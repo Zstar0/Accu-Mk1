@@ -71,3 +71,13 @@ export function avatarColor(id: number | null | undefined): string {
   if (id == null) return '#94a3b8'
   return AVATAR_COLORS[id % AVATAR_COLORS.length] ?? '#94a3b8'
 }
+
+/** Slack profile photo for a user id, or null when unlinked/unknown (initials
+ *  fallback). Coverage is intentionally partial — only Slack-linked users. */
+export function avatarUrlForUser(
+  map: UserMap,
+  id: number | null | undefined
+): string | null {
+  if (id == null) return null
+  return map.get(id)?.avatar_url ?? null
+}

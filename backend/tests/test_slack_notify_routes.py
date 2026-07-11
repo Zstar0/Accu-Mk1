@@ -65,3 +65,78 @@ def test_test_endpoint_without_token_reports_not_configured(client, monkeypatch)
     assert r.status_code == 200
     assert r.json()["ok"] is False
     assert "not configured" in r.json()["detail"].lower()
+
+
+def test_digest_prefs_roundtrip(client):
+    r = client.put("/api/slack-prefs", json={"digest_enabled": True, "digest_hour": 7})
+    assert r.status_code == 200 and r.json()["digest_enabled"] is True
+    assert r.json()["digest_hour"] == 7
+    assert client.get("/api/slack-prefs").json()["digest_hour"] == 7
+
+
+def test_digest_defaults(client):
+    body = client.get("/api/slack-prefs").json()
+    assert body["digest_enabled"] is False and body["digest_hour"] == 8
+
+
+def test_digest_hour_out_of_range_rejected(client):
+    assert client.put("/api/slack-prefs", json={"digest_hour": 25}).status_code == 422
+
+
+def _as_user(uid):
+    """Temporarily override the authed user (fixture default is id=42)."""
+    from main import app
+    from auth import get_current_user
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+        id=uid, role="standard", email=f"u{uid}@x.t")
+
+
+def test_member_id_claimed_by_another_user_409s(client, monkeypatch):
+    monkeypatch.delenv("MK1_SLACK_BOT_TOKEN", raising=False)
+    assert client.put("/api/slack-prefs",
+                      json={"slack_member_id": "U777"}).status_code == 200
+    _as_user(43)
+    r = client.put("/api/slack-prefs", json={"slack_member_id": "U777"})
+    assert r.status_code == 409
+    assert "already linked" in r.json()["detail"]
+    # and the 409 must not have half-written user 43's row
+    assert client.get("/api/slack-prefs").json()["linked"] is False
+
+
+class _FakeSlack:
+    """lookup_by_email → configurable id; user_profile → None (no refresh)."""
+    resolved = None
+
+    def __init__(self, token):
+        pass
+
+    async def lookup_by_email(self, email):
+        return _FakeSlack.resolved
+
+    async def user_profile(self, member_id):
+        return None
+
+
+def test_pasted_id_must_match_email_resolution_when_token_set(client, monkeypatch):
+    import slack_notify.client as sc
+    monkeypatch.setenv("MK1_SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setattr(sc, "SlackClient", _FakeSlack)
+    _FakeSlack.resolved = "U_REAL"
+    r = client.put("/api/slack-prefs", json={"slack_member_id": "U_SOMEONE_ELSE"})
+    assert r.status_code == 400
+    assert "different account" in r.json()["detail"]
+    assert client.get("/api/slack-prefs").json()["linked"] is False
+    # pasting the id their email actually resolves to is accepted
+    r2 = client.put("/api/slack-prefs", json={"slack_member_id": "U_REAL"})
+    assert r2.status_code == 200 and r2.json()["linked"] is True
+
+
+def test_paste_escape_hatch_when_email_unresolvable(client, monkeypatch):
+    # Slack account under a different email: lookup finds nothing → the manual
+    # paste is still accepted (the reason the paste path exists).
+    import slack_notify.client as sc
+    monkeypatch.setenv("MK1_SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setattr(sc, "SlackClient", _FakeSlack)
+    _FakeSlack.resolved = None
+    r = client.put("/api/slack-prefs", json={"slack_member_id": "U_OTHER_EMAIL"})
+    assert r.status_code == 200 and r.json()["linked"] is True

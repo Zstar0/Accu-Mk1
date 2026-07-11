@@ -1008,6 +1008,41 @@ class FlagType(Base):
         return f"<FlagType(id={self.id}, slug='{self.slug}', is_active={self.is_active})>"
 
 
+class FlagItemKind(Base):
+    """A user-managed virtual "item kind" (Phase 2 slice 7).
+
+    Item kinds are pure categories a general task can anchor to (e.g. "General
+    Task", "Purchase Task"). Unlike the code entities (sample/worksheet) there is
+    NO Mk1 row behind a kind — a flag anchored to a kind carries
+    `entity_type=<slug>` with `entity_id` NULL. Kinds join the same
+    `flag_types.entity_types` scoping vocabulary, so a flag type can be scoped to
+    a kind exactly like it is scoped to `sample`.
+
+    `slug` is the stable wire key stamped onto `flag_flags.entity_type` — it is
+    IMMUTABLE. Deletion is soft (deactivate) for built-in or in-use kinds; only
+    unused custom kinds hard-delete. Mirrors FlagType.
+    """
+
+    __tablename__ = "flag_item_kinds"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    color: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    is_builtin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<FlagItemKind(id={self.id}, slug='{self.slug}', is_active={self.is_active})>"
+
+
 class SlaPriorityTier(Base):
     """Priority -> SLA tier override, optionally scoped to a single service group.
 
@@ -1437,10 +1472,25 @@ class SlackDmPrefs(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False, index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    slack_member_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    # unique: one Slack identity maps to at most one Mk1 user (the interactions
+    # endpoint authenticates through this field). NULLs stay non-unique. Prod
+    # gets the equivalent partial index via the DDL block (S1 review fix).
+    slack_member_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True,
+                                                           unique=True)
     # WHO the link resolved to (Slack display/real name) — cached at link time
     # so the prefs UI can show "Linked → forrest" for mapping confidence.
     slack_display_name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    # Slack profile photo (image_72), captured alongside the display name at link
+    # time. Surfaces on flag/worksheet avatars; null = keep the initials circle.
+    slack_avatar_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    # Morning digest (Slice 5). Opt-in; hour is lab-local (MK1_LAB_TZ, UTC default).
+    digest_enabled: Mapped[bool] = mapped_column(Boolean, default=False,
+                                                 server_default="false", nullable=False)
+    digest_hour: Mapped[int] = mapped_column(Integer, default=8,
+                                             server_default="8", nullable=False)
+    # Last local date a digest DM went out — dedupes the ~15-min ticker to one
+    # send per user per day.
+    last_digest_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     notify_assigned: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     notify_mentioned: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     notify_raised_activity: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

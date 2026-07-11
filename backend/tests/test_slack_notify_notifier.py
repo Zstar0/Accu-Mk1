@@ -20,6 +20,10 @@ class FakeClient:
         return "U-FROM-EMAIL" if email == "two@lab.com" else None
     async def user_info(self, member_id):
         return "Forrest (fake)"
+    async def user_profile(self, member_id):
+        from slack_notify.client import SlackProfile
+        return SlackProfile("Forrest (fake)",
+                            "https://avatars.slack-edge.com/fake_72.png")
     async def open_dm(self, member_id):
         return f"D-{member_id}"
     async def post_dm(self, channel, text, blocks):
@@ -76,6 +80,8 @@ def test_email_lookup_caches_member_id_and_posts(session_factory):
     # The auto-link also caches WHO it resolved to — surfaced in the prefs UI
     # so users can confirm the mapping hit the right Slack account.
     assert row.slack_display_name == "Forrest (fake)"
+    # The avatar is captured in the same users.info touchpoint as the name.
+    assert row.slack_avatar_url == "https://avatars.slack-edge.com/fake_72.png"
     db.close()
 
 

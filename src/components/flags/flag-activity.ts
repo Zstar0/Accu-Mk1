@@ -36,3 +36,38 @@ export function activityVerb(
       return 'updated this'
   }
 }
+
+/** Personalization filter for the Activity tab. `'mine'` = assigned ∪ raised;
+ *  `'forme'` = the "notifications I received" lens (see {@link filterActivity}). */
+export type ActivityChip =
+  | 'all'
+  | 'forme'
+  | 'actor'
+  | 'mine'
+  | 'watching'
+  | 'mentioned'
+
+/** Relevance markers that mean "this event touches a flag I'm tied to". */
+const INVOLVES_ME = ['assigned', 'raised', 'watching', 'mentioned'] as const
+
+/** Pure client-side narrow of the already-fetched feed by relevance marker. */
+export function filterActivity(
+  items: ActivityItem[],
+  chip: ActivityChip
+): ActivityItem[] {
+  if (chip === 'all') return items
+  if (chip === 'mine')
+    return items.filter(
+      i => i.relevance.includes('assigned') || i.relevance.includes('raised')
+    )
+  // "For me" = notifications I received: something someone ELSE did (no 'actor',
+  // which encodes actor===me — same self-suppression as the Slack DM path) on a
+  // flag I'm tied to. The feed is already newest-first, so it reads chronologically.
+  if (chip === 'forme')
+    return items.filter(
+      i =>
+        !i.relevance.includes('actor') &&
+        INVOLVES_ME.some(m => i.relevance.includes(m))
+    )
+  return items.filter(i => i.relevance.includes(chip))
+}

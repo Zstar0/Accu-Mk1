@@ -803,8 +803,8 @@ def _run_migrations():
         """
         CREATE TABLE IF NOT EXISTS flag_flags (
             id           SERIAL PRIMARY KEY,
-            entity_type  TEXT NOT NULL,
-            entity_id    TEXT NOT NULL,
+            entity_type  TEXT,
+            entity_id    TEXT,
             kind         TEXT NOT NULL,
             type         TEXT NOT NULL,
             status       TEXT NOT NULL DEFAULT 'open'
@@ -816,12 +816,15 @@ def _run_migrations():
             created_at   TIMESTAMP NOT NULL DEFAULT NOW(),
             updated_at   TIMESTAMP NOT NULL DEFAULT NOW(),
             resolved_at  TIMESTAMP,
-            resolved_by  INTEGER
+            resolved_by  INTEGER,
+            due_at       TIMESTAMP
         )
         """,
         "CREATE INDEX IF NOT EXISTS ix_flag_flags_entity   ON flag_flags (entity_type, entity_id)",
         "CREATE INDEX IF NOT EXISTS ix_flag_flags_assignee ON flag_flags (assignee_id)",
         "CREATE INDEX IF NOT EXISTS ix_flag_flags_status   ON flag_flags (status, updated_at)",
+        # raised tab + _relevant_flag_ids filter on created_by (perf review #4)
+        "CREATE INDEX IF NOT EXISTS ix_flag_flags_created_by ON flag_flags (created_by)",
         """
         CREATE TABLE IF NOT EXISTS flag_comments (
             id         SERIAL PRIMARY KEY,
@@ -860,6 +863,8 @@ def _run_migrations():
         )
         """,
         "CREATE INDEX IF NOT EXISTS ix_flag_events_flag ON flag_events (flag_id)",
+        # activity feed's actor_id OR-branch (perf review #3)
+        "CREATE INDEX IF NOT EXISTS ix_flag_events_actor ON flag_events (actor_id)",
         # --- flag_types catalog (Plan 5) ---
         """
         CREATE TABLE IF NOT EXISTS flag_types (
@@ -905,6 +910,17 @@ def _run_migrations():
         SELECT 'ready_for_verification', 'Ready for Verification', '#22c55e', 'signal', FALSE, TRUE, 4, '[]'::jsonb, TRUE
         WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='ready_for_verification')
         """,
+        # Phase 2 slice 2: global task types for general (no-entity) flags.
+        """
+        INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
+        SELECT 'task', 'Task', '#0ea5a5', 'issue', FALSE, TRUE, 5, '[]'::jsonb, TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='task')
+        """,
+        """
+        INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
+        SELECT 'feature_request', 'Feature Request', '#ec4899', 'issue', FALSE, TRUE, 6, '[]'::jsonb, TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='feature_request')
+        """,
         # Extend the NAMED status CHECK to admit 'blocked' (Plan 5). A dedicated
         # DROP+ADD statement — NOT an edit to the IF-NOT-EXISTS flag_flags create
         # (which never re-runs once the table exists). Postgres-only; on the
@@ -921,6 +937,84 @@ def _run_migrations():
         "CREATE INDEX IF NOT EXISTS ix_flag_events_created_at_id ON flag_events (created_at DESC, id DESC)",
         # Flag @mentions: user ids called out in a comment
         "ALTER TABLE flag_comments ADD COLUMN IF NOT EXISTS mentions JSON",
+        # --- Phase 2 slice 2: general tasks + due dates ---
+        # Relax the anchor so a NULL (entity_type, entity_id) = a general task.
+        # DROP NOT NULL is idempotent in Postgres; the fresh-install CREATE TABLE
+        # above already omits NOT NULL + carries due_at, so new DBs match migrated.
+        "ALTER TABLE flag_flags ALTER COLUMN entity_type DROP NOT NULL",
+        "ALTER TABLE flag_flags ALTER COLUMN entity_id DROP NOT NULL",
+        "ALTER TABLE flag_flags ADD COLUMN IF NOT EXISTS due_at TIMESTAMP",
+        "CREATE INDEX IF NOT EXISTS ix_flag_flags_due ON flag_flags (due_at)",
+        # Entity reference links: navigational 'related items' (NOT rollup anchors).
+        """
+        CREATE TABLE IF NOT EXISTS flag_entity_links (
+            id          SERIAL PRIMARY KEY,
+            flag_id     INTEGER NOT NULL REFERENCES flag_flags(id) ON DELETE CASCADE,
+            entity_type TEXT NOT NULL,
+            entity_id   TEXT NOT NULL,
+            added_by    INTEGER,
+            created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+            CONSTRAINT uq_flag_entity_link UNIQUE (flag_id, entity_type, entity_id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_flag_entity_links_flag ON flag_entity_links (flag_id)",
+        # Flag<->flag related links: one row per unordered pair (lo/hi normalized).
+        """
+        CREATE TABLE IF NOT EXISTS flag_links (
+            id             SERIAL PRIMARY KEY,
+            flag_id        INTEGER NOT NULL REFERENCES flag_flags(id) ON DELETE CASCADE,
+            linked_flag_id INTEGER NOT NULL REFERENCES flag_flags(id) ON DELETE CASCADE,
+            relation       TEXT NOT NULL DEFAULT 'related',
+            added_by       INTEGER,
+            created_at     TIMESTAMP NOT NULL DEFAULT NOW(),
+            CONSTRAINT uq_flag_link UNIQUE (flag_id, linked_flag_id),
+            CONSTRAINT ck_flag_link_no_self CHECK (flag_id <> linked_flag_id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_flag_links_flag   ON flag_links (flag_id)",
+        "CREATE INDEX IF NOT EXISTS ix_flag_links_linked ON flag_links (linked_flag_id)",
+        # --- flag attachments (Plan 3) ---
+        """
+        CREATE TABLE IF NOT EXISTS flag_attachments (
+            id           SERIAL PRIMARY KEY,
+            flag_id      INTEGER NOT NULL REFERENCES flag_flags(id) ON DELETE CASCADE,
+            comment_id   INTEGER REFERENCES flag_comments(id) ON DELETE SET NULL,
+            uploaded_by  INTEGER,
+            filename     TEXT NOT NULL,
+            content_type TEXT NOT NULL,
+            size_bytes   INTEGER NOT NULL,
+            storage_key  TEXT NOT NULL,
+            created_at   TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_flag_attachments_flag ON flag_attachments (flag_id)",
+        "CREATE INDEX IF NOT EXISTS ix_flag_attachments_comment ON flag_attachments (comment_id)",
+        # --- flag comment reactions (Plan 3) ---
+        """
+        CREATE TABLE IF NOT EXISTS flag_comment_reactions (
+            id         SERIAL PRIMARY KEY,
+            comment_id INTEGER NOT NULL REFERENCES flag_comments(id) ON DELETE CASCADE,
+            user_id    INTEGER NOT NULL,
+            emoji      TEXT NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            CONSTRAINT uq_flag_comment_reaction UNIQUE (comment_id, user_id, emoji)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_flag_comment_reactions_comment ON flag_comment_reactions (comment_id)",
+        # --- flag comment search (Slice 4) ---
+        # pg_trgm makes ILIKE '%q%' index-accelerated. CREATE EXTENSION needs
+        # superuser; if it fails (insufficient privilege) the two index creates
+        # below also fail — and the per-statement isolation loop (see end of this
+        # function) swallows each with a `migration_skipped` warning rather than
+        # crashing startup. Search then degrades to a sequential-scan ILIKE:
+        # correct, just slower (fine at lab scale). On the SQLite test path all
+        # three fail (no pg_trgm/GIN) and are likewise swallowed; the service's
+        # portable .ilike() still returns correct results there.
+        "CREATE EXTENSION IF NOT EXISTS pg_trgm",
+        "CREATE INDEX IF NOT EXISTS ix_flag_comments_body_trgm "
+        "ON flag_comments USING gin (body gin_trgm_ops)",
+        "CREATE INDEX IF NOT EXISTS ix_flag_flags_title_trgm "
+        "ON flag_flags USING gin (title gin_trgm_ops)",
         # Slack DM prefs: cached Slack display name for mapping confidence
         "ALTER TABLE slack_dm_prefs ADD COLUMN IF NOT EXISTS slack_display_name TEXT",
         # Order-first check-in boxing: lims_boxes + sub_sample.box_id link.
@@ -981,6 +1075,93 @@ def _run_migrations():
             ON lims_analyses (lims_sample_pk, analysis_service_id)
             WHERE provenance = 'shadow' AND retested = FALSE AND lims_sample_pk IS NOT NULL
         """,
+        # --- flags Slice 5: scheduler + recurring + digest prefs ---
+        """
+        CREATE TABLE IF NOT EXISTS flag_scheduler_runs (
+            name         TEXT PRIMARY KEY,
+            last_run_at  TIMESTAMP,
+            last_status  TEXT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS flag_recurring (
+            id                   SERIAL PRIMARY KEY,
+            title                TEXT NOT NULL,
+            body                 TEXT,
+            type                 TEXT NOT NULL,
+            assignee_id          INTEGER,
+            watchers             JSONB NOT NULL DEFAULT '[]'::jsonb,
+            entity_type          TEXT,
+            entity_id            TEXT,
+            cadence              TEXT NOT NULL,
+            next_run_at          TIMESTAMP NOT NULL,
+            active               BOOLEAN NOT NULL DEFAULT TRUE,
+            skip_if_open         BOOLEAN NOT NULL DEFAULT TRUE,
+            created_by           INTEGER NOT NULL,
+            created_at           TIMESTAMP NOT NULL DEFAULT NOW(),
+            last_minted_flag_id  INTEGER
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_flag_recurring_next_run ON flag_recurring (next_run_at)",
+        "ALTER TABLE slack_dm_prefs ADD COLUMN IF NOT EXISTS digest_enabled BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE slack_dm_prefs ADD COLUMN IF NOT EXISTS digest_hour INTEGER NOT NULL DEFAULT 8",
+        "ALTER TABLE slack_dm_prefs ADD COLUMN IF NOT EXISTS last_digest_date DATE",
+        "ALTER TABLE slack_dm_prefs ADD COLUMN IF NOT EXISTS slack_avatar_url VARCHAR(512)",
+        # --- Phase 2 slice 6: state-change watches ---
+        """
+        CREATE TABLE IF NOT EXISTS flag_entity_watches (
+            id            SERIAL PRIMARY KEY,
+            entity_type   TEXT NOT NULL,
+            entity_id     TEXT NOT NULL,
+            condition     JSONB NOT NULL,
+            action        JSONB NOT NULL,
+            created_by    INTEGER NOT NULL,
+            watch_flag_id INTEGER REFERENCES flag_flags(id) ON DELETE CASCADE,
+            status        TEXT NOT NULL DEFAULT 'armed'
+                          CONSTRAINT flag_entity_watches_status_check
+                          CHECK (status IN ('armed','fired','cancelled')),
+            created_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+            fired_at      TIMESTAMP
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_flag_entity_watches_status ON flag_entity_watches (status)",
+        "CREATE INDEX IF NOT EXISTS ix_flag_entity_watches_flag   ON flag_entity_watches (watch_flag_id)",
+        # --- Phase 2 slice 7: virtual item kinds ---
+        # User-managed categories a general task anchors to (entity_type=<slug>,
+        # entity_id NULL). Kinds join flag_types.entity_types scoping. Mirrors
+        # flag_types; deactivate-not-delete for built-in/in-use.
+        """
+        CREATE TABLE IF NOT EXISTS flag_item_kinds (
+            id         SERIAL PRIMARY KEY,
+            slug       TEXT NOT NULL UNIQUE,
+            label      TEXT NOT NULL,
+            color      TEXT NOT NULL,
+            is_active  BOOLEAN NOT NULL DEFAULT TRUE,
+            is_builtin BOOLEAN NOT NULL DEFAULT FALSE,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        # Seed the general_task builtin idempotently. is_builtin=true blocks
+        # hard-delete (deactivate only); backfilled flags reference this slug.
+        """
+        INSERT INTO flag_item_kinds (slug, label, color, is_active, is_builtin, sort_order)
+        SELECT 'general_task', 'General Task', '#6b7280', TRUE, TRUE, 0
+        WHERE NOT EXISTS (SELECT 1 FROM flag_item_kinds WHERE slug='general_task')
+        """,
+        # Backfill legacy NULL-anchor general tasks onto the general_task kind so
+        # there is one representation forever. Idempotent by construction (the
+        # WHERE clause never re-matches once a row is stamped). Runs AFTER the
+        # kind is seeded; the anchor was made nullable in slice 2 (above).
+        "UPDATE flag_flags SET entity_type='general_task' WHERE entity_type IS NULL",
+        # One Slack identity → at most one Mk1 user (security review S1): the
+        # interactions endpoint resolves Slack→Mk1 through this field. Partial
+        # unique keeps multiple NULLs legal. If legacy duplicates exist, only
+        # this statement fails (migration_skipped) and the app-level 409 still
+        # guards — dedupe manually and it applies on the next start.
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_slack_dm_prefs_member "
+        "ON slack_dm_prefs (slack_member_id) WHERE slack_member_id IS NOT NULL",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

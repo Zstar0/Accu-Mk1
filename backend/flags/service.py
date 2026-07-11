@@ -4,6 +4,8 @@ transaction boundary."""
 from __future__ import annotations
 
 import base64
+import re
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
@@ -12,7 +14,31 @@ from sqlalchemy.orm import Session
 
 from flags import catalog, permissions, seams, types_service
 from flags.errors import BadRequestError, NotFoundError, PermissionDeniedError
-from flags.models import FlagComment, FlagEvent, FlagFlag, FlagParticipant, FlagRead
+from flags.models import (
+    FlagAttachment, FlagComment, FlagCommentReaction, FlagEntityLink, FlagEvent,
+    FlagFlag, FlagLink, FlagParticipant, FlagRead,
+)
+
+MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+_ATTACHMENT_TOKEN = re.compile(r"\{attachment:(\d+)\}")
+
+_MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+_MD_INLINE = re.compile(r"[*_`~]+")
+_MD_BULLET = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+", re.MULTILINE)
+
+
+def strip_markdown(text: str) -> str:
+    """Flatten markdown-lite source to plain text for the Slack excerpt.
+    Keeps @mentions literal; drops attachment tokens and formatting marks."""
+    t = _MD_LINK.sub(r"\1", text or "")           # [label](url) -> label
+    t = _ATTACHMENT_TOKEN.sub("", t)              # drop {attachment:ID}
+    t = _MD_BULLET.sub("", t)                     # list markers
+    t = _MD_INLINE.sub("", t)                     # ** * _ ` ~
+    return " ".join(t.split())                    # collapse whitespace/newlines
+
+
+def _excerpt_for_comment(body: str) -> str:
+    return (strip_markdown(body) or "📎 image")[:140]
 
 
 def _flag_summary(flag) -> dict:
@@ -58,27 +84,51 @@ def _commit_and_emit(db):
 
 
 def create_flag(db: Session, *, user, entity_type, entity_id, type, title,
-                assignee_id=None, first_comment=None) -> FlagFlag:
-    if not seams.is_registered(entity_type):
-        raise BadRequestError(f"unknown entity_type {entity_type!r}")
+                assignee_id=None, first_comment=None, due_at=None,
+                event_details=None) -> FlagFlag:
+    # A NULL anchor = a general task (spec §5). entity_id without an entity_type
+    # is malformed. A present entity_type is either a registered code entity
+    # (sample/worksheet — carries an entity_id) or a virtual item kind
+    # (general_task/purchase_task — pure category, entity_id MUST be NULL).
+    is_virtual_kind = False
+    if entity_type is None:
+        if entity_id is not None:
+            raise BadRequestError("entity_id requires entity_type")
+    else:
+        is_virtual_kind = seams.resolve_virtual_kind(db, entity_type) is not None
+        if not seams.is_registered(entity_type) and not is_virtual_kind:
+            raise BadRequestError(f"unknown entity_type {entity_type!r}")
+        if is_virtual_kind and entity_id is not None:
+            raise BadRequestError(f"item kind {entity_type!r} takes no entity_id")
     if not types_service.is_valid_type(db, type):
         raise BadRequestError(f"unknown flag type {type!r}")
     if not permissions.can(user, "create", None):
         raise PermissionDeniedError("not allowed to create flags")
-    spec = seams.get_entity_spec(entity_type)
-    if not spec.can_flag(user, str(entity_id)):
-        raise PermissionDeniedError(f"not allowed to flag {entity_type} {entity_id}")
+    # can_flag only applies to registered code entities; a virtual kind has no
+    # seam (and no entity_id) to authorize against.
+    if entity_type is not None and not is_virtual_kind:
+        spec = seams.get_entity_spec(entity_type)
+        if not spec.can_flag(user, str(entity_id)):
+            raise PermissionDeniedError(f"not allowed to flag {entity_type} {entity_id}")
+    # Enforces "general task ⇒ global type": is_allowed_for_entity returns True
+    # for entity_type=None only when the type's entity_types list is empty.
     if not types_service.is_allowed_for_entity(db, type, entity_type):
-        raise BadRequestError(f"flag type {type!r} is not allowed for {entity_type}")
+        raise BadRequestError(
+            f"flag type {type!r} is not allowed for {entity_type or 'general tasks'}")
 
     actor_id = getattr(user, "id", None)
-    flag = FlagFlag(entity_type=entity_type, entity_id=str(entity_id),
+    flag = FlagFlag(entity_type=entity_type,
+                    entity_id=str(entity_id) if entity_id is not None else None,
                     kind=types_service.kind_for_type(db, type), type=type, status="open",
-                    title=title, created_by=actor_id, assignee_id=assignee_id)
+                    title=title, created_by=actor_id, assignee_id=assignee_id,
+                    due_at=due_at)
     db.add(flag)
     db.flush()  # populate flag.id
 
-    _audit(db, flag, actor_id, "raised", to_value="open", details={"type": type})
+    _audit(db, flag, actor_id, "raised", to_value="open",
+           details={"type": type, **(event_details or {})})
+    if due_at is not None:
+        _audit(db, flag, actor_id, "due_set", to_value=due_at.isoformat())
     if assignee_id is not None:
         db.add(FlagParticipant(flag_id=flag.id, user_id=assignee_id, role="watcher", added_by=actor_id))
         _audit(db, flag, actor_id, "assigned", to_value=str(assignee_id))
@@ -188,6 +238,36 @@ def list_activity(db: Session, *, user_id: int, cursor: Optional[str] = None,
     return rows, next_cursor
 
 
+def compute_relevance(db: Session, events: list[FlagEvent], *,
+                      user_id: int) -> dict[int, list[str]]:
+    """Why each event is in this user's feed, keyed by event id. Markers are a
+    subset of actor/assigned/raised/watching/mentioned. Batch queries — no N+1."""
+    flag_ids = {e.flag_id for e in events}
+    flags = {f.id: f for f in db.execute(
+        select(FlagFlag).where(FlagFlag.id.in_(flag_ids))).scalars()}
+    watching = {fid for (fid,) in db.execute(
+        select(FlagParticipant.flag_id).where(
+            FlagParticipant.user_id == user_id,
+            FlagParticipant.flag_id.in_(flag_ids),
+            FlagParticipant.role == "watcher"))}
+    out: dict[int, list[str]] = {}
+    for e in events:
+        rel: list[str] = []
+        f = flags.get(e.flag_id)
+        if e.actor_id == user_id:
+            rel.append("actor")
+        if f is not None and f.assignee_id == user_id:
+            rel.append("assigned")
+        if f is not None and f.created_by == user_id:
+            rel.append("raised")
+        if e.flag_id in watching:
+            rel.append("watching")
+        if user_id in ((e.details or {}).get("mentions") or []):
+            rel.append("mentioned")
+        out[e.id] = rel
+    return out
+
+
 def list_unread(db: Session, *, user_id: int) -> list[FlagFlag]:
     """Flags relevant to the user that changed since they last read them
     (never-read counts as unread), newest-updated first."""
@@ -199,6 +279,116 @@ def list_unread(db: Session, *, user_id: int) -> list[FlagFlag]:
                        FlagFlag.updated_at > FlagRead.last_read_at))
             .order_by(FlagFlag.updated_at.desc()))
     return list(db.execute(stmt).scalars().all())
+
+
+# --- comment/title search (Plan 4) --------------------------------------
+_WS_RE = re.compile(r"\s+")
+
+
+@dataclass
+class SearchHit:
+    """One title/comment search match (service-internal; the route maps it to
+    the FlagSearchHit wire model). `snippet` is empty on a title-only hit.
+    `title`/`status`/`type` decorate the hit so a picker renders without a
+    follow-up fetch."""
+    flag_id: int
+    snippet: str = ""
+    matched_in: list[str] = field(default_factory=list)
+    title: str = ""
+    status: str = ""
+    type: str = ""
+
+
+def _clean_body(body: str) -> str:
+    """Drop Slice-3 `{attachment:N}` tokens and collapse whitespace so a snippet
+    reads as one clean line. @mention tokens (`@name`) are readable — kept."""
+    return _WS_RE.sub(" ", _ATTACHMENT_TOKEN.sub("", body or "")).strip()
+
+
+def _snippet(body: str, needle: str, *, radius: int = 48) -> str:
+    """A one-line excerpt of `body` centered on the first case-insensitive
+    occurrence of `needle`, ellipsized when truncated."""
+    text = _clean_body(body)
+    idx = text.lower().find(needle.lower())
+    if idx < 0:
+        # The match sat inside a stripped token or spanned a token boundary —
+        # show the head of the cleaned body rather than nothing.
+        head = text[: 2 * radius]
+        return head + "…" if len(text) > len(head) else head
+    start = max(0, idx - radius)
+    end = min(len(text), idx + len(needle) + radius)
+    out = text[start:end]
+    if start > 0:
+        out = "…" + out
+    if end < len(text):
+        out = out + "…"
+    return out
+
+
+def _like_pattern(q: str) -> str:
+    r"""A `%…%` ILIKE pattern with LIKE metacharacters escaped (escape char = `\`)
+    so a user typing `%` or `_` searches for the literal, not a wildcard."""
+    esc = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{esc}%"
+
+
+def search_flags(db: Session, *, q: str, limit: int = 50) -> list[SearchHit]:
+    """Flags whose title OR any comment body contains `q` (case-insensitive
+    substring). Portable ILIKE: a pg_trgm GIN index accelerates it on Postgres,
+    and the identical query degrades to a `lower() LIKE` seqscan on SQLite / when
+    the extension is absent. Newest-first (flag_id DESC), capped at `limit`."""
+    q = (q or "").strip()
+    if len(q) < 3:
+        return []
+    limit = max(1, min(limit, 100))
+    pattern = _like_pattern(q)
+
+    # Comment matches: the first matching comment per flag drives its snippet.
+    # Bounded scan (limit*4) — enough matching comments to still cover `limit`
+    # distinct newest flags without pulling an unbounded set.
+    comment_rows = db.execute(
+        select(FlagComment.flag_id, FlagComment.body)
+        .where(FlagComment.body.ilike(pattern, escape="\\"))
+        .order_by(FlagComment.flag_id.desc(), FlagComment.id.asc())
+        .limit(limit * 4)
+    ).all()
+    snippet_by_flag: dict[int, str] = {}
+    for flag_id, body in comment_rows:
+        if flag_id not in snippet_by_flag:
+            snippet_by_flag[flag_id] = _snippet(body, q)
+
+    title_ids = {
+        fid for (fid,) in db.execute(
+            select(FlagFlag.id)
+            .where(FlagFlag.title.ilike(pattern, escape="\\"))
+            .order_by(FlagFlag.id.desc())
+            .limit(limit)
+        ).all()
+    }
+
+    hit_ids = sorted(set(snippet_by_flag) | title_ids, reverse=True)[:limit]
+    # Batch-load the flag rows for the hits to decorate them (title/status/type)
+    # in one query — no per-hit N+1.
+    flag_by_id = {
+        f.id: f for f in db.execute(
+            select(FlagFlag).where(FlagFlag.id.in_(hit_ids))
+        ).scalars()
+    } if hit_ids else {}
+    hits: list[SearchHit] = []
+    for fid in hit_ids:
+        matched_in: list[str] = []
+        if fid in snippet_by_flag:
+            matched_in.append("comment")
+        if fid in title_ids:
+            matched_in.append("title")
+        fr = flag_by_id.get(fid)
+        hits.append(SearchHit(
+            fid, snippet_by_flag.get(fid, ""), matched_in,
+            title=getattr(fr, "title", "") or "",
+            status=getattr(fr, "status", "") or "",
+            type=getattr(fr, "type", "") or "",
+        ))
+    return hits
 
 
 def mark_read(db: Session, *, user_id: int, flag_id: int) -> None:
@@ -227,7 +417,8 @@ def summary(db: Session, *, user_id: int) -> dict:
     return {"assigned_to_me": len(assigned), "by_type": by_type}
 
 
-def add_comment(db: Session, *, user, flag_id, body, mention_ids=None) -> FlagComment:
+def add_comment(db: Session, *, user, flag_id, body, mention_ids=None,
+                event_details=None) -> FlagComment:
     flag = get_flag(db, flag_id)
     if not permissions.can(user, "comment", flag):
         raise PermissionDeniedError("not allowed to comment")
@@ -238,6 +429,8 @@ def add_comment(db: Session, *, user, flag_id, body, mention_ids=None) -> FlagCo
     c = FlagComment(flag_id=flag.id, author_id=actor_id, body=body.strip(),
                     mentions=valid or None)
     db.add(c)
+    db.flush()  # populate c.id for attachment linkage
+    _link_attachments(db, flag.id, c.id, c.body)
     # A mention loops the user in: add as a watcher (silent — no watcher_added
     # event; dedup against existing participants).
     for uid in valid:
@@ -249,10 +442,12 @@ def add_comment(db: Session, *, user, flag_id, body, mention_ids=None) -> FlagCo
                                    role="watcher", added_by=actor_id))
     flag.updated_at = datetime.utcnow()
     # body_excerpt rides the event for notification transports (Slack DMs);
-    # additive detail key — consumers ignore unknown keys.
-    details = {"body_excerpt": body.strip()[:140]}
+    # markdown-stripped to plain text (image-only comments -> "📎 image").
+    details = {"body_excerpt": _excerpt_for_comment(body)}
     if valid:
         details["mentions"] = valid
+    if event_details:
+        details.update(event_details)
     _audit(db, flag, actor_id, "commented", details=details)
     _commit_and_emit(db)
     db.refresh(c)
@@ -315,6 +510,237 @@ def remove_watcher(db: Session, *, user, flag_id, user_id) -> None:
         _commit_and_emit(db)
 
 
+def list_watchers(db: Session, flag_id: int) -> list[FlagParticipant]:
+    """Watcher participants for a flag, oldest first. 404s on a missing flag."""
+    get_flag(db, flag_id)
+    return list(db.execute(
+        select(FlagParticipant)
+        .where(FlagParticipant.flag_id == flag_id,
+               FlagParticipant.role == "watcher")
+        .order_by(FlagParticipant.added_at.asc(), FlagParticipant.id.asc())
+    ).scalars().all())
+
+
+# --- image attachments (Plan 3) -----------------------------------------
+def _sniff_image(data: bytes) -> str:
+    """Return the image content-type from magic bytes; raise on non-image.
+    Do NOT trust the client's Content-Type header (spec §11)."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    raise BadRequestError("attachment must be a PNG, JPEG, GIF, or WEBP image")
+
+
+_EXT_FOR_CT = {"image/png": ".png", "image/jpeg": ".jpg",
+               "image/gif": ".gif", "image/webp": ".webp"}
+
+
+def add_attachment(db: Session, *, user, flag_id, data: bytes, filename: str) -> FlagAttachment:
+    flag = get_flag(db, flag_id)
+    if not permissions.can(user, "comment", flag):
+        raise PermissionDeniedError("not allowed to attach")
+    if not data:
+        raise BadRequestError("empty upload")
+    if len(data) > MAX_ATTACHMENT_BYTES:
+        raise BadRequestError("attachment exceeds 10 MB")
+    content_type = _sniff_image(data)
+    actor_id = getattr(user, "id", None)
+    key = seams.get_attachment_storage().save(str(flag.id), data, f"upload{_EXT_FOR_CT[content_type]}")
+    att = FlagAttachment(flag_id=flag.id, comment_id=None, uploaded_by=actor_id,
+                         filename=(filename or f"upload{_EXT_FOR_CT[content_type]}")[:255],
+                         content_type=content_type, size_bytes=len(data), storage_key=key)
+    db.add(att)
+    db.flush()  # populate att.id for the event detail
+    # attachment_added is analytics+audit (real actor_id). It does NOT bump
+    # updated_at — the comment that references it is the unread trigger.
+    _audit(db, flag, actor_id, "attachment_added",
+           details={"attachment_id": att.id, "body_excerpt": "📎 image"})
+    _commit_and_emit(db)
+    db.refresh(att)
+    return att
+
+
+def get_attachment(db: Session, attachment_id: int) -> FlagAttachment:
+    att = db.get(FlagAttachment, attachment_id)
+    if att is None:
+        raise NotFoundError(f"attachment {attachment_id} not found")
+    return att
+
+
+# --- comment emoji reactions (Plan 3) -----------------------------------
+CURATED_EMOJI = ("👍", "✅", "👀", "🎉", "❤️", "😂", "🤔", "🚨")
+
+
+def _load_comment(db: Session, comment_id: int) -> FlagComment:
+    c = db.get(FlagComment, comment_id)
+    if c is None:
+        raise NotFoundError(f"comment {comment_id} not found")
+    return c
+
+
+def aggregate_reactions(db: Session, comment_ids) -> dict[int, list[dict]]:
+    """Batch: comment_id -> [{emoji, count, user_ids}]. One query, no N+1."""
+    ids = list(comment_ids)
+    if not ids:
+        return {}
+    rows = db.execute(select(FlagCommentReaction).where(
+        FlagCommentReaction.comment_id.in_(ids))
+        .order_by(FlagCommentReaction.id.asc())).scalars().all()
+    by_comment: dict[int, dict[str, list[int]]] = {}
+    for r in rows:
+        by_comment.setdefault(r.comment_id, {}).setdefault(r.emoji, []).append(r.user_id)
+    return {cid: [{"emoji": e, "count": len(us), "user_ids": us}
+                  for e, us in emo.items()]
+            for cid, emo in by_comment.items()}
+
+
+def _emit_reaction(db: Session, comment: FlagComment, actor_id, emoji: str, action: str) -> None:
+    """Fan a reaction onto the SSE bus WITHOUT an audit row or updated_at bump —
+    reactions must not mark a thread unread (spec §6). event_id stays None (no
+    flag_events row backs it)."""
+    flag = db.get(FlagFlag, comment.flag_id)
+    seams.EVENT_SINK.emit({
+        "event_type": "comment_reaction", "flag_id": comment.flag_id,
+        "comment_id": comment.id, "emoji": emoji, "action": action,
+        "actor_id": actor_id, "from_value": None, "to_value": None,
+        "details": {}, "event_id": None, "flag": _flag_summary(flag),
+    })
+
+
+def add_reaction(db: Session, *, user, comment_id, emoji) -> list[dict]:
+    if emoji not in CURATED_EMOJI:
+        raise BadRequestError(f"unsupported emoji {emoji!r}")
+    comment = _load_comment(db, comment_id)
+    if not permissions.can(user, "comment", get_flag(db, comment.flag_id)):
+        raise PermissionDeniedError("not allowed to react")
+    uid = getattr(user, "id", None)
+    existing = db.execute(select(FlagCommentReaction).where(
+        FlagCommentReaction.comment_id == comment_id,
+        FlagCommentReaction.user_id == uid,
+        FlagCommentReaction.emoji == emoji)).scalar_one_or_none()
+    if existing is None:
+        db.add(FlagCommentReaction(comment_id=comment_id, user_id=uid, emoji=emoji))
+        db.commit()
+        _emit_reaction(db, comment, uid, emoji, "added")
+    return aggregate_reactions(db, [comment_id]).get(comment_id, [])
+
+
+def remove_reaction(db: Session, *, user, comment_id, emoji) -> list[dict]:
+    comment = _load_comment(db, comment_id)
+    uid = getattr(user, "id", None)
+    row = db.execute(select(FlagCommentReaction).where(
+        FlagCommentReaction.comment_id == comment_id,
+        FlagCommentReaction.user_id == uid,
+        FlagCommentReaction.emoji == emoji)).scalar_one_or_none()
+    if row is not None:
+        db.delete(row)
+        db.commit()
+        _emit_reaction(db, comment, uid, emoji, "removed")
+    return aggregate_reactions(db, [comment_id]).get(comment_id, [])
+
+
+def _link_attachments(db: Session, flag_id: int, comment_id: int, body: str) -> None:
+    """FK the {attachment:ID} tokens in a saved comment's body back to it, so
+    they survive orphan GC. Only unlinked rows on THIS flag are claimed."""
+    ids = {int(m) for m in _ATTACHMENT_TOKEN.findall(body or "")}
+    if not ids:
+        return
+    for att in db.execute(select(FlagAttachment).where(
+            FlagAttachment.flag_id == flag_id,
+            FlagAttachment.id.in_(ids),
+            FlagAttachment.comment_id.is_(None))).scalars():
+        att.comment_id = comment_id
+
+
+# --- entity reference links (Phase 2 slice 2) ---------------------------
+def add_entity_link(db: Session, *, user, flag_id: int, entity_type: str,
+                    entity_id: str) -> FlagEntityLink:
+    """Attach a navigational 'related item' to a flag. NOT a rollup anchor."""
+    flag = get_flag(db, flag_id)
+    if not seams.is_registered(entity_type):
+        raise BadRequestError(f"unknown entity_type {entity_type!r}")
+    dup = db.execute(select(FlagEntityLink).where(
+        FlagEntityLink.flag_id == flag_id,
+        FlagEntityLink.entity_type == entity_type,
+        FlagEntityLink.entity_id == str(entity_id))).scalar_one_or_none()
+    if dup is not None:
+        raise BadRequestError("already linked")
+    link = FlagEntityLink(flag_id=flag_id, entity_type=entity_type,
+                          entity_id=str(entity_id),
+                          added_by=getattr(user, "id", None))
+    db.add(link)
+    _audit(db, flag, getattr(user, "id", None), "entity_link_added",
+           to_value=f"{entity_type}:{entity_id}")
+    _commit_and_emit(db)
+    db.refresh(link)
+    return link
+
+
+def remove_entity_link(db: Session, *, user, flag_id: int, link_id: int) -> None:
+    flag = get_flag(db, flag_id)
+    link = db.get(FlagEntityLink, link_id)
+    if link is None or link.flag_id != flag_id:
+        raise NotFoundError(f"link {link_id} not found on flag {flag_id}")
+    db.delete(link)
+    _audit(db, flag, getattr(user, "id", None), "entity_link_removed",
+           from_value=f"{link.entity_type}:{link.entity_id}")
+    _commit_and_emit(db)
+
+
+def list_entity_links(db: Session, flag_id: int) -> list[FlagEntityLink]:
+    return list(db.execute(select(FlagEntityLink)
+        .where(FlagEntityLink.flag_id == flag_id)
+        .order_by(FlagEntityLink.created_at.asc())).scalars().all())
+
+
+# --- flag <-> flag links (Phase 2 slice 2) ------------------------------
+def add_flag_link(db: Session, *, user, flag_id: int, other_id: int) -> FlagLink:
+    """Link two flags 'related'. Stored normalized (lo/hi) so a pair is one row;
+    events land on BOTH flags. Symmetric — the link shows in both threads."""
+    if flag_id == other_id:
+        raise BadRequestError("cannot link a flag to itself")
+    flag = get_flag(db, flag_id)
+    other = get_flag(db, other_id)
+    lo, hi = sorted((flag_id, other_id))
+    dup = db.execute(select(FlagLink).where(
+        FlagLink.flag_id == lo, FlagLink.linked_flag_id == hi)).scalar_one_or_none()
+    if dup is not None:
+        raise BadRequestError("already linked")
+    link = FlagLink(flag_id=lo, linked_flag_id=hi, added_by=getattr(user, "id", None))
+    db.add(link)
+    actor = getattr(user, "id", None)
+    _audit(db, flag, actor, "flag_link_added", to_value=str(other_id))
+    _audit(db, other, actor, "flag_link_added", to_value=str(flag_id))
+    _commit_and_emit(db)
+    db.refresh(link)
+    return link
+
+
+def remove_flag_link(db: Session, *, user, flag_id: int, link_id: int) -> None:
+    flag = get_flag(db, flag_id)
+    link = db.get(FlagLink, link_id)
+    if link is None or flag_id not in (link.flag_id, link.linked_flag_id):
+        raise NotFoundError(f"link {link_id} not found on flag {flag_id}")
+    other_id = link.linked_flag_id if link.flag_id == flag_id else link.flag_id
+    other = get_flag(db, other_id)
+    db.delete(link)
+    actor = getattr(user, "id", None)
+    _audit(db, flag, actor, "flag_link_removed", from_value=str(other_id))
+    _audit(db, other, actor, "flag_link_removed", from_value=str(flag_id))
+    _commit_and_emit(db)
+
+
+def list_flag_links(db: Session, flag_id: int) -> list[FlagLink]:
+    return list(db.execute(select(FlagLink).where(
+        or_(FlagLink.flag_id == flag_id, FlagLink.linked_flag_id == flag_id))
+        .order_by(FlagLink.created_at.asc())).scalars().all())
+
+
 def change_status(db: Session, *, user, flag_id, to_status) -> FlagFlag:
     from flags.errors import ConflictError
     flag = get_flag(db, flag_id)
@@ -333,6 +759,28 @@ def change_status(db: Session, *, user, flag_id, to_status) -> FlagFlag:
         flag.resolved_at = None
         flag.resolved_by = None
     _audit(db, flag, actor_id, "status_changed", from_value=from_status, to_value=to_status)
+    _commit_and_emit(db)
+    db.refresh(flag)
+    return flag
+
+
+def set_due(db: Session, *, user, flag_id: int,
+            due_at: Optional[datetime]) -> FlagFlag:
+    """Set/change/clear a flag's due date; no-op if unchanged. Same permission
+    tier as status changes (assignee/creator/admin) per spec §5."""
+    flag = get_flag(db, flag_id)
+    if not permissions.can(user, "change_status", flag):
+        raise PermissionDeniedError("not allowed to edit this flag")
+    if flag.due_at == due_at:
+        return flag
+    old = flag.due_at
+    flag.due_at = due_at
+    flag.updated_at = datetime.utcnow()
+    event = ("due_set" if old is None else
+             "due_cleared" if due_at is None else "due_changed")
+    _audit(db, flag, getattr(user, "id", None), event,
+           from_value=old.isoformat() if old else None,
+           to_value=due_at.isoformat() if due_at else None)
     _commit_and_emit(db)
     db.refresh(flag)
     return flag

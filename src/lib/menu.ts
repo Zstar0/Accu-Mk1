@@ -149,7 +149,7 @@ async function handleCheckForUpdates(): Promise<void> {
 
 function handleOpenPreferences(): void {
   logger.info('Preferences menu item clicked')
-  useUIStore.getState().setPreferencesOpen(true)
+  useUIStore.getState().navigateTo('settings', 'general')
 }
 
 function handleToggleLeftSidebar(): void {

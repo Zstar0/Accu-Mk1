@@ -5,6 +5,7 @@ import { useUIStore } from '@/store/ui-store'
 import type { FlagResponse, FlagStatus } from '@/lib/flags-api'
 import { flagTypeDef } from '@/components/flags/flag-catalog'
 import { useFlagTypesMap } from '@/services/flag-types'
+import { useItemKindLabels } from '@/services/item-kinds'
 import {
   entityMeta,
   entityDisplayLabel,
@@ -16,10 +17,16 @@ import {
   nameForUser,
   initialsForUser,
   avatarColor,
+  avatarUrlForUser,
 } from '@/components/flags/flag-users'
-import { relativeTime } from '@/components/flags/flag-format'
-import { STATUS_LABELS, STATUS_DOT } from '@/components/flags/flag-status'
+import { relativeTime, dueLabel } from '@/components/flags/flag-format'
+import {
+  STATUS_LABELS,
+  STATUS_DOT,
+  OPEN_STATUSES,
+} from '@/components/flags/flag-status'
 import { FlagAvatar } from '@/components/flags/FlagAvatar'
+import type { FlagSearchMeta } from '@/components/flags/flag-search'
 
 /**
  * One flag in the flyout's stacked LIST view (Plan 8 restored the pre-Plan-7
@@ -41,18 +48,22 @@ export function FlagCard({
   flag,
   unread = false,
   highlight = false,
+  search,
 }: {
   flag: FlagResponse
   unread?: boolean
   highlight?: boolean
+  /** Set when a comment body matched the flyout search — adds a badge + snippet. */
+  search?: FlagSearchMeta
 }) {
   const users = useFlagUsers()
   const typesMap = useFlagTypesMap()
+  const kindLabels = useItemKindLabels()
   const currentUserId = useAuthStore(state => state.user?.id ?? null)
 
   const def = typesMap[flag.type] ?? flagTypeDef(flag.type)
   const { Icon } = entityMeta(flag.entity_type)
-  const label = entityDisplayLabel(flag)
+  const label = entityDisplayLabel(flag, kindLabels)
   const canNavigate = flagCanNavigate(flag)
   const assigneeName =
     flag.assignee_id == null
@@ -62,6 +73,10 @@ export function FlagCard({
   const status = flag.status as FlagStatus
   const statusLabel = STATUS_LABELS[status] ?? flag.status
   const statusColor = STATUS_DOT[status] ?? '#94a3b8'
+
+  // Due-date treatment: overdue only "counts" while the flag is still open.
+  const due = dueLabel(flag.due_at)
+  const isOverdue = (due?.overdue ?? false) && OPEN_STATUSES.includes(status)
 
   // Secondary context line (vials/samples): "Sample P-0071 · PEPT-Total, …".
   // Omit the "Sample {id}" prefix when it would just repeat the chip label
@@ -90,7 +105,11 @@ export function FlagCard({
       <div
         className="w-[3px] shrink-0 rounded-full"
         style={{
-          backgroundColor: unread ? 'var(--flag-unread)' : 'transparent',
+          backgroundColor: unread
+            ? 'var(--flag-unread)'
+            : isOverdue
+              ? '#e5484d'
+              : 'transparent',
         }}
         aria-hidden
       />
@@ -134,11 +153,34 @@ export function FlagCard({
             />
             {statusLabel}
           </span>
+          {due && (
+            <span
+              className={cn(
+                'rounded-full px-2 py-0.5 text-[10px] font-medium',
+                isOverdue
+                  ? 'bg-destructive/10 text-destructive'
+                  : 'text-muted-foreground'
+              )}
+            >
+              {due.text}
+            </span>
+          )}
+          {search && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-[var(--flag-unread)]/15 px-2 py-0.5 text-[10px] font-medium text-foreground/70">
+              matched in comments
+            </span>
+          )}
         </div>
 
         <div className="truncate text-sm font-semibold text-foreground">
           {flag.title}
         </div>
+
+        {search && (
+          <div className="mt-0.5 truncate text-[11px] italic text-muted-foreground">
+            {search.snippet}
+          </div>
+        )}
 
         {hasContext && (
           <div className="mt-0.5 flex items-center gap-1 truncate text-[11px] text-muted-foreground">
@@ -161,6 +203,7 @@ export function FlagCard({
           <FlagAvatar
             initials={initialsForUser(users, flag.assignee_id, currentUserId)}
             color={avatarColor(flag.assignee_id)}
+            avatarUrl={avatarUrlForUser(users, flag.assignee_id)}
             isYou={
               flag.assignee_id != null && flag.assignee_id === currentUserId
             }

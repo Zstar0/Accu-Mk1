@@ -12,6 +12,7 @@ import {
   useCreateFlag,
   useAddComment,
   useChangeStatus,
+  useFlagSearch,
 } from '@/hooks/use-flags'
 
 // Mock the REST layer — these tests guard query-key wiring + invalidation, not
@@ -30,6 +31,7 @@ vi.mock('@/lib/flags-api', async () => {
     createFlag: vi.fn(async () => ({ id: 1 })),
     addComment: vi.fn(async () => ({ id: 1 })),
     changeStatus: vi.fn(async () => ({ id: 1 })),
+    searchFlags: vi.fn(async () => []),
   }
 })
 
@@ -166,7 +168,10 @@ describe('flag mutations invalidate the right keys', () => {
     await waitFor(() => expect(api.listFlags).toHaveBeenCalledTimes(1))
 
     await act(async () => {
-      await result.current.comment.mutateAsync({ body: 'hello', mentionIds: [] })
+      await result.current.comment.mutateAsync({
+        body: 'hello',
+        mentionIds: [],
+      })
     })
 
     // Comment touches the thread detail only — the list stays put.
@@ -204,6 +209,29 @@ describe('flag mutations invalidate the right keys', () => {
       expect(api.getSummary).toHaveBeenCalledTimes(2)
     })
     expect(api.changeStatus).toHaveBeenCalledWith(7, 'in_progress')
+    qc.clear()
+  })
+})
+
+describe('useFlagSearch', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('stays disabled (no fetch) below 3 chars', async () => {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    renderHook(() => useFlagSearch('ph'), { wrapper: makeWrapper(qc) })
+    await new Promise(r => setTimeout(r, 20))
+    expect(api.searchFlags).not.toHaveBeenCalled()
+    qc.clear()
+  })
+
+  it('queries once at 3+ chars', async () => {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    renderHook(() => useFlagSearch('precip'), { wrapper: makeWrapper(qc) })
+    await waitFor(() => expect(api.searchFlags).toHaveBeenCalledWith('precip'))
     qc.clear()
   })
 })

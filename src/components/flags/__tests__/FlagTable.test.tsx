@@ -33,6 +33,7 @@ function flag(
     updated_at: '2026-06-30T12:00:00',
     resolved_at: null,
     resolved_by: null,
+    due_at: null,
     ...over,
   }
 }
@@ -45,7 +46,7 @@ describe('FlagTable', () => {
   it('renders a header row with every column label', () => {
     render(<FlagTable flags={[flag()]} />)
     for (const label of [
-      'Entity',
+      'Item',
       'Type',
       'Title',
       'Assignee',

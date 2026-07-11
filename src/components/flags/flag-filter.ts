@@ -7,16 +7,22 @@
  * status/entity narrow by exact match (or `'all'` to pass everything).
  */
 
-import type { FlagResponse } from '@/lib/flags-api'
+import type { FlagResponse, FlagStatus } from '@/lib/flags-api'
+import { OPEN_STATUSES } from '@/components/flags/flag-status'
+import { dueLabel } from '@/components/flags/flag-format'
 
 export interface FlagFilterState {
   text: string
-  /** A `FlagStatus` slug, or `'all'`. */
+  /** A `FlagStatus` slug, `'all_open'` (open ∪ in_progress ∪ blocked), or `'all'`. */
   status: string
-  /** An entity-type slug (e.g. `sample`), or `'all'`. */
+  /** An entity-type slug (e.g. `sample`), `'general'` (null anchor), or `'all'`. */
   entityType: string
   /** A flag-type slug (e.g. `blocker`), or `'all'`. */
   type: string
+  /** `'all'`, `'none'` (unassigned), or a user id as a decimal string. */
+  assignee: string
+  /** When true, keep only overdue OPEN flags. */
+  overdueOnly: boolean
 }
 
 export const EMPTY_FLAG_FILTER: FlagFilterState = {
@@ -24,11 +30,14 @@ export const EMPTY_FLAG_FILTER: FlagFilterState = {
   status: 'all',
   entityType: 'all',
   type: 'all',
+  assignee: 'all',
+  overdueOnly: false,
 }
 
-/** The best "Sample ID"-ish token to match free text against. */
+/** The best "Sample ID"-ish token to match free text against. Empty for a
+ *  null-anchor general task. */
 function sampleToken(flag: FlagResponse): string {
-  return flag.entity?.sample_id ?? flag.entity?.label ?? flag.entity_id
+  return flag.entity?.sample_id ?? flag.entity?.label ?? flag.entity_id ?? ''
 }
 
 /** Filter a flag list by free text (title OR sample id), status, entity type,
@@ -36,18 +45,45 @@ function sampleToken(flag: FlagResponse): string {
  *  order. */
 export function filterFlags(
   flags: FlagResponse[],
-  filter: FlagFilterState
+  filter: FlagFilterState,
+  now: Date = new Date()
 ): FlagResponse[] {
   const text = filter.text.trim().toLowerCase()
-  const { status, entityType, type } = filter
+  const { status, entityType, type, assignee, overdueOnly } = filter
 
-  if (!text && status === 'all' && entityType === 'all' && type === 'all')
+  if (
+    !text &&
+    status === 'all' &&
+    entityType === 'all' &&
+    type === 'all' &&
+    assignee === 'all' &&
+    !overdueOnly
+  )
     return flags
 
   return flags.filter(flag => {
-    if (status !== 'all' && flag.status !== status) return false
-    if (entityType !== 'all' && flag.entity_type !== entityType) return false
+    if (status === 'all_open') {
+      if (!OPEN_STATUSES.includes(flag.status as FlagStatus)) return false
+    } else if (status !== 'all' && flag.status !== status) return false
+    if (entityType === 'general') {
+      // Belt-and-suspenders across the slice-7 backfill: a general task is
+      // either a legacy null anchor OR the general_task kind slug.
+      if (flag.entity_type != null && flag.entity_type !== 'general_task')
+        return false
+    } else if (entityType !== 'all' && flag.entity_type !== entityType)
+      return false
     if (type !== 'all' && flag.type !== type) return false
+    if (assignee === 'none') {
+      if (flag.assignee_id != null) return false
+    } else if (assignee !== 'all' && String(flag.assignee_id) !== assignee) {
+      return false
+    }
+    if (overdueOnly) {
+      const d = dueLabel(flag.due_at, now)
+      if (!d?.overdue) return false
+      // Resolved/closed flags never count as overdue.
+      if (!OPEN_STATUSES.includes(flag.status as FlagStatus)) return false
+    }
     if (text) {
       const haystack = `${flag.title} ${sampleToken(flag)}`.toLowerCase()
       if (!haystack.includes(text)) return false

@@ -3,12 +3,14 @@ import { useUIStore } from '@/store/ui-store'
 import type { ActivityItem, FlagStatus } from '@/lib/flags-api'
 import { flagTypeDef } from '@/components/flags/flag-catalog'
 import { useFlagTypesMap } from '@/services/flag-types'
+import { useItemKindLabels } from '@/services/item-kinds'
 import { entityDisplayLabel } from '@/components/flags/flag-entity'
 import {
   useFlagUsers,
   nameForUser,
   initialsForUser,
   avatarColor,
+  avatarUrlForUser,
 } from '@/components/flags/flag-users'
 import { relativeTime } from '@/components/flags/flag-format'
 import { STATUS_LABELS } from '@/components/flags/flag-status'
@@ -20,6 +22,7 @@ import { activityVerb } from '@/components/flags/flag-activity'
 export function FlagActivityRow({ item }: { item: ActivityItem }) {
   const users = useFlagUsers()
   const typesMap = useFlagTypesMap()
+  const kindLabels = useItemKindLabels()
   const me = useAuthStore(state => state.user?.id ?? null)
 
   const def = typesMap[item.flag.type] ?? flagTypeDef(item.flag.type)
@@ -33,7 +36,7 @@ export function FlagActivityRow({ item }: { item: ActivityItem }) {
     nameOf: id => (id == null ? 'someone' : nameForUser(users, id)),
     statusLabelOf: slug => STATUS_LABELS[slug as FlagStatus] ?? slug,
   })
-  const entity = entityDisplayLabel(item.flag)
+  const entity = entityDisplayLabel(item.flag, kindLabels)
 
   return (
     <div
@@ -51,6 +54,7 @@ export function FlagActivityRow({ item }: { item: ActivityItem }) {
       <FlagAvatar
         initials={initialsForUser(users, item.actor_id, me)}
         color={avatarColor(item.actor_id)}
+        avatarUrl={avatarUrlForUser(users, item.actor_id)}
         isYou={item.actor_id != null && item.actor_id === me}
       />
       <span className="min-w-0 flex-1 truncate text-[13px]">

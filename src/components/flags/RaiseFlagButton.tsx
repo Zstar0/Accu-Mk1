@@ -19,7 +19,9 @@ import { Label } from '@/components/ui/label'
 import { notifications } from '@/lib/notifications'
 import { useCreateFlag } from '@/hooks/use-flags'
 import { useFlagTypes } from '@/services/flag-types'
+import { useItemKinds, BUILTIN_ITEM_KINDS } from '@/services/item-kinds'
 import { useFlagUsers, nameForUser } from '@/components/flags/flag-users'
+import { entityLabel } from '@/components/flags/flag-entity'
 
 /**
  * Raise-flag compose. Prop-driven so any entity surface can drop it in with a
@@ -66,6 +68,13 @@ export function RaiseFlagButton({
 }) {
   const create = useCreateFlag()
   const users = useFlagUsers()
+  // Active item kinds a general task can anchor to (General Task, Purchase
+  // Task, …). Falls back to the general_task builtin so the compose always has
+  // at least one kind before the query resolves.
+  const { data: kindRows } = useItemKinds({ active_only: true })
+  const kinds = [...(kindRows?.length ? kindRows : BUILTIN_ITEM_KINDS)].sort(
+    (a, b) => a.sort_order - b.sort_order
+  )
   const presetEntity = entityType != null && entityId != null
   const hasCandidates =
     !presetEntity && candidates != null && candidates.length > 0
@@ -80,11 +89,26 @@ export function RaiseFlagButton({
   const [candidateId, setCandidateId] = useState<string>(
     candidates?.[0]?.entityId ?? ''
   )
+  // Anchor mode: 'item' (preset entity), 'manual' (free item form), or
+  // 'kind:<slug>' (a virtual item kind — a general task with no id). Preset
+  // defaults to its item; otherwise the compose defaults to a General Task.
+  // The candidate (order-scope) flow keeps its own picker and ignores this.
+  const [anchor, setAnchor] = useState<string>(
+    presetEntity ? 'item' : 'kind:general_task'
+  )
+  // Optional deadline as a native date string ('YYYY-MM-DD').
+  const [due, setDue] = useState('')
 
   // The chosen candidate (order scope), defaulting to the first.
   const selectedCandidate = hasCandidates
     ? (candidates.find(c => c.entityId === candidateId) ?? candidates[0])
     : undefined
+
+  // A kind anchor ('kind:<slug>') posts a general task on that kind (no id).
+  // Only meaningful outside the candidate (order-scope) flow.
+  const kindSlug =
+    !hasCandidates && anchor.startsWith('kind:') ? anchor.slice(5) : null
+  const isKind = kindSlug != null
 
   const reset = () => {
     setType('blocker')
@@ -93,33 +117,48 @@ export function RaiseFlagButton({
     setFirstComment('')
     setEntityIdInput('')
     setCandidateId(candidates?.[0]?.entityId ?? '')
+    setAnchor(presetEntity ? 'item' : 'kind:general_task')
+    setDue('')
   }
 
-  const resolvedEntityType = presetEntity
-    ? (entityType ?? '')
-    : selectedCandidate
-      ? selectedCandidate.entityType
-      : entityTypeInput
-  const resolvedEntityId = presetEntity
-    ? (entityId ?? '')
-    : selectedCandidate
-      ? selectedCandidate.entityId
-      : entityIdInput.trim()
+  const resolvedEntityType: string | null = isKind
+    ? kindSlug
+    : presetEntity
+      ? (entityType ?? '')
+      : selectedCandidate
+        ? selectedCandidate.entityType
+        : entityTypeInput
+  const resolvedEntityId: string | null = isKind
+    ? null
+    : presetEntity
+      ? (entityId ?? '')
+      : selectedCandidate
+        ? selectedCandidate.entityId
+        : entityIdInput.trim()
 
-  // Only types active AND allowed for this entity, ordered by sort_order
-  // (the backend returns them ordered). Colors come from the row.
+  // Only types active AND allowed for this anchor, ordered by sort_order (the
+  // backend returns them ordered). A kind slug joins the scoping vocabulary, so
+  // the same rule applies to code entities and kinds alike: keep globals plus
+  // types scoped to the current anchor. Filtered client-side too so a broader
+  // cached list never offers a type the anchor can't carry.
   const typesQuery = useFlagTypes({
     entity_type: resolvedEntityType || undefined,
     active_only: true,
   })
-  const flagTypes = typesQuery.data ?? []
-  // Keep the selection valid as the entity (and thus the allowed set) changes.
+  const flagTypes = (typesQuery.data ?? []).filter(
+    t =>
+      t.entity_types.length === 0 ||
+      (resolvedEntityType != null && t.entity_types.includes(resolvedEntityType))
+  )
+  // Keep the selection valid as the anchor (and thus the allowed set) changes.
   const selectedType = flagTypes.some(t => t.slug === type)
     ? type
     : (flagTypes[0]?.slug ?? type)
 
   const canSubmit =
-    title.trim().length > 0 && resolvedEntityId.length > 0 && !create.isPending
+    title.trim().length > 0 &&
+    (isKind || (resolvedEntityId != null && resolvedEntityId.length > 0)) &&
+    !create.isPending
 
   const submit = () => {
     if (!canSubmit) return
@@ -131,6 +170,8 @@ export function RaiseFlagButton({
         title: title.trim(),
         assignee_id: assigneeId,
         first_comment: firstComment.trim() || null,
+        // 5pm local = end-of-workday semantics for a date-only picker.
+        due_at: due ? new Date(`${due}T17:00:00`).toISOString() : null,
       },
       {
         onSuccess: () => {
@@ -179,6 +220,46 @@ export function RaiseFlagButton({
           )}
         </div>
 
+        {presetEntity && (
+          <div className="space-y-1">
+            <Label className="text-xs">Attach to</Label>
+            <Select value={anchor} onValueChange={setAnchor}>
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="item">
+                  {targetLabel ?? entityLabel(entityType, entityId)}
+                </SelectItem>
+                {kinds.map(k => (
+                  <SelectItem key={k.slug} value={`kind:${k.slug}`}>
+                    {k.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
+        {!presetEntity && !hasCandidates && (
+          <div className="space-y-1">
+            <Label className="text-xs">Attach to</Label>
+            <Select value={anchor} onValueChange={setAnchor}>
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {kinds.map(k => (
+                  <SelectItem key={k.slug} value={`kind:${k.slug}`}>
+                    {k.label}
+                  </SelectItem>
+                ))}
+                <SelectItem value="manual">Specific item…</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
         {hasCandidates && candidates.length > 1 && (
           <div className="space-y-1">
             <Label className="text-xs">Which sample?</Label>
@@ -200,10 +281,10 @@ export function RaiseFlagButton({
           </div>
         )}
 
-        {!presetEntity && !hasCandidates && (
+        {!presetEntity && !hasCandidates && anchor === 'manual' && (
           <div className="grid grid-cols-2 gap-2">
             <div className="space-y-1">
-              <Label className="text-xs">Entity type</Label>
+              <Label className="text-xs">Item type</Label>
               <Select
                 value={entityTypeInput}
                 onValueChange={setEntityTypeInput}
@@ -212,14 +293,14 @@ export function RaiseFlagButton({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="sub_sample">Vial</SelectItem>
+                  <SelectItem value="sub_sample">Sub Sample</SelectItem>
                   <SelectItem value="sample">Sample</SelectItem>
                   <SelectItem value="worksheet">Worksheet</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">Entity id</Label>
+              <Label className="text-xs">Item id</Label>
               <Input
                 value={entityIdInput}
                 onChange={e => setEntityIdInput(e.target.value)}
@@ -250,6 +331,19 @@ export function RaiseFlagButton({
               ))}
             </SelectContent>
           </Select>
+        </div>
+
+        <div className="space-y-1">
+          <Label htmlFor="flag-due" className="text-xs">
+            Due date (optional)
+          </Label>
+          <Input
+            id="flag-due"
+            type="date"
+            value={due}
+            onChange={e => setDue(e.target.value)}
+            className="h-8 w-40 text-xs"
+          />
         </div>
 
         <div className="space-y-1">

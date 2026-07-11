@@ -26,11 +26,20 @@ import {
   changeStatus,
   addWatcher,
   removeWatcher,
+  addReaction,
+  removeReaction,
+  setDue,
+  searchFlags,
+  entitySearch,
+  armWatch,
+  cancelWatch,
+  listWatches,
   type FlagTab,
   type ListFlagsParams,
   type FlagStatus,
   type CreateFlagBody,
   type ActivityPage,
+  type ArmWatchBody,
 } from '@/lib/flags-api'
 
 // --- query keys (exported so tests + the SSE glue share the literals) ---
@@ -45,9 +54,18 @@ export const flagKeys = {
   // invalidate(['flags']) refreshes every EntityFlagButton on any flag event.
   entity: (entityType: string, entityId: string, includeDescendants: boolean) =>
     ['flags', 'entity', entityType, entityId, includeDescendants] as const,
+  // Prefix over BOTH includeDescendants variants of ONE entity's flags. The SSE
+  // glue invalidates this to refetch just the affected entity's button(s) —
+  // scoping away the per-vial EntityFlagButton refetch storm.
+  entityScope: (entityType: string, entityId: string) =>
+    ['flags', 'entity', entityType, entityId] as const,
   activity: () => ['flags', 'activity'] as const,
   unread: () => ['flags', 'unread'] as const,
+  search: (q: string) => ['flags', 'search', q] as const,
+  entitySearch: (entityType: string, q: string) =>
+    ['flags', 'entity-search', entityType, q] as const,
   detail: (id: number) => ['flags', id] as const,
+  watches: (flagId: number) => ['flags', 'watches', flagId] as const,
 }
 
 // --- queries ---
@@ -110,6 +128,32 @@ export function useFlagUnread() {
   return useQuery({
     queryKey: flagKeys.unread(),
     queryFn: getUnread,
+    staleTime: 5_000,
+  })
+}
+
+/** Entity-link typeahead hits for `q` scoped to `entityType`. Disabled below 2
+ *  chars (the picker also debounces). Keyed on both type + query so switching
+ *  the entity-type Select refetches rather than showing stale rows. */
+export function useEntitySearch(entityType: string, q: string) {
+  const trimmed = q.trim()
+  return useQuery({
+    queryKey: flagKeys.entitySearch(entityType, trimmed),
+    queryFn: () => entitySearch(entityType, trimmed),
+    enabled: trimmed.length >= 2,
+    staleTime: 5_000,
+  })
+}
+
+/** Comment/title search hits for `q`. Disabled below 3 chars (the flyout also
+ *  debounces the input). Under ['flags', …] so the SSE glue's blanket
+ *  invalidate keeps results fresh as comments arrive live. */
+export function useFlagSearch(q: string) {
+  const trimmed = q.trim()
+  return useQuery({
+    queryKey: flagKeys.search(trimmed),
+    queryFn: () => searchFlags(trimmed),
+    enabled: trimmed.length >= 3,
     staleTime: 5_000,
   })
 }
@@ -187,6 +231,18 @@ export function useChangeStatus(flagId: number) {
   })
 }
 
+/** Set / change / clear the due date → thread + lists (overdue accents) + summary. */
+export function useSetDue(flagId: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (dueAt: string | null) => setDue(flagId, dueAt),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: flagKeys.detail(flagId) })
+      invalidateListsAndSummary(qc)
+    },
+  })
+}
+
 /** Watch a flag → thread (watcher count) + the Watching list. */
 export function useAddWatcher(flagId: number) {
   const qc = useQueryClient()
@@ -207,6 +263,67 @@ export function useRemoveWatcher(flagId: number) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: flagKeys.detail(flagId) })
       qc.invalidateQueries({ queryKey: flagKeys.lists() })
+    },
+  })
+}
+
+/** Toggle a reaction on a comment → refresh the open thread. */
+export function useAddReaction(flagId: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ commentId, emoji }: { commentId: number; emoji: string }) =>
+      addReaction(commentId, emoji),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: flagKeys.detail(flagId) }),
+  })
+}
+
+export function useRemoveReaction(flagId: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ commentId, emoji }: { commentId: number; emoji: string }) =>
+      removeReaction(commentId, emoji),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: flagKeys.detail(flagId) }),
+  })
+}
+
+// --- state-change watches (Plan 6) --------------------------------------
+
+/** Armed watches on one thread. Under ['flags', …] for live blanket-invalidate. */
+export function useFlagWatches(flagId: number | null) {
+  return useQuery({
+    queryKey: flagKeys.watches(flagId ?? -1),
+    queryFn: () => listWatches(flagId as number),
+    enabled: flagId != null,
+    staleTime: 5_000,
+  })
+}
+
+/** Arm a watch → refresh the thread's watch chips + its detail. */
+export function useArmWatch(flagId?: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: ArmWatchBody) => armWatch(body),
+    onSuccess: () => {
+      if (flagId != null) {
+        qc.invalidateQueries({ queryKey: flagKeys.watches(flagId) })
+        qc.invalidateQueries({ queryKey: flagKeys.detail(flagId) })
+      }
+    },
+  })
+}
+
+/** Cancel a watch → same refresh. */
+export function useCancelWatch(flagId?: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => cancelWatch(id),
+    onSuccess: () => {
+      if (flagId != null) {
+        qc.invalidateQueries({ queryKey: flagKeys.watches(flagId) })
+        qc.invalidateQueries({ queryKey: flagKeys.detail(flagId) })
+      }
     },
   })
 }

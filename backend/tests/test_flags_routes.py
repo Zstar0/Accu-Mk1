@@ -151,7 +151,8 @@ def test_list_types_lists_builtins(client):
     rows = client.get("/api/flags/types").json()
     slugs = [r["slug"] for r in rows]
     assert slugs == ["blocker", "critical", "question",
-                     "waiting_on_customer", "ready_for_verification"]
+                     "waiting_on_customer", "ready_for_verification",
+                     "task", "feature_request"]
     assert all(r["is_builtin"] for r in rows)
 
 

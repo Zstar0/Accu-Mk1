@@ -23,6 +23,7 @@ function flag(
     updated_at: '2026-06-30T12:00:00',
     resolved_at: null,
     resolved_by: null,
+    due_at: null,
     ...over,
   }
 }
@@ -106,6 +107,19 @@ describe('filterFlags', () => {
     ).toEqual([2])
   })
 
+  it("'all_open' keeps open/in_progress/blocked, drops resolved/closed", () => {
+    const flags = [
+      flag({ id: 1, status: 'open' }),
+      flag({ id: 2, status: 'in_progress' }),
+      flag({ id: 3, status: 'blocked' }),
+      flag({ id: 4, status: 'resolved' }),
+      flag({ id: 5, status: 'closed' }),
+    ]
+    expect(
+      filterFlags(flags, filter({ status: 'all_open' })).map(f => f.id)
+    ).toEqual([1, 2, 3])
+  })
+
   it('filters by entity type', () => {
     const flags = [
       flag({ id: 1, entity_type: 'sample' }),
@@ -115,6 +129,30 @@ describe('filterFlags', () => {
     expect(
       filterFlags(flags, filter({ entityType: 'worksheet' })).map(f => f.id)
     ).toEqual([3])
+  })
+
+  it("entityType 'general' keeps null-anchor AND general_task flags", () => {
+    // Slice 7 backfill flips null anchors to 'general_task'; the 'general'
+    // sentinel must match both (belt-and-suspenders across the migration).
+    const flags = [
+      flag({ id: 1, entity_type: 'sample' }),
+      flag({ id: 2, entity_type: null }),
+      flag({ id: 3, entity_type: 'worksheet' }),
+      flag({ id: 4, entity_type: 'general_task' }),
+    ]
+    expect(
+      filterFlags(flags, filter({ entityType: 'general' })).map(f => f.id)
+    ).toEqual([2, 4])
+  })
+
+  it('filters by a specific virtual-kind slug', () => {
+    const flags = [
+      flag({ id: 1, entity_type: 'general_task' }),
+      flag({ id: 2, entity_type: 'purchase_task' }),
+    ]
+    expect(
+      filterFlags(flags, filter({ entityType: 'purchase_task' })).map(f => f.id)
+    ).toEqual([2])
   })
 
   it('filters by flag type', () => {
@@ -159,5 +197,49 @@ describe('filterFlags', () => {
   it('returns an empty array when nothing matches', () => {
     const flags = [flag({ id: 1, title: 'A' })]
     expect(filterFlags(flags, filter({ text: 'zzz' }))).toEqual([])
+  })
+
+  it("assignee 'all' passes everything", () => {
+    const flags = [
+      flag({ id: 1, assignee_id: 7 }),
+      flag({ id: 2, assignee_id: 9 }),
+      flag({ id: 3, assignee_id: null }),
+    ]
+    expect(filterFlags(flags, filter({ assignee: 'all' }))).toHaveLength(3)
+  })
+
+  it('assignee matches a specific user id', () => {
+    const flags = [
+      flag({ id: 1, assignee_id: 7 }),
+      flag({ id: 2, assignee_id: 9 }),
+      flag({ id: 3, assignee_id: null }),
+    ]
+    expect(
+      filterFlags(flags, filter({ assignee: '7' })).map(f => f.id)
+    ).toEqual([1])
+  })
+
+  it('overdueOnly keeps only overdue OPEN flags', () => {
+    const now = new Date('2026-07-09T12:00:00Z')
+    const flags = [
+      flag({ id: 1, status: 'open', due_at: '2026-07-06T17:00:00Z' }), // overdue+open
+      flag({ id: 2, status: 'open', due_at: '2026-07-20T17:00:00Z' }), // future
+      flag({ id: 3, status: 'resolved', due_at: '2026-07-06T17:00:00Z' }), // overdue but resolved
+      flag({ id: 4, status: 'open', due_at: null }), // no due date
+    ]
+    expect(
+      filterFlags(flags, filter({ overdueOnly: true }), now).map(f => f.id)
+    ).toEqual([1])
+  })
+
+  it("assignee 'none' matches unassigned only", () => {
+    const flags = [
+      flag({ id: 1, assignee_id: 7 }),
+      flag({ id: 2, assignee_id: 9 }),
+      flag({ id: 3, assignee_id: null }),
+    ]
+    expect(
+      filterFlags(flags, filter({ assignee: 'none' })).map(f => f.id)
+    ).toEqual([3])
   })
 })
