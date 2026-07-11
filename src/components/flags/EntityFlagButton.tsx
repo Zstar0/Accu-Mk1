@@ -4,11 +4,15 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useUIStore } from '@/store/ui-store'
 import { useEntityFlags } from '@/hooks/use-flags'
-import { entityLabel } from '@/components/flags/flag-entity'
+import {
+  entityLabel,
+  WATCHABLE_ENTITY_TYPES,
+} from '@/components/flags/flag-entity'
 import { flagTypeDef } from '@/components/flags/flag-catalog'
 import { useFlagTypesMap } from '@/services/flag-types'
 import { formatDateTime } from '@/components/flags/flag-format'
 import { RaiseFlagButton } from '@/components/flags/RaiseFlagButton'
+import { WatchStateButton } from '@/components/flags/WatchStateButton'
 import type { FlagResponse } from '@/lib/flags-api'
 
 /**
@@ -95,29 +99,38 @@ export function EntityFlagButton({
   const typesMap = useFlagTypesMap()
   const open = (data ?? []).filter(f => OPEN_STATES.has(f.status))
   const lg = size === 'lg'
+  const watchable = WATCHABLE_ENTITY_TYPES.has(entityType)
 
   // --- Unflagged: subtle outline affordance → raise compose --------------
   if (open.length === 0) {
     return (
-      <RaiseFlagButton
-        entityType={entityType}
-        entityId={entityId}
-        trigger={
-          <Button
-            variant="outline"
-            size={lg ? 'default' : 'sm'}
-            aria-label="Raise a flag on this item"
-            className={cn(
-              'gap-1.5 text-muted-foreground hover:text-foreground',
-              lg && 'h-9 px-3.5',
-              className
-            )}
-          >
-            <Flag className={cn(lg ? 'h-4 w-4' : 'h-3.5 w-3.5')} />
-            Flag
-          </Button>
-        }
-      />
+      <span className={cn('inline-flex items-center gap-1', className)}>
+        <RaiseFlagButton
+          entityType={entityType}
+          entityId={entityId}
+          trigger={
+            <Button
+              variant="outline"
+              size={lg ? 'default' : 'sm'}
+              aria-label="Raise a flag on this item"
+              className={cn(
+                'gap-1.5 text-muted-foreground hover:text-foreground',
+                lg && 'h-9 px-3.5'
+              )}
+            >
+              <Flag className={cn(lg ? 'h-4 w-4' : 'h-3.5 w-3.5')} />
+              Flag
+            </Button>
+          }
+        />
+        {watchable && (
+          <WatchStateButton
+            entityType={entityType}
+            entityId={entityId}
+            targetLabel={entityLabel(entityType, entityId)}
+          />
+        )}
+      </span>
     )
   }
 
@@ -221,6 +234,13 @@ export function EntityFlagButton({
           </Button>
         }
       />
+      {watchable && (
+        <WatchStateButton
+          entityType={entityType}
+          entityId={entityId}
+          targetLabel={entityLabel(entityType, entityId)}
+        />
+      )}
     </span>
   )
 }

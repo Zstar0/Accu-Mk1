@@ -25,6 +25,7 @@ import { TurnaroundReport } from '@/components/reports/TurnaroundReport'
 import { PeptideRequestsList } from '@/pages/PeptideRequestsList'
 import { PeptideRequestDetail } from '@/pages/PeptideRequestDetail'
 import { AdminClickupUsers } from '@/pages/AdminClickupUsers'
+import { SettingsPage } from '@/components/preferences/SettingsPage'
 import { useUIStore } from '@/store/ui-store'
 import { useAuthStore } from '@/store/auth-store'
 
@@ -85,6 +86,8 @@ export function MainWindowContent({
         return <PeptideRequestsList />
       case 'admin-clickup-users':
         return <AdminClickupUsers />
+      case 'settings':
+        return <SettingsPage />
       default:
         return null
     }

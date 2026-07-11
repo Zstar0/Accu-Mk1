@@ -182,7 +182,6 @@ export function AppSidebar() {
   const activeSection = useUIStore(state => state.activeSection)
   const activeSubSection = useUIStore(state => state.activeSubSection)
   const navigateTo = useUIStore(state => state.navigateTo)
-  const setPreferencesOpen = useUIStore(state => state.setPreferencesOpen)
   const updateVersion = useUIStore(state => state.updateVersion)
   const updateReady = useUIStore(state => state.updateReady)
   const user = useAuthStore(state => state.user)
@@ -320,7 +319,8 @@ export function AppSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton
               tooltip="Settings"
-              onClick={() => setPreferencesOpen(true)}
+              isActive={activeSection === 'settings'}
+              onClick={() => navigateTo('settings', 'general')}
             >
               <Settings className="h-4 w-4" />
               <span>Settings</span>

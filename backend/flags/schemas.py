@@ -13,12 +13,18 @@ FlagTab = Literal["assigned", "raised", "watching", "all_open"]
 
 
 class CreateFlagRequest(BaseModel):
-    entity_type: str
-    entity_id: str
+    # Null anchor = a general task (Phase 2 slice 2).
+    entity_type: Optional[str] = None
+    entity_id: Optional[str] = None
     type: str
     title: str
     assignee_id: Optional[int] = None
     first_comment: Optional[str] = None
+    due_at: Optional[datetime] = None
+
+
+class DueRequest(BaseModel):
+    due_at: Optional[datetime] = None
 
 
 class CommentRequest(BaseModel):
@@ -38,6 +44,23 @@ class WatcherRequest(BaseModel):
     user_id: int
 
 
+class AttachmentResponse(BaseModel):
+    id: int
+    flag_id: int
+    comment_id: Optional[int] = None
+    filename: str
+    content_type: str
+    size_bytes: int
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ReactionAggregate(BaseModel):
+    emoji: str
+    count: int
+    user_ids: List[int] = Field(default_factory=list)
+
+
 class CommentResponse(BaseModel):
     id: int
     flag_id: int
@@ -47,6 +70,7 @@ class CommentResponse(BaseModel):
     mentions: List[int] = Field(default_factory=list)
     created_at: datetime
     edited_at: Optional[datetime]
+    reactions: List[ReactionAggregate] = Field(default_factory=list)
     model_config = ConfigDict(from_attributes=True)
 
     @field_validator("mentions", mode="before")
@@ -88,8 +112,9 @@ class EntityContext(BaseModel):
 
 class FlagResponse(BaseModel):
     id: int
-    entity_type: str
-    entity_id: str
+    # Nullable since Phase 2: a null anchor = a general task.
+    entity_type: Optional[str] = None
+    entity_id: Optional[str] = None
     kind: str
     type: str
     status: str
@@ -100,6 +125,7 @@ class FlagResponse(BaseModel):
     updated_at: datetime
     resolved_at: Optional[datetime]
     resolved_by: Optional[int]
+    due_at: Optional[datetime] = None
     # Optional server-resolved entity context (label/sample_id/analyses/deep_link).
     entity: Optional[EntityContext] = None
     model_config = ConfigDict(from_attributes=True)
@@ -114,10 +140,41 @@ class WatcherOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class EntityLinkOut(BaseModel):
+    """A navigational entity reference link, with resolved context like the
+    anchor. NOT counted in rollups/indicators (spec §2 link model b)."""
+    id: int
+    entity_type: str
+    entity_id: str
+    entity: Optional[EntityContext] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EntityLinkRequest(BaseModel):
+    entity_type: str
+    entity_id: str
+
+
+class FlagLinkOut(BaseModel):
+    """A related-flag link, resolved for the viewer. `flag_id` is THE OTHER
+    flag (symmetric render); title/status/type pre-resolved for the chip."""
+    id: int
+    flag_id: int
+    title: str
+    status: str
+    type: str
+
+
+class FlagLinkRequest(BaseModel):
+    flag_id: int
+
+
 class FlagDetailResponse(FlagResponse):
     comments: List[CommentResponse] = Field(default_factory=list)
     events: List[EventResponse] = Field(default_factory=list)
     watchers: List[WatcherOut] = Field(default_factory=list)
+    entity_links: List[EntityLinkOut] = Field(default_factory=list)
+    flag_links: List[FlagLinkOut] = Field(default_factory=list)
 
 
 class ActivityItem(BaseModel):
@@ -142,6 +199,29 @@ class ActivityPage(BaseModel):
 class SummaryResponse(BaseModel):
     assigned_to_me: int
     by_type: dict
+
+
+class FlagSearchHit(BaseModel):
+    """One comment/title search match (spec §7). `snippet` is a cleaned comment
+    excerpt (empty on a title-only hit); `matched_in` ⊆ {"comment","title"}.
+    `title`/`status`/`type` decorate the hit so a picker renders it without a
+    follow-up fetch (additive — existing consumers ignore them)."""
+    flag_id: int
+    snippet: str = ""
+    matched_in: List[str] = Field(default_factory=list)
+    title: str = ""
+    status: str = ""
+    type: str = ""
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EntitySearchHit(BaseModel):
+    """One typeahead hit for an entity link picker: the `entity_id` to link and
+    a human `label` to show. Shape is host-defined by the entity's `search`
+    seam closure."""
+    entity_id: str
+    label: str
+    model_config = ConfigDict(from_attributes=True)
 
 
 # --- flag types (Plan 5) -------------------------------------------------
@@ -182,3 +262,123 @@ class FlagTypeUpdate(BaseModel):
     is_active: Optional[bool] = None
     sort_order: Optional[int] = None
     entity_types: Optional[List[str]] = None
+
+
+# --- item kinds (Slice 7) -----------------------------------------------
+class FlagItemKindResponse(BaseModel):
+    id: int
+    slug: str
+    label: str
+    color: str
+    is_active: bool
+    is_builtin: bool
+    sort_order: int
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class FlagItemKindCreate(BaseModel):
+    label: str
+    color: str
+    # Optional — generated from `label` when absent. Immutable once created.
+    slug: Optional[str] = None
+    is_active: bool = True
+    sort_order: Optional[int] = None
+
+
+class FlagItemKindUpdate(BaseModel):
+    """All-optional partial edit. No `slug` — the slug is immutable."""
+    label: Optional[str] = None
+    color: Optional[str] = None
+    is_active: Optional[bool] = None
+    sort_order: Optional[int] = None
+
+
+# --- recurring tasks (Slice 5) ------------------------------------------
+class FlagRecurringResponse(BaseModel):
+    id: int
+    title: str
+    body: Optional[str] = None
+    type: str
+    assignee_id: Optional[int] = None
+    watchers: List[int] = Field(default_factory=list)
+    entity_type: Optional[str] = None
+    entity_id: Optional[str] = None
+    cadence: str
+    next_run_at: datetime
+    active: bool
+    skip_if_open: bool
+    created_by: int
+    created_at: datetime
+    last_minted_flag_id: Optional[int] = None
+    model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("watchers", mode="before")
+    @classmethod
+    def _none_to_list(cls, v):
+        return v or []
+
+
+class FlagRecurringCreate(BaseModel):
+    title: str
+    type: str
+    cadence: str
+    body: Optional[str] = None
+    assignee_id: Optional[int] = None
+    watchers: List[int] = Field(default_factory=list)
+    entity_type: Optional[str] = None
+    entity_id: Optional[str] = None
+    skip_if_open: bool = True
+
+
+class FlagRecurringUpdate(BaseModel):
+    title: Optional[str] = None
+    type: Optional[str] = None
+    cadence: Optional[str] = None
+    body: Optional[str] = None
+    assignee_id: Optional[int] = None
+    watchers: Optional[List[int]] = None
+    entity_type: Optional[str] = None
+    entity_id: Optional[str] = None
+    active: Optional[bool] = None
+    skip_if_open: Optional[bool] = None
+
+
+# --- state-change watches (Plan 6) --------------------------------------
+class WatchConditionModel(BaseModel):
+    field: Literal["state"]
+    equals: str
+
+
+class WatchActionModel(BaseModel):
+    kind: Literal["create_flag", "comment"]
+    # create_flag
+    type: Optional[str] = None
+    title: Optional[str] = None
+    assignee_id: Optional[int] = None
+    # comment
+    flag_id: Optional[int] = None
+    body: Optional[str] = None
+
+
+class ArmWatchRequest(BaseModel):
+    entity_type: str
+    entity_id: str
+    condition: WatchConditionModel
+    action: WatchActionModel
+    watch_flag_id: Optional[int] = None
+
+
+class WatchResponse(BaseModel):
+    id: int
+    entity_type: str
+    entity_id: str
+    condition: dict
+    action: dict
+    created_by: int
+    watch_flag_id: Optional[int] = None
+    status: str
+    created_at: datetime
+    fired_at: Optional[datetime] = None
+    model_config = ConfigDict(from_attributes=True)

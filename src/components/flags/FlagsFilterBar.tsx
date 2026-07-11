@@ -7,6 +7,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
 import type { FlagStatus } from '@/lib/flags-api'
 import {
   STATUS_LABELS,
@@ -16,6 +17,7 @@ import {
 } from '@/components/flags/flag-status'
 import { entityMeta } from '@/components/flags/flag-entity'
 import { useFlagTypes } from '@/services/flag-types'
+import { useItemKinds } from '@/services/item-kinds'
 import { useFlagUsers } from '@/components/flags/flag-users'
 import { displayName } from '@/lib/user-display'
 import type { FlagFilterState } from '@/components/flags/flag-filter'
@@ -56,6 +58,13 @@ export function FlagsFilterBar({
   const types = [...(typeRows ?? [])].sort(
     (a, b) => a.sort_order - b.sort_order
   )
+  // Active virtual item kinds, filterable by slug. general_task is excluded —
+  // it rides the 'general' sentinel option (which also matches legacy null
+  // anchors) rather than getting a redundant second entry.
+  const { data: kindRows } = useItemKinds({ active_only: true })
+  const kinds = [...(kindRows ?? [])]
+    .filter(k => k.slug !== 'general_task')
+    .sort((a, b) => a.sort_order - b.sort_order)
   // Shared user directory (same query mention-autocomplete loads), sorted by
   // display name for the assignee dropdown.
   const userMap = useFlagUsers()
@@ -70,8 +79,8 @@ export function FlagsFilterBar({
         <Input
           value={value.text}
           onChange={e => onChange({ ...value, text: e.target.value })}
-          placeholder="Search title or Sample ID…"
-          aria-label="Search flags"
+          placeholder="Search title, Sample ID, or comments…"
+          aria-label="Search flags by title, Sample ID, or comment"
           className="h-8 ps-8 text-xs"
         />
       </div>
@@ -134,16 +143,22 @@ export function FlagsFilterBar({
       >
         <SelectTrigger
           size="sm"
-          aria-label="Filter by entity"
+          aria-label="Filter by item"
           className="h-8 w-auto text-xs"
         >
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="all">All entities</SelectItem>
+          <SelectItem value="all">All items</SelectItem>
           {ENTITY_TYPES.map(t => (
             <SelectItem key={t} value={t}>
               {entityMeta(t).label}
+            </SelectItem>
+          ))}
+          <SelectItem value="general">General Task</SelectItem>
+          {kinds.map(k => (
+            <SelectItem key={k.slug} value={k.slug}>
+              {k.label}
             </SelectItem>
           ))}
         </SelectContent>
@@ -172,6 +187,17 @@ export function FlagsFilterBar({
           </SelectContent>
         </Select>
       )}
+
+      <Button
+        type="button"
+        variant={value.overdueOnly ? 'default' : 'ghost'}
+        size="sm"
+        aria-pressed={value.overdueOnly}
+        className="h-8 px-2 text-xs"
+        onClick={() => onChange({ ...value, overdueOnly: !value.overdueOnly })}
+      >
+        Overdue
+      </Button>
     </div>
   )
 }

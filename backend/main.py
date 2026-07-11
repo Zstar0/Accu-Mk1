@@ -82,6 +82,7 @@ from boxes.service import box_label_code
 from packaging_photos.routes import router as packaging_photos_router
 from flags.routes import router as flags_router
 from slack_notify.routes import router as slack_prefs_router
+from slack_notify.interactions import router as slack_interactions_router
 
 import logging
 
@@ -329,6 +330,29 @@ async def lifespan(app: FastAPI):
     init_db()
     from flags import seams as _flag_seams
     _flag_seams.register_mk1_entities()
+    # Flag attachments reuse the S3 blob store used by vial photos when
+    # configured (module purity: the adapter lives here, not in flags/).
+    if os.environ.get("MK1_PHOTO_S3_BUCKET"):
+        from sub_samples.photo_storage import S3PhotoStorage, PhotoNotFoundError
+
+        class _S3FlagAttachmentStorage:
+            def __init__(self):
+                self._s3 = S3PhotoStorage(
+                    prefix=os.environ.get("MK1_FLAG_ATTACH_S3_PREFIX", "flag-attachments/"))
+
+            def save(self, flag_id, data, filename):
+                return self._s3.save_photo(flag_id, data, filename)
+
+            def fetch(self, key):
+                try:
+                    return self._s3.fetch_photo(key)
+                except PhotoNotFoundError as e:
+                    raise _flag_seams.AttachmentNotFound(str(e))
+
+            def delete(self, key):
+                self._s3.delete_photo(key)
+
+        _flag_seams.set_attachment_storage(_S3FlagAttachmentStorage())
     import asyncio as _asyncio
     from flags import bus as _flag_bus
     _flag_bus.BUS.set_loop(_asyncio.get_running_loop())
@@ -336,6 +360,56 @@ async def lifespan(app: FastAPI):
     # Slack DM notifications (spec 2026-07-02) — dormant without the token.
     from slack_notify.notifier import maybe_start as _slack_maybe_start
     _slack_notifier_task = _slack_maybe_start(_flag_bus.BUS)
+    # Flag scheduler (Slice 5) — in-process ticker; jobs registered below.
+    from datetime import timedelta as _timedelta
+    from flags.scheduler import Scheduler as _Scheduler
+    from database import SessionLocal as _SessionLocal
+    _flag_scheduler = _Scheduler(_SessionLocal)
+    # Job registration is appended by later Slice-5 tasks (recurring, digest, GC)
+    # immediately BELOW, before start(). Registering zero jobs is harmless.
+    from flags import recurring as _recurring
+
+    def _recurring_job(now):
+        db = _SessionLocal()
+        try:
+            _recurring.run_due(db, now=now)
+        finally:
+            db.close()
+    _flag_scheduler.register("recurring_mint", interval=_timedelta(minutes=5),
+                             fn=_recurring_job)
+    # Morning digest — token-gated (needs the Slack client). Ticks every ~15 min;
+    # digest.run dedupes to one DM per user per lab-local day.
+    if os.getenv("MK1_SLACK_BOT_TOKEN"):
+        from slack_notify.client import SlackClient as _SlackClient
+        from slack_notify import digest as _digest
+        _digest_base = os.getenv("MK1_PUBLIC_URL",
+                                 "https://accumk1.valenceanalytical.com")
+
+        async def _digest_job(now):
+            await _digest.run(_SessionLocal,
+                              _SlackClient(os.environ["MK1_SLACK_BOT_TOKEN"]),
+                              _digest_base, now=now)
+        _flag_scheduler.register("slack_digest", interval=_timedelta(minutes=15),
+                                 fn=_digest_job)
+    # Orphaned-attachment GC — always registered (no Slack env needed); hourly is
+    # plenty for a 24h TTL. Lives in flags/ (zero Slack coupling).
+    from flags import attachments_gc as _attachments_gc
+
+    def _gc_job(now):
+        db = _SessionLocal()
+        try:
+            _attachments_gc.gc_orphaned_attachments(db, now=now)
+        finally:
+            db.close()
+    _flag_scheduler.register("attachment_gc", interval=_timedelta(hours=1),
+                             fn=_gc_job)
+    # State-change watches poller (Plan 6) — polls the host `state` seam every
+    # ~2 min and fires armed watches once. Job fn takes `now` (the ticker calls
+    # fn(now=now)); run_watch_poll owns its own Session via _watch_poll_job.
+    from flags import watches as _flag_watches
+    _flag_scheduler.register("flag_watch_poller", interval=_timedelta(minutes=2),
+                             fn=_flag_watches._watch_poll_job)
+    _flag_scheduler.start()
     # Seed default settings and admin user
     from database import SessionLocal
     db = SessionLocal()
@@ -412,6 +486,7 @@ app.include_router(boxes_router)
 app.include_router(packaging_photos_router)
 app.include_router(flags_router)
 app.include_router(slack_prefs_router)
+app.include_router(slack_interactions_router)
 
 # --- Endpoints ---
 
@@ -15733,13 +15808,26 @@ async def get_worksheets_users(
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
-    """Return active users for analyst assignment. Accessible to all authenticated users (not admin-only)."""
+    """Return active users for analyst assignment. Accessible to all authenticated users (not admin-only).
+
+    LEFT JOINs slack_dm_prefs so Slack-linked users carry their profile photo
+    (avatar_url); others come back null and keep the initials fallback. This
+    directory is SHARED with the worksheets UI, so worksheet avatars get photos
+    from the same field.
+    """
+    from models import SlackDmPrefs
     users = db.execute(
-        select(User.id, User.email, User.first_name, User.last_name).where(User.is_active == True)  # noqa: E712
+        select(
+            User.id, User.email, User.first_name, User.last_name,
+            SlackDmPrefs.slack_avatar_url,
+        )
+        .outerjoin(SlackDmPrefs, SlackDmPrefs.user_id == User.id)
+        .where(User.is_active == True)  # noqa: E712
         .order_by(User.email)
     ).all()
     return [
-        {"id": row.id, "email": row.email, "first_name": row.first_name, "last_name": row.last_name}
+        {"id": row.id, "email": row.email, "first_name": row.first_name,
+         "last_name": row.last_name, "avatar_url": row.slack_avatar_url}
         for row in users
     ]
 

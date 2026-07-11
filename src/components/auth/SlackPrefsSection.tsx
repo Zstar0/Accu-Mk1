@@ -12,6 +12,13 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   useSlackPrefs,
   useUpdateSlackPrefs,
   useTestSlackDm,
@@ -120,6 +127,31 @@ export function SlackPrefsSection() {
               />
             </div>
           ))}
+        </div>
+
+        {/* Morning digest — opt-in daily summary DM at a lab-local hour. */}
+        <div className="flex items-center justify-between py-1.5">
+          <span className="text-sm">{t('preferences.slack.digest')}</span>
+          <div className="flex items-center gap-2">
+            <Select
+              value={String(prefs.digest_hour)}
+              disabled={!prefs.digest_enabled}
+              onValueChange={v => update.mutate({ digest_hour: Number(v) })}
+            >
+              <SelectTrigger className="h-8 w-24 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Array.from({ length: 24 }, (_, h) => (
+                  <SelectItem key={h} value={String(h)}>{`${h}:00`}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Switch
+              checked={prefs.digest_enabled}
+              onCheckedChange={v => update.mutate({ digest_enabled: v })}
+            />
+          </div>
         </div>
       </CardContent>
     </Card>

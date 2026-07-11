@@ -42,6 +42,21 @@ export function formatClock(iso: string): string {
   })
 }
 
+/** Relative due-date label. Day-granular: floor((due - now) / 86_400_000).
+ *  Null for an unset due date. `overdue` is true only in the past. */
+export function dueLabel(
+  due_at: string | null,
+  now: Date = new Date()
+): { text: string; overdue: boolean } | null {
+  if (!due_at) return null
+  const ms = toMs(due_at)
+  if (Number.isNaN(ms)) return null
+  const days = Math.floor((ms - now.getTime()) / 86_400_000)
+  if (days < 0) return { text: `overdue ${-days}d`, overdue: true }
+  if (days === 0) return { text: 'due today', overdue: false }
+  return { text: `due in ${days}d`, overdue: false }
+}
+
 /** Compact absolute date+time, e.g. "Jun 30, 4:41 PM". */
 export function formatDateTime(iso: string): string {
   const ms = toMs(iso)

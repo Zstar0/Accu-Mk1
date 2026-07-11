@@ -6,8 +6,11 @@ Defaults wire Mk1, but the core depends only on these callables.
 """
 from __future__ import annotations
 
+import os
+import uuid
 from dataclasses import dataclass
-from typing import Callable, Optional
+from pathlib import Path
+from typing import Callable, Optional, Protocol
 
 from sqlalchemy.orm import Session
 
@@ -24,16 +27,37 @@ class EntitySpec:
     # (e.g. a sample's vials). Both are pure host-domain closures — the module
     # core never learns what a "vial" is.
     context: Optional[Callable[[Session, str], Optional[dict]]] = None
+    # Optional BATCH context resolver (perf). Given many ids of this type,
+    # returns `{entity_id: ctx}` for the ids that resolve — the SAME raw ctx dict
+    # `context` returns per id (unstamped; `resolve_contexts` stamps
+    # entity_type/entity_id, exactly like `resolve_context`). Types without it
+    # fall back to a per-id `context` loop (identical results). Only the
+    # query-heavy types (sample/sub_sample) bother; it kills the list-endpoint
+    # N+1 without the core learning any host domain.
+    contexts: Optional[Callable[[Session, list], dict]] = None
     descendants: Optional[Callable[[Session, str], list]] = None
+    # Optional state resolver (Plan 6 — state-change watches). Returns the
+    # entity's current host-domain workflow state (e.g. a sample's status) or
+    # None when unresolvable. ONLY entity types that register a `state` closure
+    # are watchable; the rest 400 at arm time.
+    state: Optional[Callable[[Session, str], Optional[str]]] = None
+    # Optional typeahead resolver (Plan 6 follow-up — link pickers). Given a
+    # query string, returns up to a handful of `{"entity_id", "label"}` hits for
+    # a search-as-you-type picker. Pure host-domain closure; the core never
+    # learns how a sample or worksheet is matched.
+    search: Optional[Callable[[Session, str], list]] = None
 
 
 _REGISTRY: dict[str, EntitySpec] = {}
 
 
 def register_entity(entity_type: str, *, label, deep_link, can_flag,
-                    context=None, descendants=None) -> None:
+                    context=None, contexts=None, descendants=None, state=None,
+                    search=None) -> None:
     _REGISTRY[entity_type] = EntitySpec(entity_type, label, deep_link, can_flag,
-                                        context=context, descendants=descendants)
+                                        context=context, contexts=contexts,
+                                        descendants=descendants,
+                                        state=state, search=search)
 
 
 def is_registered(entity_type: str) -> bool:
@@ -65,6 +89,81 @@ def resolve_context(db: Session, entity_type: str, entity_id: str) -> Optional[d
     return {"entity_type": entity_type, "entity_id": str(entity_id), **ctx}
 
 
+def resolve_contexts(db: Session, entity_type: str, ids: list) -> dict:
+    """Batch form of `resolve_context`: resolve many ids of ONE entity type in
+    one shot. Returns `{entity_id: ctx}` for the ids that resolve; ids that
+    don't resolve (unregistered type, no resolver, missing/deleted row) are
+    simply absent — same None-semantics as `resolve_context`, just expressed as
+    an omitted key. Each returned ctx is byte-identical to the per-id path:
+    stamped with `entity_type`/`entity_id` around the closure's raw dict.
+
+    Types that register a `contexts` batch closure use it (one `IN (...)` sweep
+    instead of N round-trips); the rest fall back to a per-id `resolve_context`
+    loop. A batch-closure error falls back to the per-id loop too — correctness
+    over efficiency, and it still never raises into a request.
+    """
+    ids = [str(i) for i in ids]
+    spec = _REGISTRY.get(entity_type)
+    if spec is None or spec.context is None:
+        return {}
+
+    def _per_id() -> dict:
+        out: dict = {}
+        for eid in ids:
+            ctx = resolve_context(db, entity_type, eid)
+            if ctx is not None:
+                out[eid] = ctx
+        return out
+
+    if spec.contexts is None:
+        return _per_id()
+    try:
+        raw = spec.contexts(db, ids)
+    except Exception:  # noqa: BLE001 — batch is best-effort; fall back per-id
+        return _per_id()
+    if raw is None:
+        return _per_id()
+    return {str(eid): {"entity_type": entity_type, "entity_id": str(eid), **ctx}
+            for eid, ctx in raw.items() if ctx is not None}
+
+
+def has_state_seam(entity_type: str) -> bool:
+    """True when the entity type registered a `state` closure (→ watchable).
+    Deliberately distinct from `resolve_state` returning None, which can mean
+    'unresolvable right now'. Arm-time validation uses THIS."""
+    spec = _REGISTRY.get(entity_type)
+    return spec is not None and spec.state is not None
+
+
+def resolve_state(db: Session, entity_type: str, entity_id: str) -> Optional[str]:
+    """Current host state for an entity, or None (unregistered, no `state`
+    closure, row gone, or resolver error). Best-effort — never raises into the
+    poller (a transient None just means 'no match this tick')."""
+    spec = _REGISTRY.get(entity_type)
+    if spec is None or spec.state is None:
+        return None
+    try:
+        return spec.state(db, str(entity_id))
+    except Exception:  # noqa: BLE001 — state read is best-effort
+        return None
+
+
+def resolve_entity_search(db: Session, entity_type: str, q: str) -> list:
+    """Typeahead hits for a registered entity type, as
+    `[{"entity_id": str, "label": str}, …]`. Returns [] for an unregistered
+    type, a type with no `search` resolver, or on resolver error — never raises
+    into a request (mirrors resolve_context/resolve_state; a picker with no
+    results is fine, a 500 is not)."""
+    spec = _REGISTRY.get(entity_type)
+    if spec is None or spec.search is None:
+        return []
+    try:
+        rows = spec.search(db, str(q))
+    except Exception:  # noqa: BLE001 — search is best-effort decoration
+        return []
+    return list(rows or [])
+
+
 def resolve_descendants(db: Session, entity_type: str, entity_id: str) -> list:
     """Resolve the (entity_type, entity_id) pairs that roll up under this
     entity (a sample's vials). Returns [] when unregistered, no resolver, or on
@@ -76,6 +175,29 @@ def resolve_descendants(db: Session, entity_type: str, entity_id: str) -> list:
         return list(spec.descendants(db, str(entity_id)) or [])
     except Exception:  # noqa: BLE001 — rollup is best-effort
         return []
+
+
+# --- virtual item kinds (Phase 2 slice 7) --------------------------------
+def resolve_virtual_kind(db: Session, entity_type: str):
+    """Return the active FlagItemKind row for `entity_type`, or None.
+
+    A "virtual kind" is a user-managed category (general_task, purchase_task, …)
+    a flag anchors to WITHOUT a registered entity seam and WITHOUT a Mk1 row —
+    `entity_id` is NULL. This is the one place the create-flag validation
+    consults so a kind slug passes the `is_registered` gate; watches/entity-links
+    stay `is_registered`-only, so arming a watch or linking a related item on a
+    kind still 400s / returns [] (no deep-link/state/search affordances). Only
+    ACTIVE kinds resolve — a deactivated kind can't take new flags. Kept here
+    (not in the pure core) so the module still reaches host models only through a
+    seam, mirroring resolve_user."""
+    from sqlalchemy import select
+    from models import FlagItemKind
+    return db.execute(
+        select(FlagItemKind).where(
+            FlagItemKind.slug == entity_type,
+            FlagItemKind.is_active.is_(True),
+        )
+    ).scalar_one_or_none()
 
 
 # --- user provider -------------------------------------------------------
@@ -107,7 +229,113 @@ def set_event_sink(sink) -> None:
     EVENT_SINK = sink
 
 
+# --- attachment storage seam (Plan 3) ------------------------------------
+# The flags module never imports boto3 or host storage modules. The host wires
+# an S3-backed adapter (see main.py) that satisfies this Protocol; the default
+# is a local filesystem store so dev/test work with zero config.
+class AttachmentNotFound(LookupError):
+    """fetch() could not locate a key."""
+
+
+class AttachmentStorageError(RuntimeError):
+    """Any storage-layer failure (bad key, write/read error)."""
+
+
+class AttachmentStorage(Protocol):
+    def save(self, flag_id: str, data: bytes, filename: str) -> str: ...
+    def fetch(self, key: str) -> bytes: ...
+    def delete(self, key: str) -> None: ...
+
+
+def _attach_ext(filename: str) -> str:
+    ext = Path(filename or "").suffix.lower()
+    return ext if ext in {".png", ".jpg", ".jpeg", ".gif", ".webp"} else ".bin"
+
+
+class InMemoryAttachmentStorage:
+    """No-disk store for tests/dev. Key = 'flag_id/uuid.ext'."""
+    def __init__(self) -> None:
+        self._blobs: dict[str, bytes] = {}
+
+    def save(self, flag_id: str, data: bytes, filename: str) -> str:
+        key = f"{flag_id}/{uuid.uuid4().hex}{_attach_ext(filename)}"
+        self._blobs[key] = data
+        return key
+
+    def fetch(self, key: str) -> bytes:
+        if key not in self._blobs:
+            raise AttachmentNotFound(key)
+        return self._blobs[key]
+
+    def delete(self, key: str) -> None:
+        self._blobs.pop(key, None)
+
+
+class FilesystemAttachmentStorage:
+    """Prod default. One file per attachment under {root}/{flag_id}/{uuid}.{ext}."""
+    def __init__(self, root: str | None = None) -> None:
+        self.root = Path(root or os.environ.get("MK1_FLAG_ATTACH_DIR", "/data/flag_attachments"))
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def save(self, flag_id: str, data: bytes, filename: str) -> str:
+        rel = f"{flag_id}/{uuid.uuid4().hex}{_attach_ext(filename)}"
+        p = self.root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data)
+        return rel
+
+    def fetch(self, key: str) -> bytes:
+        p = self._safe(key)
+        if not p.exists():
+            raise AttachmentNotFound(key)
+        return p.read_bytes()
+
+    def delete(self, key: str) -> None:
+        p = self._safe(key)
+        if p.exists():
+            p.unlink()
+
+    def _safe(self, key: str) -> Path:
+        if not key or key.startswith("/") or ".." in key.split("/"):
+            raise AttachmentStorageError(f"unsafe key: {key!r}")
+        resolved = (self.root / key).resolve()
+        try:
+            resolved.relative_to(self.root.resolve())
+        except ValueError as e:
+            raise AttachmentStorageError(f"key escapes root: {key!r}") from e
+        return resolved
+
+
+_ATTACHMENT_STORAGE: "AttachmentStorage | None" = None
+
+
+def get_attachment_storage() -> "AttachmentStorage":
+    global _ATTACHMENT_STORAGE
+    if _ATTACHMENT_STORAGE is None:
+        _ATTACHMENT_STORAGE = FilesystemAttachmentStorage()
+    return _ATTACHMENT_STORAGE
+
+
+def set_attachment_storage(storage: "AttachmentStorage") -> None:
+    global _ATTACHMENT_STORAGE
+    _ATTACHMENT_STORAGE = storage
+
+
+def set_attachment_storage_for_tests(storage: "AttachmentStorage") -> None:
+    set_attachment_storage(storage)
+
+
 # --- Mk1 registrations ---------------------------------------------------
+def _ilike_prefix(q: str) -> str:
+    r"""An escaped `q%` ILIKE pattern for search-as-you-type. LIKE metacharacters
+    are matched literally (escape char `\`), so typing `%`/`_` finds the literal
+    rather than a wildcard. Prefix (not substring) — a typeahead over ids/titles
+    anchors on the start. Mirrors service._like_pattern's escaping; kept local so
+    seams does not depend on the higher service layer."""
+    esc = str(q).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"{esc}%"
+
+
 def register_mk1_entities() -> None:
     """Register the Phase-1 flaggable entity types. Called at startup.
 
@@ -130,10 +358,14 @@ def register_mk1_entities() -> None:
         row = _load_sample(db, eid)
         return getattr(row, "sample_id", None) or f"Sample {eid}"
 
+    def _sample_state(db, eid):
+        row = _load_sample(db, eid)
+        return getattr(row, "status", None)
+
     def _sub_sample_label(db, eid):
         from models import LimsSubSample
         row = db.get(LimsSubSample, int(eid)) if str(eid).isdigit() else None
-        return getattr(row, "sample_id", None) or f"Vial {eid}"
+        return getattr(row, "sample_id", None) or f"Sub Sample {eid}"
 
     def _sample_context(db, eid):
         row = _load_sample(db, eid)
@@ -146,6 +378,36 @@ def register_mk1_entities() -> None:
             "lot": None,     # deferred — lives only in SENAITE
             "deep_link": {"kind": "sample", "id": row.sample_id},
         }
+
+    def _sample_contexts(db, eids):
+        """Batch of `_sample_context`. Mirrors `_load_sample`'s pk-then-human-id
+        precedence over an `IN (...)` sweep, keyed by the INPUT id (a flag may
+        anchor a sample by pk OR by its human Sample ID, e.g. P-0071)."""
+        from sqlalchemy import or_
+        from models import LimsSample
+        eids = [str(e) for e in eids]
+        numeric = [int(e) for e in eids if e.isdigit()]
+        conds = [LimsSample.sample_id.in_(eids)]
+        if numeric:
+            conds.append(LimsSample.id.in_(numeric))
+        rows = db.query(LimsSample).filter(or_(*conds)).all()
+        by_pk = {r.id: r for r in rows}
+        by_sid = {r.sample_id: r for r in rows}
+        out = {}
+        for e in eids:
+            row = by_pk.get(int(e)) if e.isdigit() else None
+            if row is None:
+                row = by_sid.get(e)
+            if row is None:
+                continue
+            out[e] = {
+                "label": row.sample_id,
+                "sample_id": row.sample_id,
+                "analyses": [],
+                "lot": None,
+                "deep_link": {"kind": "sample", "id": row.sample_id},
+            }
+        return out
 
     def _sample_descendants(db, eid):
         from models import LimsSubSample
@@ -184,6 +446,55 @@ def register_mk1_entities() -> None:
             "deep_link": deep_link,
         }
 
+    def _sub_sample_contexts(db, eids):
+        """Batch of `_sub_sample_context`: one sweep for the vials, one for their
+        parents, one for their analyses — three queries for the whole set,
+        replacing the per-vial (get + lazy parent + analyses) N+1. Non-digit ids
+        never resolve (mirrors the per-id `int(eid)` gate → None)."""
+        from models import LimsSubSample, LimsSample, LimsAnalysis
+        eids = [str(e) for e in eids]
+        numeric = [int(e) for e in eids if e.isdigit()]
+        if not numeric:
+            return {}
+        vials = db.query(LimsSubSample).filter(LimsSubSample.id.in_(numeric)).all()
+        by_id = {v.id: v for v in vials}
+        parent_pks = {v.parent_sample_pk for v in vials
+                      if v.parent_sample_pk is not None}
+        parents = {}
+        if parent_pks:
+            parents = {p.id: p for p in db.query(LimsSample).filter(
+                LimsSample.id.in_(parent_pks)).all()}
+        # Analyses grouped per vial, ordered by id, de-duped title-wise
+        # (first occurrence wins) — identical to the per-id closure.
+        titles_by_vial: dict = {}
+        if by_id:
+            for sub_pk, title in db.query(
+                    LimsAnalysis.lims_sub_sample_pk, LimsAnalysis.title).filter(
+                    LimsAnalysis.lims_sub_sample_pk.in_(list(by_id))
+                    ).order_by(LimsAnalysis.id).all():
+                lst = titles_by_vial.setdefault(sub_pk, [])
+                if title not in lst:
+                    lst.append(title)
+        out = {}
+        for e in eids:
+            if not e.isdigit():
+                continue
+            vial = by_id.get(int(e))
+            if vial is None:
+                continue
+            parent = parents.get(vial.parent_sample_pk)
+            parent_sample_id = getattr(parent, "sample_id", None)
+            deep_link = ({"kind": "sample", "id": parent_sample_id}
+                         if parent_sample_id else {"kind": "none", "id": str(e)})
+            out[e] = {
+                "label": vial.sample_id,
+                "sample_id": parent_sample_id,
+                "analyses": titles_by_vial.get(vial.id, []),
+                "lot": None,
+                "deep_link": deep_link,
+            }
+        return out
+
     def _worksheet_context(db, eid):
         return {
             "label": f"Worksheet {eid}",
@@ -193,6 +504,46 @@ def register_mk1_entities() -> None:
             "deep_link": {"kind": "worksheet", "id": str(eid)},
         }
 
+    def _worksheet_contexts(db, eids):
+        """Batch of `_worksheet_context`. The per-id resolver is already
+        DB-free; batching just keeps the three registered types symmetric so the
+        list route never falls back to a per-id loop for a real entity."""
+        return {str(e): _worksheet_context(db, str(e)) for e in eids}
+
+    # --- typeahead search closures (link pickers) ------------------------
+    # entity_id is per-type to match how each type's context/deep-link
+    # resolves and how existing links dedup: sample → human sample_id,
+    # sub_sample/worksheet → the pk their resolvers accept.
+    def _sample_search(db, q):
+        from models import LimsSample
+        pattern = _ilike_prefix(q)
+        rows = (db.query(LimsSample)
+                .filter(LimsSample.sample_id.ilike(pattern, escape="\\"))
+                .order_by(LimsSample.sample_id)
+                .limit(10).all())
+        return [{"entity_id": r.sample_id, "label": r.sample_id} for r in rows]
+
+    def _sub_sample_search(db, q):
+        from models import LimsSubSample
+        pattern = _ilike_prefix(q)
+        rows = (db.query(LimsSubSample)
+                .filter(LimsSubSample.sample_id.ilike(pattern, escape="\\"))
+                .order_by(LimsSubSample.sample_id)
+                .limit(10).all())
+        return [{"entity_id": str(r.id), "label": r.sample_id} for r in rows]
+
+    def _worksheet_search(db, q):
+        from sqlalchemy import or_
+        from models import Worksheet
+        cond = Worksheet.title.ilike(_ilike_prefix(q), escape="\\")
+        if str(q).isdigit():
+            cond = or_(cond, Worksheet.id == int(q))
+        rows = (db.query(Worksheet).filter(cond)
+                .order_by(Worksheet.id.desc())
+                .limit(10).all())
+        return [{"entity_id": str(r.id), "label": r.title or f"Worksheet {r.id}"}
+                for r in rows]
+
     # Deep links reconciled against the real frontend useHashNavigation routes
     # (Plan 3 Task 7). Hash format is `#<section>/<subsection>?id=<id>`.
     register_entity("sample",
@@ -200,14 +551,21 @@ def register_mk1_entities() -> None:
                     deep_link=lambda eid: f"/#senaite/sample-details?id={eid}",
                     can_flag=lambda user, eid: True,
                     context=_sample_context,
-                    descendants=_sample_descendants)
+                    contexts=_sample_contexts,
+                    descendants=_sample_descendants,
+                    state=_sample_state,
+                    search=_sample_search)
     register_entity("sub_sample",
                     label=_sub_sample_label,
                     deep_link=lambda eid: f"/#senaite/sample-details?id={eid}",
                     can_flag=lambda user, eid: True,
-                    context=_sub_sample_context)
+                    context=_sub_sample_context,
+                    contexts=_sub_sample_contexts,
+                    search=_sub_sample_search)
     register_entity("worksheet",
                     label=lambda db, eid: f"Worksheet {eid}",
                     deep_link=lambda eid: f"/#hplc-analysis/worksheet-detail?id={eid}",
                     can_flag=lambda user, eid: True,
-                    context=_worksheet_context)
+                    context=_worksheet_context,
+                    contexts=_worksheet_contexts,
+                    search=_worksheet_search)

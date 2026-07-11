@@ -95,3 +95,27 @@ def test_worksheets_users_includes_names(client_as, db, user):
     assert r.status_code == 200
     mine = next(x for x in r.json() if x["email"] == "me@lab.test")
     assert mine["first_name"] == "Ada"
+
+
+def test_worksheets_users_surfaces_slack_avatar_url(client_as, db, user):
+    """A Slack-linked user's cached avatar surfaces via the LEFT JOIN."""
+    from models import SlackDmPrefs
+    pref = SlackDmPrefs(
+        user_id=user.id, slack_member_id="U1",
+        slack_avatar_url="https://avatars.slack-edge.com/x_72.png")
+    db.add(pref); db.commit()
+    try:
+        r = client_as.get("/worksheets/users")
+        assert r.status_code == 200
+        mine = next(x for x in r.json() if x["email"] == "me@lab.test")
+        assert mine["avatar_url"] == "https://avatars.slack-edge.com/x_72.png"
+    finally:
+        db.delete(db.get(SlackDmPrefs, pref.id)); db.commit()
+
+
+def test_worksheets_users_avatar_null_without_slack_link(client_as, db, user):
+    """No slack_dm_prefs row → avatar_url is null (initials fallback on the FE)."""
+    r = client_as.get("/worksheets/users")
+    assert r.status_code == 200
+    mine = next(x for x in r.json() if x["email"] == "me@lab.test")
+    assert mine["avatar_url"] is None

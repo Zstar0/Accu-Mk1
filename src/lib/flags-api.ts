@@ -7,6 +7,8 @@
  */
 
 import { apiFetch } from './api'
+import { getApiBaseUrl } from '@/lib/config'
+import { getAuthToken } from '@/store/auth-store'
 
 // --- string unions (mirror schemas.py FlagStatus/FlagTab) ---
 
@@ -31,6 +33,13 @@ export type FlagTab = 'assigned' | 'raised' | 'watching' | 'all_open'
 
 // --- response shapes (mirror schemas.py) ---
 
+/** Mirrors backend `ReactionAggregate`. */
+export interface ReactionAggregate {
+  emoji: string
+  count: number
+  user_ids: number[]
+}
+
 /** Mirrors `CommentResponse`. `mentions` = user ids called out in the body. */
 export interface CommentResponse {
   id: number
@@ -41,6 +50,8 @@ export interface CommentResponse {
   mentions: number[]
   created_at: string
   edited_at: string | null
+  /** Optional — backend always sends `[]`; older cached payloads may omit it. */
+  reactions?: ReactionAggregate[]
 }
 
 /** Mirrors `EventResponse` — one audit-trail entry. */
@@ -79,8 +90,9 @@ export interface EntityContext {
  *  backend stores them as text); narrow to the unions at the UI boundary. */
 export interface FlagResponse {
   id: number
-  entity_type: string
-  entity_id: string
+  /** Nullable since Phase 2: a null anchor = a general task. */
+  entity_type: string | null
+  entity_id: string | null
   kind: string
   type: string
   status: string
@@ -91,6 +103,8 @@ export interface FlagResponse {
   updated_at: string
   resolved_at: string | null
   resolved_by: number | null
+  /** Optional deadline (Phase 2 slice 2); null when unset. */
+  due_at: string | null
   /** Server-resolved entity context; absent when unresolvable (Plan 4). */
   entity?: EntityContext | null
 }
@@ -103,11 +117,31 @@ export interface Watcher {
   added_by: number | null
 }
 
-/** Mirrors `FlagDetailResponse` (adds comments + events + watchers). */
+/** Mirrors backend `EntityLinkOut` — a navigational related-item reference. */
+export interface EntityLink {
+  id: number
+  entity_type: string
+  entity_id: string
+  entity: EntityContext | null
+}
+
+/** Mirrors backend `FlagLinkOut` — a related flag, pre-resolved for the viewer
+ *  (`flag_id` is THE OTHER flag). */
+export interface FlagLink {
+  id: number
+  flag_id: number
+  title: string
+  status: string
+  type: string
+}
+
+/** Mirrors `FlagDetailResponse` (adds comments + events + watchers + links). */
 export interface FlagDetailResponse extends FlagResponse {
   comments: CommentResponse[]
   events: EventResponse[]
   watchers: Watcher[]
+  entity_links: EntityLink[]
+  flag_links: FlagLink[]
 }
 
 /** Mirrors `ActivityItem` — one audit event + its (entity-resolved) flag.
@@ -136,16 +170,31 @@ export interface SummaryResponse {
   by_type: Record<string, number>
 }
 
+/** Mirrors `FlagSearchHit` (spec §7). `snippet` is a cleaned comment excerpt
+ *  (empty on a title-only hit); `matched_in` ⊆ `['comment','title']`.
+ *  `title`/`status`/`type` decorate the hit so a picker renders it without a
+ *  follow-up fetch. */
+export interface FlagSearchHit {
+  flag_id: number
+  snippet: string
+  matched_in: string[]
+  title: string
+  status: string
+  type: string
+}
+
 // --- request bodies (mirror schemas.py request models) ---
 
-/** Mirrors `CreateFlagRequest`. `type` is a DB-managed type slug (Plan 5). */
+/** Mirrors `CreateFlagRequest`. `type` is a DB-managed type slug (Plan 5).
+ *  A null anchor (`entity_type`/`entity_id`) raises a general task (Phase 2). */
 export interface CreateFlagBody {
-  entity_type: string
-  entity_id: string
+  entity_type: string | null
+  entity_id: string | null
   type: string
   title: string
   assignee_id?: number | null
   first_comment?: string | null
+  due_at?: string | null
 }
 
 /** Mirrors `FlagTypeResponse` — a row of the user-managed flag-type catalog
@@ -185,6 +234,36 @@ export interface FlagTypeUpdate {
   is_active?: boolean
   sort_order?: number
   entity_types?: string[]
+}
+
+/** Mirrors `FlagItemKindResponse` — a user-managed virtual item kind (slice 7):
+ *  a pure category a general task anchors to (entity_type=<slug>, entity_id
+ *  null). Kind slugs join the flag_types `entity_types` scoping vocabulary. */
+export interface FlagItemKind {
+  id: number
+  slug: string
+  label: string
+  color: string
+  is_active: boolean
+  is_builtin: boolean
+  sort_order: number
+}
+
+/** Mirrors `FlagItemKindCreate`. */
+export interface FlagItemKindCreate {
+  label: string
+  color: string
+  slug?: string
+  is_active?: boolean
+  sort_order?: number
+}
+
+/** Mirrors `FlagItemKindUpdate` (all-optional; no slug — it's immutable). */
+export interface FlagItemKindUpdate {
+  label?: string
+  color?: string
+  is_active?: boolean
+  sort_order?: number
 }
 
 /** Optional server-side narrowing filters for the list endpoint. The primary
@@ -244,6 +323,29 @@ export const getActivity = (cursor?: string, limit = 25) => {
 /** `GET /api/flags/unread` — flags relevant to me with unread changes. */
 export const getUnread = () => apiFetch<FlagResponse[]>('/api/flags/unread')
 
+/** `GET /api/flags/search?q=` — flags whose title or a comment body matches `q`
+ *  (comment matches carry a snippet). Caller gates at ≥3 chars + debounce. */
+export const searchFlags = (q: string, limit = 50) => {
+  const qs = new URLSearchParams({ q, limit: String(limit) })
+  return apiFetch<FlagSearchHit[]>(`/api/flags/search?${qs.toString()}`)
+}
+
+/** Mirrors `EntitySearchHit` — one typeahead result for an entity link picker:
+ *  the `entity_id` to link and a human `label` to show. */
+export interface EntitySearchHit {
+  entity_id: string
+  label: string
+}
+
+/** `GET /api/flags/entity-search?entity_type=&q=` — typeahead over a registered
+ *  entity type. Caller gates at ≥2 chars + debounce. */
+export const entitySearch = (entityType: string, q: string) => {
+  const qs = new URLSearchParams({ entity_type: entityType, q })
+  return apiFetch<EntitySearchHit[]>(
+    `/api/flags/entity-search?${qs.toString()}`
+  )
+}
+
 /** `POST /api/flags/{id}/read` — stamp this flag read for me (204). */
 export const markRead = (id: number) =>
   apiFetch<undefined>(`/api/flags/${id}/read`, { method: 'POST' })
@@ -278,6 +380,13 @@ export const changeStatus = (id: number, to_status: FlagStatus) =>
     body: JSON.stringify({ to_status }),
   })
 
+/** `PUT /api/flags/{id}/due` — set, change, or clear (null) the due date. */
+export const setDue = (id: number, due_at: string | null) =>
+  apiFetch<FlagResponse>(`/api/flags/${id}/due`, {
+    method: 'PUT',
+    body: JSON.stringify({ due_at }),
+  })
+
 /** `POST /api/flags/{id}/watchers` — start watching a flag. */
 export const addWatcher = (id: number, user_id: number) =>
   apiFetch<{ ok: boolean }>(`/api/flags/${id}/watchers`, {
@@ -290,6 +399,182 @@ export const removeWatcher = (id: number, user_id: number) =>
   apiFetch<undefined>(`/api/flags/${id}/watchers/${user_id}`, {
     method: 'DELETE',
   })
+
+// --- state-change watches (Plan 6) --------------------------------------
+
+/** Mirrors `WatchResponse`. `condition`/`action` are the stored JSON blobs. */
+export interface EntityWatch {
+  id: number
+  entity_type: string
+  entity_id: string
+  condition: { field: 'state'; equals: string }
+  action:
+    | {
+        kind: 'create_flag'
+        type?: string
+        title?: string
+        assignee_id?: number | null
+      }
+    | { kind: 'comment'; flag_id?: number; body?: string }
+  created_by: number
+  watch_flag_id: number | null
+  status: 'armed' | 'fired' | 'cancelled'
+  created_at: string
+  fired_at: string | null
+}
+
+/** Mirrors `ArmWatchRequest`. */
+export interface ArmWatchBody {
+  entity_type: string
+  entity_id: string
+  condition: { field: 'state'; equals: string }
+  action: EntityWatch['action']
+  watch_flag_id?: number | null
+}
+
+/** `POST /api/flags/watches` — arm a watch (comment-on-fire with `watch_flag_id`,
+ *  else create-flag-on-fire). 400 when the entity type has no watchable state. */
+export const armWatch = (body: ArmWatchBody) =>
+  apiFetch<EntityWatch>('/api/flags/watches', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+
+/** `DELETE /api/flags/watches/{id}` — cancel an armed watch (204). */
+export const cancelWatch = (id: number) =>
+  apiFetch<undefined>(`/api/flags/watches/${id}`, { method: 'DELETE' })
+
+/** `GET /api/flags/watches?flag_id=` — armed watches on a thread. */
+export const listWatches = (flagId: number) =>
+  apiFetch<EntityWatch[]>(`/api/flags/watches?flag_id=${flagId}`)
+
+// --- links (Phase 2 slice 2) ---------------------------------------------
+
+/** `POST /api/flags/{id}/links/entities` — attach a related entity. */
+export const addEntityLink = (
+  id: number,
+  entity_type: string,
+  entity_id: string
+) =>
+  apiFetch<{ id: number }>(`/api/flags/${id}/links/entities`, {
+    method: 'POST',
+    body: JSON.stringify({ entity_type, entity_id }),
+  })
+
+/** `DELETE /api/flags/{id}/links/entities/{link_id}` — detach (204). */
+export const removeEntityLink = (id: number, linkId: number) =>
+  apiFetch<undefined>(`/api/flags/${id}/links/entities/${linkId}`, {
+    method: 'DELETE',
+  })
+
+/** `POST /api/flags/{id}/links/flags` — link another flag as related. */
+export const addFlagLink = (id: number, otherId: number) =>
+  apiFetch<{ id: number }>(`/api/flags/${id}/links/flags`, {
+    method: 'POST',
+    body: JSON.stringify({ flag_id: otherId }),
+  })
+
+/** `DELETE /api/flags/{id}/links/flags/{link_id}` — unlink (204). */
+export const removeFlagLink = (id: number, linkId: number) =>
+  apiFetch<undefined>(`/api/flags/${id}/links/flags/${linkId}`, {
+    method: 'DELETE',
+  })
+
+// --- attachments (Phase 2 slice 3) ---------------------------------------
+
+/** Mirrors backend `AttachmentResponse`. */
+export interface FlagAttachment {
+  id: number
+  flag_id: number
+  comment_id: number | null
+  filename: string
+  content_type: string
+  size_bytes: number
+  created_at: string
+}
+
+function bearerHeaders(): Record<string, string> {
+  const token = getAuthToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+/** Upload an image to a flag (multipart). The browser sets the multipart
+ *  boundary — do NOT set Content-Type. */
+export async function addFlagAttachment(
+  flagId: number,
+  file: File
+): Promise<FlagAttachment> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch(
+    `${getApiBaseUrl()}/api/flags/${flagId}/attachments`,
+    {
+      method: 'POST',
+      headers: bearerHeaders(),
+      body: form,
+    }
+  )
+  if (!res.ok) throw new Error(`attachment upload failed: ${res.status}`)
+  return res.json() as Promise<FlagAttachment>
+}
+
+const _flagAttachmentCache = new Map<number, string>()
+
+/** Resolve an attachment's bytes to a renderable blob object URL. The serve
+ *  endpoint requires Bearer auth, so a plain <img src> would 401; we fetch as a
+ *  blob and wrap it. Mirrors fetchPackagingPhotoUrl. Cached per id. */
+export async function fetchFlagAttachmentUrl(
+  attachmentId: number
+): Promise<string | null> {
+  const cached = _flagAttachmentCache.get(attachmentId)
+  if (cached) return cached
+  const res = await fetch(
+    `${getApiBaseUrl()}/api/flags/attachments/${attachmentId}`,
+    { headers: bearerHeaders() }
+  )
+  if (res.status === 404) return null
+  if (!res.ok) throw new Error(`fetchFlagAttachmentUrl failed: ${res.status}`)
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  _flagAttachmentCache.set(attachmentId, url)
+  return url
+}
+
+export function invalidateFlagAttachment(attachmentId: number): void {
+  const prev = _flagAttachmentCache.get(attachmentId)
+  if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev)
+  _flagAttachmentCache.delete(attachmentId)
+}
+
+// --- reactions (Phase 2 slice 3) -----------------------------------------
+
+/** Curated reaction set (spec §6). BYTE-IDENTICAL to backend CURATED_EMOJI —
+ *  VS16-carrying glyphs included, or the server 400s a reaction the UI sent. */
+export const FLAG_REACTION_EMOJI = [
+  '👍',
+  '✅',
+  '👀',
+  '🎉',
+  '❤️',
+  '😂',
+  '🤔',
+  '🚨',
+] as const
+export type FlagReactionEmoji = (typeof FLAG_REACTION_EMOJI)[number]
+
+/** `PUT /api/flags/comments/{id}/reactions/{emoji}` — idempotent add. */
+export const addReaction = (commentId: number, emoji: string) =>
+  apiFetch<ReactionAggregate[]>(
+    `/api/flags/comments/${commentId}/reactions/${encodeURIComponent(emoji)}`,
+    { method: 'PUT' }
+  )
+
+/** `DELETE /api/flags/comments/{id}/reactions/{emoji}` — remove own. */
+export const removeReaction = (commentId: number, emoji: string) =>
+  apiFetch<ReactionAggregate[]>(
+    `/api/flags/comments/${commentId}/reactions/${encodeURIComponent(emoji)}`,
+    { method: 'DELETE' }
+  )
 
 // --- flag types (Plan 5) -------------------------------------------------
 
@@ -352,3 +637,99 @@ export const deleteFlagType = async (id: number): Promise<void> => {
  *  names resolved client-side via flag-entity.ts ENTITY_META). */
 export const getFlagEntityTypes = () =>
   apiFetch<string[]>('/api/flags/entity-types')
+
+// --- item kinds (Slice 7) -----------------------------------------------
+
+/** `GET /api/flags/item-kinds` — the managed item-kind catalog. `active_only`
+ *  is for the compose/filter picker; omit it for label resolution so a
+ *  deactivated-but-still-referenced kind resolves. */
+export const getItemKinds = (params?: { active_only?: boolean }) => {
+  const suffix = params?.active_only ? '?active_only=true' : ''
+  return apiFetch<FlagItemKind[]>(`/api/flags/item-kinds${suffix}`)
+}
+
+/** `POST /api/flags/item-kinds` — create a kind (admin). */
+export const createItemKind = (body: FlagItemKindCreate) =>
+  apiFetch<FlagItemKind>('/api/flags/item-kinds', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+
+/** `PUT /api/flags/item-kinds/{id}` — edit a kind (admin). */
+export const updateItemKind = (id: number, body: FlagItemKindUpdate) =>
+  apiFetch<FlagItemKind>(`/api/flags/item-kinds/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+
+/** `DELETE /api/flags/item-kinds/{id}` — hard-delete an unused custom kind
+ *  (admin). Throws {@link FlagTypeApiError} with `status === 409` when the kind
+ *  is built-in or in use (the caller should deactivate instead). */
+export const deleteItemKind = async (id: number): Promise<void> => {
+  try {
+    await apiFetch<undefined>(`/api/flags/item-kinds/${id}`, { method: 'DELETE' })
+  } catch (e) {
+    const match = e instanceof Error ? e.message.match(/(\d{3})$/) : null
+    throw new FlagTypeApiError(
+      match ? Number(match[1]) : 0,
+      e instanceof Error ? e.message : 'delete failed'
+    )
+  }
+}
+
+// --- recurring tasks (Slice 5, admin-only) ------------------------------
+
+/** Mirrors backend FlagRecurringResponse. cadence: 'daily' | 'weekly:<0-6>' | 'monthly:<1-28>'. */
+export interface FlagRecurring {
+  id: number
+  title: string
+  body: string | null
+  type: string
+  assignee_id: number | null
+  watchers: number[]
+  entity_type: string | null
+  entity_id: string | null
+  cadence: string
+  next_run_at: string
+  active: boolean
+  skip_if_open: boolean
+  created_by: number
+  created_at: string
+  last_minted_flag_id: number | null
+}
+export type FlagRecurringCreate = Pick<
+  FlagRecurring,
+  'title' | 'type' | 'cadence'
+> &
+  Partial<
+    Pick<
+      FlagRecurring,
+      | 'body'
+      | 'assignee_id'
+      | 'watchers'
+      | 'entity_type'
+      | 'entity_id'
+      | 'skip_if_open'
+    >
+  >
+export type FlagRecurringUpdate = Partial<
+  Omit<
+    FlagRecurring,
+    'id' | 'created_by' | 'created_at' | 'last_minted_flag_id' | 'next_run_at'
+  >
+>
+
+export const listRecurring = () =>
+  apiFetch<FlagRecurring[]>('/api/flags/recurring')
+export const createRecurring = (body: FlagRecurringCreate) =>
+  apiFetch<FlagRecurring>('/api/flags/recurring', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+export const updateRecurring = (id: number, body: FlagRecurringUpdate) =>
+  apiFetch<FlagRecurring>(`/api/flags/recurring/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+export const deleteRecurring = (id: number) =>
+  apiFetch<undefined>(`/api/flags/recurring/${id}`, { method: 'DELETE' })

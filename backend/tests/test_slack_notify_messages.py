@@ -77,3 +77,19 @@ def test_build_message_uses_entity_link_hash_when_given():
     flat = str(blocks)
     assert "https://mk1.example/#senaite/sample-details?id=P-0134&flag=7" in flat
     assert "#dashboard/orders" not in flat
+
+
+def test_interactive_adds_action_buttons():
+    _text, blocks = build_message(_event(), "assigned", "Nick",
+                                  "https://mk1.example", interactive=True)
+    actions = [b for b in blocks if b.get("type") == "actions"]
+    assert len(actions) == 1
+    ids = {e["action_id"] for e in actions[0]["elements"]}
+    assert ids == {"flag_assign_me", "flag_mark_read", "flag_resolve"}
+    assert all(e["value"] == "7" for e in actions[0]["elements"])  # flag id
+
+
+def test_non_interactive_has_no_action_block():
+    _text, blocks = build_message(_event(), "assigned", "Nick",
+                                  "https://mk1.example")
+    assert not any(b.get("type") == "actions" for b in blocks)

@@ -32,4 +32,24 @@ describe('useFlagFilter', () => {
     const { result } = renderHook(() => useFlagFilter('raised'))
     expect(result.current[0].status).toBe('all_open')
   })
+
+  // Regression: the original hook re-read localStorage inside render
+  // memoization; React Compiler cached that impure read keyed on `tab` alone,
+  // so a same-tab set persisted to storage but never re-rendered — filters
+  // only "applied" after a full reload. Assert the same-tab path directly.
+  it('reflects a same-tab set immediately, without a tab switch', () => {
+    const { result } = renderHook(() => useFlagFilter('raised'))
+    act(() => result.current[1]({ ...result.current[0], status: 'resolved' }))
+    expect(result.current[0].status).toBe('resolved')
+    act(() => result.current[1]({ ...result.current[0], type: 'blocker' }))
+    expect(result.current[0].type).toBe('blocker')
+    expect(result.current[0].status).toBe('resolved') // earlier set survives
+  })
+
+  it('keeps free text live but session-only', () => {
+    const { result } = renderHook(() => useFlagFilter('raised'))
+    act(() => result.current[1]({ ...result.current[0], text: 'abc' }))
+    expect(result.current[0].text).toBe('abc')
+    expect(localStorage.getItem('flags:filter:raised')).not.toContain('abc')
+  })
 })

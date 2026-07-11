@@ -15,6 +15,9 @@ export interface SlackDmPrefs {
   notify_raised_activity: boolean
   notify_watching_activity: boolean
   notify_status_changes: boolean
+  /** Morning digest opt-in + lab-local hour (0–23). */
+  digest_enabled: boolean
+  digest_hour: number
 }
 
 export type SlackDmPrefsUpdate = Partial<Omit<SlackDmPrefs, 'linked'>>
