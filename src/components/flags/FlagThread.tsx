@@ -748,7 +748,7 @@ function CommentRow({
   if (mode === 'compact') {
     return (
       <div
-        className="flag-cmt-in group -mx-2 flex items-start gap-2 rounded-md px-2 py-1 transition-colors hover:bg-muted/40"
+        className="flag-cmt-in group group/react -mx-2 flex items-start gap-2 rounded-md px-2 py-1 transition-colors hover:bg-muted/40"
         style={{ animationDelay }}
       >
         <FlagAvatar
@@ -773,7 +773,7 @@ function CommentRow({
 
   return (
     <div
-      className="flag-cmt-in flex gap-2.5"
+      className="flag-cmt-in group/react flex gap-2.5"
       style={{ animationDelay }}
     >
       <FlagAvatar

@@ -175,4 +175,29 @@ describe('FlagThread — timeline view mode', () => {
       screen.getByText('cloudy after reconstitution')
     ).toBeInTheDocument()
   })
+
+  it('comment wrapper is the reaction-picker hover group in both modes', async () => {
+    // Regression (live review): the hover group lived on the reactions bar —
+    // a near-zero-height strip when a comment has no reactions — so the picker
+    // was effectively undiscoverable. Hovering ANYWHERE on the comment must
+    // reveal it: the wrapper carries group/react and contains the picker.
+    const { FlagThread } = await import('@/components/flags/FlagThread')
+    const { within } = await import('@testing-library/react')
+    render(<FlagThread flagId={7} tabLabel="Assigned to me" />)
+
+    for (const mode of ['bubbles', 'compact'] as const) {
+      if (mode === 'compact') {
+        fireEvent.click(screen.getByRole('button', { name: 'Compact view' }))
+      }
+      const wrapper = screen
+        .getByText('cloudy after reconstitution')
+        .closest('.group\\/react') as HTMLElement
+      expect(wrapper).not.toBeNull()
+      // The hidden picker sits INSIDE the group and is group-hover-driven.
+      const picker = within(wrapper).getByRole('button', { name: 'React 🎉' })
+      expect(picker.parentElement?.className).toContain(
+        'group-hover/react:flex'
+      )
+    }
+  })
 })
