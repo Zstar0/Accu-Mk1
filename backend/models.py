@@ -1314,6 +1314,16 @@ class LimsAnalysis(Base):
     )
     reportable_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # SENAITE phase-out (parent analysis mirror): provenance discriminates a
+    # promoted/native 'canonical' row from a SENAITE 'shadow' mirror row.
+    provenance: Mapped[str] = mapped_column(
+        Text, nullable=False, default="canonical", server_default="canonical",
+        index=True,
+    )
+    # For shadow rows only: the true SENAITE review_state (the row's own
+    # review_state is the sentinel 'senaite_mirror'). NULL on canonical rows.
+    mirror_review_state: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )

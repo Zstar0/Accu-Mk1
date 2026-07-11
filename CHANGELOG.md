@@ -1,5 +1,47 @@
 # Changelog
 
+## v1.2.0 — 2026-07-10
+
+Bundles two independent work streams shipped in one release.
+
+**SENAITE phase-out — slice 2 (native parent-analysis mirror).** Parent-sample
+**analysis line items** now mirror natively into Accu-Mk1 — **inert by default**
+(read-dormant shadow rows; every reader still sources SENAITE until a later
+read-flip).
+
+### Added
+
+- **Native parent-analysis mirror (dual-write).** Every parent-analysis mutation
+  (result entry, submit / verify / reject / retract / retest, method &
+  instrument, analyte replace, publish, add / remove) tees a native
+  `lims_analyses` shadow row alongside the SENAITE write. Shadow rows are
+  fail-closed: a `senaite_mirror` sentinel keeps them out of every reader's
+  allow-list, so they can't reach a COA, variance series, or bench view until a
+  deliberate read-flip. The true SENAITE state lives in a new
+  `mirror_review_state` column. Full parent lifecycle validated live 0-drift.
+- **Backfill / reconcile script** (`scripts/backfill_parent_analysis_shadows.py`):
+  idempotent, registry-cursor, one throttled SENAITE query per parent, dry-run
+  preview; doubles as a manual reconcile.
+- **Registry-inspect analyses column.** The admin registry panel now shows a
+  per-keyword shadow-vs-SENAITE sync compare, so drift is observable, not silent.
+
+### Fixed
+
+- **Retract no longer reports a false failure.** SENAITE retract is
+  retire-and-replace (the original goes `retracted` and a fresh copy spawns
+  `unassigned` with the result carried), not a state flip — the endpoint now
+  re-fetches to confirm success instead of falsely reporting "SENAITE returned
+  no items."
+
+**Flag System Phase 2 (general tasks + collaboration).** General tasks not tied
+to a sample, task foundation (links, due dates), comments v2 (markdown, image
+attachments, reactions), comment-body search, filters & saved visibility, Slack
+round 2 (interactive actions, daily digest, recurring/scheduled tasks),
+state-change watches, and a settings page with user-managed item kinds /
+type-bucket board. New prod config required for the Slack/attachment features:
+`MK1_SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `MK1_PUBLIC_URL`, `MK1_LAB_TZ`,
+and flag-attachment storage (`MK1_FLAG_ATTACH_DIR`, or S3 via the photo bucket).
+
 ## v1.1.1 — 2026-07-09
 
 ### Fixed

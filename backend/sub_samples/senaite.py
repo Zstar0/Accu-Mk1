@@ -258,6 +258,60 @@ def fetch_parent_metadata(parent_sample_id: str) -> dict:
     return detail_items[0]
 
 
+def fetch_parent_analyses(sample_id: str) -> List[dict]:
+    """ONE throttled SENAITE Analysis-catalog query for every analysis line
+    on a parent AR. Shared by `backfill_parent_analysis_shadows.py` and the
+    registry-inspect debug panel's analyses column (main.py) — same endpoint
+    + params + field-extraction shape as `coa.source_resolver
+    .SenaiteAnalysesHttpReader.list_for_sample` (sync via `_get` rather than
+    an async httpx client), plus two additions those callers need that the
+    COA reader doesn't:
+
+      * `instrument_uid` — the SENAITE Analysis catalog carries the
+        instrument as a nested `Instrument` object ref ({"uid": ..., "title":
+        ...}), the same shape main.py's AR-detail analyses fetch reads at
+        ~12504-12510. Only the uid is extracted; None when absent.
+      * `created` — best-effort creation timestamp for newest-line selection
+        when a keyword has more than one non-superseded line (should not
+        normally happen outside a retest chain, but the fallback exists so
+        selection is deterministic instead of order-dependent). Falls back
+        through the same field-name variants main.py's report-date code uses
+        elsewhere (`created`/`creation_date`/`DateCreated`/`getDateCreated`);
+        None when the catalog brain carries none of them (falls back to
+        last-in-list — see `lims_analyses.parent_mirror.select_current_lines`).
+
+    Raises RuntimeError on a non-2xx SENAITE response — callers wrap this in
+    their own best-effort try/except, never letting one parent's failure
+    abort a wider run or blank an unrelated panel section."""
+    url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/Analysis"
+    resp = _get(url, params={"getRequestID": sample_id, "complete": "yes", "limit": 200})
+    if resp.status_code >= 300:
+        raise RuntimeError(f"SENAITE fetch_parent_analyses failed ({resp.status_code}): {resp.text}")
+    items = resp.json().get("items", []) or []
+    out: List[dict] = []
+    for it in items:
+        instrument_obj = it.get("Instrument")
+        instrument_uid = instrument_obj.get("uid") if isinstance(instrument_obj, dict) else None
+        out.append({
+            "uid": it.get("uid"),
+            "keyword": it.get("getKeyword") or it.get("Keyword"),
+            "result": it.get("Result"),
+            "unit": it.get("Unit"),
+            "review_state": it.get("review_state"),
+            "retest_of_uid": (
+                it.get("getRetestOfUID")
+                or (it.get("RetestOf") or {}).get("uid")
+                or None
+            ),
+            "instrument_uid": instrument_uid,
+            "created": (
+                it.get("created") or it.get("creation_date")
+                or it.get("DateCreated") or it.get("getDateCreated")
+            ),
+        })
+    return out
+
+
 def iter_all_sample_ids(batch_size: int = 50, start: int = 0) -> Iterator[Tuple[str, int]]:
     """Yield (sample_id, page_b_start) for EVERY AnalysisRequest in SENAITE,
     paged via b_size/b_start against the plain list endpoint (minimal

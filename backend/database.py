@@ -527,7 +527,7 @@ def _run_migrations():
                                   CHECK (review_state IN (
                                       'unassigned', 'assigned', 'to_be_verified',
                                       'verified', 'published', 'rejected', 'retracted',
-                                      'promoted', 'variance_verified'
+                                      'promoted', 'variance_verified', 'senaite_mirror'
                                   )),
 
             method_id             INTEGER REFERENCES hplc_methods(id) ON DELETE SET NULL,
@@ -544,6 +544,12 @@ def _run_migrations():
 
             reportable            BOOLEAN NOT NULL DEFAULT TRUE,
             reportable_reason     TEXT,
+
+            -- SENAITE phase-out (parent analysis mirror): 'canonical' (native/
+            -- promoted) vs 'shadow' (SENAITE mirror). mirror_review_state holds
+            -- the true SENAITE state for shadow rows only (NULL on canonical).
+            provenance            TEXT NOT NULL DEFAULT 'canonical',
+            mirror_review_state   TEXT,
 
             created_at            TIMESTAMP NOT NULL DEFAULT NOW(),
             updated_at            TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -1029,6 +1035,46 @@ def _run_migrations():
         "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS box_id INTEGER REFERENCES lims_boxes(id) ON DELETE SET NULL",
         "ALTER TABLE lims_boxes ADD COLUMN IF NOT EXISTS stored_at TIMESTAMP",
         "ALTER TABLE lims_boxes ADD COLUMN IF NOT EXISTS stored_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL",
+        # parent-analysis-native-mirror Task 1: provenance discriminates a
+        # 'canonical' (native/promoted) row from a 'shadow' (SENAITE mirror)
+        # row; mirror_review_state carries the true SENAITE state for shadow
+        # rows (the row's own review_state is the 'senaite_mirror' sentinel).
+        "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS provenance TEXT NOT NULL DEFAULT 'canonical'",
+        "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS mirror_review_state TEXT",
+        "CREATE INDEX IF NOT EXISTS ix_lims_analyses_provenance ON lims_analyses (provenance)",
+        # Admit the 'senaite_mirror' sentinel into the review_state CHECK.
+        "ALTER TABLE lims_analyses DROP CONSTRAINT IF EXISTS lims_analyses_review_state_check",
+        """
+        ALTER TABLE lims_analyses ADD CONSTRAINT lims_analyses_review_state_check
+            CHECK (review_state IN (
+                'unassigned', 'assigned', 'to_be_verified', 'verified',
+                'published', 'rejected', 'retracted', 'promoted',
+                'variance_verified', 'senaite_mirror'
+            ))
+        """,
+        # Make the parent-tier root index provenance-aware: a shadow mirror
+        # row must never occupy the canonical slot, so 'canonical' rows and
+        # 'shadow' rows can coexist for the same (parent, keyword).
+        "DROP INDEX IF EXISTS uq_lims_analyses_parent_service_root",
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_parent_service_root
+            ON lims_analyses (lims_sample_pk, keyword)
+            WHERE retest_of_id IS NULL AND lims_sample_pk IS NOT NULL
+              AND review_state NOT IN ('retracted', 'rejected')
+              AND provenance = 'canonical'
+        """,
+        # parent-analysis-native-mirror Task 3: fail-loud backstop for the
+        # shadow mirror's own "live row" invariant. At most one non-retested
+        # shadow row may exist per (parent, service) at a time — an
+        # accidental duplicate becomes a loud IntegrityError instead of
+        # silent mirror death (e.g. a second concurrent writer, or a bug in
+        # the retest branch's flush ordering).
+        "DROP INDEX IF EXISTS uq_lims_analyses_parent_service_shadow",
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_parent_service_shadow
+            ON lims_analyses (lims_sample_pk, analysis_service_id)
+            WHERE provenance = 'shadow' AND retested = FALSE AND lims_sample_pk IS NOT NULL
+        """,
         # --- flags Slice 5: scheduler + recurring + digest prefs ---
         """
         CREATE TABLE IF NOT EXISTS flag_scheduler_runs (

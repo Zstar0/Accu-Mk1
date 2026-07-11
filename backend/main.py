@@ -8771,6 +8771,27 @@ async def add_sample_analysis(
             sample_id, _add_err,
         )
 
+    # ── Parent analysis shadow mirror (A7 add, best-effort) ───────────────
+    # A shadow row for an analysis with no result yet is correct — it
+    # mirrors the line's existence. The IS proxy response carries no
+    # keyword (just {success, message}), so resolve service_uid -> keyword
+    # via the locally-synced analysis_services table (senaite_uid isn't
+    # unique — see resolve_instrument_id's note — hence order_by + first()).
+    # Unresolvable service_uid is the documented no-op: skip silently.
+    _svc_uid = body.get("service_uid")
+    if _svc_uid:
+        _add_svc = db.execute(
+            _select(AnalysisService).where(AnalysisService.senaite_uid == _svc_uid)
+            .order_by(AnalysisService.id)
+        ).scalars().first()
+        if _add_svc is not None and _add_svc.keyword:
+            from fastapi.concurrency import run_in_threadpool
+            await run_in_threadpool(
+                _mirror_parent_analysis_bg,
+                sample_id=sample_id, keyword=_add_svc.keyword,
+                mirror_review_state="unassigned",
+            )
+
     return result
 
 
@@ -8900,6 +8921,17 @@ async def remove_sample_analysis(
             "cascade_parent_remove: unexpected error for sample=%s keyword=%s: %s",
             sample_id, keyword, _rm_err,
         )
+
+    # ── Parent analysis shadow mirror (A7 remove, best-effort) ───────────
+    # Mark the keyword's live shadow row rejected — never deleted (audit
+    # trail). Own session via _mirror_parent_analysis_bg, never the request
+    # `db` used by the cascade above.
+    from fastapi.concurrency import run_in_threadpool
+    await run_in_threadpool(
+        _mirror_parent_analysis_bg,
+        sample_id=sample_id, keyword=keyword,
+        mirror_review_state="rejected",
+    )
 
     return result
 
@@ -9089,6 +9121,24 @@ async def replace_analyte(
                 identity["added"] = new_id_svc.keyword
             except Exception as _e:
                 _rep_logger.warning("replace_analyte: add %s failed: %s", new_id_svc.keyword, _e)
+
+    # ── 5b. parent analysis shadow mirror (best-effort) ───────────────────────
+    # Mirror the OLD identity keyword as rejected and the NEW as unassigned —
+    # gated per-op on the swap actually succeeding above (identity["removed"]
+    # / identity["added"] are only set on a successful IS call each).
+    from fastapi.concurrency import run_in_threadpool
+    if identity["removed"]:
+        await run_in_threadpool(
+            _mirror_parent_analysis_bg,
+            sample_id=sample_id, keyword=identity["removed"],
+            mirror_review_state="rejected",
+        )
+    if identity["added"]:
+        await run_in_threadpool(
+            _mirror_parent_analysis_bg,
+            sample_id=sample_id, keyword=identity["added"],
+            mirror_review_state="unassigned",
+        )
 
     # ── 6. re-mirror the slot across vials ────────────────────────────────────
     try:
@@ -10245,6 +10295,26 @@ async def publish_sample_coa(
                                 f"Verify the sample in SENAITE, then retry."
                             ),
                         )
+
+                # ── Parent shadow mirror (A6 publish, best-effort) ────────────
+                # mirror_review_state records SENAITE-side truth, so this is
+                # gated on the AR having ACTUALLY reached 'published' — after
+                # the reconciliation above (so the silent-rejection 502 path
+                # can never leave a durable 'published' mirror behind), and
+                # deliberately NOT on the broader accepted/pre-publish sets:
+                # to_be_verified / waiting_for_addon_results mean the
+                # customer-facing COA is live but SENAITE deferred the
+                # workflow publish (partial-publish / addon flow) — the
+                # SENAITE analyses are NOT published there, and mirroring
+                # 'published' would be false. When publish lands later,
+                # per-line A2/A3 hooks and/or the next publish call record
+                # it. Own session via _mark_shadows_published_bg — never the
+                # request `db`.
+                if actual_state == "published":
+                    from fastapi.concurrency import run_in_threadpool
+                    await run_in_threadpool(
+                        _mark_shadows_published_bg, sample_id=sample_id
+                    )
         except HTTPException:
             raise
         except Exception as e:
@@ -13747,6 +13817,87 @@ async def update_senaite_sample_fields(
 # --- Analysis result and transition endpoints ---
 
 
+def _mirror_parent_analysis_bg(**kwargs) -> None:
+    """Best-effort parent-analysis shadow mirror on its own short-lived session
+    (never holds the request DB across the SENAITE HTTP call). Never raises.
+
+    Accepts optional `method_uid`/`instrument_uid` (raw SENAITE uids) — popped
+    and resolved to Mk1 ids on THIS function's own session (never on the event
+    loop) via resolve_method_id/resolve_instrument_id, then passed through to
+    mirror_parent_analysis as method_id/instrument_id, but only when resolved
+    non-None (an unresolvable uid must never overwrite an existing value with
+    None). Existing callers (A1/A2/A3) never pass these kwargs — pop() with a
+    None default plus the resolvers' own None-safety makes this a pure,
+    backward-compatible extension.
+
+    `SessionLocal()`, the resolver/helper imports, and the kwargs.pop() calls
+    all live INSIDE the try (not just the mirror call) so that even a
+    pathological construction/import failure is caught here rather than
+    escaping to the caller — this function must never raise. `db` is set to
+    None before the try so the finally block can guard `db.close()` for the
+    case where SessionLocal() itself never returned a session.
+    """
+    db = None
+    try:
+        from database import SessionLocal
+        from lims_analyses.parent_mirror import (
+            mirror_parent_analysis, resolve_instrument_id, resolve_method_id,
+        )
+        method_uid = kwargs.pop("method_uid", None)
+        instrument_uid = kwargs.pop("instrument_uid", None)
+        db = SessionLocal()
+        method_id = resolve_method_id(db, method_uid)
+        instrument_id = resolve_instrument_id(db, instrument_uid)
+        if method_id is not None:
+            kwargs["method_id"] = method_id
+        if instrument_id is not None:
+            kwargs["instrument_id"] = instrument_id
+        if mirror_parent_analysis(db, **kwargs):
+            db.commit()
+    except Exception as mirror_err:  # noqa: BLE001
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        logger.warning("registry.analysis_mirror_failed kw=%s err=%s",
+                       kwargs.get("keyword"), mirror_err)
+    finally:
+        if db is not None:
+            db.close()
+
+
+def _mark_shadows_published_bg(sample_id: str) -> None:
+    """Best-effort A6 sibling of _mirror_parent_analysis_bg: on its own
+    short-lived session, flip every LIVE parent shadow row to
+    mirror_review_state='published' (mark_parent_shadows_published). Never
+    holds the request `db` across the SENAITE HTTP calls in publish_sample_coa;
+    never raises — a mirror failure must never fail the publish.
+
+    `SessionLocal()` and the helper import live INSIDE the try, same
+    hardening rationale as `_mirror_parent_analysis_bg`: `db` starts as None
+    so `finally` can guard `db.close()` if construction itself failed.
+    """
+    db = None
+    try:
+        from database import SessionLocal
+        from lims_analyses.parent_mirror import mark_parent_shadows_published
+        db = SessionLocal()
+        if mark_parent_shadows_published(db, sample_id=sample_id):
+            db.commit()
+    except Exception as mirror_err:  # noqa: BLE001
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        logger.warning("registry.publish_shadow_mark_failed sample_id=%s err=%s",
+                       sample_id, mirror_err)
+    finally:
+        if db is not None:
+            db.close()
+
+
 class AnalysisResultRequest(BaseModel):
     result: str  # The result value to set
 
@@ -13796,6 +13947,18 @@ async def set_analysis_result(
                     message="SENAITE returned no items — update may have failed",
                 )
             item = items[0]
+
+            from fastapi.concurrency import run_in_threadpool
+            _sid = item.get("getRequestID") or item.get("RequestID")
+            _kw = item.get("Keyword")
+            if _sid and _kw:
+                await run_in_threadpool(
+                    _mirror_parent_analysis_bg,
+                    sample_id=_sid, keyword=_kw,
+                    mirror_review_state=item.get("review_state"),
+                    result_value=req.result,
+                )
+
             return AnalysisResultResponse(
                 success=True,
                 message="Result updated",
@@ -13870,6 +14033,18 @@ async def set_analysis_method_instrument(
                     message="SENAITE returned no items — update may have failed",
                 )
             item = items[0]
+
+            from fastapi.concurrency import run_in_threadpool
+            _sid = item.get("getRequestID") or item.get("RequestID")
+            _kw = item.get("Keyword")
+            if _sid and _kw:
+                await run_in_threadpool(
+                    _mirror_parent_analysis_bg,
+                    sample_id=_sid, keyword=_kw,
+                    mirror_review_state=item.get("review_state"),
+                    method_uid=req.method_uid, instrument_uid=req.instrument_uid,
+                )
+
             return AnalysisResultResponse(
                 success=True,
                 message="Updated",
@@ -13899,6 +14074,12 @@ class AnalysisTransitionRequest(BaseModel):
 
 # After a successful transition, SENAITE should move to this review_state.
 # If the actual state differs, SENAITE silently rejected the transition (DATA-04).
+# NOTE: "retract"'s "unassigned" entry is DEAD for validation purposes —
+# retract is retire-and-replace, not an in-place flip (see the dedicated
+# early-return branch in transition_analysis), so its real post-state
+# ('retracted') is checked there instead of via this dict/DATA-04. The key
+# stays here only so the membership gate a few lines below still accepts
+# "retract" as a valid transition name.
 EXPECTED_POST_STATES: dict[str, str] = {
     "submit": "to_be_verified",
     "verify": "verified",
@@ -13953,6 +14134,83 @@ async def transition_analysis(
                 update_url, json={"transition": req.transition}
             )
             resp.raise_for_status()
+
+            # ── Retract: retire-and-replace, not an in-place state flip ──────
+            # SENAITE's retract transition retires the ORIGINAL analysis line
+            # (review_state -> 'retracted') and spawns a brand-new, DIFFERENT
+            # analysis object born 'unassigned' carrying the old Result, with
+            # retest_of_uid pointing at the original (live evidence: BW-0002
+            # FILL-NET-CONTENT — original 800582b9 -> retracted result=30;
+            # new copy 736bb35a -> unassigned result=30
+            # retest_of_uid=800582b9). Two bugs this exposes in the generic
+            # path below:
+            #   1. SENAITE's /update response for retract comes back with an
+            #      EMPTY items list even on success — the items-empty guard
+            #      a few lines down would report a false failure.
+            #   2. EXPECTED_POST_STATES["retract"] == "unassigned" models the
+            #      in-place flip that doesn't exist; the original's true
+            #      post-state is 'retracted' — the unassigned thing is a
+            #      DIFFERENT object, so DATA-04 below can't validate retract.
+            # Handled as a self-contained early-return branch so every other
+            # verb (submit/verify/reject/retest) stays byte-identical to
+            # before: whether or not the POST's items came back, re-fetch the
+            # target uid's current state (same GET-by-uid shape as the
+            # retest/reject cascade's getRequestID fallback further below) and
+            # use its review_state as the sole success criterion.
+            if req.transition == "retract":
+                _fetch_url = (
+                    f"{SENAITE_URL}/senaite/@@API/senaite/v1/Analysis/{uid}"
+                )
+                _fetch_resp = await client.get(_fetch_url)
+                _retract_item: dict = {}
+                if _fetch_resp.status_code == 200:
+                    _fetch_items = _fetch_resp.json().get("items", [])
+                    if _fetch_items:
+                        _retract_item = _fetch_items[0]
+
+                _retracted_state = _retract_item.get("review_state", "")
+                _retract_keyword = _retract_item.get("Keyword", "")
+
+                if _retracted_state != "retracted":
+                    return AnalysisResultResponse(
+                        success=False,
+                        message=(
+                            "Transition 'retract' was silently rejected by "
+                            f"SENAITE. Expected state 'retracted' but got "
+                            f"'{_retracted_state or 'unknown'}'."
+                        ),
+                        new_review_state=_retracted_state,
+                        keyword=_retract_keyword,
+                    )
+
+                # Confirmed retracted — fire the chained shadow mirror:
+                # the OLD live shadow row is stamped retracted+retested, and
+                # a NEW live row is born unassigned carrying the re-fetched
+                # Result (SENAITE's copy). Best-effort, own session, same
+                # posture as the A2/A3 mirror block below.
+                _retract_sid = (
+                    _retract_item.get("getRequestID")
+                    or _retract_item.get("RequestID")
+                )
+                if _retract_sid and _retract_keyword:
+                    from fastapi.concurrency import run_in_threadpool
+                    await run_in_threadpool(
+                        _mirror_parent_analysis_bg,
+                        sample_id=_retract_sid, keyword=_retract_keyword,
+                        mirror_review_state="unassigned",
+                        result_value=(_retract_item.get("Result") or None),
+                        is_retest=True,
+                        old_mirror_review_state="retracted",
+                    )
+
+                return AnalysisResultResponse(
+                    success=True,
+                    message="Transition 'retract' completed",
+                    new_review_state=_retracted_state,
+                    keyword=_retract_keyword,
+                )
+            # ── end retract special-case ──────────────────────────────────────
+
             data = resp.json()
             items = data.get("items", [])
             if not items:
@@ -14063,6 +14321,46 @@ async def transition_analysis(
                         _cascade_tag, uid, _cascade_err,
                     )
             # ── end parent retest/reject cascade ──────────────────────────────
+
+            # ── Parent analysis shadow mirror (A2/A3, best-effort) ───────────
+            # Only reached after the silent-rejection check above passes, i.e.
+            # SENAITE actually applied the transition. Uses its own SessionLocal
+            # via _mirror_parent_analysis_bg — never the request's `db` (that
+            # session is reserved for the retest/reject cascade above).
+            from fastapi.concurrency import run_in_threadpool
+            _sid = item.get("getRequestID") or item.get("RequestID")
+            if _sid and keyword:
+                _is_retest = req.transition == "retest"
+                # For retest, `actual_state` ("verified", per
+                # EXPECTED_POST_STATES["retest"]) describes the OLD SENAITE
+                # analysis line SENAITE echoed back — not the NEW retest
+                # analysis object spawned under the hood, which is born
+                # unassigned. The mirror helper's is_retest branch creates
+                # that new row and stamps it with whatever mirror_review_state
+                # is passed here, so passing actual_state would mislabel the
+                # brand-new row as already verified. The old row keeps its own
+                # (correct) mirror_review_state — is_retest only marks it
+                # retested, it doesn't touch that field.
+                #
+                # Live registry-inspect UAT showed SENAITE's retest
+                # transition also copies the OLD line's Result onto the new
+                # retest analysis under the hood (new line born unassigned
+                # but already carrying the old Result) — so `item["Result"]`
+                # here is that carried-over value, not a real new result.
+                # Mirror it onto the new row for the same reason as the
+                # state above: leaving result_value=None would drift from
+                # SENAITE truth. `or None` guards against mirroring an
+                # empty-string Result. Non-retest transitions are unchanged —
+                # they never pass result_value (state-only mirror).
+                _mirror_state = "unassigned" if _is_retest else actual_state
+                _retest_result = (item.get("Result") or None) if _is_retest else None
+                await run_in_threadpool(
+                    _mirror_parent_analysis_bg,
+                    sample_id=_sid, keyword=keyword,
+                    mirror_review_state=_mirror_state,
+                    result_value=_retest_result,
+                    is_retest=_is_retest,
+                )
 
             return AnalysisResultResponse(
                 success=True,
@@ -16975,6 +17273,98 @@ def _registry_origin(row) -> str:
     return "lazy-or-backfill"
 
 
+def _build_analysis_debug_rows(db: Session, row: LimsSample, sample_id: str) -> dict:
+    """Registry-debug panel's analyses column (Task 10, 2026-07-07-sample-
+    registry-debug-panel-design.md amendment): per-keyword compare of current
+    SENAITE parent-analysis lines vs native `lims_analyses` rows (live shadow
+    + current canonical) for this parent. Non-mutating — read-only, same
+    posture as the rest of this panel.
+
+    Independent try/except around the SENAITE analyses-catalog fetch: this is
+    a SEPARATE SENAITE call from the basic-info `fetch_parent_metadata` above
+    (own failure mode), so a failure here must not blank the field diff, and
+    a `senaite_error` on the basic-info side must not blank this section. On
+    failure, short-circuits to an empty rows/summary (same posture as the
+    `meta is None` early-return above it) rather than rendering shadow/
+    canonical rows as misleading "shadow_only" — we genuinely don't know
+    whether a current SENAITE line exists, so showing none beats showing a
+    wrong signal."""
+    from lims_analyses.parent_mirror import build_analysis_sync_rows, select_current_lines
+    from models import LimsAnalysis
+
+    try:
+        items = senaite.fetch_parent_analyses(sample_id)
+    except Exception as e:
+        return {"rows": [], "summary": None, "error": str(e)}
+
+    current = select_current_lines(items)  # same selection as the backfill
+    senaite_map = {
+        kw: {"review_state": line.get("review_state"), "result": line.get("result")}
+        for kw, line in current.items()
+    }
+
+    native_rows = db.execute(
+        select(LimsAnalysis).where(LimsAnalysis.lims_sample_pk == row.id)
+    ).scalars().all()
+
+    def _is_live_canonical(r) -> bool:
+        # Mirrors the DB's own `uq_lims_analyses_parent_service_root` partial
+        # unique index definition (database.py) exactly: at most one
+        # canonical row per (parent, keyword) may have retest_of_id IS NULL
+        # AND review_state NOT IN ('retracted', 'rejected') at a time.
+        return r.retest_of_id is None and r.review_state not in ("retracted", "rejected")
+
+    # Newest-wins per keyword, same "prefer live, else fallback to newest"
+    # idiom as parent_mirror.py's _existing_shadow / resolve_instrument_id.
+    shadow_best: dict = {}
+    canonical_best: dict = {}
+    for r in native_rows:
+        if r.provenance == "shadow" and not r.retested:
+            cur = shadow_best.get(r.keyword)
+            if cur is None or r.id > cur.id:
+                shadow_best[r.keyword] = r
+        elif r.provenance == "canonical":
+            cur = canonical_best.get(r.keyword)
+            if cur is None:
+                canonical_best[r.keyword] = r
+            else:
+                r_live, cur_live = _is_live_canonical(r), _is_live_canonical(cur)
+                if (r_live and not cur_live) or (r_live == cur_live and r.id > cur.id):
+                    canonical_best[r.keyword] = r
+
+    shadow_map = {
+        kw: {"mirror_review_state": r.mirror_review_state, "result": r.result_value, "title": r.title}
+        for kw, r in shadow_best.items()
+    }
+    canonical_map = {
+        kw: {"review_state": r.review_state, "result": r.result_value, "title": r.title}
+        for kw, r in canonical_best.items()
+    }
+
+    # Resolve a display title for SENAITE-only keywords (no native row to
+    # source one from) with a single batched lookup.
+    missing_title_kws = [
+        kw for kw in senaite_map if kw not in shadow_map and kw not in canonical_map
+    ]
+    title_lookup: dict = {}
+    if missing_title_kws:
+        svc_rows = db.execute(
+            select(AnalysisService.keyword, AnalysisService.title)
+            .where(AnalysisService.keyword.in_(missing_title_kws))
+        ).all()
+        title_lookup = {kw: title for kw, title in svc_rows}
+    for kw, entry in senaite_map.items():
+        entry["title"] = (
+            shadow_map.get(kw, {}).get("title")
+            or canonical_map.get(kw, {}).get("title")
+            or title_lookup.get(kw) or kw
+        )
+
+    result = build_analysis_sync_rows(senaite_map, shadow_map, canonical_map)
+    result["error"] = None
+    return result
+
+
 def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
     """Assemble the registry-debug payload. NON-MUTATING: reads the raw row
     directly (never ensure_sample_row / list_sub_samples / reconcile), so
@@ -16991,6 +17381,7 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
             "linkage": None, "origin": None, "container": None,
             "fields": [], "summary": None, "vials": None,
             "verdict": None, "senaite_error": None, "raw": None,
+            "analyses": None,
         }
 
     age = None
@@ -17005,6 +17396,11 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
         "age_seconds": age, "reconcile_due": reconcile_due,
     }
     container = {"container_mode": row.container_mode, "assignment_role": row.assignment_role}
+
+    # Independent of the basic-info meta fetch below — its own try/except,
+    # its own error surface (analyses.error), never blanked by nor blanking
+    # the field diff.
+    analyses = _build_analysis_debug_rows(db, row, sample_id)
 
     meta = None
     senaite_error = None
@@ -17022,6 +17418,7 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
             "fields": [], "summary": None, "vials": None, "verdict": None,
             "senaite_error": senaite_error,
             "raw": {"registry": _row_to_dict(row), "senaite": None},
+            "analyses": analyses,
         }
 
     diff = diff_registry_vs_senaite(row, meta)
@@ -17054,6 +17451,7 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
                     "registry_null": diff["summary"]["registry_null"]},
         "senaite_error": None,
         "raw": {"registry": _row_to_dict(row), "senaite": meta},
+        "analyses": analyses,
     }
 
 
@@ -17067,24 +17465,33 @@ def _row_to_dict(row) -> dict:
 
 
 @app.get("/debug/sample-registry/{sample_id}")
-async def get_sample_registry_debug(
+def get_sample_registry_debug(
     sample_id: str,
     admin=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """Admin registry diagnostic — non-mutating registry-vs-SENAITE compare."""
+    """Admin registry diagnostic — non-mutating registry-vs-SENAITE compare.
+
+    Plain `def` (not `async def`): the SENAITE calls behind this (fetch_parent_
+    analyses / fetch_parent_metadata / fetch_secondaries, all `requests`-based)
+    are blocking. FastAPI runs sync `def` route handlers in the threadpool so
+    they no longer stall the event loop while holding this request's `db`."""
     return _build_registry_debug_response(db, sample_id)
 
 
 @app.post("/debug/sample-registry/{sample_id}/refresh")
-async def refresh_sample_registry_debug(
+def refresh_sample_registry_debug(
     sample_id: str,
     admin=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """Admin action: force a SENAITE reconcile of the registry row, then
     return the re-diffed debug payload so drift can be watched resolving.
-    Distinct POST verb because it mutates."""
+    Distinct POST verb because it mutates.
+
+    Plain `def` for the same reason as the GET sibling: `_refresh_parent_
+    from_senaite` and `_build_registry_debug_response` both make blocking
+    SENAITE calls; threadpool execution keeps them off the event loop."""
     from sub_samples.service import _refresh_parent_from_senaite
     row = db.execute(
         select(LimsSample).where(LimsSample.sample_id == sample_id)

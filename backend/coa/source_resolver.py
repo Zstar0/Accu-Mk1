@@ -271,6 +271,11 @@ def _resolve_mk1_parent_tier(
             LimsAnalysis.retest_of_id.is_(None),
             LimsAnalysis.result_value.isnot(None),
             LimsAnalysis.result_value != "",
+            # SENAITE phase-out defense-in-depth: the sentinel review_state
+            # 'senaite_mirror' already isn't in _LIVE_RESULT_STATES, so a shadow
+            # row can never reach this COA-facing query — this clause makes that
+            # exclusion explicit rather than incidental.
+            LimsAnalysis.provenance == "canonical",
         )
     ).scalars().all()
 
@@ -355,6 +360,12 @@ def _apply_pin_override(
         if (
             row is None
             or row.review_state not in _LIVE_RESULT_STATES
+            # SENAITE phase-out defense-in-depth: a shadow row's sentinel
+            # review_state already fails the check above (it's never in
+            # _LIVE_RESULT_STATES), so this can't currently change behavior —
+            # kept explicit so a pin can never resolve to a shadow row even if
+            # the state list changes later.
+            or row.provenance != "canonical"
             or not row.reportable
             or row.retest_of_id is not None
             or row.keyword != analyte_keyword

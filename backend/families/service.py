@@ -65,6 +65,12 @@ def _gather_analytes(
             LimsAnalysis.lims_sample_pk == parent.id,
             LimsAnalysis.reportable == True,  # noqa: E712
             LimsAnalysis.retest_of_id.is_(None),
+            # SENAITE phase-out fail-closed: this query carries NO review_state
+            # filter, so without this clause a SENAITE-mirror SHADOW row (sentinel
+            # review_state='senaite_mirror') would surface here with a fabricated
+            # parent_state — the MANDATORY filter for this reader (see
+            # docs/superpowers/sdd/task-7-brief.md).
+            LimsAnalysis.provenance == "canonical",
         )
     ).scalars().all()
     for r in parent_rows:
