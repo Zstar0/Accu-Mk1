@@ -106,6 +106,19 @@ describe('filterFlags', () => {
     ).toEqual([2])
   })
 
+  it("'all_open' keeps open/in_progress/blocked, drops resolved/closed", () => {
+    const flags = [
+      flag({ id: 1, status: 'open' }),
+      flag({ id: 2, status: 'in_progress' }),
+      flag({ id: 3, status: 'blocked' }),
+      flag({ id: 4, status: 'resolved' }),
+      flag({ id: 5, status: 'closed' }),
+    ]
+    expect(
+      filterFlags(flags, filter({ status: 'all_open' })).map(f => f.id)
+    ).toEqual([1, 2, 3])
+  })
+
   it('filters by entity type', () => {
     const flags = [
       flag({ id: 1, entity_type: 'sample' }),
@@ -159,5 +172,36 @@ describe('filterFlags', () => {
   it('returns an empty array when nothing matches', () => {
     const flags = [flag({ id: 1, title: 'A' })]
     expect(filterFlags(flags, filter({ text: 'zzz' }))).toEqual([])
+  })
+
+  it("assignee 'all' passes everything", () => {
+    const flags = [
+      flag({ id: 1, assignee_id: 7 }),
+      flag({ id: 2, assignee_id: 9 }),
+      flag({ id: 3, assignee_id: null }),
+    ]
+    expect(filterFlags(flags, filter({ assignee: 'all' }))).toHaveLength(3)
+  })
+
+  it('assignee matches a specific user id', () => {
+    const flags = [
+      flag({ id: 1, assignee_id: 7 }),
+      flag({ id: 2, assignee_id: 9 }),
+      flag({ id: 3, assignee_id: null }),
+    ]
+    expect(
+      filterFlags(flags, filter({ assignee: '7' })).map(f => f.id)
+    ).toEqual([1])
+  })
+
+  it("assignee 'none' matches unassigned only", () => {
+    const flags = [
+      flag({ id: 1, assignee_id: 7 }),
+      flag({ id: 2, assignee_id: 9 }),
+      flag({ id: 3, assignee_id: null }),
+    ]
+    expect(
+      filterFlags(flags, filter({ assignee: 'none' })).map(f => f.id)
+    ).toEqual([3])
   })
 })

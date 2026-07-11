@@ -10,6 +10,7 @@ const base: ActivityItem = {
   to_value: null,
   created_at: '2026-07-01T00:00:00Z',
   flag: {} as ActivityItem['flag'],
+  relevance: [],
 }
 const opts = {
   nameOf: (id: number | null) => (id === 2 ? 'Alice' : `User ${id}`),

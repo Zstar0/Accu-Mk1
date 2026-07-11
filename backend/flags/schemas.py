@@ -105,13 +105,24 @@ class FlagResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class WatcherOut(BaseModel):
+    """A watcher participant on a flag (ids only — display resolves client-side
+    via the shared user directory, keeping the flags module host-agnostic)."""
+    user_id: int
+    added_at: datetime
+    added_by: Optional[int] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
 class FlagDetailResponse(FlagResponse):
     comments: List[CommentResponse] = Field(default_factory=list)
     events: List[EventResponse] = Field(default_factory=list)
+    watchers: List[WatcherOut] = Field(default_factory=list)
 
 
 class ActivityItem(BaseModel):
-    """One audit event + its (entity-resolved) flag — a row of the feed."""
+    """One audit event + its (entity-resolved) flag — a row of the feed.
+    `relevance` marks why this event is in the requesting user's feed."""
     id: int
     event_type: str
     actor_id: Optional[int] = None
@@ -119,6 +130,7 @@ class ActivityItem(BaseModel):
     to_value: Optional[str] = None
     created_at: datetime
     flag: FlagResponse
+    relevance: List[str] = Field(default_factory=list)
 
 
 class ActivityPage(BaseModel):

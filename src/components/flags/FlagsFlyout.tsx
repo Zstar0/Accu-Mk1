@@ -25,11 +25,8 @@ import {
   type FlagCandidate,
 } from '@/components/flags/RaiseFlagButton'
 import { entityLabel } from '@/components/flags/flag-entity'
-import {
-  filterFlags,
-  EMPTY_FLAG_FILTER,
-  type FlagFilterState,
-} from '@/components/flags/flag-filter'
+import { filterFlags } from '@/components/flags/flag-filter'
+import { useFlagFilter } from '@/components/flags/use-flag-filter'
 
 /** The flyout's tab axis. Four map 1:1 to the API's `FlagTab`; `activity` (event
  *  feed) and `unread` (unread flags) are FE-only tabs. */
@@ -123,8 +120,9 @@ export function FlagsFlyout() {
   // FE-only tabs: Activity renders the event feed; Unread lists unread flags.
   const isActivity = tab === 'activity'
   const isUnread = tab === 'unread'
-  // Ephemeral triage filters, local to the flyout — reset when it closes.
-  const [filter, setFilter] = useState<FlagFilterState>(EMPTY_FLAG_FILTER)
+  // Per-tab triage filters, persisted in localStorage (personal tabs default
+  // to All-Open). Keyed on the active tab; switching tabs restores its filter.
+  const [filter, setFilter] = useFlagFilter(tab)
   // Persisted display style (stacked list vs. aligned table).
   const [viewMode, setViewMode] = useFlagViewMode()
   // Flags the user was just pinged about (snapshot captured when this flyout
@@ -222,7 +220,6 @@ export function FlagsFlyout() {
       open={open}
       onOpenChange={isOpen => {
         if (!isOpen) {
-          setFilter(EMPTY_FLAG_FILTER)
           useUIStore.getState().closeFlagsFlyout()
         }
       }}
@@ -365,7 +362,11 @@ export function FlagsFlyout() {
             {/* Filter bar — shown whenever there are flags to triage (not on
                 Activity or Unread). */}
             {!isActivity && !isUnread && !isLoading && !isError && hasFlags && (
-              <FlagsFilterBar value={filter} onChange={setFilter} />
+              <FlagsFilterBar
+                value={filter}
+                onChange={setFilter}
+                showAssignee={tab !== 'assigned'}
+              />
             )}
 
             {/* List — or the Activity feed on that tab. */}

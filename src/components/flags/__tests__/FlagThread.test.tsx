@@ -83,6 +83,7 @@ function detail(): FlagDetailResponse {
         created_at: '2026-06-30T15:45:00Z',
       },
     ],
+    watchers: [],
   }
 }
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, ArrowUpRight, Check, Eye, Send } from 'lucide-react'
+import { ArrowLeft, ArrowUpRight, Check, Send } from 'lucide-react'
 import {
   Select,
   SelectContent,
@@ -19,8 +19,6 @@ import {
   useChangeStatus,
   useAssignFlag,
   useAddComment,
-  useAddWatcher,
-  useRemoveWatcher,
   flagKeys,
 } from '@/hooks/use-flags'
 import { markRead } from '@/lib/flags-api'
@@ -52,19 +50,17 @@ import {
 import { formatClock } from '@/components/flags/flag-format'
 import { STATUS_LABELS, STATUS_DOT } from '@/components/flags/flag-status'
 import { FlagAvatar } from '@/components/flags/FlagAvatar'
+import { FlagWatchers } from '@/components/flags/FlagWatchers'
 
 type TimelineEntry =
   | { kind: 'comment'; at: string; comment: CommentResponse }
   | { kind: 'event'; at: string; event: EventResponse }
 
 /**
- * One flag's thread: breadcrumb + entity/resolve header, status/assignee/watch
- * controls, an interleaved audit+comment timeline, and a composer. Visual
- * target: flag-thread-dark.html.
- *
- * Gaps vs the mockup (API limits, noted): the detail API exposes no watchers
- * list, so the watcher count is derived best-effort from the event trail and
- * the Watch toggle's initial state is inferred the same way.
+ * One flag's thread: breadcrumb + entity/resolve header, status/assignee
+ * controls, a watcher row (FlagWatchers, backed by the detail API's watchers
+ * list), an interleaved audit+comment timeline, and a composer. Visual target:
+ * flag-thread-dark.html.
  */
 export function FlagThread({
   flagId,
@@ -81,8 +77,6 @@ export function FlagThread({
   const changeStatus = useChangeStatus(flagId)
   const assign = useAssignFlag(flagId)
   const addComment = useAddComment(flagId)
-  const addWatcher = useAddWatcher(flagId)
-  const removeWatcher = useRemoveWatcher(flagId)
 
   const [draft, setDraft] = useState('')
   // @mention picker state: the users chosen (id → display name), the open
@@ -166,15 +160,6 @@ export function FlagThread({
   const def = typesMap[flag.type] ?? flagTypeDef(flag.type)
   const { Icon, canDeepLink } = entityMeta(flag.entity_type)
   const status = (flag.status as FlagStatus) ?? 'open'
-
-  // Best-effort watcher state from the audit trail (no watchers list on the API).
-  const watchers = new Set<number>()
-  for (const e of flag.events) {
-    if (e.actor_id == null) continue
-    if (e.event_type === 'watcher_added') watchers.add(e.actor_id)
-    if (e.event_type === 'watcher_removed') watchers.delete(e.actor_id)
-  }
-  const iWatch = currentUserId != null && watchers.has(currentUserId)
 
   // Merge comments + non-comment events into one time-ordered timeline.
   const timeline: TimelineEntry[] = [
@@ -321,28 +306,15 @@ export function FlagThread({
               ))}
             </SelectContent>
           </Select>
+        </div>
 
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 gap-1.5 text-xs"
-            disabled={
-              addWatcher.isPending ||
-              removeWatcher.isPending ||
-              currentUserId == null
-            }
-            onClick={() => {
-              if (currentUserId == null) return
-              if (iWatch) removeWatcher.mutate(currentUserId)
-              else addWatcher.mutate(currentUserId)
-            }}
-          >
-            <Eye className="h-3.5 w-3.5" />
-            {iWatch ? 'Watching' : 'Watch'}
-            {watchers.size > 0 && (
-              <span className="text-muted-foreground">· {watchers.size}</span>
-            )}
-          </Button>
+        {/* Watchers: real list from the detail API (add / remove / self-toggle). */}
+        <div className="mt-3">
+          <FlagWatchers
+            flagId={flag.id}
+            watchers={flag.watchers ?? []}
+            currentUserId={currentUserId}
+          />
         </div>
       </div>
 

@@ -36,3 +36,19 @@ export function activityVerb(
       return 'updated this'
   }
 }
+
+/** Personalization filter for the Activity tab. `'mine'` = assigned ∪ raised. */
+export type ActivityChip = 'all' | 'actor' | 'mine' | 'watching' | 'mentioned'
+
+/** Pure client-side narrow of the already-fetched feed by relevance marker. */
+export function filterActivity(
+  items: ActivityItem[],
+  chip: ActivityChip
+): ActivityItem[] {
+  if (chip === 'all') return items
+  if (chip === 'mine')
+    return items.filter(
+      i => i.relevance.includes('assigned') || i.relevance.includes('raised')
+    )
+  return items.filter(i => i.relevance.includes(chip))
+}
