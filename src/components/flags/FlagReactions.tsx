@@ -35,7 +35,11 @@ export function FlagReactions({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="group/react mt-1 flex flex-wrap items-center gap-1">
+      {/* The hover group that reveals the picker is the COMMENT WRAPPER
+          (`group/react` in FlagThread, both view modes) — not this bar. With
+          zero reactions this bar is a near-zero-height strip nobody can find
+          to hover (live-review discoverability bug). */}
+      <div className="mt-1 flex flex-wrap items-center gap-1">
         {reactions.map(r => {
           const mine =
             currentUserId != null && r.user_ids.includes(currentUserId)

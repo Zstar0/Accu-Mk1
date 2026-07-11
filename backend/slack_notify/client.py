@@ -4,12 +4,18 @@ The token is never logged."""
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import httpx
 
 logger = logging.getLogger(__name__)
 _BASE = "https://slack.com/api"
+
+
+class SlackProfile(NamedTuple):
+    """The bits of a Slack user we cache at link time (one users.info call)."""
+    display_name: Optional[str]
+    avatar_url: Optional[str]
 
 
 class SlackClient:
@@ -42,14 +48,27 @@ class SlackClient:
                                 form=True)
         return (data or {}).get("user", {}).get("id") or None
 
+    async def user_profile(self, member_id: str) -> Optional[SlackProfile]:
+        """Display name (fallback real name) + avatar for a member id, from a
+        single users.info call. Returns None only when the call itself fails so
+        callers can distinguish "no data" from "linked but no photo". Form-
+        encoded like lookupByEmail."""
+        data = await self._call("users.info", {"user": member_id}, form=True)
+        if not data:
+            return None
+        user = data.get("user") or {}
+        profile = user.get("profile") or {}
+        name = (profile.get("display_name") or user.get("real_name")
+                or profile.get("real_name") or None)
+        # image_72 is the small (72px) avatar — plenty for a 18-22px circle.
+        avatar = profile.get("image_72") or None
+        return SlackProfile(name, avatar)
+
     async def user_info(self, member_id: str) -> Optional[str]:
         """Display name (fallback real name) for a member id — mapping
-        confidence in the prefs UI. Form-encoded like lookupByEmail."""
-        data = await self._call("users.info", {"user": member_id}, form=True)
-        user = (data or {}).get("user") or {}
-        profile = user.get("profile") or {}
-        return (profile.get("display_name") or user.get("real_name")
-                or profile.get("real_name") or None)
+        confidence in the prefs UI. Thin wrapper over user_profile."""
+        prof = await self.user_profile(member_id)
+        return prof.display_name if prof else None
 
     async def open_dm(self, member_id: str) -> Optional[str]:
         data = await self._call("conversations.open", {"users": member_id})

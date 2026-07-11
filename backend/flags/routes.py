@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import List, Optional
 
 from fastapi import (
@@ -14,14 +15,15 @@ from sqlalchemy.orm import Session
 
 from auth import get_current_user, require_admin
 from database import get_db
-from flags import recurring, seams, service, types_service, watches
+from flags import kinds_service, recurring, seams, service, types_service, watches
 from flags.bus import BUS
 from flags.errors import BadRequestError, ConflictError, NotFoundError, PermissionDeniedError
 from flags.schemas import (
     ActivityItem, ActivityPage, AssignRequest, AttachmentResponse, CommentRequest,
     CommentResponse, CreateFlagRequest, DueRequest, EntityContext, EntityLinkOut,
     EntityLinkRequest, FlagDetailResponse, FlagLinkOut, FlagLinkRequest, FlagResponse,
-    ArmWatchRequest, EntitySearchHit, FlagRecurringCreate, FlagRecurringResponse,
+    ArmWatchRequest, EntitySearchHit, FlagItemKindCreate, FlagItemKindResponse,
+    FlagItemKindUpdate, FlagRecurringCreate, FlagRecurringResponse,
     FlagRecurringUpdate, FlagSearchHit, FlagTypeCreate, FlagTypeResponse, FlagTypeUpdate,
     ReactionAggregate, StatusRequest, SummaryResponse, WatchResponse,
     WatcherOut, WatcherRequest,
@@ -42,6 +44,35 @@ def _with_entity(db: Session, flag, resp_cls=FlagResponse):
     if ctx is not None:
         resp.entity = EntityContext.model_validate(ctx)
     return resp
+
+
+def _with_entities(db: Session, flags, resp_cls=FlagResponse):
+    """Batch form of `_with_entity` for list endpoints: decorate many flags with
+    resolved entity context in a BOUNDED number of queries (one batch per entity
+    type) instead of the per-flag N+1. Output per flag is identical to
+    `_with_entity`; order is preserved.
+
+    Virtual item kinds (entity_type set, entity_id NULL) and general tasks
+    (entity_type NULL) carry no seam context — they're skipped here and their
+    `entity` stays unset, exactly as `resolve_context` would leave them.
+    """
+    resps = [resp_cls.model_validate(f) for f in flags]
+    # Group the ids that CAN resolve (both parts present) by entity type.
+    ids_by_type: dict[str, set] = {}
+    for f in flags:
+        if f.entity_type is not None and f.entity_id is not None:
+            ids_by_type.setdefault(f.entity_type, set()).add(str(f.entity_id))
+    ctx_by_type = {
+        et: seams.resolve_contexts(db, et, list(ids))
+        for et, ids in ids_by_type.items()
+    }
+    for resp, f in zip(resps, flags):
+        if f.entity_type is None or f.entity_id is None:
+            continue
+        ctx = ctx_by_type.get(f.entity_type, {}).get(str(f.entity_id))
+        if ctx is not None:
+            resp.entity = EntityContext.model_validate(ctx)
+    return resps
 
 
 def _http(e: Exception) -> HTTPException:
@@ -80,7 +111,7 @@ def list_flags(tab: str = Query("all_open"), status: Optional[str] = None,
         rows = service.list_flags(db, user_id=getattr(user, "id", None), tab=tab,
                                   status=status, entity_type=entity_type, entity_id=entity_id,
                                   include_descendants=include_descendants)
-        return [_with_entity(db, r) for r in rows]
+        return _with_entities(db, rows)
     except Exception as e:
         raise _http(e)
 
@@ -99,14 +130,15 @@ def activity(cursor: Optional[str] = None, limit: int = Query(25, ge=1, le=50),
         rows, next_cursor = service.list_activity(
             db, user_id=user_id, cursor=cursor, limit=limit)
         rel = service.compute_relevance(db, rows, user_id=user_id)
+        flag_resps = _with_entities(db, [ev.flag for ev in rows])
         items = [
             ActivityItem(
                 id=ev.id, event_type=ev.event_type, actor_id=ev.actor_id,
                 from_value=ev.from_value, to_value=ev.to_value,
-                created_at=ev.created_at, flag=_with_entity(db, ev.flag),
+                created_at=ev.created_at, flag=fr,
                 relevance=rel.get(ev.id, []),
             )
-            for ev in rows
+            for ev, fr in zip(rows, flag_resps)
         ]
         return ActivityPage(items=items, next_cursor=next_cursor)
     except Exception as e:
@@ -118,7 +150,7 @@ def unread(db: Session = Depends(get_db), user=Depends(get_current_user)):
     # Literal /unread above /{flag_id}.
     try:
         rows = service.list_unread(db, user_id=getattr(user, "id", None))
-        return [_with_entity(db, r) for r in rows]
+        return _with_entities(db, rows)
     except Exception as e:
         raise _http(e)
 
@@ -193,6 +225,49 @@ def delete_flag_type(type_id: int, db: Session = Depends(get_db),
     # → 409, signalling the client to offer the deactivate path instead.
     try:
         types_service.delete_type(db, type_id)
+    except Exception as e:
+        raise _http(e)
+
+
+# --- item kinds (Slice 7) ------------------------------------------------
+# Literal `/item-kinds*` routes are defined ABOVE `/{flag_id}` so they win the
+# match (literal-before-param). Reads are open; mutations are admin-gated.
+@router.get("/item-kinds", response_model=List[FlagItemKindResponse])
+def list_item_kinds(active_only: bool = False, db: Session = Depends(get_db),
+                    user=Depends(get_current_user)):
+    try:
+        return kinds_service.list_kinds(db, active_only=active_only)
+    except Exception as e:
+        raise _http(e)
+
+
+@router.post("/item-kinds", response_model=FlagItemKindResponse, status_code=201)
+def create_item_kind(req: FlagItemKindCreate, db: Session = Depends(get_db),
+                     admin=Depends(require_admin)):
+    try:
+        return kinds_service.create_kind(
+            db, label=req.label, color=req.color, slug=req.slug,
+            is_active=req.is_active, sort_order=req.sort_order)
+    except Exception as e:
+        raise _http(e)
+
+
+@router.put("/item-kinds/{kind_id}", response_model=FlagItemKindResponse)
+def update_item_kind(kind_id: int, req: FlagItemKindUpdate,
+                     db: Session = Depends(get_db), admin=Depends(require_admin)):
+    try:
+        return kinds_service.update_kind(db, kind_id, **req.model_dump(exclude_unset=True))
+    except Exception as e:
+        raise _http(e)
+
+
+@router.delete("/item-kinds/{kind_id}", status_code=204)
+def delete_item_kind(kind_id: int, db: Session = Depends(get_db),
+                     admin=Depends(require_admin)):
+    # Hard-delete only unused custom kinds; built-in/in-use raise ConflictError
+    # → 409, signalling the client to offer the deactivate path instead.
+    try:
+        kinds_service.delete_kind(db, kind_id)
     except Exception as e:
         raise _http(e)
 
@@ -273,7 +348,18 @@ def get_attachment(attachment_id: int, db: Session = Depends(get_db), user=Depen
         raise HTTPException(status_code=404, detail="attachment file missing from storage")
     except Exception as e:
         raise _http(e)
-    return Response(content=data, media_type=att.content_type)
+    # Defense-in-depth: content_type is magic-byte-derived (raster images only),
+    # but never let a browser second-guess it, and pin a download name that
+    # can't smuggle header syntax (quotes/CRLF stripped to a safe subset).
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", att.filename or "") or "attachment"
+    return Response(
+        content=data,
+        media_type=att.content_type,
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": f'inline; filename="{safe_name}"',
+        },
+    )
 
 
 @router.get("/search", response_model=List[FlagSearchHit])

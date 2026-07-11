@@ -10,6 +10,7 @@ import {
 
 const CHIPS: { key: ActivityChip; label: string }[] = [
   { key: 'all', label: 'All' },
+  { key: 'forme', label: 'For me' },
   { key: 'actor', label: 'My actions' },
   { key: 'mine', label: 'My flags' },
   { key: 'watching', label: 'Watching' },

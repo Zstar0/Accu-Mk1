@@ -35,12 +35,27 @@ const ENTITY_META: Record<string, EntityMeta> = {
   sample: { Icon: FlaskConical, label: 'Sample', canDeepLink: true },
   sub_sample: { Icon: TestTube2, label: 'Sub Sample', canDeepLink: false },
   worksheet: { Icon: ClipboardList, label: 'Worksheet', canDeepLink: true },
+  // The seeded builtin item kind (slice 7). Legacy null-anchor general tasks are
+  // backfilled to this slug; the chip must show a human label, never the slug.
+  // Other (admin-created) kinds resolve their label FE-side via useItemKinds.
+  general_task: { Icon: ListTodo, label: 'General Task', canDeepLink: false },
 }
 
 /** Entity types with a backend `state` seam (→ watchable). Mirror of the
  *  `state=` registrations in backend/flags/seams.py `register_mk1_entities`.
  *  Update both together if another type opts in. */
 export const WATCHABLE_ENTITY_TYPES: ReadonlySet<string> = new Set(['sample'])
+
+/** The Mk1-backed ("code") entity types — anchors that always carry an
+ *  entity_id and can have per-entity flag buttons. NOT derived from
+ *  ENTITY_META (it also styles `general_task`, a virtual kind). Everything
+ *  outside this set in entity_type space is a virtual item kind whose
+ *  entity_id is NULL by design. Mirrors ENTITY_TYPES in FlagsFilterBar. */
+export const CODE_ENTITY_TYPES: ReadonlySet<string> = new Set([
+  'sample',
+  'sub_sample',
+  'worksheet',
+])
 
 /** Meta for a null-anchor general task (Phase 2). */
 const GENERAL_META: EntityMeta = {
@@ -67,6 +82,9 @@ export function entityLabel(
   entityId: string | null | undefined
 ): string {
   if (entityType == null) return 'General task'
+  // A virtual item kind carries no entity_id — render just the kind label
+  // (avoids the "general_task null" the backfill would otherwise produce).
+  if (entityId == null) return entityMeta(entityType).label
   return `${entityMeta(entityType).label} ${entityId}`
 }
 
@@ -130,9 +148,21 @@ export function navigateForFlag(flag: EntityCarrier): boolean {
   return navigateToEntity(flag.entity_type, flag.entity_id)
 }
 
-/** Best human label: the server-resolved one if present, else "Vial 42". */
-export function entityDisplayLabel(flag: EntityCarrier): string {
-  return flag.entity?.label ?? entityLabel(flag.entity_type, flag.entity_id)
+/** Best human label: the server-resolved one if present, else a virtual-kind
+ *  label from `kindLabels` (slug → label, e.g. from useItemKindsMap), else the
+ *  pure "Sample 42" / "General Task" fallback. */
+export function entityDisplayLabel(
+  flag: EntityCarrier,
+  kindLabels?: Record<string, string>
+): string {
+  if (flag.entity?.label != null) return flag.entity.label
+  // A kind-anchored flag carries no entity_id; resolve its label from the
+  // catalog so admin-created kinds render their real name, not the slug.
+  if (flag.entity_id == null && flag.entity_type != null) {
+    const kindLabel = kindLabels?.[flag.entity_type]
+    if (kindLabel != null) return kindLabel
+  }
+  return entityLabel(flag.entity_type, flag.entity_id)
 }
 
 /** Whether a flag has a usable navigation target (drives the chip's arrow). */

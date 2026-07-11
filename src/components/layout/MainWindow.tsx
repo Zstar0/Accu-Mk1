@@ -9,7 +9,6 @@ import { TitleBar } from '@/components/titlebar/TitleBar'
 import { AppSidebar } from './AppSidebar'
 import { MainWindowContent } from './MainWindowContent'
 import { CommandPalette } from '@/components/command-palette/CommandPalette'
-import { PreferencesDialog } from '@/components/preferences/PreferencesDialog'
 import { WorksheetDrawer } from '@/components/hplc/WorksheetDrawer'
 import { Toaster } from 'sonner'
 import { useTheme } from '@/hooks/use-theme'
@@ -185,7 +184,6 @@ export function MainWindow() {
 
         {/* Global UI Components (hidden until triggered) */}
         <CommandPalette />
-        <PreferencesDialog />
         <WorksheetDrawer />
         <FlagsFlyout />
         <Toaster

@@ -3,7 +3,7 @@
  * Stored under `flags:filter:<tab>` (same localStorage idiom as
  * `flags:viewMode`); personal tabs default to the composite All-Open status.
  */
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useState } from 'react'
 import {
   EMPTY_FLAG_FILTER,
   type FlagFilterState,
@@ -36,24 +36,24 @@ function load(tab: string): FlagFilterState {
 export function useFlagFilter(
   tab: string
 ): [FlagFilterState, (next: FlagFilterState) => void] {
-  // Free text is session-only; a write bumps `session` (new ref), which
-  // re-runs the memo and re-reads localStorage. load() is cheap.
-  const [session, setSession] = useState<Record<string, string>>({})
+  // React state is the source of truth; localStorage is a write-through
+  // consulted only for tabs with no state yet (first render / tab switch).
+  // Do NOT re-read localStorage inside render memoization: React Compiler
+  // caches the impure read keyed on `tab` alone, so same-tab writes persist
+  // but never re-render — filters silently "apply on next reload".
+  const [byTab, setByTab] = useState<Record<string, FlagFilterState>>({})
 
-  const filter = useMemo(
-    () => ({ ...load(tab), text: session[tab] ?? '' }),
-    [tab, session]
-  )
+  const filter = byTab[tab] ?? load(tab)
 
   const setFilter = useCallback(
     (next: FlagFilterState) => {
-      const { text, ...persisted } = next
+      const { text: _text, ...persisted } = next
       try {
         localStorage.setItem(KEY(tab), JSON.stringify(persisted))
       } catch {
         /* quota/SSR — session-only */
       }
-      setSession(s => ({ ...s, [tab]: text }))
+      setByTab(s => ({ ...s, [tab]: next }))
     },
     [tab]
   )

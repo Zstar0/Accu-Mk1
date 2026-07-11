@@ -8,6 +8,7 @@ vi.mock('@/components/flags/flag-users', () => ({
     id == null ? 'Unassigned' : `User ${id}`,
   initialsForUser: () => 'U',
   avatarColor: () => '#888888',
+  avatarUrlForUser: () => null,
 }))
 
 const addCommentMutate = vi.fn()
@@ -132,5 +133,71 @@ describe('FlagThread', () => {
       body: 'on it',
       mentionIds: [],
     })
+  })
+})
+
+describe('FlagThread — timeline view mode', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+    useFlag.mockReset()
+    useFlag.mockReturnValue({
+      data: detail(),
+      isLoading: false,
+      isError: false,
+    })
+  })
+
+  it('defaults to the bubble view', async () => {
+    const { FlagThread } = await import('@/components/flags/FlagThread')
+    render(<FlagThread flagId={7} tabLabel="Assigned to me" />)
+
+    expect(
+      screen.getByRole('button', { name: 'Bubble view' })
+    ).toHaveAttribute('aria-pressed', 'true')
+    expect(
+      screen.getByRole('button', { name: 'Compact view' })
+    ).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('switches to compact and keeps comment content rendering', async () => {
+    const { FlagThread } = await import('@/components/flags/FlagThread')
+    render(<FlagThread flagId={7} tabLabel="Assigned to me" />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Compact view' }))
+
+    expect(
+      screen.getByRole('button', { name: 'Compact view' })
+    ).toHaveAttribute('aria-pressed', 'true')
+    // The chosen mode persists (mirrors the flyout view-mode idiom).
+    expect(window.localStorage.getItem('flags:threadView')).toBe('compact')
+    // Content still renders after the wrapper presentation swaps.
+    expect(
+      screen.getByText('cloudy after reconstitution')
+    ).toBeInTheDocument()
+  })
+
+  it('comment wrapper is the reaction-picker hover group in both modes', async () => {
+    // Regression (live review): the hover group lived on the reactions bar —
+    // a near-zero-height strip when a comment has no reactions — so the picker
+    // was effectively undiscoverable. Hovering ANYWHERE on the comment must
+    // reveal it: the wrapper carries group/react and contains the picker.
+    const { FlagThread } = await import('@/components/flags/FlagThread')
+    const { within } = await import('@testing-library/react')
+    render(<FlagThread flagId={7} tabLabel="Assigned to me" />)
+
+    for (const mode of ['bubbles', 'compact'] as const) {
+      if (mode === 'compact') {
+        fireEvent.click(screen.getByRole('button', { name: 'Compact view' }))
+      }
+      const wrapper = screen
+        .getByText('cloudy after reconstitution')
+        .closest('.group\\/react') as HTMLElement
+      expect(wrapper).not.toBeNull()
+      // The hidden picker sits INSIDE the group and is group-hover-driven.
+      const picker = within(wrapper).getByRole('button', { name: 'React 🎉' })
+      expect(picker.parentElement?.className).toContain(
+        'group-hover/react:flex'
+      )
+    }
   })
 })

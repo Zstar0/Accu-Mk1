@@ -12,6 +12,7 @@ export type ActiveSection =
   | 'account'
   | 'peptide-requests'
   | 'admin-clickup-users'
+  | 'settings'
 
 // Sub-sections within each main section
 export type DashboardSubSection = 'orders' | 'analytics'
@@ -53,6 +54,18 @@ export type ReportsSubSection =
   | 'sync-debug'
 export type AccountSubSection = 'profile' | 'user-management'
 export type PeptideRequestsSubSection = 'list' | 'detail'
+// Settings panes double as subsections so #settings/<pane> round-trips through
+// the same hash-navigation as every other section.
+export type SettingsSubSection =
+  | 'general'
+  | 'appearance'
+  | 'dataPipeline'
+  | 'dataSource'
+  | 'sla'
+  | 'businessHours'
+  | 'flags'
+  | 'checkIn'
+  | 'advanced'
 export type ActiveSubSection =
   | DashboardSubSection
   | SenaiteSubSection
@@ -63,6 +76,7 @@ export type ActiveSubSection =
   | AccuMarkToolsSubSection
   | AccountSubSection
   | PeptideRequestsSubSection
+  | SettingsSubSection
 
 interface UIState {
   leftSidebarVisible: boolean

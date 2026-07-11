@@ -9,6 +9,7 @@ vi.mock('@/components/flags/flag-users', () => ({
     id == null ? 'Unassigned' : `User ${id}`,
   initialsForUser: () => 'U',
   avatarColor: () => '#888888',
+  avatarUrlForUser: () => null,
 }))
 
 const flag = (): FlagResponse =>

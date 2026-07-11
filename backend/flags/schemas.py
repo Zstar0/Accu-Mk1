@@ -264,6 +264,37 @@ class FlagTypeUpdate(BaseModel):
     entity_types: Optional[List[str]] = None
 
 
+# --- item kinds (Slice 7) -----------------------------------------------
+class FlagItemKindResponse(BaseModel):
+    id: int
+    slug: str
+    label: str
+    color: str
+    is_active: bool
+    is_builtin: bool
+    sort_order: int
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class FlagItemKindCreate(BaseModel):
+    label: str
+    color: str
+    # Optional — generated from `label` when absent. Immutable once created.
+    slug: Optional[str] = None
+    is_active: bool = True
+    sort_order: Optional[int] = None
+
+
+class FlagItemKindUpdate(BaseModel):
+    """All-optional partial edit. No `slug` — the slug is immutable."""
+    label: Optional[str] = None
+    color: Optional[str] = None
+    is_active: Optional[bool] = None
+    sort_order: Optional[int] = None
+
+
 # --- recurring tasks (Slice 5) ------------------------------------------
 class FlagRecurringResponse(BaseModel):
     id: int

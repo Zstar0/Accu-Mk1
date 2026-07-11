@@ -46,7 +46,7 @@ describe('FlagTable', () => {
   it('renders a header row with every column label', () => {
     render(<FlagTable flags={[flag()]} />)
     for (const label of [
-      'Entity',
+      'Item',
       'Type',
       'Title',
       'Assignee',

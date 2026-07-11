@@ -54,6 +54,11 @@ export const flagKeys = {
   // invalidate(['flags']) refreshes every EntityFlagButton on any flag event.
   entity: (entityType: string, entityId: string, includeDescendants: boolean) =>
     ['flags', 'entity', entityType, entityId, includeDescendants] as const,
+  // Prefix over BOTH includeDescendants variants of ONE entity's flags. The SSE
+  // glue invalidates this to refetch just the affected entity's button(s) —
+  // scoping away the per-vial EntityFlagButton refetch storm.
+  entityScope: (entityType: string, entityId: string) =>
+    ['flags', 'entity', entityType, entityId] as const,
   activity: () => ['flags', 'activity'] as const,
   unread: () => ['flags', 'unread'] as const,
   search: (q: string) => ['flags', 'search', q] as const,

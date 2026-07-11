@@ -10,6 +10,8 @@ import {
   Code,
   List,
   Link as LinkIcon,
+  MessageSquare,
+  AlignLeft,
 } from 'lucide-react'
 import {
   Select,
@@ -41,9 +43,10 @@ import type {
 } from '@/lib/flags-api'
 import { flagTypeDef } from '@/components/flags/flag-catalog'
 import { useFlagTypesMap } from '@/services/flag-types'
+import { useItemKindLabels } from '@/services/item-kinds'
 import {
   entityMeta,
-  entityLabel,
+  entityDisplayLabel,
   navigateToEntity,
 } from '@/components/flags/flag-entity'
 import {
@@ -51,6 +54,7 @@ import {
   nameForUser,
   initialsForUser,
   avatarColor,
+  avatarUrlForUser,
   type UserMap,
 } from '@/components/flags/flag-users'
 import { displayName } from '@/lib/user-display'
@@ -70,6 +74,10 @@ import { FlagLinkChips } from '@/components/flags/FlagLinkChips'
 import { FlagWatchChips } from '@/components/flags/FlagWatchChips'
 import { CommentBody } from '@/components/flags/CommentBody'
 import { FlagReactions } from '@/components/flags/FlagReactions'
+import {
+  useThreadViewMode,
+  type ThreadViewMode,
+} from '@/components/flags/use-thread-view-mode'
 
 type TimelineEntry =
   | { kind: 'comment'; at: string; comment: CommentResponse }
@@ -91,7 +99,9 @@ export function FlagThread({
   const { data: flag, isLoading, isError } = useFlag(flagId)
   const users = useFlagUsers()
   const typesMap = useFlagTypesMap()
+  const kindLabels = useItemKindLabels()
   const currentUserId = useAuthStore(state => state.user?.id ?? null)
+  const [threadView, setThreadView] = useThreadViewMode()
 
   const changeStatus = useChangeStatus(flagId)
   const assign = useAssignFlag(flagId)
@@ -287,11 +297,11 @@ export function FlagThread({
         <div className="flex items-center justify-between gap-2">
           <span className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-1 text-[11px] font-bold text-foreground/80">
             <Icon className="h-3.5 w-3.5" />
-            {entityLabel(flag.entity_type, flag.entity_id)}
+            {entityDisplayLabel(flag, kindLabels)}
             {canDeepLink && (
               <button
                 type="button"
-                aria-label="Open entity"
+                aria-label="Open item"
                 onClick={() =>
                   navigateToEntity(flag.entity_type, flag.entity_id)
                 }
@@ -301,16 +311,19 @@ export function FlagThread({
               </button>
             )}
           </span>
-          {status !== 'resolved' && status !== 'closed' && (
-            <Button
-              size="sm"
-              className="h-7 gap-1.5 bg-emerald-700 text-emerald-50 hover:bg-emerald-700/90"
-              disabled={changeStatus.isPending}
-              onClick={() => changeStatus.mutate('resolved')}
-            >
-              <Check className="h-3.5 w-3.5" /> Resolve
-            </Button>
-          )}
+          <div className="flex items-center gap-2">
+            <ThreadViewToggle mode={threadView} onChange={setThreadView} />
+            {status !== 'resolved' && status !== 'closed' && (
+              <Button
+                size="sm"
+                className="h-7 gap-1.5 bg-emerald-700 text-emerald-50 hover:bg-emerald-700/90"
+                disabled={changeStatus.isPending}
+                onClick={() => changeStatus.mutate('resolved')}
+              >
+                <Check className="h-3.5 w-3.5" /> Resolve
+              </Button>
+            )}
+          </div>
         </div>
 
         <div className="mt-2.5 flex items-center gap-2">
@@ -457,10 +470,12 @@ export function FlagThread({
                 currentUserId
               )}
               color={avatarColor(entry.comment.author_id)}
+              avatarUrl={avatarUrlForUser(users, entry.comment.author_id)}
               users={users}
               index={i}
               flagId={flagId}
               currentUserId={currentUserId}
+              mode={threadView}
             />
           )
         )}
@@ -476,6 +491,7 @@ export function FlagThread({
         <FlagAvatar
           initials={initialsForUser(users, currentUserId, currentUserId)}
           color={avatarColor(currentUserId)}
+          avatarUrl={avatarUrlForUser(users, currentUserId)}
           isYou
           size={22}
         />
@@ -497,6 +513,7 @@ export function FlagThread({
                 <FlagAvatar
                   initials={initialsForUser(users, u.id, currentUserId)}
                   color={avatarColor(u.id)}
+                  avatarUrl={avatarUrlForUser(users, u.id)}
                   size={18}
                 />
                 <span className="truncate">{displayName(u)}</span>
@@ -643,36 +660,132 @@ export function FlagThread({
   )
 }
 
+const THREAD_VIEW_OPTIONS = [
+  { mode: 'bubbles' as const, Icon: MessageSquare, label: 'Bubble view' },
+  { mode: 'compact' as const, Icon: AlignLeft, label: 'Compact view' },
+]
+
+/** Compact segmented control (chat bubbles ⇄ flush-left compact rows) — mirrors
+ *  the flyout's list/table ViewToggle. */
+function ThreadViewToggle({
+  mode,
+  onChange,
+}: {
+  mode: ThreadViewMode
+  onChange: (mode: ThreadViewMode) => void
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Thread view"
+      className="inline-flex items-center gap-0.5 rounded-md border p-0.5"
+    >
+      {THREAD_VIEW_OPTIONS.map(({ mode: m, Icon, label }) => (
+        <button
+          key={m}
+          type="button"
+          aria-label={label}
+          aria-pressed={mode === m}
+          onClick={() => onChange(m)}
+          className={cn(
+            'inline-flex h-6 w-6 items-center justify-center rounded transition-colors',
+            mode === m
+              ? 'bg-muted text-foreground'
+              : 'text-muted-foreground hover:text-foreground'
+          )}
+        >
+          <Icon className="h-3.5 w-3.5" />
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function CommentRow({
   comment,
   isMe,
   name,
   initials,
   color,
+  avatarUrl,
   users,
   index,
   flagId,
   currentUserId,
+  mode,
 }: {
   comment: CommentResponse
   isMe: boolean
   name: string
   initials: string
   color: string
+  avatarUrl: string | null
   users: UserMap
   index: number
   flagId: number
   currentUserId: number | null
+  mode: ThreadViewMode
 }) {
+  // Rich content (markdown, mentions, attachments+lightbox, reactions) renders
+  // identically in both modes — only the wrapper presentation changes.
+  const content = (
+    <>
+      <CommentBody
+        body={comment.body}
+        mentions={comment.mentions ?? []}
+        users={users}
+      />
+      <FlagReactions
+        commentId={comment.id}
+        flagId={flagId}
+        currentUserId={currentUserId}
+        reactions={comment.reactions ?? []}
+      />
+    </>
+  )
+  const animationDelay = `${Math.min(index, 8) * 30}ms`
+
+  if (mode === 'compact') {
+    return (
+      <div
+        className="flag-cmt-in group group/react -mx-2 flex items-start gap-2 rounded-md px-2 py-1 transition-colors hover:bg-muted/40"
+        style={{ animationDelay }}
+      >
+        <FlagAvatar
+          initials={initials}
+          color={color}
+          avatarUrl={avatarUrl}
+          isYou={isMe}
+          size={20}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2">
+            <b className="text-xs text-foreground">{isMe ? 'You' : name}</b>
+            <span className="text-[10.5px] text-muted-foreground">
+              {formatClock(comment.created_at)}
+            </span>
+          </div>
+          {content}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div
-      className="flag-cmt-in flex gap-2.5"
-      style={{ animationDelay: `${Math.min(index, 8) * 30}ms` }}
+      className="flag-cmt-in group/react flex gap-2.5"
+      style={{ animationDelay }}
     >
-      <FlagAvatar initials={initials} color={color} isYou={isMe} size={22} />
+      <FlagAvatar
+        initials={initials}
+        color={color}
+        avatarUrl={avatarUrl}
+        isYou={isMe}
+        size={22}
+      />
       <div
         className={cn(
-          'max-w-[300px] rounded-xl border px-3 py-2',
+          'min-w-0 max-w-full rounded-xl border px-3 py-2',
           isMe ? 'border-primary/40 bg-primary/10' : 'border-border bg-muted/60'
         )}
       >
@@ -682,17 +795,7 @@ function CommentRow({
             {formatClock(comment.created_at)}
           </span>
         </div>
-        <CommentBody
-          body={comment.body}
-          mentions={comment.mentions ?? []}
-          users={users}
-        />
-        <FlagReactions
-          commentId={comment.id}
-          flagId={flagId}
-          currentUserId={currentUserId}
-          reactions={comment.reactions ?? []}
-        />
+        {content}
       </div>
     </div>
   )

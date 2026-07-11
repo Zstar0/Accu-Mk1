@@ -17,6 +17,7 @@ import {
 } from '@/components/flags/flag-status'
 import { entityMeta } from '@/components/flags/flag-entity'
 import { useFlagTypes } from '@/services/flag-types'
+import { useItemKinds } from '@/services/item-kinds'
 import { useFlagUsers } from '@/components/flags/flag-users'
 import { displayName } from '@/lib/user-display'
 import type { FlagFilterState } from '@/components/flags/flag-filter'
@@ -57,6 +58,13 @@ export function FlagsFilterBar({
   const types = [...(typeRows ?? [])].sort(
     (a, b) => a.sort_order - b.sort_order
   )
+  // Active virtual item kinds, filterable by slug. general_task is excluded —
+  // it rides the 'general' sentinel option (which also matches legacy null
+  // anchors) rather than getting a redundant second entry.
+  const { data: kindRows } = useItemKinds({ active_only: true })
+  const kinds = [...(kindRows ?? [])]
+    .filter(k => k.slug !== 'general_task')
+    .sort((a, b) => a.sort_order - b.sort_order)
   // Shared user directory (same query mention-autocomplete loads), sorted by
   // display name for the assignee dropdown.
   const userMap = useFlagUsers()
@@ -135,19 +143,24 @@ export function FlagsFilterBar({
       >
         <SelectTrigger
           size="sm"
-          aria-label="Filter by entity"
+          aria-label="Filter by item"
           className="h-8 w-auto text-xs"
         >
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="all">All entities</SelectItem>
+          <SelectItem value="all">All items</SelectItem>
           {ENTITY_TYPES.map(t => (
             <SelectItem key={t} value={t}>
               {entityMeta(t).label}
             </SelectItem>
           ))}
-          <SelectItem value="general">General</SelectItem>
+          <SelectItem value="general">General Task</SelectItem>
+          {kinds.map(k => (
+            <SelectItem key={k.slug} value={k.slug}>
+              {k.label}
+            </SelectItem>
+          ))}
         </SelectContent>
       </Select>
 

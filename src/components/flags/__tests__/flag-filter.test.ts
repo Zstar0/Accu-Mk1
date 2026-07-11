@@ -131,14 +131,27 @@ describe('filterFlags', () => {
     ).toEqual([3])
   })
 
-  it("entityType 'general' keeps only null-anchor flags", () => {
+  it("entityType 'general' keeps null-anchor AND general_task flags", () => {
+    // Slice 7 backfill flips null anchors to 'general_task'; the 'general'
+    // sentinel must match both (belt-and-suspenders across the migration).
     const flags = [
       flag({ id: 1, entity_type: 'sample' }),
       flag({ id: 2, entity_type: null }),
       flag({ id: 3, entity_type: 'worksheet' }),
+      flag({ id: 4, entity_type: 'general_task' }),
     ]
     expect(
       filterFlags(flags, filter({ entityType: 'general' })).map(f => f.id)
+    ).toEqual([2, 4])
+  })
+
+  it('filters by a specific virtual-kind slug', () => {
+    const flags = [
+      flag({ id: 1, entity_type: 'general_task' }),
+      flag({ id: 2, entity_type: 'purchase_task' }),
+    ]
+    expect(
+      filterFlags(flags, filter({ entityType: 'purchase_task' })).map(f => f.id)
     ).toEqual([2])
   })
 

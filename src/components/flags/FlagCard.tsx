@@ -5,6 +5,7 @@ import { useUIStore } from '@/store/ui-store'
 import type { FlagResponse, FlagStatus } from '@/lib/flags-api'
 import { flagTypeDef } from '@/components/flags/flag-catalog'
 import { useFlagTypesMap } from '@/services/flag-types'
+import { useItemKindLabels } from '@/services/item-kinds'
 import {
   entityMeta,
   entityDisplayLabel,
@@ -16,6 +17,7 @@ import {
   nameForUser,
   initialsForUser,
   avatarColor,
+  avatarUrlForUser,
 } from '@/components/flags/flag-users'
 import { relativeTime, dueLabel } from '@/components/flags/flag-format'
 import {
@@ -56,11 +58,12 @@ export function FlagCard({
 }) {
   const users = useFlagUsers()
   const typesMap = useFlagTypesMap()
+  const kindLabels = useItemKindLabels()
   const currentUserId = useAuthStore(state => state.user?.id ?? null)
 
   const def = typesMap[flag.type] ?? flagTypeDef(flag.type)
   const { Icon } = entityMeta(flag.entity_type)
-  const label = entityDisplayLabel(flag)
+  const label = entityDisplayLabel(flag, kindLabels)
   const canNavigate = flagCanNavigate(flag)
   const assigneeName =
     flag.assignee_id == null
@@ -200,6 +203,7 @@ export function FlagCard({
           <FlagAvatar
             initials={initialsForUser(users, flag.assignee_id, currentUserId)}
             color={avatarColor(flag.assignee_id)}
+            avatarUrl={avatarUrlForUser(users, flag.assignee_id)}
             isYou={
               flag.assignee_id != null && flag.assignee_id === currentUserId
             }

@@ -66,7 +66,10 @@ export function filterFlags(
       if (!OPEN_STATUSES.includes(flag.status as FlagStatus)) return false
     } else if (status !== 'all' && flag.status !== status) return false
     if (entityType === 'general') {
-      if (flag.entity_type != null) return false
+      // Belt-and-suspenders across the slice-7 backfill: a general task is
+      // either a legacy null anchor OR the general_task kind slug.
+      if (flag.entity_type != null && flag.entity_type !== 'general_task')
+        return false
     } else if (entityType !== 'all' && flag.entity_type !== entityType)
       return false
     if (type !== 'all' && flag.type !== type) return false
