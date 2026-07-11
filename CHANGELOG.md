@@ -1,5 +1,35 @@
 # Changelog
 
+## v1.1.2 — 2026-07-10
+
+Second slice of the 1.1.x SENAITE phase-out line: parent-sample **analysis line
+items** now mirror natively into Accu-Mk1 — **inert by default** (read-dormant
+shadow rows; every reader still sources SENAITE until a later read-flip).
+
+### Added
+
+- **Native parent-analysis mirror (dual-write).** Every parent-analysis mutation
+  (result entry, submit / verify / reject / retract / retest, method &
+  instrument, analyte replace, publish, add / remove) tees a native
+  `lims_analyses` shadow row alongside the SENAITE write. Shadow rows are
+  fail-closed: a `senaite_mirror` sentinel keeps them out of every reader's
+  allow-list, so they can't reach a COA, variance series, or bench view until a
+  deliberate read-flip. The true SENAITE state lives in a new
+  `mirror_review_state` column. Full parent lifecycle validated live 0-drift.
+- **Backfill / reconcile script** (`scripts/backfill_parent_analysis_shadows.py`):
+  idempotent, registry-cursor, one throttled SENAITE query per parent, dry-run
+  preview; doubles as a manual reconcile.
+- **Registry-inspect analyses column.** The admin registry panel now shows a
+  per-keyword shadow-vs-SENAITE sync compare, so drift is observable, not silent.
+
+### Fixed
+
+- **Retract no longer reports a false failure.** SENAITE retract is
+  retire-and-replace (the original goes `retracted` and a fresh copy spawns
+  `unassigned` with the result carried), not a state flip — the endpoint now
+  re-fetches to confirm success instead of falsely reporting "SENAITE returned
+  no items."
+
 ## v1.1.1 — 2026-07-09
 
 ### Fixed
