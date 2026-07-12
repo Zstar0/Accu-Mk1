@@ -12547,6 +12547,17 @@ async def lookup_senaite_sample(
 
                 _svc_uid_to_indices: dict[str, list[int]] = {}
 
+                # Task 7 passive drift observer: a parallel raw-line capture
+                # (NOT the SenaiteAnalysis pydantic objects below, which
+                # collapse RetestOf to a bare bool). This endpoint returns
+                # EVERY analysis line including retest-superseded ones (no
+                # review_state filter) — same shape/reason
+                # sub_samples/senaite.py's fetch_parent_analyses documents —
+                # so `select_current_lines` (same one the backfill and the
+                # registry-debug hook use) reduces this to one current line
+                # per keyword before anything is handed to the observer.
+                _observer_raw_lines: list[dict] = []
+
                 for an_item in an_data.get("items", []):
                     # Result: prefer formatted string for selection-type results,
                     # then fall back to raw numeric Result
@@ -12635,6 +12646,25 @@ async def lookup_senaite_sample(
                         captured=str(captured) if captured else None,
                         retested=retested_val,
                     ))
+                    # Task 7 raw-line capture (see comment above the list init):
+                    # uid/retest_of_uid/created mirror sub_samples/senaite.py's
+                    # fetch_parent_analyses projection exactly, so the same
+                    # `select_current_lines` reduces this list too.
+                    _observer_raw_lines.append({
+                        "uid": an_item.get("uid") or an_item.get("UID") or None,
+                        "keyword": an_item.get("Keyword") or an_item.get("getKeyword") or None,
+                        "review_state": an_item.get("review_state") or None,
+                        "result": result_str,
+                        "retest_of_uid": (
+                            an_item.get("getRetestOfUID")
+                            or (an_item.get("RetestOf") or {}).get("uid")
+                            or None
+                        ),
+                        "created": (
+                            an_item.get("created") or an_item.get("creation_date")
+                            or an_item.get("DateCreated") or an_item.get("getDateCreated")
+                        ),
+                    })
                     # Track indices that need instrument UID resolution
                     if instrument_uid:
                         if instrument_uid not in _inst_uid_to_indices:
@@ -12780,6 +12810,30 @@ async def lookup_senaite_sample(
                 a.retested,  # False (0) before True (1)
             ))
             print(f"[INFO] Fetched {len(senaite_analyses)} analyses for sample {sample_id}")
+
+            # Passive drift observer (Task 7): schedule ONLY on this success
+            # path (never in the except branch below) — zero additional
+            # SENAITE load. Deliberately NOT the SenaiteAnalysis objects
+            # above (`senaite_analyses`) — this endpoint returns every
+            # analysis line including retest-superseded ones, and the
+            # observer has no dedup of its own, so feeding it a raw
+            # multi-line-per-keyword list can heal a shadow to a stale
+            # (superseded) state. `select_current_lines` (the same reducer
+            # the backfill script and the registry-debug hook use) collapses
+            # `_observer_raw_lines` to one current line per keyword first.
+            # Own session, never raises; scheduled via run_in_threadpool
+            # since this route is `async def`.
+            from fastapi.concurrency import run_in_threadpool
+            from lims_analyses.parent_mirror import select_current_lines
+            _observer_current = select_current_lines(_observer_raw_lines)
+            await run_in_threadpool(
+                _observe_parent_analyses_bg,
+                sample_id=sample_id,
+                observed=[
+                    {"keyword": kw, "review_state": ln.get("review_state"), "result": ln.get("result")}
+                    for kw, ln in _observer_current.items()
+                ],
+            )
         except Exception as exc:
             print(f"[WARN] Failed to fetch analyses for {sample_id}: {exc}")
 
@@ -13954,6 +14008,41 @@ def _record_sample_transition_bg(**kwargs) -> None:
                 pass
         logger.warning("workflow.sample_log_failed sample_id=%s err=%s",
                        kwargs.get("sample_id"), log_err)
+    finally:
+        if db is not None:
+            db.close()
+
+
+def _observe_parent_analyses_bg(sample_id: str, observed: list[dict]) -> None:
+    """Best-effort passive analysis drift observer (Task 7) on its own
+    short-lived session — never holds the request/route `db` across the
+    SENAITE fetch either hook site already made for display. Never raises: a
+    healing failure must never affect the page that triggered it.
+
+    Commits unconditionally on success (not gated on `observe_parent_
+    analyses`'s return count): result-only healing writes no transition row
+    but still mutates `result_value` and must persist — gating the commit on
+    the count would silently drop that write.
+
+    `SessionLocal()` and the observer import live INSIDE the try, same
+    hardening rationale as `_mirror_parent_analysis_bg`: `db` starts as None
+    so `finally` can guard `db.close()` if construction itself failed.
+    """
+    db = None
+    try:
+        from database import SessionLocal
+        from workflow.observer import observe_parent_analyses
+        db = SessionLocal()
+        observe_parent_analyses(db, sample_id=sample_id, observed=observed)
+        db.commit()
+    except Exception as observer_err:  # noqa: BLE001
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        logger.warning("workflow.observer_failed sample_id=%s err=%s",
+                       sample_id, observer_err)
     finally:
         if db is not None:
             db.close()
@@ -17325,6 +17414,9 @@ def s2s_upsert_lims_sample(
 # (2026-07-07-sample-registry-debug-panel-design.md). Reads the raw
 # LimsSample row directly — never ensure_sample_row / list_sub_samples /
 # _reconcile_from_senaite — so drift is observable instead of auto-healed.
+# Exception (Task 7, workflow state system): the analyses column's SENAITE
+# fetch now ALSO feeds the passive drift observer, which heals the parent's
+# shadow mirror rows in place — the LimsSample row itself stays untouched.
 
 def _registry_origin(row) -> str:
     if row.external_lims_system == "mk1":
@@ -17338,8 +17430,16 @@ def _build_analysis_debug_rows(db: Session, row: LimsSample, sample_id: str) -> 
     """Registry-debug panel's analyses column (Task 10, 2026-07-07-sample-
     registry-debug-panel-design.md amendment): per-keyword compare of current
     SENAITE parent-analysis lines vs native `lims_analyses` rows (live shadow
-    + current canonical) for this parent. Non-mutating — read-only, same
-    posture as the rest of this panel.
+    + current canonical) for this parent. Read-only for the registry row and
+    the comparison itself — EXCEPT for the passive drift observer (Task 7)
+    scheduled LAST, after `result` is built: it heals the parent's live
+    shadow row(s) in place (+ logs a `transition_kind='observed'` row) using
+    the deduped current SENAITE lines this function already fetched for
+    display, at zero additional SENAITE load. Scheduling it last (not right
+    after the fetch) means THIS view still renders the true pre-heal drift
+    for the admin to see — the shadow heals for the NEXT view. Deliberate,
+    documented exception to the panel's otherwise non-mutating posture — see
+    `workflow.observer`.
 
     Independent try/except around the SENAITE analyses-catalog fetch: this is
     a SEPARATE SENAITE call from the basic-info `fetch_parent_metadata` above
@@ -17423,6 +17523,30 @@ def _build_analysis_debug_rows(db: Session, row: LimsSample, sample_id: str) -> 
 
     result = build_analysis_sync_rows(senaite_map, shadow_map, canonical_map)
     result["error"] = None
+
+    # Passive drift observer (Task 7): scheduled LAST, after `result` (and
+    # the `native_rows` snapshot it's built from) is already captured —
+    # THIS view still shows the true pre-heal drift (the panel's diagnostic
+    # purpose), and the shadow row heals for the NEXT view. `current`
+    # (`select_current_lines(items)` above) is passed rather than raw
+    # `items`: the raw SENAITE Analysis fetch returns every line including
+    # retest-superseded ones (no review_state filter), and the observer's
+    # per-keyword loop has no dedup of its own — feeding it a superseded
+    # line for a keyword that already has a newer current line would heal
+    # the shadow to the WRONG (stale) state. `current` is already reduced to
+    # one (newest, non-superseded) line per keyword, same guarantee the
+    # backfill script relies on. This function runs on a plain `def` route
+    # (FastAPI's threadpool), so the observer is called inline rather than
+    # via `await run_in_threadpool(...)`; it's already never-raise (own
+    # session, commits/rolls back internally) so a healing failure can't
+    # blank this read-only panel.
+    _observe_parent_analyses_bg(
+        sample_id=sample_id,
+        observed=[
+            {"keyword": kw, "review_state": ln.get("review_state"), "result": ln.get("result")}
+            for kw, ln in current.items()
+        ],
+    )
     return result
 
 
