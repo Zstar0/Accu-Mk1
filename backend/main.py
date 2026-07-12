@@ -83,6 +83,7 @@ from packaging_photos.routes import router as packaging_photos_router
 from flags.routes import router as flags_router
 from slack_notify.routes import router as slack_prefs_router
 from slack_notify.interactions import router as slack_interactions_router
+from workflow.routes import router as workflow_router
 
 import logging
 
@@ -487,6 +488,7 @@ app.include_router(packaging_photos_router)
 app.include_router(flags_router)
 app.include_router(slack_prefs_router)
 app.include_router(slack_interactions_router)
+app.include_router(workflow_router)
 
 # --- Endpoints ---
 
