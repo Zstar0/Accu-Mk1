@@ -166,7 +166,20 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
                   )}
 
                   {/* Recent transitions (Task 8): compact tail under the analyses summary. */}
-                  <div className="font-mono text-[11px] text-zinc-700 pt-2 pb-1">{'─'.repeat(3)} recent transitions {'─'.repeat(18)}</div>
+                  <div className="font-mono text-[11px] text-zinc-700 pt-2 pb-1 flex items-center gap-2">
+                    <span>{'─'.repeat(3)} recent transitions {'─'.repeat(18)}</span>
+                    {/* UAT fast-follow: log-vs-status sync glyph — same ✔/⚠ vocabulary
+                        as the field-diff and analyses columns above. Null log_in_sync
+                        (no rows logged yet) renders nothing. */}
+                    {data.transitions?.log_in_sync === true && (
+                      <span className="text-emerald-400">✔ log matches status</span>
+                    )}
+                    {data.transitions?.log_in_sync === false && (
+                      <span className="text-amber-400">
+                        {`⚠ log behind: latest '${data.transitions.latest_to_status}' ≠ status '${data.transitions.current_status}'`}
+                      </span>
+                    )}
+                  </div>
                   {data.transitions?.error && (
                     <div className={cn(line, 'text-red-400')}>transitions_error: {data.transitions.error}</div>
                   )}

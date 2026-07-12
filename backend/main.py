@@ -17576,7 +17576,19 @@ def _build_sample_transitions(db: Session, row: LimsSample) -> dict:
             .limit(5)
         ).scalars().all()
     except Exception as e:
-        return {"rows": [], "error": str(e)}
+        return {
+            "rows": [], "error": str(e),
+            "latest_to_status": None, "log_in_sync": None,
+            "current_status": row.status,
+        }
+
+    # UAT fast-follow: sync check between the transition log and the
+    # registry's current status. `rows` is already newest-first
+    # (occurred_at DESC, id DESC), so the newest row is rows[0] — no extra
+    # query needed. None (not True/False) when there's no log yet, so the FE
+    # can distinguish "nothing logged" from "logged and in sync".
+    latest_to_status = rows[0].to_status if rows else None
+    log_in_sync = None if not rows else (latest_to_status == row.status)
 
     return {
         "rows": [
@@ -17587,6 +17599,9 @@ def _build_sample_transitions(db: Session, row: LimsSample) -> dict:
             for r in rows
         ],
         "error": None,
+        "latest_to_status": latest_to_status,
+        "log_in_sync": log_in_sync,
+        "current_status": row.status,
     }
 
 

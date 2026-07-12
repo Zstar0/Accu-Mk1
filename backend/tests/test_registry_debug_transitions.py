@@ -148,7 +148,11 @@ def test_id_desc_tiebreaks_equal_occurred_at(db, seed_parent):
 
 def test_empty_rows_when_no_transitions_logged(db, seed_parent):
     out = main._build_registry_debug_response(db, TEST_SAMPLE_ID)
-    assert out["transitions"] == {"rows": [], "error": None}
+    assert out["transitions"] == {
+        "rows": [], "error": None,
+        "latest_to_status": None, "log_in_sync": None,
+        "current_status": seed_parent.status,
+    }
 
 
 def test_transitions_query_exception_returns_error(db, seed_parent):
@@ -160,6 +164,57 @@ def test_transitions_query_exception_returns_error(db, seed_parent):
         out = main._build_sample_transitions(db, seed_parent)
     assert out["rows"] == []
     assert "boom" in out["error"]
+    assert out["latest_to_status"] is None
+    assert out["log_in_sync"] is None
+    assert out["current_status"] == seed_parent.status
+
+
+# ── log-vs-status sync check (UAT fast-follow) ──────────────────────────────
+
+
+def test_log_in_sync_true_when_newest_row_matches_status(db, seed_parent):
+    """`seed_parent.status` is "received" (see the `seed_parent` fixture).
+    Seed two older rows, then add the newest one with `to_status` matching
+    the registry's current status."""
+    _seed_transitions(db, seed_parent, 2)  # occurred_at t=0,1min; to_status s1,s2
+    newest = LimsSampleTransition(
+        lims_sample_pk=seed_parent.id, verb="verify", from_status="s2",
+        to_status="received", source="mk1",
+        occurred_at=datetime(2026, 1, 1, 12, 5, 0),
+    )
+    db.add(newest)
+    db.commit()
+
+    out = main._build_registry_debug_response(db, TEST_SAMPLE_ID)
+    tx = out["transitions"]
+    assert tx["error"] is None
+    assert tx["latest_to_status"] == "received"
+    assert tx["log_in_sync"] is True
+    assert tx["current_status"] == "received"
+
+
+def test_log_in_sync_false_when_newest_row_differs_from_status(db, seed_parent):
+    """Newest row's to_status ("s2") is deliberately left different from
+    `seed_parent.status` ("received")."""
+    _seed_transitions(db, seed_parent, 2)
+
+    out = main._build_registry_debug_response(db, TEST_SAMPLE_ID)
+    tx = out["transitions"]
+    assert tx["error"] is None
+    assert tx["latest_to_status"] == "s2"
+    assert tx["log_in_sync"] is False
+    assert tx["current_status"] == "received"
+
+
+def test_log_in_sync_none_when_no_transitions_logged(db, seed_parent):
+    """No log rows at all -> log_in_sync is None (not False), distinct from
+    a genuine out-of-sync log."""
+    out = main._build_registry_debug_response(db, TEST_SAMPLE_ID)
+    tx = out["transitions"]
+    assert tx["rows"] == []
+    assert tx["latest_to_status"] is None
+    assert tx["log_in_sync"] is None
+    assert tx["current_status"] == "received"
 
 
 def test_transitions_none_when_row_missing(db):

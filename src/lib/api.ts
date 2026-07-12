@@ -5105,6 +5105,15 @@ export interface SampleTransitionRow {
 export interface SampleTransitionsTail {
   rows: SampleTransitionRow[]
   error: string | null
+  // UAT fast-follow: transition-log-vs-status sync check. `latest_to_status`
+  // is the newest logged row's to_status (or null if no rows). `log_in_sync`
+  // is null when there's no log yet, else whether latest_to_status matches
+  // the registry's current status. `current_status` is that current status,
+  // carried here so the panel doesn't need to derive it from the field diff
+  // (which is empty on the senaite-missing path).
+  latest_to_status: string | null
+  log_in_sync: boolean | null
+  current_status: string | null
 }
 
 export interface SampleRegistryDebug {
