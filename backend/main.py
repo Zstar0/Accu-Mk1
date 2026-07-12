@@ -10317,6 +10317,15 @@ async def publish_sample_coa(
                     await run_in_threadpool(
                         _mark_shadows_published_bg, sample_id=sample_id
                     )
+                    # Task 3: native sample-transition log (own session,
+                    # never-fail — see _record_sample_transition_bg).
+                    await run_in_threadpool(
+                        _record_sample_transition_bg,
+                        sample_id=sample_id, verb="publish", to_status="published",
+                        from_status=(_parent_row.status if _parent_row is not None else None),
+                        source="mk1",
+                        actor_user_id=getattr(current_user, "id", None),
+                    )
         except HTTPException:
             raise
         except Exception as e:
@@ -13666,6 +13675,15 @@ async def receive_senaite_sample(
                 )
                 if new_state == "sample_received":
                     steps_done.append("received")
+                    # Task 3: native sample-transition log (own session,
+                    # never-fail — see _record_sample_transition_bg).
+                    from fastapi.concurrency import run_in_threadpool
+                    await run_in_threadpool(
+                        _record_sample_transition_bg,
+                        sample_id=req.sample_id, verb="receive", to_status="sample_received",
+                        from_status="sample_due", source="mk1",
+                        actor_user_id=getattr(current_user, "id", None),
+                    )
                 else:
                     return SenaiteReceiveSampleResponse(
                         success=False,
@@ -13895,6 +13913,37 @@ def _mark_shadows_published_bg(sample_id: str) -> None:
                 pass
         logger.warning("registry.publish_shadow_mark_failed sample_id=%s err=%s",
                        sample_id, mirror_err)
+    finally:
+        if db is not None:
+            db.close()
+
+
+def _record_sample_transition_bg(**kwargs) -> None:
+    """Best-effort native sample-transition log write (Task 3) on its own
+    short-lived session — never holds the request `db` across the SENAITE
+    HTTP calls at the two call sites (publish, receive). Never raises: a
+    log-write failure must never fail or delay-fail the endpoint it's
+    scheduled from.
+
+    `SessionLocal()` and the recorder import live INSIDE the try, same
+    hardening rationale as `_mirror_parent_analysis_bg`: `db` starts as None
+    so `finally` can guard `db.close()` if construction itself failed.
+    """
+    db = None
+    try:
+        from database import SessionLocal
+        from workflow.sample_log import record_sample_transition
+        db = SessionLocal()
+        if record_sample_transition(db, **kwargs):
+            db.commit()
+    except Exception as log_err:  # noqa: BLE001
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        logger.warning("workflow.sample_log_failed sample_id=%s err=%s",
+                       kwargs.get("sample_id"), log_err)
     finally:
         if db is not None:
             db.close()
