@@ -335,6 +335,7 @@ export function StateDetailSheet({
   const [label, setLabel] = useState(state.label)
   const [description, setDescription] = useState(state.description ?? '')
   const [category, setCategory] = useState<WorkflowCategory>(state.category)
+  const [color, setColor] = useState(state.color ?? '#94a3b8')
   const [sortOrder, setSortOrder] = useState(String(state.sort_order))
 
   const readOnly = !isAdmin
@@ -351,6 +352,11 @@ export function StateDetailSheet({
   const commitDescription = () => {
     const next = description.trim() || null
     if (next !== state.description) onSave({ description: next })
+  }
+
+  const commitColor = () => {
+    if (color === (state.color ?? '#94a3b8')) return
+    onSave({ color })
   }
 
   const commitSortOrder = () => {
@@ -445,6 +451,21 @@ export function StateDetailSheet({
                 ))}
               </SelectContent>
             </Select>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="wf-state-detail-color">
+              {t('preferences.workflow.color')}
+            </Label>
+            <input
+              id="wf-state-detail-color"
+              type="color"
+              value={color}
+              disabled={readOnly || isSaving}
+              onChange={e => setColor(e.target.value)}
+              onBlur={commitColor}
+              className="h-8 w-16 cursor-pointer rounded-md border bg-transparent p-0.5 disabled:cursor-default"
+            />
           </div>
 
           <div className="space-y-1.5">
