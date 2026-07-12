@@ -17551,9 +17551,10 @@ def _build_analysis_debug_rows(db: Session, row: LimsSample, sample_id: str) -> 
 
 
 def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
-    """Assemble the registry-debug payload. NON-MUTATING: reads the raw row
-    directly (never ensure_sample_row / list_sub_samples / reconcile), so
-    drift is observable instead of auto-healed."""
+    """Assemble the registry-debug payload. Basic-info half is read-only;
+    analyses half schedules the passive drift observer (Task 7) which heals
+    shadow rows + audits transitions asynchronously. Display-view only;
+    never mutates lims_analyses row count."""
     row = db.execute(
         select(LimsSample).where(LimsSample.sample_id == sample_id)
     ).scalar_one_or_none()
@@ -17655,7 +17656,9 @@ def get_sample_registry_debug(
     admin=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """Admin registry diagnostic — non-mutating registry-vs-SENAITE compare.
+    """Admin registry diagnostic — read-only for basic info; viewing may
+    heal analysis-shadow drift via the passive observer (audit-logged as
+    transition_kind='observed').
 
     Plain `def` (not `async def`): the SENAITE calls behind this (fetch_parent_
     analyses / fetch_parent_metadata / fetch_secondaries, all `requests`-based)

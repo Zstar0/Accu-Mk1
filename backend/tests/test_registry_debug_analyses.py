@@ -10,10 +10,15 @@ function with no DB and no mocks; the live-DB half (SessionLocal(), a
 TEST-prefixed LimsSample + a real seeded AnalysisService — house pattern per
 test_parent_mirror_helper.py) proves only what the pure function can't: the
 live-shadow / current-canonical row SELECTION from `lims_analyses`,
-non-mutation, and the analyses-specific SENAITE-error degradation. The
-SENAITE fetch seam is monkeypatched via `main.senaite.fetch_parent_analyses`
-— the same idiom test_registry_debug_endpoint.py already uses for
-`main.senaite.fetch_parent_metadata` / `fetch_secondaries`.
+non-mutation (no new lims_analyses rows written), and the analyses-specific
+SENAITE-error degradation. The SENAITE fetch seam is monkeypatched via
+`main.senaite.fetch_parent_analyses` — the same idiom test_registry_debug_endpoint.py
+already uses for `main.senaite.fetch_parent_metadata` / `fetch_secondaries`.
+
+NOTE: Viewing triggers the passive observer (Task 7) which UPDATEs/audits
+existing shadows asynchronously; the non-mutation guarantee holds only for
+lims_analyses row COUNT (never INSERTs new rows; observer only UPDATEs +
+inserts audit transition rows).
 """
 from __future__ import annotations
 
@@ -321,7 +326,9 @@ def test_summary_counts_across_mixed_statuses_via_builder(db, seed_parent, two_a
 
 
 def test_non_mutation_no_rows_written(db, seed_parent, two_analysis_services):
-    """A registry-debug read must never write lims_analyses rows."""
+    """A registry-debug read must never INSERT new lims_analyses rows.
+    (Passive observer may UPDATE existing shadows or INSERT transition
+    audit rows; lims_analyses row count remains unchanged.)"""
     svc_a, _ = two_analysis_services
     before = db.execute(
         select(func.count()).select_from(LimsAnalysis)

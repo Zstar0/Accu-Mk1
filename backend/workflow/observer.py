@@ -26,13 +26,10 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from lims_analyses.parent_mirror import _norm_result
 from models import LimsAnalysis, LimsAnalysisTransition, LimsSample
 
 OBSERVED_REASON = "SENAITE-direct change observed via display fetch"
-
-
-def _norm_result(v: Optional[str]) -> Optional[str]:
-    return None if v is None else str(v).strip()
 
 
 def _live_shadow(db: Session, parent_id: int, keyword: str) -> Optional[LimsAnalysis]:
