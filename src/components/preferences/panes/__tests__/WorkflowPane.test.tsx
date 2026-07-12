@@ -3,6 +3,7 @@ import { render, screen, waitFor, within } from '@/test/test-utils'
 import { useAuthStore } from '@/store/auth-store'
 import type { WorkflowGraph } from '@/lib/workflow-api'
 import { validateRequirements } from '@/components/preferences/panes/workflow/WorkflowDrawers'
+import type { GraphCanvasProps } from '@/components/preferences/panes/workflow/GraphCanvas'
 
 // Mirrors FlagsPane.recurring.test.tsx: mock the api layer (importActual
 // spread so the pane's type-only imports still resolve), keep the real
@@ -41,6 +42,35 @@ vi.mock('sonner', () => ({
     success: vi.fn(),
     error: (...args: unknown[]) => toastError(...args),
   },
+}))
+
+// Task 10: the canvas is React.lazy-loaded from the pane, and once it loads
+// it's the ONLY view (the Task 9 list is Suspense-fallback-only, see
+// WorkflowPane.tsx). Mock it so tests don't drive real @xyflow/react in
+// jsdom (no ResizeObserver / layout) and can still exercise the click ->
+// onSelectState/onSelectTransition -> sheet-open plumbing the real canvas
+// wires up. Must use the '@/...' alias — a relative './workflow/GraphCanvas'
+// path here resolves relative to THIS file (__tests__/), not to
+// WorkflowPane.tsx's './workflow/GraphCanvas', so it wouldn't match.
+vi.mock('@/components/preferences/panes/workflow/GraphCanvas', () => ({
+  default: (props: GraphCanvasProps) => (
+    <div
+      data-testid="graph"
+      data-nodes={props.graph.states.length}
+      data-show-inactive={String(props.showInactive)}
+    >
+      {props.graph.states.map(s => (
+        <button key={s.id} onClick={() => props.onSelectState(s.id)}>
+          node-{s.slug}
+        </button>
+      ))}
+      {props.graph.transitions.map(t => (
+        <button key={t.id} onClick={() => props.onSelectTransition(t.id)}>
+          edge-{t.verb}
+        </button>
+      ))}
+    </div>
+  ),
 }))
 
 const SAMPLE_GRAPH: WorkflowGraph = {
@@ -125,12 +155,45 @@ describe('WorkflowPane', () => {
     ).toBeInTheDocument()
   })
 
-  it('shows the states list with seeded labels, usage badges, and the not-yet-reachable badge', async () => {
+  it('renders the lazy-loaded graph with the fetched states/transitions, and opens the state sheet with usage + not-yet-reachable badges on node click', async () => {
     await renderPane()
-    expect(await screen.findByText('Sample Due')).toBeInTheDocument()
-    expect(screen.getByText('Orphan State')).toBeInTheDocument()
-    expect(screen.getByText(/5 in use/i)).toBeInTheDocument()
-    expect(screen.getByText(/defined — not yet reachable/i)).toBeInTheDocument()
+
+    const graph = await screen.findByTestId('graph')
+    expect(graph).toHaveAttribute('data-nodes', '2')
+
+    const { default: userEvent } = await import('@testing-library/user-event')
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'node-sample_due' }))
+    let sheet = await screen.findByRole('dialog')
+    expect(within(sheet).getByText(/5 in use/i)).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    )
+
+    await user.click(
+      screen.getByRole('button', { name: 'node-orphan_state' })
+    )
+    sheet = await screen.findByRole('dialog')
+    expect(
+      within(sheet).getByText(/defined — not yet reachable/i)
+    ).toBeInTheDocument()
+  })
+
+  it('toggles "show inactive" and passes it through to the canvas', async () => {
+    await renderPane()
+    const graph = await screen.findByTestId('graph')
+    expect(graph).toHaveAttribute('data-show-inactive', 'false')
+
+    const { default: userEvent } = await import('@testing-library/user-event')
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('switch', { name: /show inactive/i }))
+
+    expect(screen.getByTestId('graph')).toHaveAttribute(
+      'data-show-inactive',
+      'true'
+    )
   })
 
   it('submits the create-state dialog, calls createWorkflowState, and invalidates the graph query', async () => {
@@ -150,7 +213,7 @@ describe('WorkflowPane', () => {
     const user = userEvent.setup()
     await renderPane()
 
-    await screen.findByText('Sample Due')
+    await screen.findByTestId('graph')
     await user.click(screen.getByRole('button', { name: /add state/i }))
 
     const dialog = await screen.findByRole('dialog')
@@ -179,7 +242,10 @@ describe('WorkflowPane', () => {
     const user = userEvent.setup()
     await renderPane()
 
-    await user.click(await screen.findByText('Orphan State'))
+    await screen.findByTestId('graph')
+    await user.click(
+      screen.getByRole('button', { name: 'node-orphan_state' })
+    )
     const sheet = await screen.findByRole('dialog')
     await user.click(within(sheet).getByRole('button', { name: /delete/i }))
 
@@ -193,7 +259,7 @@ describe('WorkflowPane', () => {
   it('hides Add controls for a non-admin (read-only view)', async () => {
     useAuthStore.setState({ user: { id: 2, role: 'standard' } as never })
     await renderPane()
-    await screen.findByText('Sample Due')
+    await screen.findByTestId('graph')
     expect(
       screen.queryByRole('button', { name: /add state/i })
     ).not.toBeInTheDocument()
@@ -209,8 +275,10 @@ describe('WorkflowPane', () => {
 
     // 'Revert' ships pre-seeded with an invalid requirement (non-manual
     // kind, empty value) — no need to drive the Radix Select through
-    // jsdom to reach the invalid state.
-    await user.click(await screen.findByText('Revert'))
+    // jsdom to reach the invalid state. Open it via the mocked canvas's
+    // edge-click plumbing (edge id 11, verb 'revert').
+    await screen.findByTestId('graph')
+    await user.click(screen.getByRole('button', { name: 'edge-revert' }))
     const sheet = await screen.findByRole('dialog')
     await user.click(within(sheet).getByRole('button', { name: /^save$/i }))
 

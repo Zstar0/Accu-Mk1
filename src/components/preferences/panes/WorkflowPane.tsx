@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -6,6 +6,7 @@ import { Info, Loader2, Plus } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 import { SettingsSection } from '../shared/SettingsComponents'
@@ -31,11 +32,19 @@ import {
   TransitionDetailSheet,
 } from './workflow/WorkflowDrawers'
 
+// First React.lazy split in the codebase — deliberate: @xyflow/react +
+// @dagrejs/dagre are ~150kB and only needed once the pane is open, so vite
+// puts them in their own chunk instead of the main bundle. The Task 9 list
+// below renders as the Suspense fallback while that chunk fetches, and is
+// NOT rendered once the canvas has loaded (see the Suspense boundary below).
+const GraphCanvas = lazy(() => import('./workflow/GraphCanvas'))
+
 /**
- * Workflow settings pane (Task 9). Form-driven CRUD over the workflow
- * catalog — states + transitions per scope (sample | analysis). This is the
- * a11y/test fallback list view; Task 10 adds a React Flow canvas ABOVE this
- * list, it doesn't replace it.
+ * Workflow settings pane (Task 9 form CRUD + Task 10 graph canvas).
+ * States + transitions per scope (sample | analysis), rendered as a React
+ * Flow graph; the form-driven list from Task 9 is kept only as the Suspense
+ * fallback while the graph chunk loads, and remains the a11y baseline if the
+ * lazy import ever fails.
  *
  * Catalog rows are documentation only while SENAITE remains system of
  * record (phase-out slice 3) — nothing here reads or writes live workflow
@@ -47,6 +56,7 @@ export function WorkflowPane() {
   const queryClient = useQueryClient()
 
   const [scope, setScope] = useState<WorkflowScope>('sample')
+  const [showInactive, setShowInactive] = useState(false)
   const [createStateOpen, setCreateStateOpen] = useState(false)
   const [createTransitionOpen, setCreateTransitionOpen] = useState(false)
   const [selectedStateId, setSelectedStateId] = useState<number | null>(null)
@@ -139,14 +149,23 @@ export function WorkflowPane() {
       )}
 
       <Tabs value={scope} onValueChange={v => setScope(v as WorkflowScope)}>
-        <TabsList>
-          <TabsTrigger value="sample">
-            {t('preferences.workflow.tabSample')}
-          </TabsTrigger>
-          <TabsTrigger value="analysis">
-            {t('preferences.workflow.tabAnalysis')}
-          </TabsTrigger>
-        </TabsList>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <TabsList>
+            <TabsTrigger value="sample">
+              {t('preferences.workflow.tabSample')}
+            </TabsTrigger>
+            <TabsTrigger value="analysis">
+              {t('preferences.workflow.tabAnalysis')}
+            </TabsTrigger>
+          </TabsList>
+          <label className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Switch
+              checked={showInactive}
+              onCheckedChange={setShowInactive}
+            />
+            {t('preferences.workflow.showInactive')}
+          </label>
+        </div>
 
         <TabsContent value={scope} className="space-y-8 pt-4">
           {graphQuery.isLoading && (
@@ -162,59 +181,100 @@ export function WorkflowPane() {
           )}
 
           {graphQuery.data && (
-            <>
-              <SettingsSection title={t('preferences.workflow.states')}>
-                <div className="flex items-center justify-between">
-                  <p className="text-sm text-muted-foreground">
-                    {t('preferences.workflow.statesDescription')}
-                  </p>
-                  {isAdmin && (
-                    <Button size="sm" onClick={() => setCreateStateOpen(true)}>
-                      <Plus className="mr-1 h-4 w-4" />
-                      {t('preferences.workflow.addState')}
-                    </Button>
-                  )}
-                </div>
-                <div className="space-y-2">
-                  {states.map(state => (
-                    <StateRow
-                      key={state.id}
-                      state={state}
-                      onClick={() => setSelectedStateId(state.id)}
-                    />
-                  ))}
-                </div>
-              </SettingsSection>
+            <Suspense
+              fallback={
+                <>
+                  <SettingsSection title={t('preferences.workflow.states')}>
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm text-muted-foreground">
+                        {t('preferences.workflow.statesDescription')}
+                      </p>
+                      {isAdmin && (
+                        <Button
+                          size="sm"
+                          onClick={() => setCreateStateOpen(true)}
+                        >
+                          <Plus className="mr-1 h-4 w-4" />
+                          {t('preferences.workflow.addState')}
+                        </Button>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      {states.map(state => (
+                        <StateRow
+                          key={state.id}
+                          state={state}
+                          onClick={() => setSelectedStateId(state.id)}
+                        />
+                      ))}
+                    </div>
+                  </SettingsSection>
 
-              <SettingsSection title={t('preferences.workflow.transitions')}>
-                <div className="flex items-center justify-between">
+                  <SettingsSection title={t('preferences.workflow.transitions')}>
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm text-muted-foreground">
+                        {t('preferences.workflow.transitionsDescription')}
+                      </p>
+                      {isAdmin && (
+                        <Button
+                          size="sm"
+                          disabled={states.length < 2}
+                          onClick={() => setCreateTransitionOpen(true)}
+                        >
+                          <Plus className="mr-1 h-4 w-4" />
+                          {t('preferences.workflow.addTransition')}
+                        </Button>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      {transitions.map(transition => (
+                        <TransitionRow
+                          key={transition.id}
+                          transition={transition}
+                          fromLabel={stateLabelById(transition.from_state_id)}
+                          toLabel={stateLabelById(transition.to_state_id)}
+                          onClick={() => setSelectedTransitionId(transition.id)}
+                        />
+                      ))}
+                    </div>
+                  </SettingsSection>
+                </>
+              }
+            >
+              <SettingsSection title={t('preferences.workflow.graph')}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-sm text-muted-foreground">
-                    {t('preferences.workflow.transitionsDescription')}
+                    {t('preferences.workflow.graphDescription')}
                   </p>
                   {isAdmin && (
-                    <Button
-                      size="sm"
-                      disabled={states.length < 2}
-                      onClick={() => setCreateTransitionOpen(true)}
-                    >
-                      <Plus className="mr-1 h-4 w-4" />
-                      {t('preferences.workflow.addTransition')}
-                    </Button>
+                    <div className="flex shrink-0 gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => setCreateStateOpen(true)}
+                      >
+                        <Plus className="mr-1 h-4 w-4" />
+                        {t('preferences.workflow.addState')}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={states.length < 2}
+                        onClick={() => setCreateTransitionOpen(true)}
+                      >
+                        <Plus className="mr-1 h-4 w-4" />
+                        {t('preferences.workflow.addTransition')}
+                      </Button>
+                    </div>
                   )}
                 </div>
-                <div className="space-y-2">
-                  {transitions.map(transition => (
-                    <TransitionRow
-                      key={transition.id}
-                      transition={transition}
-                      fromLabel={stateLabelById(transition.from_state_id)}
-                      toLabel={stateLabelById(transition.to_state_id)}
-                      onClick={() => setSelectedTransitionId(transition.id)}
-                    />
-                  ))}
-                </div>
+                <GraphCanvas
+                  graph={graphQuery.data}
+                  showInactive={showInactive}
+                  onSelectState={setSelectedStateId}
+                  onSelectTransition={setSelectedTransitionId}
+                />
               </SettingsSection>
-            </>
+            </Suspense>
           )}
         </TabsContent>
       </Tabs>
