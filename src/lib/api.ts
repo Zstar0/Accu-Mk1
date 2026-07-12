@@ -5092,6 +5092,21 @@ export interface AnalysesSync {
   error: string | null
 }
 
+// Task 8: registry-inspect recent-transitions tail — last 5 native
+// lims_sample_transitions rows for this parent, newest first.
+export interface SampleTransitionRow {
+  verb: string | null
+  from_status: string | null
+  to_status: string
+  source: string
+  occurred_at: string
+}
+
+export interface SampleTransitionsTail {
+  rows: SampleTransitionRow[]
+  error: string | null
+}
+
 export interface SampleRegistryDebug {
   sample_id: string
   load: {
@@ -5112,6 +5127,7 @@ export interface SampleRegistryDebug {
   senaite_error: string | null
   raw: { registry: Record<string, unknown> | null; senaite: Record<string, unknown> | null } | null
   analyses: AnalysesSync | null
+  transitions: SampleTransitionsTail | null
 }
 
 export async function getSampleRegistryDebug(sampleId: string): Promise<SampleRegistryDebug> {

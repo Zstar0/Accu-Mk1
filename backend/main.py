@@ -17550,6 +17550,38 @@ def _build_analysis_debug_rows(db: Session, row: LimsSample, sample_id: str) -> 
     return result
 
 
+def _build_sample_transitions(db: Session, row: LimsSample) -> dict:
+    """Registry-debug panel's recent-transitions tail (Task 8): the last 5
+    `lims_sample_transitions` rows for this parent, newest first. Pure DB
+    read, no SENAITE I/O — but still wrapped in its own try/except with its
+    own error surface (`transitions.error`), same independent-failure
+    posture as `_build_analysis_debug_rows`'s SENAITE fetch: a failure here
+    must not blank the rest of the payload, and must not be blanked by a
+    basic-info or analyses failure elsewhere."""
+    from models import LimsSampleTransition
+
+    try:
+        rows = db.execute(
+            select(LimsSampleTransition)
+            .where(LimsSampleTransition.lims_sample_pk == row.id)
+            .order_by(LimsSampleTransition.occurred_at.desc(), LimsSampleTransition.id.desc())
+            .limit(5)
+        ).scalars().all()
+    except Exception as e:
+        return {"rows": [], "error": str(e)}
+
+    return {
+        "rows": [
+            {
+                "verb": r.verb, "from_status": r.from_status, "to_status": r.to_status,
+                "source": r.source, "occurred_at": r.occurred_at.isoformat(),
+            }
+            for r in rows
+        ],
+        "error": None,
+    }
+
+
 def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
     """Assemble the registry-debug payload. Basic-info half is read-only;
     analyses half schedules the passive drift observer (Task 7) which heals
@@ -17567,7 +17599,7 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
             "linkage": None, "origin": None, "container": None,
             "fields": [], "summary": None, "vials": None,
             "verdict": None, "senaite_error": None, "raw": None,
-            "analyses": None,
+            "analyses": None, "transitions": None,
         }
 
     age = None
@@ -17588,6 +17620,11 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
     # the field diff.
     analyses = _build_analysis_debug_rows(db, row, sample_id)
 
+    # Recent-transitions tail (Task 8): same independent-failure posture —
+    # own try/except, own error surface, never blanked by nor blanking
+    # anything else in this payload.
+    transitions = _build_sample_transitions(db, row)
+
     meta = None
     senaite_error = None
     try:
@@ -17604,7 +17641,7 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
             "fields": [], "summary": None, "vials": None, "verdict": None,
             "senaite_error": senaite_error,
             "raw": {"registry": _row_to_dict(row), "senaite": None},
-            "analyses": analyses,
+            "analyses": analyses, "transitions": transitions,
         }
 
     diff = diff_registry_vs_senaite(row, meta)
@@ -17637,7 +17674,7 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
                     "registry_null": diff["summary"]["registry_null"]},
         "senaite_error": None,
         "raw": {"registry": _row_to_dict(row), "senaite": meta},
-        "analyses": analyses,
+        "analyses": analyses, "transitions": transitions,
     }
 
 
