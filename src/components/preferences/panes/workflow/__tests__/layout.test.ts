@@ -1,14 +1,24 @@
 import { describe, it, expect } from 'vitest'
-import { layoutGraph } from '../GraphCanvas'
+import { layoutGraph } from '../layout'
 import type { WorkflowGraph } from '@/lib/workflow-api'
 
 /**
- * Unlike WorkflowPane.test.tsx (which mocks this whole module so it can
+ * Unlike WorkflowPane.test.tsx (which mocks the GraphCanvas module so it can
  * assert the pane's plumbing without driving real @xyflow/react in jsdom),
  * this file exercises the REAL dagre integration `layoutGraph` wraps —
  * `new dagre.graphlib.Graph()`, `setNode`/`setEdge`, `dagre.layout`,
  * `g.node()` — since nothing else in the suite ever executes it. Pure
  * function, no React, so no ResizeObserver/jsdom-dimension concerns.
+ *
+ * `layoutGraph` lives in `../layout.ts`, a module deliberately kept free of
+ * the `@xyflow/react` *runtime* (type-only imports only — see that file's
+ * header comment) so this test never pulls in ReactFlow/its CSS/worker
+ * setup cost just to exercise a pure dagre layout function. Importing it
+ * from `../GraphCanvas` here (pre-split) is what previously dragged the
+ * real xyflow runtime into every worker running this file, adding enough
+ * contention to intermittently blow past unrelated flag tests' async
+ * timeouts under full-suite parallelism — see the 2026-07-12
+ * workflow-state-system gate report (task-11-report.md).
  */
 
 const SAMPLE_GRAPH: WorkflowGraph = {
