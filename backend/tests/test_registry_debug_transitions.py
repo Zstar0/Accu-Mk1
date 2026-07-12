@@ -15,13 +15,11 @@ app's real dependency talks to the same live dev DB the `SessionLocal()`
 fixtures seed into). TEST-prefixed sample_id, FK-safe cleanup (transitions
 before the sample row) adapted from test_sample_transition_log.py.
 
-DB-error try/except path is not exercised here: unlike the analyses
-section's SENAITE fetch (trivially mocked to raise), there is no clean seam
-to force a `lims_sample_transitions` SELECT to fail without monkeypatching
-SQLAlchemy internals the test would then be coupled to. The posture (mirror
-of the analyses section's `except Exception as e: return {"rows": [],
-"error": str(e)}`) is inspectable by code review — same acknowledged gap the
-Task 8 brief calls out.
+DB-error try/except path: covered by `test_transitions_query_exception_
+returns_error` below via `patch.object(db, "execute", side_effect=...)`,
+scoped tightly (context manager wraps only the direct
+`_build_sample_transitions` call) so the autouse `cleanup` fixture's own
+`db.execute` deletes run unpatched afterward.
 """
 from __future__ import annotations
 
@@ -151,6 +149,17 @@ def test_id_desc_tiebreaks_equal_occurred_at(db, seed_parent):
 def test_empty_rows_when_no_transitions_logged(db, seed_parent):
     out = main._build_registry_debug_response(db, TEST_SAMPLE_ID)
     assert out["transitions"] == {"rows": [], "error": None}
+
+
+def test_transitions_query_exception_returns_error(db, seed_parent):
+    """Forces the SELECT itself to raise (not a SENAITE-mockable seam):
+    patch `db.execute` directly, scoped tightly around the call to
+    `_build_sample_transitions` so nothing else — including the autouse
+    `cleanup` fixture's own deletes — runs against a patched `db`."""
+    with patch.object(db, "execute", side_effect=RuntimeError("boom")):
+        out = main._build_sample_transitions(db, seed_parent)
+    assert out["rows"] == []
+    assert "boom" in out["error"]
 
 
 def test_transitions_none_when_row_missing(db):

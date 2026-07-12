@@ -168,7 +168,7 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
                   {/* Recent transitions (Task 8): compact tail under the analyses summary. */}
                   <div className="font-mono text-[11px] text-zinc-700 pt-2 pb-1">{'─'.repeat(3)} recent transitions {'─'.repeat(18)}</div>
                   {data.transitions?.error && (
-                    <div className={cn(line, 'text-amber-400')}>transitions_error: {data.transitions.error}</div>
+                    <div className={cn(line, 'text-red-400')}>transitions_error: {data.transitions.error}</div>
                   )}
                   {data.transitions && data.transitions.rows.length > 0 && (
                     <div className="space-y-0.5">
