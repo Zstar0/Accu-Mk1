@@ -152,7 +152,13 @@ def maybe_start(app) -> Optional["asyncio.Task"]:
     """Env-gated entry point for main.py's lifespan (mirrors
     slack_notify.notifier.maybe_start's shape). Dormant when the Integration
     Service DB isn't configured, or when explicitly disabled via
-    MK1_IS_EVENT_SYNC_ENABLED=0."""
+    MK1_IS_EVENT_SYNC_ENABLED=0.
+
+    Note: the config-presence gate (`_integration_db_configured()`) is
+    effectively always True in practice — `get_connection_config()` defaults
+    host to "localhost" when no INTEGRATION_DB_*_HOST env var is set, so an
+    unconfigured environment still reads as "configured". In practice
+    MK1_IS_EVENT_SYNC_ENABLED=0 is the real operational off-switch."""
     if os.getenv("MK1_IS_EVENT_SYNC_ENABLED", "1") == "0":
         return None
     if not _integration_db_configured():

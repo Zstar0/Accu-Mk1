@@ -199,7 +199,12 @@ def test_unknown_sample_counts_as_no_sample_but_advances_cursor(db):
         stats = is_event_stream.sync_once(SessionLocal)
 
     assert stats == {"fetched": 1, "inserted": 0, "dup": 0, "no_sample": 1, "errors": 0}
-    assert db.query(LimsSampleTransition).count() == 0 or True  # no row possible (no sample pk)
+    scoped_count = db.query(LimsSampleTransition).filter(
+        LimsSampleTransition.lims_sample_pk.in_(
+            select(LimsSample.id).where(LimsSample.sample_id.like("TEST-WST5-%"))
+        )
+    ).count()
+    assert scoped_count == 0  # no row possible (no sample pk)
 
     cursor = _get_cursor(db)
     assert cursor is not None
@@ -228,6 +233,39 @@ def test_fetch_failure_counts_error_and_does_not_move_cursor(db):
     cursor = _get_cursor(db)
     assert cursor is not None
     assert cursor.cursor_created_at == seeded_at
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# (f) per-event error isolation: one bad event in a batch doesn't sink the
+# other events, and the cursor still advances past the whole batch (same
+# "seen, not necessarily inserted" cursor semantics as the no_sample case)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_per_event_error_is_isolated_and_cursor_still_advances(db):
+    sample = _seed_sample(db, "F")
+    base = datetime.now(timezone.utc)
+    events = [
+        _fake_event(
+            sample_id=sample.sample_id, transition="receive",
+            new_status="sample_received", event_id=f"TEST-WST5-EVT-F{i}",
+            created_at=base + timedelta(seconds=i), ev_id=f"uuid-f{i}",
+        )
+        for i in range(3)
+    ]
+    last_created_at = events[-1]["created_at"]
+
+    with patch.object(is_event_stream, "_fetch_events", return_value=events), \
+         patch.object(is_event_stream, "record_sample_transition",
+                       side_effect=[True, RuntimeError("boom"), True]) as recorder:
+        stats = is_event_stream.sync_once(SessionLocal)
+
+    assert recorder.call_count == 3
+    assert stats == {"fetched": 3, "inserted": 2, "dup": 0, "no_sample": 0, "errors": 1}
+
+    cursor = _get_cursor(db)
+    assert cursor is not None
+    assert cursor.cursor_created_at == last_created_at
 
 
 # ═══════════════════════════════════════════════════════════════════════════
