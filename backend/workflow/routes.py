@@ -1,9 +1,16 @@
-"""Admin CRUD + graph API for the workflow catalog (phase-out slice 3).
+"""Admin CRUD + read-only graph API for the workflow catalog (phase-out
+slice 3).
 
 Edits touch CATALOG rows only (documentation while SENAITE is authority) —
 no live sample/analysis state is ever read from or written through here.
 Guardrails are fail-loud (409/422, spec §9.4); routes own their commits
 (flags routes convention).
+
+Auth split: the router-level gate is `get_current_user` (any authenticated
+user) — GET /graph exposes only the catalog + usage counts, no secrets, and
+is the designed read-only view for non-admins (the Workflow nav item is
+visible to everyone). Every mutating route (POST/PATCH/DELETE) additionally
+requires `require_admin` via a per-route `dependencies=` override.
 """
 from __future__ import annotations
 
@@ -14,13 +21,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from auth import require_admin
+from auth import get_current_user, require_admin
 from database import get_db
 from models import LimsWorkflowState, LimsWorkflowTransition
 from workflow.catalog import graph_payload, usage_counts, validate_requirements
 
 router = APIRouter(prefix="/api/workflow", tags=["workflow"],
-                   dependencies=[Depends(require_admin)])
+                   dependencies=[Depends(get_current_user)])
 
 Scope = Literal["sample", "analysis"]
 Category = Literal["active", "terminal", "exception"]
@@ -125,7 +132,7 @@ def get_graph(scope: Scope = Query(...), db: Session = Depends(get_db)):
 
 # ── states ───────────────────────────────────────────────────────────────
 
-@router.post("/states")
+@router.post("/states", dependencies=[Depends(require_admin)])
 def create_state(body: StateCreate, db: Session = Depends(get_db)):
     dup = (db.query(LimsWorkflowState)
            .filter_by(entity_scope=body.entity_scope, slug=body.slug)
@@ -142,7 +149,7 @@ def create_state(body: StateCreate, db: Session = Depends(get_db)):
     return _state_out(row)
 
 
-@router.patch("/states/{state_id}")
+@router.patch("/states/{state_id}", dependencies=[Depends(require_admin)])
 def update_state(state_id: int, body: StateUpdate,
                  db: Session = Depends(get_db)):
     row = db.get(LimsWorkflowState, state_id)
@@ -157,7 +164,8 @@ def update_state(state_id: int, body: StateUpdate,
     return _state_out(row, usage_counts(db, row.entity_scope).get(row.slug, 0))
 
 
-@router.delete("/states/{state_id}", status_code=204)
+@router.delete("/states/{state_id}", status_code=204,
+              dependencies=[Depends(require_admin)])
 def delete_state(state_id: int, db: Session = Depends(get_db)):
     row = db.get(LimsWorkflowState, state_id)
     if row is None:
@@ -187,7 +195,7 @@ def delete_state(state_id: int, db: Session = Depends(get_db)):
 
 # ── transitions ──────────────────────────────────────────────────────────
 
-@router.post("/transitions")
+@router.post("/transitions", dependencies=[Depends(require_admin)])
 def create_transition(body: TransitionCreate, db: Session = Depends(get_db)):
     frm = db.get(LimsWorkflowState, body.from_state_id)
     to = db.get(LimsWorkflowState, body.to_state_id)
@@ -220,7 +228,8 @@ def create_transition(body: TransitionCreate, db: Session = Depends(get_db)):
     return _transition_out(row)
 
 
-@router.patch("/transitions/{transition_id}")
+@router.patch("/transitions/{transition_id}",
+             dependencies=[Depends(require_admin)])
 def update_transition(transition_id: int, body: TransitionUpdate,
                       db: Session = Depends(get_db)):
     row = db.get(LimsWorkflowTransition, transition_id)
@@ -269,7 +278,8 @@ def update_transition(transition_id: int, body: TransitionUpdate,
     return _transition_out(row)
 
 
-@router.delete("/transitions/{transition_id}", status_code=204)
+@router.delete("/transitions/{transition_id}", status_code=204,
+              dependencies=[Depends(require_admin)])
 def delete_transition(transition_id: int, db: Session = Depends(get_db)):
     row = db.get(LimsWorkflowTransition, transition_id)
     if row is None:

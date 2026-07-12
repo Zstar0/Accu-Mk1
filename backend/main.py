@@ -10154,6 +10154,14 @@ async def publish_sample_coa(
     _parent_row = db.execute(
         select(LimsSample).where(LimsSample.sample_id == sample_id)
     ).scalar_one_or_none()
+    # Snapshot the pre-publish status NOW, before any commit below can expire
+    # `_parent_row` (expire_on_commit=True). The transition-log hook at the
+    # bottom of this function passes `from_status` as a run_in_threadpool
+    # kwarg, which is evaluated on the event loop at call time — touching an
+    # expired ORM attribute there triggers a synchronous refresh SELECT on
+    # the event loop that can raise and escape into the generic except below,
+    # producing a false 502 AFTER the publish already succeeded.
+    _pre_publish_status = _parent_row.status if _parent_row is not None else None
     _publish_body: dict = {}
     _deliver_remark = False
     if _parent_row is not None:
@@ -10332,7 +10340,7 @@ async def publish_sample_coa(
                     await run_in_threadpool(
                         _record_sample_transition_bg,
                         sample_id=sample_id, verb="publish", to_status="published",
-                        from_status=(_parent_row.status if _parent_row is not None else None),
+                        from_status=_pre_publish_status,
                         source="mk1",
                         actor_user_id=getattr(current_user, "id", None),
                     )

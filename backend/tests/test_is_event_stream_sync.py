@@ -91,6 +91,18 @@ def _get_cursor(db) -> LimsWorkflowSyncState | None:
     ).scalar_one_or_none()
 
 
+def _seed_cursor(db, dt: datetime | None = None) -> None:
+    """Pre-seed the sync cursor so a test can exercise steady-state
+    incremental-pull behavior directly, bypassing the cold-start tick (see
+    module COLD-START SEMANTICS: a missing cursor row means sync_once
+    initializes-and-returns on its own, without ever calling _fetch_events)."""
+    db.add(LimsWorkflowSyncState(
+        name=CURSOR_NAME,
+        cursor_created_at=dt or (datetime.now(timezone.utc) - timedelta(hours=1)),
+    ))
+    db.commit()
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # (a) fresh insert + cursor advance
 # ═══════════════════════════════════════════════════════════════════════════
@@ -98,6 +110,7 @@ def _get_cursor(db) -> LimsWorkflowSyncState | None:
 
 def test_fresh_event_inserts_and_advances_cursor(db):
     sample = _seed_sample(db, "A")
+    _seed_cursor(db)
     created_at = datetime.now(timezone.utc)
     ts = int(created_at.timestamp())
     event = _fake_event(
@@ -131,6 +144,7 @@ def test_fresh_event_inserts_and_advances_cursor(db):
 
 def test_resynced_event_id_counts_as_dup(db):
     sample = _seed_sample(db, "B")
+    _seed_cursor(db)
     created_at = datetime.now(timezone.utc)
     event = _fake_event(
         sample_id=sample.sample_id, transition="receive",
@@ -157,6 +171,7 @@ def test_resynced_event_id_counts_as_dup(db):
 
 def test_event_within_mk1_window_counts_as_dup(db):
     sample = _seed_sample(db, "C")
+    _seed_cursor(db)
     now = datetime.utcnow()
     assert record_sample_transition(
         db, sample_id=sample.sample_id, verb="receive",
@@ -188,6 +203,7 @@ def test_event_within_mk1_window_counts_as_dup(db):
 
 
 def test_unknown_sample_counts_as_no_sample_but_advances_cursor(db):
+    _seed_cursor(db)
     created_at = datetime.now(timezone.utc)
     event = _fake_event(
         sample_id="TEST-WST5-GHOST", transition="receive",
@@ -244,6 +260,7 @@ def test_fetch_failure_counts_error_and_does_not_move_cursor(db):
 
 def test_per_event_error_is_isolated_and_cursor_still_advances(db):
     sample = _seed_sample(db, "F")
+    _seed_cursor(db)
     base = datetime.now(timezone.utc)
     events = [
         _fake_event(
@@ -270,15 +287,46 @@ def test_per_event_error_is_isolated_and_cursor_still_advances(db):
 
 # ═══════════════════════════════════════════════════════════════════════════
 # empty batch: fetched=0 is a legitimate steady-state result, not an error
+# (with a cursor already established — the cold-start tick is covered
+# separately below)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 def test_empty_batch_is_a_noop(db):
-    with patch.object(is_event_stream, "_fetch_events", return_value=[]):
+    seeded_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    _seed_cursor(db, seeded_at)
+
+    with patch.object(is_event_stream, "_fetch_events", return_value=[]) as fetch:
         stats = is_event_stream.sync_once(SessionLocal)
 
+    fetch.assert_called_once()
     assert stats == {"fetched": 0, "inserted": 0, "dup": 0, "no_sample": 0, "errors": 0}
+    cursor = _get_cursor(db)
+    assert cursor is not None
+    assert cursor.cursor_created_at == seeded_at
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# cold start: no cursor row yet → sync_once initializes the cursor to now
+# and returns without ever calling _fetch_events (no epoch-walk of IS
+# history — that history belongs to the seed backfill script instead)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_cold_start_initializes_cursor_to_now_without_fetching(db):
     assert _get_cursor(db) is None
+    before = datetime.now(timezone.utc)
+
+    with patch.object(is_event_stream, "_fetch_events") as fetch:
+        stats = is_event_stream.sync_once(SessionLocal)
+
+    after = datetime.now(timezone.utc)
+    fetch.assert_not_called()
+    assert stats == {"fetched": 0, "inserted": 0, "dup": 0, "no_sample": 0, "errors": 0}
+
+    cursor = _get_cursor(db)
+    assert cursor is not None
+    assert before <= cursor.cursor_created_at <= after
 
 
 # ═══════════════════════════════════════════════════════════════════════════

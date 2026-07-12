@@ -6,6 +6,16 @@ the native sample-transition log (`workflow.sample_log.record_sample_transition`
 source="senaite"). This is the single place data flows from IS into Mk1's
 workflow history today.
 
+COLD-START SEMANTICS: sync starts at now. The first tick after boot, when no
+cursor row exists yet, initializes the cursor to `datetime.now(timezone.utc)`
+and returns immediately without fetching — it deliberately does NOT walk IS
+history from epoch. A full first sweep would replay all of IS history as if
+it were live traffic and mislabel it source='senaite'; that history properly
+belongs to the one-time seed backfill
+(`scripts/backfill_sample_transitions_from_is.py`, source='is_seed' — spec
+§6.5). Run the seed backfill separately for history; this stream only ever
+carries events going forward from first boot.
+
 RETIREMENT CONTRACT: when the direction inverts — Mk1 becomes the
 authoritative LIMS and starts feeding IS instead of the reverse, near the
 SENAITE disconnect — this module is deleted wholesale, in full. It is kept
@@ -31,7 +41,6 @@ from workflow.sample_log import record_sample_transition
 logger = logging.getLogger(__name__)
 
 CURSOR_NAME = "is_sample_events"
-EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 _FETCH_EVENTS_SQL = """
     SELECT id, sample_id, transition, new_status, event_id,
@@ -74,10 +83,13 @@ def sync_once(db_factory: Callable[[], Session], *, batch_size: int = 500,
     """One incremental pull: read the cursor, fetch IS events since
     cursor - overlap, append each to the sample-transition log, commit the
     batch, then advance the cursor to the max `created_at` seen — ONLY after
-    that batch commit succeeds. A NULL/missing cursor is treated as epoch (a
-    full first sweep). Safe to call repeatedly: the recorder's own dedup
-    rules plus the is_event_id partial unique make re-processing the overlap
-    window idempotent.
+    that batch commit succeeds. A missing cursor row (cold start) is NOT
+    treated as epoch: it's initialized to now() and persisted immediately,
+    and this tick returns with fetched=0 — no IS history is walked or
+    replayed here (see module docstring's COLD-START SEMANTICS; the seed
+    backfill script owns history). Safe to call repeatedly: the recorder's
+    own dedup rules plus the is_event_id partial unique make re-processing
+    the overlap window idempotent.
 
     Returns stats: {"fetched", "inserted", "dup", "no_sample", "errors"}.
     "no_sample" and "dup" are both `record_sample_transition() -> False`
@@ -90,7 +102,19 @@ def sync_once(db_factory: Callable[[], Session], *, batch_size: int = 500,
         cursor_row = db.execute(
             select(LimsWorkflowSyncState).where(LimsWorkflowSyncState.name == CURSOR_NAME)
         ).scalar_one_or_none()
-        cursor_dt = (cursor_row.cursor_created_at if cursor_row else None) or EPOCH
+
+        if cursor_row is None:
+            # Cold start: anchor the cursor at now and stop. Do NOT fetch —
+            # a first-boot epoch walk would mislabel all of IS history as
+            # live 'senaite' traffic. The seed backfill script owns history.
+            cursor_row = LimsWorkflowSyncState(
+                name=CURSOR_NAME, cursor_created_at=datetime.now(timezone.utc)
+            )
+            db.add(cursor_row)
+            db.commit()
+            return stats
+
+        cursor_dt = cursor_row.cursor_created_at
         query_from = cursor_dt - timedelta(minutes=overlap_minutes)
 
         try:
@@ -131,9 +155,8 @@ def sync_once(db_factory: Callable[[], Session], *, batch_size: int = 500,
 
         db.commit()
 
-        if cursor_row is None:
-            cursor_row = LimsWorkflowSyncState(name=CURSOR_NAME)
-            db.add(cursor_row)
+        # cursor_row always exists by this point — the cold-start branch
+        # above returns early before ever reaching here.
         cursor_row.cursor_created_at = max_created_at
         db.commit()
     finally:

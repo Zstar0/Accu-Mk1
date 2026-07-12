@@ -73,9 +73,13 @@ def _cleanup():
 
 @pytest.fixture
 def client():
+    """Overrides BOTH gates: the router-level get_current_user (any
+    authenticated user, gates GET /graph) and require_admin (gates every
+    mutation). An admin satisfies both."""
     prev = dict(main.app.dependency_overrides)
-    main.app.dependency_overrides[require_admin] = (
-        lambda: SimpleNamespace(id=1, role="admin", email="admin@test"))
+    admin = lambda: SimpleNamespace(id=1, role="admin", email="admin@test")
+    main.app.dependency_overrides[get_current_user] = admin
+    main.app.dependency_overrides[require_admin] = admin
     tc = TestClient(main.app)
     yield tc
     main.app.dependency_overrides.clear()
@@ -84,7 +88,11 @@ def client():
 
 @pytest.fixture
 def client_non_admin():
-    """No require_admin override — the REAL gate runs against a standard user."""
+    """Only get_current_user is overridden (with a standard-role user) — the
+    REAL require_admin gate runs on top of it (require_admin itself depends
+    on get_current_user, so it sees the overridden standard user and 403s).
+    This proves: GET /graph succeeds (get_current_user gate only), mutations
+    403 (require_admin gate)."""
     prev = dict(main.app.dependency_overrides)
     main.app.dependency_overrides[get_current_user] = (
         lambda: SimpleNamespace(id=42, role="standard", email="t@test"))
@@ -397,9 +405,18 @@ def test_patch_missing_404(client):
 
 # ── auth gate ────────────────────────────────────────────────────────────
 
+def test_graph_readable_by_non_admin(client_non_admin):
+    """GET /graph is the designed read-only view for every authenticated
+    user (nav item is visible to all) — it exposes only catalog + usage
+    counts, no secrets, so it sits behind get_current_user, not
+    require_admin."""
+    r = client_non_admin.get("/api/workflow/graph", params={"scope": "sample"})
+    assert r.status_code == 200, r.text
+    assert r.json()["scope"] == "sample"
+
+
 def test_requires_admin(client_non_admin):
     c = client_non_admin
-    assert c.get("/api/workflow/graph", params={"scope": "sample"}).status_code == 403
     assert c.post("/api/workflow/states", json={
         "entity_scope": "sample", "slug": "test_wf_nope", "label": "n"}).status_code == 403
     assert c.patch("/api/workflow/states/1", json={"label": "n"}).status_code == 403
@@ -408,3 +425,18 @@ def test_requires_admin(client_non_admin):
         "from_state_id": 1, "to_state_id": 2, "verb": "test_wf_nope"}).status_code == 403
     assert c.patch("/api/workflow/transitions/1", json={"label": "n"}).status_code == 403
     assert c.delete("/api/workflow/transitions/1").status_code == 403
+
+
+def test_requires_authentication():
+    """No auth at all (neither require_admin nor get_current_user
+    overridden) — the router-level get_current_user gate rejects with 401,
+    including on the read-only graph route."""
+    prev = dict(main.app.dependency_overrides)
+    main.app.dependency_overrides.clear()
+    try:
+        c = TestClient(main.app)
+        r = c.get("/api/workflow/graph", params={"scope": "sample"})
+        assert r.status_code == 401
+    finally:
+        main.app.dependency_overrides.clear()
+        main.app.dependency_overrides.update(prev)
