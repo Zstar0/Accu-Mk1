@@ -361,6 +361,16 @@ async def lifespan(app: FastAPI):
     # Slack DM notifications (spec 2026-07-02) — dormant without the token.
     from slack_notify.notifier import maybe_start as _slack_maybe_start
     _slack_notifier_task = _slack_maybe_start(_flag_bus.BUS)
+    # IS event-stream incremental sync (workflow state system, slice 3 Task 5)
+    # — the only IS→Mk1 puller (spec §7); dormant without IS DB config or
+    # when disabled via MK1_IS_EVENT_SYNC_ENABLED=0. Guarded: a startup issue
+    # here must never take down the rest of the app.
+    try:
+        from workflow.is_event_stream import maybe_start as _is_sync_maybe_start
+        _is_sync_task = _is_sync_maybe_start(app)
+    except Exception:
+        logger.warning("workflow.is_sync_start_failed", exc_info=True)
+        _is_sync_task = None
     # Flag scheduler (Slice 5) — in-process ticker; jobs registered below.
     from datetime import timedelta as _timedelta
     from flags.scheduler import Scheduler as _Scheduler
