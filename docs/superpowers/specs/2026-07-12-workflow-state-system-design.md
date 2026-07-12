@@ -342,6 +342,17 @@ missing-seed; gate on failure-SET diff vs base, not zero failures):
 
 ## 11. Rollback runbook
 
+**Deploy note — `'observed'` CHECK is last-boot-wins (final-review Important 3).**
+The `transition_kind` CHECK is enforced by a DROP/re-ADD migration pair that
+re-runs on every backend boot. Any OLDER-image boot against the same DB
+(rollback, roll-forward sequencing, a sibling stack on a shared dev DB)
+re-applies the old 10-value list — after which every observer write dies
+silently (IntegrityError swallowed by the never-fail wrapper: capture goes
+dark, pages stay fine). This was observed live on the shared dev DB during
+the branch. Remedy: after any rollback→roll-forward or mixed-version window,
+boot the CURRENT image last (or rerun `init_db()`) to restore the 12-value
+CHECK. A union-preserving re-add can ride a later slice.
+
 Everything is additive and dormant. Rollback = revert the image; optionally
 drop the four new-table datasets (`lims_sample_transitions`,
 `lims_workflow_states`, `lims_workflow_transitions`) and delete
