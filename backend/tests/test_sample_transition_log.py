@@ -1,6 +1,9 @@
 """Tests for Task 3: the native sample-transition recorder
 (workflow/sample_log.py) + the two Mk1 hooks that call it — publish_sample_coa
-(publish) and receive_senaite_sample (receive).
+(publish) and receive_senaite_sample (receive). Also Task 4: reconcile drift
+synthesis in sub_samples.service._refresh_parent_from_senaite — a status
+change picked up by the SENAITE cache-refresh path (not an explicit mk1/
+senaite hook) gets synthesized into the log as source='reconcile'.
 
 Recorder unit tests exercise `record_sample_transition` directly against a
 live session: insert, the two source-specific dedup rules (§6.2/§6.3), an
@@ -34,6 +37,7 @@ import main
 from auth import get_current_user
 from database import SessionLocal
 from models import LimsSample, LimsSampleTransition
+from sub_samples.service import _refresh_parent_from_senaite
 from workflow.sample_log import record_sample_transition
 
 TEST_SAMPLE_ID = "TEST-WST3-SAMPLE"
@@ -488,6 +492,77 @@ def test_receive_hook_never_fails_on_recorder_exception(db, seed_sample, caplog)
     assert body["success"] is True
     assert "received" in body["senaite_response"]["steps_done"]
     assert any("workflow.sample_log_failed" in rec.message for rec in caplog.records)
+
+    row = db.query(LimsSampleTransition).filter_by(
+        lims_sample_pk=seed_sample.id
+    ).one_or_none()
+    assert row is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Task 4: reconcile drift synthesis — sub_samples.service._refresh_parent_
+# from_senaite. Status writes happen INSIDE _populate_basic_info
+# (row.status = meta.get("review_state")); the refresh wrapper diffs old vs
+# new status and, on a change, synthesizes a source='reconcile' row so drift
+# caught by the cache-refresh path (not an explicit mk1/senaite hook) still
+# shows up in history.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _reconcile_meta(review_state: str) -> dict:
+    """Sparse fetch_parent_metadata payload — _populate_basic_info tolerates
+    missing keys (see test_populate_missing_new_keys_yields_nulls in
+    test_lims_sample_basic_info.py)."""
+    return {"uid": "U-RECONCILE", "ClientID": "c", "review_state": review_state}
+
+
+def test_reconcile_synthesizes_transition_on_status_drift(db, seed_sample):
+    assert seed_sample.status == "verified"
+    with patch("sub_samples.service.senaite.fetch_parent_metadata",
+               return_value=_reconcile_meta("published")):
+        _refresh_parent_from_senaite(db, seed_sample)
+
+    assert seed_sample.status == "published"
+    row = db.query(LimsSampleTransition).filter_by(
+        lims_sample_pk=seed_sample.id
+    ).one()
+    assert row.source == "reconcile"
+    assert row.from_status == "verified"
+    assert row.to_status == "published"
+
+
+def test_reconcile_skipped_within_explained_window(db, seed_sample):
+    """A mk1 row landed the same to_status a minute ago — the recorder's
+    60-min reconcile dedup window (§6.3) means the drift synthesis is a
+    no-op, even though the parent's cached status still gets refreshed."""
+    assert record_sample_transition(
+        db, sample_id=seed_sample.sample_id, to_status="published",
+        source="mk1", occurred_at=datetime.utcnow() - timedelta(minutes=1),
+    ) is True
+
+    with patch("sub_samples.service.senaite.fetch_parent_metadata",
+               return_value=_reconcile_meta("published")):
+        _refresh_parent_from_senaite(db, seed_sample)
+
+    assert seed_sample.status == "published"
+    rows = db.query(LimsSampleTransition).filter_by(
+        lims_sample_pk=seed_sample.id
+    ).all()
+    assert len(rows) == 1
+    assert rows[0].source == "mk1"
+
+
+def test_reconcile_log_failure_does_not_break_refresh(db, seed_sample, caplog):
+    import logging
+    with patch("sub_samples.service.senaite.fetch_parent_metadata",
+               return_value=_reconcile_meta("published")), \
+         patch("workflow.sample_log.record_sample_transition",
+               side_effect=RuntimeError("boom")), \
+         caplog.at_level(logging.WARNING):
+        _refresh_parent_from_senaite(db, seed_sample)  # must not raise
+
+    assert seed_sample.status == "published"
+    assert any("workflow.reconcile_log_failed" in rec.message for rec in caplog.records)
 
     row = db.query(LimsSampleTransition).filter_by(
         lims_sample_pk=seed_sample.id

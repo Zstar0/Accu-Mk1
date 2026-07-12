@@ -332,10 +332,31 @@ def _refresh_parent_from_senaite(db: Session, parent: LimsSample) -> None:
     """Refresh the cached lims_samples row from SENAITE in place. Writes the
     FULL basic-info set via _populate_basic_info (it used to write a 5-field
     subset, which let client_sample_id / peptide_name / client_id / dates go
-    permanently stale)."""
+    permanently stale).
+
+    Reconcile drift synthesis (Task 4): _populate_basic_info writes
+    row.status from the freshly-fetched review_state. If that changed the
+    status, synthesize a source='reconcile' row into the sample-transition
+    log so drift caught here (not via an explicit mk1/senaite hook) still
+    shows up in history. The recorder's 60-min explained-window means this
+    is a no-op when a mk1/senaite row already accounts for the transition.
+    Logging-only failure: never let the log write break the refresh."""
+    old_status = parent.status
     meta = senaite.fetch_parent_metadata(parent.sample_id)
     _populate_basic_info(parent, meta)
     db.flush()
+    if parent.status != old_status:
+        from workflow.sample_log import record_sample_transition
+        try:
+            record_sample_transition(
+                db, sample_id=parent.sample_id, to_status=parent.status,
+                from_status=old_status, source="reconcile", occurred_at=None,
+            )
+        except Exception as e:
+            log.warning(
+                "workflow.reconcile_log_failed sample_id=%s err=%s",
+                parent.sample_id, e,
+            )
 
 
 def _next_vial_sequence(db: Session, parent_pk: int) -> int:
