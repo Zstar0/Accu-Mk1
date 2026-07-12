@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, within } from '@/test/test-utils'
 import { useAuthStore } from '@/store/auth-store'
 import type { WorkflowGraph } from '@/lib/workflow-api'
+import { validateRequirements } from '@/components/preferences/panes/workflow/WorkflowDrawers'
 
 // Mirrors FlagsPane.recurring.test.tsx: mock the api layer (importActual
 // spread so the pane's type-only imports still resolve), keep the real
@@ -80,6 +81,19 @@ const SAMPLE_GRAPH: WorkflowGraph = {
       description: null,
       requirements: [],
       is_builtin: true,
+      is_active: true,
+    },
+    {
+      id: 11,
+      from_state_id: 2,
+      to_state_id: 1,
+      verb: 'revert',
+      label: 'Revert',
+      description: null,
+      // Pre-invalid from data (e.g. seeded before the client-side gate
+      // existed): a non-manual kind with no value.
+      requirements: [{ kind: 'field_present', value: null, note: null }],
+      is_builtin: false,
       is_active: true,
     },
   ],
@@ -186,5 +200,51 @@ describe('WorkflowPane', () => {
     expect(
       screen.queryByRole('button', { name: /add transition/i })
     ).not.toBeInTheDocument()
+  })
+
+  it('surfaces a toast and blocks the save when a requirement row is invalid (all-or-nothing)', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event')
+    const user = userEvent.setup()
+    await renderPane()
+
+    // 'Revert' ships pre-seeded with an invalid requirement (non-manual
+    // kind, empty value) — no need to drive the Radix Select through
+    // jsdom to reach the invalid state.
+    await user.click(await screen.findByText('Revert'))
+    const sheet = await screen.findByRole('dialog')
+    await user.click(within(sheet).getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith(
+        "Requirement 1: 'field_present' needs a value"
+      )
+    )
+    // Silent no-op regression guard: nothing in the batch saves, not even
+    // the other (valid) rows.
+    expect(updateWorkflowTransition).not.toHaveBeenCalled()
+  })
+})
+
+describe('validateRequirements (pure)', () => {
+  it('passes when every non-manual row has a value', () => {
+    expect(
+      validateRequirements([
+        { kind: 'manual', value: null, note: null },
+        { kind: 'field_present', value: 'client_sample_id', note: null },
+      ])
+    ).toEqual({ ok: true })
+  })
+
+  it('flags the first invalid row, 1-indexed, naming the offending kind', () => {
+    expect(
+      validateRequirements([
+        { kind: 'manual', value: null, note: null },
+        { kind: 'field_present', value: null, note: null },
+        { kind: 'role_at_least', value: '', note: null },
+      ])
+    ).toEqual({
+      ok: false,
+      error: "Requirement 2: 'field_present' needs a value",
+    })
   })
 })

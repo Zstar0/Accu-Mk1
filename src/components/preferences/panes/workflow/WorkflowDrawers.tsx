@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Loader2, Plus, Trash2 } from 'lucide-react'
+import { toast } from 'sonner'
 import {
   Dialog,
   DialogContent,
@@ -50,6 +51,30 @@ const REQUIREMENT_KINDS: RequirementKind[] = [
   'role_at_least',
   'manual',
 ]
+
+/**
+ * Client-side gate mirrors the backend rule (non-manual kinds require a
+ * value) so we don't round-trip a guaranteed 422 — but a 422 that slips
+ * through (e.g. a race) still surfaces via the mutation's onError toast.
+ *
+ * Pure so it's unit-testable without driving the Radix Select through
+ * jsdom: the caller (saveRequirements) is responsible for surfacing
+ * `error` to the user and for keeping the save all-or-nothing (a single
+ * invalid row blocks the whole batch, valid rows included).
+ */
+export function validateRequirements(
+  entries: RequirementEntry[]
+): { ok: true } | { ok: false; error: string } {
+  for (const [i, entry] of entries.entries()) {
+    if (entry.kind !== 'manual' && !entry.value?.trim()) {
+      return {
+        ok: false,
+        error: `Requirement ${i + 1}: '${entry.kind}' needs a value`,
+      }
+    }
+  }
+  return { ok: true }
+}
 
 // ── create state ────────────────────────────────────────────────────────
 
@@ -586,13 +611,13 @@ export function TransitionDetailSheet({
   }
 
   const saveRequirements = () => {
-    // Client-side gate mirrors the backend rule (non-manual kinds require a
-    // value) so we don't round-trip a guaranteed 422 — but a 422 that slips
-    // through (e.g. a race) still surfaces via the mutation's onError toast.
-    const invalid = requirements.some(
-      r => r.kind !== 'manual' && !r.value?.trim()
-    )
-    if (invalid) return
+    const result = validateRequirements(requirements)
+    if (!result.ok) {
+      // All-or-nothing: don't save the valid rows in the batch either —
+      // tell the user why nothing saved so they can fix the offending row.
+      toast.error(result.error)
+      return
+    }
     onSave({ requirements })
   }
 
