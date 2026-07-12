@@ -122,6 +122,13 @@ def init_db():
     _run_migrations()
     Base.metadata.create_all(bind=engine)
     _seed_federal_holidays_window()
+    try:
+        from workflow.seeds import seed_workflow_catalog
+        with SessionLocal() as _wf_db:
+            seed_workflow_catalog(_wf_db)
+            _wf_db.commit()
+    except Exception as e:  # never block startup
+        log.warning("workflow_seed_skipped err=%s", e)
 
 
 def _run_migrations():
@@ -583,7 +590,7 @@ def _run_migrations():
             transition_kind   TEXT NOT NULL
                               CHECK (transition_kind IN
                                   ('assign','submit','verify','retract','reject',
-                                   'retest','publish','reset','auto','variance_verify')),
+                                   'retest','publish','reset','auto','variance_verify','observed')),
             user_id           INTEGER REFERENCES users(id) ON DELETE SET NULL,
             reason            TEXT,
             occurred_at       TIMESTAMP NOT NULL DEFAULT NOW()
@@ -765,7 +772,7 @@ def _run_migrations():
         ALTER TABLE lims_analysis_transitions ADD CONSTRAINT lims_analysis_transitions_transition_kind_check
             CHECK (transition_kind IN
                 ('assign','submit','verify','retract','reject',
-                 'retest','publish','reset','auto','variance_verify'))
+                 'retest','publish','reset','auto','variance_verify','observed'))
         """,
         # Variance addon: lab-side override until WP variance addon ships.
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS variance_override TEXT",
@@ -1162,6 +1169,68 @@ def _run_migrations():
         # guards — dedupe manually and it applies on the next start.
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_slack_dm_prefs_member "
         "ON slack_dm_prefs (slack_member_id) WHERE slack_member_id IS NOT NULL",
+        # ── workflow state system (phase-out slice 3, spec 2026-07-12) ──
+        """
+        CREATE TABLE IF NOT EXISTS lims_workflow_states (
+            id           SERIAL PRIMARY KEY,
+            entity_scope TEXT NOT NULL CHECK (entity_scope IN ('sample','analysis')),
+            slug         TEXT NOT NULL,
+            label        TEXT NOT NULL,
+            description  TEXT,
+            category     TEXT NOT NULL DEFAULT 'active'
+                         CHECK (category IN ('active','terminal','exception')),
+            color        TEXT,
+            sort_order   INTEGER NOT NULL DEFAULT 0,
+            is_builtin   BOOLEAN NOT NULL DEFAULT FALSE,
+            is_active    BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at   TIMESTAMP NOT NULL DEFAULT NOW(),
+            updated_at   TIMESTAMP NOT NULL DEFAULT NOW(),
+            CONSTRAINT uq_lims_workflow_states_scope_slug UNIQUE (entity_scope, slug)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS lims_workflow_transitions (
+            id            SERIAL PRIMARY KEY,
+            entity_scope  TEXT NOT NULL CHECK (entity_scope IN ('sample','analysis')),
+            from_state_id INTEGER NOT NULL REFERENCES lims_workflow_states(id),
+            to_state_id   INTEGER NOT NULL REFERENCES lims_workflow_states(id),
+            verb          TEXT NOT NULL,
+            label         TEXT,
+            description   TEXT,
+            requirements  JSONB NOT NULL DEFAULT '[]',
+            sort_order    INTEGER NOT NULL DEFAULT 0,
+            is_builtin    BOOLEAN NOT NULL DEFAULT FALSE,
+            is_active     BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+            updated_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+            CONSTRAINT uq_lims_workflow_transitions_edge UNIQUE (entity_scope, from_state_id, verb)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS lims_sample_transitions (
+            id             SERIAL PRIMARY KEY,
+            lims_sample_pk INTEGER NOT NULL REFERENCES lims_samples(id) ON DELETE CASCADE,
+            verb           TEXT,
+            from_status    TEXT,
+            to_status      TEXT NOT NULL,
+            source         TEXT NOT NULL
+                           CONSTRAINT lims_sample_transitions_source_check
+                           CHECK (source IN ('mk1','senaite','reconcile','is_seed')),
+            actor_user_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            occurred_at    TIMESTAMP NOT NULL,
+            is_event_id    TEXT,
+            created_at     TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_lims_sample_transitions_sample ON lims_sample_transitions (lims_sample_pk, occurred_at)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_sample_transitions_event ON lims_sample_transitions (is_event_id) WHERE is_event_id IS NOT NULL",
+        """
+        CREATE TABLE IF NOT EXISTS lims_workflow_sync_state (
+            name              TEXT PRIMARY KEY,
+            cursor_created_at TIMESTAMPTZ,
+            updated_at        TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

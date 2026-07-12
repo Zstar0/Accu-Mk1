@@ -85,6 +85,10 @@ TRANSITION_KINDS: FrozenSet[str] = frozenset({
     "assign", "submit", "verify", "retract", "reject",
     "retest", "publish", "reset", "auto", "variance_verify",
 })
+# NOTE: 'observed' is a valid lims_analysis_transitions.transition_kind value
+# (workflow state system, spec 2026-07-12) but is deliberately NOT a member
+# here — it is not a performable verb; observer rows are written directly,
+# bypassing apply_transition.
 
 # Tier discriminator constants. Service layer reads these.
 TIER_VIAL = "vial"
