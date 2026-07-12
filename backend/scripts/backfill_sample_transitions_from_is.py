@@ -38,11 +38,16 @@ invocation rather than silently skipped.
 
 Checkpoint: `{"last_created_at": <iso8601>}`, atomic tmp+os.replace (same
 idiom as backfill_parent_analysis_shadows.py). Pages IS events by
-`created_at ASC`, strictly greater than the checkpoint, via `_fetch_events`
-— imported directly from `workflow.is_event_stream`, the exact same
-query/seam Task 5's incremental sync uses, so there is exactly one place
-that SQL lives. Checkpoint advances once per PAGE, after that page's commit
-succeeds (never mid-page, never before commit).
+`created_at ASC` via `_fetch_events` — imported directly from
+`workflow.is_event_stream`, the exact same query/seam Task 5's incremental
+sync uses, so there is exactly one place that SQL lives. On checkpoint
+RESUME the initial query starts from `last_created_at - overlap`
+(--overlap-minutes, default 5 — see the page-boundary note below); within a
+run, pages advance strictly greater than each page's max `created_at`.
+Checkpoint advances once per PAGE, after that page's commit succeeds (never
+mid-page, never before commit). NOTE: a per-event errored row still
+advances the checkpoint (its page commits and checkpoints past it) — DELETE
+the checkpoint file to retry errored events from the start.
 
 Retirability note: `workflow/is_event_stream.py` is deliberately
 self-contained (its own retirement contract, spec §7 — deleted wholesale at
@@ -55,13 +60,19 @@ module's internals, and `is_event_stream` doesn't have to grow a new public
 export just to serve a caller outside its own sync loop. Keep the two copies
 in sync if the IS event shape ever changes.
 
-Known limitation: strictly-greater `created_at` pagination (no overlap
-window, unlike Task 5's incremental sync) can in theory miss rows that share
-the EXACT same `created_at` timestamp as the last row of a full
-(`== batch_size`) page — a narrow edge case inherent to non-overlapping
-cursor pagination on a non-unique sort key. Not mitigated here — the brief's
-specified interface calls for no overlap on this one-time seed; flagged for
-awareness, not engineered around.
+Page-boundary overlap: `created_at` is a non-unique sort key, so
+strictly-greater cursor pagination can in theory miss rows sharing the
+EXACT `created_at` of the last row of a full (`== batch_size`) page. The
+mitigation is caller-side, the same way Task 5's `sync_once` does it: on
+checkpoint RESUME the query starts from `last_created_at - overlap`
+(--overlap-minutes, default 5), so any rows tied at/near a previous run's
+boundary are swept up by the next invocation — the `is_event_id` partial
+unique makes re-processing the overlap region a clean no-op (rows count as
+"dup"). Per-page overlap WITHIN a run is deliberately NOT used: a tie-group
+larger than batch_size would re-fetch the same page forever. Operational
+habit: for a maximally complete seed, run the script twice — the second
+pass is a cheap all-dup sweep that captures any intra-run page-boundary
+ties via the resume overlap.
 
 Caveat (spec §6.5): best-effort seed, not a certified audit trail — this
 stream is only as complete as SENAITE's push hook into IS. The certified
@@ -78,7 +89,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 # Make the /app package root importable when run as a file (python -m from
@@ -114,10 +125,12 @@ def _occurred_at(ev: dict) -> datetime:
 
 
 def load_checkpoint(path: str) -> datetime:
-    """Return the last-seeded `created_at` to resume STRICTLY AFTER (epoch =
-    fresh run). Any read/parse failure (missing file, corrupt JSON, bad
-    timestamp) is treated as a fresh run — same forgiving posture as
-    backfill_parent_analysis_shadows.py's load_checkpoint."""
+    """Return the last-seeded `created_at` cursor (epoch = fresh run); on
+    resume the CALLER rewinds it by --overlap-minutes before querying (see
+    the module docstring's page-boundary note). Any read/parse failure
+    (missing file, corrupt JSON, bad timestamp) is treated as a fresh run —
+    same forgiving posture as backfill_parent_analysis_shadows.py's
+    load_checkpoint."""
     try:
         with open(path) as f:
             raw = json.load(f).get("last_created_at")
@@ -175,12 +188,15 @@ def _process_event(db, ev: dict, stats: dict, *, dry_run: bool) -> None:
 
 
 def backfill(db_factory, *, batch_size: int, checkpoint_path: str,
-             dry_run: bool, limit: Optional[int], sleep_s: float = 0.0) -> dict:
-    """Page through IS `sample_status_events` (`created_at ASC`, strictly
-    greater than the checkpoint) and seed each into the native
-    sample-transition log with source='is_seed'. One page = one DB session,
-    one commit (real runs), one checkpoint save — never per-event, matching
-    the "batched, never per-row" house convention.
+             dry_run: bool, limit: Optional[int], sleep_s: float = 0.0,
+             overlap_minutes: int = 5) -> dict:
+    """Page through IS `sample_status_events` (`created_at ASC`) and seed
+    each into the native sample-transition log with source='is_seed'. On
+    checkpoint resume the INITIAL query is rewound by `overlap_minutes`
+    (invocation start ONLY — internal pages stay strictly greater than each
+    page's max `created_at`; see the module docstring's page-boundary note).
+    One page = one DB session, one commit (real runs), one checkpoint save —
+    never per-event, matching the "batched, never per-row" house convention.
 
     `--limit` truncation is event-granular, not page-granular: the
     checkpoint only ever advances to the last event actually PROCESSED, so a
@@ -208,7 +224,14 @@ def backfill(db_factory, *, batch_size: int, checkpoint_path: str,
               "would_insert": 0, "errors": 0}
     cursor_dt = load_checkpoint(checkpoint_path)
     if cursor_dt != EPOCH:
-        log.info("resuming from checkpoint last_created_at=%s", cursor_dt.isoformat())
+        # Resume: rewind the initial query window so rows tied at/near the
+        # previous run's boundary are re-fetched (is_event_id dedup makes
+        # re-processing them a no-op — they count as "dup", never double-insert).
+        query_from = cursor_dt - timedelta(minutes=overlap_minutes)
+        log.info("resuming from checkpoint last_created_at=%s "
+                 "(overlap %d min -> querying from %s)",
+                 cursor_dt.isoformat(), overlap_minutes, query_from.isoformat())
+        cursor_dt = query_from
 
     processed = 0
     while limit is None or processed < limit:
@@ -299,6 +322,11 @@ def main(argv=None) -> int:
                          "(no DB rows, no checkpoint)")
     ap.add_argument("--limit", type=int, default=None,
                     help="stop after N events processed (smoke runs)")
+    ap.add_argument("--overlap-minutes", type=int, default=5,
+                    help="on checkpoint resume, rewind the initial query to "
+                         "last_created_at minus this window (default 5) — "
+                         "re-processed rows dedup via is_event_id; 0 restores "
+                         "strictly-greater resume")
     ap.add_argument("--sleep", type=float, default=0.0,
                     help="seconds between pages — operator control only, "
                          "DB-to-DB needs no throttling by default (default 0)")
@@ -308,7 +336,8 @@ def main(argv=None) -> int:
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
     stats = backfill(SessionLocal, batch_size=args.batch_size,
                      checkpoint_path=args.checkpoint, dry_run=args.dry_run,
-                     limit=args.limit, sleep_s=args.sleep)
+                     limit=args.limit, sleep_s=args.sleep,
+                     overlap_minutes=args.overlap_minutes)
     print(json.dumps(stats))  # coverage evidence line — retain
     return 1 if stats["errors"] else 0  # nonzero so unattended runs surface partial failure
 

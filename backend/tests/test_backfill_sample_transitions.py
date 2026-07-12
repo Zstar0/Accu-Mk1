@@ -245,12 +245,12 @@ def test_rerun_from_scratch_is_all_dup(db, checkpoint_path):
                             dry_run=False, limit=None)
     assert first["inserted"] == 1
 
-    # No-overlap pagination (unlike Task 5's incremental sync) means an
-    # UNMODIFIED checkpoint naturally fetches zero new rows next run — the
-    # cursor already sits strictly past this event. "Re-run" here means the
-    # documented resume-gotcha scenario: an operator deletes the checkpoint
-    # to deliberately re-scan (same idiom as test_backfill_parent_analysis_
-    # shadows.py's idempotent-rerun test re-seeding its checkpoint).
+    # An UNMODIFIED checkpoint would only re-sweep the 5-min resume-overlap
+    # window (all dup). "Re-run" here means the documented full re-scan
+    # idiom: an operator deletes the checkpoint to deliberately re-seed from
+    # epoch (same idiom as test_backfill_parent_analysis_shadows.py's
+    # idempotent-rerun test re-seeding its checkpoint) — and every event
+    # dups via is_event_id.
     os.remove(checkpoint_path)
     with patch.object(bf, "_fetch_events", side_effect=_fake_fetch(pool)):
         second = bf.backfill(SessionLocal, batch_size=100, checkpoint_path=checkpoint_path,
@@ -263,43 +263,61 @@ def test_rerun_from_scratch_is_all_dup(db, checkpoint_path):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# (d) checkpoint resume skips earlier pages
+# (d) checkpoint resume: overlap window re-fetches + dedups the boundary
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def test_checkpoint_resume_skips_earlier_pages(db, checkpoint_path):
+def test_checkpoint_resume_overlap_dedups_boundary_and_inserts_later(db, checkpoint_path):
+    """Resume rewinds the initial query by --overlap-minutes (default 5), the
+    page-boundary-miss fix: events at/near the checkpoint timestamp are
+    re-fetched and resolve as dup via the is_event_id partial unique (NOT
+    missed, NOT double-inserted); events older than the overlap window are
+    not re-fetched at all; events after the checkpoint insert normally."""
     sample = _seed_sample(db, "E")
     base = datetime.now(timezone.utc)
-    older = base - timedelta(hours=1)
-    newer = base
+    ancient = base - timedelta(hours=1)   # far outside the 5-min overlap window
+    boundary = base                        # exactly == the saved checkpoint
+    newer = base + timedelta(minutes=1)
 
     pool = [
+        _fake_event(sample_id=sample.sample_id, transition="create",
+                    new_status="sample_due", event_id="TEST-WST6-EVT-E-ANCIENT",
+                    created_at=ancient, ev_id="uuid-e-ancient"),
         _fake_event(sample_id=sample.sample_id, transition="receive",
-                    new_status="sample_received", event_id="TEST-WST6-EVT-E-OLD",
-                    created_at=older, ev_id="uuid-e-old"),
+                    new_status="sample_received", event_id="TEST-WST6-EVT-E-BOUNDARY",
+                    created_at=boundary, ev_id="uuid-e-boundary"),
         _fake_event(sample_id=sample.sample_id, transition="publish",
                     new_status="published", event_id="TEST-WST6-EVT-E-NEW",
                     created_at=newer, ev_id="uuid-e-new"),
     ]
 
-    # Pre-seed the checkpoint AFTER the older event, simulating a prior run
-    # that already got that far.
-    bf.save_checkpoint(checkpoint_path, older)
+    # Simulate a prior run that already seeded ancient + boundary and left
+    # the checkpoint at the boundary event's created_at.
+    for eid, status in (("TEST-WST6-EVT-E-ANCIENT", "sample_due"),
+                        ("TEST-WST6-EVT-E-BOUNDARY", "sample_received")):
+        assert record_sample_transition(
+            db, sample_id=sample.sample_id, to_status=status,
+            source="is_seed", is_event_id=eid,
+        ) is True
+    db.commit()
+    bf.save_checkpoint(checkpoint_path, boundary)
 
     with patch.object(bf, "_fetch_events", side_effect=_fake_fetch(pool)) as fetch:
         stats = bf.backfill(SessionLocal, batch_size=100, checkpoint_path=checkpoint_path,
                             dry_run=False, limit=None)
 
-    # Only the NEWER event (strictly after the checkpoint) is fetched/inserted.
-    assert stats == {"fetched": 1, "inserted": 1, "dup": 0, "no_sample": 0,
-                      "would_insert": 0, "errors": 0}
-    rows = db.query(LimsSampleTransition).filter_by(lims_sample_pk=sample.id).all()
-    assert len(rows) == 1
-    assert rows[0].is_event_id == "TEST-WST6-EVT-E-NEW"
-
-    # The first _fetch_events call received the pre-seeded cursor, not epoch.
+    # The first query was rewound to checkpoint - 5min (not the raw checkpoint,
+    # not epoch): boundary re-fetched -> dup; ancient excluded; newer inserted.
     first_call_cursor = fetch.call_args_list[0].args[0]
-    assert first_call_cursor == older
+    assert first_call_cursor == boundary - timedelta(minutes=5)
+    assert stats == {"fetched": 2, "inserted": 1, "dup": 1, "no_sample": 0,
+                      "would_insert": 0, "errors": 0}
+
+    rows = db.query(LimsSampleTransition).filter_by(lims_sample_pk=sample.id).all()
+    assert sorted(r.is_event_id for r in rows) == [
+        "TEST-WST6-EVT-E-ANCIENT", "TEST-WST6-EVT-E-BOUNDARY", "TEST-WST6-EVT-E-NEW"]
+    # Checkpoint advanced past the overlap sweep to the newest event seen.
+    assert bf.load_checkpoint(checkpoint_path) == newer
 
 
 def test_multi_page_single_invocation_advances_cursor_between_pages(db, checkpoint_path):
@@ -423,8 +441,11 @@ def test_limit_caps_events_processed_and_checkpoint_reflects_partial_page(db, ch
         stats2 = bf.backfill(SessionLocal, batch_size=100, checkpoint_path=checkpoint_path,
                              dry_run=False, limit=None)
 
-    assert stats2["fetched"] == 2
+    # Resume rewinds by the 5-min overlap, so H0 (== checkpoint) is
+    # re-fetched too — it dedups via is_event_id while H1/H2 insert.
+    assert stats2["fetched"] == 3
     assert stats2["inserted"] == 2
+    assert stats2["dup"] == 1
     rows = db.query(LimsSampleTransition).filter_by(lims_sample_pk=sample.id).all()
     assert len(rows) == 3
 
