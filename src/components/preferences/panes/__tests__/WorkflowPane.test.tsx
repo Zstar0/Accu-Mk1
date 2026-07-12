@@ -234,7 +234,7 @@ describe('WorkflowPane', () => {
     await waitFor(() => expect(getWorkflowGraph).toHaveBeenCalledTimes(2))
   })
 
-  it('shows the backend 409 detail in a toast when a delete is blocked', async () => {
+  it('asks for confirmation before deleting, and shows the backend 409 detail in a toast when the confirmed delete is blocked', async () => {
     deleteWorkflowState.mockRejectedValue(
       new Error("state 'orphan_state' has 3 live row(s) — deactivate instead")
     )
@@ -249,11 +249,45 @@ describe('WorkflowPane', () => {
     const sheet = await screen.findByRole('dialog')
     await user.click(within(sheet).getByRole('button', { name: /delete/i }))
 
+    // Clicking Delete opens a confirmation dialog rather than deleting
+    // immediately — the mutation must not fire until the user confirms.
+    const confirmDialog = await screen.findByRole('alertdialog')
+    expect(deleteWorkflowState).not.toHaveBeenCalled()
+    await user.click(
+      within(confirmDialog).getByRole('button', { name: /delete state/i })
+    )
+
+    await waitFor(() => expect(deleteWorkflowState).toHaveBeenCalled())
     await waitFor(() =>
       expect(toastError).toHaveBeenCalledWith(
         expect.stringContaining('has 3 live row(s)')
       )
     )
+  })
+
+  it('cancels the delete confirmation without calling the delete mutation', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event')
+    const user = userEvent.setup()
+    await renderPane()
+
+    await screen.findByTestId('graph')
+    await user.click(
+      screen.getByRole('button', { name: 'node-orphan_state' })
+    )
+    const sheet = await screen.findByRole('dialog')
+    await user.click(within(sheet).getByRole('button', { name: /delete/i }))
+
+    const confirmDialog = await screen.findByRole('alertdialog')
+    await user.click(
+      within(confirmDialog).getByRole('button', { name: /cancel/i })
+    )
+
+    await waitFor(() =>
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    )
+    expect(deleteWorkflowState).not.toHaveBeenCalled()
+    // The state sheet itself stays open — cancel only dismisses the confirm.
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
   })
 
   it('hides Add controls for a non-admin (read-only view)', async () => {

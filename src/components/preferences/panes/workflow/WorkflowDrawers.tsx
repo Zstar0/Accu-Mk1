@@ -3,6 +3,17 @@ import { useTranslation } from 'react-i18next'
 import { Loader2, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -519,18 +530,41 @@ export function StateDetailSheet({
 
         {isAdmin && (
           <SheetFooter>
-            <Button
-              variant="destructive"
-              disabled={isDeleting}
-              onClick={onDelete}
-            >
-              {isDeleting ? (
-                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-              ) : (
-                <Trash2 className="mr-1 h-4 w-4" />
-              )}
-              {t('preferences.workflow.deleteState')}
-            </Button>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="destructive" disabled={isDeleting}>
+                  {isDeleting ? (
+                    <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="mr-1 h-4 w-4" />
+                  )}
+                  {t('preferences.workflow.deleteState')}
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>
+                    {t('preferences.workflow.confirmDeleteStateTitle')}
+                  </AlertDialogTitle>
+                  <AlertDialogDescription>
+                    {t('preferences.workflow.confirmDeleteStateDescription', {
+                      label: state.label,
+                    })}
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>
+                    {t('preferences.workflow.cancel')}
+                  </AlertDialogCancel>
+                  <AlertDialogAction
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    onClick={onDelete}
+                  >
+                    {t('preferences.workflow.deleteState')}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </SheetFooter>
         )}
       </SheetContent>
@@ -797,18 +831,42 @@ export function TransitionDetailSheet({
 
         {isAdmin && (
           <SheetFooter>
-            <Button
-              variant="destructive"
-              disabled={isDeleting}
-              onClick={onDelete}
-            >
-              {isDeleting ? (
-                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-              ) : (
-                <Trash2 className="mr-1 h-4 w-4" />
-              )}
-              {t('preferences.workflow.deleteTransition')}
-            </Button>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="destructive" disabled={isDeleting}>
+                  {isDeleting ? (
+                    <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="mr-1 h-4 w-4" />
+                  )}
+                  {t('preferences.workflow.deleteTransition')}
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>
+                    {t('preferences.workflow.confirmDeleteTransitionTitle')}
+                  </AlertDialogTitle>
+                  <AlertDialogDescription>
+                    {t(
+                      'preferences.workflow.confirmDeleteTransitionDescription',
+                      { verb: transition.label || transition.verb }
+                    )}
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>
+                    {t('preferences.workflow.cancel')}
+                  </AlertDialogCancel>
+                  <AlertDialogAction
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    onClick={onDelete}
+                  >
+                    {t('preferences.workflow.deleteTransition')}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </SheetFooter>
         )}
       </SheetContent>
