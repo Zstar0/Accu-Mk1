@@ -24,6 +24,7 @@ import {
   type CaptureCapabilities,
   type CaptureFormat,
 } from './capture-options'
+import { useCameraDevices } from './use-camera-devices'
 
 interface Props {
   parentSampleId: string
@@ -164,6 +165,13 @@ export function VialPanel({
   const fileRef = useRef<HTMLInputElement>(null)
   const [cameraOk, setCameraOk] = useState(true)
 
+  // Camera device list + persisted selection ('' = browser default). The
+  // active id mirrors whichever device the unpinned stream landed on, so the
+  // dropdown shows the truth even before an explicit choice.
+  const { devices, selectedDeviceId, setSelectedDeviceId, refreshDevices } =
+    useCameraDevices()
+  const [activeDeviceId, setActiveDeviceId] = useState('')
+
   // Reset state when switching between create/edit/different vials.
   useEffect(() => {
     setRemarks(editingSub?.remarks ?? '')
@@ -210,7 +218,7 @@ export function VialPanel({
       return
     }
     navigator.mediaDevices
-      .getUserMedia({ video: videoConstraints(captureRes) })
+      .getUserMedia({ video: videoConstraints(captureRes, selectedDeviceId) })
       .then(s => {
         if (cancelled) {
           s.getTracks().forEach(t => t.stop())
@@ -226,17 +234,30 @@ export function VialPanel({
             // capabilities unsupported on this browser — keep the full list
           }
         }
+        setActiveDeviceId(track?.getSettings?.().deviceId ?? '')
+        // Labels are blank until a permission grant — re-list now that we
+        // have one, so the Camera dropdown shows real device names.
+        refreshDevices()
         if (videoRef.current) {
           videoRef.current.srcObject = s
         }
       })
-      .catch(() => setCameraOk(false))
+      .catch(() => {
+        if (cancelled) return
+        if (selectedDeviceId) {
+          // Saved camera is gone (unplugged / id rotated) — drop the pin so
+          // the effect retries with the default camera instead of going dark.
+          setSelectedDeviceId('')
+        } else {
+          setCameraOk(false)
+        }
+      })
     return () => {
       cancelled = true
       streamRef.current?.getTracks().forEach(t => t.stop())
       streamRef.current = null
     }
-  }, [captureRes])
+  }, [captureRes, selectedDeviceId, setSelectedDeviceId, refreshDevices])
 
   const capture = useCallback(() => {
     if (!videoRef.current || !canvasRef.current) return
@@ -578,6 +599,25 @@ export function VialPanel({
                   <Crosshair className="w-4 h-4" aria-hidden="true" />
                   Guides {showGuides ? 'on' : 'off'}
                 </Button>
+              )}
+              {cameraPhase === 'live' && devices.length > 1 && (
+                <label className="flex items-center gap-1 text-sm">
+                  <span className="text-muted-foreground">Camera</span>
+                  <select
+                    value={selectedDeviceId || activeDeviceId}
+                    onChange={e => setSelectedDeviceId(e.target.value)}
+                    disabled={busy}
+                    title="Capture camera — pick which webcam feeds the preview"
+                    aria-label="Capture camera"
+                    className="h-9 rounded-md border bg-background px-2 text-sm disabled:opacity-50"
+                  >
+                    {devices.map((d, i) => (
+                      <option key={d.deviceId} value={d.deviceId}>
+                        {d.label || `Camera ${i + 1}`}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               )}
               {cameraPhase === 'live' && (
                 <label className="flex items-center gap-1 text-sm">

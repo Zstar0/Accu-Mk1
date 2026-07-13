@@ -90,6 +90,31 @@ describe('PackagingPanel', () => {
     expect(mockUpdate.mock.calls[0]![0]).toBe(42)
     expect(mockCreate).not.toHaveBeenCalled()
   })
+
+  it('shows a Camera selector when more than one camera is present', async () => {
+    // Working-camera stub for this test only — the suite default rejects
+    // getUserMedia to exercise the camera-unavailable branch.
+    const track = {
+      stop: vi.fn(),
+      getCapabilities: () => ({ width: { max: 1920 }, height: { max: 1080 } }),
+      getSettings: () => ({ deviceId: 'cam-1' }),
+    }
+    const stream = { getTracks: () => [track], getVideoTracks: () => [track] }
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        getUserMedia: vi.fn().mockResolvedValue(stream),
+        enumerateDevices: vi.fn().mockResolvedValue([
+          { kind: 'videoinput', deviceId: 'cam-1', label: 'Webcam', groupId: '' },
+          { kind: 'videoinput', deviceId: 'cam-2', label: 'Doc cam', groupId: '' },
+        ]),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
+    })
+    renderPanelWithContainer()
+    expect(await screen.findByLabelText(/capture camera/i)).toBeInTheDocument()
+  })
 })
 
 // Small helper so tests can grab the render container.

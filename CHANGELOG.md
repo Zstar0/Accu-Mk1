@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.2.1 — 2026-07-13
+
+### Added
+
+- **Camera selector in the Receive-Sample wizard.** Multi-camera stations can
+  now pick which webcam feeds the vial and packaging capture panels (dropdown
+  appears when more than one camera is present). The choice persists per
+  browser (`wizard-camera-device`); if the saved camera is unplugged the panel
+  falls back to the default camera instead of showing "Camera unavailable".
+
 ## v1.2.0 — 2026-07-10
 
 Bundles two independent work streams shipped in one release.
