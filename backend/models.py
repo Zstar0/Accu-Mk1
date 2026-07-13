@@ -934,8 +934,35 @@ class LimsPackagingPhoto(Base):
     created_by_user_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+    capture_token_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("lims_capture_tokens.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     parent_sample: Mapped["LimsSample"] = relationship("LimsSample")
+
+
+class LimsCaptureToken(Base):
+    """A short-lived, scope-frozen token letting a phone add packaging photos.
+
+    The raw token lives only in the QR URL; this row stores its SHA-256. The
+    sample scope + display context are frozen at mint in context_json —
+    [{"sample_id","lot","analytes"}] — so token-authed requests never derive
+    anything. See docs/superpowers/specs/2026-07-13-packaging-fanout-qr-phone-capture-design.md.
+    """
+
+    __tablename__ = "lims_capture_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    order_label: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    context_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by_user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
 class SlaTier(Base):

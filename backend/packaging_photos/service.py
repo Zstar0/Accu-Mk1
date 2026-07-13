@@ -177,6 +177,7 @@ def create_packaging_photos_bulk(
     content_type: Optional[str],
     remarks: Optional[str],
     user_id: Optional[int],
+    capture_token_id: Optional[int] = None,
 ) -> list[LimsPackagingPhoto]:
     """Fan one packaging photo out to several parents — all-or-nothing.
 
@@ -218,6 +219,7 @@ def create_packaging_photos_bulk(
                 ordering=next_ordering,
                 remarks=remarks,
                 created_by_user_id=user_id,
+                capture_token_id=capture_token_id,
             )
             db.add(photo)
             photos.append(photo)

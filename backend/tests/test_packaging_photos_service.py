@@ -177,3 +177,12 @@ def test_bulk_missing_parent_is_all_or_nothing(db, storage, parent_sample):
         )
     assert "NOPE-1" in str(ei.value) and "NOPE-2" in str(ei.value)
     assert list_packaging_photos(db, parent_sample.sample_id) == []
+
+
+def test_bulk_stamps_capture_token_id(db, storage, parent_sample):
+    from packaging_photos.service import create_packaging_photos_bulk
+    photos = create_packaging_photos_bulk(
+        db, [parent_sample.sample_id], b"box", "p.jpg", "image/jpeg",
+        None, 1, capture_token_id=42,
+    )
+    assert photos[0].capture_token_id == 42

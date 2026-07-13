@@ -1162,6 +1162,12 @@ def _run_migrations():
         # guards — dedupe manually and it applies on the next start.
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_slack_dm_prefs_member "
         "ON slack_dm_prefs (slack_member_id) WHERE slack_member_id IS NOT NULL",
+        # --- Packaging fan-out + QR phone capture ---
+        # lims_capture_tokens is a new ORM-only table (no CREATE TABLE here);
+        # create_all() makes it after migrations run, so this ALTER no-ops via
+        # migration_skipped on first boot and self-heals on the next restart —
+        # same pattern as the sla_tier_id FK above.
+        "ALTER TABLE lims_packaging_photos ADD COLUMN IF NOT EXISTS capture_token_id INTEGER REFERENCES lims_capture_tokens(id) ON DELETE SET NULL",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
