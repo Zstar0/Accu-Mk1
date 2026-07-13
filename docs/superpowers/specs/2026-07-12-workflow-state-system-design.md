@@ -217,6 +217,16 @@ cursor only advances after commit.
 **Retirement:** this module is the *only* IS→Mk1 puller; at inversion (§7) it
 is deleted wholesale.
 
+**Log-and-heal (amendment, 2026-07-13, Handler-approved during UAT):** a
+freshly-INSERTED `senaite` row also updates `lims_samples.status` in the same
+batch transaction, so the mirror doesn't sit visibly behind SENAITE (amber
+"log ahead of status" glyph) until the next display-fetch reconcile. Strictly
+a mirror move, not an authority change: dup rows never heal, and an event
+older than the sample's `last_synced_at` never heals (a catch-up backlog
+after sync downtime must not regress a status a fresher reconcile already
+wrote). Heal failures log `workflow.is_sync_heal_failed` and never break the
+sync loop.
+
 ### 6.3 Reconcile fallback (`source='reconcile'`)
 
 `_refresh_parent_from_senaite` already updates `lims_samples.status`. When it

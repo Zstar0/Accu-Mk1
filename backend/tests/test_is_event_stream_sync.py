@@ -123,7 +123,7 @@ def test_fresh_event_inserts_and_advances_cursor(db):
         stats = is_event_stream.sync_once(SessionLocal)
 
     fetch.assert_called_once()
-    assert stats == {"fetched": 1, "inserted": 1, "dup": 0, "no_sample": 0, "errors": 0}
+    assert stats == {"fetched": 1, "inserted": 1, "dup": 0, "no_sample": 0, "healed": 0, "errors": 0}
 
     row = db.query(LimsSampleTransition).filter_by(lims_sample_pk=sample.id).one()
     assert row.source == "senaite"
@@ -159,7 +159,7 @@ def test_resynced_event_id_counts_as_dup(db):
     with patch.object(is_event_stream, "_fetch_events", return_value=[event]):
         second = is_event_stream.sync_once(SessionLocal)
 
-    assert second == {"fetched": 1, "inserted": 0, "dup": 1, "no_sample": 0, "errors": 0}
+    assert second == {"fetched": 1, "inserted": 0, "dup": 1, "no_sample": 0, "healed": 0, "errors": 0}
     count = db.query(LimsSampleTransition).filter_by(lims_sample_pk=sample.id).count()
     assert count == 1
 
@@ -190,7 +190,7 @@ def test_event_within_mk1_window_counts_as_dup(db):
     with patch.object(is_event_stream, "_fetch_events", return_value=[event]):
         stats = is_event_stream.sync_once(SessionLocal)
 
-    assert stats == {"fetched": 1, "inserted": 0, "dup": 1, "no_sample": 0, "errors": 0}
+    assert stats == {"fetched": 1, "inserted": 0, "dup": 1, "no_sample": 0, "healed": 0, "errors": 0}
     rows = db.query(LimsSampleTransition).filter_by(lims_sample_pk=sample.id).all()
     assert len(rows) == 1
     assert rows[0].source == "mk1"
@@ -214,7 +214,7 @@ def test_unknown_sample_counts_as_no_sample_but_advances_cursor(db):
     with patch.object(is_event_stream, "_fetch_events", return_value=[event]):
         stats = is_event_stream.sync_once(SessionLocal)
 
-    assert stats == {"fetched": 1, "inserted": 0, "dup": 0, "no_sample": 1, "errors": 0}
+    assert stats == {"fetched": 1, "inserted": 0, "dup": 0, "no_sample": 1, "healed": 0, "errors": 0}
     scoped_count = db.query(LimsSampleTransition).filter(
         LimsSampleTransition.lims_sample_pk.in_(
             select(LimsSample.id).where(LimsSample.sample_id.like("TEST-WST5-%"))
@@ -244,7 +244,7 @@ def test_fetch_failure_counts_error_and_does_not_move_cursor(db):
         stats = is_event_stream.sync_once(SessionLocal)
 
     fetch.assert_called_once()
-    assert stats == {"fetched": 0, "inserted": 0, "dup": 0, "no_sample": 0, "errors": 1}
+    assert stats == {"fetched": 0, "inserted": 0, "dup": 0, "no_sample": 0, "healed": 0, "errors": 1}
 
     cursor = _get_cursor(db)
     assert cursor is not None
@@ -278,7 +278,9 @@ def test_per_event_error_is_isolated_and_cursor_still_advances(db):
         stats = is_event_stream.sync_once(SessionLocal)
 
     assert recorder.call_count == 3
-    assert stats == {"fetched": 3, "inserted": 2, "dup": 0, "no_sample": 0, "errors": 1}
+    # healed=1: the first insert heals sample_due -> sample_received; the
+    # third inserts but the status is already current (no second heal).
+    assert stats == {"fetched": 3, "inserted": 2, "dup": 0, "no_sample": 0, "healed": 1, "errors": 1}
 
     cursor = _get_cursor(db)
     assert cursor is not None
@@ -300,7 +302,8 @@ def test_empty_batch_is_a_noop(db):
         stats = is_event_stream.sync_once(SessionLocal)
 
     fetch.assert_called_once()
-    assert stats == {"fetched": 0, "inserted": 0, "dup": 0, "no_sample": 0, "errors": 0}
+    assert stats == {"fetched": 0, "inserted": 0, "dup": 0, "no_sample": 0,
+                     "healed": 0, "errors": 0}
     cursor = _get_cursor(db)
     assert cursor is not None
     assert cursor.cursor_created_at == seeded_at
@@ -322,7 +325,8 @@ def test_cold_start_initializes_cursor_to_now_without_fetching(db):
 
     after = datetime.now(timezone.utc)
     fetch.assert_not_called()
-    assert stats == {"fetched": 0, "inserted": 0, "dup": 0, "no_sample": 0, "errors": 0}
+    assert stats == {"fetched": 0, "inserted": 0, "dup": 0, "no_sample": 0,
+                     "healed": 0, "errors": 0}
 
     cursor = _get_cursor(db)
     assert cursor is not None
@@ -338,3 +342,92 @@ def test_cold_start_initializes_cursor_to_now_without_fetching(db):
 def test_maybe_start_noop_when_disabled(monkeypatch):
     monkeypatch.setenv("MK1_IS_EVENT_SYNC_ENABLED", "0")
     assert is_event_stream.maybe_start(app=None) is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# log-and-heal — a freshly-inserted senaite row mirrors the status column
+# in the same batch; dups and stale catch-up events never touch it
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_inserted_event_heals_status(db):
+    sample = _seed_sample(db, "H1", status="sample_received")
+    # Model default stamps last_synced_at=now at creation; the event's
+    # second-truncated timestamp would tie with it and trip the
+    # anti-regression guard. Steady state is a snapshot from a while ago.
+    sample.last_synced_at = datetime.utcnow() - timedelta(hours=1)
+    db.commit()
+    _seed_cursor(db)
+    created_at = datetime.now(timezone.utc)
+    event = _fake_event(
+        sample_id=sample.sample_id, transition="submit",
+        new_status="to_be_verified", event_id="TEST-WST5-EVT-H1",
+        created_at=created_at, event_timestamp=int(created_at.timestamp()),
+        ev_id="uuid-h1",
+    )
+
+    with patch.object(is_event_stream, "_fetch_events", return_value=[event]):
+        stats = is_event_stream.sync_once(SessionLocal)
+
+    assert stats["inserted"] == 1
+    assert stats["healed"] == 1
+    db.expire_all()
+    assert db.get(LimsSample, sample.id).status == "to_be_verified"
+
+
+def test_dup_event_does_not_heal(db):
+    sample = _seed_sample(db, "H2", status="sample_received")
+    _seed_cursor(db)
+    # Pre-record the same is_event_id so the sync sees a dedup skip, then
+    # force the status column stale — a dup must NOT heal it.
+    record_sample_transition(
+        db, sample_id=sample.sample_id, to_status="to_be_verified",
+        source="senaite", verb="submit",
+        occurred_at=datetime.utcnow() - timedelta(minutes=5),
+        is_event_id="TEST-WST5-EVT-H2",
+    )
+    db.commit()
+    sample.status = "sample_received"
+    db.commit()
+
+    created_at = datetime.now(timezone.utc)
+    event = _fake_event(
+        sample_id=sample.sample_id, transition="submit",
+        new_status="to_be_verified", event_id="TEST-WST5-EVT-H2",
+        created_at=created_at, event_timestamp=int(created_at.timestamp()),
+        ev_id="uuid-h2",
+    )
+
+    with patch.object(is_event_stream, "_fetch_events", return_value=[event]):
+        stats = is_event_stream.sync_once(SessionLocal)
+
+    assert stats["dup"] == 1
+    assert stats["healed"] == 0
+    db.expire_all()
+    assert db.get(LimsSample, sample.id).status == "sample_received"
+
+
+def test_stale_event_does_not_regress_fresher_reconcile(db):
+    # Sample was reconciled from a fresh SENAITE snapshot moments ago
+    # (status=verified); a 3h-old backlog event must land in the LOG but
+    # never regress the status column.
+    sample = _seed_sample(db, "H3", status="verified")
+    sample.last_synced_at = datetime.utcnow()
+    db.commit()
+    _seed_cursor(db)
+
+    created_at = datetime.now(timezone.utc)
+    stale_ts = int((created_at - timedelta(hours=3)).timestamp())
+    event = _fake_event(
+        sample_id=sample.sample_id, transition="submit",
+        new_status="to_be_verified", event_id="TEST-WST5-EVT-H3",
+        created_at=created_at, event_timestamp=stale_ts, ev_id="uuid-h3",
+    )
+
+    with patch.object(is_event_stream, "_fetch_events", return_value=[event]):
+        stats = is_event_stream.sync_once(SessionLocal)
+
+    assert stats["inserted"] == 1
+    assert stats["healed"] == 0
+    db.expire_all()
+    assert db.get(LimsSample, sample.id).status == "verified"

@@ -4,7 +4,10 @@ Pulls `sample_status_events` rows out of the Integration Service database
 (read-only, via `integration_db.get_integration_db()`) and appends them to
 the native sample-transition log (`workflow.sample_log.record_sample_transition`,
 source="senaite"). This is the single place data flows from IS into Mk1's
-workflow history today.
+workflow history today. Freshly-inserted rows also heal the sample's `status`
+column in the same batch transaction (log-and-heal, `_heal_status`) so the
+mirror doesn't sit visibly behind SENAITE until the next display-fetch
+reconcile.
 
 COLD-START SEMANTICS: sync starts at now. The first tick after boot, when no
 cursor row exists yet, initializes the cursor to `datetime.now(timezone.utc)`
@@ -78,6 +81,36 @@ def _occurred_at(ev: dict) -> datetime:
     return created
 
 
+def _heal_status(db: Session, sample_pk: int, new_status: str,
+                 occurred_at: Optional[datetime], stats: dict) -> None:
+    """Log-and-heal: a freshly-INSERTED senaite row means SENAITE just moved
+    this sample, so mirror the status column immediately instead of waiting
+    for the next display-fetch reconcile (kills the registry-inspect
+    "log ahead of status" window). Two guards keep this strictly a mirror:
+
+      - dup rows never heal (the transition was already accounted for);
+        callers only invoke this when the recorder inserted.
+      - an event older than the sample's last SENAITE snapshot
+        (last_synced_at) never heals — a catch-up backlog after sync downtime
+        must not regress a status a fresher reconcile already wrote.
+
+    Heal failure never breaks the sync loop (same contract as the recorder)."""
+    try:
+        sample = db.get(LimsSample, sample_pk)
+        if sample is None or not new_status or sample.status == new_status:
+            return
+        last_synced = sample.last_synced_at
+        if (last_synced is not None and occurred_at is not None
+                and occurred_at < last_synced):
+            return
+        sample.status = new_status
+        stats["healed"] += 1
+    except Exception as e:
+        logger.warning("workflow.is_sync_heal_failed sample_pk=%s err=%s",
+                       sample_pk, e)
+        stats["errors"] += 1
+
+
 def sync_once(db_factory: Callable[[], Session], *, batch_size: int = 500,
               overlap_minutes: int = 10) -> dict:
     """One incremental pull: read the cursor, fetch IS events since
@@ -91,12 +124,15 @@ def sync_once(db_factory: Callable[[], Session], *, batch_size: int = 500,
     own dedup rules plus the is_event_id partial unique make re-processing
     the overlap window idempotent.
 
-    Returns stats: {"fetched", "inserted", "dup", "no_sample", "errors"}.
-    "no_sample" and "dup" are both `record_sample_transition() -> False`
-    outcomes, disambiguated here by a cheap existence check up front (the
-    recorder itself doesn't distinguish "unknown sample" from "dedup skip").
+    Returns stats: {"fetched", "inserted", "dup", "no_sample", "healed",
+    "errors"}. "no_sample" and "dup" are both
+    `record_sample_transition() -> False` outcomes, disambiguated here by a
+    cheap existence check up front (the recorder itself doesn't distinguish
+    "unknown sample" from "dedup skip"). "healed" counts status-column writes
+    made by `_heal_status` for freshly-inserted rows (log-and-heal).
     """
-    stats = {"fetched": 0, "inserted": 0, "dup": 0, "no_sample": 0, "errors": 0}
+    stats = {"fetched": 0, "inserted": 0, "dup": 0, "no_sample": 0,
+             "healed": 0, "errors": 0}
     db = db_factory()
     try:
         cursor_row = db.execute(
@@ -141,13 +177,18 @@ def sync_once(db_factory: Callable[[], Session], *, batch_size: int = 500,
                 if sample_pk is None:
                     stats["no_sample"] += 1
                     continue
+                occurred = _occurred_at(ev)
                 inserted = record_sample_transition(
                     db, sample_id=ev["sample_id"], to_status=ev["new_status"],
                     source="senaite", verb=ev["transition"],
-                    occurred_at=_occurred_at(ev),
+                    occurred_at=occurred,
                     is_event_id=ev["event_id"] or f"synth:{ev['id']}",
                 )
                 stats["inserted" if inserted else "dup"] += 1
+                if inserted:
+                    # Events arrive created_at ASC, so a multi-event batch
+                    # for one sample lands on the newest status.
+                    _heal_status(db, sample_pk, ev["new_status"], occurred, stats)
             except Exception as e:
                 logger.warning("workflow.is_sync_event_failed sample_id=%s err=%s",
                                 ev.get("sample_id"), e)
