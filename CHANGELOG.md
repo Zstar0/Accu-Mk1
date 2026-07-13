@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.3.0 — 2026-07-13
+
+Receiving batch: order-wide packaging photos, phone capture via QR, and
+partial check-in.
+
+### Added
+
+- **Packaging photos fan out to the whole order.** A packaging photo saved
+  during an order check-in now lands on every sample in the order in one
+  transactional call ("Photo added to N samples"). Copies are independent per
+  sample — retake/delete on one never touches siblings.
+- **QR phone capture for packaging photos.** The packaging tab shows a QR;
+  scanning it opens a mobile page where a tech shoots box photos with the
+  phone's native camera — no login. Access is a scoped capture token
+  (SHA-256-stored, 2 h expiry, revocable, capture-only, frozen to the order's
+  samples). Phone shots fan out order-wide and appear on the desktop within
+  ~2.5 s. Retake stays desktop-side (delete, shoot again).
+- **Partial check-in.** The Complete Check-In button gains a dropdown listing
+  the order's samples with checkboxes — uncheck a sample to hold it back
+  (e.g. its vials were forgotten); it stays Due with its vials attached and
+  checks in later via the existing deferred flow. Unvialed samples show
+  disabled ("no vials").
+
 ## v1.2.1 — 2026-07-13
 
 ### Added
