@@ -77,6 +77,20 @@ Each image is tagged three ways: `VERSION` (e.g. `0.16.1`), `sha-ABCDEF` (git SH
 | `.env.production` | **Frontend** Vite build vars | `VITE_API_URL`, `VITE_WORDPRESS_URL`, `VITE_SENAITE_URL` | Baked into Docker image at build time       |
 | `backend/.env`    | **Backend** secrets          | DB credentials, JWT secret, API keys, SENAITE creds      | **Never** — must be edited manually via SSH |
 
+#### Flag-system / Slack feature vars (`backend/.env`)
+
+All optional — every feature degrades to dormant/default when unset. Read at
+runtime from `backend/.env` (server-only, survives deploys).
+
+| Variable | Purpose | Unset behavior |
+| --- | --- | --- |
+| `MK1_SLACK_BOT_TOKEN` | Enables Slack DMs, morning digest, and DM action buttons | All Slack features dormant, zero overhead |
+| `SLACK_SIGNING_SECRET` | Verifies inbound `/api/slack/interactions` requests (HMAC v0) | Interactions endpoint fail-closed 404 |
+| `MK1_LAB_TZ` | IANA zone for the morning-digest hour users pick in Settings (e.g. `America/Los_Angeles`, set in prod 2026-07-12) | **UTC** — digest hours will be wrong for the lab |
+| `MK1_SLACK_EMAIL_ALIAS_DOMAINS` | Extra email domains tried when resolving users' Slack accounts | Only the exact account email is tried |
+| `MK1_PUBLIC_URL` | Absolute base URL used in Slack deep links | Links may point at the wrong host |
+| `MK1_FLAG_ATTACH_DIR` | Filesystem root for comment-image attachments | Module default path |
+
 ### Critical Files That Must Not Be Overwritten
 
 1. **`backend/.env`** — Production database credentials, JWT secret, API keys, SENAITE credentials
