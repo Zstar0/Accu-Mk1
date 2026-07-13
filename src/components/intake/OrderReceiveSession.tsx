@@ -2,11 +2,7 @@ import { useState, useCallback, useEffect, type ComponentProps } from 'react'
 import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
 import { Check, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-} from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
 import { useParentSampleDetails } from '@/components/intake/ReceiveWizard/useParentSampleDetails'
@@ -18,7 +14,10 @@ import {
   type SubSampleListResponse,
 } from '@/lib/api'
 import type { SenaiteLookupResult } from '@/lib/api'
-import { completeCheckIn, type CompleteCheckInSample } from '@/lib/complete-checkin'
+import {
+  completeCheckIn,
+  type CompleteCheckInSample,
+} from '@/lib/complete-checkin'
 import type { OrderGroup } from '@/lib/inbox-orders'
 import { cn } from '@/lib/utils'
 
@@ -91,7 +90,11 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
     (sampleId: string, lot: string | null, analytes: string | null) => {
       setRailContexts(prev => {
         const existing = prev[sampleId]
-        if (existing && existing.lot === lot && existing.analytes === analytes) {
+        if (
+          existing &&
+          existing.lot === lot &&
+          existing.analytes === analytes
+        ) {
           return prev
         }
         return { ...prev, [sampleId]: { lot, analytes } }
@@ -117,7 +120,9 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
       await completeCheckIn(freshSamples)
       onClose()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Complete Check-In failed')
+      toast.error(
+        err instanceof Error ? err.message : 'Complete Check-In failed'
+      )
     } finally {
       setCompleting(false)
     }
@@ -171,10 +176,12 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
   const clientName = d?.client ?? orders[0]?.clientId ?? current.client_id
   const contact = d?.contact ?? null
   const sampleType = d?.sample_type ?? current.sample_type
-  const orderNumber = d?.client_order_number ?? current.client_order_number ?? null
+  const orderNumber =
+    d?.client_order_number ?? current.client_order_number ?? null
   const clientSampleId = d?.client_sample_id ?? null
   const lot = d?.client_lot ?? null
-  const declaredQty = d?.declared_weight_mg != null ? `${d.declared_weight_mg} mg` : null
+  const declaredQty =
+    d?.declared_weight_mg != null ? `${d.declared_weight_mg} mg` : null
   const analytes = analyteLabel(d, current)
 
   // `current` guaranteed the union is non-empty, so an owning order always
@@ -191,22 +198,43 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
   )
 
   // Capture-QR scope (Task 7) mirrors the fan-out target exactly, so a phone
-  // capture lands on the same samples a desktop save would. Per-sample lot +
-  // analytes are best-effort — whatever the rail has resolved so far.
-  const captureContext = {
-    orderLabel: activeOrder.orderLabel,
-    samples: boxingSampleIds.map((id): CaptureSampleContext => ({
-      sample_id: id,
-      lot: railContexts[id]?.lot ?? null,
-      analytes: railContexts[id]?.analytes ?? null,
-    })),
-  }
+  // capture lands on the same samples a desktop save would. The QR mints
+  // (and freezes) its sample scope + enrichment on mount, so we must not hand
+  // it a captureContext before that scope is actually settled:
+  //  - the "all review states" union (allStatesQ) may still be resolving,
+  //    meaning boxingSampleIds' membership itself isn't final yet;
+  //  - the rail rows that DO render (activeOrder.samples) may not have
+  //    reported their lot/analytes yet.
+  // "All states" ids beyond the rendered rail rows never get their own row
+  // (only the session's own samples do), so we don't wait on those
+  // specifically — once the union query settles, they're included with
+  // best-effort-null enrichment, same as any sample the rail hasn't gotten to.
+  const boxingListSettled = activeOrderKey === null || allStatesQ.isFetched
+  const railRowsSettled = activeOrder.samples.every(
+    s => railContexts[s.id] !== undefined
+  )
+  const captureContext =
+    boxingListSettled && railRowsSettled
+      ? {
+          orderLabel: activeOrder.orderLabel,
+          samples: boxingSampleIds.map(
+            (id): CaptureSampleContext => ({
+              sample_id: id,
+              lot: railContexts[id]?.lot ?? null,
+              analytes: railContexts[id]?.analytes ?? null,
+            })
+          ),
+        }
+      : undefined
 
   return (
-    <Dialog open onOpenChange={open => { if (!open) onClose() }}>
-      <DialogContent
-        className="max-w-[95vw] w-[95vw] sm:max-w-[95vw] h-[92vh] p-0 gap-0 grid-rows-[auto_1fr] overflow-hidden"
-      >
+    <Dialog
+      open
+      onOpenChange={open => {
+        if (!open) onClose()
+      }}
+    >
+      <DialogContent className="max-w-[95vw] w-[95vw] sm:max-w-[95vw] h-[92vh] p-0 gap-0 grid-rows-[auto_1fr] overflow-hidden">
         {/* Radix requires a labelled title; the styled header below is the
             visible heading, so the DialogTitle is visually hidden. */}
         <DialogTitle className="sr-only">{headerLabel}</DialogTitle>
@@ -220,7 +248,8 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
                 {headerLabel}
                 {clientName && (
                   <span className="text-muted-foreground font-normal">
-                    {' · '}{clientName}
+                    {' · '}
+                    {clientName}
                   </span>
                 )}
               </h2>
@@ -236,7 +265,10 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
                 disabled={completing || vialedCount === 0}
               >
                 {completing ? (
-                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  <Loader2
+                    className="h-4 w-4 animate-spin"
+                    aria-hidden="true"
+                  />
                 ) : (
                   <Check className="h-4 w-4" aria-hidden="true" />
                 )}
@@ -261,7 +293,11 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
             <HeaderField label="Client Sample ID" value={clientSampleId} />
             <HeaderField label="Client Lot" value={lot} />
             <HeaderField label="Declared Qty" value={declaredQty} />
-            <HeaderField label="Analytes" value={analytes} className="max-w-[28rem]" />
+            <HeaderField
+              label="Analytes"
+              value={analytes}
+              className="max-w-[28rem]"
+            />
           </div>
         </header>
 
@@ -302,13 +338,18 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
           <div className="min-h-0 overflow-hidden">
             <ReceiveWizard
               key={current.uid}
-              parent={{ uid: current.uid, sample_id: current.id, status: current.review_state ?? null }}
+              parent={{
+                uid: current.uid,
+                sample_id: current.id,
+                status: current.review_state ?? null,
+              }}
               onClose={onClose}
               initialPhase={initialPhase}
               hideSampleInfo
               orderManaged
               boxing={{
-                orderKey: activeOrder.orderKey ?? activeOrder.samples[0]?.id ?? '',
+                orderKey:
+                  activeOrder.orderKey ?? activeOrder.samples[0]?.id ?? '',
                 orderLabel: activeOrder.orderLabel,
                 clientId: activeOrder.clientId,
                 sampleIds: boxingSampleIds,
@@ -379,7 +420,11 @@ function SampleRailRow({
   onSelect: () => void
   // Reports this row's resolved lot + analytes up so the capture-QR context
   // (Task 7) can reuse the exact same enriched values instead of re-fetching.
-  onContext?: (sampleId: string, lot: string | null, analytes: string | null) => void
+  onContext?: (
+    sampleId: string,
+    lot: string | null,
+    analytes: string | null
+  ) => void
 }) {
   const subQ = useQuery({
     queryKey: ['order-rail-sub-count', sample.id],
