@@ -1,23 +1,31 @@
-import { useState, type ComponentProps } from 'react'
+import { useState, useCallback, useEffect, type ComponentProps } from 'react'
 import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
-import { Check, Loader2 } from 'lucide-react'
+import { Check, ChevronDown, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-} from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
 import { useParentSampleDetails } from '@/components/intake/ReceiveWizard/useParentSampleDetails'
 import {
   getSenaiteSamples,
   listSubSamples,
+  type CaptureSampleContext,
   type SenaiteSample,
   type SubSampleListResponse,
 } from '@/lib/api'
 import type { SenaiteLookupResult } from '@/lib/api'
-import { completeCheckIn, type CompleteCheckInSample } from '@/lib/complete-checkin'
+import {
+  completeCheckIn,
+  type CompleteCheckInSample,
+} from '@/lib/complete-checkin'
 import type { OrderGroup } from '@/lib/inbox-orders'
 import { cn } from '@/lib/utils'
 
@@ -71,13 +79,55 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
     sampleId: s.id,
     vialCount: subCountQueries[i]?.data?.parent.sub_sample_count ?? 0,
   }))
-  const vialedCount = checkInSamples.filter(s => s.vialCount > 0).length
+
+  // Samples the tech has explicitly excluded from this check-in (e.g. the
+  // customer forgot one sample's vials, or a sample needs to be held back).
+  // Excluded samples stay Due with their vials attached — reopening the order
+  // later and completing again receives them (deferred check-in). Unvialed
+  // samples are never receivable via this path regardless (complete-checkin
+  // skips them), so the dropdown shows them disabled.
+  const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set())
+  const toggleExcluded = (sampleId: string, nowChecked: boolean) => {
+    setExcludedIds(prev => {
+      const next = new Set(prev)
+      if (nowChecked) next.delete(sampleId)
+      else next.add(sampleId)
+      return next
+    })
+  }
+  const checkedCount = checkInSamples.filter(
+    s => s.vialCount > 0 && !excludedIds.has(s.sampleId)
+  ).length
 
   // Order-level receive: transitions every vialed sample at once, then closes
   // (parent refreshes the due list via onClose). Disabled while running and
   // when nothing is vialed. The embedded wizard is `orderManaged`, so its own
   // finish never receives — this button owns the whole order's receive.
   const [completing, setCompleting] = useState(false)
+
+  // Per-sample lot + analytes, reported up from each rail row as it resolves
+  // its own SENAITE lookup — feeds the capture-QR context (Task 7) with the
+  // exact same enriched values the rail already displays. Best-effort: a
+  // sample the rail hasn't rendered/resolved yet just carries sample_id.
+  const [railContexts, setRailContexts] = useState<
+    Record<string, { lot: string | null; analytes: string | null }>
+  >({})
+  const handleRailContext = useCallback(
+    (sampleId: string, lot: string | null, analytes: string | null) => {
+      setRailContexts(prev => {
+        const existing = prev[sampleId]
+        if (
+          existing &&
+          existing.lot === lot &&
+          existing.analytes === analytes
+        ) {
+          return prev
+        }
+        return { ...prev, [sampleId]: { lot, analytes } }
+      })
+    },
+    []
+  )
   const handleCompleteCheckIn = async () => {
     setCompleting(true)
     try {
@@ -86,17 +136,23 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
       // rebuild the sample list from the fresh cache so a just-vialed sample
       // is never skipped by a stale zero.
       await qc.refetchQueries({ queryKey: ['order-rail-sub-count'] })
-      const freshSamples: CompleteCheckInSample[] = samples.map(s => ({
-        uid: s.uid,
-        sampleId: s.id,
-        vialCount:
-          qc.getQueryData<SubSampleListResponse>(['order-rail-sub-count', s.id])
-            ?.parent.sub_sample_count ?? 0,
-      }))
+      const freshSamples: CompleteCheckInSample[] = samples
+        .filter(s => !excludedIds.has(s.id))
+        .map(s => ({
+          uid: s.uid,
+          sampleId: s.id,
+          vialCount:
+            qc.getQueryData<SubSampleListResponse>([
+              'order-rail-sub-count',
+              s.id,
+            ])?.parent.sub_sample_count ?? 0,
+        }))
       await completeCheckIn(freshSamples)
       onClose()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Complete Check-In failed')
+      toast.error(
+        err instanceof Error ? err.message : 'Complete Check-In failed'
+      )
     } finally {
       setCompleting(false)
     }
@@ -150,10 +206,12 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
   const clientName = d?.client ?? orders[0]?.clientId ?? current.client_id
   const contact = d?.contact ?? null
   const sampleType = d?.sample_type ?? current.sample_type
-  const orderNumber = d?.client_order_number ?? current.client_order_number ?? null
+  const orderNumber =
+    d?.client_order_number ?? current.client_order_number ?? null
   const clientSampleId = d?.client_sample_id ?? null
   const lot = d?.client_lot ?? null
-  const declaredQty = d?.declared_weight_mg != null ? `${d.declared_weight_mg} mg` : null
+  const declaredQty =
+    d?.declared_weight_mg != null ? `${d.declared_weight_mg} mg` : null
   const analytes = analyteLabel(d, current)
 
   // `current` guaranteed the union is non-empty, so an owning order always
@@ -169,11 +227,44 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
     new Set([...activeOrder.samples.map(s => s.id), ...allStateIds])
   )
 
+  // Capture-QR scope (Task 7) mirrors the fan-out target exactly, so a phone
+  // capture lands on the same samples a desktop save would. The QR mints
+  // (and freezes) its sample scope + enrichment on mount, so we must not hand
+  // it a captureContext before that scope is actually settled:
+  //  - the "all review states" union (allStatesQ) may still be resolving,
+  //    meaning boxingSampleIds' membership itself isn't final yet;
+  //  - the rail rows that DO render (activeOrder.samples) may not have
+  //    reported their lot/analytes yet.
+  // "All states" ids beyond the rendered rail rows never get their own row
+  // (only the session's own samples do), so we don't wait on those
+  // specifically — once the union query settles, they're included with
+  // best-effort-null enrichment, same as any sample the rail hasn't gotten to.
+  const boxingListSettled = activeOrderKey === null || allStatesQ.isFetched
+  const railRowsSettled = activeOrder.samples.every(
+    s => railContexts[s.id] !== undefined
+  )
+  const captureContext =
+    boxingListSettled && railRowsSettled
+      ? {
+          orderLabel: activeOrder.orderLabel,
+          samples: boxingSampleIds.map(
+            (id): CaptureSampleContext => ({
+              sample_id: id,
+              lot: railContexts[id]?.lot ?? null,
+              analytes: railContexts[id]?.analytes ?? null,
+            })
+          ),
+        }
+      : undefined
+
   return (
-    <Dialog open onOpenChange={open => { if (!open) onClose() }}>
-      <DialogContent
-        className="max-w-[95vw] w-[95vw] sm:max-w-[95vw] h-[92vh] p-0 gap-0 grid-rows-[auto_1fr] overflow-hidden"
-      >
+    <Dialog
+      open
+      onOpenChange={open => {
+        if (!open) onClose()
+      }}
+    >
+      <DialogContent className="max-w-[95vw] w-[95vw] sm:max-w-[95vw] h-[92vh] p-0 gap-0 grid-rows-[auto_1fr] overflow-hidden">
         {/* Radix requires a labelled title; the styled header below is the
             visible heading, so the DialogTitle is visually hidden. */}
         <DialogTitle className="sr-only">{headerLabel}</DialogTitle>
@@ -187,7 +278,8 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
                 {headerLabel}
                 {clientName && (
                   <span className="text-muted-foreground font-normal">
-                    {' · '}{clientName}
+                    {' · '}
+                    {clientName}
                   </span>
                 )}
               </h2>
@@ -196,19 +288,73 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
               </span>
             </div>
             <div className="flex items-center gap-4 shrink-0">
-              <Button
-                type="button"
-                size="sm"
-                onClick={handleCompleteCheckIn}
-                disabled={completing || vialedCount === 0}
-              >
-                {completing ? (
-                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                ) : (
-                  <Check className="h-4 w-4" aria-hidden="true" />
-                )}
-                {`Complete Check-In · ${vialedCount} of ${total} samples`}
-              </Button>
+              <div className="flex">
+                <Button
+                  type="button"
+                  size="sm"
+                  className="rounded-r-none"
+                  onClick={handleCompleteCheckIn}
+                  disabled={completing || checkedCount === 0}
+                >
+                  {completing ? (
+                    <Loader2
+                      className="h-4 w-4 animate-spin"
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <Check className="h-4 w-4" aria-hidden="true" />
+                  )}
+                  {`Complete Check-In · ${checkedCount} of ${total} samples`}
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="rounded-l-none border-l border-primary-foreground/20 px-1.5"
+                      disabled={completing}
+                      aria-label="Select samples to check in"
+                    >
+                      <ChevronDown className="h-4 w-4" aria-hidden="true" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-72">
+                    <DropdownMenuLabel>Samples to check in</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    {checkInSamples.map(s => (
+                      <DropdownMenuCheckboxItem
+                        key={s.sampleId}
+                        checked={
+                          s.vialCount > 0 && !excludedIds.has(s.sampleId)
+                        }
+                        disabled={s.vialCount === 0}
+                        // Keep the menu open so several samples can be
+                        // toggled in one visit.
+                        onSelect={e => e.preventDefault()}
+                        onCheckedChange={checked =>
+                          toggleExcluded(s.sampleId, checked === true)
+                        }
+                      >
+                        <span className="flex w-full items-center gap-2 min-w-0">
+                          <span className="font-mono truncate">
+                            {s.sampleId}
+                          </span>
+                          {railContexts[s.sampleId]?.lot && (
+                            <span className="text-muted-foreground text-xs truncate">
+                              {railContexts[s.sampleId]?.lot}
+                            </span>
+                          )}
+                          <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                            {s.vialCount === 0
+                              ? 'no vials'
+                              : `${s.vialCount} vial${s.vialCount === 1 ? '' : 's'}`}
+                          </span>
+                        </span>
+                      </DropdownMenuCheckboxItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
               <div className="flex flex-col items-end gap-0.5">
                 <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
                   Progress
@@ -228,7 +374,11 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
             <HeaderField label="Client Sample ID" value={clientSampleId} />
             <HeaderField label="Client Lot" value={lot} />
             <HeaderField label="Declared Qty" value={declaredQty} />
-            <HeaderField label="Analytes" value={analytes} className="max-w-[28rem]" />
+            <HeaderField
+              label="Analytes"
+              value={analytes}
+              className="max-w-[28rem]"
+            />
           </div>
         </header>
 
@@ -252,6 +402,7 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
                             sample={s}
                             active={gi === index}
                             onSelect={() => setIndex(gi)}
+                            onContext={handleRailContext}
                           />
                         </li>
                       )
@@ -268,17 +419,24 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
           <div className="min-h-0 overflow-hidden">
             <ReceiveWizard
               key={current.uid}
-              parent={{ uid: current.uid, sample_id: current.id, status: current.review_state ?? null }}
+              parent={{
+                uid: current.uid,
+                sample_id: current.id,
+                status: current.review_state ?? null,
+              }}
               onClose={onClose}
               initialPhase={initialPhase}
               hideSampleInfo
               orderManaged
               boxing={{
-                orderKey: activeOrder.orderKey ?? activeOrder.samples[0]?.id ?? '',
+                orderKey:
+                  activeOrder.orderKey ?? activeOrder.samples[0]?.id ?? '',
                 orderLabel: activeOrder.orderLabel,
                 clientId: activeOrder.clientId,
                 sampleIds: boxingSampleIds,
               }}
+              fanoutSampleIds={boxingSampleIds}
+              captureContext={captureContext}
             />
           </div>
         </div>
@@ -336,10 +494,18 @@ function SampleRailRow({
   sample,
   active,
   onSelect,
+  onContext,
 }: {
   sample: SenaiteSample
   active: boolean
   onSelect: () => void
+  // Reports this row's resolved lot + analytes up so the capture-QR context
+  // (Task 7) can reuse the exact same enriched values instead of re-fetching.
+  onContext?: (
+    sampleId: string,
+    lot: string | null,
+    analytes: string | null
+  ) => void
 }) {
   const subQ = useQuery({
     queryKey: ['order-rail-sub-count', sample.id],
@@ -356,6 +522,10 @@ function SampleRailRow({
   const lot = d?.client_lot ?? null
   const analytes = analyteLabel(d, sample)
   const placeholder = details.loading ? '…' : '—'
+
+  useEffect(() => {
+    if (!details.loading) onContext?.(sample.id, lot, analytes)
+  }, [sample.id, lot, analytes, details.loading, onContext])
 
   return (
     <button

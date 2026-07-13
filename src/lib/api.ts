@@ -6272,3 +6272,69 @@ export async function deletePackagingPhoto(photoId: number): Promise<void> {
     throw new Error(`deletePackagingPhoto failed: ${response.status}`)
   invalidatePackagingPhoto(photoId)
 }
+
+/**
+ * Create the same packaging photo against every parent sample in an order in
+ * one transactional call. Mirrors createPackagingPhoto's headers/base-URL/
+ * error handling.
+ */
+export async function createPackagingPhotosBulk(args: {
+  parentSampleIds: string[]
+  photoBase64: string
+  remarks?: string | null
+}): Promise<PackagingPhoto[]> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/packaging-photos/bulk`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({
+        parent_sample_ids: args.parentSampleIds,
+        photo_base64: args.photoBase64,
+        remarks: args.remarks ?? null,
+      }),
+    }
+  )
+  if (!response.ok)
+    throw new Error(`createPackagingPhotosBulk failed: ${response.status}`)
+  return response.json()
+}
+
+// ── Capture tokens (QR phone capture) ───────────────────────────────────────
+
+export interface CaptureSampleContext {
+  sample_id: string
+  lot?: string | null
+  analytes?: string | null
+}
+
+export interface CaptureTokenMint {
+  id: number
+  token: string
+  expires_at: string
+}
+
+/**
+ * Mint a scoped, time-limited capture token so a phone can add packaging
+ * photos without logging in. Mirrors createPackagingPhoto's headers/base-URL/
+ * error handling.
+ */
+export async function mintCaptureToken(args: {
+  samples: CaptureSampleContext[]
+  orderLabel?: string | null
+}): Promise<CaptureTokenMint> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/capture-tokens`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({
+        samples: args.samples,
+        order_label: args.orderLabel ?? null,
+      }),
+    }
+  )
+  if (!response.ok)
+    throw new Error(`mintCaptureToken failed: ${response.status}`)
+  return response.json()
+}

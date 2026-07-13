@@ -51,19 +51,14 @@ vi.mock('@/lib/api', async importOriginal => {
     listSubSamples: vi.fn((id: string) =>
       Promise.resolve({ parent: { sub_sample_count: subCounts[id] ?? 0 } })
     ),
-    getSenaiteSamples: vi.fn(() =>
-      Promise.resolve({ items: allStatesItems })
-    ),
+    getSenaiteSamples: vi.fn(() => Promise.resolve({ items: allStatesItems })),
   }
 })
 
 const sample = (id: string): SenaiteSample =>
   ({ id, uid: `uid-${id}` }) as unknown as SenaiteSample
 
-const order = (
-  orderKey: string,
-  sampleIds: string[]
-): OrderGroup => ({
+const order = (orderKey: string, sampleIds: string[]): OrderGroup => ({
   orderKey,
   orderLabel: orderKey,
   clientId: 'acme',
@@ -117,7 +112,9 @@ describe('OrderReceiveSession (orders[])', () => {
   it('hands the wizard the active order’s boxing scope (order-scoped tab)', () => {
     renderSession(twoOrders)
     // No standalone boxing stage anymore — no rail Boxing button.
-    expect(screen.queryByRole('button', { name: /Boxing/i })).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /Boxing/i })
+    ).not.toBeInTheDocument()
     // The wizard mounts for the active sample (P-1101, first order) and gets
     // that order's whole scope for its Boxing tab.
     const last = receiveWizardProps[receiveWizardProps.length - 1]
@@ -214,5 +211,89 @@ describe('OrderReceiveSession (orders[])', () => {
       name: /Complete Check-In · 0 of 3 samples/i,
     })
     expect(btn).toBeDisabled()
+  })
+
+  describe('sample-selection dropdown', () => {
+    it('lists every sample; vialed rows checked, unvialed rows disabled', async () => {
+      subCounts['P-1101'] = 2
+      subCounts['P-1102'] = 0
+      subCounts['P-1108'] = 1
+      renderSession(twoOrders)
+      await screen.findByRole('button', {
+        name: /Complete Check-In · 2 of 3 samples/i,
+      })
+
+      fireEvent.pointerDown(
+        screen.getByRole('button', { name: /select samples to check in/i })
+      )
+
+      const item1101 = await screen.findByRole('menuitemcheckbox', {
+        name: /P-1101/,
+      })
+      const item1102 = screen.getByRole('menuitemcheckbox', { name: /P-1102/ })
+      const item1108 = screen.getByRole('menuitemcheckbox', { name: /P-1108/ })
+      expect(item1101).toHaveAttribute('aria-checked', 'true')
+      expect(item1108).toHaveAttribute('aria-checked', 'true')
+      expect(item1102).toHaveAttribute('aria-checked', 'false')
+      expect(item1102).toHaveAttribute('aria-disabled', 'true')
+      expect(item1102.textContent).toMatch(/no vials/i)
+    })
+
+    it('unchecking a sample excludes it from the receive and updates the count', async () => {
+      subCounts['P-1101'] = 2
+      subCounts['P-1108'] = 1
+      const { onClose } = renderSession(twoOrders)
+      await screen.findByRole('button', {
+        name: /Complete Check-In · 2 of 3 samples/i,
+      })
+
+      fireEvent.pointerDown(
+        screen.getByRole('button', { name: /select samples to check in/i })
+      )
+      const item1108 = await screen.findByRole('menuitemcheckbox', {
+        name: /P-1108/,
+      })
+      // Radix menu items activate via keyboard in jsdom (pointer-event
+      // sequences don't fully register); Enter toggles the checkbox item.
+      fireEvent.keyDown(item1108, { key: 'Enter' })
+      // The open menu is modal (rest of the app aria-hidden) — close it
+      // before querying the button by role.
+      fireEvent.keyDown(item1108, { key: 'Escape' })
+
+      const btn = await screen.findByRole('button', {
+        name: /Complete Check-In · 1 of 3 samples/i,
+      })
+      await waitFor(() => expect(btn).not.toBeDisabled())
+      fireEvent.click(btn)
+
+      await waitFor(() => expect(completeCheckIn).toHaveBeenCalledTimes(1))
+      expect(completeCheckIn).toHaveBeenCalledWith([
+        { uid: 'uid-P-1101', sampleId: 'P-1101', vialCount: 2 },
+        { uid: 'uid-P-1102', sampleId: 'P-1102', vialCount: 0 },
+      ])
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+    })
+
+    it('disables Complete Check-In when every vialed sample is unchecked', async () => {
+      subCounts['P-1101'] = 2
+      renderSession(twoOrders)
+      await screen.findByRole('button', {
+        name: /Complete Check-In · 1 of 3 samples/i,
+      })
+
+      fireEvent.pointerDown(
+        screen.getByRole('button', { name: /select samples to check in/i })
+      )
+      const item1101 = await screen.findByRole('menuitemcheckbox', {
+        name: /P-1101/,
+      })
+      fireEvent.keyDown(item1101, { key: 'Enter' })
+      fireEvent.keyDown(item1101, { key: 'Escape' })
+
+      const btn = await screen.findByRole('button', {
+        name: /Complete Check-In · 0 of 3 samples/i,
+      })
+      expect(btn).toBeDisabled()
+    })
   })
 })

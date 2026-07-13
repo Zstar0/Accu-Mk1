@@ -40,9 +40,13 @@ export function PackagingImagesList({
 }: PackagingImagesListProps) {
   const queryClient = useQueryClient()
 
+  // Polls while the packaging tab is mounted so photos landed by a phone
+  // capture (Task 7's QR flow) show up here within seconds, without the tech
+  // needing to switch tabs and back to trigger a refetch.
   const { data: photos = [] } = useQuery({
     queryKey: ['packaging-photos', parentSampleId],
     queryFn: () => listPackagingPhotos(parentSampleId),
+    refetchInterval: 2500,
   })
 
   const deleteMutation = useMutation({

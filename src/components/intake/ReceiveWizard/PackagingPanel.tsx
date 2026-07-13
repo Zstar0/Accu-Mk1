@@ -1,10 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Camera, Crosshair, RotateCcw, Upload } from 'lucide-react'
+import { toast } from 'sonner'
 import {
   createPackagingPhoto,
+  createPackagingPhotosBulk,
   fetchPackagingPhotoUrl,
   updatePackagingPhoto,
+  type CaptureSampleContext,
   type PackagingPhoto,
 } from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -19,12 +22,21 @@ import {
   type CaptureFormat,
 } from './capture-options'
 import { useCameraDevices } from './use-camera-devices'
+import { CaptureQrCard } from './CaptureQrCard'
 
 interface PackagingPanelProps {
   parentSampleId: string
   editing?: PackagingPhoto | null
   onSaved?: () => void
   onCancelEdit?: () => void
+  // When set (order flow, length > 1), Save fans the same photo out to every
+  // sample in the order via the bulk endpoint instead of just parentSampleId.
+  // Edit mode never fans out — it always targets the single photo being edited.
+  fanoutSampleIds?: string[]
+  // Scopes the phone-capture QR (Task 7) to the same sample set Save writes
+  // to. Standalone (non-order) ReceiveWizard builds a one-sample context;
+  // absent entirely means no QR card renders.
+  captureContext?: { orderLabel: string | null; samples: CaptureSampleContext[] }
 }
 
 async function dataUrlToBytes(dataUrl: string): Promise<Uint8Array> {
@@ -53,6 +65,8 @@ export function PackagingPanel({
   editing,
   onSaved,
   onCancelEdit,
+  fanoutSampleIds,
+  captureContext,
 }: PackagingPanelProps) {
   const queryClient = useQueryClient()
   const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null)
@@ -282,11 +296,25 @@ export function PackagingPanel({
           setBusy(false)
           return
         }
-        await createPackagingPhoto({
-          parentSampleId,
-          photoBase64,
-          remarks: trimmedRemarks ?? null,
-        })
+        if (fanoutSampleIds && fanoutSampleIds.length > 1) {
+          await createPackagingPhotosBulk({
+            parentSampleIds: fanoutSampleIds,
+            photoBase64,
+            remarks: trimmedRemarks ?? null,
+          })
+          for (const id of fanoutSampleIds) {
+            void queryClient.invalidateQueries({
+              queryKey: ['packaging-photos', id],
+            })
+          }
+          toast(`Photo added to ${fanoutSampleIds.length} samples`)
+        } else {
+          await createPackagingPhoto({
+            parentSampleId,
+            photoBase64,
+            remarks: trimmedRemarks ?? null,
+          })
+        }
       }
       void queryClient.invalidateQueries({
         queryKey: ['packaging-photos', parentSampleId],
@@ -300,7 +328,7 @@ export function PackagingPanel({
     } finally {
       setBusy(false)
     }
-  }, [photoDataUrl, remarks, editing, parentSampleId, queryClient, onSaved])
+  }, [photoDataUrl, remarks, editing, parentSampleId, fanoutSampleIds, queryClient, onSaved])
 
   const error = localError
 
@@ -525,6 +553,9 @@ export function PackagingPanel({
               )
             )}
           </div>
+        )}
+        {captureContext && cameraPhase === 'live' && (
+          <CaptureQrCard captureContext={captureContext} />
         )}
       </section>
 
