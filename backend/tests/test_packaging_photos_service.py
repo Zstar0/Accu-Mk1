@@ -128,3 +128,61 @@ def test_delete_removes_row_and_storage(db, storage, parent_sample):
 
 def test_delete_missing_returns_false(db, storage):
     assert delete_packaging_photo(db, 9999) is False
+
+
+@pytest.fixture
+def parent_sample_2(db):
+    p = LimsSample(sample_id="P-0701", external_lims_uid="u-701")
+    db.add(p)
+    db.flush()
+    return p
+
+
+def test_bulk_creates_one_row_per_parent_with_independent_storage(db, storage, parent_sample, parent_sample_2):
+    from packaging_photos.service import create_packaging_photos_bulk
+    photos = create_packaging_photos_bulk(
+        db, [parent_sample.sample_id, parent_sample_2.sample_id],
+        b"box", "packaging.jpg", "image/jpeg", "note", 1,
+    )
+    assert len(photos) == 2
+    assert {p.parent_sample_pk for p in photos} == {parent_sample.id, parent_sample_2.id}
+    # independent storage objects, keyed per sample
+    keys = [p.storage_key for p in photos]
+    assert len(set(keys)) == 2
+    assert all(k.startswith("mk1://") for k in keys)
+    for p in photos:
+        raw, _ = read_packaging_photo_bytes(db, p.id)
+        assert raw == b"box"
+        assert p.remarks == "note"
+
+
+def test_bulk_ordering_is_per_parent(db, storage, parent_sample, parent_sample_2):
+    from packaging_photos.service import create_packaging_photos_bulk
+    create_packaging_photo(db, parent_sample.sample_id, b"a", "a.jpg", "image/jpeg", None, 1)
+    photos = create_packaging_photos_bulk(
+        db, [parent_sample.sample_id, parent_sample_2.sample_id],
+        b"box", "packaging.jpg", "image/jpeg", None, 1,
+    )
+    by_pk = {p.parent_sample_pk: p for p in photos}
+    assert by_pk[parent_sample.id].ordering == 1      # parent 1 already had one
+    assert by_pk[parent_sample_2.id].ordering == 0    # parent 2's first
+
+
+def test_bulk_missing_parent_is_all_or_nothing(db, storage, parent_sample):
+    from packaging_photos.service import create_packaging_photos_bulk
+    with pytest.raises(LookupError) as ei:
+        create_packaging_photos_bulk(
+            db, [parent_sample.sample_id, "NOPE-1", "NOPE-2"],
+            b"box", "packaging.jpg", "image/jpeg", None, 1,
+        )
+    assert "NOPE-1" in str(ei.value) and "NOPE-2" in str(ei.value)
+    assert list_packaging_photos(db, parent_sample.sample_id) == []
+
+
+def test_bulk_stamps_capture_token_id(db, storage, parent_sample):
+    from packaging_photos.service import create_packaging_photos_bulk
+    photos = create_packaging_photos_bulk(
+        db, [parent_sample.sample_id], b"box", "p.jpg", "image/jpeg",
+        None, 1, capture_token_id=42,
+    )
+    assert photos[0].capture_token_id == 42

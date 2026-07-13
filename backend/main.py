@@ -80,6 +80,7 @@ from families.routes import router as families_router  # Phase 5b
 from boxes.routes import router as boxes_router
 from boxes.service import box_label_code
 from packaging_photos.routes import router as packaging_photos_router
+from capture_tokens.routes import router as capture_tokens_router
 from flags.routes import router as flags_router
 from slack_notify.routes import router as slack_prefs_router
 from slack_notify.interactions import router as slack_interactions_router
@@ -484,6 +485,7 @@ app.include_router(lims_analyses_router)
 app.include_router(families_router)
 app.include_router(boxes_router)
 app.include_router(packaging_photos_router)
+app.include_router(capture_tokens_router)
 app.include_router(flags_router)
 app.include_router(slack_prefs_router)
 app.include_router(slack_interactions_router)

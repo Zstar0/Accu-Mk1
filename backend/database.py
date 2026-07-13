@@ -1162,6 +1162,26 @@ def _run_migrations():
         # guards — dedupe manually and it applies on the next start.
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_slack_dm_prefs_member "
         "ON slack_dm_prefs (slack_member_id) WHERE slack_member_id IS NOT NULL",
+        # --- Packaging fan-out + QR phone capture ---
+        # lims_capture_tokens must exist before the FK-ALTER below runs (same
+        # pattern as lims_boxes/sla_tiers above): migrations run BEFORE
+        # create_all, so without this raw CREATE TABLE here the ALTER would
+        # fail on first boot (migration_skipped) and every packaging-photo
+        # read/create — including the already-shipped check-in flow — would
+        # 500 on the ORM's capture_token_id column until a second restart.
+        """
+        CREATE TABLE IF NOT EXISTS lims_capture_tokens (
+            id SERIAL PRIMARY KEY,
+            token_hash VARCHAR(64) NOT NULL UNIQUE,
+            order_label VARCHAR(100),
+            context_json TEXT NOT NULL,
+            created_by_user_id INTEGER NOT NULL REFERENCES users(id),
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP NOT NULL,
+            revoked_at TIMESTAMP
+        )
+        """,
+        "ALTER TABLE lims_packaging_photos ADD COLUMN IF NOT EXISTS capture_token_id INTEGER REFERENCES lims_capture_tokens(id) ON DELETE SET NULL",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

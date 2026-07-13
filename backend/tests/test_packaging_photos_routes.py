@@ -76,6 +76,16 @@ def parent(client):
     return p
 
 
+@pytest.fixture
+def two_parents(client):
+    db = client._session
+    p1 = LimsSample(sample_id="P-0900", external_lims_uid="u-900")
+    p2 = LimsSample(sample_id="P-0901", external_lims_uid="u-901")
+    db.add_all([p1, p2])
+    db.commit()
+    return p1, p2
+
+
 def _create(client, sample_id="P-0800", remarks=None):
     return client.post(
         f"/api/samples/{sample_id}/packaging-photos",
@@ -171,3 +181,31 @@ def test_patch_unknown_photo_404(client, parent):
 
 def test_delete_unknown_photo_404(client, parent):
     assert client.delete("/api/packaging-photos/9999").status_code == 404
+
+
+def test_bulk_route_creates_on_all_parents(client, two_parents):
+    p1, p2 = two_parents
+    resp = client.post("/api/packaging-photos/bulk", json={
+        "parent_sample_ids": [p1.sample_id, p2.sample_id],
+        "photo_base64": base64.b64encode(b"\xff\xd8\xffbulk").decode(),
+        "remarks": "box",
+    })
+    assert resp.status_code == 201
+    body = resp.json()
+    assert len(body) == 2
+    # PackagingPhotoOut has no parent_sample_id column, so confirm the fan-out
+    # landed on both parents via a follow-up per-parent list instead.
+    for p in (p1, p2):
+        rows = client.get(f"/api/samples/{p.sample_id}/packaging-photos").json()
+        assert len(rows) == 1
+        assert rows[0]["remarks"] == "box"
+
+
+def test_bulk_route_404_names_missing(client, two_parents):
+    p1, _ = two_parents
+    resp = client.post("/api/packaging-photos/bulk", json={
+        "parent_sample_ids": [p1.sample_id, "NOPE"],
+        "photo_base64": base64.b64encode(b"\xff\xd8\xffx").decode(),
+    })
+    assert resp.status_code == 404
+    assert "NOPE" in resp.json()["detail"]
