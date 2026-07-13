@@ -399,10 +399,7 @@ function SampleRailRow({
 
   useEffect(() => {
     if (!details.loading) onContext?.(sample.id, lot, analytes)
-    // onContext's identity is a stable useCallback from the parent; omitted
-    // here so this only re-fires when THIS row's own resolved data changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sample.id, lot, analytes, details.loading])
+  }, [sample.id, lot, analytes, details.loading, onContext])
 
   return (
     <button
