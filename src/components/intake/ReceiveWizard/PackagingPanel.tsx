@@ -22,6 +22,7 @@ import {
   type CaptureFormat,
 } from './capture-options'
 import { useCameraDevices } from './use-camera-devices'
+import { CaptureQrCard } from './CaptureQrCard'
 
 interface PackagingPanelProps {
   parentSampleId: string
@@ -65,6 +66,7 @@ export function PackagingPanel({
   onSaved,
   onCancelEdit,
   fanoutSampleIds,
+  captureContext,
 }: PackagingPanelProps) {
   const queryClient = useQueryClient()
   const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null)
@@ -551,6 +553,9 @@ export function PackagingPanel({
               )
             )}
           </div>
+        )}
+        {captureContext && cameraPhase === 'live' && (
+          <CaptureQrCard captureContext={captureContext} />
         )}
       </section>
 
