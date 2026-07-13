@@ -19,7 +19,7 @@ from main import app
 from auth import get_current_user
 from database import Base, get_db
 from models import LimsSample
-from sub_samples import photo_storage
+from sub_samples import photo_storage, senaite
 from sub_samples.photo_storage import FilesystemPhotoStorage, set_storage_for_tests
 
 
@@ -201,7 +201,14 @@ def test_bulk_route_creates_on_all_parents(client, two_parents):
         assert rows[0]["remarks"] == "box"
 
 
-def test_bulk_route_404_names_missing(client, two_parents):
+def test_bulk_route_404_names_missing(client, two_parents, monkeypatch):
+    # "NOPE" is genuinely unknown: resolution now goes through the lazy
+    # ensure_sample_row path (whole-branch review fix for sibling 404s), so
+    # fake SENAITE also failing it rather than hitting a real network call.
+    def boom(sid):
+        raise RuntimeError(f"SENAITE has no AR with id={sid}")
+    monkeypatch.setattr(senaite, "fetch_parent_metadata", boom)
+
     p1, _ = two_parents
     resp = client.post("/api/packaging-photos/bulk", json={
         "parent_sample_ids": [p1.sample_id, "NOPE"],

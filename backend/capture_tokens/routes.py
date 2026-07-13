@@ -4,12 +4,11 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy import select
 
 from database import get_db
 from auth import get_current_user
-from models import LimsSample
 from capture_tokens import service
+from sub_samples.service import ensure_sample_row
 from capture_tokens.schemas import (
     CaptureTokenCreate, CaptureTokenOut, CaptureContextOut,
     CapturePhotoIn, CapturePhotoOut, CaptureSampleContext,
@@ -27,6 +26,7 @@ _MAX_PHOTO_BYTES = 10 * 1024 * 1024
 # stays as defense in depth.
 _MAX_PHOTO_B64_CHARS = (_MAX_PHOTO_BYTES * 4) // 3 + 1024
 _ALLOWED_EXTS = {".jpg", ".png", ".webp"}
+_EXT_CONTENT_TYPES = {".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 
 
 def _resolve_or_http(db: Session, token: str):
@@ -44,11 +44,20 @@ def mint_capture_token(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    ids = [s.sample_id for s in body.samples]
-    found = set(db.execute(
-        select(LimsSample.sample_id).where(LimsSample.sample_id.in_(ids))
-    ).scalars())
-    missing = [i for i in ids if i not in found]
+    # Order-flow sibling ids come from SENAITE-shaped searches, and only the
+    # actively-touched sample gets eagerly materialized into lims_samples —
+    # an untouched sibling may have no local row yet. Resolve each one via
+    # the same lazy first-touch path as the packaging bulk-fanout service
+    # (ensure_sample_row) instead of a bare local SELECT, so those siblings
+    # get lazily upserted from SENAITE rather than 404ing the whole mint.
+    # Only an id ensure_sample_row truly cannot resolve (RuntimeError:
+    # SENAITE unreachable or has no such AR) counts as missing.
+    missing = []
+    for sid in (s.sample_id for s in body.samples):
+        try:
+            ensure_sample_row(db, sid)
+        except RuntimeError:
+            missing.append(sid)
     if missing:
         raise HTTPException(status_code=404, detail=f"samples not found: {', '.join(missing)}")
     tok, raw = service.mint_capture_token(
@@ -98,9 +107,12 @@ def add_capture_photo(token: str, body: CapturePhotoIn, db: Session = Depends(ge
         photo_bytes[:4] == b"RIFF" and photo_bytes[8:12] == b"WEBP"
     ):
         raise HTTPException(status_code=415, detail="unsupported image type")
+    # filename already sniffed above; the 415 checks guarantee its extension
+    # is one of _ALLOWED_EXTS, so PNG/WebP no longer get mislabeled jpeg.
+    content_type = _EXT_CONTENT_TYPES["." + filename.rsplit(".", 1)[-1]]
     sample_ids = [s["sample_id"] for s in json.loads(tok.context_json)]
     photos = create_packaging_photos_bulk(
-        db, sample_ids, photo_bytes, filename, "image/jpeg", None,
+        db, sample_ids, photo_bytes, filename, content_type, None,
         tok.created_by_user_id, capture_token_id=tok.id,
     )
     return CapturePhotoOut(
