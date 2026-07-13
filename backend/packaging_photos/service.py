@@ -167,3 +167,66 @@ def _delete_stored_photo_quietly(key: str) -> None:
         get_storage().delete_photo(key)
     except PhotoStorageError as e:
         log.warning("packaging_photos.photo_cleanup_failed key=%s err=%s", key, e)
+
+
+def create_packaging_photos_bulk(
+    db: Session,
+    parent_sample_ids: list[str],
+    photo_bytes: bytes,
+    filename: str,
+    content_type: Optional[str],
+    remarks: Optional[str],
+    user_id: Optional[int],
+) -> list[LimsPackagingPhoto]:
+    """Fan one packaging photo out to several parents — all-or-nothing.
+
+    Resolves every parent before writing anything so a single bad id fails
+    the whole call (LookupError names all missing ids). Bytes are duplicated
+    per parent under that parent's storage namespace so per-sample
+    edit/delete semantics stay untouched. On a storage failure midway the
+    already-saved keys are best-effort deleted and nothing is committed.
+    """
+    parents = []
+    missing = []
+    for sid in parent_sample_ids:
+        row = db.execute(
+            select(LimsSample).where(LimsSample.sample_id == sid)
+        ).scalar_one_or_none()
+        if row is None:
+            missing.append(sid)
+        else:
+            parents.append(row)
+    if missing:
+        raise LookupError(f"parent samples not found: {', '.join(missing)}")
+
+    saved_keys: list[str] = []
+    photos: list[LimsPackagingPhoto] = []
+    try:
+        for parent in parents:
+            key = get_storage().save_photo(parent.sample_id, photo_bytes, filename)
+            saved_keys.append(key)
+            next_ordering = (db.execute(
+                select(func.coalesce(func.max(LimsPackagingPhoto.ordering), -1))
+                .where(LimsPackagingPhoto.parent_sample_pk == parent.id)
+            ).scalar_one()) + 1
+            photo = LimsPackagingPhoto(
+                parent_sample_pk=parent.id,
+                kind="packaging",
+                storage_key=f"{_PREFIX}{key}",
+                filename=filename,
+                content_type=content_type,
+                ordering=next_ordering,
+                remarks=remarks,
+                created_by_user_id=user_id,
+            )
+            db.add(photo)
+            photos.append(photo)
+        db.commit()
+    except Exception:
+        db.rollback()
+        for key in saved_keys:
+            _delete_stored_photo_quietly(key)
+        raise
+    for photo in photos:
+        db.refresh(photo)
+    return photos
