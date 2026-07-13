@@ -1,4 +1,4 @@
-import { useState, type ComponentProps } from 'react'
+import { useState, useCallback, useEffect, type ComponentProps } from 'react'
 import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
 import { Check, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -13,6 +13,7 @@ import { useParentSampleDetails } from '@/components/intake/ReceiveWizard/usePar
 import {
   getSenaiteSamples,
   listSubSamples,
+  type CaptureSampleContext,
   type SenaiteSample,
   type SubSampleListResponse,
 } from '@/lib/api'
@@ -78,6 +79,26 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
   // when nothing is vialed. The embedded wizard is `orderManaged`, so its own
   // finish never receives — this button owns the whole order's receive.
   const [completing, setCompleting] = useState(false)
+
+  // Per-sample lot + analytes, reported up from each rail row as it resolves
+  // its own SENAITE lookup — feeds the capture-QR context (Task 7) with the
+  // exact same enriched values the rail already displays. Best-effort: a
+  // sample the rail hasn't rendered/resolved yet just carries sample_id.
+  const [railContexts, setRailContexts] = useState<
+    Record<string, { lot: string | null; analytes: string | null }>
+  >({})
+  const handleRailContext = useCallback(
+    (sampleId: string, lot: string | null, analytes: string | null) => {
+      setRailContexts(prev => {
+        const existing = prev[sampleId]
+        if (existing && existing.lot === lot && existing.analytes === analytes) {
+          return prev
+        }
+        return { ...prev, [sampleId]: { lot, analytes } }
+      })
+    },
+    []
+  )
   const handleCompleteCheckIn = async () => {
     setCompleting(true)
     try {
@@ -169,6 +190,18 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
     new Set([...activeOrder.samples.map(s => s.id), ...allStateIds])
   )
 
+  // Capture-QR scope (Task 7) mirrors the fan-out target exactly, so a phone
+  // capture lands on the same samples a desktop save would. Per-sample lot +
+  // analytes are best-effort — whatever the rail has resolved so far.
+  const captureContext = {
+    orderLabel: activeOrder.orderLabel,
+    samples: boxingSampleIds.map((id): CaptureSampleContext => ({
+      sample_id: id,
+      lot: railContexts[id]?.lot ?? null,
+      analytes: railContexts[id]?.analytes ?? null,
+    })),
+  }
+
   return (
     <Dialog open onOpenChange={open => { if (!open) onClose() }}>
       <DialogContent
@@ -252,6 +285,7 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
                             sample={s}
                             active={gi === index}
                             onSelect={() => setIndex(gi)}
+                            onContext={handleRailContext}
                           />
                         </li>
                       )
@@ -279,6 +313,8 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
                 clientId: activeOrder.clientId,
                 sampleIds: boxingSampleIds,
               }}
+              fanoutSampleIds={boxingSampleIds}
+              captureContext={captureContext}
             />
           </div>
         </div>
@@ -336,10 +372,14 @@ function SampleRailRow({
   sample,
   active,
   onSelect,
+  onContext,
 }: {
   sample: SenaiteSample
   active: boolean
   onSelect: () => void
+  // Reports this row's resolved lot + analytes up so the capture-QR context
+  // (Task 7) can reuse the exact same enriched values instead of re-fetching.
+  onContext?: (sampleId: string, lot: string | null, analytes: string | null) => void
 }) {
   const subQ = useQuery({
     queryKey: ['order-rail-sub-count', sample.id],
@@ -356,6 +396,13 @@ function SampleRailRow({
   const lot = d?.client_lot ?? null
   const analytes = analyteLabel(d, sample)
   const placeholder = details.loading ? '…' : '—'
+
+  useEffect(() => {
+    if (!details.loading) onContext?.(sample.id, lot, analytes)
+    // onContext's identity is a stable useCallback from the parent; omitted
+    // here so this only re-fires when THIS row's own resolved data changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sample.id, lot, analytes, details.loading])
 
   return (
     <button

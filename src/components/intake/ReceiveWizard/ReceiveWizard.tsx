@@ -16,7 +16,7 @@ import { VialDetailsTab, useCloseAndNavigate } from './VialDetailsTab'
 import { PackagingPanel } from './PackagingPanel'
 import { PackagingImagesList } from './PackagingImagesList'
 import { receiveSenaiteSample } from '@/lib/api'
-import type { PackagingPhoto } from '@/lib/api'
+import type { CaptureSampleContext, PackagingPhoto } from '@/lib/api'
 
 type Phase = 'packaging' | 'capture' | 'assign' | 'boxing' | 'print' | 'details'
 
@@ -47,6 +47,14 @@ interface Props {
   // must NOT receive — it just closes. Default false: the standalone
   // single-sample path owns its own receive on "Complete Check-In".
   orderManaged?: boolean
+  // Order-scoped sample ids for packaging photo fan-out (Task 6). Forwarded
+  // straight through to PackagingPanel. Omitted on the standalone path, so a
+  // standalone save always targets just this one sample.
+  fanoutSampleIds?: string[]
+  // Scopes the phone-capture QR (Task 7) to the same samples fanoutSampleIds
+  // writes to. When the caller doesn't supply one (standalone path), a
+  // one-sample context is built from this wizard's own parent details.
+  captureContext?: { orderLabel: string | null; samples: CaptureSampleContext[] }
 }
 
 export function ReceiveWizard({
@@ -56,9 +64,29 @@ export function ReceiveWizard({
   hideSampleInfo = false,
   boxing,
   orderManaged = false,
+  fanoutSampleIds,
+  captureContext,
 }: Props) {
   const wiz = useReceiveWizard(parent)
   const parentDetails = useParentSampleDetails(parent.sample_id)
+
+  // Standalone (non-order) capture context: one sample, this wizard's own
+  // parent. Only used when the caller (order flow) doesn't supply its own.
+  const standaloneAnalytes =
+    parentDetails.details?.analytes
+      ?.map(a => a.matched_peptide_name ?? a.raw_name)
+      .filter(Boolean)
+      .join(', ') || null
+  const effectiveCaptureContext = captureContext ?? {
+    orderLabel: null,
+    samples: [
+      {
+        sample_id: parent.sample_id,
+        lot: parentDetails.details?.client_lot ?? null,
+        analytes: standaloneAnalytes,
+      },
+    ],
+  }
   const [phase, setPhase] = useState<Phase>(initialPhase)
   const [editingSampleId, setEditingSampleId] = useState<string | null>(null)
   const [editingPackaging, setEditingPackaging] = useState<PackagingPhoto | null>(null)
@@ -194,7 +222,8 @@ export function ReceiveWizard({
     body = (
       <div className="grid grid-cols-[1fr_240px] min-h-0 overflow-hidden">
         <PackagingPanel parentSampleId={parent.sample_id} editing={editingPackaging}
-          onSaved={() => setEditingPackaging(null)} onCancelEdit={() => setEditingPackaging(null)} />
+          onSaved={() => setEditingPackaging(null)} onCancelEdit={() => setEditingPackaging(null)}
+          fanoutSampleIds={fanoutSampleIds} captureContext={effectiveCaptureContext} />
         <PackagingImagesList parentSampleId={parent.sample_id} onEdit={setEditingPackaging} />
       </div>
     )
