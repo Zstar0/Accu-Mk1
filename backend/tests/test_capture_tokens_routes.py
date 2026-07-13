@@ -23,6 +23,7 @@ from models import LimsSample
 from sub_samples import photo_storage
 from sub_samples.photo_storage import FilesystemPhotoStorage, set_storage_for_tests
 from capture_tokens import service as capture_service
+from capture_tokens import routes as capture_routes
 
 
 _JPEG = b"\xff\xd8\xff\xe0hello-capture"
@@ -143,6 +144,17 @@ def test_post_photo_413_oversize(client, two_samples):
     raw = _mint(client, [p1.sample_id]).json()["token"]
     big = base64.b64encode(b"\xff\xd8\xff" + b"0" * (10 * 1024 * 1024)).decode()
     resp = client.post(f"/api/capture/{raw}/photos", json={"photo_base64": big})
+    assert resp.status_code == 413
+
+
+def test_post_photo_413_rejects_oversize_b64_before_decoding(client, two_samples):
+    p1, _ = two_samples
+    raw = _mint(client, [p1.sample_id]).json()["token"]
+    # Deliberately NOT valid base64 (trailing "!" is outside the alphabet):
+    # if this reached _decode_photo it would 400, not 413 — so a 413 here
+    # proves the size guard runs BEFORE decode, on the raw string length.
+    too_big = "A" * capture_routes._MAX_PHOTO_B64_CHARS + "!"
+    resp = client.post(f"/api/capture/{raw}/photos", json={"photo_base64": too_big})
     assert resp.status_code == 413
 
 

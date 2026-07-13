@@ -20,6 +20,12 @@ from packaging_photos.service import create_packaging_photos_bulk
 router = APIRouter(prefix="/api", tags=["capture"])
 
 _MAX_PHOTO_BYTES = 10 * 1024 * 1024
+# Base64 inflates by 4/3 plus a little slack for a data: URL prefix — checked
+# against the raw string BEFORE decoding, since this route is unauthenticated
+# and a full in-memory decode of an arbitrarily large body is unnecessary work
+# an anonymous caller can force. The post-decode _MAX_PHOTO_BYTES check below
+# stays as defense in depth.
+_MAX_PHOTO_B64_CHARS = (_MAX_PHOTO_BYTES * 4) // 3 + 1024
 _ALLOWED_EXTS = {".jpg", ".png", ".webp"}
 
 
@@ -78,6 +84,8 @@ def add_capture_photo(token: str, body: CapturePhotoIn, db: Session = Depends(ge
     tok = _resolve_or_http(db, token)
     if service.token_photo_count(db, tok) >= service.MAX_PHOTOS_PER_TOKEN:
         raise HTTPException(status_code=429, detail="photo limit reached for this QR session")
+    if len(body.photo_base64) > _MAX_PHOTO_B64_CHARS:
+        raise HTTPException(status_code=413, detail="photo exceeds 10 MB")
     photo_bytes = _decode_photo(body.photo_base64)
     if len(photo_bytes) > _MAX_PHOTO_BYTES:
         raise HTTPException(status_code=413, detail="photo exceeds 10 MB")
