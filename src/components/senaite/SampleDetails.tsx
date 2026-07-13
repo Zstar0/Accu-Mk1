@@ -116,6 +116,10 @@ import {
   fetchPackagingPhotoUrl,
   type PackagingPhoto,
 } from '@/lib/api'
+import {
+  ZoomableImage,
+  parseAssignedVialFilename,
+} from '@/components/senaite/AttachmentLightbox'
 import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
 import type { ParentInfo } from '@/components/intake/ReceiveWizard/useReceiveWizard'
 import {
@@ -1055,11 +1059,23 @@ function AttachmentImage({ attachment }: { attachment: SenaiteAttachment }) {
     )
   }
 
+  // Select Vial Image snapshots carry the source vial in the filename;
+  // Mk1 keeps no record of the assignment itself, so no timestamp here.
+  const sourceVialId =
+    attachment.attachment_type === 'Sample Image'
+      ? parseAssignedVialFilename(attachment.filename)
+      : null
   return (
-    <img
+    <ZoomableImage
       src={src}
       alt={attachment.filename}
       className="rounded-lg border border-border/30 max-h-40 w-auto object-contain"
+      meta={{
+        filename: attachment.filename,
+        badge: attachment.attachment_type ?? undefined,
+        contentType: attachment.content_type ?? undefined,
+        sourceVialId: sourceVialId ?? undefined,
+      }}
     />
   )
 }
@@ -1092,10 +1108,16 @@ function PackagingThumb({ photo }: { photo: PackagingPhoto }) {
           <span className="text-xs text-muted-foreground">Failed to load image</span>
         </div>
       ) : (
-        <img
+        <ZoomableImage
           src={src}
           alt={photo.remarks ?? 'Packaging photo'}
           className="rounded-lg border border-border/30 max-h-40 w-auto object-contain"
+          meta={{
+            badge: 'Packaging',
+            contentType: photo.content_type ?? undefined,
+            takenAt: photo.created_at,
+            caption: photo.remarks ?? undefined,
+          }}
         />
       )}
       {photo.remarks && (
@@ -1687,10 +1709,14 @@ function VialAttachmentImage({
   sampleId,
   attachmentId,
   filename,
+  createdAt,
+  contentType,
 }: {
   sampleId: string
   attachmentId: number
   filename: string
+  createdAt?: string
+  contentType?: string
 }) {
   const [src, setSrc] = useState<string | null>(null)
   const [error, setError] = useState(false)
@@ -1731,10 +1757,17 @@ function VialAttachmentImage({
     )
   }
   return (
-    <img
+    <ZoomableImage
       src={src}
       alt={filename}
       className="rounded-lg border border-border/30 max-h-40 w-auto object-contain"
+      meta={{
+        filename,
+        badge: 'Sample Image',
+        contentType,
+        takenAt: createdAt,
+        takenAtLabel: 'Uploaded',
+      }}
     />
   )
 }
@@ -1945,6 +1978,7 @@ function VialAttachmentsBlock({
   sampleId,
   photoUrl,
   photoIsMk1,
+  photoReceivedAt,
   attachments,
   chromatograms,
   onPhotoChanged,
@@ -1956,6 +1990,9 @@ function VialAttachmentsBlock({
    *  SENAITE photos live on the parent AR and can't be deleted or demoted
    *  from here. */
   photoIsMk1: boolean
+  /** Vial received_at — the check-in photo is captured at receive time, so
+   *  this doubles as its capture date in the lightbox. */
+  photoReceivedAt?: string | null
   attachments: SubSampleAttachment[]
   /** Chromatograms from this vial's HPLC preps (derived, read-only —
    *  the data lives on hplc_analyses, nothing to add/remove here). */
@@ -2076,10 +2113,16 @@ function VialAttachmentsBlock({
           </div>
         </div>
         {photoUrl ? (
-          <img
+          <ZoomableImage
             src={photoUrl}
             alt={`${sampleId} vial photo`}
             className="rounded-lg border border-border/30 max-h-40 w-auto object-contain"
+            meta={{
+              filename: `${sampleId} vial photo`,
+              badge: 'Check-in',
+              takenAt: photoReceivedAt ?? undefined,
+              takenAtLabel: 'Received',
+            }}
           />
         ) : (
           <div className="flex flex-col items-center justify-center gap-2 w-full h-24 rounded-lg bg-muted/40 border border-dashed border-border/50">
@@ -2165,6 +2208,8 @@ function VialAttachmentsBlock({
                 sampleId={sampleId}
                 attachmentId={att.id}
                 filename={att.filename}
+                createdAt={att.created_at}
+                contentType={att.content_type}
               />
             </div>
           ))}
@@ -5805,6 +5850,11 @@ export function SampleDetails() {
                   !!parentSummary?.sub_samples
                     .find(s => s.sample_id === sampleId)
                     ?.photo_external_uid?.startsWith('mk1://')
+                }
+                photoReceivedAt={
+                  parentSummary?.sub_samples.find(
+                    s => s.sample_id === sampleId
+                  )?.received_at ?? null
                 }
                 attachments={vialAttachments}
                 chromatograms={vialChromatograms}
