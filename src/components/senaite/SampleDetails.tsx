@@ -1116,6 +1116,7 @@ function PackagingThumb({ photo }: { photo: PackagingPhoto }) {
             badge: 'Packaging',
             contentType: photo.content_type ?? undefined,
             takenAt: photo.created_at,
+            createdBy: photo.created_by ?? undefined,
             caption: photo.remarks ?? undefined,
           }}
         />
@@ -1711,12 +1712,14 @@ function VialAttachmentImage({
   filename,
   createdAt,
   contentType,
+  createdBy,
 }: {
   sampleId: string
   attachmentId: number
   filename: string
   createdAt?: string
   contentType?: string
+  createdBy?: string
 }) {
   const [src, setSrc] = useState<string | null>(null)
   const [error, setError] = useState(false)
@@ -1767,6 +1770,7 @@ function VialAttachmentImage({
         contentType,
         takenAt: createdAt,
         takenAtLabel: 'Uploaded',
+        createdBy,
       }}
     />
   )
@@ -1979,6 +1983,7 @@ function VialAttachmentsBlock({
   photoUrl,
   photoIsMk1,
   photoReceivedAt,
+  photoReceivedBy,
   attachments,
   chromatograms,
   onPhotoChanged,
@@ -1993,6 +1998,8 @@ function VialAttachmentsBlock({
   /** Vial received_at — the check-in photo is captured at receive time, so
    *  this doubles as its capture date in the lightbox. */
   photoReceivedAt?: string | null
+  /** Receiver display name — who checked the vial in / took the photo. */
+  photoReceivedBy?: string | null
   attachments: SubSampleAttachment[]
   /** Chromatograms from this vial's HPLC preps (derived, read-only —
    *  the data lives on hplc_analyses, nothing to add/remove here). */
@@ -2122,6 +2129,7 @@ function VialAttachmentsBlock({
               badge: 'Check-in',
               takenAt: photoReceivedAt ?? undefined,
               takenAtLabel: 'Received',
+              createdBy: photoReceivedBy ?? undefined,
             }}
           />
         ) : (
@@ -2210,6 +2218,7 @@ function VialAttachmentsBlock({
                 filename={att.filename}
                 createdAt={att.created_at}
                 contentType={att.content_type}
+                createdBy={att.created_by ?? undefined}
               />
             </div>
           ))}
@@ -5855,6 +5864,11 @@ export function SampleDetails() {
                   parentSummary?.sub_samples.find(
                     s => s.sample_id === sampleId
                   )?.received_at ?? null
+                }
+                photoReceivedBy={
+                  parentSummary?.sub_samples.find(
+                    s => s.sample_id === sampleId
+                  )?.received_by ?? null
                 }
                 attachments={vialAttachments}
                 chromatograms={vialChromatograms}

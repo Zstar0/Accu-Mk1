@@ -24,6 +24,10 @@ class PackagingPhotoOut(BaseModel):
     content_type: Optional[str] = None
     created_at: datetime
     created_by_user_id: Optional[int] = None
+    # Uploader display name ("First Last", email fallback). Populated by the
+    # LIST endpoint via a batched user lookup; single-item responses leave it
+    # None.
+    created_by: Optional[str] = None
 
     class Config:
         from_attributes = True

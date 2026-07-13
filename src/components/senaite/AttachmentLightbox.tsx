@@ -22,6 +22,8 @@ export interface AttachmentLightboxMeta {
   assignedAt?: string
   /** Vial the assigned image came from (parsed from the filename). */
   sourceVialId?: string
+  /** Uploader/receiver display name — who created the image. */
+  createdBy?: string
   /** Free-text remark shown under the metadata row. */
   caption?: string
 }
@@ -122,6 +124,7 @@ export function AttachmentLightbox({
                 {meta.takenAtLabel ?? 'Taken'} {taken.toLocaleString()}
               </span>
             )}
+            {meta.createdBy && <span>by {meta.createdBy}</span>}
             {(assigned || meta.sourceVialId) && (
               <span className="text-foreground">
                 {assigned

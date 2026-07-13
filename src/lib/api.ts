@@ -34,14 +34,18 @@ export async function apiFetch<T>(
   init: RequestInit = {}
 ): Promise<T> {
   const contentType =
-    init.body !== undefined && init.body !== null ? 'application/json' : undefined
+    init.body !== undefined && init.body !== null
+      ? 'application/json'
+      : undefined
   const headers: HeadersInit = {
     ...getBearerHeaders(contentType),
     ...(init.headers ?? {}),
   }
   const response = await fetch(`${API_BASE_URL()}${path}`, { ...init, headers })
   if (!response.ok) {
-    throw new Error(`${init.method ?? 'GET'} ${path} failed: ${response.status}`)
+    throw new Error(
+      `${init.method ?? 'GET'} ${path} failed: ${response.status}`
+    )
   }
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
@@ -868,7 +872,9 @@ export interface OrderPayload {
 }
 
 /** Cast a raw payload dict to a typed OrderPayload, or null if missing. */
-export function parseOrderPayload(payload: Record<string, unknown> | null): OrderPayload | null {
+export function parseOrderPayload(
+  payload: Record<string, unknown> | null
+): OrderPayload | null {
   if (!payload) return null
   return payload as unknown as OrderPayload
 }
@@ -953,7 +959,8 @@ export async function getWooOrder(orderId: string): Promise<WooOrder | null> {
       { headers: getAuthHeaders() }
     )
     if (response.status === 404) return null
-    if (!response.ok) throw new Error(`WooCommerce order fetch failed: ${response.status}`)
+    if (!response.ok)
+      throw new Error(`WooCommerce order fetch failed: ${response.status}`)
     return response.json()
   } catch (error) {
     console.error('Get WooCommerce order error:', error)
@@ -1199,7 +1206,9 @@ export async function getExplorerOrders(
  * Get a single order from Integration Service by its WordPress order ID.
  * Returns null if not found.
  */
-export async function getExplorerOrderById(orderId: string): Promise<ExplorerOrder | null> {
+export async function getExplorerOrderById(
+  orderId: string
+): Promise<ExplorerOrder | null> {
   try {
     const response = await fetch(
       `${API_BASE_URL()}/explorer/orders/${encodeURIComponent(orderId)}`,
@@ -1665,17 +1674,17 @@ export interface ManageAnalysisResult {
 }
 
 export async function listAnalysisServices(): Promise<AnalysisService[]> {
-  const response = await fetch(
-    `${API_BASE_URL()}/explorer/analysis-services`,
-    { headers: getAuthHeaders() }
-  )
-  if (!response.ok) throw new Error(`Failed to list analysis services: ${response.status}`)
+  const response = await fetch(`${API_BASE_URL()}/explorer/analysis-services`, {
+    headers: getAuthHeaders(),
+  })
+  if (!response.ok)
+    throw new Error(`Failed to list analysis services: ${response.status}`)
   return response.json()
 }
 
 export async function addAnalysisToSample(
   sampleId: string,
-  serviceUid: string,
+  serviceUid: string
 ): Promise<ManageAnalysisResult> {
   const response = await fetch(
     `${API_BASE_URL()}/explorer/samples/${encodeURIComponent(sampleId)}/analyses`,
@@ -1711,16 +1720,18 @@ export interface RemovalImpact {
 
 export async function getRemovalImpact(
   sampleId: string,
-  keyword: string,
+  keyword: string
 ): Promise<RemovalImpact> {
   return apiFetch<RemovalImpact>(
-    `/explorer/samples/${encodeURIComponent(sampleId)}/analyses/${encodeURIComponent(keyword)}/removal-impact`,
+    `/explorer/samples/${encodeURIComponent(sampleId)}/analyses/${encodeURIComponent(keyword)}/removal-impact`
   )
 }
 
 /** Peptide ids eligible for Replace (have a full ID_/PUR_/QTY_ service set). */
 export async function getPeptidesWithServiceSet(): Promise<number[]> {
-  const r = await apiFetch<{ peptide_ids: number[] }>('/peptides/with-service-set')
+  const r = await apiFetch<{ peptide_ids: number[] }>(
+    '/peptides/with-service-set'
+  )
   return r.peptide_ids
 }
 
@@ -1732,7 +1743,12 @@ export interface ReplaceAnalyteResult {
   slot: number
   old_peptide_id: number
   new_peptide_id: number
-  vials: { deleted: unknown[]; retracted: unknown[]; blocked: unknown[]; reseeded: string[] }
+  vials: {
+    deleted: unknown[]
+    retracted: unknown[]
+    blocked: unknown[]
+    reseeded: string[]
+  }
 }
 
 /** Replace the peptide on one analyte slot. Throws on non-2xx; the thrown
@@ -1741,7 +1757,12 @@ export interface ReplaceAnalyteResult {
 export async function replaceAnalyte(
   sampleId: string,
   slot: number,
-  body: { newPeptideId: number; oldPeptideId: number; senaiteUid: string; force?: boolean },
+  body: {
+    newPeptideId: number
+    oldPeptideId: number
+    senaiteUid: string
+    force?: boolean
+  }
 ): Promise<ReplaceAnalyteResult> {
   const response = await fetch(
     `${API_BASE_URL()}/explorer/samples/${encodeURIComponent(sampleId)}/analytes/${slot}/replace`,
@@ -1754,17 +1775,23 @@ export async function replaceAnalyte(
         senaite_uid: body.senaiteUid,
         force: body.force ?? false,
       }),
-    },
+    }
   )
   if (!response.ok) {
     const payload = await response.json().catch(() => null)
     const err = new Error(
-      typeof payload?.detail === 'string' ? payload.detail : `Replace failed: ${response.status}`,
+      typeof payload?.detail === 'string'
+        ? payload.detail
+        : `Replace failed: ${response.status}`
     ) as Error & { status?: number; impact?: RemovalImpact; detail?: unknown }
     err.status = response.status
     err.detail = payload?.detail
     // 412 carries the impact buckets so the FE can show the retract-confirm modal.
-    if (response.status === 412 && payload?.detail && typeof payload.detail === 'object') {
+    if (
+      response.status === 412 &&
+      payload?.detail &&
+      typeof payload.detail === 'object'
+    ) {
       err.impact = payload.detail as RemovalImpact
     }
     throw err
@@ -1775,7 +1802,7 @@ export async function replaceAnalyte(
 export async function removeAnalysisFromSample(
   sampleId: string,
   keyword: string,
-  opts?: { confirmRetract?: boolean },
+  opts?: { confirmRetract?: boolean }
 ): Promise<ManageAnalysisResult> {
   const qs = opts?.confirmRetract ? '?confirm_retract=true' : ''
   const response = await fetch(
@@ -1787,7 +1814,9 @@ export async function removeAnalysisFromSample(
   )
   if (!response.ok) {
     const err = await response.json().catch(() => null)
-    throw new Error(err?.detail || `Failed to remove analysis: ${response.status}`)
+    throw new Error(
+      err?.detail || `Failed to remove analysis: ${response.status}`
+    )
   }
   return response.json()
 }
@@ -1818,11 +1847,17 @@ export async function getSampleAdditionalCOAs(
  */
 export async function fetchChromatogramLttb(
   verificationCode: string,
-  resolution: '5k' | '10k',
-): Promise<{ x: number[]; y: number[]; peaks?: any[]; points?: number; source_points?: number }> {
+  resolution: '5k' | '10k'
+): Promise<{
+  x: number[]
+  y: number[]
+  peaks?: any[]
+  points?: number
+  source_points?: number
+}> {
   const response = await fetch(
     `${API_BASE_URL()}/explorer/chromatogram-lttb/${encodeURIComponent(verificationCode)}/${resolution}`,
-    { headers: getAuthHeaders() },
+    { headers: getAuthHeaders() }
   )
   if (!response.ok) throw new Error(`LTTB fetch failed: ${response.status}`)
   return response.json()
@@ -1862,7 +1897,10 @@ export interface SampleCOAActionResponse {
   warning?: string | null
 }
 
-async function extractErrorMessage(response: Response, fallback: string): Promise<string> {
+async function extractErrorMessage(
+  response: Response,
+  fallback: string
+): Promise<string> {
   try {
     const body = await response.json()
     const detail = body?.detail ?? body?.message ?? fallback
@@ -1880,11 +1918,17 @@ async function extractErrorMessage(response: Response, fallback: string): Promis
       let msg: string = detail.message ?? fallback
       if (Array.isArray(detail.unresolved) && detail.unresolved.length > 0) {
         const lines = detail.unresolved
-          .map((u: { analyte_name?: string; analyte_keyword?: string; reason?: string }) => {
-            const name = u.analyte_name ?? u.analyte_keyword
-            if (!name) return null
-            return u.reason ? `- ${name}: ${u.reason}` : `- ${name}`
-          })
+          .map(
+            (u: {
+              analyte_name?: string
+              analyte_keyword?: string
+              reason?: string
+            }) => {
+              const name = u.analyte_name ?? u.analyte_keyword
+              if (!name) return null
+              return u.reason ? `- ${name}: ${u.reason}` : `- ${name}`
+            }
+          )
           .filter(Boolean)
           .join('\n')
         if (lines) msg += `\n${lines}`
@@ -1904,7 +1948,13 @@ export async function generateSenaiteCOA(
     `${API_BASE_URL()}/wizard/senaite/samples/${encodeURIComponent(sampleId)}/generate-coa`,
     { method: 'POST', headers: getBearerHeaders() }
   )
-  if (!response.ok) throw new Error(await extractErrorMessage(response, `COA generation failed: ${response.status}`))
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `COA generation failed: ${response.status}`
+      )
+    )
   return response.json()
 }
 
@@ -1912,7 +1962,11 @@ export interface GenerateVialCOAsResult {
   success: boolean
   message: string
   expected: number
-  generated: { vial_sequence: number; verification_code: string | null; generation_id: string | null }[]
+  generated: {
+    vial_sequence: number
+    verification_code: string | null
+    generation_id: string | null
+  }[]
   skipped: number[]
   errors: { vial_sequence: number; error: string }[]
 }
@@ -1933,7 +1987,13 @@ export async function generateVialCOAs(
       body: JSON.stringify({}),
     }
   )
-  if (!response.ok) throw new Error(await extractErrorMessage(response, `Vial COA generation failed: ${response.status}`))
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Vial COA generation failed: ${response.status}`
+      )
+    )
   return response.json()
 }
 
@@ -1944,7 +2004,13 @@ export async function publishSenaiteCOA(
     `${API_BASE_URL()}/wizard/senaite/samples/${encodeURIComponent(sampleId)}/publish-coa`,
     { method: 'POST', headers: getBearerHeaders() }
   )
-  if (!response.ok) throw new Error(await extractErrorMessage(response, `COA publish failed: ${response.status}`))
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `COA publish failed: ${response.status}`
+      )
+    )
   return response.json()
 }
 
@@ -1955,7 +2021,13 @@ export async function regenPrimaryCOA(
     `${API_BASE_URL()}/wizard/senaite/samples/${encodeURIComponent(sampleId)}/regen-primary-coa`,
     { method: 'POST', headers: getBearerHeaders() }
   )
-  if (!response.ok) throw new Error(await extractErrorMessage(response, `Primary COA regen failed: ${response.status}`))
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Primary COA regen failed: ${response.status}`
+      )
+    )
   return response.json()
 }
 
@@ -1966,7 +2038,13 @@ export async function regenAdditionalCOA(
     `${API_BASE_URL()}/wizard/senaite/additional-coas/${encodeURIComponent(configId)}/regen-coa`,
     { method: 'POST', headers: getBearerHeaders() }
   )
-  if (!response.ok) throw new Error(await extractErrorMessage(response, `Additional COA regen failed: ${response.status}`))
+  if (!response.ok)
+    throw new Error(
+      await extractErrorMessage(
+        response,
+        `Additional COA regen failed: ${response.status}`
+      )
+    )
   return response.json()
 }
 
@@ -2047,7 +2125,12 @@ export interface CalibrationCurve {
   slope: number
   intercept: number
   r_squared: number
-  standard_data: { concentrations: number[]; areas: number[]; rts?: number[]; excluded_indices?: number[] } | null
+  standard_data: {
+    concentrations: number[]
+    areas: number[]
+    rts?: number[]
+    excluded_indices?: number[]
+  } | null
   source_filename: string | null
   source_path: string | null
   source_date: string | null
@@ -2212,11 +2295,14 @@ export interface PeptideCreateInput {
   analyte_class?: AnalyteClass
 }
 
-export type BlendCalibrationData = Record<string, {
-  peptide_id: number
-  name: string
-  calibrations: CalibrationCurve[]
-}>
+export type BlendCalibrationData = Record<
+  string,
+  {
+    peptide_id: number
+    name: string
+    calibrations: CalibrationCurve[]
+  }
+>
 
 export interface CalibrationDataInput {
   concentrations: number[]
@@ -2228,9 +2314,13 @@ export interface CalibrationDataInput {
   notes?: string
 }
 
-export async function getPeptides(opts?: { analyteClass?: AnalyteClass }): Promise<PeptideRecord[]> {
+export async function getPeptides(opts?: {
+  analyteClass?: AnalyteClass
+}): Promise<PeptideRecord[]> {
   try {
-    const qs = opts?.analyteClass ? `?analyte_class=${encodeURIComponent(opts.analyteClass)}` : ''
+    const qs = opts?.analyteClass
+      ? `?analyte_class=${encodeURIComponent(opts.analyteClass)}`
+      : ''
     const response = await fetch(`${API_BASE_URL()}/peptides${qs}`, {
       headers: getBearerHeaders(),
     })
@@ -2268,14 +2358,16 @@ export async function createPeptide(
 
 export async function updatePeptide(
   peptideId: number,
-  data: Partial<PeptideCreateInput & {
-    active: boolean
-    method_ids: number[]
-    prep_vial_count: number
-    hplc_aliases: string[] | null
-    display_aliases: string[] | null
-    component_vial_assignments: Record<string, number>
-  }>
+  data: Partial<
+    PeptideCreateInput & {
+      active: boolean
+      method_ids: number[]
+      prep_vial_count: number
+      hplc_aliases: string[] | null
+      display_aliases: string[] | null
+      component_vial_assignments: Record<string, number>
+    }
+  >
 ): Promise<PeptideRecord> {
   try {
     const response = await fetch(`${API_BASE_URL()}/peptides/${peptideId}`, {
@@ -2345,7 +2437,9 @@ export async function setSampleAnalyteAlias(
   )
   if (!response.ok) {
     const err = await response.json().catch(() => null)
-    throw new Error(err?.detail || `Set analyte alias failed: ${response.status}`)
+    throw new Error(
+      err?.detail || `Set analyte alias failed: ${response.status}`
+    )
   }
   return response.json()
 }
@@ -2369,18 +2463,24 @@ export async function getInstruments(): Promise<Instrument[]> {
   const response = await fetch(`${API_BASE_URL()}/instruments`, {
     headers: getBearerHeaders(),
   })
-  if (!response.ok) throw new Error(`Get instruments failed: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Get instruments failed: ${response.status}`)
   return response.json()
 }
 
-export async function syncInstruments(): Promise<{ created: number; total: number }> {
+export async function syncInstruments(): Promise<{
+  created: number
+  total: number
+}> {
   const response = await fetch(`${API_BASE_URL()}/instruments/sync`, {
     method: 'POST',
     headers: getBearerHeaders(),
   })
   if (!response.ok) {
     const err = await response.json().catch(() => null)
-    throw new Error(err?.detail || `Sync instruments failed: ${response.status}`)
+    throw new Error(
+      err?.detail || `Sync instruments failed: ${response.status}`
+    )
   }
   return response.json()
 }
@@ -2414,15 +2514,22 @@ export interface AnalysisServiceRecord {
  * Integration Service for SENAITE data. Consumers needing keyword → service-id
  * mapping (e.g., the order-SLA cell in D2) must use this local one.
  */
-export async function getAnalysisServices(opts?: { search?: string; category?: string }): Promise<AnalysisServiceRecord[]> {
+export async function getAnalysisServices(opts?: {
+  search?: string
+  category?: string
+}): Promise<AnalysisServiceRecord[]> {
   const searchParams = new URLSearchParams()
   if (opts?.search) searchParams.set('search', opts.search)
   if (opts?.category) searchParams.set('category', opts.category)
   const qs = searchParams.toString()
-  const response = await fetch(`${API_BASE_URL()}/analysis-services${qs ? `?${qs}` : ''}`, {
-    headers: getBearerHeaders(),
-  })
-  if (!response.ok) throw new Error(`Get analysis services failed: ${response.status}`)
+  const response = await fetch(
+    `${API_BASE_URL()}/analysis-services${qs ? `?${qs}` : ''}`,
+    {
+      headers: getBearerHeaders(),
+    }
+  )
+  if (!response.ok)
+    throw new Error(`Get analysis services failed: ${response.status}`)
   return response.json()
 }
 
@@ -2430,12 +2537,16 @@ export async function updateAnalysisServicePeptide(
   serviceId: number,
   peptideId: number | null
 ): Promise<AnalysisServiceRecord> {
-  const response = await fetch(`${API_BASE_URL()}/analysis-services/${serviceId}/peptide`, {
-    method: 'PUT',
-    headers: getBearerHeaders('application/json'),
-    body: JSON.stringify({ peptide_id: peptideId }),
-  })
-  if (!response.ok) throw new Error(`Update peptide link failed: ${response.status}`)
+  const response = await fetch(
+    `${API_BASE_URL()}/analysis-services/${serviceId}/peptide`,
+    {
+      method: 'PUT',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ peptide_id: peptideId }),
+    }
+  )
+  if (!response.ok)
+    throw new Error(`Update peptide link failed: ${response.status}`)
   return response.json()
 }
 
@@ -2444,38 +2555,51 @@ export async function updateAnalysisServiceResultType(
   body: {
     result_type: string | null
     result_options: { value: string; label: string }[] | null
-  },
+  }
 ): Promise<AnalysisServiceRecord> {
-  const response = await fetch(`${API_BASE_URL()}/analysis-services/${serviceId}/result-type`, {
-    method: 'PATCH',
-    headers: getBearerHeaders('application/json'),
-    body: JSON.stringify(body),
-  })
-  if (!response.ok) throw new Error(`Update result type failed: ${response.status}`)
+  const response = await fetch(
+    `${API_BASE_URL()}/analysis-services/${serviceId}/result-type`,
+    {
+      method: 'PATCH',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(body),
+    }
+  )
+  if (!response.ok)
+    throw new Error(`Update result type failed: ${response.status}`)
   return response.json()
 }
 
 export async function updateAnalysisServiceVarianceCapable(
   serviceId: number,
-  varianceCapable: boolean,
+  varianceCapable: boolean
 ): Promise<AnalysisServiceRecord> {
-  const response = await fetch(`${API_BASE_URL()}/analysis-services/${serviceId}/variance-capable`, {
-    method: 'PATCH',
-    headers: getBearerHeaders('application/json'),
-    body: JSON.stringify({ variance_capable: varianceCapable }),
-  })
-  if (!response.ok) throw new Error(`Update variance-capable failed: ${response.status}`)
+  const response = await fetch(
+    `${API_BASE_URL()}/analysis-services/${serviceId}/variance-capable`,
+    {
+      method: 'PATCH',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ variance_capable: varianceCapable }),
+    }
+  )
+  if (!response.ok)
+    throw new Error(`Update variance-capable failed: ${response.status}`)
   return response.json()
 }
 
-export async function syncAnalysisServices(): Promise<{ created: number; total: number }> {
+export async function syncAnalysisServices(): Promise<{
+  created: number
+  total: number
+}> {
   const response = await fetch(`${API_BASE_URL()}/analysis-services/sync`, {
     method: 'POST',
     headers: getBearerHeaders(),
   })
   if (!response.ok) {
     const err = await response.json().catch(() => null)
-    throw new Error(err?.detail || `Sync analysis services failed: ${response.status}`)
+    throw new Error(
+      err?.detail || `Sync analysis services failed: ${response.status}`
+    )
   }
   return response.json()
 }
@@ -2490,9 +2614,7 @@ export async function getMethods(): Promise<HplcMethod[]> {
   return response.json()
 }
 
-export async function createMethod(
-  data: HplcMethodInput
-): Promise<HplcMethod> {
+export async function createMethod(data: HplcMethodInput): Promise<HplcMethod> {
   const response = await fetch(`${API_BASE_URL()}/hplc/methods`, {
     method: 'POST',
     headers: getBearerHeaders('application/json'),
@@ -2612,7 +2734,8 @@ export async function createCalibrationFromStandard(
   if (!response.ok) {
     const err = await response.json().catch(() => null)
     throw new Error(
-      err?.detail || `Create calibration from standard failed: ${response.status}`
+      err?.detail ||
+        `Create calibration from standard failed: ${response.status}`
     )
   }
   return response.json()
@@ -2651,7 +2774,9 @@ export async function updateCalibration(
   )
   if (!response.ok) {
     const err = await response.json().catch(() => null)
-    throw new Error(err?.detail || `Update calibration failed: ${response.status}`)
+    throw new Error(
+      err?.detail || `Update calibration failed: ${response.status}`
+    )
   }
   return response.json()
 }
@@ -2659,7 +2784,7 @@ export async function updateCalibration(
 /** Fetch a single calibration curve with full data (including chromatogram_data). */
 export async function getCalibration(
   peptideId: number,
-  calibrationId: number,
+  calibrationId: number
 ): Promise<CalibrationCurve> {
   const response = await fetch(
     `${API_BASE_URL()}/peptides/${peptideId}/calibrations/${calibrationId}`,
@@ -2670,7 +2795,9 @@ export async function getCalibration(
   )
   if (!response.ok) {
     const err = await response.json().catch(() => null)
-    throw new Error(err?.detail || `Fetch calibration failed: ${response.status}`)
+    throw new Error(
+      err?.detail || `Fetch calibration failed: ${response.status}`
+    )
   }
   return response.json()
 }
@@ -2688,7 +2815,9 @@ export async function deleteCalibration(
   )
   if (!response.ok && response.status !== 204) {
     const err = await response.json().catch(() => null)
-    throw new Error(err?.detail || `Delete calibration failed: ${response.status}`)
+    throw new Error(
+      err?.detail || `Delete calibration failed: ${response.status}`
+    )
   }
 }
 
@@ -2715,7 +2844,10 @@ export interface HPLCAnalyzeRequest {
   chromatogram_data?: { times: number[]; signals: number[] }
   run_group_id?: string
   // Phase 13: standard injection RT lookup for same-method identity check
-  standard_injection_rts?: Record<string, { rt: number; source_sample_id: string }>
+  standard_injection_rts?: Record<
+    string,
+    { rt: number; source_sample_id: string }
+  >
   // Phase 13.5: Audit trail
   debug_log?: { level: string; msg: string }[]
   source_files?: { filename: string; content: string; sha256: string }[]
@@ -2794,7 +2926,9 @@ export async function getHPLCAnalysesBySamplePrep(
   )
   if (!response.ok) {
     const err = await response.json().catch(() => null)
-    throw new Error(err?.detail || `Failed to fetch analyses: ${response.status}`)
+    throw new Error(
+      err?.detail || `Failed to fetch analyses: ${response.status}`
+    )
   }
   return response.json()
 }
@@ -2886,10 +3020,13 @@ export interface SeedFromServicesResult {
 }
 
 export async function seedPeptidesFromServices(): Promise<SeedFromServicesResult> {
-  const response = await fetch(`${API_BASE_URL()}/peptides/seed-from-services`, {
-    method: 'POST',
-    headers: getBearerHeaders(),
-  })
+  const response = await fetch(
+    `${API_BASE_URL()}/peptides/seed-from-services`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders(),
+    }
+  )
   if (!response.ok) {
     const text = await response.text()
     throw new Error(text || `Seed failed: ${response.status}`)
@@ -3017,9 +3154,18 @@ export interface WizardSessionResponse {
   updated_at: string
   completed_at: string | null
   measurements: WizardMeasurementResponse[]
-  calculations: (Record<string, number> & { analyte_calculations?: Record<string, Record<string, number>> }) | null
+  calculations:
+    | (Record<string, number> & {
+        analyte_calculations?: Record<string, Record<string, number>>
+      })
+    | null
   vial_params: Record<string, VialParams> | null
-  vial_calculations: Record<string, Record<string, number> & { analyte_calculations?: Record<string, Record<string, number>> }> | null
+  vial_calculations: Record<
+    string,
+    Record<string, number> & {
+      analyte_calculations?: Record<string, Record<string, number>>
+    }
+  > | null
   // Phase 09: Standard prep metadata
   is_standard: boolean
   manufacturer: string | null
@@ -3065,7 +3211,9 @@ export async function createWizardSession(data: {
     })
     if (!response.ok) {
       const body = await response.json().catch(() => null)
-      throw new Error(body?.detail || `Create wizard session failed: ${response.status}`)
+      throw new Error(
+        body?.detail || `Create wizard session failed: ${response.status}`
+      )
     }
     return response.json()
   } catch (error) {
@@ -3134,7 +3282,12 @@ export async function listWizardSessions(params?: {
  */
 export async function recordWizardMeasurement(
   sessionId: number,
-  data: { step_key: string; weight_mg: number; source: string; vial_number?: number }
+  data: {
+    step_key: string
+    weight_mg: number
+    source: string
+    vial_number?: number
+  }
 ): Promise<WizardSessionResponse> {
   try {
     const response = await fetch(
@@ -3261,7 +3414,7 @@ export interface VialData {
 
 export interface SamplePrep {
   id: number
-  sample_id: string                   // SP-YYYYMMDD-NNNN
+  sample_id: string // SP-YYYYMMDD-NNNN
   wizard_session_id: number | null
   peptide_id: number
   peptide_name: string | null
@@ -3327,14 +3480,16 @@ export async function listSamplePreps(params?: {
 }): Promise<SamplePrep[]> {
   const qs = new URLSearchParams()
   if (params?.search) qs.set('search', params.search)
-  if (params?.is_standard != null) qs.set('is_standard', String(params.is_standard))
+  if (params?.is_standard != null)
+    qs.set('is_standard', String(params.is_standard))
   if (params?.limit != null) qs.set('limit', String(params.limit))
   if (params?.offset != null) qs.set('offset', String(params.offset))
   const response = await fetch(
     `${API_BASE_URL()}/sample-preps${qs.toString() ? '?' + qs : ''}`,
     { headers: getBearerHeaders() }
   )
-  if (!response.ok) throw new Error(`List sample preps failed: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`List sample preps failed: ${response.status}`)
   return response.json()
 }
 
@@ -3342,24 +3497,35 @@ export async function getSamplePrep(id: number): Promise<SamplePrep> {
   const response = await fetch(`${API_BASE_URL()}/sample-preps/${id}`, {
     headers: getBearerHeaders(),
   })
-  if (!response.ok) throw new Error(`Get sample prep ${id} failed: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Get sample prep ${id} failed: ${response.status}`)
   return response.json()
 }
 
 export async function updateSamplePrep(
   id: number,
-  data: Partial<Pick<SamplePrep,
-    | 'senaite_sample_id' | 'declared_weight_mg' | 'target_conc_ug_ml'
-    | 'target_total_vol_ul' | 'status' | 'notes'
-    | 'instrument_name' | 'manufacturer' | 'standard_notes'
-  >>
+  data: Partial<
+    Pick<
+      SamplePrep,
+      | 'senaite_sample_id'
+      | 'declared_weight_mg'
+      | 'target_conc_ug_ml'
+      | 'target_total_vol_ul'
+      | 'status'
+      | 'notes'
+      | 'instrument_name'
+      | 'manufacturer'
+      | 'standard_notes'
+    >
+  >
 ): Promise<SamplePrep> {
   const response = await fetch(`${API_BASE_URL()}/sample-preps/${id}`, {
     method: 'PATCH',
     headers: getBearerHeaders('application/json'),
     body: JSON.stringify(data),
   })
-  if (!response.ok) throw new Error(`Update sample prep ${id} failed: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Update sample prep ${id} failed: ${response.status}`)
   return response.json()
 }
 
@@ -3371,10 +3537,13 @@ export async function updateSamplePrep(
 export async function rebridgeSamplePrep(
   prepId: number
 ): Promise<{ submitted: number[]; count: number }> {
-  const response = await fetch(`${API_BASE_URL()}/hplc/sample-preps/${prepId}/bridge`, {
-    method: 'POST',
-    headers: getBearerHeaders(),
-  })
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/sample-preps/${prepId}/bridge`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders(),
+    }
+  )
   if (!response.ok) {
     const err = await response.json().catch(() => null)
     throw new Error(
@@ -3391,7 +3560,8 @@ export async function deleteSamplePrep(id: number): Promise<void> {
     method: 'DELETE',
     headers: getBearerHeaders(),
   })
-  if (!response.ok) throw new Error(`Delete sample prep ${id} failed: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Delete sample prep ${id} failed: ${response.status}`)
 }
 
 // --- HPLC Scan ---
@@ -3474,10 +3644,10 @@ export function scanSamplePrepsHplc(opts: {
 
   ;(async () => {
     try {
-      const response = await fetch(
-        `${API_BASE_URL()}/sample-preps/scan-hplc`,
-        { headers: getBearerHeaders(), signal: abortController.signal }
-      )
+      const response = await fetch(`${API_BASE_URL()}/sample-preps/scan-hplc`, {
+        headers: getBearerHeaders(),
+        signal: abortController.signal,
+      })
       if (!response.ok) {
         opts.onError(`Scan request failed: ${response.status}`)
         return
@@ -3492,7 +3662,8 @@ export function scanSamplePrepsHplc(opts: {
         const parts = buffer.split('\n\n')
         buffer = parts.pop() ?? ''
         for (const part of parts) {
-          let eventType = 'message', dataStr = ''
+          let eventType = 'message',
+            dataStr = ''
           for (const line of part.split('\n')) {
             if (line.startsWith('event: ')) eventType = line.slice(7).trim()
             else if (line.startsWith('data: ')) dataStr = line.slice(6).trim()
@@ -3500,17 +3671,27 @@ export function scanSamplePrepsHplc(opts: {
           if (!dataStr) continue
           try {
             const data = JSON.parse(dataStr)
-            if (eventType === 'log')      opts.onLog(data)
-            else if (eventType === 'match')    opts.onMatch(data)
-            else if (eventType === 'progress') opts.onProgress(data.current, data.total)
-            else if (eventType === 'done')  { opts.onDone(data.matches); return }
-            else if (eventType === 'error') { opts.onError(data.msg); return }
-          } catch { /* ignore malformed SSE chunks */ }
+            if (eventType === 'log') opts.onLog(data)
+            else if (eventType === 'match') opts.onMatch(data)
+            else if (eventType === 'progress')
+              opts.onProgress(data.current, data.total)
+            else if (eventType === 'done') {
+              opts.onDone(data.matches)
+              return
+            } else if (eventType === 'error') {
+              opts.onError(data.msg)
+              return
+            }
+          } catch {
+            /* ignore malformed SSE chunks */
+          }
         }
       }
     } catch (err) {
       if ((err as Error).name !== 'AbortError')
-        opts.onError(err instanceof Error ? err.message : 'SSE connection error')
+        opts.onError(
+          err instanceof Error ? err.message : 'SSE connection error'
+        )
     }
   })()
 
@@ -3554,7 +3735,7 @@ export interface SenaiteAnalysis {
   title: string
   result: string | null
   result_type?: string | null
-  result_options: SenaiteResultOption[]  // always present from backend; [] if no predefined options
+  result_options: SenaiteResultOption[] // always present from backend; [] if no predefined options
   unit: string | null
   method: string | null
   method_uid: string | null
@@ -3675,20 +3856,23 @@ export async function lookupSenaiteSample(
   /** 'mk1' reads from the Mk1 registry endpoint instead of the live SENAITE lookup. */
   source: 'senaite' | 'mk1' = 'senaite'
 ): Promise<SenaiteLookupResult> {
-  const url = source === 'mk1'
-    ? `${API_BASE_URL()}/registry/sample/${encodeURIComponent(sampleId)}/details`
-    : `${API_BASE_URL()}/wizard/senaite/lookup?id=${encodeURIComponent(sampleId)}&no_cache=${noCache}`
+  const url =
+    source === 'mk1'
+      ? `${API_BASE_URL()}/registry/sample/${encodeURIComponent(sampleId)}/details`
+      : `${API_BASE_URL()}/wizard/senaite/lookup?id=${encodeURIComponent(sampleId)}&no_cache=${noCache}`
   return senaiteLimiter(async () => {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 15_000)
     try {
-      const response = await fetch(
-        url,
-        { headers: getBearerHeaders(), signal: controller.signal }
-      )
+      const response = await fetch(url, {
+        headers: getBearerHeaders(),
+        signal: controller.signal,
+      })
       if (!response.ok) {
         const err = await response.json().catch(() => null)
-        throw new Error(err?.detail || `SENAITE lookup failed: ${response.status}`)
+        throw new Error(
+          err?.detail || `SENAITE lookup failed: ${response.status}`
+        )
       }
       return response.json()
     } catch (error) {
@@ -3705,7 +3889,9 @@ export async function lookupSenaiteSample(
 const _attachmentCache = new Map<string, string>()
 const _attachmentTextCache = new Map<string, string>()
 
-export async function fetchSenaiteAttachmentText(attachmentUid: string): Promise<string> {
+export async function fetchSenaiteAttachmentText(
+  attachmentUid: string
+): Promise<string> {
   const cached = _attachmentTextCache.get(attachmentUid)
   if (cached) return cached
 
@@ -3713,7 +3899,8 @@ export async function fetchSenaiteAttachmentText(attachmentUid: string): Promise
     `${API_BASE_URL()}/wizard/senaite/attachment/${encodeURIComponent(attachmentUid)}`,
     { headers: getBearerHeaders() }
   )
-  if (!response.ok) throw new Error(`Failed to fetch attachment: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Failed to fetch attachment: ${response.status}`)
   const text = await response.text()
   _attachmentTextCache.set(attachmentUid, text)
   return text
@@ -3738,12 +3925,15 @@ export async function fetchSenaiteAttachmentUrl(
   return url
 }
 
-export async function fetchSenaiteReportUrl(reportUid: string): Promise<string> {
+export async function fetchSenaiteReportUrl(
+  reportUid: string
+): Promise<string> {
   const response = await fetch(
     `${API_BASE_URL()}/wizard/senaite/report/${encodeURIComponent(reportUid)}`,
     { headers: getBearerHeaders() }
   )
-  if (!response.ok) throw new Error(`Failed to fetch report: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Failed to fetch report: ${response.status}`)
   const blob = await response.blob()
   return URL.createObjectURL(blob)
 }
@@ -3774,16 +3964,20 @@ export async function uploadSenaiteAttachment(
   return response.json() as Promise<SenaiteUploadAttachmentResponse>
 }
 
-export async function getChromatogramStatus(): Promise<{ prep_ids_with_chromatogram: number[] }> {
-  const response = await fetch(
-    `${API_BASE_URL()}/hplc/chromatogram-status`,
-    { headers: getBearerHeaders() }
-  )
-  if (!response.ok) throw new Error(`Failed to fetch chromatogram status: ${response.status}`)
+export async function getChromatogramStatus(): Promise<{
+  prep_ids_with_chromatogram: number[]
+}> {
+  const response = await fetch(`${API_BASE_URL()}/hplc/chromatogram-status`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok)
+    throw new Error(`Failed to fetch chromatogram status: ${response.status}`)
   return response.json()
 }
 
-export async function refetchChromatogram(analysisId: number): Promise<{ success: boolean; message: string; points?: number }> {
+export async function refetchChromatogram(
+  analysisId: number
+): Promise<{ success: boolean; message: string; points?: number }> {
   const response = await fetch(
     `${API_BASE_URL()}/hplc/analyses/${analysisId}/refetch-chromatogram`,
     { method: 'POST', headers: getBearerHeaders() }
@@ -3795,7 +3989,9 @@ export async function refetchChromatogram(analysisId: number): Promise<{ success
   return response.json()
 }
 
-export async function renderChromatogramImage(analysisId: number): Promise<string> {
+export async function renderChromatogramImage(
+  analysisId: number
+): Promise<string> {
   const response = await fetch(
     `${API_BASE_URL()}/hplc/analyses/${analysisId}/chromatogram-image`,
     { method: 'POST', headers: getBearerHeaders() }
@@ -3810,14 +4006,21 @@ export async function renderChromatogramImage(analysisId: number): Promise<strin
 export async function uploadChromatogramToSenaite(
   analysisId: number,
   sampleUid: string
-): Promise<{ success: boolean; message: string; filename?: string; size_bytes?: number }> {
+): Promise<{
+  success: boolean
+  message: string
+  filename?: string
+  size_bytes?: number
+}> {
   const response = await fetch(
     `${API_BASE_URL()}/hplc/analyses/${analysisId}/chromatogram-to-senaite?sample_uid=${encodeURIComponent(sampleUid)}`,
     { method: 'POST', headers: getBearerHeaders() }
   )
   if (!response.ok) {
     const err = await response.json().catch(() => null)
-    throw new Error(err?.detail || `Chromatogram upload failed: ${response.status}`)
+    throw new Error(
+      err?.detail || `Chromatogram upload failed: ${response.status}`
+    )
   }
   return response.json()
 }
@@ -3877,7 +4080,9 @@ export async function setAnalysisResult(
     )
     if (!response.ok) {
       const err = await response.json().catch(() => null)
-      throw new Error(err?.detail || `Set result (mk1) failed: ${response.status}`)
+      throw new Error(
+        err?.detail || `Set result (mk1) failed: ${response.status}`
+      )
     }
     const row = await response.json()
     return {
@@ -3927,7 +4132,9 @@ export async function setAnalysisMethodInstrument(
     )
     if (!response.ok) {
       const err = await response.json().catch(() => null)
-      throw new Error(err?.detail || `Set method/instrument (mk1) failed: ${response.status}`)
+      throw new Error(
+        err?.detail || `Set method/instrument (mk1) failed: ${response.status}`
+      )
     }
     const row = await response.json()
     return {
@@ -3942,19 +4149,30 @@ export async function setAnalysisMethodInstrument(
     {
       method: 'POST',
       headers: getBearerHeaders('application/json'),
-      body: JSON.stringify({ method_uid: methodUid, instrument_uid: instrumentUid }),
+      body: JSON.stringify({
+        method_uid: methodUid,
+        instrument_uid: instrumentUid,
+      }),
     }
   )
   if (!response.ok) {
     const err = await response.json().catch(() => null)
-    throw new Error(err?.detail || `Set method/instrument failed: ${response.status}`)
+    throw new Error(
+      err?.detail || `Set method/instrument failed: ${response.status}`
+    )
   }
   return response.json()
 }
 
 export async function transitionAnalysis(
   uid: string,
-  transition: 'submit' | 'verify' | 'retract' | 'reject' | 'retest' | 'variance_verify'
+  transition:
+    | 'submit'
+    | 'verify'
+    | 'retract'
+    | 'reject'
+    | 'retest'
+    | 'variance_verify'
 ): Promise<AnalysisResultResponse> {
   // Phase 3: route mk1:<id> UIDs to the Mk1 transitions endpoint. The
   // 'retest' kind creates a linked retest row on the Mk1 side and returns
@@ -3974,7 +4192,9 @@ export async function transitionAnalysis(
     )
     if (!response.ok) {
       const err = await response.json().catch(() => null)
-      throw new Error(err?.detail || `Transition (mk1) failed: ${response.status}`)
+      throw new Error(
+        err?.detail || `Transition (mk1) failed: ${response.status}`
+      )
     }
     const row = await response.json()
     return {
@@ -4043,7 +4263,9 @@ export interface PromoteResponse {
  * Throws on non-2xx with a structured Error message including the backend's
  * detail (404 missing source, 409 parent_row_already_exists, 400 validation).
  */
-export async function promoteAnalyses(req: PromoteRequest): Promise<PromoteResponse> {
+export async function promoteAnalyses(
+  req: PromoteRequest
+): Promise<PromoteResponse> {
   const response = await fetch(`${API_BASE_URL()}/api/lims-analyses/promote`, {
     method: 'POST',
     headers: getBearerHeaders('application/json'),
@@ -4052,9 +4274,10 @@ export async function promoteAnalyses(req: PromoteRequest): Promise<PromoteRespo
   if (!response.ok) {
     const err = await response.json().catch(() => null)
     const detail = err?.detail
-    const message = typeof detail === 'string'
-      ? detail
-      : detail?.message ?? `Promote failed: ${response.status}`
+    const message =
+      typeof detail === 'string'
+        ? detail
+        : (detail?.message ?? `Promote failed: ${response.status}`)
     throw new Error(message)
   }
   return response.json()
@@ -4133,7 +4356,9 @@ export async function getRegistrySamples(
   })
   if (!response.ok) {
     const err = await response.json().catch(() => null)
-    throw new Error(err?.detail || `Registry samples failed: ${response.status}`)
+    throw new Error(
+      err?.detail || `Registry samples failed: ${response.status}`
+    )
   }
   return response.json()
 }
@@ -4232,12 +4457,15 @@ export async function browseSharePoint(
   return response.json()
 }
 
-export async function getFolderChromFiles(folderId: string): Promise<SharePointItem[]> {
+export async function getFolderChromFiles(
+  folderId: string
+): Promise<SharePointItem[]> {
   const response = await fetch(
     `${API_BASE_URL()}/sharepoint/folder-by-id/${encodeURIComponent(folderId)}/chrom-files`,
     { headers: getBearerHeaders() }
   )
-  if (!response.ok) throw new Error(`Chrom file lookup failed: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Chrom file lookup failed: ${response.status}`)
   const data = await response.json()
   return data.files as SharePointItem[]
 }
@@ -4304,27 +4532,35 @@ export async function getServiceGroups(): Promise<ServiceGroup[]> {
   const response = await fetch(`${API_BASE_URL()}/service-groups`, {
     headers: getBearerHeaders(),
   })
-  if (!response.ok) throw new Error(`Failed to load service groups: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Failed to load service groups: ${response.status}`)
   return response.json()
 }
 
-export async function createServiceGroup(data: ServiceGroupCreate): Promise<ServiceGroup> {
+export async function createServiceGroup(
+  data: ServiceGroupCreate
+): Promise<ServiceGroup> {
   const response = await fetch(`${API_BASE_URL()}/service-groups`, {
     method: 'POST',
     headers: getBearerHeaders('application/json'),
     body: JSON.stringify(data),
   })
-  if (!response.ok) throw new Error(`Failed to create service group: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Failed to create service group: ${response.status}`)
   return response.json()
 }
 
-export async function updateServiceGroup(id: number, data: ServiceGroupUpdate): Promise<ServiceGroup> {
+export async function updateServiceGroup(
+  id: number,
+  data: ServiceGroupUpdate
+): Promise<ServiceGroup> {
   const response = await fetch(`${API_BASE_URL()}/service-groups/${id}`, {
     method: 'PUT',
     headers: getBearerHeaders('application/json'),
     body: JSON.stringify(data),
   })
-  if (!response.ok) throw new Error(`Failed to update service group: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Failed to update service group: ${response.status}`)
   return response.json()
 }
 
@@ -4333,14 +4569,21 @@ export async function deleteServiceGroup(id: number): Promise<void> {
     method: 'DELETE',
     headers: getBearerHeaders(),
   })
-  if (!response.ok) throw new Error(`Failed to delete service group: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Failed to delete service group: ${response.status}`)
 }
 
-export async function getServiceGroupMembers(groupId: number): Promise<number[]> {
-  const response = await fetch(`${API_BASE_URL()}/service-groups/${groupId}/members`, {
-    headers: getBearerHeaders(),
-  })
-  if (!response.ok) throw new Error(`Failed to load service group members: ${response.status}`)
+export async function getServiceGroupMembers(
+  groupId: number
+): Promise<number[]> {
+  const response = await fetch(
+    `${API_BASE_URL()}/service-groups/${groupId}/members`,
+    {
+      headers: getBearerHeaders(),
+    }
+  )
+  if (!response.ok)
+    throw new Error(`Failed to load service group members: ${response.status}`)
   return response.json()
 }
 
@@ -4348,12 +4591,18 @@ export async function setServiceGroupMembers(
   groupId: number,
   analysisServiceIds: number[]
 ): Promise<{ count: number }> {
-  const response = await fetch(`${API_BASE_URL()}/service-groups/${groupId}/members`, {
-    method: 'PUT',
-    headers: getBearerHeaders('application/json'),
-    body: JSON.stringify({ analysis_service_ids: analysisServiceIds }),
-  })
-  if (!response.ok) throw new Error(`Failed to update service group members: ${response.status}`)
+  const response = await fetch(
+    `${API_BASE_URL()}/service-groups/${groupId}/members`,
+    {
+      method: 'PUT',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ analysis_service_ids: analysisServiceIds }),
+    }
+  )
+  if (!response.ok)
+    throw new Error(
+      `Failed to update service group members: ${response.status}`
+    )
   return response.json()
 }
 
@@ -4397,70 +4646,101 @@ export interface SlaPriorityTier {
 }
 
 export async function getSlaTiers(): Promise<SlaTier[]> {
-  const response = await fetch(`${API_BASE_URL()}/sla-tiers`, { headers: getBearerHeaders() })
-  if (!response.ok) throw new Error(`Failed to load SLA tiers: ${response.status}`)
+  const response = await fetch(`${API_BASE_URL()}/sla-tiers`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok)
+    throw new Error(`Failed to load SLA tiers: ${response.status}`)
   return response.json()
 }
 
 export async function createSlaTier(data: SlaTierCreate): Promise<SlaTier> {
   const response = await fetch(`${API_BASE_URL()}/sla-tiers`, {
-    method: 'POST', headers: getBearerHeaders('application/json'), body: JSON.stringify(data),
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
   })
-  if (!response.ok) throw new Error(`Failed to create SLA tier: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Failed to create SLA tier: ${response.status}`)
   return response.json()
 }
 
-export async function updateSlaTier(id: number, data: SlaTierUpdate): Promise<SlaTier> {
+export async function updateSlaTier(
+  id: number,
+  data: SlaTierUpdate
+): Promise<SlaTier> {
   const response = await fetch(`${API_BASE_URL()}/sla-tiers/${id}`, {
-    method: 'PUT', headers: getBearerHeaders('application/json'), body: JSON.stringify(data),
+    method: 'PUT',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
   })
-  if (!response.ok) throw new Error(`Failed to update SLA tier: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Failed to update SLA tier: ${response.status}`)
   return response.json()
 }
 
 export async function deleteSlaTier(id: number): Promise<void> {
   const response = await fetch(`${API_BASE_URL()}/sla-tiers/${id}`, {
-    method: 'DELETE', headers: getBearerHeaders(),
+    method: 'DELETE',
+    headers: getBearerHeaders(),
   })
-  if (!response.ok) throw new Error(`Failed to delete SLA tier: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Failed to delete SLA tier: ${response.status}`)
 }
 
 export async function getSlaPriorityTiers(): Promise<SlaPriorityTier[]> {
-  const response = await fetch(`${API_BASE_URL()}/sla-priority-tiers`, { headers: getBearerHeaders() })
-  if (!response.ok) throw new Error(`Failed to load priority overrides: ${response.status}`)
+  const response = await fetch(`${API_BASE_URL()}/sla-priority-tiers`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok)
+    throw new Error(`Failed to load priority overrides: ${response.status}`)
   return response.json()
 }
 
 export async function setSlaPriorityTier(
   priority: InboxPriority,
   slaTierId: number,
-  serviceGroupId?: number | null,
+  serviceGroupId?: number | null
 ): Promise<SlaPriorityTier> {
   // Omit service_group_id entirely (rather than send null) when the caller is
   // setting the global override — matches the existing single-arg call sites
   // and keeps the request body slim.
-  const body: { sla_tier_id: number; service_group_id?: number | null } = { sla_tier_id: slaTierId }
+  const body: { sla_tier_id: number; service_group_id?: number | null } = {
+    sla_tier_id: slaTierId,
+  }
   if (serviceGroupId != null) body.service_group_id = serviceGroupId
-  const response = await fetch(`${API_BASE_URL()}/sla-priority-tiers/${priority}`, {
-    method: 'PUT', headers: getBearerHeaders('application/json'), body: JSON.stringify(body),
-  })
-  if (!response.ok) throw new Error(`Failed to set priority override: ${response.status}`)
+  const response = await fetch(
+    `${API_BASE_URL()}/sla-priority-tiers/${priority}`,
+    {
+      method: 'PUT',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(body),
+    }
+  )
+  if (!response.ok)
+    throw new Error(`Failed to set priority override: ${response.status}`)
   return response.json()
 }
 
 export async function deleteSlaPriorityTier(
   priority: InboxPriority,
-  serviceGroupId?: number | null,
+  serviceGroupId?: number | null
 ): Promise<void> {
   // Without serviceGroupId, deletes the global (NULL group) override; with it,
   // deletes only the per-group row.
   const params = new URLSearchParams()
-  if (serviceGroupId != null) params.set('service_group_id', String(serviceGroupId))
+  if (serviceGroupId != null)
+    params.set('service_group_id', String(serviceGroupId))
   const qs = params.toString()
-  const response = await fetch(`${API_BASE_URL()}/sla-priority-tiers/${priority}${qs ? `?${qs}` : ''}`, {
-    method: 'DELETE', headers: getBearerHeaders(),
-  })
-  if (!response.ok) throw new Error(`Failed to remove priority override: ${response.status}`)
+  const response = await fetch(
+    `${API_BASE_URL()}/sla-priority-tiers/${priority}${qs ? `?${qs}` : ''}`,
+    {
+      method: 'DELETE',
+      headers: getBearerHeaders(),
+    }
+  )
+  if (!response.ok)
+    throw new Error(`Failed to remove priority override: ${response.status}`)
 }
 
 /**
@@ -4522,53 +4802,86 @@ export interface SlaStatusResultItem {
 }
 
 export async function getBusinessHoursConfig(): Promise<BusinessHoursConfig> {
-  const response = await fetch(`${API_BASE_URL()}/business-hours-config`, { headers: getBearerHeaders() })
-  if (!response.ok) throw new Error(`Failed to load business hours: ${response.status}`)
+  const response = await fetch(`${API_BASE_URL()}/business-hours-config`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok)
+    throw new Error(`Failed to load business hours: ${response.status}`)
   return response.json()
 }
 
-export async function updateBusinessHoursConfig(data: BusinessHoursConfig): Promise<BusinessHoursConfig> {
+export async function updateBusinessHoursConfig(
+  data: BusinessHoursConfig
+): Promise<BusinessHoursConfig> {
   const response = await fetch(`${API_BASE_URL()}/business-hours-config`, {
-    method: 'PUT', headers: getBearerHeaders('application/json'), body: JSON.stringify(data),
+    method: 'PUT',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
   })
-  if (!response.ok) throw new Error(`Failed to save business hours: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Failed to save business hours: ${response.status}`)
   return response.json()
 }
 
 export async function getLabHolidays(year: number): Promise<LabHoliday[]> {
-  const response = await fetch(`${API_BASE_URL()}/lab-holidays?year=${year}`, { headers: getBearerHeaders() })
-  if (!response.ok) throw new Error(`Failed to load holidays: ${response.status}`)
+  const response = await fetch(`${API_BASE_URL()}/lab-holidays?year=${year}`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok)
+    throw new Error(`Failed to load holidays: ${response.status}`)
   return response.json()
 }
 
-export async function createLabHoliday(data: { holiday_date: string; name: string }): Promise<LabHoliday> {
+export async function createLabHoliday(data: {
+  holiday_date: string
+  name: string
+}): Promise<LabHoliday> {
   const response = await fetch(`${API_BASE_URL()}/lab-holidays`, {
-    method: 'POST', headers: getBearerHeaders('application/json'), body: JSON.stringify(data),
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
   })
   if (!response.ok) throw new Error(`Failed to add holiday: ${response.status}`)
   return response.json()
 }
 
 export async function deleteLabHoliday(holidayDate: string): Promise<void> {
-  const response = await fetch(`${API_BASE_URL()}/lab-holidays/${holidayDate}`, {
-    method: 'DELETE', headers: getBearerHeaders(),
-  })
-  if (!response.ok) throw new Error(`Failed to remove holiday: ${response.status}`)
+  const response = await fetch(
+    `${API_BASE_URL()}/lab-holidays/${holidayDate}`,
+    {
+      method: 'DELETE',
+      headers: getBearerHeaders(),
+    }
+  )
+  if (!response.ok)
+    throw new Error(`Failed to remove holiday: ${response.status}`)
 }
 
-export async function generateFederalHolidays(year: number): Promise<{ year: number; added: number }> {
-  const response = await fetch(`${API_BASE_URL()}/lab-holidays/generate-federal?year=${year}`, {
-    method: 'POST', headers: getBearerHeaders(),
-  })
-  if (!response.ok) throw new Error(`Failed to generate federal holidays: ${response.status}`)
+export async function generateFederalHolidays(
+  year: number
+): Promise<{ year: number; added: number }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/lab-holidays/generate-federal?year=${year}`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders(),
+    }
+  )
+  if (!response.ok)
+    throw new Error(`Failed to generate federal holidays: ${response.status}`)
   return response.json()
 }
 
-export async function fetchSlaStatuses(items: SlaStatusRequestItem[]): Promise<SlaStatusResultItem[]> {
+export async function fetchSlaStatuses(
+  items: SlaStatusRequestItem[]
+): Promise<SlaStatusResultItem[]> {
   const response = await fetch(`${API_BASE_URL()}/sla/status`, {
-    method: 'POST', headers: getBearerHeaders('application/json'), body: JSON.stringify({ items }),
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({ items }),
   })
-  if (!response.ok) throw new Error(`Failed to fetch SLA statuses: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Failed to fetch SLA statuses: ${response.status}`)
   const data = await response.json()
   return data.items
 }
@@ -4600,7 +4913,8 @@ export async function getSenaiteAnalysts(): Promise<SenaiteAnalyst[]> {
   const response = await fetch(`${API_BASE_URL()}/senaite/analysts`, {
     headers: getBearerHeaders(),
   })
-  if (!response.ok) throw new Error(`Failed to load analysts: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Failed to load analysts: ${response.status}`)
   return response.json()
 }
 
@@ -4686,7 +5000,9 @@ export interface GetInboxOptions {
   showXtra?: boolean
 }
 
-export async function getInboxSamples(opts: GetInboxOptions = {}): Promise<InboxResponse> {
+export async function getInboxSamples(
+  opts: GetInboxOptions = {}
+): Promise<InboxResponse> {
   const {
     hideTestOrders = true,
     forceRefresh = false,
@@ -4707,7 +5023,10 @@ export async function getInboxSamples(opts: GetInboxOptions = {}): Promise<Inbox
   return response.json()
 }
 
-export async function updateInboxPriority(sampleUid: string, priority: InboxPriority): Promise<void> {
+export async function updateInboxPriority(
+  sampleUid: string,
+  priority: InboxPriority
+): Promise<void> {
   // sample_uid travels in the BODY, not the path: Mk1-native UIDs are
   // `mk1://<hex>` and a slash-bearing UID in a path segment gets mangled by the
   // nginx proxy (encoded `://` -> decoded + slash-merged -> wrong route -> 404).
@@ -4716,7 +5035,8 @@ export async function updateInboxPriority(sampleUid: string, priority: InboxPrio
     headers: getBearerHeaders('application/json'),
     body: JSON.stringify({ sample_uid: sampleUid, priority }),
   })
-  if (!response.ok) throw new Error(`Priority update failed: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Priority update failed: ${response.status}`)
 }
 
 export async function getWorksheetUsers(): Promise<WorksheetUser[]> {
@@ -4754,9 +5074,12 @@ export async function createWorksheet(data: {
   })
   if (response.status === 409) {
     const body = await response.json()
-    throw Object.assign(new Error('Stale samples detected'), { staleUids: body.stale_uids })
+    throw Object.assign(new Error('Stale samples detected'), {
+      staleUids: body.stale_uids,
+    })
   }
-  if (!response.ok) throw new Error(`Worksheet creation failed: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Worksheet creation failed: ${response.status}`)
   return response.json()
 }
 
@@ -4802,14 +5125,20 @@ export interface WorksheetListItem {
   }[]
 }
 
-export async function listWorksheets(status?: string): Promise<WorksheetListItem[]> {
+export async function listWorksheets(
+  status?: string
+): Promise<WorksheetListItem[]> {
   const params = new URLSearchParams()
   if (status) params.set('status', status)
   const qs = params.toString()
-  const response = await fetch(`${API_BASE_URL()}/worksheets${qs ? `?${qs}` : ''}`, {
-    headers: getBearerHeaders(),
-  })
-  if (!response.ok) throw new Error(`List worksheets failed: ${response.status}`)
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets${qs ? `?${qs}` : ''}`,
+    {
+      headers: getBearerHeaders(),
+    }
+  )
+  if (!response.ok)
+    throw new Error(`List worksheets failed: ${response.status}`)
   return response.json()
 }
 
@@ -4832,7 +5161,8 @@ export async function deleteWorksheet(worksheetId: number): Promise<void> {
     method: 'DELETE',
     headers: getBearerHeaders(),
   })
-  if (!response.ok) throw new Error(`Delete worksheet failed: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Delete worksheet failed: ${response.status}`)
 }
 
 export async function updateWorksheet(
@@ -4844,34 +5174,57 @@ export async function updateWorksheet(
     headers: getBearerHeaders('application/json'),
     body: JSON.stringify(data),
   })
-  if (!response.ok) throw new Error(`Update worksheet failed: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Update worksheet failed: ${response.status}`)
 }
 
 export async function addGroupToWorksheet(
   worksheetId: number,
-  data: { sample_uid: string; sample_id: string; service_group_id: number; date_received?: string | null; analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[] }
+  data: {
+    sample_uid: string
+    sample_id: string
+    service_group_id: number
+    date_received?: string | null
+    analyses?: {
+      title: string
+      keyword?: string | null
+      peptide_name?: string | null
+      method?: string | null
+    }[]
+  }
 ): Promise<{ status: string; item_id: number }> {
-  const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}/add-group`, {
-    method: 'POST',
-    headers: getBearerHeaders('application/json'),
-    body: JSON.stringify(data),
-  })
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/add-group`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(data),
+    }
+  )
   if (!response.ok) {
     if (response.status === 409) {
       const detail = await response.json().catch(() => null)
-      throw new Error(detail?.detail ?? 'Sample already assigned to another worksheet')
+      throw new Error(
+        detail?.detail ?? 'Sample already assigned to another worksheet'
+      )
     }
     throw new Error(`Add to worksheet failed: ${response.status}`)
   }
   return response.json()
 }
 
-export async function completeWorksheet(worksheetId: number): Promise<{ status: string }> {
-  const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}/complete`, {
-    method: 'POST',
-    headers: getBearerHeaders(),
-  })
-  if (!response.ok) throw new Error(`Complete worksheet failed: ${response.status}`)
+export async function completeWorksheet(
+  worksheetId: number
+): Promise<{ status: string }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/complete`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders(),
+    }
+  )
+  if (!response.ok)
+    throw new Error(`Complete worksheet failed: ${response.status}`)
   return response.json()
 }
 
@@ -4899,11 +5252,14 @@ export async function updateWorksheetItem(
   itemId: number,
   data: { instrument_uid?: string; prep_status?: string }
 ): Promise<{ status: string; item_id: number }> {
-  const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}/items/${itemId}`, {
-    method: 'PATCH',
-    headers: getBearerHeaders('application/json'),
-    body: JSON.stringify(data),
-  })
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/items/${itemId}`,
+    {
+      method: 'PATCH',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(data),
+    }
+  )
   if (!response.ok) throw new Error(`Update item failed: ${response.status}`)
   return response.json()
 }
@@ -4912,27 +5268,44 @@ export async function reorderWorksheetItems(
   worksheetId: number,
   itemIds: number[]
 ): Promise<{ status: string; count: number }> {
-  const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}/reorder`, {
-    method: 'PUT',
-    headers: getBearerHeaders('application/json'),
-    body: JSON.stringify({ item_ids: itemIds }),
-  })
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/reorder`,
+    {
+      method: 'PUT',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ item_ids: itemIds }),
+    }
+  )
   if (!response.ok) throw new Error(`Reorder failed: ${response.status}`)
   return response.json()
 }
 
-export async function createWorksheetFromDrop(
-  data: { sample_uid: string; sample_id: string; service_group_id: number; date_received?: string | null; analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[] }
-): Promise<WorksheetCreateResponse> {
-  const response = await fetch(`${API_BASE_URL()}/worksheets/create-from-drop`, {
-    method: 'POST',
-    headers: getBearerHeaders('application/json'),
-    body: JSON.stringify(data),
-  })
+export async function createWorksheetFromDrop(data: {
+  sample_uid: string
+  sample_id: string
+  service_group_id: number
+  date_received?: string | null
+  analyses?: {
+    title: string
+    keyword?: string | null
+    peptide_name?: string | null
+    method?: string | null
+  }[]
+}): Promise<WorksheetCreateResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/create-from-drop`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(data),
+    }
+  )
   if (!response.ok) {
     if (response.status === 409) {
       const detail = await response.json().catch(() => null)
-      throw new Error(detail?.detail ?? 'Sample already assigned to another worksheet')
+      throw new Error(
+        detail?.detail ?? 'Sample already assigned to another worksheet'
+      )
     }
     throw new Error(`Create worksheet failed: ${response.status}`)
   }
@@ -4980,11 +5353,15 @@ export async function getReportsDashboard(): Promise<ReportsDashboard> {
   const response = await fetch(`${API_BASE_URL()}/reports/dashboard`, {
     headers: getBearerHeaders(),
   })
-  if (!response.ok) throw new Error(`Reports dashboard failed: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Reports dashboard failed: ${response.status}`)
   return response.json()
 }
 
-export async function getReportsPurityTrend(analyteName: string, isBlend = false): Promise<PurityTrendPoint[]> {
+export async function getReportsPurityTrend(
+  analyteName: string,
+  isBlend = false
+): Promise<PurityTrendPoint[]> {
   const params = isBlend ? '?is_blend=true' : ''
   const response = await fetch(
     `${API_BASE_URL()}/reports/purity-trend/${encodeURIComponent(analyteName)}${params}`,
@@ -5005,14 +5382,20 @@ export interface CheckInRecord {
   is_test_order: boolean
 }
 
-export async function getCheckInTimes(from?: string, to?: string): Promise<CheckInRecord[]> {
+export async function getCheckInTimes(
+  from?: string,
+  to?: string
+): Promise<CheckInRecord[]> {
   const qs = new URLSearchParams()
   if (from) qs.set('from', from)
   if (to) qs.set('to', to)
   const suffix = qs.toString() ? `?${qs.toString()}` : ''
-  const response = await fetch(`${API_BASE_URL()}/reports/checkin-times${suffix}`, {
-    headers: getBearerHeaders(),
-  })
+  const response = await fetch(
+    `${API_BASE_URL()}/reports/checkin-times${suffix}`,
+    {
+      headers: getBearerHeaders(),
+    }
+  )
   if (!response.ok) throw new Error(`Check-in times failed: ${response.status}`)
   return response.json()
 }
@@ -5053,18 +5436,25 @@ export interface SampleActivityResponse {
   count: number
 }
 
-export async function getSampleActivity(sampleId: string): Promise<SampleActivityResponse> {
+export async function getSampleActivity(
+  sampleId: string
+): Promise<SampleActivityResponse> {
   const response = await fetch(
     `${API_BASE_URL()}/samples/${encodeURIComponent(sampleId)}/activity`,
     { headers: getAuthHeaders() }
   )
-  if (!response.ok) throw new Error(`Sample activity failed: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Sample activity failed: ${response.status}`)
   return response.json()
 }
 
 // ─── Registry Debug Panel (admin) ────────────────────────────────────────────
 
-export type RegistryFieldStatus = 'agree' | 'drift' | 'registry_null' | 'senaite_null'
+export type RegistryFieldStatus =
+  | 'agree'
+  | 'drift'
+  | 'registry_null'
+  | 'senaite_null'
 
 export interface RegistryDebugField {
   field: string
@@ -5075,7 +5465,11 @@ export interface RegistryDebugField {
 
 // Task 10: registry-inspect analyses sync column (parent analysis line
 // items — SENAITE current line vs native lims_analyses shadow/canonical).
-export type AnalysisSyncStatus = 'in_sync' | 'drift' | 'no_shadow' | 'shadow_only'
+export type AnalysisSyncStatus =
+  | 'in_sync'
+  | 'drift'
+  | 'no_shadow'
+  | 'shadow_only'
 
 export interface AnalysisSyncRow {
   keyword: string
@@ -5088,7 +5482,13 @@ export interface AnalysisSyncRow {
 
 export interface AnalysesSync {
   rows: AnalysisSyncRow[]
-  summary: { senaite: number; shadow: number; in_sync: number; drift: number; missing: number } | null
+  summary: {
+    senaite: number
+    shadow: number
+    in_sync: number
+    drift: number
+    missing: number
+  } | null
   error: string | null
 }
 
@@ -5102,26 +5502,49 @@ export interface SampleRegistryDebug {
     age_seconds: number | null
     reconcile_due: boolean | null
   }
-  linkage: { registry_uid: string | null; senaite_uid: string | null; status: string } | null
+  linkage: {
+    registry_uid: string | null
+    senaite_uid: string | null
+    status: string
+  } | null
   origin: string | null
   container: { container_mode: boolean; assignment_role: string } | null
   fields: RegistryDebugField[]
-  summary: { agree: number; drift: number; registry_null: number; senaite_null: number } | null
+  summary: {
+    agree: number
+    drift: number
+    registry_null: number
+    senaite_null: number
+  } | null
   vials: { local: number; senaite: number; status: string } | null
-  verdict: { linkage_ok: boolean; vials_ok: boolean | null; drift: number; registry_null: number } | null
+  verdict: {
+    linkage_ok: boolean
+    vials_ok: boolean | null
+    drift: number
+    registry_null: number
+  } | null
   senaite_error: string | null
-  raw: { registry: Record<string, unknown> | null; senaite: Record<string, unknown> | null } | null
+  raw: {
+    registry: Record<string, unknown> | null
+    senaite: Record<string, unknown> | null
+  } | null
   analyses: AnalysesSync | null
 }
 
-export async function getSampleRegistryDebug(sampleId: string): Promise<SampleRegistryDebug> {
-  return apiFetch<SampleRegistryDebug>(`/debug/sample-registry/${encodeURIComponent(sampleId)}`)
+export async function getSampleRegistryDebug(
+  sampleId: string
+): Promise<SampleRegistryDebug> {
+  return apiFetch<SampleRegistryDebug>(
+    `/debug/sample-registry/${encodeURIComponent(sampleId)}`
+  )
 }
 
-export async function refreshSampleRegistry(sampleId: string): Promise<SampleRegistryDebug> {
+export async function refreshSampleRegistry(
+  sampleId: string
+): Promise<SampleRegistryDebug> {
   return apiFetch<SampleRegistryDebug>(
     `/debug/sample-registry/${encodeURIComponent(sampleId)}/refresh`,
-    { method: 'POST' },
+    { method: 'POST' }
   )
 }
 
@@ -5146,12 +5569,15 @@ export interface SampleRetestInfo {
   retested_as: RetestForwardLink[]
 }
 
-export async function getSampleRetestInfo(sampleId: string): Promise<SampleRetestInfo> {
+export async function getSampleRetestInfo(
+  sampleId: string
+): Promise<SampleRetestInfo> {
   const response = await fetch(
     `${API_BASE_URL()}/samples/${encodeURIComponent(sampleId)}/retest-info`,
     { headers: getAuthHeaders() }
   )
-  if (!response.ok) throw new Error(`Sample retest-info failed: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`Sample retest-info failed: ${response.status}`)
   return response.json()
 }
 
@@ -5167,6 +5593,9 @@ export interface SubSample {
   vial_sequence: number
   received_at: string
   received_by_user_id: number | null
+  /** Receiver display name — who checked the vial in (and took its check-in
+   *  photo). Populated by the LIST endpoint; optional for back-compat. */
+  received_by?: string | null
   photo_external_uid: string | null
   remarks: string | null
   assignment_role: AssignmentRole | null
@@ -5258,16 +5687,21 @@ export class SecondaryFalloutError extends Error {
  *  summary with an AUTHORITATIVE container_mode. The receive wizard calls
  *  this on mount — the list endpoint's missing-parent fallback reports
  *  container_mode=false, which must not drive the first-vial save decision. */
-export async function ensureParentSampleRow(parentSampleId: string): Promise<ParentSampleSummary> {
+export async function ensureParentSampleRow(
+  parentSampleId: string
+): Promise<ParentSampleSummary> {
   const response = await fetch(
     `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(parentSampleId)}/ensure`,
     { method: 'POST', headers: getBearerHeaders() }
   )
-  if (!response.ok) throw new Error(`ensureParentSampleRow failed: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`ensureParentSampleRow failed: ${response.status}`)
   return response.json()
 }
 
-export async function listSubSamples(parentSampleId: string): Promise<SubSampleListResponse> {
+export async function listSubSamples(
+  parentSampleId: string
+): Promise<SubSampleListResponse> {
   const response = await fetch(
     `${API_BASE_URL()}/api/sub-samples?parent_sample_id=${encodeURIComponent(parentSampleId)}`,
     { headers: getBearerHeaders() }
@@ -5280,8 +5714,12 @@ export async function listSubSamples(parentSampleId: string): Promise<SubSampleL
 export async function updateCustomerRemarks(
   parentSampleId: string,
   remarks: string,
-  include: boolean,
-): Promise<{ sample_id: string; customer_remarks: string; customer_remarks_include: boolean }> {
+  include: boolean
+): Promise<{
+  sample_id: string
+  customer_remarks: string
+  customer_remarks_include: boolean
+}> {
   const response = await fetch(
     `${API_BASE_URL()}/api/sub-samples/parent/${encodeURIComponent(parentSampleId)}/customer-remarks`,
     {
@@ -5290,7 +5728,8 @@ export async function updateCustomerRemarks(
       body: JSON.stringify({ remarks, include }),
     }
   )
-  if (!response.ok) throw new Error(`updateCustomerRemarks failed: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`updateCustomerRemarks failed: ${response.status}`)
   return response.json()
 }
 
@@ -5309,9 +5748,12 @@ export async function listLimsAnalysesForSubSample(
     as: 'senaite_shape',
     include_retests: 'true',
   })
-  const response = await fetch(`${API_BASE_URL()}/api/lims-analyses?${params}`, {
-    headers: getBearerHeaders(),
-  })
+  const response = await fetch(
+    `${API_BASE_URL()}/api/lims-analyses?${params}`,
+    {
+      headers: getBearerHeaders(),
+    }
+  )
   if (!response.ok) {
     throw new Error(`listLimsAnalysesForSubSample failed: ${response.status}`)
   }
@@ -5339,9 +5781,12 @@ export async function listParentPromotions(
   parentSampleId: string
 ): Promise<ParentPromotionInfo[]> {
   const params = new URLSearchParams({ parent_sample_id: parentSampleId })
-  const response = await fetch(`${API_BASE_URL()}/api/lims-analyses/promotions?${params}`, {
-    headers: getBearerHeaders(),
-  })
+  const response = await fetch(
+    `${API_BASE_URL()}/api/lims-analyses/promotions?${params}`,
+    {
+      headers: getBearerHeaders(),
+    }
+  )
   if (!response.ok) {
     throw new Error(`listParentPromotions failed: ${response.status}`)
   }
@@ -5358,9 +5803,12 @@ export async function listParentLineStates(
   parentSampleId: string
 ): Promise<{ states: Record<string, string> }> {
   const params = new URLSearchParams({ parent_sample_id: parentSampleId })
-  const response = await fetch(`${API_BASE_URL()}/api/lims-analyses/parent-line-states?${params}`, {
-    headers: getBearerHeaders(),
-  })
+  const response = await fetch(
+    `${API_BASE_URL()}/api/lims-analyses/parent-line-states?${params}`,
+    {
+      headers: getBearerHeaders(),
+    }
+  )
   if (!response.ok) {
     throw new Error(`listParentLineStates failed: ${response.status}`)
   }
@@ -5396,7 +5844,7 @@ export async function createSubSample(args: {
           throw new SecondaryFalloutError(
             d.message ?? 'SENAITE silently created an orphan AR',
             d.orphan_uid,
-            d.orphan_sample_id,
+            d.orphan_sample_id
           )
         }
         throw new Error(
@@ -5450,7 +5898,7 @@ export async function createSubSamplesBulk(args: {
           throw new SecondaryFalloutError(
             d.message ?? 'SENAITE silently created an orphan AR',
             d.orphan_uid,
-            d.orphan_sample_id,
+            d.orphan_sample_id
           )
         }
         throw new Error(
@@ -5484,7 +5932,8 @@ export async function updateSubSample(
       }),
     }
   )
-  if (!response.ok) throw new Error(`updateSubSample failed: ${response.status}`)
+  if (!response.ok)
+    throw new Error(`updateSubSample failed: ${response.status}`)
   return response.json()
 }
 
@@ -5512,14 +5961,18 @@ export interface VialDemandResponse {
  * Get just the vial demand for a parent sample without running auto-assign.
  * Used by the wizard header for "expected vs received" counts on the capture step.
  */
-export async function getVialDemand(parentSampleId: string): Promise<VialDemandResponse> {
+export async function getVialDemand(
+  parentSampleId: string
+): Promise<VialDemandResponse> {
   const response = await fetch(
     `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(parentSampleId)}/vial-demand`,
     { headers: getBearerHeaders() }
   )
   if (!response.ok) {
     const err = await response.json().catch(() => null)
-    throw new Error(err?.detail || `Vial demand fetch failed: ${response.status}`)
+    throw new Error(
+      err?.detail || `Vial demand fetch failed: ${response.status}`
+    )
   }
   return response.json()
 }
@@ -5531,10 +5984,10 @@ export interface OrderBoxLabelSummary {
 }
 
 export async function getOrderBoxLabelSummary(
-  orderNumber: string,
+  orderNumber: string
 ): Promise<OrderBoxLabelSummary> {
   return apiFetch<OrderBoxLabelSummary>(
-    `/orders/${encodeURIComponent(orderNumber)}/box-label-summary`,
+    `/orders/${encodeURIComponent(orderNumber)}/box-label-summary`
   )
 }
 
@@ -5550,7 +6003,7 @@ export interface OrderBoxLabelSummaries {
  *  concurrently under HTTP/2 (prod brownout 2026-07-09); never call it in a
  *  per-row loop. Max 100 order numbers per request. */
 export async function getOrderBoxLabelSummaries(
-  orderNumbers: string[],
+  orderNumbers: string[]
 ): Promise<OrderBoxLabelSummaries> {
   return apiFetch<OrderBoxLabelSummaries>('/orders/box-label-summaries', {
     method: 'POST',
@@ -5561,7 +6014,9 @@ export async function getOrderBoxLabelSummaries(
 /**
  * Get the vial plan for a parent sample (demand, assignment roles, etc.).
  */
-export async function getVialPlan(parentSampleId: string): Promise<VialPlanResponse> {
+export async function getVialPlan(
+  parentSampleId: string
+): Promise<VialPlanResponse> {
   const response = await fetch(
     `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(parentSampleId)}/vial-plan`,
     { headers: getBearerHeaders() }
@@ -5608,17 +6063,16 @@ export async function fetchSampleAggregates(
   if (parentSampleIds.length === 0) {
     return { aggregates: {} }
   }
-  const response = await fetch(
-    `${API_BASE_URL()}/api/sub-samples/aggregates`,
-    {
-      method: 'POST',
-      headers: getBearerHeaders('application/json'),
-      body: JSON.stringify({ parent_sample_ids: parentSampleIds }),
-    }
-  )
+  const response = await fetch(`${API_BASE_URL()}/api/sub-samples/aggregates`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({ parent_sample_ids: parentSampleIds }),
+  })
   if (!response.ok) {
     const err = await response.json().catch(() => null)
-    throw new Error(err?.detail || `Sample aggregates fetch failed: ${response.status}`)
+    throw new Error(
+      err?.detail || `Sample aggregates fetch failed: ${response.status}`
+    )
   }
   return response.json()
 }
@@ -5645,7 +6099,7 @@ export class ApiCodeError extends Error {
 export async function patchVialAssignment(
   sampleId: string,
   role: AssignmentRole | null,
-  kind?: 'core' | 'variance' | null,
+  kind?: 'core' | 'variance' | null
 ): Promise<{ sample_id: string; assignment_role: AssignmentRole | null }> {
   const response = await fetch(
     `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(sampleId)}/assignment`,
@@ -5662,9 +6116,9 @@ export async function patchVialAssignment(
       typeof detail === 'object' && detail?.message
         ? detail.message
         : typeof detail === 'string'
-        ? detail
-        : `Vial assignment update failed: ${response.status}`
-    const code = typeof detail === 'object' ? detail?.code ?? null : null
+          ? detail
+          : `Vial assignment update failed: ${response.status}`
+    const code = typeof detail === 'object' ? (detail?.code ?? null) : null
     throw new ApiCodeError(message, code)
   }
   return response.json()
@@ -5689,12 +6143,14 @@ export interface LimsBox {
 }
 
 export async function listOrderBoxes(orderKey: string): Promise<LimsBox[]> {
-  return apiFetch<LimsBox[]>(`/api/boxes?order_key=${encodeURIComponent(orderKey)}`)
+  return apiFetch<LimsBox[]>(
+    `/api/boxes?order_key=${encodeURIComponent(orderKey)}`
+  )
 }
 
 export async function createBox(
   orderKey: string,
-  role: 'hplc' | 'endo' | 'ster' | 'xtra',
+  role: 'hplc' | 'endo' | 'ster' | 'xtra'
 ): Promise<LimsBox> {
   return apiFetch<LimsBox>('/api/boxes', {
     method: 'POST',
@@ -5704,7 +6160,7 @@ export async function createBox(
 
 export async function assignVialsToBox(
   boxId: number,
-  subSampleIds: string[],
+  subSampleIds: string[]
 ): Promise<LimsBox> {
   return apiFetch<LimsBox>(`/api/boxes/${boxId}/assign`, {
     method: 'POST',
@@ -5714,7 +6170,9 @@ export async function assignVialsToBox(
 
 /** Clear box membership for the given vials (drag back out to the Unboxed
  *  tray). Mirrors {@link assignVialsToBox}; backend responds `{ unassigned: N }`. */
-export async function unassignVialsFromBox(subSampleIds: string[]): Promise<void> {
+export async function unassignVialsFromBox(
+  subSampleIds: string[]
+): Promise<void> {
   await apiFetch<{ unassigned: number }>('/api/boxes/unassign', {
     method: 'POST',
     body: JSON.stringify({ sub_sample_ids: subSampleIds }),
@@ -5744,11 +6202,11 @@ export async function closeBox(boxId: number): Promise<LimsBox> {
 /** Per-service variance counts the parent's order purchased. Empty when none
  *  or unreachable — callers fail closed (action hidden). */
 export async function fetchVarianceEntitlement(
-  parentSampleId: string,
+  parentSampleId: string
 ): Promise<{ variance: Record<string, number>; unreachable: boolean }> {
   const response = await fetch(
     `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(parentSampleId)}/variance-entitlement`,
-    { headers: getBearerHeaders() },
+    { headers: getBearerHeaders() }
   )
   if (!response.ok) {
     return { variance: {}, unreachable: true }
@@ -5759,7 +6217,7 @@ export async function fetchVarianceEntitlement(
 /** Set/clear the lab-side variance override (interim until the WP addon). */
 export async function putVarianceOverride(
   parentSampleId: string,
-  variance: Record<string, number> | null,
+  variance: Record<string, number> | null
 ): Promise<{ variance: Record<string, number> }> {
   const response = await fetch(
     `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(parentSampleId)}/variance-override`,
@@ -5767,14 +6225,14 @@ export async function putVarianceOverride(
       method: 'PUT',
       headers: getBearerHeaders('application/json'),
       body: JSON.stringify({ variance }),
-    },
+    }
   )
   if (!response.ok) {
     const err = await response.json().catch(() => null)
     throw new Error(
       typeof err?.detail === 'string'
         ? err.detail
-        : err?.detail?.message || `Variance override failed: ${response.status}`,
+        : err?.detail?.message || `Variance override failed: ${response.status}`
     )
   }
   return response.json()
@@ -5895,6 +6353,8 @@ export interface SubSampleAttachment {
   filename: string
   content_type: string
   created_at: string
+  /** Uploader display name; populated by the LIST endpoint. */
+  created_by?: string | null
 }
 
 export async function listSubSampleAttachments(
@@ -5979,7 +6439,8 @@ export async function setSubSamplePrimaryAttachment(
     throw new Error(
       typeof detail === 'string'
         ? detail
-        : detail?.message ?? `setSubSamplePrimaryAttachment failed: ${response.status}`
+        : (detail?.message ??
+            `setSubSamplePrimaryAttachment failed: ${response.status}`)
     )
   }
   invalidateSubSamplePhoto(sampleId)
@@ -6048,7 +6509,9 @@ export interface VarianceSetResponse {
   locked_by_user_id: number | null
 }
 
-export async function getVarianceSet(parentSampleId: string): Promise<VarianceSetResponse> {
+export async function getVarianceSet(
+  parentSampleId: string
+): Promise<VarianceSetResponse> {
   const r = await fetch(
     `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(parentSampleId)}/variance-set`,
     { headers: getBearerHeaders() }
@@ -6061,7 +6524,11 @@ export async function patchVarianceMembership(args: {
   sampleId: string
   inVarianceSet: boolean
   exclusionReason?: string | null
-}): Promise<{ sample_id: string; in_variance_set: boolean; exclusion_reason: string | null }> {
+}): Promise<{
+  sample_id: string
+  in_variance_set: boolean
+  exclusion_reason: string | null
+}> {
   const r = await fetch(
     `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(args.sampleId)}/variance-set`,
     {
@@ -6081,7 +6548,9 @@ export async function patchVarianceMembership(args: {
   return r.json()
 }
 
-export async function lockVarianceSet(parentSampleId: string): Promise<{ parent_sample_id: string; locked_at: string }> {
+export async function lockVarianceSet(
+  parentSampleId: string
+): Promise<{ parent_sample_id: string; locked_at: string }> {
   const r = await fetch(
     `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(parentSampleId)}/variance-set/lock`,
     { method: 'POST', headers: getBearerHeaders() }
@@ -6094,12 +6563,15 @@ export async function lockVarianceSet(parentSampleId: string): Promise<{ parent_
   return r.json()
 }
 
-export async function unlockVarianceSet(parentSampleId: string): Promise<{ parent_sample_id: string; locked: boolean }> {
+export async function unlockVarianceSet(
+  parentSampleId: string
+): Promise<{ parent_sample_id: string; locked: boolean }> {
   const r = await fetch(
     `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(parentSampleId)}/variance-set/unlock`,
     { method: 'POST', headers: getBearerHeaders() }
   )
-  if (r.status === 403) throw new Error('admin role required to unlock variance sets')
+  if (r.status === 403)
+    throw new Error('admin role required to unlock variance sets')
   if (!r.ok) throw new Error(`unlockVarianceSet failed: ${r.status}`)
   return r.json()
 }
@@ -6131,14 +6603,20 @@ export class OrderedProductsError extends Error {
   }
 }
 
-export async function getOrderedProducts(sampleId: string): Promise<OrderedProductsResponse> {
+export async function getOrderedProducts(
+  sampleId: string
+): Promise<OrderedProductsResponse> {
   const response = await fetch(
     `${API_BASE_URL()}/api/sub-samples/${encodeURIComponent(sampleId)}/ordered-products`,
-    { headers: getBearerHeaders() },
+    { headers: getBearerHeaders() }
   )
   if (!response.ok) {
     let detail: unknown = null
-    try { detail = (await response.json()).detail ?? null } catch { /* no body */ }
+    try {
+      detail = (await response.json()).detail ?? null
+    } catch {
+      /* no body */
+    }
     throw new OrderedProductsError(response.status, detail)
   }
   return response.json()
@@ -6153,6 +6631,8 @@ export interface PackagingPhoto {
   content_type: string | null
   created_at: string
   created_by_user_id: number | null
+  /** Uploader display name; populated by the LIST endpoint. */
+  created_by?: string | null
 }
 
 /**

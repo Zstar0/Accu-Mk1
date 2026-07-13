@@ -294,6 +294,45 @@ def test_route_list_attachments_200():
     body = resp.json()
     assert body["attachments"][0]["id"] == 3
     assert body["attachments"][0]["content_type"] == "image/png"
+    # Mocked att has no real int user_id — the int-guard skips resolution.
+    assert body["attachments"][0]["created_by"] is None
+
+
+def test_route_list_attachments_resolves_created_by():
+    # Local StaticPool session (not the conftest db_session): TestClient runs
+    # the route on another thread, which plain in-memory SQLite rejects.
+    # Mirrors the fixture in test_packaging_photos_routes.py.
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+    from database import Base, get_db
+    from models import User
+
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    db.add(User(id=1, email="ada@lab.test", hashed_password="x",
+                first_name="Ada", last_name="Lovelace"))
+    db.commit()
+
+    def _override_db():
+        yield db
+
+    att = MagicMock(id=3, filename="a.png", content_type="image/png", user_id=1)
+    att.created_at = __import__("datetime").datetime.utcnow()
+    app.dependency_overrides[get_db] = _override_db
+    try:
+        with patch("sub_samples.routes.service.list_attachments",
+                   return_value=[att]):
+            resp = client.get("/api/sub-samples/P-1-S01/attachments")
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+    assert resp.status_code == 200
+    assert resp.json()["attachments"][0]["created_by"] == "Ada Lovelace"
 
 
 def test_route_list_attachments_404_unknown_sample():

@@ -68,6 +68,7 @@ describe('AttachmentLightbox', () => {
           contentType: 'image/jpeg',
           sizeBytes: 2048,
           takenAt: '2026-07-13T04:42:21',
+          createdBy: 'Ada Lovelace',
         }}
       />
     )
@@ -80,6 +81,7 @@ describe('AttachmentLightbox', () => {
     expect(screen.getByText('2.0 KB')).toBeInTheDocument()
     const expected = parseUtcDate('2026-07-13T04:42:21')?.toLocaleString() ?? ''
     expect(screen.getByText(`Taken ${expected}`)).toBeInTheDocument()
+    expect(screen.getByText('by Ada Lovelace')).toBeInTheDocument()
   })
 
   it('shows the source vial even without an assigned timestamp', () => {
