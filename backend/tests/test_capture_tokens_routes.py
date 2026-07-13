@@ -20,7 +20,8 @@ from main import app
 from auth import get_current_user
 from database import Base, get_db
 from models import LimsSample
-from sub_samples import photo_storage
+from sqlalchemy import select
+from sub_samples import photo_storage, senaite
 from sub_samples.photo_storage import FilesystemPhotoStorage, set_storage_for_tests
 from capture_tokens import service as capture_service
 from capture_tokens import routes as capture_routes
@@ -95,11 +96,38 @@ def test_mint_201_returns_raw_token_once(client, two_samples):
     assert "expires_at" in body
 
 
-def test_mint_404_on_unknown_sample_id(client, two_samples):
+def test_mint_404_on_unknown_sample_id(client, two_samples, monkeypatch):
+    # "NOPE" is genuinely unknown: resolution goes through the lazy
+    # ensure_sample_row path now, so fake SENAITE also failing it (matching
+    # test_customer_remarks.py's pattern) instead of hitting a real network call.
+    def boom(sid):
+        raise RuntimeError(f"SENAITE has no AR with id={sid}")
+    monkeypatch.setattr(senaite, "fetch_parent_metadata", boom)
+
     p1, _ = two_samples
     resp = _mint(client, [p1.sample_id, "NOPE"])
     assert resp.status_code == 404
     assert "NOPE" in resp.json()["detail"]
+
+
+def test_mint_materializes_unmaterialized_sibling_via_senaite(client, two_samples, monkeypatch):
+    """Order-flow sibling ids may have no local lims_samples row yet; mint
+    must lazily upsert them from SENAITE (ensure_sample_row) instead of
+    404ing the whole QR mint — regression guard for the whole-branch review
+    finding."""
+    p1, _ = two_samples
+    fake_meta = {"uid": "uid-p1002", "review_state": "published", "ClientID": "VALENCE"}
+    monkeypatch.setattr(senaite, "fetch_parent_metadata", lambda sid: fake_meta)
+
+    resp = _mint(client, [p1.sample_id, "P-1002"], "WP-300")
+    assert resp.status_code == 201
+
+    db = client._session
+    row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == "P-1002")
+    ).scalar_one_or_none()
+    assert row is not None
+    assert row.external_lims_uid == "uid-p1002"
 
 
 def test_get_context_200_with_zero_photo_count(client, two_samples):
@@ -156,6 +184,16 @@ def test_post_photo_413_rejects_oversize_b64_before_decoding(client, two_samples
     too_big = "A" * capture_routes._MAX_PHOTO_B64_CHARS + "!"
     resp = client.post(f"/api/capture/{raw}/photos", json={"photo_base64": too_big})
     assert resp.status_code == 413
+
+
+def test_post_photo_derives_content_type_from_sniffed_extension(client, two_samples):
+    p1, _ = two_samples
+    raw = _mint(client, [p1.sample_id]).json()["token"]
+    png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"fake-png-body").decode()
+    resp = client.post(f"/api/capture/{raw}/photos", json={"photo_base64": png})
+    assert resp.status_code == 201
+    rows = client.get(f"/api/samples/{p1.sample_id}/packaging-photos").json()
+    assert rows[0]["content_type"] == "image/png"
 
 
 def test_post_photo_415_bad_magic_bytes(client, two_samples):

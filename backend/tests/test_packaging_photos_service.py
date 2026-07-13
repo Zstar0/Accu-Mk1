@@ -1,5 +1,5 @@
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from database import Base
@@ -12,7 +12,7 @@ from packaging_photos.service import (
     update_packaging_photo,
     delete_packaging_photo,
 )
-from sub_samples import photo_storage
+from sub_samples import photo_storage, senaite
 from sub_samples.photo_storage import (
     FilesystemPhotoStorage,
     PhotoNotFoundError,
@@ -168,15 +168,89 @@ def test_bulk_ordering_is_per_parent(db, storage, parent_sample, parent_sample_2
     assert by_pk[parent_sample_2.id].ordering == 0    # parent 2's first
 
 
-def test_bulk_missing_parent_is_all_or_nothing(db, storage, parent_sample):
+def test_bulk_missing_parent_is_all_or_nothing(db, storage, parent_sample, monkeypatch):
     from packaging_photos.service import create_packaging_photos_bulk
+
+    # NOPE-1/NOPE-2 are genuinely unknown: resolution now goes through the
+    # lazy ensure_sample_row path (SENAITE-shaped sibling lookup), so a
+    # real-but-bogus id must fail SENAITE too, not just the local table —
+    # fake that failure the same way test_customer_remarks.py does, rather
+    # than let the test hit a real network call.
+    def boom(sid):
+        raise RuntimeError(f"SENAITE has no AR with id={sid}")
+    monkeypatch.setattr(senaite, "fetch_parent_metadata", boom)
+
+    parent_sample_id = parent_sample.sample_id
     with pytest.raises(LookupError) as ei:
         create_packaging_photos_bulk(
-            db, [parent_sample.sample_id, "NOPE-1", "NOPE-2"],
+            db, [parent_sample_id, "NOPE-1", "NOPE-2"],
             b"box", "packaging.jpg", "image/jpeg", None, 1,
         )
     assert "NOPE-1" in str(ei.value) and "NOPE-2" in str(ei.value)
-    assert list_packaging_photos(db, parent_sample.sample_id) == []
+    assert list_packaging_photos(db, parent_sample_id) == []
+
+
+def test_bulk_materializes_unmaterialized_sibling_via_senaite(db, storage, parent_sample, monkeypatch):
+    """Order-flow siblings come from SENAITE-shaped searches; only the active
+    sample is eagerly materialized into lims_samples. A sibling with no local
+    row must be lazily upserted (ensure_sample_row) rather than 404 the whole
+    bulk save — regression guard for the whole-branch review finding."""
+    from packaging_photos.service import create_packaging_photos_bulk
+
+    fake_meta = {"uid": "uid-p0702", "review_state": "published", "ClientID": "VALENCE"}
+    monkeypatch.setattr(senaite, "fetch_parent_metadata", lambda sid: fake_meta)
+
+    photos = create_packaging_photos_bulk(
+        db, [parent_sample.sample_id, "P-0702"],
+        b"box", "packaging.jpg", "image/jpeg", None, 1,
+    )
+    assert len(photos) == 2
+
+    row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == "P-0702")
+    ).scalar_one_or_none()
+    assert row is not None
+    assert row.external_lims_uid == "uid-p0702"
+
+    sibling_photos = list_packaging_photos(db, "P-0702")
+    assert len(sibling_photos) == 1
+    raw, _ = read_packaging_photo_bytes(db, sibling_photos[0].id)
+    assert raw == b"box"
+
+
+def test_bulk_storage_failure_rolls_back_and_cleans_up_first_key(
+    db, storage, parent_sample, parent_sample_2, monkeypatch,
+):
+    """Spec §7: a mid-loop storage failure must leave no photo rows committed
+    for ANY parent (not just the failing one) and must best-effort delete the
+    key(s) already saved before the failure."""
+    from packaging_photos.service import create_packaging_photos_bulk
+
+    real_save_photo = storage.save_photo
+    saved_keys = []
+
+    def flaky_save_photo(sample_id, photo_bytes, filename):
+        if saved_keys:
+            raise RuntimeError("storage backend unavailable")
+        key = real_save_photo(sample_id, photo_bytes, filename)
+        saved_keys.append(key)
+        return key
+
+    monkeypatch.setattr(storage, "save_photo", flaky_save_photo)
+
+    parent_sample_id = parent_sample.sample_id
+    parent_sample_2_id = parent_sample_2.sample_id
+    with pytest.raises(RuntimeError):
+        create_packaging_photos_bulk(
+            db, [parent_sample_id, parent_sample_2_id],
+            b"box", "packaging.jpg", "image/jpeg", None, 1,
+        )
+
+    assert len(saved_keys) == 1
+    assert list_packaging_photos(db, parent_sample_id) == []
+    assert list_packaging_photos(db, parent_sample_2_id) == []
+    with pytest.raises(PhotoNotFoundError):
+        storage.fetch_photo(saved_keys[0])
 
 
 def test_bulk_stamps_capture_token_id(db, storage, parent_sample):
