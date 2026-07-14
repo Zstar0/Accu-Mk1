@@ -148,7 +148,7 @@ timestamps (`SenaiteRemark {content, user_id, created}`).
 **Schema:** `lims_parent_attachments` (additive):
 
     id, lims_sample_pk (FK lims_samples ON DELETE CASCADE),
-    kind TEXT CHECK IN ('vial_image','packaging_image','manual'),
+    kind TEXT CHECK IN ('vial_image','packaging_image','receive_image','manual'),
     source_sub_sample_pk (FK lims_sub_samples, NULL),  -- vial_image lineage
     filename TEXT, content_type TEXT,
     storage TEXT CHECK IN ('s3','senaite'),   -- where the bytes live
@@ -157,10 +157,21 @@ timestamps (`SenaiteRemark {content, user_id, created}`).
     render_in_report BOOLEAN NOT NULL DEFAULT FALSE,
     created_by_user_id (FK users, NULL), created_at TIMESTAMP NOT NULL
 
-- **Dual-write:** Select-Vial-Image and the receive-flow AR image upload keep
-  posting to SENAITE (COABuilder dependency) AND insert a native row with the
-  returned attachment uid. This also closes the lightbox follow-up (Mk1 keeps
-  no record of Select-Vial-Image uploads — now it does, with actor+timestamp).
+- **Dual-write with S3 snapshot (Handler decision 2026-07-14, option 1):**
+  Select-Vial-Image and the receive-flow AR image upload keep posting to
+  SENAITE (COABuilder dependency) AND, best-effort after SENAITE success,
+  store a **frozen snapshot copy** of the uploaded bytes to S3
+  (`sub_samples.photo_storage.get_storage().save_photo(...)` under the
+  parent's namespace) and insert a native row pointing at it. The snapshot is
+  deliberate: Select-Vial-Image has snapshot semantics — a later vial-photo
+  retake must NOT change what was attached. Pointing at the live vial-photo
+  S3 key would silently break that contract; duplicate bytes are the accepted
+  cost, and the section-5 COABuilder re-wire will consume exactly these
+  frozen copies. Closes the lightbox follow-up (actor+timestamp now recorded).
+  Capture-time rows may carry `senaite_attachment_uid=NULL` — the Plone form
+  upload does not return the new uid; the backfill's sweep ADOPTS such rows
+  (fills the uid by `(lims_sample_pk, filename)` match) instead of inserting
+  a duplicate.
 - **Backfill:** one-time sweep of AR `Attachment` lists → native rows with
   `storage='senaite'` (bytes stay in ZODB, served via the existing proxy).
   New-era rows whose bytes exist natively (vial/packaging photos in S3) point
