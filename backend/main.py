@@ -14027,9 +14027,19 @@ def _record_sample_transition_bg(**kwargs) -> None:
     db = None
     try:
         from database import SessionLocal
-        from workflow.sample_log import record_sample_transition
+        from workflow.sample_log import heal_sample_status, record_sample_transition
         db = SessionLocal()
-        if record_sample_transition(db, **kwargs):
+        wrote_log = record_sample_transition(db, **kwargs)
+        # 2026-07-14 inbox-desync RC1: ALSO heal lims_samples.status here.
+        # The log row alone leaves the registry column stale, and the IS
+        # event sync can't fix it later — its dup guard sees this mk1 row as
+        # "already accounted for" and log-and-heal only fires on fresh
+        # inserts. Healing is whitelist-gated + idempotent, and runs even
+        # when the recorder deduped (the status may still be behind).
+        wrote_status = heal_sample_status(
+            db, kwargs["sample_id"], kwargs["to_status"]
+        )
+        if wrote_log or wrote_status:
             db.commit()
     except Exception as log_err:  # noqa: BLE001
         if db is not None:

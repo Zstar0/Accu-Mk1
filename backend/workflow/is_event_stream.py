@@ -93,9 +93,18 @@ def _heal_status(db: Session, sample_pk: int, new_status: str,
       - an event older than the sample's last SENAITE snapshot
         (last_synced_at) never heals — a catch-up backlog after sync downtime
         must not regress a status a fresher reconcile already wrote.
+      - non-SENAITE vocabulary never heals (2026-07-14 inbox-desync RC3): IS
+        events carry WP order-progress statuses for some verbs
+        (worksheet_assigned -> 'analyzing') that are NOT review_states;
+        writing them poisons a column every read surface compares against
+        SENAITE vocabulary. The transition LOG still records the raw event —
+        only the status-column write is gated.
 
     Heal failure never breaks the sync loop (same contract as the recorder)."""
+    from workflow.sample_log import SAMPLE_REVIEW_STATE_WHITELIST
     try:
+        if new_status not in SAMPLE_REVIEW_STATE_WHITELIST:
+            return
         sample = db.get(LimsSample, sample_pk)
         if sample is None or not new_status or sample.status == new_status:
             return

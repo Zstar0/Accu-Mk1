@@ -24,6 +24,44 @@ from models import LimsSample, LimsSampleTransition
 SENAITE_DEDUP_WINDOW = timedelta(minutes=5)
 RECONCILE_DEDUP_WINDOW = timedelta(minutes=60)
 
+# States that may be WRITTEN into lims_samples.status by a heal (2026-07-14
+# inbox-desync fix, RC3). The column holds SENAITE review_state vocabulary
+# everywhere else (_populate_basic_info writes meta review_state verbatim), so
+# heals must never introduce the IS event stream's WP order-progress
+# vocabulary ('analyzing', 'under_review', 'complete' — status_service.py's
+# OrderStatus enum): 'analyzing' rides every worksheet_assigned event while
+# SENAITE's review_state hasn't moved at all. Derived from the workflow
+# catalog's sample-scope seeds (the canonical state list) plus two real
+# SENAITE sample states the catalog doesn't carry yet.
+from workflow.seeds import SEED_STATES
+
+SAMPLE_REVIEW_STATE_WHITELIST: frozenset[str] = frozenset(
+    slug for (scope, slug, *_rest) in SEED_STATES if scope == "sample"
+) | {"rejected", "stored"}
+
+
+def heal_sample_status(db: Session, sample_id: str, to_status: str) -> bool:
+    """Guarded write of lims_samples.status (the registry mirror of SENAITE's
+    review_state). Returns True iff the column was changed. Guards:
+
+      - vocabulary: only SAMPLE_REVIEW_STATE_WHITELIST members are ever
+        written (RC3 — IS order-progress vocab must not poison the column);
+      - existence: unknown sample_id is a no-op (False);
+      - idempotence: an already-matching status is a no-op (False).
+
+    Flush-only, never commits — same transaction contract as
+    record_sample_transition; callers own the commit."""
+    if to_status not in SAMPLE_REVIEW_STATE_WHITELIST:
+        return False
+    row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if row is None or row.status == to_status:
+        return False
+    row.status = to_status
+    db.flush()
+    return True
+
 
 def _explained(db: Session, *, lims_sample_pk: int, source: str,
                verb: str | None, to_status: str, occurred_at: datetime) -> bool:
