@@ -7577,6 +7577,7 @@ async def get_explorer_orders(
     search_order_number: Optional[str] = None,
     search_sample_id: Optional[str] = None,
     search_analyte: Optional[str] = None,
+    search_lot: Optional[str] = None,
     sort: Optional[str] = None,
     _current_user=Depends(get_current_user),
 ):
@@ -7590,10 +7591,11 @@ async def get_explorer_orders(
     - customer_id: When present, scopes the list to that WC customer (Phase 29).
       Local fetch_orders does not support this filter, so the request is
       proxied to the Integration Service which owns customer-scoped queries.
-    - search_order_number / search_sample_id / search_analyte: UX-revision
-      three-input AND search (Customer Detail → Customer Orders tab). Each is
-      independently optional; the IS AND-combines whichever are set. Each is
-      forwarded only when explicitly provided so an absent param stays absent.
+    - search_order_number / search_sample_id / search_analyte / search_lot:
+      UX-revision AND-combined search axes (Customer Detail → Customer Orders
+      tab). Each is independently optional; the IS AND-combines whichever are
+      set. Each is forwarded only when explicitly provided so an absent param
+      stays absent.
     - sort: Phase 30 sort key (open_first | date_desc | date_asc); forwarded
       to the IS for customer-scoped requests.
     """
@@ -7614,6 +7616,8 @@ async def get_explorer_orders(
             params["search_sample_id"] = search_sample_id
         if search_analyte is not None:
             params["search_analyte"] = search_analyte
+        if search_lot is not None:
+            params["search_lot"] = search_lot
         if sort is not None:
             params["sort"] = sort
         url = f"{os.environ.get('INTEGRATION_SERVICE_URL', 'http://host.docker.internal:8000')}/explorer/orders"
