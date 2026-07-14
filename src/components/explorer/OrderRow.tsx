@@ -86,22 +86,22 @@ export function OrderRow({
   // undefined and the card omits the analyte row.
   const payloadSamples = (
     order.payload as
-      | { samples?: { sample_identity?: string }[] }
+      | { samples?: { sample_identity?: string; lot_code?: string }[] }
       | null
       | undefined
   )?.samples
   const sampleEntries = order.sample_results
     ? Object.entries(order.sample_results).map(([key, val]) => {
         const idx = parseInt(key, 10) - 1
-        const rawAnalyte = Number.isNaN(idx)
-          ? undefined
-          : payloadSamples?.[idx]?.sample_identity
-        const trimmed = rawAnalyte?.trim()
+        const payloadSample = Number.isNaN(idx) ? undefined : payloadSamples?.[idx]
+        const trimmed = payloadSample?.sample_identity?.trim()
+        const trimmedLot = payloadSample?.lot_code?.trim()
         return {
           name: key,
           senaiteId: val.senaite_id,
           integrationStatus: val.status,
           analyte: trimmed && trimmed.length > 0 ? trimmed : undefined,
+          lot: trimmedLot && trimmedLot.length > 0 ? trimmedLot : undefined,
         }
       })
     : []
@@ -310,6 +310,14 @@ export function OrderRow({
                         {s.analyte}
                       </div>
                     )}
+                    {s.lot && (
+                      <div
+                        className="text-xs text-muted-foreground truncate mb-1"
+                        title={s.lot}
+                      >
+                        Lot: {s.lot}
+                      </div>
+                    )}
                     <div className="text-xs text-muted-foreground">
                       Failed to create in SENAITE
                     </div>
@@ -325,6 +333,7 @@ export function OrderRow({
                   isLoading={lookup?.isLoading ?? true}
                   isError={lookup?.isError ?? false}
                   analyte={s.analyte}
+                  lot={s.lot}
                   slaSnapshots={sampleSlaStatusesMap?.get(s.senaiteId)}
                   className={cn(
                     highlightSampleId === s.senaiteId &&

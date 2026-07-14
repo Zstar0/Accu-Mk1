@@ -25,6 +25,7 @@ const getWooOrderMock = vi.fn()
 vi.mock('@/lib/api', () => ({
   lookupSenaiteSample: vi.fn(),
   getWooOrder: getWooOrderMock,
+  getWorksheetUsers: vi.fn().mockResolvedValue([]),
 }))
 
 const { OrderRow } = await import('@/components/explorer/OrderRow')
@@ -738,5 +739,85 @@ describe('OrderRow — sampleSlaStatusesMap plumbing (D2 follow-on)', () => {
     )
     await screen.findByTestId('sample-card-BW-0011')
     expect(screen.queryByTestId('sample-sla-indicator')).toBeNull()
+  })
+})
+
+// Lot pass-through — payload.samples[i].lot_code reaches the SampleCard lot
+// row via the same positional alignment used for the analyte (key "1" →
+// samples[0]). Payload-sourced, so it renders even while the SENAITE lookup
+// is loading (empty sampleLookupMap ⇒ loading branch).
+describe('OrderRow — lot pass-through', () => {
+  const emptyMap = new Map<
+    string,
+    { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }
+  >()
+
+  it('passes payload lot_code positionally to each SampleCard', () => {
+    const order = makeOrder({
+      sample_results: {
+        '1': { senaite_id: 'P-0001', status: 'created' },
+        '2': { senaite_id: 'P-0002', status: 'created' },
+      },
+      payload: {
+        billing: { email: 'forrestp@outlook.com' },
+        samples: [
+          { sample_identity: 'BPC-157', lot_code: 'LOT-A100' },
+          { sample_identity: 'GHRP-6', lot_code: 'LOT-B200' },
+        ],
+      },
+    })
+    renderRow(
+      <OrderRow
+        order={order}
+        wordpressHost="https://wp.example.test"
+        sampleLookupMap={emptyMap}
+        activeAnalysisStates={[]}
+      />
+    )
+    expect(screen.getByTestId('sample-card-lot-P-0001')).toHaveTextContent(
+      'Lot: LOT-A100'
+    )
+    expect(screen.getByTestId('sample-card-lot-P-0002')).toHaveTextContent(
+      'Lot: LOT-B200'
+    )
+  })
+
+  it('omits the lot row when the payload sample has no lot_code', () => {
+    const order = makeOrder({
+      sample_results: { '1': { senaite_id: 'P-0003', status: 'created' } },
+      payload: {
+        billing: { email: 'forrestp@outlook.com' },
+        samples: [{ sample_identity: 'NAD+' }],
+      },
+    })
+    renderRow(
+      <OrderRow
+        order={order}
+        wordpressHost="https://wp.example.test"
+        sampleLookupMap={emptyMap}
+        activeAnalysisStates={[]}
+      />
+    )
+    expect(screen.queryByTestId('sample-card-lot-P-0003')).toBeNull()
+  })
+
+  it('renders the lot line on the failed-sample inline card', () => {
+    const order = makeOrder({
+      sample_results: { '1': { senaite_id: '', status: 'failed' } },
+      payload: {
+        billing: { email: 'forrestp@outlook.com' },
+        samples: [{ sample_identity: 'BPC-157', lot_code: 'LOT-F500' }],
+      },
+    })
+    renderRow(
+      <OrderRow
+        order={order}
+        wordpressHost="https://wp.example.test"
+        sampleLookupMap={emptyMap}
+        activeAnalysisStates={[]}
+      />
+    )
+    expect(screen.getByText('Lot: LOT-F500')).toBeInTheDocument()
+    expect(screen.getByText('Failed to create in SENAITE')).toBeInTheDocument()
   })
 })
