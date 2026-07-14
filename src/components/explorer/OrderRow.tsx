@@ -20,6 +20,7 @@ import {
   getOrderReceivedAt,
   getOrderWorstState,
   groupAnalysisStates,
+  HighlightMatch,
   isOrderDone,
   sampleMatchesAnalysisFilter,
 } from './helpers'
@@ -31,6 +32,7 @@ export function OrderRow({
   activeAnalysisStates,
   defaultExpanded,
   highlightSampleId,
+  highlightLot,
   showFinance,
   slaVerdict,
   sampleSlaStatusesMap,
@@ -60,6 +62,10 @@ export function OrderRow({
   // search hit. Also mirrored to `data-highlight-sample-id` on the root <tr>.
   defaultExpanded?: boolean
   highlightSampleId?: string
+  // Active lot-search query — forwarded to each SampleCard (and the
+  // failed-sample inline card) for browser-find-style highlighting of the
+  // matched substring inside the displayed lot value. Presentational only.
+  highlightLot?: string
   // Opt-in (customer-detail only). When true, renders a chevron in the Order ID
   // cell that toggles a live WooCommerce finance disclosure row beneath this one.
   // Off by default so the shared /explorer OrderStatusPage view is unchanged.
@@ -86,22 +92,22 @@ export function OrderRow({
   // undefined and the card omits the analyte row.
   const payloadSamples = (
     order.payload as
-      | { samples?: { sample_identity?: string }[] }
+      | { samples?: { sample_identity?: string; lot_code?: string }[] }
       | null
       | undefined
   )?.samples
   const sampleEntries = order.sample_results
     ? Object.entries(order.sample_results).map(([key, val]) => {
         const idx = parseInt(key, 10) - 1
-        const rawAnalyte = Number.isNaN(idx)
-          ? undefined
-          : payloadSamples?.[idx]?.sample_identity
-        const trimmed = rawAnalyte?.trim()
+        const payloadSample = Number.isNaN(idx) ? undefined : payloadSamples?.[idx]
+        const trimmed = payloadSample?.sample_identity?.trim()
+        const trimmedLot = payloadSample?.lot_code?.trim()
         return {
           name: key,
           senaiteId: val.senaite_id,
           integrationStatus: val.status,
           analyte: trimmed && trimmed.length > 0 ? trimmed : undefined,
+          lot: trimmedLot && trimmedLot.length > 0 ? trimmedLot : undefined,
         }
       })
     : []
@@ -310,6 +316,14 @@ export function OrderRow({
                         {s.analyte}
                       </div>
                     )}
+                    {s.lot && (
+                      <div
+                        className="text-xs text-muted-foreground truncate mb-1"
+                        title={s.lot}
+                      >
+                        Lot: <HighlightMatch text={s.lot} query={highlightLot} />
+                      </div>
+                    )}
                     <div className="text-xs text-muted-foreground">
                       Failed to create in SENAITE
                     </div>
@@ -325,6 +339,8 @@ export function OrderRow({
                   isLoading={lookup?.isLoading ?? true}
                   isError={lookup?.isError ?? false}
                   analyte={s.analyte}
+                  lot={s.lot}
+                  highlightLot={highlightLot}
                   slaSnapshots={sampleSlaStatusesMap?.get(s.senaiteId)}
                   className={cn(
                     highlightSampleId === s.senaiteId &&

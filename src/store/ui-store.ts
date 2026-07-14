@@ -103,13 +103,14 @@ interface UIState {
   hideTestAccounts: boolean
   // Customer detail page — Phase 30
   customerDetailTab: 'orders' | 'dashboard'
-  // UX revision: three independent search slots, AND-combined server-side.
+  // UX revision: four independent search slots, AND-combined server-side.
   // Each slot is the raw committed value (post-debounce) for one input. Empty
   // string = "no filter on that axis" (back-compat with debounce-flush flow).
   customerOrderSearch: {
     order_number: string
     sample_id: string
     analyte: string
+    lot: string
   }
   updateVersion: string | null
   updateReady: boolean
@@ -139,13 +140,13 @@ interface UIState {
   setHideTestAccounts: (hide: boolean) => void
   setSearchAndResetPage: (term: string) => void
   setCustomerDetailTab: (tab: 'orders' | 'dashboard') => void
-  // Per-axis setter: writes ONE slot, leaves the other two unchanged. This is
-  // how the three-input UI commits debounced values independently per axis.
+  // Per-axis setter: writes ONE slot, leaves the others unchanged. This is
+  // how the four-input UI commits debounced values independently per axis.
   setCustomerOrderSearchField: (
-    field: 'order_number' | 'sample_id' | 'analyte',
+    field: 'order_number' | 'sample_id' | 'analyte' | 'lot',
     value: string
   ) => void
-  // Clears all three slots. Used by navigateToCustomers and any explicit
+  // Clears all four slots. Used by navigateToCustomers and any explicit
   // "clear filters" affordance the UI exposes.
   setCustomerOrderSearchReset: () => void
   setUpdateVersion: (version: string | null) => void
@@ -243,7 +244,12 @@ export const useUIStore = create<UIState>()(
       customerSearchTerm: '',
       hideTestAccounts: true,
       customerDetailTab: 'orders',
-      customerOrderSearch: { order_number: '', sample_id: '', analyte: '' },
+      customerOrderSearch: {
+        order_number: '',
+        sample_id: '',
+        analyte: '',
+        lot: '',
+      },
       updateVersion: null,
       updateReady: false,
       worksheetDrawerOpen: false,
@@ -436,13 +442,14 @@ export const useUIStore = create<UIState>()(
             // back to the list so search/tab state never leaks between
             // customer drill-throughs.
             customerDetailTab: 'orders',
-            // UX revision: clear all three search slots when navigating back
+            // UX revision: clear all four search slots when navigating back
             // to the customer list — same intent as the old single-field
             // reset, just applied per-axis.
             customerOrderSearch: {
               order_number: '',
               sample_id: '',
               analyte: '',
+              lot: '',
             },
             navigationKey: state.navigationKey + 1,
           }),
@@ -469,8 +476,8 @@ export const useUIStore = create<UIState>()(
       setCustomerDetailTab: tab =>
         set({ customerDetailTab: tab }, undefined, 'setCustomerDetailTab'),
 
-      // UX revision: per-axis setter. Writes ONE slot and preserves the other
-      // two via spread — this is what lets the three inputs commit
+      // UX revision: per-axis setter. Writes ONE slot and preserves the
+      // others via spread — this is what lets the four inputs commit
       // independently from their own per-input debounce timers without
       // stomping each other.
       setCustomerOrderSearchField: (field, value) =>
@@ -485,7 +492,7 @@ export const useUIStore = create<UIState>()(
           'setCustomerOrderSearchField'
         ),
 
-      // Clears all three slots in one render cycle. Used by clear-filters
+      // Clears all four slots in one render cycle. Used by clear-filters
       // affordances; navigateToCustomers does the equivalent inline.
       setCustomerOrderSearchReset: () =>
         set(
@@ -494,6 +501,7 @@ export const useUIStore = create<UIState>()(
               order_number: '',
               sample_id: '',
               analyte: '',
+              lot: '',
             },
           },
           undefined,

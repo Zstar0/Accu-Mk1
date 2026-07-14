@@ -1337,7 +1337,7 @@ export async function getExplorerCustomerById(
  */
 export async function getExplorerOrdersByCustomer(
   customerId: number,
-  // UX revision (post-Phase 30): three independent search axes, AND-combined
+  // UX revision (post-Phase 30): four independent search axes, AND-combined
   // server-side. Each axis is independently optional, and each is gated on a
   // 2-char minimum HERE in the client (the backend treats '' as "no filter on
   // that axis" but doesn't enforce a minimum length — the gate is purely a UX
@@ -1346,6 +1346,7 @@ export async function getExplorerOrdersByCustomer(
     order_number?: string
     sample_id?: string
     analyte?: string
+    lot?: string
   },
   sort: 'open_first' | 'date_desc' | 'date_asc' = 'open_first',
   page = 0,
@@ -1369,6 +1370,9 @@ export async function getExplorerOrdersByCustomer(
       }
       if (search.analyte && search.analyte.length >= 2) {
         params.set('search_analyte', search.analyte)
+      }
+      if (search.lot && search.lot.length >= 2) {
+        params.set('search_lot', search.lot)
       }
     }
 
@@ -4073,6 +4077,9 @@ export interface SenaiteSample {
   sample_type: string | null
   contact: string | null
   verification_code: string | null
+  // Customer lot/batch code — lims_samples.client_lot in registry mode,
+  // SENAITE ClientLot on hydrated items (null on slim catalog-brains rows).
+  client_lot: string | null
   analytes: string[]
 }
 
@@ -4087,7 +4094,7 @@ export async function getSenaiteSamples(
   limit = 50,
   bStart = 0,
   search?: string,
-  searchField?: 'verification_code' | 'order_number',
+  searchField?: 'verification_code' | 'order_number' | 'lot',
   /** Catalog-brains only (no complete=yes hydration on the SENAITE side).
    *  Items carry live review_state/id/uid but empty analytes/verification
    *  code. Only the mk1-read-mode list refresh passes this. */
@@ -4119,7 +4126,7 @@ export async function getRegistrySamples(
   limit = 50,
   bStart = 0,
   search?: string,
-  searchField?: 'verification_code' | 'order_number'
+  searchField?: 'verification_code' | 'order_number' | 'lot'
 ): Promise<SenaiteSamplesResponse> {
   const params = new URLSearchParams({
     limit: String(limit),

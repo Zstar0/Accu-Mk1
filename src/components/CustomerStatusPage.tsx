@@ -512,12 +512,12 @@ function CustomerDetailView() {
   // Phase 30 — Task 6: detail-view tab selection
   const customerDetailTab = useUIStore(state => state.customerDetailTab)
   const setCustomerDetailTab = useUIStore(state => state.setCustomerDetailTab)
-  // UX revision: per-customer order search uses THREE independent axes
-  // (order_number, sample_id, analyte) that are AND-combined server-side.
+  // UX revision: per-customer order search uses FOUR independent axes
+  // (order_number, sample_id, analyte, lot) that are AND-combined server-side.
   // - `customerOrderSearch` is the committed (post-debounce) state per axis.
   // - `setCustomerOrderSearchField(field, value)` writes ONE slot at a time
   //   from the corresponding input's debounced effect.
-  // - `setCustomerOrderSearchReset()` clears all three slots (used by the
+  // - `setCustomerOrderSearchReset()` clears all four slots (used by the
   //   Clear button and by navigateToCustomers).
   //
   // Selector syntax is mandatory (ast-grep enforced — no destructuring of
@@ -596,15 +596,15 @@ function CustomerDetailView() {
   const resolvedCustomer: ExplorerCustomer | null =
     headerCustomer ?? fetchedCustomer ?? null
 
-  // --- Orders query (D-09 + UX revision: three-axis search + envName) ---
+  // --- Orders query (D-09 + UX revision: four-axis search + envName) ---
   // QueryKey shape:
   //   ['explorer','orders','by-customer', id,
-  //    order_number, sample_id, analyte, 'open_first', envName]
+  //    order_number, sample_id, analyte, lot, 'open_first', envName]
   // - Each search axis participates in the key so distinct queries occupy
   //   distinct cache slots (no bleed across filter combinations).
   // - sort is fixed to 'open_first' but reserved in the key so later phases
   //   can parameterize without invalidating existing cache writes.
-  // - envName lives at the LAST position (index 8) — T-29-05-new mitigation
+  // - envName lives at the LAST position (index 9) — T-29-05-new mitigation
   //   scope for any future cross-env predicate. Do NOT move it.
   // The per-axis 2-char minimum gate lives in the API client
   // (src/lib/api.ts:getExplorerOrdersByCustomer); the call site forwards
@@ -623,6 +623,7 @@ function CustomerDetailView() {
       customerOrderSearch.order_number,
       customerOrderSearch.sample_id,
       customerOrderSearch.analyte,
+      customerOrderSearch.lot,
       'open_first',
       envName,
     ],
@@ -638,6 +639,7 @@ function CustomerDetailView() {
           order_number: customerOrderSearch.order_number,
           sample_id: customerOrderSearch.sample_id,
           analyte: customerOrderSearch.analyte,
+          lot: customerOrderSearch.lot,
         },
         'open_first',
         0,
@@ -804,10 +806,10 @@ function CustomerDetailView() {
 }
 
 /**
- * UX revision — Customer Orders tab body (three-input AND search).
+ * UX revision — Customer Orders tab body (four-input AND search).
  *
- * The single Select+Input search has been replaced by THREE labeled inputs
- * laid out side-by-side: Order #, Sample ID, Analyte. Each input has its own
+ * The single Select+Input search has been replaced by FOUR labeled inputs
+ * laid out side-by-side: Order #, Sample ID, Analyte, Lot. Each input has its own
  * local state, its own 300ms debounce, and dispatches via
  * `setCustomerOrderSearchField(<that axis>, value)` — slots are independent
  * and AND-combined server-side.
@@ -829,8 +831,8 @@ function CustomerDetailView() {
  * OrderRow.defaultExpanded propagation in lock-step with what was actually
  * dispatched (the 300ms debounce window is the only delay).
  *
- * Clear button: appears when ANY of the three committed slots is non-empty.
- * On click it dispatches `setCustomerOrderSearchReset()` AND wipes all three
+ * Clear button: appears when ANY of the four committed slots is non-empty.
+ * On click it dispatches `setCustomerOrderSearchReset()` AND wipes all four
  * local input states (the local resets are what cancel any in-flight
  * debounce — the effect bails when local === committed).
  */
@@ -864,9 +866,10 @@ function CustomerOrdersTab({
     order_number: string
     sample_id: string
     analyte: string
+    lot: string
   }
   setCustomerOrderSearchField: (
-    field: 'order_number' | 'sample_id' | 'analyte',
+    field: 'order_number' | 'sample_id' | 'analyte' | 'lot',
     value: string
   ) => void
   setCustomerOrderSearchReset: () => void
@@ -880,6 +883,7 @@ function CustomerOrdersTab({
     customerOrderSearch.sample_id
   )
   const [analyteInput, setAnalyteInput] = useState(customerOrderSearch.analyte)
+  const [lotInput, setLotInput] = useState(customerOrderSearch.lot)
 
   // 300ms debounce, per axis. Each effect depends ONLY on its own axis (local
   // + committed) — touching another axis won't reschedule this timer.
@@ -919,12 +923,21 @@ function CustomerOrdersTab({
     setCustomerOrderSearchField,
   ])
 
+  useEffect(() => {
+    if (lotInput === customerOrderSearch.lot) return
+    const handle = setTimeout(() => {
+      setCustomerOrderSearchField('lot', lotInput)
+    }, 300)
+    return () => clearTimeout(handle)
+  }, [lotInput, customerOrderSearch.lot, setCustomerOrderSearchField])
+
   // searchActive: any committed (post-debounce) axis non-empty. Drives the
   // empty-state echo, OrderRow.defaultExpanded, and the Clear button mount.
   const searchActive = Boolean(
     customerOrderSearch.order_number ||
       customerOrderSearch.sample_id ||
-      customerOrderSearch.analyte
+      customerOrderSearch.analyte ||
+      customerOrderSearch.lot
   )
 
   // highlightSampleId: sample-ID highlight forwarded to OrderRow only when
@@ -933,6 +946,14 @@ function CustomerOrdersTab({
   const highlightSampleId =
     searchActive && customerOrderSearch.sample_id.length >= 2
       ? customerOrderSearch.sample_id
+      : undefined
+
+  // highlightLot: same contract as highlightSampleId — only highlight what
+  // the server actually filtered on (the api.ts 2-char gate), rendered as a
+  // browser-find-style <mark> inside each card's lot value.
+  const highlightLot =
+    searchActive && customerOrderSearch.lot.length >= 2
+      ? customerOrderSearch.lot
       : undefined
 
   // Empty-state echo: build "Order #: \"3001\" AND Sample ID: \"P-0001\""
@@ -957,6 +978,9 @@ function CustomerOrdersTab({
       value: customerOrderSearch.analyte,
     })
   }
+  if (customerOrderSearch.lot) {
+    activeFilters.push({ label: 'Lot', value: customerOrderSearch.lot })
+  }
 
   const hasError = ordersError != null
   const hasOrders = orders.length > 0
@@ -971,11 +995,12 @@ function CustomerOrdersTab({
     setOrderNumberInput('')
     setSampleIdInput('')
     setAnalyteInput('')
+    setLotInput('')
   }
 
   return (
     <>
-      {/* Search header — three labeled inputs side-by-side, AND-combined */}
+      {/* Search header — four labeled inputs side-by-side, AND-combined */}
       <div className="flex items-end gap-3 mb-3">
         <div className="flex flex-col gap-1 flex-1">
           <Label htmlFor="customer-orders-search-order-number">Order #</Label>
@@ -1005,6 +1030,16 @@ function CustomerOrdersTab({
             value={analyteInput}
             onChange={e => setAnalyteInput(e.target.value)}
             placeholder="e.g., BPC-157"
+          />
+        </div>
+        <div className="flex flex-col gap-1 flex-1">
+          <Label htmlFor="customer-orders-search-lot">Lot</Label>
+          <Input
+            id="customer-orders-search-lot"
+            aria-label="Lot"
+            value={lotInput}
+            onChange={e => setLotInput(e.target.value)}
+            placeholder="e.g., LOT-001"
           />
         </div>
         {searchActive && (
@@ -1127,6 +1162,7 @@ function CustomerOrdersTab({
                       activeAnalysisStates={[]}
                       defaultExpanded={searchActive ? true : undefined}
                       highlightSampleId={highlightSampleId}
+                      highlightLot={highlightLot}
                       showFinance
                       slaVerdict={orderSla.verdictByOrderId.get(order.order_id)}
                       sampleSlaStatusesMap={orderSla.sampleStatusesBySampleId}

@@ -48,12 +48,13 @@ import {
   formatProcessingTime,
   getOrderEmail,
   groupAnalysisStates,
+  HighlightMatch,
   sampleMatchesAnalysisFilter,
   COL_COUNT_LABEL,
   TEST_EMAILS,
   type AnalysisStateCounts,
 } from '@/components/explorer/helpers'
-import { toggleFilterKey, isOrderAtRisk } from '@/components/explorer/order-filters'
+import { toggleFilterKey, isOrderAtRisk, orderMatchesLot } from '@/components/explorer/order-filters'
 import { OrderRow } from '@/components/explorer/OrderRow'
 import { FlagIndicator } from '@/components/flags/FlagIndicator'
 import { SampleSlaIndicator } from '@/components/explorer/SampleSlaIndicator'
@@ -103,6 +104,7 @@ interface KanbanSampleItem {
   isLoading: boolean
   isError: boolean
   analysisServices?: string[]  // names of analyses matching this column's state
+  lot?: string  // payload lot_code, positionally aligned (display fallback for client_lot)
 }
 
 // Tailwind classes for count pill background per column
@@ -190,11 +192,15 @@ function KanbanSampleCard({
   item,
   showOrder,
   showAnalysisServices,
+  lotHighlight,
   sampleSlaStatusesMap,
 }: {
   item: KanbanSampleItem
   showOrder: boolean
   showAnalysisServices: boolean
+  // Active Lot-filter query — matched substrings inside the displayed lot
+  // value get a browser-find-style <mark> highlight (presentational only).
+  lotHighlight?: string
   // Multi-tier follow-on: each sample now has an array of snapshots (one per
   // service group). Until the indicator itself renders stacked rows, we pick
   // the first element so behavior stays single-tier-visible.
@@ -228,6 +234,8 @@ function KanbanSampleCard({
     return Array.from(names)
   })()
 
+  const kanbanLot = item.lookup?.client_lot?.trim() || item.lot
+
   return (
     <div className="rounded border border-border/50 bg-card px-2 py-1 hover:border-border transition-colors cursor-pointer">
       {/* Row 1: sample ID + email (left) + count pill (right) */}
@@ -257,6 +265,14 @@ function KanbanSampleCard({
           <span className="text-[10px] text-muted-foreground/50">Tech:</span>
           <span className="text-[10px] text-muted-foreground/80 truncate">
             {analysts.join(', ')}
+          </span>
+        </div>
+      )}
+      {kanbanLot && (
+        <div className="flex items-center gap-1 mt-0.5">
+          <span className="text-[10px] text-muted-foreground/50">Lot:</span>
+          <span className="text-[10px] text-muted-foreground/80 truncate">
+            <HighlightMatch text={kanbanLot} query={lotHighlight} />
           </span>
         </div>
       )}
@@ -316,6 +332,7 @@ function KanbanView({
   groupByOrder,
   activeStates,
   showAnalysisServices,
+  lotHighlight,
   sampleSlaStatusesMap,
   collapsedCols,
   onToggleCollapse,
@@ -325,6 +342,9 @@ function KanbanView({
   groupByOrder: boolean
   activeStates: string[]
   showAnalysisServices: boolean
+  // Active Lot-filter query, forwarded to every KanbanSampleCard for
+  // browser-find-style highlighting of the matched lot substring.
+  lotHighlight?: string
   sampleSlaStatusesMap?: Map<string, SampleSlaSnapshot[]>
   collapsedCols: string[]
   onToggleCollapse: (key: string) => void
@@ -340,8 +360,17 @@ function KanbanView({
     for (const order of orders) {
       if (!order.sample_results) continue
       const email = getOrderEmail(order)
-      for (const entry of Object.values(order.sample_results)) {
+      const kanbanPayloadSamples = (
+        order.payload as { samples?: { lot_code?: string }[] } | null | undefined
+      )?.samples
+      for (const [slotKey, entry] of Object.entries(order.sample_results)) {
         if (!entry.senaite_id || entry.status === 'failed') continue
+        const slotIdx = parseInt(slotKey, 10) - 1
+        const rawLot = Number.isNaN(slotIdx)
+          ? undefined
+          : kanbanPayloadSamples?.[slotIdx]?.lot_code
+        const lot =
+          rawLot && rawLot.trim().length > 0 ? rawLot.trim() : undefined
         const lq = sampleLookupMap.get(entry.senaite_id)
         if (lq?.isLoading) {
           for (const col of visibleCols) {
@@ -356,6 +385,7 @@ function KanbanView({
               lookup: undefined,
               isLoading: true,
               isError: false,
+              lot,
             })
           }
           continue
@@ -377,6 +407,7 @@ function KanbanView({
               isLoading: false,
               isError: false,
               analysisServices: getAnalysisServicesForCol(lq.data.analyses, col.key, lq.data),
+              lot,
             })
           }
         }
@@ -434,6 +465,7 @@ function KanbanView({
                       item={item}
                       showOrder={true}
                       showAnalysisServices={showAnalysisServices}
+                      lotHighlight={lotHighlight}
                       sampleSlaStatusesMap={sampleSlaStatusesMap}
                     />
                   ))}
@@ -499,6 +531,7 @@ function KanbanView({
                           item={item}
                           showOrder={false}
                           showAnalysisServices={showAnalysisServices}
+                          lotHighlight={lotHighlight}
                           sampleSlaStatusesMap={sampleSlaStatusesMap}
                         />
                       ))
@@ -537,6 +570,7 @@ interface OrderFilters {
   emailFilter: string
   orderIdFilter: string
   analyteFilter: string
+  lotFilter: string
   hideTestOrders: boolean
   slaAtRisk: boolean
   collapsedKanbanCols: string[]
@@ -557,6 +591,7 @@ function loadOrderFilters(): OrderFilters {
         activeStates: (parsed.activeStates ?? []).filter(s => s !== 'pending'),
         collapsedKanbanCols: parsed.collapsedKanbanCols ?? [],
         analyteFilter: parsed.analyteFilter ?? '',
+        lotFilter: parsed.lotFilter ?? '',
       }
     }
   } catch {
@@ -568,6 +603,7 @@ function loadOrderFilters(): OrderFilters {
     emailFilter: '',
     orderIdFilter: '',
     analyteFilter: '',
+    lotFilter: '',
     hideTestOrders: true,
     slaAtRisk: false,
     collapsedKanbanCols: [],
@@ -706,6 +742,13 @@ export function OrderStatusPage() {
           )
         })
       })
+    }
+    // Lot filter — payload lot_code (instant) OR loaded SENAITE client_lot
+    // (refines as lookups arrive). Same progressive-refinement contract as
+    // the analyte filter above.
+    const lotQ = orderFilters.lotFilter.trim().toLowerCase()
+    if (lotQ) {
+      result = result.filter(o => orderMatchesLot(o, lotQ, sampleLookupMap))
     }
     // Apply kanban sort when in grouped kanban mode
     if (orderFilters.viewMode === 'kanban') {
@@ -1125,10 +1168,16 @@ export function OrderStatusPage() {
               onChange={e => updateFilters({ analyteFilter: e.target.value })}
               className="h-7 w-36 text-xs"
             />
-            {(orderFilters.orderIdFilter || orderFilters.emailFilter || orderFilters.sampleIdFilter || orderFilters.analyteFilter) && (
+            <Input
+              placeholder="Lot"
+              value={orderFilters.lotFilter}
+              onChange={e => updateFilters({ lotFilter: e.target.value })}
+              className="h-7 w-32 text-xs"
+            />
+            {(orderFilters.orderIdFilter || orderFilters.emailFilter || orderFilters.sampleIdFilter || orderFilters.analyteFilter || orderFilters.lotFilter) && (
               <button
                 type="button"
-                onClick={() => updateFilters({ orderIdFilter: '', emailFilter: '', sampleIdFilter: '', analyteFilter: '' })}
+                onClick={() => updateFilters({ orderIdFilter: '', emailFilter: '', sampleIdFilter: '', analyteFilter: '', lotFilter: '' })}
                 className="text-xs text-muted-foreground hover:text-foreground underline"
               >
                 Clear
@@ -1200,6 +1249,7 @@ export function OrderStatusPage() {
                         wordpressHost={wordpressHost}
                         sampleLookupMap={sampleLookupMap}
                         activeAnalysisStates={orderFilters.activeStates}
+                        highlightLot={orderFilters.lotFilter.trim() || undefined}
                         slaVerdict={orderSla.verdictByOrderId.get(order.order_id)}
                         sampleSlaStatusesMap={orderSla.sampleStatusesBySampleId}
                       />
@@ -1217,6 +1267,7 @@ export function OrderStatusPage() {
                   groupByOrder={orderFilters.groupByOrder}
                   activeStates={orderFilters.activeStates}
                   showAnalysisServices={orderFilters.showAnalysisServices}
+                  lotHighlight={orderFilters.lotFilter.trim() || undefined}
                   sampleSlaStatusesMap={orderSla.sampleStatusesBySampleId}
                   collapsedCols={orderFilters.collapsedKanbanCols}
                   onToggleCollapse={toggleCollapsedCol}

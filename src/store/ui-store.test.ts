@@ -306,11 +306,12 @@ describe('UIStore customer detail tabs + order search', () => {
   it('has correct customer-detail-tab initial state', () => {
     const state = useUIStore.getState()
     expect(state.customerDetailTab).toBe('orders')
-    // UX revision: three-slot shape, all empty.
+    // UX revision: four-slot shape, all empty.
     expect(state.customerOrderSearch).toEqual({
       order_number: '',
       sample_id: '',
       analyte: '',
+      lot: '',
     })
   })
 
@@ -319,13 +320,14 @@ describe('UIStore customer detail tabs + order search', () => {
     expect(useUIStore.getState().customerDetailTab).toBe('dashboard')
   })
 
-  it('setCustomerOrderSearchField writes one slot, preserves the other two', () => {
+  it('setCustomerOrderSearchField writes one slot, preserves the others', () => {
     useUIStore.getState().setCustomerOrderSearchField('sample_id', 'P-0001')
     let state = useUIStore.getState()
     expect(state.customerOrderSearch).toEqual({
       order_number: '',
       sample_id: 'P-0001',
       analyte: '',
+      lot: '',
     })
 
     // Independent setter call must NOT clobber the previously-written slot.
@@ -335,6 +337,7 @@ describe('UIStore customer detail tabs + order search', () => {
       order_number: '',
       sample_id: 'P-0001',
       analyte: 'BPC-157',
+      lot: '',
     })
 
     // Third slot exercise + overwrite-in-place.
@@ -345,6 +348,25 @@ describe('UIStore customer detail tabs + order search', () => {
       order_number: 'WP-001',
       sample_id: 'P-0002',
       analyte: 'BPC-157',
+      lot: '',
+    })
+  })
+
+  it('setCustomerOrderSearchField("lot", v) writes the lot slot and preserves the others', () => {
+    useUIStore.setState({
+      customerOrderSearch: {
+        order_number: '3001',
+        sample_id: 'P-0001',
+        analyte: 'BPC',
+        lot: '',
+      },
+    })
+    useUIStore.getState().setCustomerOrderSearchField('lot', 'LOT-A100')
+    expect(useUIStore.getState().customerOrderSearch).toEqual({
+      order_number: '3001',
+      sample_id: 'P-0001',
+      analyte: 'BPC',
+      lot: 'LOT-A100',
     })
   })
 
@@ -354,6 +376,7 @@ describe('UIStore customer detail tabs + order search', () => {
         order_number: 'WP-001',
         sample_id: 'P-0001',
         analyte: 'BPC-157',
+        lot: '',
       },
     })
     useUIStore.getState().setCustomerOrderSearchField('sample_id', '')
@@ -361,15 +384,17 @@ describe('UIStore customer detail tabs + order search', () => {
       order_number: 'WP-001',
       sample_id: '',
       analyte: 'BPC-157',
+      lot: '',
     })
   })
 
-  it('setCustomerOrderSearchReset clears all three slots', () => {
+  it('setCustomerOrderSearchReset clears all four slots', () => {
     useUIStore.setState({
       customerOrderSearch: {
         order_number: 'WP-001',
         sample_id: 'P-0001',
         analyte: 'BPC-157',
+        lot: 'LOT-A100',
       },
     })
     useUIStore.getState().setCustomerOrderSearchReset()
@@ -377,17 +402,37 @@ describe('UIStore customer detail tabs + order search', () => {
       order_number: '',
       sample_id: '',
       analyte: '',
+      lot: '',
+    })
+  })
+
+  it('setCustomerOrderSearchReset clears the lot slot too', () => {
+    useUIStore.setState({
+      customerOrderSearch: {
+        order_number: '',
+        sample_id: '',
+        analyte: '',
+        lot: 'LOT-A100',
+      },
+    })
+    useUIStore.getState().setCustomerOrderSearchReset()
+    expect(useUIStore.getState().customerOrderSearch).toEqual({
+      order_number: '',
+      sample_id: '',
+      analyte: '',
+      lot: '',
     })
   })
 
   it('navigateToCustomers clears customerDetailTab and all customerOrderSearch slots', () => {
-    // Seed all three slots + tab with non-default values
+    // Seed all four slots + tab with non-default values
     useUIStore.setState({
       customerDetailTab: 'dashboard',
       customerOrderSearch: {
         order_number: 'WP-001',
         sample_id: 'P-0001',
         analyte: 'BPC-157',
+        lot: 'LOT-A100',
       },
     })
     useUIStore.getState().navigateToCustomers()
@@ -397,6 +442,7 @@ describe('UIStore customer detail tabs + order search', () => {
       order_number: '',
       sample_id: '',
       analyte: '',
+      lot: '',
     })
   })
 })

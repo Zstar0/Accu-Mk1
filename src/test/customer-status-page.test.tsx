@@ -44,6 +44,7 @@ vi.mock('@/store/ui-store', () => {
       order_number: '',
       sample_id: '',
       analyte: '',
+      lot: '',
     },
     navigateToCustomer: vi.fn(),
     navigateToCustomers: vi.fn(),
@@ -153,6 +154,7 @@ const mockState = (useUIStore as any).__state as {
     order_number: string
     sample_id: string
     analyte: string
+    lot: string
   }
   navigateToCustomer: ReturnType<typeof vi.fn>
   navigateToCustomers: ReturnType<typeof vi.fn>
@@ -212,7 +214,7 @@ function resetState() {
   mockState.customerSearchTerm = ''
   mockState.hideTestAccounts = true
   mockState.customerDetailTab = 'orders'
-  mockState.customerOrderSearch = { order_number: '', sample_id: '', analyte: '' }
+  mockState.customerOrderSearch = { order_number: '', sample_id: '', analyte: '', lot: '' }
   mockState.navigateToCustomer.mockReset()
   mockState.navigateToCustomers.mockReset()
   mockState.setCustomerListPage.mockReset()
@@ -1090,7 +1092,7 @@ describe('CustomerStatusPage — detail view tabs (Phase 30)', () => {
     mockState.activeSubSection = 'customer-detail'
     mockState.customerDetailTargetId = 42
     mockState.customerDetailTab = 'orders'
-    mockState.customerOrderSearch = { order_number: '', sample_id: '', analyte: '' }
+    mockState.customerOrderSearch = { order_number: '', sample_id: '', analyte: '', lot: '' }
   })
 
   afterEach(() => {
@@ -1163,7 +1165,7 @@ describe('CustomerStatusPage — detail view tabs (Phase 30)', () => {
 // debounce, one timer per axis. The Clear button resets all three slots via
 // `setCustomerOrderSearchReset()` and wipes local input state.
 // ---------------------------------------------------------------------------
-describe('CustomerStatusPage — customer-orders search (three-input AND)', () => {
+describe('CustomerStatusPage — customer-orders search (four-input AND)', () => {
   beforeEach(() => {
     resetState()
     vi.mocked(getExplorerStatus).mockReset()
@@ -1183,6 +1185,7 @@ describe('CustomerStatusPage — customer-orders search (three-input AND)', () =
       order_number: '',
       sample_id: '',
       analyte: '',
+      lot: '',
     }
   })
 
@@ -1191,13 +1194,51 @@ describe('CustomerStatusPage — customer-orders search (three-input AND)', () =
     vi.unstubAllEnvs()
   })
 
-  it('renders three labeled search inputs side-by-side (Order # / Sample ID / Analyte)', async () => {
+  it('renders four labeled search inputs side-by-side (Order # / Sample ID / Analyte / Lot)', async () => {
     renderDetailWithCache(makeCustomer({ customer_id: 42 }))
 
     // Each input carries a unique aria-label matching its visible Label.
     expect(await screen.findByLabelText('Order #')).toBeInTheDocument()
     expect(screen.getByLabelText('Sample ID')).toBeInTheDocument()
     expect(screen.getByLabelText('Analyte')).toBeInTheDocument()
+    expect(screen.getByLabelText('Lot')).toBeInTheDocument()
+  })
+
+  it('typing in Lot dispatches setCustomerOrderSearchField("lot", value) after 300ms debounce', async () => {
+    renderDetailWithCache(makeCustomer({ customer_id: 42 }))
+    const lotInput = await screen.findByLabelText('Lot')
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      fireEvent.change(lotInput, { target: { value: 'LOT-A100' } })
+      expect(mockState.setCustomerOrderSearchField).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(300)
+      expect(mockState.setCustomerOrderSearchField).toHaveBeenCalledWith(
+        'lot',
+        'LOT-A100'
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('forwards the committed lot slot to getExplorerOrdersByCustomer', async () => {
+    mockState.customerOrderSearch = {
+      order_number: '',
+      sample_id: '',
+      analyte: '',
+      lot: 'LOT-A100',
+    }
+    renderDetailWithCache(makeCustomer({ customer_id: 42 }))
+    await waitFor(() => {
+      expect(getExplorerOrdersByCustomer).toHaveBeenCalledWith(
+        42,
+        { order_number: '', sample_id: '', analyte: '', lot: 'LOT-A100' },
+        'open_first',
+        0,
+        50
+      )
+    })
   })
 
   it('typing in Sample ID dispatches setCustomerOrderSearchField("sample_id", value) after 300ms debounce', async () => {
@@ -1227,12 +1268,13 @@ describe('CustomerStatusPage — customer-orders search (three-input AND)', () =
       order_number: '',
       sample_id: 'P-0001',
       analyte: '',
+      lot: '',
     }
     renderDetailWithCache(makeCustomer({ customer_id: 42 }))
     await waitFor(() => {
       expect(getExplorerOrdersByCustomer).toHaveBeenCalledWith(
         42,
-        { order_number: '', sample_id: 'P-0001', analyte: '' },
+        { order_number: '', sample_id: 'P-0001', analyte: '', lot: '' },
         'open_first',
         0,
         50
@@ -1247,12 +1289,13 @@ describe('CustomerStatusPage — customer-orders search (three-input AND)', () =
       order_number: '',
       sample_id: 'P',
       analyte: '',
+      lot: '',
     }
     renderDetailWithCache(makeCustomer({ customer_id: 42 }))
     await waitFor(() => {
       expect(getExplorerOrdersByCustomer).toHaveBeenCalledWith(
         42,
-        { order_number: '', sample_id: 'P', analyte: '' },
+        { order_number: '', sample_id: 'P', analyte: '', lot: '' },
         'open_first',
         0,
         50
@@ -1265,6 +1308,7 @@ describe('CustomerStatusPage — customer-orders search (three-input AND)', () =
       order_number: '',
       sample_id: 'P-0001',
       analyte: '',
+      lot: '',
     }
     vi.mocked(getExplorerOrdersByCustomer).mockResolvedValue([
       makeOrder({
@@ -1284,6 +1328,7 @@ describe('CustomerStatusPage — customer-orders search (three-input AND)', () =
       order_number: '',
       sample_id: 'P-0001',
       analyte: '',
+      lot: '',
     }
     vi.mocked(getExplorerOrdersByCustomer).mockResolvedValue([
       makeOrder({
@@ -1303,6 +1348,7 @@ describe('CustomerStatusPage — customer-orders search (three-input AND)', () =
       order_number: '',
       sample_id: '',
       analyte: 'BPC-157',
+      lot: '',
     }
     vi.mocked(getExplorerOrdersByCustomer).mockResolvedValue([])
     renderDetailWithCache(makeCustomer({ customer_id: 42 }))
@@ -1316,6 +1362,7 @@ describe('CustomerStatusPage — customer-orders search (three-input AND)', () =
       order_number: '',
       sample_id: 'P-9999',
       analyte: 'BPC-157',
+      lot: '',
     }
     vi.mocked(getExplorerOrdersByCustomer).mockResolvedValue([])
     renderDetailWithCache(makeCustomer({ customer_id: 42 }))
@@ -1332,6 +1379,7 @@ describe('CustomerStatusPage — customer-orders search (three-input AND)', () =
       order_number: '3001',
       sample_id: 'P-0001',
       analyte: 'BPC-157',
+      lot: '',
     }
     renderDetailWithCache(makeCustomer({ customer_id: 42 }))
     await user.click(
@@ -1376,12 +1424,13 @@ describe('CustomerStatusPage — customer-orders search (three-input AND)', () =
       order_number: '',
       sample_id: 'P-0001',
       analyte: 'BPC-157',
+      lot: '',
     }
     renderDetailWithCache(makeCustomer({ customer_id: 42 }))
     await waitFor(() => {
       expect(getExplorerOrdersByCustomer).toHaveBeenCalledWith(
         42,
-        { order_number: '', sample_id: 'P-0001', analyte: 'BPC-157' },
+        { order_number: '', sample_id: 'P-0001', analyte: 'BPC-157', lot: '' },
         'open_first',
         0,
         50
