@@ -4684,6 +4684,11 @@ export interface GetInboxOptions {
   hidePrepped?: boolean
   role?: InboxRole | null
   showXtra?: boolean
+  /** Read source for candidate samples + parent analyses: 'mk1' = local
+   *  registry (no SENAITE round-trips), omitted/'senaite' = legacy SENAITE
+   *  fetch. Resolved by callers from the 'worksheets_inbox' read-source
+   *  setting. */
+  source?: 'senaite' | 'mk1'
 }
 
 export async function getInboxSamples(opts: GetInboxOptions = {}): Promise<InboxResponse> {
@@ -4693,6 +4698,7 @@ export async function getInboxSamples(opts: GetInboxOptions = {}): Promise<Inbox
     hidePrepped = true,
     role = null,
     showXtra = false,
+    source,
   } = opts
   const params = new URLSearchParams()
   params.set('hide_test_orders', String(hideTestOrders))
@@ -4700,6 +4706,7 @@ export async function getInboxSamples(opts: GetInboxOptions = {}): Promise<Inbox
   if (forceRefresh) params.set('force_refresh', 'true')
   if (role) params.set('role', role)
   if (showXtra) params.set('show_xtra', 'true')
+  if (source) params.set('source', source)
   const response = await fetch(`${API_BASE_URL()}/worksheets/inbox?${params}`, {
     headers: getBearerHeaders(),
   })

@@ -15,6 +15,9 @@ interface InboxKeyParams {
   hidePrepped: boolean
   role?: InboxRole | null
   showXtra?: boolean
+  /** Read source from the 'worksheets_inbox' two-tier setting; part of the
+   *  query key so flipping the source refetches. */
+  source?: 'senaite' | 'mk1'
 }
 
 export function inboxKey(params: InboxKeyParams) {
@@ -29,6 +32,7 @@ export function useInboxSamples(params: InboxKeyParams) {
       hidePrepped: params.hidePrepped,
       role: params.role ?? null,
       showXtra: params.showXtra ?? false,
+      source: params.source,
     }),
     refetchInterval: 30_000, // 30s polling per D-04
     staleTime: 0, // always fresh -- live queue

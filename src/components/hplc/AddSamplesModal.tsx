@@ -13,6 +13,7 @@ import { PriorityBadge } from '@/components/hplc/PriorityBadge'
 import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
 import { SERVICE_GROUP_COLORS } from '@/lib/service-group-colors'
 import { getInboxSamples } from '@/lib/api'
+import { useEffectiveReadSource } from '@/lib/read-source'
 import type { WorksheetListItem, InboxPriority } from '@/lib/api'
 
 interface AddSamplesModalProps {
@@ -44,9 +45,11 @@ export function AddSamplesModal({
   existingItems,
   onAdd,
 }: AddSamplesModalProps) {
+  // Same read-source as the inbox page — the modal is the inbox in disguise.
+  const { effective: readSource } = useEffectiveReadSource('worksheets_inbox')
   const { data: inboxData } = useQuery({
-    queryKey: ['inbox-samples', { hideTestOrders: true, addSamplesModal: true }],
-    queryFn: () => getInboxSamples({ hideTestOrders: true }),
+    queryKey: ['inbox-samples', { hideTestOrders: true, addSamplesModal: true, source: readSource }],
+    queryFn: () => getInboxSamples({ hideTestOrders: true, source: readSource }),
     enabled: open,
   })
 
