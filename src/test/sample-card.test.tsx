@@ -23,9 +23,12 @@ vi.mock('@/lib/api-profiles', () => ({
   API_PROFILE_CHANGED_EVENT: 'api-profile-changed',
 }))
 
-// Stub the api module so type-only imports resolve.
+// Stub the api module so type-only imports resolve. getWorksheetUsers is
+// needed because the normal render branch mounts FlagIndicator ->
+// RaiseFlagButton -> useFlagUsers, which calls it as a react-query queryFn.
 vi.mock('@/lib/api', () => ({
   lookupSenaiteSample: vi.fn(),
+  getWorksheetUsers: vi.fn().mockResolvedValue([]),
 }))
 
 const { SampleCard } = await import('@/components/explorer/SampleCard')
@@ -350,5 +353,130 @@ describe('SampleCard — slaSnapshot indicator', () => {
       { wrapper }
     )
     expect(screen.queryByTestId('sample-sla-indicator')).toBeNull()
+  })
+})
+
+// Lot display — payload `lot_code` prop with SENAITE `client_lot` upgrade.
+// Payload value renders on all three branches (loading / error / normal);
+// on the normal branch the SENAITE lookup's client_lot (authoritative,
+// lab-editable) wins over the payload value. When neither source has a
+// value the row is omitted entirely (no whitespace gap).
+describe('SampleCard — lot display', () => {
+  it('renders the payload lot on the loading branch', () => {
+    render(
+      <SampleCard
+        sampleId="P-0001"
+        lookup={undefined}
+        isLoading={true}
+        isError={false}
+        lot="LOT-A100"
+      />,
+      { wrapper }
+    )
+    expect(screen.getByTestId('sample-card-lot-P-0001')).toHaveTextContent(
+      'Lot: LOT-A100'
+    )
+  })
+
+  it('renders the payload lot on the error branch', () => {
+    render(
+      <SampleCard
+        sampleId="P-0001"
+        lookup={undefined}
+        isLoading={false}
+        isError={true}
+        lot="LOT-A100"
+      />,
+      { wrapper }
+    )
+    expect(screen.getByTestId('sample-card-lot-P-0001')).toHaveTextContent(
+      'Lot: LOT-A100'
+    )
+  })
+
+  it('prefers lookup.client_lot over the payload lot on the normal branch', () => {
+    const lookup = makeLookup({
+      review_state: 'verified',
+      client_lot: 'LOT-EDITED',
+    })
+    render(
+      <SampleCard
+        sampleId="P-0001"
+        lookup={lookup}
+        isLoading={false}
+        isError={false}
+        lot="LOT-A100"
+      />,
+      { wrapper }
+    )
+    const el = screen.getByTestId('sample-card-lot-P-0001')
+    expect(el).toHaveTextContent('Lot: LOT-EDITED')
+    expect(el).toHaveAttribute('title', 'LOT-EDITED')
+    expect(el.className).toMatch(/truncate/)
+  })
+
+  it('falls back to the payload lot when client_lot is null', () => {
+    const lookup = makeLookup({ review_state: 'verified', client_lot: null })
+    render(
+      <SampleCard
+        sampleId="P-0001"
+        lookup={lookup}
+        isLoading={false}
+        isError={false}
+        lot="LOT-A100"
+      />,
+      { wrapper }
+    )
+    expect(screen.getByTestId('sample-card-lot-P-0001')).toHaveTextContent(
+      'Lot: LOT-A100'
+    )
+  })
+
+  it('renders client_lot even when no payload lot prop is passed', () => {
+    const lookup = makeLookup({ review_state: 'verified', client_lot: 'LOT-S1' })
+    render(
+      <SampleCard
+        sampleId="P-0001"
+        lookup={lookup}
+        isLoading={false}
+        isError={false}
+      />,
+      { wrapper }
+    )
+    expect(screen.getByTestId('sample-card-lot-P-0001')).toHaveTextContent(
+      'Lot: LOT-S1'
+    )
+  })
+
+  it('omits the lot row entirely when neither source has a value', () => {
+    const lookup = makeLookup({ review_state: 'verified', client_lot: null })
+    render(
+      <SampleCard
+        sampleId="P-0001"
+        lookup={lookup}
+        isLoading={false}
+        isError={false}
+      />,
+      { wrapper }
+    )
+    expect(
+      screen.queryByTestId('sample-card-lot-P-0001')
+    ).not.toBeInTheDocument()
+  })
+
+  it('omits the lot row for a blank payload lot on the loading branch', () => {
+    render(
+      <SampleCard
+        sampleId="P-0001"
+        lookup={undefined}
+        isLoading={true}
+        isError={false}
+        lot="  "
+      />,
+      { wrapper }
+    )
+    expect(
+      screen.queryByTestId('sample-card-lot-P-0001')
+    ).not.toBeInTheDocument()
   })
 })
