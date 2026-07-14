@@ -102,6 +102,12 @@ to SENAITE's None.
   delete the proxy endpoint itself.
 - No backfill: historical shadow M/I stays NULL — faithful, since SENAITE
   never held meaningful values (verified: nothing reads them).
+- **Retest supersession blanks current-row M/I — by design.** A SENAITE-driven
+  retest makes the mirror create a NEW current row (`method_id`/`instrument_id`
+  NULL); natively-set M/I stays on the superseded row and does not carry
+  forward. Correct lab semantics (a retest may run on different equipment);
+  the analyst re-picks. The Layer-4 builder's analyses field-source row must
+  note this: blank M/I after a SENAITE-side retest is expected, not drift.
 
 ## 6. Layer 2 — internal remarks native-authoritative
 

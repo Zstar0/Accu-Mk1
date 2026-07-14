@@ -24,6 +24,18 @@
 
 ### Task 1: Remove the M/I pass-through from the mirror path (A4 + bg wrapper + mirror fn)
 
+> **Deviations (as-built, 2026-07-14):** Step 1's second test body below is the
+> ORIGINAL plan text and was proven unusable at build time — the A4 endpoint
+> short-circuits on `{"method_uid": None, "instrument_uid": None}` before ever
+> mirroring, and reusing one M/I pair cannot distinguish "preserved" from
+> "overwritten with the same id". The as-built test seeds the shadow via the
+> `/transition` hook and uses a second fixture (`seed_second_method_instrument`)
+> with two distinct pairs. Also as-built: the `is_retest` branch's
+> `LimsAnalysis(...)` constructor in `parent_mirror.py` passed
+> `method_id`/`instrument_id` too (missed by Step 4's line range) and was
+> cleaned in the same commit. See the test docstrings in
+> `backend/tests/test_parent_mirror_hooks.py` — they are authoritative.
+
 **Files:**
 - Modify: `backend/main.py:14201-14206` (A4 proxy's mirror call — drop two kwargs)
 - Modify: `backend/main.py:13914-13952` (`_mirror_parent_analysis_bg` — remove uid-resolution block)
@@ -249,6 +261,17 @@ Claude-Session: https://claude.ai/code/session_01L7mtRqLeMEzMfN5oCSUxAA"
 ---
 
 ### Task 2: Remove instrument extraction from the shadow backfill
+
+> **Deviations (as-built, 2026-07-14):** Step 1's second test needs a
+> checkpoint rewind before the second `_run()` (same idiom as
+> `test_backfill_idempotent_rerun_updates_not_duplicates`) — without it the
+> second run starts past the parent's id and processes zero rows. As-built
+> also: `"TEST-PM9-NATIVE-MI"` added to `TEST_SAMPLE_IDS` for the cleanup
+> fixture; the sibling projection test
+> `test_fetch_parent_analyses_instrument_uid_none_when_absent` deleted along
+> with the brief-named one; the exact-dict assertion in
+> `test_fetch_parent_analyses_extracts_keyword_result_unit_state` dropped its
+> `instrument_uid` key. The committed test file is authoritative.
 
 **Files:**
 - Modify: `backend/scripts/backfill_parent_analysis_shadows.py` (drop `resolve_instrument_id` import + `instrument_id=` kwarg at ~lines 81, 227-233; update the "Known gap" docstring at ~lines 51-54)

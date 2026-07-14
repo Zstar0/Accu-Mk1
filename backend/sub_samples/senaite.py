@@ -264,7 +264,7 @@ def fetch_parent_analyses(sample_id: str) -> List[dict]:
     registry-inspect debug panel's analyses column (main.py) — same endpoint
     + params + field-extraction shape as `coa.source_resolver
     .SenaiteAnalysesHttpReader.list_for_sample` (sync via `_get` rather than
-    an async httpx client), plus two additions those callers need that the
+    an async httpx client), plus one addition those callers need that the
     COA reader doesn't:
 
       * `created` — best-effort creation timestamp for newest-line selection
