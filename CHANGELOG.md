@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.5.1 — 2026-07-14
+
+Backend-only hotfix: the mk1-mode worksheets inbox was incomplete/out of
+sync because `lims_samples.status` (the registry mirror of SENAITE's
+review_state) was not reliably maintained.
+
+### Fixed
+
+- **Receive/publish hooks now heal the registry status.** The Mk1 receive
+  and publish paths recorded workflow transitions but never wrote
+  `lims_samples.status` — and the IS event sync's dup guard then suppressed
+  its own heal because the mk1 log row already "explained" the transition.
+  The hooks' background writer now heals the status column in the same
+  never-fail session.
+- **Status heals are vocabulary-gated.** IS events carry WordPress
+  order-progress statuses for some verbs (`worksheet_assigned` →
+  `analyzing`) that are not SENAITE review states; healing them poisoned a
+  column every read surface compares against SENAITE vocabulary. All heal
+  paths now gate on the workflow catalog's sample-state whitelist. The
+  transition log still records raw events.
+- **One-time sweep script** (`scripts/heal_sample_status_from_transitions.py`,
+  dry-run by default) heals rows frozen before the 1.4.0 event-sync
+  cold-start cursor from the transition log itself — zero SENAITE load.
+  Prod dry-run: 180 heals across 1,581 samples.
+
 ## v1.5.0 — 2026-07-14
 
 Sample lot visibility end to end: lot codes on every sample card, lot search
