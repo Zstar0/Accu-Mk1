@@ -24,6 +24,7 @@ from packaging_photos.schemas import (
     PackagingPhotoCreate,
     PackagingPhotoUpdate,
     PackagingPhotoOut,
+    PackagingPhotoBulkCreate,
 )
 
 router = APIRouter(prefix="/api", tags=["packaging-photos"])
@@ -96,6 +97,33 @@ def create_packaging_photo(
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return PackagingPhotoOut.model_validate(photo)
+
+
+@router.post(
+    "/packaging-photos/bulk",
+    status_code=status.HTTP_201_CREATED,
+    response_model=list[PackagingPhotoOut],
+)
+def create_packaging_photos_bulk_route(
+    body: PackagingPhotoBulkCreate,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Fan one packaging photo out to every listed parent (all-or-nothing)."""
+    photo_bytes = _decode_photo(body.photo_base64)
+    try:
+        photos = service.create_packaging_photos_bulk(
+            db,
+            parent_sample_ids=body.parent_sample_ids,
+            photo_bytes=photo_bytes,
+            filename=body.filename or _filename_from_bytes(photo_bytes),
+            content_type=body.content_type,
+            remarks=body.remarks,
+            user_id=user.id,
+        )
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return [PackagingPhotoOut.model_validate(p) for p in photos]
 
 
 @router.get(

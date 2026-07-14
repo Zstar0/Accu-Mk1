@@ -63,4 +63,24 @@ describe('videoConstraints', () => {
       height: { ideal: 1080 },
     })
   })
+
+  it('pins the exact device and drops facingMode when a device id is given', () => {
+    expect(videoConstraints('default', 'cam-123')).toEqual({
+      deviceId: { exact: 'cam-123' },
+    })
+  })
+
+  it('combines the device pin with a sized preset', () => {
+    expect(videoConstraints('1920x1080', 'cam-123')).toEqual({
+      deviceId: { exact: 'cam-123' },
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
+    })
+  })
+
+  it('falls back to facingMode when the device id is empty', () => {
+    expect(videoConstraints('default', '')).toEqual({
+      facingMode: 'environment',
+    })
+  })
 })

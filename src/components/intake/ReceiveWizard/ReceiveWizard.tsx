@@ -16,7 +16,7 @@ import { VialDetailsTab, useCloseAndNavigate } from './VialDetailsTab'
 import { PackagingPanel } from './PackagingPanel'
 import { PackagingImagesList } from './PackagingImagesList'
 import { receiveSenaiteSample } from '@/lib/api'
-import type { PackagingPhoto } from '@/lib/api'
+import type { CaptureSampleContext, PackagingPhoto } from '@/lib/api'
 
 type Phase = 'packaging' | 'capture' | 'assign' | 'boxing' | 'print' | 'details'
 
@@ -47,6 +47,17 @@ interface Props {
   // must NOT receive — it just closes. Default false: the standalone
   // single-sample path owns its own receive on "Complete Check-In".
   orderManaged?: boolean
+  // Order-scoped sample ids for packaging photo fan-out (Task 6). Forwarded
+  // straight through to PackagingPanel. Omitted on the standalone path, so a
+  // standalone save always targets just this one sample.
+  fanoutSampleIds?: string[]
+  // Scopes the phone-capture QR (Task 7) to the same samples fanoutSampleIds
+  // writes to. When the caller doesn't supply one (standalone path), a
+  // one-sample context is built from this wizard's own parent details.
+  captureContext?: {
+    orderLabel: string | null
+    samples: CaptureSampleContext[]
+  }
 }
 
 export function ReceiveWizard({
@@ -56,12 +67,42 @@ export function ReceiveWizard({
   hideSampleInfo = false,
   boxing,
   orderManaged = false,
+  fanoutSampleIds,
+  captureContext,
 }: Props) {
   const wiz = useReceiveWizard(parent)
   const parentDetails = useParentSampleDetails(parent.sample_id)
+
+  // Standalone (non-order) capture context: one sample, this wizard's own
+  // parent. Only built when there's no `boxing` scope at all — an order flow
+  // (boxing present) may legitimately pass captureContext as undefined while
+  // its sample scope is still settling (OrderReceiveSession gates it until
+  // the rail rows resolve), and that must NOT fall through to a one-sample
+  // default: it means "not ready yet, render no QR card," not "no context
+  // was ever intended."
+  const standaloneAnalytes =
+    parentDetails.details?.analytes
+      ?.map(a => a.matched_peptide_name ?? a.raw_name)
+      .filter(Boolean)
+      .join(', ') || null
+  const effectiveCaptureContext =
+    captureContext ??
+    (boxing
+      ? undefined
+      : {
+          orderLabel: null,
+          samples: [
+            {
+              sample_id: parent.sample_id,
+              lot: parentDetails.details?.client_lot ?? null,
+              analytes: standaloneAnalytes,
+            },
+          ],
+        })
   const [phase, setPhase] = useState<Phase>(initialPhase)
   const [editingSampleId, setEditingSampleId] = useState<string | null>(null)
-  const [editingPackaging, setEditingPackaging] = useState<PackagingPhoto | null>(null)
+  const [editingPackaging, setEditingPackaging] =
+    useState<PackagingPhoto | null>(null)
   const [completing, setCompleting] = useState(false)
 
   // Sub Sample Details table reads assignment_role off the wizard's local
@@ -76,7 +117,7 @@ export function ReceiveWizard({
   // (parent IS vial 1); container families count only physical sub-samples.
   // Identical across all phases since it tracks the parent's vial set.
   const receivedCount =
-    (wiz.containerMode ? 0 : (wiz.parentReceived ? 1 : 0)) + wiz.vials.length
+    (wiz.containerMode ? 0 : wiz.parentReceived ? 1 : 0) + wiz.vials.length
 
   // Assignment tab is meaningful when the parent already exists (typical for
   // sample detail entry) OR when at least one vial has been saved this session
@@ -92,10 +133,12 @@ export function ReceiveWizard({
   // prior-session vial's photo/remarks is safe, but deleting an established
   // vial from a completed check-in is not something we expose by accident.
   const editingIsThisSession = editingSampleId
-    ? (wiz.vials.find(v => v.sub.sample_id === editingSampleId)?.isThisSession ?? false)
+    ? (wiz.vials.find(v => v.sub.sample_id === editingSampleId)
+        ?.isThisSession ?? false)
     : false
 
-  const hasSessionVials = wiz.sessionVials.length > 0 || wiz.parentReceivedThisSession
+  const hasSessionVials =
+    wiz.sessionVials.length > 0 || wiz.parentReceivedThisSession
 
   // Print Labels tab lists every vial the sample has whenever there is at least
   // one — deferred check-in means a sample can be vialed while its parent is
@@ -108,9 +151,17 @@ export function ReceiveWizard({
     sample_id: v.sub.sample_id,
     received_at: v.sub.received_at,
   }))
-  const legacyParentLabel: { sample_id: string; received_at?: string | null }[] =
+  const legacyParentLabel: {
+    sample_id: string
+    received_at?: string | null
+  }[] =
     wiz.parentReceived && !wiz.containerMode
-      ? [{ sample_id: parent.sample_id, received_at: parentDetails.details?.date_received ?? null }]
+      ? [
+          {
+            sample_id: parent.sample_id,
+            received_at: parentDetails.details?.date_received ?? null,
+          },
+        ]
       : []
   const printList = [...legacyParentLabel, ...vialLabels]
 
@@ -124,7 +175,8 @@ export function ReceiveWizard({
   // Finish in the order flow — it would be a duplicate, competing affordance.
   // Standalone keeps its footer Finish/"Complete Check-In" as the sole way to
   // finish.
-  const showFinish = !orderManaged && (hasSessionVials || initialPhase !== 'details')
+  const showFinish =
+    !orderManaged && (hasSessionVials || initialPhase !== 'details')
 
   const phaseTabs = (
     <div className="px-6 py-2 border-b bg-muted/10">
@@ -135,16 +187,22 @@ export function ReceiveWizard({
           click/Enter only. */}
       <Tabs
         value={phase}
-        onValueChange={(v) => setPhase(v as Phase)}
+        onValueChange={v => setPhase(v as Phase)}
         activationMode="manual"
       >
         <TabsList>
           <TabsTrigger value="packaging">Packaging</TabsTrigger>
           <TabsTrigger value="capture">Vial Management</TabsTrigger>
-          <TabsTrigger value="assign" disabled={!assignmentEnabled}>Assignment</TabsTrigger>
-          <TabsTrigger value="print" disabled={printList.length === 0}>Print Labels</TabsTrigger>
+          <TabsTrigger value="assign" disabled={!assignmentEnabled}>
+            Assignment
+          </TabsTrigger>
+          <TabsTrigger value="print" disabled={printList.length === 0}>
+            Print Labels
+          </TabsTrigger>
           {boxing && <TabsTrigger value="boxing">Boxing</TabsTrigger>}
-          <TabsTrigger value="details" disabled={wiz.vials.length === 0}>Sub Sample Details</TabsTrigger>
+          <TabsTrigger value="details" disabled={wiz.vials.length === 0}>
+            Sub Sample Details
+          </TabsTrigger>
         </TabsList>
       </Tabs>
     </div>
@@ -162,7 +220,9 @@ export function ReceiveWizard({
       await receiveSenaiteSample(parent.uid, parent.sample_id, null, null)
       onClose()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Complete Check-In failed')
+      toast.error(
+        err instanceof Error ? err.message : 'Complete Check-In failed'
+      )
     } finally {
       setCompleting(false)
     }
@@ -193,9 +253,18 @@ export function ReceiveWizard({
   if (phase === 'packaging') {
     body = (
       <div className="grid grid-cols-[1fr_240px] min-h-0 overflow-hidden">
-        <PackagingPanel parentSampleId={parent.sample_id} editing={editingPackaging}
-          onSaved={() => setEditingPackaging(null)} onCancelEdit={() => setEditingPackaging(null)} />
-        <PackagingImagesList parentSampleId={parent.sample_id} onEdit={setEditingPackaging} />
+        <PackagingPanel
+          parentSampleId={parent.sample_id}
+          editing={editingPackaging}
+          onSaved={() => setEditingPackaging(null)}
+          onCancelEdit={() => setEditingPackaging(null)}
+          fanoutSampleIds={fanoutSampleIds}
+          captureContext={effectiveCaptureContext}
+        />
+        <PackagingImagesList
+          parentSampleId={parent.sample_id}
+          onEdit={setEditingPackaging}
+        />
       </div>
     )
   } else if (phase === 'capture') {
@@ -310,13 +379,22 @@ export function ReceiveWizard({
   } else if (phase === 'assign') {
     footer = (
       <footer className="flex justify-between gap-2 px-6 py-3 border-t bg-muted/20 transition-colors">
-        <Button type="button" variant="outline" onClick={() => setPhase('capture')} className="gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => setPhase('capture')}
+          className="gap-2"
+        >
           <ArrowLeft className="w-4 h-4" aria-hidden="true" />
           Back
         </Button>
         <div className="flex gap-2">
           {showFinish && finishButton}
-          <Button type="button" onClick={() => setPhase('print')} className="gap-2">
+          <Button
+            type="button"
+            onClick={() => setPhase('print')}
+            className="gap-2"
+          >
             Print Labels
             <ArrowRight className="w-4 h-4" aria-hidden="true" />
           </Button>
@@ -326,7 +404,12 @@ export function ReceiveWizard({
   } else if (phase === 'print') {
     footer = (
       <footer className="flex justify-between gap-2 px-6 py-3 border-t bg-muted/20 transition-colors">
-        <Button type="button" variant="outline" onClick={() => setPhase('assign')} className="gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => setPhase('assign')}
+          className="gap-2"
+        >
           <ArrowLeft className="w-4 h-4" aria-hidden="true" />
           Back
         </Button>

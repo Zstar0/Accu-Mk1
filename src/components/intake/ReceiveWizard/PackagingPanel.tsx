@@ -1,10 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Camera, Crosshair, RotateCcw, Upload } from 'lucide-react'
+import { toast } from 'sonner'
 import {
   createPackagingPhoto,
+  createPackagingPhotosBulk,
   fetchPackagingPhotoUrl,
   updatePackagingPhoto,
+  type CaptureSampleContext,
   type PackagingPhoto,
 } from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -18,12 +21,22 @@ import {
   type CaptureCapabilities,
   type CaptureFormat,
 } from './capture-options'
+import { useCameraDevices } from './use-camera-devices'
+import { CaptureQrCard } from './CaptureQrCard'
 
 interface PackagingPanelProps {
   parentSampleId: string
   editing?: PackagingPhoto | null
   onSaved?: () => void
   onCancelEdit?: () => void
+  // When set (order flow, length > 1), Save fans the same photo out to every
+  // sample in the order via the bulk endpoint instead of just parentSampleId.
+  // Edit mode never fans out — it always targets the single photo being edited.
+  fanoutSampleIds?: string[]
+  // Scopes the phone-capture QR (Task 7) to the same sample set Save writes
+  // to. Standalone (non-order) ReceiveWizard builds a one-sample context;
+  // absent entirely means no QR card renders.
+  captureContext?: { orderLabel: string | null; samples: CaptureSampleContext[] }
 }
 
 async function dataUrlToBytes(dataUrl: string): Promise<Uint8Array> {
@@ -52,6 +65,8 @@ export function PackagingPanel({
   editing,
   onSaved,
   onCancelEdit,
+  fanoutSampleIds,
+  captureContext,
 }: PackagingPanelProps) {
   const queryClient = useQueryClient()
   const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null)
@@ -121,6 +136,13 @@ export function PackagingPanel({
   const fileRef = useRef<HTMLInputElement>(null)
   const [cameraOk, setCameraOk] = useState(true)
 
+  // Camera device list + persisted selection ('' = browser default). The
+  // active id mirrors whichever device the unpinned stream landed on, so the
+  // dropdown shows the truth even before an explicit choice.
+  const { devices, selectedDeviceId, setSelectedDeviceId, refreshDevices } =
+    useCameraDevices()
+  const [activeDeviceId, setActiveDeviceId] = useState('')
+
   // Reset state when switching between create/edit/different photos.
   useEffect(() => {
     setRemarks(editing?.remarks ?? '')
@@ -162,7 +184,7 @@ export function PackagingPanel({
       return
     }
     navigator.mediaDevices
-      .getUserMedia({ video: videoConstraints(captureRes) })
+      .getUserMedia({ video: videoConstraints(captureRes, selectedDeviceId) })
       .then(s => {
         if (cancelled) {
           s.getTracks().forEach(t => t.stop())
@@ -178,17 +200,30 @@ export function PackagingPanel({
             // capabilities unsupported on this browser — keep the full list
           }
         }
+        setActiveDeviceId(track?.getSettings?.().deviceId ?? '')
+        // Labels are blank until a permission grant — re-list now that we
+        // have one, so the Camera dropdown shows real device names.
+        refreshDevices()
         if (videoRef.current) {
           videoRef.current.srcObject = s
         }
       })
-      .catch(() => setCameraOk(false))
+      .catch(() => {
+        if (cancelled) return
+        if (selectedDeviceId) {
+          // Saved camera is gone (unplugged / id rotated) — drop the pin so
+          // the effect retries with the default camera instead of going dark.
+          setSelectedDeviceId('')
+        } else {
+          setCameraOk(false)
+        }
+      })
     return () => {
       cancelled = true
       streamRef.current?.getTracks().forEach(t => t.stop())
       streamRef.current = null
     }
-  }, [captureRes])
+  }, [captureRes, selectedDeviceId, setSelectedDeviceId, refreshDevices])
 
   const capture = useCallback(() => {
     if (!videoRef.current || !canvasRef.current) return
@@ -261,11 +296,25 @@ export function PackagingPanel({
           setBusy(false)
           return
         }
-        await createPackagingPhoto({
-          parentSampleId,
-          photoBase64,
-          remarks: trimmedRemarks ?? null,
-        })
+        if (fanoutSampleIds && fanoutSampleIds.length > 1) {
+          await createPackagingPhotosBulk({
+            parentSampleIds: fanoutSampleIds,
+            photoBase64,
+            remarks: trimmedRemarks ?? null,
+          })
+          for (const id of fanoutSampleIds) {
+            void queryClient.invalidateQueries({
+              queryKey: ['packaging-photos', id],
+            })
+          }
+          toast(`Photo added to ${fanoutSampleIds.length} samples`)
+        } else {
+          await createPackagingPhoto({
+            parentSampleId,
+            photoBase64,
+            remarks: trimmedRemarks ?? null,
+          })
+        }
       }
       void queryClient.invalidateQueries({
         queryKey: ['packaging-photos', parentSampleId],
@@ -279,7 +328,7 @@ export function PackagingPanel({
     } finally {
       setBusy(false)
     }
-  }, [photoDataUrl, remarks, editing, parentSampleId, queryClient, onSaved])
+  }, [photoDataUrl, remarks, editing, parentSampleId, fanoutSampleIds, queryClient, onSaved])
 
   const error = localError
 
@@ -400,6 +449,25 @@ export function PackagingPanel({
                   Guides {showGuides ? 'on' : 'off'}
                 </Button>
               )}
+              {cameraPhase === 'live' && devices.length > 1 && (
+                <label className="flex items-center gap-1 text-sm">
+                  <span className="text-muted-foreground">Camera</span>
+                  <select
+                    value={selectedDeviceId || activeDeviceId}
+                    onChange={e => setSelectedDeviceId(e.target.value)}
+                    disabled={busy}
+                    title="Capture camera — pick which webcam feeds the preview"
+                    aria-label="Capture camera"
+                    className="h-9 rounded-md border bg-background px-2 text-sm disabled:opacity-50"
+                  >
+                    {devices.map((d, i) => (
+                      <option key={d.deviceId} value={d.deviceId}>
+                        {d.label || `Camera ${i + 1}`}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               {cameraPhase === 'live' && (
                 <label className="flex items-center gap-1 text-sm">
                   <span className="text-muted-foreground">Res</span>
@@ -485,6 +553,9 @@ export function PackagingPanel({
               )
             )}
           </div>
+        )}
+        {captureContext && cameraPhase === 'live' && (
+          <CaptureQrCard captureContext={captureContext} />
         )}
       </section>
 
