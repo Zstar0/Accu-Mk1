@@ -12122,6 +12122,36 @@ class SenaiteRemark(BaseModel):
     created: Optional[str] = None
 
 
+def _native_sample_remarks(db: Session, sample_id: str) -> list["SenaiteRemark"]:
+    """lims_sample_remarks → SenaiteRemark list (read-flip spec §6).
+
+    Native in BOTH read modes: SENAITE's Remarks field is stale by design
+    since the 2026-07-14 write flip. Backfilled rows carry the SENAITE login
+    in author_label; Mk1-era rows resolve the users FK to "First Last",
+    falling back to email.
+    """
+    rows = db.execute(
+        select(LimsSampleRemark, User)
+        .outerjoin(User, LimsSampleRemark.author_user_id == User.id)
+        .join(LimsSample, LimsSampleRemark.lims_sample_pk == LimsSample.id)
+        .where(LimsSample.sample_id == sample_id.strip().upper())
+        .order_by(LimsSampleRemark.created_at, LimsSampleRemark.id)
+    ).all()
+    out: list[SenaiteRemark] = []
+    for remark, user in rows:
+        label = remark.author_label
+        if not label and user is not None:
+            label = (f"{user.first_name or ''} {user.last_name or ''}".strip()
+                     or user.email)
+        out.append(SenaiteRemark(
+            content=remark.content,
+            user_id=label,
+            created=(remark.created_at.isoformat()
+                     if remark.created_at else None),
+        ))
+    return out
+
+
 class SenaiteAnalysis(BaseModel):
     uid: Optional[str] = None
     keyword: Optional[str] = None
@@ -12523,17 +12553,12 @@ async def lookup_senaite_sample(
             verification_code=item.get("VerificationCode") or None,
         )
 
-        # Parse remarks (list of {content, user_id, created, ...})
-        senaite_remarks: list[SenaiteRemark] = []
-        raw_remarks = item.get("Remarks")
-        if isinstance(raw_remarks, list):
-            for r in raw_remarks:
-                if isinstance(r, dict) and r.get("content"):
-                    senaite_remarks.append(SenaiteRemark(
-                        content=r["content"],
-                        user_id=r.get("user_id") or None,
-                        created=r.get("created") or None,
-                    ))
+        # Native remarks (read-flip spec §6): lims_sample_remarks is the
+        # system of record in BOTH read modes — SENAITE's Remarks field is
+        # stale by design since the write flip. The SENAITE payload's
+        # "Remarks" key is deliberately ignored.
+        senaite_remarks: list[SenaiteRemark] = _native_sample_remarks(
+            db, sample_id)
 
         # Fetch analyses (lab test results) for this sample.
         # Use getRequestID (the sample ID string) — this is the only reliable
@@ -17820,6 +17845,13 @@ async def get_sample_read_from_registry(
 
     field_sources = {f: "senaite" for f in OVERLAY_FIELDS}
     if row is None:
+        # Remarks are native in both modes (read-flip spec §6). Re-applied
+        # here (idempotent — the wrapped lookup already serves native) so the
+        # wiring is provable through this endpoint's lookup-mocked test
+        # harness. No lims_samples row means no native remarks: [].
+        payload["remarks"] = [r.model_dump()
+                              for r in _native_sample_remarks(db, sample_id)]
+        field_sources["remarks"] = "mk1"
         return RegistrySampleReadResult(**payload, read_source="mk1",
                                         registry_missing=True, field_sources=field_sources)
 
@@ -17836,6 +17868,13 @@ async def get_sample_read_from_registry(
             continue
         payload[field] = value
         field_sources[field] = "mk1"
+
+    # Remarks are native in both modes (read-flip spec §6). Re-applied here
+    # (idempotent — the wrapped lookup already serves native) so the wiring
+    # is provable through this endpoint's lookup-mocked test harness.
+    payload["remarks"] = [r.model_dump()
+                          for r in _native_sample_remarks(db, sample_id)]
+    field_sources["remarks"] = "mk1"
 
     return RegistrySampleReadResult(**payload, read_source="mk1",
                                     registry_missing=False, field_sources=field_sources)

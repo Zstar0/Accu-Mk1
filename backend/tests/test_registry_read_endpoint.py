@@ -139,7 +139,12 @@ def test_missing_row_returns_senaite_and_flag(client):
     assert r.status_code == 200
     body = r.json()
     assert body["registry_missing"] is True
-    assert set(body["field_sources"].values()) == {"senaite"}
+    # remarks is native-sourced regardless of registry_missing (read-flip
+    # spec §6) — no lims_samples row means no native remarks ([]), but the
+    # field is still tagged "mk1", not "senaite". Every other field falls
+    # back to SENAITE since there's no registry row to overlay from.
+    assert body["field_sources"]["remarks"] == "mk1"
+    assert {v for k, v in body["field_sources"].items() if k != "remarks"} == {"senaite"}
     assert body["client"] == "SenaiteCo"
     assert body["client_lot"] == "L-SEN"
 
@@ -150,7 +155,11 @@ def test_field_sources_covers_overlay_fields(client):
         r = client.get("/registry/sample/P-1/details")
     assert r.status_code == 200
     body = r.json()
-    assert set(body["field_sources"].keys()) == set(OVERLAY_FIELDS)
+    # remarks is native-sourced (read-flip spec §6) but deliberately NOT an
+    # OVERLAY_FIELDS entry -- overlay fields carry SENAITE-fallback
+    # semantics; remarks has no fallback (native-only in both read modes),
+    # so it's added to field_sources separately from the overlay loop.
+    assert set(body["field_sources"].keys()) == set(OVERLAY_FIELDS) | {"remarks"}
 
 
 def test_review_state_is_never_overlaid(client):
