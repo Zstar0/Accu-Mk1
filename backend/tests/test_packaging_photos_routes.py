@@ -115,6 +115,19 @@ def test_get_list_ordered(client, parent):
     assert [r["ordering"] for r in rows] == [0, 1, 2]
 
 
+def test_get_list_resolves_created_by(client, parent):
+    from models import User
+
+    db = client._session
+    db.add(User(id=7, email="ada@lab.test", hashed_password="x",
+                first_name="Ada", last_name="Lovelace"))
+    db.commit()
+    _create(client, remarks="a")
+    rows = client.get("/api/samples/P-0800/packaging-photos").json()
+    assert rows[0]["created_by_user_id"] == 7
+    assert rows[0]["created_by"] == "Ada Lovelace"
+
+
 def test_get_bytes_returns_derived_content_type(client, parent):
     pid = _create(client).json()["id"]
     resp = client.get(f"/api/packaging-photos/{pid}")

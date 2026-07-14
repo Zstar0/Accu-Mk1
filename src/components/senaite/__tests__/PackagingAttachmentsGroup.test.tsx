@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 
@@ -35,7 +35,9 @@ function renderGroup(parentSampleId = 'P-1') {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={qc}>{children}</QueryClientProvider>
   )
-  render(<PackagingAttachmentsGroup parentSampleId={parentSampleId} />, { wrapper })
+  render(<PackagingAttachmentsGroup parentSampleId={parentSampleId} />, {
+    wrapper,
+  })
   return { qc }
 }
 
@@ -50,7 +52,9 @@ describe('PackagingAttachmentsGroup', () => {
     renderGroup()
 
     // Group heading
-    await waitFor(() => expect(screen.getByText('Packaging')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText('Packaging')).toBeInTheDocument()
+    )
 
     // One thumbnail (img) per photo once the blob URLs resolve
     await waitFor(() => expect(screen.getAllByRole('img')).toHaveLength(3))
@@ -59,10 +63,25 @@ describe('PackagingAttachmentsGroup', () => {
     expect(screen.getByText('front')).toBeInTheDocument()
     expect(screen.getByText('back')).toBeInTheDocument()
 
-    // Read-only: no controls at all
-    expect(screen.queryByRole('button')).toBeNull()
+    // Mutation-free: thumbnails are zoom buttons (lightbox), but there are
+    // no delete/edit/remove controls — all mutation stays in the wizard.
+    expect(screen.getAllByRole('button')).toHaveLength(3)
+    expect(screen.queryByText(/remove/i)).toBeNull()
     expect(screen.queryByLabelText(/delete/i)).toBeNull()
     expect(screen.queryByLabelText(/edit/i)).toBeNull()
+  })
+
+  it('clicking a thumbnail opens the lightbox with photo metadata', async () => {
+    mockList.mockResolvedValue([photo(1, 'front')])
+    renderGroup()
+
+    await waitFor(() => expect(screen.getAllByRole('img')).toHaveLength(1))
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button'))
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    // Badge + content type from the photo row
+    expect(screen.getByText('image/jpeg')).toBeInTheDocument()
   })
 
   it('renders nothing when there are no packaging photos', async () => {
@@ -71,7 +90,9 @@ describe('PackagingAttachmentsGroup', () => {
 
     // Let the query settle, then assert the heading never appears
     await waitFor(() =>
-      expect(qc.getQueryState(['packaging-photos', 'P-1'])?.status).toBe('success'),
+      expect(qc.getQueryState(['packaging-photos', 'P-1'])?.status).toBe(
+        'success'
+      )
     )
     expect(screen.queryByText('Packaging')).toBeNull()
   })
