@@ -1271,6 +1271,31 @@ def _run_migrations():
         # the same SENAITE remark; ON CONFLICT DO NOTHING rides this index.
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_sample_remarks_dedup "
         "ON lims_sample_remarks (lims_sample_pk, created_at, md5(content))",
+        # ── parent-AR attachments native record (read-flip spec §7) ──
+        """
+        CREATE TABLE IF NOT EXISTS lims_parent_attachments (
+            id                     SERIAL PRIMARY KEY,
+            lims_sample_pk         INTEGER NOT NULL REFERENCES lims_samples(id) ON DELETE CASCADE,
+            kind                   VARCHAR(30) NOT NULL
+                                   CHECK (kind IN ('vial_image','packaging_image','receive_image','manual')),
+            source_sub_sample_pk   INTEGER REFERENCES lims_sub_samples(id) ON DELETE SET NULL,
+            filename               VARCHAR(255) NOT NULL,
+            content_type           VARCHAR(100),
+            storage                VARCHAR(10) NOT NULL CHECK (storage IN ('s3','senaite')),
+            storage_key            TEXT,
+            senaite_attachment_uid VARCHAR(50),
+            render_in_report       BOOLEAN NOT NULL DEFAULT FALSE,
+            created_by_user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            created_at             TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_lims_parent_attachments_sample "
+        "ON lims_parent_attachments (lims_sample_pk, created_at)",
+        # Backfill idempotency: one native row per SENAITE attachment uid.
+        # Partial — capture-time rows are uid-less until the sweep adopts them.
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_parent_attachments_uid "
+        "ON lims_parent_attachments (senaite_attachment_uid) "
+        "WHERE senaite_attachment_uid IS NOT NULL",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

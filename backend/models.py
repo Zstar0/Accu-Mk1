@@ -838,6 +838,49 @@ class LimsSampleRemark(Base):
         return f"<LimsSampleRemark(id={self.id}, sample_pk={self.lims_sample_pk})>"
 
 
+class LimsParentAttachment(Base):
+    """Native record of a parent-AR attachment (read-flip spec §7).
+
+    Dual-write era: SENAITE keeps receiving the upload (COABuilder reads AR
+    attachments until the section-5 re-wire); Mk1 records what/when/who and,
+    for capture-time rows, a FROZEN S3 snapshot of the exact bytes
+    (storage='s3') — never a pointer to the live vial-photo key (snapshot
+    semantics: a retake must not change what was attached). Backfilled
+    historical rows point at SENAITE's copy (storage='senaite') served via
+    the existing attachment proxy. senaite_attachment_uid is NULL on
+    capture-time rows (the Plone form upload returns no uid); the backfill
+    sweep adopts them by (lims_sample_pk, filename) match.
+    """
+    __tablename__ = "lims_parent_attachments"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    lims_sample_pk: Mapped[int] = mapped_column(
+        ForeignKey("lims_samples.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    source_sub_sample_pk: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("lims_sub_samples.id", ondelete="SET NULL"), nullable=True
+    )
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    storage: Mapped[str] = mapped_column(String(10), nullable=False)
+    storage_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    senaite_attachment_uid: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    render_in_report: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return (f"<LimsParentAttachment(id={self.id}, "
+                f"sample_pk={self.lims_sample_pk}, kind='{self.kind}')>")
+
+
 class LimsSubSample(Base):
     """One physical vial received under a parent LimsSample. SENAITE id format
     `<parent>-S<NN>`, e.g. P-0134-S01."""
