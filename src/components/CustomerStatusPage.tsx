@@ -596,15 +596,15 @@ function CustomerDetailView() {
   const resolvedCustomer: ExplorerCustomer | null =
     headerCustomer ?? fetchedCustomer ?? null
 
-  // --- Orders query (D-09 + UX revision: three-axis search + envName) ---
+  // --- Orders query (D-09 + UX revision: four-axis search + envName) ---
   // QueryKey shape:
   //   ['explorer','orders','by-customer', id,
-  //    order_number, sample_id, analyte, 'open_first', envName]
+  //    order_number, sample_id, analyte, lot, 'open_first', envName]
   // - Each search axis participates in the key so distinct queries occupy
   //   distinct cache slots (no bleed across filter combinations).
   // - sort is fixed to 'open_first' but reserved in the key so later phases
   //   can parameterize without invalidating existing cache writes.
-  // - envName lives at the LAST position (index 8) — T-29-05-new mitigation
+  // - envName lives at the LAST position (index 9) — T-29-05-new mitigation
   //   scope for any future cross-env predicate. Do NOT move it.
   // The per-axis 2-char minimum gate lives in the API client
   // (src/lib/api.ts:getExplorerOrdersByCustomer); the call site forwards
@@ -623,6 +623,7 @@ function CustomerDetailView() {
       customerOrderSearch.order_number,
       customerOrderSearch.sample_id,
       customerOrderSearch.analyte,
+      customerOrderSearch.lot,
       'open_first',
       envName,
     ],
@@ -638,6 +639,7 @@ function CustomerDetailView() {
           order_number: customerOrderSearch.order_number,
           sample_id: customerOrderSearch.sample_id,
           analyte: customerOrderSearch.analyte,
+          lot: customerOrderSearch.lot,
         },
         'open_first',
         0,
@@ -864,9 +866,10 @@ function CustomerOrdersTab({
     order_number: string
     sample_id: string
     analyte: string
+    lot: string
   }
   setCustomerOrderSearchField: (
-    field: 'order_number' | 'sample_id' | 'analyte',
+    field: 'order_number' | 'sample_id' | 'analyte' | 'lot',
     value: string
   ) => void
   setCustomerOrderSearchReset: () => void
@@ -880,6 +883,7 @@ function CustomerOrdersTab({
     customerOrderSearch.sample_id
   )
   const [analyteInput, setAnalyteInput] = useState(customerOrderSearch.analyte)
+  const [lotInput, setLotInput] = useState(customerOrderSearch.lot)
 
   // 300ms debounce, per axis. Each effect depends ONLY on its own axis (local
   // + committed) — touching another axis won't reschedule this timer.
@@ -919,12 +923,21 @@ function CustomerOrdersTab({
     setCustomerOrderSearchField,
   ])
 
+  useEffect(() => {
+    if (lotInput === customerOrderSearch.lot) return
+    const handle = setTimeout(() => {
+      setCustomerOrderSearchField('lot', lotInput)
+    }, 300)
+    return () => clearTimeout(handle)
+  }, [lotInput, customerOrderSearch.lot, setCustomerOrderSearchField])
+
   // searchActive: any committed (post-debounce) axis non-empty. Drives the
   // empty-state echo, OrderRow.defaultExpanded, and the Clear button mount.
   const searchActive = Boolean(
     customerOrderSearch.order_number ||
       customerOrderSearch.sample_id ||
-      customerOrderSearch.analyte
+      customerOrderSearch.analyte ||
+      customerOrderSearch.lot
   )
 
   // highlightSampleId: sample-ID highlight forwarded to OrderRow only when
@@ -957,6 +970,9 @@ function CustomerOrdersTab({
       value: customerOrderSearch.analyte,
     })
   }
+  if (customerOrderSearch.lot) {
+    activeFilters.push({ label: 'Lot', value: customerOrderSearch.lot })
+  }
 
   const hasError = ordersError != null
   const hasOrders = orders.length > 0
@@ -971,6 +987,7 @@ function CustomerOrdersTab({
     setOrderNumberInput('')
     setSampleIdInput('')
     setAnalyteInput('')
+    setLotInput('')
   }
 
   return (
@@ -1005,6 +1022,16 @@ function CustomerOrdersTab({
             value={analyteInput}
             onChange={e => setAnalyteInput(e.target.value)}
             placeholder="e.g., BPC-157"
+          />
+        </div>
+        <div className="flex flex-col gap-1 flex-1">
+          <Label htmlFor="customer-orders-search-lot">Lot</Label>
+          <Input
+            id="customer-orders-search-lot"
+            aria-label="Lot"
+            value={lotInput}
+            onChange={e => setLotInput(e.target.value)}
+            placeholder="e.g., LOT-001"
           />
         </div>
         {searchActive && (

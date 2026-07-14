@@ -1346,6 +1346,7 @@ export async function getExplorerOrdersByCustomer(
     order_number?: string
     sample_id?: string
     analyte?: string
+    lot?: string
   },
   sort: 'open_first' | 'date_desc' | 'date_asc' = 'open_first',
   page = 0,
@@ -1369,6 +1370,9 @@ export async function getExplorerOrdersByCustomer(
       }
       if (search.analyte && search.analyte.length >= 2) {
         params.set('search_analyte', search.analyte)
+      }
+      if (search.lot && search.lot.length >= 2) {
+        params.set('search_lot', search.lot)
       }
     }
 
