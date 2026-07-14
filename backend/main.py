@@ -39,7 +39,7 @@ from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
 from sla_engine import BusinessSchedule, compute_business_minutes, sla_status_dict
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSubSample, LimsBox, FlagType
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -13689,18 +13689,41 @@ async def receive_senaite_sample(
                         senaite_response={"steps_done": steps_done},
                     )
 
-            # --- Step 2: Add remarks (optional) ---
+            # --- Step 2: Add remarks (optional) — NATIVE ---
+            # lims_sample_remarks is the system of record (read-flip spec §6);
+            # the SENAITE Remarks write was deleted 2026-07-14 (nothing read
+            # it). Hard step preserved: failure fails the receive, same as
+            # the SENAITE write did.
             if req.remarks and req.remarks.strip():
-                update_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/update/{req.sample_uid}"
-                remark_resp = await client.post(
-                    update_url, json={"Remarks": req.remarks.strip()}
-                )
-                if remark_resp.status_code == 200:
+                def _insert_remark() -> bool:
+                    from database import SessionLocal
+                    rdb = SessionLocal()
+                    try:
+                        row = rdb.execute(
+                            select(LimsSample).where(
+                                LimsSample.sample_id
+                                == req.sample_id.strip().upper())
+                        ).scalar_one_or_none()
+                        if row is None:
+                            return False
+                        rdb.add(LimsSampleRemark(
+                            lims_sample_pk=row.id,
+                            content=req.remarks.strip(),
+                            author_user_id=getattr(current_user, "id", None),
+                        ))
+                        rdb.commit()
+                        return True
+                    finally:
+                        rdb.close()
+
+                from fastapi.concurrency import run_in_threadpool
+                if await run_in_threadpool(_insert_remark):
                     steps_done.append("remarks_added")
                 else:
                     return SenaiteReceiveSampleResponse(
                         success=False,
-                        message=f"Remarks update failed: SENAITE returned {remark_resp.status_code}",
+                        message=(f"Remarks save failed: no registry row for "
+                                 f"{req.sample_id}"),
                         senaite_response={"steps_done": steps_done},
                     )
 
