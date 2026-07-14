@@ -65,6 +65,7 @@ export type SettingsSubSection =
   | 'businessHours'
   | 'flags'
   | 'checkIn'
+  | 'workflow'
   | 'advanced'
 export type ActiveSubSection =
   | DashboardSubSection

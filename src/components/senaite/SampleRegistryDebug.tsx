@@ -164,6 +164,42 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
                   {data.analyses && data.analyses.rows.length === 0 && !data.analyses.error && (
                     <div className="font-mono text-[11px] text-zinc-600">no analysis lines</div>
                   )}
+
+                  {/* Recent transitions (Task 8): compact tail under the analyses summary. */}
+                  <div className="font-mono text-[11px] text-zinc-700 pt-2 pb-1 flex items-center gap-2">
+                    <span>{'─'.repeat(3)} recent transitions {'─'.repeat(18)}</span>
+                    {/* UAT fast-follow: log-vs-status sync glyph — same ✔/⚠ vocabulary
+                        as the field-diff and analyses columns above. Null log_in_sync
+                        (no rows logged yet) renders nothing. */}
+                    {data.transitions?.log_in_sync === true && (
+                      <span className="text-emerald-400">✔ log matches status</span>
+                    )}
+                    {data.transitions?.log_in_sync === false && (
+                      <span className="text-amber-400">
+                        {`⚠ log behind: latest '${data.transitions.latest_to_status}' ≠ status '${data.transitions.current_status}'`}
+                      </span>
+                    )}
+                  </div>
+                  {data.transitions?.error && (
+                    <div className={cn(line, 'text-red-400')}>transitions_error: {data.transitions.error}</div>
+                  )}
+                  {data.transitions && data.transitions.rows.length > 0 && (
+                    <div className="space-y-0.5">
+                      {data.transitions.rows.map((t, i) => (
+                        <div key={i} className="font-mono text-[11px] text-zinc-500 leading-relaxed">
+                          <span className="text-zinc-300">{t.verb ?? '—'}</span>{'  '}
+                          <span className="text-zinc-600">{t.from_status ?? '∅'} → {t.to_status}</span>{'  '}
+                          <span className="text-zinc-700">·</span>{'  '}
+                          <span className="text-zinc-600">{t.source}</span>{'  '}
+                          <span className="text-zinc-700">·</span>{'  '}
+                          <span className="text-zinc-600">{new Date(t.occurred_at).toLocaleTimeString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {data.transitions && data.transitions.rows.length === 0 && !data.transitions.error && (
+                    <div className="font-mono text-[11px] text-zinc-600">no transitions logged yet</div>
+                  )}
                 </div>
 
                 {/* RIGHT column: basic-info status block + field diff (unchanged) */}

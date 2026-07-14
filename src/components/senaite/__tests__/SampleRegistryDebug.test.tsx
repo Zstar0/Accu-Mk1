@@ -21,6 +21,7 @@ const base: api.SampleRegistryDebug = {
   senaite_error: null,
   raw: { registry: { sample_id: 'P-1' }, senaite: { uid: 'U1' } },
   analyses: null,
+  transitions: null,
 }
 
 const analysesBase: api.AnalysesSync = {
@@ -39,6 +40,19 @@ const analysesBase: api.AnalysesSync = {
   ],
   summary: { senaite: 2, shadow: 1, in_sync: 0, drift: 1, missing: 1 },
   error: null,
+}
+
+const transitionsBase: api.SampleTransitionsTail = {
+  rows: [
+    { verb: 'receive', from_status: 'sample_due', to_status: 'sample_received',
+      source: 'mk1', occurred_at: '2026-07-10T12:00:00' },
+    { verb: null, from_status: 'sample_received', to_status: 'verified',
+      source: 'reconcile', occurred_at: '2026-07-10T11:00:00' },
+  ],
+  error: null,
+  latest_to_status: 'sample_received',
+  log_in_sync: true,
+  current_status: 'sample_received',
 }
 
 beforeEach(() => vi.restoreAllMocks())
@@ -126,5 +140,59 @@ describe('SampleRegistryDebug', () => {
     await waitFor(() => expect(screen.getByText('client_sample_id')).toBeInTheDocument())
     // ...alongside the analyses error.
     expect(screen.getByText(/senaite down/)).toBeInTheDocument()
+  })
+
+  it('renders recent-transitions rows with verb, from→to, and source', async () => {
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue({ ...base, transitions: transitionsBase })
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(screen.getByText('receive')).toBeInTheDocument())
+    expect(screen.getByText(/sample_due → sample_received/)).toBeInTheDocument()
+    expect(screen.getByText('mk1')).toBeInTheDocument()
+    // Second row has no verb — must render the em dash fallback, not blank.
+    expect(screen.getByText('—')).toBeInTheDocument()
+    expect(screen.getByText(/sample_received → verified/)).toBeInTheDocument()
+    expect(screen.getByText('reconcile')).toBeInTheDocument()
+  })
+
+  it('shows the empty-transitions state when no rows have been logged yet', async () => {
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue({
+      ...base,
+      transitions: { rows: [], error: null, latest_to_status: null, log_in_sync: null, current_status: 'received' },
+    })
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(screen.getByText(/no transitions logged yet/i)).toBeInTheDocument())
+    // No log rows -> log_in_sync is null -> the sync glyph renders nothing.
+    expect(screen.queryByText(/log matches status/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/log behind/i)).not.toBeInTheDocument()
+  })
+
+  it('shows a warning line when the transitions query errored', async () => {
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue({
+      ...base,
+      transitions: { rows: [], error: 'db down', latest_to_status: null, log_in_sync: null, current_status: 'received' },
+    })
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(screen.getByText(/transitions_error: db down/)).toBeInTheDocument())
+    // Error state must not also show the empty-state message.
+    expect(screen.queryByText(/no transitions logged yet/i)).not.toBeInTheDocument()
+  })
+
+  it('shows a green sync glyph when the transition log matches the current status', async () => {
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue({ ...base, transitions: transitionsBase })
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(screen.getByText(/log matches status/i)).toBeInTheDocument())
+    expect(screen.queryByText(/log behind/i)).not.toBeInTheDocument()
+  })
+
+  it('shows an amber out-of-sync warning naming the latest log status and current status', async () => {
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue({
+      ...base,
+      transitions: { ...transitionsBase, log_in_sync: false, latest_to_status: 'sample_received', current_status: 'verified' },
+    })
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() =>
+      expect(screen.getByText(/log behind: latest 'sample_received' ≠ status 'verified'/)).toBeInTheDocument()
+    )
+    expect(screen.queryByText(/log matches status/i)).not.toBeInTheDocument()
   })
 })

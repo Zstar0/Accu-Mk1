@@ -1417,6 +1417,87 @@ class LimsAnalysisTransition(Base):
         )
 
 
+class LimsWorkflowState(Base):
+    """Workflow catalog: one state definition per (entity_scope, slug).
+
+    Descriptive while SENAITE is system of record — no live path reads it
+    until the authority-swap slice (spec 2026-07-12 §3)."""
+    __tablename__ = "lims_workflow_states"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    entity_scope: Mapped[str] = mapped_column(Text, nullable=False)
+    slug: Mapped[str] = mapped_column(Text, nullable=False)
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    category: Mapped[str] = mapped_column(Text, nullable=False, default="active")
+    color: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_builtin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow,
+                                                 onupdate=datetime.utcnow, nullable=False)
+
+
+class LimsWorkflowTransition(Base):
+    """Workflow catalog edge: from → to via verb, with machine-checkable
+    (but dormant) requirement entries. See workflow/catalog.py for the
+    requirement-kind registry."""
+    __tablename__ = "lims_workflow_transitions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    entity_scope: Mapped[str] = mapped_column(Text, nullable=False)
+    from_state_id: Mapped[int] = mapped_column(Integer, ForeignKey("lims_workflow_states.id"), nullable=False)
+    to_state_id: Mapped[int] = mapped_column(Integer, ForeignKey("lims_workflow_states.id"), nullable=False)
+    verb: Mapped[str] = mapped_column(Text, nullable=False)
+    label: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    requirements: Mapped[list] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=False, default=list
+    )
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_builtin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow,
+                                                 onupdate=datetime.utcnow, nullable=False)
+
+    from_state: Mapped["LimsWorkflowState"] = relationship("LimsWorkflowState", foreign_keys=[from_state_id])
+    to_state: Mapped["LimsWorkflowState"] = relationship("LimsWorkflowState", foreign_keys=[to_state_id])
+
+
+class LimsSampleTransition(Base):
+    """Append-only sample-level transition log (mirror of SENAITE reality).
+
+    source: 'mk1' (our endpoint, actor known) | 'senaite' (IS event stream)
+          | 'reconcile' (drift synthesized) | 'is_seed' (historical backfill).
+    """
+    __tablename__ = "lims_sample_transitions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    lims_sample_pk: Mapped[int] = mapped_column(
+        Integer, ForeignKey("lims_samples.id", ondelete="CASCADE"), nullable=False)
+    verb: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    from_status: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    to_status: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_user_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    is_event_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class LimsWorkflowSyncState(Base):
+    """Single-row-per-stream cursor for the IS event-stream sync (retired at
+    the Mk1→IS inversion; spec §7)."""
+    __tablename__ = "lims_workflow_sync_state"
+
+    name: Mapped[str] = mapped_column(Text, primary_key=True)
+    cursor_created_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow,
+                                                 onupdate=datetime.utcnow, nullable=False)
+
+
 class LimsSubSampleEvent(Base):
     """
     Lightweight event log for sub-sample actions that have no other audit trail.

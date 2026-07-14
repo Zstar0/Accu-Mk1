@@ -5099,6 +5099,30 @@ export interface AnalysesSync {
   error: string | null
 }
 
+// Task 8: registry-inspect recent-transitions tail — last 5 native
+// lims_sample_transitions rows for this parent, newest first.
+export interface SampleTransitionRow {
+  verb: string | null
+  from_status: string | null
+  to_status: string
+  source: string
+  occurred_at: string
+}
+
+export interface SampleTransitionsTail {
+  rows: SampleTransitionRow[]
+  error: string | null
+  // UAT fast-follow: transition-log-vs-status sync check. `latest_to_status`
+  // is the newest logged row's to_status (or null if no rows). `log_in_sync`
+  // is null when there's no log yet, else whether latest_to_status matches
+  // the registry's current status. `current_status` is that current status,
+  // carried here so the panel doesn't need to derive it from the field diff
+  // (which is empty on the senaite-missing path).
+  latest_to_status: string | null
+  log_in_sync: boolean | null
+  current_status: string | null
+}
+
 export interface SampleRegistryDebug {
   sample_id: string
   load: {
@@ -5119,6 +5143,7 @@ export interface SampleRegistryDebug {
   senaite_error: string | null
   raw: { registry: Record<string, unknown> | null; senaite: Record<string, unknown> | null } | null
   analyses: AnalysesSync | null
+  transitions: SampleTransitionsTail | null
 }
 
 export async function getSampleRegistryDebug(sampleId: string): Promise<SampleRegistryDebug> {
