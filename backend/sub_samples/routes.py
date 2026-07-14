@@ -15,7 +15,8 @@ from sqlalchemy.orm import Session
 from database import get_db
 from auth import get_current_user
 from boxes.service import box_label_code
-from models import LimsBox, LimsSample, LimsSubSample
+from models import LimsBox, LimsSample, LimsSubSample, User
+from users_display import user_display_name
 from sub_samples import service
 from sub_samples.senaite import (
     SecondaryFalloutError,
@@ -295,6 +296,23 @@ def list_sub_samples(
         for item in items:
             if item.box_id is not None:
                 item.box_label = label_by_id.get(item.box_id)
+    # Batch-resolve receiver names the same way — the attachment lightbox
+    # shows who took the check-in photo.
+    receiver_ids = {
+        s.received_by_user_id
+        for s in subs
+        if isinstance(getattr(s, "received_by_user_id", None), int)
+    }
+    if receiver_ids:
+        name_by_id = {
+            u.id: user_display_name(u)
+            for u in db.execute(
+                select(User).where(User.id.in_(receiver_ids))
+            ).scalars()
+        }
+        for item, s in zip(items, subs):
+            if isinstance(getattr(s, "received_by_user_id", None), int):
+                item.received_by = name_by_id.get(s.received_by_user_id)
     return SubSampleListResponse(
         parent=ParentSampleSummary(
             sample_id=parent.sample_id,
@@ -658,12 +676,15 @@ def list_sub_sample_chromatograms(
 
 # ── Sub-sample image attachments (2026-06-11 design) ─────────────────────────
 
-def _serialize_attachment(att) -> SubSampleAttachmentResponse:
+def _serialize_attachment(
+    att, created_by: Optional[str] = None
+) -> SubSampleAttachmentResponse:
     return SubSampleAttachmentResponse(
         id=att.id,
         filename=att.filename,
         content_type=att.content_type,
         created_at=att.created_at,
+        created_by=created_by,
     )
 
 
@@ -679,8 +700,23 @@ def list_sub_sample_attachments(
         atts = service.list_attachments(db, sample_id)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    # Uploader names, batched (one SELECT) — shown in the attachment lightbox.
+    # int-guard: tolerate rows (and mocked test doubles) without a real id.
+    uploader_ids = {
+        a.user_id for a in atts if isinstance(getattr(a, "user_id", None), int)
+    }
+    name_by_id: dict[int, str] = {}
+    if uploader_ids:
+        name_by_id = {
+            u.id: user_display_name(u)
+            for u in db.execute(
+                select(User).where(User.id.in_(uploader_ids))
+            ).scalars()
+        }
     return SubSampleAttachmentListResponse(
-        attachments=[_serialize_attachment(a) for a in atts]
+        attachments=[
+            _serialize_attachment(a, name_by_id.get(a.user_id)) for a in atts
+        ]
     )
 
 

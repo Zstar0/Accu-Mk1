@@ -5192,6 +5192,9 @@ export interface SubSample {
   vial_sequence: number
   received_at: string
   received_by_user_id: number | null
+  /** Receiver display name — who checked the vial in (and took its check-in
+   *  photo). Populated by the LIST endpoint; optional for back-compat. */
+  received_by?: string | null
   photo_external_uid: string | null
   remarks: string | null
   assignment_role: AssignmentRole | null
@@ -5920,6 +5923,8 @@ export interface SubSampleAttachment {
   filename: string
   content_type: string
   created_at: string
+  /** Uploader display name; populated by the LIST endpoint. */
+  created_by?: string | null
 }
 
 export async function listSubSampleAttachments(
@@ -6178,6 +6183,8 @@ export interface PackagingPhoto {
   content_type: string | null
   created_at: string
   created_by_user_id: number | null
+  /** Uploader display name; populated by the LIST endpoint. */
+  created_by?: string | null
 }
 
 /**

@@ -37,6 +37,10 @@ class SubSampleResponse(BaseModel):
     # by the LIST endpoint via a batched box lookup; single-item responses
     # leave it None (their callers key off box_id).
     box_label: Optional[str] = None
+    # Receiver display name — who checked the vial in (and took its check-in
+    # photo). Populated by the LIST endpoint via a batched user lookup;
+    # single-item responses leave it None.
+    received_by: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -179,6 +183,10 @@ class SubSampleAttachmentResponse(BaseModel):
     filename: str
     content_type: str
     created_at: datetime
+    # Uploader display name ("First Last", email fallback). Populated by the
+    # LIST endpoint via a batched user lookup; single-item responses leave it
+    # None (mirrors the box_label pattern on SubSampleResponse).
+    created_by: Optional[str] = None
 
     class Config:
         from_attributes = True

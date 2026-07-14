@@ -12,10 +12,13 @@ import base64
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from database import get_db
 from auth import get_current_user
+from models import User
+from users_display import user_display_name
 from packaging_photos import service
 from packaging_photos.schemas import (
     PackagingPhotoCreate,
@@ -134,7 +137,28 @@ def list_packaging_photos(
 ):
     """List a parent's packaging photos, ordered."""
     photos = service.list_packaging_photos(db, parent_sample_id)
-    return [PackagingPhotoOut.model_validate(p) for p in photos]
+    # Uploader names, batched (one SELECT) — shown in the attachment lightbox.
+    # int-guard: tolerate rows (and mocked test doubles) without a real id.
+    uploader_ids = {
+        p.created_by_user_id
+        for p in photos
+        if isinstance(getattr(p, "created_by_user_id", None), int)
+    }
+    name_by_id: dict[int, str] = {}
+    if uploader_ids:
+        name_by_id = {
+            u.id: user_display_name(u)
+            for u in db.execute(
+                select(User).where(User.id.in_(uploader_ids))
+            ).scalars()
+        }
+    out = []
+    for p in photos:
+        item = PackagingPhotoOut.model_validate(p)
+        if p.created_by_user_id is not None:
+            item.created_by = name_by_id.get(p.created_by_user_id)
+        out.append(item)
+    return out
 
 
 @router.get("/packaging-photos/{photo_id}")
