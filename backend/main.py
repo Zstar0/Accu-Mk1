@@ -13278,6 +13278,9 @@ class SenaiteSampleItem(BaseModel):
     sample_type: Optional[str] = None
     contact: Optional[str] = None
     verification_code: Optional[str] = None
+    # Customer lot/batch code (SENAITE ClientLot / lims_samples.client_lot).
+    # Hydrated SENAITE items carry it; slim catalog-brains items don't (None).
+    client_lot: Optional[str] = None
     analytes: list[str] = []
 
 
@@ -13385,6 +13388,7 @@ async def list_senaite_samples(
             sample_type=it.get("getSampleTypeTitle") or it.get("SampleTypeTitle") or it.get("SampleType") or None,
             contact=_extract_contact(it),
             verification_code=it.get("VerificationCode") or it.get("getVerificationCode") or None,
+            client_lot=it.get("ClientLot") or it.get("getClientLot") or None,
             analytes=_extract_analytes(it),
         )
 
@@ -13431,6 +13435,19 @@ async def list_senaite_samples(
                 elif search_field == "order_number":
                     from integration_db import search_sample_ids_by_order_number
                     sample_ids = search_sample_ids_by_order_number(search_term, limit=50)
+                elif search_field == "lot":
+                    # Lot search resolves against the LOCAL lims_samples mirror
+                    # (client_lot, basic-info dual-write) → sample IDs → getId,
+                    # mirroring the verification_code/order_number pattern.
+                    # SENAITE's catalog has no usable ClientLot index, and a
+                    # catalog scan is off the table (single-Zope load hazard);
+                    # the ≤50-id bound matches the sibling axes.
+                    sample_ids = db.execute(
+                        select(LimsSample.sample_id)
+                        .where(LimsSample.client_lot.ilike(f"%{search_term}%"))
+                        .order_by(LimsSample.id.desc())
+                        .limit(50)
+                    ).scalars().all()
                 else:
                     # Default: direct getId lookup (sample ID search)
                     sample_ids = [search_term]
@@ -17859,6 +17876,11 @@ async def list_samples_from_registry(
         s = f"%{search.strip()}%"
         if search_field == "order_number":
             stmt = stmt.where(LimsSample.client_order_number.ilike(s))
+        elif search_field == "lot":
+            # Customer lot/batch code — mirrored into lims_samples.client_lot
+            # by the basic-info dual-write. Same single-table ILIKE cost class
+            # as the order_number axis; no extra round-trips.
+            stmt = stmt.where(LimsSample.client_lot.ilike(s))
         elif search_field == "verification_code":
             # Codes are IS-owned and REPLACED on COA regeneration — resolve ids
             # against the IS DB (parity with /senaite/samples' search) so a

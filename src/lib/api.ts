@@ -4077,6 +4077,9 @@ export interface SenaiteSample {
   sample_type: string | null
   contact: string | null
   verification_code: string | null
+  // Customer lot/batch code — lims_samples.client_lot in registry mode,
+  // SENAITE ClientLot on hydrated items (null on slim catalog-brains rows).
+  client_lot: string | null
   analytes: string[]
 }
 
@@ -4091,7 +4094,7 @@ export async function getSenaiteSamples(
   limit = 50,
   bStart = 0,
   search?: string,
-  searchField?: 'verification_code' | 'order_number',
+  searchField?: 'verification_code' | 'order_number' | 'lot',
   /** Catalog-brains only (no complete=yes hydration on the SENAITE side).
    *  Items carry live review_state/id/uid but empty analytes/verification
    *  code. Only the mk1-read-mode list refresh passes this. */
@@ -4123,7 +4126,7 @@ export async function getRegistrySamples(
   limit = 50,
   bStart = 0,
   search?: string,
-  searchField?: 'verification_code' | 'order_number'
+  searchField?: 'verification_code' | 'order_number' | 'lot'
 ): Promise<SenaiteSamplesResponse> {
   const params = new URLSearchParams({
     limit: String(limit),

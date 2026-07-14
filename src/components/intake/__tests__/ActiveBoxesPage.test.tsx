@@ -76,6 +76,7 @@ const orderSample = {
   sample_type: 'Peptide',
   contact: null,
   verification_code: null,
+  client_lot: null,
   analytes: [],
 }
 
