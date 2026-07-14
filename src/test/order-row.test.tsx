@@ -817,7 +817,9 @@ describe('OrderRow — lot pass-through', () => {
         activeAnalysisStates={[]}
       />
     )
-    expect(screen.getByText('Lot: LOT-F500')).toBeInTheDocument()
+    // The lot line is composed of multiple inline elements (HighlightMatch
+    // segments), so match on the row container's textContent via its title.
+    expect(screen.getByTitle('LOT-F500')).toHaveTextContent('Lot: LOT-F500')
     expect(screen.getByText('Failed to create in SENAITE')).toBeInTheDocument()
   })
 })

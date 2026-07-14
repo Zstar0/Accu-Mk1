@@ -7,6 +7,7 @@ import type { SenaiteLookupResult } from '@/lib/api'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 import {
   AnalysisCounts,
+  HighlightMatch,
   SampleStateBadge,
   groupAnalysisStates,
 } from './helpers'
@@ -20,6 +21,7 @@ export function SampleCard({
   className,
   analyte,
   lot,
+  highlightLot,
   slaSnapshots,
 }: {
   sampleId: string
@@ -45,6 +47,10 @@ export function SampleCard({
   // (authoritative — lab-editable after AR creation) wins over this prop.
   // When neither source has a non-blank value the row is omitted.
   lot?: string
+  // Active lot-search query. When set, occurrences inside the displayed lot
+  // value get a browser-find-style <mark> highlight (see HighlightMatch).
+  // Purely presentational — filtering happens in the caller.
+  highlightLot?: string
   // Multi-tier follow-on — per-sample SLA snapshots, one entry per service
   // group the sample's analyses touch. Replaces the legacy hardcoded 24h/48h
   // goalNote with the real tier-resolved indicator (priority>group>default
@@ -76,7 +82,7 @@ export function SampleCard({
         className="text-xs text-muted-foreground truncate mb-1"
         title={value}
       >
-        Lot: {value}
+        Lot: <HighlightMatch text={value} query={highlightLot} />
       </div>
     ) : null
 

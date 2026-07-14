@@ -480,3 +480,43 @@ describe('SampleCard — lot display', () => {
     ).not.toBeInTheDocument()
   })
 })
+
+// Lot highlight — browser-find-style <mark> around the matched substring of
+// the displayed lot value when the active lot-search query is passed in.
+describe('SampleCard — lot highlight', () => {
+  it('wraps the matched substring in a <mark> when highlightLot is set', () => {
+    const lookup = makeLookup({ review_state: 'verified', client_lot: 'LOT-555-A' })
+    render(
+      <SampleCard
+        sampleId="P-0001"
+        lookup={lookup}
+        isLoading={false}
+        isError={false}
+        highlightLot="555"
+      />,
+      { wrapper }
+    )
+    const row = screen.getByTestId('sample-card-lot-P-0001')
+    const mark = row.querySelector('mark')
+    expect(mark).not.toBeNull()
+    expect(mark).toHaveTextContent('555')
+    expect(row).toHaveTextContent('Lot: LOT-555-A')
+  })
+
+  it('renders no <mark> when highlightLot is absent or does not match', () => {
+    const lookup = makeLookup({ review_state: 'verified', client_lot: 'LOT-111' })
+    render(
+      <SampleCard
+        sampleId="P-0001"
+        lookup={lookup}
+        isLoading={false}
+        isError={false}
+        highlightLot="999"
+      />,
+      { wrapper }
+    )
+    const row = screen.getByTestId('sample-card-lot-P-0001')
+    expect(row.querySelector('mark')).toBeNull()
+    expect(row).toHaveTextContent('Lot: LOT-111')
+  })
+})

@@ -20,6 +20,7 @@ import {
   getOrderReceivedAt,
   getOrderWorstState,
   groupAnalysisStates,
+  HighlightMatch,
   isOrderDone,
   sampleMatchesAnalysisFilter,
 } from './helpers'
@@ -31,6 +32,7 @@ export function OrderRow({
   activeAnalysisStates,
   defaultExpanded,
   highlightSampleId,
+  highlightLot,
   showFinance,
   slaVerdict,
   sampleSlaStatusesMap,
@@ -60,6 +62,10 @@ export function OrderRow({
   // search hit. Also mirrored to `data-highlight-sample-id` on the root <tr>.
   defaultExpanded?: boolean
   highlightSampleId?: string
+  // Active lot-search query — forwarded to each SampleCard (and the
+  // failed-sample inline card) for browser-find-style highlighting of the
+  // matched substring inside the displayed lot value. Presentational only.
+  highlightLot?: string
   // Opt-in (customer-detail only). When true, renders a chevron in the Order ID
   // cell that toggles a live WooCommerce finance disclosure row beneath this one.
   // Off by default so the shared /explorer OrderStatusPage view is unchanged.
@@ -315,7 +321,7 @@ export function OrderRow({
                         className="text-xs text-muted-foreground truncate mb-1"
                         title={s.lot}
                       >
-                        Lot: {s.lot}
+                        Lot: <HighlightMatch text={s.lot} query={highlightLot} />
                       </div>
                     )}
                     <div className="text-xs text-muted-foreground">
@@ -334,6 +340,7 @@ export function OrderRow({
                   isError={lookup?.isError ?? false}
                   analyte={s.analyte}
                   lot={s.lot}
+                  highlightLot={highlightLot}
                   slaSnapshots={sampleSlaStatusesMap?.get(s.senaiteId)}
                   className={cn(
                     highlightSampleId === s.senaiteId &&

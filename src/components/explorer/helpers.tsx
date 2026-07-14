@@ -354,3 +354,59 @@ export const COL_COUNT_LABEL: Record<string, string> = {
   verified: 'verified',
   published: 'published',
 }
+
+// --- Lot-search highlight ---
+
+/** Split `text` into ordered segments marking every case-insensitive
+ *  occurrence of `query` (browser-find semantics). Empty/undefined/blank
+ *  query → a single non-match segment. Pure — unit-tested directly;
+ *  <HighlightMatch> is the thin JSX wrapper. */
+export function splitHighlight(
+  text: string,
+  query: string | undefined
+): { text: string; match: boolean }[] {
+  const q = query?.trim().toLowerCase()
+  if (!q || !text) return [{ text, match: false }]
+  const lower = text.toLowerCase()
+  const segments: { text: string; match: boolean }[] = []
+  let i = 0
+  while (i < text.length) {
+    const hit = lower.indexOf(q, i)
+    if (hit === -1) {
+      segments.push({ text: text.slice(i), match: false })
+      break
+    }
+    if (hit > i) segments.push({ text: text.slice(i, hit), match: false })
+    segments.push({ text: text.slice(hit, hit + q.length), match: true })
+    i = hit + q.length
+  }
+  return segments
+}
+
+/** Render `text` with every occurrence of `query` wrapped in a yellow
+ *  <mark> (like the browser's find-in-page). No query → plain text, so
+ *  callers can render this unconditionally. */
+export function HighlightMatch({
+  text,
+  query,
+}: {
+  text: string
+  query?: string
+}) {
+  return (
+    <>
+      {splitHighlight(text, query).map((seg, i) =>
+        seg.match ? (
+          <mark
+            key={i}
+            className="rounded-[2px] bg-yellow-400 px-px text-black"
+          >
+            {seg.text}
+          </mark>
+        ) : (
+          <span key={i}>{seg.text}</span>
+        )
+      )}
+    </>
+  )
+}

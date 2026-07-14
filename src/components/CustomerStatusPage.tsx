@@ -948,6 +948,14 @@ function CustomerOrdersTab({
       ? customerOrderSearch.sample_id
       : undefined
 
+  // highlightLot: same contract as highlightSampleId — only highlight what
+  // the server actually filtered on (the api.ts 2-char gate), rendered as a
+  // browser-find-style <mark> inside each card's lot value.
+  const highlightLot =
+    searchActive && customerOrderSearch.lot.length >= 2
+      ? customerOrderSearch.lot
+      : undefined
+
   // Empty-state echo: build "Order #: \"3001\" AND Sample ID: \"P-0001\""
   // from whichever committed axes are non-empty. Each fragment is rendered
   // separately so the labels and values keep their typography contract.
@@ -1154,6 +1162,7 @@ function CustomerOrdersTab({
                       activeAnalysisStates={[]}
                       defaultExpanded={searchActive ? true : undefined}
                       highlightSampleId={highlightSampleId}
+                      highlightLot={highlightLot}
                       showFinance
                       slaVerdict={orderSla.verdictByOrderId.get(order.order_id)}
                       sampleSlaStatusesMap={orderSla.sampleStatusesBySampleId}

@@ -48,6 +48,7 @@ import {
   formatProcessingTime,
   getOrderEmail,
   groupAnalysisStates,
+  HighlightMatch,
   sampleMatchesAnalysisFilter,
   COL_COUNT_LABEL,
   TEST_EMAILS,
@@ -191,11 +192,15 @@ function KanbanSampleCard({
   item,
   showOrder,
   showAnalysisServices,
+  lotHighlight,
   sampleSlaStatusesMap,
 }: {
   item: KanbanSampleItem
   showOrder: boolean
   showAnalysisServices: boolean
+  // Active Lot-filter query — matched substrings inside the displayed lot
+  // value get a browser-find-style <mark> highlight (presentational only).
+  lotHighlight?: string
   // Multi-tier follow-on: each sample now has an array of snapshots (one per
   // service group). Until the indicator itself renders stacked rows, we pick
   // the first element so behavior stays single-tier-visible.
@@ -267,7 +272,7 @@ function KanbanSampleCard({
         <div className="flex items-center gap-1 mt-0.5">
           <span className="text-[10px] text-muted-foreground/50">Lot:</span>
           <span className="text-[10px] text-muted-foreground/80 truncate">
-            {kanbanLot}
+            <HighlightMatch text={kanbanLot} query={lotHighlight} />
           </span>
         </div>
       )}
@@ -327,6 +332,7 @@ function KanbanView({
   groupByOrder,
   activeStates,
   showAnalysisServices,
+  lotHighlight,
   sampleSlaStatusesMap,
   collapsedCols,
   onToggleCollapse,
@@ -336,6 +342,9 @@ function KanbanView({
   groupByOrder: boolean
   activeStates: string[]
   showAnalysisServices: boolean
+  // Active Lot-filter query, forwarded to every KanbanSampleCard for
+  // browser-find-style highlighting of the matched lot substring.
+  lotHighlight?: string
   sampleSlaStatusesMap?: Map<string, SampleSlaSnapshot[]>
   collapsedCols: string[]
   onToggleCollapse: (key: string) => void
@@ -456,6 +465,7 @@ function KanbanView({
                       item={item}
                       showOrder={true}
                       showAnalysisServices={showAnalysisServices}
+                      lotHighlight={lotHighlight}
                       sampleSlaStatusesMap={sampleSlaStatusesMap}
                     />
                   ))}
@@ -521,6 +531,7 @@ function KanbanView({
                           item={item}
                           showOrder={false}
                           showAnalysisServices={showAnalysisServices}
+                          lotHighlight={lotHighlight}
                           sampleSlaStatusesMap={sampleSlaStatusesMap}
                         />
                       ))
@@ -1238,6 +1249,7 @@ export function OrderStatusPage() {
                         wordpressHost={wordpressHost}
                         sampleLookupMap={sampleLookupMap}
                         activeAnalysisStates={orderFilters.activeStates}
+                        highlightLot={orderFilters.lotFilter.trim() || undefined}
                         slaVerdict={orderSla.verdictByOrderId.get(order.order_id)}
                         sampleSlaStatusesMap={orderSla.sampleStatusesBySampleId}
                       />
@@ -1255,6 +1267,7 @@ export function OrderStatusPage() {
                   groupByOrder={orderFilters.groupByOrder}
                   activeStates={orderFilters.activeStates}
                   showAnalysisServices={orderFilters.showAnalysisServices}
+                  lotHighlight={orderFilters.lotFilter.trim() || undefined}
                   sampleSlaStatusesMap={orderSla.sampleStatusesBySampleId}
                   collapsedCols={orderFilters.collapsedKanbanCols}
                   onToggleCollapse={toggleCollapsedCol}
