@@ -1,5 +1,38 @@
 # Changelog
 
+## v1.5.0 — 2026-07-14
+
+Sample lot visibility end to end: lot codes on every sample card, lot search
+on the Order Status and Customers pages, and a Lot column on the samples
+list page.
+
+### Added
+
+- **Lot on sample cards.** Order Status (table + kanban), Customers detail,
+  and failed-sample cards show the sample's lot — instantly from the order
+  payload's `lot_code`, upgraded to SENAITE's authoritative `ClientLot` when
+  the per-sample lookup loads. Blank values render nothing.
+- **Lot search box on the Order Status page.** Client-side filter matching
+  the payload lot instantly and the loaded SENAITE `client_lot` as lookups
+  arrive (same progressive contract as the Analyte filter). Order-level
+  semantics: an order stays visible when ANY of its samples matches.
+- **Lot search axis on the Customers page.** Fourth debounced input on the
+  customer-detail orders search, AND-combined server-side via the new
+  Integration Service `search_lot` param (requires IS >= 1.0.9; on older IS
+  the axis no-ops rather than erroring).
+- **Lot column + filter on the samples list page.** Registry (Mk1) read mode
+  serves the lot straight from `lims_samples.client_lot` with a single-table
+  ILIKE filter — no extra queries, page speed unchanged. SENAITE read mode
+  resolves matching ids from the local mirror, then bounded `getId` fetches.
+- **Browser-find-style highlight.** Matched lot text is highlighted with a
+  yellow mark on every card and list surface while a lot search is active.
+
+### Fixed
+
+- **27 pre-existing frontend test failures** (flag-hook pollution class) in
+  the sample-card and order-row suites, healed via a one-line
+  `getWorksheetUsers` test mock.
+
 ## v1.4.0 — 2026-07-13
 
 SENAITE phase-out slice 3 (workflow state system) plus two independent
