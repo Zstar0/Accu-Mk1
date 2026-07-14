@@ -267,10 +267,6 @@ def fetch_parent_analyses(sample_id: str) -> List[dict]:
     an async httpx client), plus two additions those callers need that the
     COA reader doesn't:
 
-      * `instrument_uid` — the SENAITE Analysis catalog carries the
-        instrument as a nested `Instrument` object ref ({"uid": ..., "title":
-        ...}), the same shape main.py's AR-detail analyses fetch reads at
-        ~12504-12510. Only the uid is extracted; None when absent.
       * `created` — best-effort creation timestamp for newest-line selection
         when a keyword has more than one non-superseded line (should not
         normally happen outside a retest chain, but the fallback exists so
@@ -290,8 +286,6 @@ def fetch_parent_analyses(sample_id: str) -> List[dict]:
     items = resp.json().get("items", []) or []
     out: List[dict] = []
     for it in items:
-        instrument_obj = it.get("Instrument")
-        instrument_uid = instrument_obj.get("uid") if isinstance(instrument_obj, dict) else None
         out.append({
             "uid": it.get("uid"),
             "keyword": it.get("getKeyword") or it.get("Keyword"),
@@ -303,7 +297,6 @@ def fetch_parent_analyses(sample_id: str) -> List[dict]:
                 or (it.get("RetestOf") or {}).get("uid")
                 or None
             ),
-            "instrument_uid": instrument_uid,
             "created": (
                 it.get("created") or it.get("creation_date")
                 or it.get("DateCreated") or it.get("getDateCreated")
