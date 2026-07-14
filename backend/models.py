@@ -811,6 +811,33 @@ class LimsSample(Base):
     )
 
 
+class LimsSampleRemark(Base):
+    """Parent-AR internal remark — Mk1 system of record (read-flip spec §6).
+
+    Replaces SENAITE's AR `Remarks` field: the receive flow writes here
+    natively (SENAITE write deleted 2026-07-14) and the lookup serves this
+    table in BOTH read modes. Backfilled rows carry the SENAITE login string
+    in author_label; Mk1-era rows carry a real users FK.
+    """
+    __tablename__ = "lims_sample_remarks"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    lims_sample_pk: Mapped[int] = mapped_column(
+        ForeignKey("lims_samples.id", ondelete="CASCADE"), nullable=False
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    author_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    author_label: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return f"<LimsSampleRemark(id={self.id}, sample_pk={self.lims_sample_pk})>"
+
+
 class LimsSubSample(Base):
     """One physical vial received under a parent LimsSample. SENAITE id format
     `<parent>-S<NN>`, e.g. P-0134-S01."""

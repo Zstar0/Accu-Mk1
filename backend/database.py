@@ -1251,6 +1251,26 @@ def _run_migrations():
         )
         """,
         "ALTER TABLE lims_packaging_photos ADD COLUMN IF NOT EXISTS capture_token_id INTEGER REFERENCES lims_capture_tokens(id) ON DELETE SET NULL",
+        # ── parent-AR internal remarks (read-flip spec §6, 2026-07-14) ──
+        # Full CREATE here (not just in create_all): migrations run BEFORE
+        # create_all, and the dedup unique index below needs the table on
+        # first boot (lims_capture_tokens precedent).
+        """
+        CREATE TABLE IF NOT EXISTS lims_sample_remarks (
+            id             SERIAL PRIMARY KEY,
+            lims_sample_pk INTEGER NOT NULL REFERENCES lims_samples(id) ON DELETE CASCADE,
+            content        TEXT NOT NULL,
+            author_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            author_label   VARCHAR(200),
+            created_at     TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_lims_sample_remarks_sample "
+        "ON lims_sample_remarks (lims_sample_pk, created_at)",
+        # Backfill idempotency key: same sample + timestamp + content hash is
+        # the same SENAITE remark; ON CONFLICT DO NOTHING rides this index.
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_sample_remarks_dedup "
+        "ON lims_sample_remarks (lims_sample_pk, created_at, md5(content))",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
