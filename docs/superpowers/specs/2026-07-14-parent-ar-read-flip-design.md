@@ -88,14 +88,18 @@ to SENAITE's None.
 - Native write path already exists and stays: vial picker + prep-bridge
   auto-stamp (fill-only-NULL) + `promote_to_parent(method_id, instrument_id)`
   → all via `service.set_method_instrument` (audited).
-- `AnalysisTable.tsx` M/I editor: in `mk1` mode, PATCH the native
-  `lims_analyses` route (existing `patch_method_instrument`) with native ids;
-  `SenaiteAnalysis` gains optional `method_id` / `instrument_id` +
-  native option lists (from `instruments` / `hplc_methods` tables) so the
-  editor works without UIDs. `senaite` mode keeps the existing UID proxy
+- FE editor: **no FE or model change needed.** `api.ts
+  setAnalysisMethodInstrument` (Phase 3.6, shipped) already routes analysis
+  uids of the form `mk1:<lims_analyses.id>` to the native PATCH with
+  int-as-string option uids, and real SENAITE uids to the proxy. The Layer-4
+  builder emits `mk1:<id>` uids + native option lists in the existing
+  `{uid, title}` shape (`service.py:2017` precedent) and the routing follows.
+  `senaite` mode keeps the existing UID proxy
   (`POST /wizard/senaite/analyses/{uid}/method-instrument`) untouched.
-- Post-flip retirement (follow-up, not this slice): delete the SENAITE proxy
-  endpoint + the A4 SENAITE→shadow M/I mirror hook.
+- The A4 SENAITE→shadow M/I mirror pass-through is removed **in this layer**
+  (it is exactly the write the ownership rule forbids); the proxy keeps
+  updating SENAITE only. Post-flip retirement (follow-up, not this slice):
+  delete the proxy endpoint itself.
 - No backfill: historical shadow M/I stays NULL — faithful, since SENAITE
   never held meaningful values (verified: nothing reads them).
 
