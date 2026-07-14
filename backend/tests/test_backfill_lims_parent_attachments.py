@@ -124,6 +124,7 @@ def test_backfill_inserts_attachment_rows(db_factory, tmp_path):
     assert stats["dup"] == 0
     assert stats["adopted"] == 0
     assert stats["skipped_malformed"] == 0
+    assert stats["detail_fetch_errors"] == 0
     assert stats["errors"] == 0
 
     db = db_factory()
@@ -251,13 +252,52 @@ def test_backfill_dry_run_does_not_adopt(db_factory, tmp_path):
     db.close()
 
 
+def test_backfill_uid_collision_counts_dup_and_leaves_capture_row(db_factory, tmp_path):
+    """Re-scan collision guard: the swept uid ALREADY exists on another row
+    for this sample, AND a later uid-less capture row shares the filename
+    (retake/re-upload — filename is user-controlled and not unique). The
+    sweep must count `dup` and skip entirely — never stamp the existing uid
+    onto the uid-less row (partial-unique-index violation that would roll
+    back the whole sample and mask itself as a generic `errors` count)."""
+    pk = _seed_sample(db_factory, "TEST-ATTBF-P6")
+    # Sweep #1 already landed uid A9 for (pk, 'v-1.png') on an earlier row.
+    _seed_capture_row(db_factory, pk, "v-1.png",
+                      senaite_attachment_uid="A9", kind="manual",
+                      storage="senaite", storage_key=None)
+    # A later capture-time retake shares the filename, uid-less.
+    uidless_id = _seed_capture_row(db_factory, pk, "v-1.png")
+
+    meta = _meta_with_attachments([{"uid": "A9"}, {"uid": "A11"}])
+    attachment_metas = {
+        "A9": {"AttachmentFile": {"filename": "v-1.png", "content_type": "image/png"},
+               "created": "2026-01-09T00:00:00"},
+        "A11": {"AttachmentFile": {"filename": "other.png", "content_type": "image/png"},
+                "created": "2026-01-11T00:00:00"},
+    }
+    ckpt = str(tmp_path / "ckpt.json")
+
+    stats = _run(db_factory, {"TEST-ATTBF-P6": meta}, attachment_metas, ckpt)
+
+    assert stats["dup"] == 1        # A9 skipped entirely — uid already present
+    assert stats["adopted"] == 0    # never stamped onto the uid-less retake
+    assert stats["inserted"] == 1   # A11 in the same sample still lands
+    assert stats["errors"] == 0     # no IntegrityError, no masked rollback
+
+    db = db_factory()
+    row = db.get(LimsParentAttachment, uidless_id)
+    assert row.senaite_attachment_uid is None  # retake row untouched
+    assert db.query(LimsParentAttachment).filter_by(
+        lims_sample_pk=pk).count() == 3  # 2 seeded + A11
+    db.close()
+
+
 def test_backfill_skips_malformed_attachment_refs(db_factory, tmp_path):
     _seed_sample(db_factory, "TEST-ATTBF-P5")
     meta = _meta_with_attachments([
         {"uid": "D1"},          # good
         "not-a-dict",           # malformed: ref itself isn't a dict
         {"api_url": "no-uid"},  # malformed: ref has no uid
-        {"uid": "D2"},          # malformed: detail fetch raises
+        {"uid": "D2"},          # detail fetch raises → detail_fetch_errors
     ])
     attachment_metas = {
         "D1": {"AttachmentFile": {"filename": "good.png", "content_type": "image/png"},
@@ -270,7 +310,8 @@ def test_backfill_skips_malformed_attachment_refs(db_factory, tmp_path):
 
     assert stats["attachments_seen"] == 4
     assert stats["inserted"] == 1
-    assert stats["skipped_malformed"] == 3
+    assert stats["skipped_malformed"] == 2       # non-dict + no-uid only
+    assert stats["detail_fetch_errors"] == 1     # raised fetch, counted separately
     assert stats["errors"] == 0  # a bad ref/detail-fetch never counts as a sample-level error
 
     db = db_factory()

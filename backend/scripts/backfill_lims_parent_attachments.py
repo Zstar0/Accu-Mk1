@@ -37,10 +37,13 @@ detail (its `Attachment` list of refs); each ref then needs its OWN
 throttled `fetch_attachment_meta(uid)` call to resolve the object's
 `AttachmentFile` sub-object (filename/content_type) plus `RenderInReport`
 and `created` — a two-step fetch per attachment, unlike the remarks sweep's
-one-step-per-sample. A malformed ref (not a dict, no uid) or a failed
-per-ref detail fetch is skipped and counted (`skipped_malformed`) — it never
-aborts the sample; a sample-level failure (e.g. `fetch_parent_metadata`
-itself raising) is the only thing counted under `errors`.
+one-step-per-sample. A malformed ref (not a dict, no uid, or a detail with
+no usable filename) is skipped and counted under `skipped_malformed`; a
+per-ref detail fetch that RAISES is skipped and counted under
+`detail_fetch_errors` (missed coverage — it fails the exit code, see
+below). Neither aborts the sample; a sample-level failure (e.g.
+`fetch_parent_metadata` itself raising) is the only thing counted under
+`errors`.
 
 ADOPTION (the one novel mechanic here, vs. the remarks sweep): a capture-time
 row (Tasks 2-3's upload endpoint) has no SENAITE attachment uid — the Plone
@@ -53,6 +56,17 @@ storage_key, kind, render_in_report, created_at — the capture-time truth) is
 left untouched; adoption only closes the "which SENAITE object is this"
 gap. Only the FIRST matching uid-less row (lowest id) is adopted if more
 than one exists for the same (sample, filename).
+
+UID-COLLISION GUARD (ordering is load-bearing): the dup check
+(`EXISTS_UID_SQL` for the incoming uid, any row) runs BEFORE the
+adoption-candidate check, on real runs and --dry-run alike. Without it, a
+re-scan that re-encounters an already-landed uid while a LATER uid-less
+capture row shares the filename (retake/re-upload — filename is
+user-controlled, not unique) would stamp the existing uid onto that row,
+trip `uq_lims_parent_attachments_uid`, roll back the whole sample's
+transaction, and surface only as an opaque `errors` count (with the
+checkpoint still advancing past the sample). Order everywhere: uid already
+present → `dup`, skip; else uid-less filename match → adopt; else insert.
 
 Row shape for a genuinely new (non-adopted) insert: storage='senaite',
 storage_key=NULL, senaite_attachment_uid=<uid>, filename/content_type from
@@ -77,24 +91,32 @@ here is idempotent.
 Stats line printed as JSON on completion (retain it as the run record):
 
     {"fetched": N, "attachments_seen": N, "inserted": N, "dup": N,
-     "adopted": N, "skipped_malformed": N, "unparseable_created": N,
-     "errors": N}
+     "adopted": N, "skipped_malformed": N, "detail_fetch_errors": N,
+     "unparseable_created": N, "errors": N}
 
 `fetched` = registry rows visited. `attachments_seen` = total `Attachment`
 list entries encountered across all visited samples, well-formed or not
 (invariant: attachments_seen == inserted + dup + adopted + skipped_malformed
-on a real run; --dry-run's inserted/dup/adopted are would-be counts, so the
-same invariant holds there too). `inserted`/`dup`/`adopted` mean "would
-insert" / "already present" / "would adopt" during --dry-run (SELECT-side
-only, nothing written) and the real outcome on a real run.
-`skipped_malformed` = individual Attachment refs that were not a dict, had
-no uid, or whose detail fetch failed/returned no usable filename (the AR's
-OTHER attachments still get backfilled). `unparseable_created` = entries
-whose `created` timestamp did not parse; they are still inserted/adopted,
-keyed on the epoch sentinel (see `_rows_for_sample`).
++ detail_fetch_errors on a real run; --dry-run's inserted/dup/adopted are
+would-be counts, so the same invariant holds there too).
+`inserted`/`dup`/`adopted` mean "would insert" / "already present" / "would
+adopt" during --dry-run (SELECT-side only, nothing written) and the real
+outcome on a real run. `skipped_malformed` = individual Attachment refs
+that were genuinely malformed — not a dict, no uid, or a fetched detail
+with no usable filename (the AR's OTHER attachments still get backfilled).
+`detail_fetch_errors` = per-ref `fetch_attachment_meta` calls that RAISED
+(network/SENAITE failure — the attachment likely exists but wasn't swept);
+kept separate from `skipped_malformed` because it means MISSED coverage,
+not skippable garbage, and it therefore fails the exit code (below).
+`unparseable_created` = entries whose `created` timestamp did not parse;
+they are still inserted/adopted, keyed on the epoch sentinel (see
+`_rows_for_sample`).
 
-Exit code contract: 0 = clean run, no per-sample errors. 1 = run completed
-but one or more samples errored (see the "errors" count in the stats line).
+Exit code contract: 0 = clean run, no per-sample errors and no per-ref
+detail-fetch failures. 1 = run completed but one or more samples errored
+OR one or more attachment detail fetches failed (see the "errors" /
+"detail_fetch_errors" counts in the stats line) — a run where every detail
+fetch fails must not report success.
 """
 import argparse
 import json
@@ -207,13 +229,15 @@ def _rows_for_sample(meta: dict, lims_sample_pk: int, *, sleep_s: float):
     """SENAITE Attachment list → per-ref detail fetch → insert/adopt param
     dicts + stat deltas. Strictly sequential: sleeps after EVERY per-ref
     `fetch_attachment_meta` call (bulk-scan safety). A malformed ref (not a
-    dict, no uid, no usable filename in the detail) or a raised detail-fetch
-    error is skipped and counted — it never aborts the sample."""
-    out, malformed, unparseable = [], 0, 0
+    dict, no uid, no usable filename in the detail) is skipped and counted
+    under `malformed`; a RAISED detail fetch is skipped and counted under
+    `fetch_errors` (missed coverage — fails the exit code, see module
+    docstring). Neither ever aborts the sample."""
+    out, malformed, fetch_errors, unparseable = [], 0, 0, 0
     seen = 0
     raw = meta.get("Attachment")
     if not isinstance(raw, list):
-        return out, seen, malformed, unparseable
+        return out, seen, malformed, fetch_errors, unparseable
 
     for ref in raw:
         seen += 1
@@ -225,7 +249,7 @@ def _rows_for_sample(meta: dict, lims_sample_pk: int, *, sleep_s: float):
         try:
             detail = sen.fetch_attachment_meta(uid)
         except Exception as e:
-            malformed += 1
+            fetch_errors += 1
             log.warning("attachment detail fetch failed uid=%s err=%s", uid, e)
             continue
         finally:
@@ -238,8 +262,7 @@ def _rows_for_sample(meta: dict, lims_sample_pk: int, *, sleep_s: float):
             continue
         content_type = att_file.get("content_type")
 
-        render_flag = detail.get("RenderInReport")
-        render_in_report = bool(render_flag) if render_flag is not None else False
+        render_in_report = bool(detail.get("RenderInReport"))
 
         created = detail.get("created")
         try:
@@ -260,7 +283,7 @@ def _rows_for_sample(meta: dict, lims_sample_pk: int, *, sleep_s: float):
             "render_in_report": render_in_report,
             "created": created_dt,
         })
-    return out, seen, malformed, unparseable
+    return out, seen, malformed, fetch_errors, unparseable
 
 
 def backfill(db_factory, *, sleep_s: float, batch_size: int,
@@ -270,8 +293,8 @@ def backfill(db_factory, *, sleep_s: float, batch_size: int,
     (idempotent — see module docstring). One sample's failure never aborts
     the run. Returns coverage stats."""
     stats = {"fetched": 0, "attachments_seen": 0, "inserted": 0, "dup": 0,
-             "adopted": 0, "skipped_malformed": 0, "unparseable_created": 0,
-             "errors": 0}
+             "adopted": 0, "skipped_malformed": 0, "detail_fetch_errors": 0,
+             "unparseable_created": 0, "errors": 0}
     start = load_checkpoint(checkpoint_path)
     if start:
         log.info("resuming from checkpoint last_pk=%s", start)
@@ -284,10 +307,11 @@ def backfill(db_factory, *, sleep_s: float, batch_size: int,
 
         try:
             meta = sen.fetch_parent_metadata(sample_id)  # fetch ONCE
-            rows, seen, malformed, unparseable = _rows_for_sample(
+            rows, seen, malformed, fetch_errors, unparseable = _rows_for_sample(
                 meta, pk, sleep_s=sleep_s)
             stats["attachments_seen"] += seen
             stats["skipped_malformed"] += malformed
+            stats["detail_fetch_errors"] += fetch_errors
             stats["unparseable_created"] += unparseable
 
             if rows:
@@ -305,6 +329,18 @@ def backfill(db_factory, *, sleep_s: float, batch_size: int,
                 db = db_factory()
                 try:
                     for row in rows:
+                        # UID-COLLISION GUARD — ordering is load-bearing
+                        # (module docstring): dup check FIRST, on real runs
+                        # and dry runs alike, so an already-landed uid is
+                        # never stamped onto a later same-filename uid-less
+                        # capture row (partial-unique-index violation that
+                        # would roll back the whole sample).
+                        exists = db.execute(
+                            EXISTS_UID_SQL, {"uid": row["uid"]}).scalar()
+                        if exists:
+                            dup_here += 1
+                            continue  # uid already landed — nothing to do
+
                         candidate_id = db.execute(ADOPT_CANDIDATE_SQL, {
                             "pk": row["pk"], "filename": row["filename"],
                         }).scalar()
@@ -317,18 +353,13 @@ def backfill(db_factory, *, sleep_s: float, batch_size: int,
                             continue  # adopted, never also inserted
 
                         if dry_run:
-                            exists = db.execute(
-                                EXISTS_UID_SQL, {"uid": row["uid"]}).scalar()
-                            if exists:
-                                dup_here += 1
-                            else:
-                                ins_here += 1
+                            ins_here += 1  # uid absence established above
                         else:
                             result = db.execute(INSERT_SQL, row)
                             if result.rowcount:
                                 ins_here += 1
                             else:
-                                dup_here += 1
+                                dup_here += 1  # belt-and-braces: concurrent writer
                     if not dry_run:
                         db.commit()
                 finally:
@@ -377,7 +408,10 @@ def main(argv=None) -> int:
                      checkpoint_path=args.checkpoint, dry_run=args.dry_run,
                      limit=args.limit)
     print(json.dumps(stats))  # coverage evidence line — retain
-    return 1 if stats["errors"] else 0  # nonzero so unattended runs surface partial failure
+    # Nonzero so unattended runs surface partial failure. detail_fetch_errors
+    # counts too: those attachments likely exist but were NOT swept (missed
+    # coverage) — a run where every detail fetch fails must not exit 0.
+    return 1 if stats["errors"] or stats["detail_fetch_errors"] else 0
 
 
 if __name__ == "__main__":
