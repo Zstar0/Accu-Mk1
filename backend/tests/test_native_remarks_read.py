@@ -5,7 +5,7 @@ ONLY have come from the re-apply, not SENAITE)."""
 from __future__ import annotations
 
 from datetime import datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,6 +20,7 @@ from models import LimsSample, LimsSampleRemark, User
 
 TEST_SAMPLE_ID_1 = "TEST-NRR-P1"
 TEST_SAMPLE_ID_2 = "TEST-NRR-P2"
+TEST_LOOKUP_SAMPLE_ID = "TEST-NRR-LOOKUP"
 TEST_USER_EMAIL_1 = "test-rmk@example.com"
 TEST_USER_EMAIL_2 = "test-rmk-2@example.com"
 
@@ -221,3 +222,82 @@ def test_registry_endpoint_empty_native_remarks_is_empty_list(client):
     assert r.status_code == 200
     body = r.json()
     assert body["remarks"] == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Test 5 (review follow-up): the REAL lookup_senaite_sample — the directly
+# exposed GET /wizard/senaite/lookup route (Order Status etc.) — ignores a
+# SENAITE payload carrying a Remarks list and serves native rows instead.
+# Tests 3-4 mock the lookup wholesale, so they prove only the registry
+# endpoint's re-apply; this one drives the lookup's own internal swap.
+# Live dev DB (same TEST-NRR-% seeding/cleanup as tests 1-2); SENAITE HTTP
+# mocked at two layers: _fetch_senaite_sample for the AR payload, plus a
+# broad httpx.AsyncClient patch (the _mock_receive_flow idiom from
+# test_receive_remarks_native.py) whose every GET returns an empty-items
+# payload — the lookup's downstream analyses/attachments/published-COA
+# fetches all tolerate that (each is wrapped in its own try/except).
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _mock_senaite_http_empty():
+    """Broad httpx.AsyncClient patch: every request returns 200 with an
+    empty-items JSON payload. Returns the patcher (caller must .stop())."""
+    mock_instance = AsyncMock()
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json = MagicMock(return_value={"count": 0, "items": []})
+    resp.raise_for_status = MagicMock()
+    mock_instance.get = AsyncMock(return_value=resp)
+    mock_instance.post = AsyncMock(return_value=resp)
+    p = patch("httpx.AsyncClient")
+    cls = p.start()
+    cls.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
+    cls.return_value.__aexit__ = AsyncMock(return_value=False)
+    return p
+
+
+def test_lookup_route_ignores_senaite_remarks_serves_native(db):
+    parent = LimsSample(sample_id=TEST_LOOKUP_SAMPLE_ID, sample_type="x",
+                        status="sample_received")
+    db.add(parent)
+    db.commit()
+    db.refresh(parent)
+    db.add(LimsSampleRemark(lims_sample_pk=parent.id,
+                            content="<p>native lookup remark</p>",
+                            author_label="native.author"))
+    db.commit()
+
+    # AR payload as SENAITE would return it — Remarks list present and
+    # populated. The old parse would have surfaced it verbatim.
+    ar_item = {
+        "id": TEST_LOOKUP_SAMPLE_ID,
+        "uid": "UID-NRR-LOOKUP",
+        "Remarks": list(_STALE_SENAITE_REMARKS),
+    }
+
+    http_patcher = _mock_senaite_http_empty()
+    try:
+        with patch.object(main, "SENAITE_URL", "http://senaite.test"), \
+             patch.object(main, "SENAITE_USER", "u"), \
+             patch.object(main, "SENAITE_PASSWORD", "p"), \
+             patch.object(main, "_fetch_senaite_sample",
+                          AsyncMock(return_value={"count": 1, "items": [ar_item]})):
+            main.app.dependency_overrides[get_current_user] = (
+                lambda: {"email": "a@x", "role": "admin"})
+            c = TestClient(main.app)
+            r = c.get("/wizard/senaite/lookup",
+                      params={"id": TEST_LOOKUP_SAMPLE_ID})
+    finally:
+        http_patcher.stop()
+        main.app.dependency_overrides.clear()
+        # The lookup unconditionally writes its result to the module-level
+        # cache even when no_cache=true (which only skips the read) — evict
+        # so no other test can be served this mocked result.
+        main._senaite_lookup_cache.pop(TEST_LOOKUP_SAMPLE_ID, None)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["remarks"]) == 1
+    assert body["remarks"][0]["content"] == "<p>native lookup remark</p>"
+    assert body["remarks"][0]["user_id"] == "native.author"
+    assert all("stale senaite remark" not in rm["content"]
+               for rm in body["remarks"])

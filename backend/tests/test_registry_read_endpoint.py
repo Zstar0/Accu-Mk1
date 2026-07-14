@@ -134,15 +134,20 @@ def test_analyses_never_overlaid(client):
 
 def test_missing_row_returns_senaite_and_flag(client):
     # No LimsSample seeded for this id.
-    with _mock_lookup(_senaite_result()):
+    with _mock_lookup(_senaite_result(remarks=[{
+        "content": "<p>stale senaite remark</p>", "user_id": "zeus",
+        "created": "2020-01-01T00:00:00",
+    }])):
         r = client.get("/registry/sample/NOPE/details")
     assert r.status_code == 200
     body = r.json()
     assert body["registry_missing"] is True
     # remarks is native-sourced regardless of registry_missing (read-flip
-    # spec §6) — no lims_samples row means no native remarks ([]), but the
-    # field is still tagged "mk1", not "senaite". Every other field falls
-    # back to SENAITE since there's no registry row to overlay from.
+    # spec §6) — no lims_samples row means no native remarks, so the
+    # early-return path serves [] (dropping the mocked stale SENAITE remark)
+    # and the field is still tagged "mk1", not "senaite". Every other field
+    # falls back to SENAITE since there's no registry row to overlay from.
+    assert body["remarks"] == []
     assert body["field_sources"]["remarks"] == "mk1"
     assert {v for k, v in body["field_sources"].items() if k != "remarks"} == {"senaite"}
     assert body["client"] == "SenaiteCo"
