@@ -1165,7 +1165,7 @@ describe('CustomerStatusPage — detail view tabs (Phase 30)', () => {
 // debounce, one timer per axis. The Clear button resets all three slots via
 // `setCustomerOrderSearchReset()` and wipes local input state.
 // ---------------------------------------------------------------------------
-describe('CustomerStatusPage — customer-orders search (three-input AND)', () => {
+describe('CustomerStatusPage — customer-orders search (four-input AND)', () => {
   beforeEach(() => {
     resetState()
     vi.mocked(getExplorerStatus).mockReset()

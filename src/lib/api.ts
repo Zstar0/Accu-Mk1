@@ -1337,7 +1337,7 @@ export async function getExplorerCustomerById(
  */
 export async function getExplorerOrdersByCustomer(
   customerId: number,
-  // UX revision (post-Phase 30): three independent search axes, AND-combined
+  // UX revision (post-Phase 30): four independent search axes, AND-combined
   // server-side. Each axis is independently optional, and each is gated on a
   // 2-char minimum HERE in the client (the backend treats '' as "no filter on
   // that axis" but doesn't enforce a minimum length — the gate is purely a UX

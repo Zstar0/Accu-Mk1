@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { toggleFilterKey, isOrderAtRisk } from '@/components/explorer/order-filters'
+import { toggleFilterKey, isOrderAtRisk, orderMatchesLot } from '@/components/explorer/order-filters'
 import type { OrderSlaVerdict } from '@/lib/sla-resolution'
-import { orderMatchesLot } from '@/components/explorer/order-filters'
 import type { ExplorerOrder, SenaiteLookupResult } from '@/lib/api'
 
 describe('toggleFilterKey', () => {

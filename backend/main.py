@@ -7569,7 +7569,7 @@ async def get_explorer_orders(
     limit: int = 50,
     offset: int = 0,
     customer_id: Optional[int] = None,
-    # UX revision (post-Phase 30): three independent search axes, AND-combined
+    # UX revision (post-Phase 30): four independent search axes, AND-combined
     # at the IS SQL layer. We forward verbatim — the IS enforces per-axis
     # max_length=256 (T-30-02) and the per-axis SQL-safety pipeline (T-30-01).
     # None = "axis not requested"; empty string is forwarded as-is so the IS

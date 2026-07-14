@@ -229,6 +229,8 @@ function KanbanSampleCard({
     return Array.from(names)
   })()
 
+  const kanbanLot = item.lookup?.client_lot?.trim() || item.lot
+
   return (
     <div className="rounded border border-border/50 bg-card px-2 py-1 hover:border-border transition-colors cursor-pointer">
       {/* Row 1: sample ID + email (left) + count pill (right) */}
@@ -261,11 +263,11 @@ function KanbanSampleCard({
           </span>
         </div>
       )}
-      {(item.lookup?.client_lot ?? item.lot) && (
+      {kanbanLot && (
         <div className="flex items-center gap-1 mt-0.5">
           <span className="text-[10px] text-muted-foreground/50">Lot:</span>
           <span className="text-[10px] text-muted-foreground/80 truncate">
-            {item.lookup?.client_lot ?? item.lot}
+            {kanbanLot}
           </span>
         </div>
       )}

@@ -512,12 +512,12 @@ function CustomerDetailView() {
   // Phase 30 — Task 6: detail-view tab selection
   const customerDetailTab = useUIStore(state => state.customerDetailTab)
   const setCustomerDetailTab = useUIStore(state => state.setCustomerDetailTab)
-  // UX revision: per-customer order search uses THREE independent axes
-  // (order_number, sample_id, analyte) that are AND-combined server-side.
+  // UX revision: per-customer order search uses FOUR independent axes
+  // (order_number, sample_id, analyte, lot) that are AND-combined server-side.
   // - `customerOrderSearch` is the committed (post-debounce) state per axis.
   // - `setCustomerOrderSearchField(field, value)` writes ONE slot at a time
   //   from the corresponding input's debounced effect.
-  // - `setCustomerOrderSearchReset()` clears all three slots (used by the
+  // - `setCustomerOrderSearchReset()` clears all four slots (used by the
   //   Clear button and by navigateToCustomers).
   //
   // Selector syntax is mandatory (ast-grep enforced — no destructuring of
@@ -806,10 +806,10 @@ function CustomerDetailView() {
 }
 
 /**
- * UX revision — Customer Orders tab body (three-input AND search).
+ * UX revision — Customer Orders tab body (four-input AND search).
  *
- * The single Select+Input search has been replaced by THREE labeled inputs
- * laid out side-by-side: Order #, Sample ID, Analyte. Each input has its own
+ * The single Select+Input search has been replaced by FOUR labeled inputs
+ * laid out side-by-side: Order #, Sample ID, Analyte, Lot. Each input has its own
  * local state, its own 300ms debounce, and dispatches via
  * `setCustomerOrderSearchField(<that axis>, value)` — slots are independent
  * and AND-combined server-side.
@@ -831,8 +831,8 @@ function CustomerDetailView() {
  * OrderRow.defaultExpanded propagation in lock-step with what was actually
  * dispatched (the 300ms debounce window is the only delay).
  *
- * Clear button: appears when ANY of the three committed slots is non-empty.
- * On click it dispatches `setCustomerOrderSearchReset()` AND wipes all three
+ * Clear button: appears when ANY of the four committed slots is non-empty.
+ * On click it dispatches `setCustomerOrderSearchReset()` AND wipes all four
  * local input states (the local resets are what cancel any in-flight
  * debounce — the effect bails when local === committed).
  */
@@ -992,7 +992,7 @@ function CustomerOrdersTab({
 
   return (
     <>
-      {/* Search header — three labeled inputs side-by-side, AND-combined */}
+      {/* Search header — four labeled inputs side-by-side, AND-combined */}
       <div className="flex items-end gap-3 mb-3">
         <div className="flex flex-col gap-1 flex-1">
           <Label htmlFor="customer-orders-search-order-number">Order #</Label>
