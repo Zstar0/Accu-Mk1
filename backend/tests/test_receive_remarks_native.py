@@ -19,6 +19,8 @@ House pattern: TEST-prefixed rows (`TEST-RRN-` sample_ids), FK-safe cleanup
 """
 from __future__ import annotations
 
+import base64
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -28,9 +30,11 @@ from sqlalchemy import delete, select
 import main
 from auth import get_current_user
 from database import SessionLocal
-from models import LimsSample, LimsSampleRemark
+from models import LimsParentAttachment, LimsSample, LimsSampleRemark
+from sub_samples.photo_storage import get_storage, set_storage_for_tests
 
 TEST_SAMPLE_ID = "TEST-RRN-SAMPLE"
+TEST_SAMPLE_UID = "UID-RRN-SAMPLE"
 TEST_MISSING_SAMPLE_ID = "TEST-RRN-MISSING"
 
 
@@ -55,6 +59,11 @@ def db():
 def cleanup(db):
     yield
     db.rollback()
+    db.execute(delete(LimsParentAttachment).where(
+        LimsParentAttachment.lims_sample_pk.in_(
+            select(LimsSample.id).where(LimsSample.sample_id.like("TEST-RRN-%"))
+        )
+    ))
     db.execute(delete(LimsSampleRemark).where(
         LimsSampleRemark.lims_sample_pk.in_(
             select(LimsSample.id).where(LimsSample.sample_id.like("TEST-RRN-%"))
@@ -66,11 +75,43 @@ def cleanup(db):
 
 @pytest.fixture
 def seed_sample(db):
-    row = LimsSample(sample_id=TEST_SAMPLE_ID, sample_type="x", status="verified")
+    row = LimsSample(sample_id=TEST_SAMPLE_ID, external_lims_uid=TEST_SAMPLE_UID,
+                      sample_type="x", status="verified")
     db.add(row)
     db.commit()
     db.refresh(row)
     return row
+
+
+class _FakePhotoStorage:
+    """Records every save_photo call; returns a deterministic key. Copied
+    (not imported) from test_parent_attachment_capture.py's fake — that
+    file's class is local, not exported."""
+
+    def __init__(self, *, raise_on_save: bool = False):
+        self.calls: list[tuple[str, bytes, str]] = []
+        self.raise_on_save = raise_on_save
+
+    def save_photo(self, sample_id: str, photo_bytes: bytes, filename: str) -> str:
+        if self.raise_on_save:
+            raise RuntimeError("fake storage boom")
+        self.calls.append((sample_id, photo_bytes, filename))
+        return f"fake-key/{sample_id}/{filename}"
+
+    def fetch_photo(self, key: str) -> bytes:  # pragma: no cover - unused
+        raise NotImplementedError
+
+    def delete_photo(self, key: str) -> None:  # pragma: no cover - unused
+        raise NotImplementedError
+
+
+@pytest.fixture
+def fake_storage():
+    prev = get_storage()
+    fake = _FakePhotoStorage()
+    set_storage_for_tests(fake)
+    yield fake
+    set_storage_for_tests(prev)
 
 
 def _mock_receive_flow(*, initial_state="sample_due", final_state="sample_received",
@@ -215,3 +256,128 @@ def test_receive_remarks_fails_closed_without_registry_row(db):
         LimsSample, LimsSampleRemark.lims_sample_pk == LimsSample.id
     ).filter(LimsSample.sample_id == TEST_MISSING_SAMPLE_ID).all()
     assert rows == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Task 3: native attachment capture on receive step-1 image upload
+# (read-flip spec §7, Layer 3 Task 3) — shares _capture_parent_attachment_bg
+# with upload_senaite_attachment (test_parent_attachment_capture.py).
+#
+# _mock_receive_flow's mock.post uses `return_value` (not `side_effect`), so
+# it already tolerates an extra attachment-upload POST ahead of the
+# workflow-transition POST without any harness change — both calls get the
+# same canned 200 response. The image path also adds no extra GET (it reuses
+# the CSRF page_resp already fetched for the workflow transition), so the
+# fixed 4-GET side_effect list lines up whether or not an image is sent.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_TEST_IMAGE_B64 = base64.b64encode(b"receive-image-bytes").decode()
+
+
+def test_receive_image_captures_native_row(db, seed_sample, fake_storage):
+    # Real seeded admin user id=1 for created_by_user_id (FK to users) —
+    # same convention as test_sample_transition_log.py's actor_user_id.
+    proxy, _mock_instance = _mock_receive_flow()
+    try:
+        with patch.object(main, "SENAITE_URL", "http://senaite.test"):
+            r = _client_as_user(user_id=1).post(
+                "/wizard/senaite/receive-sample",
+                json={
+                    "sample_uid": seed_sample.external_lims_uid,
+                    "sample_id": seed_sample.sample_id,
+                    "image_base64": _TEST_IMAGE_B64,
+                },
+            )
+    finally:
+        proxy.stop()
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["success"] is True
+    assert "image_uploaded" in body["senaite_response"]["steps_done"]
+
+    expected_filename = f"{seed_sample.sample_id}-sample-image.png"
+    expected_bytes = base64.b64decode(_TEST_IMAGE_B64)
+
+    assert len(fake_storage.calls) == 1
+    saved_sample_id, saved_bytes, saved_filename = fake_storage.calls[0]
+    assert saved_sample_id == seed_sample.sample_id
+    assert saved_bytes == expected_bytes
+    assert saved_filename == expected_filename
+
+    rows = db.query(LimsParentAttachment).filter_by(
+        lims_sample_pk=seed_sample.id
+    ).all()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.kind == "receive_image"
+    assert row.storage == "s3"
+    assert row.storage_key == f"fake-key/{seed_sample.sample_id}/{expected_filename}"
+    assert row.source_sub_sample_pk is None
+    assert row.filename == expected_filename
+    assert row.content_type == "image/png"
+    assert row.render_in_report is True
+    assert row.senaite_attachment_uid is None
+    assert row.created_by_user_id == 1
+
+
+def test_receive_without_image_no_row(db, seed_sample, fake_storage):
+    proxy, _mock_instance = _mock_receive_flow()
+    try:
+        with patch.object(main, "SENAITE_URL", "http://senaite.test"):
+            r = _client_as_user().post(
+                "/wizard/senaite/receive-sample",
+                json={
+                    "sample_uid": seed_sample.external_lims_uid,
+                    "sample_id": seed_sample.sample_id,
+                },
+            )
+    finally:
+        proxy.stop()
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["success"] is True
+    assert "image_uploaded" not in body["senaite_response"]["steps_done"]
+
+    assert fake_storage.calls == []
+    rows = db.query(LimsParentAttachment).filter_by(
+        lims_sample_pk=seed_sample.id
+    ).all()
+    assert rows == []
+
+
+def test_receive_capture_failure_never_breaks_receive(db, seed_sample, caplog):
+    prev = get_storage()
+    fake = _FakePhotoStorage(raise_on_save=True)
+    set_storage_for_tests(fake)
+    try:
+        proxy, _mock_instance = _mock_receive_flow()
+        try:
+            with patch.object(main, "SENAITE_URL", "http://senaite.test"), \
+                 caplog.at_level(logging.WARNING):
+                r = _client_as_user().post(
+                    "/wizard/senaite/receive-sample",
+                    json={
+                        "sample_uid": seed_sample.external_lims_uid,
+                        "sample_id": seed_sample.sample_id,
+                        "image_base64": _TEST_IMAGE_B64,
+                    },
+                )
+        finally:
+            proxy.stop()
+    finally:
+        set_storage_for_tests(prev)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["success"] is True
+    assert "image_uploaded" in body["senaite_response"]["steps_done"]
+    assert "received" in body["senaite_response"]["steps_done"]
+
+    rows = db.query(LimsParentAttachment).filter_by(
+        lims_sample_pk=seed_sample.id
+    ).all()
+    assert rows == []
+    assert any("parent_attachment.capture_failed" in rec.message
+                for rec in caplog.records)

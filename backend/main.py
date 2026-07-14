@@ -13277,60 +13277,16 @@ async def upload_senaite_attachment(
             if att_resp.status_code in (200, 301, 302):
                 # Native record + frozen S3 snapshot (read-flip spec §7) —
                 # best-effort AFTER SENAITE success; never fails the response.
-                # Snapshot semantics: store THESE bytes under a new key; never
-                # point at the live vial-photo key (retakes must not mutate
-                # what was attached).
-                def _capture_native() -> None:
-                    from database import SessionLocal
-                    from sub_samples.photo_storage import get_storage
-                    kind = native_kind if native_kind in (
-                        "vial_image", "packaging_image", "receive_image", "manual"
-                    ) else "manual"
-                    cdb = SessionLocal()
-                    try:
-                        row = cdb.execute(
-                            select(LimsSample).where(
-                                LimsSample.external_lims_uid == sample_uid)
-                        ).scalar_one_or_none()
-                        if row is None:
-                            logger.warning(
-                                "parent_attachment.capture_failed uid=%s "
-                                "err=no-registry-row", sample_uid)
-                            return
-                        source_pk = None
-                        if source_sample_id:
-                            sub = cdb.execute(
-                                select(LimsSubSample).where(
-                                    LimsSubSample.sample_id == source_sample_id)
-                            ).scalar_one_or_none()
-                            source_pk = sub.id if sub is not None else None
-                        key = get_storage().save_photo(
-                            row.sample_id, file_bytes, filename)
-                        cdb.add(LimsParentAttachment(
-                            lims_sample_pk=row.id,
-                            kind=kind,
-                            source_sub_sample_pk=source_pk,
-                            filename=filename,
-                            content_type=content_type,
-                            storage="s3",
-                            storage_key=key,
-                            render_in_report=True,
-                            created_by_user_id=getattr(current_user, "id", None),
-                        ))
-                        cdb.commit()
-                    except Exception as cap_err:  # noqa: BLE001
-                        try:
-                            cdb.rollback()
-                        except Exception:
-                            pass
-                        logger.warning(
-                            "parent_attachment.capture_failed uid=%s err=%s",
-                            sample_uid, cap_err)
-                    finally:
-                        cdb.close()
-
+                # Shared with receive_senaite_sample's step-1 image upload via
+                # _capture_parent_attachment_bg (Layer 3 Task 3).
                 from fastapi.concurrency import run_in_threadpool
-                await run_in_threadpool(_capture_native)
+                await run_in_threadpool(
+                    _capture_parent_attachment_bg,
+                    sample_uid=sample_uid, file_bytes=file_bytes,
+                    filename=filename, content_type=content_type,
+                    kind=native_kind, source_sample_id=source_sample_id,
+                    user_id=getattr(current_user, "id", None),
+                )
 
                 return SenaiteUploadAttachmentResponse(success=True, message="Attachment uploaded")
             else:
@@ -13736,6 +13692,7 @@ async def receive_senaite_sample(
                 )
 
                 filename = f"{req.sample_id}-sample-image.png"
+                content_type = "image/png"
                 form_url = f"{sample_url}/@@attachments_view/add"
                 form_data = {
                     "submitted": "1",
@@ -13751,7 +13708,7 @@ async def receive_senaite_sample(
                     "AttachmentFile_file": (
                         filename,
                         image_bytes,
-                        "image/png",
+                        content_type,
                     ),
                 }
                 headers = {
@@ -13766,6 +13723,21 @@ async def receive_senaite_sample(
                 )
                 if att_resp.status_code in (200, 301, 302):
                     steps_done.append("image_uploaded")
+                    # Native record + frozen S3 snapshot (read-flip spec §7)
+                    # — best-effort AFTER SENAITE success; never fails the
+                    # receive. Same filename/content_type as the SENAITE
+                    # copy above so the native record and SENAITE agree.
+                    # (Steps 2/3 below also import run_in_threadpool,
+                    # unconditionally, ahead of their own use sites — a
+                    # second local import of the same name here is harmless.)
+                    from fastapi.concurrency import run_in_threadpool
+                    await run_in_threadpool(
+                        _capture_parent_attachment_bg,
+                        sample_uid=req.sample_uid, file_bytes=image_bytes,
+                        filename=filename, content_type=content_type,
+                        kind="receive_image", source_sample_id=None,
+                        user_id=getattr(current_user, "id", None),
+                    )
                 else:
                     return SenaiteReceiveSampleResponse(
                         success=False,
@@ -14205,6 +14177,83 @@ def _observe_parent_analyses_bg(sample_id: str, observed: list[dict]) -> None:
                 pass
         logger.warning("workflow.observer_failed sample_id=%s err=%s",
                        sample_id, observer_err)
+    finally:
+        if db is not None:
+            db.close()
+
+
+def _capture_parent_attachment_bg(
+    *, sample_uid: str, file_bytes: bytes, filename: str,
+    content_type: str, kind: str, source_sample_id: Optional[str],
+    user_id: Optional[int],
+) -> None:
+    """Best-effort native parent-attachment capture + frozen S3 snapshot
+    (read-flip spec §7, Layer 3 Task 3) on its own short-lived session —
+    never holds the request session across the SENAITE HTTP call. Never
+    raises: a capture failure must never fail or delay-fail the endpoint
+    it's scheduled from.
+
+    Shared by two call sites: upload_senaite_attachment (kind/source_sample_id
+    come from user-controlled form fields — native_kind, source_sample_id)
+    and receive_senaite_sample's step-1 image upload (kind='receive_image',
+    source_sample_id=None, hardcoded). `kind` is clamped to the allowed set
+    here rather than trusted from the caller, since the upload endpoint's
+    native_kind is user-supplied.
+
+    Snapshot semantics: saves the EXACT bytes passed under a NEW storage key,
+    never the live vial-photo key — retakes must not mutate what was
+    attached.
+
+    `SessionLocal()` and the storage/model imports live INSIDE the try, same
+    hardening rationale as `_mirror_parent_analysis_bg`: `db` starts as None
+    so `finally` can guard `db.close()` if construction itself failed.
+    """
+    db = None
+    try:
+        from database import SessionLocal
+        from sub_samples.photo_storage import get_storage
+        resolved_kind = kind if kind in (
+            "vial_image", "packaging_image", "receive_image", "manual"
+        ) else "manual"
+        db = SessionLocal()
+        row = db.execute(
+            select(LimsSample).where(
+                LimsSample.external_lims_uid == sample_uid)
+        ).scalar_one_or_none()
+        if row is None:
+            logger.warning(
+                "parent_attachment.capture_failed uid=%s "
+                "err=no-registry-row", sample_uid)
+            return
+        source_pk = None
+        if source_sample_id:
+            sub = db.execute(
+                select(LimsSubSample).where(
+                    LimsSubSample.sample_id == source_sample_id)
+            ).scalar_one_or_none()
+            source_pk = sub.id if sub is not None else None
+        key = get_storage().save_photo(row.sample_id, file_bytes, filename)
+        db.add(LimsParentAttachment(
+            lims_sample_pk=row.id,
+            kind=resolved_kind,
+            source_sub_sample_pk=source_pk,
+            filename=filename,
+            content_type=content_type,
+            storage="s3",
+            storage_key=key,
+            render_in_report=True,
+            created_by_user_id=user_id,
+        ))
+        db.commit()
+    except Exception as cap_err:  # noqa: BLE001
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        logger.warning(
+            "parent_attachment.capture_failed uid=%s err=%s",
+            sample_uid, cap_err)
     finally:
         if db is not None:
             db.close()
