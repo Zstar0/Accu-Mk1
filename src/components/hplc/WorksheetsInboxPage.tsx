@@ -7,6 +7,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { ROLE_BADGE_CLASS } from '@/lib/assignment-colors'
+import { useEffectiveReadSource } from '@/lib/read-source'
 import { toast } from 'sonner'
 import { InboxVialCard, type DragData } from '@/components/hplc/InboxVialCard'
 import { InboxFamilyGroup } from '@/components/hplc/InboxFamilyGroup'
@@ -130,13 +131,18 @@ export default function WorksheetsInboxPage() {
     if (role !== 'microbiology') setMicroCategory('')
   }, [role])
 
+  // Two-tier read-source: global default (admin setting) + per-user session
+  // override, same mechanism as the samples list. 'mk1' serves the inbox
+  // entirely from the local registry — no SENAITE round-trips.
+  const { effective: readSource } = useEffectiveReadSource('worksheets_inbox')
+
   const {
     data: inboxData,
     isLoading,
     isError,
     error,
     refetch,
-  } = useInboxSamples({ hideTestOrders, hidePrepped, role, showXtra })
+  } = useInboxSamples({ hideTestOrders, hidePrepped, role, showXtra, source: readSource })
 
   const handleForceRefresh = async () => {
     setIsRefreshing(true)
@@ -147,6 +153,7 @@ export default function WorksheetsInboxPage() {
         hidePrepped,
         role,
         showXtra,
+        source: readSource,
       })
       queryClient.invalidateQueries({ queryKey: ['inbox-samples'] })
     } finally {

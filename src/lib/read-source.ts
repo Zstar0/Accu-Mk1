@@ -3,12 +3,16 @@ import { useQuery } from '@tanstack/react-query'
 import { getSettings } from '@/lib/api'
 
 export type ReadSource = 'senaite' | 'mk1'
-export type PageKey = 'sample_details' | 'samples_list'
+export type PageKey = 'sample_details' | 'samples_list' | 'worksheets_inbox'
 export const DEFAULT_READ_SOURCE: ReadSource = 'senaite'
 export const READ_SOURCE_SETTING_KEY = 'registry_read_source'
 
 const KEY = 'registryReadSource'
-const PAGE_KEYS: readonly PageKey[] = ['sample_details', 'samples_list']
+const PAGE_KEYS: readonly PageKey[] = [
+  'sample_details',
+  'samples_list',
+  'worksheets_inbox',
+]
 const listeners = new Set<() => void>()
 const isSource = (v: unknown): v is ReadSource => v === 'senaite' || v === 'mk1'
 const isPage = (v: unknown): v is PageKey => PAGE_KEYS.includes(v as PageKey)

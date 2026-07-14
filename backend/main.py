@@ -15355,6 +15355,7 @@ async def get_worksheets_inbox(
     force_refresh: bool = False,
     role: Optional[str] = None,
     show_xtra: bool = False,
+    source: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -15368,7 +15369,12 @@ async def get_worksheets_inbox(
                      AddSamplesModal, which adds across both benches). 400 on invalid value.
       show_xtra    — when True, append XTRA-role vials to the active filter's results.
       hide_test_*  — existing behavior.
-      force_refresh — bypass the 30-min SENAITE cache.
+      force_refresh — bypass the 30-min SENAITE cache (senaite source only).
+      source       — 'mk1' | 'senaite' | omitted (= 'senaite'). 'mk1' replaces BOTH
+                     SENAITE fetch stages (candidate list + per-sample analyses) with
+                     lims_ registry queries — no SENAITE round-trips at all. The FE
+                     resolves this from the two-tier read-source setting
+                     ('worksheets_inbox' page key), same as the samples list.
     """
     global _inbox_senaite_cache, _inbox_senaite_cache_time
 
@@ -15379,7 +15385,14 @@ async def get_worksheets_inbox(
             detail=f"Invalid role: {role!r}. Expected one of {sorted(VALID_INBOX_ROLES)} or omit.",
         )
 
-    if not SENAITE_URL:
+    if source is not None and source not in ("mk1", "senaite"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid source: {source!r}. Expected 'mk1', 'senaite', or omit.",
+        )
+    use_registry_source = source == "mk1"
+
+    if not SENAITE_URL and not use_registry_source:
         raise HTTPException(status_code=503, detail="SENAITE not configured")
 
     # Resolve role → allowed service_group IDs. None means "no filter; pass all groups".
@@ -15404,13 +15417,23 @@ async def get_worksheets_inbox(
         if show_xtra:
             allowed_vial_roles.add("xtra")
 
-    # Step 1: Fetch sample_received samples from SENAITE (with cache)
+    # Step 1: candidate sample_received parents.
+    # mk1 source: two local registry queries (candidates + parent analyses)
+    # replace both SENAITE stages — no cache needed, the DB IS the cache.
+    registry_analyses_by_sample: dict[str, list[dict]] = {}
+    if use_registry_source:
+        from sub_samples.registry_inbox import inbox_candidates_from_registry
+        _reg_items, registry_analyses_by_sample = inbox_candidates_from_registry(db)
+        senaite_data = {"items": _reg_items}
+    # senaite source: fetch from SENAITE (with the 30-min cache)
     import time as _time
     now = _time.time()
     cache_age = now - _inbox_senaite_cache_time
     cache_valid = not force_refresh and _inbox_senaite_cache.get("items") is not None and cache_age < _INBOX_CACHE_TTL_SECONDS
 
-    if cache_valid:
+    if use_registry_source:
+        pass
+    elif cache_valid:
         senaite_data = _inbox_senaite_cache
     else:
         senaite_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
@@ -15740,8 +15763,13 @@ async def get_worksheets_inbox(
     sample_id_list = [str(it.get("id", "")) for it in filtered_items if it.get("id")]
     analyses_by_sample: dict[str, list[dict]] = {sid: [] for sid in sample_id_list}
 
-    if sample_id_list:
-        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
+    if use_registry_source:
+        # mk1 source: parent-scope lims_analyses rows, already fetched in
+        # step 1's registry call — zero SENAITE round-trips.
+        for sid in sample_id_list:
+            analyses_by_sample[sid] = registry_analyses_by_sample.get(sid, [])
+    elif sample_id_list:
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT,
             timeout=SENAITE_TIMEOUT,
             auth=_get_senaite_auth(current_user),
             follow_redirects=True,

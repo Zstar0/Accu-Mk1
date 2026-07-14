@@ -17,6 +17,7 @@ import { useAuthStore } from '@/store/auth-store'
 const PAGES: { key: PageKey; label: string }[] = [
   { key: 'sample_details', label: 'Sample details' },
   { key: 'samples_list', label: 'Samples list' },
+  { key: 'worksheets_inbox', label: 'Worksheets inbox' },
 ]
 
 /**
@@ -40,6 +41,7 @@ export function DataSourcePane() {
   const [sourceByPage, setSourceByPage] = useState<Record<PageKey, ReadSource>>({
     sample_details: 'senaite',
     samples_list: 'senaite',
+    worksheets_inbox: 'senaite',
   })
   const [isDirty, setIsDirty] = useState(false)
 
@@ -65,6 +67,7 @@ export function DataSourcePane() {
     setSourceByPage({
       sample_details: globalMap.sample_details ?? 'senaite',
       samples_list: globalMap.samples_list ?? 'senaite',
+      worksheets_inbox: globalMap.worksheets_inbox ?? 'senaite',
     })
     setIsDirty(false)
   }
