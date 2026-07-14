@@ -53,7 +53,7 @@ import {
   TEST_EMAILS,
   type AnalysisStateCounts,
 } from '@/components/explorer/helpers'
-import { toggleFilterKey, isOrderAtRisk } from '@/components/explorer/order-filters'
+import { toggleFilterKey, isOrderAtRisk, orderMatchesLot } from '@/components/explorer/order-filters'
 import { OrderRow } from '@/components/explorer/OrderRow'
 import { FlagIndicator } from '@/components/flags/FlagIndicator'
 import { SampleSlaIndicator } from '@/components/explorer/SampleSlaIndicator'
@@ -103,6 +103,7 @@ interface KanbanSampleItem {
   isLoading: boolean
   isError: boolean
   analysisServices?: string[]  // names of analyses matching this column's state
+  lot?: string  // payload lot_code, positionally aligned (display fallback for client_lot)
 }
 
 // Tailwind classes for count pill background per column
@@ -260,6 +261,14 @@ function KanbanSampleCard({
           </span>
         </div>
       )}
+      {(item.lookup?.client_lot ?? item.lot) && (
+        <div className="flex items-center gap-1 mt-0.5">
+          <span className="text-[10px] text-muted-foreground/50">Lot:</span>
+          <span className="text-[10px] text-muted-foreground/80 truncate">
+            {item.lookup?.client_lot ?? item.lot}
+          </span>
+        </div>
+      )}
       {/* Row 2: secondary metadata — clearly separated from analysis state */}
       {(showOrder || item.lookup) && (
         <div className="flex items-center justify-between gap-1 mt-0.5">
@@ -340,8 +349,17 @@ function KanbanView({
     for (const order of orders) {
       if (!order.sample_results) continue
       const email = getOrderEmail(order)
-      for (const entry of Object.values(order.sample_results)) {
+      const kanbanPayloadSamples = (
+        order.payload as { samples?: { lot_code?: string }[] } | null | undefined
+      )?.samples
+      for (const [slotKey, entry] of Object.entries(order.sample_results)) {
         if (!entry.senaite_id || entry.status === 'failed') continue
+        const slotIdx = parseInt(slotKey, 10) - 1
+        const rawLot = Number.isNaN(slotIdx)
+          ? undefined
+          : kanbanPayloadSamples?.[slotIdx]?.lot_code
+        const lot =
+          rawLot && rawLot.trim().length > 0 ? rawLot.trim() : undefined
         const lq = sampleLookupMap.get(entry.senaite_id)
         if (lq?.isLoading) {
           for (const col of visibleCols) {
@@ -356,6 +374,7 @@ function KanbanView({
               lookup: undefined,
               isLoading: true,
               isError: false,
+              lot,
             })
           }
           continue
@@ -377,6 +396,7 @@ function KanbanView({
               isLoading: false,
               isError: false,
               analysisServices: getAnalysisServicesForCol(lq.data.analyses, col.key, lq.data),
+              lot,
             })
           }
         }
@@ -537,6 +557,7 @@ interface OrderFilters {
   emailFilter: string
   orderIdFilter: string
   analyteFilter: string
+  lotFilter: string
   hideTestOrders: boolean
   slaAtRisk: boolean
   collapsedKanbanCols: string[]
@@ -557,6 +578,7 @@ function loadOrderFilters(): OrderFilters {
         activeStates: (parsed.activeStates ?? []).filter(s => s !== 'pending'),
         collapsedKanbanCols: parsed.collapsedKanbanCols ?? [],
         analyteFilter: parsed.analyteFilter ?? '',
+        lotFilter: parsed.lotFilter ?? '',
       }
     }
   } catch {
@@ -568,6 +590,7 @@ function loadOrderFilters(): OrderFilters {
     emailFilter: '',
     orderIdFilter: '',
     analyteFilter: '',
+    lotFilter: '',
     hideTestOrders: true,
     slaAtRisk: false,
     collapsedKanbanCols: [],
@@ -706,6 +729,13 @@ export function OrderStatusPage() {
           )
         })
       })
+    }
+    // Lot filter — payload lot_code (instant) OR loaded SENAITE client_lot
+    // (refines as lookups arrive). Same progressive-refinement contract as
+    // the analyte filter above.
+    const lotQ = orderFilters.lotFilter.trim().toLowerCase()
+    if (lotQ) {
+      result = result.filter(o => orderMatchesLot(o, lotQ, sampleLookupMap))
     }
     // Apply kanban sort when in grouped kanban mode
     if (orderFilters.viewMode === 'kanban') {
@@ -1125,10 +1155,16 @@ export function OrderStatusPage() {
               onChange={e => updateFilters({ analyteFilter: e.target.value })}
               className="h-7 w-36 text-xs"
             />
-            {(orderFilters.orderIdFilter || orderFilters.emailFilter || orderFilters.sampleIdFilter || orderFilters.analyteFilter) && (
+            <Input
+              placeholder="Lot"
+              value={orderFilters.lotFilter}
+              onChange={e => updateFilters({ lotFilter: e.target.value })}
+              className="h-7 w-32 text-xs"
+            />
+            {(orderFilters.orderIdFilter || orderFilters.emailFilter || orderFilters.sampleIdFilter || orderFilters.analyteFilter || orderFilters.lotFilter) && (
               <button
                 type="button"
-                onClick={() => updateFilters({ orderIdFilter: '', emailFilter: '', sampleIdFilter: '', analyteFilter: '' })}
+                onClick={() => updateFilters({ orderIdFilter: '', emailFilter: '', sampleIdFilter: '', analyteFilter: '', lotFilter: '' })}
                 className="text-xs text-muted-foreground hover:text-foreground underline"
               >
                 Clear
