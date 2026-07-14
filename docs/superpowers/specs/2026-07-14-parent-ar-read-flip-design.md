@@ -137,6 +137,11 @@ timestamps (`SenaiteRemark {content, user_id, created}`).
 - Ordering note: the write flip and the backfill land in the same deploy
   window (write-flip first ⇒ new remarks native; backfill sweeps history;
   re-run backfill after to catch the gap window — idempotent).
+- Third write site (closed at final review, 2026-07-14): the generic
+  `POST /wizard/senaite/samples/{uid}/update` endpoint (`update_senaite_sample_fields`)
+  also carries `Remarks` from both remark-entry forms — it now intercepts
+  and pops `Remarks` before forwarding, writing it natively instead of
+  reaching SENAITE.
 
 ## 7. Layer 3 — parent-AR attachments: native record + dual-write
 

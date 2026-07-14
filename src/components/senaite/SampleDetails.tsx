@@ -5788,7 +5788,7 @@ export function SampleDetails() {
         </div>
       )}
 
-      {/* Internal Remarks — full width (SENAITE-backed, lab-internal) */}
+      {/* Internal Remarks — full width (Mk1-native, lab-internal; lims_sample_remarks is the system of record post-read-flip, SENAITE's Remarks field is stale) */}
       <Card className="p-4 mb-6">
         <SectionHeader icon={MessageSquare} title="Internal Remarks">
           {data.remarks.length > 0 ? (

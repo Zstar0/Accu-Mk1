@@ -13714,6 +13714,14 @@ async def receive_senaite_sample(
                         senaite_response={"steps_done": steps_done},
                     )
 
+            # Steps 2 and 3 below both dispatch a native DB write via
+            # run_in_threadpool; imported once here (unconditionally, ahead
+            # of both use sites) rather than once per conditional branch —
+            # step 2 only runs when remarks are present, so a step-2-local
+            # import would NameError on a no-remarks receive that still
+            # reaches step 3's transition-log write.
+            from fastapi.concurrency import run_in_threadpool
+
             # --- Step 2: Add remarks (optional) — NATIVE ---
             # lims_sample_remarks is the system of record (read-flip spec §6);
             # the SENAITE Remarks write was deleted 2026-07-14 (nothing read
@@ -13741,7 +13749,6 @@ async def receive_senaite_sample(
                     finally:
                         rdb.close()
 
-                from fastapi.concurrency import run_in_threadpool
                 if await run_in_threadpool(_insert_remark):
                     steps_done.append("remarks_added")
                 else:
@@ -13800,7 +13807,6 @@ async def receive_senaite_sample(
                     steps_done.append("received")
                     # Task 3: native sample-transition log (own session,
                     # never-fail — see _record_sample_transition_bg).
-                    from fastapi.concurrency import run_in_threadpool
                     await run_in_threadpool(
                         _record_sample_transition_bg,
                         sample_id=req.sample_id, verb="receive", to_status="sample_received",
@@ -13870,13 +13876,61 @@ async def update_senaite_sample_fields(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Update one or more fields on a SENAITE sample via the JSON API."""
+    """Update one or more fields on a SENAITE sample via the JSON API.
+
+    `Remarks` is intercepted here, before anything reaches SENAITE (read-flip
+    spec §6): this was the third parent-AR-remarks SENAITE write path found
+    at final review — the receive flow and the lookup were flipped to
+    `lims_sample_remarks`, but this generic endpoint (hit by
+    `AddRemarkForm` / `AssignRemarksBlock` via
+    `updateSenaiteSampleFields(uid, { Remarks })`) still forwarded Remarks to
+    SENAITE, where nothing reads it post-flip. Any remaining fields still
+    forward to SENAITE unchanged.
+    """
     if SENAITE_URL is None:
         return SenaiteFieldUpdateResponse(
             success=False, message="SENAITE not configured"
         )
 
     if not req.fields:
+        return SenaiteFieldUpdateResponse(
+            success=False, message="No fields provided"
+        )
+
+    # --- Remarks intercept: native write, never forwarded to SENAITE ---
+    # `db` is the request-scoped session (already used below by the registry
+    # mirror, synchronously, same pattern) — no separate SessionLocal/
+    # run_in_threadpool needed since this runs before any httpx call, not
+    # held across one.
+    raw_remarks = req.fields.pop("Remarks", None)
+    remarks_written = False
+    if raw_remarks is not None and str(raw_remarks).strip():
+        remark_content = str(raw_remarks).strip()
+        row = db.execute(
+            select(LimsSample).where(LimsSample.external_lims_uid == uid)
+        ).scalar_one_or_none()
+        if row is None:
+            return SenaiteFieldUpdateResponse(
+                success=False,
+                message=f"Remarks save failed: no registry row for uid {uid}",
+            )
+        db.add(LimsSampleRemark(
+            lims_sample_pk=row.id,
+            content=remark_content,
+            author_user_id=getattr(current_user, "id", None),
+        ))
+        db.commit()
+        remarks_written = True
+
+    if not req.fields:
+        # Remarks was the only field (the common case from AddRemarkForm /
+        # AssignRemarksBlock) — nothing left to send SENAITE.
+        if remarks_written:
+            return SenaiteFieldUpdateResponse(
+                success=True,
+                message="Updated 1 field(s)",
+                updated_fields=["Remarks"],
+            )
         return SenaiteFieldUpdateResponse(
             success=False, message="No fields provided"
         )
@@ -13931,10 +13985,13 @@ async def update_senaite_sample_fields(
                     "registry.field_mirror_failed uid=%s err=%s", uid, mirror_err
                 )
 
+            updated_fields = (
+                ["Remarks"] if remarks_written else []
+            ) + list(req.fields.keys())
             return SenaiteFieldUpdateResponse(
                 success=True,
-                message=f"Updated {len(req.fields)} field(s)",
-                updated_fields=list(req.fields.keys()),
+                message=f"Updated {len(updated_fields)} field(s)",
+                updated_fields=updated_fields,
             )
 
     except httpx.TimeoutException:

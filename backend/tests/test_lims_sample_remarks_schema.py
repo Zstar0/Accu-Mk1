@@ -2,12 +2,10 @@
 
 House pattern: live dev DB, TEST-prefixed rows, FK-safe cleanup.
 """
-import hashlib
-
 import pytest
 from sqlalchemy import select, text
 
-from database import SessionLocal, engine, init_db
+from database import SessionLocal
 from models import LimsSample, LimsSampleRemark
 
 
