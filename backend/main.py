@@ -39,7 +39,7 @@ from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
 from sla_engine import BusinessSchedule, compute_business_minutes, sla_status_dict
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -13195,6 +13195,8 @@ async def upload_senaite_attachment(
     sample_uid: str,
     file: UploadFile,
     attachment_type: str = Form(...),  # "HPLC Graph" or "Sample Image"
+    native_kind: str = Form("manual"),
+    source_sample_id: Optional[str] = Form(None),
     current_user=Depends(get_current_user),
 ):
     """Upload a file attachment to a SENAITE sample.
@@ -13273,6 +13275,63 @@ async def upload_senaite_attachment(
                 headers=headers,
             )
             if att_resp.status_code in (200, 301, 302):
+                # Native record + frozen S3 snapshot (read-flip spec §7) —
+                # best-effort AFTER SENAITE success; never fails the response.
+                # Snapshot semantics: store THESE bytes under a new key; never
+                # point at the live vial-photo key (retakes must not mutate
+                # what was attached).
+                def _capture_native() -> None:
+                    from database import SessionLocal
+                    from sub_samples.photo_storage import get_storage
+                    kind = native_kind if native_kind in (
+                        "vial_image", "packaging_image", "receive_image", "manual"
+                    ) else "manual"
+                    cdb = SessionLocal()
+                    try:
+                        row = cdb.execute(
+                            select(LimsSample).where(
+                                LimsSample.external_lims_uid == sample_uid)
+                        ).scalar_one_or_none()
+                        if row is None:
+                            logger.warning(
+                                "parent_attachment.capture_failed uid=%s "
+                                "err=no-registry-row", sample_uid)
+                            return
+                        source_pk = None
+                        if source_sample_id:
+                            sub = cdb.execute(
+                                select(LimsSubSample).where(
+                                    LimsSubSample.sample_id == source_sample_id)
+                            ).scalar_one_or_none()
+                            source_pk = sub.id if sub is not None else None
+                        key = get_storage().save_photo(
+                            row.sample_id, file_bytes, filename)
+                        cdb.add(LimsParentAttachment(
+                            lims_sample_pk=row.id,
+                            kind=kind,
+                            source_sub_sample_pk=source_pk,
+                            filename=filename,
+                            content_type=content_type,
+                            storage="s3",
+                            storage_key=key,
+                            render_in_report=True,
+                            created_by_user_id=getattr(current_user, "id", None),
+                        ))
+                        cdb.commit()
+                    except Exception as cap_err:  # noqa: BLE001
+                        try:
+                            cdb.rollback()
+                        except Exception:
+                            pass
+                        logger.warning(
+                            "parent_attachment.capture_failed uid=%s err=%s",
+                            sample_uid, cap_err)
+                    finally:
+                        cdb.close()
+
+                from fastapi.concurrency import run_in_threadpool
+                await run_in_threadpool(_capture_native)
+
                 return SenaiteUploadAttachmentResponse(success=True, message="Attachment uploaded")
             else:
                 return SenaiteUploadAttachmentResponse(

@@ -3758,11 +3758,15 @@ export interface SenaiteUploadAttachmentResponse {
 export async function uploadSenaiteAttachment(
   sampleUid: string,
   file: File,
-  attachmentType: SenaiteAttachmentType
+  attachmentType: SenaiteAttachmentType,
+  nativeKind?: string,
+  sourceSampleId?: string
 ): Promise<SenaiteUploadAttachmentResponse> {
   const form = new FormData()
   form.append('file', file, file.name)
   form.append('attachment_type', attachmentType)
+  if (nativeKind) form.append('native_kind', nativeKind)
+  if (sourceSampleId) form.append('source_sample_id', sourceSampleId)
 
   const response = await fetch(
     `${API_BASE_URL()}/wizard/senaite/samples/${encodeURIComponent(sampleUid)}/attachments`,

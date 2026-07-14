@@ -2277,7 +2277,9 @@ function SelectVialImageDialog({
       const result = await uploadSenaiteAttachment(
         parentSampleUid,
         file,
-        'Sample Image'
+        'Sample Image',
+        'vial_image',
+        vial.sample_id
       )
       if (!result.success) throw new Error(result.message)
       // Seed the parent's photo cache with the exact bytes so the header
