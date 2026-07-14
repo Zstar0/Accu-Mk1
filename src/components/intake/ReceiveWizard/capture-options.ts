@@ -71,9 +71,18 @@ export function highestSupportedResValue(
   ).value
 }
 
-/** Build getUserMedia video constraints for a chosen preset value. */
-export function videoConstraints(res: string): MediaTrackConstraints {
-  const c: MediaTrackConstraints = { facingMode: 'environment' }
+/**
+ * Build getUserMedia video constraints for a chosen preset value. An explicit
+ * device pin replaces facingMode — combining `deviceId: {exact}` with a
+ * facingMode the device doesn't have makes getUserMedia reject.
+ */
+export function videoConstraints(
+  res: string,
+  deviceId?: string,
+): MediaTrackConstraints {
+  const c: MediaTrackConstraints = deviceId
+    ? { deviceId: { exact: deviceId } }
+    : { facingMode: 'environment' }
   const opt = RES_OPTIONS.find(o => o.value === res)
   if (opt?.w && opt?.h) {
     c.width = { ideal: opt.w }

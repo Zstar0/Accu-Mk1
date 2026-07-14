@@ -1,10 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 
 import {
   createPackagingPhoto,
+  createPackagingPhotosBulk,
   updatePackagingPhoto,
   fetchPackagingPhotoUrl,
   type PackagingPhoto,
@@ -12,6 +13,7 @@ import {
 
 vi.mock('@/lib/api', () => ({
   createPackagingPhoto: vi.fn(),
+  createPackagingPhotosBulk: vi.fn(),
   updatePackagingPhoto: vi.fn(),
   fetchPackagingPhotoUrl: vi.fn(),
 }))
@@ -19,6 +21,7 @@ vi.mock('@/lib/api', () => ({
 import { PackagingPanel } from '@/components/intake/ReceiveWizard/PackagingPanel'
 
 const mockCreate = vi.mocked(createPackagingPhoto)
+const mockCreateBulk = vi.mocked(createPackagingPhotosBulk)
 const mockUpdate = vi.mocked(updatePackagingPhoto)
 const mockFetchUrl = vi.mocked(fetchPackagingPhotoUrl)
 
@@ -54,6 +57,7 @@ describe('PackagingPanel', () => {
     vi.clearAllMocks()
     mockFetchUrl.mockResolvedValue(null)
     mockCreate.mockResolvedValue(editingPhoto)
+    mockCreateBulk.mockResolvedValue([editingPhoto])
     mockUpdate.mockResolvedValue(editingPhoto)
   })
 
@@ -89,6 +93,73 @@ describe('PackagingPanel', () => {
     await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1))
     expect(mockUpdate.mock.calls[0]![0]).toBe(42)
     expect(mockCreate).not.toHaveBeenCalled()
+  })
+
+  // jsdom's Response.blob() lacks arrayBuffer() on this machine — the same gap
+  // that makes 'file-path + Save calls createPackagingPhoto...' a known-red
+  // environmental failure above. Camera-capture goes through the identical
+  // dataUrlToBytes call in handleSave, so it doesn't dodge the issue either.
+  // Stub fetch just for these two tests so the fan-out behavior under test
+  // isn't coupled to that unrelated environment gap.
+  describe('order fan-out', () => {
+    const realFetch = global.fetch
+    beforeEach(() => {
+      global.fetch = vi.fn().mockResolvedValue({
+        blob: () =>
+          Promise.resolve({
+            arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+          }),
+      }) as unknown as typeof fetch
+    })
+    afterEach(() => {
+      global.fetch = realFetch
+    })
+
+    it('fans the save out to every order sample when fanoutSampleIds is set', async () => {
+      const { container } = renderPanelWithContainer({
+        fanoutSampleIds: ['P-1', 'P-2', 'P-3'],
+      })
+      pickFile(container)
+      await screen.findByAltText('Uploaded packaging')
+      fireEvent.click(screen.getByRole('button', { name: 'Save packaging photo' }))
+      await waitFor(() => expect(mockCreateBulk).toHaveBeenCalledTimes(1))
+      expect(mockCreateBulk.mock.calls[0]?.[0]?.parentSampleIds).toEqual(['P-1', 'P-2', 'P-3'])
+      expect(mockCreate).not.toHaveBeenCalled()
+    })
+
+    it('uses the single endpoint when fanoutSampleIds is absent', async () => {
+      const { container } = renderPanelWithContainer()
+      pickFile(container)
+      await screen.findByAltText('Uploaded packaging')
+      fireEvent.click(screen.getByRole('button', { name: 'Save packaging photo' }))
+      await waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1))
+      expect(mockCreateBulk).not.toHaveBeenCalled()
+    })
+  })
+
+  it('shows a Camera selector when more than one camera is present', async () => {
+    // Working-camera stub for this test only — the suite default rejects
+    // getUserMedia to exercise the camera-unavailable branch.
+    const track = {
+      stop: vi.fn(),
+      getCapabilities: () => ({ width: { max: 1920 }, height: { max: 1080 } }),
+      getSettings: () => ({ deviceId: 'cam-1' }),
+    }
+    const stream = { getTracks: () => [track], getVideoTracks: () => [track] }
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        getUserMedia: vi.fn().mockResolvedValue(stream),
+        enumerateDevices: vi.fn().mockResolvedValue([
+          { kind: 'videoinput', deviceId: 'cam-1', label: 'Webcam', groupId: '' },
+          { kind: 'videoinput', deviceId: 'cam-2', label: 'Doc cam', groupId: '' },
+        ]),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
+    })
+    renderPanelWithContainer()
+    expect(await screen.findByLabelText(/capture camera/i)).toBeInTheDocument()
   })
 })
 

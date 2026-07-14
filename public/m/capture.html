@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Accumark — Packaging Photos</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #fbfbfa;
+        --fg: #1a1a1a;
+        --muted: #5a5a5a;
+        --border: #e0ddd6;
+        --accent: #2563eb;
+        --accent-fg: #ffffff;
+        --danger: #b91c1c;
+        --card-bg: #ffffff;
+        --thumb-bg: #e0ddd6;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #181816;
+          --fg: #ededed;
+          --muted: #a8a8a8;
+          --border: #2e2c28;
+          --accent: #3b82f6;
+          --accent-fg: #ffffff;
+          --danger: #f87171;
+          --card-bg: #201f1d;
+          --thumb-bg: #2e2c28;
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family:
+          -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu,
+          Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+        font-size: 16px;
+        line-height: 1.5;
+      }
+
+      body {
+        padding: env(safe-area-inset-top) env(safe-area-inset-right)
+          max(24px, env(safe-area-inset-bottom)) env(safe-area-inset-left);
+      }
+
+      main {
+        max-width: 480px;
+        margin: 0 auto;
+        padding: 20px 16px 40px;
+      }
+
+      header {
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+        color: var(--muted);
+        text-transform: uppercase;
+        padding-bottom: 12px;
+        margin-bottom: 16px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      section {
+        margin-bottom: 20px;
+      }
+
+      #order-label {
+        font-size: 20px;
+        font-weight: 700;
+        margin: 0 0 10px;
+      }
+
+      #sample-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+        background: var(--card-bg);
+      }
+
+      .sample-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 4px 10px;
+        padding: 10px 12px;
+      }
+      .sample-row + .sample-row {
+        border-top: 1px solid var(--border);
+      }
+
+      .sample-id {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-weight: 600;
+        font-size: 14px;
+      }
+      .sample-lot {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .sample-analytes {
+        flex-basis: 100%;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      #expiry-note {
+        margin-top: 8px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .capture-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        min-height: 64px;
+        width: 100%;
+        border-radius: 14px;
+        background: var(--accent);
+        color: var(--accent-fg);
+        font-size: 18px;
+        font-weight: 700;
+        text-align: center;
+        cursor: pointer;
+        user-select: none;
+        touch-action: manipulation;
+      }
+      .capture-btn.is-busy {
+        opacity: 0.5;
+        pointer-events: none;
+      }
+
+      #status {
+        min-height: 20px;
+        margin: 14px 0 0;
+        font-size: 14px;
+        color: var(--muted);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      #status.status-error {
+        color: var(--danger);
+      }
+
+      .retry-btn {
+        border: 1px solid currentColor;
+        background: transparent;
+        color: inherit;
+        border-radius: 8px;
+        padding: 6px 12px;
+        font-size: 13px;
+        font-weight: 600;
+        min-height: 32px;
+        cursor: pointer;
+        touch-action: manipulation;
+      }
+
+      #thumbs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 16px;
+      }
+
+      .thumb {
+        position: relative;
+        width: 72px;
+        height: 72px;
+        border-radius: 8px;
+        overflow: hidden;
+        background: var(--thumb-bg);
+        flex-shrink: 0;
+      }
+      .thumb img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+      .thumb-badge {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 20px;
+        font-weight: 700;
+        color: #fff;
+        background: rgba(0, 0, 0, 0.35);
+      }
+      .thumb-done .thumb-badge {
+        display: none;
+      }
+      .thumb-failed {
+        outline: 2px solid var(--danger);
+        outline-offset: -2px;
+      }
+      .thumb-failed .thumb-badge {
+        background: rgba(185, 28, 28, 0.6);
+      }
+
+      #expired {
+        text-align: center;
+        padding: 48px 12px;
+        font-size: 16px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>Accumark — Packaging Photos</header>
+
+      <section id="context">
+        <div id="order-label"></div>
+        <ul id="sample-list"></ul>
+        <div id="expiry-note"></div>
+      </section>
+
+      <section id="shoot">
+        <label class="capture-btn" id="captureLabel" for="camera"
+          >📦 Take photo</label
+        >
+        <input
+          id="camera"
+          type="file"
+          accept="image/*"
+          capture="environment"
+          hidden
+        />
+        <p id="status"></p>
+        <div id="thumbs"></div>
+      </section>
+
+      <section id="expired" hidden>
+        This QR has expired — reopen the packaging tab on the desktop to get a
+        fresh one.
+      </section>
+    </main>
+    <script src="capture.js"></script>
+  </body>
+</html>

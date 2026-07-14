@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from models import LimsSample, LimsPackagingPhoto
 from sub_samples.photo_storage import get_storage
+from sub_samples.service import ensure_sample_row
 
 log = logging.getLogger(__name__)
 
@@ -167,3 +168,84 @@ def _delete_stored_photo_quietly(key: str) -> None:
         get_storage().delete_photo(key)
     except PhotoStorageError as e:
         log.warning("packaging_photos.photo_cleanup_failed key=%s err=%s", key, e)
+
+
+def create_packaging_photos_bulk(
+    db: Session,
+    parent_sample_ids: list[str],
+    photo_bytes: bytes,
+    filename: str,
+    content_type: Optional[str],
+    remarks: Optional[str],
+    user_id: Optional[int],
+    capture_token_id: Optional[int] = None,
+) -> list[LimsPackagingPhoto]:
+    """Fan one packaging photo out to several parents — all-or-nothing.
+
+    Resolves every parent before writing any photo rows so a single bad id
+    fails the whole call (LookupError names all missing ids). Order-flow
+    sibling sample ids come from SENAITE-shaped searches, and only the
+    actively-touched sample gets materialized into lims_samples eagerly —
+    untouched siblings may have no local row yet. Resolving via
+    ensure_sample_row (the same lazy first-touch path as
+    set_customer_remarks / POST .../ensure) lazily upserts those siblings
+    from SENAITE instead of 404ing them; only an id ensure_sample_row truly
+    cannot resolve (RuntimeError: SENAITE unreachable or has no such AR)
+    counts as missing.
+
+    Nothing is committed on any failure — neither photo rows nor a sibling
+    row freshly materialized during resolution. On a resolution failure no
+    commit has happened yet, so the caller's session close (or the storage-
+    failure branch's explicit rollback below) discards any pending
+    ensure_sample_row flush along with everything else; a materialized
+    sibling only survives when the whole call reaches the final commit.
+
+    Bytes are duplicated per parent under that parent's storage namespace so
+    per-sample edit/delete semantics stay untouched. On a storage failure
+    midway the already-saved keys are best-effort deleted and nothing is
+    committed.
+    """
+    parents = []
+    missing = []
+    for sid in parent_sample_ids:
+        try:
+            row = ensure_sample_row(db, sid)
+        except RuntimeError:
+            missing.append(sid)
+        else:
+            parents.append(row)
+    if missing:
+        raise LookupError(f"parent samples not found: {', '.join(missing)}")
+
+    saved_keys: list[str] = []
+    photos: list[LimsPackagingPhoto] = []
+    try:
+        for parent in parents:
+            key = get_storage().save_photo(parent.sample_id, photo_bytes, filename)
+            saved_keys.append(key)
+            next_ordering = (db.execute(
+                select(func.coalesce(func.max(LimsPackagingPhoto.ordering), -1))
+                .where(LimsPackagingPhoto.parent_sample_pk == parent.id)
+            ).scalar_one()) + 1
+            photo = LimsPackagingPhoto(
+                parent_sample_pk=parent.id,
+                kind="packaging",
+                storage_key=f"{_PREFIX}{key}",
+                filename=filename,
+                content_type=content_type,
+                ordering=next_ordering,
+                remarks=remarks,
+                created_by_user_id=user_id,
+                capture_token_id=capture_token_id,
+            )
+            db.add(photo)
+            photos.append(photo)
+        db.commit()
+    except Exception:
+        db.rollback()
+        for key in saved_keys:
+            _delete_stored_photo_quietly(key)
+        raise
+    for photo in photos:
+        db.refresh(photo)
+    return photos
