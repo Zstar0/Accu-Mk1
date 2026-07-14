@@ -258,6 +258,24 @@ def fetch_parent_metadata(parent_sample_id: str) -> dict:
     return detail_items[0]
 
 
+def fetch_attachment_meta(uid: str) -> dict:
+    """Fetch a single Attachment object's detail by uid — the second step of
+    an AR's `Attachment` list (each list entry is a minimal ref; this
+    resolves it to the full object, whose `AttachmentFile` sub-object carries
+    filename/content_type, alongside `RenderInReport` and `created`). Same
+    `_get` + envelope + error-raise shape as `fetch_parent_metadata`'s
+    uid-lookup half (portal_type path segment lowercased, per SENAITE's
+    convention — verified against a live Attachment detail payload)."""
+    url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/attachment/{uid}"
+    resp = _get(url)
+    if resp.status_code >= 300:
+        raise RuntimeError(f"SENAITE fetch_attachment_meta failed ({resp.status_code}): {resp.text}")
+    items = resp.json().get("items", [])
+    if not items:
+        raise RuntimeError(f"SENAITE attachment detail empty for uid={uid}")
+    return items[0]
+
+
 def fetch_parent_analyses(sample_id: str) -> List[dict]:
     """ONE throttled SENAITE Analysis-catalog query for every analysis line
     on a parent AR. Shared by `backfill_parent_analysis_shadows.py` and the
