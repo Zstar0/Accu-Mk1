@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.4.0 — 2026-07-13
+
+SENAITE phase-out slice 3 (workflow state system) plus two independent
+features: an attachment lightbox and a registry-served worksheets inbox.
+
+### Added
+
+- **Workflow state system (phase-out slice 3).** A native workflow catalog —
+  states, allowed transitions, and entry requirements for samples and
+  analyses — editable on a new admin Settings → Workflow page (form CRUD plus
+  a graph view). Every sample state change is now recorded in Mk1's own
+  transition log with actor, source, verb, from→to, and real timestamp,
+  captured from three sources (Mk1 write hooks, the IS event stream, and
+  reconcile drift synthesis) and deduped; a passive observer does the same
+  for analysis-state drift at zero extra SENAITE load. Additive and dormant:
+  nothing enforces yet, SENAITE remains the workflow authority. Historical
+  transitions seed from the IS event stream via an idempotent backfill
+  script (labeled `is_seed`, best-effort).
+- **Attachment lightbox.** Image attachments on Sample detail open in a
+  full-page overlay with type/size/dates/source-vial and uploader/receiver
+  names (Mk1-side metadata only), with keyboard navigation between
+  attachments.
+- **Inbox read source.** The worksheets inbox can now be served entirely from
+  the Mk1 registry (`source=mk1`), replacing both SENAITE fetch stages. Wired
+  as a two-tier read-source setting (`worksheets_inbox`); the default stays
+  SENAITE — flipping is a Preferences change after parity eyeballing.
+
 ## v1.3.0 — 2026-07-13
 
 Receiving batch: order-wide packaging photos, phone capture via QR, and
