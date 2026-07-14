@@ -11,53 +11,11 @@ from typing import Optional, Tuple
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 from models import (
-    AnalysisService, HplcMethod, Instrument, LimsAnalysis,
+    AnalysisService, LimsAnalysis,
     LimsAnalysisTransition, LimsSample,
 )
 
 SHADOW_STATE = "senaite_mirror"
-
-
-def resolve_method_id(db: Session, senaite_uid: Optional[str]) -> Optional[int]:
-    """Resolve a SENAITE method uid to the Mk1 HplcMethod id.
-
-    NOTE: HplcMethod has no `senaite_uid` column (unlike Instrument /
-    AnalysisService, which are auto-synced from SENAITE's "uid" field) —
-    there is no SENAITE-uid sync path for methods in this codebase.
-    `senaite_id` (unique) is the only SENAITE-identity field on the model
-    and is the established match key elsewhere (see main.py's method
-    dup-check: `HplcMethod.senaite_id == data.senaite_id`). In prod today,
-    `hplc_methods.senaite_id` holds locally-invented codes (e.g.
-    "MET-HPLC1-PURITY-1290A"), NOT real SENAITE uids, so this resolves to
-    None for real incoming method_uid values until a dedicated senaite_uid
-    column + backfill exists for hplc_methods (tracked as follow-up).
-    None-safe: falsy uid or no match -> None.
-    """
-    if not senaite_uid:
-        return None
-    m = db.execute(
-        select(HplcMethod).where(HplcMethod.senaite_id == senaite_uid)
-    ).scalar_one_or_none()
-    return m.id if m else None
-
-
-def resolve_instrument_id(db: Session, senaite_uid: Optional[str]) -> Optional[int]:
-    """Resolve a SENAITE instrument uid to the Mk1 Instrument id.
-
-    `Instrument.senaite_uid` carries no unique constraint (models.py ~132),
-    so this uses `.scalars().first()` ordered by id rather than
-    `scalar_one_or_none()` — two rows sharing a uid must resolve
-    deterministically (oldest id) instead of raising MultipleResultsFound
-    and taking down the whole mirror write.
-    None-safe: falsy uid or no match -> None.
-    """
-    if not senaite_uid:
-        return None
-    i = db.execute(
-        select(Instrument).where(Instrument.senaite_uid == senaite_uid)
-        .order_by(Instrument.id)
-    ).scalars().first()
-    return i.id if i else None
 
 
 def resolve_shadow_target(db: Session, *, sample_id: str, keyword: str
@@ -115,12 +73,13 @@ def mirror_parent_analysis(db: Session, *, sample_id: str, keyword: str,
                            mirror_review_state: Optional[str] = None,
                            result_value: Optional[str] = None,
                            result_unit: Optional[str] = None,
-                           method_id: Optional[int] = None,
-                           instrument_id: Optional[int] = None,
                            is_retest: bool = False,
                            old_mirror_review_state: Optional[str] = None) -> bool:
     """Upsert a parent shadow row. Returns False (no-op) if the parent isn't
     registered. Caller commits. Best-effort — callers wrap in try/except.
+
+    method_id/instrument_id are Mk1-owned (read-flip spec §5) — this mirror
+    never reads or writes them.
 
     `old_mirror_review_state` is honored ONLY in the `is_retest` branch: when
     provided, it's stamped onto the OLD (superseded) row's
@@ -166,7 +125,6 @@ def mirror_parent_analysis(db: Session, *, sample_id: str, keyword: str,
             review_state=SHADOW_STATE, provenance="shadow",
             mirror_review_state=mirror_review_state,
             result_value=result_value, result_unit=result_unit,
-            method_id=method_id, instrument_id=instrument_id,
             retest_of_id=(old.id if old is not None else None),
         )
         db.add(new_row)
@@ -198,10 +156,6 @@ def mirror_parent_analysis(db: Session, *, sample_id: str, keyword: str,
         row.result_value = result_value
     if result_unit is not None:
         row.result_unit = result_unit
-    if method_id is not None:
-        row.method_id = method_id
-    if instrument_id is not None:
-        row.instrument_id = instrument_id
     row.updated_at = datetime.utcnow()
     db.flush()
     return True

@@ -8790,7 +8790,8 @@ async def add_sample_analysis(
     # mirrors the line's existence. The IS proxy response carries no
     # keyword (just {success, message}), so resolve service_uid -> keyword
     # via the locally-synced analysis_services table (senaite_uid isn't
-    # unique — see resolve_instrument_id's note — hence order_by + first()).
+    # unique — Instrument.senaite_uid has no unique constraint, hence
+    # order_by + first()).
     # Unresolvable service_uid is the documented no-op: skip silently.
     _svc_uid = body.get("service_uid")
     if _svc_uid:
@@ -13915,37 +13916,24 @@ def _mirror_parent_analysis_bg(**kwargs) -> None:
     """Best-effort parent-analysis shadow mirror on its own short-lived session
     (never holds the request DB across the SENAITE HTTP call). Never raises.
 
-    Accepts optional `method_uid`/`instrument_uid` (raw SENAITE uids) — popped
-    and resolved to Mk1 ids on THIS function's own session (never on the event
-    loop) via resolve_method_id/resolve_instrument_id, then passed through to
-    mirror_parent_analysis as method_id/instrument_id, but only when resolved
-    non-None (an unresolvable uid must never overwrite an existing value with
-    None). Existing callers (A1/A2/A3) never pass these kwargs — pop() with a
-    None default plus the resolvers' own None-safety makes this a pure,
-    backward-compatible extension.
+    method_id/instrument_id are Mk1-OWNED (read-flip spec §5): this wrapper
+    and mirror_parent_analysis never write them. The A4 proxy used to pass
+    method_uid/instrument_uid for shadow-side resolution — removed 2026-07-14;
+    the native path (service.set_method_instrument, prep bridge, promote) is
+    the only M/I writer.
 
-    `SessionLocal()`, the resolver/helper imports, and the kwargs.pop() calls
-    all live INSIDE the try (not just the mirror call) so that even a
-    pathological construction/import failure is caught here rather than
-    escaping to the caller — this function must never raise. `db` is set to
-    None before the try so the finally block can guard `db.close()` for the
-    case where SessionLocal() itself never returned a session.
+    `SessionLocal()` and the mirror_parent_analysis import live INSIDE the
+    try (not just the mirror call) so that even a pathological
+    construction/import failure is caught here rather than escaping to the
+    caller — this function must never raise. `db` is set to None before the
+    try so the finally block can guard `db.close()` for the case where
+    SessionLocal() itself never returned a session.
     """
     db = None
     try:
         from database import SessionLocal
-        from lims_analyses.parent_mirror import (
-            mirror_parent_analysis, resolve_instrument_id, resolve_method_id,
-        )
-        method_uid = kwargs.pop("method_uid", None)
-        instrument_uid = kwargs.pop("instrument_uid", None)
+        from lims_analyses.parent_mirror import mirror_parent_analysis
         db = SessionLocal()
-        method_id = resolve_method_id(db, method_uid)
-        instrument_id = resolve_instrument_id(db, instrument_uid)
-        if method_id is not None:
-            kwargs["method_id"] = method_id
-        if instrument_id is not None:
-            kwargs["instrument_id"] = instrument_id
         if mirror_parent_analysis(db, **kwargs):
             db.commit()
     except Exception as mirror_err:  # noqa: BLE001
@@ -14202,7 +14190,6 @@ async def set_analysis_method_instrument(
                     _mirror_parent_analysis_bg,
                     sample_id=_sid, keyword=_kw,
                     mirror_review_state=item.get("review_state"),
-                    method_uid=req.method_uid, instrument_uid=req.instrument_uid,
                 )
 
             return AnalysisResultResponse(
@@ -17514,7 +17501,7 @@ def _build_analysis_debug_rows(db: Session, row: LimsSample, sample_id: str) -> 
         return r.retest_of_id is None and r.review_state not in ("retracted", "rejected")
 
     # Newest-wins per keyword, same "prefer live, else fallback to newest"
-    # idiom as parent_mirror.py's _existing_shadow / resolve_instrument_id.
+    # idiom as parent_mirror.py's _existing_shadow.
     shadow_best: dict = {}
     canonical_best: dict = {}
     for r in native_rows:
