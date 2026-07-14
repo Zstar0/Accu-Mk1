@@ -16,6 +16,7 @@ import {
   CalendarClock,
   Flag,
   ClipboardCheck,
+  GitBranch,
 } from 'lucide-react'
 import type { ComponentType } from 'react'
 import type { LucideIcon } from 'lucide-react'
@@ -28,6 +29,7 @@ import { SlaPane } from './panes/SlaPane'
 import { BusinessHoursPane } from './panes/BusinessHoursPane'
 import { FlagsPane } from './panes/FlagsPane'
 import { CheckInPane } from './panes/CheckInPane'
+import { WorkflowPane } from './panes/WorkflowPane'
 
 export type PreferencePane =
   | 'general'
@@ -38,6 +40,7 @@ export type PreferencePane =
   | 'businessHours'
   | 'flags'
   | 'checkIn'
+  | 'workflow'
   | 'advanced'
 
 interface NavigationItem {
@@ -59,6 +62,7 @@ export const navigationItems: readonly NavigationItem[] = [
   },
   { id: 'flags', labelKey: 'preferences.flags', icon: Flag },
   { id: 'checkIn', labelKey: 'preferences.checkIn', icon: ClipboardCheck },
+  { id: 'workflow', labelKey: 'preferences.workflow', icon: GitBranch },
   { id: 'advanced', labelKey: 'preferences.advanced', icon: Zap },
 ] as const
 
@@ -71,6 +75,7 @@ export const PANE_COMPONENTS: Record<PreferencePane, ComponentType> = {
   businessHours: BusinessHoursPane,
   flags: FlagsPane,
   checkIn: CheckInPane,
+  workflow: WorkflowPane,
   advanced: AdvancedPane,
 }
 

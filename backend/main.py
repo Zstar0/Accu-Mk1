@@ -84,6 +84,7 @@ from capture_tokens.routes import router as capture_tokens_router
 from flags.routes import router as flags_router
 from slack_notify.routes import router as slack_prefs_router
 from slack_notify.interactions import router as slack_interactions_router
+from workflow.routes import router as workflow_router
 
 import logging
 
@@ -361,6 +362,16 @@ async def lifespan(app: FastAPI):
     # Slack DM notifications (spec 2026-07-02) — dormant without the token.
     from slack_notify.notifier import maybe_start as _slack_maybe_start
     _slack_notifier_task = _slack_maybe_start(_flag_bus.BUS)
+    # IS event-stream incremental sync (workflow state system, slice 3 Task 5)
+    # — the only IS→Mk1 puller (spec §7); dormant without IS DB config or
+    # when disabled via MK1_IS_EVENT_SYNC_ENABLED=0. Guarded: a startup issue
+    # here must never take down the rest of the app.
+    try:
+        from workflow.is_event_stream import maybe_start as _is_sync_maybe_start
+        _is_sync_task = _is_sync_maybe_start(app)
+    except Exception:
+        logger.warning("workflow.is_sync_start_failed", exc_info=True)
+        _is_sync_task = None
     # Flag scheduler (Slice 5) — in-process ticker; jobs registered below.
     from datetime import timedelta as _timedelta
     from flags.scheduler import Scheduler as _Scheduler
@@ -489,6 +500,7 @@ app.include_router(capture_tokens_router)
 app.include_router(flags_router)
 app.include_router(slack_prefs_router)
 app.include_router(slack_interactions_router)
+app.include_router(workflow_router)
 
 # --- Endpoints ---
 
@@ -10144,6 +10156,14 @@ async def publish_sample_coa(
     _parent_row = db.execute(
         select(LimsSample).where(LimsSample.sample_id == sample_id)
     ).scalar_one_or_none()
+    # Snapshot the pre-publish status NOW, before any commit below can expire
+    # `_parent_row` (expire_on_commit=True). The transition-log hook at the
+    # bottom of this function passes `from_status` as a run_in_threadpool
+    # kwarg, which is evaluated on the event loop at call time — touching an
+    # expired ORM attribute there triggers a synchronous refresh SELECT on
+    # the event loop that can raise and escape into the generic except below,
+    # producing a false 502 AFTER the publish already succeeded.
+    _pre_publish_status = _parent_row.status if _parent_row is not None else None
     _publish_body: dict = {}
     _deliver_remark = False
     if _parent_row is not None:
@@ -10316,6 +10336,15 @@ async def publish_sample_coa(
                     from fastapi.concurrency import run_in_threadpool
                     await run_in_threadpool(
                         _mark_shadows_published_bg, sample_id=sample_id
+                    )
+                    # Task 3: native sample-transition log (own session,
+                    # never-fail — see _record_sample_transition_bg).
+                    await run_in_threadpool(
+                        _record_sample_transition_bg,
+                        sample_id=sample_id, verb="publish", to_status="published",
+                        from_status=_pre_publish_status,
+                        source="mk1",
+                        actor_user_id=getattr(current_user, "id", None),
                     )
         except HTTPException:
             raise
@@ -12528,6 +12557,17 @@ async def lookup_senaite_sample(
 
                 _svc_uid_to_indices: dict[str, list[int]] = {}
 
+                # Task 7 passive drift observer: a parallel raw-line capture
+                # (NOT the SenaiteAnalysis pydantic objects below, which
+                # collapse RetestOf to a bare bool). This endpoint returns
+                # EVERY analysis line including retest-superseded ones (no
+                # review_state filter) — same shape/reason
+                # sub_samples/senaite.py's fetch_parent_analyses documents —
+                # so `select_current_lines` (same one the backfill and the
+                # registry-debug hook use) reduces this to one current line
+                # per keyword before anything is handed to the observer.
+                _observer_raw_lines: list[dict] = []
+
                 for an_item in an_data.get("items", []):
                     # Result: prefer formatted string for selection-type results,
                     # then fall back to raw numeric Result
@@ -12616,6 +12656,25 @@ async def lookup_senaite_sample(
                         captured=str(captured) if captured else None,
                         retested=retested_val,
                     ))
+                    # Task 7 raw-line capture (see comment above the list init):
+                    # uid/retest_of_uid/created mirror sub_samples/senaite.py's
+                    # fetch_parent_analyses projection exactly, so the same
+                    # `select_current_lines` reduces this list too.
+                    _observer_raw_lines.append({
+                        "uid": an_item.get("uid") or an_item.get("UID") or None,
+                        "keyword": an_item.get("Keyword") or an_item.get("getKeyword") or None,
+                        "review_state": an_item.get("review_state") or None,
+                        "result": result_str,
+                        "retest_of_uid": (
+                            an_item.get("getRetestOfUID")
+                            or (an_item.get("RetestOf") or {}).get("uid")
+                            or None
+                        ),
+                        "created": (
+                            an_item.get("created") or an_item.get("creation_date")
+                            or an_item.get("DateCreated") or an_item.get("getDateCreated")
+                        ),
+                    })
                     # Track indices that need instrument UID resolution
                     if instrument_uid:
                         if instrument_uid not in _inst_uid_to_indices:
@@ -12761,6 +12820,30 @@ async def lookup_senaite_sample(
                 a.retested,  # False (0) before True (1)
             ))
             print(f"[INFO] Fetched {len(senaite_analyses)} analyses for sample {sample_id}")
+
+            # Passive drift observer (Task 7): schedule ONLY on this success
+            # path (never in the except branch below) — zero additional
+            # SENAITE load. Deliberately NOT the SenaiteAnalysis objects
+            # above (`senaite_analyses`) — this endpoint returns every
+            # analysis line including retest-superseded ones, and the
+            # observer has no dedup of its own, so feeding it a raw
+            # multi-line-per-keyword list can heal a shadow to a stale
+            # (superseded) state. `select_current_lines` (the same reducer
+            # the backfill script and the registry-debug hook use) collapses
+            # `_observer_raw_lines` to one current line per keyword first.
+            # Own session, never raises; scheduled via run_in_threadpool
+            # since this route is `async def`.
+            from fastapi.concurrency import run_in_threadpool
+            from lims_analyses.parent_mirror import select_current_lines
+            _observer_current = select_current_lines(_observer_raw_lines)
+            await run_in_threadpool(
+                _observe_parent_analyses_bg,
+                sample_id=sample_id,
+                observed=[
+                    {"keyword": kw, "review_state": ln.get("review_state"), "result": ln.get("result")}
+                    for kw, ln in _observer_current.items()
+                ],
+            )
         except Exception as exc:
             print(f"[WARN] Failed to fetch analyses for {sample_id}: {exc}")
 
@@ -13666,6 +13749,15 @@ async def receive_senaite_sample(
                 )
                 if new_state == "sample_received":
                     steps_done.append("received")
+                    # Task 3: native sample-transition log (own session,
+                    # never-fail — see _record_sample_transition_bg).
+                    from fastapi.concurrency import run_in_threadpool
+                    await run_in_threadpool(
+                        _record_sample_transition_bg,
+                        sample_id=req.sample_id, verb="receive", to_status="sample_received",
+                        from_status="sample_due", source="mk1",
+                        actor_user_id=getattr(current_user, "id", None),
+                    )
                 else:
                     return SenaiteReceiveSampleResponse(
                         success=False,
@@ -13895,6 +13987,72 @@ def _mark_shadows_published_bg(sample_id: str) -> None:
                 pass
         logger.warning("registry.publish_shadow_mark_failed sample_id=%s err=%s",
                        sample_id, mirror_err)
+    finally:
+        if db is not None:
+            db.close()
+
+
+def _record_sample_transition_bg(**kwargs) -> None:
+    """Best-effort native sample-transition log write (Task 3) on its own
+    short-lived session — never holds the request `db` across the SENAITE
+    HTTP calls at the two call sites (publish, receive). Never raises: a
+    log-write failure must never fail or delay-fail the endpoint it's
+    scheduled from.
+
+    `SessionLocal()` and the recorder import live INSIDE the try, same
+    hardening rationale as `_mirror_parent_analysis_bg`: `db` starts as None
+    so `finally` can guard `db.close()` if construction itself failed.
+    """
+    db = None
+    try:
+        from database import SessionLocal
+        from workflow.sample_log import record_sample_transition
+        db = SessionLocal()
+        if record_sample_transition(db, **kwargs):
+            db.commit()
+    except Exception as log_err:  # noqa: BLE001
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        logger.warning("workflow.sample_log_failed sample_id=%s err=%s",
+                       kwargs.get("sample_id"), log_err)
+    finally:
+        if db is not None:
+            db.close()
+
+
+def _observe_parent_analyses_bg(sample_id: str, observed: list[dict]) -> None:
+    """Best-effort passive analysis drift observer (Task 7) on its own
+    short-lived session — never holds the request/route `db` across the
+    SENAITE fetch either hook site already made for display. Never raises: a
+    healing failure must never affect the page that triggered it.
+
+    Commits unconditionally on success (not gated on `observe_parent_
+    analyses`'s return count): result-only healing writes no transition row
+    but still mutates `result_value` and must persist — gating the commit on
+    the count would silently drop that write.
+
+    `SessionLocal()` and the observer import live INSIDE the try, same
+    hardening rationale as `_mirror_parent_analysis_bg`: `db` starts as None
+    so `finally` can guard `db.close()` if construction itself failed.
+    """
+    db = None
+    try:
+        from database import SessionLocal
+        from workflow.observer import observe_parent_analyses
+        db = SessionLocal()
+        observe_parent_analyses(db, sample_id=sample_id, observed=observed)
+        db.commit()
+    except Exception as observer_err:  # noqa: BLE001
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        logger.warning("workflow.observer_failed sample_id=%s err=%s",
+                       sample_id, observer_err)
     finally:
         if db is not None:
             db.close()
@@ -17266,6 +17424,9 @@ def s2s_upsert_lims_sample(
 # (2026-07-07-sample-registry-debug-panel-design.md). Reads the raw
 # LimsSample row directly — never ensure_sample_row / list_sub_samples /
 # _reconcile_from_senaite — so drift is observable instead of auto-healed.
+# Exception (Task 7, workflow state system): the analyses column's SENAITE
+# fetch now ALSO feeds the passive drift observer, which heals the parent's
+# shadow mirror rows in place — the LimsSample row itself stays untouched.
 
 def _registry_origin(row) -> str:
     if row.external_lims_system == "mk1":
@@ -17279,8 +17440,16 @@ def _build_analysis_debug_rows(db: Session, row: LimsSample, sample_id: str) -> 
     """Registry-debug panel's analyses column (Task 10, 2026-07-07-sample-
     registry-debug-panel-design.md amendment): per-keyword compare of current
     SENAITE parent-analysis lines vs native `lims_analyses` rows (live shadow
-    + current canonical) for this parent. Non-mutating — read-only, same
-    posture as the rest of this panel.
+    + current canonical) for this parent. Read-only for the registry row and
+    the comparison itself — EXCEPT for the passive drift observer (Task 7)
+    scheduled LAST, after `result` is built: it heals the parent's live
+    shadow row(s) in place (+ logs a `transition_kind='observed'` row) using
+    the deduped current SENAITE lines this function already fetched for
+    display, at zero additional SENAITE load. Scheduling it last (not right
+    after the fetch) means THIS view still renders the true pre-heal drift
+    for the admin to see — the shadow heals for the NEXT view. Deliberate,
+    documented exception to the panel's otherwise non-mutating posture — see
+    `workflow.observer`.
 
     Independent try/except around the SENAITE analyses-catalog fetch: this is
     a SEPARATE SENAITE call from the basic-info `fetch_parent_metadata` above
@@ -17364,13 +17533,85 @@ def _build_analysis_debug_rows(db: Session, row: LimsSample, sample_id: str) -> 
 
     result = build_analysis_sync_rows(senaite_map, shadow_map, canonical_map)
     result["error"] = None
+
+    # Passive drift observer (Task 7): scheduled LAST, after `result` (and
+    # the `native_rows` snapshot it's built from) is already captured —
+    # THIS view still shows the true pre-heal drift (the panel's diagnostic
+    # purpose), and the shadow row heals for the NEXT view. `current`
+    # (`select_current_lines(items)` above) is passed rather than raw
+    # `items`: the raw SENAITE Analysis fetch returns every line including
+    # retest-superseded ones (no review_state filter), and the observer's
+    # per-keyword loop has no dedup of its own — feeding it a superseded
+    # line for a keyword that already has a newer current line would heal
+    # the shadow to the WRONG (stale) state. `current` is already reduced to
+    # one (newest, non-superseded) line per keyword, same guarantee the
+    # backfill script relies on. This function runs on a plain `def` route
+    # (FastAPI's threadpool), so the observer is called inline rather than
+    # via `await run_in_threadpool(...)`; it's already never-raise (own
+    # session, commits/rolls back internally) so a healing failure can't
+    # blank this read-only panel.
+    _observe_parent_analyses_bg(
+        sample_id=sample_id,
+        observed=[
+            {"keyword": kw, "review_state": ln.get("review_state"), "result": ln.get("result")}
+            for kw, ln in current.items()
+        ],
+    )
     return result
 
 
+def _build_sample_transitions(db: Session, row: LimsSample) -> dict:
+    """Registry-debug panel's recent-transitions tail (Task 8): the last 5
+    `lims_sample_transitions` rows for this parent, newest first. Pure DB
+    read, no SENAITE I/O — but still wrapped in its own try/except with its
+    own error surface (`transitions.error`), same independent-failure
+    posture as `_build_analysis_debug_rows`'s SENAITE fetch: a failure here
+    must not blank the rest of the payload, and must not be blanked by a
+    basic-info or analyses failure elsewhere."""
+    from models import LimsSampleTransition
+
+    try:
+        rows = db.execute(
+            select(LimsSampleTransition)
+            .where(LimsSampleTransition.lims_sample_pk == row.id)
+            .order_by(LimsSampleTransition.occurred_at.desc(), LimsSampleTransition.id.desc())
+            .limit(5)
+        ).scalars().all()
+    except Exception as e:
+        return {
+            "rows": [], "error": str(e),
+            "latest_to_status": None, "log_in_sync": None,
+            "current_status": row.status,
+        }
+
+    # UAT fast-follow: sync check between the transition log and the
+    # registry's current status. `rows` is already newest-first
+    # (occurred_at DESC, id DESC), so the newest row is rows[0] — no extra
+    # query needed. None (not True/False) when there's no log yet, so the FE
+    # can distinguish "nothing logged" from "logged and in sync".
+    latest_to_status = rows[0].to_status if rows else None
+    log_in_sync = None if not rows else (latest_to_status == row.status)
+
+    return {
+        "rows": [
+            {
+                "verb": r.verb, "from_status": r.from_status, "to_status": r.to_status,
+                "source": r.source, "occurred_at": r.occurred_at.isoformat(),
+            }
+            for r in rows
+        ],
+        "error": None,
+        "latest_to_status": latest_to_status,
+        "log_in_sync": log_in_sync,
+        "current_status": row.status,
+    }
+
+
 def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
-    """Assemble the registry-debug payload. NON-MUTATING: reads the raw row
-    directly (never ensure_sample_row / list_sub_samples / reconcile), so
-    drift is observable instead of auto-healed."""
+    """Assemble the registry-debug payload. Basic-info half is read-only;
+    analyses half schedules the passive drift observer (Task 7) which heals
+    shadow rows + audits transitions asynchronously. Display-view only;
+    never mutates lims_analyses row count."""
     row = db.execute(
         select(LimsSample).where(LimsSample.sample_id == sample_id)
     ).scalar_one_or_none()
@@ -17383,7 +17624,7 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
             "linkage": None, "origin": None, "container": None,
             "fields": [], "summary": None, "vials": None,
             "verdict": None, "senaite_error": None, "raw": None,
-            "analyses": None,
+            "analyses": None, "transitions": None,
         }
 
     age = None
@@ -17404,6 +17645,11 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
     # the field diff.
     analyses = _build_analysis_debug_rows(db, row, sample_id)
 
+    # Recent-transitions tail (Task 8): same independent-failure posture —
+    # own try/except, own error surface, never blanked by nor blanking
+    # anything else in this payload.
+    transitions = _build_sample_transitions(db, row)
+
     meta = None
     senaite_error = None
     try:
@@ -17420,7 +17666,7 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
             "fields": [], "summary": None, "vials": None, "verdict": None,
             "senaite_error": senaite_error,
             "raw": {"registry": _row_to_dict(row), "senaite": None},
-            "analyses": analyses,
+            "analyses": analyses, "transitions": transitions,
         }
 
     diff = diff_registry_vs_senaite(row, meta)
@@ -17453,7 +17699,7 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
                     "registry_null": diff["summary"]["registry_null"]},
         "senaite_error": None,
         "raw": {"registry": _row_to_dict(row), "senaite": meta},
-        "analyses": analyses,
+        "analyses": analyses, "transitions": transitions,
     }
 
 
@@ -17472,7 +17718,9 @@ def get_sample_registry_debug(
     admin=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """Admin registry diagnostic — non-mutating registry-vs-SENAITE compare.
+    """Admin registry diagnostic — read-only for basic info; viewing may
+    heal analysis-shadow drift via the passive observer (audit-logged as
+    transition_kind='observed').
 
     Plain `def` (not `async def`): the SENAITE calls behind this (fetch_parent_
     analyses / fetch_parent_metadata / fetch_secondaries, all `requests`-based)

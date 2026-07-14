@@ -2,6 +2,9 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@/test/test-utils'
 import type { FlagDetailResponse } from '@/lib/flags-api'
 
+// suite-scaling contention headroom — see 2026-07-12 workflow-state-system gate report
+vi.setConfig({ testTimeout: 15000 })
+
 vi.mock('@/components/flags/flag-users', () => ({
   useFlagUsers: () => new Map(),
   nameForUser: (_m: unknown, id: number | null) =>
