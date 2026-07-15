@@ -46,6 +46,7 @@ import { useUIStore } from '@/store/ui-store'
 import { useSenaiteLookupMap } from '@/services/senaite-lookup-map'
 import { useOrderSlaStatuses } from '@/services/order-sla'
 import { OrderSlaCell } from '@/components/explorer/OrderSlaCell'
+import { useEffectiveReadSource } from '@/lib/read-source'
 
 // --- Constants ---
 
@@ -183,8 +184,12 @@ export function OrderDashboard() {
     () => [...outstandingOrders, ...failedOrders].slice(0, 25),
     [outstandingOrders, failedOrders]
   )
+  // Resolved from the 'sample_details' two-tier read-source setting — same
+  // mechanism as SampleDetails.tsx; defaults to 'senaite' (no behavior
+  // change until the Handler flips it).
+  const { effective: sampleDetailsSource } = useEffectiveReadSource('sample_details')
   const { sampleLookupMap, isLoading: slaMapLoading, isError: slaMapError } =
-    useSenaiteLookupMap(displayedOrders)
+    useSenaiteLookupMap(displayedOrders, sampleDetailsSource)
   const { verdictByOrderId, isLoading: slaVerdictLoading, isError: slaVerdictError } =
     useOrderSlaStatuses(displayedOrders, sampleLookupMap)
   const slaIsLoading = slaMapLoading || slaVerdictLoading

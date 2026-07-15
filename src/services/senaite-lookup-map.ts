@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { useQueries } from '@tanstack/react-query'
 import type { ExplorerOrder, SenaiteLookupResult } from '@/lib/api'
 import { enqueueSenaiteLookup } from '@/components/explorer/senaite-queue'
+import type { ReadSource } from '@/lib/read-source'
 
 export interface SenaiteLookupEntry {
   data?: SenaiteLookupResult
@@ -33,11 +34,21 @@ export interface SenaiteLookupMapResult {
  * serialized SENAITE lookup per id (via enqueueSenaiteLookup, which throttles
  * to avoid overwhelming Zope), and expose a Map keyed by senaite_id.
  *
- * The query key `['senaite','lookup',id]` is shared across every surface that
- * uses this hook, so a lookup fetched on one page is reused warm on another.
- * Feed the returned `sampleLookupMap` to `useOrderSlaStatuses(orders, map)`.
+ * The query key `['senaite','lookup',id,source]` is shared across every
+ * surface that uses this hook, so a lookup fetched on one page is reused
+ * warm on another. Feed the returned `sampleLookupMap` to
+ * `useOrderSlaStatuses(orders, map)`.
+ *
+ * `source` resolves the 'sample_details' two-tier read-source setting
+ * (`useEffectiveReadSource('sample_details')`); defaults to 'senaite' so
+ * callers that don't pass it keep today's behavior exactly. `source` is
+ * part of the query key so flipping it invalidates stale cross-mode cache
+ * entries instead of silently reusing them.
  */
-export function useSenaiteLookupMap(orders: ExplorerOrder[]): SenaiteLookupMapResult {
+export function useSenaiteLookupMap(
+  orders: ExplorerOrder[],
+  source: ReadSource = 'senaite'
+): SenaiteLookupMapResult {
   // Collect unique sample IDs from the orders (skip failed/empty ones).
   const sampleIds = useMemo(() => {
     const ids: string[] = []
@@ -59,8 +70,8 @@ export function useSenaiteLookupMap(orders: ExplorerOrder[]): SenaiteLookupMapRe
   // Fetch sample details from SENAITE — serialized to avoid overwhelming Zope.
   const sampleQueries = useQueries({
     queries: sampleIds.map(id => ({
-      queryKey: ['senaite', 'lookup', id],
-      queryFn: () => enqueueSenaiteLookup(id),
+      queryKey: ['senaite', 'lookup', id, source],
+      queryFn: () => enqueueSenaiteLookup(id, source),
       staleTime: 15 * 60_000,
       retry: 1,
     })),

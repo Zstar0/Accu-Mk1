@@ -17928,60 +17928,34 @@ async def get_sample_read_from_registry(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Sample-details read path: basic-info sourced registry-first (Accu-Mk1
-    lims_samples) with per-field SENAITE fallback. Analyses and everything
-    else come from the unchanged SENAITE lookup.
+    """Sample-details read path (read-flip Layer 4 / Task 3): assembled
+    100% from Mk1 tables + the IS DB via `build_native_details` — zero
+    SENAITE HTTP (spec §9 invariant 2).
+
+    This endpoint is reached ONLY in 'mk1' read-source mode. There is no
+    senaite-mode branch here to preserve: `lookupSenaiteSample`'s 'senaite'
+    branch (the default) calls `/wizard/senaite/lookup` directly and never
+    routes through this route at all (src/lib/api.ts:~3678) — this endpoint
+    IS the mk1 implementation, unconditionally.
+
+    `build_native_details` is sync with a blocking IS-DB call
+    (integration_db.fetch_verification_codes_for_samples, psycopg2) inside a
+    route that stays `async def` — call it via run_in_threadpool so it can't
+    stall the event loop, per this codebase's documented async-def
+    loop-blocking incident class (see /worksheets above: a 2.5s sync body
+    run as `async def` froze every other request behind it, prod-probed
+    2026-07-07).
 
     Gated by `get_current_user` (any authenticated user), not `require_admin`
-    — it's a read-only projection of data the user already sees via the
-    SENAITE lookup it wraps (see spec Access-control). `current_user` is
-    resolved before `db` (auth gate before any DB dependency is entered) —
-    matches the sibling debug endpoints above.
+    — it's a read-only projection of data the user already sees (see spec
+    Access-control). `current_user` is resolved before `db` (auth gate
+    before any DB dependency is entered) — matches the sibling debug
+    endpoints above.
     """
-    from sub_samples.registry_read import registry_row_to_display, OVERLAY_FIELDS
+    from fastapi.concurrency import run_in_threadpool
+    from sub_samples.registry_details import build_native_details
 
-    base = await lookup_senaite_sample(id=sample_id, no_cache=True, db=db, _current_user=current_user)
-    payload = base.model_dump()
-
-    row = db.execute(
-        select(LimsSample).where(LimsSample.sample_id == sample_id.strip().upper())
-    ).scalar_one_or_none()
-
-    field_sources = {f: "senaite" for f in OVERLAY_FIELDS}
-    if row is None:
-        # Remarks are native in both modes (read-flip spec §6). Re-applied
-        # here (idempotent — the wrapped lookup already serves native) so the
-        # wiring is provable through this endpoint's lookup-mocked test
-        # harness. No lims_samples row means no native remarks: [].
-        payload["remarks"] = [r.model_dump()
-                              for r in _native_sample_remarks(db, sample_id)]
-        field_sources["remarks"] = "mk1"
-        return RegistrySampleReadResult(**payload, read_source="mk1",
-                                        registry_missing=True, field_sources=field_sources)
-
-    overlay = registry_row_to_display(row)
-    for field, value in overlay.items():
-        # `analytes` is the one OVERLAY_FIELDS entry whose registry shape
-        # ({"name", "declared_quantity"}) is NOT the response_model's typed
-        # SenaiteAnalyte shape ({"raw_name", "slot_number", ...}). Overlaying
-        # it verbatim would raise a Pydantic ValidationError (500) on every
-        # sample with registry-populated analytes. Leave SENAITE's typed
-        # analytes untouched and keep field_sources["analytes"] == "senaite",
-        # which honestly reflects where the shown value came from.
-        if field == "analytes":
-            continue
-        payload[field] = value
-        field_sources[field] = "mk1"
-
-    # Remarks are native in both modes (read-flip spec §6). Re-applied here
-    # (idempotent — the wrapped lookup already serves native) so the wiring
-    # is provable through this endpoint's lookup-mocked test harness.
-    payload["remarks"] = [r.model_dump()
-                          for r in _native_sample_remarks(db, sample_id)]
-    field_sources["remarks"] = "mk1"
-
-    return RegistrySampleReadResult(**payload, read_source="mk1",
-                                    registry_missing=False, field_sources=field_sources)
+    return await run_in_threadpool(build_native_details, db, sample_id)
 
 
 @app.get("/registry/sample/{sample_id}/attachments/{attachment_id}/download")

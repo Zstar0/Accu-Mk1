@@ -59,6 +59,7 @@ import { FlagIndicator } from '@/components/flags/FlagIndicator'
 import { SampleSlaIndicator } from '@/components/explorer/SampleSlaIndicator'
 import { useOrderSlaStatuses, type SampleSlaSnapshot } from '@/services/order-sla'
 import { useSenaiteLookupMap } from '@/services/senaite-lookup-map'
+import { useEffectiveReadSource } from '@/lib/read-source'
 
 // Re-export TEST_EMAILS so the existing import surface
 // `import { TEST_EMAILS } from '@/components/OrderStatusPage'` keeps working
@@ -674,9 +675,13 @@ export function OrderStatusPage() {
   // Per-sample SENAITE lookup map (shared hook — see useSenaiteLookupMap).
   // `sampleLookupMap` is consumed below by the analysis-state filter
   // (filteredOrders) and by useOrderSlaStatuses; built from the full `orders`
-  // set so filtered lookups are always present.
+  // set so filtered lookups are always present. Resolved from the
+  // 'sample_details' two-tier read-source setting — same mechanism as
+  // SampleDetails.tsx; defaults to 'senaite' (no behavior change until the
+  // Handler flips it).
+  const { effective: sampleDetailsSource } = useEffectiveReadSource('sample_details')
   const { sampleLookupMap, isFetching: sampleLookupFetching, lastCachedAt } =
-    useSenaiteLookupMap(orders)
+    useSenaiteLookupMap(orders, sampleDetailsSource)
 
   // Hide orders where no samples match the active analysis state filter
   const filteredOrders = useMemo(() => {
