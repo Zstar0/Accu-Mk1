@@ -112,6 +112,78 @@ describe('VialPanel — resolution mode-selection', () => {
   })
 })
 
+describe('VialPanel — center-square capture', () => {
+  const videoDescW = Object.getOwnPropertyDescriptor(
+    HTMLVideoElement.prototype, 'videoWidth',
+  )
+  const videoDescH = Object.getOwnPropertyDescriptor(
+    HTMLVideoElement.prototype, 'videoHeight',
+  )
+  const origGetContext = HTMLCanvasElement.prototype.getContext
+  const origToDataURL = HTMLCanvasElement.prototype.toDataURL
+  let drawImage: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    Object.defineProperty(HTMLVideoElement.prototype, 'videoWidth', {
+      configurable: true,
+      get: () => 1440,
+    })
+    Object.defineProperty(HTMLVideoElement.prototype, 'videoHeight', {
+      configurable: true,
+      get: () => 1080,
+    })
+    drawImage = vi.fn()
+    HTMLCanvasElement.prototype.getContext = vi.fn(
+      () => ({ drawImage }),
+    ) as unknown as typeof HTMLCanvasElement.prototype.getContext
+    HTMLCanvasElement.prototype.toDataURL = vi.fn(
+      () => 'data:image/jpeg;base64,sq',
+    )
+  })
+
+  afterEach(() => {
+    if (videoDescW) {
+      Object.defineProperty(HTMLVideoElement.prototype, 'videoWidth', videoDescW)
+    } else {
+      Reflect.deleteProperty(HTMLVideoElement.prototype, 'videoWidth')
+    }
+    if (videoDescH) {
+      Object.defineProperty(HTMLVideoElement.prototype, 'videoHeight', videoDescH)
+    } else {
+      Reflect.deleteProperty(HTMLVideoElement.prototype, 'videoHeight')
+    }
+    HTMLCanvasElement.prototype.getContext = origGetContext
+    HTMLCanvasElement.prototype.toDataURL = origToDataURL
+  })
+
+  it('captures the center square of the video frame', async () => {
+    render(<VialPanel {...baseProps} />)
+    const btn = await screen.findByRole('button', { name: /capture photo/i })
+    fireEvent.click(btn)
+    await waitFor(() => expect(drawImage).toHaveBeenCalledTimes(1))
+    // drawImage(video, sx, sy, sw, sh, dx, dy, dw, dh): center square of
+    // a 1440×1080 frame is 1080×1080 at x-offset 180.
+    expect(drawImage.mock.calls.at(0)?.slice(1)).toEqual([
+      180, 0, 1080, 1080, 0, 0, 1080, 1080,
+    ])
+    expect(HTMLCanvasElement.prototype.toDataURL).toHaveBeenCalledWith(
+      'image/jpeg', 0.9,
+    )
+    expect(await screen.findByAltText(/captured vial/i)).toHaveAttribute(
+      'src', 'data:image/jpeg;base64,sq',
+    )
+  })
+
+  it('renders the live preview as a square crop (WYSIWYG)', async () => {
+    const { container } = render(<VialPanel {...baseProps} />)
+    await screen.findByRole('button', { name: /capture photo/i })
+    const video = container.querySelector('video')
+    expect(video?.className).toContain('aspect-square')
+    expect(video?.className).toContain('object-cover')
+    expect(video?.className).not.toContain('aspect-[4/3]')
+  })
+})
+
 describe('VialPanel — camera device selector', () => {
   it('shows a Camera selector when more than one camera is present', async () => {
     mockCamera(1920, 1080, {
