@@ -257,6 +257,38 @@ def test_datetime_instants_actually_differing_stay_real():
     assert d.is_real
 
 
+def _override_analysis_analyst(payload: dict, analyst) -> dict:
+    payload["analyses"] = copy.deepcopy(payload["analyses"])
+    for line in payload["analyses"]:
+        line["analyst"] = analyst
+    return payload
+
+
+def test_analyst_attribution_known_expected_both_directions():
+    """mk1 worksheet-stamped email vs SENAITE username ('admin'/'Forrest')
+    are two attribution spaces that can never string-agree; senaite-era rows
+    additionally were never worksheet-stamped natively (mk1 None). Both
+    directions ride analyst_attribution (registry-stack UAT finding)."""
+    # mk1-era: populated email vs SENAITE's API service account
+    diffs = compare_sample(
+        _override_analysis_analyst(_mk1_payload(), "forrest@valenceanalytical.com"),
+        _override_analysis_analyst(_senaite_payload(), "admin"),
+    )
+    d = _one(diffs, "analyses[BPC157_ID].analyst")
+    assert d.classification == "known_expected"
+    assert d.rule_id == "analyst_attribution"
+    assert not d.is_real
+
+    # senaite-era: never worksheet-stamped natively
+    diffs = compare_sample(
+        _override_analysis_analyst(_mk1_payload(), None),
+        _override_analysis_analyst(_senaite_payload(), "Forrest"),
+    )
+    d = _one(diffs, "analyses[BPC157_ID].analyst")
+    assert d.classification == "known_expected"
+    assert d.rule_id == "analyst_attribution"
+
+
 def test_attachment_uid_and_native_download_url_known_expected():
     """Reviewer case (a) at the classifier level: the uid shape difference
     (mk1att: vs a senaite uid) is known-expected, and the download_url

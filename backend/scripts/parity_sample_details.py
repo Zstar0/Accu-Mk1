@@ -57,8 +57,8 @@ published_coa_senaite_era, senaite_url_unavailable, profiles_empty_native,
 attachment_mk1att_uids [overlapping the brief's], analytes_defaults,
 coa_chromatograph_background_url), 3 added at build/review time
 (cached_at_timestamps, analyses_uid_shape, attachment_native_download_route),
-and 1 added at registry-stack UAT (datetime_serialization) -- each justified
-where it's defined below:
+and 2 added at registry-stack UAT (datetime_serialization,
+analyst_attribution) -- each justified where it's defined below:
 
   published_coa_senaite_era   -- `published_coa` is always None in mk1 mode
                                   (SENAITE-era artifact; coordinator ruling,
@@ -128,6 +128,22 @@ where it's defined below:
                                   (first live parity run, 2026-07-14): every
                                   sample carried 1-2 of these, which would
                                   have made --strict permanently red.
+  analyst_attribution          -- per-analysis-line `analyst` lives in two
+                                  attribution spaces that can never agree:
+                                  mk1 stamps analyst_user_id from WORKSHEET
+                                  membership (2026-06-07 spec) and serves the
+                                  user's email; SENAITE records its own
+                                  username -- the actual operator ('Forrest')
+                                  or the API service account ('admin') that
+                                  pushed the result. Same phenomenon class as
+                                  analyses_uid_shape: even "the same" person
+                                  is 'forrest@...' on one side and 'Forrest'
+                                  on the other, and senaite-era rows were
+                                  never worksheet-stamped natively (mk1
+                                  None). String equality still wins when it
+                                  happens (equal short-circuits every rule).
+                                  Discovered at registry-stack UAT alongside
+                                  datetime_serialization.
 
   analyses_uid_shape           -- per-analysis-line `uid` differs in SHAPE
                                   (mk1's `mk1:{lims_analyses.id}` vs SENAITE's
@@ -455,6 +471,8 @@ def diff_analyses(mk1_list: list[dict], senaite_list: list[dict]) -> list[FieldD
                 )
             elif sub in _ANALYSIS_MI_TITLE_SUBFIELDS:
                 rule_fn = lambda mk1v, sv: "mi_blank_after_retest" if _is_blank(mk1v) else None
+            elif sub == "analyst":
+                rule_fn = lambda mk1v, sv: "analyst_attribution"
             else:
                 rule_fn = None
             out.append(_diff_leaf(f"analyses[{label}].{sub}", mk1_item.get(sub), sen_item.get(sub), rule_fn))
