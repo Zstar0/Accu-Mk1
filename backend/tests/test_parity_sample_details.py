@@ -15,6 +15,8 @@ import json
 from scripts.parity_sample_details import (
     ALL_COMPARED_FIELDS,
     REAL_CLASSIFICATIONS,
+    TRUNCATE_LEN,
+    build_report,
     compare_sample,
     main,
 )
@@ -219,25 +221,83 @@ def test_cached_at_always_known_expected():
     assert d.rule_id == "cached_at_timestamps"
 
 
-def test_attachment_uid_known_expected_but_download_url_stays_real():
-    """The uid shape difference (mk1att: vs a senaite uid) is known-expected,
-    but the download_url actually routes to two different places for an
-    s3-frozen attachment -- that difference must NOT be hidden."""
+def test_attachment_uid_and_native_download_url_known_expected():
+    """Reviewer case (a) at the classifier level: the uid shape difference
+    (mk1att: vs a senaite uid) is known-expected, and the download_url
+    divergence is ALSO known-expected when -- and only because -- the mk1
+    URL is this sample's native download route (the structural s3-frozen
+    routing split; reviewer ruling superseding the earlier stays-real
+    treatment)."""
     diffs = compare_sample(_mk1_payload(), _senaite_payload())
     uid_diff = _one(diffs, "attachments[chrom.csv].uid")
     assert uid_diff.classification == "known_expected"
     assert uid_diff.rule_id == "attachment_mk1att_uids"
 
     url_diff = _one(diffs, "attachments[chrom.csv].download_url")
-    assert url_diff.classification == "differing"
-    assert url_diff.is_real
-    assert url_diff.rule_id is None
-    # REAL diffs carry the raw pair so the Handler can eyeball without refetching
-    assert url_diff.mk1_value == "/registry/sample/P-0001/attachments/9001/download"
-    assert url_diff.senaite_value == "/wizard/senaite/attachment/senaite-att-uid-1"
+    assert url_diff.classification == "known_expected"
+    assert url_diff.rule_id == "attachment_native_download_route"
+    assert not url_diff.is_real
 
     # attachment_type matches on both sides -> plain equal
     assert _one(diffs, "attachments[chrom.csv].attachment_type").classification == "equal"
+
+
+def test_attachment_download_url_wrong_sample_id_stays_real():
+    """Reviewer case (b): a native-LOOKING URL embedding the WRONG sample id
+    must NOT match the rule -- the gate is the actual sample's route, not
+    'anything that looks native'. This is exactly the malformed-URL class
+    the shape gate exists to catch."""
+    bad_attachment = {
+        **_mk1_payload()["attachments"][0],
+        "download_url": "/registry/sample/P-9999/attachments/9001/download",
+    }
+    diffs = compare_sample(
+        _mk1_payload(attachments=[bad_attachment]),
+        _senaite_payload(),
+    )
+    d = _one(diffs, "attachments[chrom.csv].download_url")
+    assert d.classification == "differing"
+    assert d.is_real
+    assert d.rule_id is None
+
+
+def test_attachment_download_url_known_expected_even_when_uids_adopted_equal():
+    """Reviewer case (c): backfill adoption can equalize the uids on both
+    sides while download_url still legitimately diverges (mk1 serves the
+    frozen s3 copy natively). The download_url rule must fire on the URL's
+    own shape, NOT be gated on the uid rule having fired."""
+    adopted_mk1 = {
+        **_mk1_payload()["attachments"][0],
+        "uid": "senaite-att-uid-1",  # adopted: same uid both sides
+    }
+    diffs = compare_sample(
+        _mk1_payload(attachments=[adopted_mk1]),
+        _senaite_payload(),
+    )
+    assert _one(diffs, "attachments[chrom.csv].uid").classification == "equal"
+
+    url_diff = _one(diffs, "attachments[chrom.csv].download_url")
+    assert url_diff.classification == "known_expected"
+    assert url_diff.rule_id == "attachment_native_download_route"
+
+
+def test_attachment_senaite_storage_pair_fully_equal():
+    """Reviewer case (d): a senaite-storage attachment -- both sides emit
+    the identical proxy URL and the same uid -- classifies plain equal on
+    every subfield (unchanged behavior; no rule needed or fired)."""
+    senaite_backed = {
+        "uid": "senaite-att-uid-1", "filename": "chrom.csv", "content_type": "text/csv",
+        "attachment_type": "HPLC Graph",
+        "download_url": "/wizard/senaite/attachment/senaite-att-uid-1",
+    }
+    diffs = compare_sample(
+        _mk1_payload(attachments=[senaite_backed]),
+        _senaite_payload(attachments=[dict(senaite_backed)]),
+    )
+    for sub in ("uid", "attachment_type", "download_url"):
+        d = _one(diffs, f"attachments[chrom.csv].{sub}")
+        assert d.classification == "equal", (sub, d)
+        assert d.rule_id is None
 
 
 def test_analytes_defaults_matched_peptide_and_slot_known_expected():
@@ -378,6 +438,50 @@ def test_analyses_order_insensitive_matching_no_false_diffs():
     assert _one(diffs, "analyses[BBB].result").classification == "equal"
 
 
+def test_scalar_mk1_only_and_senaite_only_without_override():
+    """Bare mk1_only/senaite_only on a scalar field with no known-expected
+    rule attached: one side has a value, the other is blank -> classified
+    by presence direction, REAL both ways."""
+    # mk1 has a client_lot, senaite doesn't -> mk1_only
+    diffs = compare_sample(
+        _mk1_payload(client_lot="LOT-1"),
+        _senaite_payload(client_lot=None),
+    )
+    d = _one(diffs, "client_lot")
+    assert d.classification == "mk1_only"
+    assert d.is_real
+    assert d.rule_id is None
+    assert d.mk1_value == "LOT-1"
+    assert d.senaite_value is None
+
+    # senaite has a contact, mk1 doesn't -> senaite_only
+    diffs = compare_sample(
+        _mk1_payload(contact=None),
+        _senaite_payload(contact="Jane Doe"),
+    )
+    d = _one(diffs, "contact")
+    assert d.classification == "senaite_only"
+    assert d.is_real
+    assert d.rule_id is None
+
+
+def test_real_diff_values_truncated_at_500_chars():
+    """A REAL diff whose raw value exceeds 500 chars is truncated in the
+    report (with an explicit marker) so one pathological HTML remark or blob
+    can't bloat the artifact."""
+    long_mk1 = "A" * (TRUNCATE_LEN + 200)
+    long_senaite = "B" * (TRUNCATE_LEN + 200)
+    report = build_report([(
+        "P-0001",
+        _mk1_payload(client=long_mk1),
+        _senaite_payload(client=long_senaite),
+    )])
+    entry = next(f for f in report["samples"][0]["fields"] if f["path"] == "client")
+    assert entry["classification"] == "differing"
+    assert entry["mk1_value"] == "A" * TRUNCATE_LEN + "...(truncated)"
+    assert entry["senaite_value"] == "B" * TRUNCATE_LEN + "...(truncated)"
+
+
 def test_analyses_one_side_missing_line_is_real():
     mk1 = _mk1_payload(analyses=[
         {**_mk1_payload()["analyses"][0], "keyword": "ONLY_MK1"},
@@ -469,6 +573,83 @@ def test_main_strict_exits_0_when_clean(tmp_path):
     # not hidden -- the "never hidden" contract, verified end-to-end.
     assert report["known_expected_rule_counts"]["published_coa_senaite_era"] == 1
     assert report["known_expected_rule_counts"]["analyses_uid_shape"] == 3
+
+
+def test_main_strict_exits_0_with_s3_native_attachment(tmp_path):
+    """Reviewer case (a): an s3-captured attachment pair -- mk1's
+    download_url is THIS sample's native route, senaite's is the proxy.
+    That divergence is structural for every post-deploy sample, so it must
+    classify known-expected (attachment_native_download_route) and a
+    strict run over an otherwise-clean sample must exit 0."""
+    fixtures = [{
+        "sample_id": "P-0001",
+        "mk1": _mk1_payload(),        # baseline: native-route download_url
+        "senaite": _senaite_payload(),  # baseline: proxy download_url
+    }]
+    fixtures_path = _write_fixtures(tmp_path, fixtures)
+    out_path = tmp_path / "report.json"
+
+    rc = main(["--fixtures", fixtures_path, "--out", str(out_path), "--strict"])
+
+    assert rc == 0
+    report = json.loads(out_path.read_text())
+    assert report["real_diff_sample_count"] == 0
+    assert report["known_expected_rule_counts"]["attachment_native_download_route"] == 1
+
+
+def test_main_fetch_error_continues_partial_report_strict_exits_1(tmp_path, monkeypatch):
+    """One failing sample must not lose the run: the fetch loop catches
+    per-sample errors, the run continues to a PARTIAL report carrying the
+    error, and --strict exits 1 (a partial run is not a clean run)."""
+    import scripts.parity_sample_details as psd
+
+    monkeypatch.setenv("MK1_PARITY_TOKEN", "test-token")
+
+    good_mk1, good_senaite = _mk1_payload(), _senaite_payload()
+
+    def fake_fetch(sample_id, *, base_url, token):
+        if sample_id == "P-0002":
+            raise RuntimeError("senaite timed out")
+        return good_mk1, good_senaite
+
+    monkeypatch.setattr(psd, "fetch_pair_http", fake_fetch)
+    out_path = tmp_path / "report.json"
+
+    rc = main(["--samples", "P-0001,P-0002", "--base-url", "http://backend",
+               "--out", str(out_path), "--strict"])
+
+    assert rc == 1
+    report = json.loads(out_path.read_text())
+    # the good sample still made it into the (partial) report
+    assert report["sample_count"] == 1
+    assert report["samples"][0]["sample_id"] == "P-0001"
+    assert report["real_diff_sample_count"] == 0  # clean pair, only known-expected
+    # the failure is counted and named, not swallowed
+    assert report["fetch_error_count"] == 1
+    assert report["fetch_errors"][0]["sample_id"] == "P-0002"
+    assert "senaite timed out" in report["fetch_errors"][0]["error"]
+
+
+def test_main_fetch_error_default_still_exits_0(tmp_path, monkeypatch):
+    """Without --strict the run stays report-only: fetch errors are reported
+    but never change the exit code."""
+    import scripts.parity_sample_details as psd
+
+    monkeypatch.setenv("MK1_PARITY_TOKEN", "test-token")
+
+    def always_fail(sample_id, *, base_url, token):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(psd, "fetch_pair_http", always_fail)
+    out_path = tmp_path / "report.json"
+
+    rc = main(["--samples", "P-0001", "--base-url", "http://backend",
+               "--out", str(out_path)])
+
+    assert rc == 0
+    report = json.loads(out_path.read_text())
+    assert report["sample_count"] == 0
+    assert report["fetch_error_count"] == 1
 
 
 def test_main_requires_exactly_one_of_samples_or_limit():

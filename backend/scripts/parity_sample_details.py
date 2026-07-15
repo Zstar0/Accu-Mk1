@@ -50,10 +50,14 @@ either way, matching every sibling script in this directory.
 
 KNOWN-EXPECTED RULES
 ---------------------
-Named by the L4/Task5 brief (9), reconciled against Task 2's builder report
-(`.superpowers/sdd/task-l4-2-report.md` "Notes for downstream tasks" -- Task
-2's 6-item list is a strict SUBSET of these 9; nothing from Task 2 was
-missing here):
+Provenance: 3 classes named by the L4/Task5 brief itself (remarks_native_
+both, mi_blank_after_retest, attachment_mk1att_uids), 6 by Task 2's builder
+report (`.superpowers/sdd/task-l4-2-report.md` "Notes for downstream tasks":
+published_coa_senaite_era, senaite_url_unavailable, profiles_empty_native,
+attachment_mk1att_uids [overlapping the brief's], analytes_defaults,
+coa_chromatograph_background_url), and 3 added at build/review time
+(cached_at_timestamps, analyses_uid_shape, attachment_native_download_route
+-- each justified where it's defined below):
 
   published_coa_senaite_era   -- `published_coa` is always None in mk1 mode
                                   (SENAITE-era artifact; coordinator ruling,
@@ -65,13 +69,28 @@ missing here):
   attachment_mk1att_uids      -- per-attachment `uid` differs in SHAPE
                                   (`mk1att:{id}` vs a SENAITE attachment uid)
                                   where filename+content_type match (Task 2
-                                  note 4). Other attachment subfields
-                                  (download_url, attachment_type) are NOT
-                                  covered by this rule and surface as real
-                                  diffs if they differ -- the routing target
-                                  genuinely differs for s3-frozen copies and
-                                  the Handler should see that, not have it
-                                  hidden.
+                                  note 4). `attachment_type` is NOT covered
+                                  and surfaces as a real diff; `download_url`
+                                  has its own shape-gated rule (see
+                                  attachment_native_download_route below).
+  attachment_native_download_route -- a paired attachment's `download_url`
+                                  differs AND the mk1 side's URL is THIS
+                                  sample's native download route
+                                  (`/registry/sample/{sample_id}/attachments/
+                                  {id}/download`, matched against the actual
+                                  sample id). Structural for every s3-frozen
+                                  capture: mk1 serves its frozen copy
+                                  natively, senaite points at the proxy --
+                                  without this rule --strict could never pass
+                                  on a post-deploy sample. Gated on the mk1
+                                  URL's SHAPE only: NOT on the pairing key
+                                  (would blanket-suppress, hiding malformed
+                                  URLs) and NOT on the uid rule having fired
+                                  (backfill adoption can equalize uids while
+                                  download_url still legitimately diverges).
+                                  A native-looking URL embedding the WRONG
+                                  sample id stays a REAL diff. Reviewer-added
+                                  (task-l4-5 review round).
   analytes_defaults           -- per-analyte `matched_peptide_id` /
                                   `matched_peptide_name` are None in mk1 mode
                                   (no fuzzy match at build time), and
@@ -97,37 +116,36 @@ missing here):
                                   `datetime.now()` calls); always known-
                                   expected, ignored in the strict gate.
 
-Added by this dispatch, NOT in the brief's named list (flagged per the
-brief's "if it names a class this dispatch missed, include it" allowance --
-this is the converse: a class the *comparison contract* requires but the
-*named list* omitted):
-
   analyses_uid_shape           -- per-analysis-line `uid` differs in SHAPE
                                   (mk1's `mk1:{lims_analyses.id}` vs SENAITE's
                                   opaque hex uid) for a keyword-matched line.
-                                  Required by this file's own "Analyses
+                                  Required by the dispatch's "Analyses
                                   comparison" contract bullet ("uid shape
-                                  differences ... = known-expected") but the
-                                  brief's enumerated 9-class list never named
-                                  it -- same phenomenon as
-                                  attachment_mk1att_uids, different list.
-                                  ALSO applied to `method_uid` / `instrument_
-                                  uid` when both sides are populated but
-                                  differ: mk1 stores str(HplcMethod.id) /
-                                  str(Instrument.id) (an internal integer
-                                  PK), senaite stores its own Zope object
-                                  uid -- two id spaces that can never agree
-                                  even for "the same" method/instrument.
-                                  Discovered empirically while TDD-ing
-                                  mi_blank_after_retest: a populated-but-
-                                  mismatched *_uid pair is NOT the blank
-                                  case the brief named, but IS the exact
-                                  same shape-mismatch phenomenon as the line
-                                  uid, so it rides the same rule rather than
-                                  going unclassified on every single run.
+                                  differences ... = known-expected") but never
+                                  given a rule id in any named list -- same
+                                  phenomenon as attachment_mk1att_uids,
+                                  different list. ALSO applied to
+                                  `method_uid` / `instrument_uid` when both
+                                  sides are populated but differ: mk1 stores
+                                  str(HplcMethod.id) / str(Instrument.id) (an
+                                  internal integer PK), senaite stores its
+                                  own Zope object uid -- two id spaces that
+                                  can never agree even for "the same"
+                                  method/instrument. Discovered empirically
+                                  while TDD-ing mi_blank_after_retest: a
+                                  populated-but-mismatched *_uid pair is NOT
+                                  the blank case the brief named, but IS the
+                                  exact same shape-mismatch phenomenon as the
+                                  line uid, so it rides the same rule rather
+                                  than going unclassified on every single run.
 
-Exit code: 0 unless `--strict` is passed AND at least one REAL (non-
-known-expected, non-equal) diff exists anywhere in the run, in which case 1.
+Fault isolation: in HTTP / in-process mode, one sample's failed fetch logs a
+warning, lands in the report's `fetch_errors` list, and the run CONTINUES to
+a partial report -- never a lost run.
+
+Exit code: 0 unless `--strict` is passed AND (at least one REAL (non-
+known-expected, non-equal) diff exists anywhere in the run, OR at least one
+sample's fetch failed -- a partial run is not a clean run), in which case 1.
 Report-only by default -- this script never writes anything, so a nonzero
 exit under `--strict` is purely a "go look" signal, not a failure state.
 """
@@ -333,16 +351,49 @@ def diff_analytes(mk1_list: list[dict], senaite_list: list[dict]) -> list[FieldD
     return out
 
 
-def diff_attachments(mk1_list: list[dict], senaite_list: list[dict]) -> list[FieldDiff]:
+def _native_download_route_rule(sample_id: str) -> Callable[[Any, Any], Optional[str]]:
+    """attachment_native_download_route: a paired attachment's download_url
+    diff is known-expected IFF the mk1 side's URL is THIS sample's native
+    download route (`/registry/sample/{sample_id}/attachments/{id}/download`
+    -- the exact sample id, not just any). That divergence is structural for
+    every s3-frozen capture post-deploy: mk1 serves its frozen copy natively
+    while senaite points at the proxy, so without this rule --strict could
+    never pass on a post-deploy sample.
+
+    Deliberately gated on the mk1 URL's SHAPE, not on the pairing key
+    (filename+content_type -- that would blanket-suppress and hide a
+    malformed/mispointed URL) and not on the uid-shape rule having fired
+    (backfill adoption can equalize uids while download_url still
+    legitimately diverges). A native-looking URL embedding the WRONG sample
+    id does NOT match and stays a REAL diff."""
+    import re
+    pattern = re.compile(
+        rf"^/registry/sample/{re.escape(sample_id)}/attachments/\d+/download$"
+    )
+    def rule(mk1v: Any, sv: Any) -> Optional[str]:
+        if isinstance(mk1v, str) and pattern.match(mk1v):
+            return "attachment_native_download_route"
+        return None
+    return rule
+
+
+def diff_attachments(mk1_list: list[dict], senaite_list: list[dict],
+                     sample_id: str) -> list[FieldDiff]:
     pairs, mk1_only, senaite_only = _pair_lists(
         mk1_list or [], senaite_list or [],
         key_fn=lambda a: ((a.get("filename") or "").strip().casefold(), a.get("content_type")),
     )
+    download_url_rule = _native_download_route_rule(sample_id)
     out: list[FieldDiff] = []
     for mk1_item, sen_item in pairs:
         label = mk1_item.get("filename") or "?"
         for sub in ("uid", "attachment_type", "download_url"):
-            rule_fn = (lambda mk1v, sv: "attachment_mk1att_uids") if sub == "uid" else None
+            if sub == "uid":
+                rule_fn = lambda mk1v, sv: "attachment_mk1att_uids"
+            elif sub == "download_url":
+                rule_fn = download_url_rule
+            else:
+                rule_fn = None
             out.append(_diff_leaf(f"attachments[{label}].{sub}", mk1_item.get(sub), sen_item.get(sub), rule_fn))
     for item in mk1_only:
         out.append(FieldDiff(f"attachments[{item.get('filename')}]", "mk1_only", None, item, None))
@@ -404,7 +455,12 @@ def compare_sample(mk1: dict, senaite: dict) -> list[FieldDiff]:
         out.append(diff_scalar_field(path, mk1.get(path), senaite.get(path)))
     out.extend(diff_coa(mk1.get("coa"), senaite.get("coa")))
     out.extend(diff_analytes(mk1.get("analytes"), senaite.get("analytes")))
-    out.extend(diff_attachments(mk1.get("attachments"), senaite.get("attachments")))
+    # sample_id for the native-download-route rule: the mk1 payload's own
+    # sample_id (falling back to senaite's -- they're the same sample).
+    out.extend(diff_attachments(
+        mk1.get("attachments"), senaite.get("attachments"),
+        sample_id=str(mk1.get("sample_id") or senaite.get("sample_id") or ""),
+    ))
     out.extend(diff_analyses(mk1.get("analyses"), senaite.get("analyses")))
     out.extend(diff_remarks(mk1.get("remarks"), senaite.get("remarks")))
     return out
@@ -417,9 +473,13 @@ def _truncate(value: Any) -> Any:
     return s if len(s) <= TRUNCATE_LEN else s[:TRUNCATE_LEN] + "...(truncated)"
 
 
-def build_report(pairs: list[tuple[str, dict, dict]]) -> dict:
+def build_report(pairs: list[tuple[str, dict, dict]],
+                 fetch_errors: Optional[list[dict]] = None) -> dict:
     """pairs: [(sample_id, mk1_payload, senaite_payload), ...]. Pure function
-    of already-fetched data -- no I/O here, so it's directly unit-testable."""
+    of already-fetched data -- no I/O here, so it's directly unit-testable.
+    fetch_errors: [{"sample_id": ..., "error": ...}] for samples whose fetch
+    failed -- carried into the report so a partial run is visibly partial."""
+    fetch_errors = fetch_errors or []
     samples = []
     field_counts: Counter = Counter()
     rule_counts: Counter = Counter()
@@ -453,6 +513,8 @@ def build_report(pairs: list[tuple[str, dict, dict]]) -> dict:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "sample_count": len(pairs),
         "real_diff_sample_count": real_diff_sample_count,
+        "fetch_error_count": len(fetch_errors),
+        "fetch_errors": fetch_errors,
         "field_classification_counts": dict(sorted(field_counts.items())),
         "known_expected_rule_counts": dict(sorted(rule_counts.items())),
         "samples": samples,
@@ -461,7 +523,10 @@ def build_report(pairs: list[tuple[str, dict, dict]]) -> dict:
 
 def print_summary(report: dict) -> None:
     print(f"parity run: {report['sample_count']} sample(s), "
-          f"{report['real_diff_sample_count']} with REAL (unclassified) diffs")
+          f"{report['real_diff_sample_count']} with REAL (unclassified) diffs, "
+          f"{report['fetch_error_count']} fetch error(s)")
+    for fe in report["fetch_errors"]:
+        print(f"  FETCH ERROR {fe['sample_id']}: {fe['error']}")
     print(f"  field classifications: {report['field_classification_counts']}")
     if report["known_expected_rule_counts"]:
         print(f"  known-expected rules fired: {report['known_expected_rule_counts']}")
@@ -544,8 +609,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         description="Sample-details parity harness (mk1 vs senaite read paths) "
                     "-- the read-flip go/no-go artifact. Report-only by default.",
         epilog="Exit codes: 0 = ran clean OR --strict not passed. 1 = --strict "
-               "passed and at least one REAL (unclassified) diff exists anywhere "
-               "in the run.")
+               "passed and at least one REAL (unclassified) diff OR per-sample "
+               "fetch error exists anywhere in the run.")
     ap.add_argument("--samples", help="comma-separated sample IDs, e.g. P-0001,P-0002")
     ap.add_argument("--limit", type=int, help="newest N samples from lims_samples (id desc)")
     ap.add_argument("--base-url", help="backend base URL for HTTP mode (bearer token via env MK1_PARITY_TOKEN)")
@@ -553,12 +618,14 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="call build_native_details + lookup_senaite_sample directly (stack/UAT mode; needs SENAITE env)")
     ap.add_argument("--out", help="write the JSON report to this path")
     ap.add_argument("--strict", action="store_true",
-                    help="exit 1 if any REAL (unclassified) diff exists anywhere in the run")
+                    help="exit 1 if any REAL (unclassified) diff or per-sample "
+                         "fetch error exists anywhere in the run")
     ap.add_argument("--fixtures", help=argparse.SUPPRESS)  # test-only: bypass fetch entirely
     args = ap.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
+    fetch_errors: list[dict] = []
     if args.fixtures:
         pairs = _load_fixture_pairs(args.fixtures)
     else:
@@ -570,21 +637,29 @@ def main(argv: Optional[list[str]] = None) -> int:
         from database import SessionLocal
         sample_ids = resolve_sample_ids(SessionLocal, samples=args.samples, limit=args.limit)
 
+        token = None
         if args.base_url:
             token = os.environ.get("MK1_PARITY_TOKEN")
             if not token:
                 ap.error("--base-url mode needs a bearer token in env MK1_PARITY_TOKEN")
-            pairs = []
-            for sid in sample_ids:
-                mk1, senaite = fetch_pair_http(sid, base_url=args.base_url, token=token)
-                pairs.append((sid, mk1, senaite))
-        else:
-            pairs = []
-            for sid in sample_ids:
-                mk1, senaite = fetch_pair_in_process(sid, SessionLocal)
-                pairs.append((sid, mk1, senaite))
 
-    report = build_report(pairs)
+        # Per-sample fault isolation: one failing fetch (SENAITE hiccup, a
+        # sample deleted mid-run, a 404) logs + counts, and the run continues
+        # to a PARTIAL report -- never a lost run. fetch_errors ride the
+        # report and trip the --strict gate: a partial run is not a clean run.
+        pairs = []
+        for sid in sample_ids:
+            try:
+                if args.base_url:
+                    mk1, senaite = fetch_pair_http(sid, base_url=args.base_url, token=token)
+                else:
+                    mk1, senaite = fetch_pair_in_process(sid, SessionLocal)
+                pairs.append((sid, mk1, senaite))
+            except Exception as e:
+                log.warning("fetch failed sample=%s err=%s", sid, e, exc_info=True)
+                fetch_errors.append({"sample_id": sid, "error": f"{type(e).__name__}: {e}"})
+
+    report = build_report(pairs, fetch_errors=fetch_errors)
     print_summary(report)
 
     if args.out:
@@ -592,7 +667,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             json.dump(report, f, indent=2, default=str)
         log.info("report written to %s", args.out)
 
-    if args.strict and report["real_diff_sample_count"] > 0:
+    if args.strict and (report["real_diff_sample_count"] > 0
+                        or report["fetch_error_count"] > 0):
         return 1
     return 0
 
