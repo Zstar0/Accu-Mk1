@@ -258,15 +258,29 @@ def fetch_parent_metadata(parent_sample_id: str) -> dict:
     return detail_items[0]
 
 
-def fetch_attachment_meta(uid: str) -> dict:
+def fetch_attachment_meta(uid: str, api_url: Optional[str] = None) -> dict:
     """Fetch a single Attachment object's detail by uid — the second step of
     an AR's `Attachment` list (each list entry is a minimal ref; this
     resolves it to the full object, whose `AttachmentFile` sub-object carries
-    filename/content_type, alongside `RenderInReport` and `created`). Same
-    `_get` + envelope + error-raise shape as `fetch_parent_metadata`'s
-    uid-lookup half (portal_type path segment lowercased, per SENAITE's
-    convention — verified against a live Attachment detail payload)."""
-    url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/attachment/{uid}"
+    filename/content_type, alongside `RenderInReport`, `created`, and
+    `AttachmentType`). Same `_get` + envelope + error-raise shape as
+    `fetch_parent_metadata`'s uid-lookup half.
+
+    `api_url`, when given, is the ref's OWN self-reported URL (the sweep
+    already has the ref dict in hand — pass `ref.get("api_url")`) and is
+    preferred outright over constructing one. Only when it's absent does this
+    fall back to a constructed URL, using the `Attachment/{uid}` casing
+    precedent from `main.py`'s `get_senaite_attachment` proxy fallback (same
+    file, ~line 13096) rather than guessing a lowercase path.
+
+    Honesty note (final review, 2026-07-14): this shape was NOT verified
+    against a live Attachment detail payload, despite an earlier version of
+    this docstring claiming otherwise. It's inferred from the display-path
+    extraction in `main.py` (`get_senaite_sample`'s attachments loop, ~line
+    12899) plus COABuilder's `senaite_client.py` precedent for the same
+    object type. A live smoke test against a real SENAITE instance is
+    required before the first prod run of the attachment backfill sweep."""
+    url = api_url or f"{SENAITE_BASE_URL}/@@API/senaite/v1/Attachment/{uid}"
     resp = _get(url)
     if resp.status_code >= 300:
         raise RuntimeError(f"SENAITE fetch_attachment_meta failed ({resp.status_code}): {resp.text}")

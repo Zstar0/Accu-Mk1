@@ -86,8 +86,14 @@ def _run(db_factory, metas, attachment_metas, ckpt_path, **kw):
     sen.fetch_parent_metadata mocked per parent sample_id and
     sen.fetch_attachment_meta mocked per attachment uid. A value in
     `attachment_metas` that IS an Exception instance is raised instead of
-    returned — models a per-ref detail-fetch failure."""
-    def _fetch_attachment(uid):
+    returned — models a per-ref detail-fetch failure.
+
+    `_fetch_attachment` accepts the `api_url` second positional arg
+    `_rows_for_sample` now passes (final review, 2026-07-14: prefer the
+    ref's self-reported api_url) — unused here since none of these fixtures'
+    refs carry one, but the signature must match or the mock's side_effect
+    raises a TypeError on every call."""
+    def _fetch_attachment(uid, api_url=None):
         val = attachment_metas[uid]
         if isinstance(val, Exception):
             raise val
@@ -109,9 +115,14 @@ def test_backfill_inserts_attachment_rows(db_factory, tmp_path):
     pk = _seed_sample(db_factory, "TEST-ATTBF-P1")
     meta = _meta_with_attachments([{"uid": "A1"}, {"uid": "A2"}])
     attachment_metas = {
+        # AttachmentType as a plain string — one shape SENAITE may return it.
         "A1": {"AttachmentFile": {"filename": "img1.png", "content_type": "image/png"},
+               "AttachmentType": "HPLC Graph",
                "RenderInReport": True, "created": "2026-01-05T10:00:00"},
+        # AttachmentType as a {title: ...} dict — the other shape (matches
+        # the display path's extraction in main.py's get_senaite_sample).
         "A2": {"AttachmentFile": {"filename": "data.csv", "content_type": "text/csv"},
+               "AttachmentType": {"title": "Sample Image"},
                "RenderInReport": None, "created": "2026-01-06T11:00:00"},
     }
     ckpt = str(tmp_path / "ckpt.json")
@@ -137,14 +148,40 @@ def test_backfill_inserts_attachment_rows(db_factory, tmp_path):
     assert a1.senaite_attachment_uid == "A1"
     assert a1.filename == "img1.png"
     assert a1.content_type == "image/png"
+    assert a1.attachment_type == "HPLC Graph"
     assert a1.storage == "senaite"
     assert a1.storage_key is None
     assert a1.kind == "manual"
     assert a1.render_in_report is True
     assert a1.created_at == datetime(2026, 1, 5, 10, 0, 0)
     assert a2.senaite_attachment_uid == "A2"
+    assert a2.attachment_type == "Sample Image"  # extracted from dict shape
     assert a2.render_in_report is False  # RenderInReport None -> False
     db.close()
+
+
+def test_backfill_prefers_ref_api_url_over_constructed(db_factory, tmp_path):
+    """final review (2026-07-14): a ref carrying its own `api_url` is passed
+    straight through to `fetch_attachment_meta` instead of letting it
+    construct one from just the uid — see that function's docstring."""
+    _seed_sample(db_factory, "TEST-ATTBF-P7")
+    meta = _meta_with_attachments([
+        {"uid": "A20", "api_url": "http://senaite.test/self-reported/A20"},
+    ])
+    ckpt = str(tmp_path / "ckpt.json")
+
+    with patch("scripts.backfill_lims_parent_attachments.sen.fetch_parent_metadata") as fpm, \
+         patch("scripts.backfill_lims_parent_attachments.sen.fetch_attachment_meta") as fam, \
+         patch("scripts.backfill_lims_parent_attachments.time.sleep"):
+        fpm.side_effect = lambda sid: meta
+        fam.return_value = {
+            "AttachmentFile": {"filename": "x.png", "content_type": "image/png"},
+            "created": "2026-01-20T00:00:00",
+        }
+        backfill(db_factory, sleep_s=0, batch_size=50, checkpoint_path=ckpt,
+                 dry_run=False, limit=None)
+
+    fam.assert_called_once_with("A20", "http://senaite.test/self-reported/A20")
 
 
 def test_backfill_idempotent_rerun_inserts_nothing(db_factory, tmp_path):

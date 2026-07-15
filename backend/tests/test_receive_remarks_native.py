@@ -317,6 +317,7 @@ def test_receive_image_captures_native_row(db, seed_sample, fake_storage):
     assert row.filename == expected_filename
     assert row.content_type == "image/png"
     assert row.render_in_report is True
+    assert row.attachment_type == "Sample Image"
     assert row.senaite_attachment_uid is None
     assert row.created_by_user_id == 1
 

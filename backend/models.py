@@ -850,6 +850,13 @@ class LimsParentAttachment(Base):
     the existing attachment proxy. senaite_attachment_uid is NULL on
     capture-time rows (the Plone form upload returns no uid); the backfill
     sweep adopts them by (lims_sample_pk, filename) match.
+
+    kind vocabulary: 'vial_image' | 'packaging_image' | 'receive_image' |
+    'chromatogram' | 'manual'. 'chromatogram' (final review, 2026-07-14)
+    covers the HPLC-chromatogram-CSV push (upload_chromatogram_to_senaite) —
+    a third write path onto the parent AR discovered uncaptured at review;
+    lineage is the analysis, not a vial, so source_sub_sample_pk stays NULL
+    on these rows.
     """
     __tablename__ = "lims_parent_attachments"
 
@@ -869,6 +876,13 @@ class LimsParentAttachment(Base):
     render_in_report: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    # SENAITE's AttachmentType title ("HPLC Graph" / "Sample Image") — the FE
+    # keys real behavior off this (isHplcGraph, lightbox badge) and Layer 4's
+    # builder will need it. Populated by every writer: capture-time rows get
+    # it from the caller (form value / hardcoded literal, mirroring what was
+    # actually sent to SENAITE); backfilled rows extract it from the swept
+    # Attachment detail (same title-string extraction as the display path).
+    attachment_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     created_by_user_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

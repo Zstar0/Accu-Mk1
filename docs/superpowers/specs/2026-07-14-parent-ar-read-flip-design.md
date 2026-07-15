@@ -184,6 +184,24 @@ timestamps (`SenaiteRemark {content, user_id, created}`).
   non-fatal; an orphaned SENAITE copy is acceptable mirror-era noise and
   shows up in the parity eyeball, never in mk1-mode reads).
 
+**As-built amendment (2026-07-14, final review):** two gaps closed after the
+first pass shipped (b118bad). (1) A third dual-write path was found
+uncaptured: `upload_chromatogram_to_senaite` (`POST
+/hplc/analyses/{id}/chromatogram-to-senaite`) posts the chromatogram CSV as
+an AR attachment to the uid the FE passes — and `SelectVialChromatogramDialog`
+always passes the PARENT uid, not a vial uid. It now captures natively too
+(`kind='chromatogram'`, `attachment_type='HPLC Graph'`,
+`render_in_report=False`, `source_sub_sample_pk=NULL` — lineage here is the
+HPLC analysis, not a vial), widening the `kind` CHECK to 5 values. (2) The
+schema gained an `attachment_type` column (SENAITE's AttachmentType title,
+"HPLC Graph" / "Sample Image") populated by every writer (capture-time and
+the backfill sweep) — the FE keys real behavior off this value (`isHplcGraph`,
+lightbox badge) and Layer 4's builder will need it. Both changes landed
+before any prod run of this table exists, so the `kind` CHECK widening used a
+plain DROP/re-ADD migration pair rather than a union-preserving one (see
+`backend/database.py`'s inline comment on the last-boot-wins class this
+implies for any *future* image-mismatch window).
+
 ## 8. Layer 4 — native details builder
 
 New module `backend/sub_samples/registry_details.py` (mirrors the

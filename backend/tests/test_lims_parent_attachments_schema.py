@@ -37,7 +37,8 @@ def test_model_round_trip_and_cascade(db):
 
     db.add(LimsParentAttachment(lims_sample_pk=parent.id, kind="vial_image",
                                 filename="v-1.png", storage="s3",
-                                storage_key="k/x.png", render_in_report=True))
+                                storage_key="k/x.png", render_in_report=True,
+                                attachment_type="Sample Image"))
     db.commit()
 
     got = db.execute(select(LimsParentAttachment).where(
@@ -49,6 +50,7 @@ def test_model_round_trip_and_cascade(db):
     assert got.storage_key == "k/x.png"
     assert got.senaite_attachment_uid is None
     assert got.render_in_report is True
+    assert got.attachment_type == "Sample Image"
     assert got.created_by_user_id is None
     assert got.created_at is not None
 
@@ -58,6 +60,38 @@ def test_model_round_trip_and_cascade(db):
     db.commit()
     assert db.execute(select(LimsParentAttachment).where(
         LimsParentAttachment.id == attachment_id)).scalar_one_or_none() is None
+
+
+def test_kind_check_accepts_chromatogram(db):
+    """final review (2026-07-14): 'chromatogram' was widened onto the kind
+    CHECK via a named DROP/re-ADD migration pair (the dev DB predates this
+    kind — the original CREATE TABLE only had 4 values; database.py's
+    migration list now appends `DROP CONSTRAINT IF EXISTS
+    lims_parent_attachments_kind_check` + a 5-value re-ADD). This is the
+    discriminating assertion that the swap actually took effect against a
+    live Postgres constraint name: if the migration's guessed name doesn't
+    match Postgres's real auto-generated inline-CHECK name, DROP ... IF
+    EXISTS silently no-ops, the ADD creates a second (redundant, still
+    4-value-blocking) constraint, and this insert fails against the OLD
+    list forever — exactly the silent-capture-death class the last-boot-wins
+    lesson warns about. Requires `init_db()` to have run against this DB
+    first (task contract)."""
+    parent = LimsSample(sample_id=TEST_SAMPLE_ID, sample_type="x",
+                        status="sample_received")
+    db.add(parent)
+    db.commit()
+    db.refresh(parent)
+
+    db.add(LimsParentAttachment(lims_sample_pk=parent.id, kind="chromatogram",
+                                filename="chrom.csv", storage="senaite",
+                                render_in_report=False,
+                                attachment_type="HPLC Graph"))
+    db.commit()
+
+    got = db.execute(select(LimsParentAttachment).where(
+        LimsParentAttachment.lims_sample_pk == parent.id)).scalar_one()
+    assert got.kind == "chromatogram"
+    assert got.attachment_type == "HPLC Graph"
 
 
 def test_kind_and_storage_checks_reject_unknown(db):

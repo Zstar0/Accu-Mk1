@@ -1277,7 +1277,7 @@ def _run_migrations():
             id                     SERIAL PRIMARY KEY,
             lims_sample_pk         INTEGER NOT NULL REFERENCES lims_samples(id) ON DELETE CASCADE,
             kind                   VARCHAR(30) NOT NULL
-                                   CHECK (kind IN ('vial_image','packaging_image','receive_image','manual')),
+                                   CHECK (kind IN ('vial_image','packaging_image','receive_image','chromatogram','manual')),
             source_sub_sample_pk   INTEGER REFERENCES lims_sub_samples(id) ON DELETE SET NULL,
             filename               VARCHAR(255) NOT NULL,
             content_type           VARCHAR(100),
@@ -1296,6 +1296,31 @@ def _run_migrations():
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_parent_attachments_uid "
         "ON lims_parent_attachments (senaite_attachment_uid) "
         "WHERE senaite_attachment_uid IS NOT NULL",
+        # attachment_type (final review, 2026-07-14): SENAITE's AttachmentType
+        # title ("HPLC Graph" / "Sample Image") — Layer 4's builder + the FE
+        # (isHplcGraph, lightbox badge) key real behavior off this.
+        "ALTER TABLE lims_parent_attachments ADD COLUMN IF NOT EXISTS "
+        "attachment_type VARCHAR(100)",
+        # 'chromatogram' kind (final review, 2026-07-14): the CREATE TABLE
+        # above already carries the 5-value list for a fresh boot, but the
+        # dev DB already has the 4-value CHECK from the original CREATE, so a
+        # DROP/re-ADD pair is needed to widen it there too. LAST-BOOT-WINS
+        # CLASS (same lesson as the 2026-07-12 workflow-state-system spec
+        # §11 rollback runbook: a DROP/re-ADD CHECK pair re-runs on EVERY
+        # boot, so an older image booted against this same DB after this one
+        # re-applies the narrower list and every 'chromatogram' capture then
+        # dies silently — IntegrityError swallowed by
+        # _capture_parent_attachment_bg's never-fail wrapper). Acceptable
+        # here because lims_parent_attachments exists on no other image
+        # lineage yet (prod has never run this table) — a later kind
+        # addition on a table other images already depend on must
+        # union-preserve instead (name the constraint, add without dropping,
+        # or widen-only).
+        "ALTER TABLE lims_parent_attachments "
+        "DROP CONSTRAINT IF EXISTS lims_parent_attachments_kind_check",
+        "ALTER TABLE lims_parent_attachments ADD CONSTRAINT "
+        "lims_parent_attachments_kind_check CHECK (kind IN "
+        "('vial_image','packaging_image','receive_image','chromatogram','manual'))",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

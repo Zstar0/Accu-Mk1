@@ -4780,6 +4780,25 @@ async def upload_chromatogram_to_senaite(
             if att_resp.status_code not in (200, 301, 302):
                 raise HTTPException(502, f"SENAITE attachment upload returned {att_resp.status_code}")
 
+            # Native record + frozen S3 snapshot (read-flip spec §7) —
+            # best-effort AFTER SENAITE success; never fails or delays the
+            # response. Third dual-write path onto the parent AR (uncaptured
+            # at the Layer 3 final review): the FE always passes the PARENT
+            # AR uid here (SelectVialChromatogramDialog), not a vial uid.
+            # attachment_type/render_in_report mirror exactly what the
+            # SENAITE form POST above just sent ("HPLC Graph" /
+            # RenderInReport=False). source_sample_id=None — lineage here is
+            # the HPLC analysis, not a vial; out of scope for this capture.
+            from fastapi.concurrency import run_in_threadpool
+            await run_in_threadpool(
+                _capture_parent_attachment_bg,
+                sample_uid=sample_uid, file_bytes=csv_bytes,
+                filename=filename, content_type="text/csv",
+                kind="chromatogram", source_sample_id=None,
+                user_id=getattr(current_user, "id", None),
+                render_in_report=False, attachment_type="HPLC Graph",
+            )
+
     except HTTPException:
         raise
     except httpx.TimeoutException:
@@ -13286,6 +13305,7 @@ async def upload_senaite_attachment(
                     filename=filename, content_type=content_type,
                     kind=native_kind, source_sample_id=source_sample_id,
                     user_id=getattr(current_user, "id", None),
+                    attachment_type=attachment_type,
                 )
 
                 return SenaiteUploadAttachmentResponse(success=True, message="Attachment uploaded")
@@ -13737,6 +13757,7 @@ async def receive_senaite_sample(
                         filename=filename, content_type=content_type,
                         kind="receive_image", source_sample_id=None,
                         user_id=getattr(current_user, "id", None),
+                        attachment_type="Sample Image",
                     )
                 else:
                     return SenaiteReceiveSampleResponse(
@@ -14185,7 +14206,8 @@ def _observe_parent_analyses_bg(sample_id: str, observed: list[dict]) -> None:
 def _capture_parent_attachment_bg(
     *, sample_uid: str, file_bytes: bytes, filename: str,
     content_type: str, kind: str, source_sample_id: Optional[str],
-    user_id: Optional[int],
+    user_id: Optional[int], render_in_report: bool = True,
+    attachment_type: Optional[str] = None,
 ) -> None:
     """Best-effort native parent-attachment capture + frozen S3 snapshot
     (read-flip spec §7, Layer 3 Task 3) on its own short-lived session —
@@ -14193,12 +14215,18 @@ def _capture_parent_attachment_bg(
     raises: a capture failure must never fail or delay-fail the endpoint
     it's scheduled from.
 
-    Shared by two call sites: upload_senaite_attachment (kind/source_sample_id
-    come from user-controlled form fields — native_kind, source_sample_id)
-    and receive_senaite_sample's step-1 image upload (kind='receive_image',
-    source_sample_id=None, hardcoded). `kind` is clamped to the allowed set
-    here rather than trusted from the caller, since the upload endpoint's
-    native_kind is user-supplied.
+    Shared by three call sites: upload_senaite_attachment (kind/source_sample_id
+    /attachment_type come from user-controlled form fields — native_kind,
+    source_sample_id, attachment_type), receive_senaite_sample's step-1 image
+    upload (kind='receive_image', source_sample_id=None,
+    attachment_type='Sample Image', hardcoded), and
+    upload_chromatogram_to_senaite (kind='chromatogram', source_sample_id=None
+    — lineage is the analysis, not a vial — attachment_type='HPLC Graph',
+    render_in_report=False, all hardcoded to match what that endpoint sends
+    SENAITE). `kind` is clamped to the allowed set here rather than trusted
+    from the caller, since the upload endpoint's native_kind is user-supplied.
+    `render_in_report` defaults True (the first two call sites' original,
+    unchanged behavior); only the chromatogram site passes False explicitly.
 
     Snapshot semantics: saves the EXACT bytes passed under a NEW storage key,
     never the live vial-photo key — retakes must not mutate what was
@@ -14213,8 +14241,10 @@ def _capture_parent_attachment_bg(
         from database import SessionLocal
         from sub_samples.photo_storage import get_storage
         resolved_kind = kind if kind in (
-            "vial_image", "packaging_image", "receive_image", "manual"
+            "vial_image", "packaging_image", "receive_image",
+            "chromatogram", "manual",
         ) else "manual"
+        filename = filename[:255]  # column is VARCHAR(255) — guard both writers
         db = SessionLocal()
         row = db.execute(
             select(LimsSample).where(
@@ -14231,7 +14261,18 @@ def _capture_parent_attachment_bg(
                 select(LimsSubSample).where(
                     LimsSubSample.sample_id == source_sample_id)
             ).scalar_one_or_none()
-            source_pk = sub.id if sub is not None else None
+            if sub is None:
+                logger.warning(
+                    "parent_attachment.source_unresolvable uid=%s "
+                    "source_sample_id=%s", sample_uid, source_sample_id)
+            elif sub.parent_sample_pk != row.id:
+                logger.warning(
+                    "parent_attachment.source_lineage_mismatch uid=%s "
+                    "source_sample_id=%s vial_parent_pk=%s row_id=%s",
+                    sample_uid, source_sample_id, sub.parent_sample_pk,
+                    row.id)
+            else:
+                source_pk = sub.id
         key = get_storage().save_photo(row.sample_id, file_bytes, filename)
         db.add(LimsParentAttachment(
             lims_sample_pk=row.id,
@@ -14241,7 +14282,8 @@ def _capture_parent_attachment_bg(
             content_type=content_type,
             storage="s3",
             storage_key=key,
-            render_in_report=True,
+            render_in_report=render_in_report,
+            attachment_type=attachment_type,
             created_by_user_id=user_id,
         ))
         db.commit()

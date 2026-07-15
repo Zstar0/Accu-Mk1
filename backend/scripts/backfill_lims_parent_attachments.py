@@ -26,9 +26,15 @@ PARTIAL unique index `uq_lims_parent_attachments_uid` on
 `ON CONFLICT (senaite_attachment_uid) WHERE senaite_attachment_uid IS NOT
 NULL DO NOTHING`. Use --dry-run for a rehearsal that iterates the registry +
 fetches (throttled) but writes nothing (no DB rows, no UPDATEs, no
-checkpoint) — it reports the same insert/dup/adopted counts a real run
-would, using the SELECT side of each check only. Use --limit N for a smoke
-run.
+checkpoint) — it reports the same insert/dup/adopted TOTAL a real run would
+(final review, 2026-07-14: the adopt-vs-insert SPLIT can differ when two
+swept refs in the same sample both match one uid-less candidate — dry-run
+never runs the UPDATE, so the candidate stays uid-less across both checks
+and BOTH refs read as "would adopt"; a real run's first UPDATE makes the
+candidate no longer uid-less for the second ref's own SELECT within the same
+transaction, so it lands as inserted instead. adopted+inserted still sums
+the same either way — only which bucket a given ref falls in can shift).
+Use --limit N for a smoke run.
 
 MECHANISM (registry-cursor, same shape as backfill_lims_sample_remarks.py):
 this script iterates Mk1's OWN `lims_samples` registry table, ordered by id.
@@ -70,13 +76,16 @@ present → `dup`, skip; else uid-less filename match → adopt; else insert.
 
 Row shape for a genuinely new (non-adopted) insert: storage='senaite',
 storage_key=NULL, senaite_attachment_uid=<uid>, filename/content_type from
-the attachment detail's `AttachmentFile`, render_in_report from the
+the attachment detail's `AttachmentFile`, attachment_type from the detail's
+`AttachmentType` title (string or {title|Title: ...} dict — same extraction
+as the display path, see `_rows_for_sample`), render_in_report from the
 detail's `RenderInReport` when present (truthy) else False, kind='manual'
 (historical provenance is unknown — capture-time kinds like 'vial_image' /
 'receive_image' don't apply retroactively), created_at parsed from the
 detail's `created` when parseable else the epoch sentinel `datetime(1970,
 1, 1)` (counted under `unparseable_created`, same convention as the remarks
-sweep).
+sweep). filename is truncated to 255 chars (the column's VARCHAR(255)
+limit) before either the adoption-candidate lookup or the insert.
 
 SENAITE BULK-SCAN SAFETY (load-bearing — do not "optimize" away): strictly
 sequential (concurrency 1), throttled between EVERY SENAITE call — both the
@@ -98,7 +107,17 @@ Stats line printed as JSON on completion (retain it as the run record):
 list entries encountered across all visited samples, well-formed or not
 (invariant: attachments_seen == inserted + dup + adopted + skipped_malformed
 + detail_fetch_errors on a real run; --dry-run's inserted/dup/adopted are
-would-be counts, so the same invariant holds there too).
+would-be counts, so the same invariant holds there too). NOTE
+`attachments_seen` is folded into `stats` as soon as a sample's refs are
+enumerated (right after `_rows_for_sample` returns) — PRE-COMMIT, unlike
+inserted/dup/adopted which are only folded in after that sample's
+transaction actually lands (module docstring's own "accumulate in LOCALS"
+rule). A sample-level error raised AFTER enumeration but during the write
+loop would therefore count that sample's refs under `attachments_seen`
+(and under `errors`) without any of them landing — the stated invariant can
+only be violated by that narrow, not-currently-observed error class (the
+UID-COLLISION GUARD below closes the one integrity-error path that used to
+reach it).
 `inserted`/`dup`/`adopted` mean "would insert" / "already present" / "would
 adopt" during --dry-run (SELECT-side only, nothing written) and the real
 outcome on a real run. `skipped_malformed` = individual Attachment refs
@@ -148,9 +167,9 @@ DEFAULT_CHECKPOINT = "/tmp/backfill_lims_parent_attachments.checkpoint.json"
 INSERT_SQL = text(
     "INSERT INTO lims_parent_attachments "
     "  (lims_sample_pk, kind, filename, content_type, storage, storage_key, "
-    "   senaite_attachment_uid, render_in_report, created_at) "
+    "   senaite_attachment_uid, render_in_report, created_at, attachment_type) "
     "VALUES (:pk, 'manual', :filename, :content_type, 'senaite', NULL, "
-    "   :uid, :render_in_report, :created) "
+    "   :uid, :render_in_report, :created, :attachment_type) "
     "ON CONFLICT (senaite_attachment_uid) WHERE senaite_attachment_uid IS NOT NULL "
     "DO NOTHING"
 ).bindparams(bindparam("created", type_=DateTime()), bindparam("render_in_report", type_=Boolean()))
@@ -179,8 +198,8 @@ ADOPT_UPDATE_SQL = text(
     "UPDATE lims_parent_attachments SET senaite_attachment_uid=:uid WHERE id=:id"
 )
 # Adoption touches ONLY the uid column — every other field (storage,
-# storage_key, kind, render_in_report, created_at) is the capture-time
-# truth and is left exactly as it was.
+# storage_key, kind, render_in_report, attachment_type, created_at) is the
+# capture-time truth and is left exactly as it was.
 
 
 def load_checkpoint(path: str) -> int:
@@ -232,7 +251,11 @@ def _rows_for_sample(meta: dict, lims_sample_pk: int, *, sleep_s: float):
     dict, no uid, no usable filename in the detail) is skipped and counted
     under `malformed`; a RAISED detail fetch is skipped and counted under
     `fetch_errors` (missed coverage — fails the exit code, see module
-    docstring). Neither ever aborts the sample."""
+    docstring). Neither ever aborts the sample.
+
+    `fetch_attachment_meta` is called with the ref's own `api_url` when the
+    ref carries one (preferred over letting the helper construct a URL from
+    just the uid — see that function's docstring)."""
     out, malformed, fetch_errors, unparseable = [], 0, 0, 0
     seen = 0
     raw = meta.get("Attachment")
@@ -247,7 +270,7 @@ def _rows_for_sample(meta: dict, lims_sample_pk: int, *, sleep_s: float):
             continue
 
         try:
-            detail = sen.fetch_attachment_meta(uid)
+            detail = sen.fetch_attachment_meta(uid, ref.get("api_url"))
         except Exception as e:
             fetch_errors += 1
             log.warning("attachment detail fetch failed uid=%s err=%s", uid, e)
@@ -260,9 +283,24 @@ def _rows_for_sample(meta: dict, lims_sample_pk: int, *, sleep_s: float):
         if not filename:
             malformed += 1
             continue
+        filename = filename[:255]  # column is VARCHAR(255) — guard both writers
         content_type = att_file.get("content_type")
 
         render_in_report = bool(detail.get("RenderInReport"))
+
+        # AttachmentType title extraction — same shape as the display path's
+        # extraction in main.py's get_senaite_sample attachments loop
+        # (~line 12899): a plain string on some SENAITE versions, a
+        # {title|Title: ...} dict on others.
+        attachment_type = (
+            detail.get("AttachmentType") or detail.get("getAttachmentType")
+            or None
+        )
+        if isinstance(attachment_type, dict):
+            attachment_type = (
+                attachment_type.get("title") or attachment_type.get("Title")
+                or None
+            )
 
         created = detail.get("created")
         try:
@@ -280,6 +318,7 @@ def _rows_for_sample(meta: dict, lims_sample_pk: int, *, sleep_s: float):
             "uid": uid,
             "filename": filename,
             "content_type": content_type,
+            "attachment_type": attachment_type,
             "render_in_report": render_in_report,
             "created": created_dt,
         })
