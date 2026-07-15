@@ -271,3 +271,53 @@ export function downscaleForCoa(previewDataUrl: string): Promise<string> {
     img.src = previewDataUrl
   })
 }
+
+// ---------------------------------------------------------------------------
+// Center-square capture (2026-07-14 hotfix)
+//
+// The ReceiveWizard replaced the old processVialPhoto pipeline with a
+// full-frame capture; these helpers restore ONLY the center-square crop at
+// full shorter-axis resolution — no downscale, no enhancement.
+// ---------------------------------------------------------------------------
+
+/** Centered square source-rect for a width×height frame. */
+export function squareCropRect(
+  width: number,
+  height: number,
+): { sx: number; sy: number; side: number } {
+  const side = Math.min(width, height)
+  return {
+    sx: Math.round((width - side) / 2),
+    sy: Math.round((height - side) / 2),
+    side,
+  }
+}
+
+/**
+ * Capture the center square of a live video frame at full shorter-axis
+ * resolution and encode it via the supplied canvas.
+ *
+ * Throws with the ReceiveWizard's exact operator-facing messages so the
+ * caller can surface `err.message` directly.
+ */
+export function captureSquareFromVideo(
+  video: HTMLVideoElement,
+  canvas: HTMLCanvasElement,
+  mimeType: string,
+  quality: number,
+): string {
+  const vw = video.videoWidth
+  const vh = video.videoHeight
+  if (!vw || !vh) {
+    throw new Error('Camera not ready yet — try again in a moment.')
+  }
+  const { sx, sy, side } = squareCropRect(vw, vh)
+  canvas.width = side
+  canvas.height = side
+  const ctx = canvas.getContext('2d')
+  if (!ctx) {
+    throw new Error('Cannot capture — browser canvas unavailable.')
+  }
+  ctx.drawImage(video, sx, sy, side, side, 0, 0, side, side)
+  return canvas.toDataURL(mimeType, quality)
+}
