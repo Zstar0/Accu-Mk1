@@ -20,6 +20,7 @@ from sqlalchemy import and_, delete as sa_delete, or_, select
 from sqlalchemy.orm import Session
 
 from lims_analyses.state_machine import (
+    TIER_PARENT,
     InvalidTransitionError,
     TierMismatchError,
     is_terminal,
@@ -908,14 +909,25 @@ def list_parent_analyses_senaite_shape(
     provenance='canonical' -- it reports on *promotions*, a canonical-only
     concept), this reads the full parent-tier analysis surface regardless
     of which side authored the row -- that's the read-flip's whole point.
-    Note: this selection is host-shape only (lims_sample_pk set, no
-    sub-sample) -- it does not additionally require review_state to be one
-    of the "true" parent-tier states, so a parent-acting-as-a-vial row
-    (variance set, mid-run: unassigned/assigned/to_be_verified per
-    state_machine.tier_of) also matches if present. Matches the brief's
-    literal selection contract; no live seeding path produces such a row
-    with lims_sub_sample_pk NULL today, but a caller expanding this in the
-    future should be aware.
+
+    Tier guard: host shape alone (lims_sample_pk set, no sub-sample) is NOT
+    sufficient -- a parent can also host VIAL-tier rows. That shape is
+    reachable, not hypothetical: create_analysis(host_kind="sample") mints
+    a parent-hosted row in 'unassigned' via the authenticated
+    POST /api/lims-analyses (routes.py passes host_kind straight through),
+    and state_machine.tier_of explicitly models it ("the parent acting as
+    a vial in a variance set, mid-run": parent-hosted +
+    unassigned/assigned/to_be_verified => TIER_VIAL). Those rows belong to
+    the variance UI, not this AR-shaped analyses view -- they have no
+    SENAITE counterpart, so surfacing them here would be a guaranteed
+    mk1-vs-senaite parity diff (phantom 'unassigned' lines in mk1 mode).
+    Canonical rows are therefore filtered per-row through
+    state_machine.tier_of itself (no parallel state list to drift), keeping
+    only TIER_PARENT. Shadow rows bypass the check: they are parent-tier by
+    construction (parent_mirror.py writes them only against the parent
+    host), and their sentinel review_state ('senaite_mirror') is not in
+    tier_of's parent-state set, so running them through tier_of would
+    misclassify them as TIER_VIAL.
 
     "Current" row resolution mirrors resolve_shadow_target's shadow-side
     semantics (retested=False is the liveness signal, not retest_of_id --
@@ -974,6 +986,22 @@ def list_parent_analyses_senaite_shape(
             ),
         ).order_by(LimsAnalysis.keyword, LimsAnalysis.id)
     ).scalars().all())
+
+    # Tier guard (see docstring): canonical rows must be parent-TIER per the
+    # state machine's own discriminator -- a parent-acting-as-vial mid-run
+    # row (TIER_VIAL) belongs to the variance UI, not this AR-shaped view.
+    # In-memory filter on the already-fetched rows (no per-row queries);
+    # tier_of is pure. Shadow rows bypass: parent-tier by construction,
+    # and their sentinel review_state would misclassify under tier_of.
+    rows = [
+        r for r in rows
+        if r.provenance == "shadow"
+        or tier_of(
+            lims_sample_pk=r.lims_sample_pk,
+            lims_sub_sample_pk=r.lims_sub_sample_pk,
+            review_state=r.review_state,
+        ) == TIER_PARENT
+    ]
 
     return _serialize_senaite_shape_rows(db, rows)
 

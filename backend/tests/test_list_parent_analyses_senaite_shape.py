@@ -207,6 +207,73 @@ def test_unknown_parent_sample_returns_empty_list(db_session):
     assert list_parent_analyses_senaite_shape(db_session, "NO-SUCH-PARENT-XYZ") == []
 
 
+# ── contract 6 (review fix): parent-acting-as-vial rows are excluded ────────
+
+
+def test_parent_acting_as_vial_midrun_rows_excluded(db_session):
+    """A parent can host VIAL-TIER rows: create_analysis(host_kind="sample")
+    (reachable via authenticated POST /api/lims-analyses -- routes.py
+    create_analysis passes host_kind straight through) mints a parent-hosted
+    row in 'unassigned', and state_machine.tier_of explicitly models "the
+    parent acting as a vial in a variance set, mid-run" (parent-hosted +
+    unassigned/assigned/to_be_verified => TIER_VIAL). Such rows have NO
+    SENAITE counterpart -- SENAITE's AR analyses view never shows them --
+    so surfacing them in mk1 mode would be a guaranteed parity diff
+    (phantom 'unassigned' lines). The listing must include only rows that
+    are parent-TIER per tier_of; shadow rows are parent-tier by
+    construction (their sentinel review_state is not in tier_of's state
+    set, so they bypass the per-row check)."""
+    from lims_analyses.service import (
+        create_analysis,
+        list_parent_analyses_senaite_shape,
+    )
+
+    parent = _mk_parent(db_session)
+    svc_v1 = _mk_service(db_session, "TEST-PAV-1", "TEST: parent-as-vial 1")
+    svc_v2 = _mk_service(db_session, "TEST-PAV-2", "TEST: parent-as-vial 2")
+    svc_p = _mk_service(db_session, "ANALYTE-1-PUR", "Analyte 1 (Purity)")
+    svc_s = _mk_service(db_session, "ANALYTE-2-QTY", "Analyte 2 (Quantity)")
+
+    # Parent-acting-as-vial, mid-run: the real seeding path (create_analysis
+    # with host_kind="sample"), one still unassigned...
+    midrun_unassigned = create_analysis(
+        db_session, host_kind="sample", host_pk=parent.id,
+        analysis_service_id=svc_v1.id, keyword=svc_v1.keyword,
+        title=svc_v1.title,
+    )
+    # ...and one walked to to_be_verified (still TIER_VIAL per tier_of).
+    midrun_tbv = create_analysis(
+        db_session, host_kind="sample", host_pk=parent.id,
+        analysis_service_id=svc_v2.id, keyword=svc_v2.keyword,
+        title=svc_v2.title, result_value="98.1",
+    )
+    midrun_tbv.review_state = "to_be_verified"
+    db_session.flush()
+
+    # True parent-tier rows: a verified canonical + a shadow mirror.
+    canonical = _mk_parent_analysis(
+        db_session, parent, svc_p, provenance="canonical",
+        review_state="verified", result_value="99.0",
+    )
+    shadow = _mk_parent_analysis(
+        db_session, parent, svc_s, provenance="shadow",
+        review_state="senaite_mirror", mirror_review_state="published",
+        result_value="12.0",
+    )
+
+    rows = list_parent_analyses_senaite_shape(db_session, parent.sample_id)
+    uids = {r.uid for r in rows}
+
+    assert f"mk1:{canonical.id}" in uids
+    assert f"mk1:{shadow.id}" in uids
+    assert f"mk1:{midrun_unassigned.id}" not in uids, (
+        "parent-acting-as-vial (unassigned) row leaked into the AR-shaped listing"
+    )
+    assert f"mk1:{midrun_tbv.id}" not in uids, (
+        "parent-acting-as-vial (to_be_verified) row leaked into the AR-shaped listing"
+    )
+
+
 # ── contract 5: extraction proof -- vial-tier senaite-shape unchanged ──────
 
 
