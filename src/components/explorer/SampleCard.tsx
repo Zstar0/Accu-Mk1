@@ -7,6 +7,7 @@ import type { SenaiteLookupResult } from '@/lib/api'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 import {
   AnalysisCounts,
+  HighlightMatch,
   SampleStateBadge,
   groupAnalysisStates,
 } from './helpers'
@@ -19,6 +20,8 @@ export function SampleCard({
   isError,
   className,
   analyte,
+  lot,
+  highlightLot,
   slaSnapshots,
 }: {
   sampleId: string
@@ -38,6 +41,16 @@ export function SampleCard({
   // while the lookup is loading or has errored. When undefined/empty the
   // sub-row is omitted so empty orders don't get a whitespace gap.
   analyte?: string
+  // Sample lot — payload-sourced (`order.payload.samples[i].lot_code`), same
+  // positional-alignment contract as `analyte`, so it shows on all three
+  // render branches. On the normal branch the SENAITE lookup's `client_lot`
+  // (authoritative — lab-editable after AR creation) wins over this prop.
+  // When neither source has a non-blank value the row is omitted.
+  lot?: string
+  // Active lot-search query. When set, occurrences inside the displayed lot
+  // value get a browser-find-style <mark> highlight (see HighlightMatch).
+  // Purely presentational — filtering happens in the caller.
+  highlightLot?: string
   // Multi-tier follow-on — per-sample SLA snapshots, one entry per service
   // group the sample's analyses touch. Replaces the legacy hardcoded 24h/48h
   // goalNote with the real tier-resolved indicator (priority>group>default
@@ -60,6 +73,19 @@ export function SampleCard({
     </div>
   ) : null
 
+  const payloadLot =
+    typeof lot === 'string' && lot.trim().length > 0 ? lot.trim() : undefined
+  const lotRow = (value: string | undefined) =>
+    value ? (
+      <div
+        data-testid={`sample-card-lot-${sampleId}`}
+        className="text-xs text-muted-foreground truncate mb-1"
+        title={value}
+      >
+        Lot: <HighlightMatch text={value} query={highlightLot} />
+      </div>
+    ) : null
+
   if (isLoading) {
     return (
       <div
@@ -74,6 +100,7 @@ export function SampleCard({
           <span className="font-mono">{sampleId}</span>
         </div>
         {analyteEl}
+        {lotRow(payloadLot)}
       </div>
     )
   }
@@ -89,6 +116,7 @@ export function SampleCard({
       >
         <span className="text-xs font-mono text-destructive">{sampleId}</span>
         {analyteEl}
+        {lotRow(payloadLot)}
         <div className="text-xs text-muted-foreground">Failed to load</div>
       </div>
     )
@@ -96,6 +124,10 @@ export function SampleCard({
 
   const counts = groupAnalysisStates(lookup.analyses, lookup.review_state)
   const needsAttention = counts.to_verify > 0
+  const clientLot =
+    lookup.client_lot && lookup.client_lot.trim().length > 0
+      ? lookup.client_lot.trim()
+      : undefined
 
   return (
     <div
@@ -125,6 +157,7 @@ export function SampleCard({
         </span>
       </div>
       {analyteEl}
+      {lotRow(clientLot ?? payloadLot)}
       <div className="flex items-center gap-2">
         <AnalysisCounts counts={counts} needsAttention={needsAttention} />
         {lookup.date_received && lookup.review_state !== 'published' && (

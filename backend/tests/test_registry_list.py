@@ -206,3 +206,34 @@ def test_search_by_verification_code_falls_back_to_stored_column_on_is_error(cli
         r = client.get("/registry/samples",
                        params={"search": "OLD1", "search_field": "verification_code"})
     assert [i["id"] for i in r.json()["items"]] == ["P-1"]
+
+
+def test_client_lot_passthrough_in_list_shape():
+    row = _row(sample_id='P-77', client_lot='LOT-555')
+    [out] = registry_rows_to_list([row])
+    assert out['client_lot'] == 'LOT-555'
+
+
+def test_client_lot_null_when_missing():
+    row = _row(sample_id='P-78')
+    [out] = registry_rows_to_list([row])
+    assert out['client_lot'] is None
+
+
+def test_search_by_lot_ilike_substring(client):
+    _seed(client, sample_id="P-1", external_lims_uid="u1", client_lot="LOT-555-A")
+    _seed(client, sample_id="P-2", external_lims_uid="u2", client_lot="LOT-111")
+    _seed(client, sample_id="P-3", external_lims_uid="u3")  # no lot
+    r = client.get("/registry/samples", params={"search": "555", "search_field": "lot"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    assert [item["id"] for item in body["items"]] == ["P-1"]
+    assert body["items"][0]["client_lot"] == "LOT-555-A"
+
+
+def test_search_by_lot_case_insensitive(client):
+    _seed(client, sample_id="P-1", external_lims_uid="u1", client_lot="LOT-ABC")
+    r = client.get("/registry/samples", params={"search": "lot-abc", "search_field": "lot"})
+    assert r.status_code == 200
+    assert r.json()["total"] == 1

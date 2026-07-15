@@ -568,3 +568,25 @@ def test_reconcile_log_failure_does_not_break_refresh(db, seed_sample, caplog):
         lims_sample_pk=seed_sample.id
     ).one_or_none()
     assert row is None
+
+
+def test_receive_hook_heals_registry_status(db, seed_sample):
+    """RC1 (2026-07-14 inbox-desync fix): the receive hook must ALSO heal
+    lims_samples.status — the transition log alone leaves the registry stale
+    AND suppresses the event-sync heal via the dup guard. seed_sample starts
+    at 'verified' so the write is observable."""
+    proxy = _mock_receive_flow()
+    try:
+        with patch.object(main, "SENAITE_URL", "http://senaite.test"):
+            r = _client_as_user().post(
+                "/wizard/senaite/receive-sample",
+                json={"sample_uid": "UID-RECV-HEAL", "sample_id": seed_sample.sample_id},
+            )
+    finally:
+        proxy.stop()
+
+    assert r.status_code == 200, r.text
+    assert r.json()["success"] is True
+    db.expire_all()
+    row = db.query(LimsSample).filter_by(sample_id=seed_sample.sample_id).one()
+    assert row.status == "sample_received"

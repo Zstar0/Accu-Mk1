@@ -7,6 +7,7 @@ import {
   getOrderReceivedAt,
   groupAnalysisStates,
   isOrderDone,
+  splitHighlight,
 } from '@/components/explorer/helpers'
 import type {
   ExplorerOrder,
@@ -240,5 +241,52 @@ describe('getOrderReceivedAt', () => {
     expect(getOrderReceivedAt(orderWith(['S-1', 'S-2', 'S-3']), map)).toBe(
       '2026-05-09T00:00:00Z'
     )
+  })
+})
+
+// Lot-search highlight — pure segment splitter behind <HighlightMatch>.
+// Case-insensitive, all occurrences, browser-find semantics. Empty/undefined
+// query → one non-match segment (renders as plain text).
+describe('splitHighlight', () => {
+  it('splits a middle match into before/match/after segments', () => {
+    expect(splitHighlight('LOT-555-A', '555')).toEqual([
+      { text: 'LOT-', match: false },
+      { text: '555', match: true },
+      { text: '-A', match: false },
+    ])
+  })
+
+  it('matches case-insensitively but preserves original casing in segments', () => {
+    expect(splitHighlight('Lot-ABC', 'abc')).toEqual([
+      { text: 'Lot-', match: false },
+      { text: 'ABC', match: true },
+    ])
+  })
+
+  it('highlights every occurrence, not just the first', () => {
+    expect(splitHighlight('555x555', '555')).toEqual([
+      { text: '555', match: true },
+      { text: 'x', match: false },
+      { text: '555', match: true },
+    ])
+  })
+
+  it('returns one non-match segment when the query is absent from the text', () => {
+    expect(splitHighlight('LOT-111', '555')).toEqual([
+      { text: 'LOT-111', match: false },
+    ])
+  })
+
+  it('returns one non-match segment for undefined or whitespace-only query', () => {
+    expect(splitHighlight('LOT-111', undefined)).toEqual([
+      { text: 'LOT-111', match: false },
+    ])
+    expect(splitHighlight('LOT-111', '   ')).toEqual([
+      { text: 'LOT-111', match: false },
+    ])
+  })
+
+  it('handles the query equalling the whole text', () => {
+    expect(splitHighlight('555', '555')).toEqual([{ text: '555', match: true }])
   })
 })

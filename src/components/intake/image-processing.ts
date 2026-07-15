@@ -271,3 +271,112 @@ export function downscaleForCoa(previewDataUrl: string): Promise<string> {
     img.src = previewDataUrl
   })
 }
+
+// ---------------------------------------------------------------------------
+// Center-square capture (2026-07-14 hotfix)
+//
+// The ReceiveWizard replaced the old processVialPhoto pipeline with a
+// full-frame capture; these helpers restore ONLY the center-square crop at
+// full shorter-axis resolution — no downscale, no enhancement.
+// ---------------------------------------------------------------------------
+
+/** Centered square source-rect for a width×height frame. */
+export function squareCropRect(
+  width: number,
+  height: number,
+): { sx: number; sy: number; side: number } {
+  const side = Math.min(width, height)
+  return {
+    sx: Math.round((width - side) / 2),
+    sy: Math.round((height - side) / 2),
+    side,
+  }
+}
+
+/**
+ * Capture the center square of a live video frame at full shorter-axis
+ * resolution and encode it via the supplied canvas.
+ *
+ * Throws with the ReceiveWizard's exact operator-facing messages so the
+ * caller can surface `err.message` directly.
+ */
+export function captureSquareFromVideo(
+  video: HTMLVideoElement,
+  canvas: HTMLCanvasElement,
+  mimeType: string,
+  quality: number,
+): string {
+  const vw = video.videoWidth
+  const vh = video.videoHeight
+  if (!vw || !vh) {
+    throw new Error('Camera not ready yet — try again in a moment.')
+  }
+  const { sx, sy, side } = squareCropRect(vw, vh)
+  canvas.width = side
+  canvas.height = side
+  const ctx = canvas.getContext('2d')
+  if (!ctx) {
+    throw new Error('Cannot capture — browser canvas unavailable.')
+  }
+  ctx.drawImage(video, sx, sy, side, side, 0, 0, side, side)
+  return canvas.toDataURL(mimeType, quality)
+}
+
+/**
+ * Center-crop a picked image file to a square at full shorter-axis
+ * resolution, re-encoding with the wizard's active format/quality.
+ *
+ * Already-square images resolve to the ORIGINAL bytes as a data URL — no
+ * lossy re-encode. Mirrors the validation/error contract of the legacy
+ * processFileImage (webcam-fallback picker).
+ */
+export function cropFileToSquare(
+  file: File,
+  mimeType: string,
+  quality: number,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!file.type.startsWith('image/')) {
+      reject(new Error('Selected file is not an image'))
+      return
+    }
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error('Failed to read file'))
+    reader.onload = () => {
+      const dataUrl = reader.result as string
+      const img = new Image()
+      img.onerror = () => reject(new Error('Failed to load image'))
+      img.onload = () => {
+        try {
+          if (img.width === 0 || img.height === 0) {
+            reject(new Error('Image has no dimensions'))
+            return
+          }
+          if (img.width === img.height) {
+            resolve(dataUrl)
+            return
+          }
+          const { sx, sy, side } = squareCropRect(img.width, img.height)
+          const canvas = document.createElement('canvas')
+          canvas.width = side
+          canvas.height = side
+          const ctx = canvas.getContext('2d')
+          if (!ctx) {
+            reject(new Error('Canvas 2D context unavailable'))
+            return
+          }
+          ctx.imageSmoothingEnabled = true
+          ctx.imageSmoothingQuality = 'high'
+          ctx.drawImage(img, sx, sy, side, side, 0, 0, side, side)
+          resolve(canvas.toDataURL(mimeType, quality))
+        } catch (err) {
+          reject(
+            err instanceof Error ? err : new Error('Image processing failed'),
+          )
+        }
+      }
+      img.src = dataUrl
+    }
+    reader.readAsDataURL(file)
+  })
+}

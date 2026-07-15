@@ -1,5 +1,87 @@
 # Changelog
 
+## v1.5.2 — 2026-07-14
+
+Double hotfix: vial photos capture square again, and the Sample Preps page
+no longer hides older active preps.
+
+### Fixed
+
+- **Vial photo center-square crop restored.** The 2026-06-30 receive-page
+  rework replaced the old photo pipeline with a full-frame capture, so vial
+  photos landed widescreen (letterboxed-small in the COA's square slot).
+  Webcam capture and the file-picker fallback now center-crop to the shorter
+  axis at full resolution (no downscale, no enhancement); the live preview
+  is `aspect-square object-cover` so operators see exactly what is saved.
+  Already-square file uploads pass through byte-identical. Packaging
+  capture deliberately stays full-frame 4:3.
+- **Sample Preps list: server-side status filtering.** The page fetched the
+  newest-100 preps and hid completed statuses client-side, so active preps
+  older than the newest-100 window silently vanished from the list while
+  staying findable via search (38 hidden in prod at diagnosis: 23
+  awaiting-HPLC + 15 on-hold, oldest from April 6). `GET /sample-preps` now
+  accepts `exclude_statuses` (comma-separated) applied in SQL before the
+  LIMIT; the page requests active preps only with a 500 limit and keeps a
+  client-side re-filter for deploy skew.
+
+## v1.5.1 — 2026-07-14
+
+Backend-only hotfix: the mk1-mode worksheets inbox was incomplete/out of
+sync because `lims_samples.status` (the registry mirror of SENAITE's
+review_state) was not reliably maintained.
+
+### Fixed
+
+- **Receive/publish hooks now heal the registry status.** The Mk1 receive
+  and publish paths recorded workflow transitions but never wrote
+  `lims_samples.status` — and the IS event sync's dup guard then suppressed
+  its own heal because the mk1 log row already "explained" the transition.
+  The hooks' background writer now heals the status column in the same
+  never-fail session.
+- **Status heals are vocabulary-gated.** IS events carry WordPress
+  order-progress statuses for some verbs (`worksheet_assigned` →
+  `analyzing`) that are not SENAITE review states; healing them poisoned a
+  column every read surface compares against SENAITE vocabulary. All heal
+  paths now gate on the workflow catalog's sample-state whitelist. The
+  transition log still records raw events.
+- **One-time sweep script** (`scripts/heal_sample_status_from_transitions.py`,
+  dry-run by default) heals rows frozen before the 1.4.0 event-sync
+  cold-start cursor from the transition log itself — zero SENAITE load.
+  Prod dry-run: 180 heals across 1,581 samples.
+
+## v1.5.0 — 2026-07-14
+
+Sample lot visibility end to end: lot codes on every sample card, lot search
+on the Order Status and Customers pages, and a Lot column on the samples
+list page.
+
+### Added
+
+- **Lot on sample cards.** Order Status (table + kanban), Customers detail,
+  and failed-sample cards show the sample's lot — instantly from the order
+  payload's `lot_code`, upgraded to SENAITE's authoritative `ClientLot` when
+  the per-sample lookup loads. Blank values render nothing.
+- **Lot search box on the Order Status page.** Client-side filter matching
+  the payload lot instantly and the loaded SENAITE `client_lot` as lookups
+  arrive (same progressive contract as the Analyte filter). Order-level
+  semantics: an order stays visible when ANY of its samples matches.
+- **Lot search axis on the Customers page.** Fourth debounced input on the
+  customer-detail orders search, AND-combined server-side via the new
+  Integration Service `search_lot` param (requires IS >= 1.0.9; on older IS
+  the axis no-ops rather than erroring).
+- **Lot column + filter on the samples list page.** Registry (Mk1) read mode
+  serves the lot straight from `lims_samples.client_lot` with a single-table
+  ILIKE filter — no extra queries, page speed unchanged. SENAITE read mode
+  resolves matching ids from the local mirror, then bounded `getId` fetches.
+- **Browser-find-style highlight.** Matched lot text is highlighted with a
+  yellow mark on every card and list surface while a lot search is active.
+
+### Fixed
+
+- **27 pre-existing frontend test failures** (flag-hook pollution class) in
+  the sample-card and order-row suites, healed via a one-line
+  `getWorksheetUsers` test mock.
+
 ## v1.4.0 — 2026-07-13
 
 SENAITE phase-out slice 3 (workflow state system) plus two independent

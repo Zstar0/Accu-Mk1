@@ -23,6 +23,7 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { ROLE_BADGE_CLASS } from '@/lib/assignment-colors'
+import { HighlightMatch } from '@/components/explorer/helpers'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -113,6 +114,7 @@ const TABS: Tab[] = [
 type SortColumn =
   | 'id'
   | 'client_order_number'
+  | 'client_lot'
   | 'client_id'
   | 'verification_code'
   | 'date_created'
@@ -175,6 +177,7 @@ const ROLE_BADGES: { key: RoleKey; label: string; cls: string }[] = [
 interface ColumnFilters {
   id: string
   client_order_number: string
+  client_lot: string
   verification_code: string
   analytes: string
 }
@@ -377,6 +380,12 @@ function SampleTable({
       cellClassName: 'text-sm text-muted-foreground',
     },
     {
+      key: 'client_lot',
+      label: 'Lot',
+      className: 'w-28',
+      cellClassName: 'text-sm text-muted-foreground',
+    },
+    {
       key: 'client_id',
       label: 'Client',
       className: '',
@@ -409,7 +418,7 @@ function SampleTable({
   ]
 
   // Columns that support inline search
-  const filterableColumns: (keyof ColumnFilters)[] = ['id', 'client_order_number', 'analytes', 'verification_code']
+  const filterableColumns: (keyof ColumnFilters)[] = ['id', 'client_order_number', 'client_lot', 'analytes', 'verification_code']
 
   return (
     <div className="overflow-auto">
@@ -559,6 +568,16 @@ function SampleTable({
                   <span className="text-muted-foreground">—</span>
                 )}
               </TableCell>
+              <TableCell className="text-sm text-muted-foreground">
+                {s.client_lot ? (
+                  <HighlightMatch
+                    text={s.client_lot}
+                    query={committedFilters.client_lot}
+                  />
+                ) : (
+                  '—'
+                )}
+              </TableCell>
               <TableCell className="text-sm">{s.client_id ?? '—'}</TableCell>
               <TableCell className="text-sm">
                 {s.analytes?.length > 0 ? (
@@ -691,12 +710,14 @@ export function SenaiteDashboard() {
   const [columnFilters, setColumnFilters] = useState<ColumnFilters>({
     id: '',
     client_order_number: '',
+    client_lot: '',
     verification_code: '',
     analytes: '',
   })
   const [committedFilters, setCommittedFilters] = useState<ColumnFilters>({
     id: '',
     client_order_number: '',
+    client_lot: '',
     verification_code: '',
     analytes: '',
   })
@@ -724,7 +745,7 @@ export function SenaiteDashboard() {
       limit: number,
       bStart: number,
       search?: string,
-      searchField?: 'verification_code' | 'order_number'
+      searchField?: 'verification_code' | 'order_number' | 'lot'
     ): Promise<SenaiteSamplesResponse> =>
       effective === 'mk1'
         ? getRegistrySamples(reviewState, limit, bStart, search, searchField)
@@ -747,7 +768,7 @@ export function SenaiteDashboard() {
       limit: number,
       bStart: number,
       search: string | undefined,
-      searchField: 'verification_code' | 'order_number' | undefined,
+      searchField: 'verification_code' | 'order_number' | 'lot' | undefined,
       onRefresh: (items: SenaiteSample[]) => void
     ) => {
       if (effective !== 'mk1') return
@@ -775,7 +796,7 @@ export function SenaiteDashboard() {
   )
 
   const loadTab = useCallback(
-    async (tabId: string, _page = 0, searchQuery = '', searchField?: 'verification_code' | 'order_number') => {
+    async (tabId: string, _page = 0, searchQuery = '', searchField?: 'verification_code' | 'order_number' | 'lot') => {
       const tab = TABS.find(t => t.id === tabId)
       if (!tab) return
 
@@ -878,8 +899,9 @@ export function SenaiteDashboard() {
     const idQ = committedFilters.id.trim()
     const orderQ = committedFilters.client_order_number.trim()
     const verQ = committedFilters.verification_code.trim()
+    const lotQ = committedFilters.client_lot.trim()
 
-    if (!idQ && !orderQ && !verQ) {
+    if (!idQ && !orderQ && !verQ && !lotQ) {
       // No filters active — reload normal tab data
       loadTab(activeTab, 0)
       return
@@ -891,6 +913,10 @@ export function SenaiteDashboard() {
       loadTab(activeTab, 0, orderQ, 'order_number')
     } else if (verQ) {
       loadTab(activeTab, 0, verQ, 'verification_code')
+    } else if (lotQ) {
+      // Lot search: registry ILIKE in mk1 mode; in senaite mode the backend
+      // resolves ids from the lims_samples mirror -> getId (bounded <=50).
+      loadTab(activeTab, 0, lotQ, 'lot')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [committedFilters])
@@ -910,7 +936,7 @@ export function SenaiteDashboard() {
   const currentPage = pageByTab[activeTab] ?? 0
   const totalPages = Math.ceil((totalsByTab[activeTab] ?? 0) / PAGE_SIZE)
   const currentTab = TABS.find(t => t.id === activeTab)!
-  const hasActiveFilters = committedFilters.id.trim() !== '' || committedFilters.client_order_number !== '' || committedFilters.verification_code !== '' || committedFilters.analytes !== ''
+  const hasActiveFilters = committedFilters.id.trim() !== '' || committedFilters.client_order_number !== '' || committedFilters.client_lot !== '' || committedFilters.verification_code !== '' || committedFilters.analytes !== ''
 
   return (
     <ScrollArea className="h-full">
@@ -993,8 +1019,8 @@ export function SenaiteDashboard() {
                   size="sm"
                   className="text-xs gap-1 text-muted-foreground"
                   onClick={() => {
-                    setColumnFilters({ id: '', client_order_number: '', verification_code: '', analytes: '' })
-                    setCommittedFilters({ id: '', client_order_number: '', verification_code: '', analytes: '' })
+                    setColumnFilters({ id: '', client_order_number: '', client_lot: '', verification_code: '', analytes: '' })
+                    setCommittedFilters({ id: '', client_order_number: '', client_lot: '', verification_code: '', analytes: '' })
                   }}
                 >
                   <X className="h-3 w-3" />

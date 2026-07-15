@@ -43,6 +43,7 @@ def registry_rows_to_list(rows: list[LimsSample]) -> list[dict[str, Any]]:
             "sample_type": r.sample_type_title,
             "contact": r.contact_title,
             "verification_code": r.verification_code,
+            "client_lot": r.client_lot,
             "analytes": _analyte_names(r.analytes),
         })
     return out

@@ -30,6 +30,7 @@ const registryItem: api.SenaiteSample = {
   sample_type: 'Peptide',
   contact: 'Acme',
   verification_code: 'AAAA-BBBB',
+  client_lot: null,
   analytes: ['DSIP - Identity (HPLC)'],
 }
 
