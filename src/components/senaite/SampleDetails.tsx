@@ -1025,7 +1025,7 @@ function AttachmentImage({ attachment }: { attachment: SenaiteAttachment }) {
       return
     }
     let cancelled = false
-    fetchSenaiteAttachmentUrl(attachment.uid)
+    fetchSenaiteAttachmentUrl(attachment.uid, attachment.download_url)
       .then(url => {
         if (!cancelled) setSrc(url)
       })
@@ -1168,7 +1168,7 @@ function HplcAttachmentChart({
 
   useEffect(() => {
     let cancelled = false
-    fetchSenaiteAttachmentText(attachment.uid)
+    fetchSenaiteAttachmentText(attachment.uid, attachment.download_url)
       .then(text => {
         if (cancelled) return
         const raw = parseChromatogramCsv(text)
