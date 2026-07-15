@@ -424,11 +424,26 @@ def _native_download_route_rule(sample_id: str) -> Callable[[Any, Any], Optional
     return rule
 
 
+# SENAITE serializes CSVs as the legacy 'text/comma-separated-values' while
+# native capture stores the modern 'text/csv' — same actual type, so pairing
+# on the raw string splits one dual-written chromatogram into a false
+# mk1_only + senaite_only pair (UAT catch, P-0143 chromatogram push).
+_CONTENT_TYPE_SYNONYMS = {"text/comma-separated-values": "text/csv"}
+
+
+def _normalize_content_type(ct: Optional[str]) -> Optional[str]:
+    if ct is None:
+        return None
+    ct = ct.strip().casefold()
+    return _CONTENT_TYPE_SYNONYMS.get(ct, ct)
+
+
 def diff_attachments(mk1_list: list[dict], senaite_list: list[dict],
                      sample_id: str) -> list[FieldDiff]:
     pairs, mk1_only, senaite_only = _pair_lists(
         mk1_list or [], senaite_list or [],
-        key_fn=lambda a: ((a.get("filename") or "").strip().casefold(), a.get("content_type")),
+        key_fn=lambda a: ((a.get("filename") or "").strip().casefold(),
+                          _normalize_content_type(a.get("content_type"))),
     )
     download_url_rule = _native_download_route_rule(sample_id)
     out: list[FieldDiff] = []

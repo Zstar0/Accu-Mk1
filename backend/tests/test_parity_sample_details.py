@@ -247,6 +247,28 @@ def test_datetime_serialization_explicit_utc_offset_form():
     assert d.rule_id == "datetime_serialization"
 
 
+def test_attachment_pairing_normalizes_content_type_synonyms():
+    """SENAITE serializes CSVs as text/comma-separated-values while native
+    capture stores text/csv — the same actual type. A dual-written
+    chromatogram must PAIR (UAT catch, P-0143 chromatogram push): the raw
+    string in the pairing key split it into a false mk1_only + senaite_only
+    whole-attachment pair."""
+    mk1 = _mk1_payload()
+    senaite = _senaite_payload()
+    senaite["attachments"] = [{
+        **senaite["attachments"][0],
+        "content_type": "text/comma-separated-values",
+    }]
+    diffs = compare_sample(mk1, senaite)
+    unpaired = [d for d in diffs
+                if d.path == "attachments[chrom.csv]"
+                and d.classification in ("mk1_only", "senaite_only")]
+    assert unpaired == [], unpaired
+    # still paired: the uid-shape rule fires exactly as with equal ct strings
+    d = _one(diffs, "attachments[chrom.csv].uid")
+    assert d.rule_id == "attachment_mk1att_uids"
+
+
 def test_datetime_instants_actually_differing_stay_real():
     diffs = compare_sample(
         _mk1_payload(date_received="2026-05-05T01:33:15"),

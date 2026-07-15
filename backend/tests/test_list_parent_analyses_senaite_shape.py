@@ -100,6 +100,53 @@ def test_parent_tier_lists_both_canonical_and_shadow_rows(db_session):
     assert by_uid[f"mk1:{shadow.id}"].review_state == "to_be_verified"
 
 
+# ── contract 1b: cross-provenance keyword collapse (canonical wins) ────────
+
+
+def test_shadow_collapsed_when_live_canonical_shares_keyword(db_session):
+    """UAT catch (P-0143 promote flow): promote_to_parent authors a live
+    canonical row AND pushes the result to SENAITE via the identity bridge,
+    whose submit event the mirror echoes straight back as a live shadow for
+    the SAME keyword — without the collapse the AR-shaped view showed every
+    promoted test twice. Canonical wins; a shadow with no live canonical
+    twin still flows (the normal SENAITE-driven parent). The collapse keys
+    on KEYWORD, not service id — the mirror resolves duplicate-keyword
+    services to the lowest id, so the two provenances can hold different
+    service ids for the same logical line (modeled here)."""
+    from lims_analyses.service import list_parent_analyses_senaite_shape
+
+    parent = _mk_parent(db_session)
+    svc = _mk_service(db_session, "HPLC-PUR", "Peptide Purity (HPLC)")
+    svc_dup = _mk_service(db_session, "HPLC-PUR", "Peptide Purity (HPLC) [clone]")
+    svc_other = _mk_service(db_session, "ENDO-LAL", "Endotoxin")
+
+    canonical = _mk_parent_analysis(
+        db_session, parent, svc, provenance="canonical",
+        review_state="verified", result_value="9",
+    )
+    _mk_parent_analysis(  # the mirror's echo of the same promoted result
+        db_session, parent, svc_dup, provenance="shadow",
+        review_state="senaite_mirror", mirror_review_state="to_be_verified",
+        result_value="9",
+    )
+    shadow_only = _mk_parent_analysis(
+        db_session, parent, svc_other, provenance="shadow",
+        review_state="senaite_mirror", mirror_review_state="to_be_verified",
+        result_value="2",
+    )
+
+    rows = list_parent_analyses_senaite_shape(db_session, parent.sample_id)
+    by_keyword: dict = {}
+    for r in rows:
+        by_keyword.setdefault(r.keyword, []).append(r)
+
+    assert len(by_keyword["HPLC-PUR"]) == 1, by_keyword
+    assert by_keyword["HPLC-PUR"][0].uid == f"mk1:{canonical.id}"
+    assert by_keyword["HPLC-PUR"][0].review_state == "verified"
+    assert len(by_keyword["ENDO-LAL"]) == 1
+    assert by_keyword["ENDO-LAL"][0].uid == f"mk1:{shadow_only.id}"
+
+
 # ── contract 2: retested/superseded rows excluded, replacement included ────
 
 

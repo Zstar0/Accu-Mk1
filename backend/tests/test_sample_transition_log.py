@@ -590,3 +590,44 @@ def test_receive_hook_heals_registry_status(db, seed_sample):
     db.expire_all()
     row = db.query(LimsSample).filter_by(sample_id=seed_sample.sample_id).one()
     assert row.status == "sample_received"
+
+
+# ═══════ receive stamps date_received natively (read-flip UAT catch) ═══════
+# P-0143: date_received was only ever written from SENAITE metadata during a
+# senaite-touching fetch, so a natively-received sample read in pure mk1 mode
+# showed no received date. The receive hook now stamps it, NULL-gated.
+
+
+def test_receive_bg_stamps_date_received_when_null(db, seed_sample):
+    assert seed_sample.date_received is None
+    main._record_sample_transition_bg(
+        sample_id=seed_sample.sample_id, verb="receive",
+        to_status="sample_received", from_status="sample_due",
+        source="mk1", actor_user_id=1,
+    )
+    db.expire_all()
+    row = db.query(LimsSample).filter_by(sample_id=seed_sample.sample_id).one()
+    assert row.date_received is not None
+
+
+def test_receive_bg_never_overwrites_existing_date_received(db, seed_sample):
+    stamped = datetime(2026, 1, 2, 3, 4, 5)
+    seed_sample.date_received = stamped
+    db.commit()
+    main._record_sample_transition_bg(
+        sample_id=seed_sample.sample_id, verb="receive",
+        to_status="sample_received", source="mk1",
+    )
+    db.expire_all()
+    row = db.query(LimsSample).filter_by(sample_id=seed_sample.sample_id).one()
+    assert row.date_received == stamped
+
+
+def test_non_receive_verbs_do_not_stamp_date_received(db, seed_sample):
+    main._record_sample_transition_bg(
+        sample_id=seed_sample.sample_id, verb="publish",
+        to_status="published", source="mk1",
+    )
+    db.expire_all()
+    row = db.query(LimsSample).filter_by(sample_id=seed_sample.sample_id).one()
+    assert row.date_received is None

@@ -14111,7 +14111,23 @@ def _record_sample_transition_bg(**kwargs) -> None:
         wrote_status = heal_sample_status(
             db, kwargs["sample_id"], kwargs["to_status"]
         )
-        if wrote_log or wrote_status:
+        # Read-flip UAT catch (P-0143): date_received was only ever written
+        # from SENAITE metadata during a senaite-touching fetch
+        # (sub_samples/service.py:88), so a natively-received sample read in
+        # pure mk1 mode showed no received date until some reconcile ran.
+        # Stamp it when the receive verb is recorded — the endpoint has just
+        # re-read SENAITE and confirmed the transition took, so utcnow() is
+        # within a second of SENAITE's own DateReceived. NULL-gated: never
+        # overwrites a SENAITE-sourced value.
+        wrote_received = False
+        if kwargs.get("verb") == "receive":
+            _row = db.execute(select(LimsSample).where(
+                LimsSample.sample_id == kwargs["sample_id"]
+            )).scalar_one_or_none()
+            if _row is not None and _row.date_received is None:
+                _row.date_received = datetime.utcnow()
+                wrote_received = True
+        if wrote_log or wrote_status or wrote_received:
             db.commit()
     except Exception as log_err:  # noqa: BLE001
         if db is not None:

@@ -1003,6 +1003,23 @@ def list_parent_analyses_senaite_shape(
         ) == TIER_PARENT
     ]
 
+    # Cross-provenance keyword collapse (UAT catch, P-0143 promote flow):
+    # promote_to_parent authors a live canonical row AND pushes the result to
+    # SENAITE via the identity bridge, whose submit event the mirror echoes
+    # straight back as a live shadow row for the same keyword — both are
+    # "current" by their own provenance's liveness rules, and this AR-shaped
+    # view would show the test twice. The canonical row IS the native
+    # authority for that line, so a shadow is emitted only when no live
+    # canonical shares its keyword. Keyword (not service id) is the collapse
+    # key: the mirror resolves duplicate-keyword services to the lowest id
+    # (resolve_shadow_target), so the two provenances can legitimately hold
+    # different service ids for the same logical line.
+    canonical_keywords = {r.keyword for r in rows if r.provenance == "canonical"}
+    rows = [
+        r for r in rows
+        if r.provenance == "canonical" or r.keyword not in canonical_keywords
+    ]
+
     return _serialize_senaite_shape_rows(db, rows)
 
 
