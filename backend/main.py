@@ -75,6 +75,19 @@ import sub_samples.service as sub_service
 from sub_samples.service import derive_base_demand
 from sub_samples import senaite
 from sub_samples.registry_debug import diff_registry_vs_senaite
+# Lookup-shape models moved to sub_samples/lookup_models.py (read-flip L4:
+# the native details builder types its return without importing main).
+# Imported back by name so every existing reference keeps working.
+from sub_samples.lookup_models import (
+    RegistrySampleReadResult,
+    SenaiteAnalysis,
+    SenaiteAnalyte,
+    SenaiteAttachment,
+    SenaiteCOAInfo,
+    SenaiteLookupResult,
+    SenaitePublishedCOA,
+    SenaiteRemark,
+)
 from lims_analyses.routes import router as lims_analyses_router
 from families.routes import router as families_router  # Phase 5b
 from boxes.routes import router as boxes_router
@@ -12117,141 +12130,25 @@ def _user_to_read(user) -> UserRead:
     )
 
 
-class SenaiteAnalyte(BaseModel):
-    raw_name: str
-    slot_number: int  # 1-4, corresponding to Analyte1..Analyte4 in SENAITE
-    matched_peptide_id: Optional[int] = None
-    matched_peptide_name: Optional[str] = None
-    declared_quantity: Optional[float] = None  # per-analyte declared qty (mg)
+# SenaiteAnalyte / SenaiteCOAInfo / SenaiteRemark / SenaiteAnalysis /
+# SenaiteAttachment / SenaitePublishedCOA / SenaiteLookupResult /
+# RegistrySampleReadResult moved to sub_samples/lookup_models.py (read-flip
+# L4 — imported back by name at the top of this file, so all references
+# below are unchanged).
 
-
-class SenaiteCOAInfo(BaseModel):
-    company_logo_url: Optional[str] = None
-    chromatograph_background_url: Optional[str] = None
-    company_name: Optional[str] = None
-    email: Optional[str] = None
-    website: Optional[str] = None
-    address: Optional[str] = None
-    verification_code: Optional[str] = None
-
-
-class SenaiteRemark(BaseModel):
-    content: str  # HTML string from SENAITE
-    user_id: Optional[str] = None
-    created: Optional[str] = None
-
-
-def _native_sample_remarks(db: Session, sample_id: str) -> list["SenaiteRemark"]:
-    """lims_sample_remarks → SenaiteRemark list (read-flip spec §6).
-
-    Native in BOTH read modes: SENAITE's Remarks field is stale by design
-    since the 2026-07-14 write flip. Backfilled rows carry the SENAITE login
-    in author_label; Mk1-era rows resolve the users FK to "First Last",
-    falling back to email.
-    """
-    rows = db.execute(
-        select(LimsSampleRemark, User)
-        .outerjoin(User, LimsSampleRemark.author_user_id == User.id)
-        .join(LimsSample, LimsSampleRemark.lims_sample_pk == LimsSample.id)
-        .where(LimsSample.sample_id == sample_id.strip().upper())
-        .order_by(LimsSampleRemark.created_at, LimsSampleRemark.id)
-    ).all()
-    out: list[SenaiteRemark] = []
-    for remark, user in rows:
-        label = remark.author_label
-        if not label and user is not None:
-            label = (f"{user.first_name or ''} {user.last_name or ''}".strip()
-                     or user.email)
-        out.append(SenaiteRemark(
-            content=remark.content,
-            user_id=label,
-            created=(remark.created_at.isoformat()
-                     if remark.created_at else None),
-        ))
-    return out
-
-
-class SenaiteAnalysis(BaseModel):
-    uid: Optional[str] = None
-    keyword: Optional[str] = None
-    title: str
-    result: Optional[str] = None
-    result_options: list[dict] = []  # [{value: str, label: str}] for selection-type analyses
-    unit: Optional[str] = None
-    method: Optional[str] = None
-    method_uid: Optional[str] = None  # UID for editing
-    method_options: list[dict] = []   # [{uid: str, title: str}] allowed methods for this analysis
-    instrument: Optional[str] = None
-    instrument_uid: Optional[str] = None  # UID for editing
-    instrument_options: list[dict] = []   # [{uid: str, title: str}] allowed instruments for this analysis
-    analyst: Optional[str] = None
-    due_date: Optional[str] = None
-    review_state: Optional[str] = None
-    sort_key: Optional[float] = None
-    captured: Optional[str] = None
-    retested: bool = False
-    # Mk1-local enrichment: which service_group this analysis belongs to
-    # (resolved from analysis_services table by keyword). Drives the
-    # per-vial "primary analysis" highlight on the sample detail page.
-    service_group_id: Optional[int] = None
-    service_group_name: Optional[str] = None
-
-
-class SenaiteAttachment(BaseModel):
-    uid: str
-    filename: str
-    content_type: Optional[str] = None
-    attachment_type: Optional[str] = None  # e.g. "Sample Image", "HPLC Graph"
-    download_url: Optional[str] = None  # proxied through our backend
-
+# `_native_sample_remarks` moved to sub_samples/registry_details.py (the
+# native details builder calls it without importing main). Re-imported
+# under the old private name so the L2 call sites — and tests addressing
+# `main._native_sample_remarks` — keep working unchanged.
+from sub_samples.registry_details import (
+    native_sample_remarks as _native_sample_remarks,
+)
 
 # Cache SENAITE download URLs for attachment proxy (uid -> {download_url, content_type, filename})
 _attachment_download_cache: dict[str, dict[str, str]] = {}
 
 # Cache SENAITE download URLs for ARReport PDF proxy (uid -> download_url)
 _report_download_cache: dict[str, str] = {}
-
-
-class SenaitePublishedCOA(BaseModel):
-    report_uid: str
-    filename: str
-    file_size_bytes: Optional[int] = None
-    published_date: Optional[str] = None
-    published_by: Optional[str] = None
-    download_url: str  # proxied through our backend
-
-
-class SenaiteLookupResult(BaseModel):
-    sample_id: str
-    sample_uid: Optional[str] = None
-    client: Optional[str] = None
-    contact: Optional[str] = None
-    sample_type: Optional[str] = None
-    date_received: Optional[str] = None
-    date_sampled: Optional[str] = None
-    profiles: list[str] = []
-    client_order_number: Optional[str] = None
-    client_sample_id: Optional[str] = None
-    client_lot: Optional[str] = None
-    review_state: Optional[str] = None
-    declared_weight_mg: Optional[float] = None
-    analytes: list[SenaiteAnalyte]
-    coa: SenaiteCOAInfo = SenaiteCOAInfo()
-    remarks: list[SenaiteRemark] = []
-    analyses: list[SenaiteAnalysis] = []
-    attachments: list[SenaiteAttachment] = []
-    published_coa: Optional[SenaitePublishedCOA] = None
-    senaite_url: Optional[str] = None  # e.g. "/clients/client-8/PB-0057"
-    cached_at: Optional[str] = None  # ISO timestamp when this result was cached
-
-
-class RegistrySampleReadResult(SenaiteLookupResult):
-    """SenaiteLookupResult with basic-info overlaid from the Accu-Mk1 registry.
-    field_sources records, per overlay field, whether the value shown came from
-    the registry ('mk1') or fell back to SENAITE ('senaite')."""
-    read_source: str = "mk1"
-    registry_missing: bool = False
-    field_sources: dict[str, str] = {}
 
 
 class SenaiteStatusResponse(BaseModel):
@@ -18085,6 +17982,70 @@ async def get_sample_read_from_registry(
 
     return RegistrySampleReadResult(**payload, read_source="mk1",
                                     registry_missing=False, field_sources=field_sources)
+
+
+@app.get("/registry/sample/{sample_id}/attachments/{attachment_id}/download")
+def download_registry_parent_attachment(
+    sample_id: str,
+    attachment_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Serve a native (S3 frozen-snapshot) parent-AR attachment's bytes
+    (read-flip Layer 4 / Task 2; the builder emits this route's URL for
+    storage='s3' rows).
+
+    BINDING CONSTRAINT (L4 plan #1): Content-Type and Content-Disposition
+    come from the DB row (`content_type`, `filename`) — NEVER from the
+    storage-key extension. Chromatogram snapshots key as '.bin' (csv is not
+    a photo_storage-known extension) while the row says text/csv;
+    extension-derived typing would serve them as octet-stream.
+
+    storage='senaite' rows 404 here with a proxy hint: their download_url
+    always points at the existing /wizard/senaite/attachment/{uid} proxy,
+    never this route. Missing S3 object → 404 (logged).
+
+    Auth matches the sibling registry endpoints: `get_current_user` (any
+    authenticated user, resolved before the db dependency). Plain `def` —
+    sync DB + sync storage fetch belong on the threadpool.
+    """
+    from sub_samples.photo_storage import PhotoNotFoundError, get_storage
+
+    att = db.execute(
+        select(LimsParentAttachment)
+        .join(LimsSample, LimsParentAttachment.lims_sample_pk == LimsSample.id)
+        .where(
+            LimsParentAttachment.id == attachment_id,
+            LimsSample.sample_id == sample_id.strip().upper(),
+        )
+    ).scalar_one_or_none()
+    if att is None:
+        raise HTTPException(
+            404, f"No attachment {attachment_id} on sample {sample_id}")
+    if att.storage != "s3":
+        raise HTTPException(
+            404,
+            "Attachment is SENAITE-stored — fetch it via the "
+            f"/wizard/senaite/attachment/{att.senaite_attachment_uid or '<uid>'}"
+            " proxy, not this route",
+        )
+    if not att.storage_key:
+        logger.warning(
+            "registry_attachment.download_missing_key id=%s sample=%s",
+            att.id, sample_id)
+        raise HTTPException(404, "Attachment has no storage key")
+    try:
+        data = get_storage().fetch_photo(att.storage_key)
+    except PhotoNotFoundError:
+        logger.warning(
+            "registry_attachment.download_object_missing id=%s key=%s",
+            att.id, att.storage_key)
+        raise HTTPException(404, "Attachment object missing from storage")
+    return Response(
+        content=data,
+        media_type=att.content_type or "application/octet-stream",
+        headers={"Content-Disposition": f'inline; filename="{att.filename}"'},
+    )
 
 
 @app.get("/registry/samples", response_model=SenaiteSamplesResponse)
