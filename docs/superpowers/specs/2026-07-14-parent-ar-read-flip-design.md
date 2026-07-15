@@ -314,7 +314,23 @@ table is backfilled; a re-export script to SENAITE is trivial if ever needed.
 - Post-flip retirements: SENAITE M/I proxy endpoint + A4 M/I mirror hook;
   `senaite`-mode lookup path itself once soaked (Handler-gated).
 - COABuilder re-wire (section 5) → then delete the attachment SENAITE
-  dual-write + the receive-flow AR image upload.
+  dual-write + the receive-flow AR image upload. **Section-5 checklist items
+  (Handler-confirmed 2026-07-14):**
+  1. *Historical attachment byte-migration script* — sweep-recorded
+     `storage='senaite'` rows keep their bytes in SENAITE's ZODB; retiring
+     SENAITE orphans them. Migrate bytes to S3 (flip rows to `storage='s3'`)
+     before disconnect. While pulling each attachment object, repair
+     epoch-sentinel `created_at` values from SENAITE metadata (see item 2).
+  2. *Vial-image selection rule must be reproduced or replaced.* COABuilder's
+     SENAITE reader implicitly uses the MOST RECENT AR attachment ("latest
+     wins") when multiple vial images exist. The native table reproduces this
+     via `created_at` ordering over `kind='vial_image'` rows — BUT historical
+     rows whose SENAITE `created` was unparseable carry the epoch sentinel
+     and would sort wrong. Either fix timestamps at byte-migration (item 1)
+     or replace latest-wins with explicit selection (a "chosen for COA" flag
+     on `lims_parent_attachments` — better UX, natural at re-wire time).
+     Until section 5, COA behavior is untouched: SENAITE receives every
+     upload and COABuilder reads SENAITE, latest-wins intact.
 - Shadow engine (next slice, spec 2026-07-13) — burns in on the flipped
   mirror.
 - Method/instrument on *shadow* history: stays NULL; if the lab ever wants
