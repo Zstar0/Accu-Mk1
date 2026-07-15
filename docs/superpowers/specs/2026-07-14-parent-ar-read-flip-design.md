@@ -216,7 +216,8 @@ Field-source matrix (the response shape is `SenaiteLookupResult`):
 
 | Field(s) | Native source |
 |---|---|
-| sample_id/uid, client, contact, sample_type, dates, client_order_number, client_sample_id, client_lot, declared_weight_mg, profiles | `lims_samples` (basic-info registry — already the overlay set) |
+| sample_id/uid, client, contact, sample_type, dates, client_order_number, client_sample_id, client_lot, declared_weight_mg | `lims_samples` (basic-info registry — already the overlay set) |
+| profiles | as-built (2026-07-14): NOT persisted natively — builder returns `[]`; parity class `profiles_empty_native` |
 | review_state | `lims_samples.status` (slice-3 mirrored + healed) |
 | analytes | `lims_samples.analytes` JSON → typed `SenaiteAnalyte` adapter (the shape mismatch that blocked the old overlay gets a real adapter; verify field-by-field at build) |
 | analyses | parent-tier `lims_analyses` (native rows: `review_state`; shadow rows: `mirror_review_state`), result/unit from the row, method/instrument **names via FK joins** (Layer 1), analyst via `users`, result_options + service-group enrichment from `analysis_services` (already native) |

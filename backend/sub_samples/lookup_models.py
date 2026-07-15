@@ -105,9 +105,13 @@ class SenaiteLookupResult(BaseModel):
 
 
 class RegistrySampleReadResult(SenaiteLookupResult):
-    """SenaiteLookupResult with basic-info overlaid from the Accu-Mk1 registry.
-    field_sources records, per overlay field, whether the value shown came from
-    the registry ('mk1') or fell back to SENAITE ('senaite')."""
+    """SenaiteLookupResult as served by the registry details endpoint.
+
+    mk1 mode (read-flip L4): every field is native-sourced by
+    sub_samples/registry_details.py's builder; field_sources covers the full
+    response — 'mk1' (native), 'senaite' (SENAITE-era artifact not served
+    natively yet, e.g. published_coa), or 'unavailable' (no native source,
+    e.g. senaite_url). There is no per-field SENAITE fallback in mk1 mode."""
     read_source: str = "mk1"
     registry_missing: bool = False
     field_sources: dict[str, str] = {}

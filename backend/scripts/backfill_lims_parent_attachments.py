@@ -301,6 +301,10 @@ def _rows_for_sample(meta: dict, lims_sample_pk: int, *, sleep_s: float):
                 attachment_type.get("title") or attachment_type.get("Title")
                 or None
             )
+        if isinstance(attachment_type, str):
+            # Clamp to the column width (VARCHAR(100)) — an oversized SENAITE
+            # title must degrade to truncation, not a per-sample DataError.
+            attachment_type = attachment_type[:100]
 
         created = detail.get("created")
         try:
