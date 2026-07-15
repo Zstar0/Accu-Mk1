@@ -385,6 +385,20 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.warning("workflow.is_sync_start_failed", exc_info=True)
         _is_sync_task = None
+    # Parent-mirror nightly shadow reconcile rider (read-flip Layer 4, Task 4,
+    # spec §8) -- replaces the drift-observer coverage the sample_details
+    # read-flip retires (that observer piggybacked on the now-retired
+    # SENAITE display fetch). Env-gated INSIDE the rider's own tick
+    # (MK1_PARENT_MIRROR_RECONCILE_ENABLED, code default "false"), so this
+    # unconditionally starts the loop task -- it's a cheap no-op tick when
+    # the gate is off, not absent. Guarded: a startup issue here must never
+    # take down the rest of the app (same contract as the IS-sync tick above).
+    try:
+        from workflow.parent_mirror_reconcile import maybe_start as _reconcile_maybe_start
+        _reconcile_task = _reconcile_maybe_start(app)
+    except Exception:
+        logger.warning("workflow.reconcile_start_failed", exc_info=True)
+        _reconcile_task = None
     # Flag scheduler (Slice 5) — in-process ticker; jobs registered below.
     from datetime import timedelta as _timedelta
     from flags.scheduler import Scheduler as _Scheduler
