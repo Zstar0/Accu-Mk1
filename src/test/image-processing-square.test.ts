@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   squareCropRect,
   captureSquareFromVideo,
+  cropFileToSquare,
 } from '@/components/intake/image-processing'
 
 describe('squareCropRect', () => {
@@ -76,5 +77,14 @@ describe('captureSquareFromVideo', () => {
         0.9,
       ),
     ).toThrow('Cannot capture — browser canvas unavailable.')
+  })
+})
+
+describe('cropFileToSquare', () => {
+  it('rejects non-image files', async () => {
+    const file = new File(['not an image'], 'notes.txt', { type: 'text/plain' })
+    await expect(
+      cropFileToSquare(file, 'image/jpeg', 0.9),
+    ).rejects.toThrow('Selected file is not an image')
   })
 })
