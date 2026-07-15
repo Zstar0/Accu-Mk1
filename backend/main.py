@@ -11768,14 +11768,30 @@ async def list_sample_preps_endpoint(
     is_standard: Optional[bool] = None,
     limit: int = 100,
     offset: int = 0,
+    exclude_statuses: Optional[str] = None,
     _current_user=Depends(get_current_user),
 ):
-    """List sample preps from the integration DB (newest first)."""
+    """List sample preps from the integration DB (newest first).
+
+    exclude_statuses: comma-separated status list to filter out server-side,
+    so the LIMIT window applies AFTER status filtering (not before, which
+    hid older active preps from the Sample Preps page)."""
     from mk1_db import ensure_sample_preps_table, list_sample_preps
 
+    excluded = (
+        [s for s in (part.strip() for part in exclude_statuses.split(",")) if s]
+        if exclude_statuses
+        else None
+    )
     try:
         ensure_sample_preps_table()
-        rows = list_sample_preps(search=search, is_standard=is_standard, limit=limit, offset=offset)
+        rows = list_sample_preps(
+            search=search,
+            is_standard=is_standard,
+            limit=limit,
+            offset=offset,
+            exclude_statuses=excluded,
+        )
         for row in rows:
             for k in ("created_at", "updated_at"):
                 if row.get(k) and hasattr(row[k], "isoformat"):

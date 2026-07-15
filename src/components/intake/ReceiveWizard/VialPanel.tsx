@@ -25,6 +25,10 @@ import {
   type CaptureFormat,
 } from './capture-options'
 import { useCameraDevices } from './use-camera-devices'
+import {
+  captureSquareFromVideo,
+  cropFileToSquare,
+} from '@/components/intake/image-processing'
 
 interface Props {
   parentSampleId: string
@@ -263,23 +267,22 @@ export function VialPanel({
     if (!videoRef.current || !canvasRef.current) return
     const v = videoRef.current
     const c = canvasRef.current
-    if (!v.videoWidth) {
-      setLocalError('Camera not ready yet — try again in a moment.')
-      return
+    // Center-square crop at full shorter-axis resolution. JPEG (q0.9) is
+    // ~10× smaller and feeds the customer order-page gallery directly; PNG
+    // stays available (lossless) via the Format toggle. PNG ignores the
+    // quality arg.
+    try {
+      setPhotoDataUrl(
+        captureSquareFromVideo(
+          v, c, captureMimeType(captureFormat), CAPTURE_JPEG_QUALITY,
+        ),
+      )
+      setLocalError(null)
+    } catch (err) {
+      setLocalError(
+        err instanceof Error ? err.message : 'Capture failed.',
+      )
     }
-    c.width = v.videoWidth
-    c.height = v.videoHeight
-    const ctx = c.getContext('2d')
-    if (!ctx) {
-      setLocalError('Cannot capture — browser canvas unavailable.')
-      return
-    }
-    ctx.drawImage(v, 0, 0)
-    // JPEG (q0.9) is ~10× smaller and feeds the customer order-page gallery
-    // directly; PNG stays available (lossless) via the Format toggle. PNG
-    // ignores the quality arg.
-    setPhotoDataUrl(c.toDataURL(captureMimeType(captureFormat), CAPTURE_JPEG_QUALITY))
-    setLocalError(null)
   }, [captureFormat])
 
   const retake = useCallback(() => {
@@ -292,19 +295,25 @@ export function VialPanel({
     }
   }, [editingSub])
 
-  const onPickFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0]
-    if (!f) return
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = reader.result
-      if (typeof result === 'string') {
-        setPhotoDataUrl(result)
-        setLocalError(null)
-      }
-    }
-    reader.readAsDataURL(f)
-  }, [])
+  const onPickFile = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const f = e.target.files?.[0]
+      if (!f) return
+      cropFileToSquare(f, captureMimeType(captureFormat), CAPTURE_JPEG_QUALITY)
+        .then(dataUrl => {
+          setPhotoDataUrl(dataUrl)
+          setLocalError(null)
+        })
+        .catch((err: unknown) => {
+          setLocalError(
+            err instanceof Error
+              ? err.message
+              : 'Could not load the selected image.',
+          )
+        })
+    },
+    [captureFormat],
+  )
 
   const handleSave = useCallback(async () => {
     setBusy(true)
@@ -522,7 +531,7 @@ export function VialPanel({
                     `${e.currentTarget.videoWidth}×${e.currentTarget.videoHeight}`,
                   )
                 }
-                className="block w-full rounded bg-black aspect-[4/3] object-contain transition-opacity"
+                className="block w-full rounded bg-black aspect-square object-cover transition-opacity"
               />
               {showGuides && (
                 <div

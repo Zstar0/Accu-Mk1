@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.5.2 — 2026-07-14
+
+Double hotfix: vial photos capture square again, and the Sample Preps page
+no longer hides older active preps.
+
+### Fixed
+
+- **Vial photo center-square crop restored.** The 2026-06-30 receive-page
+  rework replaced the old photo pipeline with a full-frame capture, so vial
+  photos landed widescreen (letterboxed-small in the COA's square slot).
+  Webcam capture and the file-picker fallback now center-crop to the shorter
+  axis at full resolution (no downscale, no enhancement); the live preview
+  is `aspect-square object-cover` so operators see exactly what is saved.
+  Already-square file uploads pass through byte-identical. Packaging
+  capture deliberately stays full-frame 4:3.
+- **Sample Preps list: server-side status filtering.** The page fetched the
+  newest-100 preps and hid completed statuses client-side, so active preps
+  older than the newest-100 window silently vanished from the list while
+  staying findable via search (38 hidden in prod at diagnosis: 23
+  awaiting-HPLC + 15 on-hold, oldest from April 6). `GET /sample-preps` now
+  accepts `exclude_statuses` (comma-separated) applied in SQL before the
+  LIMIT; the page requests active preps only with a 500 limit and keeps a
+  client-side re-filter for deploy skew.
+
 ## v1.5.1 — 2026-07-14
 
 Backend-only hotfix: the mk1-mode worksheets inbox was incomplete/out of

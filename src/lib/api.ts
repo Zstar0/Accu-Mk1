@@ -3328,12 +3328,18 @@ export async function listSamplePreps(params?: {
   is_standard?: boolean
   limit?: number
   offset?: number
+  // Statuses filtered out SERVER-side, so the limit window applies after
+  // status filtering — client-side filtering after LIMIT hid older active
+  // preps from the Sample Preps page.
+  exclude_statuses?: string[]
 }): Promise<SamplePrep[]> {
   const qs = new URLSearchParams()
   if (params?.search) qs.set('search', params.search)
   if (params?.is_standard != null) qs.set('is_standard', String(params.is_standard))
   if (params?.limit != null) qs.set('limit', String(params.limit))
   if (params?.offset != null) qs.set('offset', String(params.offset))
+  if (params?.exclude_statuses?.length)
+    qs.set('exclude_statuses', params.exclude_statuses.join(','))
   const response = await fetch(
     `${API_BASE_URL()}/sample-preps${qs.toString() ? '?' + qs : ''}`,
     { headers: getBearerHeaders() }

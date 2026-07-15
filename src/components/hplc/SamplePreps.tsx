@@ -46,6 +46,10 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 
 // ─── Status definitions ───────────────────────────────────────────────────────
 
+// Preps in these statuses live on the History page, not this list. Passed to
+// the backend as exclude_statuses AND re-applied client-side after fetch.
+const HIDDEN_PREP_STATUSES = ['hplc_complete', 'completed', 'curve_created']
+
 const STATUSES: { value: string; label: string; cls: string }[] = [
   { value: 'awaiting_hplc',  label: 'Awaiting HPLC',  cls: 'bg-blue-600 text-white' },
   { value: 'hplc_complete',  label: 'HPLC Complete',  cls: 'bg-teal-600 text-white' },
@@ -231,10 +235,15 @@ export function SamplePreps() {
       const data = await listSamplePreps({
         search: q || undefined,
         is_standard: standardFilter === 'all' ? undefined : standardFilter === 'standard',
-        limit: 100,
+        // Completed preps are excluded SERVER-side (they show on the History
+        // page) so the limit window applies to ACTIVE preps only — filtering
+        // client-side after the newest-100 fetch hid older active preps.
+        exclude_statuses: HIDDEN_PREP_STATUSES,
+        limit: 500,
       })
-      // Hide completed preps — they show on the History page
-      setPreps(data.filter(p => !['hplc_complete', 'completed', 'curve_created'].includes(p.status)))
+      // Belt-and-braces re-filter: keeps the page correct across deploy skew
+      // (new frontend against a backend that ignores exclude_statuses).
+      setPreps(data.filter(p => !HIDDEN_PREP_STATUSES.includes(p.status)))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load sample preps')
     } finally {

@@ -413,11 +413,15 @@ def list_sample_preps(
     is_standard: Optional[bool] = None,
     limit: int = 100,
     offset: int = 0,
+    exclude_statuses: Optional[list[str]] = None,
 ) -> list[dict]:
     """
     List sample preps from accumark_mk1, ordered newest-first.
     Optional search matches sample_id, senaite_sample_id, or peptide_name.
     Optional is_standard filter limits to standard or non-standard preps.
+    Optional exclude_statuses drops rows in those statuses SERVER-side —
+    filtering client-side after a LIMIT window silently hides older active
+    preps (the 2026-07-14 missing-list-items bug).
     """
     query = """
         SELECT *
@@ -434,6 +438,9 @@ def list_sample_preps(
     if is_standard is not None:
         conditions.append("is_standard = %s")
         params.append(is_standard)
+    if exclude_statuses:
+        conditions.append("NOT (status = ANY(%s))")
+        params.append(exclude_statuses)
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
     query += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
