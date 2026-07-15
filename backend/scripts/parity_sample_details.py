@@ -55,9 +55,10 @@ both, mi_blank_after_retest, attachment_mk1att_uids), 6 by Task 2's builder
 report (`.superpowers/sdd/task-l4-2-report.md` "Notes for downstream tasks":
 published_coa_senaite_era, senaite_url_unavailable, profiles_empty_native,
 attachment_mk1att_uids [overlapping the brief's], analytes_defaults,
-coa_chromatograph_background_url), and 3 added at build/review time
-(cached_at_timestamps, analyses_uid_shape, attachment_native_download_route
--- each justified where it's defined below):
+coa_chromatograph_background_url), 3 added at build/review time
+(cached_at_timestamps, analyses_uid_shape, attachment_native_download_route),
+and 1 added at registry-stack UAT (datetime_serialization) -- each justified
+where it's defined below:
 
   published_coa_senaite_era   -- `published_coa` is always None in mk1 mode
                                   (SENAITE-era artifact; coordinator ruling,
@@ -115,6 +116,18 @@ coa_chromatograph_background_url), and 3 added at build/review time
   cached_at_timestamps         -- `cached_at` always differs (two independent
                                   `datetime.now()` calls); always known-
                                   expected, ignored in the strict gate.
+  datetime_serialization       -- both sides are ISO-8601 strings for the
+                                  SAME instant, serialized differently: mk1
+                                  emits naive UTC (`2026-05-05T01:33:15`),
+                                  SENAITE emits an explicit offset
+                                  (`2026-05-04T18:33:15-07:00` /
+                                  `...+00:00`). Applies at any leaf (fired in
+                                  practice by date_received/date_sampled).
+                                  Two strings whose instants DIFFER stay a
+                                  REAL diff. Discovered at registry-stack UAT
+                                  (first live parity run, 2026-07-14): every
+                                  sample carried 1-2 of these, which would
+                                  have made --strict permanently red.
 
   analyses_uid_shape           -- per-analysis-line `uid` differs in SHAPE
                                   (mk1's `mk1:{lims_analyses.id}` vs SENAITE's
@@ -213,6 +226,21 @@ def _is_blank(v: Any) -> bool:
     return v is None or v == [] or v == {}
 
 
+def _as_utc_instant(v: Any) -> Optional[datetime]:
+    """ISO-8601 string -> aware UTC instant, else None. Naive strings are
+    UTC by definition here (build_native_details serializes naive-UTC DB
+    values); SENAITE serializes the same instant with an explicit offset."""
+    if not isinstance(v, str) or len(v) < 10:
+        return None
+    try:
+        dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def classify_raw(mk1v: Any, senaitev: Any) -> str:
     """The four-way base classification, before any known-expected rule is
     consulted: equal / differing / mk1_only / senaite_only."""
@@ -272,6 +300,9 @@ def _diff_leaf(path: str, mk1v: Any, senaitev: Any,
     raw = classify_raw(mk1v, senaitev)
     if raw == "equal":
         return FieldDiff(path, "equal")
+    mk1_instant = _as_utc_instant(mk1v)
+    if mk1_instant is not None and mk1_instant == _as_utc_instant(senaitev):
+        return FieldDiff(path, "known_expected", "datetime_serialization", mk1v, senaitev)
     rule_id = rule_fn(mk1v, senaitev) if rule_fn else None
     if rule_id:
         return FieldDiff(path, "known_expected", rule_id, mk1v, senaitev)

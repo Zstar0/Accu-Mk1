@@ -221,6 +221,42 @@ def test_cached_at_always_known_expected():
     assert d.rule_id == "cached_at_timestamps"
 
 
+def test_datetime_serialization_same_instant_known_expected():
+    """mk1 naive-UTC vs SENAITE explicit-offset serialization of the SAME
+    instant -- datetime_serialization (registry-stack UAT finding: every
+    sample carried 1-2 of these on date_received/date_sampled, which would
+    have made --strict permanently red)."""
+    diffs = compare_sample(
+        _mk1_payload(date_received="2026-05-05T01:33:15"),
+        _senaite_payload(date_received="2026-05-04T18:33:15-07:00"),
+    )
+    d = _one(diffs, "date_received")
+    assert d.classification == "known_expected"
+    assert d.rule_id == "datetime_serialization"
+    assert not d.is_real
+
+
+def test_datetime_serialization_explicit_utc_offset_form():
+    # the +00:00 variant SENAITE emits for recent samples
+    diffs = compare_sample(
+        _mk1_payload(date_received="2026-07-08T17:55:16"),
+        _senaite_payload(date_received="2026-07-08T17:55:16+00:00"),
+    )
+    d = _one(diffs, "date_received")
+    assert d.classification == "known_expected"
+    assert d.rule_id == "datetime_serialization"
+
+
+def test_datetime_instants_actually_differing_stay_real():
+    diffs = compare_sample(
+        _mk1_payload(date_received="2026-05-05T01:33:15"),
+        _senaite_payload(date_received="2026-05-05T02:33:15+00:00"),
+    )
+    d = _one(diffs, "date_received")
+    assert d.classification == "differing"
+    assert d.is_real
+
+
 def test_attachment_uid_and_native_download_url_known_expected():
     """Reviewer case (a) at the classifier level: the uid shape difference
     (mk1att: vs a senaite uid) is known-expected, and the download_url
