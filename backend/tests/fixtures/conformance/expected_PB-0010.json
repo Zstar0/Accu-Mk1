@@ -1,0 +1,54 @@
+{
+  "addon_results": [],
+  "canonical": {
+    "blend_identity_status": "NOT APPLICABLE",
+    "declared_blend_total_qty": "",
+    "declared_components": [],
+    "measured_blend_total_purity": "99.0%",
+    "measured_blend_total_qty": "10.0 mg/mL",
+    "nonconformance_reasons": [
+      "Blend Identity Condition not met"
+    ],
+    "overall_pass": false,
+    "overall_status_badge": "FAILED",
+    "results_interpretation": ""
+  },
+  "client_spec": {
+    "analytes": []
+  },
+  "declared_peptides": [],
+  "measured": {
+    "blend_total": {
+      "unit": "mg/mL",
+      "value": 10.0
+    },
+    "slots": {
+      "1": {
+        "unit": "mg",
+        "value": 1.0
+      },
+      "2": {
+        "unit": "mg",
+        "value": 2.0
+      },
+      "3": {
+        "unit": "mg",
+        "value": 3.0
+      },
+      "4": {
+        "unit": "mg",
+        "value": 4.0
+      }
+    }
+  },
+  "meta": {
+    "client": "ForrestTest",
+    "client_sample_id": "",
+    "date_published": "07/15/2026",
+    "date_received": "01/05/2026",
+    "lot_code": "",
+    "matrix": "Peptide Blend",
+    "sample_id": "PB-0010"
+  },
+  "results_table": []
+}

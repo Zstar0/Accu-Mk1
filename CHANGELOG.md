@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.5.3 — 2026-07-15
+
+Additive backend feature for the Lab Manager verification agent.
+
+### Added
+
+- **Conformance endpoint (`GET /api/conformance/{sample_id}`).** Runs a
+  mirror-only vendored copy of the COA Builder conformance engine
+  (`coabuilder@2c95762`, v2.14.8) in-process: fetches the sample's SENAITE AR +
+  analyses, applies the same peptide-vs-BW engine selection COA Builder uses, and
+  returns per-analyte verdicts. New isolated packages `conformance_vendored/`
+  (byte-identical engine, do not edit in place) and `conformance/` (SENAITE input
+  adapter + service + route). No change to existing behavior; the only edit to an
+  existing file is the router registration in `main.py`. Guarded by a golden
+  parity test and an adapter-shape regression test; a devbox `-m parity` gate
+  checks the adapter reproduces COA Builder's verdict for the same sample.
+
 ## v1.5.2 — 2026-07-14
 
 Double hotfix: vial photos capture square again, and the Sample Preps page

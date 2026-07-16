@@ -1,0 +1,153 @@
+[
+  {
+    "getKeyword": "HPLC-ID",
+    "getResult": "1",
+    "getUnit": "Text",
+    "title": "Peptide ID (HPLC)",
+    "review_state": "verified",
+    "getResultCaptureDate": "2026-01-05T22:59:33+00:00",
+    "uid": "cc1f1c8dfe65487090c5337fea8f769b",
+    "ResultOptions": [
+      {
+        "ResultValue": "1",
+        "ResultText": "Conforms",
+        "value": ""
+      },
+      {
+        "ResultValue": "0",
+        "ResultText": "Does Not Conform",
+        "value": ""
+      }
+    ]
+  },
+  {
+    "getKeyword": "PEPT-Total",
+    "getResult": "10",
+    "getUnit": "mg/mL",
+    "title": "Peptide Total Quantity",
+    "review_state": "verified",
+    "getResultCaptureDate": "2026-01-05T22:59:33+00:00",
+    "uid": "88c7259ee12b463b99bfdff8d1ffa24f",
+    "ResultOptions": []
+  },
+  {
+    "getKeyword": "ANALYTE-1-PUR",
+    "getResult": "11",
+    "getUnit": "%",
+    "title": "Analyte 1 (Purity)",
+    "review_state": "verified",
+    "getResultCaptureDate": "2026-01-05T22:59:33+00:00",
+    "uid": "3c1afc9d4593419ba0650f65679cc582",
+    "ResultOptions": []
+  },
+  {
+    "getKeyword": "ANALYTE-1-QTY",
+    "getResult": "1",
+    "getUnit": "mg",
+    "title": "Analyte 1 (Quantity)",
+    "review_state": "verified",
+    "getResultCaptureDate": "2026-01-05T22:59:34+00:00",
+    "uid": "aa707456f23e4e01b8131a999d9527dd",
+    "ResultOptions": []
+  },
+  {
+    "getKeyword": "ANALYTE-2-PUR",
+    "getResult": "22",
+    "getUnit": "%",
+    "title": "Analyte 2 (Purity)",
+    "review_state": "verified",
+    "getResultCaptureDate": "2026-01-05T22:59:34+00:00",
+    "uid": "41f64f848e094deba90e5e4a3f873dea",
+    "ResultOptions": []
+  },
+  {
+    "getKeyword": "ANALYTE-2-QTY",
+    "getResult": "2",
+    "getUnit": "mg",
+    "title": "Analyte 2 (Quantity)",
+    "review_state": "verified",
+    "getResultCaptureDate": "2026-01-05T22:59:34+00:00",
+    "uid": "df3f626079f64d34917039351acf86a5",
+    "ResultOptions": []
+  },
+  {
+    "getKeyword": "ANALYTE-3-PUR",
+    "getResult": "33",
+    "getUnit": "%",
+    "title": "Analyte 3 (Purity)",
+    "review_state": "verified",
+    "getResultCaptureDate": "2026-01-05T22:59:35+00:00",
+    "uid": "c9dbcef8d5fa4773a9652f23d8841b14",
+    "ResultOptions": []
+  },
+  {
+    "getKeyword": "ANALYTE-3-QTY",
+    "getResult": "3",
+    "getUnit": "mg",
+    "title": "Analyte 3 (Quantity)",
+    "review_state": "verified",
+    "getResultCaptureDate": "2026-01-05T22:59:35+00:00",
+    "uid": "7303ebaa8c6e4816ba6e5b5195c31a05",
+    "ResultOptions": []
+  },
+  {
+    "getKeyword": "ANALYTE-4-PUR",
+    "getResult": "44",
+    "getUnit": "%",
+    "title": "Analyte 4 (Purity)",
+    "review_state": "verified",
+    "getResultCaptureDate": "2026-01-05T22:59:35+00:00",
+    "uid": "9e88b564a84e4fc98190c1dbbf92a32b",
+    "ResultOptions": []
+  },
+  {
+    "getKeyword": "ANALYTE-4-QTY",
+    "getResult": "4",
+    "getUnit": "mg",
+    "title": "Analyte 4 (Quantity)",
+    "review_state": "verified",
+    "getResultCaptureDate": "2026-01-05T22:59:35+00:00",
+    "uid": "edbc43f1a555437a9f7838ebc2b11a8e",
+    "ResultOptions": []
+  },
+  {
+    "getKeyword": "BLEND-PUR",
+    "getResult": "99",
+    "getUnit": "%",
+    "title": "Blend Purity",
+    "review_state": "verified",
+    "getResultCaptureDate": "2026-01-05T22:59:36+00:00",
+    "uid": "603727327dd543f2bf45e3a0475a287a",
+    "ResultOptions": []
+  },
+  {
+    "getKeyword": "ID_BPC157",
+    "getResult": "BPC-157",
+    "getUnit": "text",
+    "title": "BPC-157 - Identity (HPLC)",
+    "review_state": "verified",
+    "getResultCaptureDate": "2026-01-05T22:59:36+00:00",
+    "uid": "de33aba8db3d41db8a672dd00078d944",
+    "ResultOptions": []
+  },
+  {
+    "getKeyword": "ID_GHKCU",
+    "getResult": "GHK-Cu",
+    "getUnit": "text",
+    "title": "GHK-Cu - Identity (HPLC)",
+    "review_state": "verified",
+    "getResultCaptureDate": "2026-01-05T22:59:36+00:00",
+    "uid": "0959c964a46e4a34883e7cec6415fab1",
+    "ResultOptions": []
+  },
+  {
+    "getKeyword": "ID_TB500",
+    "getResult": "TB-500",
+    "getUnit": "text",
+    "title": "TB-500 - Identity (HPLC)",
+    "review_state": "verified",
+    "getResultCaptureDate": "2026-01-05T22:59:37+00:00",
+    "uid": "7ab124c62c7247ba8d6a9202060a8860",
+    "ResultOptions": []
+  }
+]
