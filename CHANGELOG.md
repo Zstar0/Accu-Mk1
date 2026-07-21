@@ -1,5 +1,24 @@
 # Changelog
 
+## v1.5.4 — 2026-07-20
+
+Bug fix for the variance COA quantity unit.
+
+### Fixed
+
+- **Variance COA quantity column rendered a literal `text` unit** (e.g.
+  `10.387 text`) for blends. `coa/variance_series.py::_parent_quantity_unit`
+  chose the parent quantity unit by returning the first matching row from an
+  **unordered** query, so a per-substance analysis service mis-seeded with
+  `unit='text'` (`QTY_BPC157`/`PUR_BPC157`) could win the race and poison the
+  whole sample-wide quantity unit (every analyte, both `text` and the coin-flip
+  `mg`/`mg/mL` split). The selector is now deterministic: it prefers the blend
+  concentration (`PEPT-Total`) so a blend renders one consistent unit regardless
+  of row order, and rejects any value outside a known real-unit allowlist so a
+  mis-seeded `text` can never reach the certificate. Standard COAs were
+  unaffected (SENAITE-sourced, header unit) and purity is immune (always `%`);
+  this is variance-quantity only.
+
 ## v1.5.3 — 2026-07-15
 
 Additive backend feature for the Lab Manager verification agent.
