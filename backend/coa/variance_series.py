@@ -69,10 +69,22 @@ def _fmt(category: str, value: str, unit: Optional[str], default_unit: str = "mg
     return v  # identity: raw
 
 
+# Real measured quantity units a parent row may carry. A per-substance service
+# mis-seeded with unit='text' (e.g. QTY_BPC157) must never become the series
+# unit — comparison is case-insensitive on the stripped value.
+_VALID_QTY_UNITS = frozenset({"mg", "mg/ml", "ug", "mcg", "g", "ng", "mg/vial"})
+
+
 def _parent_quantity_unit(db: Session, parent) -> Optional[str]:
     """The parent's own quantity unit (e.g. 'mg/mL'), used as the fallback for
     variance vials whose quantity rows carry no unit — so the comma series stays
-    consistent rather than fabricating 'mg' next to a 'mg/mL' parent figure."""
+    consistent rather than fabricating 'mg' next to a 'mg/mL' parent figure.
+
+    Deterministic by design: the blend concentration PEPT-Total wins so a whole
+    blend renders one consistent quantity unit regardless of parent-row order,
+    and any non-unit string (a mis-seeded 'text') is rejected outright rather
+    than leaking onto the certificate. Falls back to the first valid per-analyte
+    quantity unit; returns None when no real unit is present (callers default)."""
     rows = db.execute(
         select(LimsAnalysis.keyword, LimsAnalysis.result_unit).where(
             LimsAnalysis.lims_sample_pk == parent.id,
@@ -86,10 +98,18 @@ def _parent_quantity_unit(db: Session, parent) -> Optional[str]:
             LimsAnalysis.provenance == "canonical",
         )
     ).all()
+    fallback: Optional[str] = None
     for kw, unit in rows:
-        if _category(kw) == "quantity" and (unit or "").strip():
-            return unit.strip()
-    return None
+        if _category(kw) != "quantity":
+            continue
+        u = (unit or "").strip()
+        if not u or u.lower() not in _VALID_QTY_UNITS:
+            continue  # reject non-unit strings (e.g. a mis-seeded 'text')
+        if (kw or "").upper() == "PEPT-TOTAL":
+            return u  # blend concentration wins → one unit across the sample
+        if fallback is None:
+            fallback = u
+    return fallback
 
 
 def build_variance_replicates(db: Session, parent) -> dict:
