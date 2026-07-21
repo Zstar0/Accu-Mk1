@@ -266,3 +266,59 @@ def test_vial_quantity_inherits_parent_unit_when_missing(prod_world, db):
     db.commit()
     recs = build_variance_replicates(db, prod_world)["BPC-157"]
     assert recs[0]["QUANTITY"] == "15 mg/mL"
+
+
+# ─── _parent_quantity_unit: reject non-unit strings, prefer blend concentration ──
+# Regression: QTY_BPC157/PUR_BPC157 were mis-seeded with unit='text'. That string
+# rode onto the parent quantity row at promote time and, because the old selector
+# returned the FIRST quantity row's unit from an unordered query, leaked onto the
+# variance COA quantity column as e.g. "10.387 text" (both analytes — the unit is
+# sample-wide). The selector must reject non-unit strings and deterministically
+# prefer PEPT-Total (the blend concentration) so every blend renders one unit.
+
+
+def test_parent_quantity_unit_rejects_text_unit(db):
+    from coa.variance_series import _parent_quantity_unit
+    parent = LimsSample(sample_id="P-0801", external_lims_uid="uid-p0801", container_mode=True)
+    db.add(parent); db.flush()
+    qsvc = _svc(db, "ANALYTE-2-QTY")
+    db.add(LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=qsvc.id,
+        keyword="ANALYTE-2-QTY", title="ANALYTE-2-QTY", result_value="10.387",
+        result_unit="text", review_state="verified", reportable=True,
+    ))
+    db.commit()
+    # 'text' is not a real unit — it must never become the series unit (callers
+    # default to 'mg' when this returns None).
+    assert _parent_quantity_unit(db, parent) is None
+
+
+def test_parent_quantity_unit_prefers_pept_total_over_analyte(db):
+    from coa.variance_series import _parent_quantity_unit
+    parent = LimsSample(sample_id="P-0802", external_lims_uid="uid-p0802", container_mode=True)
+    db.add(parent); db.flush()
+    aqty = _svc(db, "ANALYTE-1-QTY")
+    ptot = _svc(db, "PEPT-Total")
+    # Analyte row inserted FIRST: the old unordered "first quantity row" logic
+    # would return its 'mg'. The blend concentration must win regardless of order.
+    db.add(LimsAnalysis(lims_sample_pk=parent.id, analysis_service_id=aqty.id,
+                        keyword="ANALYTE-1-QTY", title="ANALYTE-1-QTY", result_value="9.6",
+                        result_unit="mg", review_state="verified", reportable=True))
+    db.flush()
+    db.add(LimsAnalysis(lims_sample_pk=parent.id, analysis_service_id=ptot.id,
+                        keyword="PEPT-Total", title="PEPT-Total", result_value="20.0",
+                        result_unit="mg/mL", review_state="verified", reportable=True))
+    db.commit()
+    assert _parent_quantity_unit(db, parent) == "mg/mL"
+
+
+def test_parent_quantity_unit_uses_valid_analyte_unit_when_no_pept_total(db):
+    from coa.variance_series import _parent_quantity_unit
+    parent = LimsSample(sample_id="P-0803", external_lims_uid="uid-p0803", container_mode=True)
+    db.add(parent); db.flush()
+    aqty = _svc(db, "ANALYTE-1-QTY")
+    db.add(LimsAnalysis(lims_sample_pk=parent.id, analysis_service_id=aqty.id,
+                        keyword="ANALYTE-1-QTY", title="ANALYTE-1-QTY", result_value="9.6",
+                        result_unit="mg", review_state="verified", reportable=True))
+    db.commit()
+    assert _parent_quantity_unit(db, parent) == "mg"
