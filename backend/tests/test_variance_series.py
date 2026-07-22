@@ -268,13 +268,15 @@ def test_vial_quantity_inherits_parent_unit_when_missing(prod_world, db):
     assert recs[0]["QUANTITY"] == "15 mg/mL"
 
 
-# ─── _parent_quantity_unit: reject non-unit strings, prefer blend concentration ──
+# ─── _parent_quantity_unit: reject non-unit strings, prefer per-analyte mass ─────
 # Regression: QTY_BPC157/PUR_BPC157 were mis-seeded with unit='text'. That string
 # rode onto the parent quantity row at promote time and, because the old selector
 # returned the FIRST quantity row's unit from an unordered query, leaked onto the
 # variance COA quantity column as e.g. "10.387 text" (both analytes — the unit is
 # sample-wide). The selector must reject non-unit strings and deterministically
-# prefer PEPT-Total (the blend concentration) so every blend renders one unit.
+# prefer the per-analyte quantity unit (mg, the measured mass the per-vial series
+# reports) over the PEPT-Total blend concentration (mg/mL). PEPT-Total is only a
+# fallback for single-peptide samples that carry no per-analyte quantity row.
 
 
 def test_parent_quantity_unit_rejects_text_unit(db):
@@ -293,23 +295,23 @@ def test_parent_quantity_unit_rejects_text_unit(db):
     assert _parent_quantity_unit(db, parent) is None
 
 
-def test_parent_quantity_unit_prefers_pept_total_over_analyte(db):
+def test_parent_quantity_unit_prefers_analyte_mass_over_pept_total(db):
     from coa.variance_series import _parent_quantity_unit
     parent = LimsSample(sample_id="P-0802", external_lims_uid="uid-p0802", container_mode=True)
     db.add(parent); db.flush()
-    aqty = _svc(db, "ANALYTE-1-QTY")
     ptot = _svc(db, "PEPT-Total")
-    # Analyte row inserted FIRST: the old unordered "first quantity row" logic
-    # would return its 'mg'. The blend concentration must win regardless of order.
-    db.add(LimsAnalysis(lims_sample_pk=parent.id, analysis_service_id=aqty.id,
-                        keyword="ANALYTE-1-QTY", title="ANALYTE-1-QTY", result_value="9.6",
-                        result_unit="mg", review_state="verified", reportable=True))
-    db.flush()
+    aqty = _svc(db, "ANALYTE-1-QTY")
+    # PEPT-Total inserted FIRST so it can't win merely by row order: the per-vial
+    # series reports per-analyte mass (mg), not the blend concentration (mg/mL).
     db.add(LimsAnalysis(lims_sample_pk=parent.id, analysis_service_id=ptot.id,
                         keyword="PEPT-Total", title="PEPT-Total", result_value="20.0",
                         result_unit="mg/mL", review_state="verified", reportable=True))
+    db.flush()
+    db.add(LimsAnalysis(lims_sample_pk=parent.id, analysis_service_id=aqty.id,
+                        keyword="ANALYTE-1-QTY", title="ANALYTE-1-QTY", result_value="9.6",
+                        result_unit="mg", review_state="verified", reportable=True))
     db.commit()
-    assert _parent_quantity_unit(db, parent) == "mg/mL"
+    assert _parent_quantity_unit(db, parent) == "mg"
 
 
 def test_parent_quantity_unit_uses_valid_analyte_unit_when_no_pept_total(db):
@@ -322,3 +324,17 @@ def test_parent_quantity_unit_uses_valid_analyte_unit_when_no_pept_total(db):
                         result_unit="mg", review_state="verified", reportable=True))
     db.commit()
     assert _parent_quantity_unit(db, parent) == "mg"
+
+
+def test_parent_quantity_unit_falls_back_to_pept_total_when_no_analyte(db):
+    """Single-peptide variance samples carry only a PEPT-Total quantity row and no
+    per-analyte ANALYTE-N-QTY rows; they keep inheriting the blend concentration."""
+    from coa.variance_series import _parent_quantity_unit
+    parent = LimsSample(sample_id="P-0804", external_lims_uid="uid-p0804", container_mode=True)
+    db.add(parent); db.flush()
+    ptot = _svc(db, "PEPT-Total")
+    db.add(LimsAnalysis(lims_sample_pk=parent.id, analysis_service_id=ptot.id,
+                        keyword="PEPT-Total", title="PEPT-Total", result_value="20.0",
+                        result_unit="mg/mL", review_state="verified", reportable=True))
+    db.commit()
+    assert _parent_quantity_unit(db, parent) == "mg/mL"
