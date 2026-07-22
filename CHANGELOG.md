@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.5.6 — 2026-07-22
+
+Variance COA quantity unit: single-peptide samples render `mg`, not `mg/mL`.
+
+### Changed
+
+- **Single-peptide variance COAs now render the quantity column in `mg`** instead
+  of the `PEPT-Total` blend concentration (`mg/mL`). Follows v1.5.5 (which fixed
+  blends to per-analyte `mg`): the per-vial series reports each analyte's measured
+  **mass**, so `coa/variance_series.py::_parent_quantity_unit` no longer accepts
+  `mg/mL` at all — a single-peptide sample (whose only quantity row is
+  `PEPT-Total`) now falls through to the caller's `mg` default, matching the
+  COA's own total-quantity figure (e.g. NAD+ P-1463: front page "834.86 mg" vs
+  per-vial cells previously "832.42 mg/mL"). The `text` rejection is retained.
+  Net effect: the variance quantity column is now `mg` for every sample.
+
 ## v1.5.5 — 2026-07-22
 
 Variance COA quantity unit: report per-analyte mass (`mg`).

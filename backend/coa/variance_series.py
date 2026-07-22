@@ -69,22 +69,25 @@ def _fmt(category: str, value: str, unit: Optional[str], default_unit: str = "mg
     return v  # identity: raw
 
 
-# Real measured quantity units a parent row may carry. A per-substance service
-# mis-seeded with unit='text' (e.g. QTY_BPC157) must never become the series
-# unit — comparison is case-insensitive on the stripped value.
-_VALID_QTY_UNITS = frozenset({"mg", "mg/ml", "ug", "mcg", "g", "ng", "mg/vial"})
+# Real per-analyte MASS units a parent quantity row may carry. mg/mL — the
+# PEPT-Total blend *concentration* — is deliberately excluded: the variance
+# per-vial series reports each analyte's measured mass, so a single-peptide
+# sample (only a PEPT-Total row) falls through to the caller's 'mg' default
+# instead of rendering mg/mL, matching the COA's own total-quantity figure. A
+# mis-seeded 'text' is likewise rejected. Comparison is case-insensitive on the
+# stripped value.
+_VALID_QTY_UNITS = frozenset({"mg", "ug", "mcg", "g", "ng", "mg/vial"})
 
 
 def _parent_quantity_unit(db: Session, parent) -> Optional[str]:
     """The parent's own quantity unit, applied to variance vials whose quantity
     rows carry no unit so the comma series stays consistent.
 
-    Deterministic by design: the per-vial series reports per-analyte measured
-    mass, so a per-analyte quantity unit (mg) is preferred over the PEPT-Total
-    blend concentration (mg/mL); PEPT-Total is only a fallback for single-peptide
-    samples that carry no per-analyte quantity row. Any non-unit string (a
-    mis-seeded 'text') is rejected outright rather than leaking onto the
-    certificate. Returns None when no real unit is present (callers default)."""
+    The per-vial series reports per-analyte measured MASS (mg), so this returns
+    the first parent quantity row whose unit is a real mass unit. The PEPT-Total
+    blend concentration (mg/mL) and any non-unit string (a mis-seeded 'text') are
+    rejected; a single-peptide sample with only a PEPT-Total row therefore returns
+    None and the caller defaults to 'mg'."""
     rows = db.execute(
         select(LimsAnalysis.keyword, LimsAnalysis.result_unit).where(
             LimsAnalysis.lims_sample_pk == parent.id,
@@ -98,19 +101,13 @@ def _parent_quantity_unit(db: Session, parent) -> Optional[str]:
             LimsAnalysis.provenance == "canonical",
         )
     ).all()
-    pept_total_unit: Optional[str] = None
     for kw, unit in rows:
         if _category(kw) != "quantity":
             continue
         u = (unit or "").strip()
-        if not u or u.lower() not in _VALID_QTY_UNITS:
-            continue  # reject non-unit strings (e.g. a mis-seeded 'text')
-        if (kw or "").upper() == "PEPT-TOTAL":
-            if pept_total_unit is None:
-                pept_total_unit = u  # remembered, but per-analyte mass wins
-            continue
-        return u  # per-analyte quantity unit (mg) — the per-vial series unit
-    return pept_total_unit  # single-peptide samples inherit the blend concentration
+        if u.lower() in _VALID_QTY_UNITS:
+            return u  # per-analyte measured mass (mg)
+    return None  # PEPT-Total mg/mL / 'text' / none → callers default to 'mg'
 
 
 def build_variance_replicates(db: Session, parent) -> dict:
