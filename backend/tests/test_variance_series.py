@@ -250,14 +250,14 @@ def test_non_variance_sample_sends_nothing(db):
     assert build_variance_replicates(db, parent) == {}
 
 
-def test_vial_quantity_inherits_parent_unit_when_missing(prod_world, db):
-    """Vial PEPT-Total rows often carry no unit; the series must not fabricate
-    'mg' next to a parent measured in mg/mL. Inherit the parent's quantity unit
-    so the comma series stays consistent ('12 mg/mL, 15 mg/mL, ...')."""
+def test_vial_quantity_single_peptide_renders_mg_not_concentration(prod_world, db):
+    """Single-peptide variance sample: its only parent quantity row is PEPT-Total
+    (mg/mL, the blend concentration). The per-vial series reports per-analyte
+    measured MASS, so the quantity column renders 'mg' — matching the COA's own
+    total-quantity figure — not the mg/mL concentration."""
     qty = db.execute(
         select(AnalysisService).where(AnalysisService.keyword == "PEPT-Total")
     ).scalar_one()
-    # Parent-tier quantity row carries the canonical unit.
     db.add(LimsAnalysis(
         lims_sample_pk=prod_world.id, analysis_service_id=qty.id,
         keyword="PEPT-Total", title="PEPT-Total", result_value="12",
@@ -265,7 +265,7 @@ def test_vial_quantity_inherits_parent_unit_when_missing(prod_world, db):
     ))
     db.commit()
     recs = build_variance_replicates(db, prod_world)["BPC-157"]
-    assert recs[0]["QUANTITY"] == "15 mg/mL"
+    assert recs[0]["QUANTITY"] == "15 mg"
 
 
 # ─── _parent_quantity_unit: reject non-unit strings, prefer per-analyte mass ─────
@@ -326,9 +326,10 @@ def test_parent_quantity_unit_uses_valid_analyte_unit_when_no_pept_total(db):
     assert _parent_quantity_unit(db, parent) == "mg"
 
 
-def test_parent_quantity_unit_falls_back_to_pept_total_when_no_analyte(db):
-    """Single-peptide variance samples carry only a PEPT-Total quantity row and no
-    per-analyte ANALYTE-N-QTY rows; they keep inheriting the blend concentration."""
+def test_parent_quantity_unit_rejects_pept_total_concentration(db):
+    """A single-peptide sample carries only a PEPT-Total (mg/mL) quantity row. The
+    per-vial series reports per-analyte mass, so mg/mL is NOT accepted — this
+    returns None and the caller defaults to 'mg' (not the blend concentration)."""
     from coa.variance_series import _parent_quantity_unit
     parent = LimsSample(sample_id="P-0804", external_lims_uid="uid-p0804", container_mode=True)
     db.add(parent); db.flush()
@@ -337,4 +338,4 @@ def test_parent_quantity_unit_falls_back_to_pept_total_when_no_analyte(db):
                         keyword="PEPT-Total", title="PEPT-Total", result_value="20.0",
                         result_unit="mg/mL", review_state="verified", reportable=True))
     db.commit()
-    assert _parent_quantity_unit(db, parent) == "mg/mL"
+    assert _parent_quantity_unit(db, parent) is None
