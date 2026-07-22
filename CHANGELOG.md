@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.5.5 — 2026-07-22
+
+Variance COA quantity unit: report per-analyte mass (`mg`).
+
+### Changed
+
+- **Variance COA quantity column now renders `mg` for blends** instead of the
+  blend concentration `mg/mL`. Per the lab, the per-vial series reports each
+  analyte's measured **mass** (`mg`), so `coa/variance_series.py::_parent_quantity_unit`
+  now prefers the per-analyte quantity unit (`mg`) over `PEPT-Total` (`mg/mL`).
+  `PEPT-Total` remains a fallback only for single-peptide variance samples that
+  carry no per-analyte quantity row (those keep inheriting `mg/mL`). The v1.5.4
+  non-unit rejection (a mis-seeded `text` can never reach the certificate) is
+  retained. Adjusts the choice made in v1.5.4 before any COA was regenerated.
+
 ## v1.5.4 — 2026-07-20
 
 Bug fix for the variance COA quantity unit.

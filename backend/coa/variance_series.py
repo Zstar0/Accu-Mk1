@@ -76,15 +76,15 @@ _VALID_QTY_UNITS = frozenset({"mg", "mg/ml", "ug", "mcg", "g", "ng", "mg/vial"})
 
 
 def _parent_quantity_unit(db: Session, parent) -> Optional[str]:
-    """The parent's own quantity unit (e.g. 'mg/mL'), used as the fallback for
-    variance vials whose quantity rows carry no unit — so the comma series stays
-    consistent rather than fabricating 'mg' next to a 'mg/mL' parent figure.
+    """The parent's own quantity unit, applied to variance vials whose quantity
+    rows carry no unit so the comma series stays consistent.
 
-    Deterministic by design: the blend concentration PEPT-Total wins so a whole
-    blend renders one consistent quantity unit regardless of parent-row order,
-    and any non-unit string (a mis-seeded 'text') is rejected outright rather
-    than leaking onto the certificate. Falls back to the first valid per-analyte
-    quantity unit; returns None when no real unit is present (callers default)."""
+    Deterministic by design: the per-vial series reports per-analyte measured
+    mass, so a per-analyte quantity unit (mg) is preferred over the PEPT-Total
+    blend concentration (mg/mL); PEPT-Total is only a fallback for single-peptide
+    samples that carry no per-analyte quantity row. Any non-unit string (a
+    mis-seeded 'text') is rejected outright rather than leaking onto the
+    certificate. Returns None when no real unit is present (callers default)."""
     rows = db.execute(
         select(LimsAnalysis.keyword, LimsAnalysis.result_unit).where(
             LimsAnalysis.lims_sample_pk == parent.id,
@@ -98,7 +98,7 @@ def _parent_quantity_unit(db: Session, parent) -> Optional[str]:
             LimsAnalysis.provenance == "canonical",
         )
     ).all()
-    fallback: Optional[str] = None
+    pept_total_unit: Optional[str] = None
     for kw, unit in rows:
         if _category(kw) != "quantity":
             continue
@@ -106,10 +106,11 @@ def _parent_quantity_unit(db: Session, parent) -> Optional[str]:
         if not u or u.lower() not in _VALID_QTY_UNITS:
             continue  # reject non-unit strings (e.g. a mis-seeded 'text')
         if (kw or "").upper() == "PEPT-TOTAL":
-            return u  # blend concentration wins → one unit across the sample
-        if fallback is None:
-            fallback = u
-    return fallback
+            if pept_total_unit is None:
+                pept_total_unit = u  # remembered, but per-analyte mass wins
+            continue
+        return u  # per-analyte quantity unit (mg) — the per-vial series unit
+    return pept_total_unit  # single-peptide samples inherit the blend concentration
 
 
 def build_variance_replicates(db: Session, parent) -> dict:
