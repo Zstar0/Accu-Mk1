@@ -42,6 +42,10 @@ def pytest_configure(config):
         "integration: live-SENAITE integration test. Skipped by default; "
         "run explicitly with `-m integration`.",
     )
+    config.addinivalue_line(
+        "markers",
+        "parity: adapter-vs-coabuilder conformance parity (needs COABUILDER_SRC).",
+    )
 
 
 def pytest_collection_modifyitems(config, items):

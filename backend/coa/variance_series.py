@@ -69,10 +69,25 @@ def _fmt(category: str, value: str, unit: Optional[str], default_unit: str = "mg
     return v  # identity: raw
 
 
+# Real per-analyte MASS units a parent quantity row may carry. mg/mL — the
+# PEPT-Total blend *concentration* — is deliberately excluded: the variance
+# per-vial series reports each analyte's measured mass, so a single-peptide
+# sample (only a PEPT-Total row) falls through to the caller's 'mg' default
+# instead of rendering mg/mL, matching the COA's own total-quantity figure. A
+# mis-seeded 'text' is likewise rejected. Comparison is case-insensitive on the
+# stripped value.
+_VALID_QTY_UNITS = frozenset({"mg", "ug", "mcg", "g", "ng", "mg/vial"})
+
+
 def _parent_quantity_unit(db: Session, parent) -> Optional[str]:
-    """The parent's own quantity unit (e.g. 'mg/mL'), used as the fallback for
-    variance vials whose quantity rows carry no unit — so the comma series stays
-    consistent rather than fabricating 'mg' next to a 'mg/mL' parent figure."""
+    """The parent's own quantity unit, applied to variance vials whose quantity
+    rows carry no unit so the comma series stays consistent.
+
+    The per-vial series reports per-analyte measured MASS (mg), so this returns
+    the first parent quantity row whose unit is a real mass unit. The PEPT-Total
+    blend concentration (mg/mL) and any non-unit string (a mis-seeded 'text') are
+    rejected; a single-peptide sample with only a PEPT-Total row therefore returns
+    None and the caller defaults to 'mg'."""
     rows = db.execute(
         select(LimsAnalysis.keyword, LimsAnalysis.result_unit).where(
             LimsAnalysis.lims_sample_pk == parent.id,
@@ -87,9 +102,12 @@ def _parent_quantity_unit(db: Session, parent) -> Optional[str]:
         )
     ).all()
     for kw, unit in rows:
-        if _category(kw) == "quantity" and (unit or "").strip():
-            return unit.strip()
-    return None
+        if _category(kw) != "quantity":
+            continue
+        u = (unit or "").strip()
+        if u.lower() in _VALID_QTY_UNITS:
+            return u  # per-analyte measured mass (mg)
+    return None  # PEPT-Total mg/mL / 'text' / none → callers default to 'mg'
 
 
 def build_variance_replicates(db: Session, parent) -> dict:

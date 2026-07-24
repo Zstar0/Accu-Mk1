@@ -1,5 +1,72 @@
 # Changelog
 
+## v1.5.6 — 2026-07-22
+
+Variance COA quantity unit: single-peptide samples render `mg`, not `mg/mL`.
+
+### Changed
+
+- **Single-peptide variance COAs now render the quantity column in `mg`** instead
+  of the `PEPT-Total` blend concentration (`mg/mL`). Follows v1.5.5 (which fixed
+  blends to per-analyte `mg`): the per-vial series reports each analyte's measured
+  **mass**, so `coa/variance_series.py::_parent_quantity_unit` no longer accepts
+  `mg/mL` at all — a single-peptide sample (whose only quantity row is
+  `PEPT-Total`) now falls through to the caller's `mg` default, matching the
+  COA's own total-quantity figure (e.g. NAD+ P-1463: front page "834.86 mg" vs
+  per-vial cells previously "832.42 mg/mL"). The `text` rejection is retained.
+  Net effect: the variance quantity column is now `mg` for every sample.
+
+## v1.5.5 — 2026-07-22
+
+Variance COA quantity unit: report per-analyte mass (`mg`).
+
+### Changed
+
+- **Variance COA quantity column now renders `mg` for blends** instead of the
+  blend concentration `mg/mL`. Per the lab, the per-vial series reports each
+  analyte's measured **mass** (`mg`), so `coa/variance_series.py::_parent_quantity_unit`
+  now prefers the per-analyte quantity unit (`mg`) over `PEPT-Total` (`mg/mL`).
+  `PEPT-Total` remains a fallback only for single-peptide variance samples that
+  carry no per-analyte quantity row (those keep inheriting `mg/mL`). The v1.5.4
+  non-unit rejection (a mis-seeded `text` can never reach the certificate) is
+  retained. Adjusts the choice made in v1.5.4 before any COA was regenerated.
+
+## v1.5.4 — 2026-07-20
+
+Bug fix for the variance COA quantity unit.
+
+### Fixed
+
+- **Variance COA quantity column rendered a literal `text` unit** (e.g.
+  `10.387 text`) for blends. `coa/variance_series.py::_parent_quantity_unit`
+  chose the parent quantity unit by returning the first matching row from an
+  **unordered** query, so a per-substance analysis service mis-seeded with
+  `unit='text'` (`QTY_BPC157`/`PUR_BPC157`) could win the race and poison the
+  whole sample-wide quantity unit (every analyte, both `text` and the coin-flip
+  `mg`/`mg/mL` split). The selector is now deterministic: it prefers the blend
+  concentration (`PEPT-Total`) so a blend renders one consistent unit regardless
+  of row order, and rejects any value outside a known real-unit allowlist so a
+  mis-seeded `text` can never reach the certificate. Standard COAs were
+  unaffected (SENAITE-sourced, header unit) and purity is immune (always `%`);
+  this is variance-quantity only.
+
+## v1.5.3 — 2026-07-15
+
+Additive backend feature for the Lab Manager verification agent.
+
+### Added
+
+- **Conformance endpoint (`GET /api/conformance/{sample_id}`).** Runs a
+  mirror-only vendored copy of the COA Builder conformance engine
+  (`coabuilder@2c95762`, v2.14.8) in-process: fetches the sample's SENAITE AR +
+  analyses, applies the same peptide-vs-BW engine selection COA Builder uses, and
+  returns per-analyte verdicts. New isolated packages `conformance_vendored/`
+  (byte-identical engine, do not edit in place) and `conformance/` (SENAITE input
+  adapter + service + route). No change to existing behavior; the only edit to an
+  existing file is the router registration in `main.py`. Guarded by a golden
+  parity test and an adapter-shape regression test; a devbox `-m parity` gate
+  checks the adapter reproduces COA Builder's verdict for the same sample.
+
 ## v1.5.2 — 2026-07-14
 
 Double hotfix: vial photos capture square again, and the Sample Preps page
