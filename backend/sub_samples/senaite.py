@@ -258,19 +258,47 @@ def fetch_parent_metadata(parent_sample_id: str) -> dict:
     return detail_items[0]
 
 
+def fetch_attachment_meta(uid: str, api_url: Optional[str] = None) -> dict:
+    """Fetch a single Attachment object's detail by uid — the second step of
+    an AR's `Attachment` list (each list entry is a minimal ref; this
+    resolves it to the full object, whose `AttachmentFile` sub-object carries
+    filename/content_type, alongside `RenderInReport`, `created`, and
+    `AttachmentType`). Same `_get` + envelope + error-raise shape as
+    `fetch_parent_metadata`'s uid-lookup half.
+
+    `api_url`, when given, is the ref's OWN self-reported URL (the sweep
+    already has the ref dict in hand — pass `ref.get("api_url")`) and is
+    preferred outright over constructing one. Only when it's absent does this
+    fall back to a constructed URL, using the `Attachment/{uid}` casing
+    precedent from `main.py`'s `get_senaite_attachment` proxy fallback (same
+    file, ~line 13096) rather than guessing a lowercase path.
+
+    Honesty note (final review, 2026-07-14): this shape was NOT verified
+    against a live Attachment detail payload, despite an earlier version of
+    this docstring claiming otherwise. It's inferred from the display-path
+    extraction in `main.py` (`get_senaite_sample`'s attachments loop, ~line
+    12899) plus COABuilder's `senaite_client.py` precedent for the same
+    object type. A live smoke test against a real SENAITE instance is
+    required before the first prod run of the attachment backfill sweep."""
+    url = api_url or f"{SENAITE_BASE_URL}/@@API/senaite/v1/Attachment/{uid}"
+    resp = _get(url)
+    if resp.status_code >= 300:
+        raise RuntimeError(f"SENAITE fetch_attachment_meta failed ({resp.status_code}): {resp.text}")
+    items = resp.json().get("items", [])
+    if not items:
+        raise RuntimeError(f"SENAITE attachment detail empty for uid={uid}")
+    return items[0]
+
+
 def fetch_parent_analyses(sample_id: str) -> List[dict]:
     """ONE throttled SENAITE Analysis-catalog query for every analysis line
     on a parent AR. Shared by `backfill_parent_analysis_shadows.py` and the
     registry-inspect debug panel's analyses column (main.py) — same endpoint
     + params + field-extraction shape as `coa.source_resolver
     .SenaiteAnalysesHttpReader.list_for_sample` (sync via `_get` rather than
-    an async httpx client), plus two additions those callers need that the
+    an async httpx client), plus one addition those callers need that the
     COA reader doesn't:
 
-      * `instrument_uid` — the SENAITE Analysis catalog carries the
-        instrument as a nested `Instrument` object ref ({"uid": ..., "title":
-        ...}), the same shape main.py's AR-detail analyses fetch reads at
-        ~12504-12510. Only the uid is extracted; None when absent.
       * `created` — best-effort creation timestamp for newest-line selection
         when a keyword has more than one non-superseded line (should not
         normally happen outside a retest chain, but the fallback exists so
@@ -290,8 +318,6 @@ def fetch_parent_analyses(sample_id: str) -> List[dict]:
     items = resp.json().get("items", []) or []
     out: List[dict] = []
     for it in items:
-        instrument_obj = it.get("Instrument")
-        instrument_uid = instrument_obj.get("uid") if isinstance(instrument_obj, dict) else None
         out.append({
             "uid": it.get("uid"),
             "keyword": it.get("getKeyword") or it.get("Keyword"),
@@ -303,7 +329,6 @@ def fetch_parent_analyses(sample_id: str) -> List[dict]:
                 or (it.get("RetestOf") or {}).get("uid")
                 or None
             ),
-            "instrument_uid": instrument_uid,
             "created": (
                 it.get("created") or it.get("creation_date")
                 or it.get("DateCreated") or it.get("getDateCreated")

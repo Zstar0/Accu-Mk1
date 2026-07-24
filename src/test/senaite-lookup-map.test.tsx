@@ -3,11 +3,12 @@ import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import React from 'react'
 import type { ExplorerOrder, SenaiteLookupResult } from '@/lib/api'
+import type { ReadSource } from '@/lib/read-source'
 
-const enqueueSenaiteLookupMock = vi.fn<(id: string) => Promise<SenaiteLookupResult>>()
+const enqueueSenaiteLookupMock = vi.fn<(id: string, source?: ReadSource) => Promise<SenaiteLookupResult>>()
 
 vi.mock('@/components/explorer/senaite-queue', () => ({
-  enqueueSenaiteLookup: (id: string) => enqueueSenaiteLookupMock(id),
+  enqueueSenaiteLookup: (id: string, source?: ReadSource) => enqueueSenaiteLookupMock(id, source),
 }))
 
 const { useSenaiteLookupMap } = await import('@/services/senaite-lookup-map')
@@ -119,5 +120,17 @@ describe('useSenaiteLookupMap', () => {
     const { result } = renderHook(() => useSenaiteLookupMap(orders), { wrapper: Wrapper })
     await waitFor(() => expect(result.current.isLoading).toBe(false))
     expect(result.current.isFetching).toBe(false)
+  })
+
+  it('defaults to source "senaite" when the caller omits it', async () => {
+    const orders = [makeOrder('o1', { a: { senaite_id: 'PB-001', status: 'ok' } })]
+    renderHook(() => useSenaiteLookupMap(orders), { wrapper: Wrapper })
+    await waitFor(() => expect(enqueueSenaiteLookupMock).toHaveBeenCalledWith('PB-001', 'senaite'))
+  })
+
+  it("threads an explicit 'mk1' source through to enqueueSenaiteLookup", async () => {
+    const orders = [makeOrder('o1', { a: { senaite_id: 'PB-001', status: 'ok' } })]
+    renderHook(() => useSenaiteLookupMap(orders, 'mk1'), { wrapper: Wrapper })
+    await waitFor(() => expect(enqueueSenaiteLookupMock).toHaveBeenCalledWith('PB-001', 'mk1'))
   })
 })

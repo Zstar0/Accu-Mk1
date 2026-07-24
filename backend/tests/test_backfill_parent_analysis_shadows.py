@@ -29,7 +29,7 @@ from models import AnalysisService, Instrument, LimsAnalysis, LimsAnalysisTransi
 
 TEST_SAMPLE_IDS = [
     "TEST-PM9-PARENT", "TEST-PM9-PARENT2", "TEST-PM9-NOUID",
-    "TEST-PM9-S01", "TEST-PM9-UNKNOWNKW",
+    "TEST-PM9-S01", "TEST-PM9-UNKNOWNKW", "TEST-PM9-NATIVE-MI",
 ]
 
 
@@ -210,7 +210,7 @@ def test_fetch_parent_analyses_extracts_keyword_result_unit_state():
     assert out == [{
         "uid": "U1", "keyword": "ANALYTE-1-PUR", "result": "99.2", "unit": "%",
         "review_state": "to_be_verified", "retest_of_uid": None,
-        "instrument_uid": None, "created": None,
+        "created": None,
     }]
 
 
@@ -243,31 +243,6 @@ def test_fetch_parent_analyses_retest_of_uid_falls_back_to_RetestOf_dict():
     with patch("sub_samples.senaite._get", return_value=mock_resp):
         out = fetch_parent_analyses("P-0001")
     assert out[0]["retest_of_uid"] == "U1"
-
-
-def test_fetch_parent_analyses_instrument_uid_from_nested_instrument_object():
-    """SENAITE's Analysis catalog carries the instrument as a nested
-    `Instrument` object ref ({"uid": ..., "title": ...}) on the same payload
-    shape as getRequestID/Keyword/Result — same endpoint main.py's AR-detail
-    fetch reads at ~12504-12510. Only the uid is needed for
-    resolve_instrument_id; title is not extracted here."""
-    mock_resp = MagicMock(status_code=200)
-    mock_resp.json.return_value = {"items": [
-        {"uid": "U1", "getKeyword": "KW", "Instrument": {"uid": "INST-UID-1", "title": "HPLC-1"}},
-    ]}
-    with patch("sub_samples.senaite._get", return_value=mock_resp):
-        out = fetch_parent_analyses("P-0001")
-    assert out[0]["instrument_uid"] == "INST-UID-1"
-
-
-def test_fetch_parent_analyses_instrument_uid_none_when_absent():
-    mock_resp = MagicMock(status_code=200)
-    mock_resp.json.return_value = {"items": [
-        {"uid": "U1", "getKeyword": "KW"},
-    ]}
-    with patch("sub_samples.senaite._get", return_value=mock_resp):
-        out = fetch_parent_analyses("P-0001")
-    assert out[0]["instrument_uid"] is None
 
 
 def test_fetch_parent_analyses_created_field_fallback_chain():
@@ -358,14 +333,18 @@ def test_backfill_only_mirrors_current_line_after_retest_supersession(
     assert row.retested is False  # backfilled as the current row, not a retest chain
 
 
-def test_backfill_resolves_instrument_uid_onto_shadow_row(
+def test_backfill_never_writes_instrument(
         db, checkpoint_from_now, two_analysis_services, seeded_instrument):
+    """Ownership rule (read-flip spec §5): the backfill mirrors state/result
+    but never writes method_id/instrument_id — even when the SENAITE line
+    carries a resolvable instrument uid."""
     svc_a, _svc_b = two_analysis_services
     parent = LimsSample(sample_id="TEST-PM9-PARENT", sample_type="x",
                         status="received", external_lims_uid="SENAITE-UID-1")
     db.add(parent); db.commit(); db.refresh(parent)
 
-    items = [_item("A", svc_a.keyword, result="1", instrument_uid=seeded_instrument.senaite_uid)]
+    items = [_item("A", svc_a.keyword, result="1",
+                   instrument_uid=seeded_instrument.senaite_uid)]
     with patch("scripts.backfill_parent_analysis_shadows.fetch_parent_analyses",
                return_value=items):
         _run(checkpoint_from_now)
@@ -373,7 +352,54 @@ def test_backfill_resolves_instrument_uid_onto_shadow_row(
     row = db.query(LimsAnalysis).filter_by(
         lims_sample_pk=parent.id, analysis_service_id=svc_a.id, provenance="shadow"
     ).one()
-    assert row.instrument_id == seeded_instrument.id
+    assert row.instrument_id is None
+    assert row.method_id is None
+
+
+def test_backfill_preserves_native_mi_on_update(
+        db, checkpoint_from_now, two_analysis_services, seeded_instrument):
+    """Re-running the backfill over a shadow row that has natively-set M/I
+    (the Layer-4 reconcile-rider scenario) must leave those values untouched
+    while still updating result/state."""
+    from lims_analyses import service as la_service
+
+    svc_a, _svc_b = two_analysis_services
+    parent = LimsSample(sample_id="TEST-PM9-NATIVE-MI", sample_type="x",
+                        status="received", external_lims_uid="SENAITE-UID-2")
+    db.add(parent); db.commit(); db.refresh(parent)
+
+    items = [_item("A", svc_a.keyword, result="OLD")]
+    with patch("scripts.backfill_parent_analysis_shadows.fetch_parent_analyses",
+               return_value=items):
+        _run(checkpoint_from_now)
+
+    row = db.query(LimsAnalysis).filter_by(
+        lims_sample_pk=parent.id, analysis_service_id=svc_a.id, provenance="shadow"
+    ).one()
+    la_service.set_method_instrument(
+        db, analysis_id=row.id,
+        method_id=None, instrument_id=seeded_instrument.id, user_id=None,
+    )
+
+    # Resume gotcha (same as test_backfill_idempotent_rerun_updates_not_duplicates):
+    # the first _run() already advanced the checkpoint past parent.id, so the
+    # second _run() must rewind it or it silently sees zero rows.
+    save_checkpoint(checkpoint_from_now, db.execute(
+        select(func.max(LimsSample.id)).where(LimsSample.id < parent.id)
+    ).scalar() or 0, "reseed")
+
+    items = [_item("A", svc_a.keyword, result="NEW",
+                   instrument_uid="TEST-SOME-OTHER-UID")]
+    with patch("scripts.backfill_parent_analysis_shadows.fetch_parent_analyses",
+               return_value=items):
+        _run(checkpoint_from_now)
+
+    db.expire_all()
+    row = db.query(LimsAnalysis).filter_by(
+        lims_sample_pk=parent.id, analysis_service_id=svc_a.id, provenance="shadow"
+    ).one()
+    assert row.result_value == "NEW"                      # mirror still mirrors
+    assert row.instrument_id == seeded_instrument.id      # native M/I survives
 
 
 def test_backfill_unresolved_keyword_is_a_silent_no_op(db, checkpoint_from_now):

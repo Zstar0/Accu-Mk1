@@ -140,6 +140,29 @@ def seed_method_instrument(db):
     return method, instrument
 
 
+@pytest.fixture
+def seed_second_method_instrument(db, seed_method_instrument):
+    """A second HplcMethod/Instrument pair, distinct from
+    seed_method_instrument's — needed by the M/I-ownership-preservation test
+    so a natively-set value and a proxy-incoming value are provably
+    different (same-value assertions can't distinguish 'preserved' from
+    'overwritten with the same id')."""
+    first_method, first_instrument = seed_method_instrument
+    method = db.execute(
+        select(HplcMethod).where(
+            HplcMethod.senaite_id.isnot(None), HplcMethod.id != first_method.id
+        )
+    ).scalars().first()
+    instrument = db.execute(
+        select(Instrument).where(
+            Instrument.senaite_uid.isnot(None), Instrument.id != first_instrument.id
+        )
+    ).scalars().first()
+    if method is None or instrument is None:
+        pytest.skip("no second seeded HplcMethod/Instrument available")
+    return method, instrument
+
+
 @pytest.fixture(autouse=True)
 def cleanup(db):
     yield
@@ -599,20 +622,16 @@ def test_transition_retract_refetch_not_retracted_fails_no_mirror(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Task 6: hook A4 — set_analysis_method_instrument (SENAITE-uid resolution)
+# Task 6: hook A4 — M/I ownership (mirror never writes method/instrument)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def test_method_instrument_mirrors_resolved_ids(db, seed_parent_and_service,
-                                                 seed_method_instrument):
-    """A method_uid/instrument_uid that resolve to a real Mk1 HplcMethod /
-    Instrument land as method_id/instrument_id on the shadow row.
-
-    NOTE: HplcMethod has no senaite_uid column — resolve_method_id matches
-    on senaite_id instead (see parent_mirror.py docstring). The seeded
-    method's senaite_id doubles as the "uid" sent to the endpoint here for
-    exactly that reason.
-    """
+def test_method_instrument_proxy_never_writes_shadow_mi(
+        db, seed_parent_and_service, seed_method_instrument):
+    """Ownership rule (read-flip spec §5): method_id/instrument_id are
+    Mk1-OWNED on every lims_analyses row. The A4 proxy still updates SENAITE
+    and still mirrors state, but never copies M/I onto the shadow — even when
+    the uids resolve to real Mk1 rows."""
     parent, svc = seed_parent_and_service
     method, instrument = seed_method_instrument
     proxy = _mock_senaite_update(
@@ -637,18 +656,66 @@ def test_method_instrument_mirrors_resolved_ids(db, seed_parent_and_service,
     row = db.query(LimsAnalysis).filter_by(
         lims_sample_pk=parent.id, provenance="shadow"
     ).one()
-    assert row.method_id == method.id
-    assert row.instrument_id == instrument.id
+    # state still mirrors; M/I never does
+    assert row.mirror_review_state == "to_be_verified"
+    assert row.method_id is None
+    assert row.instrument_id is None
 
 
-def test_method_instrument_unresolvable_uids_writes_row_with_none(
-        db, seed_parent_and_service):
-    """Unknown method_uid/instrument_uid (no matching Mk1 row) must not kill
-    the mirror — the shadow row is still written/updated, with method_id and
-    instrument_id left None."""
+def test_method_instrument_proxy_preserves_native_mi(
+        db, seed_parent_and_service, seed_method_instrument,
+        seed_second_method_instrument):
+    """A natively-set M/I value on the shadow row survives an A4 proxy call
+    that would previously have overwritten it with a DIFFERENT
+    SENAITE-derived id.
+
+    Deviates from the read-flip plan's literal test body in two ways, both
+    load-bearing:
+    1. Shadow-row seeding uses the proven A2/A3 `/transition` hook (state-
+       only), not a method-instrument call with both uids None — that call
+       hits the A4 endpoint's own `if not payload: return success=False`
+       short-circuit (main.py ~14176) before ever reaching SENAITE or the
+       mirror, so no row would ever be created.
+    2. The native write and the second proxy call use TWO DISTINCT
+       method/instrument pairs. Reusing one pair means the proxy's
+       "clobbering" write lands the identical id the native write already
+       set — the final assert would pass before AND after the fix, never
+       observing a real RED.
+    """
+    from lims_analyses import service as la_service
+
     parent, svc = seed_parent_and_service
+    proxy_method, proxy_instrument = seed_method_instrument
+    native_method, native_instrument = seed_second_method_instrument
+
+    # First call (A2/A3 transition hook) creates the shadow row (state-only).
     proxy = _mock_senaite_update(
         review_state="to_be_verified", keyword=svc.keyword,
+        get_request_id=parent.sample_id,
+    )
+    try:
+        with patch.object(main, "SENAITE_URL", "http://senaite.test"):
+            _client().post(
+                "/wizard/senaite/analyses/UID-1/transition",
+                json={"transition": "submit"},
+            )
+    finally:
+        proxy.stop()
+
+    row = db.query(LimsAnalysis).filter_by(
+        lims_sample_pk=parent.id, provenance="shadow"
+    ).one()
+
+    # Native write (the path that must win forever).
+    la_service.set_method_instrument(
+        db, analysis_id=row.id,
+        method_id=native_method.id, instrument_id=native_instrument.id,
+        user_id=None,
+    )
+
+    # Second proxy call carries DIFFERENT resolvable uids.
+    proxy = _mock_senaite_update(
+        review_state="verified", keyword=svc.keyword,
         get_request_id=parent.sample_id,
     )
     try:
@@ -656,21 +723,22 @@ def test_method_instrument_unresolvable_uids_writes_row_with_none(
             r = _client().post(
                 "/wizard/senaite/analyses/UID-1/method-instrument",
                 json={
-                    "method_uid": "TEST-NO-SUCH-METHOD-UID",
-                    "instrument_uid": "TEST-NO-SUCH-INSTRUMENT-UID",
+                    "method_uid": proxy_method.senaite_id,
+                    "instrument_uid": proxy_instrument.senaite_uid,
                 },
             )
     finally:
         proxy.stop()
 
     assert r.status_code == 200
-    assert r.json()["success"] is True
-
+    db.expire_all()
     row = db.query(LimsAnalysis).filter_by(
         lims_sample_pk=parent.id, provenance="shadow"
     ).one()
-    assert row.method_id is None
-    assert row.instrument_id is None
+    # state healed by the mirror; native M/I untouched
+    assert row.mirror_review_state == "verified"
+    assert row.method_id == native_method.id
+    assert row.instrument_id == native_instrument.id
 
 
 # ═══════════════════════════════════════════════════════════════════════════

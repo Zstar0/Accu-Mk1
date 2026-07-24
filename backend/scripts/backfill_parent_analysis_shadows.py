@@ -48,10 +48,10 @@ checkpoint, which only advances on a real fetch attempt: our cursor is
 row-granular, so re-skipping the same deterministic skip is pure waste with
 no retry benefit, unlike a transient SENAITE error).
 
-Known gap: HplcMethod has no reliable SENAITE-uid match key on parent
-analyses (see lims_analyses/parent_mirror.py::resolve_method_id's docstring),
-so `method_id` is never set by this backfill — mirrored rows land with
-method_id=NULL until that gap is closed separately.
+M/I ownership (read-flip spec §5, 2026-07-14): method_id/instrument_id are
+Mk1-owned columns — this backfill (and the reconcile rider built on it)
+never reads or writes them. The native writers are the vial picker, the
+prep bridge, and promote_to_parent.
 
 The final stats line on stdout is the coverage evidence for this one-time
 migration — retain it with the run record.
@@ -78,7 +78,7 @@ from sqlalchemy import select
 
 from database import SessionLocal
 from lims_analyses.parent_mirror import (
-    mirror_parent_analysis, resolve_instrument_id, resolve_shadow_target,
+    mirror_parent_analysis, resolve_shadow_target,
     select_current_lines,
 )
 from models import LimsAnalysis, LimsSample
@@ -224,13 +224,11 @@ def backfill(db_factory, *, sleep_s: float, batch_size: int,
                 try:
                     for keyword, line in selected.items():
                         existed = _has_live_shadow(db, sample_id, keyword)
-                        instrument_id = resolve_instrument_id(db, line.get("instrument_uid"))
                         ok = mirror_parent_analysis(
                             db, sample_id=sample_id, keyword=keyword,
                             mirror_review_state=line.get("review_state"),
                             result_value=line.get("result"),
                             result_unit=line.get("unit"),
-                            instrument_id=instrument_id,
                             is_retest=False,  # backfill records CURRENT state, not history
                         )
                         if ok:

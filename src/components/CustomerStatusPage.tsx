@@ -87,6 +87,7 @@ import { formatDate } from '@/components/explorer/helpers'
 import { OrderRow } from '@/components/explorer/OrderRow'
 import { useOrderSlaStatuses } from '@/services/order-sla'
 import { useSenaiteLookupMap } from '@/services/senaite-lookup-map'
+import { useEffectiveReadSource } from '@/lib/read-source'
 
 const PER_PAGE = 50
 
@@ -666,7 +667,11 @@ function CustomerDetailView() {
   }, [orders])
 
   // Per-sample SENAITE lookup map (shared hook — see useSenaiteLookupMap).
-  const { sampleLookupMap } = useSenaiteLookupMap(orders ?? [])
+  // Resolved from the 'sample_details' two-tier read-source setting — same
+  // mechanism as SampleDetails.tsx; defaults to 'senaite' (no behavior
+  // change until the Handler flips it).
+  const { effective: sampleDetailsSource } = useEffectiveReadSource('sample_details')
+  const { sampleLookupMap } = useSenaiteLookupMap(orders ?? [], sampleDetailsSource)
 
   // wordpressHost is read here and threaded into CustomerOrdersTab (the
   // derived render flags hasError/hasOrders/showLoading/showEmpty now live

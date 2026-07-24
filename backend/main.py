@@ -39,7 +39,7 @@ from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
 from sla_engine import BusinessSchedule, compute_business_minutes, sla_status_dict
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSubSample, LimsBox, FlagType
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -75,6 +75,19 @@ import sub_samples.service as sub_service
 from sub_samples.service import derive_base_demand
 from sub_samples import senaite
 from sub_samples.registry_debug import diff_registry_vs_senaite
+# Lookup-shape models moved to sub_samples/lookup_models.py (read-flip L4:
+# the native details builder types its return without importing main).
+# Imported back by name so every existing reference keeps working.
+from sub_samples.lookup_models import (
+    RegistrySampleReadResult,
+    SenaiteAnalysis,
+    SenaiteAnalyte,
+    SenaiteAttachment,
+    SenaiteCOAInfo,
+    SenaiteLookupResult,
+    SenaitePublishedCOA,
+    SenaiteRemark,
+)
 from lims_analyses.routes import router as lims_analyses_router
 from families.routes import router as families_router  # Phase 5b
 from boxes.routes import router as boxes_router
@@ -373,6 +386,20 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.warning("workflow.is_sync_start_failed", exc_info=True)
         _is_sync_task = None
+    # Parent-mirror nightly shadow reconcile rider (read-flip Layer 4, Task 4,
+    # spec §8) -- replaces the drift-observer coverage the sample_details
+    # read-flip retires (that observer piggybacked on the now-retired
+    # SENAITE display fetch). Env-gated INSIDE the rider's own tick
+    # (MK1_PARENT_MIRROR_RECONCILE_ENABLED, code default "false"), so this
+    # unconditionally starts the loop task -- it's a cheap no-op tick when
+    # the gate is off, not absent. Guarded: a startup issue here must never
+    # take down the rest of the app (same contract as the IS-sync tick above).
+    try:
+        from workflow.parent_mirror_reconcile import maybe_start as _reconcile_maybe_start
+        _reconcile_task = _reconcile_maybe_start(app)
+    except Exception:
+        logger.warning("workflow.reconcile_start_failed", exc_info=True)
+        _reconcile_task = None
     # Flag scheduler (Slice 5) — in-process ticker; jobs registered below.
     from datetime import timedelta as _timedelta
     from flags.scheduler import Scheduler as _Scheduler
@@ -4782,6 +4809,25 @@ async def upload_chromatogram_to_senaite(
             if att_resp.status_code not in (200, 301, 302):
                 raise HTTPException(502, f"SENAITE attachment upload returned {att_resp.status_code}")
 
+            # Native record + frozen S3 snapshot (read-flip spec §7) —
+            # best-effort AFTER SENAITE success; never fails or delays the
+            # response. Third dual-write path onto the parent AR (uncaptured
+            # at the Layer 3 final review): the FE always passes the PARENT
+            # AR uid here (SelectVialChromatogramDialog), not a vial uid.
+            # attachment_type/render_in_report mirror exactly what the
+            # SENAITE form POST above just sent ("HPLC Graph" /
+            # RenderInReport=False). source_sample_id=None — lineage here is
+            # the HPLC analysis, not a vial; out of scope for this capture.
+            from fastapi.concurrency import run_in_threadpool
+            await run_in_threadpool(
+                _capture_parent_attachment_bg,
+                sample_uid=sample_uid, file_bytes=csv_bytes,
+                filename=filename, content_type="text/csv",
+                kind="chromatogram", source_sample_id=None,
+                user_id=getattr(current_user, "id", None),
+                render_in_report=False, attachment_type="HPLC Graph",
+            )
+
     except HTTPException:
         raise
     except httpx.TimeoutException:
@@ -8796,7 +8842,8 @@ async def add_sample_analysis(
     # mirrors the line's existence. The IS proxy response carries no
     # keyword (just {success, message}), so resolve service_uid -> keyword
     # via the locally-synced analysis_services table (senaite_uid isn't
-    # unique — see resolve_instrument_id's note — hence order_by + first()).
+    # unique — Instrument.senaite_uid has no unique constraint, hence
+    # order_by + first()).
     # Unresolvable service_uid is the documented no-op: skip silently.
     _svc_uid = body.get("service_uid")
     if _svc_uid:
@@ -12119,111 +12166,25 @@ def _user_to_read(user) -> UserRead:
     )
 
 
-class SenaiteAnalyte(BaseModel):
-    raw_name: str
-    slot_number: int  # 1-4, corresponding to Analyte1..Analyte4 in SENAITE
-    matched_peptide_id: Optional[int] = None
-    matched_peptide_name: Optional[str] = None
-    declared_quantity: Optional[float] = None  # per-analyte declared qty (mg)
+# SenaiteAnalyte / SenaiteCOAInfo / SenaiteRemark / SenaiteAnalysis /
+# SenaiteAttachment / SenaitePublishedCOA / SenaiteLookupResult /
+# RegistrySampleReadResult moved to sub_samples/lookup_models.py (read-flip
+# L4 — imported back by name at the top of this file, so all references
+# below are unchanged).
 
-
-class SenaiteCOAInfo(BaseModel):
-    company_logo_url: Optional[str] = None
-    chromatograph_background_url: Optional[str] = None
-    company_name: Optional[str] = None
-    email: Optional[str] = None
-    website: Optional[str] = None
-    address: Optional[str] = None
-    verification_code: Optional[str] = None
-
-
-class SenaiteRemark(BaseModel):
-    content: str  # HTML string from SENAITE
-    user_id: Optional[str] = None
-    created: Optional[str] = None
-
-
-class SenaiteAnalysis(BaseModel):
-    uid: Optional[str] = None
-    keyword: Optional[str] = None
-    title: str
-    result: Optional[str] = None
-    result_options: list[dict] = []  # [{value: str, label: str}] for selection-type analyses
-    unit: Optional[str] = None
-    method: Optional[str] = None
-    method_uid: Optional[str] = None  # UID for editing
-    method_options: list[dict] = []   # [{uid: str, title: str}] allowed methods for this analysis
-    instrument: Optional[str] = None
-    instrument_uid: Optional[str] = None  # UID for editing
-    instrument_options: list[dict] = []   # [{uid: str, title: str}] allowed instruments for this analysis
-    analyst: Optional[str] = None
-    due_date: Optional[str] = None
-    review_state: Optional[str] = None
-    sort_key: Optional[float] = None
-    captured: Optional[str] = None
-    retested: bool = False
-    # Mk1-local enrichment: which service_group this analysis belongs to
-    # (resolved from analysis_services table by keyword). Drives the
-    # per-vial "primary analysis" highlight on the sample detail page.
-    service_group_id: Optional[int] = None
-    service_group_name: Optional[str] = None
-
-
-class SenaiteAttachment(BaseModel):
-    uid: str
-    filename: str
-    content_type: Optional[str] = None
-    attachment_type: Optional[str] = None  # e.g. "Sample Image", "HPLC Graph"
-    download_url: Optional[str] = None  # proxied through our backend
-
+# `_native_sample_remarks` moved to sub_samples/registry_details.py (the
+# native details builder calls it without importing main). Re-imported
+# under the old private name so the L2 call sites — and tests addressing
+# `main._native_sample_remarks` — keep working unchanged.
+from sub_samples.registry_details import (
+    native_sample_remarks as _native_sample_remarks,
+)
 
 # Cache SENAITE download URLs for attachment proxy (uid -> {download_url, content_type, filename})
 _attachment_download_cache: dict[str, dict[str, str]] = {}
 
 # Cache SENAITE download URLs for ARReport PDF proxy (uid -> download_url)
 _report_download_cache: dict[str, str] = {}
-
-
-class SenaitePublishedCOA(BaseModel):
-    report_uid: str
-    filename: str
-    file_size_bytes: Optional[int] = None
-    published_date: Optional[str] = None
-    published_by: Optional[str] = None
-    download_url: str  # proxied through our backend
-
-
-class SenaiteLookupResult(BaseModel):
-    sample_id: str
-    sample_uid: Optional[str] = None
-    client: Optional[str] = None
-    contact: Optional[str] = None
-    sample_type: Optional[str] = None
-    date_received: Optional[str] = None
-    date_sampled: Optional[str] = None
-    profiles: list[str] = []
-    client_order_number: Optional[str] = None
-    client_sample_id: Optional[str] = None
-    client_lot: Optional[str] = None
-    review_state: Optional[str] = None
-    declared_weight_mg: Optional[float] = None
-    analytes: list[SenaiteAnalyte]
-    coa: SenaiteCOAInfo = SenaiteCOAInfo()
-    remarks: list[SenaiteRemark] = []
-    analyses: list[SenaiteAnalysis] = []
-    attachments: list[SenaiteAttachment] = []
-    published_coa: Optional[SenaitePublishedCOA] = None
-    senaite_url: Optional[str] = None  # e.g. "/clients/client-8/PB-0057"
-    cached_at: Optional[str] = None  # ISO timestamp when this result was cached
-
-
-class RegistrySampleReadResult(SenaiteLookupResult):
-    """SenaiteLookupResult with basic-info overlaid from the Accu-Mk1 registry.
-    field_sources records, per overlay field, whether the value shown came from
-    the registry ('mk1') or fell back to SENAITE ('senaite')."""
-    read_source: str = "mk1"
-    registry_missing: bool = False
-    field_sources: dict[str, str] = {}
 
 
 class SenaiteStatusResponse(BaseModel):
@@ -12544,17 +12505,12 @@ async def lookup_senaite_sample(
             verification_code=item.get("VerificationCode") or None,
         )
 
-        # Parse remarks (list of {content, user_id, created, ...})
-        senaite_remarks: list[SenaiteRemark] = []
-        raw_remarks = item.get("Remarks")
-        if isinstance(raw_remarks, list):
-            for r in raw_remarks:
-                if isinstance(r, dict) and r.get("content"):
-                    senaite_remarks.append(SenaiteRemark(
-                        content=r["content"],
-                        user_id=r.get("user_id") or None,
-                        created=r.get("created") or None,
-                    ))
+        # Native remarks (read-flip spec §6): lims_sample_remarks is the
+        # system of record in BOTH read modes — SENAITE's Remarks field is
+        # stale by design since the write flip. The SENAITE payload's
+        # "Remarks" key is deliberately ignored.
+        senaite_remarks: list[SenaiteRemark] = _native_sample_remarks(
+            db, sample_id)
 
         # Fetch analyses (lab test results) for this sample.
         # Use getRequestID (the sample ID string) — this is the only reliable
@@ -13191,6 +13147,8 @@ async def upload_senaite_attachment(
     sample_uid: str,
     file: UploadFile,
     attachment_type: str = Form(...),  # "HPLC Graph" or "Sample Image"
+    native_kind: str = Form("manual"),
+    source_sample_id: Optional[str] = Form(None),
     current_user=Depends(get_current_user),
 ):
     """Upload a file attachment to a SENAITE sample.
@@ -13269,6 +13227,20 @@ async def upload_senaite_attachment(
                 headers=headers,
             )
             if att_resp.status_code in (200, 301, 302):
+                # Native record + frozen S3 snapshot (read-flip spec §7) —
+                # best-effort AFTER SENAITE success; never fails the response.
+                # Shared with receive_senaite_sample's step-1 image upload via
+                # _capture_parent_attachment_bg (Layer 3 Task 3).
+                from fastapi.concurrency import run_in_threadpool
+                await run_in_threadpool(
+                    _capture_parent_attachment_bg,
+                    sample_uid=sample_uid, file_bytes=file_bytes,
+                    filename=filename, content_type=content_type,
+                    kind=native_kind, source_sample_id=source_sample_id,
+                    user_id=getattr(current_user, "id", None),
+                    attachment_type=attachment_type,
+                )
+
                 return SenaiteUploadAttachmentResponse(success=True, message="Attachment uploaded")
             else:
                 return SenaiteUploadAttachmentResponse(
@@ -13690,6 +13662,7 @@ async def receive_senaite_sample(
                 )
 
                 filename = f"{req.sample_id}-sample-image.png"
+                content_type = "image/png"
                 form_url = f"{sample_url}/@@attachments_view/add"
                 form_data = {
                     "submitted": "1",
@@ -13705,7 +13678,7 @@ async def receive_senaite_sample(
                     "AttachmentFile_file": (
                         filename,
                         image_bytes,
-                        "image/png",
+                        content_type,
                     ),
                 }
                 headers = {
@@ -13720,6 +13693,22 @@ async def receive_senaite_sample(
                 )
                 if att_resp.status_code in (200, 301, 302):
                     steps_done.append("image_uploaded")
+                    # Native record + frozen S3 snapshot (read-flip spec §7)
+                    # — best-effort AFTER SENAITE success; never fails the
+                    # receive. Same filename/content_type as the SENAITE
+                    # copy above so the native record and SENAITE agree.
+                    # (Steps 2/3 below also import run_in_threadpool,
+                    # unconditionally, ahead of their own use sites — a
+                    # second local import of the same name here is harmless.)
+                    from fastapi.concurrency import run_in_threadpool
+                    await run_in_threadpool(
+                        _capture_parent_attachment_bg,
+                        sample_uid=req.sample_uid, file_bytes=image_bytes,
+                        filename=filename, content_type=content_type,
+                        kind="receive_image", source_sample_id=None,
+                        user_id=getattr(current_user, "id", None),
+                        attachment_type="Sample Image",
+                    )
                 else:
                     return SenaiteReceiveSampleResponse(
                         success=False,
@@ -13727,18 +13716,48 @@ async def receive_senaite_sample(
                         senaite_response={"steps_done": steps_done},
                     )
 
-            # --- Step 2: Add remarks (optional) ---
+            # Steps 2 and 3 below both dispatch a native DB write via
+            # run_in_threadpool; imported once here (unconditionally, ahead
+            # of both use sites) rather than once per conditional branch —
+            # step 2 only runs when remarks are present, so a step-2-local
+            # import would NameError on a no-remarks receive that still
+            # reaches step 3's transition-log write.
+            from fastapi.concurrency import run_in_threadpool
+
+            # --- Step 2: Add remarks (optional) — NATIVE ---
+            # lims_sample_remarks is the system of record (read-flip spec §6);
+            # the SENAITE Remarks write was deleted 2026-07-14 (nothing read
+            # it). Hard step preserved: failure fails the receive, same as
+            # the SENAITE write did.
             if req.remarks and req.remarks.strip():
-                update_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/update/{req.sample_uid}"
-                remark_resp = await client.post(
-                    update_url, json={"Remarks": req.remarks.strip()}
-                )
-                if remark_resp.status_code == 200:
+                def _insert_remark() -> bool:
+                    from database import SessionLocal
+                    rdb = SessionLocal()
+                    try:
+                        row = rdb.execute(
+                            select(LimsSample).where(
+                                LimsSample.sample_id
+                                == req.sample_id.strip().upper())
+                        ).scalar_one_or_none()
+                        if row is None:
+                            return False
+                        rdb.add(LimsSampleRemark(
+                            lims_sample_pk=row.id,
+                            content=req.remarks.strip(),
+                            author_user_id=getattr(current_user, "id", None),
+                        ))
+                        rdb.commit()
+                        return True
+                    finally:
+                        rdb.close()
+
+                if await run_in_threadpool(_insert_remark):
                     steps_done.append("remarks_added")
                 else:
                     return SenaiteReceiveSampleResponse(
                         success=False,
-                        message=f"Remarks update failed: SENAITE returned {remark_resp.status_code}",
+                        message=(f"Remarks save failed: no registry row for "
+                                 f"{req.sample_id}"),
                         senaite_response={"steps_done": steps_done},
                     )
 
@@ -13790,7 +13809,6 @@ async def receive_senaite_sample(
                     steps_done.append("received")
                     # Task 3: native sample-transition log (own session,
                     # never-fail — see _record_sample_transition_bg).
-                    from fastapi.concurrency import run_in_threadpool
                     await run_in_threadpool(
                         _record_sample_transition_bg,
                         sample_id=req.sample_id, verb="receive", to_status="sample_received",
@@ -13860,13 +13878,61 @@ async def update_senaite_sample_fields(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Update one or more fields on a SENAITE sample via the JSON API."""
+    """Update one or more fields on a SENAITE sample via the JSON API.
+
+    `Remarks` is intercepted here, before anything reaches SENAITE (read-flip
+    spec §6): this was the third parent-AR-remarks SENAITE write path found
+    at final review — the receive flow and the lookup were flipped to
+    `lims_sample_remarks`, but this generic endpoint (hit by
+    `AddRemarkForm` / `AssignRemarksBlock` via
+    `updateSenaiteSampleFields(uid, { Remarks })`) still forwarded Remarks to
+    SENAITE, where nothing reads it post-flip. Any remaining fields still
+    forward to SENAITE unchanged.
+    """
     if SENAITE_URL is None:
         return SenaiteFieldUpdateResponse(
             success=False, message="SENAITE not configured"
         )
 
     if not req.fields:
+        return SenaiteFieldUpdateResponse(
+            success=False, message="No fields provided"
+        )
+
+    # --- Remarks intercept: native write, never forwarded to SENAITE ---
+    # `db` is the request-scoped session (already used below by the registry
+    # mirror, synchronously, same pattern) — no separate SessionLocal/
+    # run_in_threadpool needed since this runs before any httpx call, not
+    # held across one.
+    raw_remarks = req.fields.pop("Remarks", None)
+    remarks_written = False
+    if raw_remarks is not None and str(raw_remarks).strip():
+        remark_content = str(raw_remarks).strip()
+        row = db.execute(
+            select(LimsSample).where(LimsSample.external_lims_uid == uid)
+        ).scalar_one_or_none()
+        if row is None:
+            return SenaiteFieldUpdateResponse(
+                success=False,
+                message=f"Remarks save failed: no registry row for uid {uid}",
+            )
+        db.add(LimsSampleRemark(
+            lims_sample_pk=row.id,
+            content=remark_content,
+            author_user_id=getattr(current_user, "id", None),
+        ))
+        db.commit()
+        remarks_written = True
+
+    if not req.fields:
+        # Remarks was the only field (the common case from AddRemarkForm /
+        # AssignRemarksBlock) — nothing left to send SENAITE.
+        if remarks_written:
+            return SenaiteFieldUpdateResponse(
+                success=True,
+                message="Updated 1 field(s)",
+                updated_fields=["Remarks"],
+            )
         return SenaiteFieldUpdateResponse(
             success=False, message="No fields provided"
         )
@@ -13921,10 +13987,13 @@ async def update_senaite_sample_fields(
                     "registry.field_mirror_failed uid=%s err=%s", uid, mirror_err
                 )
 
+            updated_fields = (
+                ["Remarks"] if remarks_written else []
+            ) + list(req.fields.keys())
             return SenaiteFieldUpdateResponse(
                 success=True,
-                message=f"Updated {len(req.fields)} field(s)",
-                updated_fields=list(req.fields.keys()),
+                message=f"Updated {len(updated_fields)} field(s)",
+                updated_fields=updated_fields,
             )
 
     except httpx.TimeoutException:
@@ -13954,37 +14023,24 @@ def _mirror_parent_analysis_bg(**kwargs) -> None:
     """Best-effort parent-analysis shadow mirror on its own short-lived session
     (never holds the request DB across the SENAITE HTTP call). Never raises.
 
-    Accepts optional `method_uid`/`instrument_uid` (raw SENAITE uids) — popped
-    and resolved to Mk1 ids on THIS function's own session (never on the event
-    loop) via resolve_method_id/resolve_instrument_id, then passed through to
-    mirror_parent_analysis as method_id/instrument_id, but only when resolved
-    non-None (an unresolvable uid must never overwrite an existing value with
-    None). Existing callers (A1/A2/A3) never pass these kwargs — pop() with a
-    None default plus the resolvers' own None-safety makes this a pure,
-    backward-compatible extension.
+    method_id/instrument_id are Mk1-OWNED (read-flip spec §5): this wrapper
+    and mirror_parent_analysis never write them. The A4 proxy used to pass
+    method_uid/instrument_uid for shadow-side resolution — removed 2026-07-14;
+    the native path (service.set_method_instrument, prep bridge, promote) is
+    the only M/I writer.
 
-    `SessionLocal()`, the resolver/helper imports, and the kwargs.pop() calls
-    all live INSIDE the try (not just the mirror call) so that even a
-    pathological construction/import failure is caught here rather than
-    escaping to the caller — this function must never raise. `db` is set to
-    None before the try so the finally block can guard `db.close()` for the
-    case where SessionLocal() itself never returned a session.
+    `SessionLocal()` and the mirror_parent_analysis import live INSIDE the
+    try (not just the mirror call) so that even a pathological
+    construction/import failure is caught here rather than escaping to the
+    caller — this function must never raise. `db` is set to None before the
+    try so the finally block can guard `db.close()` for the case where
+    SessionLocal() itself never returned a session.
     """
     db = None
     try:
         from database import SessionLocal
-        from lims_analyses.parent_mirror import (
-            mirror_parent_analysis, resolve_instrument_id, resolve_method_id,
-        )
-        method_uid = kwargs.pop("method_uid", None)
-        instrument_uid = kwargs.pop("instrument_uid", None)
+        from lims_analyses.parent_mirror import mirror_parent_analysis
         db = SessionLocal()
-        method_id = resolve_method_id(db, method_uid)
-        instrument_id = resolve_instrument_id(db, instrument_uid)
-        if method_id is not None:
-            kwargs["method_id"] = method_id
-        if instrument_id is not None:
-            kwargs["instrument_id"] = instrument_id
         if mirror_parent_analysis(db, **kwargs):
             db.commit()
     except Exception as mirror_err:  # noqa: BLE001
@@ -14057,7 +14113,23 @@ def _record_sample_transition_bg(**kwargs) -> None:
         wrote_status = heal_sample_status(
             db, kwargs["sample_id"], kwargs["to_status"]
         )
-        if wrote_log or wrote_status:
+        # Read-flip UAT catch (P-0143): date_received was only ever written
+        # from SENAITE metadata during a senaite-touching fetch
+        # (sub_samples/service.py:88), so a natively-received sample read in
+        # pure mk1 mode showed no received date until some reconcile ran.
+        # Stamp it when the receive verb is recorded — the endpoint has just
+        # re-read SENAITE and confirmed the transition took, so utcnow() is
+        # within a second of SENAITE's own DateReceived. NULL-gated: never
+        # overwrites a SENAITE-sourced value.
+        wrote_received = False
+        if kwargs.get("verb") == "receive":
+            _row = db.execute(select(LimsSample).where(
+                LimsSample.sample_id == kwargs["sample_id"]
+            )).scalar_one_or_none()
+            if _row is not None and _row.date_received is None:
+                _row.date_received = datetime.utcnow()
+                wrote_received = True
+        if wrote_log or wrote_status or wrote_received:
             db.commit()
     except Exception as log_err:  # noqa: BLE001
         if db is not None:
@@ -14102,6 +14174,104 @@ def _observe_parent_analyses_bg(sample_id: str, observed: list[dict]) -> None:
                 pass
         logger.warning("workflow.observer_failed sample_id=%s err=%s",
                        sample_id, observer_err)
+    finally:
+        if db is not None:
+            db.close()
+
+
+def _capture_parent_attachment_bg(
+    *, sample_uid: str, file_bytes: bytes, filename: str,
+    content_type: str, kind: str, source_sample_id: Optional[str],
+    user_id: Optional[int], render_in_report: bool = True,
+    attachment_type: Optional[str] = None,
+) -> None:
+    """Best-effort native parent-attachment capture + frozen S3 snapshot
+    (read-flip spec §7, Layer 3 Task 3) on its own short-lived session —
+    never holds the request session across the SENAITE HTTP call. Never
+    raises: a capture failure must never fail or delay-fail the endpoint
+    it's scheduled from.
+
+    Shared by three call sites: upload_senaite_attachment (kind/source_sample_id
+    /attachment_type come from user-controlled form fields — native_kind,
+    source_sample_id, attachment_type), receive_senaite_sample's step-1 image
+    upload (kind='receive_image', source_sample_id=None,
+    attachment_type='Sample Image', hardcoded), and
+    upload_chromatogram_to_senaite (kind='chromatogram', source_sample_id=None
+    — lineage is the analysis, not a vial — attachment_type='HPLC Graph',
+    render_in_report=False, all hardcoded to match what that endpoint sends
+    SENAITE). `kind` is clamped to the allowed set here rather than trusted
+    from the caller, since the upload endpoint's native_kind is user-supplied.
+    `render_in_report` defaults True (the first two call sites' original,
+    unchanged behavior); only the chromatogram site passes False explicitly.
+
+    Snapshot semantics: saves the EXACT bytes passed under a NEW storage key,
+    never the live vial-photo key — retakes must not mutate what was
+    attached.
+
+    `SessionLocal()` and the storage/model imports live INSIDE the try, same
+    hardening rationale as `_mirror_parent_analysis_bg`: `db` starts as None
+    so `finally` can guard `db.close()` if construction itself failed.
+    """
+    db = None
+    try:
+        from database import SessionLocal
+        from sub_samples.photo_storage import get_storage
+        resolved_kind = kind if kind in (
+            "vial_image", "packaging_image", "receive_image",
+            "chromatogram", "manual",
+        ) else "manual"
+        filename = filename[:255]  # column is VARCHAR(255) — guard both writers
+        db = SessionLocal()
+        row = db.execute(
+            select(LimsSample).where(
+                LimsSample.external_lims_uid == sample_uid)
+        ).scalar_one_or_none()
+        if row is None:
+            logger.warning(
+                "parent_attachment.capture_failed uid=%s "
+                "err=no-registry-row", sample_uid)
+            return
+        source_pk = None
+        if source_sample_id:
+            sub = db.execute(
+                select(LimsSubSample).where(
+                    LimsSubSample.sample_id == source_sample_id)
+            ).scalar_one_or_none()
+            if sub is None:
+                logger.warning(
+                    "parent_attachment.source_unresolvable uid=%s "
+                    "source_sample_id=%s", sample_uid, source_sample_id)
+            elif sub.parent_sample_pk != row.id:
+                logger.warning(
+                    "parent_attachment.source_lineage_mismatch uid=%s "
+                    "source_sample_id=%s vial_parent_pk=%s row_id=%s",
+                    sample_uid, source_sample_id, sub.parent_sample_pk,
+                    row.id)
+            else:
+                source_pk = sub.id
+        key = get_storage().save_photo(row.sample_id, file_bytes, filename)
+        db.add(LimsParentAttachment(
+            lims_sample_pk=row.id,
+            kind=resolved_kind,
+            source_sub_sample_pk=source_pk,
+            filename=filename,
+            content_type=content_type,
+            storage="s3",
+            storage_key=key,
+            render_in_report=render_in_report,
+            attachment_type=attachment_type,
+            created_by_user_id=user_id,
+        ))
+        db.commit()
+    except Exception as cap_err:  # noqa: BLE001
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        logger.warning(
+            "parent_attachment.capture_failed uid=%s err=%s",
+            sample_uid, cap_err)
     finally:
         if db is not None:
             db.close()
@@ -14251,7 +14421,6 @@ async def set_analysis_method_instrument(
                     _mirror_parent_analysis_bg,
                     sample_id=_sid, keyword=_kw,
                     mirror_review_state=item.get("review_state"),
-                    method_uid=req.method_uid, instrument_uid=req.instrument_uid,
                 )
 
             return AnalysisResultResponse(
@@ -17563,7 +17732,7 @@ def _build_analysis_debug_rows(db: Session, row: LimsSample, sample_id: str) -> 
         return r.retest_of_id is None and r.review_state not in ("retracted", "rejected")
 
     # Newest-wins per keyword, same "prefer live, else fallback to newest"
-    # idiom as parent_mirror.py's _existing_shadow / resolve_instrument_id.
+    # idiom as parent_mirror.py's _existing_shadow.
     shadow_best: dict = {}
     canonical_best: dict = {}
     for r in native_rows:
@@ -17838,46 +18007,98 @@ async def get_sample_read_from_registry(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Sample-details read path: basic-info sourced registry-first (Accu-Mk1
-    lims_samples) with per-field SENAITE fallback. Analyses and everything
-    else come from the unchanged SENAITE lookup.
+    """Sample-details read path (read-flip Layer 4 / Task 3): assembled
+    100% from Mk1 tables + the IS DB via `build_native_details` — zero
+    SENAITE HTTP (spec §9 invariant 2).
+
+    This endpoint is reached ONLY in 'mk1' read-source mode. There is no
+    senaite-mode branch here to preserve: `lookupSenaiteSample`'s 'senaite'
+    branch (the default) calls `/wizard/senaite/lookup` directly and never
+    routes through this route at all (src/lib/api.ts:~3678) — this endpoint
+    IS the mk1 implementation, unconditionally.
+
+    `build_native_details` is sync with a blocking IS-DB call
+    (integration_db.fetch_verification_codes_for_samples, psycopg2) inside a
+    route that stays `async def` — call it via run_in_threadpool so it can't
+    stall the event loop, per this codebase's documented async-def
+    loop-blocking incident class (see /worksheets above: a 2.5s sync body
+    run as `async def` froze every other request behind it, prod-probed
+    2026-07-07).
 
     Gated by `get_current_user` (any authenticated user), not `require_admin`
-    — it's a read-only projection of data the user already sees via the
-    SENAITE lookup it wraps (see spec Access-control). `current_user` is
-    resolved before `db` (auth gate before any DB dependency is entered) —
-    matches the sibling debug endpoints above.
+    — it's a read-only projection of data the user already sees (see spec
+    Access-control). `current_user` is resolved before `db` (auth gate
+    before any DB dependency is entered) — matches the sibling debug
+    endpoints above.
     """
-    from sub_samples.registry_read import registry_row_to_display, OVERLAY_FIELDS
+    from fastapi.concurrency import run_in_threadpool
+    from sub_samples.registry_details import build_native_details
 
-    base = await lookup_senaite_sample(id=sample_id, no_cache=True, db=db, _current_user=current_user)
-    payload = base.model_dump()
+    return await run_in_threadpool(build_native_details, db, sample_id)
 
-    row = db.execute(
-        select(LimsSample).where(LimsSample.sample_id == sample_id.strip().upper())
+
+@app.get("/registry/sample/{sample_id}/attachments/{attachment_id}/download")
+def download_registry_parent_attachment(
+    sample_id: str,
+    attachment_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Serve a native (S3 frozen-snapshot) parent-AR attachment's bytes
+    (read-flip Layer 4 / Task 2; the builder emits this route's URL for
+    storage='s3' rows).
+
+    BINDING CONSTRAINT (L4 plan #1): Content-Type and Content-Disposition
+    come from the DB row (`content_type`, `filename`) — NEVER from the
+    storage-key extension. Chromatogram snapshots key as '.bin' (csv is not
+    a photo_storage-known extension) while the row says text/csv;
+    extension-derived typing would serve them as octet-stream.
+
+    storage='senaite' rows 404 here with a proxy hint: their download_url
+    always points at the existing /wizard/senaite/attachment/{uid} proxy,
+    never this route. Missing S3 object → 404 (logged).
+
+    Auth matches the sibling registry endpoints: `get_current_user` (any
+    authenticated user, resolved before the db dependency). Plain `def` —
+    sync DB + sync storage fetch belong on the threadpool.
+    """
+    from sub_samples.photo_storage import PhotoNotFoundError, get_storage
+
+    att = db.execute(
+        select(LimsParentAttachment)
+        .join(LimsSample, LimsParentAttachment.lims_sample_pk == LimsSample.id)
+        .where(
+            LimsParentAttachment.id == attachment_id,
+            LimsSample.sample_id == sample_id.strip().upper(),
+        )
     ).scalar_one_or_none()
-
-    field_sources = {f: "senaite" for f in OVERLAY_FIELDS}
-    if row is None:
-        return RegistrySampleReadResult(**payload, read_source="mk1",
-                                        registry_missing=True, field_sources=field_sources)
-
-    overlay = registry_row_to_display(row)
-    for field, value in overlay.items():
-        # `analytes` is the one OVERLAY_FIELDS entry whose registry shape
-        # ({"name", "declared_quantity"}) is NOT the response_model's typed
-        # SenaiteAnalyte shape ({"raw_name", "slot_number", ...}). Overlaying
-        # it verbatim would raise a Pydantic ValidationError (500) on every
-        # sample with registry-populated analytes. Leave SENAITE's typed
-        # analytes untouched and keep field_sources["analytes"] == "senaite",
-        # which honestly reflects where the shown value came from.
-        if field == "analytes":
-            continue
-        payload[field] = value
-        field_sources[field] = "mk1"
-
-    return RegistrySampleReadResult(**payload, read_source="mk1",
-                                    registry_missing=False, field_sources=field_sources)
+    if att is None:
+        raise HTTPException(
+            404, f"No attachment {attachment_id} on sample {sample_id}")
+    if att.storage != "s3":
+        raise HTTPException(
+            404,
+            "Attachment is SENAITE-stored — fetch it via the "
+            f"/wizard/senaite/attachment/{att.senaite_attachment_uid or '<uid>'}"
+            " proxy, not this route",
+        )
+    if not att.storage_key:
+        logger.warning(
+            "registry_attachment.download_missing_key id=%s sample=%s",
+            att.id, sample_id)
+        raise HTTPException(404, "Attachment has no storage key")
+    try:
+        data = get_storage().fetch_photo(att.storage_key)
+    except PhotoNotFoundError:
+        logger.warning(
+            "registry_attachment.download_object_missing id=%s key=%s",
+            att.id, att.storage_key)
+        raise HTTPException(404, "Attachment object missing from storage")
+    return Response(
+        content=data,
+        media_type=att.content_type or "application/octet-stream",
+        headers={"Content-Disposition": f'inline; filename="{att.filename}"'},
+    )
 
 
 @app.get("/registry/samples", response_model=SenaiteSamplesResponse)

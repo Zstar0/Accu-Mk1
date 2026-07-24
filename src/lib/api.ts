@@ -3715,12 +3715,25 @@ export async function lookupSenaiteSample(
 const _attachmentCache = new Map<string, string>()
 const _attachmentTextCache = new Map<string, string>()
 
-export async function fetchSenaiteAttachmentText(attachmentUid: string): Promise<string> {
+// Both read modes put the authoritative fetch path in the attachment's own
+// download_url (senaite mode: the /wizard/senaite/attachment proxy; mk1 mode:
+// the native /registry/.../download route). Building the proxy URL from the
+// uid only works for SENAITE-era uids — a native-only row's `mk1att:<id>` uid
+// 404s on the proxy — so prefer download_url and keep the uid-built proxy URL
+// strictly as a fallback for callers that don't have one.
+function _attachmentFetchPath(attachmentUid: string, downloadUrl?: string | null): string {
+  return downloadUrl || `/wizard/senaite/attachment/${encodeURIComponent(attachmentUid)}`
+}
+
+export async function fetchSenaiteAttachmentText(
+  attachmentUid: string,
+  downloadUrl?: string | null
+): Promise<string> {
   const cached = _attachmentTextCache.get(attachmentUid)
   if (cached) return cached
 
   const response = await fetch(
-    `${API_BASE_URL()}/wizard/senaite/attachment/${encodeURIComponent(attachmentUid)}`,
+    `${API_BASE_URL()}${_attachmentFetchPath(attachmentUid, downloadUrl)}`,
     { headers: getBearerHeaders() }
   )
   if (!response.ok) throw new Error(`Failed to fetch attachment: ${response.status}`)
@@ -3730,13 +3743,14 @@ export async function fetchSenaiteAttachmentText(attachmentUid: string): Promise
 }
 
 export async function fetchSenaiteAttachmentUrl(
-  attachmentUid: string
+  attachmentUid: string,
+  downloadUrl?: string | null
 ): Promise<string> {
   const cached = _attachmentCache.get(attachmentUid)
   if (cached) return cached
 
   const response = await fetch(
-    `${API_BASE_URL()}/wizard/senaite/attachment/${encodeURIComponent(attachmentUid)}`,
+    `${API_BASE_URL()}${_attachmentFetchPath(attachmentUid, downloadUrl)}`,
     { headers: getBearerHeaders() }
   )
   if (!response.ok) {
@@ -3768,11 +3782,15 @@ export interface SenaiteUploadAttachmentResponse {
 export async function uploadSenaiteAttachment(
   sampleUid: string,
   file: File,
-  attachmentType: SenaiteAttachmentType
+  attachmentType: SenaiteAttachmentType,
+  nativeKind?: string,
+  sourceSampleId?: string
 ): Promise<SenaiteUploadAttachmentResponse> {
   const form = new FormData()
   form.append('file', file, file.name)
   form.append('attachment_type', attachmentType)
+  if (nativeKind) form.append('native_kind', nativeKind)
+  if (sourceSampleId) form.append('source_sample_id', sourceSampleId)
 
   const response = await fetch(
     `${API_BASE_URL()}/wizard/senaite/samples/${encodeURIComponent(sampleUid)}/attachments`,

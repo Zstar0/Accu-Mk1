@@ -16,10 +16,11 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import delete as sa_delete, select
+from sqlalchemy import and_, delete as sa_delete, or_, select
 from sqlalchemy.orm import Session
 
 from lims_analyses.state_machine import (
+    TIER_PARENT,
     InvalidTransitionError,
     TierMismatchError,
     is_terminal,
@@ -886,6 +887,140 @@ def list_promotions_for_parent(
         ))
 
     return result
+
+
+# ─── Read-flip L4/Task1: parent-tier analyses in senaite shape ──────────────
+
+
+def list_parent_analyses_senaite_shape(
+    db: Session,
+    parent_sample_id: str,
+) -> List["SenaiteShapeAnalysisResponse"]:
+    """Parent-tier analyses (SENAITE AR line items), projected to the FE's
+    SenaiteAnalysis shape via the shared _serialize_senaite_shape_rows
+    helper -- the read-flip's native substitute for SENAITE's own analyses
+    proxy on the parent AR page.
+
+    Row selection: rows hosted directly on the parent (lims_sample_pk ==
+    parent.id, lims_sub_sample_pk IS NULL), across BOTH provenances --
+    'canonical' (native promote_to_parent results) and 'shadow' (SENAITE
+    mirror rows written by parent_mirror.mirror_parent_analysis). Unlike
+    list_promotions_for_parent just above (which deliberately scopes to
+    provenance='canonical' -- it reports on *promotions*, a canonical-only
+    concept), this reads the full parent-tier analysis surface regardless
+    of which side authored the row -- that's the read-flip's whole point.
+
+    Tier guard: host shape alone (lims_sample_pk set, no sub-sample) is NOT
+    sufficient -- a parent can also host VIAL-tier rows. That shape is
+    reachable, not hypothetical: create_analysis(host_kind="sample") mints
+    a parent-hosted row in 'unassigned' via the authenticated
+    POST /api/lims-analyses (routes.py passes host_kind straight through),
+    and state_machine.tier_of explicitly models it ("the parent acting as
+    a vial in a variance set, mid-run": parent-hosted +
+    unassigned/assigned/to_be_verified => TIER_VIAL). Those rows belong to
+    the variance UI, not this AR-shaped analyses view -- they have no
+    SENAITE counterpart, so surfacing them here would be a guaranteed
+    mk1-vs-senaite parity diff (phantom 'unassigned' lines in mk1 mode).
+    Canonical rows are therefore filtered per-row through
+    state_machine.tier_of itself (no parallel state list to drift), keeping
+    only TIER_PARENT. Shadow rows bypass the check: they are parent-tier by
+    construction (parent_mirror.py writes them only against the parent
+    host), and their sentinel review_state ('senaite_mirror') is not in
+    tier_of's parent-state set, so running them through tier_of would
+    misclassify them as TIER_VIAL.
+
+    "Current" row resolution mirrors resolve_shadow_target's shadow-side
+    semantics (retested=False is the liveness signal, not retest_of_id --
+    see parent_mirror.py's _existing_shadow docstring). Canonical parent-tier
+    rows can never actually flip retested=True: state_machine.tier_allows
+    for TIER_PARENT is {publish, retract, auto} -- 'retest' isn't among
+    them, so apply_transition's retest branch (the only place that sets
+    retested=True) is unreachable for a parent-hosted canonical row. Instead,
+    a superseded canonical row is RETRACTED (promote_to_parent's retest-
+    source supersession, cascade_parent_retest_to_sources's un-promote,
+    force_retract_analysis) while retested stays False. So a
+    retested==False-only filter would leave every superseded canonical row
+    visible; review_state != 'retracted' is layered on for canonical rows
+    only to close that gap. ('rejected' is deliberately not excluded
+    alongside it, unlike the DB's uq_lims_analyses_parent_service_root
+    partial index -- 'reject' is not a TIER_PARENT-legal kind, so a
+    canonical parent-tier row can never reach review_state='rejected'; the
+    asymmetry with the index is inert, not a gap.) Shadow rows don't need
+    this extra clause: mirror_parent_analysis's is_retest branch DOES set
+    retested=True on the row it supersedes, so retested==False already
+    excludes it there. One accepted asymmetry this implies: a *live*
+    (retested=False) shadow row whose mirror_review_state is 'retracted'
+    (SENAITE retracted the line and no replacement has synced yet) still
+    surfaces with review_state='retracted' in the output -- faithful to
+    SENAITE's actual state, not filtered, since the shadow side has no
+    review_state-based exclusion.
+
+    review_state in the output: mirror_review_state for shadow rows (the
+    true SENAITE state -- their own review_state column carries the
+    sentinel 'senaite_mirror'), review_state for canonical rows. Resolved
+    inside the shared helper.
+
+    Returns [] when the parent sample_id is unknown (not a 404 -- mirrors
+    list_promotions_for_parent's contract; parent pages for samples that
+    were never promoted/mirrored call this too).
+    """
+    from models import LimsSample
+
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        return []
+
+    rows = list(db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+            LimsAnalysis.retested.is_(False),
+            or_(
+                and_(
+                    LimsAnalysis.provenance == "canonical",
+                    LimsAnalysis.review_state != "retracted",
+                ),
+                LimsAnalysis.provenance == "shadow",
+            ),
+        ).order_by(LimsAnalysis.keyword, LimsAnalysis.id)
+    ).scalars().all())
+
+    # Tier guard (see docstring): canonical rows must be parent-TIER per the
+    # state machine's own discriminator -- a parent-acting-as-vial mid-run
+    # row (TIER_VIAL) belongs to the variance UI, not this AR-shaped view.
+    # In-memory filter on the already-fetched rows (no per-row queries);
+    # tier_of is pure. Shadow rows bypass: parent-tier by construction,
+    # and their sentinel review_state would misclassify under tier_of.
+    rows = [
+        r for r in rows
+        if r.provenance == "shadow"
+        or tier_of(
+            lims_sample_pk=r.lims_sample_pk,
+            lims_sub_sample_pk=r.lims_sub_sample_pk,
+            review_state=r.review_state,
+        ) == TIER_PARENT
+    ]
+
+    # Cross-provenance keyword collapse (UAT catch, P-0143 promote flow):
+    # promote_to_parent authors a live canonical row AND pushes the result to
+    # SENAITE via the identity bridge, whose submit event the mirror echoes
+    # straight back as a live shadow row for the same keyword — both are
+    # "current" by their own provenance's liveness rules, and this AR-shaped
+    # view would show the test twice. The canonical row IS the native
+    # authority for that line, so a shadow is emitted only when no live
+    # canonical shares its keyword. Keyword (not service id) is the collapse
+    # key: the mirror resolves duplicate-keyword services to the lowest id
+    # (resolve_shadow_target), so the two provenances can legitimately hold
+    # different service ids for the same logical line.
+    canonical_keywords = {r.keyword for r in rows if r.provenance == "canonical"}
+    rows = [
+        r for r in rows
+        if r.provenance == "canonical" or r.keyword not in canonical_keywords
+    ]
+
+    return _serialize_senaite_shape_rows(db, rows)
 
 
 def list_variance_verifications_for_parent(
@@ -1897,51 +2032,54 @@ def delete_pristine_analysis(
 # ─── Phase 3 adapter: SenaiteAnalysis-shape projection ──────────────────────
 
 
-def list_analyses_in_senaite_shape(
+def _serialize_senaite_shape_rows(
     db: Session,
+    rows: List[LimsAnalysis],
     *,
-    host_kind: str,
-    host_pk: int,
-    include_retests: bool = False,
-):
-    """List analyses for a host, projected to the FE's SenaiteAnalysis shape.
+    promo_by_source: Optional[Dict[int, int]] = None,
+) -> List["SenaiteShapeAnalysisResponse"]:
+    """Shared per-row projection to the FE's SenaiteAnalysis shape.
+
+    Used by both the vial-tier listing (list_analyses_in_senaite_shape) and
+    the parent-tier listing (list_parent_analyses_senaite_shape) so the two
+    surfaces can never drift in field-mapping behavior — this is the whole
+    body of what used to be list_analyses_in_senaite_shape's bulk-load +
+    per-row loop, generalized to take an already-resolved row list instead
+    of fetching them itself.
 
     UID carries the 'mk1:' prefix so the FE can dispatch transitions to the
-    Mk1 endpoints. method_options + instrument_options are left empty in
-    Phase 3 — editing method/instrument on Mk1 vials would need new Mk1
-    PATCH endpoints; deferred to a later phase. Bench-tech result-entry +
-    state transitions DO work via the Phase 1 transitions endpoint.
+    Mk1 endpoints.
+
+    review_state resolution: shadow rows (provenance='shadow') report
+    mirror_review_state (the true SENAITE state — their own review_state
+    column carries the sentinel SHADOW_STATE 'senaite_mirror'); canonical
+    rows report their own review_state. Vial-tier rows are always
+    provenance='canonical' (shadows are parent-tier only — see
+    parent_mirror.py), so this is a no-op widening for the existing
+    vial-tier caller: r.provenance == "shadow" is never true for a
+    sub-sample-hosted row, so it always falls through to r.review_state,
+    unchanged from before this helper existed.
+
+    promo_by_source: optional {source_analysis_id: parent_analysis_id} —
+    only meaningful for vial-tier rows (only vial-tier rows can be sources
+    of a promotion; see SenaiteShapeAnalysisResponse.promoted_to_parent_id's
+    docstring). Parent-tier callers omit it; every row's
+    promoted_to_parent_id then resolves to None via the empty-dict default,
+    matching the schema's documented contract for parent-tier rows.
     """
-    from models import AnalysisService, HplcMethod, Instrument
+    from models import AnalysisService, HplcMethod, Instrument, User
     from lims_analyses.schemas import (
         SenaiteShapeAnalysisResponse,
         SenaiteShapeInstrumentOption,
         SenaiteShapeMethodOption,
         SenaiteShapeResultOption,
     )
+    from users_display import user_display_name
 
-    rows = list_analyses_for_host(
-        db, host_kind=host_kind, host_pk=host_pk,
-        include_retests=include_retests,
-    )
     if not rows:
         return []
 
-    # Phase 4b: bulk-load promotion links so we can surface promoted_to_parent_id
-    # on each vial-tier row. Single-query, indexed lookup on source_analysis_id.
-    # senaite-writeback: ignore links whose parent row was retracted/rejected —
-    # "retract the parent row, then re-promote" must restore promotability.
-    from models import LimsAnalysisPromotion
-    row_ids = [r.id for r in rows]
-    promo_by_source: Dict[int, int] = {}
-    if row_ids:
-        for p, parent_state in db.execute(
-            select(LimsAnalysisPromotion, LimsAnalysis.review_state)
-            .join(LimsAnalysis, LimsAnalysis.id == LimsAnalysisPromotion.parent_analysis_id)
-            .where(LimsAnalysisPromotion.source_analysis_id.in_(row_ids))
-        ).all():
-            if parent_state not in ("retracted", "rejected"):
-                promo_by_source[p.source_analysis_id] = p.parent_analysis_id
+    promo_by_source = promo_by_source or {}
 
     # Bulk-load services for unit / method-name display
     service_ids = {r.analysis_service_id for r in rows}
@@ -1966,9 +2104,9 @@ def list_analyses_in_senaite_shape(
     }
 
     # Analyst display: "First Last" (email fallback). Mirrors the FE rule in
-    # src/lib/user-display.ts; helper in backend/users_display.py.
-    from models import User
-    from users_display import user_display_name
+    # src/lib/user-display.ts; helper in backend/users_display.py. Batched
+    # (single IN-query) — never per-row, mirroring the lightbox created_by
+    # batched-names idiom.
     analyst_ids = {r.analyst_user_id for r in rows if r.analyst_user_id}
     analyst_name_by_id = {}
     if analyst_ids:
@@ -2002,6 +2140,10 @@ def list_analyses_in_senaite_shape(
             if isinstance(o, dict) and "value" in o and "label" in o
         ]
 
+        row_review_state = (
+            r.mirror_review_state if r.provenance == "shadow" else r.review_state
+        )
+
         out.append(SenaiteShapeAnalysisResponse(
             uid=f"mk1:{r.id}",
             keyword=r.keyword,
@@ -2017,7 +2159,7 @@ def list_analyses_in_senaite_shape(
             instrument_uid=str(r.instrument_id) if r.instrument_id else None,
             instrument_options=instrument_options,
             analyst=analyst_name_by_id.get(r.analyst_user_id),
-            review_state=r.review_state,
+            review_state=row_review_state,
             sort_key=None,
             captured=r.captured_at.isoformat() if r.captured_at else None,
             retested=r.retested,
@@ -2026,3 +2168,48 @@ def list_analyses_in_senaite_shape(
             promoted_to_parent_id=promo_by_source.get(r.id),
         ))
     return out
+
+
+def list_analyses_in_senaite_shape(
+    db: Session,
+    *,
+    host_kind: str,
+    host_pk: int,
+    include_retests: bool = False,
+):
+    """List analyses for a host, projected to the FE's SenaiteAnalysis shape.
+
+    UID carries the 'mk1:' prefix so the FE can dispatch transitions to the
+    Mk1 endpoints. method_options + instrument_options are left empty in
+    Phase 3 — editing method/instrument on Mk1 vials would need new Mk1
+    PATCH endpoints; deferred to a later phase. Bench-tech result-entry +
+    state transitions DO work via the Phase 1 transitions endpoint.
+
+    Per-row projection is delegated to the shared _serialize_senaite_shape_rows
+    helper (also used by list_parent_analyses_senaite_shape) so the two
+    surfaces can't drift in field-mapping behavior.
+    """
+    rows = list_analyses_for_host(
+        db, host_kind=host_kind, host_pk=host_pk,
+        include_retests=include_retests,
+    )
+    if not rows:
+        return []
+
+    # Phase 4b: bulk-load promotion links so we can surface promoted_to_parent_id
+    # on each vial-tier row. Single-query, indexed lookup on source_analysis_id.
+    # senaite-writeback: ignore links whose parent row was retracted/rejected —
+    # "retract the parent row, then re-promote" must restore promotability.
+    from models import LimsAnalysisPromotion
+    row_ids = [r.id for r in rows]
+    promo_by_source: Dict[int, int] = {}
+    if row_ids:
+        for p, parent_state in db.execute(
+            select(LimsAnalysisPromotion, LimsAnalysis.review_state)
+            .join(LimsAnalysis, LimsAnalysis.id == LimsAnalysisPromotion.parent_analysis_id)
+            .where(LimsAnalysisPromotion.source_analysis_id.in_(row_ids))
+        ).all():
+            if parent_state not in ("retracted", "rejected"):
+                promo_by_source[p.source_analysis_id] = p.parent_analysis_id
+
+    return _serialize_senaite_shape_rows(db, rows, promo_by_source=promo_by_source)

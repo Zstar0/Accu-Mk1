@@ -1,5 +1,38 @@
 # Changelog
 
+## v1.6.0 — 2026-07-24
+
+SENAITE phase-out section-2 read-flip: native parent sample details.
+
+### Added
+
+- **Native sample-details builder** (`sub_samples/registry_details.py`): mk1 read
+  mode renders `/registry/sample/{id}/details` 100% from Mk1 tables + the IS DB —
+  zero SENAITE HTTP (test-enforced). Default read source stays `senaite`; the
+  flip is a per-page Preferences call gated by the parity harness
+  (`backend/scripts/parity_sample_details.py --strict`).
+- **Native sample remarks** (`lims_sample_remarks`): all three remark entry
+  points (receive flow, assign-tab block, sample-details form) write Mk1;
+  remarks are READ from Mk1 in BOTH read modes — SENAITE's Remarks field is
+  stale by design from this release. Backfill:
+  `backend/scripts/backfill_lims_sample_remarks.py` (required at deploy).
+- **Native parent attachments** (`lims_parent_attachments`): Select-Vial-Image,
+  receive packaging, and chromatogram pushes dual-record natively with frozen
+  S3 snapshots; DB-typed download route. Backfill sweep with SENAITE-uid
+  adoption: `backend/scripts/backfill_lims_parent_attachments.py`.
+- **Nightly parent-mirror reconcile rider** (`MK1_PARENT_MIRROR_RECONCILE_ENABLED`,
+  default off, 08:00 UTC).
+
+### Changed
+
+- `lims_analyses.method_id/instrument_id` are Mk1-owned on every row (mirror and
+  shadow-backfill no longer write them).
+- Parent analysis listing collapses cross-provenance keyword duplicates
+  (canonical wins over the mirror's echo shadow).
+- Receive hook stamps `date_received` natively (NULL-gated).
+- FE attachment helpers prefer the payload's `download_url` (senaite proxy stays
+  as fallback).
+
 ## v1.5.6 — 2026-07-22
 
 Variance COA quantity unit: single-peptide samples render `mg`, not `mg/mL`.

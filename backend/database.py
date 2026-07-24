@@ -1251,6 +1251,76 @@ def _run_migrations():
         )
         """,
         "ALTER TABLE lims_packaging_photos ADD COLUMN IF NOT EXISTS capture_token_id INTEGER REFERENCES lims_capture_tokens(id) ON DELETE SET NULL",
+        # ── parent-AR internal remarks (read-flip spec §6, 2026-07-14) ──
+        # Full CREATE here (not just in create_all): migrations run BEFORE
+        # create_all, and the dedup unique index below needs the table on
+        # first boot (lims_capture_tokens precedent).
+        """
+        CREATE TABLE IF NOT EXISTS lims_sample_remarks (
+            id             SERIAL PRIMARY KEY,
+            lims_sample_pk INTEGER NOT NULL REFERENCES lims_samples(id) ON DELETE CASCADE,
+            content        TEXT NOT NULL,
+            author_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            author_label   VARCHAR(200),
+            created_at     TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_lims_sample_remarks_sample "
+        "ON lims_sample_remarks (lims_sample_pk, created_at)",
+        # Backfill idempotency key: same sample + timestamp + content hash is
+        # the same SENAITE remark; ON CONFLICT DO NOTHING rides this index.
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_sample_remarks_dedup "
+        "ON lims_sample_remarks (lims_sample_pk, created_at, md5(content))",
+        # ── parent-AR attachments native record (read-flip spec §7) ──
+        """
+        CREATE TABLE IF NOT EXISTS lims_parent_attachments (
+            id                     SERIAL PRIMARY KEY,
+            lims_sample_pk         INTEGER NOT NULL REFERENCES lims_samples(id) ON DELETE CASCADE,
+            kind                   VARCHAR(30) NOT NULL
+                                   CHECK (kind IN ('vial_image','packaging_image','receive_image','chromatogram','manual')),
+            source_sub_sample_pk   INTEGER REFERENCES lims_sub_samples(id) ON DELETE SET NULL,
+            filename               VARCHAR(255) NOT NULL,
+            content_type           VARCHAR(100),
+            storage                VARCHAR(10) NOT NULL CHECK (storage IN ('s3','senaite')),
+            storage_key            TEXT,
+            senaite_attachment_uid VARCHAR(50),
+            render_in_report       BOOLEAN NOT NULL DEFAULT FALSE,
+            created_by_user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            created_at             TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_lims_parent_attachments_sample "
+        "ON lims_parent_attachments (lims_sample_pk, created_at)",
+        # Backfill idempotency: one native row per SENAITE attachment uid.
+        # Partial — capture-time rows are uid-less until the sweep adopts them.
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_parent_attachments_uid "
+        "ON lims_parent_attachments (senaite_attachment_uid) "
+        "WHERE senaite_attachment_uid IS NOT NULL",
+        # attachment_type (final review, 2026-07-14): SENAITE's AttachmentType
+        # title ("HPLC Graph" / "Sample Image") — Layer 4's builder + the FE
+        # (isHplcGraph, lightbox badge) key real behavior off this.
+        "ALTER TABLE lims_parent_attachments ADD COLUMN IF NOT EXISTS "
+        "attachment_type VARCHAR(100)",
+        # 'chromatogram' kind (final review, 2026-07-14): the CREATE TABLE
+        # above already carries the 5-value list for a fresh boot, but the
+        # dev DB already has the 4-value CHECK from the original CREATE, so a
+        # DROP/re-ADD pair is needed to widen it there too. LAST-BOOT-WINS
+        # CLASS (same lesson as the 2026-07-12 workflow-state-system spec
+        # §11 rollback runbook: a DROP/re-ADD CHECK pair re-runs on EVERY
+        # boot, so an older image booted against this same DB after this one
+        # re-applies the narrower list and every 'chromatogram' capture then
+        # dies silently — IntegrityError swallowed by
+        # _capture_parent_attachment_bg's never-fail wrapper). Acceptable
+        # here because lims_parent_attachments exists on no other image
+        # lineage yet (prod has never run this table) — a later kind
+        # addition on a table other images already depend on must
+        # union-preserve instead (name the constraint, add without dropping,
+        # or widen-only).
+        "ALTER TABLE lims_parent_attachments "
+        "DROP CONSTRAINT IF EXISTS lims_parent_attachments_kind_check",
+        "ALTER TABLE lims_parent_attachments ADD CONSTRAINT "
+        "lims_parent_attachments_kind_check CHECK (kind IN "
+        "('vial_image','packaging_image','receive_image','chromatogram','manual'))",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

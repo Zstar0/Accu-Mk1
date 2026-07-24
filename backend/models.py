@@ -811,6 +811,90 @@ class LimsSample(Base):
     )
 
 
+class LimsSampleRemark(Base):
+    """Parent-AR internal remark — Mk1 system of record (read-flip spec §6).
+
+    Replaces SENAITE's AR `Remarks` field: the receive flow writes here
+    natively (SENAITE write deleted 2026-07-14) and the lookup serves this
+    table in BOTH read modes. Backfilled rows carry the SENAITE login string
+    in author_label; Mk1-era rows carry a real users FK.
+    """
+    __tablename__ = "lims_sample_remarks"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    lims_sample_pk: Mapped[int] = mapped_column(
+        ForeignKey("lims_samples.id", ondelete="CASCADE"), nullable=False
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    author_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    author_label: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return f"<LimsSampleRemark(id={self.id}, sample_pk={self.lims_sample_pk})>"
+
+
+class LimsParentAttachment(Base):
+    """Native record of a parent-AR attachment (read-flip spec §7).
+
+    Dual-write era: SENAITE keeps receiving the upload (COABuilder reads AR
+    attachments until the section-5 re-wire); Mk1 records what/when/who and,
+    for capture-time rows, a FROZEN S3 snapshot of the exact bytes
+    (storage='s3') — never a pointer to the live vial-photo key (snapshot
+    semantics: a retake must not change what was attached). Backfilled
+    historical rows point at SENAITE's copy (storage='senaite') served via
+    the existing attachment proxy. senaite_attachment_uid is NULL on
+    capture-time rows (the Plone form upload returns no uid); the backfill
+    sweep adopts them by (lims_sample_pk, filename) match.
+
+    kind vocabulary: 'vial_image' | 'packaging_image' | 'receive_image' |
+    'chromatogram' | 'manual'. 'chromatogram' (final review, 2026-07-14)
+    covers the HPLC-chromatogram-CSV push (upload_chromatogram_to_senaite) —
+    a third write path onto the parent AR discovered uncaptured at review;
+    lineage is the analysis, not a vial, so source_sub_sample_pk stays NULL
+    on these rows.
+    """
+    __tablename__ = "lims_parent_attachments"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    lims_sample_pk: Mapped[int] = mapped_column(
+        ForeignKey("lims_samples.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    source_sub_sample_pk: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("lims_sub_samples.id", ondelete="SET NULL"), nullable=True
+    )
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    storage: Mapped[str] = mapped_column(String(10), nullable=False)
+    storage_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    senaite_attachment_uid: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    render_in_report: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    # SENAITE's AttachmentType title ("HPLC Graph" / "Sample Image") — the FE
+    # keys real behavior off this (isHplcGraph, lightbox badge) and Layer 4's
+    # builder will need it. Populated by every writer: capture-time rows get
+    # it from the caller (form value / hardcoded literal, mirroring what was
+    # actually sent to SENAITE); backfilled rows extract it from the swept
+    # Attachment detail (same title-string extraction as the display path).
+    attachment_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return (f"<LimsParentAttachment(id={self.id}, "
+                f"sample_pk={self.lims_sample_pk}, kind='{self.kind}')>")
+
+
 class LimsSubSample(Base):
     """One physical vial received under a parent LimsSample. SENAITE id format
     `<parent>-S<NN>`, e.g. P-0134-S01."""

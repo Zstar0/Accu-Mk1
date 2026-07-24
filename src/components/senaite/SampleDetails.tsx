@@ -1025,7 +1025,7 @@ function AttachmentImage({ attachment }: { attachment: SenaiteAttachment }) {
       return
     }
     let cancelled = false
-    fetchSenaiteAttachmentUrl(attachment.uid)
+    fetchSenaiteAttachmentUrl(attachment.uid, attachment.download_url)
       .then(url => {
         if (!cancelled) setSrc(url)
       })
@@ -1168,7 +1168,7 @@ function HplcAttachmentChart({
 
   useEffect(() => {
     let cancelled = false
-    fetchSenaiteAttachmentText(attachment.uid)
+    fetchSenaiteAttachmentText(attachment.uid, attachment.download_url)
       .then(text => {
         if (cancelled) return
         const raw = parseChromatogramCsv(text)
@@ -2277,7 +2277,9 @@ function SelectVialImageDialog({
       const result = await uploadSenaiteAttachment(
         parentSampleUid,
         file,
-        'Sample Image'
+        'Sample Image',
+        'vial_image',
+        vial.sample_id
       )
       if (!result.success) throw new Error(result.message)
       // Seed the parent's photo cache with the exact bytes so the header
@@ -5788,7 +5790,7 @@ export function SampleDetails() {
         </div>
       )}
 
-      {/* Internal Remarks — full width (SENAITE-backed, lab-internal) */}
+      {/* Internal Remarks — full width (Mk1-native, lab-internal; lims_sample_remarks is the system of record post-read-flip, SENAITE's Remarks field is stale) */}
       <Card className="p-4 mb-6">
         <SectionHeader icon={MessageSquare} title="Internal Remarks">
           {data.remarks.length > 0 ? (
