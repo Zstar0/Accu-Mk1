@@ -211,6 +211,53 @@ def select_current_lines(items: list[dict]) -> dict[str, dict]:
     return selected
 
 
+def sync_parent_shadows_from_items(db: Session, *, sample_id: str,
+                                   items: list[dict]) -> dict[str, int]:
+    """Upsert a shadow row for every CURRENT line in `items`. Returns
+    {"created", "updated", "skipped"}. Caller commits.
+
+    The registration-time counterpart to the event-driven hooks: those only
+    fire on result/transition/replace/remove/publish, so a sample that has
+    only been REGISTERED has no shadow rows at all and reads back with zero
+    analyses in mk1 mode. This fills that gap from the AR's catalog lines.
+
+    PURE DB by design — the SENAITE fetch is the caller's job (same split as
+    `select_current_lines`, which this reuses). That keeps this module free of
+    HTTP imports and lets the tests drive it with plain dicts.
+
+    Idempotent by construction: every write goes through
+    `mirror_parent_analysis`'s get-or-create/update against the live
+    (`retested=False`) shadow row, so re-running — a rider sweep, a retry, or
+    the first real result event afterwards — UPDATES the same row rather than
+    adding a second one. `is_retest=False` always: this records current state,
+    never retest history (same contract as the backfill).
+
+    A line whose keyword has no AnalysisService, or a parent that isn't in the
+    registry, counts as `skipped` and never aborts the batch — one unmapped
+    keyword must not cost the sample its other lines.
+    """
+    stats = {"created": 0, "updated": 0, "skipped": 0}
+    for keyword, line in select_current_lines(items).items():
+        target = resolve_shadow_target(db, sample_id=sample_id, keyword=keyword)
+        if target is None:
+            stats["skipped"] += 1
+            continue
+        parent, svc = target
+        existed = _existing_shadow(db, parent.id, svc.id) is not None
+        ok = mirror_parent_analysis(
+            db, sample_id=sample_id, keyword=keyword,
+            mirror_review_state=line.get("review_state"),
+            result_value=line.get("result"),
+            result_unit=line.get("unit"),
+            is_retest=False,
+        )
+        if not ok:
+            stats["skipped"] += 1
+            continue
+        stats["updated" if existed else "created"] += 1
+    return stats
+
+
 def _norm_result(v: Optional[str]) -> Optional[str]:
     return None if v is None else str(v).strip()
 

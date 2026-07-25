@@ -1,5 +1,43 @@
 # Changelog
 
+## v1.6.1 — 2026-07-25
+
+Shadow parent analyses at registration — closes the fresh-sample gap that
+blocked the section-2 read flip.
+
+### Fixed
+
+- **Analyses now shadowed at REGISTRATION**, not only on the first result or
+  transition event. The parent-analysis mirror hooks are event-driven, so a
+  freshly registered sample had zero shadow rows and `build_native_details`
+  returned an EMPTY analyses list in mk1 mode — flipping the read source with
+  that open would have hidden pending tests from the bench. The IS creation
+  signal (`POST /s2s/lims-samples`) now schedules a best-effort shadow sync of
+  the AR's analysis lines via `BackgroundTasks`, so the S2S response returns to
+  IS before the SENAITE round trip and a SENAITE failure can never fail the
+  registration.
+- Same gap also hid analysis lines that were registered and then rejected
+  without ever carrying a result (they exist at AR-creation time, so
+  registration-time shadowing captures them and the later reject event updates
+  the same row).
+
+### Added
+
+- `lims_analyses.parent_mirror.sync_parent_shadows_from_items` — pure-DB
+  (no HTTP) upsert of one shadow row per current line, reusing
+  `select_current_lines`; idempotent via `mirror_parent_analysis`'s
+  get-or-create/update against the live `retested=False` row, so a rider sweep,
+  a retry, or the first real result event updates the same row rather than
+  adding a second.
+
+### Notes
+
+- One `fetch_parent_analyses` catalog query per newly registered sample — the
+  same single call the backfill already makes per parent (~20-30/day); not a
+  bulk sweep.
+- The existing `scripts/backfill_parent_analysis_shadows.py` healed the
+  pre-existing backlog (1791 seen, 555 created, 8632 updated, 0 errors).
+
 ## v1.6.0 — 2026-07-24
 
 SENAITE phase-out section-2 read-flip: native parent sample details.

@@ -30,7 +30,7 @@ def _read_app_version() -> str:
 
 APP_VERSION = _read_app_version()
 
-from fastapi import FastAPI, Body, Depends, Form, HTTPException, Header, Query, Request, Response, UploadFile, status
+from fastapi import BackgroundTasks, FastAPI, Body, Depends, Form, HTTPException, Header, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 from sqlalchemy.orm import Session, joinedload
@@ -14087,6 +14087,59 @@ def _mark_shadows_published_bg(sample_id: str) -> None:
             db.close()
 
 
+def _shadow_analyses_at_registration_bg(sample_id: str) -> None:
+    """Best-effort registration-time sibling of _mirror_parent_analysis_bg:
+    on its own short-lived session, shadow every analysis line the freshly
+    registered AR already carries in SENAITE.
+
+    Why: the parent-analysis mirror hooks are event-driven (result /
+    transition / replace / remove / publish). A sample that has only just been
+    REGISTERED has fired none of them, so it has zero shadow rows and reads
+    back with an EMPTY analyses list in mk1 mode — the bench would lose sight
+    of its pending tests. This closes that gap at the one point that is a true
+    creation-time hook (IS calls it immediately after creating the AR).
+
+    ONE throttle-free SENAITE query per newly registered sample — the same
+    single `fetch_parent_analyses` catalog call the backfill makes per parent,
+    not a bulk scan (feedback_senaite_bulk_scan_hazard is about unthrottled
+    SWEEPS; this is one call on a human-paced event). Runs as a FastAPI
+    BackgroundTask so the S2S response returns to IS before the SENAITE round
+    trip, and never holds the request `db` across it.
+
+    Never raises: a SENAITE outage or an unmapped keyword must leave the
+    registration itself untouched — the row is still created and the rider /
+    backfill (or the first real result event) heals the shadows later.
+
+    `SessionLocal()` and the helper imports live INSIDE the try, same
+    hardening rationale as `_mirror_parent_analysis_bg`: `db` starts as None
+    so `finally` can guard `db.close()` if construction itself failed.
+    """
+    db = None
+    try:
+        from database import SessionLocal
+        from lims_analyses.parent_mirror import sync_parent_shadows_from_items
+        from sub_samples import senaite as _senaite
+        items = _senaite.fetch_parent_analyses(sample_id)
+        db = SessionLocal()
+        stats = sync_parent_shadows_from_items(db, sample_id=sample_id, items=items)
+        db.commit()
+        logger.info(
+            "registry.registration_shadow_sync sample_id=%s created=%s updated=%s skipped=%s",
+            sample_id, stats["created"], stats["updated"], stats["skipped"],
+        )
+    except Exception as shadow_err:  # noqa: BLE001
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        logger.warning("registry.registration_shadow_sync_failed sample_id=%s err=%s",
+                       sample_id, shadow_err)
+    finally:
+        if db is not None:
+            db.close()
+
+
 def _record_sample_transition_bg(**kwargs) -> None:
     """Best-effort native sample-transition log write (Task 3) on its own
     short-lived session — never holds the request `db` across the SENAITE
@@ -17653,15 +17706,33 @@ class RegistrySampleSignalResponse(BaseModel):
 @app.post("/s2s/lims-samples", response_model=RegistrySampleSignalResponse)
 def s2s_upsert_lims_sample(
     req: RegistrySampleSignal,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _: None = Depends(require_internal_service_token),
 ):
     """Server-to-server registry upsert, called by the Integration Service
     immediately after it creates a SENAITE AR (or, for future SENAITE-free
-    lines, with no SENAITE id at all). Idempotent."""
+    lines, with no SENAITE id at all). Idempotent.
+
+    Schedules a best-effort shadow sync of the AR's analysis lines AFTER the
+    response (see `_shadow_analyses_at_registration_bg`): the event-driven
+    mirror hooks never fire for a sample that has only been registered, so
+    without this the sample reads back with zero analyses in mk1 mode. Queued
+    as a BackgroundTask, never inline — IS must not wait on a SENAITE round
+    trip, and a SENAITE failure must never fail the signal.
+
+    Scheduled for every SENAITE-ATTACHED row; only the SENAITE-free form has
+    no AR to mirror. The gate is `external_lims_system` (the sample_id-less
+    branch of upsert_sample_from_signal is the one that stamps "mk1"), NOT
+    `external_lims_uid`: the IS adapter documents `senaite_uid` as optional
+    ("Mk1 fills uid via its reconcile later") and `fetch_parent_analyses`
+    keys on the SAMPLE ID, so a uid gate would silently skip a real AR.
+    """
     from sub_samples.service import upsert_sample_from_signal
     row = upsert_sample_from_signal(db, req.sample_id, req.senaite_uid, req.meta)
     db.commit()
+    if row.external_lims_system != "mk1":
+        background_tasks.add_task(_shadow_analyses_at_registration_bg, row.sample_id)
     return RegistrySampleSignalResponse(sample_id=row.sample_id, native_id=row.native_id)
 
 
