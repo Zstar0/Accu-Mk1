@@ -278,6 +278,20 @@ _TOP_LEVEL_RULES: dict[str, Callable[[Any, Any], Optional[str]]] = {
     "senaite_url": lambda mk1v, sv: "senaite_url_unavailable" if _is_blank(mk1v) else None,
     "profiles": lambda mk1v, sv: "profiles_empty_native" if _is_blank(mk1v) else None,
     "cached_at": lambda mk1v, sv: "cached_at_timestamps",
+    # contact_fullname_senaite_doubling: SENAITE stores the Contacts IS creates
+    # with Firstname == Lastname == the COA company name, so its Fullname
+    # getter returns "X X" while mk1 holds the clean single value from the IS
+    # creation signal (and collapses it on refresh -- see
+    # sub_samples.service._collapse_self_doubled). mk1 is AUTHORITATIVE here;
+    # the two sides can never agree. Gated on an EXACT doubling of the mk1
+    # value, never on "contact differs" -- a genuinely wrong contact must stay
+    # a REAL diff.
+    "contact": lambda mk1v, sv: (
+        "contact_fullname_senaite_doubling"
+        if isinstance(mk1v, str) and isinstance(sv, str)
+        and mk1v.strip() and sv.strip() == f"{mk1v.strip()} {mk1v.strip()}"
+        else None
+    ),
 }
 
 _COA_RULES: dict[str, Callable[[Any, Any], Optional[str]]] = {

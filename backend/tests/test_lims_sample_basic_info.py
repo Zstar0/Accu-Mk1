@@ -272,3 +272,41 @@ def test_populate_missing_new_keys_yields_nulls(db):
     service._populate_basic_info(row, meta)
     assert row.analytes is None and row.coa_meta is not None  # map of Nones
     assert row.client_title is None and row.date_created is None
+
+
+# ── SENAITE ContactFullName self-doubling ───────────────────────────────────
+# SENAITE stores these Contacts with Firstname == Lastname == the COA company
+# name, so its Fullname getter returns "X X". The IS creation signal supplies
+# the CLEAN single value, so a full-field refresh from SENAITE would otherwise
+# overwrite good mk1 data with a doubled, user-visible string (this happened in
+# prod on 2026-07-25: 1738 of 1822 rows degraded by a basic-info backfill).
+# mk1 is authoritative on this field — collapse on read.
+
+
+def test_populate_collapses_self_doubled_contact_fullname(db):
+    row = LimsSample(sample_id="P-0135")
+    service._populate_basic_info(
+        row, _full_meta(ContactFullName="Prime Purity USA Prime Purity USA")
+    )
+    assert row.contact_title == "Prime Purity USA"
+
+
+def test_populate_keeps_genuine_two_word_name(db):
+    """A real person's name is not a self-doubling and must survive."""
+    row = LimsSample(sample_id="P-0136")
+    service._populate_basic_info(row, _full_meta(ContactFullName="Levi Fried"))
+    assert row.contact_title == "Levi Fried"
+
+
+def test_populate_keeps_name_whose_words_merely_repeat_once(db):
+    """'Bio Bio Labs' is NOT an exact self-doubling — leave it alone."""
+    row = LimsSample(sample_id="P-0137")
+    service._populate_basic_info(row, _full_meta(ContactFullName="Bio Bio Labs"))
+    assert row.contact_title == "Bio Bio Labs"
+
+
+def test_populate_contact_collapse_is_idempotent(db):
+    """An already-clean value must not be collapsed further."""
+    row = LimsSample(sample_id="P-0138")
+    service._populate_basic_info(row, _full_meta(ContactFullName="NxGen Bio Med"))
+    assert row.contact_title == "NxGen Bio Med"
