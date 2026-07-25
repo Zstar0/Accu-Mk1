@@ -504,7 +504,37 @@ def diff_attachments(mk1_list: list[dict], senaite_list: list[dict],
     return out
 
 
-def diff_analyses(mk1_list: list[dict], senaite_list: list[dict]) -> list[FieldDiff]:
+def _canonical_publish_rule(sample_published: bool) -> Callable[[Any, Any], Optional[str]]:
+    """canonical_verified_vs_senaite_published: on a PUBLISHED sample, a
+    canonical parent line reads 'verified' in mk1 where SENAITE reads
+    'published'.
+
+    That is by design, not lag. Publishing a sample flips the SENAITE-mirror
+    SHADOW rows to mirror_review_state='published' (mark_parent_shadows_
+    published), while the CANONICAL row -- the one the native builder surfaces
+    -- keeps its own state. Measured on prod 2026-07-25, analyses of published
+    samples were 7577 shadow / 2832 canonical-'verified' / 28 retracted:
+    ZERO canonical rows have ever reached 'published', so 'verified' IS the
+    canonical terminal state and surfacing it is correct.
+
+    GATED on the mk1 sample itself already being published. That gate is the
+    whole point: an analysis still sitting at 'verified' while its sample is
+    NOT yet published is genuine publish lag, and stays a REAL diff. Only the
+    exact by-design pair is suppressed -- any other state combination
+    ('unassigned' vs 'published', 'retracted' vs 'published', ...) is
+    untouched.
+    """
+    def rule(mk1v: Any, sv: Any) -> Optional[str]:
+        if not sample_published:
+            return None
+        if mk1v == "verified" and sv == "published":
+            return "canonical_verified_vs_senaite_published"
+        return None
+    return rule
+
+
+def diff_analyses(mk1_list: list[dict], senaite_list: list[dict], *,
+                  sample_published: bool = False) -> list[FieldDiff]:
     """Match lines by keyword (order-insensitive). Lines present on only one
     side are REAL diffs classified `analyses_mk1_only` / `analyses_senaite_
     only` (not the generic mk1_only/senaite_only -- brief-mandated naming so
@@ -513,6 +543,7 @@ def diff_analyses(mk1_list: list[dict], senaite_list: list[dict]) -> list[FieldD
         mk1_list or [], senaite_list or [],
         key_fn=lambda a: (a.get("keyword") or "").strip().casefold(),
     )
+    publish_rule = _canonical_publish_rule(sample_published)
     out: list[FieldDiff] = []
     for mk1_item, sen_item in pairs:
         label = mk1_item.get("keyword") or "?"
@@ -531,6 +562,8 @@ def diff_analyses(mk1_list: list[dict], senaite_list: list[dict]) -> list[FieldD
                     if isinstance(sv, str) and sv.strip() in _SENAITE_MI_PLACEHOLDERS
                     else None
                 )
+            elif sub == "review_state":
+                rule_fn = publish_rule
             elif sub == "analyst":
                 rule_fn = lambda mk1v, sv: "analyst_attribution"
             else:
@@ -570,7 +603,12 @@ def compare_sample(mk1: dict, senaite: dict) -> list[FieldDiff]:
         mk1.get("attachments"), senaite.get("attachments"),
         sample_id=str(mk1.get("sample_id") or senaite.get("sample_id") or ""),
     ))
-    out.extend(diff_analyses(mk1.get("analyses"), senaite.get("analyses")))
+    out.extend(diff_analyses(
+        mk1.get("analyses"), senaite.get("analyses"),
+        # The gate for canonical_verified_vs_senaite_published -- mk1's OWN
+        # view of whether this sample is published.
+        sample_published=(mk1.get("review_state") == "published"),
+    ))
     out.extend(diff_remarks(mk1.get("remarks"), senaite.get("remarks")))
     return out
 

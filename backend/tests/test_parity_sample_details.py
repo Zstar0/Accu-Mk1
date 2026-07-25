@@ -865,3 +865,39 @@ def test_mi_blank_mk1_still_takes_the_retest_rule():
     blank, even if SENAITE holds a placeholder."""
     d = _mi(None, "Manual")
     assert d.rule_id == "mi_blank_after_retest"
+
+
+# ── canonical_verified_vs_senaite_published ─────────────────────────────────
+
+
+def _rs(mk1_state, sen_state, *, sample_published):
+    diffs = diff_analyses(
+        [_an(review_state=mk1_state)], [_an(review_state=sen_state)],
+        sample_published=sample_published,
+    )
+    return next(d for d in diffs if d.path.endswith(".review_state"))
+
+
+def test_canonical_verified_on_published_sample_is_known_expected():
+    """Publishing flips the SHADOW rows; the CANONICAL row the builder
+    surfaces keeps 'verified' — zero canonical rows have ever reached
+    'published' in prod, so 'verified' IS the canonical terminal state."""
+    d = _rs("verified", "published", sample_published=True)
+    assert d.classification == "known_expected"
+    assert d.rule_id == "canonical_verified_vs_senaite_published"
+
+
+def test_verified_while_sample_not_published_stays_a_real_diff():
+    """The gate's whole purpose: a line at 'verified' while its sample is NOT
+    published is genuine publish lag and must stay visible."""
+    d = _rs("verified", "published", sample_published=False)
+    assert d.classification == "differing"
+    assert d.rule_id is None
+
+
+def test_other_state_pairs_on_published_sample_stay_real():
+    """Only the exact by-design pair is suppressed."""
+    for mk1_state in ("unassigned", "retracted", "to_be_verified"):
+        d = _rs(mk1_state, "published", sample_published=True)
+        assert d.classification == "differing", mk1_state
+        assert d.rule_id is None, mk1_state
