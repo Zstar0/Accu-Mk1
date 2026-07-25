@@ -18,6 +18,8 @@ from scripts.parity_sample_details import (
     TRUNCATE_LEN,
     build_report,
     compare_sample,
+    diff_analyses,
+    diff_attachments,
     diff_scalar_field,
     main,
 )
@@ -781,3 +783,85 @@ def test_contact_near_miss_doubling_stays_a_real_diff():
     d = diff_scalar_field("contact", "Prime Purity USA",
                           "Prime Purity USA Prime Purity LLC")
     assert d.classification == "differing"
+
+
+# ── attachment_type_native_only ─────────────────────────────────────────────
+
+
+def _att(**kw):
+    base = {"uid": "u1", "filename": "chromatogram_P-0001-S01.csv",
+            "content_type": "text/csv", "attachment_type": None,
+            "download_url": "/wizard/senaite/attachment/u1"}
+    base.update(kw)
+    return base
+
+
+def test_attachment_type_blank_on_senaite_is_known_expected():
+    """mk1 records the capture's type; SENAITE leaves it blank. mk1 is
+    strictly richer and SENAITE offers no competing value."""
+    diffs = diff_attachments(
+        [_att(attachment_type="HPLC Graph")], [_att(attachment_type=None)],
+        sample_id="P-0001",
+    )
+    d = next(x for x in diffs if x.path.endswith(".attachment_type"))
+    assert d.classification == "known_expected"
+    assert d.rule_id == "attachment_type_native_only"
+
+
+def test_attachment_type_conflicting_values_stay_a_real_diff():
+    """If SENAITE DOES carry a type and the two disagree, that is real."""
+    diffs = diff_attachments(
+        [_att(attachment_type="HPLC Graph")],
+        [_att(attachment_type="Sample Image")],
+        sample_id="P-0001",
+    )
+    d = next(x for x in diffs if x.path.endswith(".attachment_type"))
+    assert d.classification == "differing"
+    assert d.rule_id is None
+
+
+# ── mi_senaite_placeholder ──────────────────────────────────────────────────
+
+
+def _an(**kw):
+    base = {"uid": "u", "keyword": "HPLC-PUR", "result": None, "unit": None,
+            "review_state": "verified", "analyst": None, "method": None,
+            "method_uid": None, "instrument": None, "instrument_uid": None}
+    base.update(kw)
+    return base
+
+
+def _mi(mk1_val, sen_val, sub="method"):
+    diffs = diff_analyses([_an(**{sub: mk1_val})], [_an(**{sub: sen_val})])
+    return next(d for d in diffs if d.path.endswith("." + sub))
+
+
+def test_mi_senaite_manual_placeholder_is_known_expected():
+    """'Manual' is a placeholder, not a real method — mk1's catalog-backed
+    value is strictly richer and the two can never agree."""
+    d = _mi("Method 1", "Manual")
+    assert d.classification == "known_expected"
+    assert d.rule_id == "mi_senaite_placeholder"
+
+
+def test_mi_real_competing_senaite_method_stays_a_real_diff():
+    """SENAITE naming an actual method that DISAGREES with mk1 is a genuine
+    data-integrity question about which method ran — never suppressed."""
+    d = _mi("Method 7", "MET-HPLC-ID-1290A")
+    assert d.classification == "differing"
+    assert d.rule_id is None
+
+
+def test_mi_two_real_instruments_in_conflict_stays_a_real_diff():
+    """Both sides name a REAL instrument and they disagree — one of them is
+    wrong about which machine ran the sample."""
+    d = _mi("HPLC 1290b", "HPLC 1290a", sub="instrument")
+    assert d.classification == "differing"
+    assert d.rule_id is None
+
+
+def test_mi_blank_mk1_still_takes_the_retest_rule():
+    """The pre-existing blank-after-retest rule must still win when mk1 is
+    blank, even if SENAITE holds a placeholder."""
+    d = _mi(None, "Manual")
+    assert d.rule_id == "mi_blank_after_retest"

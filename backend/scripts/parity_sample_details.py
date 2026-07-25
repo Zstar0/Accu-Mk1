@@ -320,6 +320,21 @@ _ANALYSIS_MI_TITLE_SUBFIELDS = frozenset({"method", "instrument"})
 # own `uid` field (analyses_uid_shape) -- never a real diff, the two sides
 # fundamentally cannot agree on a shared id space for the same method.
 _ANALYSIS_MI_UID_SUBFIELDS = frozenset({"method_uid", "instrument_uid"})
+# SENAITE-side values that are PLACEHOLDERS rather than a real method or
+# instrument. When SENAITE carries one of these and mk1 carries a real
+# catalog-backed value, mk1 is strictly richer and the two can never agree
+# (L1 ownership: method_id/instrument_id are Mk1-owned).
+#
+# Deliberately a placeholder ALLOWLIST, not "any populated mismatch". Measured
+# on the prod published cohort 2026-07-25, the 93 populated M/I mismatches were
+# NOT one phenomenon:
+#   71  senaite='Manual'              -> placeholder, mk1 richer      (ruled here)
+#   17  senaite='MET-HPLC-ID-1290A'   -> a REAL competing method      (stays REAL)
+#    5  mk1='HPLC 1290b' vs senaite='HPLC 1290a' -> two REAL instruments
+#                                        in conflict                 (stays REAL)
+# Blanket-suppressing "populated mismatch" would have buried those last 22 --
+# genuine data-integrity questions about which method/instrument actually ran.
+_SENAITE_MI_PLACEHOLDERS = frozenset({"Manual"})
 
 
 def _diff_leaf(path: str, mk1v: Any, senaitev: Any,
@@ -468,6 +483,17 @@ def diff_attachments(mk1_list: list[dict], senaite_list: list[dict],
                 rule_fn = lambda mk1v, sv: "attachment_mk1att_uids"
             elif sub == "download_url":
                 rule_fn = download_url_rule
+            elif sub == "attachment_type":
+                # attachment_type_native_only: mk1 records the capture's type
+                # ('HPLC Graph', 'Sample Image') while SENAITE leaves the paired
+                # attachment's type BLANK. mk1 is strictly richer here and
+                # SENAITE offers no competing value, so the two can never agree.
+                # Gated on the SENAITE side being blank -- if SENAITE ever does
+                # carry a type and the two DISAGREE, that is a real diff and
+                # stays one.
+                rule_fn = lambda mk1v, sv: (
+                    "attachment_type_native_only" if _is_blank(sv) else None
+                )
             else:
                 rule_fn = None
             out.append(_diff_leaf(f"attachments[{label}].{sub}", mk1_item.get(sub), sen_item.get(sub), rule_fn))
@@ -499,7 +525,12 @@ def diff_analyses(mk1_list: list[dict], senaite_list: list[dict]) -> list[FieldD
                     "mi_blank_after_retest" if _is_blank(mk1v) else "analyses_uid_shape"
                 )
             elif sub in _ANALYSIS_MI_TITLE_SUBFIELDS:
-                rule_fn = lambda mk1v, sv: "mi_blank_after_retest" if _is_blank(mk1v) else None
+                rule_fn = lambda mk1v, sv: (
+                    "mi_blank_after_retest" if _is_blank(mk1v)
+                    else "mi_senaite_placeholder"
+                    if isinstance(sv, str) and sv.strip() in _SENAITE_MI_PLACEHOLDERS
+                    else None
+                )
             elif sub == "analyst":
                 rule_fn = lambda mk1v, sv: "analyst_attribution"
             else:
