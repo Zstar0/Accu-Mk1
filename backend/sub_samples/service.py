@@ -64,6 +64,36 @@ def ensure_sample_row(db: Session, parent_sample_id: str) -> LimsSample:
     return _create_sample_row(db, parent_sample_id, meta)
 
 
+def _collapse_self_doubled(value: Optional[str]) -> Optional[str]:
+    """Collapse a string that is EXACTLY its own left half repeated once with a
+    single separating space ("X X" -> "X"); return it unchanged otherwise.
+
+    SENAITE stores the Contacts IS creates with Firstname == Lastname == the
+    COA company name, so its `ContactFullName` getter returns the doubled form.
+    The IS creation signal supplies the clean single value, which makes mk1
+    authoritative on this field — but a full-field refresh reads SENAITE and
+    would overwrite the good value with the doubled one. That happened in prod
+    on 2026-07-25: a basic-info backfill degraded 1738 of 1822 rows on a
+    user-visible field. Collapsing on read makes the refresh path safe to
+    re-run.
+
+    Deliberately narrow — an EXACT self-doubling only. A genuine two-word name
+    ("Levi Fried"), a name that merely repeats a word ("Bio Bio Labs"), and an
+    already-clean value are all left untouched, so this can never eat real
+    data. Idempotent: a collapsed value no longer matches the pattern.
+    """
+    if not value:
+        return value
+    s = value.strip()
+    if len(s) % 2 == 0:          # a doubled "X X" is always odd-length
+        return value
+    mid = len(s) // 2
+    if s[mid] != " ":
+        return value
+    left, right = s[:mid], s[mid + 1:]
+    return left if (left and left == right) else value
+
+
 def _populate_basic_info(row: LimsSample, meta: dict) -> None:
     """Write the FULL canonical basic-info field set from a
     fetch_parent_metadata payload (the raw complete=true item). The single
@@ -92,7 +122,11 @@ def _populate_basic_info(row: LimsSample, meta: dict) -> None:
     # the live complete=true payload verified them (2026-07-06); bare-key
     # fallbacks keep old test fixtures and sparse payloads working.
     row.client_title = meta.get("getClientTitle") or meta.get("ClientTitle")
-    row.contact_title = meta.get("ContactFullName") or meta.get("getContactFullName")
+    # Collapsed: SENAITE's Fullname getter doubles these (see
+    # _collapse_self_doubled) and mk1 is authoritative on this field.
+    row.contact_title = _collapse_self_doubled(
+        meta.get("ContactFullName") or meta.get("getContactFullName")
+    )
     row.contact_email = meta.get("ContactEmail") or meta.get("getContactEmail")
     row.sample_type_title = meta.get("getSampleTypeTitle") or meta.get("SampleTypeTitle")
     row.date_created = _parse_senaite_date(meta.get("created"))

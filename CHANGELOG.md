@@ -1,5 +1,33 @@
 # Changelog
 
+## v1.6.2 — 2026-07-25
+
+Stop SENAITE's self-doubled contact name from overwriting mk1's clean value.
+
+### Fixed
+
+- **`contact_title` no longer degraded by a full-field refresh.** SENAITE
+  stores the Contacts IS creates with `Firstname == Lastname ==` the COA
+  company name, so its `ContactFullName` getter returns the doubled form
+  `"X X"`. The IS creation signal supplies the clean single value, making mk1
+  authoritative here — but `_populate_basic_info` read SENAITE verbatim, so any
+  refresh overwrote the good value with the doubled one. The 2026-07-25
+  basic-info backfill degraded 1738 of 1822 rows on a field that is
+  user-visible in the sample-details payload; those rows were repaired in prod,
+  and this stops the next refresh from re-doubling them.
+- `_collapse_self_doubled` is deliberately narrow — it collapses only a string
+  that is EXACTLY its own left half repeated once with a single separating
+  space. A genuine two-word name (`Levi Fried`), a name that merely repeats a
+  word (`Bio Bio Labs`), and an already-clean value are all untouched, so it
+  can never eat real data. Idempotent.
+
+### Added
+
+- Parity harness rule `contact_fullname_senaite_doubling`. With mk1 clean and
+  SENAITE doubled the two sides can never agree, so the class would otherwise
+  sit red forever. Gated on an EXACT doubling of the mk1 value — never on
+  "contact differs", so a genuinely wrong contact stays a REAL diff.
+
 ## v1.6.1 — 2026-07-25
 
 Shadow parent analyses at registration — closes the fresh-sample gap that

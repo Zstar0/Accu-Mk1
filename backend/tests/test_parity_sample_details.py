@@ -18,6 +18,7 @@ from scripts.parity_sample_details import (
     TRUNCATE_LEN,
     build_report,
     compare_sample,
+    diff_scalar_field,
     main,
 )
 from sub_samples.lookup_models import RegistrySampleReadResult, SenaiteLookupResult
@@ -752,3 +753,31 @@ def test_main_requires_exactly_one_of_base_url_or_in_process():
     import pytest
     with pytest.raises(SystemExit):
         main(["--samples", "P-0001"])  # neither --base-url nor --in-process
+
+
+# ── contact_fullname_senaite_doubling ───────────────────────────────────────
+
+
+def test_contact_exact_senaite_doubling_is_known_expected():
+    """SENAITE's Fullname getter returns "X X" (Firstname == Lastname == the
+    COA company name) while mk1 holds the clean value. mk1 is authoritative;
+    the sides can never agree."""
+    d = diff_scalar_field("contact", "Prime Purity USA",
+                          "Prime Purity USA Prime Purity USA")
+    assert d.classification == "known_expected"
+    assert d.rule_id == "contact_fullname_senaite_doubling"
+
+
+def test_contact_genuinely_different_stays_a_real_diff():
+    """The rule must NOT blanket-suppress 'contact differs' — a wrong contact
+    is exactly what parity exists to catch."""
+    d = diff_scalar_field("contact", "Prime Purity USA", "Someone Else")
+    assert d.classification == "differing"
+    assert d.rule_id is None
+
+
+def test_contact_near_miss_doubling_stays_a_real_diff():
+    """Not an exact doubling (trailing word differs) — still real."""
+    d = diff_scalar_field("contact", "Prime Purity USA",
+                          "Prime Purity USA Prime Purity LLC")
+    assert d.classification == "differing"
