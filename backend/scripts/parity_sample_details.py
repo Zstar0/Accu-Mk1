@@ -467,13 +467,79 @@ def _normalize_content_type(ct: Optional[str]) -> Optional[str]:
     return _CONTENT_TYPE_SYNONYMS.get(ct, ct)
 
 
-def diff_attachments(mk1_list: list[dict], senaite_list: list[dict],
-                     sample_id: str) -> list[FieldDiff]:
-    pairs, mk1_only, senaite_only = _pair_lists(
-        mk1_list or [], senaite_list or [],
+# mk1 emits this prefix for a capture-time row SENAITE has not adopted yet
+# (registry_details.py: `uid=a.senaite_attachment_uid or f"mk1att:{a.id}"`).
+_MK1ATT_UID_PREFIX = "mk1att:"
+
+
+def _senaite_attachment_uid(a: dict) -> Optional[str]:
+    """The SENAITE attachment uid carried by an attachment dict, or None.
+
+    None means "this side has no SENAITE uid to join on" — either the field is
+    absent/blank, or mk1 emitted its `mk1att:{id}` placeholder because
+    senaite_attachment_uid is still NULL on that row (capture-time rows stay
+    uid-less until the backfill sweep adopts them)."""
+    uid = a.get("uid")
+    if not isinstance(uid, str):
+        return None
+    uid = uid.strip()
+    if not uid or uid.startswith(_MK1ATT_UID_PREFIX):
+        return None
+    return uid
+
+
+def _pair_attachments(mk1_list: list[dict], senaite_list: list[dict],
+                      ) -> tuple[list[tuple[dict, dict]], list[dict], list[dict]]:
+    """Pair attachments on the SENAITE uid FIRST, then fall back to
+    (filename, content_type).
+
+    Filename is NOT unique: vial-photo retakes are frozen snapshots by design,
+    so one parent AR legitimately holds several attachments sharing a filename
+    AND content_type. The plain first-come/first-served fallback then CROSSES
+    them — each side's attachment compared against a different one. Live case
+    P-1522 (2026-07-25): two `P-1522-S01-vial-photo.jpg` rows produced a
+    phantom `download_url` diff (both URLs real, just swapped) while the
+    equally-crossed `uid` diffs were absorbed by the blanket
+    attachment_mk1att_uids rule and never surfaced.
+
+    The uid is an exact join, so it runs first and only where BOTH sides carry
+    one. The filename fallback still covers capture-time rows whose
+    senaite_attachment_uid is NULL — which is the majority — so this strictly
+    improves pairing rather than replacing it."""
+    senaite_by_uid: dict[str, deque] = {}
+    for idx, item in enumerate(senaite_list):
+        uid = _senaite_attachment_uid(item)
+        if uid is not None:
+            senaite_by_uid.setdefault(uid, deque()).append(idx)
+
+    pairs: list[tuple[dict, dict]] = []
+    consumed: set[int] = set()
+    mk1_rest: list[dict] = []
+    for item in mk1_list:
+        uid = _senaite_attachment_uid(item)
+        bucket = senaite_by_uid.get(uid) if uid is not None else None
+        if bucket:
+            idx = bucket.popleft()
+            consumed.add(idx)
+            pairs.append((item, senaite_list[idx]))
+        else:
+            mk1_rest.append(item)
+
+    senaite_rest = [item for i, item in enumerate(senaite_list)
+                    if i not in consumed]
+
+    fallback_pairs, mk1_only, senaite_only = _pair_lists(
+        mk1_rest, senaite_rest,
         key_fn=lambda a: ((a.get("filename") or "").strip().casefold(),
                           _normalize_content_type(a.get("content_type"))),
     )
+    return pairs + fallback_pairs, mk1_only, senaite_only
+
+
+def diff_attachments(mk1_list: list[dict], senaite_list: list[dict],
+                     sample_id: str) -> list[FieldDiff]:
+    pairs, mk1_only, senaite_only = _pair_attachments(
+        mk1_list or [], senaite_list or [])
     download_url_rule = _native_download_route_rule(sample_id)
     out: list[FieldDiff] = []
     for mk1_item, sen_item in pairs:

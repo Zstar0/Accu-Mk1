@@ -393,6 +393,64 @@ def test_attachment_senaite_storage_pair_fully_equal():
         assert d.rule_id is None
 
 
+def test_attachments_with_duplicate_filenames_pair_by_uid():
+    """Same-filename attachments must pair by SENAITE uid, not by order.
+
+    Live case P-1522 (2026-07-25): a parent AR legitimately holds TWO
+    `P-1522-S01-vial-photo.jpg` attachments — vial-photo retakes are frozen
+    snapshots by design. The (filename, content_type) key is therefore not
+    unique, and the first-come/first-served fallback CROSSED them: each side's
+    photo was compared against the other one. That surfaced as a phantom
+    `download_url` diff (mk1 holding .../783d8dd, senaite holding .../149bbb6
+    — both real, just swapped), while the equally-crossed `uid` diffs were
+    silently absorbed by the blanket attachment_mk1att_uids rule.
+
+    Both uids exist on BOTH sides, so uid-first pairing resolves this exactly
+    rather than splitting it into one-sided entries.
+    """
+    photo_a_uid = "783d8ddbf5c0437ca743e7517661d1af"
+    photo_b_uid = "149bbb61ef5b4c8ebda06fd21e2c8938"
+    fname = "P-1522-S01-vial-photo.jpg"
+
+    # mk1 lists them in the opposite order from SENAITE — the crossing trigger.
+    mk1_atts = [
+        {"uid": photo_a_uid, "filename": fname, "content_type": "image/jpeg",
+         "attachment_type": None,
+         "download_url": f"/wizard/senaite/attachment/{photo_a_uid}"},
+        {"uid": photo_b_uid, "filename": fname, "content_type": "image/jpeg",
+         "attachment_type": "Sample Image",
+         "download_url": "/registry/sample/P-1522/attachments/2530/download"},
+    ]
+    senaite_atts = [
+        {"uid": photo_b_uid, "filename": fname, "content_type": "image/jpeg",
+         "attachment_type": None,
+         "download_url": f"/wizard/senaite/attachment/{photo_b_uid}"},
+        {"uid": photo_a_uid, "filename": fname, "content_type": "image/jpeg",
+         "attachment_type": None,
+         "download_url": f"/wizard/senaite/attachment/{photo_a_uid}"},
+    ]
+
+    diffs = compare_sample(
+        _mk1_payload(sample_id="P-1522", attachments=mk1_atts),
+        _senaite_payload(sample_id="P-1522", attachments=senaite_atts),
+    )
+    att_diffs = [d for d in diffs if d.path.startswith("attachments[")]
+
+    # Nothing may go unpaired — every uid exists on both sides.
+    assert [d for d in att_diffs
+            if d.classification in ("mk1_only", "senaite_only")] == []
+
+    # Correctly paired, every uid now matches outright: no uid diff survives,
+    # so the blanket attachment_mk1att_uids rule has nothing to absorb.
+    assert [d for d in att_diffs
+            if d.path.endswith(".uid") and d.classification != "equal"] == []
+
+    # The phantom download_url diff is gone: the proxy-URL photo pairs with
+    # its own uid (equal), and the natively-served one is ruled on URL shape.
+    real = [d for d in att_diffs if d.is_real]
+    assert real == [], real
+
+
 def test_analytes_defaults_matched_peptide_and_slot_known_expected():
     """Covers both analytes_defaults sub-cases: matched_peptide_* (mk1
     always None) and slot_number (may legitimately differ when SENAITE had
