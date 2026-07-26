@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+**Runtime-affecting.** The three parity-rule commits before this one were
+harness-only; this one changes a production write path and needs a deploy.
+
+### Fixed
+
+- **A translated promote now takes the parent-tier `result_unit` from the
+  TARGET service** instead of writing the caller's value verbatim.
+  `promote_to_parent` already re-pointed keyword/service/title at the generic
+  `ANALYTE-{n}-PUR/QTY` slot for per-substance promotion; `result_unit` was the
+  one field still riding from the source vial. The caller sends the source
+  row's DISPLAY unit, which falls back to the source SERVICE's unit whenever
+  the vial row's `result_unit` is NULL — so the two rogue-seeded services
+  `PUR_BPC157` (id=70) and `QTY_BPC157` (id=4), both `unit='text'`, stamped
+  `'text'` onto 60 parent rows whose real units are `%` / `mg`. v1.5.6 fixed
+  how this rendered; this fixes what gets written.
+- Scope is deliberately narrow. The unit is re-derived ONLY when a target
+  service actually resolves; an ordinary promote keeps the caller's unit
+  verbatim, because some services legitimately vary per sample — `ENDO-LAL` is
+  `EU/mg` for a solid and `EU/mL` for a solution — and must not be flattened to
+  whatever the seed row says. A resolved target whose unit is NULL still wins
+  over the caller: carrying the source's unit across a service change is the
+  defect itself.
+
 ## v1.6.2 — 2026-07-25
 
 Stop SENAITE's self-doubled contact name from overwriting mk1's clean value.
