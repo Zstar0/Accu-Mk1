@@ -383,3 +383,99 @@ unblocks COABuilder re-wire (program step 5) and SENAITE retirement.
   instead of the intended `no_native_pathway`. D now uses a private
   `test_sum_d_isolated` state with zero outgoing sample-scope transitions
   (same isolation pattern as the file's existing `window_state` fixture).
+
+## Verb-aware divergence bucketing (2026-07-27, UAT cancel finding)
+
+`_shadow_summary_payload`'s live-probe fallthrough originally probed every
+active `auto_fire` edge out of `native_status` blindly. Real repro
+(sample PB-0067): SENAITE cancelled a sample directly while it sat in
+`sample_received` — a state that (post the submit-edge gating fix above)
+always has an unrelated auto `submit` edge — and the probe found THAT edge
+unmet and misreported it as the reason, when the true story is "SENAITE
+acted where Mk1 has no trigger." Since most SENAITE-direct actions
+(cancel/dispatch) land on samples sitting in states with an auto_fire
+edge, `no_native_pathway` was systematically under-counted — the exact
+punch-list signal the report exists to build (tracked as
+`project_native_verb_origination_punchlist`).
+
+Fix: the fallthrough now resolves the sample's latest `source='senaite'`
+`lims_sample_transitions` row first and, if its `verb` is non-null, probes
+the catalog edge for THAT verb via `workflow.engine._find_edge` (any
+active edge, not just `auto_fire`) instead of guessing from auto_fire
+candidates:
+- No catalog edge for that verb → `no_native_pathway` (catalog gap).
+- Edge exists, unmet → `mk1_refused` / `live_probe_unmet`, `latest_verb`
+  = the actual SENAITE verb (Mk1 would have refused what SENAITE did).
+- Edge exists, met → `no_native_pathway` (Mk1 had the pathway; what's
+  missing is a TRIGGER, not a rule — this is the punch-list signal).
+
+No SENAITE-sourced transition (or a null verb) falls back to the original
+auto-edge probe, unchanged — it remains the transient-cascade-stall
+detector for the case where nothing external moved the sample at all.
+
+**Follow-up (same day):** both `no_native_pathway` sub-cases above
+(no edge for the verb; edge exists and is met) initially left `latest_verb`
+as `None` on the divergent row — but this bucket exists specifically to
+enumerate WHICH verbs Mk1 can't originate yet, so an operator couldn't see
+"this was a cancel" without cross-referencing the transition log. Both
+sub-cases now set `latest_verb` to the SENAITE verb that caused the
+divergence; the shadow-eval-derived `outcome` field is left `None` as
+before.
+
+## Arming native_status on first touch (2026-07-27, P-0140 coverage-decay finding)
+
+Real design gap, not a bug in the engine's logic: `native_status` is only
+ever set by the one-time catalog seed script
+(`scripts/seed_native_status.py`) or — after this fix — a first-touch
+arm. A sample **minted after** the seed run (i.e. every sample created
+during normal operation post-go-live) got `native_status=NULL` forever,
+since nothing else in the system ever wrote the column, and the engine
+skips NULL by design (§3.1: "NULL native_status = not seeded → engine
+skips silently"). UAT proved this concretely: P-0140 was checked in
+through the UI (the mk1 transition log row + status heal landed
+normally), but produced ZERO shadow trajectory — the sample was invisible
+to the divergence report for its entire life. Burn-in coverage would have
+silently decayed to whatever fraction of the fleet existed at seed time.
+
+**Fix — arm on first touch, at both true creation/first-contact hooks:**
+
+- **New helper, `workflow/engine.py`: `arm_native_status(db, sample,
+  adopted, *, trigger, actor_user_id=None)`.** Public (not the module's
+  usual `_`-prefixed internal helpers) — both call sites below import it.
+  Sets `sample.native_status = adopted`, flushes, and records a `seeded`
+  trajectory row via the same internal `_record` the bulk seed script's
+  outcome vocabulary uses. Flush-only; caller commits. Not deduped against
+  a prior arm (same "repeated heals APPEND a new seeded row, by design"
+  precedent `seed_native_status.py` already established) — callers check
+  `native_status is None` before calling.
+- **Site 1 — the `_record_sample_transition_bg` chokepoint (`main.py`).**
+  After the locked sample fetch (finding #2's row lock), if the sample is
+  unarmed and the verb is `receive`/`publish`: arm from
+  `kwargs.get("from_status") or sample.status`, THEN proceed through the
+  existing `execute_verb` + `evaluate_cascades` unchanged. Arms from
+  `from_status`, not `status`, deliberately: by the time this hook runs,
+  `heal_sample_status` has already advanced `sample.status` to the
+  POST-transition state earlier in the same function — arming from
+  `status` would make the verb about to execute a `no_edge` (there's no
+  edge FROM the destination state for the verb that just landed you
+  there). Both call sites (`receive`, `publish`) always pass `from_status`
+  explicitly, so the `sample.status` fallback is defensive-only and should
+  never actually fire in production.
+- **Site 2 — a new bg task, `_arm_native_status_at_registration_bg`
+  (`main.py`), scheduled from `POST /s2s/lims-samples`
+  (`s2s_upsert_lims_sample`).** Deliberately a SEPARATE background task
+  from the existing `_shadow_analyses_at_registration_bg` sibling, not
+  folded into it: that sibling's SENAITE `fetch_parent_analyses` call can
+  fail (SENAITE outage, unmapped keyword), and arming must not be coupled
+  to that outcome. Scheduled unconditionally for every registration (both
+  SENAITE-attached and SENAITE-free rows) — unlike the shadow-sync task,
+  which only runs for SENAITE-attached rows (there's no AR to mirror for
+  the SENAITE-free `external_lims_system='mk1'` form, but there's always a
+  `status` to arm from). Gated on `shadow_enabled()`; arms from the row's
+  current `status` (there is no prior state — this is the sample's first
+  tick of existence); own short-lived session, never-raise, same hardening
+  pattern as its sibling bg tasks.
+- **New `trigger` vocabulary value: `'registration'`** (paired with
+  `outcome='seeded'`) — added to the code-enforced vocabulary comment on
+  `LimsWorkflowShadowEvaluation` in `models.py`. No test pins the trigger
+  list exhaustively, so no other test needed updating for the new value.

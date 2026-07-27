@@ -14140,6 +14140,54 @@ def _shadow_analyses_at_registration_bg(sample_id: str) -> None:
             db.close()
 
 
+def _arm_native_status_at_registration_bg(sample_id: str) -> None:
+    """Registration-time arming sibling of `_shadow_analyses_at_registration_bg`
+    (2026-07-27, P-0140 coverage-decay finding): a sample minted AFTER the
+    catalog seed run gets `native_status=NULL` forever unless something
+    arms it — the engine skips NULL by design, and nothing else in the
+    system ever sets the column for a brand-new row. Left unarmed, its
+    first `receive`/`publish` touchpoint later WOULD arm it (see the
+    `_record_sample_transition_bg` chokepoint), but a sample that's only
+    ever checked in via the SENAITE-side path (or never reaches a native
+    touchpoint before someone runs the divergence report) silently decays
+    burn-in coverage the whole time in between. Arms from the row's
+    CURRENT `status` at registration time (there is no prior state to
+    adopt — this is the sample's first tick of existence).
+
+    Deliberately a SEPARATE bg task from `_shadow_analyses_at_registration_bg`
+    rather than folded into it: that sibling's SENAITE `fetch_parent_analyses`
+    call can fail (SENAITE outage, unmapped keyword) and arming must not be
+    coupled to that outcome. Gated on `shadow_enabled()` — no-op with the
+    kill switch off. Never raises: own short-lived session, same hardening
+    pattern as its sibling bg tasks.
+    """
+    db = None
+    try:
+        from database import SessionLocal
+        from workflow.engine import arm_native_status, shadow_enabled
+        if not shadow_enabled():
+            return
+        db = SessionLocal()
+        row = db.execute(select(LimsSample).where(
+            LimsSample.sample_id == sample_id
+        )).scalar_one_or_none()
+        if row is not None and row.native_status is None:
+            arm_native_status(db, row, row.status, trigger="registration",
+                              actor_user_id=None)
+            db.commit()
+    except Exception as arm_err:  # noqa: BLE001
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        logger.warning("workflow.registration_arm_failed sample_id=%s err=%s",
+                       sample_id, arm_err)
+    finally:
+        if db is not None:
+            db.close()
+
+
 def _record_sample_transition_bg(**kwargs) -> None:
     """Best-effort native sample-transition log write (Task 3) on its own
     short-lived session — never holds the request `db` across the SENAITE
@@ -14187,8 +14235,8 @@ def _record_sample_transition_bg(**kwargs) -> None:
         # guarded — an engine error must not cost us the log write above.
         wrote_engine = False
         try:
-            from workflow.engine import (evaluate_cascades, execute_verb,
-                                         shadow_enabled)
+            from workflow.engine import (arm_native_status, evaluate_cascades,
+                                         execute_verb, shadow_enabled)
             if shadow_enabled():
                 # Row lock (finding #2, 2026-07-27): this bg session can
                 # interleave with run_cascades_bg's own bg session on the
@@ -14199,6 +14247,22 @@ def _record_sample_transition_bg(**kwargs) -> None:
                 ).with_for_update()).scalar_one_or_none()
                 _verb = kwargs.get("verb")
                 if _s is not None and _verb in ("receive", "publish"):
+                    if _s.native_status is None:
+                        # Arm on first touch (2026-07-27, P-0140 coverage-
+                        # decay finding): a sample minted after the catalog
+                        # seed run never gets a native_status otherwise, so
+                        # the engine skips it silently forever. Adopt
+                        # `from_status` — the PRE-transition state both
+                        # call sites always pass — NOT `_s.status`: by the
+                        # time this hook runs, heal has already advanced
+                        # `_s.status` to the POST-transition state, and
+                        # arming from status would make the verb about to
+                        # run below a no_edge. The `_s.status` fallback is
+                        # defensive only.
+                        arm_native_status(
+                            db, _s, kwargs.get("from_status") or _s.status,
+                            trigger=_verb,
+                            actor_user_id=kwargs.get("actor_user_id"))
                     execute_verb(
                         db, _s, _verb, trigger=_verb,
                         actor_user_id=kwargs.get("actor_user_id"),
@@ -17761,6 +17825,11 @@ def s2s_upsert_lims_sample(
     db.commit()
     if row.external_lims_system != "mk1":
         background_tasks.add_task(_shadow_analyses_at_registration_bg, row.sample_id)
+    # Side-by-side engine (2026-07-27, P-0140 coverage-decay finding):
+    # arm native_status at the one true creation-time hook, for BOTH
+    # SENAITE-attached and SENAITE-free rows — unrelated to (and never
+    # gated on) the SENAITE analyses shadow-sync scheduled above.
+    background_tasks.add_task(_arm_native_status_at_registration_bg, row.sample_id)
     return RegistrySampleSignalResponse(sample_id=row.sample_id, native_id=row.native_id)
 
 

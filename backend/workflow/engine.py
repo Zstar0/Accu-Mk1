@@ -154,6 +154,34 @@ def _record(db: Session, sample: LimsSample, *, trigger: str,
     return row
 
 
+def arm_native_status(db: Session, sample: LimsSample, adopted: str, *,
+                      trigger: str, actor_user_id: Optional[int] = None,
+                      ) -> LimsWorkflowShadowEvaluation:
+    """First-touch arming (2026-07-27, P-0140 coverage-decay finding):
+    samples minted AFTER the catalog seed run get `native_status=NULL`
+    forever otherwise — nothing else ever sets it, and the engine skips
+    NULL by design (spec §3.1), so burn-in coverage silently decays for
+    every sample created post-go-live. Sets `native_status = adopted`,
+    flushes, and records a `seeded` trajectory row (same outcome
+    vocabulary `scripts/seed_native_status.py`'s bulk seed uses).
+    Flush-only; caller commits. Public — imported by both first-touch
+    call sites (the `_record_sample_transition_bg` chokepoint and the
+    registration signal), not just internal engine code.
+
+    Idempotent in effect (setting the same column twice is harmless) but
+    NOT deduped against a prior arm: callers are expected to check
+    `sample.native_status is None` before calling, same "repeated heals
+    APPEND a new seeded row, by design" precedent the bulk seed script
+    already established — this function does not guard against re-arming
+    an already-armed row itself.
+    """
+    sample.native_status = adopted
+    db.flush()
+    return _record(db, sample, trigger=trigger, verb=None, from_status=None,
+                   to_status=adopted, outcome="seeded", requirements_met=None,
+                   outcomes=[], actor_user_id=actor_user_id)
+
+
 def _find_edge(db: Session, from_slug: str, verb: str,
                ) -> Optional[tuple[LimsWorkflowTransition, str]]:
     """(edge, to_slug) for the active sample-scope edge `verb` out of

@@ -1600,7 +1600,11 @@ class LimsWorkflowShadowEvaluation(Base):
     the same transaction). outcome/trigger vocabularies are enforced in code,
     NOT CHECKs (last-boot-wins class):
       outcome: 'advanced' | 'requirements_unmet' | 'no_edge' | 'seeded'
-      trigger: 'receive' | 'publish' | 'analysis_cascade' | 'seed'
+      trigger: 'receive' | 'publish' | 'analysis_cascade' | 'seed' |
+               'registration' (2026-07-27: first-touch arming at the
+               registry-signal creation hook — see `workflow.engine.
+               arm_native_status` and `main._arm_native_status_at_
+               registration_bg`; always paired with outcome='seeded')
     """
     __tablename__ = "lims_workflow_shadow_evaluations"
 

@@ -102,6 +102,52 @@ def _run_hook(sample_id):
         from_status="sample_due", source="mk1", actor_user_id=None)
 
 
+@pytest.fixture
+def tp_sample_unarmed(db):
+    """Same shape as tp_sample but native_status=None — the arming target
+    (P-0140 coverage-decay finding, 2026-07-27): a sample minted after the
+    catalog seed run that has never been touched by anything that arms
+    native_status."""
+    row = LimsSample(sample_id="TEST-TP-0003", status="sample_due",
+                     native_status=None)
+    db.add(row); db.flush(); db.commit()
+    yield row
+    db.execute(delete(LimsWorkflowShadowEvaluation).where(
+        LimsWorkflowShadowEvaluation.lims_sample_pk == row.id))
+    db.execute(delete(LimsSampleTransition).where(
+        LimsSampleTransition.lims_sample_pk == row.id))
+    db.execute(delete(LimsSample).where(LimsSample.id == row.id))
+    db.commit()
+
+
+def test_chokepoint_arms_unseeded_sample_on_first_touch(
+        db, receive_catalog, tp_sample_unarmed):
+    """P-0140 coverage-decay finding: a sample with native_status=None must
+    be armed on its first receive/publish touchpoint instead of being
+    skipped forever. Arms from `from_status` (the PRE-transition state),
+    then proceeds through the existing execute_verb + cascades unchanged —
+    one 'seeded' row followed by one 'advanced' row, ending on the catalog's
+    real destination state."""
+    from main import _record_sample_transition_bg
+    _record_sample_transition_bg(
+        sample_id=tp_sample_unarmed.sample_id, verb="receive",
+        to_status="sample_received", from_status="test_tp_due",
+        source="mk1", actor_user_id=None)
+    db.expire_all()
+    fresh = db.get(LimsSample, tp_sample_unarmed.id)
+    assert fresh.native_status == "test_tp_received"
+    evals = db.execute(select(LimsWorkflowShadowEvaluation).where(
+        LimsWorkflowShadowEvaluation.lims_sample_pk == tp_sample_unarmed.id
+    ).order_by(LimsWorkflowShadowEvaluation.id)).scalars().all()
+    seeded = [e for e in evals if e.outcome == "seeded"]
+    advanced = [e for e in evals if e.outcome == "advanced"]
+    assert len(seeded) == 1
+    assert seeded[0].trigger == "receive"
+    assert seeded[0].to_status == "test_tp_due"
+    assert len(advanced) == 1
+    assert advanced[0].trigger == "receive"
+
+
 def test_receive_hook_advances_native(db, receive_catalog, tp_sample):
     _run_hook(tp_sample.sample_id)
     db.expire_all()
