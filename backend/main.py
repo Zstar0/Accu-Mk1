@@ -18038,7 +18038,7 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
             "fields": [], "summary": None, "vials": None, "verdict": None,
             "senaite_error": senaite_error,
             "raw": {"registry": _row_to_dict(row), "senaite": None},
-            "analyses": analyses, "transitions": transitions,
+            "analyses": analyses, "transitions": transitions, "shadow": shadow,
         }
 
     diff = diff_registry_vs_senaite(row, meta)

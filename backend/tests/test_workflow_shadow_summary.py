@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -251,3 +252,32 @@ def test_build_shadow_block(db, cohort):
 
     agree = next(r for r in cohort if r.sample_id == "TEST-SUM-A")
     assert _build_shadow_block(db, agree)["in_sync"] is True
+
+
+# Fix round 1: "shadow" must be a sibling of "transitions" on EVERY return
+# path out of _build_registry_debug_response, not just the happy path —
+# same independent-failure posture the "transitions" key already proves via
+# test_registry_debug_transitions.py's test_transitions_none_when_row_missing
+# / test_transitions_populated_on_senaite_meta_missing_path.
+
+def test_shadow_key_present_when_row_missing(db):
+    from main import _build_registry_debug_response
+    out = _build_registry_debug_response(db, "TEST-SUM-NOPE")
+    assert out["load"]["exists"] is False
+    assert "shadow" in out
+    assert out["shadow"] is None
+
+
+def test_shadow_key_populated_on_senaite_meta_missing_path(db, cohort):
+    """The `meta is None` early-return (senaite fetch_parent_metadata raised)
+    must still carry a populated shadow block — same independent-failure
+    posture the transitions section already proves for this path."""
+    from main import _build_registry_debug_response
+    agree = next(r for r in cohort if r.sample_id == "TEST-SUM-A")
+    with patch.object(main.senaite, "fetch_parent_metadata", side_effect=RuntimeError("no AR")):
+        out = _build_registry_debug_response(db, agree.sample_id)
+    assert out["senaite_error"] is not None
+    assert "shadow" in out
+    assert isinstance(out["shadow"], dict)
+    assert out["shadow"]["error"] is None
+    assert out["shadow"]["in_sync"] is True
