@@ -180,3 +180,69 @@ def test_seed_native_status_dry_run_and_apply(db, tp_sample):
     # heal/reset: re-run re-adopts (idempotent when equal — still records)
     stats3 = seed_native_status(db, sample_ids=[tp_sample.sample_id], apply=True)
     assert stats3["seeded"] == 1
+    db.expire_all()
+    # verify seeded-row accumulation: second heal appends a new row
+    seeded_rows_after_heal = db.execute(select(LimsWorkflowShadowEvaluation).where(
+        LimsWorkflowShadowEvaluation.lims_sample_pk == tp_sample.id,
+        LimsWorkflowShadowEvaluation.outcome == "seeded",
+    )).scalars().all()
+    assert len(seeded_rows_after_heal) == 2
+
+
+def test_seed_native_status_error_path_per_row_commits(db):
+    """Error on one sample does not roll back prior successful seeds.
+    Per-row commits ensure durability — only failed rows are lost."""
+    from unittest.mock import patch
+    from scripts.seed_native_status import seed_native_status
+
+    # Create two unseeded samples
+    sample1 = LimsSample(sample_id="TEST-ERR-0001", status="sample_due", native_status=None)
+    sample2 = LimsSample(sample_id="TEST-ERR-0002", status="sample_due", native_status=None)
+    db.add_all([sample1, sample2])
+    db.commit()
+
+    try:
+        # Patch LimsWorkflowShadowEvaluation to fail on the second sample's construction
+        call_count = [0]
+        original_init = LimsWorkflowShadowEvaluation.__init__
+
+        def failing_init(self, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 2:  # second call (second sample, ordered by id)
+                raise RuntimeError("simulated seed failure")
+            return original_init(self, **kwargs)
+
+        with patch.object(LimsWorkflowShadowEvaluation, "__init__", failing_init):
+            stats = seed_native_status(db, sample_ids=[sample1.sample_id, sample2.sample_id], apply=True)
+
+        # Verify stats: first succeeded, second failed
+        assert stats["scanned"] == 2
+        assert stats["seeded"] == 1
+        assert stats["errors"] == 1
+
+        # Verify first sample is durably seeded (in a fresh session)
+        db.expire_all()
+        fresh1 = db.get(LimsSample, sample1.id)
+        assert fresh1.native_status == fresh1.status == "sample_due"
+
+        # Verify first sample has a seeded row
+        seeded_rows_1 = db.execute(select(LimsWorkflowShadowEvaluation).where(
+            LimsWorkflowShadowEvaluation.lims_sample_pk == sample1.id,
+            LimsWorkflowShadowEvaluation.outcome == "seeded",
+        )).scalars().all()
+        assert len(seeded_rows_1) == 1
+
+        # Verify second sample is untouched (no seed, no eval row)
+        fresh2 = db.get(LimsSample, sample2.id)
+        assert fresh2.native_status is None
+        seeded_rows_2 = db.execute(select(LimsWorkflowShadowEvaluation).where(
+            LimsWorkflowShadowEvaluation.lims_sample_pk == sample2.id,
+            LimsWorkflowShadowEvaluation.outcome == "seeded",
+        )).scalars().all()
+        assert len(seeded_rows_2) == 0
+    finally:
+        # Cleanup
+        db.execute(delete(LimsWorkflowShadowEvaluation).where(
+            LimsWorkflowShadowEvaluation.lims_sample_pk.in_([sample1.id, sample2.id])))
+        db.execute(delete(LimsSample).where(LimsSample.id.in_([sample1.id, sample2.id])))
+        db.commit()

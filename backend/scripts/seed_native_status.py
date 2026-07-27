@@ -8,6 +8,9 @@ outcome='seeded' trajectory row per sample (trigger='seed') recording the
 adopted state. Serves three roles: initial deploy seed; per-sample heal after
 a diagnosed divergence; global burn-in reset after a rule fix. Pure DB — no
 SENAITE, no throttle needed. Exit 0 clean; 1 on any per-sample error.
+
+Per-row commits in apply mode: each successful seed is durable before moving
+to the next row. Repeated heals append a new seeded trajectory row (audit trail).
 """
 from __future__ import annotations
 
@@ -37,12 +40,11 @@ def seed_native_status(db: Session, *, sample_ids=None, apply: bool = False) -> 
                 from_status=prior, to_status=row.status, outcome="seeded",
                 requirements_met=None, outcomes=[]))
             db.flush()
+            db.commit()
             stats["seeded"] += 1
         except Exception:
             stats["errors"] += 1
             db.rollback()
-    if apply:
-        db.commit()
     return stats
 
 
