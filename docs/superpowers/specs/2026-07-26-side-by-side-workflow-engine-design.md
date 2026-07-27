@@ -268,3 +268,46 @@ clean → THEN the sample-tier authority flip (separately gated, data change)
 → which unblocks retiring the SENAITE workflow round-trips (`/update/{uid}`
 transition proxy) → which, together with the 4+5 verdict/snapshot slice,
 unblocks COABuilder re-wire (program step 5) and SENAITE retirement.
+
+## As built (2026-07-26 implementation)
+
+- Requirements vocabulary v1 is the LIVE catalog registry
+  (`workflow/catalog.py REQUIREMENT_KINDS`) — entry shape
+  `{kind, value, note}`, extended with `coa_published` (no value) and
+  `distinct_actor` (value = than-verb, non-gating). The 07-13 draft's
+  `{kind, args}` shape was never seeded and is dropped.
+  `all_analyses_in_state` takes a comma-list value; empty live-line set
+  evaluates unmet (fail-closed).
+- Cascade eligibility = `lims_workflow_transitions.auto_fire` (new additive
+  column; seeded TRUE for the builtin sample submit/verify edges via a
+  guarded boot UPDATE).
+- Trigger sites landed as: the `_record_sample_transition_bg` chokepoint
+  (receive + publish, attestation = the hook only fires post-IS-success) and
+  `lims_analyses` routes `transition`/`promote` via BackgroundTasks.
+- Cascade probing does NOT record refusals (speculative probes would spam
+  the trajectory); refusals are recorded only for explicit verbs.
+- Seed data itself now carries `auto_fire` + the publish edge's
+  `coa_published` requirement (first-boot ordering fix — migrations run
+  before `seed_workflow_catalog`, so relying on a boot UPDATE alone was a
+  no-op on true first boot); the boot UPDATEs are retained for existing DBs.
+- Controller amendment implemented in the summary endpoint: divergent
+  samples that fall to `no_native_pathway` are live-probed against
+  `auto_fire` edges via `evaluate_requirements`; an unmet probe reclassifies
+  the sample as `mk1_refused` with `latest_outcome='live_probe_unmet'`. This
+  prevents a genuine rule-miscalibration (cascade stalled on an unmet
+  requirement) from silently masquerading as a pathway gap.
+- since-window semantics: bucket labels are window-relative (documented in
+  the endpoint docstring and pinned by test) — `since=None` does not recover
+  the sample's true original blocker, only its latest trajectory row.
+- Seed script commits PER ROW, not once at the end — the spec/plan's
+  single-commit sample was defective (a mid-loop rollback discarded already
+  processed rows while the in-memory stats counter had already incremented
+  for them, over-reporting). Stats increment strictly after a successful
+  per-row commit. Repeated heals are intended to APPEND a new `seeded`
+  trajectory row rather than dedup, by design — each re-adoption is a
+  distinct, auditable event.
+- The chokepoint commit gate (`wrote_log or wrote_status or wrote_received`)
+  now also includes `wrote_engine`, so a side-by-side engine write can never
+  be silently rolled back by the host function's pre-existing flag logic —
+  closes a case where all three original flags were False but the engine had
+  advanced `native_status`.

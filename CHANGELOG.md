@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Side-by-side workflow engine** (2026-07-26 spec): Mk1 executes sample-tier
+  transitions in parallel — own `native_status` driven by the workflow catalog
+  + requirements at Mk1-originated trigger sites (receive, publish, analysis
+  cascades). SENAITE untouched and authoritative; all writes additive; env
+  kill switch `MK1_WORKFLOW_SHADOW_ENABLED`. Divergence report
+  `GET /api/workflow/shadow/summary` = flip-readiness; registry-inspect gains
+  a side-by-side block. Deploy: run
+  `python -m scripts.seed_native_status --all --apply` (off-hours), then
+  verify the summary shows 100% agree on day zero.
+
 ## v1.6.2 — 2026-07-25
 
 Stop SENAITE's self-doubled contact name from overwriting mk1's clean value.

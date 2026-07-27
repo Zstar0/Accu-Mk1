@@ -3,7 +3,10 @@
 Pure and DB-local: reads lims_samples / lims_analyses / lims_sample_transitions
 and the workflow catalog. NO SENAITE reads, NO IS calls — publish success is
 attested by the touchpoint. Flush-only helpers; touchpoint wrappers own their
-sessions and commits. Never imported by any read path.
+sessions and commits. Imported by the Mk1-originated touchpoints (receive,
+publish, analysis cascades) and by the read-only divergence summary endpoint
+(pure SELECTs plus a live requirements probe). It never performs SENAITE or
+Integration Service I/O.
 """
 from __future__ import annotations
 
@@ -11,8 +14,7 @@ import hashlib
 import json
 import logging
 import os
-from datetime import datetime
-from typing import Any, Optional
+from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
