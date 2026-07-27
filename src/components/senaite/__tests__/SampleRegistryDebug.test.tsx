@@ -290,3 +290,47 @@ describe('log tab', () => {
     expect(screen.getByText(/advanced/)).toBeTruthy()      // trajectory outcome
   })
 })
+
+const parityBase: api.SampleParityResult = {
+  sample_id: 'P-1',
+  fields: [
+    { path: 'analyses[PUR_KPV].result_unit', classification: 'differing',
+      rule_id: null, mk1_value: 'mg/mL', senaite_value: 'text', is_real: true },
+    { path: 'cached_at', classification: 'known_expected',
+      rule_id: 'cached_at_timestamps', mk1_value: 'a', senaite_value: 'b', is_real: false },
+    { path: 'client_name', classification: 'equal', rule_id: null,
+      mk1_value: null, senaite_value: null, is_real: false },
+  ],
+  summary: { total: 3, equal: 1, known_expected: 1, real: 1 },
+  verdict: false,
+  error: null,
+}
+
+describe('parity tab', () => {
+  it('never fetches on tab open; only the run button fires', async () => {
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue(base)
+    const paritySpy = vi.spyOn(api, 'getSampleRegistryParity').mockResolvedValue(parityBase)
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(api.getSampleRegistryDebug).toHaveBeenCalled())
+    screen.getByText('parity').click()
+    expect(paritySpy).not.toHaveBeenCalled()             // THE invariant
+    screen.getByText(/run parity scan/i).click()
+    await waitFor(() => expect(paritySpy).toHaveBeenCalledTimes(1))
+    await waitFor(() => screen.getByText(/REAL DIFFS/i))
+    expect(screen.getByText(/result_unit/)).toBeTruthy()          // real bucket
+    expect(screen.getByText('cached_at_timestamps')).toBeTruthy() // rule tag
+  })
+
+  it('renders error payload as an error line', async () => {
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue(base)
+    vi.spyOn(api, 'getSampleRegistryParity').mockResolvedValue({
+      sample_id: 'P-1', fields: [], summary: null, verdict: null,
+      error: 'SENAITE unreachable',
+    })
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(api.getSampleRegistryDebug).toHaveBeenCalled())
+    screen.getByText('parity').click()
+    screen.getByText(/run parity scan/i).click()
+    await waitFor(() => screen.getByText(/SENAITE unreachable/))
+  })
+})

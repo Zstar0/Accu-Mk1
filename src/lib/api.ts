@@ -5228,6 +5228,31 @@ export async function getSampleRegistryLog(sampleId: string): Promise<SampleRegi
     `/debug/sample-registry/${encodeURIComponent(sampleId)}/log`)
 }
 
+// 2026-07-27 parity-convergence spec: on-demand /parity scan. Classifications
+// are the harness's vocabulary — equal / known_expected / differing /
+// mk1_only / senaite_only; is_real mirrors FieldDiff.is_real.
+export interface SampleParityField {
+  path: string
+  classification: string
+  rule_id: string | null
+  mk1_value: unknown
+  senaite_value: unknown
+  is_real: boolean
+}
+
+export interface SampleParityResult {
+  sample_id: string
+  fields: SampleParityField[]
+  summary: { total: number; equal: number; known_expected: number; real: number } | null
+  verdict: boolean | null
+  error: string | null
+}
+
+export async function getSampleRegistryParity(sampleId: string): Promise<SampleParityResult> {
+  return apiFetch<SampleParityResult>(
+    `/debug/sample-registry/${encodeURIComponent(sampleId)}/parity`)
+}
+
 // ─── Sample Retest Info ──────────────────────────────────────────────────────
 
 export interface RetestForwardLink {

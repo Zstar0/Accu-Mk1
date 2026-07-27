@@ -5,14 +5,15 @@
  * freshness, field-by-field agreement/drift, and vial-count sanity.
  */
 import { useState, useEffect } from 'react'
+import { flushSync } from 'react-dom'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
 import { X, RefreshCw, RotateCw } from 'lucide-react'
 import {
-  getSampleRegistryDebug, refreshSampleRegistry, getSampleRegistryLog,
+  getSampleRegistryDebug, refreshSampleRegistry, getSampleRegistryLog, getSampleRegistryParity,
   type SampleRegistryDebug as DebugData, type RegistryFieldStatus,
-  type AnalysisSyncStatus, type SampleRegistryLog,
+  type AnalysisSyncStatus, type SampleRegistryLog, type SampleParityResult,
 } from '@/lib/api'
 import { useReadSourceOverride } from '@/lib/read-source'
 
@@ -61,6 +62,10 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
   const [logLoading, setLogLoading] = useState(false)
   const [logError, setLogError] = useState<string | null>(null)
   const [expandedTrajectory, setExpandedTrajectory] = useState<Set<number>>(new Set())
+  const [parityData, setParityData] = useState<SampleParityResult | null>(null)
+  const [parityLoading, setParityLoading] = useState(false)
+  const [parityError, setParityError] = useState<string | null>(null)
+  const [showEqual, setShowEqual] = useState(false)
 
   async function load() {
     setLoading(true); setError(null)
@@ -80,8 +85,18 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
     catch (e) { setLogError(e instanceof Error ? e.message : 'failed') }
     finally { setLogLoading(false) }
   }
+  async function runParity() {
+    setParityLoading(true); setParityError(null)
+    try { setParityData(await getSampleRegistryParity(sampleId)) }
+    catch (e) { setParityError(e instanceof Error ? e.message : 'failed') }
+    finally { setParityLoading(false) }
+  }
   function selectTab(t: 'overview' | 'log' | 'parity') {
-    setTab(t)
+    // flushSync: raw DOM .click() (used by this panel's tests) isn't
+    // act()-wrapped, so React 18+ automatic batching would otherwise defer
+    // the tab-switch commit to a microtask — a synchronous query for the
+    // newly-revealed pane right after the click would see stale DOM.
+    flushSync(() => setTab(t))
     if (t === 'log' && !logData && !logLoading) loadLog()
   }
   function toggleTrajectory(i: number) {
@@ -97,9 +112,13 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
     setLogData(null)
     setLogError(null)
     setExpandedTrajectory(new Set())
+    setParityData(null)
+    setParityError(null)
   }, [open, sampleId])
 
   const line = 'font-mono text-[12px] leading-relaxed whitespace-pre-wrap'
+  const parityBtn = 'px-2 py-1 text-[10px] font-mono rounded border border-zinc-800 text-amber-400 '
+    + 'hover:bg-amber-600/20 hover:text-amber-300 transition-colors disabled:opacity-30'
 
   return (
     <Sheet open={open} onOpenChange={v => !v && onClose()}>
@@ -459,7 +478,100 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
             )}
 
             {tab === 'parity' && (
-              <div className="font-mono text-[11px] text-zinc-600">parity tab: coming in Task 4</div>
+              <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                {!parityData && !parityLoading && (
+                  <div className="space-y-2 py-2 shrink-0">
+                    <div className="font-mono text-[11px] text-zinc-500 leading-relaxed">
+                      compares the full mk1 vs senaite read-path payloads via the parity harness (16 known-expected rules)
+                    </div>
+                    <div className="font-mono text-[11px] text-zinc-600 leading-relaxed">
+                      hits live SENAITE for this one sample · takes a few seconds
+                    </div>
+                    {parityError && <div className={cn(line, 'text-red-400')}>{parityError}</div>}
+                    <button onClick={runParity} className={parityBtn}>run parity scan</button>
+                  </div>
+                )}
+
+                {parityLoading && !parityData && (
+                  <div className="flex items-center gap-2 py-8 justify-center">
+                    <Spinner className="size-3" />
+                    <span className="font-mono text-[11px] text-zinc-600">scanning {sampleId}...</span>
+                  </div>
+                )}
+
+                {parityData?.error && (
+                  <div className="space-y-2 shrink-0">
+                    <div className={cn(line, 'text-red-400')}>{parityData.error}</div>
+                    <button onClick={runParity} disabled={parityLoading} className={parityBtn}>re-run</button>
+                  </div>
+                )}
+
+                {parityData && !parityData.error && parityData.summary && (
+                  <div className="flex-1 min-h-0 overflow-y-auto space-y-1.5 pr-2">
+                    <div className={cn(line, 'text-zinc-400')}>
+                      {`total=${parityData.summary.total} equal=${parityData.summary.equal} `
+                        + `known_expected=${parityData.summary.known_expected} real=${parityData.summary.real}`}
+                      {'  '}
+                      {parityData.verdict === true && (
+                        <span className="text-emerald-400">✔ PASS — read paths agree</span>
+                      )}
+                      {parityData.verdict === false && (
+                        <span className="text-red-400">⚠ REAL DIFFS</span>
+                      )}
+                    </div>
+
+                    {parityData.fields.filter(f => f.is_real).map(f => (
+                      <div key={f.path} className="font-mono text-[12px] leading-relaxed flex gap-1.5 text-red-400">
+                        <span className="shrink-0 text-red-400">⚠</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-zinc-300">{f.path}</div>
+                          <div className="text-zinc-400 whitespace-pre-wrap break-all">
+                            <span className="text-zinc-700">reg </span>{val(f.mk1_value)}
+                          </div>
+                          <div className="text-zinc-600 whitespace-pre-wrap break-all">
+                            <span className="text-zinc-700">sen </span>{val(f.senaite_value)}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+
+                    {parityData.fields.filter(f => !f.is_real && f.classification === 'known_expected').map(f => (
+                      <div key={f.path} className="font-mono text-[12px] leading-relaxed flex gap-1.5 text-zinc-500">
+                        <span className="shrink-0 text-zinc-500">○</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-zinc-500">
+                            {f.path}{'  '}
+                            <span className="border border-zinc-800 rounded px-1 text-zinc-500">{f.rule_id}</span>
+                          </div>
+                          <div className="text-zinc-700 whitespace-pre-wrap break-all">
+                            {val(f.mk1_value)} / {val(f.senaite_value)}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+
+                    {parityData.fields.filter(f => !f.is_real && f.classification !== 'known_expected').length > 0 && (
+                      <div>
+                        <button onClick={() => setShowEqual(v => !v)}
+                          className="font-mono text-[11px] text-zinc-600 hover:text-zinc-400 pt-1">
+                          {showEqual ? '▾' : '▸'} {parityData.summary.equal} equal fields
+                        </button>
+                        {showEqual && (
+                          <div className="space-y-0.5 pl-3">
+                            {parityData.fields.filter(f => !f.is_real && f.classification !== 'known_expected').map(f => (
+                              <div key={f.path} className="font-mono text-[11px] text-zinc-600">✔ {f.path}</div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <button onClick={runParity} disabled={parityLoading} className={cn(parityBtn, 'mt-1')}>
+                      re-run
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
