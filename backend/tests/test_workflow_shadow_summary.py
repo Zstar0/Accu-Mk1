@@ -223,11 +223,14 @@ def test_summary_senaite_verb_with_met_edge_stays_no_native_pathway(
     """The edge for the verb SENAITE actually used exists and is trivially
     met (no requirements) — Mk1 HAD the pathway and would have allowed it,
     so what's missing is a TRIGGER, not a rule. Must stay
-    no_native_pathway, not get misreported against an unrelated edge."""
+    no_native_pathway, not get misreported against an unrelated edge. The
+    row still names the verb (punch-list rows must be readable without
+    drilling into the transition log)."""
     from workflow.routes import _shadow_summary_payload
     p = _shadow_summary_payload(db, since=None)
     by_id = {d["sample_id"]: d for d in p["divergent"]}
     assert by_id["TEST-SUM-VB"]["bucket"] == "no_native_pathway"
+    assert by_id["TEST-SUM-VB"]["latest_verb"] == "test_vb_cancel"
 
 
 @pytest.fixture

@@ -430,11 +430,19 @@ def _shadow_summary_payload(db: Session, since) -> dict:
                         outcome = "live_probe_unmet"
                         latest_verb = senaite_txn.verb
                         unmet = [o for o in edge_outcomes if not o.get("met")]
-                    # else: Mk1 HAD the pathway and would have allowed it —
-                    # what's missing is a trigger, not a rule. Stays
-                    # no_native_pathway.
-                # else: no catalog edge for this verb at all — catalog gap.
-                # Stays no_native_pathway.
+                    else:
+                        # Mk1 HAD the pathway and would have allowed it —
+                        # what's missing is a trigger, not a rule. Stays
+                        # no_native_pathway, but the row still names the
+                        # verb SENAITE used: this bucket exists to
+                        # enumerate which verbs lack a Mk1 trigger, and an
+                        # operator can't see that without it.
+                        latest_verb = senaite_txn.verb
+                else:
+                    # No catalog edge for this verb at all — catalog gap.
+                    # Stays no_native_pathway; still name the verb for the
+                    # same punch-list-enumeration reason as above.
+                    latest_verb = senaite_txn.verb
             else:
                 # No SENAITE-sourced transition to explain the divergence
                 # (or its verb is null) — fall back to the original
