@@ -93,3 +93,99 @@ def test_seed_data_carries_auto_fire_and_coa_published(db):
         verb = key[3]
         if verb not in ("submit", "verify"):
             assert row[4] is False, f"{verb} should default to auto_fire=False"
+
+
+from models import AnalysisService, LimsAnalysis
+
+
+@pytest.fixture
+def any_service(db):
+    svc = db.execute(select(AnalysisService).where(
+        AnalysisService.keyword.isnot(None))).scalars().first()
+    if svc is None:
+        pytest.skip("no seeded analysis_services")
+    return svc
+
+
+def _add_parent_line(db, sample, svc, state, provenance="canonical",
+                     mirror_state=None, keyword=None):
+    row = LimsAnalysis(
+        lims_sample_pk=sample.id, lims_sub_sample_pk=None,
+        analysis_service_id=svc.id, keyword=keyword or svc.keyword,
+        title="TEST: sbs line", provenance=provenance,
+        review_state=state if provenance == "canonical" else "senaite_mirror",
+        mirror_review_state=mirror_state,
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+@pytest.fixture
+def sbs_cleanup(db, test_sample):
+    yield
+    db.execute(delete(LimsAnalysis).where(
+        LimsAnalysis.lims_sample_pk == test_sample.id))
+    db.commit()
+
+
+def test_all_analyses_in_state_empty_set_is_unmet(db, test_sample, sbs_cleanup):
+    from workflow.engine import evaluate_requirements
+    met, outcomes = evaluate_requirements(
+        db, test_sample,
+        [{"kind": "all_analyses_in_state", "value": "verified", "note": None}])
+    assert met is False
+    assert outcomes[0]["detail"] == "no live parent analyses"
+
+
+def test_all_analyses_in_state_comma_list_and_canonical_wins(
+        db, test_sample, sbs_cleanup):
+    from workflow.engine import evaluate_requirements
+    # canonical verified + shadow (same keyword) published → canonical wins;
+    # second keyword only-shadow to_be_verified.
+    svcs = db.execute(select(AnalysisService).where(
+        AnalysisService.keyword.isnot(None)
+    )).scalars().all()
+    if len(svcs) < 2:
+        pytest.skip("need at least 2 seeded analysis_services")
+    svc1, svc2 = svcs[0], svcs[1]
+
+    _add_parent_line(db, test_sample, svc1, "verified")
+    _add_parent_line(db, test_sample, svc1, None, provenance="shadow",
+                     mirror_state="published")
+    _add_parent_line(db, test_sample, svc2, None, provenance="shadow",
+                     mirror_state="to_be_verified", keyword="TEST-KW2")
+    met, _ = evaluate_requirements(
+        db, test_sample,
+        [{"kind": "all_analyses_in_state",
+          "value": "verified,to_be_verified", "note": None}])
+    assert met is True
+    met2, _ = evaluate_requirements(
+        db, test_sample,
+        [{"kind": "all_analyses_in_state", "value": "verified", "note": None}])
+    assert met2 is False   # TEST-KW2 is to_be_verified
+
+
+def test_coa_published_attested_and_unknown_kind_fail_closed(db, test_sample):
+    from workflow.engine import evaluate_requirements
+    met, _ = evaluate_requirements(
+        db, test_sample, [{"kind": "coa_published", "value": None, "note": None}],
+        attested={"coa_published": True})
+    assert met is True
+    met2, out2 = evaluate_requirements(
+        db, test_sample, [{"kind": "coa_published", "value": None, "note": None}])
+    assert met2 is False
+    met3, out3 = evaluate_requirements(
+        db, test_sample, [{"kind": "bogus_kind", "value": "x", "note": None}])
+    assert met3 is False and out3[0]["detail"] == "unknown kind"
+
+
+def test_distinct_actor_evaluated_but_never_gates(db, test_sample):
+    from workflow.engine import evaluate_requirements
+    met, outcomes = evaluate_requirements(
+        db, test_sample,
+        [{"kind": "distinct_actor", "value": "submit", "note": None}],
+        actor_user_id=None)
+    assert met is True                      # non-gating: gate ignores it
+    assert outcomes[0]["met"] is False      # ...but the outcome is recorded
+    assert outcomes[0]["gates"] is False
