@@ -341,3 +341,85 @@ def test_run_cascades_bg_failure_path_never_raises(db):
         db.execute(delete(LimsSample).where(LimsSample.id == sample.id))
         db.commit()
     db.rollback()
+
+
+# ── boot-migration bindparam guard (2026-07-27, CRITICAL finding) ───────
+#
+# database._run_migrations() executes every statement as conn.execute(
+# text(sql)) inside a per-statement try/except that logs 'migration_skipped'
+# on ANY exception. SQLAlchemy's text() parses an unescaped `:token` as a
+# bind parameter — the coa_published boot UPDATE's original
+# '"value":null' JSON literal was silently parsed as bind param `null`,
+# and every real boot then hit InvalidRequestError ("A value is required
+# for bind parameter 'null'"), swallowed as migration_skipped forever. This
+# never surfaced on fresh DBs (the catalog seed carries the requirement
+# directly from first boot — Task 1's ordering fix), but on every EXISTING
+# DB this UPDATE was the ONLY path, so the publish edge never gained the
+# coa_published requirement post-upgrade. Guards the WHOLE migrations
+# list, not just the sbs statements — this failure class can silently
+# no-op ANY future raw-SQL migration with the same shape.
+#
+# Captures the exact TextClause objects _run_migrations() would execute by
+# mocking `database.engine.connect()` — this runs the REAL function (so it
+# can never drift from the real statement list) without touching the DB.
+
+@pytest.fixture
+def captured_migration_statements():
+    import database
+
+    captured = []
+
+    class _FakeConn:
+        def execute(self, clause):
+            captured.append(clause)
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    with patch.object(database.engine, "connect", return_value=_FakeConn()):
+        database._run_migrations()
+    return captured
+
+
+def test_boot_migration_statements_have_no_bindparams(
+        captured_migration_statements):
+    offenders = [(str(c)[:120], list(c._bindparams.keys()))
+                 for c in captured_migration_statements if c._bindparams]
+    assert offenders == [], (
+        f"{len(offenders)} boot migration statement(s) contain an "
+        "unescaped ':token' SQLAlchemy parses as a bind parameter — this "
+        "silently no-ops the statement via migration_skipped on every "
+        f"boot forever: {offenders}"
+    )
+
+
+def test_sbs_boot_statements_execute_against_live_db(
+        captured_migration_statements, db):
+    """Beyond zero-bindparams: actually EXECUTES the three sbs boot
+    statements (auto_fire, coa_published, submit-gate) against the live
+    dev DB, inside a transaction rolled back at the end — proves they bind
+    AND parse AND run. A naive bindparam count alone would not have caught
+    a statement that parses fine but fails on some other runtime error."""
+    markers = ("auto_fire = TRUE", "coa_published", "all_analyses_in_state")
+    sbs_stmts = [c for c in captured_migration_statements
+                if any(m in str(c) for m in markers)]
+    assert len(sbs_stmts) == 3, (
+        f"expected exactly 3 sbs boot statements, found {len(sbs_stmts)}: "
+        f"{[str(s)[:80] for s in sbs_stmts]}"
+    )
+    conn = db.connection()
+    nested = conn.begin_nested()
+    try:
+        for stmt in sbs_stmts:
+            conn.execute(stmt)   # must not raise
+    finally:
+        nested.rollback()

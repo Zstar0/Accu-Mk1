@@ -1260,8 +1260,26 @@ def _run_migrations():
         "UPDATE lims_workflow_transitions SET auto_fire = TRUE "
         "WHERE entity_scope = 'sample' AND verb IN ('submit','verify') "
         "AND is_builtin AND NOT auto_fire",
+        # NOTE (2026-07-27, CRITICAL finding): the "value":null key below
+        # was ORIGINALLY present and made this statement a silent no-op on
+        # EVERY boot — SQLAlchemy's text() parses an unescaped `:token`
+        # (here `:null`, from the JSON literal) as a bind parameter, and
+        # conn.execute(text(sql)) then raises InvalidRequestError
+        # ("A value is required for bind parameter 'null'"), caught by
+        # this loop's per-statement try/except and logged as
+        # migration_skipped forever. Fresh DBs were unaffected (the seed
+        # carries this requirement directly per the Task-1 first-boot fix
+        # below), but every EXISTING DB relied on this UPDATE as the only
+        # path — the publish edge never gained the coa_published
+        # attestation requirement on any upgraded database. Dropping the
+        # "value" key entirely is semantically identical to keeping it
+        # null: `_eval_one`'s coa_published branch (workflow/engine.py)
+        # never reads `entry.get("value")` at all, and every reader uses
+        # `.get("value")`, never bracket access — see
+        # test_boot_migration_statements_have_no_bindparams for the
+        # regression guard (scoped to the whole migrations list).
         "UPDATE lims_workflow_transitions SET requirements = requirements || "
-        "'[{\"kind\":\"coa_published\",\"value\":null,"
+        "'[{\"kind\":\"coa_published\","
         "\"note\":\"attested by the publish touchpoint\"}]'::jsonb "
         "WHERE entity_scope = 'sample' AND verb = 'publish' AND is_builtin "
         "AND requirements::text NOT LIKE '%coa_published%'",
