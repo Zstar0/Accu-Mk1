@@ -302,7 +302,17 @@ def _shadow_summary_payload(db: Session, since) -> dict:
 
     `since` scopes ONLY the latest-shadow-row lookup used to explain an
     already-divergent sample — `total_seeded` and the `agree` count are
-    always computed over the full population, unfiltered.
+    always computed over the full population, unfiltered. This makes bucket
+    labels WINDOW-RELATIVE, not immutable history: if `since` excludes the
+    row that actually blocked the sample (its real refusal/no_edge is older
+    than the cutoff), the WHY is re-derived from CURRENT state instead —
+    either a fresh live probe (which may find a different, unrelated unmet
+    auto edge and report `mk1_refused`/`live_probe_unmet` for a reason that
+    isn't what actually blocked it) or, if no auto edge applies,
+    `no_native_pathway` (masking a real historical refusal). Callers wanting
+    the TRUE original blocker for a sample must pass `since=None` for that
+    sample, or treat a `since`-scoped bucket as "reason as of now", not
+    "reason it diverged".
 
     Live probe (amendment): a divergent sample whose latest shadow row is
     not itself a refusal (`requirements_unmet` / `no_edge`) would otherwise

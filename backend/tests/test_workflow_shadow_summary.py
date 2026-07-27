@@ -1,6 +1,7 @@
 """Summary buckets + registry-inspect shadow block."""
 from __future__ import annotations
 
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -127,6 +128,68 @@ def test_summary_live_probe_reclassifies_unfired_auto_edge(db, sample_e):
     by_id = {d["sample_id"]: d for d in p["divergent"]}
     assert by_id["TEST-SUM-E"]["bucket"] == "mk1_refused"
     assert by_id["TEST-SUM-E"]["latest_outcome"] == "live_probe_unmet"
+
+
+# ── fix round 1: since-window bucket semantics are window-relative ──────
+#
+# A `since` cutoff that excludes a sample's real historical refusal doesn't
+# make the refusal disappear from the payload's honesty — it makes the WHY
+# get RE-DERIVED from current state, which can silently land a different
+# (or no) reason than what actually blocked the sample. This pins that
+# documented behavior rather than leaving it as an undocumented surprise.
+
+@pytest.fixture
+def window_state(db):
+    """Private TEST state with ZERO outgoing transitions (no auto_fire
+    edges at all) — isolated from the real catalog so the live probe has no
+    candidate to find regardless of catalog changes elsewhere."""
+    s = LimsWorkflowState(entity_scope="sample", slug="test_sum_f_window",
+                          label="TEST window", category="active",
+                          sort_order=9300, is_builtin=False)
+    db.add(s)
+    db.flush()
+    db.commit()
+    yield s
+    db.execute(delete(LimsWorkflowState).where(LimsWorkflowState.id == s.id))
+    db.commit()
+
+
+@pytest.fixture
+def sample_f(db, window_state):
+    """The sample's ONLY shadow row is a real historical refusal
+    (requirements_unmet), explicitly timestamped in the past. native_status
+    has no outgoing edges, so a live probe run against it finds nothing."""
+    r = LimsSample(sample_id="TEST-SUM-F", status="published",
+                   native_status="test_sum_f_window")
+    db.add(r)
+    db.flush()
+    db.add(LimsWorkflowShadowEvaluation(
+        lims_sample_pk=r.id, trigger="publish", verb="publish",
+        from_status="test_sum_f_window", to_status="test_sum_f_window",
+        outcome="requirements_unmet", requirements_met=False, outcomes=[],
+        evaluated_at=datetime(2026, 1, 1)))
+    db.commit()
+    yield r
+    db.execute(delete(LimsWorkflowShadowEvaluation).where(
+        LimsWorkflowShadowEvaluation.lims_sample_pk == r.id))
+    db.execute(delete(LimsSample).where(LimsSample.id == r.id))
+    db.commit()
+
+
+def test_summary_since_window_is_relative_not_immutable_history(db, sample_f):
+    from workflow.routes import _shadow_summary_payload
+    # since=None sees the real historical refusal.
+    full = _shadow_summary_payload(db, since=None)
+    by_full = {d["sample_id"]: d for d in full["divergent"]}
+    assert by_full["TEST-SUM-F"]["bucket"] == "mk1_refused"
+    assert by_full["TEST-SUM-F"]["latest_outcome"] == "requirements_unmet"
+
+    # since after the refusal excludes it; no auto edge exists to live-probe
+    # from test_sum_f_window, so the bucket silently reclassifies —
+    # pinning the documented window-relative semantics, not a bug.
+    windowed = _shadow_summary_payload(db, since=datetime(2026, 6, 1))
+    by_windowed = {d["sample_id"]: d for d in windowed["divergent"]}
+    assert by_windowed["TEST-SUM-F"]["bucket"] == "no_native_pathway"
 
 
 # ── route wiring: admin gate + since validation ─────────────────────────
