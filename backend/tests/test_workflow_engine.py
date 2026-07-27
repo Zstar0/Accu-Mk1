@@ -189,3 +189,93 @@ def test_distinct_actor_evaluated_but_never_gates(db, test_sample):
     assert met is True                      # non-gating: gate ignores it
     assert outcomes[0]["met"] is False      # ...but the outcome is recorded
     assert outcomes[0]["gates"] is False
+
+
+@pytest.fixture
+def sbs_catalog(db):
+    """Private TEST slice of the sample-scope catalog:
+    test_sbs_received --submit(auto)--> test_sbs_tbv --verify(auto, needs
+    all verified)--> test_sbs_verified --publish(explicit, needs attested
+    coa_published)--> test_sbs_published."""
+    states = {}
+    for slug in ("test_sbs_received", "test_sbs_tbv",
+                 "test_sbs_verified", "test_sbs_published"):
+        s = LimsWorkflowState(entity_scope="sample", slug=slug,
+                              label=f"TEST {slug}", category="active",
+                              sort_order=9000, is_builtin=False)
+        db.add(s)
+        db.flush()
+        states[slug] = s
+    def edge(f, t, verb, reqs, auto):
+        e = LimsWorkflowTransition(
+            entity_scope="sample", from_state_id=states[f].id,
+            to_state_id=states[t].id, verb=verb, requirements=reqs,
+            auto_fire=auto, is_builtin=False, sort_order=9000)
+        db.add(e)
+        db.flush()
+        return e
+    edge("test_sbs_received", "test_sbs_tbv", "test_submit",
+         [{"kind": "all_analyses_in_state",
+           "value": "to_be_verified,verified", "note": None}], True)
+    edge("test_sbs_tbv", "test_sbs_verified", "test_verify",
+         [{"kind": "all_analyses_in_state", "value": "verified",
+           "note": None}], True)
+    edge("test_sbs_verified", "test_sbs_published", "test_publish",
+         [{"kind": "coa_published", "value": None, "note": None}], False)
+    yield states
+    db.execute(delete(LimsWorkflowTransition).where(
+        LimsWorkflowTransition.verb.in_(
+            ["test_submit", "test_verify", "test_publish"])))
+    db.execute(delete(LimsWorkflowState).where(
+        LimsWorkflowState.slug.like("test_sbs_%")))
+    db.commit()
+
+
+def test_execute_verb_advances_and_records(db, test_sample, any_service,
+                                           sbs_catalog, sbs_cleanup):
+    from workflow.engine import execute_verb
+    _add_parent_line(db, test_sample, any_service, "verified")
+    test_sample.native_status = "test_sbs_verified"
+    row = execute_verb(db, test_sample, "test_publish", trigger="publish",
+                       attested={"coa_published": True})
+    assert row.outcome == "advanced"
+    assert test_sample.native_status == "test_sbs_published"
+    assert row.from_status == "test_sbs_verified"
+    db.rollback()
+
+
+def test_execute_verb_refuses_and_dedups(db, test_sample, any_service,
+                                         sbs_catalog, sbs_cleanup):
+    from workflow.engine import execute_verb
+    test_sample.native_status = "test_sbs_verified"
+    r1 = execute_verb(db, test_sample, "test_publish", trigger="publish")
+    assert r1.outcome == "requirements_unmet"
+    assert test_sample.native_status == "test_sbs_verified"   # unchanged
+    r2 = execute_verb(db, test_sample, "test_publish", trigger="publish")
+    assert r2 is None                                          # delta-dedup
+    r3 = execute_verb(db, test_sample, "bogus_verb", trigger="publish")
+    assert r3.outcome == "no_edge"
+    db.rollback()
+
+
+def test_execute_verb_skips_unseeded(db, sbs_catalog):
+    from workflow.engine import execute_verb
+    s = LimsSample(sample_id="TEST-SBS-NULL", status="sample_received",
+                   native_status=None)
+    db.add(s)
+    db.flush()
+    assert execute_verb(db, s, "test_publish", trigger="publish") is None
+    db.rollback()
+
+
+def test_cascades_chain_and_terminate(db, test_sample, any_service,
+                                      sbs_catalog, sbs_cleanup):
+    from workflow.engine import evaluate_cascades
+    _add_parent_line(db, test_sample, any_service, "verified")
+    test_sample.native_status = "test_sbs_received"
+    rows = evaluate_cascades(db, test_sample, trigger="analysis_cascade")
+    # submit fires (verified ∈ list), then verify fires (all verified);
+    # publish is NOT auto_fire so the chain stops at verified.
+    assert [r.outcome for r in rows] == ["advanced", "advanced"]
+    assert test_sample.native_status == "test_sbs_verified"
+    db.rollback()
