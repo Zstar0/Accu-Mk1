@@ -11,7 +11,7 @@ import logging
 from datetime import date
 from typing import List, Literal, Union
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -97,6 +97,33 @@ def _handle_service_error(e: Exception) -> HTTPException:
         )
     # Unknown — let FastAPI 500 it
     raise e
+
+
+def _schedule_sbs_cascade(background_tasks, db, row, current_user) -> None:
+    """Side-by-side engine (2026-07-26 spec §5): after a parent-analysis
+    state change, evaluate sample-tier auto_fire edges post-response.
+    Never-raise by construction: resolution failures are swallowed and the
+    bg target itself is own-session never-raise."""
+    try:
+        from models import LimsSubSample
+        from workflow.engine import run_cascades_bg, shadow_enabled
+        if not shadow_enabled():
+            return
+        if row.lims_sample_pk is not None:
+            parent_pk = row.lims_sample_pk
+        elif row.lims_sub_sample_pk is not None:
+            sub = db.get(LimsSubSample, row.lims_sub_sample_pk)
+            parent_pk = sub.parent_sample_pk if sub else None
+        else:
+            parent_pk = None
+        if parent_pk is not None:
+            background_tasks.add_task(
+                run_cascades_bg, parent_pk,
+                getattr(current_user, "id", None))
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception(
+            "sbs cascade scheduling failed (never-raise)")
 
 
 # ─── Endpoints ───────────────────────────────────────────────────────────────
@@ -213,6 +240,7 @@ def get_by_id(
 def transition(
     analysis_id: int,
     req: TransitionRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -225,6 +253,24 @@ def transition(
             reason=req.reason,
             user_id=getattr(current_user, "id", None),
         )
+        # Schedule sample-tier cascade post-response (never-raise)
+        try:
+            from models import LimsSubSample
+            from workflow.engine import run_cascades_bg, shadow_enabled
+            if shadow_enabled():
+                if row.lims_sample_pk is not None:
+                    parent_pk = row.lims_sample_pk
+                elif row.lims_sub_sample_pk is not None:
+                    sub = db.get(LimsSubSample, row.lims_sub_sample_pk)
+                    parent_pk = sub.parent_sample_pk if sub else None
+                else:
+                    parent_pk = None
+                if parent_pk is not None:
+                    background_tasks.add_task(
+                        run_cascades_bg, parent_pk,
+                        getattr(current_user, "id", None))
+        except Exception:
+            logger.exception("sbs cascade scheduling failed (never-raise)")
         return AnalysisResponse.model_validate(row)
     except Exception as e:
         raise _handle_service_error(e)
@@ -273,6 +319,7 @@ def patch_method_instrument(
 @router.post("/promote", response_model=PromoteResponse, status_code=status.HTTP_201_CREATED)
 def promote(
     req: PromoteRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -371,6 +418,25 @@ def promote(
     db.refresh(parent_row)
     for p in promotion_rows:
         db.refresh(p)
+
+    # Schedule sample-tier cascade post-response (never-raise)
+    try:
+        from models import LimsSubSample
+        from workflow.engine import run_cascades_bg, shadow_enabled
+        if shadow_enabled():
+            if parent_row.lims_sample_pk is not None:
+                parent_pk = parent_row.lims_sample_pk
+            elif parent_row.lims_sub_sample_pk is not None:
+                sub = db.get(LimsSubSample, parent_row.lims_sub_sample_pk)
+                parent_pk = sub.parent_sample_pk if sub else None
+            else:
+                parent_pk = None
+            if parent_pk is not None:
+                background_tasks.add_task(
+                    run_cascades_bg, parent_pk,
+                    getattr(current_user, "id", None))
+    except Exception:
+        logger.exception("sbs cascade scheduling failed (never-raise)")
 
     return PromoteResponse(
         parent=AnalysisResponse.model_validate(parent_row),

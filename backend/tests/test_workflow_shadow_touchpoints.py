@@ -144,3 +144,14 @@ def test_publish_hook_advances_native(db, publish_catalog, tp_sample_publish):
     )).scalars().all()
     assert any(e.outcome == "advanced" and e.trigger == "publish"
                for e in evals)
+
+
+def test_transition_route_schedules_cascade():
+    """The native analysis transition endpoint registers run_cascades_bg as
+    a background task with the resolved PARENT sample pk."""
+    import inspect
+    from lims_analyses import routes
+    src = inspect.getsource(routes.transition)
+    assert "run_cascades_bg" in src and "background_tasks" in src
+    src2 = inspect.getsource(routes.promote)
+    assert "run_cascades_bg" in src2 and "background_tasks" in src2
