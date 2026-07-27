@@ -12,7 +12,8 @@ from sqlalchemy import delete
 import main
 from auth import get_current_user, require_admin
 from database import SessionLocal
-from models import (LimsSample, LimsWorkflowShadowEvaluation,
+from models import (LimsSample, LimsSampleTransition,
+                    LimsWorkflowShadowEvaluation,
                     LimsWorkflowState, LimsWorkflowTransition)
 
 
@@ -146,6 +147,154 @@ def test_summary_live_probe_reclassifies_unfired_auto_edge(db, sample_e):
     by_id = {d["sample_id"]: d for d in p["divergent"]}
     assert by_id["TEST-SUM-E"]["bucket"] == "mk1_refused"
     assert by_id["TEST-SUM-E"]["latest_outcome"] == "live_probe_unmet"
+
+
+# ── verb-aware fallthrough (UAT cancel finding, 2026-07-27) ─────────────
+#
+# UAT repro (PB-0067): native=sample_received, SENAITE cancelled it
+# directly (source='senaite' verb='cancel' transition log row, status
+# healed to 'cancelled'). Expected bucket: no_native_pathway (a SENAITE-
+# only action). Actual (pre-fix): mk1_refused/live_probe_unmet — the old
+# probe found the UNRELATED auto submit edge unmet and reported that as
+# the reason. Since most SENAITE-direct actions (cancel/dispatch) land on
+# samples sitting in states that happen to have an auto_fire edge,
+# no_native_pathway was systematically undercounted — the exact punch-list
+# this report exists to build. Fix: resolve the sample's latest
+# SENAITE-sourced transition and probe THAT verb's edge instead of
+# guessing from auto_fire candidates.
+
+@pytest.fixture
+def vb_catalog_met(db):
+    """Private TEST catalog: test_vb_a --test_vb_cancel(explicit, NO
+    requirements)--> test_vb_b. Not auto_fire — SENAITE originates this
+    verb directly, same as real cancel/dispatch."""
+    states = {}
+    for slug in ("test_vb_a", "test_vb_b"):
+        s = LimsWorkflowState(entity_scope="sample", slug=slug,
+                              label=f"TEST {slug}", category="active",
+                              sort_order=9600, is_builtin=False)
+        db.add(s)
+        db.flush()
+        states[slug] = s
+    edge = LimsWorkflowTransition(
+        entity_scope="sample", from_state_id=states["test_vb_a"].id,
+        to_state_id=states["test_vb_b"].id, verb="test_vb_cancel",
+        requirements=[], auto_fire=False, is_builtin=False, sort_order=9600)
+    db.add(edge)
+    db.flush()
+    db.commit()
+    yield states
+    db.execute(delete(LimsWorkflowTransition).where(
+        LimsWorkflowTransition.id == edge.id))
+    db.execute(delete(LimsWorkflowState).where(
+        LimsWorkflowState.slug.in_(["test_vb_a", "test_vb_b"])))
+    db.commit()
+
+
+@pytest.fixture
+def sample_vb_met(db, vb_catalog_met):
+    """PB-0067-shaped: SENAITE cancelled directly; native stayed at
+    test_vb_a, status healed to test_vb_b. Only a 'seeded' shadow eval row
+    — no requirements_unmet/no_edge row to explain the divergence, so it
+    must reach the fallthrough branch."""
+    r = LimsSample(sample_id="TEST-SUM-VB", status="test_vb_b",
+                   native_status="test_vb_a")
+    db.add(r)
+    db.flush()
+    db.add(LimsWorkflowShadowEvaluation(
+        lims_sample_pk=r.id, trigger="seed", verb=None,
+        from_status=None, to_status="test_vb_a",
+        outcome="seeded", requirements_met=None, outcomes=[]))
+    db.add(LimsSampleTransition(
+        lims_sample_pk=r.id, verb="test_vb_cancel", from_status="test_vb_a",
+        to_status="test_vb_b", source="senaite", occurred_at=datetime.utcnow()))
+    db.commit()
+    yield r
+    db.execute(delete(LimsSampleTransition).where(
+        LimsSampleTransition.lims_sample_pk == r.id))
+    db.execute(delete(LimsWorkflowShadowEvaluation).where(
+        LimsWorkflowShadowEvaluation.lims_sample_pk == r.id))
+    db.execute(delete(LimsSample).where(LimsSample.id == r.id))
+    db.commit()
+
+
+def test_summary_senaite_verb_with_met_edge_stays_no_native_pathway(
+        db, sample_vb_met):
+    """The edge for the verb SENAITE actually used exists and is trivially
+    met (no requirements) — Mk1 HAD the pathway and would have allowed it,
+    so what's missing is a TRIGGER, not a rule. Must stay
+    no_native_pathway, not get misreported against an unrelated edge."""
+    from workflow.routes import _shadow_summary_payload
+    p = _shadow_summary_payload(db, since=None)
+    by_id = {d["sample_id"]: d for d in p["divergent"]}
+    assert by_id["TEST-SUM-VB"]["bucket"] == "no_native_pathway"
+
+
+@pytest.fixture
+def vb_catalog_unmet(db):
+    """Same shape as vb_catalog_met, but the edge REQUIRES all analyses
+    verified — isolated state slugs so the two catalogs never collide."""
+    states = {}
+    for slug in ("test_vb2_a", "test_vb2_b"):
+        s = LimsWorkflowState(entity_scope="sample", slug=slug,
+                              label=f"TEST {slug}", category="active",
+                              sort_order=9601, is_builtin=False)
+        db.add(s)
+        db.flush()
+        states[slug] = s
+    edge = LimsWorkflowTransition(
+        entity_scope="sample", from_state_id=states["test_vb2_a"].id,
+        to_state_id=states["test_vb2_b"].id, verb="test_vb_cancel",
+        requirements=[{"kind": "all_analyses_in_state", "value": "verified",
+                       "note": None}],
+        auto_fire=False, is_builtin=False, sort_order=9601)
+    db.add(edge)
+    db.flush()
+    db.commit()
+    yield states
+    db.execute(delete(LimsWorkflowTransition).where(
+        LimsWorkflowTransition.id == edge.id))
+    db.execute(delete(LimsWorkflowState).where(
+        LimsWorkflowState.slug.in_(["test_vb2_a", "test_vb2_b"])))
+    db.commit()
+
+
+@pytest.fixture
+def sample_vb_unmet(db, vb_catalog_unmet):
+    """Same shape as sample_vb_met, but zero analyses → the verb-matched
+    edge's all_analyses_in_state requirement is fail-closed unmet."""
+    r = LimsSample(sample_id="TEST-SUM-VB2", status="test_vb2_b",
+                   native_status="test_vb2_a")
+    db.add(r)
+    db.flush()
+    db.add(LimsWorkflowShadowEvaluation(
+        lims_sample_pk=r.id, trigger="seed", verb=None,
+        from_status=None, to_status="test_vb2_a",
+        outcome="seeded", requirements_met=None, outcomes=[]))
+    db.add(LimsSampleTransition(
+        lims_sample_pk=r.id, verb="test_vb_cancel", from_status="test_vb2_a",
+        to_status="test_vb2_b", source="senaite", occurred_at=datetime.utcnow()))
+    db.commit()
+    yield r
+    db.execute(delete(LimsSampleTransition).where(
+        LimsSampleTransition.lims_sample_pk == r.id))
+    db.execute(delete(LimsWorkflowShadowEvaluation).where(
+        LimsWorkflowShadowEvaluation.lims_sample_pk == r.id))
+    db.execute(delete(LimsSample).where(LimsSample.id == r.id))
+    db.commit()
+
+
+def test_summary_senaite_verb_with_unmet_edge_is_mk1_refused(
+        db, sample_vb_unmet):
+    """The edge for the verb SENAITE actually used exists but is unmet —
+    Mk1 would have refused what SENAITE did, a genuine rule-miscalibration
+    signal. Must report the VERB-MATCHED reason, not an unrelated probe."""
+    from workflow.routes import _shadow_summary_payload
+    p = _shadow_summary_payload(db, since=None)
+    by_id = {d["sample_id"]: d for d in p["divergent"]}
+    assert by_id["TEST-SUM-VB2"]["bucket"] == "mk1_refused"
+    assert by_id["TEST-SUM-VB2"]["latest_verb"] == "test_vb_cancel"
+    assert by_id["TEST-SUM-VB2"]["latest_outcome"] == "live_probe_unmet"
 
 
 # ── fix round 1: since-window bucket semantics are window-relative ──────

@@ -158,7 +158,9 @@ def _find_edge(db: Session, from_slug: str, verb: str,
                ) -> Optional[tuple[LimsWorkflowTransition, str]]:
     """(edge, to_slug) for the active sample-scope edge `verb` out of
     `from_slug`, or None. Two aliased joins — native_status stores SLUGS,
-    the catalog stores state ids."""
+    the catalog stores state ids. Also imported by
+    `workflow.routes._shadow_summary_payload` for its verb-aware
+    SENAITE-action classification (same-package internal use)."""
     from sqlalchemy.orm import aliased
     FromS, ToS = aliased(LimsWorkflowState), aliased(LimsWorkflowState)
     row = db.execute(
