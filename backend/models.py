@@ -6,7 +6,7 @@ Uses SQLAlchemy 2.0 style with mapped_column.
 from datetime import datetime, time, date
 from typing import Optional, List
 import uuid
-from sqlalchemy import String, Text, Float, Integer, Boolean, DateTime, Time, Date, ForeignKey, JSON, Column, Table, UniqueConstraint, CheckConstraint
+from sqlalchemy import String, Text, Float, Integer, BigInteger, Boolean, DateTime, Time, Date, ForeignKey, JSON, Column, Table, UniqueConstraint, CheckConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -802,6 +802,13 @@ class LimsSample(Base):
     # Internal-only Mk1-native identifier (aP-0001 …), forward-only, minted
     # once by sub_samples.native_id. Never customer-facing in this program.
     native_id: Mapped[Optional[str]] = mapped_column(String(20), unique=True, index=True)
+    # Side-by-side engine (2026-07-26 spec §3.1): Mk1's OWN sample-tier
+    # workflow position, advanced only by workflow/engine.py and the seed
+    # script. NULL = not seeded (engine skips). NO existing reader consults
+    # this — `status` remains the SENAITE mirror that every page renders.
+    # Authority note: lims_workflow_shadow_evaluations is the authoritative
+    # history; this column is its O(1) materialization.
+    native_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -1540,6 +1547,10 @@ class LimsWorkflowTransition(Base):
         JSONB().with_variant(JSON(), "sqlite"), nullable=False, default=list
     )
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Side-by-side engine: edges the cascade evaluator may fire WITHOUT an
+    # explicit verb call (SENAITE-style auto-transitions, e.g. all-submitted
+    # → to_be_verified). Catalog data, not engine hardcode (spec §4).
+    auto_fire: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_builtin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -1580,6 +1591,34 @@ class LimsWorkflowSyncState(Base):
     cursor_created_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow,
                                                  onupdate=datetime.utcnow, nullable=False)
+
+
+class LimsWorkflowShadowEvaluation(Base):
+    """Side-by-side engine trajectory (2026-07-26 spec §3.2): every engine
+    attempt — advance, refusal, or seed — one row. Authoritative history for
+    lims_samples.native_status (the column is the materialization; written in
+    the same transaction). outcome/trigger vocabularies are enforced in code,
+    NOT CHECKs (last-boot-wins class):
+      outcome: 'advanced' | 'requirements_unmet' | 'no_edge' | 'seeded'
+      trigger: 'receive' | 'publish' | 'analysis_cascade' | 'seed'
+    """
+    __tablename__ = "lims_workflow_shadow_evaluations"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    lims_sample_pk: Mapped[int] = mapped_column(
+        Integer, ForeignKey("lims_samples.id", ondelete="CASCADE"), nullable=False)
+    evaluated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False)
+    trigger: Mapped[str] = mapped_column(Text, nullable=False)
+    verb: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    from_status: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    to_status: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    requirements_met: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    outcomes: Mapped[list] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=False, default=list)
+    actor_user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True)
 
 
 class LimsSubSampleEvent(Base):

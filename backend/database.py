@@ -1231,6 +1231,40 @@ def _run_migrations():
             updated_at        TIMESTAMP NOT NULL DEFAULT NOW()
         )
         """,
+        # ── Side-by-side workflow engine (2026-07-26 spec) — ALL additive.
+        # Vocabularies live in code, not CHECKs (last-boot-wins class).
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS native_status VARCHAR(50)",
+        "ALTER TABLE lims_workflow_transitions ADD COLUMN IF NOT EXISTS "
+        "auto_fire BOOLEAN NOT NULL DEFAULT FALSE",
+        """
+        CREATE TABLE IF NOT EXISTS lims_workflow_shadow_evaluations (
+            id                BIGSERIAL PRIMARY KEY,
+            lims_sample_pk    INTEGER NOT NULL REFERENCES lims_samples(id) ON DELETE CASCADE,
+            evaluated_at      TIMESTAMP NOT NULL DEFAULT NOW(),
+            trigger           TEXT NOT NULL,
+            verb              TEXT,
+            from_status       TEXT,
+            to_status         TEXT,
+            outcome           TEXT NOT NULL,
+            requirements_met  BOOLEAN,
+            outcomes          JSONB NOT NULL DEFAULT '[]'::jsonb,
+            actor_user_id     INTEGER REFERENCES users(id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_shadow_evals_sample "
+        "ON lims_workflow_shadow_evaluations (lims_sample_pk, evaluated_at)",
+        "CREATE INDEX IF NOT EXISTS ix_shadow_evals_nonadvanced "
+        "ON lims_workflow_shadow_evaluations (outcome) WHERE outcome != 'advanced'",
+        # Catalog data (spec §8 decision 3): cascade-eligible builtin edges +
+        # the publish edge's attested requirement. Guarded → idempotent.
+        "UPDATE lims_workflow_transitions SET auto_fire = TRUE "
+        "WHERE entity_scope = 'sample' AND verb IN ('submit','verify') "
+        "AND is_builtin AND NOT auto_fire",
+        "UPDATE lims_workflow_transitions SET requirements = requirements || "
+        "'[{\"kind\":\"coa_published\",\"value\":null,"
+        "\"note\":\"attested by the publish touchpoint\"}]'::jsonb "
+        "WHERE entity_scope = 'sample' AND verb = 'publish' AND is_builtin "
+        "AND requirements::text NOT LIKE '%coa_published%'",
         # --- Packaging fan-out + QR phone capture ---
         # lims_capture_tokens must exist before the FK-ALTER below runs (same
         # pattern as lims_boxes/sla_tiers above): migrations run BEFORE
