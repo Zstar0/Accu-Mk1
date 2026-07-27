@@ -18,7 +18,7 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import or_
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from auth import get_current_user, require_admin
@@ -290,3 +290,120 @@ def delete_transition(transition_id: int, db: Session = Depends(get_db)):
             detail="built-in transition cannot be deleted — deactivate instead")
     db.delete(row)
     db.commit()
+
+
+# ── shadow summary (Task 7 — flip-readiness report) ─────────────────────
+
+def _shadow_summary_payload(db: Session, since) -> dict:
+    """Side-by-side divergence report (2026-07-26 spec §6.1, live-probe
+    amendment 2026-07-26). Core is a two-column comparison (status vs.
+    native_status); the latest trajectory row supplies the WHY for anything
+    that disagrees.
+
+    `since` scopes ONLY the latest-shadow-row lookup used to explain an
+    already-divergent sample — `total_seeded` and the `agree` count are
+    always computed over the full population, unfiltered.
+
+    Live probe (amendment): a divergent sample whose latest shadow row is
+    not itself a refusal (`requirements_unmet` / `no_edge`) would otherwise
+    fall straight to `no_native_pathway` — but `evaluate_cascades` (Task 3)
+    records NO refusal row for an auto_fire edge that simply never fired
+    (cascade probing is speculative), so a sample whose auto-edge
+    requirements are merely unmet looks identical to a true pathway gap.
+    Before accepting `no_native_pathway`, re-evaluate every active
+    sample-scope `auto_fire` edge out of `native_status` — same
+    aliased-slug-join candidate query as `workflow.engine.evaluate_cascades`
+    (only the FROM state needs resolving; the destination is irrelevant
+    here) — via `workflow.engine.evaluate_requirements`, which is pure
+    SELECTs and never writes. If ANY such edge is unmet, bucket =
+    `mk1_refused` with a synthetic `latest_outcome = "live_probe_unmet"`
+    (a payload-only value — deliberately NOT part of
+    LimsWorkflowShadowEvaluation's persisted outcome vocabulary and never
+    written to that table) and `latest_verb`/`unmet` taken from the first
+    unmet edge in (sort_order, id) order. Otherwise `no_native_pathway`
+    stands (true no-edge gaps, plus the rare met-but-not-yet-triggered
+    transient, which self-heals at the next touchpoint). The probe runs
+    ONLY for divergent samples reaching this branch — never the `agree`
+    set — so cost stays proportional to divergence.
+    """
+    from sqlalchemy.orm import aliased
+
+    from models import LimsSample, LimsWorkflowShadowEvaluation as Ev
+    from workflow.engine import evaluate_requirements
+
+    samples = db.execute(
+        select(LimsSample).where(LimsSample.native_status.isnot(None))
+    ).scalars().all()
+    buckets = {"agree": 0, "mk1_refused": 0,
+               "no_native_pathway": 0, "stuck_behind": 0}
+    divergent = []
+    for s in samples:
+        if s.native_status == s.status:
+            buckets["agree"] += 1
+            continue
+        q = select(Ev).where(Ev.lims_sample_pk == s.id)
+        if since is not None:
+            q = q.where(Ev.evaluated_at >= since)
+        latest = db.execute(
+            q.order_by(Ev.evaluated_at.desc(), Ev.id.desc()).limit(1)
+        ).scalars().first()
+        outcome = latest.outcome if latest else None
+        latest_verb = latest.verb if latest else None
+        unmet = ([o for o in (latest.outcomes or []) if not o.get("met")]
+                 if latest else [])
+
+        if outcome == "requirements_unmet":
+            bucket = "mk1_refused"
+        elif outcome == "no_edge":
+            bucket = "stuck_behind"
+        else:
+            bucket = "no_native_pathway"
+            FromS = aliased(LimsWorkflowState)
+            candidates = db.execute(
+                select(LimsWorkflowTransition)
+                .join(FromS, LimsWorkflowTransition.from_state_id == FromS.id)
+                .where(LimsWorkflowTransition.entity_scope == "sample",
+                       LimsWorkflowTransition.is_active,
+                       LimsWorkflowTransition.auto_fire,
+                       FromS.slug == s.native_status)
+                .order_by(LimsWorkflowTransition.sort_order,
+                          LimsWorkflowTransition.id)
+            ).scalars().all()
+            for edge in candidates:
+                gate_met, edge_outcomes = evaluate_requirements(
+                    db, s, edge.requirements or [])
+                if not gate_met:
+                    bucket = "mk1_refused"
+                    outcome = "live_probe_unmet"
+                    latest_verb = edge.verb
+                    unmet = [o for o in edge_outcomes if not o.get("met")]
+                    break
+
+        buckets[bucket] += 1
+        if len(divergent) < 200:
+            divergent.append({
+                "sample_id": s.sample_id, "status": s.status,
+                "native_status": s.native_status, "bucket": bucket,
+                "latest_outcome": outcome, "latest_verb": latest_verb,
+                "unmet": unmet,
+            })
+    return {"total_seeded": len(samples), "buckets": buckets,
+            "divergent": divergent}
+
+
+@router.get("/shadow/summary", dependencies=[Depends(require_admin)])
+def shadow_summary(since: Optional[str] = Query(default=None),
+                   db: Session = Depends(get_db)):
+    """Flip-readiness report: agree / mk1_refused / no_native_pathway /
+    stuck_behind over seeded samples (spec §6.1, live-probe amendment
+    2026-07-26 — see `_shadow_summary_payload`)."""
+    from datetime import datetime as _dt
+    parsed = None
+    if since is not None:
+        try:
+            parsed = _dt.fromisoformat(since)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail=f"invalid since (expected ISO 8601): {since!r}")
+    return _shadow_summary_payload(db, since=parsed)
