@@ -14185,6 +14185,7 @@ def _record_sample_transition_bg(**kwargs) -> None:
         # Side-by-side engine touchpoint (2026-07-26 spec §5): the SAME verb
         # this hook just logged drives Mk1's own trajectory. Separately
         # guarded — an engine error must not cost us the log write above.
+        wrote_engine = False
         try:
             from workflow.engine import (evaluate_cascades, execute_verb,
                                          shadow_enabled)
@@ -14202,9 +14203,10 @@ def _record_sample_transition_bg(**kwargs) -> None:
                     )
                     evaluate_cascades(db, _s, trigger=_verb,
                                       actor_user_id=kwargs.get("actor_user_id"))
+                    wrote_engine = True
         except Exception:
             logger.exception("sbs touchpoint failed (never-raise)")
-        if wrote_log or wrote_status or wrote_received:
+        if wrote_log or wrote_status or wrote_received or wrote_engine:
             db.commit()
     except Exception as log_err:  # noqa: BLE001
         if db is not None:
