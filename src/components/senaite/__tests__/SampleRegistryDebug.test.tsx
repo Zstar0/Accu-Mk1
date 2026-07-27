@@ -314,6 +314,9 @@ describe('parity tab', () => {
     await waitFor(() => expect(api.getSampleRegistryDebug).toHaveBeenCalled())
     screen.getByText('parity').click()
     expect(paritySpy).not.toHaveBeenCalled()             // THE invariant
+    // Tab-switch commit isn't act()-wrapped for a raw .click(); await the
+    // pane before reading it, same discipline the log-tab tests use above.
+    await waitFor(() => screen.getByText(/run parity scan/i))
     screen.getByText(/run parity scan/i).click()
     await waitFor(() => expect(paritySpy).toHaveBeenCalledTimes(1))
     await waitFor(() => screen.getByText(/REAL DIFFS/i))
@@ -330,6 +333,7 @@ describe('parity tab', () => {
     render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
     await waitFor(() => expect(api.getSampleRegistryDebug).toHaveBeenCalled())
     screen.getByText('parity').click()
+    await waitFor(() => screen.getByText(/run parity scan/i))
     screen.getByText(/run parity scan/i).click()
     await waitFor(() => screen.getByText(/SENAITE unreachable/))
   })

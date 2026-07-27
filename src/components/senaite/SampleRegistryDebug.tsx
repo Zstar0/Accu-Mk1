@@ -5,7 +5,6 @@
  * freshness, field-by-field agreement/drift, and vial-count sanity.
  */
 import { useState, useEffect } from 'react'
-import { flushSync } from 'react-dom'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
@@ -92,11 +91,7 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
     finally { setParityLoading(false) }
   }
   function selectTab(t: 'overview' | 'log' | 'parity') {
-    // flushSync: raw DOM .click() (used by this panel's tests) isn't
-    // act()-wrapped, so React 18+ automatic batching would otherwise defer
-    // the tab-switch commit to a microtask — a synchronous query for the
-    // newly-revealed pane right after the click would see stale DOM.
-    flushSync(() => setTab(t))
+    setTab(t)
     if (t === 'log' && !logData && !logLoading) loadLog()
   }
   function toggleTrajectory(i: number) {
