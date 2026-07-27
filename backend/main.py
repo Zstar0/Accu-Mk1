@@ -18262,6 +18262,51 @@ def get_sample_registry_log(
     }
 
 
+@app.get("/debug/sample-registry/{sample_id}/parity")
+def get_sample_registry_parity(
+    sample_id: str,
+    admin=Depends(require_admin),
+):
+    """On-demand full-payload parity scan (2026-07-27 parity-convergence
+    spec): thin adapter over scripts.parity_sample_details — the harness
+    stays the ONLY rule engine. Heavyweight (live SENAITE fetches for this
+    one sample) so it is button-fired from the panel, never auto-loaded.
+    Zero writes: native side is a pure read builder; the senaite lookup's
+    cache is an in-memory dict. No get_db dependency ON PURPOSE —
+    fetch_pair_in_process opens/closes its own session, and holding a
+    request session across seconds of SENAITE I/O would waste a pool slot.
+    Sync `def`: fetch_pair_in_process's internal asyncio.run needs a thread
+    with no running event loop (threadpool provides exactly that)."""
+    from database import SessionLocal
+    try:
+        from scripts import parity_sample_details as parity
+        mk1, senaite = parity.fetch_pair_in_process(sample_id, SessionLocal)
+        diffs = parity.compare_sample(mk1, senaite)
+    except Exception as e:
+        return {"sample_id": sample_id, "fields": [], "summary": None,
+                "verdict": None, "error": str(e)}
+
+    def _bucket(d) -> int:
+        if d.is_real:
+            return 0
+        return 1 if d.classification == "known_expected" else 2
+
+    fields = [
+        {"path": d.path, "classification": d.classification,
+         "rule_id": d.rule_id, "mk1_value": d.mk1_value,
+         "senaite_value": d.senaite_value, "is_real": d.is_real}
+        for d in sorted(diffs, key=_bucket)  # sorted() is stable
+    ]
+    summary = {
+        "total": len(fields),
+        "equal": sum(1 for d in diffs if _bucket(d) == 2),
+        "known_expected": sum(1 for d in diffs if _bucket(d) == 1),
+        "real": sum(1 for d in diffs if d.is_real),
+    }
+    return {"sample_id": sample_id, "fields": fields, "summary": summary,
+            "verdict": summary["real"] == 0, "error": None}
+
+
 @app.get("/registry/sample/{sample_id}/details", response_model=RegistrySampleReadResult)
 async def get_sample_read_from_registry(
     sample_id: str,
