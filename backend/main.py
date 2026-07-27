@@ -17974,23 +17974,29 @@ def _build_analysis_debug_rows(db: Session, row: LimsSample, sample_id: str) -> 
     return result
 
 
-def _build_sample_transitions(db: Session, row: LimsSample) -> dict:
+def _build_sample_transitions(db: Session, row: LimsSample, limit: int | None = 5) -> dict:
     """Registry-debug panel's recent-transitions tail (Task 8): the last 5
     `lims_sample_transitions` rows for this parent, newest first. Pure DB
     read, no SENAITE I/O — but still wrapped in its own try/except with its
     own error surface (`transitions.error`), same independent-failure
     posture as `_build_analysis_debug_rows`'s SENAITE fetch: a failure here
     must not blank the rest of the payload, and must not be blanked by a
-    basic-info or analyses failure elsewhere."""
+    basic-info or analyses failure elsewhere.
+
+    `limit=None` (the /log endpoint's full-history request, 2026-07-27
+    parity-convergence spec) returns every row instead of the overview's
+    5-row tail; the overview call site keeps the default."""
     from models import LimsSampleTransition
 
     try:
-        rows = db.execute(
+        q = (
             select(LimsSampleTransition)
             .where(LimsSampleTransition.lims_sample_pk == row.id)
             .order_by(LimsSampleTransition.occurred_at.desc(), LimsSampleTransition.id.desc())
-            .limit(5)
-        ).scalars().all()
+        )
+        if limit is not None:
+            q = q.limit(limit)
+        rows = db.execute(q).scalars().all()
     except Exception as e:
         return {
             "rows": [], "error": str(e),
@@ -18198,6 +18204,62 @@ def refresh_sample_registry_debug(
         except Exception:
             db.rollback()
     return _build_registry_debug_response(db, sample_id)
+
+
+def _build_shadow_trajectory(db: Session, row: LimsSample) -> dict:
+    """Full side-by-side trajectory for the /log tab (2026-07-27 parity-
+    convergence spec): every shadow evaluation, newest first, FULL outcomes
+    list (met AND unmet — the overview block shows unmet-only). Same
+    independent-failure posture as its siblings."""
+    from models import LimsWorkflowShadowEvaluation as Ev
+    try:
+        rows = db.execute(
+            select(Ev).where(Ev.lims_sample_pk == row.id)
+            .order_by(Ev.evaluated_at.desc(), Ev.id.desc())
+        ).scalars().all()
+        return {
+            "rows": [
+                {
+                    "evaluated_at": r.evaluated_at.isoformat(),
+                    "trigger": r.trigger, "verb": r.verb,
+                    "from_status": r.from_status, "to_status": r.to_status,
+                    "outcome": r.outcome,
+                    "requirements_met": r.requirements_met,
+                    "outcomes": r.outcomes or [],
+                }
+                for r in rows
+            ],
+            "error": None,
+        }
+    except Exception as e:
+        return {"rows": [], "error": str(e)}
+
+
+@app.get("/debug/sample-registry/{sample_id}/log")
+def get_sample_registry_log(
+    sample_id: str,
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin forensic log — the /log tab's payload: ALL transitions + the
+    full shadow trajectory. Pure DB, no SENAITE I/O, zero writes. Sync `def`
+    for consistency with its siblings (threadpool; nothing blocking here
+    but the panel's routes share one posture)."""
+    row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if row is None:
+        return {
+            "sample_id": sample_id, "exists": False,
+            "transitions": {"rows": [], "error": None, "latest_to_status": None,
+                            "log_in_sync": None, "current_status": None},
+            "trajectory": {"rows": [], "error": None},
+        }
+    return {
+        "sample_id": sample_id, "exists": True,
+        "transitions": _build_sample_transitions(db, row, limit=None),
+        "trajectory": _build_shadow_trajectory(db, row),
+    }
 
 
 @app.get("/registry/sample/{sample_id}/details", response_model=RegistrySampleReadResult)
