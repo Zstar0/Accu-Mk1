@@ -10,9 +10,9 @@ import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
 import { X, RefreshCw, RotateCw } from 'lucide-react'
 import {
-  getSampleRegistryDebug, refreshSampleRegistry,
+  getSampleRegistryDebug, refreshSampleRegistry, getSampleRegistryLog,
   type SampleRegistryDebug as DebugData, type RegistryFieldStatus,
-  type AnalysisSyncStatus,
+  type AnalysisSyncStatus, type SampleRegistryLog,
 } from '@/lib/api'
 import { useReadSourceOverride } from '@/lib/read-source'
 
@@ -35,6 +35,13 @@ const analysisStatusColor: Record<AnalysisSyncStatus, string> = {
   shadow_only: 'text-amber-400', no_shadow: 'text-zinc-500',
 }
 
+// Log tab: transition source badges — same colored-span vocabulary as the
+// status glyphs above, keyed by the transition's `source` field.
+const sourceColor: Record<string, string> = {
+  mk1: 'text-emerald-400', senaite: 'text-sky-400', reconcile: 'text-amber-400',
+  is_seed: 'text-zinc-500',
+}
+
 function val(v: unknown): string {
   if (v === null || v === undefined) return '∅'
   if (typeof v === 'object') return JSON.stringify(v)
@@ -49,6 +56,11 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [showRaw, setShowRaw] = useState(false)
   const { override: source, setOverride: setSource } = useReadSourceOverride('sample_details')
+  const [tab, setTab] = useState<'overview' | 'log' | 'parity'>('overview')
+  const [logData, setLogData] = useState<SampleRegistryLog | null>(null)
+  const [logLoading, setLogLoading] = useState(false)
+  const [logError, setLogError] = useState<string | null>(null)
+  const [expandedTrajectory, setExpandedTrajectory] = useState<Set<number>>(new Set())
 
   async function load() {
     setLoading(true); setError(null)
@@ -62,7 +74,30 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
     catch (e) { setError(e instanceof Error ? e.message : 'failed') }
     finally { setLoading(false) }
   }
-  useEffect(() => { if (open && sampleId) load() }, [open, sampleId])
+  async function loadLog() {
+    setLogLoading(true); setLogError(null)
+    try { setLogData(await getSampleRegistryLog(sampleId)) }
+    catch (e) { setLogError(e instanceof Error ? e.message : 'failed') }
+    finally { setLogLoading(false) }
+  }
+  function selectTab(t: 'overview' | 'log' | 'parity') {
+    setTab(t)
+    if (t === 'log' && !logData && !logLoading) loadLog()
+  }
+  function toggleTrajectory(i: number) {
+    setExpandedTrajectory(prev => {
+      const next = new Set(prev)
+      if (next.has(i)) next.delete(i); else next.add(i)
+      return next
+    })
+  }
+  useEffect(() => {
+    if (open && sampleId) load()
+    setTab('overview')
+    setLogData(null)
+    setLogError(null)
+    setExpandedTrajectory(new Set())
+  }, [open, sampleId])
 
   const line = 'font-mono text-[12px] leading-relaxed whitespace-pre-wrap'
 
@@ -96,9 +131,11 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
                 className="text-amber-600/70 hover:text-amber-400 transition-colors disabled:opacity-30">
                 <RotateCw size={12} />
               </button>
-              <button onClick={load} disabled={loading}
+              <button
+                onClick={() => { if (tab === 'overview') load(); else if (tab === 'log') loadLog() }}
+                disabled={tab === 'parity' || (tab === 'overview' ? loading : logLoading)}
                 className="text-zinc-600 hover:text-zinc-300 transition-colors disabled:opacity-30">
-                <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+                <RefreshCw size={12} className={(tab === 'overview' ? loading : tab === 'log' && logLoading) ? 'animate-spin' : ''} />
               </button>
               <button onClick={onClose} className="text-zinc-600 hover:text-zinc-300 transition-colors">
                 <X size={13} />
@@ -107,6 +144,16 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
           </div>
 
           <div className="bg-[#0d0d0d] px-3 py-3 flex-1 min-h-0 flex flex-col overflow-hidden">
+            <div className="flex items-center gap-0.5 rounded border border-zinc-800 p-0.5 w-fit mb-2 shrink-0">
+              {(['overview', 'log', 'parity'] as const).map(t => (
+                <button key={t} onClick={() => selectTab(t)}
+                  className={cn('px-1.5 py-0.5 text-[10px] font-mono rounded transition-colors',
+                    tab === t ? 'bg-emerald-600/30 text-emerald-300' : 'text-zinc-600 hover:text-zinc-300')}>
+                  {t}
+                </button>
+              ))}
+            </div>
+
             {loading && !data && (
               <div className="flex items-center gap-2 py-8 justify-center">
                 <Spinner className="size-3" />
@@ -121,7 +168,7 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
               </div>
             )}
 
-            {data && data.load.exists && (
+            {tab === 'overview' && data && data.load.exists && (
               <div className="flex-1 min-h-0 flex gap-3">
                 {/* LEFT column: analysis line items (SENAITE vs shadow vs canonical) */}
                 <div className="flex-[3] min-w-0 h-full overflow-y-auto pr-2 border-r border-zinc-900/80 space-y-1.5">
@@ -316,6 +363,103 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
                   )}
                 </div>
               </div>
+            )}
+
+            {tab === 'log' && (
+              <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                {logLoading && !logData && (
+                  <div className="flex items-center gap-2 py-8 justify-center">
+                    <Spinner className="size-3" />
+                    <span className="font-mono text-[11px] text-zinc-600">loading log for {sampleId}...</span>
+                  </div>
+                )}
+                {logError && <div className="font-mono text-[11px] text-red-400 py-2">error: {logError}</div>}
+
+                {logData && (
+                  <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-2">
+                    {/* full transition history */}
+                    <div>
+                      <div className="font-mono text-[11px] text-zinc-700 pb-1 flex items-center gap-2">
+                        <span>{'─'.repeat(3)} transitions (all) {'─'.repeat(30)}</span>
+                        {logData.transitions.log_in_sync === true && (
+                          <span className="text-emerald-400">✔ log matches status</span>
+                        )}
+                        {logData.transitions.log_in_sync === false && (
+                          <span className="text-amber-400">
+                            {`⚠ log behind: latest '${logData.transitions.latest_to_status}' ≠ status '${logData.transitions.current_status}'`}
+                          </span>
+                        )}
+                      </div>
+                      {logData.transitions.error && (
+                        <div className={cn(line, 'text-red-400')}>transitions_error: {logData.transitions.error}</div>
+                      )}
+                      {logData.transitions.rows.length > 0 && (
+                        <div className="space-y-0.5">
+                          {logData.transitions.rows.map((t, i) => (
+                            <div key={i} className="font-mono text-[11px] text-zinc-500 leading-relaxed">
+                              <span className="text-zinc-300">{t.verb ?? '—'}</span>{'  '}
+                              <span className="text-zinc-600">{t.from_status ?? '∅'} → {t.to_status}</span>{'  '}
+                              <span className="text-zinc-700">·</span>{'  '}
+                              <span className={sourceColor[t.source] ?? 'text-zinc-500'}>{t.source}</span>{'  '}
+                              <span className="text-zinc-700">·</span>{'  '}
+                              <span className="text-zinc-600">{new Date(t.occurred_at).toLocaleString()}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {logData.transitions.rows.length === 0 && !logData.transitions.error && (
+                        <div className="font-mono text-[11px] text-zinc-600">no transitions logged yet</div>
+                      )}
+                    </div>
+
+                    {/* shadow trajectory */}
+                    <div>
+                      <div className="font-mono text-[11px] text-zinc-700 pb-1">{'─'.repeat(3)} shadow trajectory {'─'.repeat(25)}</div>
+                      {logData.trajectory.error && (
+                        <div className={cn(line, 'text-red-400')}>trajectory_error: {logData.trajectory.error}</div>
+                      )}
+                      {logData.trajectory.rows.length > 0 && (
+                        <div className="space-y-0.5">
+                          {logData.trajectory.rows.map((r, i) => {
+                            const isExpanded = expandedTrajectory.has(i)
+                            const outcomeColor = r.outcome === 'advanced' ? 'text-emerald-400'
+                              : r.outcome === 'requirements_unmet' ? 'text-amber-400' : 'text-zinc-500'
+                            return (
+                              <div key={i} className="font-mono text-[11px] text-zinc-500 leading-relaxed">
+                                <button onClick={() => toggleTrajectory(i)} className="text-zinc-600 hover:text-zinc-300 mr-1">
+                                  {isExpanded ? '▾' : '▸'}
+                                </button>
+                                {`${r.trigger} · ${r.verb ?? '—'} · ${r.from_status ?? '∅'} → ${r.to_status ?? '∅'} · `}
+                                <span className={outcomeColor}>{r.outcome}</span>
+                                {` · reqs=${String(r.requirements_met)}`}{'  '}
+                                <span className="text-zinc-700">·</span>{'  '}
+                                <span className="text-zinc-600">{new Date(r.evaluated_at).toLocaleString()}</span>
+                                {isExpanded && (
+                                  <div className="pl-4 space-y-0.5">
+                                    {r.outcomes.map((o, j) => (
+                                      <div key={j} className="font-mono text-[11px] text-zinc-600 leading-relaxed">
+                                        <span className={o.met ? 'text-emerald-400' : 'text-amber-400'}>{o.met ? '✔' : '✖'}</span>{' '}
+                                        {o.kind}: {o.value ?? '∅'} {o.detail ?? ''}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                      {logData.trajectory.rows.length === 0 && !logData.trajectory.error && (
+                        <div className="font-mono text-[11px] text-zinc-600">no trajectory evaluations yet</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {tab === 'parity' && (
+              <div className="font-mono text-[11px] text-zinc-600">parity tab: coming in Task 4</div>
             )}
           </div>
 

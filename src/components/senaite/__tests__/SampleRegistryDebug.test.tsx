@@ -240,3 +240,53 @@ describe('SampleRegistryDebug', () => {
     expect(screen.queryByText(/not seeded/i)).not.toBeInTheDocument()
   })
 })
+
+const logBase: api.SampleRegistryLog = {
+  sample_id: 'P-1',
+  exists: true,
+  transitions: {
+    rows: [
+      { verb: 'publish', from_status: 'verified', to_status: 'published',
+        source: 'senaite', occurred_at: '2026-07-11T09:00:00' },
+      { verb: 'receive', from_status: 'sample_due', to_status: 'sample_received',
+        source: 'mk1', occurred_at: '2026-07-10T12:00:00' },
+    ],
+    error: null, latest_to_status: 'published', log_in_sync: true,
+    current_status: 'published',
+  },
+  trajectory: {
+    rows: [
+      { evaluated_at: '2026-07-11T09:00:01', trigger: 'publish', verb: 'publish',
+        from_status: 'verified', to_status: 'published', outcome: 'advanced',
+        requirements_met: true,
+        outcomes: [{ kind: 'coa_published', value: null, met: true, detail: null }] },
+    ],
+    error: null,
+  },
+}
+
+describe('log tab', () => {
+  it('lazy-fetches /log on first activation only', async () => {
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue(base)
+    const logSpy = vi.spyOn(api, 'getSampleRegistryLog').mockResolvedValue(logBase)
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(api.getSampleRegistryDebug).toHaveBeenCalled())
+    expect(logSpy).not.toHaveBeenCalled()          // overview default: no log fetch
+    screen.getByText('log').click()
+    await waitFor(() => expect(logSpy).toHaveBeenCalledTimes(1))
+    screen.getByText('overview').click()
+    screen.getByText('log').click()
+    expect(logSpy).toHaveBeenCalledTimes(1)        // cached per open
+  })
+
+  it('renders full transition history with source badges and trajectory rows', async () => {
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue(base)
+    vi.spyOn(api, 'getSampleRegistryLog').mockResolvedValue(logBase)
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(api.getSampleRegistryDebug).toHaveBeenCalled())
+    screen.getByText('log').click()
+    await waitFor(() => screen.getByText('publish'))
+    expect(screen.getByText('senaite')).toBeTruthy()       // source badge
+    expect(screen.getByText(/advanced/)).toBeTruthy()      // trajectory outcome
+  })
+})

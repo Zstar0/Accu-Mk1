@@ -5204,6 +5204,30 @@ export async function refreshSampleRegistry(sampleId: string): Promise<SampleReg
   )
 }
 
+// 2026-07-27 parity-convergence spec: /log tab payload — full histories.
+export interface ShadowTrajectoryRow {
+  evaluated_at: string
+  trigger: string
+  verb: string | null
+  from_status: string | null
+  to_status: string | null
+  outcome: string
+  requirements_met: boolean | null
+  outcomes: Array<{ kind: string; value: string | null; met: boolean; detail: string | null }>
+}
+
+export interface SampleRegistryLog {
+  sample_id: string
+  exists: boolean
+  transitions: SampleTransitionsTail
+  trajectory: { rows: ShadowTrajectoryRow[]; error: string | null }
+}
+
+export async function getSampleRegistryLog(sampleId: string): Promise<SampleRegistryLog> {
+  return apiFetch<SampleRegistryLog>(
+    `/debug/sample-registry/${encodeURIComponent(sampleId)}/log`)
+}
+
 // ─── Sample Retest Info ──────────────────────────────────────────────────────
 
 export interface RetestForwardLink {
