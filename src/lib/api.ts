@@ -5154,6 +5154,21 @@ export interface SampleTransitionsTail {
   current_status: string | null
 }
 
+// Task 8: registry-inspect side-by-side block — native trajectory position
+// vs the SENAITE mirror, plus the latest engine attempt (if any).
+export interface SampleShadowBlock {
+  native_status: string | null
+  current_status: string | null
+  in_sync: boolean | null
+  latest: {
+    verb: string | null
+    outcome: string
+    evaluated_at: string
+    unmet: Array<{ kind: string; value: string | null; detail: string | null }>
+  } | null
+  error: string | null
+}
+
 export interface SampleRegistryDebug {
   sample_id: string
   load: {
@@ -5175,6 +5190,7 @@ export interface SampleRegistryDebug {
   raw: { registry: Record<string, unknown> | null; senaite: Record<string, unknown> | null } | null
   analyses: AnalysesSync | null
   transitions: SampleTransitionsTail | null
+  shadow: SampleShadowBlock | null
 }
 
 export async function getSampleRegistryDebug(sampleId: string): Promise<SampleRegistryDebug> {

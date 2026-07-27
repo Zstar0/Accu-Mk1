@@ -200,6 +200,48 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
                   {data.transitions && data.transitions.rows.length === 0 && !data.transitions.error && (
                     <div className="font-mono text-[11px] text-zinc-600">no transitions logged yet</div>
                   )}
+
+                  {/* Side-by-side engine block (Task 8): native trajectory position vs
+                      the SENAITE mirror, plus the latest engine attempt (if any). */}
+                  <div className="font-mono text-[11px] text-zinc-700 pt-2 pb-1 flex items-center gap-2">
+                    <span>{'─'.repeat(3)} side-by-side {'─'.repeat(21)}</span>
+                    {data.shadow?.in_sync === true && (
+                      <span className="text-emerald-400">✔ in sync</span>
+                    )}
+                    {data.shadow?.in_sync === false && (
+                      <span className="text-amber-400">⚠ desync</span>
+                    )}
+                    {data.shadow?.in_sync === null && (
+                      <span className="text-zinc-600">not seeded</span>
+                    )}
+                  </div>
+                  {data.shadow?.error && (
+                    <div className={cn(line, 'text-red-400')}>shadow_error: {data.shadow.error}</div>
+                  )}
+                  {data.shadow && !data.shadow.error && (
+                    <div className={cn(line, 'text-zinc-400')}>
+                      {`native=${data.shadow.native_status ?? '∅'}  current=${data.shadow.current_status ?? '∅'}`}
+                    </div>
+                  )}
+                  {data.shadow?.latest && (
+                    <div className="font-mono text-[11px] text-zinc-500 leading-relaxed">
+                      <span className="text-zinc-300">{data.shadow.latest.verb ?? '—'}</span>{'  '}
+                      <span className="text-zinc-600">{'→'} {data.shadow.latest.outcome}</span>{'  '}
+                      <span className="text-zinc-700">·</span>{'  '}
+                      <span className="text-zinc-600">
+                        {new Date(data.shadow.latest.evaluated_at).toLocaleTimeString()}
+                      </span>
+                    </div>
+                  )}
+                  {data.shadow?.latest && data.shadow.latest.unmet.length > 0 && (
+                    <div className="space-y-0.5 pl-3">
+                      {data.shadow.latest.unmet.map((u, i) => (
+                        <div key={i} className="font-mono text-[11px] text-zinc-600 leading-relaxed">
+                          {u.kind}: {u.detail ?? '∅'}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* RIGHT column: basic-info status block + field diff (unchanged) */}

@@ -236,3 +236,18 @@ def test_summary_endpoint_shape(client, cohort):
         assert key in body
     for key in ("agree", "mk1_refused", "no_native_pathway", "stuck_behind"):
         assert key in body["buckets"]
+
+
+# ── registry-inspect side-by-side block (Task 8) ────────────────────────
+
+def test_build_shadow_block(db, cohort):
+    from main import _build_shadow_block
+    refused = next(r for r in cohort if r.sample_id == "TEST-SUM-B")
+    block = _build_shadow_block(db, refused)
+    assert block["native_status"] == "verified"
+    assert block["current_status"] == "published"
+    assert block["in_sync"] is False
+    assert block["latest"]["outcome"] == "requirements_unmet"
+
+    agree = next(r for r in cohort if r.sample_id == "TEST-SUM-A")
+    assert _build_shadow_block(db, agree)["in_sync"] is True

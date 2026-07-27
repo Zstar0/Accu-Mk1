@@ -17948,6 +17948,34 @@ def _build_sample_transitions(db: Session, row: LimsSample) -> dict:
     }
 
 
+def _build_shadow_block(db: Session, row: LimsSample) -> dict:
+    """Side-by-side engine panel block (2026-07-26 spec §6.2): the native
+    trajectory position vs the SENAITE mirror, + the latest engine attempt.
+    Own try/except — a failure here must not blank the rest of the payload."""
+    from models import LimsWorkflowShadowEvaluation as Ev
+    try:
+        latest = db.execute(
+            select(Ev).where(Ev.lims_sample_pk == row.id)
+            .order_by(Ev.evaluated_at.desc(), Ev.id.desc()).limit(1)
+        ).scalars().first()
+        return {
+            "native_status": row.native_status,
+            "current_status": row.status,
+            "in_sync": (None if row.native_status is None
+                        else row.native_status == row.status),
+            "latest": None if latest is None else {
+                "verb": latest.verb, "outcome": latest.outcome,
+                "evaluated_at": latest.evaluated_at.isoformat(),
+                "unmet": [o for o in (latest.outcomes or [])
+                          if not o.get("met")],
+            },
+            "error": None,
+        }
+    except Exception as e:
+        return {"native_status": None, "current_status": row.status,
+                "in_sync": None, "latest": None, "error": str(e)}
+
+
 def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
     """Assemble the registry-debug payload. Basic-info half is read-only;
     analyses half schedules the passive drift observer (Task 7) which heals
@@ -17965,7 +17993,7 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
             "linkage": None, "origin": None, "container": None,
             "fields": [], "summary": None, "vials": None,
             "verdict": None, "senaite_error": None, "raw": None,
-            "analyses": None, "transitions": None,
+            "analyses": None, "transitions": None, "shadow": None,
         }
 
     age = None
@@ -17990,6 +18018,9 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
     # own try/except, own error surface, never blanked by nor blanking
     # anything else in this payload.
     transitions = _build_sample_transitions(db, row)
+
+    # Side-by-side engine block (Task 8): same independent-failure posture.
+    shadow = _build_shadow_block(db, row)
 
     meta = None
     senaite_error = None
@@ -18040,7 +18071,7 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
                     "registry_null": diff["summary"]["registry_null"]},
         "senaite_error": None,
         "raw": {"registry": _row_to_dict(row), "senaite": meta},
-        "analyses": analyses, "transitions": transitions,
+        "analyses": analyses, "transitions": transitions, "shadow": shadow,
     }
 
 

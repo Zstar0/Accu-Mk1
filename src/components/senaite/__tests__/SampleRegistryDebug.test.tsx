@@ -22,6 +22,7 @@ const base: api.SampleRegistryDebug = {
   raw: { registry: { sample_id: 'P-1' }, senaite: { uid: 'U1' } },
   analyses: null,
   transitions: null,
+  shadow: null,
 }
 
 const analysesBase: api.AnalysesSync = {
@@ -53,6 +54,17 @@ const transitionsBase: api.SampleTransitionsTail = {
   latest_to_status: 'sample_received',
   log_in_sync: true,
   current_status: 'sample_received',
+}
+
+const shadowBase: api.SampleShadowBlock = {
+  native_status: 'verified',
+  current_status: 'published',
+  in_sync: false,
+  latest: {
+    verb: 'publish', outcome: 'requirements_unmet', evaluated_at: '2026-07-26T00:00:00',
+    unmet: [{ kind: 'coa_published', value: null, detail: 'publish not attested' }],
+  },
+  error: null,
 }
 
 beforeEach(() => vi.restoreAllMocks())
@@ -194,5 +206,23 @@ describe('SampleRegistryDebug', () => {
       expect(screen.getByText(/log behind: latest 'sample_received' ≠ status 'verified'/)).toBeInTheDocument()
     )
     expect(screen.queryByText(/log matches status/i)).not.toBeInTheDocument()
+  })
+
+  it('renders the side-by-side shadow block', async () => {
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue({ ...base, shadow: shadowBase })
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(screen.getByText(/side-by-side/i)).toBeInTheDocument())
+    expect(screen.getByText(/requirements_unmet/)).toBeInTheDocument()
+    expect(screen.getByText(/⚠ desync/)).toBeInTheDocument()
+    expect(screen.getByText(/publish not attested/)).toBeInTheDocument()
+  })
+
+  it('shows "not seeded" when the shadow block has never been seeded', async () => {
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue({
+      ...base,
+      shadow: { native_status: null, current_status: 'sample_due', in_sync: null, latest: null, error: null },
+    })
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(screen.getByText(/not seeded/i)).toBeInTheDocument())
   })
 })
