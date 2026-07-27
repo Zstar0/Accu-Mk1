@@ -337,4 +337,25 @@ describe('parity tab', () => {
     screen.getByText(/run parity scan/i).click()
     await waitFor(() => screen.getByText(/SENAITE unreachable/))
   })
+
+  it('surfaces a failed re-run as an error and clears the stale verdict', async () => {
+    // Regression pin: runParity's catch used to leave parityData intact, so
+    // a re-run that throws (504 through the double nginx proxy, an expired
+    // session, etc.) re-rendered the PREVIOUS scan's verdict unchanged —
+    // a failed re-run must never look like a stale ✔ PASS.
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue(base)
+    const paritySpy = vi.spyOn(api, 'getSampleRegistryParity')
+      .mockResolvedValueOnce({ ...parityBase, verdict: true })
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(api.getSampleRegistryDebug).toHaveBeenCalled())
+    screen.getByText('parity').click()
+    await waitFor(() => screen.getByText(/run parity scan/i))
+    screen.getByText(/run parity scan/i).click()
+    await waitFor(() => screen.getByText(/PASS/i))
+
+    paritySpy.mockRejectedValueOnce(new Error('gateway timeout'))
+    screen.getByText('re-run').click()
+    await waitFor(() => screen.getByText(/gateway timeout/i))
+    expect(screen.queryByText(/PASS/i)).not.toBeInTheDocument()
+  })
 })

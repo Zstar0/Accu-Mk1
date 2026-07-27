@@ -18232,7 +18232,7 @@ def _build_shadow_trajectory(db: Session, row: LimsSample) -> dict:
             "error": None,
         }
     except Exception as e:
-        return {"rows": [], "error": str(e)}
+        return {"rows": [], "error": str(e) or type(e).__name__}
 
 
 @app.get("/debug/sample-registry/{sample_id}/log")
@@ -18284,7 +18284,7 @@ def get_sample_registry_parity(
         diffs = parity.compare_sample(mk1, senaite)
     except Exception as e:
         return {"sample_id": sample_id, "fields": [], "summary": None,
-                "verdict": None, "error": str(e)}
+                "verdict": None, "error": str(e) or type(e).__name__}
 
     def _bucket(d) -> int:
         if d.is_real:

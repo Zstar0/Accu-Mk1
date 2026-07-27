@@ -4,7 +4,7 @@
  * lims_samples registry record vs live SENAITE: existence, linkage, origin,
  * freshness, field-by-field agreement/drift, and vial-count sanity.
  */
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
@@ -65,6 +65,13 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
   const [parityLoading, setParityLoading] = useState(false)
   const [parityError, setParityError] = useState<string | null>(null)
   const [showEqual, setShowEqual] = useState(false)
+  // The sheet never remounts across sample switches (SampleDetails mounts it
+  // unconditionally, no key prop), so in-flight log/parity fetches must be
+  // able to tell "this response is for a sample we've since navigated away
+  // from" — a plain closure over `sampleId` can't see that; a ref kept in
+  // sync every render can.
+  const sampleIdRef = useRef(sampleId)
+  sampleIdRef.current = sampleId
 
   async function load() {
     setLoading(true); setError(null)
@@ -80,14 +87,33 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
   }
   async function loadLog() {
     setLogLoading(true); setLogError(null)
-    try { setLogData(await getSampleRegistryLog(sampleId)) }
-    catch (e) { setLogError(e instanceof Error ? e.message : 'failed') }
+    try {
+      const result = await getSampleRegistryLog(sampleId)
+      // Drop a response that arrived after the panel moved on to another
+      // sample — applying it would render the old sample's log under the
+      // new sample's header.
+      if (result.sample_id === sampleIdRef.current) setLogData(result)
+    }
+    catch (e) {
+      if (sampleId === sampleIdRef.current) setLogError(e instanceof Error ? e.message : 'failed')
+    }
     finally { setLogLoading(false) }
   }
   async function runParity() {
     setParityLoading(true); setParityError(null)
-    try { setParityData(await getSampleRegistryParity(sampleId)) }
-    catch (e) { setParityError(e instanceof Error ? e.message : 'failed') }
+    try {
+      const result = await getSampleRegistryParity(sampleId)
+      if (result.sample_id === sampleIdRef.current) setParityData(result)
+    }
+    catch (e) {
+      if (sampleId === sampleIdRef.current) {
+        // A failed re-run must never leave the previous scan's verdict on
+        // screen looking current — clear it so the error state (below) is
+        // what renders, not a stale ✔ PASS.
+        setParityError(e instanceof Error ? e.message : 'failed')
+        setParityData(null)
+      }
+    }
     finally { setParityLoading(false) }
   }
   function selectTab(t: 'overview' | 'log' | 'parity') {
@@ -106,9 +132,11 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
     setTab('overview')
     setLogData(null)
     setLogError(null)
+    setLogLoading(false)
     setExpandedTrajectory(new Set())
     setParityData(null)
     setParityError(null)
+    setParityLoading(false)
   }, [open, sampleId])
 
   const line = 'font-mono text-[12px] leading-relaxed whitespace-pre-wrap'
