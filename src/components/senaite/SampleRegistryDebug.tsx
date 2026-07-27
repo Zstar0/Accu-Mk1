@@ -97,7 +97,10 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
     catch (e) {
       if (sampleId === sampleIdRef.current) setLogError(e instanceof Error ? e.message : 'failed')
     }
-    finally { setLogLoading(false) }
+    // Guarded too: an abandoned request settling here must not clear the
+    // spinner out from under a genuinely in-flight fetch for the sample the
+    // panel has since switched to.
+    finally { if (sampleId === sampleIdRef.current) setLogLoading(false) }
   }
   async function runParity() {
     setParityLoading(true); setParityError(null)
@@ -114,7 +117,7 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
         setParityData(null)
       }
     }
-    finally { setParityLoading(false) }
+    finally { if (sampleId === sampleIdRef.current) setParityLoading(false) }
   }
   function selectTab(t: 'overview' | 'log' | 'parity') {
     setTab(t)
