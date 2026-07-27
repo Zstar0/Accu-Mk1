@@ -155,3 +155,28 @@ def test_transition_route_schedules_cascade():
     assert "run_cascades_bg" in src and "background_tasks" in src
     src2 = inspect.getsource(routes.promote)
     assert "run_cascades_bg" in src2 and "background_tasks" in src2
+
+
+def test_seed_native_status_dry_run_and_apply(db, tp_sample):
+    from scripts.seed_native_status import seed_native_status
+    db.execute(  # start unseeded
+        LimsSample.__table__.update().where(
+            LimsSample.id == tp_sample.id).values(native_status=None))
+    db.commit()
+    stats = seed_native_status(db, sample_ids=[tp_sample.sample_id], apply=False)
+    db.expire_all()
+    assert stats["would_seed"] == 1
+    assert db.get(LimsSample, tp_sample.id).native_status is None
+    stats2 = seed_native_status(db, sample_ids=[tp_sample.sample_id], apply=True)
+    db.expire_all()
+    assert stats2["seeded"] == 1
+    fresh = db.get(LimsSample, tp_sample.id)
+    assert fresh.native_status == fresh.status
+    seeded_rows = db.execute(select(LimsWorkflowShadowEvaluation).where(
+        LimsWorkflowShadowEvaluation.lims_sample_pk == tp_sample.id,
+        LimsWorkflowShadowEvaluation.outcome == "seeded",
+    )).scalars().all()
+    assert len(seeded_rows) == 1
+    # heal/reset: re-run re-adopts (idempotent when equal — still records)
+    stats3 = seed_native_status(db, sample_ids=[tp_sample.sample_id], apply=True)
+    assert stats3["seeded"] == 1
