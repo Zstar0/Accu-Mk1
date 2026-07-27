@@ -14190,9 +14190,13 @@ def _record_sample_transition_bg(**kwargs) -> None:
             from workflow.engine import (evaluate_cascades, execute_verb,
                                          shadow_enabled)
             if shadow_enabled():
+                # Row lock (finding #2, 2026-07-27): this bg session can
+                # interleave with run_cascades_bg's own bg session on the
+                # same sample. Background context only — no user-facing
+                # latency impact.
                 _s = db.execute(select(LimsSample).where(
                     LimsSample.sample_id == kwargs["sample_id"]
-                )).scalar_one_or_none()
+                ).with_for_update()).scalar_one_or_none()
                 _verb = kwargs.get("verb")
                 if _s is not None and _verb in ("receive", "publish"):
                     execute_verb(

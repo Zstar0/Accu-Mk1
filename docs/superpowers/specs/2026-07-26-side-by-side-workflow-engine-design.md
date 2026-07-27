@@ -311,3 +311,75 @@ unblocks COABuilder re-wire (program step 5) and SENAITE retirement.
   be silently rolled back by the host function's pre-existing flag logic —
   closes a case where all three original flags were False but the engine had
   advanced `native_status`.
+
+## Final-review fix wave (2026-07-27)
+
+- **Submit-edge gating (finding #1).** The seeded sample-scope `submit` edge
+  (`sample_received` → `to_be_verified`, `auto_fire=True`) fired
+  unconditionally — the only gating the cascade had was `auto_fire`, with an
+  empty `requirements` list. It now carries
+  `{"kind": "all_analyses_in_state", "value": "to_be_verified,verified,published"}`
+  (Handler-confirmed 2026-07-27 state list), seeded from first boot in
+  `workflow/seeds.py` and reconciled on existing DBs via a guarded boot
+  UPDATE in `database.py`, same idiom as the neighboring `coa_published`
+  UPDATE. Verified by hand against the live dev DB before wiring the UPDATE
+  into `database.py`: the statement touches exactly the one `submit` row,
+  produces a well-formed one-element `jsonb` array via `||` concatenation,
+  and is a true no-op on re-run (0 rows the second time). Note: the seed-path
+  requirement's `note` is `None` while the boot-UPDATE path's `note` is
+  `"all analyses submitted"` — a cosmetic asymmetry (same asymmetry pattern
+  as `coa_published`'s two paths did not have, since that one's note text
+  matches); the two paths are mutually exclusive (first-boot vs.
+  existing-DB), so it never surfaces as a live inconsistency. Left as
+  written per the brief rather than "fixed" unprompted.
+- **Row locking (finding #2).** The chokepoint bg session
+  (`main._record_sample_transition_bg`) and `run_cascades_bg`'s own bg
+  session can interleave on the same sample (chokepoint bg vs.
+  post-response analysis-route cascade). Both now take a row lock before
+  reading `native_status`: the chokepoint uses
+  `select(LimsSample).where(...).with_for_update()`; `run_cascades_bg` uses
+  `db.get(LimsSample, sample_pk, with_for_update=True)`. Both touchpoints
+  already commit their own request-scoped transaction (`apply_transition`
+  internally, `promote()` explicitly) before scheduling the cascade
+  background task, so the added lock does not introduce a cross-session
+  hang in the existing HTTP-level test suite — verified by running
+  `test_lims_analyses_routes.py` + `test_promote_writeback_route.py` +
+  `test_list_parent_analyses_senaite_shape.py` after the change (no hang;
+  one pre-existing unrelated `tier_mismatch` failure, confirmed present in
+  both the branch and master baseline failure lists from Task 9's gate).
+  Both entry points are background contexts — no user-facing latency
+  impact.
+- **`mk1_ahead` bucket (finding #3).** `_shadow_summary_payload` previously
+  had no bucket for a divergent sample whose latest shadow row succeeded
+  (`outcome == "advanced"`) — meaning Mk1's native trajectory has moved
+  past what SENAITE's `status` shows. Added as its own branch, checked
+  BEFORE the `no_native_pathway` live-probe fallthrough (an "advanced"
+  outcome must never reach the live-probe branch). Buckets are now `agree`
+  / `mk1_refused` / `stuck_behind` / `mk1_ahead` / `no_native_pathway`;
+  docstrings and the endpoint's bucket-key set updated to match.
+- **`run_cascades_bg` direct coverage (finding #4).** Two new tests in
+  `test_workflow_engine.py` exercise the background target directly rather
+  than only through the touchpoint tests: a happy path (own-session commit
+  verified via `expire_all` + re-query) and a failure path (patches
+  `workflow.engine.evaluate_cascades` to raise, asserts no propagation).
+  Both create + commit their own fixtures rather than reusing `test_sample`
+  (which only flushes) — `run_cascades_bg` opens a separate `SessionLocal()`
+  connection that cannot see another session's uncommitted rows.
+- **FE contradictory-diagnostic fix (finding #5).**
+  `SampleRegistryDebug.tsx`'s "not seeded" badge rendered whenever
+  `shadow.in_sync === null`, even when `shadow.error` was set — implying a
+  healthy-but-unseeded sample when the shadow query had actually failed.
+  Gated on `!shadow.error`. One regression test added pinning the error
+  case renders the error line and not the "not seeded" badge.
+- **Stable divergent-sample ordering (finding #8).** The seeded-samples
+  query in `_shadow_summary_payload` now has `.order_by(LimsSample.sample_id)`
+  so the 200-cap `divergent` list is stable across polls of the same
+  underlying state.
+- **Test isolation fix required by finding #1.** `test_workflow_shadow_summary.py`'s
+  `TEST-SUM-D` fixture previously used the real `sample_received` slug as
+  its unseeded/no-pathway example. Once `submit`'s new requirement went
+  live in the shared dev DB, `sample_received` had a real, empty-line-set,
+  live-probeable `auto_fire` edge — reclassifying D to `mk1_refused`
+  instead of the intended `no_native_pathway`. D now uses a private
+  `test_sum_d_isolated` state with zero outgoing sample-scope transitions
+  (same isolation pattern as the file's existing `window_state` fixture).

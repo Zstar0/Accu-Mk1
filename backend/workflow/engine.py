@@ -257,7 +257,11 @@ def run_cascades_bg(sample_pk: int, actor_user_id: Optional[int]) -> None:
     try:
         from database import SessionLocal
         db = SessionLocal()
-        sample = db.get(LimsSample, sample_pk)
+        # Row lock (finding #2, 2026-07-27): the chokepoint bg session
+        # (_record_sample_transition_bg) can interleave with this one on the
+        # same sample. Background context only — no user-facing latency
+        # impact.
+        sample = db.get(LimsSample, sample_pk, with_for_update=True)
         if sample is not None:
             evaluate_cascades(db, sample, trigger="analysis_cascade",
                               actor_user_id=actor_user_id)

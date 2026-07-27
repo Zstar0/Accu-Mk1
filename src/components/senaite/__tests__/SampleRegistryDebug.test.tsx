@@ -225,4 +225,18 @@ describe('SampleRegistryDebug', () => {
     render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
     await waitFor(() => expect(screen.getByText(/not seeded/i)).toBeInTheDocument())
   })
+
+  it('shows the shadow error instead of "not seeded" when the shadow query itself errored', async () => {
+    // Regression pin (finding #5): in_sync is null both when a sample was
+    // never seeded AND when the shadow lookup errored — the "not seeded"
+    // badge must not render in the error case, since that's a contradictory
+    // diagnostic (implies healthy-but-unseeded when it's actually broken).
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue({
+      ...base,
+      shadow: { native_status: null, current_status: 'sample_due', in_sync: null, latest: null, error: 'db down' },
+    })
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(screen.getByText(/shadow_error: db down/)).toBeInTheDocument())
+    expect(screen.queryByText(/not seeded/i)).not.toBeInTheDocument()
+  })
 })

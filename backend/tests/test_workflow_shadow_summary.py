@@ -26,6 +26,19 @@ def db():
 @pytest.fixture
 def cohort(db):
     rows = []
+    # TEST-SUM-D needs a native_status with literally ZERO outgoing sample-
+    # scope transitions so the live-probe amendment finds no auto_fire
+    # candidate and the sample stays a genuine no_native_pathway gap.
+    # "sample_received" no longer works for this (finding #1): its real
+    # submit edge is now gated + auto_fire, so an empty live-line set would
+    # get live-probed as unmet and reclassify D to mk1_refused — same
+    # isolation pattern as the `window_state` fixture below.
+    isolated = LimsWorkflowState(entity_scope="sample", slug="test_sum_d_isolated",
+                                 label="TEST isolated", category="active",
+                                 sort_order=9500, is_builtin=False)
+    db.add(isolated)
+    db.flush()
+
     def mk(sid, status, native, evals=()):
         r = LimsSample(sample_id=sid, status=status, native_status=native)
         db.add(r); db.flush()
@@ -42,14 +55,17 @@ def cohort(db):
        evals=[("requirements_unmet", "publish")])                  # mk1_refused
     mk("TEST-SUM-C", "published", "verified",
        evals=[("no_edge", "publish")])                             # stuck_behind
-    mk("TEST-SUM-D", "cancelled", "sample_received",
+    mk("TEST-SUM-D", "cancelled", "test_sum_d_isolated",
        evals=[("seeded", None)])                                   # no_native_pathway
+    mk("TEST-SUM-G", "verified", "published",
+       evals=[("advanced", "publish")])                            # mk1_ahead
     db.commit()
     yield rows
     for r in rows:
         db.execute(delete(LimsWorkflowShadowEvaluation).where(
             LimsWorkflowShadowEvaluation.lims_sample_pk == r.id))
         db.execute(delete(LimsSample).where(LimsSample.id == r.id))
+    db.execute(delete(LimsWorkflowState).where(LimsWorkflowState.id == isolated.id))
     db.commit()
 
 
@@ -60,6 +76,7 @@ def test_summary_buckets(db, cohort):
     assert by_id["TEST-SUM-B"] == "mk1_refused"
     assert by_id["TEST-SUM-C"] == "stuck_behind"
     assert by_id["TEST-SUM-D"] == "no_native_pathway"
+    assert by_id["TEST-SUM-G"] == "mk1_ahead"
     assert "TEST-SUM-A" not in by_id
     assert p["buckets"]["agree"] >= 1
 
@@ -235,7 +252,8 @@ def test_summary_endpoint_shape(client, cohort):
     body = r.json()
     for key in ("total_seeded", "buckets", "divergent"):
         assert key in body
-    for key in ("agree", "mk1_refused", "no_native_pathway", "stuck_behind"):
+    for key in ("agree", "mk1_refused", "no_native_pathway", "stuck_behind",
+                "mk1_ahead"):
         assert key in body["buckets"]
 
 

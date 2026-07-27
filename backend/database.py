@@ -1265,6 +1265,16 @@ def _run_migrations():
         "\"note\":\"attested by the publish touchpoint\"}]'::jsonb "
         "WHERE entity_scope = 'sample' AND verb = 'publish' AND is_builtin "
         "AND requirements::text NOT LIKE '%coa_published%'",
+        # Sample-scope submit edge (finding #1, 2026-07-27): the seeded
+        # unconditional submit was firing regardless of live analysis state.
+        # Handler-confirmed 2026-07-27 gating state list. Guarded on existing
+        # DBs the same way as the coa_published UPDATE above.
+        "UPDATE lims_workflow_transitions SET requirements = requirements || "
+        "'[{\"kind\":\"all_analyses_in_state\",\"value\":"
+        "\"to_be_verified,verified,published\","
+        "\"note\":\"all analyses submitted\"}]'::jsonb "
+        "WHERE entity_scope='sample' AND verb='submit' AND is_builtin "
+        "AND requirements::text NOT LIKE '%all_analyses_in_state%'",
         # --- Packaging fan-out + QR phone capture ---
         # lims_capture_tokens must exist before the FK-ALTER below runs (same
         # pattern as lims_boxes/sla_tiers above): migrations run BEFORE

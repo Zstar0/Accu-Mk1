@@ -35,7 +35,9 @@ SEED_STATES = [
 SEED_TRANSITIONS = [
     ("sample", "sample_registered", "sample_due", "to_due", False, [], "Order dispatched toward the lab."),
     ("sample", "sample_due", "sample_received", "receive", False, [], "Lab check-in."),
-    ("sample", "sample_received", "to_be_verified", "submit", True, [], "All analyses submitted."),
+    ("sample", "sample_received", "to_be_verified", "submit", True,
+     [{"kind": "all_analyses_in_state", "value": "to_be_verified,verified,published", "note": None}],
+     "All analyses submitted."),
     ("sample", "to_be_verified", "verified", "verify", True,
      [{"kind": "all_analyses_in_state", "value": "verified", "note": None}],
      "Lab verification of all results."),

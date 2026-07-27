@@ -2,6 +2,8 @@
 live subvial DB via SessionLocal, TEST-prefixed fixtures, self-cleanup."""
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 from sqlalchemy import delete, select
 
@@ -68,11 +70,18 @@ def test_seed_data_carries_auto_fire_and_coa_published(db):
         for row in SEED_TRANSITIONS if row[0] == "sample"
     }
 
-    # Verify sample submit edge has auto_fire=True
+    # Verify sample submit edge has auto_fire=True AND is gated (finding #1):
+    # the unconditional submit fired regardless of live analysis state.
     submit_key = ("sample", "sample_received", "to_be_verified", "submit")
     assert submit_key in sample_transitions, "submit transition missing"
     submit_row = sample_transitions[submit_key]
     assert submit_row[4] is True, "submit should have auto_fire=True"
+    submit_reqs = submit_row[5]
+    assert any(
+        req["kind"] == "all_analyses_in_state"
+        and req["value"] == "to_be_verified,verified,published"
+        for req in submit_reqs
+    ), "submit should require all_analyses_in_state=to_be_verified,verified,published"
 
     # Verify sample verify edge has auto_fire=True
     verify_key = ("sample", "to_be_verified", "verified", "verify")
@@ -278,4 +287,57 @@ def test_cascades_chain_and_terminate(db, test_sample, any_service,
     # publish is NOT auto_fire so the chain stops at verified.
     assert [r.outcome for r in rows] == ["advanced", "advanced"]
     assert test_sample.native_status == "test_sbs_verified"
+
+
+# ── run_cascades_bg direct coverage (finding #4) ────────────────────────
+#
+# run_cascades_bg opens its OWN session (SessionLocal()) — a separate
+# connection that cannot see another session's uncommitted rows. These tests
+# therefore create + commit their own fixtures rather than reusing the
+# `test_sample` fixture (which only flushes), and clean up committed rows in
+# a finally rather than relying on rollback.
+
+def test_run_cascades_bg_happy_path_advances_and_commits(
+        db, any_service, sbs_catalog):
+    from workflow.engine import run_cascades_bg
+    sample = LimsSample(sample_id="TEST-SBS-BG-0001", status="sample_received",
+                        native_status="test_sbs_received")
+    db.add(sample)
+    db.flush()
+    _add_parent_line(db, sample, any_service, "verified")
+    db.commit()
+    try:
+        run_cascades_bg(sample.id, None)
+        db.expire_all()
+        fresh = db.get(LimsSample, sample.id)
+        assert fresh.native_status == "test_sbs_verified"
+        evals = db.execute(select(LimsWorkflowShadowEvaluation).where(
+            LimsWorkflowShadowEvaluation.lims_sample_pk == sample.id
+        )).scalars().all()
+        assert any(e.outcome == "advanced" and e.trigger == "analysis_cascade"
+                   for e in evals)
+    finally:
+        db.execute(delete(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == sample.id))
+        db.execute(delete(LimsWorkflowShadowEvaluation).where(
+            LimsWorkflowShadowEvaluation.lims_sample_pk == sample.id))
+        db.execute(delete(LimsSample).where(LimsSample.id == sample.id))
+        db.commit()
+
+
+def test_run_cascades_bg_failure_path_never_raises(db):
+    from workflow.engine import run_cascades_bg
+    sample = LimsSample(sample_id="TEST-SBS-BG-0002", status="sample_received",
+                        native_status=None)
+    db.add(sample)
+    db.commit()
+    try:
+        with patch("workflow.engine.evaluate_cascades",
+                   side_effect=RuntimeError("boom")):
+            run_cascades_bg(sample.id, None)   # must not raise
+    finally:
+        db.execute(delete(LimsWorkflowShadowEvaluation).where(
+            LimsWorkflowShadowEvaluation.lims_sample_pk == sample.id))
+        db.execute(delete(LimsSample).where(LimsSample.id == sample.id))
+        db.commit()
     db.rollback()

@@ -296,9 +296,11 @@ def delete_transition(transition_id: int, db: Session = Depends(get_db)):
 
 def _shadow_summary_payload(db: Session, since) -> dict:
     """Side-by-side divergence report (2026-07-26 spec §6.1, live-probe
-    amendment 2026-07-26). Core is a two-column comparison (status vs.
-    native_status); the latest trajectory row supplies the WHY for anything
-    that disagrees.
+    amendment 2026-07-26; `mk1_ahead` bucket added 2026-07-27, finding #3).
+    Core is a two-column comparison (status vs. native_status); the latest
+    trajectory row supplies the WHY for anything that disagrees. Buckets:
+    `agree` / `mk1_refused` / `stuck_behind` / `mk1_ahead` (Mk1's native
+    trajectory has advanced past SENAITE's status) / `no_native_pathway`.
 
     `since` scopes ONLY the latest-shadow-row lookup used to explain an
     already-divergent sample — `total_seeded` and the `agree` count are
@@ -343,9 +345,10 @@ def _shadow_summary_payload(db: Session, since) -> dict:
 
     samples = db.execute(
         select(LimsSample).where(LimsSample.native_status.isnot(None))
+        .order_by(LimsSample.sample_id)
     ).scalars().all()
-    buckets = {"agree": 0, "mk1_refused": 0,
-               "no_native_pathway": 0, "stuck_behind": 0}
+    buckets = {"agree": 0, "mk1_refused": 0, "no_native_pathway": 0,
+               "stuck_behind": 0, "mk1_ahead": 0}
     divergent = []
     for s in samples:
         if s.native_status == s.status:
@@ -366,6 +369,11 @@ def _shadow_summary_payload(db: Session, since) -> dict:
             bucket = "mk1_refused"
         elif outcome == "no_edge":
             bucket = "stuck_behind"
+        elif outcome == "advanced":
+            # Mk1 successfully advanced native_status past what SENAITE's
+            # status reflects (finding #3) — this is progress, not a gap or
+            # refusal, and must not fall into the live-probe branch below.
+            bucket = "mk1_ahead"
         else:
             bucket = "no_native_pathway"
             FromS = aliased(LimsWorkflowState)
@@ -405,8 +413,8 @@ def _shadow_summary_payload(db: Session, since) -> dict:
 def shadow_summary(since: Optional[str] = Query(default=None),
                    db: Session = Depends(get_db)):
     """Flip-readiness report: agree / mk1_refused / no_native_pathway /
-    stuck_behind over seeded samples (spec §6.1, live-probe amendment
-    2026-07-26 — see `_shadow_summary_payload`)."""
+    stuck_behind / mk1_ahead over seeded samples (spec §6.1, live-probe
+    amendment 2026-07-26 — see `_shadow_summary_payload`)."""
     from datetime import datetime as _dt
     parsed = None
     if since is not None:

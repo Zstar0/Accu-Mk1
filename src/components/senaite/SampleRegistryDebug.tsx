@@ -211,7 +211,7 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
                     {data.shadow?.in_sync === false && (
                       <span className="text-amber-400">⚠ desync</span>
                     )}
-                    {data.shadow?.in_sync === null && (
+                    {data.shadow?.in_sync === null && !data.shadow?.error && (
                       <span className="text-zinc-600">not seeded</span>
                     )}
                   </div>
