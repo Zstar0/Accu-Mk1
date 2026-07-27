@@ -31,37 +31,38 @@ SEED_STATES = [
      "Internal sentinel — shadow mirror rows; never a real workflow position."),
 ]
 
-# (scope, from_slug, to_slug, verb, requirements, description)
+# (scope, from_slug, to_slug, verb, auto_fire, requirements, description)
 SEED_TRANSITIONS = [
-    ("sample", "sample_registered", "sample_due", "to_due", [], "Order dispatched toward the lab."),
-    ("sample", "sample_due", "sample_received", "receive", [], "Lab check-in."),
-    ("sample", "sample_received", "to_be_verified", "submit", [], "All analyses submitted."),
-    ("sample", "to_be_verified", "verified", "verify",
+    ("sample", "sample_registered", "sample_due", "to_due", False, [], "Order dispatched toward the lab."),
+    ("sample", "sample_due", "sample_received", "receive", False, [], "Lab check-in."),
+    ("sample", "sample_received", "to_be_verified", "submit", True, [], "All analyses submitted."),
+    ("sample", "to_be_verified", "verified", "verify", True,
      [{"kind": "all_analyses_in_state", "value": "verified", "note": None}],
      "Lab verification of all results."),
-    ("sample", "verified", "published", "publish",
-     [{"kind": "all_analyses_in_state", "value": "verified", "note": "COA generated and published via Mk1"}],
+    ("sample", "verified", "published", "publish", False,
+     [{"kind": "all_analyses_in_state", "value": "verified", "note": "COA generated and published via Mk1"},
+      {"kind": "coa_published", "value": None, "note": "attested by the publish touchpoint"}],
      "COA publish."),
-    ("sample", "sample_received", "dispatched", "dispatch", [], "Physical dispatch."),
-    ("sample", "sample_due", "cancelled", "cancel", [], "Cancel before receipt."),
-    ("sample", "sample_received", "cancelled", "cancel", [], "Cancel after receipt."),
-    ("sample", "published", "invalid", "invalidate", [], "Invalidate a published sample (spawns retest)."),
-    ("analysis", "registered", "unassigned", "init", [], "Line enters the workflow."),
-    ("analysis", "unassigned", "assigned", "assign", [], "Worksheet assignment."),
-    ("analysis", "unassigned", "to_be_verified", "submit", [], "Result entry + submit."),
-    ("analysis", "assigned", "to_be_verified", "submit", [], "Result entry + submit."),
-    ("analysis", "to_be_verified", "verified", "verify", [], "Result verification."),
-    ("analysis", "to_be_verified", "variance_verified", "variance_verify", [], "Variance-flow verification."),
-    ("analysis", "to_be_verified", "rejected", "reject", [], "Reject a submitted result."),
-    ("analysis", "unassigned", "rejected", "reject", [], "Reject an unstarted line."),
-    ("analysis", "to_be_verified", "retracted", "retract", [],
+    ("sample", "sample_received", "dispatched", "dispatch", False, [], "Physical dispatch."),
+    ("sample", "sample_due", "cancelled", "cancel", False, [], "Cancel before receipt."),
+    ("sample", "sample_received", "cancelled", "cancel", False, [], "Cancel after receipt."),
+    ("sample", "published", "invalid", "invalidate", False, [], "Invalidate a published sample (spawns retest)."),
+    ("analysis", "registered", "unassigned", "init", False, [], "Line enters the workflow."),
+    ("analysis", "unassigned", "assigned", "assign", False, [], "Worksheet assignment."),
+    ("analysis", "unassigned", "to_be_verified", "submit", False, [], "Result entry + submit."),
+    ("analysis", "assigned", "to_be_verified", "submit", False, [], "Result entry + submit."),
+    ("analysis", "to_be_verified", "verified", "verify", False, [], "Result verification."),
+    ("analysis", "to_be_verified", "variance_verified", "variance_verify", False, [], "Variance-flow verification."),
+    ("analysis", "to_be_verified", "rejected", "reject", False, [], "Reject a submitted result."),
+    ("analysis", "unassigned", "rejected", "reject", False, [], "Reject an unstarted line."),
+    ("analysis", "to_be_verified", "retracted", "retract", False, [],
      "Retire-and-replace: original retracted, SENAITE spawns an unassigned copy with the result carried."),
-    ("analysis", "verified", "retracted", "retract", [],
+    ("analysis", "verified", "retracted", "retract", False, [],
      "Retire-and-replace from verified."),
-    ("analysis", "verified", "verified", "retest", [],
+    ("analysis", "verified", "verified", "retest", False, [],
      "Spawns a new unassigned retest line (retest_of link); the original stays verified, flagged retested."),
-    ("analysis", "verified", "published", "publish", [], "Rides the sample COA publish."),
-    ("analysis", "verified", "promoted", "promote", [], "Sub-sample tier: promote result to parent."),
+    ("analysis", "verified", "published", "publish", False, [], "Rides the sample COA publish."),
+    ("analysis", "verified", "promoted", "promote", False, [], "Sub-sample tier: promote result to parent."),
 ]
 
 
@@ -80,7 +81,7 @@ def seed_workflow_catalog(db: Session) -> dict:
             db.flush()
             created_s += 1
         by_key[(scope, slug)] = row
-    for scope, f, t, verb, reqs, desc in SEED_TRANSITIONS:
+    for scope, f, t, verb, auto_fire, reqs, desc in SEED_TRANSITIONS:
         frm, to = by_key[(scope, f)], by_key[(scope, t)]
         exists = (db.query(LimsWorkflowTransition)
                   .filter_by(entity_scope=scope, from_state_id=frm.id, verb=verb)
@@ -88,7 +89,7 @@ def seed_workflow_catalog(db: Session) -> dict:
         if exists is None:
             db.add(LimsWorkflowTransition(
                 entity_scope=scope, from_state_id=frm.id, to_state_id=to.id,
-                verb=verb, requirements=reqs, description=desc, is_builtin=True))
+                verb=verb, auto_fire=auto_fire, requirements=reqs, description=desc, is_builtin=True))
             db.flush()
             created_t += 1
     return {"states_created": created_s, "transitions_created": created_t}
