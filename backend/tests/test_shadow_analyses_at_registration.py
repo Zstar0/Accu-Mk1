@@ -27,6 +27,7 @@ from database import SessionLocal
 from lims_analyses.parent_mirror import SHADOW_STATE
 from models import (
     AnalysisService, LimsAnalysis, LimsAnalysisTransition, LimsSample,
+    LimsWorkflowShadowEvaluation,
 )
 
 TEST_SAMPLE_IDS = ["TEST-SAR-PARENT", "TEST-SAR-UNREG", "TEST-SAR-REG"]
@@ -304,6 +305,92 @@ def test_s2s_registration_shadows_even_when_the_signal_carries_no_uid(
             select(LimsAnalysis).where(LimsAnalysis.lims_sample_pk == parent.id)
         ).scalars().all()
         assert [r.keyword for r in rows] == [svc_a.keyword]
+    finally:
+        fresh.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Side-by-side engine: registration must also ARM native_status (P-0140
+# coverage-decay finding, 2026-07-27). A sample minted after the catalog
+# seed run gets native_status=NULL forever otherwise — the engine skips
+# NULL by design, so burn-in coverage silently decays for every sample
+# created post-go-live. This is a SEPARATE bg task from the shadow-sync one
+# above (see test below for the "survives a SENAITE failure" proof), so it
+# runs to completion independent of the SENAITE fetch outcome.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_s2s_registration_signal_arms_native_status(db, two_analysis_services):
+    """First-touch arming: the registration signal arms native_status on a
+    newly-minted row to its current status, with a 'seeded'/'registration'
+    trajectory row. Asserts on real committed rows via a fresh session —
+    the arming bg task commits on its own session, same as its shadow-sync
+    sibling."""
+    from fastapi.testclient import TestClient
+    from main import app
+
+    svc_a, _ = two_analysis_services
+    items = [_item("A", svc_a.keyword, review_state="registered", unit="%")]
+
+    with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": "test-secret"}), \
+            patch("sub_samples.senaite.fetch_parent_analyses", return_value=items):
+        client = TestClient(app)
+        resp = client.post(
+            "/s2s/lims-samples",
+            json={
+                "sample_id": "TEST-SAR-REG",
+                "senaite_uid": "uid-test-sar-reg",
+                "meta": {"uid": "uid-test-sar-reg", "review_state": "sample_due"},
+            },
+            headers={"X-Service-Token": "test-secret"},
+        )
+
+    assert resp.status_code == 200, resp.text
+
+    fresh = SessionLocal()
+    try:
+        parent = fresh.execute(
+            select(LimsSample).where(LimsSample.sample_id == "TEST-SAR-REG")
+        ).scalar_one()
+        assert parent.native_status is not None
+        assert parent.native_status == parent.status
+        evals = fresh.execute(
+            select(LimsWorkflowShadowEvaluation).where(
+                LimsWorkflowShadowEvaluation.lims_sample_pk == parent.id)
+        ).scalars().all()
+        assert any(e.outcome == "seeded" and e.trigger == "registration"
+                   for e in evals)
+    finally:
+        fresh.close()
+
+
+def test_s2s_registration_arm_survives_a_senaite_failure(db, two_analysis_services):
+    """Arming must not be coupled to the SENAITE analyses shadow-sync
+    outcome — a SENAITE outage there must not leave the sample unarmed."""
+    from fastapi.testclient import TestClient
+    from main import app
+
+    with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": "test-secret"}), \
+            patch("sub_samples.senaite.fetch_parent_analyses",
+                  side_effect=RuntimeError("SENAITE down")):
+        client = TestClient(app)
+        resp = client.post(
+            "/s2s/lims-samples",
+            json={
+                "sample_id": "TEST-SAR-REG",
+                "senaite_uid": "uid-test-sar-reg",
+                "meta": {"uid": "uid-test-sar-reg", "review_state": "sample_due"},
+            },
+            headers={"X-Service-Token": "test-secret"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    fresh = SessionLocal()
+    try:
+        parent = fresh.execute(
+            select(LimsSample).where(LimsSample.sample_id == "TEST-SAR-REG")
+        ).scalar_one()
+        assert parent.native_status == parent.status
     finally:
         fresh.close()
 

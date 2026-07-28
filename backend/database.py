@@ -1231,6 +1231,68 @@ def _run_migrations():
             updated_at        TIMESTAMP NOT NULL DEFAULT NOW()
         )
         """,
+        # ── Side-by-side workflow engine (2026-07-26 spec) — ALL additive.
+        # Vocabularies live in code, not CHECKs (last-boot-wins class).
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS native_status VARCHAR(50)",
+        "ALTER TABLE lims_workflow_transitions ADD COLUMN IF NOT EXISTS "
+        "auto_fire BOOLEAN NOT NULL DEFAULT FALSE",
+        """
+        CREATE TABLE IF NOT EXISTS lims_workflow_shadow_evaluations (
+            id                BIGSERIAL PRIMARY KEY,
+            lims_sample_pk    INTEGER NOT NULL REFERENCES lims_samples(id) ON DELETE CASCADE,
+            evaluated_at      TIMESTAMP NOT NULL DEFAULT NOW(),
+            trigger           TEXT NOT NULL,
+            verb              TEXT,
+            from_status       TEXT,
+            to_status         TEXT,
+            outcome           TEXT NOT NULL,
+            requirements_met  BOOLEAN,
+            outcomes          JSONB NOT NULL DEFAULT '[]'::jsonb,
+            actor_user_id     INTEGER REFERENCES users(id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_shadow_evals_sample "
+        "ON lims_workflow_shadow_evaluations (lims_sample_pk, evaluated_at)",
+        "CREATE INDEX IF NOT EXISTS ix_shadow_evals_nonadvanced "
+        "ON lims_workflow_shadow_evaluations (outcome) WHERE outcome != 'advanced'",
+        # Catalog data (spec §8 decision 3): cascade-eligible builtin edges +
+        # the publish edge's attested requirement. Guarded → idempotent.
+        "UPDATE lims_workflow_transitions SET auto_fire = TRUE "
+        "WHERE entity_scope = 'sample' AND verb IN ('submit','verify') "
+        "AND is_builtin AND NOT auto_fire",
+        # NOTE (2026-07-27, CRITICAL finding): the "value":null key below
+        # was ORIGINALLY present and made this statement a silent no-op on
+        # EVERY boot — SQLAlchemy's text() parses an unescaped `:token`
+        # (here `:null`, from the JSON literal) as a bind parameter, and
+        # conn.execute(text(sql)) then raises InvalidRequestError
+        # ("A value is required for bind parameter 'null'"), caught by
+        # this loop's per-statement try/except and logged as
+        # migration_skipped forever. Fresh DBs were unaffected (the seed
+        # carries this requirement directly per the Task-1 first-boot fix
+        # below), but every EXISTING DB relied on this UPDATE as the only
+        # path — the publish edge never gained the coa_published
+        # attestation requirement on any upgraded database. Dropping the
+        # "value" key entirely is semantically identical to keeping it
+        # null: `_eval_one`'s coa_published branch (workflow/engine.py)
+        # never reads `entry.get("value")` at all, and every reader uses
+        # `.get("value")`, never bracket access — see
+        # test_boot_migration_statements_have_no_bindparams for the
+        # regression guard (scoped to the whole migrations list).
+        "UPDATE lims_workflow_transitions SET requirements = requirements || "
+        "'[{\"kind\":\"coa_published\","
+        "\"note\":\"attested by the publish touchpoint\"}]'::jsonb "
+        "WHERE entity_scope = 'sample' AND verb = 'publish' AND is_builtin "
+        "AND requirements::text NOT LIKE '%coa_published%'",
+        # Sample-scope submit edge (finding #1, 2026-07-27): the seeded
+        # unconditional submit was firing regardless of live analysis state.
+        # Handler-confirmed 2026-07-27 gating state list. Guarded on existing
+        # DBs the same way as the coa_published UPDATE above.
+        "UPDATE lims_workflow_transitions SET requirements = requirements || "
+        "'[{\"kind\":\"all_analyses_in_state\",\"value\":"
+        "\"to_be_verified,verified,published\","
+        "\"note\":\"all analyses submitted\"}]'::jsonb "
+        "WHERE entity_scope='sample' AND verb='submit' AND is_builtin "
+        "AND requirements::text NOT LIKE '%all_analyses_in_state%'",
         # --- Packaging fan-out + QR phone capture ---
         # lims_capture_tokens must exist before the FK-ALTER below runs (same
         # pattern as lims_boxes/sla_tiers above): migrations run BEFORE

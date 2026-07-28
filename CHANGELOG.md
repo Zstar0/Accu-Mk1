@@ -24,6 +24,45 @@ harness-only; this one changes a production write path and needs a deploy.
   whatever the seed row says. A resolved target whose unit is NULL still wins
   over the caller: carrying the source's unit across a service change is the
   defect itself.
+## v1.7.1 — 2026-07-28
+
+### Fixed
+
+- **Registry-inspect timestamps render true local time.** Transition and
+  shadow-trajectory timestamps are naive-UTC in the DB but were serialized
+  without an offset, so the panel displayed raw UTC digits as if local.
+  They now carry an explicit `+00:00` (`_iso_utc`), covering the log tab,
+  the overview transitions tail, and the side-by-side block.
+- **`log matches status` glyph no longer trips on IS order-progress vocab.**
+  A newest `worksheet_assigned → analyzing` row (IS-speak, deliberately
+  whitelisted OUT of `lims_samples.status` by `heal_sample_status`) made
+  the sync check cry wolf on every worksheet-assigned sample (BW-0066
+  class). The check now compares against the newest row whose `to_status`
+  is real sample review-state vocabulary; IS-vocab rows stay visible in
+  the list.
+
+## v1.7.0 — 2026-07-28
+
+### Added
+
+- **Registry-inspect: full-log tab + parity scan** (2026-07-27 spec). The
+  admin panel gains `overview | log | parity` tabs: `log` shows the complete
+  `lims_sample_transitions` history plus the full shadow-evaluation
+  trajectory (`GET /debug/sample-registry/{id}/log`, pure DB); `parity` is a
+  button-fired full-payload diff via the `parity_sample_details` harness
+  (`GET /debug/sample-registry/{id}/parity`) rendering real / known-expected
+  / equal buckets with rule ids. Overview unchanged; both endpoints
+  admin-gated, zero writes; the scan never auto-fires.
+
+- **Side-by-side workflow engine** (2026-07-26 spec): Mk1 executes sample-tier
+  transitions in parallel — own `native_status` driven by the workflow catalog
+  + requirements at Mk1-originated trigger sites (receive, publish, analysis
+  cascades). SENAITE untouched and authoritative; all writes additive; env
+  kill switch `MK1_WORKFLOW_SHADOW_ENABLED`. Divergence report
+  `GET /api/workflow/shadow/summary` = flip-readiness; registry-inspect gains
+  a side-by-side block. Deploy: run
+  `python -m scripts.seed_native_status --all --apply` (off-hours), then
+  verify the summary shows 100% agree on day zero.
 
 ## v1.6.2 — 2026-07-25
 

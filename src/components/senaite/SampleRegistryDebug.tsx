@@ -4,15 +4,15 @@
  * lims_samples registry record vs live SENAITE: existence, linkage, origin,
  * freshness, field-by-field agreement/drift, and vial-count sanity.
  */
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
 import { X, RefreshCw, RotateCw } from 'lucide-react'
 import {
-  getSampleRegistryDebug, refreshSampleRegistry,
+  getSampleRegistryDebug, refreshSampleRegistry, getSampleRegistryLog, getSampleRegistryParity,
   type SampleRegistryDebug as DebugData, type RegistryFieldStatus,
-  type AnalysisSyncStatus,
+  type AnalysisSyncStatus, type SampleRegistryLog, type SampleParityResult,
 } from '@/lib/api'
 import { useReadSourceOverride } from '@/lib/read-source'
 
@@ -35,6 +35,13 @@ const analysisStatusColor: Record<AnalysisSyncStatus, string> = {
   shadow_only: 'text-amber-400', no_shadow: 'text-zinc-500',
 }
 
+// Log tab: transition source badges — same colored-span vocabulary as the
+// status glyphs above, keyed by the transition's `source` field.
+const sourceColor: Record<string, string> = {
+  mk1: 'text-emerald-400', senaite: 'text-sky-400', reconcile: 'text-amber-400',
+  is_seed: 'text-zinc-500',
+}
+
 function val(v: unknown): string {
   if (v === null || v === undefined) return '∅'
   if (typeof v === 'object') return JSON.stringify(v)
@@ -49,6 +56,22 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [showRaw, setShowRaw] = useState(false)
   const { override: source, setOverride: setSource } = useReadSourceOverride('sample_details')
+  const [tab, setTab] = useState<'overview' | 'log' | 'parity'>('overview')
+  const [logData, setLogData] = useState<SampleRegistryLog | null>(null)
+  const [logLoading, setLogLoading] = useState(false)
+  const [logError, setLogError] = useState<string | null>(null)
+  const [expandedTrajectory, setExpandedTrajectory] = useState<Set<number>>(new Set())
+  const [parityData, setParityData] = useState<SampleParityResult | null>(null)
+  const [parityLoading, setParityLoading] = useState(false)
+  const [parityError, setParityError] = useState<string | null>(null)
+  const [showEqual, setShowEqual] = useState(false)
+  // The sheet never remounts across sample switches (SampleDetails mounts it
+  // unconditionally, no key prop), so in-flight log/parity fetches must be
+  // able to tell "this response is for a sample we've since navigated away
+  // from" — a plain closure over `sampleId` can't see that; a ref kept in
+  // sync every render can.
+  const sampleIdRef = useRef(sampleId)
+  sampleIdRef.current = sampleId
 
   async function load() {
     setLoading(true); setError(null)
@@ -62,9 +85,66 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
     catch (e) { setError(e instanceof Error ? e.message : 'failed') }
     finally { setLoading(false) }
   }
-  useEffect(() => { if (open && sampleId) load() }, [open, sampleId])
+  async function loadLog() {
+    setLogLoading(true); setLogError(null)
+    try {
+      const result = await getSampleRegistryLog(sampleId)
+      // Drop a response that arrived after the panel moved on to another
+      // sample — applying it would render the old sample's log under the
+      // new sample's header.
+      if (result.sample_id === sampleIdRef.current) setLogData(result)
+    }
+    catch (e) {
+      if (sampleId === sampleIdRef.current) setLogError(e instanceof Error ? e.message : 'failed')
+    }
+    // Guarded too: an abandoned request settling here must not clear the
+    // spinner out from under a genuinely in-flight fetch for the sample the
+    // panel has since switched to.
+    finally { if (sampleId === sampleIdRef.current) setLogLoading(false) }
+  }
+  async function runParity() {
+    setParityLoading(true); setParityError(null)
+    try {
+      const result = await getSampleRegistryParity(sampleId)
+      if (result.sample_id === sampleIdRef.current) setParityData(result)
+    }
+    catch (e) {
+      if (sampleId === sampleIdRef.current) {
+        // A failed re-run must never leave the previous scan's verdict on
+        // screen looking current — clear it so the error state (below) is
+        // what renders, not a stale ✔ PASS.
+        setParityError(e instanceof Error ? e.message : 'failed')
+        setParityData(null)
+      }
+    }
+    finally { if (sampleId === sampleIdRef.current) setParityLoading(false) }
+  }
+  function selectTab(t: 'overview' | 'log' | 'parity') {
+    setTab(t)
+    if (t === 'log' && !logData && !logLoading) loadLog()
+  }
+  function toggleTrajectory(i: number) {
+    setExpandedTrajectory(prev => {
+      const next = new Set(prev)
+      if (next.has(i)) next.delete(i); else next.add(i)
+      return next
+    })
+  }
+  useEffect(() => {
+    if (open && sampleId) load()
+    setTab('overview')
+    setLogData(null)
+    setLogError(null)
+    setLogLoading(false)
+    setExpandedTrajectory(new Set())
+    setParityData(null)
+    setParityError(null)
+    setParityLoading(false)
+  }, [open, sampleId])
 
   const line = 'font-mono text-[12px] leading-relaxed whitespace-pre-wrap'
+  const parityBtn = 'px-2 py-1 text-[10px] font-mono rounded border border-zinc-800 text-amber-400 '
+    + 'hover:bg-amber-600/20 hover:text-amber-300 transition-colors disabled:opacity-30'
 
   return (
     <Sheet open={open} onOpenChange={v => !v && onClose()}>
@@ -96,9 +176,11 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
                 className="text-amber-600/70 hover:text-amber-400 transition-colors disabled:opacity-30">
                 <RotateCw size={12} />
               </button>
-              <button onClick={load} disabled={loading}
+              <button
+                onClick={() => { if (tab === 'overview') load(); else if (tab === 'log') loadLog() }}
+                disabled={tab === 'parity' || (tab === 'overview' ? loading : logLoading)}
                 className="text-zinc-600 hover:text-zinc-300 transition-colors disabled:opacity-30">
-                <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+                <RefreshCw size={12} className={(tab === 'overview' ? loading : tab === 'log' && logLoading) ? 'animate-spin' : ''} />
               </button>
               <button onClick={onClose} className="text-zinc-600 hover:text-zinc-300 transition-colors">
                 <X size={13} />
@@ -107,6 +189,16 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
           </div>
 
           <div className="bg-[#0d0d0d] px-3 py-3 flex-1 min-h-0 flex flex-col overflow-hidden">
+            <div className="flex items-center gap-0.5 rounded border border-zinc-800 p-0.5 w-fit mb-2 shrink-0">
+              {(['overview', 'log', 'parity'] as const).map(t => (
+                <button key={t} onClick={() => selectTab(t)}
+                  className={cn('px-1.5 py-0.5 text-[10px] font-mono rounded transition-colors',
+                    tab === t ? 'bg-emerald-600/30 text-emerald-300' : 'text-zinc-600 hover:text-zinc-300')}>
+                  {t}
+                </button>
+              ))}
+            </div>
+
             {loading && !data && (
               <div className="flex items-center gap-2 py-8 justify-center">
                 <Spinner className="size-3" />
@@ -121,7 +213,7 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
               </div>
             )}
 
-            {data && data.load.exists && (
+            {tab === 'overview' && data && data.load.exists && (
               <div className="flex-1 min-h-0 flex gap-3">
                 {/* LEFT column: analysis line items (SENAITE vs shadow vs canonical) */}
                 <div className="flex-[3] min-w-0 h-full overflow-y-auto pr-2 border-r border-zinc-900/80 space-y-1.5">
@@ -200,6 +292,48 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
                   {data.transitions && data.transitions.rows.length === 0 && !data.transitions.error && (
                     <div className="font-mono text-[11px] text-zinc-600">no transitions logged yet</div>
                   )}
+
+                  {/* Side-by-side engine block (Task 8): native trajectory position vs
+                      the SENAITE mirror, plus the latest engine attempt (if any). */}
+                  <div className="font-mono text-[11px] text-zinc-700 pt-2 pb-1 flex items-center gap-2">
+                    <span>{'─'.repeat(3)} side-by-side {'─'.repeat(21)}</span>
+                    {data.shadow?.in_sync === true && (
+                      <span className="text-emerald-400">✔ in sync</span>
+                    )}
+                    {data.shadow?.in_sync === false && (
+                      <span className="text-amber-400">⚠ desync</span>
+                    )}
+                    {data.shadow?.in_sync === null && !data.shadow?.error && (
+                      <span className="text-zinc-600">not seeded</span>
+                    )}
+                  </div>
+                  {data.shadow?.error && (
+                    <div className={cn(line, 'text-red-400')}>shadow_error: {data.shadow.error}</div>
+                  )}
+                  {data.shadow && !data.shadow.error && (
+                    <div className={cn(line, 'text-zinc-400')}>
+                      {`native=${data.shadow.native_status ?? '∅'}  current=${data.shadow.current_status ?? '∅'}`}
+                    </div>
+                  )}
+                  {data.shadow?.latest && (
+                    <div className="font-mono text-[11px] text-zinc-500 leading-relaxed">
+                      <span className="text-zinc-300">{data.shadow.latest.verb ?? '—'}</span>{'  '}
+                      <span className="text-zinc-600">{'→'} {data.shadow.latest.outcome}</span>{'  '}
+                      <span className="text-zinc-700">·</span>{'  '}
+                      <span className="text-zinc-600">
+                        {new Date(data.shadow.latest.evaluated_at).toLocaleTimeString()}
+                      </span>
+                    </div>
+                  )}
+                  {data.shadow?.latest && data.shadow.latest.unmet.length > 0 && (
+                    <div className="space-y-0.5 pl-3">
+                      {data.shadow.latest.unmet.map((u, i) => (
+                        <div key={i} className="font-mono text-[11px] text-zinc-600 leading-relaxed">
+                          {u.kind}: {u.detail ?? '∅'}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* RIGHT column: basic-info status block + field diff (unchanged) */}
@@ -273,6 +407,196 @@ export function SampleRegistryDebug({ open, onClose, sampleId }: Props) {
                     </pre>
                   )}
                 </div>
+              </div>
+            )}
+
+            {tab === 'log' && (
+              <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                {logLoading && !logData && (
+                  <div className="flex items-center gap-2 py-8 justify-center">
+                    <Spinner className="size-3" />
+                    <span className="font-mono text-[11px] text-zinc-600">loading log for {sampleId}...</span>
+                  </div>
+                )}
+                {logError && <div className="font-mono text-[11px] text-red-400 py-2">error: {logError}</div>}
+
+                {logData && (
+                  <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-2">
+                    {/* full transition history */}
+                    <div>
+                      <div className="font-mono text-[11px] text-zinc-700 pb-1 flex items-center gap-2">
+                        <span>{'─'.repeat(3)} transitions (all) {'─'.repeat(30)}</span>
+                        {logData.transitions.log_in_sync === true && (
+                          <span className="text-emerald-400">✔ log matches status</span>
+                        )}
+                        {logData.transitions.log_in_sync === false && (
+                          <span className="text-amber-400">
+                            {`⚠ log behind: latest '${logData.transitions.latest_to_status}' ≠ status '${logData.transitions.current_status}'`}
+                          </span>
+                        )}
+                      </div>
+                      {logData.transitions.error && (
+                        <div className={cn(line, 'text-red-400')}>transitions_error: {logData.transitions.error}</div>
+                      )}
+                      {logData.transitions.rows.length > 0 && (
+                        <div className="space-y-0.5">
+                          {logData.transitions.rows.map((t, i) => (
+                            <div key={i} className="font-mono text-[11px] text-zinc-500 leading-relaxed">
+                              <span className="text-zinc-300">{t.verb ?? '—'}</span>{'  '}
+                              <span className="text-zinc-600">{t.from_status ?? '∅'} → {t.to_status}</span>{'  '}
+                              <span className="text-zinc-700">·</span>{'  '}
+                              <span className={sourceColor[t.source] ?? 'text-zinc-500'}>{t.source}</span>{'  '}
+                              <span className="text-zinc-700">·</span>{'  '}
+                              <span className="text-zinc-600">{new Date(t.occurred_at).toLocaleString()}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {logData.transitions.rows.length === 0 && !logData.transitions.error && (
+                        <div className="font-mono text-[11px] text-zinc-600">no transitions logged yet</div>
+                      )}
+                    </div>
+
+                    {/* shadow trajectory */}
+                    <div>
+                      <div className="font-mono text-[11px] text-zinc-700 pb-1">{'─'.repeat(3)} shadow trajectory {'─'.repeat(25)}</div>
+                      {logData.trajectory.error && (
+                        <div className={cn(line, 'text-red-400')}>trajectory_error: {logData.trajectory.error}</div>
+                      )}
+                      {logData.trajectory.rows.length > 0 && (
+                        <div className="space-y-0.5">
+                          {logData.trajectory.rows.map((r, i) => {
+                            const isExpanded = expandedTrajectory.has(i)
+                            const outcomeColor = r.outcome === 'advanced' ? 'text-emerald-400'
+                              : r.outcome === 'requirements_unmet' ? 'text-amber-400' : 'text-zinc-500'
+                            return (
+                              <div key={i} className="font-mono text-[11px] text-zinc-500 leading-relaxed">
+                                <button onClick={() => toggleTrajectory(i)} className="text-zinc-600 hover:text-zinc-300 mr-1">
+                                  {isExpanded ? '▾' : '▸'}
+                                </button>
+                                {`${r.trigger} · ${r.verb ?? '—'} · ${r.from_status ?? '∅'} → ${r.to_status ?? '∅'} · `}
+                                <span className={outcomeColor}>{r.outcome}</span>
+                                {` · reqs=${String(r.requirements_met)}`}{'  '}
+                                <span className="text-zinc-700">·</span>{'  '}
+                                <span className="text-zinc-600">{new Date(r.evaluated_at).toLocaleString()}</span>
+                                {isExpanded && (
+                                  <div className="pl-4 space-y-0.5">
+                                    {r.outcomes.map((o, j) => (
+                                      <div key={j} className="font-mono text-[11px] text-zinc-600 leading-relaxed">
+                                        <span className={o.met ? 'text-emerald-400' : 'text-amber-400'}>{o.met ? '✔' : '✖'}</span>{' '}
+                                        {o.kind}: {o.value ?? '∅'} {o.detail ?? ''}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                      {logData.trajectory.rows.length === 0 && !logData.trajectory.error && (
+                        <div className="font-mono text-[11px] text-zinc-600">no trajectory evaluations yet</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {tab === 'parity' && (
+              <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                {!parityData && !parityLoading && (
+                  <div className="space-y-2 py-2 shrink-0">
+                    <div className="font-mono text-[11px] text-zinc-500 leading-relaxed">
+                      compares the full mk1 vs senaite read-path payloads via the parity harness (16 known-expected rules)
+                    </div>
+                    <div className="font-mono text-[11px] text-zinc-600 leading-relaxed">
+                      hits live SENAITE for this one sample · takes a few seconds
+                    </div>
+                    {parityError && <div className={cn(line, 'text-red-400')}>{parityError}</div>}
+                    <button onClick={runParity} className={parityBtn}>run parity scan</button>
+                  </div>
+                )}
+
+                {parityLoading && !parityData && (
+                  <div className="flex items-center gap-2 py-8 justify-center">
+                    <Spinner className="size-3" />
+                    <span className="font-mono text-[11px] text-zinc-600">scanning {sampleId}...</span>
+                  </div>
+                )}
+
+                {parityData?.error && (
+                  <div className="space-y-2 shrink-0">
+                    <div className={cn(line, 'text-red-400')}>{parityData.error}</div>
+                    <button onClick={runParity} disabled={parityLoading} className={parityBtn}>re-run</button>
+                  </div>
+                )}
+
+                {parityData && !parityData.error && parityData.summary && (
+                  <div className="flex-1 min-h-0 overflow-y-auto space-y-1.5 pr-2">
+                    <div className={cn(line, 'text-zinc-400')}>
+                      {`total=${parityData.summary.total} equal=${parityData.summary.equal} `
+                        + `known_expected=${parityData.summary.known_expected} real=${parityData.summary.real}`}
+                      {'  '}
+                      {parityData.verdict === true && (
+                        <span className="text-emerald-400">✔ PASS — read paths agree</span>
+                      )}
+                      {parityData.verdict === false && (
+                        <span className="text-red-400">⚠ REAL DIFFS</span>
+                      )}
+                    </div>
+
+                    {parityData.fields.filter(f => f.is_real).map(f => (
+                      <div key={f.path} className="font-mono text-[12px] leading-relaxed flex gap-1.5 text-red-400">
+                        <span className="shrink-0 text-red-400">⚠</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-zinc-300">{f.path}</div>
+                          <div className="text-zinc-400 whitespace-pre-wrap break-all">
+                            <span className="text-zinc-700">reg </span>{val(f.mk1_value)}
+                          </div>
+                          <div className="text-zinc-600 whitespace-pre-wrap break-all">
+                            <span className="text-zinc-700">sen </span>{val(f.senaite_value)}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+
+                    {parityData.fields.filter(f => !f.is_real && f.classification === 'known_expected').map(f => (
+                      <div key={f.path} className="font-mono text-[12px] leading-relaxed flex gap-1.5 text-zinc-500">
+                        <span className="shrink-0 text-zinc-500">○</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-zinc-500">
+                            {f.path}{'  '}
+                            <span className="border border-zinc-800 rounded px-1 text-zinc-500">{f.rule_id}</span>
+                          </div>
+                          <div className="text-zinc-700 whitespace-pre-wrap break-all">
+                            {val(f.mk1_value)} / {val(f.senaite_value)}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+
+                    {parityData.fields.filter(f => !f.is_real && f.classification !== 'known_expected').length > 0 && (
+                      <div>
+                        <button onClick={() => setShowEqual(v => !v)}
+                          className="font-mono text-[11px] text-zinc-600 hover:text-zinc-400 pt-1">
+                          {showEqual ? '▾' : '▸'} {parityData.summary.equal} equal fields
+                        </button>
+                        {showEqual && (
+                          <div className="space-y-0.5 pl-3">
+                            {parityData.fields.filter(f => !f.is_real && f.classification !== 'known_expected').map(f => (
+                              <div key={f.path} className="font-mono text-[11px] text-zinc-600">✔ {f.path}</div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <button onClick={runParity} disabled={parityLoading} className={cn(parityBtn, 'mt-1')}>
+                      re-run
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>

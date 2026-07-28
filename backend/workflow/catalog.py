@@ -7,7 +7,10 @@ from models import (LimsAnalysis, LimsSample, LimsWorkflowState,
                     LimsWorkflowTransition)
 
 REQUIREMENT_KINDS = frozenset({"all_analyses_in_state", "field_present",
-                               "role_at_least", "manual"})
+                               "role_at_least", "manual",
+                               "coa_published", "distinct_actor"})
+# Kinds whose entries carry no value (attested / self-contained).
+NO_VALUE_KINDS = frozenset({"manual", "coa_published"})
 
 
 def validate_requirements(entries) -> list:
@@ -20,7 +23,7 @@ def validate_requirements(entries) -> list:
     for e in entries:
         if not isinstance(e, dict) or e.get("kind") not in REQUIREMENT_KINDS:
             raise ValueError(f"unknown requirement kind: {e!r}")
-        if e["kind"] != "manual" and not e.get("value"):
+        if e["kind"] not in NO_VALUE_KINDS and not e.get("value"):
             raise ValueError(f"requirement kind {e['kind']} needs a value")
         cleaned.append({"kind": e["kind"], "value": e.get("value"),
                         "note": e.get("note")})

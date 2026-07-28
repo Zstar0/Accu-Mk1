@@ -22,6 +22,7 @@ const base: api.SampleRegistryDebug = {
   raw: { registry: { sample_id: 'P-1' }, senaite: { uid: 'U1' } },
   analyses: null,
   transitions: null,
+  shadow: null,
 }
 
 const analysesBase: api.AnalysesSync = {
@@ -53,6 +54,17 @@ const transitionsBase: api.SampleTransitionsTail = {
   latest_to_status: 'sample_received',
   log_in_sync: true,
   current_status: 'sample_received',
+}
+
+const shadowBase: api.SampleShadowBlock = {
+  native_status: 'verified',
+  current_status: 'published',
+  in_sync: false,
+  latest: {
+    verb: 'publish', outcome: 'requirements_unmet', evaluated_at: '2026-07-26T00:00:00',
+    unmet: [{ kind: 'coa_published', value: null, detail: 'publish not attested' }],
+  },
+  error: null,
 }
 
 beforeEach(() => vi.restoreAllMocks())
@@ -194,5 +206,156 @@ describe('SampleRegistryDebug', () => {
       expect(screen.getByText(/log behind: latest 'sample_received' ≠ status 'verified'/)).toBeInTheDocument()
     )
     expect(screen.queryByText(/log matches status/i)).not.toBeInTheDocument()
+  })
+
+  it('renders the side-by-side shadow block', async () => {
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue({ ...base, shadow: shadowBase })
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(screen.getByText(/side-by-side/i)).toBeInTheDocument())
+    expect(screen.getByText(/requirements_unmet/)).toBeInTheDocument()
+    expect(screen.getByText(/⚠ desync/)).toBeInTheDocument()
+    expect(screen.getByText(/publish not attested/)).toBeInTheDocument()
+  })
+
+  it('shows "not seeded" when the shadow block has never been seeded', async () => {
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue({
+      ...base,
+      shadow: { native_status: null, current_status: 'sample_due', in_sync: null, latest: null, error: null },
+    })
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(screen.getByText(/not seeded/i)).toBeInTheDocument())
+  })
+
+  it('shows the shadow error instead of "not seeded" when the shadow query itself errored', async () => {
+    // Regression pin (finding #5): in_sync is null both when a sample was
+    // never seeded AND when the shadow lookup errored — the "not seeded"
+    // badge must not render in the error case, since that's a contradictory
+    // diagnostic (implies healthy-but-unseeded when it's actually broken).
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue({
+      ...base,
+      shadow: { native_status: null, current_status: 'sample_due', in_sync: null, latest: null, error: 'db down' },
+    })
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(screen.getByText(/shadow_error: db down/)).toBeInTheDocument())
+    expect(screen.queryByText(/not seeded/i)).not.toBeInTheDocument()
+  })
+})
+
+const logBase: api.SampleRegistryLog = {
+  sample_id: 'P-1',
+  exists: true,
+  transitions: {
+    rows: [
+      { verb: 'publish', from_status: 'verified', to_status: 'published',
+        source: 'senaite', occurred_at: '2026-07-11T09:00:00' },
+      { verb: 'receive', from_status: 'sample_due', to_status: 'sample_received',
+        source: 'mk1', occurred_at: '2026-07-10T12:00:00' },
+    ],
+    error: null, latest_to_status: 'published', log_in_sync: true,
+    current_status: 'published',
+  },
+  trajectory: {
+    rows: [
+      { evaluated_at: '2026-07-11T09:00:01', trigger: 'publish', verb: 'publish',
+        from_status: 'verified', to_status: 'published', outcome: 'advanced',
+        requirements_met: true,
+        outcomes: [{ kind: 'coa_published', value: null, met: true, detail: null }] },
+    ],
+    error: null,
+  },
+}
+
+describe('log tab', () => {
+  it('lazy-fetches /log on first activation only', async () => {
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue(base)
+    const logSpy = vi.spyOn(api, 'getSampleRegistryLog').mockResolvedValue(logBase)
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(api.getSampleRegistryDebug).toHaveBeenCalled())
+    expect(logSpy).not.toHaveBeenCalled()          // overview default: no log fetch
+    screen.getByText('log').click()
+    await waitFor(() => expect(logSpy).toHaveBeenCalledTimes(1))
+    screen.getByText('overview').click()
+    screen.getByText('log').click()
+    expect(logSpy).toHaveBeenCalledTimes(1)        // cached per open
+  })
+
+  it('renders full transition history with source badges and trajectory rows', async () => {
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue(base)
+    vi.spyOn(api, 'getSampleRegistryLog').mockResolvedValue(logBase)
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(api.getSampleRegistryDebug).toHaveBeenCalled())
+    screen.getByText('log').click()
+    await waitFor(() => screen.getByText('publish'))
+    expect(screen.getByText('senaite')).toBeTruthy()       // source badge
+    expect(screen.getByText(/advanced/)).toBeTruthy()      // trajectory outcome
+  })
+})
+
+const parityBase: api.SampleParityResult = {
+  sample_id: 'P-1',
+  fields: [
+    { path: 'analyses[PUR_KPV].result_unit', classification: 'differing',
+      rule_id: null, mk1_value: 'mg/mL', senaite_value: 'text', is_real: true },
+    { path: 'cached_at', classification: 'known_expected',
+      rule_id: 'cached_at_timestamps', mk1_value: 'a', senaite_value: 'b', is_real: false },
+    { path: 'client_name', classification: 'equal', rule_id: null,
+      mk1_value: null, senaite_value: null, is_real: false },
+  ],
+  summary: { total: 3, equal: 1, known_expected: 1, real: 1 },
+  verdict: false,
+  error: null,
+}
+
+describe('parity tab', () => {
+  it('never fetches on tab open; only the run button fires', async () => {
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue(base)
+    const paritySpy = vi.spyOn(api, 'getSampleRegistryParity').mockResolvedValue(parityBase)
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(api.getSampleRegistryDebug).toHaveBeenCalled())
+    screen.getByText('parity').click()
+    expect(paritySpy).not.toHaveBeenCalled()             // THE invariant
+    // Tab-switch commit isn't act()-wrapped for a raw .click(); await the
+    // pane before reading it, same discipline the log-tab tests use above.
+    await waitFor(() => screen.getByText(/run parity scan/i))
+    screen.getByText(/run parity scan/i).click()
+    await waitFor(() => expect(paritySpy).toHaveBeenCalledTimes(1))
+    await waitFor(() => screen.getByText(/REAL DIFFS/i))
+    expect(screen.getByText(/result_unit/)).toBeTruthy()          // real bucket
+    expect(screen.getByText('cached_at_timestamps')).toBeTruthy() // rule tag
+  })
+
+  it('renders error payload as an error line', async () => {
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue(base)
+    vi.spyOn(api, 'getSampleRegistryParity').mockResolvedValue({
+      sample_id: 'P-1', fields: [], summary: null, verdict: null,
+      error: 'SENAITE unreachable',
+    })
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(api.getSampleRegistryDebug).toHaveBeenCalled())
+    screen.getByText('parity').click()
+    await waitFor(() => screen.getByText(/run parity scan/i))
+    screen.getByText(/run parity scan/i).click()
+    await waitFor(() => screen.getByText(/SENAITE unreachable/))
+  })
+
+  it('surfaces a failed re-run as an error and clears the stale verdict', async () => {
+    // Regression pin: runParity's catch used to leave parityData intact, so
+    // a re-run that throws (504 through the double nginx proxy, an expired
+    // session, etc.) re-rendered the PREVIOUS scan's verdict unchanged —
+    // a failed re-run must never look like a stale ✔ PASS.
+    vi.spyOn(api, 'getSampleRegistryDebug').mockResolvedValue(base)
+    const paritySpy = vi.spyOn(api, 'getSampleRegistryParity')
+      .mockResolvedValueOnce({ ...parityBase, verdict: true })
+    render(<SampleRegistryDebug open onClose={() => {}} sampleId="P-1" />)
+    await waitFor(() => expect(api.getSampleRegistryDebug).toHaveBeenCalled())
+    screen.getByText('parity').click()
+    await waitFor(() => screen.getByText(/run parity scan/i))
+    screen.getByText(/run parity scan/i).click()
+    await waitFor(() => screen.getByText(/PASS/i))
+
+    paritySpy.mockRejectedValueOnce(new Error('gateway timeout'))
+    screen.getByText('re-run').click()
+    await waitFor(() => screen.getByText(/gateway timeout/i))
+    expect(screen.queryByText(/PASS/i)).not.toBeInTheDocument()
   })
 })
