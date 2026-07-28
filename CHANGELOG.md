@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.7.1 — 2026-07-28
+
+### Fixed
+
+- **Registry-inspect timestamps render true local time.** Transition and
+  shadow-trajectory timestamps are naive-UTC in the DB but were serialized
+  without an offset, so the panel displayed raw UTC digits as if local.
+  They now carry an explicit `+00:00` (`_iso_utc`), covering the log tab,
+  the overview transitions tail, and the side-by-side block.
+- **`log matches status` glyph no longer trips on IS order-progress vocab.**
+  A newest `worksheet_assigned → analyzing` row (IS-speak, deliberately
+  whitelisted OUT of `lims_samples.status` by `heal_sample_status`) made
+  the sync check cry wolf on every worksheet-assigned sample (BW-0066
+  class). The check now compares against the newest row whose `to_status`
+  is real sample review-state vocabulary; IS-vocab rows stay visible in
+  the list.
+
 ## v1.7.0 — 2026-07-28
 
 ### Added

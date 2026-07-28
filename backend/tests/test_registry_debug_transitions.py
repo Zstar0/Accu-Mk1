@@ -122,7 +122,8 @@ def test_row_fields_serialized(db, seed_parent):
     assert row["from_status"] == "s0"
     assert row["to_status"] == "s1"
     assert row["source"] == "mk1"
-    assert row["occurred_at"] == datetime(2026, 1, 1, 12, 0, 0).isoformat()
+    # v1.7.1: naive-UTC timestamps serialize with an explicit +00:00 offset
+    assert row["occurred_at"] == "2026-01-01T12:00:00+00:00"
 
 
 def test_id_desc_tiebreaks_equal_occurred_at(db, seed_parent):
@@ -173,13 +174,14 @@ def test_transitions_query_exception_returns_error(db, seed_parent):
 
 
 def test_log_in_sync_true_when_newest_row_matches_status(db, seed_parent):
-    """`seed_parent.status` is "received" (see the `seed_parent` fixture).
-    Seed two older rows, then add the newest one with `to_status` matching
-    the registry's current status."""
+    """Seed two older rows (fake s1/s2 vocab — invisible to the v1.7.1
+    whitelist-gated sync check), then add the newest one with a REAL
+    review-state `to_status` matching the registry's current status."""
+    seed_parent.status = "verified"
     _seed_transitions(db, seed_parent, 2)  # occurred_at t=0,1min; to_status s1,s2
     newest = LimsSampleTransition(
         lims_sample_pk=seed_parent.id, verb="verify", from_status="s2",
-        to_status="received", source="mk1",
+        to_status="verified", source="mk1",
         occurred_at=datetime(2026, 1, 1, 12, 5, 0),
     )
     db.add(newest)
@@ -188,20 +190,28 @@ def test_log_in_sync_true_when_newest_row_matches_status(db, seed_parent):
     out = main._build_registry_debug_response(db, TEST_SAMPLE_ID)
     tx = out["transitions"]
     assert tx["error"] is None
-    assert tx["latest_to_status"] == "received"
+    assert tx["latest_to_status"] == "verified"
     assert tx["log_in_sync"] is True
-    assert tx["current_status"] == "received"
+    assert tx["current_status"] == "verified"
 
 
 def test_log_in_sync_false_when_newest_row_differs_from_status(db, seed_parent):
-    """Newest row's to_status ("s2") is deliberately left different from
-    `seed_parent.status` ("received")."""
+    """Newest REAL review-state row ("verified") deliberately differs from
+    `seed_parent.status` ("received"). The older fake-vocab s1/s2 rows are
+    invisible to the v1.7.1 whitelist-gated check."""
     _seed_transitions(db, seed_parent, 2)
+    newest = LimsSampleTransition(
+        lims_sample_pk=seed_parent.id, verb="verify", from_status="s2",
+        to_status="verified", source="mk1",
+        occurred_at=datetime(2026, 1, 1, 12, 5, 0),
+    )
+    db.add(newest)
+    db.commit()
 
     out = main._build_registry_debug_response(db, TEST_SAMPLE_ID)
     tx = out["transitions"]
     assert tx["error"] is None
-    assert tx["latest_to_status"] == "s2"
+    assert tx["latest_to_status"] == "verified"
     assert tx["log_in_sync"] is False
     assert tx["current_status"] == "received"
 
