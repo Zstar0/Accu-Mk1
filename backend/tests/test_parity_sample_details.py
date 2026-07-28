@@ -525,11 +525,14 @@ def test_method_instrument_uid_namespace_mismatch_known_expected_when_populated(
     assert _one(diffs, "analyses[BPC157_ID].instrument").classification == "equal"
 
 
-def test_method_title_mismatch_when_populated_stays_real():
-    """A genuine title mismatch between two POPULATED method names is a
-    real data-integrity concern -- not the blank-after-retest case, and not
-    an id-space mismatch (titles are plain display strings). Must not be
-    swept away."""
+def test_method_title_mismatch_when_populated_accepted_by_decision():
+    """REVERSAL of the original keep-real posture, by Handler decision
+    (2026-07-25 accepted-as-finding; 2026-07-28 gate-green ruling): a
+    populated-vs-populated M/I title conflict classifies known_expected
+    under `mi_populated_conflict_accepted`. The underlying values remain a
+    real ISO-traceability question — the deferred worklist is recorded in
+    the vault; this rule (and this test) get removed when the catalog-driven
+    M/I repair lands."""
     mk1_analysis = {**_mk1_payload()["analyses"][0], "method": "HPLC Method A"}
     senaite_analysis = {**_senaite_payload()["analyses"][0], "method": "GC Method B"}
     diffs = compare_sample(
@@ -537,9 +540,9 @@ def test_method_title_mismatch_when_populated_stays_real():
         _senaite_payload(analyses=[senaite_analysis]),
     )
     d = _one(diffs, "analyses[BPC157_ID].method")
-    assert d.classification == "differing"
-    assert d.is_real
-    assert d.rule_id is None
+    assert d.classification == "known_expected"
+    assert not d.is_real
+    assert d.rule_id == "mi_populated_conflict_accepted"
 
 
 def test_remarks_native_both_never_fires_real_diff_stays_real():
@@ -902,20 +905,26 @@ def test_mi_senaite_manual_placeholder_is_known_expected():
     assert d.rule_id == "mi_senaite_placeholder"
 
 
-def test_mi_real_competing_senaite_method_stays_a_real_diff():
-    """SENAITE naming an actual method that DISAGREES with mk1 is a genuine
-    data-integrity question about which method ran — never suppressed."""
+def test_mi_real_competing_senaite_method_accepted_by_decision():
+    """SENAITE naming an actual method that DISAGREES with mk1 remains a
+    genuine data-integrity question about which method ran — the 2026-07-25
+    triage deliberately kept it real. REVERSED by Handler ruling 2026-07-28
+    ("mark green — nothing reads these mk1-side yet"): classifies under
+    `mi_populated_conflict_accepted` until the catalog-driven repair lands,
+    at which point this rule and test revert to keep-real."""
     d = _mi("Method 7", "MET-HPLC-ID-1290A")
-    assert d.classification == "differing"
-    assert d.rule_id is None
+    assert d.classification == "known_expected"
+    assert d.rule_id == "mi_populated_conflict_accepted"
 
 
-def test_mi_two_real_instruments_in_conflict_stays_a_real_diff():
+def test_mi_two_real_instruments_in_conflict_accepted_by_decision():
     """Both sides name a REAL instrument and they disagree — one of them is
-    wrong about which machine ran the sample."""
+    wrong about which machine ran the sample. Same Handler ruling as the
+    method case above: gated `mi_populated_conflict_accepted`, deferred
+    worklist in the vault, revert when the M/I repair lands."""
     d = _mi("HPLC 1290b", "HPLC 1290a", sub="instrument")
-    assert d.classification == "differing"
-    assert d.rule_id is None
+    assert d.classification == "known_expected"
+    assert d.rule_id == "mi_populated_conflict_accepted"
 
 
 def test_mi_blank_mk1_still_takes_the_retest_rule():
