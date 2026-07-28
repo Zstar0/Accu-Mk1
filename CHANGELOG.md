@@ -1,9 +1,6 @@
 # Changelog
 
-## Unreleased
-
-**Runtime-affecting.** The three parity-rule commits before this one were
-harness-only; this one changes a production write path and needs a deploy.
+## v1.7.2 — 2026-07-28
 
 ### Fixed
 
@@ -24,6 +21,12 @@ harness-only; this one changes a production write path and needs a deploy.
   whatever the seed row says. A resolved target whose unit is NULL still wins
   over the caller: carrying the source's unit across a service change is the
   defect itself.
+- **Parity harness: three known-expected rules + uid-first attachment
+  pairing** (harness-only, from the 2026-07-25 triage): `attachment_type_
+  native_only`, `mi_senaite_placeholder` (allowlist `{'Manual'}` only),
+  `canonical_verified_vs_senaite_published` (gated on the mk1 sample
+  already being published); attachments now pair on SENAITE uid before
+  filename so frozen same-filename snapshots can no longer cross-pair.
 ## v1.7.1 — 2026-07-28
 
 ### Fixed
