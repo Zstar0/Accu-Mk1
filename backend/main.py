@@ -17974,19 +17974,27 @@ def _build_analysis_debug_rows(db: Session, row: LimsSample, sample_id: str) -> 
     return result
 
 
+def _iso_utc(dt: datetime) -> str:
+    """Naive DB timestamps here are UTC by definition (`default=datetime.
+    utcnow` columns); serialize with an explicit offset so the FE's
+    `new Date()` renders true local time instead of raw UTC digits (v1.7.1)."""
+    return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).isoformat()
+
+
 def _build_sample_transitions(db: Session, row: LimsSample, limit: int | None = 5) -> dict:
-    """Registry-debug panel's recent-transitions tail (Task 8): the last 5
-    `lims_sample_transitions` rows for this parent, newest first. Pure DB
-    read, no SENAITE I/O — but still wrapped in its own try/except with its
-    own error surface (`transitions.error`), same independent-failure
-    posture as `_build_analysis_debug_rows`'s SENAITE fetch: a failure here
-    must not blank the rest of the payload, and must not be blanked by a
-    basic-info or analyses failure elsewhere.
+    """Registry-debug panel's transitions block (Task 8): newest-first
+    `lims_sample_transitions` rows for this parent — the overview's 5-row
+    tail by default. Pure DB read, no SENAITE I/O — but still wrapped in its
+    own try/except with its own error surface (`transitions.error`), same
+    independent-failure posture as `_build_analysis_debug_rows`'s SENAITE
+    fetch: a failure here must not blank the rest of the payload, and must
+    not be blanked by a basic-info or analyses failure elsewhere.
 
     `limit=None` (the /log endpoint's full-history request, 2026-07-27
     parity-convergence spec) returns every row instead of the overview's
     5-row tail; the overview call site keeps the default."""
     from models import LimsSampleTransition
+    from workflow.sample_log import SAMPLE_REVIEW_STATE_WHITELIST
 
     try:
         q = (
@@ -18005,18 +18013,25 @@ def _build_sample_transitions(db: Session, row: LimsSample, limit: int | None = 
         }
 
     # UAT fast-follow: sync check between the transition log and the
-    # registry's current status. `rows` is already newest-first
-    # (occurred_at DESC, id DESC), so the newest row is rows[0] — no extra
-    # query needed. None (not True/False) when there's no log yet, so the FE
-    # can distinguish "nothing logged" from "logged and in sync".
-    latest_to_status = rows[0].to_status if rows else None
-    log_in_sync = None if not rows else (latest_to_status == row.status)
+    # registry's current status. v1.7.1: compare against the newest row whose
+    # to_status is real sample review-state vocabulary — IS order-progress
+    # vocab ('analyzing' from worksheet_assigned) is deliberately whitelisted
+    # OUT of lims_samples.status by heal_sample_status, so those rows stay
+    # visible in the list but must not trip the glyph (BW-0066 class).
+    # `rows` is already newest-first (occurred_at DESC, id DESC). None (not
+    # True/False) when no review-state row exists in the fetched window, so
+    # the FE can distinguish "no verdict" from "logged and in sync".
+    latest_reviewed = next(
+        (r for r in rows if r.to_status in SAMPLE_REVIEW_STATE_WHITELIST), None)
+    latest_to_status = latest_reviewed.to_status if latest_reviewed else None
+    log_in_sync = (None if latest_reviewed is None
+                   else (latest_to_status == row.status))
 
     return {
         "rows": [
             {
                 "verb": r.verb, "from_status": r.from_status, "to_status": r.to_status,
-                "source": r.source, "occurred_at": r.occurred_at.isoformat(),
+                "source": r.source, "occurred_at": _iso_utc(r.occurred_at),
             }
             for r in rows
         ],
@@ -18044,7 +18059,7 @@ def _build_shadow_block(db: Session, row: LimsSample) -> dict:
                         else row.native_status == row.status),
             "latest": None if latest is None else {
                 "verb": latest.verb, "outcome": latest.outcome,
-                "evaluated_at": latest.evaluated_at.isoformat(),
+                "evaluated_at": _iso_utc(latest.evaluated_at),
                 "unmet": [o for o in (latest.outcomes or [])
                           if not o.get("met")],
             },
@@ -18220,7 +18235,7 @@ def _build_shadow_trajectory(db: Session, row: LimsSample) -> dict:
         return {
             "rows": [
                 {
-                    "evaluated_at": r.evaluated_at.isoformat(),
+                    "evaluated_at": _iso_utc(r.evaluated_at),
                     "trigger": r.trigger, "verb": r.verb,
                     "from_status": r.from_status, "to_status": r.to_status,
                     "outcome": r.outcome,

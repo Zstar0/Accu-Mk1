@@ -139,3 +139,64 @@ def test_overview_transitions_still_capped_at_5(client, db):
     db.commit()
     tail = main._build_sample_transitions(db, row)
     assert len(tail["rows"]) == 5
+
+
+# ── v1.7.1: UTC-offset serialization + whitelist-gated sync glyph ─────────
+
+
+def test_timestamps_carry_utc_offset(client, db):
+    """Naive-UTC DB timestamps must serialize with an explicit +00:00 so the
+    FE's `new Date()` renders true local time instead of raw UTC digits."""
+    row = _seed_sample(db, status="sample_received")
+    db.add(LimsSampleTransition(
+        lims_sample_pk=row.id, verb="receive", from_status="sample_due",
+        to_status="sample_received", source="mk1",
+        occurred_at=datetime(2026, 7, 27, 18, 39, 24)))
+    db.add(LimsWorkflowShadowEvaluation(
+        lims_sample_pk=row.id, evaluated_at=datetime(2026, 7, 28, 4, 19, 48),
+        trigger="seed", verb=None, from_status=None,
+        to_status="sample_received", outcome="seeded", requirements_met=None,
+        outcomes=[]))
+    db.commit()
+    out = client.get(f"/debug/sample-registry/{TEST_SAMPLE_ID}/log").json()
+    assert out["transitions"]["rows"][0]["occurred_at"].endswith("+00:00")
+    assert out["trajectory"]["rows"][0]["evaluated_at"].endswith("+00:00")
+    shadow = main._build_shadow_block(db, row)
+    assert shadow["latest"]["evaluated_at"].endswith("+00:00")
+
+
+def test_log_in_sync_ignores_is_vocab_rows(client, db):
+    """BW-0066 class: a newest `worksheet_assigned -> analyzing` row (IS
+    order-progress vocab, deliberately whitelisted OUT of lims_samples.status
+    by heal_sample_status) must not trip the log-vs-status glyph. The sync
+    check compares against the newest row whose to_status is real sample
+    review-state vocabulary; IS-vocab rows stay visible in the list."""
+    row = _seed_sample(db, status="sample_received")
+    db.add(LimsSampleTransition(
+        lims_sample_pk=row.id, verb="receive", from_status="sample_due",
+        to_status="sample_received", source="mk1",
+        occurred_at=datetime(2026, 7, 27, 18, 39, 24)))
+    db.add(LimsSampleTransition(
+        lims_sample_pk=row.id, verb="worksheet_assigned", from_status=None,
+        to_status="analyzing", source="senaite",
+        occurred_at=datetime(2026, 7, 27, 19, 26, 58)))
+    db.commit()
+    out = client.get(f"/debug/sample-registry/{TEST_SAMPLE_ID}/log").json()
+    tail = out["transitions"]
+    assert [r["to_status"] for r in tail["rows"]] == [
+        "analyzing", "sample_received"]           # row stays visible, newest first
+    assert tail["latest_to_status"] == "sample_received"
+    assert tail["log_in_sync"] is True            # was False before the gate
+
+
+def test_log_in_sync_none_when_no_review_state_rows(client, db):
+    """Only IS-vocab rows logged -> no verdict (None), not a false alarm."""
+    row = _seed_sample(db, status="sample_received")
+    db.add(LimsSampleTransition(
+        lims_sample_pk=row.id, verb="worksheet_assigned", from_status=None,
+        to_status="analyzing", source="senaite",
+        occurred_at=datetime(2026, 7, 27, 19, 26, 58)))
+    db.commit()
+    out = client.get(f"/debug/sample-registry/{TEST_SAMPLE_ID}/log").json()
+    assert out["transitions"]["latest_to_status"] is None
+    assert out["transitions"]["log_in_sync"] is None
