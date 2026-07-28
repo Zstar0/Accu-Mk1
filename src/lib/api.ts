@@ -5154,6 +5154,21 @@ export interface SampleTransitionsTail {
   current_status: string | null
 }
 
+// Task 8: registry-inspect side-by-side block — native trajectory position
+// vs the SENAITE mirror, plus the latest engine attempt (if any).
+export interface SampleShadowBlock {
+  native_status: string | null
+  current_status: string | null
+  in_sync: boolean | null
+  latest: {
+    verb: string | null
+    outcome: string
+    evaluated_at: string
+    unmet: Array<{ kind: string; value: string | null; detail: string | null }>
+  } | null
+  error: string | null
+}
+
 export interface SampleRegistryDebug {
   sample_id: string
   load: {
@@ -5175,6 +5190,7 @@ export interface SampleRegistryDebug {
   raw: { registry: Record<string, unknown> | null; senaite: Record<string, unknown> | null } | null
   analyses: AnalysesSync | null
   transitions: SampleTransitionsTail | null
+  shadow: SampleShadowBlock | null
 }
 
 export async function getSampleRegistryDebug(sampleId: string): Promise<SampleRegistryDebug> {
@@ -5186,6 +5202,55 @@ export async function refreshSampleRegistry(sampleId: string): Promise<SampleReg
     `/debug/sample-registry/${encodeURIComponent(sampleId)}/refresh`,
     { method: 'POST' },
   )
+}
+
+// 2026-07-27 parity-convergence spec: /log tab payload — full histories.
+export interface ShadowTrajectoryRow {
+  evaluated_at: string
+  trigger: string
+  verb: string | null
+  from_status: string | null
+  to_status: string | null
+  outcome: string
+  requirements_met: boolean | null
+  outcomes: Array<{ kind: string; value: string | null; met: boolean; detail: string | null }>
+}
+
+export interface SampleRegistryLog {
+  sample_id: string
+  exists: boolean
+  transitions: SampleTransitionsTail
+  trajectory: { rows: ShadowTrajectoryRow[]; error: string | null }
+}
+
+export async function getSampleRegistryLog(sampleId: string): Promise<SampleRegistryLog> {
+  return apiFetch<SampleRegistryLog>(
+    `/debug/sample-registry/${encodeURIComponent(sampleId)}/log`)
+}
+
+// 2026-07-27 parity-convergence spec: on-demand /parity scan. Classifications
+// are the harness's vocabulary — equal / known_expected / differing /
+// mk1_only / senaite_only; is_real mirrors FieldDiff.is_real.
+export interface SampleParityField {
+  path: string
+  classification: string
+  rule_id: string | null
+  mk1_value: unknown
+  senaite_value: unknown
+  is_real: boolean
+}
+
+export interface SampleParityResult {
+  sample_id: string
+  fields: SampleParityField[]
+  summary: { total: number; equal: number; known_expected: number; real: number } | null
+  verdict: boolean | null
+  error: string | null
+}
+
+export async function getSampleRegistryParity(sampleId: string): Promise<SampleParityResult> {
+  return apiFetch<SampleParityResult>(
+    `/debug/sample-registry/${encodeURIComponent(sampleId)}/parity`)
 }
 
 // ─── Sample Retest Info ──────────────────────────────────────────────────────

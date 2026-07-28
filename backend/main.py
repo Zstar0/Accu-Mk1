@@ -14140,6 +14140,54 @@ def _shadow_analyses_at_registration_bg(sample_id: str) -> None:
             db.close()
 
 
+def _arm_native_status_at_registration_bg(sample_id: str) -> None:
+    """Registration-time arming sibling of `_shadow_analyses_at_registration_bg`
+    (2026-07-27, P-0140 coverage-decay finding): a sample minted AFTER the
+    catalog seed run gets `native_status=NULL` forever unless something
+    arms it — the engine skips NULL by design, and nothing else in the
+    system ever sets the column for a brand-new row. Left unarmed, its
+    first `receive`/`publish` touchpoint later WOULD arm it (see the
+    `_record_sample_transition_bg` chokepoint), but a sample that's only
+    ever checked in via the SENAITE-side path (or never reaches a native
+    touchpoint before someone runs the divergence report) silently decays
+    burn-in coverage the whole time in between. Arms from the row's
+    CURRENT `status` at registration time (there is no prior state to
+    adopt — this is the sample's first tick of existence).
+
+    Deliberately a SEPARATE bg task from `_shadow_analyses_at_registration_bg`
+    rather than folded into it: that sibling's SENAITE `fetch_parent_analyses`
+    call can fail (SENAITE outage, unmapped keyword) and arming must not be
+    coupled to that outcome. Gated on `shadow_enabled()` — no-op with the
+    kill switch off. Never raises: own short-lived session, same hardening
+    pattern as its sibling bg tasks.
+    """
+    db = None
+    try:
+        from database import SessionLocal
+        from workflow.engine import arm_native_status, shadow_enabled
+        if not shadow_enabled():
+            return
+        db = SessionLocal()
+        row = db.execute(select(LimsSample).where(
+            LimsSample.sample_id == sample_id
+        )).scalar_one_or_none()
+        if row is not None and row.native_status is None:
+            arm_native_status(db, row, row.status, trigger="registration",
+                              actor_user_id=None)
+            db.commit()
+    except Exception as arm_err:  # noqa: BLE001
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        logger.warning("workflow.registration_arm_failed sample_id=%s err=%s",
+                       sample_id, arm_err)
+    finally:
+        if db is not None:
+            db.close()
+
+
 def _record_sample_transition_bg(**kwargs) -> None:
     """Best-effort native sample-transition log write (Task 3) on its own
     short-lived session — never holds the request `db` across the SENAITE
@@ -14182,7 +14230,51 @@ def _record_sample_transition_bg(**kwargs) -> None:
             if _row is not None and _row.date_received is None:
                 _row.date_received = datetime.utcnow()
                 wrote_received = True
-        if wrote_log or wrote_status or wrote_received:
+        # Side-by-side engine touchpoint (2026-07-26 spec §5): the SAME verb
+        # this hook just logged drives Mk1's own trajectory. Separately
+        # guarded — an engine error must not cost us the log write above.
+        wrote_engine = False
+        try:
+            from workflow.engine import (arm_native_status, evaluate_cascades,
+                                         execute_verb, shadow_enabled)
+            if shadow_enabled():
+                # Row lock (finding #2, 2026-07-27): this bg session can
+                # interleave with run_cascades_bg's own bg session on the
+                # same sample. Background context only — no user-facing
+                # latency impact.
+                _s = db.execute(select(LimsSample).where(
+                    LimsSample.sample_id == kwargs["sample_id"]
+                ).with_for_update()).scalar_one_or_none()
+                _verb = kwargs.get("verb")
+                if _s is not None and _verb in ("receive", "publish"):
+                    if _s.native_status is None:
+                        # Arm on first touch (2026-07-27, P-0140 coverage-
+                        # decay finding): a sample minted after the catalog
+                        # seed run never gets a native_status otherwise, so
+                        # the engine skips it silently forever. Adopt
+                        # `from_status` — the PRE-transition state both
+                        # call sites always pass — NOT `_s.status`: by the
+                        # time this hook runs, heal has already advanced
+                        # `_s.status` to the POST-transition state, and
+                        # arming from status would make the verb about to
+                        # run below a no_edge. The `_s.status` fallback is
+                        # defensive only.
+                        arm_native_status(
+                            db, _s, kwargs.get("from_status") or _s.status,
+                            trigger=_verb,
+                            actor_user_id=kwargs.get("actor_user_id"))
+                    execute_verb(
+                        db, _s, _verb, trigger=_verb,
+                        actor_user_id=kwargs.get("actor_user_id"),
+                        attested={"coa_published": True}
+                        if _verb == "publish" else None,
+                    )
+                    evaluate_cascades(db, _s, trigger=_verb,
+                                      actor_user_id=kwargs.get("actor_user_id"))
+                    wrote_engine = True
+        except Exception:
+            logger.exception("sbs touchpoint failed (never-raise)")
+        if wrote_log or wrote_status or wrote_received or wrote_engine:
             db.commit()
     except Exception as log_err:  # noqa: BLE001
         if db is not None:
@@ -17733,6 +17825,11 @@ def s2s_upsert_lims_sample(
     db.commit()
     if row.external_lims_system != "mk1":
         background_tasks.add_task(_shadow_analyses_at_registration_bg, row.sample_id)
+    # Side-by-side engine (2026-07-27, P-0140 coverage-decay finding):
+    # arm native_status at the one true creation-time hook, for BOTH
+    # SENAITE-attached and SENAITE-free rows — unrelated to (and never
+    # gated on) the SENAITE analyses shadow-sync scheduled above.
+    background_tasks.add_task(_arm_native_status_at_registration_bg, row.sample_id)
     return RegistrySampleSignalResponse(sample_id=row.sample_id, native_id=row.native_id)
 
 
@@ -17877,23 +17974,29 @@ def _build_analysis_debug_rows(db: Session, row: LimsSample, sample_id: str) -> 
     return result
 
 
-def _build_sample_transitions(db: Session, row: LimsSample) -> dict:
+def _build_sample_transitions(db: Session, row: LimsSample, limit: int | None = 5) -> dict:
     """Registry-debug panel's recent-transitions tail (Task 8): the last 5
     `lims_sample_transitions` rows for this parent, newest first. Pure DB
     read, no SENAITE I/O — but still wrapped in its own try/except with its
     own error surface (`transitions.error`), same independent-failure
     posture as `_build_analysis_debug_rows`'s SENAITE fetch: a failure here
     must not blank the rest of the payload, and must not be blanked by a
-    basic-info or analyses failure elsewhere."""
+    basic-info or analyses failure elsewhere.
+
+    `limit=None` (the /log endpoint's full-history request, 2026-07-27
+    parity-convergence spec) returns every row instead of the overview's
+    5-row tail; the overview call site keeps the default."""
     from models import LimsSampleTransition
 
     try:
-        rows = db.execute(
+        q = (
             select(LimsSampleTransition)
             .where(LimsSampleTransition.lims_sample_pk == row.id)
             .order_by(LimsSampleTransition.occurred_at.desc(), LimsSampleTransition.id.desc())
-            .limit(5)
-        ).scalars().all()
+        )
+        if limit is not None:
+            q = q.limit(limit)
+        rows = db.execute(q).scalars().all()
     except Exception as e:
         return {
             "rows": [], "error": str(e),
@@ -17924,6 +18027,34 @@ def _build_sample_transitions(db: Session, row: LimsSample) -> dict:
     }
 
 
+def _build_shadow_block(db: Session, row: LimsSample) -> dict:
+    """Side-by-side engine panel block (2026-07-26 spec §6.2): the native
+    trajectory position vs the SENAITE mirror, + the latest engine attempt.
+    Own try/except — a failure here must not blank the rest of the payload."""
+    from models import LimsWorkflowShadowEvaluation as Ev
+    try:
+        latest = db.execute(
+            select(Ev).where(Ev.lims_sample_pk == row.id)
+            .order_by(Ev.evaluated_at.desc(), Ev.id.desc()).limit(1)
+        ).scalars().first()
+        return {
+            "native_status": row.native_status,
+            "current_status": row.status,
+            "in_sync": (None if row.native_status is None
+                        else row.native_status == row.status),
+            "latest": None if latest is None else {
+                "verb": latest.verb, "outcome": latest.outcome,
+                "evaluated_at": latest.evaluated_at.isoformat(),
+                "unmet": [o for o in (latest.outcomes or [])
+                          if not o.get("met")],
+            },
+            "error": None,
+        }
+    except Exception as e:
+        return {"native_status": None, "current_status": row.status,
+                "in_sync": None, "latest": None, "error": str(e)}
+
+
 def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
     """Assemble the registry-debug payload. Basic-info half is read-only;
     analyses half schedules the passive drift observer (Task 7) which heals
@@ -17941,7 +18072,7 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
             "linkage": None, "origin": None, "container": None,
             "fields": [], "summary": None, "vials": None,
             "verdict": None, "senaite_error": None, "raw": None,
-            "analyses": None, "transitions": None,
+            "analyses": None, "transitions": None, "shadow": None,
         }
 
     age = None
@@ -17967,6 +18098,9 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
     # anything else in this payload.
     transitions = _build_sample_transitions(db, row)
 
+    # Side-by-side engine block (Task 8): same independent-failure posture.
+    shadow = _build_shadow_block(db, row)
+
     meta = None
     senaite_error = None
     try:
@@ -17983,7 +18117,7 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
             "fields": [], "summary": None, "vials": None, "verdict": None,
             "senaite_error": senaite_error,
             "raw": {"registry": _row_to_dict(row), "senaite": None},
-            "analyses": analyses, "transitions": transitions,
+            "analyses": analyses, "transitions": transitions, "shadow": shadow,
         }
 
     diff = diff_registry_vs_senaite(row, meta)
@@ -18016,7 +18150,7 @@ def _build_registry_debug_response(db: Session, sample_id: str) -> dict:
                     "registry_null": diff["summary"]["registry_null"]},
         "senaite_error": None,
         "raw": {"registry": _row_to_dict(row), "senaite": meta},
-        "analyses": analyses, "transitions": transitions,
+        "analyses": analyses, "transitions": transitions, "shadow": shadow,
     }
 
 
@@ -18070,6 +18204,107 @@ def refresh_sample_registry_debug(
         except Exception:
             db.rollback()
     return _build_registry_debug_response(db, sample_id)
+
+
+def _build_shadow_trajectory(db: Session, row: LimsSample) -> dict:
+    """Full side-by-side trajectory for the /log tab (2026-07-27 parity-
+    convergence spec): every shadow evaluation, newest first, FULL outcomes
+    list (met AND unmet — the overview block shows unmet-only). Same
+    independent-failure posture as its siblings."""
+    from models import LimsWorkflowShadowEvaluation as Ev
+    try:
+        rows = db.execute(
+            select(Ev).where(Ev.lims_sample_pk == row.id)
+            .order_by(Ev.evaluated_at.desc(), Ev.id.desc())
+        ).scalars().all()
+        return {
+            "rows": [
+                {
+                    "evaluated_at": r.evaluated_at.isoformat(),
+                    "trigger": r.trigger, "verb": r.verb,
+                    "from_status": r.from_status, "to_status": r.to_status,
+                    "outcome": r.outcome,
+                    "requirements_met": r.requirements_met,
+                    "outcomes": r.outcomes or [],
+                }
+                for r in rows
+            ],
+            "error": None,
+        }
+    except Exception as e:
+        return {"rows": [], "error": str(e) or type(e).__name__}
+
+
+@app.get("/debug/sample-registry/{sample_id}/log")
+def get_sample_registry_log(
+    sample_id: str,
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin forensic log — the /log tab's payload: ALL transitions + the
+    full shadow trajectory. Pure DB, no SENAITE I/O, zero writes. Sync `def`
+    for consistency with its siblings (threadpool; nothing blocking here
+    but the panel's routes share one posture)."""
+    row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if row is None:
+        return {
+            "sample_id": sample_id, "exists": False,
+            "transitions": {"rows": [], "error": None, "latest_to_status": None,
+                            "log_in_sync": None, "current_status": None},
+            "trajectory": {"rows": [], "error": None},
+        }
+    return {
+        "sample_id": sample_id, "exists": True,
+        "transitions": _build_sample_transitions(db, row, limit=None),
+        "trajectory": _build_shadow_trajectory(db, row),
+    }
+
+
+@app.get("/debug/sample-registry/{sample_id}/parity")
+def get_sample_registry_parity(
+    sample_id: str,
+    admin=Depends(require_admin),
+):
+    """On-demand full-payload parity scan (2026-07-27 parity-convergence
+    spec): thin adapter over scripts.parity_sample_details — the harness
+    stays the ONLY rule engine. Heavyweight (live SENAITE fetches for this
+    one sample) so it is button-fired from the panel, never auto-loaded.
+    Zero writes: native side is a pure read builder; the senaite lookup's
+    cache is an in-memory dict. No get_db dependency ON PURPOSE —
+    fetch_pair_in_process opens/closes its own session, and holding a
+    request session across seconds of SENAITE I/O would waste a pool slot.
+    Sync `def`: fetch_pair_in_process's internal asyncio.run needs a thread
+    with no running event loop (threadpool provides exactly that)."""
+    from database import SessionLocal
+    try:
+        from scripts import parity_sample_details as parity
+        mk1, senaite = parity.fetch_pair_in_process(sample_id, SessionLocal)
+        diffs = parity.compare_sample(mk1, senaite)
+    except Exception as e:
+        return {"sample_id": sample_id, "fields": [], "summary": None,
+                "verdict": None, "error": str(e) or type(e).__name__}
+
+    def _bucket(d) -> int:
+        if d.is_real:
+            return 0
+        return 1 if d.classification == "known_expected" else 2
+
+    fields = [
+        {"path": d.path, "classification": d.classification,
+         "rule_id": d.rule_id, "mk1_value": d.mk1_value,
+         "senaite_value": d.senaite_value, "is_real": d.is_real}
+        for d in sorted(diffs, key=_bucket)  # sorted() is stable
+    ]
+    summary = {
+        "total": len(fields),
+        "equal": sum(1 for d in diffs if _bucket(d) == 2),
+        "known_expected": sum(1 for d in diffs if _bucket(d) == 1),
+        "real": sum(1 for d in diffs if d.is_real),
+    }
+    return {"sample_id": sample_id, "fields": fields, "summary": summary,
+            "verdict": summary["real"] == 0, "error": None}
 
 
 @app.get("/registry/sample/{sample_id}/details", response_model=RegistrySampleReadResult)
