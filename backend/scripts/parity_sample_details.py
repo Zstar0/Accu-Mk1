@@ -320,6 +320,21 @@ _ANALYSIS_MI_TITLE_SUBFIELDS = frozenset({"method", "instrument"})
 # own `uid` field (analyses_uid_shape) -- never a real diff, the two sides
 # fundamentally cannot agree on a shared id space for the same method.
 _ANALYSIS_MI_UID_SUBFIELDS = frozenset({"method_uid", "instrument_uid"})
+# SENAITE-side values that are PLACEHOLDERS rather than a real method or
+# instrument. When SENAITE carries one of these and mk1 carries a real
+# catalog-backed value, mk1 is strictly richer and the two can never agree
+# (L1 ownership: method_id/instrument_id are Mk1-owned).
+#
+# Deliberately a placeholder ALLOWLIST, not "any populated mismatch". Measured
+# on the prod published cohort 2026-07-25, the 93 populated M/I mismatches were
+# NOT one phenomenon:
+#   71  senaite='Manual'              -> placeholder, mk1 richer      (ruled here)
+#   17  senaite='MET-HPLC-ID-1290A'   -> a REAL competing method      (stays REAL)
+#    5  mk1='HPLC 1290b' vs senaite='HPLC 1290a' -> two REAL instruments
+#                                        in conflict                 (stays REAL)
+# Blanket-suppressing "populated mismatch" would have buried those last 22 --
+# genuine data-integrity questions about which method/instrument actually ran.
+_SENAITE_MI_PLACEHOLDERS = frozenset({"Manual"})
 
 
 def _diff_leaf(path: str, mk1v: Any, senaitev: Any,
@@ -452,13 +467,79 @@ def _normalize_content_type(ct: Optional[str]) -> Optional[str]:
     return _CONTENT_TYPE_SYNONYMS.get(ct, ct)
 
 
-def diff_attachments(mk1_list: list[dict], senaite_list: list[dict],
-                     sample_id: str) -> list[FieldDiff]:
-    pairs, mk1_only, senaite_only = _pair_lists(
-        mk1_list or [], senaite_list or [],
+# mk1 emits this prefix for a capture-time row SENAITE has not adopted yet
+# (registry_details.py: `uid=a.senaite_attachment_uid or f"mk1att:{a.id}"`).
+_MK1ATT_UID_PREFIX = "mk1att:"
+
+
+def _senaite_attachment_uid(a: dict) -> Optional[str]:
+    """The SENAITE attachment uid carried by an attachment dict, or None.
+
+    None means "this side has no SENAITE uid to join on" — either the field is
+    absent/blank, or mk1 emitted its `mk1att:{id}` placeholder because
+    senaite_attachment_uid is still NULL on that row (capture-time rows stay
+    uid-less until the backfill sweep adopts them)."""
+    uid = a.get("uid")
+    if not isinstance(uid, str):
+        return None
+    uid = uid.strip()
+    if not uid or uid.startswith(_MK1ATT_UID_PREFIX):
+        return None
+    return uid
+
+
+def _pair_attachments(mk1_list: list[dict], senaite_list: list[dict],
+                      ) -> tuple[list[tuple[dict, dict]], list[dict], list[dict]]:
+    """Pair attachments on the SENAITE uid FIRST, then fall back to
+    (filename, content_type).
+
+    Filename is NOT unique: vial-photo retakes are frozen snapshots by design,
+    so one parent AR legitimately holds several attachments sharing a filename
+    AND content_type. The plain first-come/first-served fallback then CROSSES
+    them — each side's attachment compared against a different one. Live case
+    P-1522 (2026-07-25): two `P-1522-S01-vial-photo.jpg` rows produced a
+    phantom `download_url` diff (both URLs real, just swapped) while the
+    equally-crossed `uid` diffs were absorbed by the blanket
+    attachment_mk1att_uids rule and never surfaced.
+
+    The uid is an exact join, so it runs first and only where BOTH sides carry
+    one. The filename fallback still covers capture-time rows whose
+    senaite_attachment_uid is NULL — which is the majority — so this strictly
+    improves pairing rather than replacing it."""
+    senaite_by_uid: dict[str, deque] = {}
+    for idx, item in enumerate(senaite_list):
+        uid = _senaite_attachment_uid(item)
+        if uid is not None:
+            senaite_by_uid.setdefault(uid, deque()).append(idx)
+
+    pairs: list[tuple[dict, dict]] = []
+    consumed: set[int] = set()
+    mk1_rest: list[dict] = []
+    for item in mk1_list:
+        uid = _senaite_attachment_uid(item)
+        bucket = senaite_by_uid.get(uid) if uid is not None else None
+        if bucket:
+            idx = bucket.popleft()
+            consumed.add(idx)
+            pairs.append((item, senaite_list[idx]))
+        else:
+            mk1_rest.append(item)
+
+    senaite_rest = [item for i, item in enumerate(senaite_list)
+                    if i not in consumed]
+
+    fallback_pairs, mk1_only, senaite_only = _pair_lists(
+        mk1_rest, senaite_rest,
         key_fn=lambda a: ((a.get("filename") or "").strip().casefold(),
                           _normalize_content_type(a.get("content_type"))),
     )
+    return pairs + fallback_pairs, mk1_only, senaite_only
+
+
+def diff_attachments(mk1_list: list[dict], senaite_list: list[dict],
+                     sample_id: str) -> list[FieldDiff]:
+    pairs, mk1_only, senaite_only = _pair_attachments(
+        mk1_list or [], senaite_list or [])
     download_url_rule = _native_download_route_rule(sample_id)
     out: list[FieldDiff] = []
     for mk1_item, sen_item in pairs:
@@ -468,6 +549,17 @@ def diff_attachments(mk1_list: list[dict], senaite_list: list[dict],
                 rule_fn = lambda mk1v, sv: "attachment_mk1att_uids"
             elif sub == "download_url":
                 rule_fn = download_url_rule
+            elif sub == "attachment_type":
+                # attachment_type_native_only: mk1 records the capture's type
+                # ('HPLC Graph', 'Sample Image') while SENAITE leaves the paired
+                # attachment's type BLANK. mk1 is strictly richer here and
+                # SENAITE offers no competing value, so the two can never agree.
+                # Gated on the SENAITE side being blank -- if SENAITE ever does
+                # carry a type and the two DISAGREE, that is a real diff and
+                # stays one.
+                rule_fn = lambda mk1v, sv: (
+                    "attachment_type_native_only" if _is_blank(sv) else None
+                )
             else:
                 rule_fn = None
             out.append(_diff_leaf(f"attachments[{label}].{sub}", mk1_item.get(sub), sen_item.get(sub), rule_fn))
@@ -478,7 +570,37 @@ def diff_attachments(mk1_list: list[dict], senaite_list: list[dict],
     return out
 
 
-def diff_analyses(mk1_list: list[dict], senaite_list: list[dict]) -> list[FieldDiff]:
+def _canonical_publish_rule(sample_published: bool) -> Callable[[Any, Any], Optional[str]]:
+    """canonical_verified_vs_senaite_published: on a PUBLISHED sample, a
+    canonical parent line reads 'verified' in mk1 where SENAITE reads
+    'published'.
+
+    That is by design, not lag. Publishing a sample flips the SENAITE-mirror
+    SHADOW rows to mirror_review_state='published' (mark_parent_shadows_
+    published), while the CANONICAL row -- the one the native builder surfaces
+    -- keeps its own state. Measured on prod 2026-07-25, analyses of published
+    samples were 7577 shadow / 2832 canonical-'verified' / 28 retracted:
+    ZERO canonical rows have ever reached 'published', so 'verified' IS the
+    canonical terminal state and surfacing it is correct.
+
+    GATED on the mk1 sample itself already being published. That gate is the
+    whole point: an analysis still sitting at 'verified' while its sample is
+    NOT yet published is genuine publish lag, and stays a REAL diff. Only the
+    exact by-design pair is suppressed -- any other state combination
+    ('unassigned' vs 'published', 'retracted' vs 'published', ...) is
+    untouched.
+    """
+    def rule(mk1v: Any, sv: Any) -> Optional[str]:
+        if not sample_published:
+            return None
+        if mk1v == "verified" and sv == "published":
+            return "canonical_verified_vs_senaite_published"
+        return None
+    return rule
+
+
+def diff_analyses(mk1_list: list[dict], senaite_list: list[dict], *,
+                  sample_published: bool = False) -> list[FieldDiff]:
     """Match lines by keyword (order-insensitive). Lines present on only one
     side are REAL diffs classified `analyses_mk1_only` / `analyses_senaite_
     only` (not the generic mk1_only/senaite_only -- brief-mandated naming so
@@ -487,6 +609,7 @@ def diff_analyses(mk1_list: list[dict], senaite_list: list[dict]) -> list[FieldD
         mk1_list or [], senaite_list or [],
         key_fn=lambda a: (a.get("keyword") or "").strip().casefold(),
     )
+    publish_rule = _canonical_publish_rule(sample_published)
     out: list[FieldDiff] = []
     for mk1_item, sen_item in pairs:
         label = mk1_item.get("keyword") or "?"
@@ -499,7 +622,14 @@ def diff_analyses(mk1_list: list[dict], senaite_list: list[dict]) -> list[FieldD
                     "mi_blank_after_retest" if _is_blank(mk1v) else "analyses_uid_shape"
                 )
             elif sub in _ANALYSIS_MI_TITLE_SUBFIELDS:
-                rule_fn = lambda mk1v, sv: "mi_blank_after_retest" if _is_blank(mk1v) else None
+                rule_fn = lambda mk1v, sv: (
+                    "mi_blank_after_retest" if _is_blank(mk1v)
+                    else "mi_senaite_placeholder"
+                    if isinstance(sv, str) and sv.strip() in _SENAITE_MI_PLACEHOLDERS
+                    else None
+                )
+            elif sub == "review_state":
+                rule_fn = publish_rule
             elif sub == "analyst":
                 rule_fn = lambda mk1v, sv: "analyst_attribution"
             else:
@@ -539,7 +669,12 @@ def compare_sample(mk1: dict, senaite: dict) -> list[FieldDiff]:
         mk1.get("attachments"), senaite.get("attachments"),
         sample_id=str(mk1.get("sample_id") or senaite.get("sample_id") or ""),
     ))
-    out.extend(diff_analyses(mk1.get("analyses"), senaite.get("analyses")))
+    out.extend(diff_analyses(
+        mk1.get("analyses"), senaite.get("analyses"),
+        # The gate for canonical_verified_vs_senaite_published -- mk1's OWN
+        # view of whether this sample is published.
+        sample_published=(mk1.get("review_state") == "published"),
+    ))
     out.extend(diff_remarks(mk1.get("remarks"), senaite.get("remarks")))
     return out
 

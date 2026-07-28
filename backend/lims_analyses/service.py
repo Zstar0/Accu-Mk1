@@ -605,13 +605,19 @@ def promote_to_parent(
     Each defaults to None → unchanged behavior (parent row inherits the
     source keyword/service/title).
 
+    When parent_analysis_service_id resolves to a real service row, the
+    parent-tier result_unit is taken from THAT service and the caller's
+    result_unit is ignored — a unit is a property of the service the result
+    is stored under, and the caller sends the source vial's display unit.
+    Non-translated promotes keep the caller's unit verbatim.
+
     Raises:
       - BadRequestError on validation failures.
       - sqlalchemy.exc.IntegrityError if an existing non-retest parent-tier
         row for (parent, keyword) blocks the partial unique index. The route
         layer translates this to 409.
     """
-    from models import LimsAnalysisPromotion, LimsSubSample
+    from models import AnalysisService, LimsAnalysisPromotion, LimsSubSample
 
     if not sources:
         raise BadRequestError("promote_to_parent requires at least one source")
@@ -691,6 +697,30 @@ def promote_to_parent(
     eff_service_id = parent_analysis_service_id or first_source.analysis_service_id
     eff_title = parent_title or first_source.title
 
+    # The unit belongs to the TARGET service, not to the source vial. On a
+    # translated promote the caller sends the SOURCE row's DISPLAY unit, which
+    # falls back to the source SERVICE's unit whenever the vial row's
+    # result_unit is NULL. Two rogue-seeded per-substance services
+    # (PUR_BPC157 id=70, QTY_BPC157 id=4) carry unit='text', which is how 60
+    # parent-tier ANALYTE-{n}-PUR/QTY rows were stamped 'text' instead of
+    # '%' / 'mg' (measured in prod 2026-07-25). keyword/service/title were
+    # already re-pointed above; result_unit was the one field left riding
+    # from the source.
+    #
+    # Scope is deliberately narrow — the unit is re-derived ONLY when a target
+    # service was actually resolved. The ordinary (non-translated) promote
+    # keeps the caller's value verbatim, because some services legitimately
+    # vary per sample: ENDO-LAL is EU/mg for a solid and EU/mL for a solution,
+    # and must not be flattened to whatever the seed row happens to say.
+    eff_result_unit = result_unit
+    if parent_analysis_service_id is not None:
+        target_svc = db.get(AnalysisService, parent_analysis_service_id)
+        if target_svc is not None:
+            # Taken even when the target's unit is NULL: carrying the source's
+            # unit across a service change is precisely the defect above, so
+            # "no unit on the target" must win over "the source said 'text'".
+            eff_result_unit = target_svc.unit
+
     now = datetime.utcnow()
 
     # ── Retest-source supersession ────────────────────────────────────────────
@@ -741,7 +771,7 @@ def promote_to_parent(
         keyword=eff_parent_keyword,
         title=eff_title,
         result_value=result_value,
-        result_unit=result_unit,
+        result_unit=eff_result_unit,
         review_state="verified",
         method_id=method_id,
         instrument_id=instrument_id,

@@ -18,6 +18,8 @@ from scripts.parity_sample_details import (
     TRUNCATE_LEN,
     build_report,
     compare_sample,
+    diff_analyses,
+    diff_attachments,
     diff_scalar_field,
     main,
 )
@@ -389,6 +391,64 @@ def test_attachment_senaite_storage_pair_fully_equal():
         d = _one(diffs, f"attachments[chrom.csv].{sub}")
         assert d.classification == "equal", (sub, d)
         assert d.rule_id is None
+
+
+def test_attachments_with_duplicate_filenames_pair_by_uid():
+    """Same-filename attachments must pair by SENAITE uid, not by order.
+
+    Live case P-1522 (2026-07-25): a parent AR legitimately holds TWO
+    `P-1522-S01-vial-photo.jpg` attachments — vial-photo retakes are frozen
+    snapshots by design. The (filename, content_type) key is therefore not
+    unique, and the first-come/first-served fallback CROSSED them: each side's
+    photo was compared against the other one. That surfaced as a phantom
+    `download_url` diff (mk1 holding .../783d8dd, senaite holding .../149bbb6
+    — both real, just swapped), while the equally-crossed `uid` diffs were
+    silently absorbed by the blanket attachment_mk1att_uids rule.
+
+    Both uids exist on BOTH sides, so uid-first pairing resolves this exactly
+    rather than splitting it into one-sided entries.
+    """
+    photo_a_uid = "783d8ddbf5c0437ca743e7517661d1af"
+    photo_b_uid = "149bbb61ef5b4c8ebda06fd21e2c8938"
+    fname = "P-1522-S01-vial-photo.jpg"
+
+    # mk1 lists them in the opposite order from SENAITE — the crossing trigger.
+    mk1_atts = [
+        {"uid": photo_a_uid, "filename": fname, "content_type": "image/jpeg",
+         "attachment_type": None,
+         "download_url": f"/wizard/senaite/attachment/{photo_a_uid}"},
+        {"uid": photo_b_uid, "filename": fname, "content_type": "image/jpeg",
+         "attachment_type": "Sample Image",
+         "download_url": "/registry/sample/P-1522/attachments/2530/download"},
+    ]
+    senaite_atts = [
+        {"uid": photo_b_uid, "filename": fname, "content_type": "image/jpeg",
+         "attachment_type": None,
+         "download_url": f"/wizard/senaite/attachment/{photo_b_uid}"},
+        {"uid": photo_a_uid, "filename": fname, "content_type": "image/jpeg",
+         "attachment_type": None,
+         "download_url": f"/wizard/senaite/attachment/{photo_a_uid}"},
+    ]
+
+    diffs = compare_sample(
+        _mk1_payload(sample_id="P-1522", attachments=mk1_atts),
+        _senaite_payload(sample_id="P-1522", attachments=senaite_atts),
+    )
+    att_diffs = [d for d in diffs if d.path.startswith("attachments[")]
+
+    # Nothing may go unpaired — every uid exists on both sides.
+    assert [d for d in att_diffs
+            if d.classification in ("mk1_only", "senaite_only")] == []
+
+    # Correctly paired, every uid now matches outright: no uid diff survives,
+    # so the blanket attachment_mk1att_uids rule has nothing to absorb.
+    assert [d for d in att_diffs
+            if d.path.endswith(".uid") and d.classification != "equal"] == []
+
+    # The phantom download_url diff is gone: the proxy-URL photo pairs with
+    # its own uid (equal), and the natively-served one is ruled on URL shape.
+    real = [d for d in att_diffs if d.is_real]
+    assert real == [], real
 
 
 def test_analytes_defaults_matched_peptide_and_slot_known_expected():
@@ -781,3 +841,121 @@ def test_contact_near_miss_doubling_stays_a_real_diff():
     d = diff_scalar_field("contact", "Prime Purity USA",
                           "Prime Purity USA Prime Purity LLC")
     assert d.classification == "differing"
+
+
+# ── attachment_type_native_only ─────────────────────────────────────────────
+
+
+def _att(**kw):
+    base = {"uid": "u1", "filename": "chromatogram_P-0001-S01.csv",
+            "content_type": "text/csv", "attachment_type": None,
+            "download_url": "/wizard/senaite/attachment/u1"}
+    base.update(kw)
+    return base
+
+
+def test_attachment_type_blank_on_senaite_is_known_expected():
+    """mk1 records the capture's type; SENAITE leaves it blank. mk1 is
+    strictly richer and SENAITE offers no competing value."""
+    diffs = diff_attachments(
+        [_att(attachment_type="HPLC Graph")], [_att(attachment_type=None)],
+        sample_id="P-0001",
+    )
+    d = next(x for x in diffs if x.path.endswith(".attachment_type"))
+    assert d.classification == "known_expected"
+    assert d.rule_id == "attachment_type_native_only"
+
+
+def test_attachment_type_conflicting_values_stay_a_real_diff():
+    """If SENAITE DOES carry a type and the two disagree, that is real."""
+    diffs = diff_attachments(
+        [_att(attachment_type="HPLC Graph")],
+        [_att(attachment_type="Sample Image")],
+        sample_id="P-0001",
+    )
+    d = next(x for x in diffs if x.path.endswith(".attachment_type"))
+    assert d.classification == "differing"
+    assert d.rule_id is None
+
+
+# ── mi_senaite_placeholder ──────────────────────────────────────────────────
+
+
+def _an(**kw):
+    base = {"uid": "u", "keyword": "HPLC-PUR", "result": None, "unit": None,
+            "review_state": "verified", "analyst": None, "method": None,
+            "method_uid": None, "instrument": None, "instrument_uid": None}
+    base.update(kw)
+    return base
+
+
+def _mi(mk1_val, sen_val, sub="method"):
+    diffs = diff_analyses([_an(**{sub: mk1_val})], [_an(**{sub: sen_val})])
+    return next(d for d in diffs if d.path.endswith("." + sub))
+
+
+def test_mi_senaite_manual_placeholder_is_known_expected():
+    """'Manual' is a placeholder, not a real method — mk1's catalog-backed
+    value is strictly richer and the two can never agree."""
+    d = _mi("Method 1", "Manual")
+    assert d.classification == "known_expected"
+    assert d.rule_id == "mi_senaite_placeholder"
+
+
+def test_mi_real_competing_senaite_method_stays_a_real_diff():
+    """SENAITE naming an actual method that DISAGREES with mk1 is a genuine
+    data-integrity question about which method ran — never suppressed."""
+    d = _mi("Method 7", "MET-HPLC-ID-1290A")
+    assert d.classification == "differing"
+    assert d.rule_id is None
+
+
+def test_mi_two_real_instruments_in_conflict_stays_a_real_diff():
+    """Both sides name a REAL instrument and they disagree — one of them is
+    wrong about which machine ran the sample."""
+    d = _mi("HPLC 1290b", "HPLC 1290a", sub="instrument")
+    assert d.classification == "differing"
+    assert d.rule_id is None
+
+
+def test_mi_blank_mk1_still_takes_the_retest_rule():
+    """The pre-existing blank-after-retest rule must still win when mk1 is
+    blank, even if SENAITE holds a placeholder."""
+    d = _mi(None, "Manual")
+    assert d.rule_id == "mi_blank_after_retest"
+
+
+# ── canonical_verified_vs_senaite_published ─────────────────────────────────
+
+
+def _rs(mk1_state, sen_state, *, sample_published):
+    diffs = diff_analyses(
+        [_an(review_state=mk1_state)], [_an(review_state=sen_state)],
+        sample_published=sample_published,
+    )
+    return next(d for d in diffs if d.path.endswith(".review_state"))
+
+
+def test_canonical_verified_on_published_sample_is_known_expected():
+    """Publishing flips the SHADOW rows; the CANONICAL row the builder
+    surfaces keeps 'verified' — zero canonical rows have ever reached
+    'published' in prod, so 'verified' IS the canonical terminal state."""
+    d = _rs("verified", "published", sample_published=True)
+    assert d.classification == "known_expected"
+    assert d.rule_id == "canonical_verified_vs_senaite_published"
+
+
+def test_verified_while_sample_not_published_stays_a_real_diff():
+    """The gate's whole purpose: a line at 'verified' while its sample is NOT
+    published is genuine publish lag and must stay visible."""
+    d = _rs("verified", "published", sample_published=False)
+    assert d.classification == "differing"
+    assert d.rule_id is None
+
+
+def test_other_state_pairs_on_published_sample_stay_real():
+    """Only the exact by-design pair is suppressed."""
+    for mk1_state in ("unassigned", "retracted", "to_be_verified"):
+        d = _rs(mk1_state, "published", sample_published=True)
+        assert d.classification == "differing", mk1_state
+        assert d.rule_id is None, mk1_state

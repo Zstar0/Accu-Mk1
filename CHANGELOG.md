@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.7.2 — 2026-07-28
+
+### Fixed
+
+- **A translated promote now takes the parent-tier `result_unit` from the
+  TARGET service** instead of writing the caller's value verbatim.
+  `promote_to_parent` already re-pointed keyword/service/title at the generic
+  `ANALYTE-{n}-PUR/QTY` slot for per-substance promotion; `result_unit` was the
+  one field still riding from the source vial. The caller sends the source
+  row's DISPLAY unit, which falls back to the source SERVICE's unit whenever
+  the vial row's `result_unit` is NULL — so the two rogue-seeded services
+  `PUR_BPC157` (id=70) and `QTY_BPC157` (id=4), both `unit='text'`, stamped
+  `'text'` onto 60 parent rows whose real units are `%` / `mg`. v1.5.6 fixed
+  how this rendered; this fixes what gets written.
+- Scope is deliberately narrow. The unit is re-derived ONLY when a target
+  service actually resolves; an ordinary promote keeps the caller's unit
+  verbatim, because some services legitimately vary per sample — `ENDO-LAL` is
+  `EU/mg` for a solid and `EU/mL` for a solution — and must not be flattened to
+  whatever the seed row says. A resolved target whose unit is NULL still wins
+  over the caller: carrying the source's unit across a service change is the
+  defect itself.
+- **Parity harness: three known-expected rules + uid-first attachment
+  pairing** (harness-only, from the 2026-07-25 triage): `attachment_type_
+  native_only`, `mi_senaite_placeholder` (allowlist `{'Manual'}` only),
+  `canonical_verified_vs_senaite_published` (gated on the mk1 sample
+  already being published); attachments now pair on SENAITE uid before
+  filename so frozen same-filename snapshots can no longer cross-pair.
 ## v1.7.1 — 2026-07-28
 
 ### Fixed

@@ -477,6 +477,27 @@ def _find_parent_with_n_clean_subs(db, svc, n):
     return db.execute(sub_q).scalar_one_or_none()
 
 
+def _find_core_sub_sample(db, svc, *, exclude_ids=()):
+    """Like _find_clean_sub_sample, but also excludes variance-bucket vials.
+
+    promote_to_parent refuses variance-assigned vials by design, so a promote
+    test seeded from the bare `sub_sample` fixture can fail on bucket
+    assignment before it ever reaches the behavior under test.
+    """
+    from sqlalchemy import func
+    stmt = (
+        select(LimsSubSample)
+        .where(LimsSubSample.id.notin_(exclude_ids) if exclude_ids else True)
+        .where(func.coalesce(LimsSubSample.assignment_kind, "core") != "variance")
+        .where(~select(LimsAnalysis.id).where(
+            LimsAnalysis.lims_sub_sample_pk == LimsSubSample.id,
+            LimsAnalysis.keyword == svc.keyword,
+            LimsAnalysis.retest_of_id.is_(None),
+        ).exists())
+    )
+    return db.execute(stmt).scalars().first()
+
+
 def _make_vial_in_to_be_verified(db, sub, svc, result="98.55"):
     """Helper: create a vial-tier analysis and walk it to to_be_verified.
 
@@ -854,6 +875,144 @@ def test_promote_without_overrides_keeps_source_keyword(db, sub_sample, analysis
         commit=False,
     )
     assert parent_row.keyword == src.keyword
+    db.commit()
+
+
+def test_promote_translated_target_takes_unit_from_target_service(
+    db, sub_sample, analysis_service
+):
+    """Regression (2026-07-25): on a TRANSLATED promote the parent-tier row's
+    result_unit must come from the TARGET service, not from the caller.
+
+    Live defect: two rogue-seeded per-substance services (PUR_BPC157 id=70 and
+    QTY_BPC157 id=4) carry unit='text'. The source vial rows store
+    result_unit=NULL, so the API's display unit falls back to the SOURCE
+    service's unit ('text'); the FE sends that value back as result_unit on
+    promote (AnalysisTable.tsx:1032/1115). keyword/service/title were already
+    re-pointed at the ANALYTE-{n}-PUR/QTY target — result_unit was the one
+    field still riding from the source, stamping 'text' onto 60 parent rows
+    whose real units are '%' / 'mg'.
+    """
+    from lims_analyses.service import promote_to_parent
+
+    target_svc = db.execute(
+        select(AnalysisService).where(
+            AnalysisService.unit.isnot(None),
+            AnalysisService.unit != "text",
+            AnalysisService.id != analysis_service.id,
+        ).order_by(AnalysisService.id)
+    ).scalars().first()
+    if target_svc is None:
+        pytest.skip("no seeded analysis_service with a usable unit")
+
+    core_sub = _find_core_sub_sample(db, analysis_service)
+    if core_sub is None:
+        pytest.skip("no core-bucket sub-sample free of this service keyword")
+
+    src = _make_vial_in_to_be_verified(db, core_sub, analysis_service)
+    parent_row, _ = promote_to_parent(
+        db,
+        keyword=src.keyword,
+        result_value="99.1",
+        # Exactly what the FE sends today: the SOURCE row's display unit.
+        result_unit="text",
+        method_id=None,
+        instrument_id=None,
+        sources=[{"analysis_id": src.id, "contribution_kind": "chosen"}],
+        user_id=1,
+        parent_keyword="ANALYTE-2-PUR",
+        parent_analysis_service_id=target_svc.id,
+        parent_title="Analyte 2 (Purity)",
+        commit=False,
+    )
+    # Commit BEFORE asserting: promote_to_parent(commit=False) leaves the
+    # parent + promotion INSERTs pending, and an assertion failure here would
+    # otherwise hand the autouse cleanup a half-open transaction (the pending
+    # promotion row then trips its source_analysis_id FK during teardown).
+    observed_unit = parent_row.result_unit
+    parent_row.title = "TEST: " + parent_row.title
+    db.commit()
+
+    assert observed_unit == target_svc.unit
+    assert observed_unit != "text"
+
+
+def test_promote_translated_target_with_null_unit_clears_caller_unit(
+    db, sub_sample, analysis_service
+):
+    """A resolved target service whose unit is NULL wins over the caller's unit.
+
+    Locks in the deliberate choice documented in promote_to_parent: carrying
+    the SOURCE's unit across a service change is the defect itself, so "the
+    target has no unit" must beat "the source said 'text'". Without this,
+    the guard is one `or` away from silently reintroducing the bug.
+    """
+    from lims_analyses.service import promote_to_parent
+
+    null_unit_svc = db.execute(
+        select(AnalysisService).where(
+            AnalysisService.unit.is_(None),
+            AnalysisService.id != analysis_service.id,
+        ).order_by(AnalysisService.id)
+    ).scalars().first()
+    if null_unit_svc is None:
+        pytest.skip("no seeded analysis_service with a NULL unit")
+
+    core_sub = _find_core_sub_sample(db, analysis_service)
+    if core_sub is None:
+        pytest.skip("no core-bucket sub-sample free of this service keyword")
+
+    src = _make_vial_in_to_be_verified(db, core_sub, analysis_service)
+    parent_row, _ = promote_to_parent(
+        db,
+        keyword=src.keyword,
+        result_value="99.2",
+        result_unit="text",
+        method_id=None,
+        instrument_id=None,
+        sources=[{"analysis_id": src.id, "contribution_kind": "chosen"}],
+        user_id=1,
+        parent_keyword="ANALYTE-4-IDENT",
+        parent_analysis_service_id=null_unit_svc.id,
+        parent_title="Analyte 4 (Identity)",
+        commit=False,
+    )
+    observed_unit = parent_row.result_unit
+    parent_row.title = "TEST: " + parent_row.title
+    db.commit()
+
+    assert observed_unit is None
+
+
+def test_promote_without_target_override_keeps_caller_unit(
+    db, sub_sample, analysis_service
+):
+    """Guards the NARROW scope of the unit fix: with no parent target override
+    the caller's unit is preserved verbatim.
+
+    Some services legitimately vary per sample — ENDO-LAL is EU/mg for a solid
+    and EU/mL for a solution — so the ordinary promote path must never
+    force-derive the unit from the service row.
+    """
+    from lims_analyses.service import promote_to_parent
+
+    core_sub = _find_core_sub_sample(db, analysis_service)
+    if core_sub is None:
+        pytest.skip("no core-bucket sub-sample free of this service keyword")
+
+    src = _make_vial_in_to_be_verified(db, core_sub, analysis_service)
+    parent_row, _ = promote_to_parent(
+        db,
+        keyword=src.keyword,
+        result_value="0.05",
+        result_unit="EU/mL",
+        method_id=None,
+        instrument_id=None,
+        sources=[{"analysis_id": src.id, "contribution_kind": "chosen"}],
+        user_id=1,
+        commit=False,
+    )
+    assert parent_row.result_unit == "EU/mL"
     db.commit()
 
 
