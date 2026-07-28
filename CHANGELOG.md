@@ -1,8 +1,17 @@
 # Changelog
 
-## Unreleased
+## v1.7.0 — 2026-07-28
 
 ### Added
+
+- **Registry-inspect: full-log tab + parity scan** (2026-07-27 spec). The
+  admin panel gains `overview | log | parity` tabs: `log` shows the complete
+  `lims_sample_transitions` history plus the full shadow-evaluation
+  trajectory (`GET /debug/sample-registry/{id}/log`, pure DB); `parity` is a
+  button-fired full-payload diff via the `parity_sample_details` harness
+  (`GET /debug/sample-registry/{id}/parity`) rendering real / known-expected
+  / equal buckets with rule ids. Overview unchanged; both endpoints
+  admin-gated, zero writes; the scan never auto-fires.
 
 - **Side-by-side workflow engine** (2026-07-26 spec): Mk1 executes sample-tier
   transitions in parallel — own `native_status` driven by the workflow catalog
