@@ -622,11 +622,21 @@ def diff_analyses(mk1_list: list[dict], senaite_list: list[dict], *,
                     "mi_blank_after_retest" if _is_blank(mk1v) else "analyses_uid_shape"
                 )
             elif sub in _ANALYSIS_MI_TITLE_SUBFIELDS:
+                # Populated-vs-populated title conflicts are gated known-
+                # expected BY HANDLER DECISION (2026-07-25: accepted as a
+                # known ISO-traceability finding to repair later; 2026-07-28:
+                # "mark green — nothing reads these mk1-side yet, right
+                # values get established later"). This DELIBERATELY swallows
+                # real competing values (e.g. mk1 'Method 7' vs SENAITE
+                # 'MET-HPLC-ID-1290A', 'HPLC 1290b' vs 'HPLC 1290a') — the
+                # deferred worklist lives in the vault (2026-07-28 session
+                # log) and in /tmp/p_pub_0728.json. Remove this fallback when
+                # the catalog-driven M/I repair lands.
                 rule_fn = lambda mk1v, sv: (
                     "mi_blank_after_retest" if _is_blank(mk1v)
                     else "mi_senaite_placeholder"
                     if isinstance(sv, str) and sv.strip() in _SENAITE_MI_PLACEHOLDERS
-                    else None
+                    else "mi_populated_conflict_accepted"
                 )
             elif sub == "review_state":
                 rule_fn = publish_rule

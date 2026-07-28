@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.7.3 — 2026-07-28
+
+### Changed
+
+- **Parity harness: populated M/I title conflicts gated known-expected**
+  (`mi_populated_conflict_accepted`) by Handler decision — nothing reads
+  these fields mk1-side yet; the 21-row deferred worklist (a real
+  ISO-traceability question) is recorded in the vault ("MI Conflict Worklist
+  (Read-Flip Deferred)"). Remove the rule + its tests when the
+  catalog-driven M/I repair lands. Harness-only; zero runtime impact.
+
 ## v1.7.2 — 2026-07-28
 
 ### Fixed
