@@ -489,8 +489,16 @@ function ServicePanel({
     }
   }
 
+  // Compared RAW (no .trim()) against the raw-seeded form value — the
+  // change-detection gate must ask "did the user touch this field", not "is
+  // the trimmed value different from the untrimmed stored one". A stored
+  // value with incidental whitespace (SENAITE data isn't guaranteed clean)
+  // would otherwise register as "changed" on every untouched save, wrongly
+  // locking it as a local override / tripping the keyword-immutability
+  // guard. Trimming still happens only where the field's *value* is built
+  // for the payload, never in the *is it changed* comparison.
   const originalKeyword = service?.keyword ?? ''
-  const keywordChanged = !isCreate && form.keyword.trim() !== originalKeyword
+  const keywordChanged = !isCreate && form.keyword !== originalKeyword
 
   const handleSave = async () => {
     if (!form.title.trim()) {
@@ -557,16 +565,21 @@ function ServicePanel({
         // of reflecting whether the stored value actually changed.
         const payload: AnalysisServiceUpdatePayload = {}
 
-        const newTitle = form.title.trim()
-        if (newTitle !== service!.title) payload.title = newTitle
+        // Each gate compares the RAW form value against the RAW seeded
+        // value (see the comment on `keywordChanged` above) — only the
+        // payload's VALUE is trimmed/nulled, never the comparison that
+        // decides whether the field is included at all.
+        if (form.title !== service!.title) payload.title = form.title.trim()
 
         if (keywordChanged) payload.keyword = form.keyword.trim()
 
-        const newCategory = form.category.trim() || null
-        if (newCategory !== (service!.category ?? null)) payload.category = newCategory
+        if (form.category !== (service!.category ?? '')) {
+          payload.category = form.category.trim() || null
+        }
 
-        const newUnit = form.unit.trim() || null
-        if (newUnit !== (service!.unit ?? null)) payload.unit = newUnit
+        if (form.unit !== (service!.unit ?? '')) {
+          payload.unit = form.unit.trim() || null
+        }
 
         if (form.department_id !== (service!.department_id ?? null)) {
           payload.department_id = form.department_id
