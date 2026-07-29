@@ -56,17 +56,22 @@ def route_client():
 def test_list_departments_ordered_by_sort_order_then_name(route_client):
     db = route_client._test_session
     db.add_all([
-        Department(name="Zeta", sort_order=1),
-        Department(name="Analytical", sort_order=0),
-        Department(name="Beta", sort_order=1),
+        # sort_order deliberately fights the alphabet: an order_by(name)-only
+        # query would put Analytical first and Zeta last, the opposite of
+        # what sort_order demands. Only a genuine ORDER BY sort_order, name
+        # passes.
+        Department(name="Analytical", sort_order=5),
+        Department(name="Zeta", sort_order=0),
+        Department(name="Beta", sort_order=0),
     ])
     db.commit()
 
     resp = route_client.get("/departments")
     assert resp.status_code == 200
     names = [d["name"] for d in resp.json()]
-    # sort_order=0 first, then sort_order=1 group alphabetically (Beta, Zeta)
-    assert names == ["Analytical", "Beta", "Zeta"]
+    # sort_order=0 group first, alphabetical within it (Beta, Zeta); then
+    # sort_order=5 (Analytical) last.
+    assert names == ["Beta", "Zeta", "Analytical"]
 
 
 def test_create_department_201(route_client):

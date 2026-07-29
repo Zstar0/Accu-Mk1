@@ -4471,6 +4471,21 @@ export async function getAnalysisProfiles(): Promise<AnalysisProfile[]> {
   return response.json()
 }
 
+/**
+ * Current membership, in sort_order (the profile's future COA row order).
+ * The list response also carries `member_ids` in this same order, but that
+ * value can be up to `staleTime` (5min) old via `useAnalysisProfiles()` — the
+ * membership editor is a read-modify-write over the PUT below, so it fetches
+ * fresh here rather than risk silently reverting a concurrent edit.
+ */
+export async function getAnalysisProfileMembers(id: number): Promise<number[]> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-profiles/${id}/members`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to load profile members: ${response.status}`)
+  return response.json()
+}
+
 export async function createAnalysisProfile(data: {
   key: string
   name: string

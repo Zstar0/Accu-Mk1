@@ -40,6 +40,7 @@ import {
   updateAnalysisProfile,
   deleteAnalysisProfile,
   setAnalysisProfileMembers,
+  getAnalysisProfileMembers,
   getAnalysisServices,
   type AnalysisProfile,
   type AnalysisServiceRecord,
@@ -121,17 +122,22 @@ export default function AnalysisProfilesPage() {
       active: profile.active,
     })
     setMemberSearch('')
-    // member_ids on the list response is already sort_order-ordered — no
-    // separate members fetch needed.
-    setSelectedOrder([...profile.member_ids])
     setPanelOpen(true)
 
+    // member_ids on the list response is already sort_order-ordered, but it
+    // can be up to 5min stale (useAnalysisProfiles' staleTime) — fetch fresh
+    // membership here so Save Members can't silently revert a concurrent
+    // edit made since the list last loaded.
     setLoadingMembers(true)
     try {
-      const services = await getAnalysisServices()
+      const [services, memberIds] = await Promise.all([
+        getAnalysisServices(),
+        getAnalysisProfileMembers(profile.id),
+      ])
       setAllServices(services)
+      setSelectedOrder(memberIds)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to load analysis services')
+      toast.error(err instanceof Error ? err.message : 'Failed to load membership data')
     } finally {
       setLoadingMembers(false)
     }
