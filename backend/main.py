@@ -15524,21 +15524,34 @@ async def set_analysis_profile_members(
     _current_user=Depends(get_current_user),
 ):
     """Replace membership. Position in the list becomes sort_order — the row
-    order within the profile's COA section."""
-    from models import AnalysisProfile, analysis_profile_members
+    order within the profile's COA section.
+
+    Mirrors set_service_group_members: filters the caller's ids down to ones
+    that actually exist before writing, and reports the ACTUAL count, not the
+    requested one — a bogus id must not dangle a row (SQLite, no FK
+    enforcement) or 500 (Postgres, FK enforced)."""
+    from models import AnalysisProfile, AnalysisService, analysis_profile_members
     p = db.get(AnalysisProfile, profile_id)
     if p is None:
         raise HTTPException(404, "analysis profile not found")
+
+    valid_ids = set(db.execute(
+        select(AnalysisService.id).where(AnalysisService.id.in_(data.analysis_service_ids))
+    ).scalars().all())
+    # Preserve the caller's requested order (it becomes sort_order below);
+    # only drop ids that don't exist.
+    ordered_ids = [sid for sid in data.analysis_service_ids if sid in valid_ids]
+
     db.execute(
         analysis_profile_members.delete().where(
             analysis_profile_members.c.analysis_profile_id == profile_id
         )
     )
-    for i, svc_id in enumerate(data.analysis_service_ids):
+    for i, svc_id in enumerate(ordered_ids):
         db.execute(analysis_profile_members.insert().values(
             analysis_profile_id=profile_id, analysis_service_id=svc_id, sort_order=i))
     db.commit()
-    return {"count": len(data.analysis_service_ids)}
+    return {"count": len(ordered_ids)}
 
 
 # ─── SLA tiers (sub-project A, revised to tiers) ──────────────────────────────

@@ -4,6 +4,12 @@ in test_analysis_profiles.py exercise the relationship's order_by against
 sqlite; this exercises the GET route's own .order_by() against the real
 migrated schema, over HTTP. Self-restoring.
 
+Also covers the PUT route's own two behaviors that have no ORM-level
+equivalent: filtering bogus analysis_service_ids (rather than 500ing or
+dangling a row) and reporting the actual persisted count, and pinning the
+sort_order=i WRITE itself (as opposed to the two read-side order_by tests
+above, which only prove sort_order is read correctly once it exists).
+
 Run in container:
     docker exec accu-mk1-backend sh -c 'cd /app && python -m pytest tests/test_api_analysis_profiles.py -q'
 """
@@ -116,6 +122,63 @@ def test_get_members_orders_by_sort_order_not_insertion(two_services):
     get_resp = client.get(f"/analysis-profiles/{profile_id}/members")
     assert get_resp.status_code == 200, get_resp.text
     assert get_resp.json() == [svc_b, svc_a]
+
+
+def test_put_members_filters_bogus_ids_and_reports_actual_count(two_services):
+    """A bogus analysis_service_id must be filtered out — not dangle a row
+    and not 500 — and the returned count must reflect what was actually
+    persisted (2), not what was requested (3). Mirrors
+    set_service_group_members's select-then-assign filtering."""
+    svc_a, svc_b = two_services
+    create = client.post("/analysis-profiles", json={
+        "key": "route_filter_test", "name": "Route Filter Test", "is_addon": True,
+    })
+    assert create.status_code == 201, create.text
+    profile_id = create.json()["id"]
+
+    bogus_id = 999999999
+    put_resp = client.put(
+        f"/analysis-profiles/{profile_id}/members",
+        json={"analysis_service_ids": [svc_a, bogus_id, svc_b]},
+    )
+    assert put_resp.status_code == 200, put_resp.text
+    assert put_resp.json() == {"count": 2}
+
+    get_resp = client.get(f"/analysis-profiles/{profile_id}/members")
+    assert get_resp.status_code == 200, get_resp.text
+    assert get_resp.json() == [svc_a, svc_b]
+    assert bogus_id not in get_resp.json()
+
+
+def test_put_members_writes_sort_order_from_list_position(two_services):
+    """Pins the WRITE side (main.py's `for i, svc_id in enumerate(...)`
+    loop), independently of both read paths tested above. Reads the junction
+    table directly via raw SQL — not through GET and not through the ORM
+    relationship — so a mutation that ties every sort_order to a constant
+    (breaking only the write) fails this test even though it wouldn't
+    affect either order_by-based read test, which never exercise PUT with
+    genuinely distinguishable input."""
+    svc_a, svc_b = two_services
+    create = client.post("/analysis-profiles", json={
+        "key": "route_sort_write_test", "name": "Route Sort Write Test",
+        "is_addon": True,
+    })
+    assert create.status_code == 201, create.text
+    profile_id = create.json()["id"]
+
+    put_resp = client.put(
+        f"/analysis-profiles/{profile_id}/members",
+        json={"analysis_service_ids": [svc_b, svc_a]},
+    )
+    assert put_resp.status_code == 200, put_resp.text
+
+    with engine.connect() as c:
+        rows = c.execute(text(
+            "SELECT analysis_service_id, sort_order FROM analysis_profile_members "
+            "WHERE analysis_profile_id = :pid"
+        ), {"pid": profile_id}).fetchall()
+    stored = {r[0]: r[1] for r in rows}
+    assert stored == {svc_b: 0, svc_a: 1}
 
 
 def test_get_members_404_for_unknown_profile():
