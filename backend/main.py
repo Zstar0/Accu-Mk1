@@ -2239,6 +2239,31 @@ class AnalysisServiceResponse(BaseModel):
         from_attributes = True
 
 
+class AnalysisServiceCreate(BaseModel):
+    title: str
+    keyword: str
+    category: Optional[str] = None
+    unit: Optional[str] = None
+    department_id: Optional[int] = None
+    result_type: Optional[str] = None
+    result_options: Optional[list] = None
+    variance_capable: bool = False
+    peptide_id: Optional[int] = None
+
+
+class AnalysisServiceUpdate(BaseModel):
+    title: Optional[str] = None
+    keyword: Optional[str] = None
+    category: Optional[str] = None
+    unit: Optional[str] = None
+    department_id: Optional[int] = None
+    result_type: Optional[str] = None
+    result_options: Optional[list] = None
+    variance_capable: Optional[bool] = None
+    peptide_id: Optional[int] = None
+    active: Optional[bool] = None
+
+
 # ─── Service Group schemas ───
 
 class ServiceGroupCreate(BaseModel):
@@ -2916,6 +2941,76 @@ async def get_analysis_services(
     return [AnalysisServiceResponse.model_validate(s) for s in services]
 
 
+@app.post("/analysis-services", response_model=AnalysisServiceResponse, status_code=201)
+async def create_analysis_service(
+    data: AnalysisServiceCreate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Create an Mk1-native analysis service. NEVER creates anything in SENAITE."""
+    validate_new_keyword(db, data.keyword)
+    svc = AnalysisService(**data.model_dump(), origin="mk1")
+    db.add(svc)
+    db.commit()
+    db.refresh(svc)
+    return AnalysisServiceResponse.model_validate(svc)
+
+
+@app.patch("/analysis-services/{service_id}", response_model=AnalysisServiceResponse)
+async def update_analysis_service(
+    service_id: int,
+    data: AnalysisServiceUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Full-field edit. On a SENAITE-origin row, every sync-owned field touched
+    here is recorded in local_overrides so the next sync leaves it alone."""
+    svc = db.get(AnalysisService, service_id)
+    if svc is None:
+        raise HTTPException(404, "analysis service not found")
+
+    fields = data.model_dump(exclude_unset=True)
+
+    if "keyword" in fields and fields["keyword"] != svc.keyword:
+        assert_keyword_editable(db, svc)
+        validate_new_keyword(db, fields["keyword"], exclude_id=svc.id)
+
+    overrides = set(svc.local_overrides or [])
+    for field, value in fields.items():
+        setattr(svc, field, value)
+        if svc.origin == "senaite" and field in SYNC_OWNED_FIELDS:
+            overrides.add(field)
+    if svc.origin == "senaite":
+        svc.local_overrides = sorted(overrides)
+
+    db.commit()
+    db.refresh(svc)
+    return AnalysisServiceResponse.model_validate(svc)
+
+
+@app.delete("/analysis-services/{service_id}", status_code=204)
+async def delete_analysis_service(
+    service_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Delete an Mk1-native service. Refused if any analysis references it —
+    deactivate instead. SENAITE-origin rows are never deletable here."""
+    from models import LimsAnalysis
+    svc = db.get(AnalysisService, service_id)
+    if svc is None:
+        raise HTTPException(404, "analysis service not found")
+    if svc.origin != "mk1":
+        raise HTTPException(400, "only Mk1-native services can be deleted; deactivate instead")
+    referenced = db.execute(
+        select(LimsAnalysis.id).where(LimsAnalysis.analysis_service_id == svc.id).limit(1)
+    ).scalars().first()
+    if referenced is not None:
+        raise HTTPException(409, "service is referenced by existing analyses; deactivate instead")
+    db.delete(svc)
+    db.commit()
+
+
 class AnalysisServicePeptideUpdate(BaseModel):
     peptide_id: Optional[int] = None  # null to clear the link
 
@@ -3002,6 +3097,45 @@ async def update_analysis_service_variance_capable(
     return AnalysisServiceResponse.model_validate(service)
 
 
+KEYWORD_RE = re.compile(r"^[A-Z][A-Z0-9_-]*$")
+
+
+def validate_new_keyword(db, keyword: str, *, exclude_id: int | None = None) -> None:
+    """Validate a keyword for an Mk1-native service.
+
+    Keyword is the cross-repo join key — COABuilder indexes every result by it
+    and the baked spec limits are keyed on it. It must be well-formed and unique
+    across BOTH origins: a native service claiming a SENAITE keyword would be
+    rendered twice on a certificate.
+    """
+    if not keyword or not KEYWORD_RE.match(keyword):
+        raise HTTPException(
+            400,
+            "keyword must start with a letter and contain only A-Z, 0-9, '-' and '_' "
+            "(uppercase)",
+        )
+    q = select(AnalysisService).where(AnalysisService.keyword == keyword)
+    if exclude_id is not None:
+        q = q.where(AnalysisService.id != exclude_id)
+    if db.execute(q).scalars().first() is not None:
+        raise HTTPException(400, f"keyword '{keyword}' is already in use")
+
+
+def assert_keyword_editable(db, svc) -> None:
+    """A keyword becomes immutable once any lims_analyses row references the
+    service — renaming it would orphan results from their spec limits."""
+    from models import LimsAnalysis
+    referenced = db.execute(
+        select(LimsAnalysis.id).where(LimsAnalysis.analysis_service_id == svc.id).limit(1)
+    ).scalars().first()
+    if referenced is not None:
+        raise HTTPException(
+            409,
+            f"keyword '{svc.keyword}' is referenced by existing analyses and cannot "
+            "be changed",
+        )
+
+
 def _parse_service_result_options(raw) -> list[dict]:
     """SENAITE ResultOptions [{ResultValue, ResultText}] -> [{value, label}]."""
     out: list[dict] = []
@@ -3019,11 +3153,16 @@ def _apply_service_result_type(svc, item: dict) -> None:
     """Seed svc.result_type / result_options from a SENAITE service item, but
     ONLY when svc.result_type is NULL (local-wins). No-op otherwise.
 
-    Mk1-origin rows are skipped entirely (mirrors _apply_sync_fields). Not
-    reachable today — no path produces an origin='mk1' row with a non-null
-    senaite_id, which is what every call site matches on — but Task 5 adds
-    analysis-service CRUD, exactly where such a path could get introduced.
-    Closing this by construction rather than relying on that invariant."""
+    Mk1-origin rows are skipped entirely (mirrors _apply_sync_fields), via an
+    `svc.origin == "mk1"` check — deliberately not `!= "senaite"`. The
+    brand-new-row call site in sync_analysis_services constructs
+    `AnalysisService(...)` with no `origin` kwarg, so svc.origin is Python
+    `None` there: `mapped_column(default="senaite")` is an insert-time
+    default applied at flush, not at construction. `None == "mk1"` is False,
+    so today's bail is correct for that row. Tightening the check to
+    `if svc.origin != "senaite": return` would also match that same
+    pre-flush `None` and silently stop seeding result_type on brand-new
+    SENAITE rows — do not make that change."""
     if svc.origin == "mk1":
         return
     if svc.result_type is not None:

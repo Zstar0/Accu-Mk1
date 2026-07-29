@@ -1408,6 +1408,10 @@ def _run_migrations():
         # (synced, default) or Mk1-born (native, never written to by the sync).
         "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS origin VARCHAR(20) NOT NULL DEFAULT 'senaite'",
         "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS local_overrides JSON",
+        # Mk1-native keyword uniqueness. Partial: only covers origin='mk1' rows —
+        # SENAITE-origin keyword collisions are prevented at the app layer by
+        # validate_new_keyword (see backend/main.py), which checks BOTH origins.
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_services_mk1_keyword ON analysis_services (keyword) WHERE origin = 'mk1'",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
