@@ -46,6 +46,7 @@ import {
   getDepartments,
   getPeptides,
   syncAnalysisServices,
+  updateAnalysisServicePeptide,
   type AnalysisServiceRecord,
   type AnalysisServiceCreatePayload,
   type AnalysisServiceUpdatePayload,
@@ -447,10 +448,10 @@ function ServicePanel({
   // refetches (Sync, another row's save) must not clobber in-progress edits.
   const [form, setForm] = useState<ServiceFormState>(() => toFormState(service))
   const [keywordLockMessage, setKeywordLockMessage] = useState<string | null>(null)
+  const [savingAll, setSavingAll] = useState(false)
 
   const createMutation = useCreateAnalysisService()
   const updateMutation = useUpdateAnalysisService()
-  const saving = createMutation.isPending || updateMutation.isPending
 
   const hasOptions = form.result_type === 'select' || form.result_type === 'multiselect'
   const isSlotService = /^ANALYTE-\d/i.test(form.keyword)
@@ -461,7 +462,26 @@ function ServicePanel({
       ? 'SENAITE-owned join key — the sync and COABuilder index results off this exact value. Edit it in SENAITE instead.'
       : keywordLockMessage
 
-  const handleSave = () => {
+  // Peptide link is deliberately routed through the dedicated PUT
+  // /analysis-services/{id}/peptide endpoint, never through the POST/PATCH
+  // body, even though both schemas accept `peptide_id`. The PUT is the only
+  // endpoint that also maintains `peptide_name` (set on link, cleared on
+  // unlink) — the create/update handlers do a bare field assignment with no
+  // derivation, so routing peptide_id through them would leave the Peptide
+  // Name column and its search index stale the moment a link changes.
+  const linkPeptide = async (id: number, peptideId: number | null, verb: 'created' | 'saved') => {
+    try {
+      await updateAnalysisServicePeptide(id, peptideId)
+    } catch (e) {
+      toast.error(
+        e instanceof Error
+          ? `Service ${verb}, but peptide link failed: ${e.message}`
+          : `Service ${verb}, but peptide link failed`
+      )
+    }
+  }
+
+  const handleSave = async () => {
     if (!form.title.trim()) {
       toast.error('Title is required')
       return
@@ -489,26 +509,40 @@ function ServicePanel({
       result_type: form.result_type || null,
       result_options: hasOptions ? deduped : null,
       variance_capable: form.variance_capable,
-      peptide_id: form.peptide_id,
     }
 
-    if (isCreate) {
-      const payload: AnalysisServiceCreatePayload = shared
-      createMutation.mutate(payload, { onSuccess: onSaved })
-    } else {
-      const payload: AnalysisServiceUpdatePayload = { ...shared, active: form.active }
-      updateMutation.mutate(
-        { id: service!.id, data: payload },
-        {
-          onSuccess: onSaved,
-          onError: e => {
-            if (isKeywordReferencedError(e)) {
-              setKeywordLockMessage(e.message)
-              setForm(f => ({ ...f, keyword: service!.keyword ?? '' }))
-            }
-          },
+    setSavingAll(true)
+    try {
+      if (isCreate) {
+        const payload: AnalysisServiceCreatePayload = shared
+        let created: AnalysisServiceRecord
+        try {
+          created = await createMutation.mutateAsync(payload)
+        } catch {
+          return // createMutation's onError already toasted the backend detail
         }
-      )
+        if (form.peptide_id != null) {
+          await linkPeptide(created.id, form.peptide_id, 'created')
+        }
+        onSaved()
+      } else {
+        const payload: AnalysisServiceUpdatePayload = { ...shared, active: form.active }
+        try {
+          await updateMutation.mutateAsync({ id: service!.id, data: payload })
+        } catch (e) {
+          if (isKeywordReferencedError(e)) {
+            setKeywordLockMessage(e.message)
+            setForm(f => ({ ...f, keyword: service!.keyword ?? '' }))
+          }
+          return // updateMutation's onError already toasted; keep panel open to retry
+        }
+        if (form.peptide_id !== service!.peptide_id) {
+          await linkPeptide(service!.id, form.peptide_id, 'saved')
+        }
+        onSaved()
+      }
+    } finally {
+      setSavingAll(false)
     }
   }
 
@@ -690,10 +724,18 @@ function ServicePanel({
         )}
 
         {!isCreate && service!.origin === 'senaite' && (
-          <p className="text-xs text-muted-foreground">
-            Editing title, category, or unit on a SENAITE-origin service converts that field to a
-            local override — the next sync will leave it alone.
-          </p>
+          <div className="text-xs text-muted-foreground space-y-1">
+            <p>
+              Editing title, category, or unit on a SENAITE-origin service converts that field to
+              a local override — the next sync will leave it alone.
+            </p>
+            {!!service!.local_overrides?.length && (
+              <p>
+                Currently overridden:{' '}
+                <span className="font-mono">{service!.local_overrides.join(', ')}</span>
+              </p>
+            )}
+          </div>
         )}
       </div>
 
@@ -744,8 +786,8 @@ function ServicePanel({
 
       {/* Save */}
       <div className="border-t pt-4 flex justify-end">
-        <Button onClick={handleSave} disabled={saving}>
-          {saving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
+        <Button onClick={handleSave} disabled={savingAll}>
+          {savingAll && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
           {isCreate ? 'Create Service' : 'Save Changes'}
         </Button>
       </div>
