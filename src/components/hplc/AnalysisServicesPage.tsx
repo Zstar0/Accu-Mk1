@@ -469,24 +469,39 @@ function ServicePanel({
   // unlink) — the create/update handlers do a bare field assignment with no
   // derivation, so routing peptide_id through them would leave the Peptide
   // Name column and its search index stale the moment a link changes.
-  const linkPeptide = async (id: number, peptideId: number | null, verb: 'created' | 'saved') => {
+  // Returns whether the link succeeded so the caller can decide whether it's
+  // safe to run the rest of the save's success flow.
+  const linkPeptide = async (
+    id: number,
+    peptideId: number | null,
+    verb: 'created' | 'saved'
+  ): Promise<boolean> => {
     try {
       await updateAnalysisServicePeptide(id, peptideId)
+      return true
     } catch (e) {
       toast.error(
         e instanceof Error
           ? `Service ${verb}, but peptide link failed: ${e.message}`
           : `Service ${verb}, but peptide link failed`
       )
+      return false
     }
   }
+
+  const originalKeyword = service?.keyword ?? ''
+  const keywordChanged = !isCreate && form.keyword.trim() !== originalKeyword
 
   const handleSave = async () => {
     if (!form.title.trim()) {
       toast.error('Title is required')
       return
     }
-    if (!form.keyword.trim()) {
+    // Keyword is nullable on SENAITE-origin rows and the field is disabled
+    // for them, so it can never be "fixed" to satisfy a blanket required
+    // check — only enforce this when a keyword is actually being set
+    // (create) or actually being changed (edit).
+    if ((isCreate || keywordChanged) && !form.keyword.trim()) {
       toast.error('Keyword is required')
       return
     }
@@ -499,45 +514,103 @@ function ServicePanel({
       .map(o => ({ value: o.value.trim(), label: o.label.trim() || o.value.trim() }))
       .filter(o => o.value)
     const deduped = cleaned.filter((o, i) => cleaned.findIndex(x => x.value === o.value) === i)
-
-    const shared = {
-      title: form.title.trim(),
-      keyword: form.keyword.trim(),
-      category: form.category.trim() || null,
-      unit: form.unit.trim() || null,
-      department_id: form.department_id,
-      result_type: form.result_type || null,
-      result_options: hasOptions ? deduped : null,
-      variance_capable: form.variance_capable,
-    }
+    const newResultOptions = hasOptions ? deduped : null
 
     setSavingAll(true)
     try {
       if (isCreate) {
-        const payload: AnalysisServiceCreatePayload = shared
+        const payload: AnalysisServiceCreatePayload = {
+          title: form.title.trim(),
+          keyword: form.keyword.trim(),
+          category: form.category.trim() || null,
+          unit: form.unit.trim() || null,
+          department_id: form.department_id,
+          result_type: form.result_type || null,
+          result_options: newResultOptions,
+          variance_capable: form.variance_capable,
+        }
         let created: AnalysisServiceRecord
         try {
           created = await createMutation.mutateAsync(payload)
         } catch {
           return // createMutation's onError already toasted the backend detail
         }
+        // The record now exists — always finish the success flow (reload +
+        // close) from here on, even if the peptide link sub-step fails.
+        // Unlike edit, retrying "Save" here is NOT idempotent: this branch
+        // calls createAnalysisService again, which would mint a SECOND
+        // service. A failed peptide link is recoverable by reopening the
+        // new row in Edit; a duplicate row is not.
         if (form.peptide_id != null) {
           await linkPeptide(created.id, form.peptide_id, 'created')
         }
         onSaved()
       } else {
-        const payload: AnalysisServiceUpdatePayload = { ...shared, active: form.active }
-        try {
-          await updateMutation.mutateAsync({ id: service!.id, data: payload })
-        } catch (e) {
-          if (isKeywordReferencedError(e)) {
-            setKeywordLockMessage(e.message)
-            setForm(f => ({ ...f, keyword: service!.keyword ?? '' }))
+        // Build the PATCH body from CHANGED fields only, diffed against the
+        // persisted record — never an unconditional full-object send. Two
+        // regressions came from sending every field on every save: (1) a
+        // SENAITE row with a null keyword became entirely unsavable, because
+        // the disabled keyword field could never satisfy a blanket
+        // "keyword required" guard; (2) result_options was nulled by saves
+        // that never touched result type, because result_options only rode
+        // along with `hasOptions` (true only for select/multiselect) instead
+        // of reflecting whether the stored value actually changed.
+        const payload: AnalysisServiceUpdatePayload = {}
+
+        const newTitle = form.title.trim()
+        if (newTitle !== service!.title) payload.title = newTitle
+
+        if (keywordChanged) payload.keyword = form.keyword.trim()
+
+        const newCategory = form.category.trim() || null
+        if (newCategory !== (service!.category ?? null)) payload.category = newCategory
+
+        const newUnit = form.unit.trim() || null
+        if (newUnit !== (service!.unit ?? null)) payload.unit = newUnit
+
+        if (form.department_id !== (service!.department_id ?? null)) {
+          payload.department_id = form.department_id
+        }
+
+        const newResultType = form.result_type || null
+        if (newResultType !== (service!.result_type ?? null)) payload.result_type = newResultType
+
+        if (JSON.stringify(newResultOptions) !== JSON.stringify(service!.result_options ?? null)) {
+          payload.result_options = newResultOptions
+        }
+
+        if (form.variance_capable !== (service!.variance_capable ?? false)) {
+          payload.variance_capable = form.variance_capable
+        }
+
+        if (form.active !== service!.active) payload.active = form.active
+
+        // Skip the PATCH entirely when nothing in it changed — e.g. a
+        // peptide-only edit. Firing a no-op PATCH would still succeed and
+        // show a technically-true-but-misleading "Analysis service updated"
+        // toast before the peptide link (the actual change) is even
+        // attempted.
+        if (Object.keys(payload).length > 0) {
+          try {
+            await updateMutation.mutateAsync({ id: service!.id, data: payload })
+          } catch (e) {
+            if (isKeywordReferencedError(e)) {
+              setKeywordLockMessage(e.message)
+              setForm(f => ({ ...f, keyword: originalKeyword }))
+            }
+            return // updateMutation's onError already toasted; keep panel open to retry
           }
-          return // updateMutation's onError already toasted; keep panel open to retry
         }
         if (form.peptide_id !== service!.peptide_id) {
-          await linkPeptide(service!.id, form.peptide_id, 'saved')
+          // The primary save already committed (and already toasted). Don't
+          // fire the rest of the success flow if only this sub-step fails —
+          // closing the panel here would show the OLD peptide under a green
+          // "updated" toast with no way to retry. Leaving form.peptide_id
+          // untouched means the next Save Changes click retries just this
+          // link (the primary fields re-diff to no-ops against the
+          // still-stale `service` prop, which is harmless — see fix report).
+          const linked = await linkPeptide(service!.id, form.peptide_id, 'saved')
+          if (!linked) return
         }
         onSaved()
       }

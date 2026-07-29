@@ -2516,7 +2516,7 @@ export async function updateAnalysisServicePeptide(
     headers: getBearerHeaders('application/json'),
     body: JSON.stringify({ peptide_id: peptideId }),
   })
-  if (!response.ok) throw new Error(`Update peptide link failed: ${response.status}`)
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to update peptide link'))
   return response.json()
 }
 
