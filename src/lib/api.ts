@@ -2430,7 +2430,6 @@ export interface AnalysisServiceCreatePayload {
   result_type?: string | null
   result_options?: { value: string; label: string }[] | null
   variance_capable?: boolean
-  peptide_id?: number | null
 }
 
 export interface AnalysisServiceUpdatePayload {
@@ -2442,7 +2441,6 @@ export interface AnalysisServiceUpdatePayload {
   result_type?: string | null
   result_options?: { value: string; label: string }[] | null
   variance_capable?: boolean
-  peptide_id?: number | null
   active?: boolean
 }
 

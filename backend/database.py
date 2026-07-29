@@ -136,9 +136,12 @@ def init_db():
             backfill_departments(_s)
     except Exception as e:  # never block startup
         log.warning("catalog_department_backfill_skipped err=%s", e)
-    from catalog.profile_seed import seed_profiles_from_registry
-    with SessionLocal() as _s:
-        seed_profiles_from_registry(_s)
+    try:
+        from catalog.profile_seed import seed_profiles_from_registry
+        with SessionLocal() as _s:
+            seed_profiles_from_registry(_s)
+    except Exception as e:  # never block startup
+        log.warning("catalog_profile_seed_skipped err=%s", e)
 
 
 def _run_migrations():

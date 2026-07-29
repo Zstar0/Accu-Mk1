@@ -469,11 +469,11 @@ function ServicePanel({
 
   // Peptide link is deliberately routed through the dedicated PUT
   // /analysis-services/{id}/peptide endpoint, never through the POST/PATCH
-  // body, even though both schemas accept `peptide_id`. The PUT is the only
-  // endpoint that also maintains `peptide_name` (set on link, cleared on
-  // unlink) — the create/update handlers do a bare field assignment with no
-  // derivation, so routing peptide_id through them would leave the Peptide
-  // Name column and its search index stale the moment a link changes.
+  // body — the POST/PATCH schemas don't even accept `peptide_id`. The PUT is
+  // the only endpoint that also maintains `peptide_name` (set on link,
+  // cleared on unlink) — routing peptide_id through create/update would
+  // leave the Peptide Name column and its search index stale the moment a
+  // link changes.
   // Returns whether the link succeeded so the caller can decide whether it's
   // safe to run the rest of the save's success flow.
   const linkPeptide = async (

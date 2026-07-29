@@ -2240,6 +2240,10 @@ class AnalysisServiceResponse(BaseModel):
         from_attributes = True
 
 
+# peptide_id deliberately excluded from both schemas below: it's only
+# settable via PUT /analysis-services/{id}/peptide, the sole handler that
+# also derives peptide_name. Adding it here would let a caller set peptide_id
+# without peptide_name, desyncing COA/HPLC identity matching.
 class AnalysisServiceCreate(BaseModel):
     title: str
     keyword: str
@@ -2249,7 +2253,6 @@ class AnalysisServiceCreate(BaseModel):
     result_type: Optional[str] = None
     result_options: Optional[list] = None
     variance_capable: bool = False
-    peptide_id: Optional[int] = None
 
 
 class AnalysisServiceUpdate(BaseModel):
@@ -2261,7 +2264,6 @@ class AnalysisServiceUpdate(BaseModel):
     result_type: Optional[str] = None
     result_options: Optional[list] = None
     variance_capable: Optional[bool] = None
-    peptide_id: Optional[int] = None
     active: Optional[bool] = None
 
 
