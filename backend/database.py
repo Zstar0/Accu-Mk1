@@ -129,6 +129,13 @@ def init_db():
             _wf_db.commit()
     except Exception as e:  # never block startup
         log.warning("workflow_seed_skipped err=%s", e)
+    # Catalog foundation: seed departments and backfill department_id.
+    try:
+        from catalog.departments import backfill_departments
+        with SessionLocal() as _s:
+            backfill_departments(_s)
+    except Exception as e:  # never block startup
+        log.warning("catalog_department_backfill_skipped err=%s", e)
 
 
 def _run_migrations():
@@ -1383,6 +1390,20 @@ def _run_migrations():
         "ALTER TABLE lims_parent_attachments ADD CONSTRAINT "
         "lims_parent_attachments_kind_check CHECK (kind IN "
         "('vial_image','packaging_image','receive_image','chromatogram','manual'))",
+        # --- Catalog foundation: departments + department_id ---
+        """
+        CREATE TABLE IF NOT EXISTS departments (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(200) NOT NULL UNIQUE,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            color VARCHAR(50) NOT NULL DEFAULT 'blue',
+            is_system BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT now(),
+            updated_at TIMESTAMP DEFAULT now()
+        )
+        """,
+        "ALTER TABLE service_groups ADD COLUMN IF NOT EXISTS department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL",
+        "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
