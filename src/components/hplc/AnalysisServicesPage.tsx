@@ -366,6 +366,7 @@ export function AnalysisServicesPage() {
                 departments={departments}
                 peptides={peptides}
                 onSaved={handleSaved}
+                onNoOpSave={closePanel}
               />
             </div>
           </div>
@@ -435,11 +436,15 @@ function ServicePanel({
   departments,
   peptides,
   onSaved,
+  onNoOpSave,
 }: {
   service: AnalysisServiceRecord | null
   departments: Department[]
   peptides: PeptideRecord[]
   onSaved: () => void
+  /** Edit mode, nothing actually changed: close without a pointless reload
+   *  (or a "you saved nothing" toast) — the user asked to be done editing. */
+  onNoOpSave: () => void
 }) {
   const isCreate = service === null
 
@@ -585,18 +590,45 @@ function ServicePanel({
           payload.department_id = form.department_id
         }
 
-        const newResultType = form.result_type || null
-        if (newResultType !== (service!.result_type ?? null)) payload.result_type = newResultType
-
-        if (JSON.stringify(newResultOptions) !== JSON.stringify(service!.result_options ?? null)) {
+        // result_type/result_options are keyed on user INTENT (did the type
+        // actually change?), never on `hasOptions` alone. `hasOptions` is
+        // just "is the CURRENT form's type select/multiselect" — computing
+        // newResultOptions from it unconditionally and diffing that against
+        // storage means an untouched non-select row (which can legitimately
+        // have stored result_options — _apply_service_result_type populates
+        // them independent of result_type) always "changes" from
+        // stored-array to null and gets nulled by ANY unrelated field edit.
+        const resultTypeChanged = form.result_type !== (service!.result_type ?? '')
+        if (resultTypeChanged) {
+          // A deliberate type change legitimately redefines what
+          // result_options means here — explicit `null` is correct only in
+          // this branch (switching away from select/multiselect clears
+          // stale options; switching to one starts from the editor's
+          // current contents).
+          payload.result_type = form.result_type || null
           payload.result_options = newResultOptions
+        } else if (hasOptions) {
+          // Type unchanged and currently select/multiselect — only touch
+          // result_options if the options themselves differ from storage.
+          if (JSON.stringify(newResultOptions) !== JSON.stringify(service!.result_options ?? null)) {
+            payload.result_options = newResultOptions
+          }
         }
+        // else: type unchanged and non-select — never send result_options,
+        // regardless of what's stored.
 
         if (form.variance_capable !== (service!.variance_capable ?? false)) {
           payload.variance_capable = form.variance_capable
         }
 
         if (form.active !== service!.active) payload.active = form.active
+
+        const peptideChanged = form.peptide_id !== service!.peptide_id
+
+        if (Object.keys(payload).length === 0 && !peptideChanged) {
+          onNoOpSave()
+          return
+        }
 
         // Skip the PATCH entirely when nothing in it changed — e.g. a
         // peptide-only edit. Firing a no-op PATCH would still succeed and
@@ -614,7 +646,7 @@ function ServicePanel({
             return // updateMutation's onError already toasted; keep panel open to retry
           }
         }
-        if (form.peptide_id !== service!.peptide_id) {
+        if (peptideChanged) {
           // The primary save already committed (and already toasted). Don't
           // fire the rest of the success flow if only this sub-step fails —
           // closing the panel here would show the OLD peptide under a green
