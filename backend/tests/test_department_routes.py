@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 from unittest.mock import MagicMock
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from fastapi.testclient import TestClient
@@ -118,6 +118,41 @@ def test_patch_department_fields(route_client):
 def test_patch_department_not_found(route_client):
     resp = route_client.patch("/departments/999999", json={"name": "Nope"})
     assert resp.status_code == 404
+
+
+def test_patch_department_rename_to_existing_name_rejected(route_client):
+    """Department.name is unique=True — without an explicit guard this hits
+    an unhandled IntegrityError at commit (opaque 500) instead of the same
+    clean 400 create_department already gives for the identical user error."""
+    db = route_client._test_session
+    db.add_all([
+        Department(name="Analytical"),
+        Department(name="Microbiology"),
+    ])
+    db.commit()
+    dept_b = db.execute(select(Department).where(Department.name == "Microbiology")).scalar_one()
+
+    resp = route_client.patch(f"/departments/{dept_b.id}", json={"name": "Analytical"})
+    assert resp.status_code == 400
+
+    db.refresh(dept_b)
+    assert dept_b.name == "Microbiology"
+
+
+def test_patch_department_rename_to_own_current_name_succeeds(route_client):
+    """The duplicate-name guard must exclude the row's own id — resubmitting
+    the current name (e.g. a full-object-save that only changed sort_order)
+    must not be mistaken for a collision with itself."""
+    db = route_client._test_session
+    dept = Department(name="Analytical", sort_order=0)
+    db.add(dept)
+    db.commit()
+
+    resp = route_client.patch(
+        f"/departments/{dept.id}", json={"name": "Analytical", "sort_order": 9}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["sort_order"] == 9
 
 
 def test_delete_department_204(route_client):

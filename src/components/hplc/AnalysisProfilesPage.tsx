@@ -535,22 +535,28 @@ export default function AnalysisProfilesPage() {
                   </div>
                 </div>
 
-                {/* Active toggle */}
-                <div className="flex items-center gap-3">
-                  <Checkbox
-                    id="is-active"
-                    checked={form.active}
-                    onCheckedChange={checked =>
-                      setForm(f => ({ ...f, active: checked === true }))
-                    }
-                  />
-                  <label htmlFor="is-active" className="text-sm font-medium leading-none">
-                    Active
-                    <span className="block text-xs font-normal text-muted-foreground">
-                      Inactive profiles are hidden from new orders
-                    </span>
-                  </label>
-                </div>
+                {/* Active toggle — edit only. createAnalysisProfile's client
+                    signature has no `active` field (the backend always
+                    creates active=True), so showing this on create would let
+                    an admin uncheck it and believe the profile was created
+                    inactive when it wasn't. */}
+                {editingProfile && (
+                  <div className="flex items-center gap-3">
+                    <Checkbox
+                      id="is-active"
+                      checked={form.active}
+                      onCheckedChange={checked =>
+                        setForm(f => ({ ...f, active: checked === true }))
+                      }
+                    />
+                    <label htmlFor="is-active" className="text-sm font-medium leading-none">
+                      Active
+                      <span className="block text-xs font-normal text-muted-foreground">
+                        Inactive profiles are hidden from new orders
+                      </span>
+                    </label>
+                  </div>
+                )}
               </div>
 
               {/* Save profile button */}

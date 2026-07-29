@@ -15490,7 +15490,16 @@ async def update_department(
     dept = db.get(Department, department_id)
     if dept is None:
         raise HTTPException(404, "department not found")
-    for field, value in data.model_dump(exclude_unset=True).items():
+    update_data = data.model_dump(exclude_unset=True)
+    if "name" in update_data and update_data["name"] != dept.name:
+        existing = db.execute(
+            select(Department).where(
+                Department.name == update_data["name"], Department.id != department_id
+            )
+        ).scalar_one_or_none()
+        if existing:
+            raise HTTPException(400, f"Department '{update_data['name']}' already exists")
+    for field, value in update_data.items():
         setattr(dept, field, value)
     db.commit()
     db.refresh(dept)
