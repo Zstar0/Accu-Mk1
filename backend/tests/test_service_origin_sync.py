@@ -1,4 +1,6 @@
 """origin + local_overrides: sync can never touch Mk1-owned data."""
+import asyncio
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -77,3 +79,70 @@ def test_sync_never_touches_an_mk1_row(db_session):
     _apply_sync_fields(svc, {"title": "Clobbered"})
 
     assert svc.title == "Lead (Pb)"
+
+
+# ─── existing-row category: back-fill only, never clobber (ruling 2026-07-29) ───
+# sync_analysis_services' `if existing:` branch must reproduce the pre-Task-4
+# behavior for `category`: fill it in when missing, never overwrite a value
+# that's already there. _apply_sync_fields alone can't express "only when the
+# EXISTING value is empty" (its guard is on the incoming value), so the branch
+# gates the call at the call site. These two tests pin both halves.
+
+class _Resp:
+    def __init__(self, payload):
+        self._p = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._p
+
+
+def _fake_get(services):
+    def get(url, **kw):
+        if kw.get("params", {}).get("portal_type") == "AnalysisService":
+            return _Resp({"items": services})
+        return _Resp({"items": []})  # AnalysisCategory pull
+    return get
+
+
+def _run_sync(db, monkeypatch, services):
+    import main
+    monkeypatch.setattr("httpx.get", _fake_get(services))
+    monkeypatch.setattr(main, "SENAITE_URL", "http://senaite.test")
+    return asyncio.run(main.sync_analysis_services(db=db, _current_user=None))
+
+
+def test_existing_row_category_is_not_clobbered_when_already_set(db_session, monkeypatch):
+    from models import AnalysisService
+    svc = AnalysisService(title="X", keyword="ID_X", category="HPLC",
+                          origin="senaite", senaite_id="analysisservice-50",
+                          senaite_uid="U")
+    db_session.add(svc)
+    db_session.commit()
+
+    _run_sync(db_session, monkeypatch, [{
+        "id": "analysisservice-50", "uid": "U", "title": "X",
+        "getKeyword": "ID_X", "getCategoryTitle": "Microbiology",
+    }])
+
+    db_session.refresh(svc)
+    assert svc.category == "HPLC"  # SENAITE's differing value is NOT applied
+
+
+def test_existing_row_category_still_backfills_when_missing(db_session, monkeypatch):
+    from models import AnalysisService
+    svc = AnalysisService(title="X", keyword="ID_X", category=None,
+                          origin="senaite", senaite_id="analysisservice-51",
+                          senaite_uid="U")
+    db_session.add(svc)
+    db_session.commit()
+
+    _run_sync(db_session, monkeypatch, [{
+        "id": "analysisservice-51", "uid": "U", "title": "X",
+        "getKeyword": "ID_X", "getCategoryTitle": "Microbiology",
+    }])
+
+    db_session.refresh(svc)
+    assert svc.category == "Microbiology"  # back-fill still works

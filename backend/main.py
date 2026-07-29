@@ -3150,7 +3150,11 @@ async def sync_analysis_services(db: Session = Depends(get_db), _current_user=De
         ).scalar_one_or_none()
 
         if existing:
-            _apply_sync_fields(existing, {"category": category})
+            # Back-fill category only when it is missing — matches the
+            # pre-existing behavior. local_overrides still applies, so an
+            # operator edit is honored either way.
+            if not existing.category:
+                _apply_sync_fields(existing, {"category": category})
             _apply_service_result_type(existing, item)
             continue
 
