@@ -80,3 +80,20 @@ def test_unreferenced_keyword_is_editable(db_session):
     db_session.add(svc)
     db_session.commit()
     assert_keyword_editable(db_session, svc)   # must not raise
+
+
+def test_keyword_immutable_on_senaite_origin_even_when_unreferenced(db_session):
+    """A SENAITE-origin row's keyword is refused outright, referenced or not.
+    It is SENAITE's assignment and the join key COABuilder reads off it — an
+    UNREFERENCED SENAITE-origin service must not be rename-able from Mk1
+    either, or it silently desyncs from the next SENAITE sync pass with no
+    lims_analyses row required to trip a guard."""
+    from main import assert_keyword_editable
+    from models import AnalysisService
+    svc = AnalysisService(title="Endotoxin", keyword="ENDO-LAL", origin="senaite")
+    db_session.add(svc)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as e:
+        assert_keyword_editable(db_session, svc)
+    assert e.value.status_code == 400

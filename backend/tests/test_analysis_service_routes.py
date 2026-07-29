@@ -5,7 +5,9 @@ assert_keyword_editable directly. This file covers behavior that only lives
 in the route handlers themselves and has no other coverage in the suite:
 - DELETE's origin guard (senaite-origin rows are never deletable here)
 - DELETE's referenced-row guard (409, deactivate instead)
-- PATCH's local_overrides bookkeeping on a senaite-origin row
+- PATCH's local_overrides bookkeeping on a senaite-origin row, including the
+  no-op case where a field is resubmitted unchanged
+- PATCH's rejection of a keyword change on a senaite-origin row
 
 Fixture mirrors test_variance_capable_endpoint.py.
 """
@@ -135,3 +137,41 @@ def test_patch_mk1_origin_does_not_populate_local_overrides(route_client):
     resp = route_client.patch(f"/analysis-services/{svc.id}", json={"title": "Lead 2"})
     assert resp.status_code == 200
     assert resp.json()["local_overrides"] is None
+
+
+def test_patch_resubmitting_unchanged_values_does_not_lock_local_overrides(route_client):
+    """A full-object-save PATCH (Task 9's edit flyout is exactly this
+    pattern: open, touch one field, save everything back) must not lock an
+    UNCHANGED sync-owned field into local_overrides. Only a genuine value
+    change may transfer ownership away from the SENAITE sync."""
+    db = route_client._test_session
+    svc = AnalysisService(title="Endo", keyword="ENDO-LAL", origin="senaite", senaite_id="s-1")
+    db.add(svc)
+    db.commit()
+
+    resp = route_client.patch(
+        f"/analysis-services/{svc.id}",
+        json={"title": "Endo", "keyword": "ENDO-LAL", "unit": "EU/mL"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    # title and keyword were resubmitted with their CURRENT values -> no-op.
+    # unit actually changed (None -> "EU/mL") -> genuinely locked.
+    assert body["local_overrides"] == ["unit"], body["local_overrides"]
+    assert body["unit"] == "EU/mL"
+
+
+def test_patch_keyword_change_on_senaite_origin_rejected(route_client):
+    """Even an UNREFERENCED SENAITE-origin service must reject a keyword
+    rename outright through the route — the keyword is SENAITE's to own,
+    not Mk1's to edit, regardless of whether any analysis references it yet."""
+    db = route_client._test_session
+    svc = AnalysisService(title="Endo", keyword="ENDO-LAL", origin="senaite", senaite_id="s-1")
+    db.add(svc)
+    db.commit()
+
+    resp = route_client.patch(f"/analysis-services/{svc.id}", json={"keyword": "ENDO-LAL2"})
+    assert resp.status_code == 400
+
+    db.refresh(svc)
+    assert svc.keyword == "ENDO-LAL"

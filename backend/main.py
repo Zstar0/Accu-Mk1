@@ -2234,6 +2234,7 @@ class AnalysisServiceResponse(BaseModel):
     variance_capable: bool
     origin: str = "senaite"
     local_overrides: Optional[list] = None
+    department_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -2975,11 +2976,15 @@ async def update_analysis_service(
         assert_keyword_editable(db, svc)
         validate_new_keyword(db, fields["keyword"], exclude_id=svc.id)
 
+    # Only a genuine value change locks a sync-owned field into local_overrides.
+    # Resubmitting the current value (e.g. a full-object-save from a UI edit
+    # flyout that touches nothing) must be a no-op, not a permanent ownership
+    # transfer away from the SENAITE sync.
     overrides = set(svc.local_overrides or [])
     for field, value in fields.items():
-        setattr(svc, field, value)
-        if svc.origin == "senaite" and field in SYNC_OWNED_FIELDS:
+        if svc.origin == "senaite" and field in SYNC_OWNED_FIELDS and value != getattr(svc, field):
             overrides.add(field)
+        setattr(svc, field, value)
     if svc.origin == "senaite":
         svc.local_overrides = sorted(overrides)
 
@@ -2996,16 +3001,12 @@ async def delete_analysis_service(
 ):
     """Delete an Mk1-native service. Refused if any analysis references it —
     deactivate instead. SENAITE-origin rows are never deletable here."""
-    from models import LimsAnalysis
     svc = db.get(AnalysisService, service_id)
     if svc is None:
         raise HTTPException(404, "analysis service not found")
     if svc.origin != "mk1":
         raise HTTPException(400, "only Mk1-native services can be deleted; deactivate instead")
-    referenced = db.execute(
-        select(LimsAnalysis.id).where(LimsAnalysis.analysis_service_id == svc.id).limit(1)
-    ).scalars().first()
-    if referenced is not None:
+    if _is_service_referenced(db, svc.id):
         raise HTTPException(409, "service is referenced by existing analyses; deactivate instead")
     db.delete(svc)
     db.commit()
@@ -3121,14 +3122,31 @@ def validate_new_keyword(db, keyword: str, *, exclude_id: int | None = None) -> 
         raise HTTPException(400, f"keyword '{keyword}' is already in use")
 
 
+def _is_service_referenced(db, service_id: int) -> bool:
+    """True if any lims_analyses row references this analysis service."""
+    from models import LimsAnalysis
+    return db.execute(
+        select(LimsAnalysis.id).where(LimsAnalysis.analysis_service_id == service_id).limit(1)
+    ).scalars().first() is not None
+
+
 def assert_keyword_editable(db, svc) -> None:
     """A keyword becomes immutable once any lims_analyses row references the
-    service — renaming it would orphan results from their spec limits."""
-    from models import LimsAnalysis
-    referenced = db.execute(
-        select(LimsAnalysis.id).where(LimsAnalysis.analysis_service_id == svc.id).limit(1)
-    ).scalars().first()
-    if referenced is not None:
+    service — renaming it would orphan results from their spec limits.
+
+    A SENAITE-origin row's keyword is refused outright, referenced or not:
+    it is SENAITE's assignment and the join key COABuilder reads off it.
+    Without this, an unreferenced SENAITE-origin service could be renamed
+    from Mk1 with no lims_analyses row to trip the guard above, permanently
+    desyncing that keyword from the SENAITE sync.
+    """
+    if svc.origin == "senaite":
+        raise HTTPException(
+            400,
+            f"keyword '{svc.keyword}' is owned by SENAITE and cannot be changed "
+            "from Accu-Mk1; edit it in SENAITE instead",
+        )
+    if _is_service_referenced(db, svc.id):
         raise HTTPException(
             409,
             f"keyword '{svc.keyword}' is referenced by existing analyses and cannot "
