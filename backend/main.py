@@ -2313,6 +2313,34 @@ class ServiceGroupMembersRequest(BaseModel):
     analysis_service_ids: list[int]
 
 
+# ─── Department schemas ───
+
+class DepartmentCreate(BaseModel):
+    name: str
+    sort_order: int = 0
+    color: str = "blue"
+    is_system: bool = False
+
+
+class DepartmentUpdate(BaseModel):
+    name: Optional[str] = None
+    sort_order: Optional[int] = None
+    color: Optional[str] = None
+
+
+class DepartmentResponse(BaseModel):
+    id: int
+    name: str
+    sort_order: int
+    color: str
+    is_system: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 # ─── Analysis Profile schemas ───
 
 class AnalysisProfileCreate(BaseModel):
@@ -15419,6 +15447,77 @@ async def set_service_group_members(
     group.analysis_services = list(services)
     db.commit()
     return {"count": len(services)}
+
+
+# ─── Departments ───────────────────────────────────────────────────────────────
+
+@app.get("/departments", response_model=list[DepartmentResponse])
+async def get_departments(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
+    """All departments ordered by sort_order, then name."""
+    from models import Department
+    return db.execute(
+        select(Department).order_by(Department.sort_order, Department.name)
+    ).scalars().all()
+
+
+@app.post("/departments", response_model=DepartmentResponse, status_code=201)
+async def create_department(
+    data: DepartmentCreate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    from models import Department
+    existing = db.execute(
+        select(Department).where(Department.name == data.name)
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(400, f"Department '{data.name}' already exists")
+    dept = Department(**data.model_dump())
+    db.add(dept)
+    db.commit()
+    db.refresh(dept)
+    return dept
+
+
+@app.patch("/departments/{department_id}", response_model=DepartmentResponse)
+async def update_department(
+    department_id: int,
+    data: DepartmentUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    from models import Department
+    dept = db.get(Department, department_id)
+    if dept is None:
+        raise HTTPException(404, "department not found")
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(dept, field, value)
+    db.commit()
+    db.refresh(dept)
+    return dept
+
+
+@app.delete("/departments/{department_id}", status_code=204)
+async def delete_department(
+    department_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)
+):
+    """Refused while any service or group still points at it — reassign first.
+    A silently orphaned service would be excluded from HPLC mirroring."""
+    from models import Department
+    dept = db.get(Department, department_id)
+    if dept is None:
+        raise HTTPException(404, "department not found")
+    if dept.is_system:
+        raise HTTPException(400, "system departments cannot be deleted")
+    in_use = db.execute(
+        select(AnalysisService.id).where(AnalysisService.department_id == department_id).limit(1)
+    ).scalars().first() or db.execute(
+        select(ServiceGroup.id).where(ServiceGroup.department_id == department_id).limit(1)
+    ).scalars().first()
+    if in_use is not None:
+        raise HTTPException(409, "department still has services or groups; reassign them first")
+    db.delete(dept)
+    db.commit()
 
 
 # ─── Analysis Profiles ─────────────────────────────────────────────────────────

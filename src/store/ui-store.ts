@@ -28,6 +28,8 @@ export type LIMSSubSection =
   | 'peptide-config'
   | 'analysis-services'
   | 'service-groups'
+  | 'departments'
+  | 'analysis-profiles'
 export type HPLCAnalysisSubSection =
   | 'overview'
   | 'new-analysis'
