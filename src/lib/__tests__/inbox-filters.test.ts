@@ -42,7 +42,27 @@ describe('analysisRole', () => {
 
 describe('itemRoleBadges', () => {
   it('an Analytical item is hplc regardless of analyses', () => {
-    expect(itemRoleBadges({ department_name: 'Analytical', analyses: [] })).toEqual(['hplc'])
+    // Non-empty, conflicting analyses (a micro-looking ENDO-LAL keyword) is the
+    // point: this proves the Analytical short-circuit wins over per-analysis
+    // derivation, which an empty array can't demonstrate.
+    expect(itemRoleBadges({
+      department_name: 'Analytical',
+      analyses: [{ keyword: 'ENDO-LAL', title: 'Endotoxin' }],
+    })).toEqual(['hplc'])
+  })
+
+  it('endo-only micro item -> [endo]', () => {
+    expect(itemRoleBadges({
+      department_name: 'Microbiology',
+      analyses: [{ keyword: 'ENDO-LAL', title: 'Endotoxin' }],
+    })).toEqual(['endo'])
+  })
+
+  it('ster-only micro item -> [ster]', () => {
+    expect(itemRoleBadges({
+      department_name: 'Microbiology',
+      analyses: [{ keyword: 'STER-PCR', title: 'Rapid Sterility Screening (PCR)' }],
+    })).toEqual(['ster'])
   })
 
   it('splits micro into endo/ster by analysis', () => {
@@ -54,6 +74,13 @@ describe('itemRoleBadges', () => {
       ],
     })
     expect(badges).toEqual(['endo', 'ster'])
+  })
+
+  it('micro item with only moisture -> [] (no pill)', () => {
+    expect(itemRoleBadges({
+      department_name: 'Microbiology',
+      analyses: [{ keyword: 'KF', title: 'Moisture Content' }],
+    })).toEqual([])
   })
 
   it('null department + no derivable role -> []', () => {
