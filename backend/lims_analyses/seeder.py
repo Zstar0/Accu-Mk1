@@ -39,7 +39,7 @@ from typing import Dict, List, Optional, Set
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from catalog.departments import department_id_by_name
+from catalog.departments import ANALYTICAL_DEPARTMENT, department_id_by_name
 from lims_analyses import service as la_service
 from models import (
     AnalysisService,
@@ -193,7 +193,7 @@ def mirror_parent_hplc_analyses(
     # HPLC vials. Microbiology / NULL / mis-tagged services are excluded by
     # default, so nothing can leak onto a chromatography vial. (Was: an
     # exclude-known-Micro deny-list, which defaulted to "contaminate".)
-    analytical_dept_id = department_id_by_name(db, "Analytical")
+    analytical_dept_id = department_id_by_name(db, ANALYTICAL_DEPARTMENT)
     if analytical_dept_id is None:
         log.error("seeder.mirror.no_analytical_dept — aborting mirror (fail-closed)")
         return []

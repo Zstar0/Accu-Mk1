@@ -112,3 +112,135 @@ def test_department_id_by_name(db_session):
     backfill_departments(db_session)
     assert department_id_by_name(db_session, "Analytical") is not None
     assert department_id_by_name(db_session, "Nope") is None
+
+
+# ── production-shaped group naming + ungrouped rescue (Task 2 fix round) ────
+#
+# Production's real service_groups table has no "Analytics" row — its
+# analytical bench group is named "Core HPLC" — and its HPLC analyte services
+# (ID_*, HPLC-PUR, PEPT-Total, per-substance PUR_<X>/QTY_<X>) carry NO group
+# membership at all. Before this fix, backfill_departments left every one of
+# those services with a NULL department_id, and the fail-closed HPLC
+# allow-list (lims_analyses/seeder.py) then silently mirrored ZERO analyses
+# onto every HPLC vial — without the mirror's missing-department guard ever
+# firing, because the Analytical department row itself still existed.
+
+
+def test_backfill_recognizes_core_hplc_as_the_production_group_name(db_session):
+    """Production's analytical bench group is named "Core HPLC", not
+    "Analytics". The group-name map must recognize it — dropping this mapping
+    is exactly what would silently empty every HPLC vial."""
+    from catalog.departments import backfill_departments
+    from models import AnalysisService, Department, ServiceGroup, service_group_members
+
+    core_hplc = ServiceGroup(name="Core HPLC")
+    db_session.add(core_hplc)
+    db_session.commit()
+    id_svc = AnalysisService(title="GHK-Cu - Identity (HPLC)", keyword="ID_GHKCU")
+    db_session.add(id_svc)
+    db_session.commit()
+    db_session.execute(service_group_members.insert().values(
+        service_group_id=core_hplc.id, analysis_service_id=id_svc.id))
+    db_session.commit()
+
+    backfill_departments(db_session)
+
+    analytical_id = db_session.query(Department).filter_by(name="Analytical").one().id
+    db_session.refresh(core_hplc)
+    db_session.refresh(id_svc)
+    assert core_hplc.department_id == analytical_id
+    assert id_svc.department_id == analytical_id   # inherited from the group
+
+
+def test_ungrouped_rescue_covers_all_enumerated_analytical_families(db_session):
+    """Every ungrouped analytical keyword family production actually carries
+    — confirmed against production data during the Task 2 fix round — is
+    rescued into Analytical, not just ANALYTE-N-*."""
+    from catalog.departments import backfill_departments
+    from models import AnalysisService, Department
+
+    keywords = [
+        "ANALYTE-1-PUR", "ID_GHKCU", "HPLC-PUR", "HPLC-ID",
+        "PEPT-Total", "PUR_GHKCU", "QTY_GHKCU", "BLEND-PUR",
+    ]
+    db_session.add_all([AnalysisService(title=kw, keyword=kw) for kw in keywords])
+    db_session.commit()
+
+    backfill_departments(db_session)
+
+    analytical_id = db_session.query(Department).filter_by(name="Analytical").one().id
+    tagged = {
+        kw for (kw, dep) in db_session.query(
+            AnalysisService.keyword, AnalysisService.department_id
+        ).all()
+        if dep == analytical_id
+    }
+    assert tagged == set(keywords)
+
+
+def test_ungrouped_rescue_patterns_are_escaped_not_wildcards(db_session):
+    """The rescue LIKE patterns contain literal underscores (PUR_, QTY_,
+    ID_), which is the SQL LIKE single-char wildcard unless escaped. A decoy
+    keyword that would match an UNESCAPED "PUR_%" (any single char standing
+    in for "_") must NOT be rescued — only a literal-underscore match may
+    land in Analytical."""
+    from catalog.departments import backfill_departments
+    from models import AnalysisService, Department
+
+    real = AnalysisService(title="GHK-Cu - Purity", keyword="PUR_GHKCU")
+    decoy = AnalysisService(title="Purge Foo", keyword="PURGE-FOO")
+    db_session.add_all([real, decoy])
+    db_session.commit()
+
+    backfill_departments(db_session)
+
+    analytical_id = db_session.query(Department).filter_by(name="Analytical").one().id
+    db_session.refresh(real)
+    db_session.refresh(decoy)
+    assert real.department_id == analytical_id
+    assert decoy.department_id is None   # NOT rescued: no literal-underscore match
+
+
+def test_backfill_logs_error_when_analytical_department_ends_up_empty(db_session, caplog):
+    """Residual-gap regression coverage: a service that matches NEITHER a
+    known group name NOR any enumerated rescue pattern (a genuinely novel
+    future misconfiguration, e.g. yet another unmapped production group name)
+    leaves the Analytical department row existing but carrying zero tagged
+    services. That state is silent everywhere except here — the mirror's
+    missing-department guard never fires because the row exists — so this
+    diagnostic is the only loud signal. Must fire at ERROR, not WARNING (the
+    existing null_department check is a different, less severe condition)."""
+    import logging
+    from catalog.departments import backfill_departments
+    from models import AnalysisService, Department
+
+    db_session.add(AnalysisService(title="Mystery Service", keyword="MYSTERY-SVC"))
+    db_session.commit()
+
+    caplog.set_level(logging.ERROR)
+    backfill_departments(db_session)
+
+    assert any(
+        "catalog.backfill.analytical_department_empty" in r.message
+        for r in caplog.records
+    )
+    analytical_id = db_session.query(Department).filter_by(name="Analytical").one().id
+    assert db_session.query(AnalysisService).filter_by(
+        department_id=analytical_id
+    ).count() == 0
+
+
+def test_backfill_does_not_log_error_on_a_genuinely_empty_catalog(db_session, caplog):
+    """A fresh install with no analysis_services rows at all (before the first
+    SENAITE catalog sync) is not a misconfiguration and must not trip the
+    empty-Analytical-department diagnostic."""
+    import logging
+    from catalog.departments import backfill_departments
+
+    caplog.set_level(logging.ERROR)
+    backfill_departments(db_session)
+
+    assert not any(
+        "catalog.backfill.analytical_department_empty" in r.message
+        for r in caplog.records
+    )

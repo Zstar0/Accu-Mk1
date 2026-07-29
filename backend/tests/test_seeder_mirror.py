@@ -302,3 +302,45 @@ def test_mirror_aborts_when_the_analytical_department_is_missing(db_session, mon
         commit=False,
     )
     assert created == []
+
+
+def test_mirror_returns_empty_when_analytical_department_has_no_tagged_services(
+    db_session, monkeypatch,
+):
+    """Production-shaped regression (Task 2 fix round): the Analytical
+    department ROW can exist — so the missing-department abort guard tested
+    above never fires — while carrying ZERO tagged services, if this
+    environment's real service-group names or ungrouped keyword families
+    aren't recognized by catalog.departments (e.g. before the "Core HPLC" /
+    ungrouped-family fix). This is deliberately reached via the real
+    backfill_departments(), not hand-crafted department_id values, to prove
+    the end-to-end path: a service that matches no known group AND no
+    enumerated rescue pattern stays NULL, so the department row is empty and
+    the mirror still correctly returns [] rather than raising or leaking.
+    (The loud signal for this state is backfill's own log.error — see
+    test_backfill_logs_error_when_analytical_department_ends_up_empty in
+    test_departments_catalog.py.)"""
+    from catalog.departments import backfill_departments
+    from lims_analyses.seeder import mirror_parent_hplc_analyses
+    from models import AnalysisService
+
+    # Matches no known group name and no _UNGROUPED_ANALYTICAL_LIKE_PATTERNS
+    # entry — the residual gap the backfill's diagnostic exists to catch.
+    db_session.add(AnalysisService(title="Mystery Service", keyword="MYSTERY-SVC"))
+    db_session.commit()
+    backfill_departments(db_session)   # Analytical dept row now exists, empty
+    vial = _mk_isolated_vial(db_session)
+
+    monkeypatch.setattr(
+        "sub_samples.senaite.fetch_parent_analysis_keywords",
+        lambda _sid: ["MYSTERY-SVC"],
+    )
+    created = mirror_parent_hplc_analyses(
+        db_session,
+        sub_sample=vial,
+        parent_sample_id="P-0001",
+        existing_kw=set(),
+        created_by_user_id=None,
+        commit=False,
+    )
+    assert created == []
