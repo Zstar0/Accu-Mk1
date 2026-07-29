@@ -2406,8 +2406,44 @@ export interface AnalysisServiceRecord {
   result_type?: string | null
   result_options?: { value: string; label: string }[] | null
   variance_capable?: boolean
+  origin: 'senaite' | 'mk1'
+  local_overrides: string[] | null
+  department_id: number | null
   created_at: string
   updated_at: string
+}
+
+/**
+ * Field shapes mirror `backend/main.py`'s `AnalysisServiceCreate` /
+ * `AnalysisServiceUpdate` schemas exactly (Task 5). Deliberately NOT
+ * `Partial<AnalysisServiceRecord>` — that would silently permit callers to
+ * pass read-only/derived fields (`origin`, `senaite_id`, `methods`,
+ * `peptide_name`, timestamps) that the PATCH schema doesn't accept and the
+ * backend would ignore or reject.
+ */
+export interface AnalysisServiceCreatePayload {
+  title: string
+  keyword: string
+  category?: string | null
+  unit?: string | null
+  department_id?: number | null
+  result_type?: string | null
+  result_options?: { value: string; label: string }[] | null
+  variance_capable?: boolean
+  peptide_id?: number | null
+}
+
+export interface AnalysisServiceUpdatePayload {
+  title?: string
+  keyword?: string
+  category?: string | null
+  unit?: string | null
+  department_id?: number | null
+  result_type?: string | null
+  result_options?: { value: string; label: string }[] | null
+  variance_capable?: boolean
+  peptide_id?: number | null
+  active?: boolean
 }
 
 /**
@@ -2428,6 +2464,47 @@ export async function getAnalysisServices(opts?: { search?: string; category?: s
   })
   if (!response.ok) throw new Error(`Get analysis services failed: ${response.status}`)
   return response.json()
+}
+
+/** Create an Mk1-native analysis service. Never creates anything in SENAITE. */
+export async function createAnalysisService(
+  data: AnalysisServiceCreatePayload
+): Promise<AnalysisServiceRecord> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-services`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to create analysis service'))
+  return response.json()
+}
+
+/**
+ * Full-object edit. On a SENAITE-origin row, any sync-owned field
+ * (title/keyword/category/unit) whose value actually changes here is
+ * recorded server-side in `local_overrides`; resubmitting the current value
+ * is a no-op and does not lock it.
+ */
+export async function updateAnalysisService(
+  id: number,
+  data: AnalysisServiceUpdatePayload
+): Promise<AnalysisServiceRecord> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-services/${id}`, {
+    method: 'PATCH',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to update analysis service'))
+  return response.json()
+}
+
+/** Mk1-native services only — refused (409) if referenced by existing analyses. */
+export async function deleteAnalysisService(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-services/${id}`, {
+    method: 'DELETE',
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to delete analysis service'))
 }
 
 export async function updateAnalysisServicePeptide(
