@@ -3017,7 +3017,15 @@ def _parse_service_result_options(raw) -> list[dict]:
 
 def _apply_service_result_type(svc, item: dict) -> None:
     """Seed svc.result_type / result_options from a SENAITE service item, but
-    ONLY when svc.result_type is NULL (local-wins). No-op otherwise."""
+    ONLY when svc.result_type is NULL (local-wins). No-op otherwise.
+
+    Mk1-origin rows are skipped entirely (mirrors _apply_sync_fields). Not
+    reachable today — no path produces an origin='mk1' row with a non-null
+    senaite_id, which is what every call site matches on — but Task 5 adds
+    analysis-service CRUD, exactly where such a path could get introduced.
+    Closing this by construction rather than relying on that invariant."""
+    if svc.origin == "mk1":
+        return
     if svc.result_type is not None:
         return
     rtype = item.get("ResultType") or item.get("getResultType")

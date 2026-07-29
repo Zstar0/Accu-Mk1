@@ -42,6 +42,23 @@ def test_mk1_origin_row_is_invisible_to_orphan_adoption(db_session):
                                   current_ids={"AS-999"}) is None
 
 
+def test_mk1_row_with_senaite_id_is_still_excluded_by_origin(db_session):
+    """A native row that ALSO satisfies every other orphan condition (has a
+    senaite_id, and it's absent from current_ids) must still be excluded —
+    origin has to be the thing doing the work, not senaite_id IS NULL.
+    Review finding: the sibling test above passes even with the origin
+    filter deleted, because it never gives the row a senaite_id at all."""
+    from main import _find_adoptable_orphan
+    from models import AnalysisService
+    native = AnalysisService(title="Lead (Pb)", keyword="HM-PB", origin="mk1",
+                             senaite_id="AS-777")
+    db_session.add(native)
+    db_session.commit()
+
+    assert _find_adoptable_orphan(db_session, keyword="HM-PB",
+                                  current_ids={"AS-999"}) is None
+
+
 def test_senaite_orphan_is_still_adoptable(db_session):
     from main import _find_adoptable_orphan
     from models import AnalysisService
@@ -79,6 +96,34 @@ def test_sync_never_touches_an_mk1_row(db_session):
     _apply_sync_fields(svc, {"title": "Clobbered"})
 
     assert svc.title == "Lead (Pb)"
+
+
+def test_apply_result_type_never_touches_an_mk1_row(db_session):
+    """Review finding: the existing-row lookup matches on senaite_id alone
+    (no origin filter — deliberately, per the coordinator's ruling: filtering
+    the LOOKUP would turn an unreachable state into a hard unique-constraint
+    failure on create). _apply_service_result_type must therefore carry its
+    own origin bail, mirroring _apply_sync_fields, so result_type/result_options
+    stay protected even on a hypothetical origin='mk1' row that also carries
+    a senaite_id.
+
+    result_type is left NULL here deliberately: the function's PRE-EXISTING
+    "if svc.result_type is not None: return" guard would mask a missing
+    origin bail (a populated result_type is already protected either way).
+    NULL is the one state where the origin check is the only thing stopping
+    the mutation."""
+    from main import _apply_service_result_type
+    from models import AnalysisService
+    svc = AnalysisService(title="Lead (Pb)", keyword="HM-PB", origin="mk1",
+                          result_type=None)
+    db_session.add(svc)
+    db_session.commit()
+
+    _apply_service_result_type(svc, {"ResultType": "select",
+                                     "ResultOptions": [{"ResultValue": "1"}]})
+
+    assert svc.result_type is None
+    assert svc.result_options is None
 
 
 # ─── existing-row category: back-fill only, never clobber (ruling 2026-07-29) ───
