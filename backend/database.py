@@ -1404,6 +1404,10 @@ def _run_migrations():
         """,
         "ALTER TABLE service_groups ADD COLUMN IF NOT EXISTS department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL",
         "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL",
+        # Service origin + local overrides: marks a service as SENAITE-born
+        # (synced, default) or Mk1-born (native, never written to by the sync).
+        "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS origin VARCHAR(20) NOT NULL DEFAULT 'senaite'",
+        "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS local_overrides JSON",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

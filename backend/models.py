@@ -180,6 +180,14 @@ class AnalysisService(Base):
     department_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("departments.id", ondelete="SET NULL"), nullable=True
     )
+    # 'senaite' = born in SENAITE and synced in; 'mk1' = created in Accu-Mk1 and
+    # never written to or overwritten by SENAITE.
+    origin: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="senaite", server_default="senaite"
+    )
+    # Field names Mk1 owns for THIS row; the SENAITE sync skips them. Generalizes
+    # the pre-existing local-wins rule for result_type.
+    local_overrides: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 
     # Relationships
     peptide: Mapped[Optional["Peptide"]] = relationship("Peptide", foreign_keys=[peptide_id])

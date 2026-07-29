@@ -2232,6 +2232,8 @@ class AnalysisServiceResponse(BaseModel):
     result_type: Optional[str] = None
     result_options: Optional[list] = None
     variance_capable: bool
+    origin: str = "senaite"
+    local_overrides: Optional[list] = None
 
     class Config:
         from_attributes = True
@@ -3027,6 +3029,51 @@ def _apply_service_result_type(svc, item: dict) -> None:
     ) or None
 
 
+# Fields the SENAITE sync owns on a 'senaite'-origin service. Any of these named
+# in a row's local_overrides is Mk1-owned from then on and the sync skips it.
+SYNC_OWNED_FIELDS = frozenset({"title", "keyword", "category", "unit", "methods"})
+
+
+def _find_adoptable_orphan(db, *, keyword: str, current_ids: set):
+    """A SENAITE-origin row whose senaite_id is absent from this pull — SENAITE
+    deleted and recreated the service under a new id. Adopting preserves its
+    lims_analyses references.
+
+    Mk1-origin rows are NEVER candidates: adoption would hand SENAITE ownership
+    of a service Accu-Mk1 created.
+    """
+    if not keyword or not current_ids:
+        return None
+    return db.execute(
+        select(AnalysisService)
+        .where(
+            AnalysisService.keyword == keyword,
+            AnalysisService.origin == "senaite",
+            AnalysisService.senaite_id.isnot(None),
+            AnalysisService.senaite_id.not_in(current_ids),
+        )
+        .order_by(AnalysisService.id)
+    ).scalars().first()
+
+
+def _apply_sync_fields(svc, values: dict) -> None:
+    """Apply SENAITE-sourced field values, honoring ownership.
+
+    Mk1-origin rows are skipped entirely. On SENAITE-origin rows, any field
+    listed in local_overrides is skipped. A None/empty incoming value never
+    clears an existing one.
+    """
+    if svc.origin == "mk1":
+        return
+    overrides = set(svc.local_overrides or [])
+    for field, value in values.items():
+        if field not in SYNC_OWNED_FIELDS or field in overrides:
+            continue
+        if value in (None, "", []):
+            continue
+        setattr(svc, field, value)
+
+
 @app.post("/analysis-services/sync")
 async def sync_analysis_services(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """Sync analysis services from Senaite. Adds new services and reconciles a
@@ -3103,11 +3150,8 @@ async def sync_analysis_services(db: Session = Depends(get_db), _current_user=De
         ).scalar_one_or_none()
 
         if existing:
-            # Back-fill category if it was missing
-            if not existing.category and category:
-                existing.category = category
-                updated += 1
-            _apply_service_result_type(existing, item)  # local-wins seed
+            _apply_sync_fields(existing, {"category": category})
+            _apply_service_result_type(existing, item)
             continue
 
         # SENAITE can delete+recreate a service under a new id/UID (same keyword).
@@ -3115,27 +3159,16 @@ async def sync_analysis_services(db: Session = Depends(get_db), _current_user=De
         # row (the TB500 promote-502 incident). Adopt an orphaned row — same
         # keyword, stale senaite_id absent from this pull — preserving its id and
         # all lims_analyses / peptide_analytes references. .first() tolerates any
-        # pre-existing duplicates.
+        # pre-existing duplicates. Mk1-origin rows are excluded from this match
+        # (see _find_adoptable_orphan) so SENAITE can never adopt a native service.
         kw = item.get("getKeyword") or item.get("Keyword")
-        orphan = None
-        if kw and current_ids:
-            orphan = db.execute(
-                select(AnalysisService)
-                .where(
-                    AnalysisService.keyword == kw,
-                    AnalysisService.senaite_id.isnot(None),
-                    AnalysisService.senaite_id.not_in(current_ids),
-                )
-                .order_by(AnalysisService.id)
-            ).scalars().first()
+        orphan = _find_adoptable_orphan(db, keyword=kw, current_ids=current_ids)
         if orphan is not None:
             orphan.senaite_id = senaite_id
             orphan.senaite_uid = item.get("uid")
-            orphan.title = title
-            if category:
-                orphan.category = category
-            if methods_list:
-                orphan.methods = methods_list
+            _apply_sync_fields(orphan, {
+                "title": title, "category": category, "methods": methods_list,
+            })
             _apply_service_result_type(orphan, item)
             updated += 1
             continue
