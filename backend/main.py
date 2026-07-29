@@ -2313,6 +2313,54 @@ class ServiceGroupMembersRequest(BaseModel):
     analysis_service_ids: list[int]
 
 
+# ─── Analysis Profile schemas ───
+
+class AnalysisProfileCreate(BaseModel):
+    key: str
+    name: str
+    description: Optional[str] = None
+    is_addon: bool
+    vials_required: int = 0
+    fulfillment_role: Optional[str] = None
+    fulfillment_dim: str = "role"
+    sort_order: int = 0
+    active: bool = True
+
+
+class AnalysisProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    is_addon: Optional[bool] = None
+    vials_required: Optional[int] = None
+    fulfillment_role: Optional[str] = None
+    fulfillment_dim: Optional[str] = None
+    sort_order: Optional[int] = None
+    active: Optional[bool] = None
+
+
+class AnalysisProfileResponse(BaseModel):
+    id: int
+    key: str
+    name: str
+    description: Optional[str] = None
+    is_addon: bool
+    vials_required: int
+    fulfillment_role: Optional[str] = None
+    fulfillment_dim: str
+    sort_order: int
+    active: bool
+    member_ids: list[int] = []
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AnalysisProfileMembersRequest(BaseModel):
+    analysis_service_ids: list[int]
+
+
 # ─── SLA tier schemas (sub-project A, revised to tiers) ───
 
 # Priority tiers mirror SamplePriority/WorksheetItem.priority. Validated here at
@@ -15371,6 +15419,126 @@ async def set_service_group_members(
     group.analysis_services = list(services)
     db.commit()
     return {"count": len(services)}
+
+
+# ─── Analysis Profiles ─────────────────────────────────────────────────────────
+# The sellable test: parent of one or more Analysis Services, and the future
+# carrier of COA section identity. Deliberately distinct from ServiceGroup
+# (bench work) — see models.AnalysisProfile docstring.
+
+def _profile_to_response(p) -> AnalysisProfileResponse:
+    return AnalysisProfileResponse(
+        id=p.id, key=p.key, name=p.name, description=p.description,
+        is_addon=p.is_addon, vials_required=p.vials_required,
+        fulfillment_role=p.fulfillment_role, fulfillment_dim=p.fulfillment_dim,
+        sort_order=p.sort_order, active=p.active,
+        member_ids=[s.id for s in p.analysis_services],
+        created_at=p.created_at, updated_at=p.updated_at,
+    )
+
+
+@app.get("/analysis-profiles", response_model=list[AnalysisProfileResponse])
+async def get_analysis_profiles(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
+    from models import AnalysisProfile
+    rows = db.execute(
+        select(AnalysisProfile).order_by(AnalysisProfile.sort_order, AnalysisProfile.name)
+    ).scalars().all()
+    return [_profile_to_response(p) for p in rows]
+
+
+@app.post("/analysis-profiles", response_model=AnalysisProfileResponse, status_code=201)
+async def create_analysis_profile(
+    data: AnalysisProfileCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    from models import AnalysisProfile
+    existing = db.execute(
+        select(AnalysisProfile).where(AnalysisProfile.key == data.key)
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(400, f"profile key '{data.key}' already exists")
+    p = AnalysisProfile(**data.model_dump(), updated_by_id=getattr(current_user, "id", None))
+    db.add(p)
+    db.commit()
+    db.refresh(p)
+    return _profile_to_response(p)
+
+
+@app.patch("/analysis-profiles/{profile_id}", response_model=AnalysisProfileResponse)
+async def update_analysis_profile(
+    profile_id: int,
+    data: AnalysisProfileUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    from models import AnalysisProfile
+    p = db.get(AnalysisProfile, profile_id)
+    if p is None:
+        raise HTTPException(404, "analysis profile not found")
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(p, field, value)
+    p.updated_by_id = getattr(current_user, "id", None)
+    db.commit()
+    db.refresh(p)
+    return _profile_to_response(p)
+
+
+@app.delete("/analysis-profiles/{profile_id}", status_code=204)
+async def delete_analysis_profile(
+    profile_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)
+):
+    from models import AnalysisProfile
+    p = db.get(AnalysisProfile, profile_id)
+    if p is None:
+        raise HTTPException(404, "analysis profile not found")
+    db.delete(p)
+    db.commit()
+
+
+@app.get("/analysis-profiles/{profile_id}/members", response_model=list[int])
+async def get_analysis_profile_members(
+    profile_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Return the list of analysis_service IDs currently in the profile, in
+    sort_order (the profile's future COA section row order)."""
+    from models import AnalysisProfile, analysis_profile_members
+    p = db.get(AnalysisProfile, profile_id)
+    if p is None:
+        raise HTTPException(404, "analysis profile not found")
+    rows = db.execute(
+        select(analysis_profile_members.c.analysis_service_id)
+        .where(analysis_profile_members.c.analysis_profile_id == profile_id)
+        .order_by(analysis_profile_members.c.sort_order)
+    ).all()
+    return [row.analysis_service_id for row in rows]
+
+
+@app.put("/analysis-profiles/{profile_id}/members")
+async def set_analysis_profile_members(
+    profile_id: int,
+    data: AnalysisProfileMembersRequest,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Replace membership. Position in the list becomes sort_order — the row
+    order within the profile's COA section."""
+    from models import AnalysisProfile, analysis_profile_members
+    p = db.get(AnalysisProfile, profile_id)
+    if p is None:
+        raise HTTPException(404, "analysis profile not found")
+    db.execute(
+        analysis_profile_members.delete().where(
+            analysis_profile_members.c.analysis_profile_id == profile_id
+        )
+    )
+    for i, svc_id in enumerate(data.analysis_service_ids):
+        db.execute(analysis_profile_members.insert().values(
+            analysis_profile_id=profile_id, analysis_service_id=svc_id, sort_order=i))
+    db.commit()
+    return {"count": len(data.analysis_service_ids)}
 
 
 # ─── SLA tiers (sub-project A, revised to tiers) ──────────────────────────────
