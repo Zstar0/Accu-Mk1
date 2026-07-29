@@ -2247,6 +2247,7 @@ class ServiceGroupCreate(BaseModel):
     sort_order: int = 0
     is_default: bool = False
     sla_tier_id: Optional[int] = None
+    department_id: Optional[int] = None
 
 
 class ServiceGroupUpdate(BaseModel):
@@ -2257,6 +2258,7 @@ class ServiceGroupUpdate(BaseModel):
     sort_order: Optional[int] = None
     is_default: Optional[bool] = None
     sla_tier_id: Optional[int] = None
+    department_id: Optional[int] = None
 
 
 class ServiceGroupResponse(BaseModel):
@@ -2268,6 +2270,7 @@ class ServiceGroupResponse(BaseModel):
     sort_order: int
     is_default: bool = False
     sla_tier_id: Optional[int] = None
+    department_id: Optional[int] = None
     member_count: int = 0
     member_ids: list[int] = []
     created_at: datetime
@@ -15015,6 +15018,7 @@ async def get_service_groups(
             sort_order=group.sort_order,
             is_default=group.is_default,
             sla_tier_id=group.sla_tier_id,
+            department_id=group.department_id,
             member_count=len(group.analysis_services),
             member_ids=[s.id for s in group.analysis_services],
             created_at=group.created_at,
@@ -15054,6 +15058,7 @@ async def create_service_group(
         sort_order=group.sort_order,
         is_default=group.is_default,
         sla_tier_id=group.sla_tier_id,
+        department_id=group.department_id,
         member_count=0,
         created_at=group.created_at,
         updated_at=group.updated_at,
@@ -15094,6 +15099,7 @@ async def update_service_group(
         sort_order=group.sort_order,
         is_default=group.is_default,
         sla_tier_id=group.sla_tier_id,
+        department_id=group.department_id,
         member_count=len(group.analysis_services),
         member_ids=[s.id for s in group.analysis_services],
         created_at=group.created_at,
@@ -15586,13 +15592,29 @@ class InboxResponse(BaseModel):
     filter_role: Optional[str] = None  # echo of the query param so the frontend can confirm
 
 
-# Role → service_group_name set. Hardcoded — the lab has had Analytics +
-# Microbiology for years and a 2-entry mapping doesn't deserve a table.
-ROLE_TO_GROUP_NAMES: dict[str, set[str]] = {
-    "hplc": {"Analytics"},
-    "microbiology": {"Microbiology"},
+# Role -> DEPARTMENT name. Department drives the lane: a new Microbiology-department
+# group lands in the micro lane automatically, with no name-pinning.
+ROLE_TO_DEPARTMENT_NAME: dict[str, str] = {
+    "hplc": "Analytical",
+    "microbiology": "Microbiology",
 }
-VALID_INBOX_ROLES = set(ROLE_TO_GROUP_NAMES.keys())
+VALID_INBOX_ROLES = set(ROLE_TO_DEPARTMENT_NAME.keys())
+
+
+def _inbox_allowed_group_ids(db, role: Optional[str]) -> Optional[set[int]]:
+    """Resolve a worksheet-inbox role to the set of service-group ids in that
+    role's DEPARTMENT. None role -> None (no filter; pass all groups)."""
+    if role is None:
+        return None
+    from models import Department
+    dept_name = ROLE_TO_DEPARTMENT_NAME[role]
+    return {
+        r[0] for r in db.execute(
+            select(ServiceGroup.id)
+            .join(Department, Department.id == ServiceGroup.department_id)
+            .where(Department.name == dept_name)
+        ).all()
+    }
 
 # Role-set membership for the assignment_role column. Microbiology covers
 # both 'ster' and 'endo' (collapsed into one filter chip per spec Q1).
@@ -15917,14 +15939,7 @@ async def get_worksheets_inbox(
         raise HTTPException(status_code=503, detail="SENAITE not configured")
 
     # Resolve role → allowed service_group IDs. None means "no filter; pass all groups".
-    allowed_group_ids: Optional[set[int]] = None
-    if role is not None:
-        group_names = ROLE_TO_GROUP_NAMES[role]
-        allowed_group_ids = {
-            r[0] for r in db.execute(
-                select(ServiceGroup.id).where(ServiceGroup.name.in_(group_names))
-            ).all()
-        }
+    allowed_group_ids: Optional[set[int]] = _inbox_allowed_group_ids(db, role)
 
     # Resolve allowed vial assignment_role values. NULL roles always excluded (auto-
     # assign on /vial-plan is the cure for those). XTRA gated by show_xtra.
@@ -16925,12 +16940,17 @@ def list_worksheets(
         group_ids = {it.service_group_id for it in items if it.service_group_id}
         group_name_map: dict[int, str] = {}
         group_peptide_map: dict[int, int | None] = {}
+        group_department_name_map: dict[int, str | None] = {}
         if group_ids:
+            from models import Department
             groups = db.execute(
-                select(ServiceGroup.id, ServiceGroup.name, ServiceGroup.color).where(ServiceGroup.id.in_(group_ids))
+                select(ServiceGroup.id, ServiceGroup.name, ServiceGroup.color, Department.name)
+                .outerjoin(Department, Department.id == ServiceGroup.department_id)
+                .where(ServiceGroup.id.in_(group_ids))
             ).all()
-            group_name_map = {g.id: g.name for g in groups}
-            group_color_map: dict[int, str] = {g.id: g.color for g in groups}
+            group_name_map = {g[0]: g[1] for g in groups}
+            group_color_map: dict[int, str] = {g[0]: g[2] for g in groups}
+            group_department_name_map = {g[0]: g[3] for g in groups}
             # Resolve peptide_id and analyses per group
             group_analyses_map: dict[int, list[dict]] = {}
             for gid in group_ids:
@@ -17050,6 +17070,7 @@ def list_worksheets(
                     "sample_id": it.sample_id,
                     "sample_uid": it.sample_uid,
                     "service_group_id": it.service_group_id,
+                    "department_name": group_department_name_map.get(it.service_group_id) if it.service_group_id else None,
                     "group_name": group_name_map.get(it.service_group_id, "—") if it.service_group_id else "—",
                     "group_color": group_color_map.get(it.service_group_id, "zinc") if it.service_group_id else "zinc",
                     "priority": it.priority,
