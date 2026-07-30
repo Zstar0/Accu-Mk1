@@ -35,6 +35,14 @@ def seed_profiles_from_registry(db: Session) -> None:
         ))
         created += 1
 
+    # Flush so the backfill queries below see rows just added above in the
+    # same transaction. Without this, a session built with autoflush=False
+    # (production's SessionLocal — database.py) leaves a fresh-DB SELECT
+    # blind to the pending INSERTs: every key resolves to None, the backfill
+    # loop skips all four, and the rows commit at vials_required=0 — inert
+    # until a second boot re-seeds against already-committed rows.
+    db.flush()
+
     # Spec-3 demand backfill: the spec-1 seed shipped vials_required=0
     # ("wired to real demand in spec 3" — that is this). Idempotent: only
     # rows still at the inert defaults are touched, admin edits survive.

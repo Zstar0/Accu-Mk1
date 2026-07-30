@@ -123,3 +123,38 @@ def test_seed_backfills_demand_fields(db_session):
     assert (rows["sterility_pcr"].vials_required,
             rows["sterility_pcr"].fulfillment_role) == (2, "ster")
     assert rows["variance"].vials_required == 0  # variance NEVER folds into base
+
+
+def test_seed_backfills_on_fresh_db_under_production_autoflush_config():
+    """Regression (review finding): production's SessionLocal is built with
+    autoflush=False (database.py:40). On a fresh DB the backfill's SELECT
+    queries the same rows db.add() staged earlier in the same call, with no
+    committed data yet to find via autoflush — without an explicit flush
+    between the insert loop and the backfill loop, every key resolves to
+    None, the backfill silently no-ops, and the seed commits at
+    vials_required=0 (inert until a second boot re-seeds against
+    already-committed rows). conftest's db_session fixture defaults to
+    autoflush=True, which would mask this — so this test builds its own
+    session matching production instead of using that fixture."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from database import Base
+    from catalog.profile_seed import seed_profiles_from_registry
+    from models import AnalysisProfile
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine, autoflush=False)()
+    try:
+        seed_profiles_from_registry(db)
+        rows = {p.key: p for p in db.query(AnalysisProfile).all()}
+        assert (rows["hplcpurity_identity"].vials_required,
+                rows["hplcpurity_identity"].fulfillment_role) == (1, "hplc")
+        assert (rows["bac_water_panel"].vials_required,
+                rows["bac_water_panel"].fulfillment_role) == (1, "hplc")
+        assert (rows["endotoxin"].vials_required,
+                rows["endotoxin"].fulfillment_role) == (1, "endo")
+        assert (rows["sterility_pcr"].vials_required,
+                rows["sterility_pcr"].fulfillment_role) == (2, "ster")
+    finally:
+        db.close()
