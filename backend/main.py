@@ -10773,6 +10773,19 @@ async def regen_primary_coa(
         from coa.variance_series import process_variance_fields
         alias_body.update(process_variance_fields(db, _regen_parent))
 
+        # Native sections (spec 2) — FAIL-CLOSED, unlike the best-effort
+        # variance overlay above. If the document cannot be assembled the
+        # certificate must not be regenerated at all.
+        from coa.native_sections import NativeSectionsError, build_native_sections
+        try:
+            _native_doc = build_native_sections(db, _regen_parent)
+        except NativeSectionsError as e:
+            return SampleCOAActionResponse(
+                success=False,
+                message=f"COA regen aborted — {e.detail}",
+            )
+        alias_body["native_sections"] = _native_doc
+
     # 1. Regenerate only the primary COA via COA Builder
     try:
         async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=120.0) as client:

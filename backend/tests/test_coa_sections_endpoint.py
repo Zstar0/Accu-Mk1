@@ -195,3 +195,102 @@ def test_regular_child_attaches_native_sections_before_post(db_session, monkeypa
         ))
     assert captured["url"].endswith("/process/P-Y")
     assert captured["body"]["native_sections"] == doc
+
+
+# ── regen_primary_coa fail-closed attach (Task 4b) ────────────────────
+# regen_primary_coa builds its own alias_body independently (mirrors
+# generate_sample_coa by convention/comment, NOT shared code — same
+# situation _maybe_emit_regular_coa_child was in above), so it needs its own
+# fail-closed attach, tested the same way: call the route coroutine directly
+# via asyncio.run, bypassing FastAPI's Depends() resolution (db/current_user
+# are just plain parameters when the function is called directly — this file's
+# own regen_primary_coa does exactly this to call publish_sample_coa).
+
+
+class _FakeRegenResponse:
+    def __init__(self, json_data):
+        self._json_data = json_data
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._json_data
+
+
+class _FakeRegenClient:
+    """Records the POST (url/params/body) instead of hitting a real
+    COABuilder, and returns a canned response so regen_primary_coa can
+    proceed past the try/except into its own post-generation logic."""
+
+    def __init__(self, captured, json_data):
+        self._captured = captured
+        self._json_data = json_data
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def post(self, url, params=None, json=None):
+        self._captured["url"] = url
+        self._captured["params"] = params
+        self._captured["body"] = json
+        return _FakeRegenResponse(self._json_data)
+
+
+def test_regen_primary_coa_aborts_before_post_on_native_sections_failure(db_session, monkeypatch):
+    """Fail-closed: if build_native_sections raises, regen_primary_coa's own
+    COABuilder POST must never fire — no section-less certificate emitted."""
+    from models import LimsSample
+    db_session.add(LimsSample(sample_id="P-REGEN-1"))
+    db_session.commit()
+
+    captured = {}
+    monkeypatch.setattr(main, "COA_BUILDER_URL", "http://coabuilder.test")
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda *a, **k: _FakeRegenClient(captured, {}))
+
+    with patch("coa.native_sections.build_native_sections",
+               side_effect=NativeSectionsError("regen-boom")):
+        result = asyncio.run(main.regen_primary_coa(
+            sample_id="P-REGEN-1", db=db_session, current_user=None,
+        ))
+
+    assert captured == {}  # POST never fired
+    assert result.success is False
+    assert "regen-boom" in result.message
+
+
+def test_regen_primary_coa_attaches_native_sections_before_post(db_session, monkeypatch):
+    """Success path: native_sections is attached to the regen body BEFORE the
+    COABuilder POST fires, carrying the exact built document. The fake
+    response omits verification_code so the route short-circuits right after
+    the POST — this test's scope is the attach wiring, not the full publish
+    cascade downstream of it."""
+    from models import LimsSample
+    db_session.add(LimsSample(sample_id="P-REGEN-2"))
+    db_session.commit()
+
+    captured = {}
+    monkeypatch.setattr(main, "COA_BUILDER_URL", "http://coabuilder.test")
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda *a, **k: _FakeRegenClient(captured, {}))
+
+    doc = {
+        "sample_id": "P-REGEN-2",
+        "ordered_profiles": ["HM"],
+        "sections": [{"profile_key": "HM", "title": "Heavy Metals", "rows": []}],
+    }
+    with patch("coa.native_sections.build_native_sections", return_value=doc):
+        result = asyncio.run(main.regen_primary_coa(
+            sample_id="P-REGEN-2", db=db_session, current_user=None,
+        ))
+
+    assert captured["url"].endswith("/process/P-REGEN-2")
+    assert captured["body"]["native_sections"] == doc
+    # Confirms the POST genuinely fired and the route reached its normal
+    # post-POST logic (not an unrelated early exit): the fake response has no
+    # verification_code, which is exactly this route's existing short-circuit
+    # contract, not a symptom of the attach breaking something upstream.
+    assert result.success is False
+    assert result.message == "Primary regenerated but no verification code returned"
