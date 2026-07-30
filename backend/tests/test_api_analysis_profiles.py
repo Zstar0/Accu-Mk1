@@ -266,3 +266,18 @@ def test_patch_role_only_validates_against_existing_dim_when_omitted():
     })
     assert resp.status_code == 400
     assert "fulfillment_role" in resp.json()["detail"]
+
+
+def test_patch_explicit_null_fulfillment_dim_rejected_not_500():
+    """fulfillment_dim is NOT NULL on the model/response (unlike coa_archetype,
+    which is legitimately nullable). An explicit JSON null is indistinguishable
+    from a bad string at the DB layer — both must 400, never reach setattr +
+    commit and trip the NOT NULL constraint as an unhandled 500."""
+    create = client.post("/analysis-profiles", json={
+        "key": "patch_null_dim_test", "name": "Patch Null Dim Test", "is_addon": True,
+    })
+    assert create.status_code == 201, create.text
+    profile_id = create.json()["id"]
+    resp = client.patch(f"/analysis-profiles/{profile_id}", json={"fulfillment_dim": None})
+    assert resp.status_code == 400, resp.text
+    assert "fulfillment_dim" in resp.json()["detail"]

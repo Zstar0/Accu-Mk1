@@ -15671,10 +15671,16 @@ async def update_analysis_profile(
             f"unknown coa_archetype {fields['coa_archetype']!r}; "
             f"allowed: {sorted(COA_ARCHETYPES)} or null (not reported)",
         )
-    if data.fulfillment_dim is not None and data.fulfillment_dim not in ("role", "kind"):
+    if "fulfillment_dim" in fields and fields["fulfillment_dim"] not in ("role", "kind"):
+        # fields (exclude_unset) distinguishes an explicit JSON null from
+        # omission — data.fulfillment_dim is None either way, but only an
+        # explicit null (or a bad string) may reach here. fulfillment_dim is
+        # NOT NULL on the model/response (unlike coa_archetype, which is
+        # legitimately nullable), so an explicit null must 400 here rather
+        # than reach setattr + commit and trip the DB constraint as a 500.
         raise HTTPException(400, "fulfillment_dim must be 'role' or 'kind'")
     if data.fulfillment_role is not None:
-        effective_dim = data.fulfillment_dim or p.fulfillment_dim
+        effective_dim = fields.get("fulfillment_dim") or p.fulfillment_dim
         if effective_dim == "role" and not re.fullmatch(r"[a-z][a-z0-9_]{0,7}", data.fulfillment_role):
             raise HTTPException(
                 400, "fulfillment_role must be lowercase, <= 8 chars "
