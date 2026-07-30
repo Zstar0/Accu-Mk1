@@ -57,9 +57,12 @@ _PARENT_ANALYTE = re.compile(r"^ANALYTE-([1-4])-(PUR|QTY)$")
 
 # Role → set of WP service keys that imply analyses at this role.
 #
-# These mirror the keys consumed by derive_demand() in backend/sub_samples/
-# service.py — kept in sync by hand. If a key is added there (a new WP
-# customer-facing service category), mirror the addition here.
+# THE CATALOG IS AUTHORITATIVE; this map is the legacy fallback for the five
+# existing keys. It mirrors the keys consumed by derive_demand() in
+# backend/sub_samples/service.py — kept in sync by hand. New WP customer-
+# facing service categories no longer get an entry here: they resolve
+# directly from Analysis Profile membership (fulfillment_dim='role') via
+# _catalog_members_for_role. This map is never extended for new roles.
 ROLE_TO_WP_KEYS: Dict[str, Set[str]] = {
     "hplc": {"hplcpurity_identity", "bac_water_panel"},
     "endo": {"endotoxin"},
@@ -71,6 +74,12 @@ ROLE_TO_WP_KEYS: Dict[str, Set[str]] = {
 # analyses for the role. EXACT match — no substring magic. HPLC is NOT here:
 # HPLC vials mirror the parent's Analytics analyte set (see
 # mirror_parent_hplc_analyses) rather than seeding a fixed whitelist.
+#
+# THE CATALOG IS AUTHORITATIVE; this map is the legacy fallback for the five
+# existing keys (endo/ster/xtra + hplc's mirror carve-out above). Catalog
+# roles (any role not in this map) seed from ordered Analysis Profile
+# membership instead — see _catalog_members_for_role. Never re-route endo/
+# ster onto the catalog path: they stay pinned here.
 ROLE_TO_KEYWORDS: Dict[str, List[str]] = {
     "endo": ["ENDO-LAL"],
     "ster": ["STER-PCR"],
@@ -78,12 +87,51 @@ ROLE_TO_KEYWORDS: Dict[str, List[str]] = {
 }
 
 
-def role_implies_seeding(role: Optional[str], wp_services: Dict[str, bool]) -> bool:
-    """True iff this role's analyses are requested by the WP profile."""
+def _catalog_members_for_role(
+    db: Session, role: str, wp_services: Dict[str, bool]
+) -> List[AnalysisService]:
+    """Ordered mk1-origin member services of the ordered profiles fulfilling
+    `role`. Fail-closed on origin: a profile with any non-mk1 member seeds
+    nothing (mirrors spec-2's all-native section rule)."""
+    from models import AnalysisProfile
+
+    out: List[AnalysisService] = []
+    seen: Set[int] = set()
+    ordered = [k for k, v in (wp_services or {}).items() if v]
+    for key in ordered:
+        prof = db.query(AnalysisProfile).filter_by(key=key).one_or_none()
+        if prof is None or prof.fulfillment_dim != "role" or prof.fulfillment_role != role:
+            continue
+        members = prof.analysis_services
+        if not members or any(s.origin != "mk1" for s in members):
+            log.warning("catalog_seed_skipped_non_native profile=%s", key)
+            continue
+        for s in members:
+            if s.id not in seen:
+                seen.add(s.id)
+                out.append(s)
+    return out
+
+
+def role_implies_seeding(
+    role: Optional[str], wp_services: Dict[str, bool], db: Optional[Session] = None
+) -> bool:
+    """True iff this role's analyses are requested by the WP profile.
+
+    Legacy roles resolve from ROLE_TO_WP_KEYS (hand-synced map, retained as
+    the fallback for the five existing keys). Catalog roles resolve from
+    Analysis Profiles — THE CATALOG IS AUTHORITATIVE for any role the map
+    does not know. Without `db` (legacy callers/tests), catalog roles report
+    False rather than raising — matches the prior default-off behavior for
+    any role outside ROLE_TO_WP_KEYS."""
     if not role or role == "xtra":
         return False
-    role_keys = ROLE_TO_WP_KEYS.get(role, set())
-    return any(wp_services.get(k) for k in role_keys)
+    if role in ROLE_TO_WP_KEYS:
+        role_keys = ROLE_TO_WP_KEYS.get(role, set())
+        return any(wp_services.get(k) for k in role_keys)
+    if db is None:
+        return False
+    return bool(_catalog_members_for_role(db, role, wp_services))
 
 
 def select_services_for_role(db: Session, role: str) -> List[AnalysisService]:
@@ -285,6 +333,43 @@ def mirror_parent_hplc_analyses(
     return inserted
 
 
+def _seed_rows_from_services(
+    db: Session,
+    *,
+    sub_sample: LimsSubSample,
+    services: List[AnalysisService],
+    existing_kw: set,
+    created_by_user_id: Optional[int],
+    commit: bool,
+    log_event: str,
+) -> List[LimsAnalysis]:
+    """Create a lims_analyses row for every service not already in
+    `existing_kw` (idempotency). Shared row-construction block for both the
+    legacy keyword-whitelist branch and the catalog-membership branch — same
+    fields, same skip semantics, same commit handling."""
+    inserted: List[LimsAnalysis] = []
+    for svc in services:
+        if svc.keyword in existing_kw:
+            continue
+        row = la_service.create_analysis(
+            db,
+            host_kind="sub_sample",
+            host_pk=sub_sample.id,
+            analysis_service_id=svc.id,
+            keyword=svc.keyword,
+            title=svc.title or svc.keyword,
+            created_by_user_id=created_by_user_id,
+            commit=commit,
+        )
+        inserted.append(row)
+        existing_kw.add(svc.keyword)
+        log.info(
+            "seeder.%s sub=%s analysis_id=%s keyword=%s",
+            log_event, sub_sample.sample_id, row.id, svc.keyword,
+        )
+    return inserted
+
+
 def seed_analyses_for_vial(
     db: Session,
     *,
@@ -311,11 +396,14 @@ def seed_analyses_for_vial(
     read inside the mirror is fail-hard and propagates on error.
 
     endo/ster vials seed their fixed single-keyword ROLE_TO_KEYWORDS whitelist
-    (unchanged). xtra vials seed nothing.
+    (unchanged). xtra vials seed nothing. Any other role (a catalog role —
+    first tenant: "hm") seeds from the ordered Analysis Profile membership
+    that fulfils it — see _catalog_members_for_role. Catalog roles never
+    re-route endo/ster/xtra/hplc; those stay pinned to their existing paths.
 
     Returns the list of newly-inserted rows (empty if nothing was needed).
     """
-    if not role_implies_seeding(role, wp_services):
+    if not role_implies_seeding(role, wp_services, db=db):
         log.info(
             "seeder.skip_no_seeding sub=%s role=%s wp_keys=%s",
             sub_sample.sample_id, role, sorted(wp_services.keys()),
@@ -350,6 +438,28 @@ def seed_analyses_for_vial(
             commit=commit,
         )
 
+    # ── catalog roles (spec 3): seed from Analysis Profile membership ────────
+    # Any role not in ROLE_TO_KEYWORDS is a catalog role (first tenant: "hm").
+    # endo/ster stay on the keyword whitelist below — never re-route legacy
+    # roles onto the catalog path.
+    if role not in ROLE_TO_KEYWORDS:
+        services = _catalog_members_for_role(db, role, wp_services)
+        if not services:
+            log.warning(
+                "seeder.no_matching_catalog_members sub=%s role=%s — nothing to seed",
+                sub_sample.sample_id, role,
+            )
+            return []
+        return _seed_rows_from_services(
+            db,
+            sub_sample=sub_sample,
+            services=services,
+            existing_kw=existing_kw,
+            created_by_user_id=created_by_user_id,
+            commit=commit,
+            log_event="catalog_seeded",
+        )
+
     # ── endo / ster: fixed single-keyword whitelist (unchanged) ──────────────
     services = select_services_for_role(db, role)
     if not services:
@@ -359,25 +469,12 @@ def seed_analyses_for_vial(
         )
         return []
 
-    inserted: List[LimsAnalysis] = []
-    for svc in services:
-        if svc.keyword in existing_kw:
-            continue
-        row = la_service.create_analysis(
-            db,
-            host_kind="sub_sample",
-            host_pk=sub_sample.id,
-            analysis_service_id=svc.id,
-            keyword=svc.keyword,
-            title=svc.title or svc.keyword,
-            created_by_user_id=created_by_user_id,
-            commit=commit,
-        )
-        inserted.append(row)
-        existing_kw.add(svc.keyword)
-        log.info(
-            "seeder.seeded sub=%s analysis_id=%s keyword=%s",
-            sub_sample.sample_id, row.id, svc.keyword,
-        )
-
-    return inserted
+    return _seed_rows_from_services(
+        db,
+        sub_sample=sub_sample,
+        services=services,
+        existing_kw=existing_kw,
+        created_by_user_id=created_by_user_id,
+        commit=commit,
+        log_event="seeded",
+    )
