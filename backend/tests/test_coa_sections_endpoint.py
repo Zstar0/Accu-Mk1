@@ -25,7 +25,10 @@ builder module inside the function body, not at module top). Patch target is
 therefore coa.native_sections.build_native_sections, not main.build_native_sections
 (patch where the name is looked up).
 """
+import asyncio
+import logging
 import os
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -34,6 +37,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from fastapi.testclient import TestClient
 
+import main
 from main import app
 from database import get_db, Base
 from coa.native_sections import NativeSectionsError
@@ -105,3 +109,89 @@ def test_coa_sections_endpoint_502_on_builder_failure(client, db_session):
         r = client.get("/samples/P-8002/coa-sections", headers=SVC_TOKEN_HEADER)
     assert r.status_code == 502
     assert "order lookup failed" in r.json()["detail"]
+
+
+# ── _maybe_emit_regular_coa_child fail-closed attach ──────────────────
+# test_regular_coa_child.py's own coverage of this function is broken in this
+# venv (pytest-asyncio isn't installed — pytest refuses to even call the
+# `async def` test bodies: "async def functions are not natively supported").
+# These reuse that file's SimpleNamespace + fake-httpx-client idiom verbatim,
+# but drive the coroutine directly via asyncio.run() in a plain `def` test so
+# they don't depend on the missing plugin.
+
+
+class _FakeClient:
+    """Mirrors test_regular_coa_child.py's fake httpx client: records any
+    POST so a test can assert none fired, or inspect the body that did."""
+
+    def __init__(self, captured):
+        self._captured = captured
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def post(self, url, json=None):
+        self._captured["url"] = url
+        self._captured["body"] = json
+        return SimpleNamespace(raise_for_status=lambda: None)
+
+
+def _patch_coabuilder(monkeypatch, captured):
+    monkeypatch.setattr(main, "COA_BUILDER_URL", "http://coabuilder.test")
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda *a, **k: _FakeClient(captured))
+
+
+def _variance_parent(sample_id):
+    """A variance-sample parent stub — customer_remarks fields only, matching
+    what _maybe_emit_regular_coa_child actually reads off parent_row."""
+    return SimpleNamespace(
+        sample_id=sample_id,
+        customer_remarks_include=False,
+        customer_remarks=None,
+    )
+
+
+def test_regular_child_aborts_before_post_on_native_sections_failure(db_session, monkeypatch, caplog):
+    """Fail-closed: if build_native_sections raises, the regular-child's own
+    COABuilder POST must never fire — no section-less certificate emitted."""
+    monkeypatch.setattr(
+        "coa.variance_series.build_variance_replicates",
+        lambda db, parent: {"PEP": [{"vial_sequence": 2}]},  # variance sample
+    )
+    captured = {}
+    _patch_coabuilder(monkeypatch, captured)
+    parent = _variance_parent("P-X")
+    with patch("coa.native_sections.build_native_sections",
+               side_effect=NativeSectionsError("boom-detail")):
+        with caplog.at_level(logging.ERROR):
+            asyncio.run(main._maybe_emit_regular_coa_child(
+                db_session, "P-X", parent, {"generation_id": "GEN-1"}
+            ))
+    assert captured == {}  # POST never fired
+    assert any("boom-detail" in r.message for r in caplog.records)
+
+
+def test_regular_child_attaches_native_sections_before_post(db_session, monkeypatch):
+    """Success path: native_sections is attached to the child body BEFORE the
+    COABuilder POST fires, and carries the exact built document."""
+    monkeypatch.setattr(
+        "coa.variance_series.build_variance_replicates",
+        lambda db, parent: {"PEP": [{"vial_sequence": 2}]},  # variance sample
+    )
+    captured = {}
+    _patch_coabuilder(monkeypatch, captured)
+    parent = _variance_parent("P-Y")
+    doc = {
+        "sample_id": "P-Y",
+        "ordered_profiles": ["HM"],
+        "sections": [{"profile_key": "HM", "title": "Heavy Metals", "rows": []}],
+    }
+    with patch("coa.native_sections.build_native_sections", return_value=doc):
+        asyncio.run(main._maybe_emit_regular_coa_child(
+            db_session, "P-Y", parent, {"generation_id": "GEN-2"}
+        ))
+    assert captured["url"].endswith("/process/P-Y")
+    assert captured["body"]["native_sections"] == doc
