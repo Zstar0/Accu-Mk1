@@ -3206,6 +3206,14 @@ def validate_new_keyword(db, keyword: str, *, exclude_id: int | None = None) -> 
             "keyword must start with a letter and contain only A-Z, 0-9, '-' and '_' "
             "(uppercase)",
         )
+    # PUR_/QTY_ are the per-substance rescue namespaces the HPLC mirror mints
+    # (seeder.py generic-analyte translation). A native service claiming one
+    # would route promotes through a live SENAITE slot read (spec-2 deferred
+    # minor). Reserved outright for new mk1 keywords.
+    if keyword.startswith(("PUR_", "QTY_")):
+        raise HTTPException(
+            400, f"keyword prefix '{keyword.split('_', 1)[0]}_' is reserved "
+                 "for per-substance HPLC services")
     q = select(AnalysisService).where(AnalysisService.keyword == keyword)
     if exclude_id is not None:
         q = q.where(AnalysisService.id != exclude_id)
@@ -15630,6 +15638,13 @@ async def create_analysis_profile(
     ).scalar_one_or_none()
     if existing:
         raise HTTPException(400, f"profile key '{data.key}' already exists")
+    if data.fulfillment_dim not in ("role", "kind"):
+        raise HTTPException(400, "fulfillment_dim must be 'role' or 'kind'")
+    if data.fulfillment_role is not None and data.fulfillment_dim == "role" \
+            and not re.fullmatch(r"[a-z][a-z0-9_]{0,7}", data.fulfillment_role):
+        raise HTTPException(
+            400, "fulfillment_role must be lowercase, <= 8 chars "
+                 "(assignment_role is VARCHAR(8))")
     p = AnalysisProfile(**data.model_dump(), updated_by_id=getattr(current_user, "id", None))
     db.add(p)
     db.commit()
@@ -15656,6 +15671,14 @@ async def update_analysis_profile(
             f"unknown coa_archetype {fields['coa_archetype']!r}; "
             f"allowed: {sorted(COA_ARCHETYPES)} or null (not reported)",
         )
+    if data.fulfillment_dim is not None and data.fulfillment_dim not in ("role", "kind"):
+        raise HTTPException(400, "fulfillment_dim must be 'role' or 'kind'")
+    if data.fulfillment_role is not None:
+        effective_dim = data.fulfillment_dim or p.fulfillment_dim
+        if effective_dim == "role" and not re.fullmatch(r"[a-z][a-z0-9_]{0,7}", data.fulfillment_role):
+            raise HTTPException(
+                400, "fulfillment_role must be lowercase, <= 8 chars "
+                     "(assignment_role is VARCHAR(8))")
     for field, value in fields.items():
         setattr(p, field, value)
     p.updated_by_id = getattr(current_user, "id", None)

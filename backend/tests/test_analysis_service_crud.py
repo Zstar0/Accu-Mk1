@@ -32,6 +32,18 @@ def test_invalid_keyword_shapes_rejected(db_session, kw):
     assert e.value.status_code == 400
 
 
+@pytest.mark.parametrize("kw", ["PUR_XYZ", "QTY_XYZ"])
+def test_reserved_prefix_rejected_for_new_mk1_keywords(db_session, kw):
+    """PUR_/QTY_ are the per-substance namespaces the HPLC mirror mints; a
+    native service claiming one would route promotes through a live SENAITE
+    slot read. Reserved outright for new mk1 keywords."""
+    from main import validate_new_keyword
+    with pytest.raises(HTTPException) as e:
+        validate_new_keyword(db_session, kw)
+    assert e.value.status_code == 400
+    assert "reserved" in str(e.value.detail).lower()
+
+
 def test_duplicate_mk1_keyword_rejected(db_session):
     from main import validate_new_keyword
     from models import AnalysisService

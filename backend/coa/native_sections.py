@@ -48,6 +48,7 @@ def _ordered_native_profiles(db: Session, services: dict, package: Optional[str]
     ordered_keys = [k for k, v in (services or {}).items() if v]
     if package:
         ordered_keys.append(package)
+    ordered_keys = list(dict.fromkeys(ordered_keys))  # order-preserving dedup
 
     out = []
     for key in ordered_keys:

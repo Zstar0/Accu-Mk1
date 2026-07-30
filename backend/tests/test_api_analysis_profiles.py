@@ -184,3 +184,85 @@ def test_put_members_writes_sort_order_from_list_position(two_services):
 def test_get_members_404_for_unknown_profile():
     resp = client.get("/analysis-profiles/999999999/members")
     assert resp.status_code == 404
+
+
+def test_post_rejects_bad_fulfillment_dim():
+    resp = client.post("/analysis-profiles", json={
+        "key": "bad_dim_test", "name": "Bad Dim Test", "is_addon": True,
+        "fulfillment_dim": "banana",
+    })
+    assert resp.status_code == 400
+    assert "fulfillment_dim" in resp.json()["detail"]
+
+
+def test_post_rejects_bad_fulfillment_role():
+    resp = client.post("/analysis-profiles", json={
+        "key": "bad_role_test", "name": "Bad Role Test", "is_addon": True,
+        "fulfillment_role": "ALLCAPS-TOO-LONG", "fulfillment_dim": "role",
+    })
+    assert resp.status_code == 400
+    assert "fulfillment_role" in resp.json()["detail"]
+
+
+def test_post_accepts_valid_role_and_dim():
+    resp = client.post("/analysis-profiles", json={
+        "key": "good_role_test", "name": "Good Role Test", "is_addon": True,
+        "fulfillment_role": "hm", "fulfillment_dim": "role",
+    })
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["fulfillment_role"] == "hm"
+
+
+def test_patch_rejects_bad_fulfillment_dim():
+    create = client.post("/analysis-profiles", json={
+        "key": "patch_dim_test", "name": "Patch Dim Test", "is_addon": True,
+    })
+    assert create.status_code == 201, create.text
+    profile_id = create.json()["id"]
+    resp = client.patch(f"/analysis-profiles/{profile_id}", json={"fulfillment_dim": "banana"})
+    assert resp.status_code == 400
+    assert "fulfillment_dim" in resp.json()["detail"]
+
+
+def test_patch_rejects_bad_fulfillment_role():
+    create = client.post("/analysis-profiles", json={
+        "key": "patch_role_test", "name": "Patch Role Test", "is_addon": True,
+    })
+    assert create.status_code == 201, create.text
+    profile_id = create.json()["id"]
+    resp = client.patch(f"/analysis-profiles/{profile_id}", json={
+        "fulfillment_role": "ALLCAPS-TOO-LONG", "fulfillment_dim": "role",
+    })
+    assert resp.status_code == 400
+    assert "fulfillment_role" in resp.json()["detail"]
+
+
+def test_patch_accepts_valid_role():
+    create = client.post("/analysis-profiles", json={
+        "key": "patch_role_ok_test", "name": "Patch Role Ok Test", "is_addon": True,
+    })
+    assert create.status_code == 201, create.text
+    profile_id = create.json()["id"]
+    resp = client.patch(f"/analysis-profiles/{profile_id}", json={
+        "fulfillment_role": "hm", "fulfillment_dim": "role",
+    })
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["fulfillment_role"] == "hm"
+
+
+def test_patch_role_only_validates_against_existing_dim_when_omitted():
+    """A PATCH that sets only fulfillment_role (omitting fulfillment_dim) must
+    still validate against the profile's EXISTING dim (default 'role' here),
+    not skip validation because fulfillment_dim wasn't in this payload."""
+    create = client.post("/analysis-profiles", json={
+        "key": "patch_effective_dim_test", "name": "Patch Effective Dim Test",
+        "is_addon": True,
+    })
+    assert create.status_code == 201, create.text
+    assert create.json()["fulfillment_dim"] == "role"  # confirm default
+    profile_id = create.json()["id"]
+    resp = client.patch(f"/analysis-profiles/{profile_id}", json={
+        "fulfillment_role": "ALLCAPS",
+    })
+    assert resp.status_code == 400
+    assert "fulfillment_role" in resp.json()["detail"]

@@ -68,6 +68,21 @@ def test_happy_path_document_shape(db_session, monkeypatch):
     assert row["specification"] is None and row["conforms"] is None
 
 
+def test_duplicate_order_key_emits_one_section(db_session, monkeypatch):
+    """package == a truthy services key must not duplicate the section
+    (ledger final-review minor: ordered_keys had no dedup)."""
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")])
+    parent = _mk_parent_with_rows(db_session, svcs)
+    monkeypatch.setattr(
+        "coa.native_sections.fetch_sample_services",
+        lambda sample_id: {"services": {"heavy_metals": True}, "package": "heavy_metals"},
+    )
+    doc = build_native_sections(db_session, parent)
+    assert [s["profile_key"] for s in doc["sections"]].count("heavy_metals") == 1
+    assert doc["ordered_profiles"].count("heavy_metals") == 1
+
+
 def test_rule1_is_fetch_failure_aborts(db_session, monkeypatch):
     prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
                                     services=[("HM-PB", "mk1")])
