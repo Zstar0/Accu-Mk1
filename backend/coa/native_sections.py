@@ -69,7 +69,16 @@ def _eligible_parent_row(db: Session, parent_pk: int, service_id: int):
 
     ID-keyed (native promote stores parent rows by analysis_service_id).
     Retest supersession retracts superseded rows in the same transaction, so
-    at most one row is in an eligible state.
+    at most one row is in an eligible state today — but that is an invariant
+    of the promote code (lims_analyses/service.py), three files away and with
+    no test that pins it for the parent tier specifically. The design spec
+    (2026-07-28-native-coa-sections-design.md:73) states the "current" row
+    condition explicitly: `retest_of_id IS NULL`. Enforce it here rather than
+    depending on an invariant this module doesn't own. `.order_by(id.desc())`
+    + `.first()` (not `scalar_one_or_none()`) mirrors
+    `parent_mirror._existing_shadow`'s idiom for the same risk class: if an
+    anomaly ever produces more than one live row, resolve deterministically to
+    the newest rather than raising.
     """
     from models import LimsAnalysis
 
@@ -79,7 +88,8 @@ def _eligible_parent_row(db: Session, parent_pk: int, service_id: int):
             LimsAnalysis.lims_sub_sample_pk.is_(None),
             LimsAnalysis.analysis_service_id == service_id,
             LimsAnalysis.review_state.in_(ELIGIBLE_STATES),
-        )
+            LimsAnalysis.retest_of_id.is_(None),
+        ).order_by(LimsAnalysis.id.desc())
     ).scalars().first()
 
 
@@ -135,11 +145,21 @@ def build_native_sections(db: Session, parent) -> dict:
                     f"native sections: profile '{prof.key}' row "
                     f"'{svc.keyword}' has an empty result on {sample_id}"
                 )
+            unit = row.result_unit or (svc.unit or "")
+            if unit == "":
+                # A numeric result with a blank unit is the ENDO-LAL failure
+                # class (catalog unit missing) — but pH's unit is legitimately
+                # blank, so this is NOT a rule-3 abort. Surface it instead of
+                # printing it silently; the section still builds.
+                log.warning(
+                    "native_section_blank_unit sample=%s profile=%s keyword=%s",
+                    sample_id, prof.key, svc.keyword,
+                )
             rows.append({
                 "keyword": svc.keyword,
                 "name": svc.title,
                 "result": row.result_value,
-                "unit": row.result_unit or (svc.unit or ""),
+                "unit": unit,
                 "method": _method_label(db, row.method_id),
                 "specification": None,   # COABuilder fills from baked specs
                 "conforms": None,        # COABuilder fills from baked specs

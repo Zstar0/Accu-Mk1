@@ -191,3 +191,83 @@ def test_method_label_from_hplc_methods(db_session, monkeypatch):
     rows_by_kw = {r["keyword"]: r for r in doc["sections"][0]["rows"]}
     assert rows_by_kw["HM-PB"]["method"] == "EPA 200.8"
     assert rows_by_kw["HM-AS"]["method"] == ""
+
+
+def test_retest_of_id_row_is_not_current(db_session, monkeypatch):
+    """Design spec (2026-07-28-native-coa-sections-design.md:73): a row is
+    only "current" when retest_of_id IS NULL, even if review_state is
+    otherwise eligible. Alone, a retest_of_id-set row must NOT be picked (the
+    section aborts, rule 4). Alongside a current (retest_of_id NULL) row, the
+    current one's result is used."""
+    from models import LimsAnalysis, LimsSample
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")])
+    parent = LimsSample(sample_id="P-7003")
+    db_session.add(parent); db_session.flush()
+    # A prior row this stale row claims to be a retest of (real FK target,
+    # though SQLite here does not enforce it).
+    older_row = LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=svcs[0].id,
+        keyword=svcs[0].keyword, title=svcs[0].title,
+        result_value="0.50", result_unit=svcs[0].unit, review_state="retracted",
+    )
+    db_session.add(older_row); db_session.flush()
+    stale_row = LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=svcs[0].id,
+        keyword=svcs[0].keyword, title=svcs[0].title,
+        result_value="0.99", result_unit=svcs[0].unit,
+        review_state="verified", retest_of_id=older_row.id,
+    )
+    db_session.add(stale_row); db_session.flush()
+    monkeypatch.setattr(
+        "coa.native_sections.fetch_sample_services",
+        lambda sample_id: {"services": {"heavy_metals": True}, "package": None},
+    )
+    with pytest.raises(NativeSectionsError, match="no eligible result"):
+        build_native_sections(db_session, parent)
+
+    current_row = LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=svcs[0].id,
+        keyword=svcs[0].keyword, title=svcs[0].title,
+        result_value="0.12", result_unit=svcs[0].unit, review_state="verified",
+    )
+    db_session.add(current_row); db_session.flush()
+    doc = build_native_sections(db_session, parent)
+    assert doc["sections"][0]["rows"][0]["result"] == "0.12"
+
+
+def test_blank_unit_logs_warning_and_still_builds(db_session, monkeypatch, caplog):
+    """A row resolving to unit="" (svc.unit=None, row.result_unit=None) is the
+    ENDO-LAL blank-unit failure class — but pH's unit is legitimately blank
+    per the spec's family table, so this must NOT abort. It logs a warning
+    and the document still builds."""
+    from models import AnalysisProfile, AnalysisService, LimsAnalysis, LimsSample, analysis_profile_members
+    prof = AnalysisProfile(
+        key="ph_panel", name="Ph Panel", is_addon=True,
+        coa_archetype="limit_table", coa_section_title="pH", coa_sort_order=10,
+    )
+    db_session.add(prof); db_session.flush()
+    svc = AnalysisService(title="Ph", keyword="PH", origin="mk1", unit=None)
+    db_session.add(svc); db_session.flush()
+    db_session.execute(analysis_profile_members.insert().values(
+        analysis_profile_id=prof.id, analysis_service_id=svc.id, sort_order=0,
+    ))
+    parent = LimsSample(sample_id="P-7004")
+    db_session.add(parent); db_session.flush()
+    db_session.add(LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=svc.id,
+        keyword=svc.keyword, title=svc.title,
+        result_value="7.0", result_unit=None, review_state="verified",
+    ))
+    db_session.flush()
+    monkeypatch.setattr(
+        "coa.native_sections.fetch_sample_services",
+        lambda sample_id: {"services": {"ph_panel": True}, "package": None},
+    )
+    with caplog.at_level("WARNING", logger="coa.native_sections"):
+        doc = build_native_sections(db_session, parent)
+    assert doc["sections"][0]["rows"][0]["unit"] == ""
+    assert any(
+        "native_section_blank_unit" in r.getMessage() and "keyword=PH" in r.getMessage()
+        for r in caplog.records
+    )
