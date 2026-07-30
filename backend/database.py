@@ -1444,6 +1444,10 @@ def _run_migrations():
             CONSTRAINT uq_analysis_profile_member UNIQUE (analysis_profile_id, analysis_service_id)
         )
         """,
+        # --- Native COA sections (spec 2): profile -> certificate wiring ---
+        "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_section_title VARCHAR(200)",
+        "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_archetype VARCHAR(50)",
+        "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_sort_order INTEGER NOT NULL DEFAULT 0",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

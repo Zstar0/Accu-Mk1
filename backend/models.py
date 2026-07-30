@@ -301,6 +301,16 @@ class AnalysisProfile(Base):
     )
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # ── COA section wiring (spec 2) ──────────────────────────────────────────
+    # NULL coa_archetype = profile is NOT reported on the certificate (a
+    # legitimate internal-only test). The only legal non-NULL value today is
+    # 'limit_table'; validation lives in the route so the constant stays in
+    # one place (COA_ARCHETYPES in main.py).
+    coa_section_title: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    coa_archetype: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    coa_sort_order: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     updated_by_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

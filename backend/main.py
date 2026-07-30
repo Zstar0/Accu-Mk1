@@ -2366,6 +2366,9 @@ class AnalysisProfileUpdate(BaseModel):
     fulfillment_dim: Optional[str] = None
     sort_order: Optional[int] = None
     active: Optional[bool] = None
+    coa_section_title: Optional[str] = None
+    coa_archetype: Optional[str] = None
+    coa_sort_order: Optional[int] = None
 
 
 class AnalysisProfileResponse(BaseModel):
@@ -2379,6 +2382,9 @@ class AnalysisProfileResponse(BaseModel):
     fulfillment_dim: str
     sort_order: int
     active: bool
+    coa_section_title: Optional[str] = None
+    coa_archetype: Optional[str] = None
+    coa_sort_order: int = 0
     member_ids: list[int] = []
     created_at: datetime
     updated_at: datetime
@@ -2389,6 +2395,13 @@ class AnalysisProfileResponse(BaseModel):
 
 class AnalysisProfileMembersRequest(BaseModel):
     analysis_service_ids: list[int]
+
+
+# Only legal non-NULL coa_archetype today. NULL = profile is not reported on
+# the certificate (a legitimate internal-only test); validated at the route
+# edge rather than a DB CHECK constraint so a second archetype is a one-line
+# addition here.
+COA_ARCHETYPES = {"limit_table"}
 
 
 # ─── SLA tier schemas (sub-project A, revised to tiers) ───
@@ -15542,6 +15555,8 @@ def _profile_to_response(p) -> AnalysisProfileResponse:
         is_addon=p.is_addon, vials_required=p.vials_required,
         fulfillment_role=p.fulfillment_role, fulfillment_dim=p.fulfillment_dim,
         sort_order=p.sort_order, active=p.active,
+        coa_section_title=p.coa_section_title, coa_archetype=p.coa_archetype,
+        coa_sort_order=p.coa_sort_order,
         member_ids=[s.id for s in p.analysis_services],
         created_at=p.created_at, updated_at=p.updated_at,
     )
@@ -15562,6 +15577,9 @@ async def create_analysis_profile(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
+    """AnalysisProfileCreate deliberately has no coa_* fields: a new profile
+    always starts unreported (coa_archetype NULL) and the lab opts it into a
+    COA section via a later edit (PATCH), never at creation time."""
     from models import AnalysisProfile
     existing = db.execute(
         select(AnalysisProfile).where(AnalysisProfile.key == data.key)
@@ -15586,7 +15604,15 @@ async def update_analysis_profile(
     p = db.get(AnalysisProfile, profile_id)
     if p is None:
         raise HTTPException(404, "analysis profile not found")
-    for field, value in data.model_dump(exclude_unset=True).items():
+    fields = data.model_dump(exclude_unset=True)
+    if "coa_archetype" in fields and fields["coa_archetype"] is not None \
+            and fields["coa_archetype"] not in COA_ARCHETYPES:
+        raise HTTPException(
+            400,
+            f"unknown coa_archetype {fields['coa_archetype']!r}; "
+            f"allowed: {sorted(COA_ARCHETYPES)} or null (not reported)",
+        )
+    for field, value in fields.items():
         setattr(p, field, value)
     p.updated_by_id = getattr(current_user, "id", None)
     db.commit()

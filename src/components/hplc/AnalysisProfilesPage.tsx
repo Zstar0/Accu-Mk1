@@ -21,6 +21,9 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Label } from '@/components/ui/label'
 import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select'
+import {
   Table,
   TableBody,
   TableCell,
@@ -58,6 +61,9 @@ interface FormState {
   vials_required: string
   sort_order: string
   active: boolean
+  coa_section_title: string
+  coa_archetype: string | null
+  coa_sort_order: string
 }
 
 const DEFAULT_FORM: FormState = {
@@ -68,6 +74,9 @@ const DEFAULT_FORM: FormState = {
   vials_required: '0',
   sort_order: '0',
   active: true,
+  coa_section_title: '',
+  coa_archetype: null,
+  coa_sort_order: '0',
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
@@ -120,6 +129,9 @@ export default function AnalysisProfilesPage() {
       vials_required: String(profile.vials_required),
       sort_order: String(profile.sort_order),
       active: profile.active,
+      coa_section_title: profile.coa_section_title ?? '',
+      coa_archetype: profile.coa_archetype,
+      coa_sort_order: String(profile.coa_sort_order),
     })
     setMemberSearch('')
     setPanelOpen(true)
@@ -176,6 +188,9 @@ export default function AnalysisProfilesPage() {
           vials_required: parseInt(form.vials_required, 10) || 0,
           sort_order: parseInt(form.sort_order, 10) || 0,
           active: form.active,
+          coa_section_title: form.coa_section_title.trim() || null,
+          coa_archetype: form.coa_archetype,
+          coa_sort_order: parseInt(form.coa_sort_order, 10) || 0,
         })
         toast.success(`"${form.name.trim()}" updated`)
       } else {
@@ -555,6 +570,79 @@ export default function AnalysisProfilesPage() {
                         Inactive profiles are hidden from new orders
                       </span>
                     </label>
+                  </div>
+                )}
+
+                {/* COA section wiring — edit only. A new profile always
+                    starts unreported (coa_archetype NULL); the lab opts in
+                    here once the profile exists. */}
+                {editingProfile && (
+                  <div className="space-y-4 border-t pt-4">
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <label className="text-sm font-medium">COA Section</label>
+                        <TooltipProvider delayDuration={200}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Info className="h-3.5 w-3.5 text-muted-foreground cursor-default" />
+                            </TooltipTrigger>
+                            <TooltipContent side="right" className="max-w-xs">
+                              <div className="flex flex-col gap-1 p-1 text-xs font-mono">
+                                <div className="font-semibold border-b border-primary-foreground/20 pb-1">
+                                  Certificate reporting
+                                </div>
+                                <div>
+                                  <span className="font-semibold">Not reported</span> — internal-only; never appears on the COA.
+                                </div>
+                                <div>
+                                  <span className="font-semibold">Limit table</span> — renders as Test / Result / Unit / Specification / Verdict on the certificate.
+                                </div>
+                              </div>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </div>
+                      <Select
+                        value={form.coa_archetype ?? 'none'}
+                        onValueChange={v =>
+                          setForm(f => ({ ...f, coa_archetype: v === 'none' ? null : v }))
+                        }
+                      >
+                        <SelectTrigger className="w-56">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">Not reported</SelectItem>
+                          <SelectItem value="limit_table">Limit table</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="flex gap-4">
+                      <div className="flex-1 space-y-1.5">
+                        <label className="text-sm font-medium">Section Title</label>
+                        <Input
+                          placeholder={form.name || 'Section title'}
+                          value={form.coa_section_title}
+                          disabled={form.coa_archetype === null}
+                          onChange={e =>
+                            setForm(f => ({ ...f, coa_section_title: e.target.value }))
+                          }
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-sm font-medium">Section Order</label>
+                        <Input
+                          type="number"
+                          placeholder="0"
+                          value={form.coa_sort_order}
+                          onChange={e =>
+                            setForm(f => ({ ...f, coa_sort_order: e.target.value }))
+                          }
+                          className="max-w-[120px]"
+                        />
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
