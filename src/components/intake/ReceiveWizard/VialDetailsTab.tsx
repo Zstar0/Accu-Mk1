@@ -19,6 +19,7 @@ const ROLE_BADGES: Record<string, { label: string; cls: string }> = {
   endo:       { label: 'ENDO',       cls: ROLE_BADGE_CLASS.endo },
   ster:       { label: 'PCR',        cls: ROLE_BADGE_CLASS.ster },
   xtra:       { label: 'XTRA',       cls: ROLE_BADGE_CLASS.xtra },
+  hm:         { label: 'HM',         cls: ROLE_BADGE_CLASS.hm },
   unassigned: { label: 'Unassigned', cls: ROLE_BADGE_CLASS.unassigned },
 }
 

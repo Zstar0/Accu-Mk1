@@ -375,14 +375,25 @@ def _run_migrations():
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS customer_remarks_include BOOLEAN NOT NULL DEFAULT TRUE",
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS customer_remarks_delivered_at TIMESTAMP",
         # Backfill — non-HPLC sub-samples are not variance candidates by default.
-        # Idempotent: re-running matches no rows once already flipped. hm added
-        # spec-3 Task 3: heavy_metals is vials_required=1 (see catalog profile),
-        # so an hm vial structurally never has a same-role replicate to compare
-        # against — it must never be variance-eligible.
+        # Idempotent: re-running matches no rows once already flipped.
         """UPDATE lims_sub_samples
               SET in_variance_set = FALSE,
                   variance_exclusion_reason = 'auto: assignment_role != hplc'
-            WHERE assignment_role IN ('endo', 'ster', 'xtra', 'hm')
+            WHERE assignment_role IN ('endo', 'ster', 'xtra')
+              AND in_variance_set = TRUE""",
+        # hm-specific backfill (fix round, spec-3 Task 3): split out from the
+        # statement above so its reason string can be hm-accurate rather than
+        # the generic "!= hplc" one — heavy_metals is vials_required=1, so an
+        # hm vial structurally never has a same-role replicate to compare
+        # against; it must never be variance-eligible. This string MUST match
+        # _VARIANCE_INELIGIBLE_REASON in sub_samples/service.py — that's the
+        # runtime path that keeps this state correct going forward; this
+        # backfill only self-heals rows a race could transiently mis-set
+        # before that constant existed, or between deploy and next request.
+        """UPDATE lims_sub_samples
+              SET in_variance_set = FALSE,
+                  variance_exclusion_reason = 'auto: hm is single-vial (vials_required=1); never variance-eligible'
+            WHERE assignment_role = 'hm'
               AND in_variance_set = TRUE""",
         # ── SLA tiers (revises the former sla_targets model) ──
         # Drop the old per-(service,priority) model and its indexes.

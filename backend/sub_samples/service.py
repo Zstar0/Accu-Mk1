@@ -42,6 +42,17 @@ _ROLE_DEPARTMENT_NAMES: dict[str, set[str]] = {
     "hm": {"Heavy Metals"},
 }
 
+# Roles that must NEVER be variance-eligible, overriding the normal
+# position-based rule in set_assignment_role (vial_sequence==1 or
+# assignment_kind=="variance"). hm is here because heavy_metals is
+# vials_required=1 — an hm vial structurally cannot have a same-role
+# replicate to compare against, so "first vial is the baseline" is
+# meaningless for it (fix round, spec-3 Task 3, site 7). Keep this set
+# narrowly scoped: adding a role here changes production variance behavior
+# for that role everywhere, not just hm.
+_VARIANCE_INELIGIBLE_ROLES: set[str] = {"hm"}
+_VARIANCE_INELIGIBLE_REASON = "auto: hm is single-vial (vials_required=1); never variance-eligible"
+
 
 # SENAITE review states meaning "family not physically checked in yet".
 # Mirrors the FE's PRE_RECEIVED_STATES (useReceiveWizard.ts). A parent first
@@ -1579,7 +1590,20 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
         # Variance-set membership follows assignment: the first vial (baseline)
         # is always in; any variance replicate is in; everything else is out.
         # Manual overrides via set_variance_membership still apply afterward.
-        sub.in_variance_set = (sub.vial_sequence == 1) or (sub.assignment_kind == "variance")
+        # hm is scoped OUT of that position-based rule (fix round, spec-3 Task
+        # 3): heavy_metals is vials_required=1, so an hm vial can never have a
+        # same-role replicate to compare against — landing on vial_sequence==1
+        # (an hm-only order's first and only vial) must not make it eligible.
+        # Every other role's position-based expression is unchanged.
+        if role in _VARIANCE_INELIGIBLE_ROLES:
+            sub.in_variance_set = False
+            sub.variance_exclusion_reason = _VARIANCE_INELIGIBLE_REASON
+        else:
+            sub.in_variance_set = (sub.vial_sequence == 1) or (sub.assignment_kind == "variance")
+            if sub.in_variance_set and old_role in _VARIANCE_INELIGIBLE_ROLES:
+                # Role flipped away from hm into a naturally-eligible slot —
+                # clear the stale hm-specific reason so it doesn't linger.
+                sub.variance_exclusion_reason = None
         db.add(LimsSubSampleEvent(
             sub_sample_pk=sub.id,
             event="role_assigned",

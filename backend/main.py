@@ -17550,6 +17550,52 @@ def list_worksheets(
                 group_peptide_map[gid] = first_peptide_id
                 group_analyses_map[gid] = analyses
 
+        # Fallback department resolution for group-less items (fix round,
+        # spec-3 Task 3, Finding 3): catalog-only roles like hm carry no
+        # service_group at all, so group_department_name_map above has
+        # nothing to key on and every hm worksheet item serialized with
+        # department_name=None — making the FE hm badge (itemBench /
+        # itemRoleBadges) structurally unreachable even though it's wired
+        # correctly. Resolve via the item's own cached analyses (analyses_json,
+        # written at add-to-worksheet time) — its first analysis's keyword ->
+        # AnalysisService.department_id -> Department.name, batched across
+        # every item that needs it in one query. Only fires where the
+        # group-based lookup above yields None (no group, or a group with no
+        # department); grouped items resolve exactly as before.
+        item_department_fallback_map: dict[int, str | None] = {}
+        _needs_department_fallback = [
+            it for it in items
+            if not (it.service_group_id and group_department_name_map.get(it.service_group_id))
+        ]
+        if _needs_department_fallback:
+            item_first_keyword: dict[int, str | None] = {}
+            fallback_keywords: set[str] = set()
+            for it in _needs_department_fallback:
+                kw = None
+                if it.analyses_json:
+                    try:
+                        parsed = json.loads(it.analyses_json)
+                    except (ValueError, TypeError):
+                        parsed = None
+                    if parsed and isinstance(parsed, list) and isinstance(parsed[0], dict):
+                        kw = parsed[0].get("keyword")
+                item_first_keyword[it.id] = kw
+                if kw:
+                    fallback_keywords.add(kw)
+            if fallback_keywords:
+                from models import Department
+                kw_rows = db.execute(
+                    select(AnalysisService.keyword, Department.name)
+                    .outerjoin(Department, Department.id == AnalysisService.department_id)
+                    .where(AnalysisService.keyword.in_(fallback_keywords))
+                ).all()
+                keyword_department_name_map = {r[0]: r[1] for r in kw_rows}
+                item_department_fallback_map = {
+                    it_id: keyword_department_name_map.get(kw)
+                    for it_id, kw in item_first_keyword.items()
+                    if kw
+                }
+
         # Resolve assigned analyst email
         analyst_email = None
         if ws.assigned_analyst_id:
@@ -17643,7 +17689,10 @@ def list_worksheets(
                     "sample_id": it.sample_id,
                     "sample_uid": it.sample_uid,
                     "service_group_id": it.service_group_id,
-                    "department_name": group_department_name_map.get(it.service_group_id) if it.service_group_id else None,
+                    "department_name": (
+                        (group_department_name_map.get(it.service_group_id) if it.service_group_id else None)
+                        or item_department_fallback_map.get(it.id)
+                    ),
                     "group_name": group_name_map.get(it.service_group_id, "—") if it.service_group_id else "—",
                     "group_color": group_color_map.get(it.service_group_id, "zinc") if it.service_group_id else "zinc",
                     "priority": it.priority,
