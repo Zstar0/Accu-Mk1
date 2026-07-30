@@ -8848,7 +8848,11 @@ def _fetch_order_submission_row(order_number: str) -> Optional[dict]:
 
 
 @app.get("/orders/{order_number}/box-label-summary", response_model=BoxLabelSummary)
-def get_order_box_label_summary(order_number: str, _current_user=Depends(get_current_user)):
+def get_order_box_label_summary(
+    order_number: str,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
     row = _fetch_order_submission_row(order_number)
     if row is None:
         raise HTTPException(status_code=404, detail=f"Order {order_number} not found")
@@ -8871,7 +8875,7 @@ def get_order_box_label_summary(order_number: str, _current_user=Depends(get_cur
         # IS returns {"services": {...flags...}, ...}; derive_* wants the inner
         # flags dict (mirrors sub_samples.service.build_vial_plan).
         services = services_resp.get("services") or {}
-        d = derive_base_demand(services)
+        d = derive_base_demand(services, db=db)
         counts["hplc"] += d["hplc"]
         counts["endo"] += d["endo"]
         counts["ster"] += d["ster"]
@@ -8941,6 +8945,7 @@ class BoxLabelSummariesResponse(BaseModel):
 @app.post("/orders/box-label-summaries", response_model=BoxLabelSummariesResponse)
 def get_order_box_label_summaries(
     body: BoxLabelSummariesRequest,
+    db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
     """Batched box-label summaries: ONE request per receive-by-order PAGE.
@@ -9007,7 +9012,7 @@ def get_order_box_label_summaries(
             if not resp:
                 continue  # legit 404 / unmapped sample → contributes 0
             services = resp.get("services") or {}
-            d = derive_base_demand(services)
+            d = derive_base_demand(services, db=db)
             counts["hplc"] += d["hplc"]
             counts["endo"] += d["endo"]
             counts["ster"] += d["ster"]

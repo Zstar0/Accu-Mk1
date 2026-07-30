@@ -34,6 +34,23 @@ def seed_profiles_from_registry(db: Session) -> None:
             sort_order=i,
         ))
         created += 1
+
+    # Spec-3 demand backfill: the spec-1 seed shipped vials_required=0
+    # ("wired to real demand in spec 3" — that is this). Idempotent: only
+    # rows still at the inert defaults are touched, admin edits survive.
+    _DEMAND_DEFAULTS = {
+        "hplcpurity_identity": (1, "hplc"),
+        "bac_water_panel": (1, "hplc"),
+        "endotoxin": (1, "endo"),
+        "sterility_pcr": (2, "ster"),
+    }
+    for key, (vials, role) in _DEMAND_DEFAULTS.items():
+        row = db.query(AnalysisProfile).filter_by(key=key).one_or_none()
+        if row is not None and row.vials_required == 0:
+            row.vials_required = vials
+            if not row.fulfillment_role:
+                row.fulfillment_role = role
+
     db.commit()
     if created:
         log.info("catalog.profile_seed created=%s", created)

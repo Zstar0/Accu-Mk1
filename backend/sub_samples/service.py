@@ -1186,19 +1186,37 @@ def variance_lock_required(services: Optional[dict], variance_locked_at) -> bool
     return purchased and variance_locked_at is None
 
 
-def derive_base_demand(services: dict) -> dict:
-    """Pre-variance vial demand per bucket (the lab-protocol baseline)."""
+def derive_base_demand(services: dict, db=None) -> dict:
+    """Pre-variance vial demand per bucket (the lab-protocol baseline).
+
+    db=None -> pure legacy map (unchanged behavior, used by legacy callers
+    and as the shadow reference). With a db, the catalog is authoritative;
+    on any divergence in a LEGACY bucket the legacy value wins and an error
+    is logged (fail-open to known-good, never to under-provisioning).
+    """
     hplc = bool(services.get("hplcpurity_identity") or services.get("bac_water_panel"))
     endo = bool(services.get("endotoxin"))
     ster = bool(services.get("sterility_pcr"))
-    return {
+    legacy = {
         "hplc": 1 if hplc else 0,
         "endo": 1 if endo else 0,
         "ster": 2 if ster else 0,
     }
+    if db is None:
+        return legacy
+    from sub_samples.catalog_demand import derive_base_demand_catalog
+    catalog = derive_base_demand_catalog(db, services)
+    for bucket, legacy_n in legacy.items():
+        if catalog.get(bucket, 0) != legacy_n:
+            log.error(
+                "demand_divergence bucket=%s legacy=%s catalog=%s services=%s",
+                bucket, legacy_n, catalog.get(bucket, 0), sorted(services or {}),
+            )
+            catalog[bucket] = legacy_n
+    return catalog
 
 
-def derive_demand(services: dict) -> dict:
+def derive_demand(services: dict, db=None) -> dict:
     """Translate WP services dict to CORE vial demand per bucket.
 
     HPLC is satisfied by either `hplcpurity_identity` or `bac_water_panel` —
@@ -1210,7 +1228,7 @@ def derive_demand(services: dict) -> dict:
     not an inflation of core demand — the old max(base, n) math is retired.
     Core demand therefore equals the base lab-protocol demand.
     """
-    return derive_base_demand(services)
+    return derive_base_demand(services, db=db)
 
 
 _BUCKET_PRIORITY = ("hplc", "endo", "ster")
@@ -1276,9 +1294,9 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
         }
 
     services = services_resp.get("services") or {}
-    demand = derive_demand(services)  # core demand == base (inflation retired)
+    demand = derive_demand(services, db=db)  # core demand == base (inflation retired)
     variance = derive_variance_demand(services)
-    base_demand = derive_base_demand(services)
+    base_demand = derive_base_demand(services, db=db)
 
     # Variance lock guard: a locked set blocks re-assignment of its members
     # (spec §5), so a locked parent must NOT have vials auto-assigned under it.
