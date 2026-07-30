@@ -12,6 +12,23 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
+# ─── Task 5b: native parent analyses read shape ───────────────────────────────
+
+
+class NativeParentAnalysisRow(BaseModel):
+    """One current, origin='mk1' parent-tier row — read-only display shape for
+    the sample-details page's "Accu-Mk1 Analyses" card. Deliberately thinner
+    than AnalysisResponse: this is a display card, not an editable row."""
+    keyword: str
+    title: str
+    result_value: Optional[str] = None
+    result_unit: Optional[str] = None
+    review_state: str
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 # ─── Phase 4b: parent promotions read shapes ──────────────────────────────────
 
 

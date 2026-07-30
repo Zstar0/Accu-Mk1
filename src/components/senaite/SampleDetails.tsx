@@ -35,6 +35,13 @@ import {
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+// Aliased: `Tooltip` from recharts (imported below for the chromatogram
+// chart) already claims that name in this file.
+import {
+  Tooltip as HoverTooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import {
   Dialog,
   DialogContent,
@@ -115,6 +122,7 @@ import {
   listPackagingPhotos,
   fetchPackagingPhotoUrl,
   type PackagingPhoto,
+  getNativeParentAnalyses,
 } from '@/lib/api'
 import {
   ZoomableImage,
@@ -3320,6 +3328,88 @@ function WooOrderFlyout({
   )
 }
 
+// Task 5b: read-only "Accu-Mk1 Analyses" card. The main Analyses table on
+// the parent page stays SENAITE-sourced by design (see the Phase 3 swap
+// effect's comment inside SampleDetails, below) — native (origin='mk1')
+// parent-tier results have no SENAITE AR line to appear in, so this is the
+// separate section that surfaces them (e.g. Heavy Metals on P-0120).
+// Self-contained: owns its own gated query, same pattern as
+// PackagingAttachmentsGroup above — the parent only renders it, no lifted
+// state. `isParentPage` is threaded in rather than re-derived here so this
+// component doesn't own the sub-sample-id regex; SampleDetails already
+// computes `parentSampleId === null` for the sibling overlay queries.
+export function NativeParentAnalysesCard({
+  sampleId,
+  isParentPage,
+}: {
+  sampleId: string | null | undefined
+  isParentPage: boolean
+}) {
+  const { data: rows } = useQuery({
+    queryKey: ['native-parent-analyses', sampleId],
+    queryFn: () => getNativeParentAnalyses(sampleId!),
+    enabled: isParentPage && !!sampleId,
+    staleTime: 30_000,
+  })
+
+  if (!rows || rows.length === 0) return null
+
+  return (
+    <Card className="p-4 space-y-3">
+      <div className="flex items-center gap-1.5">
+        <h3 className="text-sm font-semibold">Accu-Mk1 Analyses</h3>
+        <HoverTooltip>
+          <TooltipTrigger asChild>
+            <span
+              className="inline-flex text-muted-foreground/70"
+              aria-label="Accu-Mk1 Analyses: provenance"
+            >
+              <Info size={12} />
+            </span>
+          </TooltipTrigger>
+          <TooltipContent className="p-0 max-w-xs">
+            <div className="flex flex-col gap-1.5 p-3 text-xs font-mono">
+              <div className="font-semibold border-b border-primary-foreground/20 pb-1.5">
+                native to Accu-Mk1
+              </div>
+              <div>
+                Results measured and promoted natively in Accu-Mk1 — not part
+                of the SENAITE AR.
+              </div>
+              <div className="border-t border-primary-foreground/20 pt-1.5">
+                Read-only here. Lifecycle stays with the promote / un-promote
+                flows.
+              </div>
+            </div>
+          </TooltipContent>
+        </HoverTooltip>
+      </div>
+      <div className="divide-y divide-border">
+        {rows.map(row => (
+          <div
+            key={row.keyword}
+            className="flex items-center justify-between gap-3 py-2 text-sm"
+          >
+            <div className="min-w-0">
+              <div className="font-medium truncate">{row.title}</div>
+              <div className="text-xs font-mono text-muted-foreground truncate">
+                {row.keyword}
+              </div>
+            </div>
+            <div className="flex items-center gap-3 shrink-0">
+              <span className="font-mono text-sm">
+                {row.result_value ?? '—'}
+                {row.result_unit ? ` ${row.result_unit}` : ''}
+              </span>
+              <StatusBadge state={row.review_state} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  )
+}
+
 // --- Main Component ---
 
 export function SampleDetails() {
@@ -6438,6 +6528,16 @@ export function SampleDetails() {
         analysisSlaPriority={analysisSla.priority}
         vialKind={currentVialKind}
       />
+
+      {/* Native (Accu-Mk1) parent analyses — separate read-only card, not a
+          merge into the SENAITE-sourced table above. Renders nothing when
+          the parent has no origin='mk1' results. */}
+      {parentSampleId === null && data.sample_id && (
+        <NativeParentAnalysesCard
+          sampleId={data.sample_id}
+          isParentPage={parentSampleId === null}
+        />
+      )}
 
       {parentSampleId === null && data.sample_id && (
         <VialsQuickLookDialog

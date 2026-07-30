@@ -5708,6 +5708,41 @@ export async function listParentPromotions(
 }
 
 /**
+ * Task 5b: read-only "Accu-Mk1 Analyses" card source — current, origin='mk1'
+ * parent-tier rows for a parent sample. The main Analyses table on the
+ * parent page stays SENAITE-sourced by design (SampleDetails.tsx); this is
+ * the separate reader for native results (e.g. Heavy Metals) that table
+ * structurally can't show.
+ */
+export interface NativeParentAnalysisRow {
+  keyword: string
+  title: string
+  result_value: string | null
+  result_unit: string | null
+  review_state: string
+  updated_at: string
+}
+
+/**
+ * GET /api/lims-analyses/parent/{sample_id}/native-analyses
+ * A sample unknown to Mk1 404s server-side; treated the same as "no native
+ * rows" here since the card renders nothing either way.
+ */
+export async function getNativeParentAnalyses(
+  sampleId: string
+): Promise<NativeParentAnalysisRow[]> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/lims-analyses/parent/${encodeURIComponent(sampleId)}/native-analyses`,
+    { headers: getBearerHeaders() }
+  )
+  if (response.status === 404) return []
+  if (!response.ok) {
+    throw new Error(`getNativeParentAnalyses failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+/**
  * Fetch SENAITE analysis states for all lines on a parent AR, keyed by keyword.
  * Returns {"states": {"STER-PCR": "verified", ...}}.
  * The backend is best-effort: any SENAITE error returns {"states": {}}.

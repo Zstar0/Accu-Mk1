@@ -25,6 +25,7 @@ from lims_analyses.schemas import (
     AnalysisWithTransitions,
     CreateAnalysisRequest,
     HostKind,
+    NativeParentAnalysisRow,
     ParentPromotionInfo,
     PromoteRequest,
     PromoteResponse,
@@ -215,6 +216,76 @@ def list_promotions(
         return service.list_promotions_for_parent(db, parent_sample_id)
     except Exception as e:
         raise _handle_service_error(e)
+
+
+@router.get("/parent/{sample_id}/native-analyses", response_model=List[NativeParentAnalysisRow])
+def list_native_parent_analyses(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Read-only "Accu-Mk1 Analyses" card (Task 5b): current, origin='mk1'
+    parent-tier rows for a parent LimsSample. The main Analyses table on the
+    parent page stays SENAITE-sourced by design (SampleDetails.tsx) — this is
+    the separate reader that surfaces native results (e.g. Heavy Metals) that
+    table structurally can't show. 404 when the sample is unknown to Mk1.
+
+    Filters: `lims_sub_sample_pk IS NULL` (parent tier only), `retest_of_id
+    IS NULL` (current row, mirrors _eligible_parent_row in
+    coa/native_sections.py), `AnalysisService.origin == 'mk1'`, and
+    `provenance == 'canonical'`. The last one is the direct exclusion for the
+    dormant SENAITE dual-write shadow mirror (lims_analyses/parent_mirror.py)
+    — origin alone would usually suffice in practice (mirror_parent_analysis
+    only ever mirrors SENAITE AR lines, which resolve to senaite-origin
+    services), but that's incidental to how resolve_shadow_target's keyword
+    lookup happens to behave, not a guarantee this endpoint should lean on.
+    provenance is the discriminator the shadow mirror itself defines, and
+    list_promotions_for_parent (above) already filters the identical risk
+    the same way.
+
+    No review_state filter: unlike the COA path (fail-closed, only
+    verified/published), this is a display card — in-progress rows show too,
+    with their review_state badge, same as the SENAITE table.
+    """
+    from models import AnalysisService, LimsAnalysis, LimsSample
+
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        raise HTTPException(status_code=404, detail=f"sample not found: {sample_id}")
+
+    rows = db.execute(
+        select(LimsAnalysis)
+        .join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
+        .where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+            LimsAnalysis.retest_of_id.is_(None),
+            LimsAnalysis.provenance == "canonical",
+            AnalysisService.origin == "mk1",
+        )
+        .order_by(LimsAnalysis.id.desc())
+    ).scalars().all()
+
+    # Latest-per-service dedup: the partial unique index backing the
+    # "parent_row_already_exists" 409 above is keyed on (lims_sample_pk,
+    # keyword), not analysis_service_id — a duplicate-keyword AnalysisService
+    # clone (prod precedent: PUR_TB500BETA4, see parent_mirror.py's
+    # resolve_shadow_target docstring) could still produce two "current" rows
+    # for the same service id. order_by(id.desc()) + first-seen-wins mirrors
+    # _eligible_parent_row's resolve-to-newest posture rather than depending
+    # on an invariant this endpoint doesn't own.
+    seen_service_ids: set[int] = set()
+    deduped: list = []
+    for analysis in rows:
+        if analysis.analysis_service_id in seen_service_ids:
+            continue
+        seen_service_ids.add(analysis.analysis_service_id)
+        deduped.append(analysis)
+    deduped.sort(key=lambda a: a.keyword)
+
+    return [NativeParentAnalysisRow.model_validate(a) for a in deduped]
 
 
 @router.get("/{analysis_id}", response_model=AnalysisWithTransitions)
