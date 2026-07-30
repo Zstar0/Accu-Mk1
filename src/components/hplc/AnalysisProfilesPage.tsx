@@ -83,6 +83,14 @@ const DEFAULT_FORM: FormState = {
   fulfillment_dim: 'role',
 }
 
+// Mirrors the backend's assignment_role format check (main.py, both POST and
+// PATCH) — a client-side echo, not the authority. The backend still 400s on
+// anything this misses; this is UX so admins don't discover the constraint
+// via a raw error toast.
+const FULFILLMENT_ROLE_PATTERN = /^[a-z][a-z0-9_]{0,7}$/
+const FULFILLMENT_ROLE_ERROR =
+  'Must be lowercase, start with a letter, letters/digits/underscore only, ≤ 8 chars'
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function AnalysisProfilesPage() {
@@ -111,6 +119,13 @@ export default function AnalysisProfilesPage() {
   const loadError = queryError
     ? (queryError instanceof Error ? queryError.message : 'Failed to load analysis profiles')
     : null
+
+  // Empty role is valid (rides an existing vial); the format constraint only
+  // binds when the effective dim is 'role' — mirrors the backend's gating.
+  const fulfillmentRoleInvalid =
+    form.fulfillment_dim === 'role' &&
+    form.fulfillment_role !== '' &&
+    !FULFILLMENT_ROLE_PATTERN.test(form.fulfillment_role)
 
   // ── Panel helpers ──
 
@@ -182,6 +197,10 @@ export default function AnalysisProfilesPage() {
     }
     if (form.is_addon === null) {
       toast.error('Choose whether this is a primary test or an add-on')
+      return
+    }
+    if (fulfillmentRoleInvalid) {
+      toast.error(FULFILLMENT_ROLE_ERROR)
       return
     }
     setSaving(true)
@@ -613,15 +632,18 @@ export default function AnalysisProfilesPage() {
                         placeholder="e.g. hm"
                         value={form.fulfillment_role}
                         maxLength={8}
+                        aria-invalid={fulfillmentRoleInvalid}
                         onChange={e =>
-                          setForm(f => ({ ...f, fulfillment_role: e.target.value }))
+                          setForm(f => ({ ...f, fulfillment_role: e.target.value.toLowerCase() }))
                         }
                         className="font-mono max-w-[160px]"
                       />
                     </div>
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    vial role code, ≤ 8 chars, e.g. hm — leave empty for profiles that ride an existing vial
+                  <p className={fulfillmentRoleInvalid ? 'text-xs text-destructive' : 'text-xs text-muted-foreground'}>
+                    {fulfillmentRoleInvalid
+                      ? FULFILLMENT_ROLE_ERROR
+                      : 'vial role code, ≤ 8 chars, e.g. hm — leave empty for profiles that ride an existing vial'}
                   </p>
                 </div>
 

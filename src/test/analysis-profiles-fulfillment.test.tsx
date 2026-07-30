@@ -29,6 +29,7 @@ import {
   getAnalysisServices,
   updateAnalysisProfile,
 } from '@/lib/api'
+import { toast } from 'sonner'
 import AnalysisProfilesPage from '@/components/hplc/AnalysisProfilesPage'
 
 function wrapper({ children }: { children: React.ReactNode }) {
@@ -57,10 +58,11 @@ const PROFILE: AnalysisProfile = {
 
 describe('AnalysisProfilesPage — fulfillment fields', () => {
   beforeEach(() => {
-    vi.mocked(getAnalysisProfiles).mockResolvedValue([PROFILE])
-    vi.mocked(getAnalysisProfileMembers).mockResolvedValue([])
-    vi.mocked(getAnalysisServices).mockResolvedValue([])
-    vi.mocked(updateAnalysisProfile).mockResolvedValue({ ...PROFILE, fulfillment_role: 'hm' })
+    vi.mocked(getAnalysisProfiles).mockReset().mockResolvedValue([PROFILE])
+    vi.mocked(getAnalysisProfileMembers).mockReset().mockResolvedValue([])
+    vi.mocked(getAnalysisServices).mockReset().mockResolvedValue([])
+    vi.mocked(updateAnalysisProfile).mockReset().mockResolvedValue({ ...PROFILE, fulfillment_role: 'hm' })
+    vi.mocked(toast.error).mockClear()
   })
 
   it('renders a fulfillment_role input in the edit panel and includes it in the PATCH payload', async () => {
@@ -134,5 +136,51 @@ describe('AnalysisProfilesPage — fulfillment fields', () => {
     await user.click(screen.getByRole('button', { name: /add profile/i }))
 
     expect(await screen.findByPlaceholderText('e.g. hm')).toBeInTheDocument()
+  })
+
+  it('shows an inline error and blocks Save when fulfillment_role is malformed', async () => {
+    const user = userEvent.setup()
+    render(<AnalysisProfilesPage />, { wrapper })
+
+    const row = await screen.findByText('Heavy Metals')
+    await user.click(row)
+
+    const roleInput = await screen.findByPlaceholderText('e.g. hm')
+    // Backend regex is [a-z][a-z0-9_]{0,7} — leading digit is invalid.
+    await user.type(roleInput, '1bad')
+
+    expect(await screen.findByText(/lowercase/i)).toBeInTheDocument()
+
+    // Save stays clickable (a stored-but-untouched malformed role on an
+    // existing profile must not strand every other field behind it) — the
+    // guard lives in handleSave and rejects via the same toast idiom as the
+    // page's other required-field checks, not a disabled button.
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+    expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/lowercase/i))
+    expect(updateAnalysisProfile).not.toHaveBeenCalled()
+  })
+
+  it('lowercases typed input so uppercase role codes save fine', async () => {
+    const user = userEvent.setup()
+    render(<AnalysisProfilesPage />, { wrapper })
+
+    const row = await screen.findByText('Heavy Metals')
+    await user.click(row)
+
+    const roleInput = await screen.findByPlaceholderText('e.g. hm')
+    await user.type(roleInput, 'HM')
+
+    expect(roleInput).toHaveValue('hm')
+    expect(screen.queryByText(/lowercase/i)).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+    await waitFor(() => {
+      expect(updateAnalysisProfile).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({ fulfillment_role: 'hm', fulfillment_dim: 'role' })
+      )
+    })
   })
 })
