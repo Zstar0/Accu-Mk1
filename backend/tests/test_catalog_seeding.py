@@ -98,11 +98,53 @@ def test_hm_vial_seeding_idempotent(db_session):
     assert again == []  # existing_kw skip, mirrors the endo/ster idiom
 
 
-def test_hm_never_seeds_on_hplc_vial(db_session):
-    """Spec-1 allow-list regression re-asserted: the HPLC mirror path is
-    untouched by catalog seeding; an hplc-role vial never gets HM members."""
-    from lims_analyses.seeder import ROLE_TO_KEYWORDS
-    assert "hm" not in ROLE_TO_KEYWORDS  # catalog roles never enter the legacy maps
+def test_hm_never_seeds_on_hplc_vial(db_session, monkeypatch):
+    """Behavioral regression pin, not just a static-map fact: an hplc-role
+    vial, whose wp_services requests BOTH the HM catalog profile and HPLC,
+    still seeds only its mirrored HPLC analyte and never any HM-* row.
+
+    "hplc" is in ROLE_TO_WP_KEYS but deliberately NOT in ROLE_TO_KEYWORDS (it
+    mirrors instead of whitelisting) — so the only thing keeping it out of
+    the catalog branch in seed_analyses_for_vial is the unconditional
+    `return` inside the `if role == "hplc":` block running BEFORE the
+    `if role not in ROLE_TO_KEYWORDS:` catalog check. If those two blocks
+    were ever reordered, this test would fail: the catalog branch would
+    short-circuit on "no matching catalog members for role=hplc" and return
+    [] WITHOUT ever calling the real mirror, so the expected PUR_X mirror row
+    would go missing below — a stronger, order-sensitive assertion than
+    "hm never appears," which the reordered code would also satisfy.
+    """
+    from lims_analyses.seeder import ROLE_TO_KEYWORDS, seed_analyses_for_vial
+    from models import AnalysisService, Department
+
+    _mk_catalog(db_session)  # heavy_metals profile, fulfillment_role="hm"
+
+    # Analytical-department service the HPLC mirror should pick up (same
+    # idiom as test_seeder_mirror.py's allow-list section).
+    analytical = Department(name="Analytical")
+    db_session.add(analytical)
+    db_session.commit()
+    db_session.add(AnalysisService(
+        title="Purity X", keyword="PUR_X", origin="mk1", department_id=analytical.id,
+    ))
+    db_session.commit()
+
+    sub = _mk_parent_and_vial(db_session, role="hplc")
+    monkeypatch.setattr(
+        "sub_samples.senaite.fetch_parent_analysis_keywords",
+        lambda _sid: ["PUR_X"],
+    )
+
+    created = seed_analyses_for_vial(
+        db_session, sub_sample=sub, role="hplc",
+        wp_services={"heavy_metals": True, "hplcpurity_identity": True},
+        parent_sample_id="ZZTEST-HM", commit=False,
+    )
+    kws = {r.keyword for r in created}
+    assert kws == {"PUR_X"}                           # the real hplc mirror ran
+    assert not any(k.startswith("HM-") for k in kws)   # never HM catalog leakage
+
+    assert "hm" not in ROLE_TO_KEYWORDS  # secondary: static-map fact, kept as documentation
 
 
 def test_catalog_seeding_fails_closed_on_non_native_member(db_session):
