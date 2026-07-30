@@ -322,14 +322,30 @@ def promote(
         _parent = db.get(LimsSample, first_src.lims_sample_pk)
     parent_sample_id = _parent.sample_id if _parent else None
 
-    try:
-        if parent_sample_id:
-            parent_keyword, parent_service_id, parent_title = service.resolve_parent_analyte_target(
-                db, vial_keyword=req.keyword, parent_sample_id=parent_sample_id)
-        else:
-            parent_keyword, parent_service_id, parent_title = req.keyword, None, None
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"parent slot resolution failed: {e}")
+    # Native (origin='mk1') sources have no per-substance SENAITE translation
+    # and no SENAITE keyword contract at all — the caller-supplied req.keyword
+    # is advisory, not identity. Force promote_to_parent's native-identity
+    # override (service-derived keyword/title/unit, service.py step 4c) to
+    # fire by passing None through, instead of trusting a request string that
+    # can drift or arrive empty. Detected off the FIRST SOURCE's service:
+    # native keywords never match the PUR_/QTY_ per-substance regex, so
+    # resolve_parent_analyte_target would be a no-op for them anyway — this
+    # just skips the call and is explicit about why, rather than relying on
+    # that no-op to coincidentally pass req.keyword through unchanged.
+    _first_src_svc = db.get(AnalysisService, first_src.analysis_service_id)
+    _first_src_is_native = _first_src_svc is not None and _first_src_svc.origin == "mk1"
+
+    if _first_src_is_native:
+        parent_keyword, parent_service_id, parent_title = None, None, None
+    else:
+        try:
+            if parent_sample_id:
+                parent_keyword, parent_service_id, parent_title = service.resolve_parent_analyte_target(
+                    db, vial_keyword=req.keyword, parent_sample_id=parent_sample_id)
+            else:
+                parent_keyword, parent_service_id, parent_title = req.keyword, None, None
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"parent slot resolution failed: {e}")
 
     try:
         parent_row, promotion_rows = service.promote_to_parent(

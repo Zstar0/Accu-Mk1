@@ -115,6 +115,34 @@ def test_native_promote_never_touches_senaite(client, db_session):
     assert body["parent"]["analysis_service_id"] == svc.id
 
 
+def test_native_promote_request_keyword_is_advisory_only(client, db_session):
+    """The REQUEST's keyword string carries no identity for a native promote —
+    only the source row's analysis_service_id does. A drifted/wrong request
+    keyword (as an FE bug or stale client could send) must NOT leak into the
+    minted parent row's keyword or block the catalog-derived unit fallback.
+
+    Discriminating regression for the route-level gap found in review: the
+    route was passing the (correct) req.keyword straight through as
+    parent_keyword, which made service.py's native-identity override
+    (step 4c) unreachable — parent_keyword was never None on the route path.
+    """
+    svc = _mk_service(db_session, keyword="HM-PB", origin="mk1", unit="ppm")
+    parent, rows = _mk_parent_and_vial_rows(db_session, svc)
+    db_session.commit()
+    with patch(
+        "lims_analyses.routes.senaite_writeback.writeback_promotion",
+        side_effect=AssertionError("must not be called"),
+    ):
+        resp = client.post("/api/lims-analyses/promote", json={
+            "keyword": "HM-PB-LEGACY-LABEL", "result_value": "0.12",
+            "sources": [{"analysis_id": rows[0].id, "contribution_kind": "chosen"}],
+        })
+    assert resp.status_code == 201, resp.text
+    parent_body = resp.json()["parent"]
+    assert parent_body["keyword"] == "HM-PB"           # service-derived, not the drifted request string
+    assert parent_body["result_unit"] == "ppm"         # service-derived, caller sent none
+
+
 def test_senaite_origin_promote_still_fail_closed(client, db_session):
     """origin='senaite' path unchanged: write-back failure -> 502 AND the
     parent row is rolled back (not committed)."""
