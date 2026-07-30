@@ -306,7 +306,7 @@ def promote(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    from models import LimsAnalysis, LimsAnalysisPromotion, LimsSample, LimsSubSample
+    from models import AnalysisService, LimsAnalysis, LimsAnalysisPromotion, LimsSample, LimsSubSample
 
     # Resolve the parent SENAITE sample_id + parent-AR target keyword BEFORE
     # promoting, so per-substance vial keywords (PUR_<X>/QTY_<X>) land on the
@@ -372,18 +372,34 @@ def promote(
         f"(Accu-Mk1) by {email} on {date.today().isoformat()}"
     )
 
-    try:
-        senaite_writeback.writeback_promotion(
-            parent_sample_id,
-            parent_row.keyword,        # parent ANALYTE-{slot} (was req.keyword)
-            req.result_value,
-            remark,
-        )
-    except SenaiteWritebackError as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=502,
-            detail=f"SENAITE write-back failed — promote aborted: {e}",
+    # ── Origin gate (native COA sections, spec 2) ─────────────────────────────
+    # A service with origin='mk1' has no SENAITE representation: there is no
+    # analysis line to write back to, so the Mk1-side commit IS the promotion.
+    # Read origin from the service backing the PARENT row — never the vial row:
+    # resolve_parent_analyte_target translates per-substance keywords, and its
+    # notion of "native" (not PUR_/QTY_) is a different predicate from
+    # origin='mk1'.
+    _parent_svc = db.get(AnalysisService, parent_row.analysis_service_id)
+    _skip_writeback = _parent_svc is not None and _parent_svc.origin == "mk1"
+
+    if not _skip_writeback:
+        try:
+            senaite_writeback.writeback_promotion(
+                parent_sample_id,
+                parent_row.keyword,        # parent ANALYTE-{slot} (was req.keyword)
+                req.result_value,
+                remark,
+            )
+        except SenaiteWritebackError as e:
+            db.rollback()
+            raise HTTPException(
+                status_code=502,
+                detail=f"SENAITE write-back failed — promote aborted: {e}",
+            )
+    else:
+        logger.info(
+            "native_promote_writeback_skipped parent_analysis_id=%s service_id=%s keyword=%s",
+            parent_row.id, parent_row.analysis_service_id, parent_row.keyword,
         )
 
     try:
