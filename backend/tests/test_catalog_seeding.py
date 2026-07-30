@@ -79,6 +79,12 @@ def test_hm_vial_seeds_exactly_profile_members(db_session):
         wp_services={"heavy_metals": True}, commit=True)
     rows = db_session.query(LimsAnalysis).filter_by(lims_sub_sample_pk=sub.id).all()
     assert sorted(r.keyword for r in rows) == ["HM-AS", "HM-CD", "HM-HG", "HM-PB"]
+    # Order is load-bearing (models.py:322-328: sort_order on the junction row
+    # IS the row order); _mk_catalog seeds members HM-PB/HM-AS/HM-CD/HM-HG at
+    # sort_order 0..3, so the profile-membership order must survive verbatim
+    # into insertion order. A stray sorted()/set() anywhere in the catalog
+    # path would pass the sorted() assertion above but fail this one.
+    assert [r.keyword for r in created] == ["HM-PB", "HM-AS", "HM-CD", "HM-HG"]
 
 
 def test_hm_vial_seeding_idempotent(db_session):
