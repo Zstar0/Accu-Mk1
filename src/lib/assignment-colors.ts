@@ -3,6 +3,7 @@
  *
  *   HPLC  → green        ENDO → orange
  *   PCR   → purple       EXTRA → light blue (sky)
+ *   HM    → slate (spec-3 Task 3 — Heavy Metals, catalog-only role)
  *
  * Single source of truth for every place that paints an assignment role:
  * inbox/worksheet vial cards, the Receive Wizard assign step, the Manage
@@ -21,6 +22,7 @@ interface RoleClassMap {
   endo: string
   ster: string
   xtra: string
+  hm: string
   unassigned: string
   [role: string]: string | undefined
 }
@@ -32,6 +34,7 @@ export const ROLE_BADGE_CLASS: RoleClassMap = {
   endo: 'bg-orange-500/15 text-orange-700 border-orange-500/40 dark:text-orange-300',
   ster: 'bg-purple-500/15 text-purple-700 border-purple-500/40 dark:text-purple-300',
   xtra: 'bg-sky-500/15 text-sky-700 border-sky-500/40 dark:text-sky-300',
+  hm: 'bg-slate-500/15 text-slate-700 border-slate-500/40 dark:text-slate-300',
   unassigned: 'bg-amber-500/15 text-amber-700 border-amber-500/40 dark:text-amber-300',
 }
 
@@ -42,6 +45,7 @@ export const ROLE_CHIP_CLASS: RoleChipMap = {
   endo: 'bg-orange-400/25 text-orange-300',
   ster: 'bg-purple-400/25 text-purple-300',
   xtra: 'bg-sky-400/25 text-sky-300',
+  hm: 'bg-slate-400/25 text-slate-300',
 }
 
 /** Text-only classes (titles, vial labels), light & dark. */
@@ -50,6 +54,7 @@ export const ROLE_TEXT_CLASS: RoleClassMap = {
   endo: 'text-orange-700 dark:text-orange-300',
   ster: 'text-purple-700 dark:text-purple-300',
   xtra: 'text-sky-700 dark:text-sky-300',
+  hm: 'text-slate-700 dark:text-slate-300',
   unassigned: 'text-amber-700 dark:text-amber-300',
 }
 

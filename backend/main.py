@@ -16156,10 +16156,16 @@ class InboxResponse(BaseModel):
 
 
 # Role -> DEPARTMENT name. Department drives the lane: a new Microbiology-department
-# group lands in the micro lane automatically, with no name-pinning.
+# group lands in the micro lane automatically, with no name-pinning. hm (Heavy
+# Metals) is catalog-only and gets its own lane rather than folding into an
+# existing bench (spec-3 Task 3) — its services carry no service group, so
+# _inbox_allowed_group_ids resolves an empty set for it; the native-vial inbox
+# path (Phase 3.5, main.py _fetch_mk1_inbox_analyses_for_sub_sample) filters
+# hm vials by assignment_role via ROLE_TO_VIAL_ROLES instead, not by group id.
 ROLE_TO_DEPARTMENT_NAME: dict[str, str] = {
     "hplc": "Analytical",
     "microbiology": "Microbiology",
+    "hm": "Heavy Metals",
 }
 VALID_INBOX_ROLES = set(ROLE_TO_DEPARTMENT_NAME.keys())
 
@@ -16180,10 +16186,12 @@ def _inbox_allowed_group_ids(db, role: Optional[str]) -> Optional[set[int]]:
     }
 
 # Role-set membership for the assignment_role column. Microbiology covers
-# both 'ster' and 'endo' (collapsed into one filter chip per spec Q1).
+# both 'ster' and 'endo' (collapsed into one filter chip per spec Q1). hm maps
+# 1:1 to its own lane (no collapsing — it's the only role in its department).
 ROLE_TO_VIAL_ROLES: dict[str, set[str]] = {
     "hplc": {"hplc"},
     "microbiology": {"ster", "endo"},
+    "hm": {"hm"},
 }
 
 
@@ -16507,8 +16515,10 @@ async def get_worksheets_inbox(
     # Resolve allowed vial assignment_role values. NULL roles always excluded (auto-
     # assign on /vial-plan is the cure for those). XTRA gated by show_xtra.
     if role is None:
-        # No bench filter: all known roles. XTRA still gated by the toggle.
-        allowed_vial_roles: set[str] = {"hplc", "ster", "endo"}
+        # No bench filter: all known roles (union of every ROLE_TO_VIAL_ROLES
+        # value — hm included, else hm vials vanish from the unfiltered view
+        # used by AddSamplesModal). XTRA still gated by the toggle.
+        allowed_vial_roles: set[str] = {"hplc", "ster", "endo", "hm"}
         if show_xtra:
             allowed_vial_roles.add("xtra")
     else:

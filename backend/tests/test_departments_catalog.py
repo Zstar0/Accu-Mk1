@@ -68,7 +68,8 @@ def test_backfill_seeds_departments_and_assigns_from_live_groups(db_session):
     backfill_departments(db_session)
 
     names = {d.name for d in db_session.query(Department).all()}
-    assert names == {"Analytical", "Microbiology"}
+    # spec-3 Task 3: Heavy Metals joins as the first catalog-only department.
+    assert names == {"Analytical", "Microbiology", "Heavy Metals"}
     analytical_id = db_session.query(Department).filter_by(name="Analytical").one().id
     micro_id = db_session.query(Department).filter_by(name="Microbiology").one().id
 
@@ -89,7 +90,8 @@ def test_backfill_is_idempotent(db_session):
     _seed_groups_and_services(db_session)
     backfill_departments(db_session)
     backfill_departments(db_session)
-    assert db_session.query(Department).count() == 2
+    # spec-3 Task 3: Heavy Metals joins as the first catalog-only department.
+    assert db_session.query(Department).count() == 3
 
 
 def test_backfill_never_clobbers_a_manual_reassignment(db_session):

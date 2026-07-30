@@ -29,7 +29,9 @@ log = logging.getLogger(__name__)
 
 
 # Sub-sample assignment role -> the DEPARTMENT name(s) whose analyses belong to
-# that role. endo/ster are both Microbiology; hplc is Analytical; xtra has none.
+# that role. endo/ster are both Microbiology; hplc is Analytical; hm is its own
+# Heavy Metals department (catalog-only role — kept off Analytical/Microbiology
+# so its cleanup can't collide with either bench); xtra has none.
 # Keyed on Department (the single structural routing key) so a new Microbiology
 # group's services are cleared correctly without name-pinning the group.
 _ROLE_DEPARTMENT_NAMES: dict[str, set[str]] = {
@@ -37,6 +39,7 @@ _ROLE_DEPARTMENT_NAMES: dict[str, set[str]] = {
     "endo": {"Microbiology"},
     "ster": {"Microbiology"},
     "xtra": set(),
+    "hm": {"Heavy Metals"},
 }
 
 
@@ -1231,8 +1234,8 @@ def derive_demand(services: dict, db=None) -> dict:
     return derive_base_demand(services, db=db)
 
 
-_BUCKET_PRIORITY = ("hplc", "endo", "ster")
-_REAL_BUCKETS = {"hplc", "endo", "ster"}
+_BUCKET_PRIORITY = ("hplc", "endo", "ster", "hm")
+_REAL_BUCKETS = {"hplc", "endo", "ster", "hm"}
 
 
 def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
@@ -1436,7 +1439,7 @@ def auto_assign(vials: list[dict], demand: dict,
     return out
 
 
-_VALID_ROLES = {"hplc", "endo", "ster", "xtra"}
+_VALID_ROLES = {"hplc", "endo", "ster", "xtra", "hm"}
 
 
 def _drop_stale_role_rows(db: Session, *, sub: LimsSubSample, old_role: Optional[str], new_role: Optional[str]) -> int:

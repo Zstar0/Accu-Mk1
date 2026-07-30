@@ -2,7 +2,7 @@
 // role-tinted badges on worksheet items. See
 // docs/superpowers/specs/2026-06-07-inbox-filters-design.md.
 
-export type InboxRoleTag = 'endo' | 'ster' | 'hplc'
+export type InboxRoleTag = 'endo' | 'ster' | 'hplc' | 'hm'
 
 interface AnalysisLike {
   keyword?: string | null
@@ -18,10 +18,13 @@ interface VialLike {
 /** Bench lane of a worksheet item, from its service DEPARTMENT (the single
  *  structural routing key from the catalog). Robust to new groups within a
  *  department — a new Microbiology group still lands in 'micro'. Replaces the
- *  old hardcoded service_group_id === 1/2. */
-export function itemBench(departmentName: string | null | undefined): 'hplc' | 'micro' | null {
+ *  old hardcoded service_group_id === 1/2. Heavy Metals (hm) is the first
+ *  catalog-only role/department — it gets its own bench, not folded into
+ *  hplc or micro (spec-3 Task 3). */
+export function itemBench(departmentName: string | null | undefined): 'hplc' | 'micro' | 'hm' | null {
   if (departmentName === 'Analytical') return 'hplc'
   if (departmentName === 'Microbiology') return 'micro'
+  if (departmentName === 'Heavy Metals') return 'hm'
   return null
 }
 
@@ -48,6 +51,7 @@ export function itemRoleBadges(item: {
   const bench = itemBench(item.department_name)
   const analyses = item.analyses ?? []
   if (bench === 'hplc') return ['hplc']
+  if (bench === 'hm') return ['hm']
   const roles = new Set<InboxRoleTag>()
   for (const a of analyses) {
     const r = analysisRole(a)
