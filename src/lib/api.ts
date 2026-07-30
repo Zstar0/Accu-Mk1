@@ -4530,7 +4530,7 @@ export interface AnalysisProfile {
   is_addon: boolean
   vials_required: number
   fulfillment_role: string | null
-  fulfillment_dim: string
+  fulfillment_dim: 'role' | 'kind'
   sort_order: number
   active: boolean
   coa_section_title: string | null
@@ -4571,6 +4571,8 @@ export async function createAnalysisProfile(data: {
   description?: string | null
   vials_required?: number
   sort_order?: number
+  fulfillment_role?: string | null
+  fulfillment_dim?: 'role' | 'kind'
 }): Promise<AnalysisProfile> {
   const response = await fetch(`${API_BASE_URL()}/analysis-profiles`, {
     method: 'POST',

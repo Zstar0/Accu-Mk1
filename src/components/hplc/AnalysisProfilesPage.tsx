@@ -64,6 +64,8 @@ interface FormState {
   coa_section_title: string
   coa_archetype: string | null
   coa_sort_order: string
+  fulfillment_role: string
+  fulfillment_dim: 'role' | 'kind'
 }
 
 const DEFAULT_FORM: FormState = {
@@ -77,6 +79,8 @@ const DEFAULT_FORM: FormState = {
   coa_section_title: '',
   coa_archetype: null,
   coa_sort_order: '0',
+  fulfillment_role: '',
+  fulfillment_dim: 'role',
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
@@ -132,6 +136,8 @@ export default function AnalysisProfilesPage() {
       coa_section_title: profile.coa_section_title ?? '',
       coa_archetype: profile.coa_archetype,
       coa_sort_order: String(profile.coa_sort_order),
+      fulfillment_role: profile.fulfillment_role ?? '',
+      fulfillment_dim: profile.fulfillment_dim,
     })
     setMemberSearch('')
     setPanelOpen(true)
@@ -191,6 +197,8 @@ export default function AnalysisProfilesPage() {
           coa_section_title: form.coa_section_title.trim() || null,
           coa_archetype: form.coa_archetype,
           coa_sort_order: parseInt(form.coa_sort_order, 10) || 0,
+          fulfillment_role: form.fulfillment_role.trim() || null,
+          fulfillment_dim: form.fulfillment_dim,
         })
         toast.success(`"${form.name.trim()}" updated`)
       } else {
@@ -201,6 +209,8 @@ export default function AnalysisProfilesPage() {
           is_addon: form.is_addon,
           vials_required: parseInt(form.vials_required, 10) || 0,
           sort_order: parseInt(form.sort_order, 10) || 0,
+          fulfillment_role: form.fulfillment_role.trim() || null,
+          fulfillment_dim: form.fulfillment_dim,
         })
         toast.success(`"${form.name.trim()}" created`)
       }
@@ -550,6 +560,71 @@ export default function AnalysisProfilesPage() {
                   </div>
                 </div>
 
+                {/* Fulfillment — which vial this profile's results land on.
+                    Shown on create AND edit (unlike active/COA below): a new
+                    family needs this from day one to be UI-manageable
+                    end-to-end, not just via a follow-up edit. */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <label className="text-sm font-medium">Fulfillment</label>
+                    <TooltipProvider delayDuration={200}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="h-3.5 w-3.5 text-muted-foreground cursor-default" />
+                        </TooltipTrigger>
+                        <TooltipContent side="right" className="max-w-xs">
+                          <div className="flex flex-col gap-1 p-1 text-xs font-mono">
+                            <div className="font-semibold border-b border-primary-foreground/20 pb-1">
+                              Vial fulfillment
+                            </div>
+                            <div>
+                              <span className="font-semibold">Role</span> matches by vial role code (e.g. <span className="font-mono">hm</span>).
+                            </div>
+                            <div>
+                              <span className="font-semibold">Kind</span> matches by assignment kind instead.
+                            </div>
+                            <div className="pt-1 opacity-80">
+                              Empty role rides an existing vial rather than claiming its own.
+                            </div>
+                          </div>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
+                  <div className="flex gap-4">
+                    <div className="space-y-1.5">
+                      <Select
+                        value={form.fulfillment_dim}
+                        onValueChange={v =>
+                          setForm(f => ({ ...f, fulfillment_dim: v as 'role' | 'kind' }))
+                        }
+                      >
+                        <SelectTrigger className="w-28">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="role">Role</SelectItem>
+                          <SelectItem value="kind">Kind</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Input
+                        placeholder="e.g. hm"
+                        value={form.fulfillment_role}
+                        maxLength={8}
+                        onChange={e =>
+                          setForm(f => ({ ...f, fulfillment_role: e.target.value }))
+                        }
+                        className="font-mono max-w-[160px]"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    vial role code, ≤ 8 chars, e.g. hm — leave empty for profiles that ride an existing vial
+                  </p>
+                </div>
+
                 {/* Active toggle — edit only. createAnalysisProfile's client
                     signature has no `active` field (the backend always
                     creates active=True), so showing this on create would let
@@ -567,7 +642,7 @@ export default function AnalysisProfilesPage() {
                     <label htmlFor="is-active" className="text-sm font-medium leading-none">
                       Active
                       <span className="block text-xs font-normal text-muted-foreground">
-                        Inactive profiles are hidden from new orders
+                        Inactive marks the profile retired — fulfilment of already-sold orders continues. Removing it from sale is the WordPress Test-Services entry.
                       </span>
                     </label>
                   </div>
