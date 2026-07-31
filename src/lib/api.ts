@@ -5921,7 +5921,11 @@ export async function getVialDemand(parentSampleId: string): Promise<VialDemandR
 export interface OrderBoxLabelSummary {
   order_number: string
   order_date: string | null
-  counts: { hplc: number; endo: number; ster: number }
+  // Demand-shape-driven, mirroring the backend (main.py get_order_box_label_
+  // summary/summaries): always carries hplc/endo/ster, plus any catalog-only
+  // role (e.g. 'hm') the order actually demanded. Never hardcode a bucket
+  // key against this — sum/iterate it instead (see OrderExpectedVials.tsx).
+  counts: Record<string, number>
 }
 
 export async function getOrderBoxLabelSummary(

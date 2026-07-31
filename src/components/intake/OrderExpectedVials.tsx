@@ -16,8 +16,10 @@ export function OrderExpectedVials({
   loading?: boolean
 }) {
   if (loading || !summary) return <span className="text-muted-foreground">—</span>
-  const c = summary.counts
-  const total = c.hplc + c.endo + c.ster
+  // Demand-shape-driven: sum every bucket the backend returns rather than a
+  // hardcoded hplc/endo/ster list, so a catalog-only role (e.g. 'hm') isn't
+  // silently dropped from the receiving desk's expected-vials total.
+  const total = Object.values(summary.counts).reduce((sum, n) => sum + n, 0)
   return (
     <span>
       {total} expected vial{total !== 1 ? 's' : ''}
