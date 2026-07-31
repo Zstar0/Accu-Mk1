@@ -49,6 +49,9 @@ import {
   type AnalysisServiceRecord,
 } from '@/lib/api'
 import { useAnalysisProfiles, analysisProfilesQueryKeys } from '@/services/analysis-profiles'
+import { useVialRoles, vialRolesQueryKeys } from '@/services/vial-roles'
+import { useDepartments } from '@/services/departments'
+import { suggestRoleCode } from '@/lib/role-code'
 import { useQueryClient } from '@tanstack/react-query'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -66,6 +69,9 @@ interface FormState {
   coa_sort_order: string
   fulfillment_role: string
   fulfillment_dim: 'role' | 'kind'
+  // Auto-mint (Task 3): department for a role this save might newly mint.
+  // Not a persisted profile field — see api.ts's role_department_id doc.
+  role_department_id: number | null
 }
 
 const DEFAULT_FORM: FormState = {
@@ -81,6 +87,7 @@ const DEFAULT_FORM: FormState = {
   coa_sort_order: '0',
   fulfillment_role: '',
   fulfillment_dim: 'role',
+  role_department_id: null,
 }
 
 // Mirrors the backend's assignment_role format check (main.py, both POST and
@@ -96,6 +103,8 @@ const FULFILLMENT_ROLE_ERROR =
 export default function AnalysisProfilesPage() {
   const queryClient = useQueryClient()
   const { data: profiles = [], isLoading: loading, error: queryError } = useAnalysisProfiles()
+  const { data: vialRoles = [] } = useVialRoles()
+  const { data: departments = [] } = useDepartments()
   const [searchInput, setSearchInput] = useState('')
 
   // Panel state
@@ -113,7 +122,13 @@ export default function AnalysisProfilesPage() {
   const [memberSearch, setMemberSearch] = useState('')
 
   const refreshProfiles = useCallback(() => {
-    return queryClient.invalidateQueries({ queryKey: analysisProfilesQueryKeys.all })
+    // Both invalidated together: a save here can mint a vial_roles row
+    // (auto-mint, Task 3) or backfill one's department, so the vial-roles
+    // admin page must not keep serving a stale registry after a profile save.
+    return Promise.all([
+      queryClient.invalidateQueries({ queryKey: analysisProfilesQueryKeys.all }),
+      queryClient.invalidateQueries({ queryKey: vialRolesQueryKeys.all }),
+    ])
   }, [queryClient])
 
   const loadError = queryError
@@ -126,6 +141,16 @@ export default function AnalysisProfilesPage() {
     form.fulfillment_dim === 'role' &&
     form.fulfillment_role !== '' &&
     !FULFILLMENT_ROLE_PATTERN.test(form.fulfillment_role)
+
+  // Auto-mint UX (Task 3). existingRoleCodes backs both the "uses existing
+  // role" / "will create role" hint and the create-only blank-role
+  // suggestion — one Set built once per render rather than per keystroke.
+  const existingRoleCodes = new Set(vialRoles.map(r => r.code))
+  const trimmedFulfillmentRole = form.fulfillment_role.trim()
+  const matchedVialRole = trimmedFulfillmentRole
+    ? vialRoles.find(r => r.code === trimmedFulfillmentRole)
+    : undefined
+  const suggestedRoleCode = suggestRoleCode(form.key || form.name, existingRoleCodes)
 
   // ── Panel helpers ──
 
@@ -153,6 +178,10 @@ export default function AnalysisProfilesPage() {
       coa_sort_order: String(profile.coa_sort_order),
       fulfillment_role: profile.fulfillment_role ?? '',
       fulfillment_dim: profile.fulfillment_dim,
+      // Not on AnalysisProfileResponse (see FormState's doc comment) — the
+      // department Select only matters for a role this save might newly
+      // mint, so it always starts unset on open, same as create.
+      role_department_id: null,
     })
     setMemberSearch('')
     setPanelOpen(true)
@@ -205,6 +234,17 @@ export default function AnalysisProfilesPage() {
     }
     setSaving(true)
     try {
+      // Auto-mint (Task 3), CREATE only: a blank role with dim=='role' fills
+      // in the suggested code rather than sending null. On EDIT, a blank
+      // role is left alone — Core/AccuShield-style existing profiles
+      // legitimately ride an existing vial with dim=='role' and no role of
+      // their own (product_registry.py), and saving unrelated fields on one
+      // of those must not retroactively mint it a role.
+      const roleForPayload =
+        !editingProfile && form.fulfillment_dim === 'role' && !trimmedFulfillmentRole
+          ? suggestedRoleCode
+          : (trimmedFulfillmentRole || null)
+
       if (editingProfile) {
         await updateAnalysisProfile(editingProfile.id, {
           name: form.name.trim(),
@@ -216,8 +256,9 @@ export default function AnalysisProfilesPage() {
           coa_section_title: form.coa_section_title.trim() || null,
           coa_archetype: form.coa_archetype,
           coa_sort_order: parseInt(form.coa_sort_order, 10) || 0,
-          fulfillment_role: form.fulfillment_role.trim() || null,
+          fulfillment_role: roleForPayload,
           fulfillment_dim: form.fulfillment_dim,
+          role_department_id: form.role_department_id,
         })
         toast.success(`"${form.name.trim()}" updated`)
       } else {
@@ -228,8 +269,9 @@ export default function AnalysisProfilesPage() {
           is_addon: form.is_addon,
           vials_required: parseInt(form.vials_required, 10) || 0,
           sort_order: parseInt(form.sort_order, 10) || 0,
-          fulfillment_role: form.fulfillment_role.trim() || null,
+          fulfillment_role: roleForPayload,
           fulfillment_dim: form.fulfillment_dim,
+          role_department_id: form.role_department_id,
         })
         toast.success(`"${form.name.trim()}" created`)
       }
@@ -645,6 +687,64 @@ export default function AnalysisProfilesPage() {
                       ? FULFILLMENT_ROLE_ERROR
                       : 'vial role code, ≤ 8 chars, e.g. hm — leave empty for profiles that ride an existing vial'}
                   </p>
+
+                  {/* Auto-mint hint (Task 3) — only meaningful once the
+                      format is valid and dim=='role'. Three states: typed
+                      code matches the vial_roles catalog already (reused,
+                      untouched); typed code doesn't (will mint on save, so
+                      offer a department up front); field is blank on the
+                      CREATE panel (offer the suggested code that Save will
+                      fill in). Suppressed on EDIT when blank — an existing
+                      profile's blank role is a real "rides an existing
+                      vial" state (e.g. Core/AccuShield), and Save does NOT
+                      auto-mint one for it, so no hint implying it would. */}
+                  {!fulfillmentRoleInvalid && form.fulfillment_dim === 'role' && (
+                    <>
+                      {trimmedFulfillmentRole && matchedVialRole && (
+                        <p className="text-xs text-muted-foreground">
+                          Uses existing role &lsquo;{matchedVialRole.code}&rsquo; — {matchedVialRole.label}
+                        </p>
+                      )}
+                      {trimmedFulfillmentRole && !matchedVialRole && (
+                        <div className="space-y-1.5">
+                          <p className="text-xs text-muted-foreground">
+                            Will create role &lsquo;{trimmedFulfillmentRole}&rsquo;
+                          </p>
+                          <Select
+                            // No "none" sentinel item: '' is a real "nothing
+                            // selected yet" state to Radix (shouldShowPlaceholder
+                            // treats '' the same as undefined), so the
+                            // placeholder renders immediately — a controlled
+                            // sentinel ITEM value would only resolve to
+                            // visible text after SelectContent has mounted
+                            // once (i.e. after the admin opens it), which
+                            // reads as blank on first render. Staying a
+                            // string (not undefined) keeps the component
+                            // controlled from the first render, same as
+                            // coa_archetype's `?? 'none'` a few fields down.
+                            value={form.role_department_id !== null ? String(form.role_department_id) : ''}
+                            onValueChange={v => setForm(f => ({ ...f, role_department_id: Number(v) }))}
+                          >
+                            <SelectTrigger className="w-48 h-8 text-xs" aria-label="Role department">
+                              <SelectValue placeholder="No department yet" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {departments.map(dep => (
+                                <SelectItem key={dep.id} value={String(dep.id)}>
+                                  {dep.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
+                      {!trimmedFulfillmentRole && !editingProfile && (
+                        <p className="text-xs text-muted-foreground">
+                          Leave blank to auto-create &lsquo;{suggestedRoleCode}&rsquo;
+                        </p>
+                      )}
+                    </>
+                  )}
                 </div>
 
                 {/* Active toggle — edit only. createAnalysisProfile's client

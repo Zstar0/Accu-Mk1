@@ -2390,6 +2390,10 @@ class AnalysisProfileCreate(BaseModel):
     fulfillment_dim: str = "role"
     sort_order: int = 0
     active: bool = True
+    # Not a persisted profile column — consumed only by the auto-mint path
+    # (POST/PATCH /analysis-profiles) to seed a newly-minted vial_roles row's
+    # department. Stripped from model_dump() before constructing AnalysisProfile.
+    role_department_id: Optional[int] = None
 
 
 class AnalysisProfileUpdate(BaseModel):
@@ -2404,6 +2408,8 @@ class AnalysisProfileUpdate(BaseModel):
     coa_section_title: Optional[str] = None
     coa_archetype: Optional[str] = None
     coa_sort_order: Optional[int] = None
+    # See AnalysisProfileCreate.role_department_id — same auto-mint-only field.
+    role_department_id: Optional[int] = None
 
 
 class AnalysisProfileResponse(BaseModel):
@@ -15685,7 +15691,7 @@ async def create_analysis_profile(
     """AnalysisProfileCreate deliberately has no coa_* fields: a new profile
     always starts unreported (coa_archetype NULL) and the lab opts it into a
     COA section via a later edit (PATCH), never at creation time."""
-    from models import AnalysisProfile
+    from models import AnalysisProfile, VialRole
     existing = db.execute(
         select(AnalysisProfile).where(AnalysisProfile.key == data.key)
     ).scalar_one_or_none()
@@ -15707,7 +15713,30 @@ async def create_analysis_profile(
             f"role '{data.fulfillment_role}' is reserved for the legacy demand map "
             "while the shadow-compare is active; new families use catalog-only roles",
         )
-    p = AnalysisProfile(**data.model_dump(), updated_by_id=getattr(current_user, "id", None))
+    # Auto-mint (Task 3): a 'role' fulfillment naming a code not yet in the
+    # vial_roles catalog mints one here, AFTER every guard above — those
+    # guards already 400 on 'xtra' and on a legacy code for a new key, so
+    # mint can never create a legacy or xtra row (the zero-clamp rider stays
+    # intact). role_department_id is optional and NULL is legal here — unlike
+    # a manual /vial-roles POST (which requires a department for anything but
+    # 'xtra'), a minted row may start department-less and get backfilled by
+    # the members PUT below once its member set agrees on one.
+    if data.fulfillment_dim == "role" and data.fulfillment_role:
+        from catalog.roles import role_registry
+        reg = role_registry(db)
+        if data.fulfillment_role not in reg:
+            max_sort = db.query(func.coalesce(func.max(VialRole.sort_order), 0)).scalar()
+            db.add(VialRole(
+                code=data.fulfillment_role, label=data.name,
+                department_id=data.role_department_id,
+                boxable=False, variance_eligible=False,
+                sort_order=max_sort + 1, frozen=False, is_system=False,
+            ))
+            logger.info("vial_role_minted code=%s for_profile=%s", data.fulfillment_role, data.key)
+    p = AnalysisProfile(
+        **data.model_dump(exclude={"role_department_id"}),
+        updated_by_id=getattr(current_user, "id", None),
+    )
     db.add(p)
     db.commit()
     db.refresh(p)
@@ -15721,11 +15750,13 @@ async def update_analysis_profile(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    from models import AnalysisProfile
+    from models import AnalysisProfile, VialRole
     p = db.get(AnalysisProfile, profile_id)
     if p is None:
         raise HTTPException(404, "analysis profile not found")
-    fields = data.model_dump(exclude_unset=True)
+    # role_department_id is not a persisted AnalysisProfile column — it only
+    # feeds the auto-mint block below, never the setattr loop at the bottom.
+    fields = data.model_dump(exclude_unset=True, exclude={"role_department_id"})
     if "coa_archetype" in fields and fields["coa_archetype"] is not None \
             and fields["coa_archetype"] not in COA_ARCHETYPES:
         raise HTTPException(
@@ -15761,6 +15792,24 @@ async def update_analysis_profile(
             f"role '{effective_role}' is reserved for the legacy demand map "
             "while the shadow-compare is active; new families use catalog-only roles",
         )
+    # Auto-mint (Task 3): mirrors the POST mint block, using the same
+    # effective_* values the guards above just validated — a role change to
+    # an unknown code mints here, AFTER every guard, so mint can never create
+    # a legacy or xtra row. Self-limiting: once a code is minted (or already
+    # existed), every later PATCH sees it in the registry and no-ops here.
+    if effective_dim == "role" and effective_role:
+        from catalog.roles import role_registry
+        reg = role_registry(db)
+        if effective_role not in reg:
+            max_sort = db.query(func.coalesce(func.max(VialRole.sort_order), 0)).scalar()
+            effective_name = fields["name"] if "name" in fields else p.name
+            db.add(VialRole(
+                code=effective_role, label=effective_name,
+                department_id=data.role_department_id,
+                boxable=False, variance_eligible=False,
+                sort_order=max_sort + 1, frozen=False, is_system=False,
+            ))
+            logger.info("vial_role_minted code=%s for_profile=%s", effective_role, p.key)
     for field, value in fields.items():
         setattr(p, field, value)
     p.updated_by_id = getattr(current_user, "id", None)
@@ -15815,7 +15864,7 @@ async def set_analysis_profile_members(
     that actually exist before writing, and reports the ACTUAL count, not the
     requested one — a bogus id must not dangle a row (SQLite, no FK
     enforcement) or 500 (Postgres, FK enforced)."""
-    from models import AnalysisProfile, AnalysisService, analysis_profile_members
+    from models import AnalysisProfile, AnalysisService, VialRole, analysis_profile_members
     p = db.get(AnalysisProfile, profile_id)
     if p is None:
         raise HTTPException(404, "analysis profile not found")
@@ -15836,6 +15885,33 @@ async def set_analysis_profile_members(
         db.execute(analysis_profile_members.insert().values(
             analysis_profile_id=profile_id, analysis_service_id=svc_id, sort_order=i))
     db.commit()
+
+    # Member-department backfill (Task 3): a role minted without a department
+    # (POST/PATCH's role_department_id omitted) picks one up here, the first
+    # time its member set unanimously agrees on a single department. Never
+    # clobbers a department already set (by this backfill, by a manual
+    # /vial-roles PATCH, or set at mint time) and never touches an is_system
+    # row (the five seeded legacy roles aren't this profile's to reassign).
+    if p.fulfillment_role:
+        role = db.execute(
+            select(VialRole).where(VialRole.code == p.fulfillment_role)
+        ).scalar_one_or_none()
+        if role is not None and role.department_id is None and not role.is_system:
+            dept_ids = set(db.execute(
+                select(AnalysisService.department_id).where(AnalysisService.id.in_(ordered_ids))
+            ).scalars().all())
+            # A department-less member doesn't veto the backfill — it's the
+            # NON-NULL departments that must agree. "exactly one distinct
+            # non-NULL department" per the brief, deliberately, not "every
+            # member has the same department."
+            dept_ids.discard(None)
+            if len(dept_ids) == 1:
+                role.department_id = dept_ids.pop()
+                db.commit()
+                logger.info(
+                    "vial_role_department_backfilled code=%s department_id=%s for_profile=%s",
+                    role.code, role.department_id, p.key,
+                )
     return {"count": len(ordered_ids)}
 
 

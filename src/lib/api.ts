@@ -4573,6 +4573,10 @@ export async function createAnalysisProfile(data: {
   sort_order?: number
   fulfillment_role?: string | null
   fulfillment_dim?: 'role' | 'kind'
+  // Auto-mint (Task 3): department for a newly-minted vial_roles row. Not a
+  // persisted AnalysisProfile field — the backend consumes it once, at mint
+  // time, and never echoes it back on AnalysisProfileResponse.
+  role_department_id?: number | null
 }): Promise<AnalysisProfile> {
   const response = await fetch(`${API_BASE_URL()}/analysis-profiles`, {
     method: 'POST',
@@ -4584,7 +4588,11 @@ export async function createAnalysisProfile(data: {
 }
 
 export async function updateAnalysisProfile(
-  id: number, data: Partial<AnalysisProfile>
+  id: number,
+  // See createAnalysisProfile's role_department_id — same auto-mint-only
+  // field, widened onto the PATCH payload without polluting the
+  // AnalysisProfile response type it's otherwise Partial<>'d from.
+  data: Partial<AnalysisProfile> & { role_department_id?: number | null }
 ): Promise<AnalysisProfile> {
   const response = await fetch(`${API_BASE_URL()}/analysis-profiles/${id}`, {
     method: 'PATCH',
