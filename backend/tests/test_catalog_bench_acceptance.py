@@ -290,6 +290,12 @@ class TestRoleCoverageLoudFailure:
             frozen=False, is_system=False,
         ))
         db_session.commit()
+        # next_box raises the same message for both "unknown code" and
+        # "known-but-unboxable" (role_row is None or not role_row.boxable) —
+        # this precondition proves the row really landed and is boxable=False,
+        # so the raise below is pinned to the SECOND branch, the one this test
+        # is actually named for.
+        assert db_session.query(VialRole).filter_by(code="zz13unbx").one().boxable is False
         with pytest.raises(ValueError, match="not boxable"):
             next_box(db_session, "WP-ZZ13COVER", "zz13unbx", user_id=1)
 
