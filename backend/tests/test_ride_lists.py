@@ -148,6 +148,15 @@ def test_rider_chain_attaches_to_earlier_self_mint(db_session):
     fent = _mk(db_session, "t_fent", "tfent", vials=1, rides=["thplc"])
     vacuum = _mk(db_session, "t_vacuum", "tvac", vials=1, rides=["thplc", "tfent"])
 
+    # Named precondition, not just a comment: this test only proves what it
+    # claims to if tfent's sort_order really did land before tvac's — mint
+    # CALL ORDER is what guarantees that (see _mk's docstring). If a future
+    # edit reorders the two _mk calls above, fail HERE with a clear cause
+    # instead of failing below on an opaque rider_profile_ids mismatch.
+    tfent_sort = db_session.query(VialRole).filter_by(code="tfent").one().sort_order
+    tvac_sort = db_session.query(VialRole).filter_by(code="tvac").one().sort_order
+    assert tfent_sort < tvac_sort
+
     result = resolve_catalog_fulfillment(
         db_session, {"t_fent": True, "t_vacuum": True})
 
@@ -315,6 +324,47 @@ def test_put_ride_hosts_rejects_duplicate_codes(client, db_session):
     assert r.status_code == 400
     assert client.get(f"/analysis-profiles/{prof.id}/ride-hosts").json() == []
     assert other_host.id  # sanity: host profile untouched
+
+
+def test_patch_rejects_re_entering_legacy_role_with_a_live_ride_list(client, db_session):
+    """Closure gap (advisor-caught, second pass): the PUT guard
+    (test_put_ride_hosts_rejects_legacy_role_owner) only blocks attaching a
+    ride list WHILE a profile's role is already legacy. It does not stop
+    the reverse door: a legacy-key profile (endotoxin) can legally move its
+    role AWAY from 'endo' (PATCH — 'zzhold' isn't reserved), pick up a ride
+    list once its role isn't legacy anymore (PUT ride-hosts — also legal),
+    then PATCH back to 'endo' — landing in the exact state the PUT guard
+    exists to prevent, without ever touching the PUT guard on the way in.
+    PATCH must refuse to re-enter a legacy role while a ride list still
+    exists; clearing the ride list first unblocks it."""
+    from catalog.profile_seed import seed_profiles_from_registry
+    from catalog.vial_roles_seed import seed_vial_roles
+
+    seed_vial_roles(db_session)
+    seed_profiles_from_registry(db_session)
+    db_session.commit()
+    endotoxin = db_session.query(AnalysisProfile).filter_by(key="endotoxin").one()
+
+    away = client.patch(f"/analysis-profiles/{endotoxin.id}",
+                         json={"fulfillment_role": "zzhold"})
+    assert away.status_code == 200
+
+    rides = client.put(f"/analysis-profiles/{endotoxin.id}/ride-hosts",
+                        json={"host_role_codes": ["hplc"]})
+    assert rides.status_code == 200
+
+    back = client.patch(f"/analysis-profiles/{endotoxin.id}",
+                         json={"fulfillment_role": "endo"})
+    assert back.status_code == 400
+    assert "ride list" in back.json()["detail"].lower()
+
+    cleared = client.put(f"/analysis-profiles/{endotoxin.id}/ride-hosts",
+                          json={"host_role_codes": []})
+    assert cleared.status_code == 200
+
+    back2 = client.patch(f"/analysis-profiles/{endotoxin.id}",
+                          json={"fulfillment_role": "endo"})
+    assert back2.status_code == 200
 
 
 def test_put_ride_hosts_rejects_kind_dim_profile(client, db_session):

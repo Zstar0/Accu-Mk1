@@ -15805,6 +15805,32 @@ async def update_analysis_profile(
             f"role '{effective_role}' is reserved for the legacy demand map "
             "while the shadow-compare is active; new families use catalog-only roles",
         )
+    # Ride-list / legacy-role closure (Task 4): the guard above only blocks a
+    # NON-legacy key from CLAIMING a legacy role — it deliberately allows the
+    # five _LEGACY_PROFILE_KEYS profiles to hold their own legacy role. That
+    # whitelist is also a door: one of those five could move its role AWAY
+    # from legacy (e.g. endotoxin: 'endo' -> 'zzhold', legal — 'zzhold' isn't
+    # reserved), pick up a ride list via PUT .../ride-hosts (also legal, its
+    # role isn't legacy anymore), then move back to 'endo' — landing in
+    # exactly the state set_analysis_profile_ride_hosts exists to prevent
+    # (a legacy-bucket anchor that's also a rider), without ever touching
+    # the ride-hosts endpoint's own guard. Closed here: re-entering a legacy
+    # role while a ride list still exists 400s; clear the ride list first
+    # (PUT ride-hosts []).
+    if effective_dim == "role" and effective_role in _RESERVED_LEGACY_ROLES:
+        from models import profile_ride_hosts
+        has_rides = db.execute(
+            select(profile_ride_hosts.c.id)
+            .where(profile_ride_hosts.c.analysis_profile_id == profile_id)
+            .limit(1)
+        ).first() is not None
+        if has_rides:
+            raise HTTPException(
+                400,
+                f"profile '{p.key}' has an existing ride list — clear it "
+                f"(PUT .../ride-hosts with an empty list) before setting "
+                f"fulfillment_role to the legacy role '{effective_role}'",
+            )
     # Auto-mint (Task 3): mirrors the POST mint block, using the same
     # effective_* values the guards above just validated — a role change to
     # an unknown code mints here, AFTER every guard, so mint can never create
