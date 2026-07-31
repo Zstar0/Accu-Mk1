@@ -15729,7 +15729,7 @@ async def delete_department(
         select(BenchStation.id).where(BenchStation.department_id == department_id).limit(1)
     ).scalars().first()
     if in_use is not None:
-        raise HTTPException(409, "department still has services or groups; reassign them first")
+        raise HTTPException(409, "department still has services, groups, or bench stations; reassign them first")
     db.delete(dept)
     db.commit()
 
@@ -16374,11 +16374,15 @@ async def update_bench_station(
 
 def _resolve_bench_station_from_token(db: Session, token: str):
     """Shared resolver for both token-authed bench routes below. Every
-    failure mode (unknown/expired/revoked token, or a token whose frozen
-    context isn't a bench-station context — e.g. a packaging-photo token)
-    collapses to 404, deliberately not distinguishing 410-gone like the
-    /capture/{token} routes do — an anonymous phone scanning a stale QR
-    gets no more signal than "try a fresh one"."""
+    failure mode (unknown/expired/revoked token, a token whose frozen
+    context isn't a bench-station context — e.g. a packaging-photo token —
+    or a station that's since been deactivated) collapses to 404,
+    deliberately not distinguishing 410-gone like the /capture/{token}
+    routes do — an anonymous phone scanning a stale or since-deactivated QR
+    gets no more signal than "try a fresh one". A station deactivated after
+    a QR was printed simply stops resolving, same contract as a revoked
+    token (mint-time also refuses a station that's already inactive —
+    capture_tokens/routes.py's mint branch)."""
     from capture_tokens import service as capture_service
     from models import BenchStation
     try:
@@ -16391,7 +16395,7 @@ def _resolve_bench_station_from_token(db: Session, token: str):
     except (ValueError, KeyError, IndexError, TypeError):
         raise HTTPException(status_code=404, detail="not a bench token")
     station = db.get(BenchStation, station_id)
-    if station is None:
+    if station is None or not station.active:
         raise HTTPException(status_code=404, detail="unknown bench station")
     return station
 

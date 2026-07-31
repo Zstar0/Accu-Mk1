@@ -275,6 +275,61 @@ def test_mint_rejects_neither_samples_nor_station(client):
     assert resp.status_code == 422
 
 
+def test_mint_rejects_inactive_station_400(client):
+    dep = _make_department(client)
+    station = client.post("/bench-stations", json={
+        "name": "Dead Bench", "department_id": dep["id"], "active": False,
+    }).json()
+    resp = client.post("/api/capture-tokens", json={"station_id": station["id"]})
+    assert resp.status_code == 400
+
+
+def test_bench_context_404_after_station_deactivated_post_mint(client):
+    """A station deactivated after its QR was already minted must stop
+    resolving — same contract as a revoked token — for both the GET
+    context read and the scan write."""
+    dep = _make_department(client)
+    station = client.post("/bench-stations", json={
+        "name": "Soon Dead Bench", "department_id": dep["id"],
+    }).json()
+    raw = client.post("/api/capture-tokens", json={"station_id": station["id"]}).json()["token"]
+
+    patch_resp = client.patch(f"/bench-stations/{station['id']}", json={"active": False})
+    assert patch_resp.status_code == 200
+
+    assert client.get(f"/api/bench/{raw}").status_code == 404
+    assert client.post(f"/api/bench/{raw}/scan", json={"sample_id": "whatever"}).status_code == 404
+
+
+def test_bench_token_against_capture_context_route_404_not_500(client):
+    """Reverse-direction context confusion: a bench-scoped token
+    (context_json=[{"station_id": N}]) hitting the pre-existing packaging
+    GET /api/capture/{token} route used to crash with an unhandled
+    pydantic ValidationError (CaptureSampleContext requires sample_id) —
+    must 404 cleanly instead."""
+    dep = _make_department(client)
+    station = client.post("/bench-stations", json={
+        "name": "Cross Bench 1", "department_id": dep["id"],
+    }).json()
+    raw = client.post("/api/capture-tokens", json={"station_id": station["id"]}).json()["token"]
+
+    resp = client.get(f"/api/capture/{raw}")
+    assert resp.status_code == 404
+
+
+def test_bench_token_against_capture_photos_route_404_not_500(client):
+    """Same confusion, POST side: used to crash with a bare KeyError on
+    'sample_id' inside add_capture_photo — must 404 cleanly instead."""
+    dep = _make_department(client)
+    station = client.post("/bench-stations", json={
+        "name": "Cross Bench 2", "department_id": dep["id"],
+    }).json()
+    raw = client.post("/api/capture-tokens", json={"station_id": station["id"]}).json()["token"]
+
+    resp = client.post(f"/api/capture/{raw}/photos", json={"photo_base64": "not-real-but-unreached"})
+    assert resp.status_code == 404
+
+
 def test_token_scan_writes_event_with_user_id_none(client, db_session):
     dep = _make_department(client)
     station = client.post("/bench-stations", json={

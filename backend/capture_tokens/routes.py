@@ -29,13 +29,34 @@ _ALLOWED_EXTS = {".jpg", ".png", ".webp"}
 _EXT_CONTENT_TYPES = {".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 
 
+def _is_samples_context(context_json: str) -> bool:
+    """True iff context_json parses to the samples-list shape these two
+    /capture/{token} routes assume — a non-empty list of dicts each
+    carrying sample_id. A bench-scoped token (spec 4, Task 12) instead
+    freezes [{"station_id": N}], which has neither; guarding here (not just
+    in the bench routes) stops it from crashing this route with an
+    unhandled pydantic ValidationError / bare KeyError."""
+    try:
+        ctx = json.loads(context_json)
+    except (ValueError, TypeError):
+        return False
+    return isinstance(ctx, list) and len(ctx) > 0 and all(
+        isinstance(item, dict) and "sample_id" in item for item in ctx
+    )
+
+
 def _resolve_or_http(db: Session, token: str):
     try:
-        return service.resolve_capture_token(db, token)
+        tok = service.resolve_capture_token(db, token)
     except service.UnknownTokenError:
         raise HTTPException(status_code=404, detail="unknown capture token")
     except service.GoneTokenError:
         raise HTTPException(status_code=410, detail="capture token expired or revoked")
+    if not _is_samples_context(tok.context_json):
+        # Right token, wrong flavor (e.g. a bench-scoped token) — 404, not
+        # 410: the token isn't gone, it was just never valid for this route.
+        raise HTTPException(status_code=404, detail="not a packaging-photo token")
+    return tok
 
 
 @router.post("/capture-tokens", status_code=status.HTTP_201_CREATED, response_model=CaptureTokenOut)
@@ -54,6 +75,8 @@ def mint_capture_token(
         station = db.get(BenchStation, body.station_id)
         if station is None:
             raise HTTPException(status_code=404, detail="unknown bench station")
+        if not station.active:
+            raise HTTPException(status_code=400, detail=f"bench station '{station.name}' is inactive")
         tok, raw = service.mint_capture_token(
             db, [{"station_id": station.id}], body.order_label, user.id,
         )
