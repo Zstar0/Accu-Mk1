@@ -1494,6 +1494,27 @@ def _run_migrations():
         priority INTEGER NOT NULL DEFAULT 0,
         CONSTRAINT uq_profile_ride_host UNIQUE (analysis_profile_id, host_role_code)
     )""",
+        # --- Catalog-driven bench (spec 4): vial-profile custody edges ---
+        # Append-only (supersede + insert, never rewrite, no DELETE path).
+        # relation's allowed-value CHECK lives here only — not on the ORM
+        # model — so SQLite test fixtures (Base.metadata.create_all) stay
+        # unconstrained per the plan's binding constraint.
+        """CREATE TABLE IF NOT EXISTS vial_profile_assignments (
+        id SERIAL PRIMARY KEY,
+        lims_sub_sample_pk INTEGER NOT NULL REFERENCES lims_sub_samples(id) ON DELETE CASCADE,
+        analysis_profile_id INTEGER NOT NULL REFERENCES analysis_profiles(id),
+        relation VARCHAR(8) NOT NULL,
+        assigned_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        assigned_by_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        superseded_at TIMESTAMP,
+        CONSTRAINT ck_vpa_relation CHECK (relation IN ('host', 'rider'))
+    )""",
+        # Partial index: fast "current custody for this vial" lookups (the
+        # hot path — write_custody_edges' supersede query and the read
+        # endpoint's current-first ordering) without indexing superseded
+        # history rows.
+        "CREATE INDEX IF NOT EXISTS ix_vpa_sub_current ON vial_profile_assignments "
+        "(lims_sub_sample_pk) WHERE superseded_at IS NULL",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

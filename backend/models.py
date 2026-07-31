@@ -1818,6 +1818,46 @@ class LimsSubSampleEvent(Base):
         )
 
 
+class VialProfileAssignment(Base):
+    """Custody edge: which AnalysisProfile's work is on this vial (spec 4,
+    catalog-driven bench — the ISO 17025 backbone). Append-only: a role
+    flip supersedes every current row (stamps superseded_at once) and
+    inserts fresh ones — rows are NEVER UPDATEd otherwise, and there is no
+    DELETE path anywhere. The full table (current + superseded) IS the
+    audit trail; there's no separate log.
+
+    relation in ('host', 'rider') is enforced by a CHECK constraint in the
+    raw DDL only (database.py) — deliberately NOT declared here, so SQLite
+    test fixtures built off Base.metadata.create_all() stay unconstrained.
+    Writer: sub_samples.custody.write_custody_edges (called from
+    sub_samples.service.set_assignment_role, same transaction, no commit
+    here).
+    """
+    __tablename__ = "vial_profile_assignments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    lims_sub_sample_pk: Mapped[int] = mapped_column(
+        Integer, ForeignKey("lims_sub_samples.id", ondelete="CASCADE"), nullable=False
+    )
+    analysis_profile_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("analysis_profiles.id"), nullable=False
+    )
+    relation: Mapped[str] = mapped_column(String(8), nullable=False)
+    assigned_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+    assigned_by_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    superseded_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:
+        return (
+            f"<VialProfileAssignment(id={self.id}, sub={self.lims_sub_sample_pk}, "
+            f"profile={self.analysis_profile_id}, relation={self.relation!r})>"
+        )
+
+
 class LimsAnalysisPromotion(Base):
     """Phase 4a: one row per (parent-tier row, contributing vial-tier row).
 

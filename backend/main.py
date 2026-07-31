@@ -16045,6 +16045,53 @@ async def set_analysis_profile_ride_hosts(
     return {"count": len(data.host_role_codes)}
 
 
+# ─── Vial-Profile Custody (spec 4, Task 5) ──────────────────────────────────
+# The persisted record of which profile's work is/was on a vial — the ISO
+# 17025 backbone. Written by sub_samples.custody.write_custody_edges inside
+# set_assignment_role's transaction; this is the only read surface, and it
+# doubles as the audit trail (superseded rows are never deleted).
+
+@app.get("/sub-samples/{sample_id}/custody")
+def get_sub_sample_custody(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Full custody history for a vial, current rows first. Plain `def`
+    (not `async def`): this does synchronous ORM/DB work, so FastAPI must
+    run it in the threadpool rather than the event loop."""
+    from models import AnalysisProfile, VialProfileAssignment
+
+    sub = db.execute(
+        select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if sub is None:
+        raise HTTPException(404, f"no sub-sample with sample_id={sample_id}")
+
+    rows = db.execute(
+        select(VialProfileAssignment, AnalysisProfile)
+        .join(AnalysisProfile, AnalysisProfile.id == VialProfileAssignment.analysis_profile_id)
+        .where(VialProfileAssignment.lims_sub_sample_pk == sub.id)
+        .order_by(
+            VialProfileAssignment.superseded_at.isnot(None),
+            VialProfileAssignment.assigned_at.desc(),
+        )
+    ).all()
+
+    return [
+        {
+            "profile_id": profile.id,
+            "profile_key": profile.key,
+            "profile_name": profile.name,
+            "relation": vpa.relation,
+            "assigned_at": vpa.assigned_at.isoformat() if vpa.assigned_at else None,
+            "assigned_by": vpa.assigned_by_id,
+            "superseded_at": vpa.superseded_at.isoformat() if vpa.superseded_at else None,
+        }
+        for vpa, profile in rows
+    ]
+
+
 # ─── Vial Roles ─────────────────────────────────────────────────────────────
 # Catalog-driven bench roles (spec 4, Task 2). code stays the DB join key on
 # vials (lims_sub_samples.assignment_role / lims_samples.assignment_role,

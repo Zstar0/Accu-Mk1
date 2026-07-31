@@ -1611,6 +1611,32 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
                      "kind_from": old_kind, "kind_to": sub.assignment_kind},
             user_id=user_id,
         ))
+        # Custody edges (spec 4, ISO 17025 backbone): supersede this vial's
+        # current vial<->profile assignment rows and, for a real role, write
+        # fresh ones from the catalog demand resolver — the persisted record
+        # of whose work is on this vial. wp_services is resolved HERE, once,
+        # and reused by the seeding hook below instead of being re-resolved
+        # there — a manual PATCH call (wp_services=None) would otherwise pay
+        # for _fetch_wp_services_for_parent twice, and a transient IS hiccup
+        # could hand custody edges and seeded analyses two different
+        # answers. Gating is identical to the seeding hook's own gate below
+        # (role real + parent_sid present), so the None/xtra and
+        # missing-parent_sid paths still make zero IS calls, same as before.
+        parent_sid = parent_row.sample_id if parent_row else None
+        services_map = None
+        if role and role != "xtra" and parent_sid:
+            services_map = (
+                wp_services if wp_services is not None
+                else _fetch_wp_services_for_parent(parent_sid) or {}
+            )
+        from sub_samples.custody import write_custody_edges
+        write_custody_edges(db, sub=sub, role=role, wp_services=services_map, user_id=user_id)
+        # flush (not commit): makes the fresh custody rows visible to
+        # in-transaction queries (Task 6's seeder) under production
+        # SessionLocal's autoflush=False. Still one transaction, one commit
+        # below — a failure anywhere after this point rolls the edges back
+        # along with the role flip and everything else.
+        db.flush()
         # Role re-assignment cleanup: drop the OLD role's stale (unassigned,
         # no-result) seeded rows so the vial only carries its current role's
         # analyses. Runs in THIS transaction (before the commit=False seed and
@@ -1629,23 +1655,17 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
         # own commit, so fail-hard there would orphan a committed vial — it
         # stays deliberately best-effort. compute_vial_plan routes through
         # THIS function and inherits the atomic role+seed unit per vial.)
-        if role and role != "xtra":
-            parent_sid = parent_row.sample_id if parent_row else None
-            if parent_sid:
-                services_map = (
-                    wp_services if wp_services is not None
-                    else _fetch_wp_services_for_parent(parent_sid) or {}
-                )
-                from lims_analyses.seeder import seed_analyses_for_vial
-                seed_analyses_for_vial(
-                    db,
-                    sub_sample=sub,
-                    role=role,
-                    wp_services=services_map,
-                    parent_sample_id=parent_sid,
-                    created_by_user_id=user_id,
-                    commit=False,
-                )
+        if role and role != "xtra" and parent_sid:
+            from lims_analyses.seeder import seed_analyses_for_vial
+            seed_analyses_for_vial(
+                db,
+                sub_sample=sub,
+                role=role,
+                wp_services=services_map,
+                parent_sample_id=parent_sid,
+                created_by_user_id=user_id,
+                commit=False,
+            )
         db.commit()
         return {"sample_id": sample_id, "assignment_role": role}
 
