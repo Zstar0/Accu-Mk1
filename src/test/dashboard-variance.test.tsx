@@ -3,6 +3,7 @@ import {
   parentHasVariance,
   parentShowsVariance,
   subIsVarianceMember,
+  ROLE_BADGES,
 } from '@/components/senaite/SenaiteDashboard'
 import type { ParentAggregate, SubSample } from '@/lib/api'
 
@@ -44,6 +45,19 @@ describe('parentShowsVariance (entitlement OR assigned variance subs)', () => {
     expect(parentShowsVariance(agg({ hplc: 0, endo: 0, ster: 0 }, false))).toBe(false)
     expect(parentShowsVariance(agg(undefined, undefined))).toBe(false)
     expect(parentShowsVariance(undefined)).toBe(false)
+  })
+})
+
+describe('ROLE_BADGES — single-glyph convention (the "HM HM" fix)', () => {
+  it('hm renders a single bold glyph (M), not the duplicated "HM" (spec 4, Task 10)', () => {
+    const hm = ROLE_BADGES.find(b => b.key === 'hm')
+    expect(hm?.label).toBe('M')
+  })
+
+  it('every badge label is exactly one visible character (the convention hm now follows)', () => {
+    for (const b of ROLE_BADGES) {
+      expect(Array.from(b.label).length).toBe(1)
+    }
   })
 })
 

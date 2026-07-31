@@ -164,14 +164,17 @@ const TEST_CLIENT_ID = 'forrest@valenceanalytical.com'
 
 // Role-pill style + short letter for each assignment_role. Used for
 // the parent's badge on the list page and per-sub-sample badges in the
-// expanded row.
+// expanded row. Rendered as two adjacent spans (bold glyph + full code,
+// e.g. "H" + "HPLC") with a flex `gap-1` between them — `label` MUST stay a
+// single glyph or it duplicates the second span's text (hm's 'HM' read as
+// "HM HM" before this fix; spec 4, Task 10).
 type RoleKey = 'hplc' | 'endo' | 'ster' | 'xtra' | 'hm' | 'unassigned'
-const ROLE_BADGES: { key: RoleKey; label: string; cls: string }[] = [
+export const ROLE_BADGES: { key: RoleKey; label: string; cls: string }[] = [
   { key: 'hplc', label: 'H', cls: ROLE_BADGE_CLASS.hplc },
   { key: 'endo', label: 'E', cls: ROLE_BADGE_CLASS.endo },
   { key: 'ster', label: 'P', cls: ROLE_BADGE_CLASS.ster },
   { key: 'xtra', label: 'X', cls: ROLE_BADGE_CLASS.xtra },
-  { key: 'hm', label: 'HM', cls: ROLE_BADGE_CLASS.hm },
+  { key: 'hm', label: 'M', cls: ROLE_BADGE_CLASS.hm },
   { key: 'unassigned', label: '?', cls: ROLE_BADGE_CLASS.unassigned },
 ]
 

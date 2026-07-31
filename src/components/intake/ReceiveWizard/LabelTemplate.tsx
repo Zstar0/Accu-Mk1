@@ -40,7 +40,7 @@ export function LabelTemplate({
   role,
   receivedAt,
 }: Props) {
-  const roleText = role ? ROLE_SHORT[role] : null
+  const roleText = role ? (ROLE_SHORT[role] ?? role.toUpperCase()) : null
   const hasVial = vialPosition && vialTotal
   const dateStr = formatLabelDate(receivedAt)
 

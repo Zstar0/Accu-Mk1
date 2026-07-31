@@ -37,7 +37,11 @@ export function PrintStep({ parentSampleId, vials, orderNumber, orderDate }: Pro
   const [checkedIds, setCheckedIds] = useState<Set<string>>(
     () => new Set(vials.map(v => v.sample_id)),
   )
-  const [orderCounts, setOrderCounts] = useState<{ hplc: number; endo: number; ster: number } | null>(null)
+  // Shape-driven (spec 4, Task 10 — the WizardHeader idiom): keyed by
+  // whatever assignment_role codes the order's vials actually carry, not a
+  // fixed hplc/endo/ster triple. A catalog-only role (e.g. hm) gets its own
+  // order label without any code change here.
+  const [orderCounts, setOrderCounts] = useState<Record<string, number> | null>(null)
   const [printMode, setPrintMode] = useState<'vials' | 'order'>('vials')
 
   // Pull vial-plan to enrich each label with assignment_role + vial position.
@@ -98,20 +102,22 @@ export function PrintStep({ parentSampleId, vials, orderNumber, orderDate }: Pro
   const clearAll = () => setCheckedIds(new Set())
 
   // Box-label counts come from what's actually ASSIGNED — the vial plan's
-  // per-vial assignment_role (hplc/endo/ster; xtra/unassigned don't count) —
-  // not what was ordered. A department with no vials assigned yet prints no
-  // label; reprinting after more vials arrive and are assigned reflects the
-  // new assignment. Guard against a double-click double-print (physical labels
-  // are expensive — a stray second print dialog can waste a label).
+  // per-vial assignment_role (any real catalog role; xtra/unassigned don't
+  // count) — not what was ordered. A department with no vials assigned yet
+  // prints no label; reprinting after more vials arrive and are assigned
+  // reflects the new assignment. Guard against a double-click double-print
+  // (physical labels are expensive — a stray second print dialog can waste a
+  // label).
   const orderPrintInFlight = useRef(false)
   const printOrderLabels = () => {
     if (!orderNumber || orderPrintInFlight.current) return
-    const counts = { hplc: 0, endo: 0, ster: 0 }
+    const counts: Record<string, number> = {}
     for (const v of Object.values(planByVial)) {
       const role = v.assignment_role
-      if (role === 'hplc' || role === 'endo' || role === 'ster') counts[role] += 1
+      if (!role || role === 'xtra' || role === 'unassigned') continue
+      counts[role] = (counts[role] ?? 0) + 1
     }
-    if (counts.hplc + counts.endo + counts.ster === 0) return // nothing assigned → no labels
+    if (Object.values(counts).reduce((sum, n) => sum + n, 0) === 0) return // nothing assigned → no labels
     orderPrintInFlight.current = true
     setOrderCounts(counts)
     setPrintMode('order')
@@ -212,14 +218,17 @@ export function PrintStep({ parentSampleId, vials, orderNumber, orderDate }: Pro
         )}
         {orderCounts && (
           <div className={printMode === 'order' ? 'print-area order-print-area' : 'order-print-area screen-only'}>
-            {(['hplc', 'endo', 'ster'] as const)
-              .filter(d => orderCounts[d] > 0)
-              .map(d => (
-                <div key={d} className="label-row">
+            {/* Sorted so a reprint never shuffles which physical strip
+                corresponds to which role. */}
+            {Object.keys(orderCounts)
+              .filter(role => (orderCounts[role] ?? 0) > 0)
+              .sort()
+              .map(role => (
+                <div key={role} className="label-row">
                   <OrderLabelTemplate
                     orderNumber={orderNumber ?? ''}
-                    department={d}
-                    vialCount={orderCounts[d]}
+                    role={role}
+                    vialCount={orderCounts[role]!}
                     orderDate={orderDate ? orderDate.slice(0, 10) : null}
                   />
                 </div>

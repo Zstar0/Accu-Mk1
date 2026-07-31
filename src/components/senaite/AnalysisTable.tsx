@@ -109,6 +109,7 @@ const PRIMARY_TITLE_COLOR: Record<string, string> = {
   endo: ROLE_TEXT_CLASS.endo,
   ster: ROLE_TEXT_CLASS.ster,
   xtra: ROLE_TEXT_CLASS.xtra,
+  hm: ROLE_TEXT_CLASS.hm,
 }
 
 /** Row-level tint: colored left border + subtle background, inspired by SENAITE. */

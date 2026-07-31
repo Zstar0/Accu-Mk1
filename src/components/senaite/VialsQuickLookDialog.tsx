@@ -54,16 +54,38 @@ import {
   patchAnalysisInList,
 } from '@/components/senaite/vial-quicklook-helpers'
 import { EntityFlagButton } from '@/components/flags/EntityFlagButton'
+import { useVialRoles } from '@/services/vial-roles'
+import { useDepartments } from '@/services/departments'
+import type { Department, VialRoleRow } from '@/lib/api'
 
-/** Role options for the quick re-assign dropdown — labels match SampleDetails'
- *  assignmentLabel switch (em-dashes, verbatim). `null` = Unassigned. */
-const REASSIGN_OPTIONS: { label: string; role: AssignmentRole | null }[] = [
-  { label: 'Analytical HPLC', role: 'hplc' },
-  { label: 'Microbiology — Endotoxin', role: 'endo' },
-  { label: 'Microbiology — Sterility', role: 'ster' },
-  { label: 'Extra (unassigned)', role: 'xtra' },
-  { label: 'Unassigned', role: null },
-]
+/**
+ * Role options for the quick re-assign dropdown, built from the catalog
+ * (spec 4, Task 10 — was a hardcoded 4-entry array; hm/Heavy Metals and any
+ * future admin-minted role are now reachable with zero code change here).
+ * label = `${department name} — ${role label}` (department-less roles, e.g.
+ * xtra, fall back to 'Extra'); the exact same formula SampleDetails'
+ * assignmentLabel lookup uses — see the shared display-delta note there.
+ * Ordered by sort_order, matching the Vial Roles admin page. `null` =
+ * Unassigned is always appended last, verbatim.
+ *
+ * Exported for testing (same idiom as boxLabelLines/roleLabel elsewhere in
+ * the ReceiveWizard) — a pure function is cheaper to pin than standing up a
+ * dialog render harness for every catalog shape.
+ */
+export function buildReassignOptions(
+  roles: VialRoleRow[],
+  departments: Department[],
+): { label: string; role: AssignmentRole | null }[] {
+  const deptNameById = new Map(departments.map(d => [d.id, d.name]))
+  const sorted = [...roles].sort((a, b) => a.sort_order - b.sort_order)
+  return [
+    ...sorted.map(r => ({
+      label: `${(r.department_id != null ? deptNameById.get(r.department_id) : null) ?? 'Extra'} — ${r.label}`,
+      role: r.code,
+    })),
+    { label: 'Unassigned', role: null },
+  ]
+}
 
 interface VialsQuickLookDialogProps {
   open: boolean
@@ -241,6 +263,13 @@ function VialSection({
   const analyses = query.data ?? []
   const primaryUids = computePrimaryAnalysisUids(analyses, vial.assignment_role)
 
+  // Catalog-driven reassign options (spec 4, Task 10). Shared react-query
+  // cache across every VialSection instance in the dialog (same queryKey) —
+  // one network round trip, not one per vial.
+  const vialRolesQ = useVialRoles()
+  const departmentsQ = useDepartments()
+  const reassignOptions = buildReassignOptions(vialRolesQ.data ?? [], departmentsQ.data ?? [])
+
   // Per-vial SLA — same code path the vial detail page uses (native-built
   // lookup + the vial's analyses), so the SLA column matches the vial page.
   const slaLookup = useMemo(
@@ -323,7 +352,7 @@ function VialSection({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
-          {REASSIGN_OPTIONS.map(opt => (
+          {reassignOptions.map(opt => (
             <DropdownMenuItem
               key={opt.label}
               onSelect={() => void handleReassign(opt.role)}

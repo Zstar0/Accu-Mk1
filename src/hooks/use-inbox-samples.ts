@@ -24,16 +24,22 @@ export function inboxKey(params: InboxKeyParams) {
   return ['inbox-samples', params] as const
 }
 
-export function useInboxSamples(params: InboxKeyParams) {
+export function useInboxSamples(params: InboxKeyParams & { enabled?: boolean }) {
+  // enabled is destructured out before the query key is built (Task 10) so
+  // toggling it (WorksheetsInboxPage gates on the catalog-driven lane being
+  // validated) doesn't fork the cache entry — the underlying request shape
+  // is unchanged.
+  const { enabled = true, ...keyParams } = params
   return useQuery({
-    queryKey: inboxKey(params),
+    queryKey: inboxKey(keyParams),
     queryFn: () => getInboxSamples({
-      hideTestOrders: params.hideTestOrders,
-      hidePrepped: params.hidePrepped,
-      role: params.role ?? null,
-      showXtra: params.showXtra ?? false,
-      source: params.source,
+      hideTestOrders: keyParams.hideTestOrders,
+      hidePrepped: keyParams.hidePrepped,
+      role: keyParams.role ?? null,
+      showXtra: keyParams.showXtra ?? false,
+      source: keyParams.source,
     }),
+    enabled,
     refetchInterval: 30_000, // 30s polling per D-04
     staleTime: 0, // always fresh -- live queue
   })

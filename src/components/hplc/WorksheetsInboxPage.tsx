@@ -33,8 +33,8 @@ import {
   deleteWorksheet,
   removeWorksheetItem,
   type InboxPriority,
-  type InboxRole,
 } from '@/lib/api'
+import { useInboxLanes } from '@/services/inbox-lanes'
 
 // Microbiology sub-bench chips — the two customer addon products, plus All.
 // Values are the `microCategory` filter values consumed by vialHasMicroCategory
@@ -51,9 +51,11 @@ const STORAGE_ROLE_KEY = 'accu_mk1_worksheet_inbox_role'
 const STORAGE_SHOW_XTRA_KEY = 'accu_mk1_worksheet_inbox_show_xtra'
 const STORAGE_HIDE_TEST_KEY = 'accu_mk1_worksheet_inbox_hide_test_orders'
 
-function loadStoredRole(): InboxRole {
-  const v = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_ROLE_KEY) : null
-  return v === 'microbiology' ? 'microbiology' : 'hplc'
+/** Raw stored lane key, unvalidated (spec 4, Task 10 — lanes are catalog-
+ *  driven now, so validity can only be checked once GET /worksheets/inbox/
+ *  lanes has resolved; see the `role` derivation in WorksheetsInboxPage). */
+function loadStoredRole(): string | null {
+  return typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_ROLE_KEY) : null
 }
 
 function loadStoredShowXtra(): boolean {
@@ -103,9 +105,27 @@ export default function WorksheetsInboxPage() {
   const queryClient = useQueryClient()
   const [hideTestOrders, setHideTestOrders] = useState<boolean>(loadStoredHideTestOrders)
   const [hidePrepped, setHidePrepped] = useState(true)
-  const [role, setRole] = useState<InboxRole>(loadStoredRole)
   const [showXtra, setShowXtra] = useState<boolean>(loadStoredShowXtra)
   const [isRefreshing, setIsRefreshing] = useState(false)
+
+  // Bench filter lanes are catalog-driven (spec 4, Task 10) — GET
+  // /worksheets/inbox/lanes, not a hardcoded HPLC/Microbiology pair. hm
+  // (Heavy Metals) was UNREACHABLE from this UI before this task even though
+  // it shipped as a role in spec-3 — see the regression test in
+  // worksheets-inbox-lanes.test.tsx.
+  const lanesQ = useInboxLanes()
+  const lanes = lanesQ.data ?? []
+
+  // Raw stored preference; validated below against the fetched lane set —
+  // an admin-deleted department's stale key must never reach the inbox
+  // fetch (it would 400). `role` is derived, not stateful: it's null only
+  // while lanes haven't resolved yet.
+  const [storedRole, setStoredRole] = useState<string | null>(loadStoredRole)
+  const [firstLane] = lanes
+  const role: string | null = firstLane
+    ? (lanes.some(l => l.key === storedRole) ? storedRole : firstLane.key)
+    : null
+  const currentLane = lanes.find(l => l.key === role)
 
   // Client-side inbox filters (transient — not persisted). Sample-ID applies to
   // both benches; analyte is HPLC-only; micro-category is Micro-only.
@@ -113,9 +133,11 @@ export default function WorksheetsInboxPage() {
   const [analyteFilter, setAnalyteFilter] = useState('')
   const [microCategory, setMicroCategory] = useState('') // '' = all categories
 
-  // Persist filter selections so the tech's last filter sticks across sessions
+  // Persist filter selections so the tech's last filter sticks across sessions.
+  // Persists the VALIDATED role (not the raw stored value) so a stale key
+  // self-heals to the fallback lane durably, not just for this session.
   useEffect(() => {
-    window.localStorage.setItem(STORAGE_ROLE_KEY, role)
+    if (role !== null) window.localStorage.setItem(STORAGE_ROLE_KEY, role)
   }, [role])
   useEffect(() => {
     window.localStorage.setItem(STORAGE_SHOW_XTRA_KEY, String(showXtra))
@@ -127,6 +149,10 @@ export default function WorksheetsInboxPage() {
   // Clear the micro sub-bench selection when leaving Microbiology so switching
   // benches never leaves a stale active sub-chip (the old dropdown silently
   // held a latent value; chips show state, so the reset must be explicit).
+  // Keyed to the literal 'microbiology' lane key — that legacy alias is
+  // always claimed by the Microbiology department (catalog.roles._LEGACY_
+  // LANE_KEYS), so this sub-filter stays reachable regardless of what other
+  // catalog lanes exist; it's orthogonal to the chip row above.
   useEffect(() => {
     if (role !== 'microbiology') setMicroCategory('')
   }, [role])
@@ -142,7 +168,13 @@ export default function WorksheetsInboxPage() {
     isError,
     error,
     refetch,
-  } = useInboxSamples({ hideTestOrders, hidePrepped, role, showXtra, source: readSource })
+  } = useInboxSamples({
+    hideTestOrders, hidePrepped, role, showXtra, source: readSource,
+    // Gate on a VALIDATED role, not merely non-null: firing the inbox fetch
+    // before the stored key is checked against the live lane set would 400
+    // on a stale/deleted-department key.
+    enabled: role !== null,
+  })
 
   const handleForceRefresh = async () => {
     setIsRefreshing(true)
@@ -353,6 +385,35 @@ export default function WorksheetsInboxPage() {
     }
   }
 
+  // Lanes drive everything below (the chip row, the default role, the
+  // empty-state copy) — a failed fetch must surface a retry, not a
+  // permanently-loading page with no escape (spec 4, Task 10).
+  if (lanesQ.isError) {
+    return (
+      <div className="h-[calc(100vh-4rem)] overflow-hidden p-6">
+        <div className="flex flex-col items-center justify-center gap-4 rounded-md border border-destructive/30 bg-destructive/5 py-12">
+          <p className="text-sm text-destructive font-medium">
+            {lanesQ.error instanceof Error ? lanesQ.error.message : 'Failed to load inbox lanes'}
+          </p>
+          <Button variant="outline" size="sm" onClick={() => lanesQ.refetch()} className="gap-2">
+            <RefreshCw className="size-4" />
+            Retry
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  // While lanes are in flight, render a skeleton rather than the chip row +
+  // grid flashing empty then popping in the real lane set.
+  if (lanesQ.isLoading || role === null) {
+    return (
+      <div className="h-[calc(100vh-4rem)] overflow-hidden p-6">
+        <CardSkeleton />
+      </div>
+    )
+  }
+
   return (
     <div className="h-[calc(100vh-4rem)] overflow-hidden">
     <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
@@ -423,32 +484,32 @@ export default function WorksheetsInboxPage() {
               </div>
             </div>
 
-            {/* Bench filter chips */}
+            {/* Bench filter chips — one per catalog-driven lane (spec 4, Task
+                10). Label is the lane's department name (e.g. 'Analytical'
+                for the legacy 'hplc' lane, not the 'HPLC' bench nickname) —
+                a deliberate display delta, same convention as the Task 9
+                AssignStep section headers; UAT punch item. */}
             <div className={cn('flex items-center gap-2', role === 'microbiology' ? 'mb-3' : 'mb-6')}>
-              <button
-                type="button"
-                onClick={() => setRole('hplc')}
-                className={cn(
-                  'inline-flex items-center rounded-full border px-3 py-1 text-sm font-medium transition-colors',
-                  role === 'hplc'
-                    ? ROLE_BADGE_CLASS.hplc
-                    : 'bg-transparent text-muted-foreground border-border hover:bg-muted/40',
-                )}
-              >
-                HPLC
-              </button>
-              <button
-                type="button"
-                onClick={() => setRole('microbiology')}
-                className={cn(
-                  'inline-flex items-center rounded-full border px-3 py-1 text-sm font-medium transition-colors',
-                  role === 'microbiology'
-                    ? 'bg-violet-500/15 text-violet-700 border-violet-500/40 dark:text-violet-300'
-                    : 'bg-transparent text-muted-foreground border-border hover:bg-muted/40',
-                )}
-              >
-                Microbiology
-              </button>
+              {lanes.map(lane => (
+                <button
+                  key={lane.key}
+                  type="button"
+                  onClick={() => setStoredRole(lane.key)}
+                  className={cn(
+                    'inline-flex items-center rounded-full border px-3 py-1 text-sm font-medium transition-colors',
+                    role === lane.key
+                      // Roles whose code exactly matches a badge palette
+                      // entry (hplc, hm) get it; every other lane (including
+                      // 'microbiology', which spans two role codes) falls
+                      // back to the same neutral-violet active look
+                      // Microbiology has always used.
+                      ? (ROLE_BADGE_CLASS[lane.key] ?? 'bg-violet-500/15 text-violet-700 border-violet-500/40 dark:text-violet-300')
+                      : 'bg-transparent text-muted-foreground border-border hover:bg-muted/40',
+                  )}
+                >
+                  {lane.label}
+                </button>
+              ))}
             </div>
 
             {/* Microbiology sub-bench chips — Endotoxin / Sterility addons.
@@ -521,17 +582,21 @@ export default function WorksheetsInboxPage() {
               </div>
             )}
 
-            {/* Empty state */}
+            {/* Empty state — copy is lane-LABEL driven (spec 4, Task 10), not
+                a hardcoded HPLC/Microbiology pair. */}
             {!isLoading && !isError && visibleVials.length === 0 && (
               <div className="flex flex-col items-center justify-center gap-3 rounded-md border py-16 text-center">
                 <Inbox className="size-12 text-muted-foreground/50" />
                 <p className="text-sm font-medium text-muted-foreground">
-                  No {role === 'hplc' ? 'HPLC' : 'Microbiology'} vials waiting
+                  No {currentLane?.label ?? role} vials waiting
                 </p>
                 <p className="text-xs text-muted-foreground/60">
-                  {role === 'hplc'
-                    ? 'Switch to Microbiology to see those vials.'
-                    : 'Switch to HPLC to see those vials.'}
+                  {(() => {
+                    const otherLabels = lanes.filter(l => l.key !== role).map(l => l.label)
+                    return otherLabels.length > 0
+                      ? `Switch to ${otherLabels.join(' or ')} to see those vials.`
+                      : ''
+                  })()}
                 </p>
               </div>
             )}

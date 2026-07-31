@@ -33,7 +33,7 @@ vi.mock('@/components/samples/usePrintLabel', () => ({
 
 import {
   listOrderBoxes, createBox, assignVialsToBox, unassignVialsFromBox, deleteBox, listSubSamples,
-  printBox, type LimsBox, type SubSample,
+  printBox, getVialRoles, type LimsBox, type SubSample, type VialRoleRow,
 } from '@/lib/api'
 
 vi.mock('@/lib/api', () => ({
@@ -44,6 +44,7 @@ vi.mock('@/lib/api', () => ({
   deleteBox: vi.fn(),
   printBox: vi.fn(),
   listSubSamples: vi.fn(),
+  getVialRoles: vi.fn(),
 }))
 
 import { BoxStep, boxKeyboardCoordinates, roleLabel } from '@/components/intake/ReceiveWizard/BoxStep'
@@ -55,10 +56,30 @@ const mockUnassignVialsFromBox = vi.mocked(unassignVialsFromBox)
 const mockDeleteBox = vi.mocked(deleteBox)
 const mockListSubSamples = vi.mocked(listSubSamples)
 const mockPrintBox = vi.mocked(printBox)
+const mockGetVialRoles = vi.mocked(getVialRoles)
+
+// The catalog-driven default: the same four boxable roles + order BoxStep
+// hardcoded before this task (hm stays boxable=false — spec-3 Handler
+// ruling, not reversed here), so every pre-existing test below is unaffected
+// by the ROLES -> useVialRoles() conversion.
+const vialRoleRow = (
+  code: string, boxable: boolean, sortOrder: number, label = code.toUpperCase(),
+): VialRoleRow => ({
+  id: sortOrder + 1, code, label, department_id: 1, boxable,
+  variance_eligible: true, sort_order: sortOrder, frozen: true, is_system: true,
+})
+
+const DEFAULT_VIAL_ROLES: VialRoleRow[] = [
+  vialRoleRow('hplc', true, 0, 'HPLC'),
+  vialRoleRow('endo', true, 1, 'Endotoxin'),
+  vialRoleRow('ster', true, 2, 'Sterility'),
+  vialRoleRow('hm', false, 3, 'Heavy Metals'),
+  vialRoleRow('xtra', true, 9, 'Extras'),
+]
 
 type Vial = SubSample & { box_id?: number | null }
 
-const vial = (sampleId: string, role: 'hplc' | 'endo' | 'ster' | 'xtra', boxId: number | null = null): Vial =>
+const vial = (sampleId: string, role: string, boxId: number | null = null): Vial =>
   ({
     id: Number(sampleId.replace(/\D/g, '')) || 0,
     sample_id: sampleId,
@@ -83,6 +104,7 @@ function setupBackend(vials: Vial[]) {
   let nextId = 1
   let nextNumber = 1
 
+  mockGetVialRoles.mockResolvedValue(DEFAULT_VIAL_ROLES)
   mockListSubSamples.mockResolvedValue({
     parent: { sub_sample_count: vials.length },
     sub_samples: vials,
@@ -428,5 +450,71 @@ describe('BoxStep — capacity-driven boxing', () => {
     await waitFor(() => expect(mockPrintBox).toHaveBeenCalledTimes(1))
     expect(mockPrintBox).toHaveBeenCalledWith(7)
     expect(printing.printNode).toHaveBeenCalledTimes(1)
+  })
+
+  describe('catalog-driven columns (Task 10): grid follows vial_roles.boxable', () => {
+    it('shows no columns while vial roles are still loading (no empty-grid flash)', async () => {
+      setupBackend([vial('P-101', 'hplc')])
+      let resolveRoles!: (rows: VialRoleRow[]) => void
+      mockGetVialRoles.mockImplementation(() => new Promise(r => { resolveRoles = r }))
+      renderBoxStep()
+
+      // Still resolving vial roles: none of the per-role "+ Add box" column
+      // headers exist yet.
+      expect(screen.queryAllByRole('button', { name: '+ Add box' })).toHaveLength(0)
+
+      await act(async () => {
+        resolveRoles(DEFAULT_VIAL_ROLES)
+      })
+
+      expect((await screen.findAllByRole('button', { name: '+ Add box' })).length).toBeGreaterThan(0)
+    })
+
+    it('keeps hm off the grid while its boxable flag is false (default)', async () => {
+      setupBackend([vial('P-301', 'hm')])
+      renderBoxStep()
+
+      // Something from the render has settled (the Unboxed panel heading is
+      // always present) before asserting the negative.
+      await screen.findByText(`Unboxed (${ORDER})`)
+      expect(screen.queryByText('Heavy Metals')).not.toBeInTheDocument()
+      expect(screen.queryByText('P-301')).not.toBeInTheDocument()
+      expect(mockCreateBox).not.toHaveBeenCalledWith(ORDER, 'hm')
+    })
+
+    it('lights the hm column with zero code change once its boxable flag flips on (dark-launch rehearsal)', async () => {
+      setupBackend([vial('P-301', 'hm')])
+      mockGetVialRoles.mockResolvedValue([
+        ...DEFAULT_VIAL_ROLES.filter(r => r.code !== 'hm'),
+        vialRoleRow('hm', true, 3, 'Heavy Metals'),
+      ])
+      renderBoxStep()
+
+      // "Heavy Metals" renders twice while the vial is unboxed: the hm column
+      // header + the Unboxed panel's role group heading (same shape as the
+      // pre-existing "Extras" xtra assertion above).
+      expect(await screen.findAllByText('Heavy Metals')).not.toHaveLength(0)
+      expect(await screen.findByText('P-301')).toBeInTheDocument()
+      await waitFor(() => expect(mockCreateBox).toHaveBeenCalledWith(ORDER, 'hm'))
+    })
+
+    it('still renders a column for a role whose boxable flag flipped off after a box was already created for it', async () => {
+      // A pre-existing hm box (id 9) with one vial already in it — matches
+      // the "boxable flipped off mid-flight" scenario: the physical box is
+      // real; the column must not vanish out from under the lab tech.
+      const { boxesState } = setupBackend([vial('P-301', 'hm', 9)])
+      boxesState.push({
+        id: 9, order_key: ORDER, box_number: 1, role: 'hm',
+        label_code: 'BOX-1042-1', vial_count: 1, printed_at: null,
+        created_at: null, stored_at: null,
+      })
+      renderBoxStep()
+
+      expect(await screen.findByText('Heavy Metals')).toBeInTheDocument()
+      expect(await screen.findByText('P-301')).toBeInTheDocument()
+      // No new box was auto-created for it (one already existed) — a stale
+      // boxable=false flag must not spuriously mint a second hm box either.
+      expect(mockCreateBox).not.toHaveBeenCalledWith(ORDER, 'hm')
+    })
   })
 })

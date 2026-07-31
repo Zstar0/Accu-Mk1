@@ -4966,7 +4966,11 @@ export async function getSenaiteAnalysts(): Promise<SenaiteAnalyst[]> {
 
 export type InboxPriority = 'normal' | 'high' | 'expedited'
 
-export type InboxRole = 'hplc' | 'microbiology'
+// Widened to string (spec 4, Task 10 — catalog-driven worksheet-inbox lanes):
+// was 'hplc' | 'microbiology'. A lane key is now any GET /worksheets/inbox/
+// lanes key — the three legacy aliases ('hplc' | 'microbiology' | 'hm') or a
+// slugified admin-created department name.
+export type InboxRole = string
 
 // Aligns with backend Pydantic InboxAnalysisItem after the vial-inbox
 // redesign — service group context now travels per-analysis.
@@ -5012,6 +5016,27 @@ export interface InboxResponse {
   items: InboxVialItem[]
   total: number
   filter_role: InboxRole | null
+}
+
+/** One worksheet-inbox filter chip (spec 4, Task 10): a department that owns
+ *  >=1 vial role. `label` is the department's display name (e.g.
+ *  'Analytical' for the legacy 'hplc' lane) — deliberately NOT the
+ *  abbreviated bench nickname; see catalog.roles.inbox_lanes on the backend.
+ *  `key` is the value to pass as GetInboxOptions.role. Ordered by
+ *  (sort_order, key) by the backend. */
+export interface InboxLaneRow {
+  key: string
+  label: string
+  role_codes: string[]
+  sort_order: number
+}
+
+export async function getInboxLanes(): Promise<InboxLaneRow[]> {
+  const response = await fetch(`${API_BASE_URL()}/worksheets/inbox/lanes`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to load inbox lanes: ${response.status}`)
+  return response.json()
 }
 
 export interface WorksheetUser {
@@ -6127,8 +6152,10 @@ export interface ParentAggregate {
    *  "single-vial; render a dash"). */
   vial_count: number
   /** The parent AR's own assignment_role. Sub-sample roles are surfaced
-   *  inline on expand via /api/sub-samples/{parent}, not here. */
-  parent_role: 'hplc' | 'endo' | 'ster' | 'xtra' | 'unassigned'
+   *  inline on expand via /api/sub-samples/{parent}, not here. Widened to
+   *  string (spec 4, Task 10): was 'hplc' | 'endo' | 'ster' | 'xtra' |
+   *  'unassigned'. */
+  parent_role: string
   /** Per-bucket variance counts from the parent's variance_override (zeros when
    *  none). AR-list display hint; authoritative gate is server-side. Optional
    *  for back-compat with older responses. */
@@ -6222,7 +6249,9 @@ export interface LimsBox {
   id: number
   order_key: string
   box_number: number
-  role: 'hplc' | 'endo' | 'ster' | 'xtra'
+  // Widened to string (spec 4, Task 10): was 'hplc' | 'endo' | 'ster' | 'xtra'.
+  // Boxing is catalog-driven now — any vial_roles code with boxable=true.
+  role: string
   label_code: string
   vial_count: number
   printed_at: string | null
@@ -6242,7 +6271,8 @@ export async function listOrderBoxes(orderKey: string): Promise<LimsBox[]> {
 
 export async function createBox(
   orderKey: string,
-  role: 'hplc' | 'endo' | 'ster' | 'xtra',
+  // Widened to string (spec 4, Task 10): was 'hplc' | 'endo' | 'ster' | 'xtra'.
+  role: string,
 ): Promise<LimsBox> {
   return apiFetch<LimsBox>('/api/boxes', {
     method: 'POST',

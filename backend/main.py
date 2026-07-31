@@ -17646,6 +17646,39 @@ async def get_worksheets_inbox(
     return InboxResponse(items=result_items, total=len(result_items), filter_role=role)
 
 
+class InboxLaneOut(BaseModel):
+    key: str
+    label: str
+    role_codes: list[str]
+    sort_order: int
+
+
+@app.get("/worksheets/inbox/lanes", response_model=list[InboxLaneOut])
+async def get_worksheets_inbox_lanes(
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Catalog-driven worksheet-inbox filter chips (spec 4, Task 10) — one
+    entry per department that owns >=1 vial role, via catalog.roles.inbox_
+    lanes(db) (same helper get_worksheets_inbox itself uses for the `role`
+    query param). `label` is the department's display name (e.g. 'Analytical'
+    for the legacy 'hplc' lane, not the abbreviated bench nickname) — a
+    deliberate FE display delta, same convention as the Task 9 AssignStep
+    section headers. Ordered by (sort_order, key) for stable chip rendering."""
+    from catalog.roles import inbox_lanes
+    lanes = inbox_lanes(db)
+    ordered = sorted(lanes.values(), key=lambda lane: (lane.sort_order, lane.key))
+    return [
+        InboxLaneOut(
+            key=lane.key,
+            label=lane.department_name,
+            role_codes=sorted(lane.role_codes),
+            sort_order=lane.sort_order,
+        )
+        for lane in ordered
+    ]
+
+
 @app.put("/worksheets/inbox/{sample_uid}/priority")
 async def update_inbox_priority(
     sample_uid: str,
