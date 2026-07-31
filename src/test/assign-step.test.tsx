@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
 import { AssignStep, bucketToAssignment, toastAssignmentError } from '@/components/intake/ReceiveWizard/AssignStep'
@@ -23,13 +23,31 @@ vi.mock('sonner', () => ({
 import { ApiCodeError, getVialPlan, patchVialAssignment, putVarianceOverride } from '@/lib/api'
 import { toast } from 'sonner'
 
+// Section fixtures mirror the real shape emitted by
+// backend/sub_samples/service.py::_build_vial_plan_sections (Task 8) — see
+// TestVialPlanSections in backend/tests/test_sub_samples_routes.py for the
+// canonical department names ('Analytical', 'Microbiology', 'Heavy Metals')
+// and role labels ('HPLC', 'Endotoxin', 'Sterility', 'Heavy Metals') seeded
+// by backend/catalog/vial_roles_seed.py.
+const ANALYTICAL_HPLC_SECTION = {
+  department_id: 1,
+  department_name: 'Analytical',
+  sort_order: 0,
+  roles: [
+    {
+      code: 'hplc', label: 'HPLC', sort_order: 0, variance_eligible: true,
+      profiles: [{ id: 1, key: 'hplcpurity_identity', name: 'HPLC Purity & Identity', relation: 'host' as const }],
+    },
+  ],
+}
+
 const PLAN: VialPlanResponse = {
   demand: { hplc: 1, endo: 0, ster: 0 },
   variance: { hplc: 0, endo: 0, ster: 0 },
   base_demand: { hplc: 1, endo: 0, ster: 0 },
   wp_order_number: null,
   is_unreachable: false,
-  sections: [],
+  sections: [ANALYTICAL_HPLC_SECTION],
   vials: [
     { sample_id: 'P-0144', is_parent: true, vial_sequence: 0, assignment_role: 'hplc' },
     { sample_id: 'P-0144-S01', is_parent: false, vial_sequence: 1, assignment_role: 'hplc' },
@@ -44,7 +62,21 @@ const VARIANCE_PLAN: VialPlanResponse = {
   base_demand: { hplc: 1, endo: 1, ster: 0 },
   wp_order_number: null,
   is_unreachable: false,
-  sections: [],
+  sections: [
+    ANALYTICAL_HPLC_SECTION,
+    {
+      department_id: 2, department_name: 'Microbiology', sort_order: 1,
+      // endo-only: ster has no demand and no carried vial in this fixture,
+      // so the backend never mints a ster spot — a single-role Microbiology
+      // section renders through the same direct-drop Bucket path as HPLC.
+      roles: [
+        {
+          code: 'endo', label: 'Endotoxin', sort_order: 1, variance_eligible: true,
+          profiles: [{ id: 2, key: 'endotoxin', name: 'Endotoxin', relation: 'host' as const }],
+        },
+      ],
+    },
+  ],
   vials: [
     { sample_id: 'P-0144', is_parent: true, vial_sequence: 0, assignment_role: 'hplc', assignment_kind: 'core' },
     { sample_id: 'P-0144-S01', is_parent: false, vial_sequence: 1, assignment_role: 'hplc', assignment_kind: 'core' },
@@ -63,10 +95,151 @@ const CONTAINER_PLAN: VialPlanResponse = {
   wp_order_number: null,
   is_unreachable: false,
   container_mode: true,
-  sections: [],
+  sections: [ANALYTICAL_HPLC_SECTION],
   vials: [
     { sample_id: 'P-0144-S01', is_parent: false, vial_sequence: 1, assignment_role: 'hplc', assignment_kind: 'core' },
     { sample_id: 'P-0144-S02', is_parent: false, vial_sequence: 2, assignment_role: null, assignment_kind: null },
+  ],
+}
+
+// Full legacy hplc+endo+ster plan — the PIXEL-PARITY reference shape: a
+// three-role plan whose Microbiology department carries BOTH endo and ster,
+// exercising the multi-role (SubDropZone) section path exactly like today's
+// hardcoded MicroBucket. Endo's spot also carries a rider profile to prove
+// the rider-chip contract (spec 4, Task 8's host/rider relation).
+const FULL_PLAN: VialPlanResponse = {
+  demand: { hplc: 1, endo: 1, ster: 1 },
+  variance: { hplc: 0, endo: 0, ster: 0 },
+  base_demand: { hplc: 1, endo: 1, ster: 1 },
+  wp_order_number: null,
+  is_unreachable: false,
+  sections: [
+    ANALYTICAL_HPLC_SECTION,
+    {
+      department_id: 2, department_name: 'Microbiology', sort_order: 1,
+      roles: [
+        {
+          code: 'endo', label: 'Endotoxin', sort_order: 1, variance_eligible: true,
+          profiles: [
+            { id: 2, key: 'endotoxin', name: 'Endotoxin', relation: 'host' as const },
+            { id: 3, key: 'zztest_rides_endo', name: 'ZZTEST Rider', relation: 'rider' as const },
+          ],
+        },
+        {
+          code: 'ster', label: 'Sterility', sort_order: 2, variance_eligible: true,
+          profiles: [{ id: 4, key: 'sterility_pcr', name: 'Sterility PCR', relation: 'host' as const }],
+        },
+      ],
+    },
+  ],
+  vials: [
+    { sample_id: 'P-0144', is_parent: true, vial_sequence: 0, assignment_role: 'hplc', assignment_kind: 'core' },
+    { sample_id: 'P-0144-S01', is_parent: false, vial_sequence: 1, assignment_role: 'hplc', assignment_kind: 'core' },
+    { sample_id: 'P-0144-S02', is_parent: false, vial_sequence: 2, assignment_role: 'endo', assignment_kind: 'core' },
+    { sample_id: 'P-0144-S03', is_parent: false, vial_sequence: 3, assignment_role: 'ster', assignment_kind: 'core' },
+  ],
+}
+
+// The hm-invisibility regression: pre-Task-9 AssignStep only ever rendered
+// hplc/endo/ster/xtra buckets, so an hm-role vial matched NO filter and
+// simply never appeared anywhere in the DOM. A catalog section now exists
+// for it, so it must render, visibly, under its own department.
+const HM_PLAN: VialPlanResponse = {
+  demand: { hplc: 0, endo: 0, ster: 0, hm: 1 },
+  variance: { hplc: 0, endo: 0, ster: 0 },
+  base_demand: { hplc: 0, endo: 0, ster: 0, hm: 1 },
+  wp_order_number: null,
+  is_unreachable: false,
+  sections: [
+    {
+      department_id: 3, department_name: 'Heavy Metals', sort_order: 3,
+      roles: [
+        {
+          code: 'hm', label: 'Heavy Metals', sort_order: 3, variance_eligible: false,
+          profiles: [{ id: 5, key: 'zztest_heavy_metals', name: 'ZZTEST Heavy Metals', relation: 'host' as const }],
+        },
+      ],
+    },
+  ],
+  vials: [
+    { sample_id: 'P-0144-S01', is_parent: false, vial_sequence: 1, assignment_role: 'hm', assignment_kind: 'core' },
+  ],
+}
+
+// A wholly novel catalog role/department the FE has never seen a literal
+// for — proves the render path is genuinely data-driven, not a hardcoded
+// allow-list with one extra case bolted on.
+const T_ROLE_PLAN: VialPlanResponse = {
+  demand: { hplc: 0, endo: 0, ster: 0, t_role: 1 },
+  variance: { hplc: 0, endo: 0, ster: 0 },
+  base_demand: { hplc: 0, endo: 0, ster: 0, t_role: 1 },
+  wp_order_number: null,
+  is_unreachable: false,
+  sections: [
+    {
+      department_id: 9, department_name: 'T Dept', sort_order: 9,
+      roles: [
+        { code: 't_role', label: 'T Role', sort_order: 0, variance_eligible: false, profiles: [] },
+      ],
+    },
+  ],
+  vials: [
+    { sample_id: 'P-0144-S01', is_parent: false, vial_sequence: 1, assignment_role: 't_role', assignment_kind: 'core' },
+  ],
+}
+
+// A vial carrying a role code that appears in NO section — the registry-
+// unknown-role case (_build_vial_plan_sections logs + excludes it
+// server-side). Must still render, visibly, in Xtra — never silently drop.
+const UNKNOWN_ROLE_PLAN: VialPlanResponse = {
+  ...PLAN,
+  vials: [
+    ...PLAN.vials,
+    { sample_id: 'P-0144-S02', is_parent: false, vial_sequence: 2, assignment_role: 'zzghost', assignment_kind: 'core' },
+  ],
+}
+
+// An admin flips variance_eligible off for a role (main.py PATCH
+// /vial-roles/{id} — the flag, unlike the row itself, isn't frozen) AFTER a
+// vial was already assigned assignment_kind='variance' under it. The zone
+// must still surface that stored vial — gating the whole zone on
+// variance_eligible would make it invisible, the same class of bug as hm.
+const VARIANCE_INELIGIBLE_STORED_PLAN: VialPlanResponse = {
+  demand: { hplc: 1, endo: 0, ster: 0 },
+  variance: { hplc: 0, endo: 0, ster: 0 },
+  base_demand: { hplc: 1, endo: 0, ster: 0 },
+  wp_order_number: null,
+  is_unreachable: false,
+  sections: [
+    {
+      department_id: 1, department_name: 'Analytical', sort_order: 0,
+      roles: [
+        {
+          code: 'hplc', label: 'HPLC', sort_order: 0, variance_eligible: false,
+          profiles: [{ id: 1, key: 'hplcpurity_identity', name: 'HPLC Purity & Identity', relation: 'host' as const }],
+        },
+      ],
+    },
+  ],
+  vials: [
+    { sample_id: 'P-0144', is_parent: true, vial_sequence: 0, assignment_role: 'hplc', assignment_kind: 'core' },
+    { sample_id: 'P-0144-S01', is_parent: false, vial_sequence: 1, assignment_role: 'hplc', assignment_kind: 'core' },
+    { sample_id: 'P-0144-S02', is_parent: false, vial_sequence: 2, assignment_role: 'hplc', assignment_kind: 'variance' },
+  ],
+}
+
+// IS-unreachable: sections is always [] on this path (Task 8 contract).
+// Every carried real role has nowhere to land but Xtra.
+const UNREACHABLE_PLAN: VialPlanResponse = {
+  demand: { hplc: 0, endo: 0, ster: 0 },
+  variance: { hplc: 0, endo: 0, ster: 0 },
+  base_demand: { hplc: 0, endo: 0, ster: 0 },
+  wp_order_number: null,
+  is_unreachable: true,
+  sections: [],
+  vials: [
+    { sample_id: 'P-0144', is_parent: true, vial_sequence: 0, assignment_role: 'hplc', assignment_kind: null },
+    { sample_id: 'P-0144-S01', is_parent: false, vial_sequence: 1, assignment_role: 'hplc', assignment_kind: 'core' },
   ],
 }
 
@@ -194,7 +367,7 @@ describe('variance HPLC bucket pill', () => {
   it('no HPLC bucket pill when no variance', async () => {
     vi.mocked(getVialPlan).mockResolvedValue(PLAN)
     renderStep()
-    await screen.findByText('Analyses Dept.')
+    await screen.findByText('Analytical')
     expect(screen.queryByText(/Variance ×/)).not.toBeInTheDocument()
   })
 })
@@ -295,9 +468,75 @@ describe('container mode', () => {
     renderStep()
     // step rendered (HPLC bucket present). CONTAINER_PLAN has no variance, so
     // the variance zone is gated off — assert on the core bucket label instead.
-    expect(await screen.findByText('Analyses Dept.')).toBeInTheDocument()
+    expect(await screen.findByText('Analytical')).toBeInTheDocument()
     // S01 chip present; the bare parent id is NOT rendered as a vial chip
     expect(screen.getByText('P-0144-S01')).toBeInTheDocument()
     expect(screen.queryByText(/^P-0144$/)).not.toBeInTheDocument()
+  })
+})
+
+describe('catalog-driven sections (Task 9)', () => {
+  it('renders a Heavy Metals section from an hm role spot — the hm vial is visible and labeled HM (invisibility regression)', async () => {
+    // Pre-Task-9 AssignStep only filtered hplc/endo/ster/xtra — an hm-role
+    // vial matched none of those and rendered nowhere. This is the fix.
+    vi.mocked(getVialPlan).mockResolvedValue(HM_PLAN)
+    renderStep()
+    expect(await screen.findByText('Heavy Metals')).toBeInTheDocument()
+    expect(screen.getByText('P-0144-S01')).toBeInTheDocument()
+    expect(screen.getByText('HM')).toBeInTheDocument()
+  })
+
+  it('renders the full hplc+endo+ster legacy plan with pixel-parity dept headers and catalog role labels', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(FULL_PLAN)
+    renderStep()
+    expect(await screen.findByText('Analytical')).toBeInTheDocument()
+    expect(screen.getByText('Microbiology')).toBeInTheDocument()
+    // Deliberate display delta (signed off): sub-zone labels are now the
+    // catalog role label ('Endotoxin'/'Sterility'), not the old short forms.
+    // (Matched with the ' ·' suffix — VarianceOverrideEditor unconditionally
+    // renders its own plain 'Sterility'/'Endo' input labels below the grid.)
+    expect(screen.getByText(/Endotoxin ·/)).toBeInTheDocument()
+    expect(screen.getByText(/Sterility ·/)).toBeInTheDocument()
+  })
+
+  it('renders a rider chip on its host role spot, distinct from a drop target', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(FULL_PLAN)
+    renderStep()
+    await screen.findByText('Microbiology')
+    expect(screen.getByText('ZZTEST Rider')).toBeInTheDocument()
+    expect(screen.getByText(/· rider/)).toBeInTheDocument()
+  })
+
+  it('round-trips a novel role (t_role): renders its section+spot, is a valid drag target, chip falls back to the uppercased code', async () => {
+    expect(bucketToAssignment('t_role')).toEqual({ role: 't_role', kind: 'core' })
+    vi.mocked(getVialPlan).mockResolvedValue(T_ROLE_PLAN)
+    renderStep()
+    expect(await screen.findByText('T Dept')).toBeInTheDocument()
+    expect(screen.getByText('P-0144-S01')).toBeInTheDocument()
+    expect(screen.getByText('T_ROLE')).toBeInTheDocument()
+  })
+
+  it('a vial whose role appears in no section lands visibly in Xtra (registry-unknown role never invisible)', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(UNKNOWN_ROLE_PLAN)
+    renderStep()
+    await screen.findByText('P-0144-S01')
+    const xtraBucket = screen.getByText('Xtra').closest('div.border-2')
+    expect(xtraBucket).not.toBeNull()
+    expect(within(xtraBucket as HTMLElement).getByText('P-0144-S02')).toBeInTheDocument()
+  })
+
+  it('is_unreachable plan (sections: []) still renders every carried-role vial, landing in Xtra', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(UNREACHABLE_PLAN)
+    renderStep()
+    expect(await screen.findByText(/Couldn't load order services/)).toBeInTheDocument()
+    const xtraBucket = screen.getByText('Xtra').closest('div.border-2')
+    expect(xtraBucket).not.toBeNull()
+    expect(within(xtraBucket as HTMLElement).getByText('P-0144-S01')).toBeInTheDocument()
+  })
+
+  it('a stored variance vial still renders even when its role is not (or no longer) variance_eligible (never invisible)', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(VARIANCE_INELIGIBLE_STORED_PLAN)
+    renderStep()
+    expect(await screen.findByText('P-0144-S02')).toBeInTheDocument()
   })
 })

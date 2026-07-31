@@ -18,6 +18,8 @@ import {
   updateSenaiteSampleFields,
   type VialPlanResponse,
   type VialPlanItem,
+  type VialPlanSection,
+  type VialPlanRoleProfile,
   type AssignmentRole,
 } from '@/lib/api'
 import { useQueryClient } from '@tanstack/react-query'
@@ -37,14 +39,23 @@ interface Props {
   parentSampleUid?: string | null
 }
 
-const ROLE_SHORT: Record<string, string> = {
+/** Short display form for a role's drag-chip badge and variance-zone header
+ *  (spec 4, Task 9). Known legacy/catalog codes get their historical short
+ *  forms; any other catalog role (a brand-new department's role code) falls
+ *  back to its uppercased code so a novel role never renders blank. */
+const ROLE_SHORT_DEFAULTS: Record<string, string> = {
   hplc: 'HPLC',
   endo: 'ENDO',
   ster: 'PCR',
   xtra: 'XTRA',
+  hm: 'HM',
 }
+const roleShort = (code: string): string => ROLE_SHORT_DEFAULTS[code] ?? code.toUpperCase()
 
-type BucketId = AssignmentRole | 'hplc_variance' | 'endo_variance' | 'ster_variance'
+// Widened to string alongside AssignmentRole (spec 4, Task 8/9): a
+// catalog-driven bench mints droppable ids from any role code the catalog
+// carries, not just the legacy three variance buckets.
+type BucketId = string
 
 /** Maps a droppable bucket id to the (role, kind) tuple sent to the server.
  *  Variance buckets map to kind='variance'; core buckets to kind='core';
@@ -53,6 +64,18 @@ export function bucketToAssignment(b: string): { role: string; kind: 'core' | 'v
   if (b.endsWith('_variance')) return { role: b.replace('_variance', ''), kind: 'variance' }
   if (b === 'xtra') return { role: 'xtra', kind: null }
   return { role: b, kind: 'core' }
+}
+
+/** plan.variance stays the legacy fixed shape {hplc, endo, ster} BY CONTRACT
+ *  (derive_variance_demand never emits a catalog-only role like hm/t_role —
+ *  Task 3). An explicit lookup — rather than a cast to an indexed type —
+ *  keeps that contract visible at the call site instead of hidden behind a
+ *  cast that would silently paper over a real code drifting outside it. */
+function varianceFor(variance: VialPlanResponse['variance'], code: string): number {
+  if (code === 'hplc') return variance.hplc
+  if (code === 'endo') return variance.endo
+  if (code === 'ster') return variance.ster
+  return 0
 }
 
 /** Routes an assignment PATCH failure to the right toast. Branches on the
@@ -164,34 +187,38 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
   }
   if (!plan) return null
 
-  // Split vials by role and kind for the new variance drop zones.
-  // Back-compat: vials without assignment_kind are treated as core.
-  const hplcCore = plan.vials.filter(v => v.assignment_role === 'hplc' && v.assignment_kind !== 'variance')
-  const hplcVariance = plan.vials.filter(v => v.assignment_role === 'hplc' && v.assignment_kind === 'variance')
-  const endoCore = plan.vials.filter(v => v.assignment_role === 'endo' && v.assignment_kind !== 'variance')
-  const endoVariance = plan.vials.filter(v => v.assignment_role === 'endo' && v.assignment_kind === 'variance')
-  const sterCore = plan.vials.filter(v => v.assignment_role === 'ster' && v.assignment_kind !== 'variance')
-  const sterVariance = plan.vials.filter(v => v.assignment_role === 'ster' && v.assignment_kind === 'variance')
+  // Catalog-driven layout (spec 4, Task 9): sections is ALWAYS present, empty
+  // only on the IS-unreachable path (Task 8 contract) — no local show*/gate
+  // consts needed, the backend already only mints a section when a role has
+  // real demand or a carried vial (parity with the old showHplc/showMicro
+  // gates falls out of that inclusion rule for free).
+  const sections = plan.sections ?? []
 
-  // demand is now Record<string, number> (spec 4, Task 8 widening) — dot
-  // access on the legacy hplc/endo/ster keys is always populated by the
-  // backend (derive_demand's 3-bucket floor), but the wider type reads as
-  // possibly-undefined; ?? 0 matches runtime reality, no behavior change.
-  const hplcDemand = plan.demand.hplc ?? 0
-  const endoDemand = plan.demand.endo ?? 0
-  const sterDemand = plan.demand.ster ?? 0
+  const vialsForRole = (code: string) => ({
+    core: plan.vials.filter(v => v.assignment_role === code && v.assignment_kind !== 'variance'),
+    variance: plan.vials.filter(v => v.assignment_role === code && v.assignment_kind === 'variance'),
+  })
 
-  // Build the bucket list. Microbiology section hidden if neither addon present.
-  const showMicro = (endoDemand + sterDemand) > 0 ||
-    (plan.variance?.endo ?? 0) > 0 || (plan.variance?.ster ?? 0) > 0 ||
-    plan.vials.some(v => v.assignment_role === 'endo' || v.assignment_role === 'ster')
-  const showHplc = hplcDemand > 0 ||
-    (plan.variance?.hplc ?? 0) > 0 ||
-    plan.vials.some(v => v.assignment_role === 'hplc')
-  // Xtra is always rendered: it doubles as the drop target for manually
-  // surplussing a vial that auto-assign placed in HPLC/Endo/Ster. Hiding
-  // it when empty would lock users out of the override path.
-  const showXtra = true
+  // Every role code the catalog actually placed in a section this render.
+  // Xtra is the visible landing spot for anything else carrying a real role:
+  // the literal 'xtra'/null vials (as before), PLUS any role code sections
+  // excluded — an unregistered code (_build_vial_plan_sections logs + drops
+  // it server-side) or, on the IS-unreachable path, every carried role
+  // (sections: []). Never invisible — this is the hm-invisibility fix.
+  const sectionRoleCodes = new Set(sections.flatMap(s => s.roles.map(r => r.code)))
+  const xtraVials = plan.vials.filter(v => {
+    const role = v.assignment_role
+    if (role == null || role === 'xtra') return true
+    return !sectionRoleCodes.has(role)
+  })
+
+  // Grid: one column per section + the always-on Xtra column. Multi-role
+  // sections keep today's wider Microbiology column (1.2fr); single-role
+  // sections keep today's Analytical column (1fr); Xtra stays narrow (0.8fr).
+  const gridTemplateColumns = [
+    ...sections.map(s => (s.roles.length > 1 ? '1.2fr' : '1fr')),
+    '0.8fr',
+  ].join(' ')
 
   return (
     <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
@@ -202,47 +229,24 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
             Drag vials manually. Print still works.
           </div>
         )}
-        <div
-          className="grid gap-4"
-          style={{
-            gridTemplateColumns: `${showHplc ? '1fr ' : ''}${showMicro ? '1.2fr ' : ''}0.8fr`.trim(),
-          }}
-        >
-          {showHplc && (
-            <Bucket
-              id="hplc"
-              label="Analyses Dept."
-              vials={hplcCore}
-              varianceVials={hplcVariance}
-              demand={hplcDemand}
-              varianceN={plan.variance?.hplc ?? 0}
-              withVarianceZone={(plan.variance?.hplc ?? 0) > 0 || hplcVariance.length > 0}
-              onReset={() => handleResetBucket('hplc')}
+        <div className="grid gap-4" style={{ gridTemplateColumns }}>
+          {sections.map(section => (
+            <DepartmentSection
+              key={section.department_id}
+              section={section}
+              plan={plan}
+              vialsForRole={vialsForRole}
+              onReset={handleResetBucket}
             />
-          )}
-          {showMicro && (
-            <MicroBucket
-              endo={endoCore}
-              ster={sterCore}
-              endoVariance={endoVariance}
-              sterVariance={sterVariance}
-              endoDemand={endoDemand}
-              sterDemand={sterDemand}
-              endoVarianceN={plan.variance?.endo ?? 0}
-              sterVarianceN={plan.variance?.ster ?? 0}
-              onResetEndo={() => handleResetBucket('endo')}
-              onResetSter={() => handleResetBucket('ster')}
-            />
-          )}
-          {showXtra && (
-            <Bucket
-              id="xtra"
-              label="Xtra"
-              vials={plan.vials.filter(v => v.assignment_role === 'xtra' || v.assignment_role == null)}
-              demand={null}
-              onReset={null}
-            />
-          )}
+          ))}
+          <Bucket
+            id="xtra"
+            label="Xtra"
+            shortLabel={roleShort('xtra')}
+            vials={xtraVials}
+            demand={null}
+            onReset={null}
+          />
         </div>
         <VarianceOverrideEditor
           parentSampleId={parentSampleId}
@@ -258,7 +262,11 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
   )
 }
 
-/** Lab-side variance count override — interim until the WP variance addon ships. */
+/** Lab-side variance count override — interim until the WP variance addon ships.
+ *  UNCHANGED by Task 9's catalog-driven rewrite: the three WP-key ternaries
+ *  below are legacy-only by backend contract (plan.variance is fixed-shape
+ *  {hplc, endo, ster} — derive_variance_demand never emits a catalog-only
+ *  role), so this editor has no section/role-spot dependency to widen. */
 const VARIANCE_OVERRIDE_FIELDS = [
   { key: 'hplcpurity_identity', label: 'HPLC', ariaLabel: 'Variance HPLC' },
   { key: 'endotoxin', label: 'Endo', ariaLabel: 'Variance Endo' },
@@ -503,10 +511,15 @@ function VariancePill({ n }: { n: number }) {
 }
 
 function Bucket({
-  id, label, vials, demand, onReset, varianceN = 0, varianceVials, withVarianceZone = false,
+  id, label, shortLabel, vials, demand, onReset, varianceN = 0, varianceVials, withVarianceZone = false,
 }: {
   id: BucketId
   label: string
+  /** Short form of `label` for the nested variance zone's "{shortLabel}
+   *  Variance" header (spec 4, Task 9 — replaces the old
+   *  `label === 'Analyses Dept.' ? 'HPLC' : label` ternary; catalog-driven
+   *  now, via `roleShort(role.code)` at the call site). */
+  shortLabel: string
   /** Core vials for this bucket (assignment_kind === 'core', or untyped for back-compat). */
   vials: VialPlanItem[]
   demand: number | null
@@ -574,41 +587,128 @@ function Bucket({
           id={varianceBucketId}
           paidCount={varianceN}
           vials={varianceVials ?? []}
-          roleLabel={label === 'Analyses Dept.' ? 'HPLC' : label}
+          roleLabel={shortLabel}
         />
       )}
     </div>
   )
 }
 
-function MicroBucket({
-  endo, ster, endoVariance, sterVariance,
-  endoDemand, sterDemand, endoVarianceN = 0, sterVarianceN = 0, onResetEndo, onResetSter,
-}: {
-  /** Core endo vials (assignment_kind !== 'variance'). */
-  endo: VialPlanItem[]
-  /** Core ster vials (assignment_kind !== 'variance'). */
-  ster: VialPlanItem[]
-  /** Variance endo vials (assignment_kind === 'variance'). */
-  endoVariance?: VialPlanItem[]
-  /** Variance ster vials (assignment_kind === 'variance'). */
-  sterVariance?: VialPlanItem[]
-  endoDemand: number
-  sterDemand: number
-  endoVarianceN?: number
-  sterVarianceN?: number
-  onResetEndo: () => void
-  onResetSter: () => void
+/** Chips for a role spot's rider profiles (spec 4, Task 8/9) — profiles that
+ *  attach their result to the host's vial instead of minting their own
+ *  (resolve_catalog_fulfillment). Rendered as a SIBLING beneath the spot's
+ *  Bucket/SubDropZone rather than as a prop threaded into either of those
+ *  kept-verbatim components — keeps both untouched. Reuses the
+ *  VarianceDropZone header visual (text-[10px] uppercase muted) with a
+ *  `· rider` marker; NOT a drop target — riders never mint their own role. */
+function RiderChips({ profiles }: { profiles: VialPlanRoleProfile[] }) {
+  const riders = profiles.filter(p => p.relation === 'rider')
+  if (riders.length === 0) return null
+  return (
+    <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] uppercase tracking-wide text-muted-foreground mt-1 pl-3">
+      {riders.map(r => (
+        <span key={r.id}>
+          {r.name}
+          <span className="ml-1 normal-case">· rider</span>
+        </span>
+      ))}
+    </div>
+  )
+}
+
+/** Dispatches a department section to the one-role vs. many-role layout
+ *  (spec 4, Task 9): a single-role department renders as a direct-drop
+ *  Bucket (today's Analytical look); two-or-more renders as a Bucket-styled
+ *  shell of per-role SubDropZones (today's Microbiology look). */
+function DepartmentSection(props: {
+  section: VialPlanSection
+  plan: VialPlanResponse
+  vialsForRole: (code: string) => { core: VialPlanItem[]; variance: VialPlanItem[] }
+  onReset: (bucket: BucketId) => void
 }) {
-  const totalAssigned = endo.length + ster.length
-  const totalDemand = endoDemand + sterDemand
-  const isShort = totalAssigned < totalDemand
+  const [onlyRole, ...rest] = props.section.roles
+  if (onlyRole && rest.length === 0) {
+    return <SingleRoleSection {...props} role={onlyRole} />
+  }
+  return <MultiRoleSection {...props} />
+}
+
+/** Single-role department section (spec 4, Task 9) — today's Analytical
+ *  look: a direct-drop Bucket, id = the role's code. Renders the role's
+ *  variance zone and rider chips through the same generic path a multi-role
+ *  section uses. */
+function SingleRoleSection({
+  section, role, plan, vialsForRole, onReset,
+}: {
+  section: VialPlanSection
+  role: VialPlanSection['roles'][number]
+  plan: VialPlanResponse
+  vialsForRole: (code: string) => { core: VialPlanItem[]; variance: VialPlanItem[] }
+  onReset: (bucket: BucketId) => void
+}) {
+  const { core, variance } = vialsForRole(role.code)
+  const demand = plan.demand[role.code] ?? 0
+  const roleVarianceN = varianceFor(plan.variance, role.code)
+  // Stored variance vials ALWAYS reveal the zone, regardless of
+  // variance_eligible — the flag only gates proactively revealing an EMPTY
+  // zone off the paid count. Gating the whole thing on variance_eligible
+  // would make already-assigned variance vials invisible the moment an
+  // admin edits that flag off — the same invisibility class this task fixed
+  // for hm. See varianceFor: roleVarianceN can only be nonzero for
+  // hplc/endo/ster anyway (plan.variance's fixed legacy shape), so
+  // variance_eligible only ever matters as a guard on THAT branch.
+  const withVarianceZone = variance.length > 0 || (role.variance_eligible && roleVarianceN > 0)
+  return (
+    <div>
+      <Bucket
+        id={role.code}
+        label={section.department_name}
+        shortLabel={roleShort(role.code)}
+        vials={core}
+        varianceVials={variance}
+        demand={demand}
+        varianceN={roleVarianceN}
+        withVarianceZone={withVarianceZone}
+        onReset={() => onReset(role.code)}
+      />
+      <RiderChips profiles={role.profiles} />
+    </div>
+  )
+}
+
+/** Multi-role department section (spec 4, Task 9) — today's Microbiology
+ *  look, generalized from the deleted MicroBucket to any N-role catalog
+ *  section: a Bucket-styled shell wrapping one SubDropZone (+ optional
+ *  VarianceDropZone, + rider chips) per role.
+ *
+ *  BW-0015 constraint (moved here from the deleted MicroBucket, still load-
+ *  bearing): the outer shell is deliberately NOT a useDroppable target. An
+ *  always-on drop id on the shell would let a vial dragged back toward the
+ *  section land on an unintended role/kind instead of a no-op — only the
+ *  per-role SubDropZone/VarianceDropZone below are real drop targets. */
+function MultiRoleSection({
+  section, plan, vialsForRole, onReset,
+}: {
+  section: VialPlanSection
+  plan: VialPlanResponse
+  vialsForRole: (code: string) => { core: VialPlanItem[]; variance: VialPlanItem[] }
+  onReset: (bucket: BucketId) => void
+}) {
+  const totals = section.roles.reduce(
+    (acc, r) => {
+      acc.assigned += vialsForRole(r.code).core.length
+      acc.demand += plan.demand[r.code] ?? 0
+      return acc
+    },
+    { assigned: 0, demand: 0 },
+  )
+  const isShort = totals.assigned < totals.demand
 
   return (
     <div
       className={cn(
         'border-2 rounded-lg p-3 min-h-[120px]',
-        totalAssigned === totalDemand && totalDemand > 0
+        totals.assigned === totals.demand && totals.demand > 0
           ? 'border-solid border-primary/45'
           : isShort
           ? 'border-dashed border-amber-500/55 bg-amber-500/5'
@@ -616,61 +716,47 @@ function MicroBucket({
       )}
     >
       <header className="flex justify-between items-baseline mb-2 text-xs uppercase tracking-wide text-muted-foreground">
-        <strong className="text-foreground font-semibold">Microbiology</strong>
+        <strong className="text-foreground font-semibold">{section.department_name}</strong>
         <span className={cn(isShort && 'text-amber-500')}>
-          {totalAssigned} / {totalDemand}
+          {totals.assigned} / {totals.demand}
         </span>
       </header>
-      {/* Variance zones are entitlement-gated (2026-06-16): shown only when there
-          is at least one PAID variance replicate — plan.variance is the replicate
-          count (total vials − 1), so >0 means "any variance purchased" (a 2-total
-          upsell = 1 replicate). An always-on zone nested inside the core bucket let
-          a vial dragged back in land on variance by accident (BW-0015 bug). To turn
-          variance ON for an order, set the total (≥2) in the Variance Testing box —
-          the lab override merges into plan.variance and reveals these zones. */}
-      {endoDemand > 0 && (
-        <>
-          <SubDropZone
-            id="endo"
-            label="Endo"
-            vials={endo}
-            demand={endoDemand}
-            varianceN={endoVarianceN}
-            onReset={onResetEndo}
-          />
-          {(endoVarianceN > 0 || (endoVariance?.length ?? 0) > 0) && (
-            <VarianceDropZone
-              id="endo_variance"
-              paidCount={endoVarianceN}
-              vials={endoVariance ?? []}
-              roleLabel="Endo"
+      {section.roles.map(role => {
+        const { core, variance } = vialsForRole(role.code)
+        const roleDemand = plan.demand[role.code] ?? 0
+        const roleVarianceN = varianceFor(plan.variance, role.code)
+        // Variance zones are entitlement-gated (2026-06-16): shown when there is
+        // at least one PAID variance replicate — plan.variance is the replicate
+        // count (total vials − 1), so >0 means "any variance purchased" (a
+        // 2-total upsell = 1 replicate). variance_eligible guards ONLY that paid-
+        // count branch (belt-and-braces — plan.variance is a fixed 3-key legacy
+        // dict, so only hplc/endo/ster can ever carry a nonzero count regardless
+        // of what the catalog role allows); it must NOT gate stored variance
+        // vials — an admin flipping the flag off must never make an
+        // already-assigned variance vial invisible (the hm-invisibility class).
+        const showVarianceZone = variance.length > 0 || (role.variance_eligible && roleVarianceN > 0)
+        return (
+          <div key={role.code}>
+            <SubDropZone
+              id={role.code}
+              label={role.label}
+              vials={core}
+              demand={roleDemand}
+              varianceN={roleVarianceN}
+              onReset={() => onReset(role.code)}
             />
-          )}
-        </>
-      )}
-      {sterDemand > 0 && (
-        <>
-          <SubDropZone
-            id="ster"
-            label="Sterility"
-            vials={ster}
-            demand={sterDemand}
-            varianceN={sterVarianceN}
-            onReset={onResetSter}
-          />
-          {(sterVarianceN > 0 || (sterVariance?.length ?? 0) > 0) && (
-            <VarianceDropZone
-              id="ster_variance"
-              paidCount={sterVarianceN}
-              vials={sterVariance ?? []}
-              roleLabel="Sterility"
-            />
-          )}
-        </>
-      )}
-      {endoDemand === 0 && sterDemand === 0 && (
-        <p className="text-xs text-muted-foreground italic">no addons</p>
-      )}
+            <RiderChips profiles={role.profiles} />
+            {showVarianceZone && (
+              <VarianceDropZone
+                id={`${role.code}_variance`}
+                paidCount={roleVarianceN}
+                vials={variance}
+                roleLabel={roleShort(role.code)}
+              />
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -788,7 +874,7 @@ function DraggableVial({ vial }: { vial: VialPlanItem }) {
     >
       <span>{vial.sample_id}</span>
       <span className={cn('text-[9px] px-1.5 py-0.5 rounded uppercase tracking-wide', roleColor)}>
-        {ROLE_SHORT[role]}
+        {roleShort(role)}
       </span>
     </div>
   )
