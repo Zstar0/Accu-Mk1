@@ -920,6 +920,7 @@ def get_sample_transfer_info(
     Reads from the integration-service Postgres directly. Cheap — bounded
     queries against indexed columns + JSONB lateral expansions.
     """
+    from psycopg2 import errors as psycopg2_errors
     from psycopg2.extras import RealDictCursor
 
     result = {
@@ -980,12 +981,21 @@ def get_sample_transfer_info(
                         "sample_id": r["new_sample_id"],
                         "order_id": int(r["order_id"]) if r["order_id"] else None,
                     })
-    except Exception:
-        # Integration DB unavailable, or the transfer columns/migration
-        # (w1x2y3z4a5b6) aren't applied yet in this environment — return the
-        # empty shell so callers can render gracefully, same fallback as
-        # get_sample_retest_info above.
+    except (psycopg2_errors.UndefinedColumn, psycopg2_errors.UndefinedTable):
+        # The transfer columns/migration (w1x2y3z4a5b6) aren't applied in this
+        # environment — the all-empty shell is the DESIGNED answer, and this is
+        # the only failure allowed to degrade silently (deploy-order
+        # tolerance: an Mk1 deploy may precede the IS migration window).
         pass
+    except Exception as exc:
+        # Narrowed per Task 9 carried-forward verification #5: a lineage
+        # endpoint must never answer "not a transfer" when the truth is
+        # unknown. Connection refusals, timeouts, and any other query failure
+        # surface as an explicit 503 instead of an empty shell.
+        raise HTTPException(
+            status_code=503,
+            detail="transfer lineage temporarily unavailable (integration DB unreachable)",
+        ) from exc
 
     return result
 

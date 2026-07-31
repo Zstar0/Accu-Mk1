@@ -54,6 +54,41 @@ def test_response_shape_is_stable(client):
         assert key in body, f"missing key {key}"
 
 
+def test_missing_migration_returns_degraded_shell(client, monkeypatch):
+    """Environments where w1x2y3z4a5b6 isn't applied (deploy-order tolerance)
+    get the designed all-empty shell — the ONLY failure allowed to degrade
+    silently after the Task 9 narrowing."""
+    import psycopg2.errors
+
+    conn = MagicMock()
+    cursor = MagicMock()
+    cursor.execute.side_effect = psycopg2.errors.UndefinedColumn(
+        'column os.is_transfer does not exist')
+    conn.__enter__ = MagicMock(return_value=conn)
+    conn.__exit__ = MagicMock(return_value=False)
+    conn.cursor.return_value.__enter__ = MagicMock(return_value=cursor)
+    conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+    monkeypatch.setattr(main, "get_integration_db", lambda: conn)
+
+    resp = client.get("/samples/P-0301/transfer-info")
+    assert resp.status_code == 200
+    assert resp.json()["is_transfer"] is False
+
+
+def test_connection_failure_is_503_not_a_false_negative(client, monkeypatch):
+    """Task 9 carried-forward verification #5: once the migration is applied,
+    the endpoint must stop swallowing connection/query failures — answering
+    "not a transfer" when the truth is unknown is a lie about lineage."""
+    import psycopg2
+
+    def refuse():
+        raise psycopg2.OperationalError("connection refused")
+    monkeypatch.setattr(main, "get_integration_db", refuse)
+
+    resp = client.get("/samples/BW-0014/transfer-info")
+    assert resp.status_code == 503
+
+
 def test_requires_authentication():
     """No auth at all (get_current_user not overridden) — the router-level
     get_current_user gate rejects with 401. Guards against a future refactor
