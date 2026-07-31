@@ -16445,7 +16445,7 @@ def scan_via_bench_token(
 
 
 @app.post("/bench-scans", status_code=201)
-async def create_bench_scan(
+def create_bench_scan(
     data: BenchScanIn,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
