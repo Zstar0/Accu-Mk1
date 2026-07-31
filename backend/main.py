@@ -15920,10 +15920,10 @@ async def delete_vial_role(
     role_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)
 ):
     """is_system → 400 outright. Otherwise refused (409, naming the reference)
-    if a profile still fulfills via this role, or any vial (parent sample or
-    sub-sample) is still assigned to it — matches the department DELETE
-    guard pattern (main.py ~:15594)."""
-    from models import AnalysisProfile, LimsSample, LimsSubSample, VialRole
+    if a profile still fulfills via this role, any vial (parent sample or
+    sub-sample) is still assigned to it, or a box is still keyed to it —
+    matches the department DELETE guard pattern (main.py ~:15594)."""
+    from models import AnalysisProfile, LimsBox, LimsSample, LimsSubSample, VialRole
     r = db.get(VialRole, role_id)
     if r is None:
         raise HTTPException(404, "vial role not found")
@@ -15943,6 +15943,12 @@ async def delete_vial_role(
     if vial_ref is not None:
         raise HTTPException(
             409, f"role '{r.code}' is still assigned to a vial; reassign it first")
+    box_ref = db.execute(
+        select(LimsBox.id).where(LimsBox.role == r.code).limit(1)
+    ).scalars().first()
+    if box_ref is not None:
+        raise HTTPException(
+            409, f"role '{r.code}' is still referenced by a box; reassign it first")
     db.delete(r)
     db.commit()
 

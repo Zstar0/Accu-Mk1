@@ -8,8 +8,8 @@ xtra is the only role allowed a NULL department (the reserved unassigned
 bucket) — POST/PATCH both refuse a NULL department for any other code.
 frozen rows (a vial already references the code) refuse a code change but
 stay otherwise editable. is_system rows can't be deleted at all; any other
-row referenced by an AnalysisProfile.fulfillment_role or a vial's
-assignment_role refuses with 409 naming what references it.
+row referenced by an AnalysisProfile.fulfillment_role, a vial's
+assignment_role, or a LimsBox.role refuses with 409 naming what references it.
 
 Fixture idiom copied from test_native_promote.py's `client`/`db_session`
 (StaticPool in-memory SQLite + get_db/get_current_user dependency overrides,
@@ -29,7 +29,7 @@ from fastapi.testclient import TestClient
 from main import app
 from auth import get_current_user
 from database import get_db, Base
-from models import VialRole, AnalysisProfile, LimsSample, LimsSubSample
+from models import VialRole, AnalysisProfile, LimsBox, LimsSample, LimsSubSample
 
 
 @pytest.fixture
@@ -148,6 +148,30 @@ def test_delete_refuses_system_and_referenced_roles(client, db_session):
     assert "vial" in vial_resp.json()["detail"].lower()
 
     assert client.delete(f"/vial-roles/{free_id}").status_code == 204
+
+
+def test_delete_refuses_role_referenced_only_by_a_box_until_cleared(client, db_session):
+    # Fourth reference clause: a LimsBox keyed to the role (box.role == code)
+    # 409s the same as a profile/vial reference, naming the box; once the
+    # box no longer references it, the delete succeeds.
+    dep = client.post("/departments", json={"name": "Box Dept"}).json()
+    box_role = VialRole(code="boxr", label="Box Ref", department_id=dep["id"])
+    db_session.add(box_role)
+    db_session.flush()
+    box_role_id = box_role.id
+
+    box = LimsBox(order_key="WP-90001", box_number=1, role="boxr")
+    db_session.add(box)
+    db_session.commit()
+
+    resp = client.delete(f"/vial-roles/{box_role_id}")
+    assert resp.status_code == 409
+    assert "box" in resp.json()["detail"].lower()
+
+    db_session.delete(box)
+    db_session.commit()
+
+    assert client.delete(f"/vial-roles/{box_role_id}").status_code == 204
 
 
 def test_patch_updates_flags_but_never_code_on_frozen(client, db_session):
