@@ -30,14 +30,14 @@ _QUIET_KEYS = {"samplevariance", "variance"}
 
 @dataclass
 class RoleFulfillment:
-    """demand is order-independent (MAX over anchors, computed once via
-    resolve_catalog_fulfillment). host_profile_ids/rider_profile_ids are
-    NOT guaranteed order-stable across calls when more than one anchor
-    shares a role (e.g. hplcpurity_identity and bac_water_panel both anchor
-    'hplc') — their relative order in host_profile_ids follows the
-    `services` dict's iteration order that call received, not a declared
-    priority. Consumers (Tasks 5/6/8) must not treat host_profile_ids[0] as
-    "the" anchor; treat the list as a set for anything but demand."""
+    """demand is order-independent (MAX over anchors). host_profile_ids and
+    rider_profile_ids are both deterministically ordered by (role
+    sort_order, profile key) — NOT by the `services` dict's iteration
+    order — so when more than one anchor shares a role (e.g.
+    hplcpurity_identity and bac_water_panel both anchor 'hplc'), the same
+    services set always produces the same host_profile_ids order regardless
+    of caller dict order. Still not a declared "priority" among anchors —
+    it's a stable tie-break, not a ranking — but it is reproducible."""
     demand: int = 0
     host_profile_ids: list = field(default_factory=list)
     rider_profile_ids: list = field(default_factory=list)
@@ -46,8 +46,9 @@ class RoleFulfillment:
 def resolve_catalog_fulfillment(db, services: dict) -> dict:
     """Anchors mint MAX-per-role demand; riders attach to the first ordered
     host on their priority list, else self-mint their own role
-    (Handler-locked 2026-07-31). Deterministic: riders iterate by (role
-    sort_order, profile key) — never by dict/query iteration order.
+    (Handler-locked 2026-07-31). Deterministic: both anchors and riders
+    iterate by (role sort_order, profile key) — never by dict/query
+    iteration order.
     """
     from models import AnalysisProfile, VialRole, profile_ride_hosts
 
@@ -81,12 +82,21 @@ def resolve_catalog_fulfillment(db, services: dict) -> dict:
     anchors = [p for p in ordered if not ride_map.get(p.id)]
     riders = [p for p in ordered if ride_map.get(p.id)]
 
+    # Deterministic order for BOTH loops — never `services` dict/query
+    # iteration order. Computed once, up front, so the anchors loop below
+    # can use it too: when two anchors share a role (a real production
+    # pair — e.g. two profiles both anchoring 'hplc'), host_profile_ids'
+    # append order would otherwise follow caller dict order. `demand` was
+    # always safe (`max` is order-independent); this makes the ID lists
+    # provably deterministic too, matching the riders sort already below.
+    sort_of = {r.code: r.sort_order for r in db.query(VialRole).all()}
+    anchors.sort(key=lambda p: (sort_of.get(p.fulfillment_role, 999), p.key))
+
     for p in anchors:
         rf = result.setdefault(p.fulfillment_role, RoleFulfillment())
         rf.demand = max(rf.demand, p.vials_required)
         rf.host_profile_ids.append(p.id)
 
-    sort_of = {r.code: r.sort_order for r in db.query(VialRole).all()}
     riders.sort(key=lambda p: (sort_of.get(p.fulfillment_role, 999), p.key))
     for p in riders:
         host = next((h for h in ride_map[p.id] if result.get(h) and result[h].demand > 0), None)

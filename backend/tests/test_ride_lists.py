@@ -186,19 +186,24 @@ def test_priority_order_respected(db_session):
 
 def test_rider_resolution_is_permutation_invariant(db_session):
     """Same service set in every dict insertion order -> identical
-    fulfillment map. Property test over itertools.permutations of 4 keys.
-    Fixture is deliberately one-anchor-per-role / one-rider-per-host so the
-    result can never depend on `services.items()` iteration order (the only
-    order-sensitive step in resolve_catalog_fulfillment is the anchors loop,
-    which only matters when two anchors share a role — not the case here)."""
+    fulfillment map, INCLUDING host_profile_ids order. Property test over
+    itertools.permutations of 5 keys — two of which (t_pi_host1,
+    t_pi_host1b) are anchors sharing the same TEST-ONLY role (tp1), the
+    real-production shape (two profiles both anchoring 'hplc') that the
+    anchors loop must sort deterministically (by (role sort_order, profile
+    key), same as riders) rather than following `services` dict iteration
+    order — the fix for a controller-ruled review finding on this exact
+    fixture gap (a one-anchor-per-role fixture would pass without ever
+    exercising the order-sensitive path)."""
     from sub_samples.catalog_demand import resolve_catalog_fulfillment
 
     _mk(db_session, "t_pi_host1", "tp1", vials=1)
+    _mk(db_session, "t_pi_host1b", "tp1", vials=1)
     _mk(db_session, "t_pi_host2", "tp2", vials=1)
     _mk(db_session, "t_pi_rider1", "tpr1", vials=1, rides=["tp1"])
     _mk(db_session, "t_pi_rider2", "tpr2", vials=1, rides=["tp2"])
 
-    keys = ["t_pi_host1", "t_pi_host2", "t_pi_rider1", "t_pi_rider2"]
+    keys = ["t_pi_host1", "t_pi_host1b", "t_pi_host2", "t_pi_rider1", "t_pi_rider2"]
     baseline = None
     for perm in itertools.permutations(keys):
         services = {k: True for k in perm}
@@ -211,6 +216,11 @@ def test_rider_resolution_is_permutation_invariant(db_session):
             baseline = snapshot
         else:
             assert snapshot == baseline, perm
+
+    # Sanity: the shared-role anchors both actually landed under tp1 — not a
+    # vacuously-true assertion because tp1 only ever had one host. snapshot
+    # values are (demand, host_profile_ids, rider_profile_ids) tuples.
+    assert len(baseline["tp1"][1]) == 2
 
 
 def test_rides_never_change_legacy_buckets(db_session, caplog):
