@@ -77,7 +77,22 @@ export const boxKeyboardCoordinates: KeyboardCoordinateGetter = (
 }
 
 type BoxRole = 'hplc' | 'endo' | 'ster' | 'xtra'
-const ROLE_LABEL: Record<BoxRole, string> = { hplc: 'HPLC', endo: 'Endotoxin', ster: 'Sterility', xtra: 'Extras' }
+// NOT the full role universe — deliberately still just the four boxable
+// roles: BOXABLE_ROLES in backend/boxes/service.py doesn't include 'hm' yet
+// (boxing catalog-only-role vials is a separate, not-yet-built backend
+// change), so ROLES/the column grid below stay as-is. ROLE_LABEL is widened
+// ahead of that so the label + its fallback are ready the day it lands,
+// rather than mislabeling (or crashing on) an unrecognized role then.
+const ROLE_LABEL: Record<string, string> = {
+  hplc: 'HPLC', endo: 'Endotoxin', ster: 'Sterility', xtra: 'Extras', hm: 'Heavy Metals',
+}
+// Exported for testing (same idiom as boxKeyboardCoordinates/boxLabelLines
+// below): ROLES only ever drives this with the four known roles today, so
+// there's no render path that reaches 'hm' or an unknown key yet — this is
+// the direct, honest way to pin the lookup + fallback themselves.
+export function roleLabel(role: string): string {
+  return ROLE_LABEL[role] ?? role.toUpperCase()
+}
 const ROLES: BoxRole[] = ['hplc', 'endo', 'ster', 'xtra']
 
 // Default per-box capacity: the lab's smallest box holds 6 vials. Auto-assign
@@ -370,7 +385,7 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
               return (
                 <div key={role} className="flex flex-col gap-3">
                   <div className="flex items-center justify-between">
-                    <h3 className={`font-semibold ${roleTextClass(role)}`}>{ROLE_LABEL[role]}</h3>
+                    <h3 className={`font-semibold ${roleTextClass(role)}`}>{roleLabel(role)}</h3>
                     <Button size="sm" variant="outline" onClick={() => void addBox(role)}>+ Add box</Button>
                   </div>
                   {boxes.filter(b => b.role === role).map(b => (
@@ -424,7 +439,7 @@ function UnboxedPanel({ orderLabel, vials, activeId }:
         if (rv.length === 0) return null
         return (
           <div key={role} className="mb-2">
-            <div className={`mb-1 text-xs ${roleTextClass(role)}`}>{ROLE_LABEL[role]}</div>
+            <div className={`mb-1 text-xs ${roleTextClass(role)}`}>{roleLabel(role)}</div>
             <div className="flex flex-wrap gap-1">
               {rv.map(v => (
                 <VialChip key={v.sample_id} id={v.sample_id} role={role} dimmed={activeId === v.sample_id} />

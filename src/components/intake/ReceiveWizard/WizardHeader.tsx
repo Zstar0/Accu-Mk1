@@ -12,26 +12,38 @@ interface Props {
 // (docs/guides/_build_html.py) mirrors the rendered HTML there.
 const CHECKIN_SOP_PATH = '/guides/front-desk-sample-check-in.html'
 
+// Display labels for known buckets, in the order they should read left to
+// right; an unrecognized bucket (a future catalog-only role) falls back to
+// its uppercased key rather than being dropped or mislabeled.
+const DEMAND_BUCKET_LABEL: Record<string, string> = { hplc: 'HPLC', endo: 'ENDO', ster: 'STERYL' }
+
 function totalDemand(d: VialDemandResponse | null): number {
   if (!d) return 0
-  // Expected physical total = core demand + variance targets. Variance is a
-  // separate ADDITIVE bucket: variance.hplc = number of variance vials on top
-  // of core demand (not total replicates) — Task 4 backend contract.
-  return (
-    d.demand.hplc + d.demand.endo + d.demand.ster +
-    (d.variance?.hplc ?? 0) + (d.variance?.endo ?? 0) + (d.variance?.ster ?? 0)
-  )
+  // Expected physical total = core demand + variance targets, summed over
+  // every bucket either side returns (shape-driven — not hardcoded to
+  // hplc/endo/ster — so a catalog-only role like hm isn't silently dropped).
+  // Variance is a separate ADDITIVE bucket: variance[bucket] = number of
+  // variance vials on top of core demand (not total replicates) — Task 4
+  // backend contract.
+  const buckets = new Set([...Object.keys(d.demand), ...Object.keys(d.variance ?? {})])
+  let total = 0
+  for (const bucket of buckets) {
+    total += (d.demand[bucket] ?? 0) + (d.variance?.[bucket] ?? 0)
+  }
+  return total
 }
 
 function demandBreakdown(d: VialDemandResponse): string {
-  // Per-role count = core demand + variance vials, matching the header total.
+  // Per-bucket count = core demand + variance vials, matching the header
+  // total above. Iteration order follows d.demand's own key order (backend
+  // emits hplc/endo/ster first, then any catalog-only role), so this reads
+  // the same left-to-right order as before for the legacy buckets.
+  const buckets = new Set([...Object.keys(d.demand), ...Object.keys(d.variance ?? {})])
   const parts: string[] = []
-  const hplcTotal = d.demand.hplc + (d.variance?.hplc ?? 0)
-  const endoTotal = d.demand.endo + (d.variance?.endo ?? 0)
-  const sterTotal = d.demand.ster + (d.variance?.ster ?? 0)
-  if (hplcTotal) parts.push(`${hplcTotal} HPLC`)
-  if (endoTotal) parts.push(`${endoTotal} ENDO`)
-  if (sterTotal) parts.push(`${sterTotal} STERYL`)
+  for (const bucket of buckets) {
+    const total = (d.demand[bucket] ?? 0) + (d.variance?.[bucket] ?? 0)
+    if (total) parts.push(`${total} ${DEMAND_BUCKET_LABEL[bucket] ?? bucket.toUpperCase()}`)
+  }
   return parts.join(' · ')
 }
 

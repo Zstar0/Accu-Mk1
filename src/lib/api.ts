@@ -5895,9 +5895,16 @@ export async function deleteSubSample(sampleId: string): Promise<void> {
 }
 
 export interface VialDemandResponse {
-  demand: { hplc: number; endo: number; ster: number }
-  variance: { hplc: number; endo: number; ster: number }
-  base_demand: { hplc: number; endo: number; ster: number }
+  // Shape-driven like OrderBoxLabelSummary.counts: demand/base_demand come
+  // from the backend's derive_base_demand, which carries hplc/endo/ster plus
+  // any catalog-only role (e.g. 'hm') the order actually demanded. `variance`
+  // is widened to match for consistency, but is legacy-only by backend
+  // contract (derive_variance_demand only ever emits hplc/endo/ster — a
+  // catalog-only role like hm is never variance-eligible, Task 3) — it just
+  // never happens to carry extra keys in practice.
+  demand: Record<string, number>
+  variance: Record<string, number>
+  base_demand: Record<string, number>
   wp_order_number: string | null
   is_unreachable: boolean
 }
