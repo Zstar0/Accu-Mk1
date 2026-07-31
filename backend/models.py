@@ -323,6 +323,37 @@ class VialRole(Base):
         return f"<VialRole(code='{self.code}', label='{self.label}')>"
 
 
+class BenchStation(Base):
+    """A physical bench location (spec 4, Task 12: catalog-driven bench)
+    vials get soft-custody scanned into — QR (phone, via a capture token
+    scoped to the station) or scanner gun (desktop, JWT-authed). Recording
+    only: a scan-in event never gates result entry (Handler ruling Q2,
+    soft custody — deviation 7).
+
+    Ships EMPTY (G-STATION pending — no seed). No DELETE path: deactivate
+    via active=false, same idiom as VialRole/Department.
+    """
+
+    __tablename__ = "bench_stations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    department_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("departments.id"), nullable=False
+    )
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    department = relationship("Department", lazy="selectin")
+
+    def __repr__(self) -> str:
+        return f"<BenchStation(id={self.id}, name='{self.name}')>"
+
+
 class AnalysisProfile(Base):
     """A sellable test — the parent of one or more Analysis Services.
 

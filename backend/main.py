@@ -1370,6 +1370,9 @@ async def get_sample_activity(
                     label = f"Removed from box {bl} (box deleted)"
                 else:
                     label = f"Unboxed from {bl}"
+            elif se.event == "bench_scanned":
+                d = se.details or {}
+                label = f"Scanned in at {d.get('station_name') or '?'}"
             else:
                 label = se.event
 
@@ -2376,6 +2379,42 @@ class VialRoleResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ─── Bench Station schemas (spec 4, Task 12) ───
+
+class BenchStationCreate(BaseModel):
+    name: str
+    department_id: int
+    active: bool = True
+    sort_order: int = 0
+
+
+class BenchStationUpdate(BaseModel):
+    name: Optional[str] = None
+    department_id: Optional[int] = None
+    active: Optional[bool] = None
+    sort_order: Optional[int] = None
+
+
+class BenchStationResponse(BaseModel):
+    id: int
+    name: str
+    department_id: int
+    active: bool
+    sort_order: int
+
+    class Config:
+        from_attributes = True
+
+
+class BenchScanIn(BaseModel):
+    station_id: int
+    sample_id: str
+
+
+class BenchTokenScanIn(BaseModel):
+    sample_id: str
 
 
 # ─── Analysis Profile schemas ───
@@ -15670,9 +15709,13 @@ async def update_department(
 async def delete_department(
     department_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)
 ):
-    """Refused while any service or group still points at it — reassign first.
-    A silently orphaned service would be excluded from HPLC mirroring."""
-    from models import Department
+    """Refused while any service, group, or bench station still points at
+    it — reassign first. A silently orphaned service would be excluded from
+    HPLC mirroring. bench_stations.department_id is NOT NULL (unlike
+    vial_roles', which is ON DELETE SET NULL and self-heals), so an
+    unguarded delete here would surface as a raw IntegrityError/500 instead
+    of this endpoint's clean 409 (spec 4, Task 12: catalog-driven bench)."""
+    from models import BenchStation, Department
     dept = db.get(Department, department_id)
     if dept is None:
         raise HTTPException(404, "department not found")
@@ -15682,6 +15725,8 @@ async def delete_department(
         select(AnalysisService.id).where(AnalysisService.department_id == department_id).limit(1)
     ).scalars().first() or db.execute(
         select(ServiceGroup.id).where(ServiceGroup.department_id == department_id).limit(1)
+    ).scalars().first() or db.execute(
+        select(BenchStation.id).where(BenchStation.department_id == department_id).limit(1)
     ).scalars().first()
     if in_use is not None:
         raise HTTPException(409, "department still has services or groups; reassign them first")
@@ -16255,6 +16300,162 @@ async def delete_vial_role(
             409, f"role '{r.code}' is still referenced by a box; reassign it first")
     db.delete(r)
     db.commit()
+
+
+# ─── Bench Stations (spec 4, Task 12: catalog-driven bench) ─────────────────
+# Physical bench locations vials get soft-custody scanned into (QR via a
+# capture token, or a desktop scanner gun). Recording only — a scan-in event
+# never gates result entry (Handler ruling Q2, deviation 7). Ships EMPTY
+# (G-STATION pending, no seed). No DELETE route — deactivate via active=false
+# (same idiom as /vial-roles' department FK and /departments itself).
+
+@app.get("/bench-stations", response_model=list[BenchStationResponse])
+async def get_bench_stations(
+    db: Session = Depends(get_db), _current_user=Depends(get_current_user)
+):
+    from models import BenchStation
+    return db.execute(
+        select(BenchStation).order_by(BenchStation.sort_order, BenchStation.name)
+    ).scalars().all()
+
+
+@app.post("/bench-stations", response_model=BenchStationResponse, status_code=201)
+async def create_bench_station(
+    data: BenchStationCreate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    from models import BenchStation, Department
+    dept = db.get(Department, data.department_id)
+    if dept is None:
+        raise HTTPException(400, "department not found")
+    existing = db.execute(
+        select(BenchStation).where(BenchStation.name == data.name)
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(400, f"bench station '{data.name}' already exists")
+    s = BenchStation(**data.model_dump())
+    db.add(s)
+    db.commit()
+    db.refresh(s)
+    return s
+
+
+@app.patch("/bench-stations/{station_id}", response_model=BenchStationResponse)
+async def update_bench_station(
+    station_id: int,
+    data: BenchStationUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    from models import BenchStation, Department
+    s = db.get(BenchStation, station_id)
+    if s is None:
+        raise HTTPException(404, "bench station not found")
+    fields = data.model_dump(exclude_unset=True)
+    if "department_id" in fields:
+        dept = db.get(Department, fields["department_id"])
+        if dept is None:
+            raise HTTPException(400, "department not found")
+    if "name" in fields and fields["name"] != s.name:
+        dup = db.execute(
+            select(BenchStation).where(
+                BenchStation.name == fields["name"], BenchStation.id != station_id
+            )
+        ).scalar_one_or_none()
+        if dup:
+            raise HTTPException(400, f"bench station '{fields['name']}' already exists")
+    for field, value in fields.items():
+        setattr(s, field, value)
+    db.commit()
+    db.refresh(s)
+    return s
+
+
+def _resolve_bench_station_from_token(db: Session, token: str):
+    """Shared resolver for both token-authed bench routes below. Every
+    failure mode (unknown/expired/revoked token, or a token whose frozen
+    context isn't a bench-station context — e.g. a packaging-photo token)
+    collapses to 404, deliberately not distinguishing 410-gone like the
+    /capture/{token} routes do — an anonymous phone scanning a stale QR
+    gets no more signal than "try a fresh one"."""
+    from capture_tokens import service as capture_service
+    from models import BenchStation
+    try:
+        tok = capture_service.resolve_capture_token(db, token)
+    except (capture_service.UnknownTokenError, capture_service.GoneTokenError):
+        raise HTTPException(status_code=404, detail="unknown or expired bench token")
+    try:
+        ctx = json.loads(tok.context_json)
+        station_id = ctx[0]["station_id"]
+    except (ValueError, KeyError, IndexError, TypeError):
+        raise HTTPException(status_code=404, detail="not a bench token")
+    station = db.get(BenchStation, station_id)
+    if station is None:
+        raise HTTPException(status_code=404, detail="unknown bench station")
+    return station
+
+
+@app.get("/api/bench/{token}")
+async def get_bench_token_context(token: str, db: Session = Depends(get_db)):
+    station = _resolve_bench_station_from_token(db, token)
+    return {"station_name": station.name}
+
+
+@app.post("/api/bench/{token}/scan", status_code=201)
+async def scan_via_bench_token(
+    token: str, data: BenchTokenScanIn, db: Session = Depends(get_db)
+):
+    from models import LimsSubSample, LimsSubSampleEvent
+    station = _resolve_bench_station_from_token(db, token)
+    # Scanner guns / manual entry can trail whitespace — normalize before the
+    # lookup so a stray space doesn't read as an "unknown vial" 404.
+    sample_id = data.sample_id.strip()
+    sub = db.execute(
+        select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if sub is None:
+        raise HTTPException(status_code=404, detail=f"unknown sample_id '{sample_id}'")
+    ev = LimsSubSampleEvent(
+        sub_sample_pk=sub.id,
+        event="bench_scanned",
+        details={"station_id": station.id, "station_name": station.name},
+        user_id=None,
+    )
+    db.add(ev)
+    db.commit()
+    return {"recorded": True, "station_name": station.name, "sample_id": sub.sample_id}
+
+
+@app.post("/bench-scans", status_code=201)
+async def create_bench_scan(
+    data: BenchScanIn,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Desktop scanner-gun path: JWT-authed, writes the same bench_scanned
+    event as the phone/token path but with a real user_id."""
+    from models import BenchStation, LimsSubSample, LimsSubSampleEvent
+    sample_id = data.sample_id.strip()
+    sub = db.execute(
+        select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if sub is None:
+        raise HTTPException(status_code=404, detail=f"unknown sample_id '{sample_id}'")
+    station = db.get(BenchStation, data.station_id)
+    if station is None:
+        raise HTTPException(status_code=404, detail="unknown bench station")
+    if not station.active:
+        raise HTTPException(status_code=400, detail=f"bench station '{station.name}' is inactive")
+    ev = LimsSubSampleEvent(
+        sub_sample_pk=sub.id,
+        event="bench_scanned",
+        details={"station_id": station.id, "station_name": station.name},
+        user_id=current_user.id,
+    )
+    db.add(ev)
+    db.commit()
+    return {"recorded": True, "station_name": station.name, "sample_id": sub.sample_id}
 
 
 # ─── SLA tiers (sub-project A, revised to tiers) ──────────────────────────────

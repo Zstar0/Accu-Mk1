@@ -44,6 +44,21 @@ def mint_capture_token(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
+    if body.station_id is not None:
+        # Bench station scan-in token (spec 4, Task 12): QR scoped to one
+        # bench station rather than a sample list. Reuses this table's
+        # hash/expiry/revocation machinery unmodified — consumed via
+        # GET/POST /api/bench/{token} (main.py), never the /capture/{token}
+        # routes below (those assume the samples-list context shape).
+        from models import BenchStation
+        station = db.get(BenchStation, body.station_id)
+        if station is None:
+            raise HTTPException(status_code=404, detail="unknown bench station")
+        tok, raw = service.mint_capture_token(
+            db, [{"station_id": station.id}], body.order_label, user.id,
+        )
+        return CaptureTokenOut(id=tok.id, token=raw, expires_at=tok.expires_at.isoformat() + "Z")
+
     # Order-flow sibling ids come from SENAITE-shaped searches, and only the
     # actively-touched sample gets eagerly materialized into lims_samples —
     # an untouched sibling may have no local row yet. Resolve each one via

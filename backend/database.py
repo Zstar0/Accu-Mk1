@@ -1520,6 +1520,19 @@ def _run_migrations():
         # history rows.
         "CREATE INDEX IF NOT EXISTS ix_vpa_sub_current ON vial_profile_assignments "
         "(lims_sub_sample_pk) WHERE superseded_at IS NULL",
+        # --- Catalog-driven bench (spec 4, Task 12): bench stations ---
+        # Physical bench locations for QR/scanner-gun soft-custody scan-in.
+        # Ships EMPTY (G-STATION pending, no seed). No DELETE path — deactivate
+        # via active=false (vial_roles/departments idiom).
+        """CREATE TABLE IF NOT EXISTS bench_stations (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100) NOT NULL UNIQUE,
+        department_id INTEGER NOT NULL REFERENCES departments(id),
+        active BOOLEAN NOT NULL DEFAULT TRUE,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )""",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
