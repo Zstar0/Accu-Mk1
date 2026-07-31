@@ -9,6 +9,7 @@ import { AnalysisServicesPage } from '@/components/hplc/AnalysisServicesPage'
 import ServiceGroupsPage from '@/components/hplc/ServiceGroupsPage'
 import DepartmentsPage from '@/components/hplc/DepartmentsPage'
 import AnalysisProfilesPage from '@/components/hplc/AnalysisProfilesPage'
+import VialRolesPage from '@/components/hplc/VialRolesPage'
 import WorksheetsInboxPage from '@/components/hplc/WorksheetsInboxPage'
 import WorksheetsListPage from '@/components/hplc/WorksheetsListPage'
 import { OrderDashboard } from '@/components/dashboard/OrderDashboard'
@@ -66,6 +67,7 @@ export function MainWindowContent({
         if (activeSubSection === 'service-groups') return <ServiceGroupsPage />
         if (activeSubSection === 'departments') return <DepartmentsPage />
         if (activeSubSection === 'analysis-profiles') return <AnalysisProfilesPage />
+        if (activeSubSection === 'vial-roles') return <VialRolesPage />
         return <InstrumentsPage />
       case 'hplc-analysis':
         if (activeSubSection === 'inbox') return <WorksheetsInboxPage />

@@ -4615,6 +4615,69 @@ export async function setAnalysisProfileMembers(
   return response.json()
 }
 
+// ─── Vial Roles ─────────────────────────────────────────────────────────────
+// Catalog-driven bench roles (spec 4). `code` is the DB join key on vials
+// (assignment_role, VARCHAR(8)); this is its editable face.
+
+export interface VialRoleRow {
+  id: number
+  code: string
+  label: string
+  department_id: number | null
+  boxable: boolean
+  variance_eligible: boolean
+  sort_order: number
+  frozen: boolean
+  is_system: boolean
+}
+
+export interface VialRoleCreate {
+  code: string
+  label: string
+  department_id?: number | null
+  boxable?: boolean
+  variance_eligible?: boolean
+  sort_order?: number
+}
+
+export async function getVialRoles(): Promise<VialRoleRow[]> {
+  const response = await fetch(`${API_BASE_URL()}/vial-roles`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to load vial roles: ${response.status}`)
+  return response.json()
+}
+
+export async function createVialRole(data: VialRoleCreate): Promise<VialRoleRow> {
+  const response = await fetch(`${API_BASE_URL()}/vial-roles`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to create vial role'))
+  return response.json()
+}
+
+export async function updateVialRole(
+  id: number, data: Partial<VialRoleCreate>
+): Promise<VialRoleRow> {
+  const response = await fetch(`${API_BASE_URL()}/vial-roles/${id}`, {
+    method: 'PATCH',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to update vial role'))
+  return response.json()
+}
+
+export async function deleteVialRole(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE_URL()}/vial-roles/${id}`, {
+    method: 'DELETE',
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to delete vial role'))
+}
+
 // ─── SLA tiers (sub-project A revised + C) ──────────────────────────────────
 
 export interface SlaTier {

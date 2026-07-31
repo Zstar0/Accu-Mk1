@@ -2343,6 +2343,41 @@ class DepartmentResponse(BaseModel):
         from_attributes = True
 
 
+# ─── Vial Role schemas ───
+
+class VialRoleCreate(BaseModel):
+    code: str
+    label: str
+    department_id: Optional[int] = None
+    boxable: bool = False
+    variance_eligible: bool = False
+    sort_order: int = 0
+
+
+class VialRoleUpdate(BaseModel):
+    code: Optional[str] = None
+    label: Optional[str] = None
+    department_id: Optional[int] = None
+    boxable: Optional[bool] = None
+    variance_eligible: Optional[bool] = None
+    sort_order: Optional[int] = None
+
+
+class VialRoleResponse(BaseModel):
+    id: int
+    code: str
+    label: str
+    department_id: Optional[int] = None
+    boxable: bool
+    variance_eligible: bool
+    sort_order: int
+    frozen: bool
+    is_system: bool
+
+    class Config:
+        from_attributes = True
+
+
 # ─── Analysis Profile schemas ───
 
 class AnalysisProfileCreate(BaseModel):
@@ -15802,6 +15837,114 @@ async def set_analysis_profile_members(
             analysis_profile_id=profile_id, analysis_service_id=svc_id, sort_order=i))
     db.commit()
     return {"count": len(ordered_ids)}
+
+
+# ─── Vial Roles ─────────────────────────────────────────────────────────────
+# Catalog-driven bench roles (spec 4, Task 2). code stays the DB join key on
+# vials (lims_sub_samples.assignment_role / lims_samples.assignment_role,
+# VARCHAR(8) — NOT widened); this catalog is its editable face (label,
+# department, bench flags). xtra is the reserved unassigned bucket — the
+# only row allowed a NULL department. frozen (a vial already references the
+# code) refuses a code change but stays otherwise editable; is_system rows
+# can't be deleted at all.
+
+@app.get("/vial-roles", response_model=list[VialRoleResponse])
+async def get_vial_roles(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
+    from models import VialRole
+    return db.execute(
+        select(VialRole).order_by(VialRole.sort_order, VialRole.code)
+    ).scalars().all()
+
+
+@app.post("/vial-roles", response_model=VialRoleResponse, status_code=201)
+async def create_vial_role(
+    data: VialRoleCreate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    from models import VialRole
+    if not re.fullmatch(r"[a-z][a-z0-9_]{0,7}", data.code):
+        raise HTTPException(
+            400, "code must be lowercase, <= 8 chars (assignment_role is VARCHAR(8))")
+    if data.department_id is None and data.code != "xtra":
+        raise HTTPException(400, "only xtra may have no department")
+    existing = db.execute(
+        select(VialRole).where(VialRole.code == data.code)
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(400, f"role code '{data.code}' already exists")
+    r = VialRole(**data.model_dump())
+    db.add(r)
+    db.commit()
+    db.refresh(r)
+    return r
+
+
+@app.patch("/vial-roles/{role_id}", response_model=VialRoleResponse)
+async def update_vial_role(
+    role_id: int,
+    data: VialRoleUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    from models import VialRole
+    r = db.get(VialRole, role_id)
+    if r is None:
+        raise HTTPException(404, "vial role not found")
+    fields = data.model_dump(exclude_unset=True)
+    if "code" in fields and fields["code"] != r.code:
+        if r.frozen:
+            raise HTTPException(
+                400, "code is immutable once frozen (a vial already references it)")
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,7}", fields["code"]):
+            raise HTTPException(
+                400, "code must be lowercase, <= 8 chars (assignment_role is VARCHAR(8))")
+        dup = db.execute(
+            select(VialRole).where(VialRole.code == fields["code"], VialRole.id != role_id)
+        ).scalar_one_or_none()
+        if dup:
+            raise HTTPException(400, f"role code '{fields['code']}' already exists")
+    if "department_id" in fields:
+        effective_code = fields.get("code", r.code)
+        if fields["department_id"] is None and effective_code != "xtra":
+            raise HTTPException(400, "only xtra may have no department")
+    for field, value in fields.items():
+        setattr(r, field, value)
+    db.commit()
+    db.refresh(r)
+    return r
+
+
+@app.delete("/vial-roles/{role_id}", status_code=204)
+async def delete_vial_role(
+    role_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)
+):
+    """is_system → 400 outright. Otherwise refused (409, naming the reference)
+    if a profile still fulfills via this role, or any vial (parent sample or
+    sub-sample) is still assigned to it — matches the department DELETE
+    guard pattern (main.py ~:15594)."""
+    from models import AnalysisProfile, LimsSample, LimsSubSample, VialRole
+    r = db.get(VialRole, role_id)
+    if r is None:
+        raise HTTPException(404, "vial role not found")
+    if r.is_system:
+        raise HTTPException(400, "system roles cannot be deleted")
+    profile_ref = db.execute(
+        select(AnalysisProfile.id).where(AnalysisProfile.fulfillment_role == r.code).limit(1)
+    ).scalars().first()
+    if profile_ref is not None:
+        raise HTTPException(
+            409, f"role '{r.code}' is still referenced by an analysis profile; reassign it first")
+    vial_ref = db.execute(
+        select(LimsSubSample.id).where(LimsSubSample.assignment_role == r.code).limit(1)
+    ).scalars().first() or db.execute(
+        select(LimsSample.id).where(LimsSample.assignment_role == r.code).limit(1)
+    ).scalars().first()
+    if vial_ref is not None:
+        raise HTTPException(
+            409, f"role '{r.code}' is still assigned to a vial; reassign it first")
+    db.delete(r)
+    db.commit()
 
 
 # ─── SLA tiers (sub-project A, revised to tiers) ──────────────────────────────
