@@ -98,6 +98,18 @@ def test_post_rejects_duplicate_code(client, db_session):
     assert second.status_code == 400
 
 
+def test_patch_rejects_null_department_for_non_xtra(client, db_session):
+    # deviation 2 on the PATCH side: an explicit {"department_id": null} must
+    # 400 for any role but xtra, same as POST — a silently-orphaned role
+    # would fall out of real_bucket_codes() without anyone noticing.
+    dep = client.post("/departments", json={"name": "Null Dept"}).json()
+    role = client.post("/vial-roles", json={
+        "code": "nullck", "label": "Null Check", "department_id": dep["id"],
+    }).json()
+    r = client.patch(f"/vial-roles/{role['id']}", json={"department_id": None})
+    assert r.status_code == 400
+
+
 def test_delete_refuses_system_and_referenced_roles(client, db_session):
     # is_system → 400; role referenced by a profile fulfillment_role or any
     # lims_sub_samples.assignment_role → 409 (department DELETE guard pattern, main.py:15594-15612)
