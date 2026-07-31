@@ -371,11 +371,16 @@ def test_set_assignment_role_wires_real_edge_driven_seeding(db_session, caplog):
     catalog_seed_no_custody_fallback in the log confirms the edge path (not
     the fallback) is what ran."""
     import logging
+    from catalog.vial_roles_seed import seed_vial_roles
     from models import (
         AnalysisProfile, AnalysisService, LimsAnalysis, LimsSample,
         LimsSubSample, profile_ride_hosts,
     )
     import sub_samples.service as svc
+
+    # set_assignment_role's role gate is catalog-driven (spec 4, Task 7) —
+    # seed the legacy roles so "hm" below resolves.
+    seed_vial_roles(db_session)
 
     svc_host = AnalysisService(title="ZZ4-HOST", keyword="ZZ4-HOST", origin="mk1", unit="ppm")
     svc_rider = AnalysisService(title="ZZ4-RIDER", keyword="ZZ4-RIDER", origin="mk1", unit="ppm")

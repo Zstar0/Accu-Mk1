@@ -59,7 +59,12 @@ def test_list_response_reflects_box_assignment(db_session):
     sub-sample list response for that parent surfaces the vial's box_id — the
     link the boxing UI reads to render per-box vial chips."""
     from boxes import service as box_service
+    from catalog.vial_roles_seed import seed_vial_roles
     from sub_samples.service import list_sub_samples
+
+    # next_box's boxable check is catalog-driven (spec 4, Task 7) — seed the
+    # legacy roles so "hplc" resolves.
+    seed_vial_roles(db_session)
 
     parent = LimsSample(sample_id="SER-0002", external_lims_uid="parent-uid-2",
                         last_synced_at=datetime.datetime.utcnow())

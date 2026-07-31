@@ -50,6 +50,13 @@ def db_session():
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     session = Session()
+    # set_assignment_role's role gate is catalog-driven (spec 4, Task 7) —
+    # seed the five legacy roles so the bare "xtra" calls below (never routed
+    # through _mk, which only mints the role it's given) resolve. Pre-seeding
+    # "hm" here too is harmless: _mk's own existing-role check just finds it
+    # already present instead of minting an ad-hoc row.
+    from catalog.vial_roles_seed import seed_vial_roles
+    seed_vial_roles(session)
     yield session
     session.close()
 

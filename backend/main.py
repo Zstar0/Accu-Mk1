@@ -16646,44 +16646,30 @@ class InboxResponse(BaseModel):
     filter_role: Optional[str] = None  # echo of the query param so the frontend can confirm
 
 
-# Role -> DEPARTMENT name. Department drives the lane: a new Microbiology-department
-# group lands in the micro lane automatically, with no name-pinning. hm (Heavy
-# Metals) is catalog-only and gets its own lane rather than folding into an
-# existing bench (spec-3 Task 3) — its services carry no service group, so
+# Worksheet-inbox lanes are catalog-driven (spec 4, Task 7): one lane per
+# department that owns >=1 vial role, via catalog.roles.inbox_lanes(db).
+# Department drives the lane: a new Microbiology-department group lands in
+# the micro lane automatically, with no name-pinning. hm (Heavy Metals) is
+# catalog-only and gets its own lane rather than folding into an existing
+# bench (spec-3 Task 3) — its services carry no service group, so
 # _inbox_allowed_group_ids resolves an empty set for it; the native-vial inbox
 # path (Phase 3.5, main.py _fetch_mk1_inbox_analyses_for_sub_sample) filters
-# hm vials by assignment_role via ROLE_TO_VIAL_ROLES instead, not by group id.
-ROLE_TO_DEPARTMENT_NAME: dict[str, str] = {
-    "hplc": "Analytical",
-    "microbiology": "Microbiology",
-    "hm": "Heavy Metals",
-}
-VALID_INBOX_ROLES = set(ROLE_TO_DEPARTMENT_NAME.keys())
+# hm vials by assignment_role via the lane's role_codes instead, not by group id.
 
 
-def _inbox_allowed_group_ids(db, role: Optional[str]) -> Optional[set[int]]:
-    """Resolve a worksheet-inbox role to the set of service-group ids in that
-    role's DEPARTMENT. None role -> None (no filter; pass all groups)."""
+def _inbox_allowed_group_ids(db, lanes: dict, role: Optional[str]) -> Optional[set[int]]:
+    """Resolve a worksheet-inbox lane key to the set of service-group ids in
+    that lane's DEPARTMENT. None role -> None (no filter; pass all groups).
+    `lanes` is the caller's `inbox_lanes(db)` (one read per request, passed
+    down — never re-queried here)."""
     if role is None:
         return None
-    from models import Department
-    dept_name = ROLE_TO_DEPARTMENT_NAME[role]
+    dept_id = lanes[role].department_id
     return {
         r[0] for r in db.execute(
-            select(ServiceGroup.id)
-            .join(Department, Department.id == ServiceGroup.department_id)
-            .where(Department.name == dept_name)
+            select(ServiceGroup.id).where(ServiceGroup.department_id == dept_id)
         ).all()
     }
-
-# Role-set membership for the assignment_role column. Microbiology covers
-# both 'ster' and 'endo' (collapsed into one filter chip per spec Q1). hm maps
-# 1:1 to its own lane (no collapsing — it's the only role in its department).
-ROLE_TO_VIAL_ROLES: dict[str, set[str]] = {
-    "hplc": {"hplc"},
-    "microbiology": {"ster", "endo"},
-    "hm": {"hm"},
-}
 
 
 class PriorityUpdate(BaseModel):
@@ -16725,6 +16711,7 @@ _INBOX_ROLE_COLOR_FALLBACK = {
     "endo": "violet",
     "ster": "violet",
     "xtra": "zinc",
+    "hm": "emerald",
 }
 
 
@@ -16970,8 +16957,9 @@ async def get_worksheets_inbox(
     parent linkage. See `docs/superpowers/specs/2026-06-02-worksheet-vial-inbox-redesign.md`.
 
     Query params:
-      role         — 'hplc' | 'microbiology' | omitted. Omitted means all roles (used by
-                     AddSamplesModal, which adds across both benches). 400 on invalid value.
+      role         — 'hplc' | 'microbiology' | 'hm' | a catalog department's lane
+                     key, or omitted. Omitted means all roles (used by AddSamplesModal,
+                     which adds across every bench). 400 on invalid value.
       show_xtra    — when True, append XTRA-role vials to the active filter's results.
       hide_test_*  — existing behavior.
       force_refresh — bypass the 30-min SENAITE cache (senaite source only).
@@ -16983,11 +16971,17 @@ async def get_worksheets_inbox(
     """
     global _inbox_senaite_cache, _inbox_senaite_cache_time
 
+    # Lanes are catalog-driven (spec 4, Task 7): one read per request, reused
+    # below for validation, group-id resolution, and the allowed-roles union —
+    # never re-queried.
+    from catalog.roles import inbox_lanes
+    lanes = inbox_lanes(db)
+
     # Validate role (None == "all roles", legal)
-    if role is not None and role not in VALID_INBOX_ROLES:
+    if role is not None and role not in lanes:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid role: {role!r}. Expected one of {sorted(VALID_INBOX_ROLES)} or omit.",
+            detail=f"Invalid role: {role!r}. Expected one of {sorted(lanes)} or omit.",
         )
 
     if source is not None and source not in ("mk1", "senaite"):
@@ -17001,19 +16995,20 @@ async def get_worksheets_inbox(
         raise HTTPException(status_code=503, detail="SENAITE not configured")
 
     # Resolve role → allowed service_group IDs. None means "no filter; pass all groups".
-    allowed_group_ids: Optional[set[int]] = _inbox_allowed_group_ids(db, role)
+    allowed_group_ids: Optional[set[int]] = _inbox_allowed_group_ids(db, lanes, role)
 
     # Resolve allowed vial assignment_role values. NULL roles always excluded (auto-
     # assign on /vial-plan is the cure for those). XTRA gated by show_xtra.
     if role is None:
-        # No bench filter: all known roles (union of every ROLE_TO_VIAL_ROLES
-        # value — hm included, else hm vials vanish from the unfiltered view
-        # used by AddSamplesModal). XTRA still gated by the toggle.
-        allowed_vial_roles: set[str] = {"hplc", "ster", "endo", "hm"}
+        # No bench filter: the union of every lane's role codes, ACTUALLY
+        # computed from the catalog (not a hand-duplicated literal) — hm
+        # included, else hm vials vanish from the unfiltered view used by
+        # AddSamplesModal. XTRA still gated by the toggle.
+        allowed_vial_roles: set[str] = set().union(*(l.role_codes for l in lanes.values()))
         if show_xtra:
             allowed_vial_roles.add("xtra")
     else:
-        allowed_vial_roles = set(ROLE_TO_VIAL_ROLES[role])
+        allowed_vial_roles = set(lanes[role].role_codes)
         if show_xtra:
             allowed_vial_roles.add("xtra")
 

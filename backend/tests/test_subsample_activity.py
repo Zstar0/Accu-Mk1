@@ -41,6 +41,10 @@ from models import (
 
 def _make_parent(db):
     """Minimal LimsSample row for FK references."""
+    # set_assignment_role's role gate is catalog-driven (spec 4, Task 7) —
+    # seed the legacy roles so the "endo"/"ster" calls below resolve.
+    from catalog.vial_roles_seed import seed_vial_roles
+    seed_vial_roles(db)
     parent = LimsSample(
         sample_id="P-TEST-001",
         external_lims_uid="SENAITE-PARENT",

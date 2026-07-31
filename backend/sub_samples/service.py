@@ -28,30 +28,11 @@ CACHE_FRESHNESS = timedelta(minutes=5)
 log = logging.getLogger(__name__)
 
 
-# Sub-sample assignment role -> the DEPARTMENT name(s) whose analyses belong to
-# that role. endo/ster are both Microbiology; hplc is Analytical; hm is its own
-# Heavy Metals department (catalog-only role — kept off Analytical/Microbiology
-# so its cleanup can't collide with either bench); xtra has none.
-# Keyed on Department (the single structural routing key) so a new Microbiology
-# group's services are cleared correctly without name-pinning the group.
-_ROLE_DEPARTMENT_NAMES: dict[str, set[str]] = {
-    "hplc": {"Analytical"},
-    "endo": {"Microbiology"},
-    "ster": {"Microbiology"},
-    "xtra": set(),
-    "hm": {"Heavy Metals"},
-}
-
-# Roles that must NEVER be variance-eligible, overriding the normal
-# position-based rule in set_assignment_role (vial_sequence==1 or
-# assignment_kind=="variance"). hm is here because heavy_metals is
-# vials_required=1 — an hm vial structurally cannot have a same-role
-# replicate to compare against, so "first vial is the baseline" is
-# meaningless for it (fix round, spec-3 Task 3, site 7). Keep this set
-# narrowly scoped: adding a role here changes production variance behavior
-# for that role everywhere, not just hm.
-_VARIANCE_INELIGIBLE_ROLES: set[str] = {"hm"}
-_VARIANCE_INELIGIBLE_REASON = "auto: hm is single-vial (vials_required=1); never variance-eligible"
+# Role -> department mapping and variance eligibility used to live here as
+# hardcoded maps; both are now catalog-driven (spec 4, Task 7) via
+# catalog.roles.role_registry(db), which reads VialRole.department_id and
+# VialRole.variance_eligible straight off the vial_roles table. See
+# _drop_stale_role_rows and set_assignment_role below.
 
 
 # SENAITE review states meaning "family not physically checked in yet".
@@ -1245,10 +1226,6 @@ def derive_demand(services: dict, db=None) -> dict:
     return derive_base_demand(services, db=db)
 
 
-_BUCKET_PRIORITY = ("hplc", "endo", "ster", "hm")
-_REAL_BUCKETS = {"hplc", "endo", "ster", "hm"}
-
-
 def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
     """Resolve services from IS, run auto-assign, persist new roles, return plan.
 
@@ -1327,7 +1304,9 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
             "container_mode": parent.container_mode,
         }
 
-    assigned = auto_assign(_current_vials(), demand, variance)
+    from catalog.roles import real_bucket_codes
+    priority = tuple(real_bucket_codes(db))
+    assigned = auto_assign(_current_vials(), demand, variance, priority)
 
     # Persist newly-set (role, kind) for sub-samples through set_assignment_role
     # so validation, the variance-lock guard, audit events, stale-role cleanup
@@ -1376,15 +1355,19 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
     }
 
 
-def _take_slot(remaining: dict, assigned_buckets: set) -> Optional[str]:
+_LEGACY_BUCKET_PRIORITY = ("hplc", "endo", "ster", "hm")
+
+
+def _take_slot(remaining: dict, assigned_buckets: set,
+               priority: tuple = _LEGACY_BUCKET_PRIORITY) -> Optional[str]:
     """Pick a bucket with remaining slots: prefer completing buckets that
     already have assignments, priority order as tiebreaker. Decrements the
     chosen bucket. Returns None when nothing remains."""
-    for bucket in _BUCKET_PRIORITY:
+    for bucket in priority:
         if bucket in assigned_buckets and remaining.get(bucket, 0) > 0:
             remaining[bucket] -= 1
             return bucket
-    for bucket in _BUCKET_PRIORITY:
+    for bucket in priority:
         if remaining.get(bucket, 0) > 0:
             remaining[bucket] -= 1
             return bucket
@@ -1392,7 +1375,8 @@ def _take_slot(remaining: dict, assigned_buckets: set) -> Optional[str]:
 
 
 def auto_assign(vials: list[dict], demand: dict,
-                variance: Optional[dict] = None) -> list[dict]:
+                variance: Optional[dict] = None,
+                priority: tuple = _LEGACY_BUCKET_PRIORITY) -> list[dict]:
     """Pure function: assign (role, kind) to a list of vial dicts.
 
     Fills vial['assignment_role'] / vial['assignment_kind'] for any vial whose
@@ -1413,7 +1397,14 @@ def auto_assign(vials: list[dict], demand: dict,
     shape — all fills are core). Variance targets only apply to buckets with
     core demand > 0: you can't buy variance for a service that wasn't ordered,
     so a (contract-invalid) variance key on a zero-demand bucket never fills.
+
+    `priority`: the real (non-xtra) bucket codes, in fill/tiebreak order.
+    Defaults to the legacy 4-bucket order so this pure function stays
+    test-callable without a db; compute_vial_plan passes
+    `tuple(real_bucket_codes(db))` so a new catalog role becomes fillable
+    with zero changes here.
     """
+    real_buckets = set(priority)
     remaining = dict(demand)  # copies so we don't mutate caller's dicts
     remaining_var = {
         bucket: n for bucket, n in (variance or {}).items()
@@ -1424,7 +1415,7 @@ def auto_assign(vials: list[dict], demand: dict,
     # First pass: track existing assignments and decrement targets.
     for vial in vials:
         role = vial.get("assignment_role")
-        if role in _REAL_BUCKETS:
+        if role in real_buckets:
             assigned_buckets.add(role)
             if vial.get("assignment_kind") == "variance":
                 if remaining_var.get(role, 0) > 0:
@@ -1438,10 +1429,10 @@ def auto_assign(vials: list[dict], demand: dict,
     out = []
     for vial in vials:
         if vial.get("assignment_role") is None:
-            assigned = _take_slot(remaining, assigned_buckets)
+            assigned = _take_slot(remaining, assigned_buckets, priority)
             kind = "core" if assigned else None
             if assigned is None:
-                assigned = _take_slot(remaining_var, assigned_buckets)
+                assigned = _take_slot(remaining_var, assigned_buckets, priority)
                 kind = "variance" if assigned else None
             if assigned is None:
                 assigned = "xtra"
@@ -1450,31 +1441,40 @@ def auto_assign(vials: list[dict], demand: dict,
     return out
 
 
-_VALID_ROLES = {"hplc", "endo", "ster", "xtra", "hm"}
-
-
-def _drop_stale_role_rows(db: Session, *, sub: LimsSubSample, old_role: Optional[str], new_role: Optional[str]) -> int:
+def _drop_stale_role_rows(db: Session, *, sub: LimsSubSample, old_role: Optional[str],
+                          new_role: Optional[str], registry: dict) -> int:
     """Delete the vial's UNASSIGNED (no-result) rows whose service group belongs
-    to the OLD role but not the NEW role — so a re-assigned vial sheds the
-    previous role's stale seeded analyses (e.g. a Microbiology STER-PCR left on a
-    now-HPLC vial). Rows that already carry a result/promotion are NEVER touched.
-    Returns the count deleted."""
+    to the OLD role's department but not the NEW role's — so a re-assigned vial
+    sheds the previous role's stale seeded analyses (e.g. a Microbiology
+    STER-PCR left on a now-HPLC vial). Rows that already carry a
+    result/promotion are NEVER touched. Returns the count deleted.
+
+    Department resolution is catalog-driven (spec 4, Task 7): `registry` is the
+    caller's `role_registry(db)` (one read per code path, passed down — never
+    re-queried here). A code the registry doesn't know (the vial predates a
+    retired role) resolves to an empty department set — log, drop nothing,
+    never raise; this is cleanup, not a validation gate."""
     if not old_role:
         return 0
-    old_depts = _ROLE_DEPARTMENT_NAMES.get(old_role, set())
-    new_depts = _ROLE_DEPARTMENT_NAMES.get(new_role or "", set())
-    clear_depts = old_depts - new_depts
-    if not clear_depts:
+    old_row = registry.get(old_role)
+    if old_row is None:
+        log.info("sub_samples.role_change_cleanup_unknown_role sub=%s old_role=%s",
+                 sub.sample_id, old_role)
         return 0
-    from models import AnalysisService, Department, LimsAnalysis, LimsAnalysisTransition
-    dept_ids = db.execute(
-        select(Department.id).where(Department.name.in_(clear_depts))
-    ).scalars().all()
-    if not dept_ids:
+    old_dept_ids = {old_row.department_id} if old_row.department_id is not None else set()
+    new_row = registry.get(new_role) if new_role else None
+    new_dept_ids = (
+        {new_row.department_id}
+        if (new_row is not None and new_row.department_id is not None)
+        else set()
+    )
+    clear_dept_ids = old_dept_ids - new_dept_ids
+    if not clear_dept_ids:
         return 0
+    from models import AnalysisService, LimsAnalysis, LimsAnalysisTransition
     # candidate analysis_service ids whose HOME DEPARTMENT we're clearing
     svc_ids = db.execute(
-        select(AnalysisService.id).where(AnalysisService.department_id.in_(dept_ids))
+        select(AnalysisService.id).where(AnalysisService.department_id.in_(clear_dept_ids))
     ).scalars().all()
     if not svc_ids:
         return 0
@@ -1566,10 +1566,18 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
     its already-fetched dict so an N-vial persist loop doesn't make N extra
     HTTP calls (or burn N x 15s timeouts during an IS outage).
     """
-    if role is not None and role not in _VALID_ROLES:
+    from catalog.roles import role_registry
+    registry = role_registry(db)  # one read per code path (spec 4, Task 7); passed down below
+    if role is not None and role not in registry:
         raise ValueError(f"Invalid role: {role!r}")
     if kind is not None and kind not in _VALID_KINDS:
         raise ValueError(f"Invalid assignment_kind: {kind!r}")
+    # Frozen maintenance: a role code is "in use" the moment anything (vial or
+    # parent) is assigned it — retire-don't-delete from here on. Idempotent;
+    # rides the same transaction as everything below (only persists if this
+    # call goes on to commit).
+    if role is not None and not registry[role].frozen:
+        registry[role].frozen = True
 
     sub = db.execute(
         select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
@@ -1590,19 +1598,23 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
         # Variance-set membership follows assignment: the first vial (baseline)
         # is always in; any variance replicate is in; everything else is out.
         # Manual overrides via set_variance_membership still apply afterward.
-        # hm is scoped OUT of that position-based rule (fix round, spec-3 Task
-        # 3): heavy_metals is vials_required=1, so an hm vial can never have a
-        # same-role replicate to compare against — landing on vial_sequence==1
-        # (an hm-only order's first and only vial) must not make it eligible.
-        # Every other role's position-based expression is unchanged.
-        if role in _VARIANCE_INELIGIBLE_ROLES:
+        # A role with variance_eligible=False (catalog-driven, spec 4 Task 7 —
+        # was a hardcoded {"hm"} set) is scoped OUT of that position-based
+        # rule: hm is the seed example (heavy_metals is vials_required=1, so
+        # an hm vial can never have a same-role replicate to compare against —
+        # landing on vial_sequence==1, an hm-only order's first and only vial,
+        # must not make it eligible). Every eligible role's position-based
+        # expression is unchanged.
+        if role is not None and not registry[role].variance_eligible:
             sub.in_variance_set = False
-            sub.variance_exclusion_reason = _VARIANCE_INELIGIBLE_REASON
+            sub.variance_exclusion_reason = f"auto: role {role} is not variance-eligible"
         else:
             sub.in_variance_set = (sub.vial_sequence == 1) or (sub.assignment_kind == "variance")
-            if sub.in_variance_set and old_role in _VARIANCE_INELIGIBLE_ROLES:
-                # Role flipped away from hm into a naturally-eligible slot —
-                # clear the stale hm-specific reason so it doesn't linger.
+            if (sub.in_variance_set and old_role is not None and old_role in registry
+                    and not registry[old_role].variance_eligible):
+                # Role flipped away from a variance-ineligible role (e.g. hm)
+                # into a naturally-eligible slot — clear the stale reason so
+                # it doesn't linger.
                 sub.variance_exclusion_reason = None
         db.add(LimsSubSampleEvent(
             sub_sample_pk=sub.id,
@@ -1641,7 +1653,7 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
         # no-result) seeded rows so the vial only carries its current role's
         # analyses. Runs in THIS transaction (before the commit=False seed and
         # the single db.commit() below), so flip + cleanup + seed are atomic.
-        _drop_stale_role_rows(db, sub=sub, old_role=old_role, new_role=role)
+        _drop_stale_role_rows(db, sub=sub, old_role=old_role, new_role=role, registry=registry)
         # Phase 2 (mk1-native-analyses): if this assignment transitioned the
         # vial into a real (non-XTRA) role, seed its lims_analyses rows.
         # Idempotent — re-running on an already-seeded vial is a no-op.
@@ -1674,7 +1686,7 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
     ).scalar_one_or_none()
     if parent is None:
         raise LookupError(f"No sample or sub-sample with sample_id={sample_id}")
-    coerced = role if role in _VALID_ROLES else "hplc"
+    coerced = role if role in registry else "hplc"
     parent.assignment_role = coerced
     db.commit()
     return {"sample_id": sample_id, "assignment_role": coerced}
