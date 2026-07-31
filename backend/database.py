@@ -1468,6 +1468,11 @@ def _run_migrations():
         "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_section_title VARCHAR(200)",
         "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_archetype VARCHAR(50)",
         "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_sort_order INTEGER NOT NULL DEFAULT 0",
+        # --- Profile-level SLA tier (Task 11, spec 4 follow-on): beats the
+        # member services' group tier, loses to a priority override. Same
+        # nullable-FK semantics as service_groups.sla_tier_id above (NULL
+        # inherits the group's own tier / default).
+        "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS sla_tier_id INTEGER REFERENCES sla_tiers(id) ON DELETE SET NULL",
         # --- Catalog-driven bench (spec 4): vial_roles ---
         # Full CREATE here (not just create_all): migrations run BEFORE create_all
         # (lims_capture_tokens precedent, see :1324-1329).

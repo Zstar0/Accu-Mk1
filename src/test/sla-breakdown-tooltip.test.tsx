@@ -62,6 +62,47 @@ describe('SlaBreakdownTooltip', () => {
     expect(el.textContent ?? '').not.toMatch(/groupMultiple/i)
   })
 
+  it('renders profile-source line with the profile name for tierSource profile (Task 11)', () => {
+    const reason: SampleSlaReason = {
+      tierSource: 'profile',
+      profileName: 'Rush Panel',
+      unmappedKeywords: [],
+    }
+    render(
+      <SlaBreakdownTooltip
+        tier={tier}
+        status={status}
+        reason={reason}
+        priority="normal"
+      />
+    )
+    const el = screen.getByTestId('sla-breakdown-tooltip')
+    expect(el.getAttribute('data-tier-source')).toBe('profile')
+    // No i18next instance in this test file — t() returns the raw key
+    // (same fallback pattern the other tests in this file rely on). Must be
+    // the NAMED key, not the generic fallback.
+    expect(el.textContent ?? '').toContain('orderStatus.sla.breakdown.source.profile')
+    expect(el.textContent ?? '').not.toContain('source.profileGeneric')
+  })
+
+  it('falls back to the generic profile line when profileName is absent (defensive — never dropped silently)', () => {
+    const reason: SampleSlaReason = {
+      tierSource: 'profile',
+      unmappedKeywords: [],
+    }
+    render(
+      <SlaBreakdownTooltip
+        tier={tier}
+        status={status}
+        reason={reason}
+        priority="normal"
+      />
+    )
+    const el = screen.getByTestId('sla-breakdown-tooltip')
+    expect(el.getAttribute('data-tier-source')).toBe('profile')
+    expect(el.textContent ?? '').toContain('source.profileGeneric')
+  })
+
   it('renders multi-group "tightest of N" when multiple candidates', () => {
     const reason: SampleSlaReason = {
       tierSource: 'group',

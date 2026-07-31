@@ -53,6 +53,7 @@ import {
 import { useAnalysisProfiles, analysisProfilesQueryKeys } from '@/services/analysis-profiles'
 import { useVialRoles, vialRolesQueryKeys } from '@/services/vial-roles'
 import { useDepartments } from '@/services/departments'
+import { useSlaTiers } from '@/services/sla'
 import { suggestRoleCode } from '@/lib/role-code'
 import { useQueryClient } from '@tanstack/react-query'
 
@@ -71,6 +72,9 @@ interface FormState {
   coa_sort_order: string
   fulfillment_role: string
   fulfillment_dim: 'role' | 'kind'
+  // Task 11: beats the member services' group tier, loses to a priority
+  // override. null = "— inherit group SLA —" (the pre-Task-11 default).
+  sla_tier_id: number | null
   // Auto-mint (Task 3): department for a role this save might newly mint.
   // Not a persisted profile field — see api.ts's role_department_id doc.
   role_department_id: number | null
@@ -89,6 +93,7 @@ const DEFAULT_FORM: FormState = {
   coa_sort_order: '0',
   fulfillment_role: '',
   fulfillment_dim: 'role',
+  sla_tier_id: null,
   role_department_id: null,
 }
 
@@ -107,6 +112,7 @@ export default function AnalysisProfilesPage() {
   const { data: profiles = [], isLoading: loading, error: queryError } = useAnalysisProfiles()
   const { data: vialRoles = [] } = useVialRoles()
   const { data: departments = [] } = useDepartments()
+  const { data: slaTiers = [] } = useSlaTiers()
   const [searchInput, setSearchInput] = useState('')
 
   // Panel state
@@ -188,6 +194,7 @@ export default function AnalysisProfilesPage() {
       coa_sort_order: String(profile.coa_sort_order),
       fulfillment_role: profile.fulfillment_role ?? '',
       fulfillment_dim: profile.fulfillment_dim,
+      sla_tier_id: profile.sla_tier_id,
       // Not on AnalysisProfileResponse (see FormState's doc comment) — the
       // department Select only matters for a role this save might newly
       // mint, so it always starts unset on open, same as create.
@@ -274,6 +281,7 @@ export default function AnalysisProfilesPage() {
           coa_sort_order: parseInt(form.coa_sort_order, 10) || 0,
           fulfillment_role: roleForPayload,
           fulfillment_dim: form.fulfillment_dim,
+          sla_tier_id: form.sla_tier_id,
           role_department_id: form.role_department_id,
         })
         toast.success(`"${form.name.trim()}" updated`)
@@ -906,6 +914,54 @@ export default function AnalysisProfilesPage() {
                         />
                       </div>
                     </div>
+                  </div>
+                )}
+
+                {/* SLA tier (Task 11) — edit only. Beats the member services'
+                    group tier, loses to a priority override. Inheriting the
+                    group SLA (the pre-Task-11 default) is the "— inherit
+                    group SLA —" option, not a tier to pick. */}
+                {editingProfile && (
+                  <div className="space-y-1.5 border-t pt-4">
+                    <div className="flex items-center gap-1.5">
+                      <label className="text-sm font-medium">SLA Tier</label>
+                      <TooltipProvider delayDuration={200}>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-3.5 w-3.5 text-muted-foreground cursor-default" />
+                          </TooltipTrigger>
+                          <TooltipContent side="right" className="max-w-xs">
+                            <div className="flex flex-col gap-1 p-1 text-xs font-mono">
+                              <div className="font-semibold border-b border-primary-foreground/20 pb-1">
+                                SLA precedence
+                              </div>
+                              <div>
+                                A profile tier beats its member services&rsquo; group tier, but a priority override (e.g. expedited) still wins over both.
+                              </div>
+                              <div>
+                                <span className="font-semibold">— inherit group SLA —</span> — no profile-level tier; falls back to the group tier (or the catch-all default).
+                              </div>
+                            </div>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
+                    <Select
+                      value={form.sla_tier_id != null ? String(form.sla_tier_id) : 'inherit'}
+                      onValueChange={v =>
+                        setForm(f => ({ ...f, sla_tier_id: v === 'inherit' ? null : Number(v) }))
+                      }
+                    >
+                      <SelectTrigger className="w-56">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="inherit">— inherit group SLA —</SelectItem>
+                        {slaTiers.map(t => (
+                          <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                 )}
               </div>

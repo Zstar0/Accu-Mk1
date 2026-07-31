@@ -2390,6 +2390,9 @@ class AnalysisProfileCreate(BaseModel):
     fulfillment_dim: str = "role"
     sort_order: int = 0
     active: bool = True
+    # Task 11: optional at create time — validated against sla_tiers in the
+    # route (400 on an unknown id), same as PATCH below.
+    sla_tier_id: Optional[int] = None
     # Not a persisted profile column — consumed only by the auto-mint path
     # (POST/PATCH /analysis-profiles) to seed a newly-minted vial_roles row's
     # department. Stripped from model_dump() before constructing AnalysisProfile.
@@ -2408,6 +2411,10 @@ class AnalysisProfileUpdate(BaseModel):
     coa_section_title: Optional[str] = None
     coa_archetype: Optional[str] = None
     coa_sort_order: Optional[int] = None
+    # Task 11: beats the member services' group tier, loses to a priority
+    # override. Explicit null clears it (inherit group SLA again) — see
+    # exclude_unset handling in update_analysis_profile.
+    sla_tier_id: Optional[int] = None
     # See AnalysisProfileCreate.role_department_id — same auto-mint-only field.
     role_department_id: Optional[int] = None
 
@@ -2426,7 +2433,12 @@ class AnalysisProfileResponse(BaseModel):
     coa_section_title: Optional[str] = None
     coa_archetype: Optional[str] = None
     coa_sort_order: int = 0
+    sla_tier_id: Optional[int] = None
     member_ids: list[int] = []
+    # Task 11: byte-identical to member_ids (same analysis_services relationship,
+    # lazy="selectin") — added under the name the FE SLA resolver contract
+    # expects. Both are populated so existing member_ids consumers don't churn.
+    member_service_ids: list[int] = []
     created_at: datetime
     updated_at: datetime
 
@@ -15683,14 +15695,15 @@ async def delete_department(
 # (bench work) — see models.AnalysisProfile docstring.
 
 def _profile_to_response(p) -> AnalysisProfileResponse:
+    member_ids = [s.id for s in p.analysis_services]
     return AnalysisProfileResponse(
         id=p.id, key=p.key, name=p.name, description=p.description,
         is_addon=p.is_addon, vials_required=p.vials_required,
         fulfillment_role=p.fulfillment_role, fulfillment_dim=p.fulfillment_dim,
         sort_order=p.sort_order, active=p.active,
         coa_section_title=p.coa_section_title, coa_archetype=p.coa_archetype,
-        coa_sort_order=p.coa_sort_order,
-        member_ids=[s.id for s in p.analysis_services],
+        coa_sort_order=p.coa_sort_order, sla_tier_id=p.sla_tier_id,
+        member_ids=member_ids, member_service_ids=member_ids,
         created_at=p.created_at, updated_at=p.updated_at,
     )
 
@@ -15735,6 +15748,10 @@ async def create_analysis_profile(
             f"role '{data.fulfillment_role}' is reserved for the legacy demand map "
             "while the shadow-compare is active; new families use catalog-only roles",
         )
+    # Task 11: reject an unknown sla_tier_id with a clean 400 rather than
+    # letting the FK constraint 500 at commit time.
+    if data.sla_tier_id is not None and not db.get(SlaTier, data.sla_tier_id):
+        raise HTTPException(400, f"SLA tier {data.sla_tier_id} not found")
     # Auto-mint (Task 3): a 'role' fulfillment naming a code not yet in the
     # vial_roles catalog mints one here, AFTER every guard above — those
     # guards already 400 on 'xtra' and on a legacy code for a new key, so
@@ -15786,6 +15803,12 @@ async def update_analysis_profile(
             f"unknown coa_archetype {fields['coa_archetype']!r}; "
             f"allowed: {sorted(COA_ARCHETYPES)} or null (not reported)",
         )
+    # Task 11: reject an unknown sla_tier_id with a 400. An explicit null
+    # (present in `fields` thanks to exclude_unset) is legal — it clears the
+    # profile's own tier and falls back to inheriting the group's tier.
+    if "sla_tier_id" in fields and fields["sla_tier_id"] is not None \
+            and not db.get(SlaTier, fields["sla_tier_id"]):
+        raise HTTPException(400, f"SLA tier {fields['sla_tier_id']} not found")
     if "fulfillment_dim" in fields and fields["fulfillment_dim"] not in ("role", "kind"):
         # fields (exclude_unset) distinguishes an explicit JSON null from
         # omission — data.fulfillment_dim is None either way, but only an

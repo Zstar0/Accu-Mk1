@@ -4537,6 +4537,14 @@ export interface AnalysisProfile {
   coa_archetype: string | null
   coa_sort_order: number
   member_ids: number[]
+  // Task 11 (profile SLA tier): byte-identical to `member_ids` — the same
+  // analysis_services relationship, added under the name the SLA resolver
+  // contract expects (`buildServiceToProfileTierMap`). Both fields are kept
+  // so existing `member_ids` consumers don't need to migrate.
+  member_service_ids: number[]
+  // Task 11: optional FK to sla_tiers — beats the member services' group tier,
+  // loses to a priority override. NULL inherits the group tier (or default).
+  sla_tier_id: number | null
   created_at: string
   updated_at: string
 }
@@ -4573,6 +4581,10 @@ export async function createAnalysisProfile(data: {
   sort_order?: number
   fulfillment_role?: string | null
   fulfillment_dim?: 'role' | 'kind'
+  // Task 11: optional at create time — the admin UI only exposes the SLA
+  // tier Select on the edit panel (mirrors the COA-section fields, which are
+  // also edit-only), but the backend accepts it on POST too.
+  sla_tier_id?: number | null
   // Auto-mint (Task 3): department for a newly-minted vial_roles row. Not a
   // persisted AnalysisProfile field — the backend consumes it once, at mint
   // time, and never echoes it back on AnalysisProfileResponse.

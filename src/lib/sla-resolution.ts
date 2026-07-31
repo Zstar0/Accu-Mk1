@@ -1,4 +1,5 @@
 import type {
+  AnalysisProfile,
   AnalysisServiceRecord,
   InboxPriority,
   SenaiteAnalysis,
@@ -96,21 +97,85 @@ export function buildServiceToGroupTierMap(
   return out
 }
 
+/** A profile's own tier, paired with the profile's name so the reason/tooltip
+ *  can say WHICH profile drove the precedence decision without a second
+ *  lookup. Returned by `buildServiceToProfileTierMap` and consumed by the
+ *  profile-tier step (2.5) in every resolver below. */
+export interface ServiceProfileTier {
+  tier: SlaTier
+  profileName: string
+}
+
 /**
- * Apply precedence: priority-override > tightest-group-tier > default.
- * Returns null if no default is configured AND nothing resolves.
+ * Service-id → tightest TIERED profile among the active profiles that carry
+ * the service (Task 11). Mirrors `buildServiceToGroupTierMap`'s tightest-wins
+ * idiom exactly (strict `<`, so a first-seen tie is kept), except the value
+ * also carries the winning profile's name — precedence needs to report WHICH
+ * profile won, and re-deriving that after the fact could pick a different
+ * profile than the one that actually set the tightest tier on a multi-way
+ * tie, so tier and name are resolved atomically in one pass.
+ *
+ * Profiles without a sla_tier_id, or whose tier id is missing from
+ * `tiersById`, are skipped (same "don't shadow a real tier with a null" rule
+ * as the group map). Inactive profiles are also skipped — a retired profile
+ * must not keep driving SLA precedence for services it once claimed.
+ */
+export function buildServiceToProfileTierMap(
+  profiles: AnalysisProfile[],
+  tiersById: Map<number, SlaTier>
+): Map<number, ServiceProfileTier> {
+  const out = new Map<number, ServiceProfileTier>()
+  for (const p of profiles) {
+    if (!p.active) continue
+    if (p.sla_tier_id == null) continue
+    const tier = tiersById.get(p.sla_tier_id)
+    if (!tier) continue
+    for (const svcId of p.member_service_ids) {
+      const existing = out.get(svcId)
+      if (!existing || tier.target_minutes < existing.tier.target_minutes) {
+        out.set(svcId, { tier, profileName: p.name })
+      }
+    }
+  }
+  return out
+}
+
+/**
+ * Apply precedence: priority-override > profile-tier > tightest-group-tier >
+ * default. Returns null if no default is configured AND nothing resolves.
+ *
+ * `serviceToProfileTier` (Task 11) is OPTIONAL and trailing: legacy callers
+ * that don't pass one skip the profile step entirely and fall through to the
+ * group-tier step exactly as before — byte-identical behavior for anything
+ * that hasn't been wired to profile data yet.
  */
 export function resolveSampleTier(
   inputs: SampleSlaInputs,
   keywordToServiceId: Map<string, number>,
   serviceToGroupTier: Map<number, SlaTier>,
   priorityToTier: Map<InboxPriority, SlaTier>,
-  defaultTier: SlaTier | null
+  defaultTier: SlaTier | null,
+  serviceToProfileTier?: Map<number, ServiceProfileTier>
 ): SlaTier | null {
   // 1. Priority override.
   if (inputs.priority) {
     const pTier = priorityToTier.get(inputs.priority)
     if (pTier) return pTier
+  }
+  // 1.5. Tightest profile tier across the sample's analyses (Task 11).
+  if (serviceToProfileTier) {
+    let tightestProfile: ServiceProfileTier | null = null
+    for (const a of inputs.analyses) {
+      if (!a.keyword) continue
+      const svcId = keywordToServiceId.get(a.keyword)
+      if (svcId == null) continue
+      const candidate = serviceToProfileTier.get(svcId)
+      if (!candidate) continue
+      if (!tightestProfile || candidate.tier.target_minutes < tightestProfile.tier.target_minutes) {
+        tightestProfile = candidate
+      }
+    }
+    if (tightestProfile) return tightestProfile.tier
   }
   // 2. Tightest group tier across the sample's analyses.
   let tightest: SlaTier | null = null
@@ -129,8 +194,10 @@ export function resolveSampleTier(
   return defaultTier
 }
 
-/** Which precedence rule produced the resolved tier (or 'none' if nothing did). */
-export type TierSource = 'priority' | 'group' | 'default' | 'none'
+/** Which precedence rule produced the resolved tier (or 'none' if nothing did).
+ *  'profile' (Task 11): a tiered analysis profile beat the bucket's group
+ *  tier — see `SampleSlaReason.profileName` for which profile won. */
+export type TierSource = 'priority' | 'group' | 'default' | 'none' | 'profile'
 
 /** Multi-tier follow-on: when a priority override fires, was it the global
  *  override (NULL service_group_id) or a per-group override? Only populated
@@ -153,6 +220,9 @@ export type PriorityScope = 'global' | 'group'
  * - `unmappedKeywords` lists analyses whose keyword had no row in the
  *   keyword→service-id map, regardless of `tierSource`. Useful for spotting
  *   newly-added analyses that haven't been wired into a service group yet.
+ * - `profileName` (Task 11) is only populated when `tierSource === 'profile'`
+ *   — the name of the tiered analysis profile that beat the bucket's group
+ *   tier. Drives the tooltip's "Profile SLA — {profile name}" line.
  */
 export interface SampleSlaReason {
   tierSource: TierSource
@@ -160,6 +230,7 @@ export interface SampleSlaReason {
   priorityScope?: PriorityScope
   multiGroupCandidates?: { tierName: string; targetMinutes: number }[]
   unmappedKeywords: string[]
+  profileName?: string
 }
 
 /**
@@ -167,13 +238,17 @@ export interface SampleSlaReason {
  * describing which rule fired and (for groups) what the candidate set looked
  * like. The two functions MUST stay in lockstep on precedence semantics —
  * any change to one must be mirrored in the other (and asserted by tests).
+ *
+ * `serviceToProfileTier` (Task 11) is OPTIONAL and trailing — see
+ * `resolveSampleTier`'s doc for the same fall-through guarantee.
  */
 export function resolveSampleTierWithReason(
   inputs: SampleSlaInputs,
   keywordToServiceId: Map<string, number>,
   serviceToGroupTier: Map<number, SlaTier>,
   priorityToTier: Map<InboxPriority, SlaTier>,
-  defaultTier: SlaTier | null
+  defaultTier: SlaTier | null,
+  serviceToProfileTier?: Map<number, ServiceProfileTier>
 ): { tier: SlaTier | null; reason: SampleSlaReason } {
   // 1. Priority override.
   if (inputs.priority) {
@@ -189,10 +264,14 @@ export function resolveSampleTierWithReason(
       }
     }
   }
-  // 2. Tightest group tier. Collect ALL candidates first so we can report the
-  // candidate set in the tooltip; the tightest still wins.
+  // 1.5 / 2. Single pass: collect unmapped keywords, group-tier candidates,
+  // AND (Task 11) the tightest profile-tier candidate — one loop instead of
+  // walking `inputs.analyses` twice. The profile candidate is checked first
+  // below (1.5 beats 2), but both are gathered here so unmappedKeywords stays
+  // identical regardless of which step ultimately wins.
   const unmappedKeywords: string[] = []
   const candidates: { tier: SlaTier }[] = []
+  let tightestProfile: ServiceProfileTier | null = null
   for (const a of inputs.analyses) {
     if (!a.keyword) continue
     const svcId = keywordToServiceId.get(a.keyword)
@@ -201,8 +280,24 @@ export function resolveSampleTierWithReason(
       continue
     }
     const groupTier = serviceToGroupTier.get(svcId)
-    if (!groupTier) continue
-    candidates.push({ tier: groupTier })
+    if (groupTier) candidates.push({ tier: groupTier })
+    if (serviceToProfileTier) {
+      const candidate = serviceToProfileTier.get(svcId)
+      if (candidate && (!tightestProfile || candidate.tier.target_minutes < tightestProfile.tier.target_minutes)) {
+        tightestProfile = candidate
+      }
+    }
+  }
+  // 1.5. Tightest profile tier — beats the group step below.
+  if (tightestProfile) {
+    return {
+      tier: tightestProfile.tier,
+      reason: {
+        tierSource: 'profile',
+        profileName: tightestProfile.profileName,
+        unmappedKeywords,
+      },
+    }
   }
   if (candidates.length > 0) {
     const tightest = candidates.reduce((a, b) =>
@@ -419,9 +514,13 @@ export function buildPerGroupPriorityToTierMap(
 
 /**
  * Resolve every (sample → service group) bucket to its own tier, applying the
- * precedence (priority, group_id) > (priority, NULL) > group's own tier >
- * default per bucket. Analyses with unmapped keywords or whose service has no
- * group land in a `NO_GROUP_KEY` bucket.
+ * precedence (priority, group_id) > (priority, NULL) > profile tier > group's
+ * own tier > default per bucket (Task 11 inserts the profile-tier step
+ * between the priority overrides and the group's own tier — a tiered
+ * analysis profile beats its member services' group tier, but still loses to
+ * either priority override). Analyses with unmapped keywords or whose
+ * service has no group land in a `NO_GROUP_KEY` bucket; the profile-tier step
+ * (like the group's-own-tier step) never applies there.
  *
  * Returns at least one entry whenever the sample has any analyses (or the
  * sample has a priority override / default tier configured — see edge cases
@@ -434,19 +533,26 @@ export function buildPerGroupPriorityToTierMap(
  * - Service is in multiple groups: the bucket follows the tightest-tier rule
  *   from `buildServiceIdToGroupIdMap` (so it's deterministic and matches the
  *   legacy single-tier collapse for that one service).
+ * - Multiple services in one bucket belong to (different) tiered profiles:
+ *   the tightest (smallest target_minutes) profile tier wins — same
+ *   tightest-wins idiom as the multi-group candidate set.
  * - Sample has no analyses: returns an empty map.
  */
 export function resolveSampleTiersByGroup(
   inputs: SampleSlaInputs,
   keywordToServiceId: Map<string, number>,
   serviceIdToGroupId: Map<number, number>,
+  serviceIdToProfileTier: Map<number, ServiceProfileTier>,
   groupIdToTier: Map<number, SlaTier>,
   globalPriorityToTier: Map<InboxPriority, SlaTier>,
   perGroupPriorityToTier: Map<string, SlaTier>,
   defaultTier: SlaTier | null
 ): Map<GroupKey, { tier: SlaTier | null; reason: SampleSlaReason }> {
-  // Bucket each analysis by group, and accumulate unmapped keywords per bucket.
+  // Bucket each analysis by group, and accumulate unmapped keywords AND
+  // mapped service ids per bucket. The service ids feed the profile-tier step
+  // below (2.5) — profile membership is per-service, not per-keyword.
   const bucketKeywords = new Map<GroupKey, string[]>()
+  const bucketServiceIds = new Map<GroupKey, number[]>()
   for (const a of inputs.analyses) {
     if (!a.keyword) continue
     const svcId = keywordToServiceId.get(a.keyword)
@@ -459,6 +565,9 @@ export function resolveSampleTiersByGroup(
     const groupId = serviceIdToGroupId.get(svcId)
     const key: GroupKey = groupId ?? NO_GROUP_KEY
     if (!bucketKeywords.has(key)) bucketKeywords.set(key, [])
+    const svcArr = bucketServiceIds.get(key) ?? []
+    svcArr.push(svcId)
+    bucketServiceIds.set(key, svcArr)
   }
 
   const result = new Map<GroupKey, { tier: SlaTier | null; reason: SampleSlaReason }>()
@@ -489,6 +598,32 @@ export function resolveSampleTiersByGroup(
             tierSource: 'priority',
             priorityUsed: inputs.priority,
             priorityScope: 'global',
+            unmappedKeywords: keywords,
+          },
+        })
+        continue
+      }
+    }
+    // 2.5. Tightest profile tier (Task 11) — only for real-group buckets;
+    // beats the group's own tier below but loses to both priority steps
+    // above. When more than one service in the bucket belongs to a (different)
+    // tiered profile, the tightest target_minutes wins.
+    if (key !== NO_GROUP_KEY) {
+      const svcIds = bucketServiceIds.get(key) ?? []
+      let tightestProfile: ServiceProfileTier | null = null
+      for (const svcId of svcIds) {
+        const candidate = serviceIdToProfileTier.get(svcId)
+        if (!candidate) continue
+        if (!tightestProfile || candidate.tier.target_minutes < tightestProfile.tier.target_minutes) {
+          tightestProfile = candidate
+        }
+      }
+      if (tightestProfile) {
+        result.set(key, {
+          tier: tightestProfile.tier,
+          reason: {
+            tierSource: 'profile',
+            profileName: tightestProfile.profileName,
             unmappedKeywords: keywords,
           },
         })

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type {
+  AnalysisProfile,
   AnalysisServiceRecord,
   ServiceGroup,
   SlaTier,
@@ -10,6 +11,7 @@ import type {
 import {
   buildKeywordToServiceIdMap,
   buildServiceToGroupTierMap,
+  buildServiceToProfileTierMap,
   buildServiceIdToGroupIdMap,
   buildGroupIdToTierMap,
   buildGlobalPriorityToTierMap,
@@ -58,6 +60,33 @@ const group = (
   member_count: member_ids.length,
   member_ids,
 } as unknown as ServiceGroup)
+
+const profile = (
+  id: number,
+  name: string,
+  sla_tier_id: number | null,
+  member_service_ids: number[],
+  active = true
+): AnalysisProfile => ({
+  id,
+  key: `profile_${id}`,
+  name,
+  description: null,
+  is_addon: true,
+  vials_required: 0,
+  fulfillment_role: null,
+  fulfillment_dim: 'role',
+  sort_order: 0,
+  active,
+  coa_section_title: null,
+  coa_archetype: null,
+  coa_sort_order: 0,
+  member_ids: member_service_ids,
+  member_service_ids,
+  sla_tier_id,
+  created_at: '2026-01-01T00:00:00',
+  updated_at: '2026-01-01T00:00:00',
+})
 
 const svc = (id: number, keyword: string | null): AnalysisServiceRecord => ({
   id,
@@ -202,6 +231,64 @@ describe('buildServiceToGroupTierMap', () => {
   })
 })
 
+describe('buildServiceToProfileTierMap', () => {
+  it('maps single-profile member service to its profile tier + name', () => {
+    const tierA = tier(10, 'A', 480, 25)
+    const tiersById = new Map<number, SlaTier>([[tierA.id, tierA]])
+    const map = buildServiceToProfileTierMap(
+      [profile(1, 'Rush Panel', tierA.id, [100])],
+      tiersById
+    )
+    expect(map.get(100)).toEqual({ tier: tierA, profileName: 'Rush Panel' })
+  })
+
+  it('multi-profile: tightest target wins, carries the winning profile name', () => {
+    const tightTier = tier(10, 'Tight', 240, 20)
+    const looseTier = tier(11, 'Loose', 2880, 20)
+    const tiersById = new Map<number, SlaTier>([
+      [tightTier.id, tightTier],
+      [looseTier.id, looseTier],
+    ])
+    const map = buildServiceToProfileTierMap(
+      [
+        profile(1, 'Loose Profile', looseTier.id, [100, 200]),
+        profile(2, 'Tight Profile', tightTier.id, [200]),
+      ],
+      tiersById
+    )
+    expect(map.get(100)).toEqual({ tier: looseTier, profileName: 'Loose Profile' })
+    expect(map.get(200)).toEqual({ tier: tightTier, profileName: 'Tight Profile' })
+  })
+
+  it('profile without sla_tier_id contributes nothing', () => {
+    const tiersById = new Map<number, SlaTier>()
+    const map = buildServiceToProfileTierMap(
+      [profile(1, 'No Tier Profile', null, [100])],
+      tiersById
+    )
+    expect(map.has(100)).toBe(false)
+  })
+
+  it('profile references a tier id missing from tiersById: silently skipped', () => {
+    const tiersById = new Map<number, SlaTier>() // empty
+    const map = buildServiceToProfileTierMap(
+      [profile(1, 'Phantom Tier Profile', 999, [100])],
+      tiersById
+    )
+    expect(map.has(100)).toBe(false)
+  })
+
+  it('inactive profile with a tier contributes nothing (a retired profile must not drive SLA)', () => {
+    const tierA = tier(10, 'A', 480, 25)
+    const tiersById = new Map<number, SlaTier>([[tierA.id, tierA]])
+    const map = buildServiceToProfileTierMap(
+      [profile(1, 'Retired Panel', tierA.id, [100], false)],
+      tiersById
+    )
+    expect(map.has(100)).toBe(false)
+  })
+})
+
 describe('resolveSampleTier', () => {
   const priorityOverrideTier = tier(20, 'Expedited', 60, 50)
   const groupTier = tier(21, 'Group', 480, 30)
@@ -291,6 +378,51 @@ describe('resolveSampleTier', () => {
     expect(
       resolveSampleTier(inputs, new Map(), new Map(), new Map(), null)
     ).toBeNull()
+  })
+
+  // Task 11: optional trailing serviceToProfileTier param.
+  it('profile tier beats group tier when serviceToProfileTier is provided', () => {
+    const profileTier = tier(22, 'Profile Rush', 60, 30)
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('HPLC-100')],
+      priority: 'normal',
+    }
+    const svcToGroupTier = new Map<number, SlaTier>([[100, groupTier]])
+    const keywordToServiceId = new Map<string, number>([['HPLC-100', 100]])
+    const svcToProfileTier = new Map([[100, { tier: profileTier, profileName: 'Rush Panel' }]])
+    expect(
+      resolveSampleTier(
+        inputs, keywordToServiceId, svcToGroupTier, priorityToTier, DEFAULT_TIER, svcToProfileTier
+      )
+    ).toEqual(profileTier)
+  })
+
+  it('priority override still beats profile tier', () => {
+    const profileTier = tier(22, 'Profile Rush', 60, 30)
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('HPLC-100')],
+      priority: 'expedited',
+    }
+    const svcToGroupTier = new Map<number, SlaTier>([[100, groupTier]])
+    const keywordToServiceId = new Map<string, number>([['HPLC-100', 100]])
+    const svcToProfileTier = new Map([[100, { tier: profileTier, profileName: 'Rush Panel' }]])
+    expect(
+      resolveSampleTier(
+        inputs, keywordToServiceId, svcToGroupTier, priorityToTier, DEFAULT_TIER, svcToProfileTier
+      )
+    ).toEqual(priorityOverrideTier)
+  })
+
+  it('omitting serviceToProfileTier falls through to group tier unchanged (legacy call sites)', () => {
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('HPLC-100')],
+      priority: 'normal',
+    }
+    const svcToGroupTier = new Map<number, SlaTier>([[100, groupTier]])
+    const keywordToServiceId = new Map<string, number>([['HPLC-100', 100]])
+    expect(
+      resolveSampleTier(inputs, keywordToServiceId, svcToGroupTier, priorityToTier, DEFAULT_TIER)
+    ).toEqual(groupTier)
   })
 })
 
@@ -445,6 +577,54 @@ describe('resolveSampleTierWithReason', () => {
     expect(out).toEqual(groupTier)
     expect(reason.tierSource).toBe('group')
     expect(reason.priorityUsed).toBeUndefined()
+  })
+
+  // Task 11: optional trailing serviceToProfileTier param.
+  it('profile tier beats group tier → tierSource profile, profileName populated', () => {
+    const profileTier = tier(22, 'Profile Rush', 60, 30)
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('HPLC-100')],
+      priority: 'normal',
+    }
+    const svcToGroupTier = new Map<number, SlaTier>([[100, groupTier]])
+    const keywordToServiceId = new Map<string, number>([['HPLC-100', 100]])
+    const svcToProfileTier = new Map([[100, { tier: profileTier, profileName: 'Rush Panel' }]])
+    const { tier: out, reason } = resolveSampleTierWithReason(
+      inputs, keywordToServiceId, svcToGroupTier, priorityToTier, DEFAULT_TIER, svcToProfileTier
+    )
+    expect(out).toEqual(profileTier)
+    expect(reason.tierSource).toBe('profile')
+    expect(reason.profileName).toBe('Rush Panel')
+  })
+
+  it('priority override still beats profile tier', () => {
+    const profileTier = tier(22, 'Profile Rush', 60, 30)
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('HPLC-100')],
+      priority: 'expedited',
+    }
+    const svcToGroupTier = new Map<number, SlaTier>([[100, groupTier]])
+    const keywordToServiceId = new Map<string, number>([['HPLC-100', 100]])
+    const svcToProfileTier = new Map([[100, { tier: profileTier, profileName: 'Rush Panel' }]])
+    const { tier: out, reason } = resolveSampleTierWithReason(
+      inputs, keywordToServiceId, svcToGroupTier, priorityToTier, DEFAULT_TIER, svcToProfileTier
+    )
+    expect(out).toEqual(priorityOverrideTier)
+    expect(reason.tierSource).toBe('priority')
+  })
+
+  it('omitting serviceToProfileTier falls through to group unchanged (legacy call sites)', () => {
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('HPLC-100')],
+      priority: 'normal',
+    }
+    const svcToGroupTier = new Map<number, SlaTier>([[100, groupTier]])
+    const keywordToServiceId = new Map<string, number>([['HPLC-100', 100]])
+    const { tier: out, reason } = resolveSampleTierWithReason(
+      inputs, keywordToServiceId, svcToGroupTier, priorityToTier, DEFAULT_TIER
+    )
+    expect(out).toEqual(groupTier)
+    expect(reason.tierSource).toBe('group')
   })
 })
 
@@ -791,6 +971,7 @@ describe('resolveSampleTiersByGroup', () => {
       inputs,
       keywordToServiceId,
       serviceIdToGroupId,
+      new Map(), // serviceIdToProfileTier — no tiered profiles in this fixture
       groupIdToTier,
       new Map(),
       new Map(),
@@ -810,6 +991,7 @@ describe('resolveSampleTiersByGroup', () => {
       inputs,
       keywordToServiceId,
       serviceIdToGroupId,
+      new Map(), // serviceIdToProfileTier — no tiered profiles in this fixture
       groupIdToTier,
       new Map(),
       new Map(),
@@ -832,6 +1014,7 @@ describe('resolveSampleTiersByGroup', () => {
       inputs,
       keywordToServiceId,
       serviceIdToGroupId,
+      new Map(), // serviceIdToProfileTier — no tiered profiles in this fixture
       groupIdToTier,
       globalMap,
       new Map(),
@@ -857,6 +1040,7 @@ describe('resolveSampleTiersByGroup', () => {
       inputs,
       keywordToServiceId,
       serviceIdToGroupId,
+      new Map(), // serviceIdToProfileTier — no tiered profiles in this fixture
       groupIdToTier,
       new Map(), // no global override
       perGroupMap,
@@ -882,6 +1066,7 @@ describe('resolveSampleTiersByGroup', () => {
       inputs,
       keywordToServiceId,
       serviceIdToGroupId,
+      new Map(), // serviceIdToProfileTier — no tiered profiles in this fixture
       groupIdToTier,
       globalMap,
       perGroupMap,
@@ -902,6 +1087,7 @@ describe('resolveSampleTiersByGroup', () => {
       inputs,
       keywordToServiceId,
       serviceIdToGroupId,
+      new Map(), // serviceIdToProfileTier — no tiered profiles in this fixture
       groupIdToTier,
       new Map(),
       new Map(),
@@ -926,6 +1112,7 @@ describe('resolveSampleTiersByGroup', () => {
       inputs,
       orphanKwMap,
       serviceIdToGroupId,
+      new Map(), // serviceIdToProfileTier — no tiered profiles in this fixture
       groupIdToTier,
       new Map(),
       new Map(),
@@ -951,6 +1138,7 @@ describe('resolveSampleTiersByGroup', () => {
       inputs,
       keywordToServiceId,
       serviceIdToGroupId,
+      new Map(), // serviceIdToProfileTier — no tiered profiles in this fixture
       groupIdToTier,
       new Map(), // no global
       perGroupMap,
@@ -965,6 +1153,7 @@ describe('resolveSampleTiersByGroup', () => {
       { analyses: [], priority: null },
       keywordToServiceId,
       serviceIdToGroupId,
+      new Map(), // serviceIdToProfileTier — no tiered profiles in this fixture
       groupIdToTier,
       new Map(),
       new Map(),
@@ -982,6 +1171,7 @@ describe('resolveSampleTiersByGroup', () => {
       inputs,
       keywordToServiceId,
       serviceIdToGroupId,
+      new Map(), // serviceIdToProfileTier — no tiered profiles in this fixture
       groupIdToTier,
       new Map(),
       new Map(),
@@ -989,5 +1179,135 @@ describe('resolveSampleTiersByGroup', () => {
     )
     expect(m.get(NO_GROUP_KEY)?.tier).toBeNull()
     expect(m.get(NO_GROUP_KEY)?.reason.tierSource).toBe('none')
+  })
+
+  // ─── Task 11: profile-tier step (2.5) ──────────────────────────────────────
+
+  it('profile tier beats the group\'s own tier', () => {
+    const PROFILE_TIER = tier(7, 'Profile Rush 1h', 60)
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('kw_hplc')],
+      priority: null,
+    }
+    const serviceIdToProfileTier = new Map([
+      [100, { tier: PROFILE_TIER, profileName: 'Rush Panel' }],
+    ])
+    const m = resolveSampleTiersByGroup(
+      inputs,
+      keywordToServiceId,
+      serviceIdToGroupId,
+      serviceIdToProfileTier,
+      groupIdToTier,
+      new Map(),
+      new Map(),
+      DEFAULT_TIER
+    )
+    expect(m.get(10)?.tier).toBe(PROFILE_TIER)
+    expect(m.get(10)?.reason.tierSource).toBe('profile')
+    expect(m.get(10)?.reason.profileName).toBe('Rush Panel')
+  })
+
+  it('priority override still beats profile tier', () => {
+    const PROFILE_TIER = tier(7, 'Profile Rush 1h', 60)
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('kw_hplc')],
+      priority: 'expedited',
+    }
+    const serviceIdToProfileTier = new Map([
+      [100, { tier: PROFILE_TIER, profileName: 'Rush Panel' }],
+    ])
+    const globalMap = new Map<InboxPriority, SlaTier>([['expedited', EXPEDITED_TIER]])
+    const m = resolveSampleTiersByGroup(
+      inputs,
+      keywordToServiceId,
+      serviceIdToGroupId,
+      serviceIdToProfileTier,
+      groupIdToTier,
+      globalMap,
+      new Map(),
+      DEFAULT_TIER
+    )
+    expect(m.get(10)?.tier).toBe(EXPEDITED_TIER)
+    expect(m.get(10)?.reason.tierSource).toBe('priority')
+  })
+
+  it('two profiles claim services in the same bucket: tightest profile tier wins', () => {
+    // Sterility bucket (group 11) has both kw_endo (service 101) and
+    // kw_sterility (service 102). Give each a different tiered profile —
+    // the tighter one (120 min) must win, same tightest-wins idiom as the
+    // multi-group candidate set.
+    const LOOSE_PROFILE_TIER = tier(8, 'Profile A', 480)
+    const TIGHT_PROFILE_TIER = tier(9, 'Profile B', 120)
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('kw_endo'), analysis('kw_sterility')],
+      priority: null,
+    }
+    const serviceIdToProfileTier = new Map([
+      [101, { tier: LOOSE_PROFILE_TIER, profileName: 'Profile A' }],
+      [102, { tier: TIGHT_PROFILE_TIER, profileName: 'Profile B' }],
+    ])
+    const m = resolveSampleTiersByGroup(
+      inputs,
+      keywordToServiceId,
+      serviceIdToGroupId,
+      serviceIdToProfileTier,
+      groupIdToTier,
+      new Map(),
+      new Map(),
+      DEFAULT_TIER
+    )
+    expect(m.get(11)?.tier).toBe(TIGHT_PROFILE_TIER)
+    expect(m.get(11)?.reason.tierSource).toBe('profile')
+    expect(m.get(11)?.reason.profileName).toBe('Profile B')
+  })
+
+  it('a tiered profile on a service with no group never applies — the NO_GROUP_KEY bucket ' +
+    'stays on default (profile step is gated same as the group-tier step)', () => {
+    const orphanServices = [...services, svc(200, 'kw_orphan')]
+    const orphanKwMap = buildKeywordToServiceIdMap(orphanServices)
+    const PROFILE_TIER = tier(7, 'Profile Rush 1h', 60)
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('kw_orphan')],
+      priority: null,
+    }
+    // svc 200 belongs to a tiered profile even though it's in no service group.
+    const serviceIdToProfileTier = new Map([
+      [200, { tier: PROFILE_TIER, profileName: 'Rush Panel' }],
+    ])
+    const m = resolveSampleTiersByGroup(
+      inputs,
+      orphanKwMap,
+      serviceIdToGroupId,
+      serviceIdToProfileTier,
+      groupIdToTier,
+      new Map(),
+      new Map(),
+      DEFAULT_TIER
+    )
+    expect(m.size).toBe(1)
+    expect(m.get(NO_GROUP_KEY)?.tier).toBe(DEFAULT_TIER)
+    expect(m.get(NO_GROUP_KEY)?.reason.tierSource).toBe('default')
+  })
+
+  it('legacy fall-through unchanged: an empty serviceIdToProfileTier map behaves exactly like pre-Task-11', () => {
+    const inputs: SampleSlaInputs = {
+      analyses: [analysis('kw_hplc'), analysis('kw_endo'), analysis('kw_sterility')],
+      priority: null,
+    }
+    const m = resolveSampleTiersByGroup(
+      inputs,
+      keywordToServiceId,
+      serviceIdToGroupId,
+      new Map(), // no tiered profiles at all
+      groupIdToTier,
+      new Map(),
+      new Map(),
+      DEFAULT_TIER
+    )
+    expect(m.size).toBe(2)
+    expect(m.get(10)?.tier).toBe(HPLC_TIER)
+    expect(m.get(10)?.reason.tierSource).toBe('group')
+    expect(m.get(11)?.tier).toBe(STER_TIER)
+    expect(m.get(11)?.reason.tierSource).toBe('group')
   })
 })

@@ -21,6 +21,8 @@ vi.mock('@/lib/api', async importOriginal => {
     putRideHosts: vi.fn(),
     getVialRoles: vi.fn(),
     getDepartments: vi.fn(),
+    // Task 11: the page now also renders an SLA tier Select (useSlaTiers()).
+    getSlaTiers: vi.fn(),
   }
 })
 
@@ -38,6 +40,7 @@ import {
   putRideHosts,
   getVialRoles,
   getDepartments,
+  getSlaTiers,
 } from '@/lib/api'
 import { toast } from 'sonner'
 import AnalysisProfilesPage from '@/components/hplc/AnalysisProfilesPage'
@@ -62,6 +65,8 @@ const PROFILE: AnalysisProfile = {
   coa_archetype: null,
   coa_sort_order: 0,
   member_ids: [],
+  member_service_ids: [],
+  sla_tier_id: null,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
 }
@@ -99,6 +104,7 @@ describe('AnalysisProfilesPage — fulfillment fields', () => {
     vi.mocked(putRideHosts).mockReset().mockResolvedValue({ count: 0 })
     vi.mocked(getVialRoles).mockReset().mockResolvedValue([])
     vi.mocked(getDepartments).mockReset().mockResolvedValue([DEPT])
+    vi.mocked(getSlaTiers).mockReset().mockResolvedValue([])
     vi.mocked(toast.error).mockClear()
   })
 
@@ -118,6 +124,35 @@ describe('AnalysisProfilesPage — fulfillment fields', () => {
       expect(updateAnalysisProfile).toHaveBeenCalledWith(
         1,
         expect.objectContaining({ fulfillment_role: 'hm', fulfillment_dim: 'role' })
+      )
+    })
+  })
+
+  it('Task 11: selecting an SLA tier in the edit panel includes sla_tier_id in the PATCH payload', async () => {
+    vi.mocked(getSlaTiers).mockResolvedValue([
+      {
+        id: 5, name: 'Rush 4h', target_minutes: 240, business_hours_only: false,
+        is_default: false, amber_threshold_percent: 20,
+        created_at: '2026-01-01T00:00:00', updated_at: '2026-01-01T00:00:00',
+      },
+    ])
+    render(<AnalysisProfilesPage />, { wrapper })
+
+    const row = await screen.findByText('Heavy Metals')
+    fireEvent.click(row)
+
+    // Starts on "— inherit group SLA —" (PROFILE.sla_tier_id is null).
+    const trigger = await screen.findByText('— inherit group SLA —')
+    fireEvent.click(trigger)
+    const option = await screen.findByRole('option', { name: 'Rush 4h' })
+    fireEvent.click(option)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+    await waitFor(() => {
+      expect(updateAnalysisProfile).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({ sla_tier_id: 5 })
       )
     })
   })

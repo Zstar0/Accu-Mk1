@@ -16,6 +16,7 @@ import {
   buildGroupIdToTierMap,
   buildGlobalPriorityToTierMap,
   buildPerGroupPriorityToTierMap,
+  buildServiceToProfileTierMap,
   classifySampleColor,
   resolveSampleTiersByGroup,
   NO_GROUP_KEY,
@@ -26,6 +27,7 @@ import {
   type SlaColor,
 } from '@/lib/sla-resolution'
 import { useAnalysisServices } from '@/services/analysis-services'
+import { useAnalysisProfiles } from '@/services/analysis-profiles'
 import { useSamplePriorities } from '@/services/sample-priorities'
 import { useServiceGroups } from '@/services/service-groups'
 import { useSlaTiers, useSlaPriorityTiers } from '@/services/sla'
@@ -104,6 +106,7 @@ export function useOrderSlaStatuses(
   const prioOverridesQuery = useSlaPriorityTiers()
   const groupsQuery = useServiceGroups()
   const servicesQuery = useAnalysisServices()
+  const profilesQuery = useAnalysisProfiles()
 
   const liveLookups = useMemo(() => {
     const out: { senaiteId: string; lookup: SenaiteLookupResult }[] = []
@@ -135,10 +138,12 @@ export function useOrderSlaStatuses(
     const tiers = tiersQuery.data ?? []
     const groups = groupsQuery.data ?? []
     const services = servicesQuery.data ?? []
+    const profiles = profilesQuery.data ?? []
     const tiersById = new Map(tiers.map(t => [t.id, t]))
     const defaultTier = tiers.find(t => t.is_default) ?? null
     const keywordToServiceId = buildKeywordToServiceIdMap(services)
     const serviceIdToGroupId = buildServiceIdToGroupIdMap(groups, tiersById)
+    const serviceIdToProfileTier = buildServiceToProfileTierMap(profiles, tiersById)
     const groupIdToTier = buildGroupIdToTierMap(groups, tiersById)
     const priorityRows = prioOverridesQuery.data ?? []
     const globalPriorityToTier = buildGlobalPriorityToTierMap(priorityRows, tiersById)
@@ -165,6 +170,7 @@ export function useOrderSlaStatuses(
         { analyses: lookup.analyses, priority },
         keywordToServiceId,
         serviceIdToGroupId,
+        serviceIdToProfileTier,
         groupIdToTier,
         globalPriorityToTier,
         perGroupPriorityToTier,
@@ -205,6 +211,7 @@ export function useOrderSlaStatuses(
     tiersQuery.data,
     groupsQuery.data,
     servicesQuery.data,
+    profilesQuery.data,
     prioOverridesQuery.data,
     prioritiesQuery.data,
   ])
@@ -361,6 +368,7 @@ export function useOrderSlaStatuses(
         tiersQuery.isLoading ||
         groupsQuery.isLoading ||
         servicesQuery.isLoading ||
+        profilesQuery.isLoading ||
         prioOverridesQuery.isLoading ||
         prioritiesQuery.isLoading ||
         (batchItems.length > 0 && statusQuery.isLoading),
@@ -368,6 +376,7 @@ export function useOrderSlaStatuses(
         tiersQuery.isError ||
         groupsQuery.isError ||
         servicesQuery.isError ||
+        profilesQuery.isError ||
         prioOverridesQuery.isError ||
         prioritiesQuery.isError ||
         statusQuery.isError,
@@ -385,6 +394,8 @@ export function useOrderSlaStatuses(
     groupsQuery.isError,
     servicesQuery.isLoading,
     servicesQuery.isError,
+    profilesQuery.isLoading,
+    profilesQuery.isError,
     prioOverridesQuery.isLoading,
     prioOverridesQuery.isError,
     prioritiesQuery.isLoading,

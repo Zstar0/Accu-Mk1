@@ -20,6 +20,8 @@ vi.mock('@/lib/api', async importOriginal => {
     putRideHosts: vi.fn(),
     getVialRoles: vi.fn(),
     getDepartments: vi.fn(),
+    // Task 11: the page now also renders an SLA tier Select (useSlaTiers()).
+    getSlaTiers: vi.fn(),
   }
 })
 
@@ -35,6 +37,7 @@ import {
   putRideHosts,
   getVialRoles,
   getDepartments,
+  getSlaTiers,
 } from '@/lib/api'
 import { toast } from 'sonner'
 import AnalysisProfilesPage from '@/components/hplc/AnalysisProfilesPage'
@@ -59,6 +62,8 @@ const PROFILE: AnalysisProfile = {
   coa_archetype: null,
   coa_sort_order: 0,
   member_ids: [],
+  member_service_ids: [],
+  sla_tier_id: null,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
 }
@@ -113,6 +118,7 @@ describe('AnalysisProfilesPage — ride hosts editor (spec 4)', () => {
       [HPLC_ROLE, ENDO_ROLE, STER_ROLE, XTRA_ROLE, OWN_ROLE]
     )
     vi.mocked(getDepartments).mockReset().mockResolvedValue([DEPT])
+    vi.mocked(getSlaTiers).mockReset().mockResolvedValue([])
     vi.mocked(toast.error).mockClear()
     vi.mocked(toast.success).mockClear()
   })

@@ -361,6 +361,13 @@ class AnalysisProfile(Base):
     coa_sort_order: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
+    # ── Profile-level SLA tier (Task 11) ─────────────────────────────────────
+    # Beats the member services' group tier, loses to a priority override.
+    # NULL inherits the group's own tier (or the catch-all default) — same
+    # nullable-FK semantics as ServiceGroup.sla_tier_id.
+    sla_tier_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("sla_tiers.id", ondelete="SET NULL"), nullable=True
+    )
     updated_by_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
