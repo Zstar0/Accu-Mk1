@@ -350,3 +350,67 @@ def test_rider_members_fail_closed_on_non_native(db_session, caplog):
     assert "catalog_seed_skipped_non_native" in caplog.text
     rows = db_session.query(LimsAnalysis).filter_by(lims_sub_sample_pk=sub.id).all()
     assert [r.keyword for r in rows] == ["ZZ3-HOST"]
+
+
+def test_set_assignment_role_wires_real_edge_driven_seeding(db_session, caplog):
+    """End-to-end through the REAL production wiring (set_assignment_role ->
+    write_custody_edges -> db.flush() -> seed_analyses_for_vial), not a
+    hand-built VialProfileAssignment row + a direct seed_analyses_for_vial
+    call like the four tests above. Proves the `sub_sample=sub_sample`
+    threading added at the catalog-branch call site in seed_analyses_for_vial
+    actually reaches _catalog_members_for_role inside the real transaction.
+
+    The rider profile anchors a DIFFERENT fulfillment_role ("zz4_rider_role")
+    than the vial's assigned role ("hm") and rides "hm" via
+    profile_ride_hosts — resolve_catalog_fulfillment attaches it as a RIDER
+    on "hm", but the legacy wp_services predicate (fulfillment_role == role)
+    could NEVER produce a "zz4_rider_role"-anchored profile for role "hm".
+    So the rider's member landing in lims_analyses is only possible if the
+    real custody-write -> custody-read path is actually wired end to end —
+    not a fallback-predicate coincidence. The absence of
+    catalog_seed_no_custody_fallback in the log confirms the edge path (not
+    the fallback) is what ran."""
+    import logging
+    from models import (
+        AnalysisProfile, AnalysisService, LimsAnalysis, LimsSample,
+        LimsSubSample, profile_ride_hosts,
+    )
+    import sub_samples.service as svc
+
+    svc_host = AnalysisService(title="ZZ4-HOST", keyword="ZZ4-HOST", origin="mk1", unit="ppm")
+    svc_rider = AnalysisService(title="ZZ4-RIDER", keyword="ZZ4-RIDER", origin="mk1", unit="ppm")
+    db_session.add_all([svc_host, svc_rider]); db_session.flush()
+
+    host = AnalysisProfile(key="zz4_host", name="ZZ4 Host", is_addon=False,
+                           vials_required=1, fulfillment_role="hm",
+                           fulfillment_dim="role", active=True)
+    rider = AnalysisProfile(key="zz4_rider", name="ZZ4 Rider", is_addon=True,
+                            vials_required=1, fulfillment_role="zz4_rider_role",
+                            fulfillment_dim="role", active=True)
+    db_session.add_all([host, rider]); db_session.flush()
+    _add_profile_members(db_session, host, [svc_host])
+    _add_profile_members(db_session, rider, [svc_rider])
+    db_session.execute(profile_ride_hosts.insert().values(
+        analysis_profile_id=rider.id, host_role_code="hm", priority=0,
+    ))
+    db_session.commit()
+
+    parent = LimsSample(sample_id="ZZ4-0001", external_lims_uid="zz4-uid")
+    db_session.add(parent); db_session.flush()
+    sub = LimsSubSample(
+        sample_id="ZZ4-0001-S01", vial_sequence=1, parent_sample_pk=parent.id,
+        external_lims_uid="zz4-0001-s01-uid",
+    )
+    db_session.add(sub); db_session.commit()
+
+    with caplog.at_level(logging.WARNING):
+        result = svc.set_assignment_role(
+            db_session, sub.sample_id, "hm",
+            wp_services={"zz4_host": True, "zz4_rider": True}, user_id=11,
+        )
+
+    assert result["assignment_role"] == "hm"
+    rows = db_session.query(LimsAnalysis).filter_by(lims_sub_sample_pk=sub.id).all()
+    kws = {r.keyword for r in rows}
+    assert kws == {"ZZ4-HOST", "ZZ4-RIDER"}
+    assert "catalog_seed_no_custody_fallback" not in caplog.text

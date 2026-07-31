@@ -92,11 +92,11 @@ def _members_through_origin_gate(
 ) -> List[AnalysisService]:
     """Shared per-profile fail-closed origin gate + cross-profile dedup.
     `profiles_with_labels` is an ordered list of (profile, log_label) pairs
-    — log_label is the profile key (wp_services path) or the profile id
-    (edge path), whichever the caller has handy for the warning line.
-    A profile with zero members or any non-mk1-origin member is skipped in
-    full (mirrors spec-2's all-native section rule); its native siblings do
-    NOT partially seed."""
+    — log_label is the profile's key in both callers (the wp_services dict
+    key on the predicate path, `prof.key` on the edge path), used only for
+    the warning line. A profile with zero members or any non-mk1-origin
+    member is skipped in full (mirrors spec-2's all-native section rule);
+    its native siblings do NOT partially seed."""
     out: List[AnalysisService] = []
     seen: Set[int] = set()
     for prof, label in profiles_with_labels:
