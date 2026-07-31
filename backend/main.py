@@ -16198,7 +16198,7 @@ def get_sub_sample_custody(
 # can't be deleted at all.
 
 @app.get("/vial-roles", response_model=list[VialRoleResponse])
-async def get_vial_roles(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
+def get_vial_roles(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     from models import VialRole
     return db.execute(
         select(VialRole).order_by(VialRole.sort_order, VialRole.code)
@@ -16206,7 +16206,7 @@ async def get_vial_roles(db: Session = Depends(get_db), _current_user=Depends(ge
 
 
 @app.post("/vial-roles", response_model=VialRoleResponse, status_code=201)
-async def create_vial_role(
+def create_vial_role(
     data: VialRoleCreate,
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
@@ -16230,7 +16230,7 @@ async def create_vial_role(
 
 
 @app.patch("/vial-roles/{role_id}", response_model=VialRoleResponse)
-async def update_vial_role(
+def update_vial_role(
     role_id: int,
     data: VialRoleUpdate,
     db: Session = Depends(get_db),
@@ -16265,7 +16265,7 @@ async def update_vial_role(
 
 
 @app.delete("/vial-roles/{role_id}", status_code=204)
-async def delete_vial_role(
+def delete_vial_role(
     role_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)
 ):
     """is_system → 400 outright. Otherwise refused (409, naming the reference)
@@ -16310,7 +16310,7 @@ async def delete_vial_role(
 # (same idiom as /vial-roles' department FK and /departments itself).
 
 @app.get("/bench-stations", response_model=list[BenchStationResponse])
-async def get_bench_stations(
+def get_bench_stations(
     db: Session = Depends(get_db), _current_user=Depends(get_current_user)
 ):
     from models import BenchStation
@@ -16320,7 +16320,7 @@ async def get_bench_stations(
 
 
 @app.post("/bench-stations", response_model=BenchStationResponse, status_code=201)
-async def create_bench_station(
+def create_bench_station(
     data: BenchStationCreate,
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
@@ -16342,7 +16342,7 @@ async def create_bench_station(
 
 
 @app.patch("/bench-stations/{station_id}", response_model=BenchStationResponse)
-async def update_bench_station(
+def update_bench_station(
     station_id: int,
     data: BenchStationUpdate,
     db: Session = Depends(get_db),
@@ -16382,7 +16382,9 @@ def _resolve_bench_station_from_token(db: Session, token: str):
     gets no more signal than "try a fresh one". A station deactivated after
     a QR was printed simply stops resolving, same contract as a revoked
     token (mint-time also refuses a station that's already inactive —
-    capture_tokens/routes.py's mint branch)."""
+    capture_tokens/routes.py's mint branch). Returns (station, tok) — the
+    resolved capture-token row is handed back too so callers that need its
+    id (the scan-cap counter, spec 4 fix round) don't have to re-resolve."""
     from capture_tokens import service as capture_service
     from models import BenchStation
     try:
@@ -16397,21 +16399,29 @@ def _resolve_bench_station_from_token(db: Session, token: str):
     station = db.get(BenchStation, station_id)
     if station is None or not station.active:
         raise HTTPException(status_code=404, detail="unknown bench station")
-    return station
+    return station, tok
 
 
 @app.get("/api/bench/{token}")
-async def get_bench_token_context(token: str, db: Session = Depends(get_db)):
-    station = _resolve_bench_station_from_token(db, token)
+def get_bench_token_context(token: str, db: Session = Depends(get_db)):
+    station, _tok = _resolve_bench_station_from_token(db, token)
     return {"station_name": station.name}
 
 
 @app.post("/api/bench/{token}/scan", status_code=201)
-async def scan_via_bench_token(
+def scan_via_bench_token(
     token: str, data: BenchTokenScanIn, db: Session = Depends(get_db)
 ):
+    from capture_tokens import service as capture_service
     from models import LimsSubSample, LimsSubSampleEvent
-    station = _resolve_bench_station_from_token(db, token)
+    station, tok = _resolve_bench_station_from_token(db, token)
+    # Per-token scan cap (spec 4 fix round, mirrors MAX_PHOTOS_PER_TOKEN):
+    # the token id rides in this event's details (bench_scanned has no
+    # dedicated capture_token_id column, unlike LimsPackagingPhoto), so the
+    # count is scoped to events written via THIS token, not the JWT
+    # scanner-gun path (/bench-scans, unlimited, real actor).
+    if capture_service.token_scan_count(db, tok.id) >= capture_service.MAX_SCANS_PER_TOKEN:
+        raise HTTPException(status_code=429, detail="scan limit reached for this bench session")
     # Scanner guns / manual entry can trail whitespace — normalize before the
     # lookup so a stray space doesn't read as an "unknown vial" 404.
     sample_id = data.sample_id.strip()
@@ -16423,7 +16433,10 @@ async def scan_via_bench_token(
     ev = LimsSubSampleEvent(
         sub_sample_pk=sub.id,
         event="bench_scanned",
-        details={"station_id": station.id, "station_name": station.name},
+        details={
+            "station_id": station.id, "station_name": station.name,
+            "capture_token_id": tok.id,
+        },
         user_id=None,
     )
     db.add(ev)

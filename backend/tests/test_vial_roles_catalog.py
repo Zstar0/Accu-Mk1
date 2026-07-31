@@ -1,4 +1,6 @@
 """vial_roles catalog table: seed + registry (spec 4 Task 1)."""
+import logging
+
 from catalog.vial_roles_seed import seed_vial_roles
 from catalog.roles import role_registry, real_bucket_codes, suggest_role_code
 from models import VialRole
@@ -63,6 +65,61 @@ def test_real_bucket_codes_excludes_xtra_and_orders_by_sort(db_session):
     codes = real_bucket_codes(db_session)
     assert codes == ["hplc", "endo", "ster", "hm"]  # legacy _BUCKET_PRIORITY order via sort_order
     assert "xtra" not in codes
+
+
+def test_seed_without_departments_leaves_null_and_logs_error(db_session, caplog):
+    # No backfill_departments call: every non-xtra legacy role's department
+    # name fails to resolve (fix round, spec 4 self-heal).
+    with caplog.at_level(logging.ERROR, logger="accumark.catalog"):
+        seed_vial_roles(db_session)
+    reg = role_registry(db_session)
+    for code in ("hplc", "endo", "ster", "hm"):
+        assert reg[code].department_id is None
+    assert reg["xtra"].department_id is None  # by design, not an error case
+    errors = [r for r in caplog.records if r.message.startswith("vial_roles_seed_department_unresolved")]
+    logged_codes = {r.getMessage().split("code=")[1].split(" ")[0] for r in errors}
+    assert logged_codes == {"hplc", "endo", "ster", "hm"}
+
+
+def test_backfill_then_reseed_heals_null_department_rows(db_session, caplog):
+    # First boot: departments don't exist yet, so the legacy rows seed with
+    # department_id NULL (same as the test above).
+    with caplog.at_level(logging.ERROR, logger="accumark.catalog"):
+        seed_vial_roles(db_session)
+    reg = role_registry(db_session)
+    assert reg["hplc"].department_id is None
+
+    # Second boot: departments now exist. Re-running seed_vial_roles must
+    # heal the existing rows in place (NULL -> resolved id), not just skip
+    # them because the code already exists.
+    from catalog.departments import backfill_departments
+    backfill_departments(db_session)
+    caplog.clear()
+    with caplog.at_level(logging.ERROR, logger="accumark.catalog"):
+        seed_vial_roles(db_session)
+    reg = role_registry(db_session)
+    assert reg["hplc"].department.name == "Analytical"
+    assert reg["endo"].department.name == "Microbiology"
+    assert reg["ster"].department.name == "Microbiology"
+    assert reg["hm"].department.name == "Heavy Metals"
+    # healed cleanly -> no more unresolved-department errors this run
+    errors = [r for r in caplog.records if r.message.startswith("vial_roles_seed_department_unresolved")]
+    assert errors == []
+    # still exactly one row per code — healing updates in place, never duplicates
+    assert db_session.query(VialRole).filter_by(code="hplc").count() == 1
+
+
+def test_heal_never_clobbers_an_admin_set_department(db_session):
+    from catalog.departments import backfill_departments
+    backfill_departments(db_session)
+    seed_vial_roles(db_session)
+    reg = role_registry(db_session)
+    other_dept_id = reg["ster"].department_id  # a real, different department
+    reg["hm"].department_id = other_dept_id
+    db_session.commit()
+    seed_vial_roles(db_session)  # re-run: hm already has a resolvable dept_id
+    reg = role_registry(db_session)
+    assert reg["hm"].department_id == other_dept_id  # untouched, not reset to Heavy Metals
 
 
 def test_suggest_role_code_sanitizes_truncates_uniquifies():

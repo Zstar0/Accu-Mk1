@@ -1860,9 +1860,13 @@ class VialProfileAssignment(Base):
     """Custody edge: which AnalysisProfile's work is on this vial (spec 4,
     catalog-driven bench — the ISO 17025 backbone). Append-only: a role
     flip supersedes every current row (stamps superseded_at once) and
-    inserts fresh ones — rows are NEVER UPDATEd otherwise, and there is no
-    DELETE path anywhere. The full table (current + superseded) IS the
-    audit trail; there's no separate log.
+    inserts fresh ones — rows are NEVER UPDATEd otherwise, and application
+    code has no DELETE path for a single row. There IS one delete path by
+    design: `lims_sub_sample_pk` is ON DELETE CASCADE, so deleting a vial
+    deletes its custody history along with it. The table (current +
+    superseded) is the audit trail for as long as the vial it belongs to
+    still exists; it does not survive the vial's deletion, and there's no
+    separate log that would.
 
     relation in ('host', 'rider') is enforced by a CHECK constraint in the
     raw DDL only (database.py) — deliberately NOT declared here, so SQLite

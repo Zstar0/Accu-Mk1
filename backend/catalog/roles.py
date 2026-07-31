@@ -8,8 +8,6 @@ from models import VialRole
 
 log = logging.getLogger(__name__)
 
-_CODE_RE = re.compile(r"[a-z][a-z0-9_]{0,7}")
-
 # Department name -> the exact worksheet-inbox lane key stored FE preferences
 # depend on (Task 7 conversion). Any OTHER department slugifies its own name
 # instead — see inbox_lanes().
@@ -40,6 +38,7 @@ def real_bucket_codes(db) -> list[str]:
 def suggest_role_code(key: str, existing: set) -> str:
     """Derive a role code from a profile key: lowercase, strip invalid chars,
     truncate to 8, uniquify with a numeric suffix."""
+    # FE parity reference: src/lib/role-code.ts ports this algorithm; the live suggestion path is the FE.
     base = re.sub(r"[^a-z0-9_]", "_", key.lower()).strip("_") or "role"
     if not base[0].isalpha():
         base = "r" + base

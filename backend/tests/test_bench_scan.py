@@ -336,7 +336,8 @@ def test_token_scan_writes_event_with_user_id_none(client, db_session):
         "name": "Token Bench", "department_id": dep["id"],
     }).json()
     sub = _make_sub(db_session)
-    raw = client.post("/api/capture-tokens", json={"station_id": station["id"]}).json()["token"]
+    minted = client.post("/api/capture-tokens", json={"station_id": station["id"]}).json()
+    raw = minted["token"]
 
     resp = client.post(f"/api/bench/{raw}/scan", json={"sample_id": sub.sample_id})
     assert resp.status_code == 201
@@ -347,8 +348,55 @@ def test_token_scan_writes_event_with_user_id_none(client, db_session):
 
     ev = db_session.query(LimsSubSampleEvent).filter_by(sub_sample_pk=sub.id).one()
     assert ev.event == "bench_scanned"
-    assert ev.details == {"station_id": station["id"], "station_name": "Token Bench"}
+    assert ev.details == {
+        "station_id": station["id"], "station_name": "Token Bench",
+        "capture_token_id": minted["id"],
+    }
     assert ev.user_id is None
+
+
+def test_token_scan_429_after_scan_cap(client, db_session, monkeypatch):
+    """Scan cap (spec 4 fix round) is per-token, mirrors the photo flow's
+    MAX_PHOTOS_PER_TOKEN idiom — 429 once THIS token's bench_scanned count
+    reaches the cap. Counting is per-token (not a global bench_scanned
+    count): a JWT-path row (no capture_token_id key at all — the discerning
+    case, since JSON_EXTRACT on an absent key must read as excluded, not as
+    a false match) and a different token's rows must not push a fresh
+    token toward its own cap."""
+    from capture_tokens import service as capture_service
+    monkeypatch.setattr(capture_service, "MAX_SCANS_PER_TOKEN", 1)
+
+    dep = _make_department(client)
+    station = client.post("/bench-stations", json={
+        "name": "Capped Bench", "department_id": dep["id"],
+    }).json()
+    sub = _make_sub(db_session)
+
+    # JWT scanner-gun path FIRST: writes bench_scanned rows with no
+    # capture_token_id key at all. Uncapped, and must not pollute any
+    # token's count below.
+    for _ in range(3):
+        jwt_scan = client.post("/bench-scans", json={
+            "station_id": station["id"], "sample_id": sub.sample_id,
+        })
+        assert jwt_scan.status_code == 201
+
+    raw = client.post("/api/capture-tokens", json={"station_id": station["id"]}).json()["token"]
+    first = client.post(f"/api/bench/{raw}/scan", json={"sample_id": sub.sample_id})
+    assert first.status_code == 201
+    second = client.post(f"/api/bench/{raw}/scan", json={"sample_id": sub.sample_id})
+    assert second.status_code == 429
+
+    # A fresh token (token B) scanning now: if the count were global (all
+    # bench_scanned rows, or leaking the JWT-path/token-A rows in) this
+    # would already be at/over cap=1 and 429. It must be 201 — token B's
+    # own count is still 0.
+    raw2 = client.post("/api/capture-tokens", json={"station_id": station["id"]}).json()["token"]
+    third = client.post(f"/api/bench/{raw2}/scan", json={"sample_id": sub.sample_id})
+    assert third.status_code == 201
+    # ...and token B is capped independently on its own second scan.
+    fourth = client.post(f"/api/bench/{raw2}/scan", json={"sample_id": sub.sample_id})
+    assert fourth.status_code == 429
 
 
 def test_token_scan_unknown_sample_404(client):

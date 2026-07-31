@@ -501,6 +501,7 @@ def _create_sub_sample_native(
     db.commit()
     db.refresh(sub)
 
+    # DO NOT add a role param to create paths without routing through set_assignment_role — direct seeding here would bypass custody edges (ISO 17025).
     _seed_analyses_if_role(db, sub, parent.sample_id, user_id)
     return sub
 
@@ -642,6 +643,7 @@ def _create_sub_sample_legacy(
     db.commit()
     db.refresh(sub)
 
+    # DO NOT add a role param to create paths without routing through set_assignment_role — direct seeding here would bypass custody edges (ISO 17025).
     _seed_analyses_if_role(db, sub, parent_sample_id, user_id)
     return sub
 
@@ -1691,16 +1693,11 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
         raise ValueError(f"Invalid role: {role!r}")
     if kind is not None and kind not in _VALID_KINDS:
         raise ValueError(f"Invalid assignment_kind: {kind!r}")
-    # Frozen maintenance: a role code is "in use" the moment anything (vial or
-    # parent) is assigned it — retire-don't-delete from here on. Idempotent;
-    # rides the same transaction as everything below (only persists if this
-    # call goes on to commit).
-    if role is not None and not registry[role].frozen:
-        registry[role].frozen = True
 
     sub = db.execute(
         select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
     ).scalar_one_or_none()
+    parent_row = None
     if sub is not None:
         # Lock guard: block re-assignment while variance set is locked.
         # Must fire BEFORE any mutation so the transaction is still clean on raise.
@@ -1710,6 +1707,16 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
                 f"variance set for {parent_row.sample_id} is locked; "
                 "unlock before re-assigning vials"
             )
+
+    # Frozen maintenance: a role code is "in use" the moment anything (vial or
+    # parent) is assigned it — retire-don't-delete from here on. Idempotent;
+    # rides the same transaction as everything below (only persists if this
+    # call goes on to commit). Fires AFTER the variance-lock guard above so a
+    # locked-set raise leaves the transaction with zero staged mutations.
+    if role is not None and not registry[role].frozen:
+        registry[role].frozen = True
+
+    if sub is not None:
         old_role = sub.assignment_role
         old_kind = sub.assignment_kind
         sub.assignment_role = role

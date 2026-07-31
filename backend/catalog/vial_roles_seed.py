@@ -24,12 +24,27 @@ _LEGACY_ROLES = [
 
 
 def seed_vial_roles(db) -> int:
-    existing = {code for (code,) in db.query(VialRole.code).all()}
+    existing = {r.code: r for r in db.query(VialRole).all()}
     created = 0
+    healed = 0
     for code, label, dept_name, boxable, var_ok, sort in _LEGACY_ROLES:
-        if code in existing:
-            continue
         dept_id = department_id_by_name(db, dept_name) if dept_name else None
+        if dept_name and dept_id is None:
+            log.error("vial_roles_seed_department_unresolved code=%s dept=%s", code, dept_name)
+        row = existing.get(code)
+        if row is not None:
+            # Self-heal (fix round): a legacy row can exist with
+            # department_id NULL because it was seeded before
+            # backfill_departments ever ran (departments seed AFTER vial
+            # roles in database.py's boot order, on the FIRST boot only —
+            # every boot after that, department rows already exist by the
+            # time this runs). NULL -> set only, never clobbers an admin
+            # edit (an admin who deliberately re-nulled a department, or
+            # pointed it elsewhere, keeps that value).
+            if row.department_id is None and dept_id is not None:
+                row.department_id = dept_id
+                healed += 1
+            continue
         db.add(
             VialRole(
                 code=code, label=label, department_id=dept_id, boxable=boxable,
@@ -40,5 +55,5 @@ def seed_vial_roles(db) -> int:
     # flush before any read-back: production SessionLocal is autoflush=False
     db.flush()
     db.commit()
-    log.info("catalog.vial_roles_seed created=%s", created)
+    log.info("catalog.vial_roles_seed created=%s healed=%s", created, healed)
     return created

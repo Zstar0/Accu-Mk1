@@ -682,10 +682,16 @@ function SingleRoleSection({
  *  VarianceDropZone, + rider chips) per role.
  *
  *  BW-0015 constraint (moved here from the deleted MicroBucket, still load-
- *  bearing): the outer shell is deliberately NOT a useDroppable target. An
- *  always-on drop id on the shell would let a vial dragged back toward the
- *  section land on an unintended role/kind instead of a no-op — only the
- *  per-role SubDropZone/VarianceDropZone below are real drop targets. */
+ *  bearing): the original bug was an always-on variance zone nested inside
+ *  the core bucket — a vial dragged back toward the section could land on
+ *  variance by accident, silently flipping assignment_kind with no
+ *  entitlement. Fixed by rendering each VarianceDropZone conditionally
+ *  (entitlement-gated: only when a paid replicate exists or the bucket
+ *  already holds variance vials). Downstream of that fix, the outer shell
+ *  here is deliberately NOT a useDroppable target either — an always-on
+ *  drop id on the shell would reintroduce the same class of accidental
+ *  landing, just one level up; only the per-role SubDropZone/
+ *  VarianceDropZone below are real drop targets. */
 function MultiRoleSection({
   section, plan, vialsForRole, onReset,
 }: {

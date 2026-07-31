@@ -76,7 +76,10 @@ def resolve_catalog_fulfillment(db, services: dict) -> dict:
         .where(profile_ride_hosts.c.analysis_profile_id.in_([p.id for p in ordered]))
     ).all() if ordered else []
     ride_map = {}
-    for pid, host, prio in sorted(ride_rows, key=lambda r: r[2]):
+    # Sort key is (priority, host_role_code, profile id) — priority is the
+    # real ordering, host_role_code + id are tiebreakers so two hand-written
+    # rows sharing a priority don't depend on DB read order (spec 4 fix round).
+    for pid, host, prio in sorted(ride_rows, key=lambda r: (r[2], r[1], r[0])):
         ride_map.setdefault(pid, []).append(host)
 
     anchors = [p for p in ordered if not ride_map.get(p.id)]

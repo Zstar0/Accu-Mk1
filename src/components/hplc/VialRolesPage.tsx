@@ -431,7 +431,33 @@ export default function VialRolesPage() {
 
                 {/* Sort order */}
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Sort Order</label>
+                  <div className="flex items-center gap-1.5">
+                    <label className="text-sm font-medium">Sort Order</label>
+                    <TooltipProvider delayDuration={200}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="h-3.5 w-3.5 text-muted-foreground cursor-default" />
+                        </TooltipTrigger>
+                        <TooltipContent side="right" className="max-w-xs">
+                          <div className="flex flex-col gap-1 p-1 text-xs font-mono">
+                            <div className="font-semibold border-b border-primary-foreground/20 pb-1">
+                              Sort Order
+                            </div>
+                            <div>Lower numbers come first. Drives three things at once:</div>
+                            <div className="pt-1 opacity-80">
+                              Auto-assign fill priority — which role a vial lands in first when the wizard assigns automatically.
+                            </div>
+                            <div className="opacity-80">
+                              Vial-plan section ordering — the order departments/roles render on the assign screen.
+                            </div>
+                            <div className="opacity-80">
+                              Inbox lane ordering — the order worksheet-inbox filter chips appear in.
+                            </div>
+                          </div>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
                   <Input
                     type="number"
                     placeholder="0"
