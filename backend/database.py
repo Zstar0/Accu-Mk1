@@ -1484,6 +1484,16 @@ def _run_migrations():
         created_at TIMESTAMP NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMP NOT NULL DEFAULT NOW()
     )""",
+        # --- Catalog-driven bench (spec 4): ride lists ---
+        # host_role_code deliberately NOT an FK to vial_roles (route-edge
+        # validation, same additive idiom as fulfillment_role above).
+        """CREATE TABLE IF NOT EXISTS profile_ride_hosts (
+        id SERIAL PRIMARY KEY,
+        analysis_profile_id INTEGER NOT NULL REFERENCES analysis_profiles(id) ON DELETE CASCADE,
+        host_role_code VARCHAR(8) NOT NULL,
+        priority INTEGER NOT NULL DEFAULT 0,
+        CONSTRAINT uq_profile_ride_host UNIQUE (analysis_profile_id, host_role_code)
+    )""",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

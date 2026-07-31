@@ -17,6 +17,8 @@ vi.mock('@/lib/api', async importOriginal => {
     updateAnalysisProfile: vi.fn(),
     deleteAnalysisProfile: vi.fn(),
     setAnalysisProfileMembers: vi.fn(),
+    getRideHosts: vi.fn(),
+    putRideHosts: vi.fn(),
     getVialRoles: vi.fn(),
     getDepartments: vi.fn(),
   }
@@ -32,6 +34,8 @@ import {
   getAnalysisServices,
   createAnalysisProfile,
   updateAnalysisProfile,
+  getRideHosts,
+  putRideHosts,
   getVialRoles,
   getDepartments,
 } from '@/lib/api'
@@ -91,6 +95,8 @@ describe('AnalysisProfilesPage — fulfillment fields', () => {
     vi.mocked(getAnalysisServices).mockReset().mockResolvedValue([])
     vi.mocked(createAnalysisProfile).mockReset().mockResolvedValue({ ...PROFILE, id: 99 })
     vi.mocked(updateAnalysisProfile).mockReset().mockResolvedValue({ ...PROFILE, fulfillment_role: 'hm' })
+    vi.mocked(getRideHosts).mockReset().mockResolvedValue([])
+    vi.mocked(putRideHosts).mockReset().mockResolvedValue({ count: 0 })
     vi.mocked(getVialRoles).mockReset().mockResolvedValue([])
     vi.mocked(getDepartments).mockReset().mockResolvedValue([DEPT])
     vi.mocked(toast.error).mockClear()

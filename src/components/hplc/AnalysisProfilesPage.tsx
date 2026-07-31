@@ -45,6 +45,8 @@ import {
   setAnalysisProfileMembers,
   getAnalysisProfileMembers,
   getAnalysisServices,
+  getRideHosts,
+  putRideHosts,
   type AnalysisProfile,
   type AnalysisServiceRecord,
 } from '@/lib/api'
@@ -121,6 +123,14 @@ export default function AnalysisProfilesPage() {
   const [savingMembers, setSavingMembers] = useState(false)
   const [memberSearch, setMemberSearch] = useState('')
 
+  // Ride-hosts editor state (spec 4) — an ORDERED list of host role codes.
+  // Order becomes priority on save (0 = first choice); see catalog_demand.
+  // resolve_catalog_fulfillment. Separate save action from the profile
+  // fields, same pattern as Members above.
+  const [rideHosts, setRideHosts] = useState<string[]>([])
+  const [loadingRideHosts, setLoadingRideHosts] = useState(false)
+  const [savingRideHosts, setSavingRideHosts] = useState(false)
+
   const refreshProfiles = useCallback(() => {
     // Both invalidated together: a save here can mint a vial_roles row
     // (auto-mint, Task 3) or backfill one's department, so the vial-roles
@@ -189,19 +199,24 @@ export default function AnalysisProfilesPage() {
     // member_ids on the list response is already sort_order-ordered, but it
     // can be up to 5min stale (useAnalysisProfiles' staleTime) — fetch fresh
     // membership here so Save Members can't silently revert a concurrent
-    // edit made since the list last loaded.
+    // edit made since the list last loaded. Ride hosts have no such stale
+    // echo on the list response at all, so they're always fetched fresh too.
     setLoadingMembers(true)
+    setLoadingRideHosts(true)
     try {
-      const [services, memberIds] = await Promise.all([
+      const [services, memberIds, hosts] = await Promise.all([
         getAnalysisServices(),
         getAnalysisProfileMembers(profile.id),
+        getRideHosts(profile.id),
       ])
       setAllServices(services)
       setSelectedOrder(memberIds)
+      setRideHosts(hosts)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to load membership data')
     } finally {
       setLoadingMembers(false)
+      setLoadingRideHosts(false)
     }
   }
 
@@ -211,6 +226,7 @@ export default function AnalysisProfilesPage() {
     setForm(DEFAULT_FORM)
     setAllServices([])
     setSelectedOrder([])
+    setRideHosts([])
   }
 
   // ── CRUD ──
@@ -336,6 +352,44 @@ export default function AnalysisProfilesPage() {
     }
   }
 
+  // ── Ride hosts (spec 4) ──
+
+  const addRideHost = (code: string) => {
+    setRideHosts(prev => (prev.includes(code) ? prev : [...prev, code]))
+  }
+
+  const removeRideHost = (code: string) => {
+    setRideHosts(prev => prev.filter(c => c !== code))
+  }
+
+  const moveRideHost = (index: number, direction: -1 | 1) => {
+    setRideHosts(prev => {
+      const target = index + direction
+      if (target < 0 || target >= prev.length) return prev
+      const next = [...prev]
+      const temp = next[index]!
+      next[index] = next[target]!
+      next[target] = temp
+      return next
+    })
+  }
+
+  const handleSaveRideHosts = async () => {
+    if (!editingProfile) return
+    setSavingRideHosts(true)
+    try {
+      const result = await putRideHosts(editingProfile.id, rideHosts)
+      toast.success(`Ride hosts saved — ${result.count} host${result.count !== 1 ? 's' : ''}`)
+    } catch (err) {
+      // Surfaces the backend's 400 text verbatim (e.g. "role 'endo' may not
+      // be a ride host...") — extractErrorMessage (api.ts) already unwraps
+      // the FastAPI {detail: "..."} body into err.message.
+      toast.error(err instanceof Error ? err.message : 'Failed to save ride hosts')
+    } finally {
+      setSavingRideHosts(false)
+    }
+  }
+
   // ── Filtering ──
 
   const filtered = profiles.filter(p => {
@@ -347,6 +401,18 @@ export default function AnalysisProfilesPage() {
       (p.description?.toLowerCase().includes(q) ?? false)
     )
   })
+
+  // Ride-host add options: never endo/ster/xtra (sensitive tests never
+  // share a vial with an unrelated result — client-side echo of the
+  // backend's _RIDE_HOST_FORBIDDEN, same idiom as FULFILLMENT_ROLE_PATTERN),
+  // never the profile's own role (can't ride itself), never one already on
+  // the list (avoid a duplicate-add the PUT would 500 on).
+  const RIDE_HOST_FORBIDDEN = new Set(['endo', 'ster', 'xtra'])
+  const rideHostOptions = vialRoles.filter(r =>
+    !RIDE_HOST_FORBIDDEN.has(r.code) &&
+    r.code !== editingProfile?.fulfillment_role &&
+    !rideHosts.includes(r.code)
+  )
 
   const serviceById = new Map(allServices.map(s => [s.id, s]))
   const filteredAvailable = allServices.filter(s => {
@@ -997,6 +1063,155 @@ export default function AnalysisProfilesPage() {
                             ))
                           )}
                         </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Ride hosts editor (spec 4) — only when editing an existing
+                  profile, same edit-only gating as Members/COA above. */}
+              {editingProfile && (
+                <div className="border-t pt-5 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <h3 className="text-sm font-semibold">Ride Hosts</h3>
+                      <TooltipProvider delayDuration={200}>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-3.5 w-3.5 text-muted-foreground cursor-default" />
+                          </TooltipTrigger>
+                          <TooltipContent side="right" className="max-w-xs">
+                            <div className="flex flex-col gap-1 p-1 text-xs font-mono">
+                              <div className="font-semibold border-b border-primary-foreground/20 pb-1">
+                                Ride lists
+                              </div>
+                              <div>
+                                Priority order — this profile's result attaches to the first host role below that already has a live vial.
+                              </div>
+                              <div>
+                                Falls back to minting its own vial when none of these hosts are ordered.
+                              </div>
+                              <div className="pt-1 opacity-80">
+                                endo, ster, and xtra can never be a ride host — sensitive tests never share a vial.
+                              </div>
+                            </div>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleSaveRideHosts}
+                      disabled={savingRideHosts || loadingRideHosts}
+                    >
+                      {savingRideHosts && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+                      Save Ride Hosts
+                    </Button>
+                  </div>
+
+                  {loadingRideHosts ? (
+                    <div className="flex items-center justify-center py-6">
+                      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : (
+                    <>
+                      {/* Selected — priority ordered */}
+                      <div className="space-y-1.5">
+                        <p className="text-xs text-muted-foreground">
+                          {rideHosts.length === 0
+                            ? 'No ride hosts — mints its own vial'
+                            : `${rideHosts.length} host${rideHosts.length !== 1 ? 's' : ''}, priority order`}
+                        </p>
+                        <div className="max-h-40 overflow-y-auto rounded-md border divide-y">
+                          {rideHosts.length === 0 ? (
+                            <p className="py-4 text-center text-sm text-muted-foreground">
+                              No ride hosts configured.
+                            </p>
+                          ) : (
+                            rideHosts.map((code, index) => {
+                              const role = vialRoles.find(r => r.code === code)
+                              return (
+                                <div
+                                  key={code}
+                                  className="flex items-center gap-3 px-3 py-2"
+                                >
+                                  <Badge variant="secondary" className="w-6 justify-center shrink-0 font-mono text-[10px]">
+                                    {index + 1}
+                                  </Badge>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="text-sm font-medium truncate font-mono">{code}</div>
+                                    {role?.label && (
+                                      <div className="text-xs text-muted-foreground truncate">
+                                        {role.label}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-0.5 shrink-0">
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-6 w-6"
+                                      disabled={index === 0}
+                                      aria-label={`Move ${code} up`}
+                                      onClick={() => moveRideHost(index, -1)}
+                                    >
+                                      <ChevronUp className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-6 w-6"
+                                      disabled={index === rideHosts.length - 1}
+                                      aria-label={`Move ${code} down`}
+                                      onClick={() => moveRideHost(index, 1)}
+                                    >
+                                      <ChevronDown className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-6 w-6 text-destructive hover:text-destructive"
+                                      aria-label={`Remove ${code} ride host`}
+                                      onClick={() => removeRideHost(code)}
+                                    >
+                                      <X className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </div>
+                                </div>
+                              )
+                            })
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Add — select from the vial-roles catalog, already
+                          excluding endo/ster/xtra, this profile's own role,
+                          and codes already on the list. */}
+                      <div className="space-y-1.5">
+                        <Select
+                          value=""
+                          onValueChange={v => addRideHost(v)}
+                          disabled={rideHostOptions.length === 0}
+                        >
+                          <SelectTrigger className="w-56 h-8 text-xs" aria-label="Add ride host">
+                            <SelectValue
+                              placeholder={
+                                rideHostOptions.length === 0
+                                  ? 'No eligible roles'
+                                  : 'Add a ride host role...'
+                              }
+                            />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {rideHostOptions.map(r => (
+                              <SelectItem key={r.code} value={r.code}>
+                                {r.code} — {r.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       </div>
                     </>
                   )}

@@ -2438,6 +2438,19 @@ class AnalysisProfileMembersRequest(BaseModel):
     analysis_service_ids: list[int]
 
 
+class RideHostsRequest(BaseModel):
+    # Position = priority (0 = first choice), mirroring analysis_service_ids
+    # on AnalysisProfileMembersRequest.
+    host_role_codes: list[str]
+
+
+# Ride lists (spec 4, Task 4): these three codes may never be a ride-host
+# target. endo/ster because sensitive tests never share a vial with an
+# unrelated result; xtra because it's the reserved unassigned bucket, not a
+# real fulfillment target.
+_RIDE_HOST_FORBIDDEN = {"endo", "ster", "xtra"}
+
+
 # Only legal non-NULL coa_archetype today. NULL = profile is not reported on
 # the certificate (a legitimate internal-only test); validated at the route
 # edge rather than a DB CHECK constraint so a second archetype is a one-line
@@ -15913,6 +15926,97 @@ async def set_analysis_profile_members(
                     role.code, role.department_id, p.key,
                 )
     return {"count": len(ordered_ids)}
+
+
+@app.get("/analysis-profiles/{profile_id}/ride-hosts", response_model=list[str])
+async def get_analysis_profile_ride_hosts(
+    profile_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Return the profile's ride-host role codes, in priority order (position
+    0 = first choice)."""
+    from models import AnalysisProfile, profile_ride_hosts
+    p = db.get(AnalysisProfile, profile_id)
+    if p is None:
+        raise HTTPException(404, "analysis profile not found")
+    rows = db.execute(
+        select(profile_ride_hosts.c.host_role_code)
+        .where(profile_ride_hosts.c.analysis_profile_id == profile_id)
+        .order_by(profile_ride_hosts.c.priority)
+    ).all()
+    return [row.host_role_code for row in rows]
+
+
+@app.put("/analysis-profiles/{profile_id}/ride-hosts")
+async def set_analysis_profile_ride_hosts(
+    profile_id: int,
+    data: RideHostsRequest,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Replace-all, mirroring set_analysis_profile_members: list position
+    becomes priority. A ride host names a role this profile's result may
+    attach to instead of self-minting its own vial (see
+    catalog_demand.resolve_catalog_fulfillment) — never endo/ster (sensitive
+    tests never share a vial with an unrelated result), never xtra (the
+    reserved unassigned bucket), never the profile's own fulfillment_role (a
+    profile can't ride itself), never a duplicate code (would 500 on the
+    junction's UNIQUE constraint), and never a code absent from the
+    vial_roles catalog. Only a fulfillment_dim='role' profile has a single
+    role to ride against — a kind-dim profile (e.g. variance) is refused
+    outright.
+
+    A profile that itself anchors a legacy bucket (fulfillment_role in
+    hplc/endo/ster — _RESERVED_LEGACY_ROLES) may never carry a ride list at
+    all: resolve_catalog_fulfillment treats "has a ride row" as "is a
+    rider", so giving hplcpurity_identity/endotoxin/sterility_pcr a ride
+    list would silently zero their own legacy bucket the moment their host
+    is also ordered — the exact bucket-count drift the binding constraint
+    ("ride-list demand must never change a legacy bucket count") forbids.
+    Refused here, structurally, rather than caught downstream by
+    derive_base_demand's shadow-compare — Tasks 5/6/8 consume
+    resolve_catalog_fulfillment directly and never see that shadow-compare.
+
+    Validated fully BEFORE any write, so a bad code in the payload can't
+    partially wipe an existing ride list."""
+    from catalog.roles import role_registry
+    from models import AnalysisProfile, profile_ride_hosts
+    p = db.get(AnalysisProfile, profile_id)
+    if p is None:
+        raise HTTPException(404, "analysis profile not found")
+    if p.fulfillment_dim != "role":
+        raise HTTPException(
+            400, "ride-hosts only applies to fulfillment_dim='role' profiles")
+    if p.fulfillment_role in _RESERVED_LEGACY_ROLES:
+        raise HTTPException(
+            400,
+            f"profile '{p.key}' fulfills the legacy role '{p.fulfillment_role}' — "
+            "legacy buckets always anchor, they never ride",
+        )
+    if len(set(data.host_role_codes)) != len(data.host_role_codes):
+        raise HTTPException(400, "duplicate host codes in one request")
+
+    reg = role_registry(db)
+    for code in data.host_role_codes:
+        if code not in reg:
+            raise HTTPException(400, f"unknown role code '{code}'")
+        if code in _RIDE_HOST_FORBIDDEN:
+            raise HTTPException(
+                400, f"role '{code}' may not be a ride host (sensitive tests never share a vial)")
+        if code == p.fulfillment_role:
+            raise HTTPException(400, "a profile may not ride its own role")
+
+    db.execute(
+        profile_ride_hosts.delete().where(
+            profile_ride_hosts.c.analysis_profile_id == profile_id
+        )
+    )
+    for i, code in enumerate(data.host_role_codes):
+        db.execute(profile_ride_hosts.insert().values(
+            analysis_profile_id=profile_id, host_role_code=code, priority=i))
+    db.commit()
+    return {"count": len(data.host_role_codes)}
 
 
 # ─── Vial Roles ─────────────────────────────────────────────────────────────

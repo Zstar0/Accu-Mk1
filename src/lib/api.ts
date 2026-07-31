@@ -4623,6 +4623,32 @@ export async function setAnalysisProfileMembers(
   return response.json()
 }
 
+/**
+ * Ride lists (spec 4): the priority-ordered host role codes this profile's
+ * result may attach to instead of self-minting its own vial. Position in
+ * the list = priority (0 = first choice), same idiom as
+ * getAnalysisProfileMembers/setAnalysisProfileMembers above.
+ */
+export async function getRideHosts(id: number): Promise<string[]> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-profiles/${id}/ride-hosts`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to load ride hosts: ${response.status}`)
+  return response.json()
+}
+
+export async function putRideHosts(
+  id: number, hostRoleCodes: string[]
+): Promise<{ count: number }> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-profiles/${id}/ride-hosts`, {
+    method: 'PUT',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({ host_role_codes: hostRoleCodes }),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to set ride hosts'))
+  return response.json()
+}
+
 // ─── Vial Roles ─────────────────────────────────────────────────────────────
 // Catalog-driven bench roles (spec 4). `code` is the DB join key on vials
 // (assignment_role, VARCHAR(8)); this is its editable face.

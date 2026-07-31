@@ -273,6 +273,26 @@ analysis_profile_members = Table(
 )
 
 
+# Ride lists (spec 4, Task 4): a profile's priority-ordered list of vial
+# roles it may attach ("ride") its result to instead of self-minting its own
+# vial. Position in the list IS priority (0 = first choice), mirroring
+# analysis_profile_members' sort_order idiom. host_role_code is deliberately
+# NOT a foreign key to vial_roles — validated at the route edge instead (the
+# same additive idiom used for AnalysisProfile.fulfillment_role) — so a role
+# retired out from under a stale ride row degrades gracefully (the row is
+# just never a live host) instead of cascading a delete or blocking one.
+profile_ride_hosts = Table(
+    "profile_ride_hosts",
+    Base.metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("analysis_profile_id", Integer,
+           ForeignKey("analysis_profiles.id", ondelete="CASCADE"), nullable=False),
+    Column("host_role_code", String(8), nullable=False),
+    Column("priority", Integer, nullable=False, default=0),
+    UniqueConstraint("analysis_profile_id", "host_role_code", name="uq_profile_ride_host"),
+)
+
+
 class VialRole(Base):
     """A vial role as a catalog row (spec 4). The role stays the DB join key on vials
     (lims_sub_samples.assignment_role, VARCHAR(8) — NOT widened); the profile is its face.
