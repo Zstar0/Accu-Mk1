@@ -475,14 +475,25 @@ class TestVialPlanSections:
             real_db.query(AnalysisProfile).filter_by(key="zztest_rides_hplc").delete()
             real_db.commit()
 
-    def test_sections_empty_when_variance_locked(self, real_db, monkeypatch):
-        """Binding constraint (verbatim from the plan): sections is empty on
-        BOTH early-return paths — IS-unreachable AND the variance-locked
-        branch (no auto-assign runs this call, so there's no fresh role/
-        profile grouping to hand Task 9). Distinct from the two tests above,
-        which exercise the persist-loop path where real sections ARE built."""
+    def test_sections_locked_carries_real_sections_grouping_stored_roles(self, real_db, monkeypatch):
+        """Fix round (review finding, overturns the initial 'sections: []
+        on both early returns' reading): a variance-locked parent still
+        gets REAL sections. _build_vial_plan_sections is a pure grouping
+        read over demand/services/vials with no auto-assign precondition —
+        a locked-but-assigned parent already has everything it needs (real
+        demand, real services, _current_vials() reflecting the STORED
+        roles), even though auto-assign itself is skipped (spec §5 lock
+        guard, untouched by this task). Only the IS-unreachable early
+        return (no services to resolve fulfillment against) carries
+        sections: []."""
         _ensure_catalog(real_db)
-        parent = _mk_zztest_parent(real_db, "ZZTEST-SEC-LOCKED", n_subs=1)
+        parent = _mk_zztest_parent(real_db, "ZZTEST-SEC-LOCKED", n_subs=2)
+        subs = real_db.query(LimsSubSample).filter(
+            LimsSubSample.sample_id.like("ZZTEST-SEC-LOCKED%")
+        ).order_by(LimsSubSample.vial_sequence).all()
+        subs[0].assignment_role = "hplc"
+        subs[0].assignment_kind = "core"
+        # subs[1] stays NULL — proves auto-assign did NOT run under the lock.
         parent.variance_locked_at = datetime.utcnow()
         real_db.commit()
         services = {"hplcpurity_identity": True}
@@ -493,7 +504,22 @@ class TestVialPlanSections:
         try:
             plan = sub_service.compute_vial_plan(real_db, "ZZTEST-SEC-LOCKED")
             assert plan["is_unreachable"] is False
-            assert plan["sections"] == []
+            # auto-assign did NOT run: the unassigned sub is still NULL in
+            # both the response's own vials list and the DB.
+            vial_by_id = {v["sample_id"]: v for v in plan["vials"]}
+            assert vial_by_id[subs[1].sample_id]["assignment_role"] is None
+            real_db.refresh(subs[1])
+            assert subs[1].assignment_role is None
+            # sections is REAL, grouping the stored hplc assignment.
+            sections = plan["sections"]
+            analytical = next((s for s in sections if s["department_name"] == "Analytical"), None)
+            assert analytical is not None, sections
+            assert [r["code"] for r in analytical["roles"]] == ["hplc"]
+            hplc_spot = analytical["roles"][0]
+            assert any(
+                p["key"] == "hplcpurity_identity" and p["relation"] == "host"
+                for p in hplc_spot["profiles"]
+            )
         finally:
             _cleanup_zztest(real_db, "ZZTEST-SEC-LOCKED")
 

@@ -5731,8 +5731,10 @@ export interface VialPlanResponse {
   /** Container family: parent is a pure depository — `vials` contains no
    *  parent entry when true (legacy families list the parent first). */
   container_mode?: boolean
-  /** Department-grouped role/profile metadata (spec 4, Task 8) — empty on
-   *  the IS-unreachable and variance-locked early returns. */
+  /** Department-grouped role/profile metadata (spec 4, Task 8) — empty ONLY
+   *  on the IS-unreachable early return (no services to resolve fulfillment
+   *  against). A variance-locked plan still carries real sections grouping
+   *  its stored (non-auto-assigned) vial roles. */
   sections: VialPlanSection[]
 }
 

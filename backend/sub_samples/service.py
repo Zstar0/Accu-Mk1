@@ -1299,20 +1299,25 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
     # set_assignment_role enforces this per-call; mirror it here by skipping
     # auto-assign entirely and returning the stored state.
     #
-    # sections: [] here too (spec 4, Task 8 binding constraint) — same as the
-    # IS-unreachable path, this is an "empty plan" as far as the assignment
-    # page's catalog-driven bench is concerned: nothing is being auto-assigned
-    # this call, so there's no fresh role/profile grouping to hand Task 9.
+    # sections still builds for real here (fix round, review finding): the
+    # builder is a pure grouping read over demand/services/vials — it has no
+    # auto-assign precondition. A locked-but-assigned parent has every input
+    # it needs (real demand, real services, _current_vials() reflecting the
+    # stored roles), so Task 9's bench should still get real department/role
+    # grouping metadata for it, same as the final return below. Only the
+    # IS-unreachable early return carries sections: [] (no services, nothing
+    # to resolve fulfillment against).
     if parent.variance_locked_at is not None:
+        locked_vials = _current_vials()
         return {
             "demand": demand,
             "variance": variance,
             "base_demand": base_demand,
             "wp_order_number": services_resp.get("wp_order_number"),
             "is_unreachable": False,
-            "vials": _current_vials(),
+            "vials": locked_vials,
             "container_mode": parent.container_mode,
-            "sections": [],
+            "sections": _build_vial_plan_sections(db, demand, locked_vials, services),
         }
 
     from catalog.roles import real_bucket_codes
