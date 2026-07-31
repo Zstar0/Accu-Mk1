@@ -510,11 +510,17 @@ describe('BoxStep — capacity-driven boxing', () => {
       })
       renderBoxStep()
 
-      expect(await screen.findByText('Heavy Metals')).toBeInTheDocument()
+      const header = await screen.findByText('Heavy Metals')
       expect(await screen.findByText('P-301')).toBeInTheDocument()
       // No new box was auto-created for it (one already existed) — a stale
       // boxable=false flag must not spuriously mint a second hm box either.
       expect(mockCreateBox).not.toHaveBeenCalledWith(ORDER, 'hm')
+      // The column's own "+ Add box" button is disabled — minting a NEW box
+      // for a role the catalog no longer marks boxable would 400 against
+      // next_box's fail-closed check; the column/existing box stay usable,
+      // only the new-box affordance is gated.
+      const addBoxButton = header.closest('div')?.querySelector('button')
+      expect(addBoxButton).toBeDisabled()
     })
   })
 })

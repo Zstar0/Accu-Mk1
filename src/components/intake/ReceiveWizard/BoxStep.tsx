@@ -209,10 +209,19 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
   // (same invisibility class as Task 9's variance_eligible finding — stored
   // reality always wins over the flag). Unrecognized/no-longer-catalog codes
   // sort after every known one; roleLabel()'s fallback still labels them.
+  //
+  // boxableCodes is the STRICTER set (catalog boxable=true only) — used to
+  // gate the "+ Add box" button and the auto-assign trailing-box create, so
+  // a union-only column (existing box, flag now off) never offers a control
+  // that would 400 against next_box's fail-closed boxable check
+  // (backend/boxes/service.py). The column itself still renders — the union
+  // above is what keeps it visible; this set only disables its NEW-box
+  // affordances, never the existing box card or drag/drop onto it.
   const vialRoles = vialRolesQ.data ?? []
+  const boxableCodes = new Set(vialRoles.filter(r => r.boxable).map(r => r.code))
   const sortOrderByCode = new Map(vialRoles.map(r => [r.code, r.sort_order]))
   const roles: BoxRole[] = Array.from(new Set([
-    ...vialRoles.filter(r => r.boxable).map(r => r.code),
+    ...boxableCodes,
     ...boxes.map(b => b.role),
   ])).sort((a, b) => {
     const sa = sortOrderByCode.get(a) ?? Number.MAX_SAFE_INTEGER
@@ -327,7 +336,10 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
       const remaining = roleUnboxed.slice(take)
       const otherEmptyBox = boxes.some(b => b.id !== box.id && b.role === role && b.vial_count === 0)
       const thisBoxStillEmpty = box.vial_count + takenIds.length === 0
-      if (remaining.length > 0 && !otherEmptyBox && !thisBoxStillEmpty) {
+      // boxableCodes-gated: a role kept on the grid only via the existing-box
+      // union (its catalog boxable flag is now false) can't mint a NEW box —
+      // createBox -> next_box is fail-closed on boxable server-side.
+      if (remaining.length > 0 && !otherEmptyBox && !thisBoxStillEmpty && boxableCodes.has(role)) {
         const created = await createBox(orderKey, role)
         await cancelBoxRefetches(qc, orderKey)
         patchBoxes(qc, orderKey, old => [...old, created])
@@ -414,7 +426,15 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
                 <div key={role} className="flex flex-col gap-3">
                   <div className="flex items-center justify-between">
                     <h3 className={`font-semibold ${roleTextClass(role)}`}>{roleLabel(role)}</h3>
-                    <Button size="sm" variant="outline" onClick={() => void addBox(role)}>+ Add box</Button>
+                    {/* Disabled (not hidden) when this column is on the grid
+                        only via the existing-box union: the column and its
+                        boxes stay usable, but minting a NEW box for a role
+                        the catalog no longer marks boxable would 400. */}
+                    <Button size="sm" variant="outline" onClick={() => void addBox(role)}
+                      disabled={!boxableCodes.has(role)}
+                      title={boxableCodes.has(role) ? undefined : 'This role is no longer boxable in the catalog'}>
+                      + Add box
+                    </Button>
                   </div>
                   {boxes.filter(b => b.role === role).map(b => (
                     <BoxCard
