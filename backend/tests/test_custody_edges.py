@@ -237,30 +237,52 @@ def test_edges_commit_atomically_with_role(db_session, monkeypatch):
 
 
 def test_no_services_skips_edges_with_warning(db_session, caplog, monkeypatch):
-    """wp_services unavailable (the PATCH route's default, resolved to
-    None/empty by IS): no edges are written or superseded, a
+    """Controller re-ruling (supersedes the earlier "full skip" semantics):
+    a role change ALWAYS supersedes current custody first, unconditionally
+    — the flip is a local fact that needs no services. wp_services
+    unavailable (the PATCH route's default, resolved to None/empty by IS)
+    then means NOTHING NEW is written: the prior edge is superseded, a
     'custody_edge_skipped' warning is logged, and the role write itself
-    still succeeds."""
-    monkeypatch.setattr(svc, "_fetch_wp_services_for_parent", lambda pid: None)
+    still succeeds — the vial honestly shows zero current custody rather
+    than a stale-but-wrong one."""
+    anchor = _mk(db_session, "zz_nosvc_anchor", "hm", vials=1)
     _parent, sub = _vial(db_session, "ZZNOSVC-0001")
 
+    # Prior generation, real services, so "supersession happened" is an
+    # observable claim and not vacuously true over an empty set.
+    svc.set_assignment_role(
+        db_session, sub.sample_id, "hm",
+        wp_services={"zz_nosvc_anchor": True}, user_id=1,
+    )
+    prior = current_custody(db_session, sub.id)
+    assert len(prior) == 1
+    prior_id = prior[0].id
+
+    monkeypatch.setattr(svc, "_fetch_wp_services_for_parent", lambda pid: None)
     with caplog.at_level("WARNING"):
         result = svc.set_assignment_role(
-            db_session, sub.sample_id, "hm", wp_services=None, user_id=1,
+            db_session, sub.sample_id, "hm", wp_services=None, user_id=2,
         )
 
     assert result["assignment_role"] == "hm"
     fresh = db_session.get(LimsSubSample, sub.id)
     assert fresh.assignment_role == "hm"
+    # supersession happened...
+    prior_row = db_session.get(type(prior[0]), prior_id)
+    assert prior_row.superseded_at is not None
+    # ...and zero new (current) rows were written.
     assert current_custody(db_session, sub.id) == []
     assert any("custody_edge_skipped" in r.message for r in caplog.records)
+    assert anchor.id is not None  # anchor never referenced by a fresh edge
 
 
-def test_no_services_leaves_existing_edges_untouched(db_session, monkeypatch):
-    """The binding decision, proven directly: a real-role reassignment with
-    no resolvable wp_services must NOT supersede whatever custody already
-    existed — losing custody on a transient IS outage would be worse than a
-    stale-but-correct record."""
+def test_no_services_supersedes_existing_edges_history_intact(db_session, monkeypatch):
+    """The re-ruled binding decision, proven directly: a real-role
+    reassignment with no resolvable wp_services SUPERSEDES whatever custody
+    already existed (stamped, not deleted — the history row survives with
+    its original id) and writes nothing new. Named test_no_services_leaves_
+    existing_edges_untouched pre-re-ruling; renamed because that claim is no
+    longer true."""
     _mk(db_session, "zz_keep_anchor", "hm", vials=1)
     _parent, sub = _vial(db_session, "ZZKEEP-0001")
 
@@ -271,14 +293,19 @@ def test_no_services_leaves_existing_edges_untouched(db_session, monkeypatch):
     before = current_custody(db_session, sub.id)
     assert len(before) == 1
     before_id = before[0].id
+    VPA = type(before[0])
 
     # Re-assign the SAME role, but this time services are unresolvable.
     monkeypatch.setattr(svc, "_fetch_wp_services_for_parent", lambda pid: None)
     svc.set_assignment_role(db_session, sub.sample_id, "hm", wp_services=None, user_id=2)
 
-    after = current_custody(db_session, sub.id)
-    assert len(after) == 1
-    assert after[0].id == before_id  # untouched — not superseded, not replaced
+    assert current_custody(db_session, sub.id) == []  # no current custody
+
+    # History intact: exactly the one original row, stamped not deleted.
+    all_rows = db_session.query(VPA).filter_by(lims_sub_sample_pk=sub.id).all()
+    assert len(all_rows) == 1
+    assert all_rows[0].id == before_id
+    assert all_rows[0].superseded_at is not None
 
 
 def test_legacy_hplc_vial_gets_host_edge(db_session):
@@ -383,3 +410,45 @@ def test_custody_endpoint_returns_history_current_first(client, db_session):
 def test_custody_endpoint_404_for_unknown_sample_id(client):
     resp = client.get("/sub-samples/ZZ-DOES-NOT-EXIST-S01/custody")
     assert resp.status_code == 404
+
+
+# ─── DELETE /analysis-profiles/{id} custody guard ──────────────────────────
+# vial_profile_assignments.analysis_profile_id is deliberately NOT ON DELETE
+# CASCADE (the custody trail must survive a profile edit/retirement) —
+# unlike every other FK to analysis_profiles. A bare db.delete(p) would
+# raise ForeignKeyViolation as an opaque 500 with a poisoned session; the
+# route must guard explicitly and steer toward deactivation instead.
+
+def test_delete_profile_with_custody_edge_returns_409(client, db_session):
+    """A profile referenced by custody history — even SUPERSEDED-only, no
+    current row — blocks the delete. Proves "history counts", not just
+    current custody."""
+    anchor = _mk(db_session, "zz_del_anchor", "hm", vials=1)
+    _parent, sub = _vial(db_session, "ZZDEL-0001")
+
+    svc.set_assignment_role(
+        db_session, sub.sample_id, "hm",
+        wp_services={"zz_del_anchor": True}, user_id=1,
+    )
+    # Flip away so the anchor's only custody edge is SUPERSEDED, not current.
+    svc.set_assignment_role(db_session, sub.sample_id, "xtra", user_id=1)
+    assert current_custody(db_session, sub.id) == []
+
+    resp = client.delete(f"/analysis-profiles/{anchor.id}")
+    assert resp.status_code == 409
+
+    # Not deleted: still readable, and its (superseded) custody row survives.
+    still_there = db_session.get(AnalysisProfile, anchor.id)
+    assert still_there is not None
+
+
+def test_delete_profile_without_custody_edge_returns_204(client, db_session):
+    """A profile with no custody history at all deletes cleanly — the guard
+    doesn't over-block."""
+    lone = _mk(db_session, "zz_del_lonely", "hm", vials=1)
+
+    resp = client.delete(f"/analysis-profiles/{lone.id}")
+    assert resp.status_code == 204
+
+    gone = db_session.get(AnalysisProfile, lone.id)
+    assert gone is None

@@ -15861,10 +15861,29 @@ async def update_analysis_profile(
 async def delete_analysis_profile(
     profile_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)
 ):
-    from models import AnalysisProfile
+    from models import AnalysisProfile, VialProfileAssignment
     p = db.get(AnalysisProfile, profile_id)
     if p is None:
         raise HTTPException(404, "analysis profile not found")
+    # vial_profile_assignments.analysis_profile_id is deliberately NOT
+    # ON DELETE CASCADE (the ISO 17025 custody trail must survive a profile
+    # edit/retirement) — unlike every other FK to analysis_profiles, a bare
+    # delete here raises ForeignKeyViolation as an opaque 500 with a
+    # poisoned session. Guard explicitly instead: ANY custody edge naming
+    # this profile — current OR superseded, history counts — blocks the
+    # delete and steers toward deactivation, which is reversible and keeps
+    # the profile row (and its custody history) intact.
+    has_custody = db.execute(
+        select(VialProfileAssignment.id)
+        .where(VialProfileAssignment.analysis_profile_id == profile_id)
+        .limit(1)
+    ).scalar_one_or_none()
+    if has_custody is not None:
+        raise HTTPException(
+            409,
+            f"profile '{p.key}' has vial custody history (current or superseded) "
+            "and cannot be deleted — deactivate it instead (active=false)",
+        )
     db.delete(p)
     db.commit()
 

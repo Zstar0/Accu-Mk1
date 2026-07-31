@@ -2,14 +2,20 @@
 supersede + insert, never rewrite. No commits here — callers own the
 transaction (sub_samples.service.set_assignment_role).
 
-Binding decision (task-5, overrides the naive "supersede unconditionally,
-then decide" ordering a first read of the plan's pseudocode suggests): when
-wp_services is unavailable for a REAL (non-xtra) role, existing custody
-rows are left completely alone — no supersede, no write. Superseding first
-and then discovering there's nothing to replace it with would silently
-erase custody on a transient Integration Service outage, which is worse
-than a stale-but-correct record. role None/'xtra' has no fulfillment to
-preserve, so it supersedes unconditionally regardless of wp_services.
+Binding decision (task-5, controller re-ruling — supersedes the earlier
+"full skip when services are unavailable" instruction): a role change
+ALWAYS supersedes every current custody row first, unconditionally — the
+flip itself is a local fact that needs no services to be true. The earlier
+"leave existing edges alone when wp_services is falsy" rule was proven
+incoherent: in the very same transaction, `_drop_stale_role_rows` still
+deletes the OLD role's analyses and the seeder runs with empty services, so
+"preserved" edges would be actively FALSE (naming profiles whose work was
+just removed), not stale-but-correct. So: supersede always; THEN, only if
+wp_services is truthy, resolve fulfillment and write fresh host/rider
+edges. If wp_services is falsy, nothing new is written and the vial
+honestly shows zero current custody until the next assignment that does
+have services. role None/'xtra' supersedes and writes nothing, same as
+before.
 """
 import logging
 from datetime import datetime
@@ -31,17 +37,18 @@ def _supersede_current(db, sub_pk: int, now: datetime) -> None:
 
 
 def write_custody_edges(db, sub, role, wp_services, user_id) -> int:
-    """Supersede this vial's current custody rows and, for a real role with
-    a resolvable services dict, write fresh host/rider edges resolved from
-    the catalog (sub_samples.catalog_demand.resolve_catalog_fulfillment).
+    """Supersede this vial's current custody rows, unconditionally, then —
+    for a real role with a resolvable services dict — write fresh
+    host/rider edges resolved from the catalog
+    (sub_samples.catalog_demand.resolve_catalog_fulfillment).
 
     - role is None or 'xtra': supersede every current row, write nothing,
       return 0 — an unassigned/xtra vial has no custody to record.
-    - role is real (not None/'xtra') but wp_services is falsy: do NOT
-      supersede, do NOT write anything — skip entirely, log
-      'custody_edge_skipped', return 0. Leaves whatever custody already
-      existed in place (fail-soft, matching the seeding hook's own
-      behavior when services can't be resolved).
+    - role is real (not None/'xtra') but wp_services is falsy: supersede
+      every current row (the flip happened; the old custody is no longer
+      true), write nothing new, log 'custody_edge_skipped', return 0. The
+      vial then has zero current custody until a later assignment resolves
+      real services — honest, not stale-but-wrong.
     - role is real and wp_services is truthy: supersede current rows, then
       resolve fulfillment for `role` and write one row per host profile id
       (relation='host') and one per rider profile id (relation='rider'),
@@ -50,16 +57,14 @@ def write_custody_edges(db, sub, role, wp_services, user_id) -> int:
       fulfillment map, e.g. no purchased service anchors it).
     """
     now = datetime.utcnow()
+    _supersede_current(db, sub.id, now)
 
     if not role or role == "xtra":
-        _supersede_current(db, sub.id, now)
         return 0
 
     if not wp_services:
         log.warning("custody_edge_skipped sub=%s role=%s reason=no_services", sub.sample_id, role)
         return 0
-
-    _supersede_current(db, sub.id, now)
 
     fulfillment = resolve_catalog_fulfillment(db, wp_services).get(role)
     if fulfillment is None:
