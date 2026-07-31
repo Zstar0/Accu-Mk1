@@ -15625,12 +15625,21 @@ async def update_department(
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
+    """name is immutable on is_system rows (fix round, spec 4 Task 7): the
+    worksheet-inbox legacy lane keys (catalog.roles._LEGACY_LANE_KEYS) are
+    pinned to Analytical/Microbiology/Heavy Metals BY NAME — a rename would
+    silently change a stored FE pref / bookmarked ?role= into a 400. color
+    and sort_order stay editable regardless (matches the VialRole
+    frozen-code-immutable-but-otherwise-editable pattern, main.py ~16155)."""
     from models import Department
     dept = db.get(Department, department_id)
     if dept is None:
         raise HTTPException(404, "department not found")
     update_data = data.model_dump(exclude_unset=True)
     if "name" in update_data and update_data["name"] != dept.name:
+        if dept.is_system:
+            raise HTTPException(
+                400, "system department names are load-bearing (inbox lanes); rename is not supported")
         existing = db.execute(
             select(Department).where(
                 Department.name == update_data["name"], Department.id != department_id

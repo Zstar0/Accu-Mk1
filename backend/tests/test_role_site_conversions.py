@@ -160,3 +160,55 @@ def test_new_department_role_appears_as_slugified_lane_and_in_union(db_session):
     computed_union = set().union(*(l.role_codes for l in lanes.values()))
     assert "zzqcret" in computed_union
     assert {"hplc", "endo", "ster", "hm"} <= computed_union
+
+
+# ─── inbox_lanes: key-collision uniquify, never drop/overwrite (fix round) ──
+
+def test_department_named_hplc_does_not_steal_analytical_lane(db_session):
+    """A department literally named "HPLC" slugifies to the SAME key as the
+    legacy Analytical alias. Analytical must keep 'hplc' unconditionally
+    (pass 1) — the new department is uniquified in pass 2, never overwrites
+    or drops the legacy lane."""
+    from catalog.roles import inbox_lanes
+    from models import Department
+    _seed_legacy(db_session)
+
+    hplc_dept = Department(name="HPLC")
+    db_session.add(hplc_dept)
+    db_session.flush()
+    _mk_role(db_session, "zzhplcd", department_id=hplc_dept.id, sort_order=61)
+
+    lanes = inbox_lanes(db_session)
+    assert lanes["hplc"].department_name == "Analytical"
+    assert lanes["hplc"].role_codes == {"hplc"}
+    # the colliding department landed under a uniquified key — not dropped,
+    # not overwriting the legacy lane.
+    assert "hplc_2" in lanes
+    assert lanes["hplc_2"].department_name == "HPLC"
+    assert lanes["hplc_2"].role_codes == {"zzhplcd"}
+
+
+def test_colliding_department_slugs_both_appear_with_distinct_keys(db_session, caplog):
+    """Two admin departments whose names slugify to the same string (e.g.
+    "QC Retain" / "QC-Retain") must BOTH surface as lanes — never one
+    silently dropped or overwritten by the other."""
+    import logging
+    from catalog.roles import inbox_lanes
+    from models import Department
+    _seed_legacy(db_session)
+
+    d1 = Department(name="QC Retain")
+    d2 = Department(name="QC-Retain")
+    db_session.add_all([d1, d2])
+    db_session.flush()
+    _mk_role(db_session, "zzqcr1", department_id=d1.id, sort_order=62)
+    _mk_role(db_session, "zzqcr2", department_id=d2.id, sort_order=63)
+
+    with caplog.at_level(logging.WARNING):
+        lanes = inbox_lanes(db_session)
+
+    assert "qc_retain" in lanes
+    assert "qc_retain_2" in lanes
+    assert lanes["qc_retain"].role_codes | lanes["qc_retain_2"].role_codes == {"zzqcr1", "zzqcr2"}
+    assert lanes["qc_retain"].department_name != lanes["qc_retain_2"].department_name
+    assert "inbox_lane_key_collision" in caplog.text

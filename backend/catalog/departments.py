@@ -93,14 +93,22 @@ def backfill_departments(db: Session) -> None:
     """
     from models import AnalysisService, Department, ServiceGroup
 
-    # 1. Ensure department rows exist.
+    # 1. Ensure department rows exist. is_system=True: these three names are
+    # load-bearing (the worksheet-inbox legacy lane keys, catalog.roles
+    # ._LEGACY_LANE_KEYS, are pinned to them BY NAME) — the departments PATCH
+    # route refuses a name change on an is_system row (fix round, spec 4 Task
+    # 7) so a rename can't silently break a stored FE pref / bookmarked
+    # ?role=. Guarded: only flips False->True, never touches any other
+    # department, and never fires on a fresh-create (already True there).
     by_name: dict[str, Department] = {}
     for i, name in enumerate(DEPARTMENT_NAMES):
         dept = db.query(Department).filter_by(name=name).one_or_none()
         if dept is None:
-            dept = Department(name=name, sort_order=i)
+            dept = Department(name=name, sort_order=i, is_system=True)
             db.add(dept)
             db.flush()
+        elif not dept.is_system:
+            dept.is_system = True
         by_name[name] = dept
 
     # 2. Group -> department, ONLY when unset.

@@ -1,9 +1,12 @@
 """Read helpers for the vial_roles catalog (spec 4). Fail-closed: callers treat a
 registry miss as an error, never a silent drop."""
+import logging
 import re
 from dataclasses import dataclass, field
 
 from models import VialRole
+
+log = logging.getLogger(__name__)
 
 _CODE_RE = re.compile(r"[a-z][a-z0-9_]{0,7}")
 
@@ -71,24 +74,74 @@ def inbox_lanes(db) -> dict:
     in that department (e.g. microbiology collapses ster+endo into one chip).
     sort_order is the lowest sort_order among the lane's roles, for stable
     chip ordering. xtra (NULL department) never gets a lane — it's the
-    reserved unassigned bucket, gated by the show_xtra toggle instead."""
+    reserved unassigned bucket, gated by the show_xtra toggle instead.
+
+    Key collisions are UNIQUIFIED, never dropped or overwritten (fix round,
+    spec 4 Task 7): a two-pass assignment claims the three legacy alias keys
+    for their canonical department names FIRST and unconditionally — an
+    admin-created department that happens to slug to the same string (e.g.
+    one literally named "HPLC") can never steal Analytical's 'hplc' key.
+    Every other department is then processed in deterministic (sort_order,
+    name) order; a slug that collides with an already-taken key gets a
+    numeric suffix (suggest_role_code precedent), logging
+    `inbox_lane_key_collision` each time."""
     rows = (
         db.query(VialRole)
         .filter(VialRole.department_id.isnot(None))
         .order_by(VialRole.sort_order, VialRole.code)
         .all()
     )
-    by_dept: dict[int, InboxLane] = {}
+    by_dept_id: dict[int, dict] = {}
     for r in rows:
         dept = r.department
         if dept is None:
             continue
-        lane = by_dept.get(dept.id)
-        if lane is None:
-            key = _LEGACY_LANE_KEYS.get(dept.name) or re.sub(r"[^a-z0-9]+", "_", dept.name.lower())
-            lane = InboxLane(key=key, department_id=dept.id, department_name=dept.name,
-                             sort_order=r.sort_order)
-            by_dept[dept.id] = lane
-        lane.role_codes.add(r.code)
-        lane.sort_order = min(lane.sort_order, r.sort_order)
-    return {lane.key: lane for lane in by_dept.values()}
+        entry = by_dept_id.get(dept.id)
+        if entry is None:
+            entry = {"dept": dept, "role_codes": set(), "sort_order": r.sort_order}
+            by_dept_id[dept.id] = entry
+        entry["role_codes"].add(r.code)
+        entry["sort_order"] = min(entry["sort_order"], r.sort_order)
+
+    lanes: dict[str, InboxLane] = {}
+    taken_keys: set[str] = set()
+
+    # Pass 1: legacy alias keys, claimed by their CANONICAL department name,
+    # unconditionally — before any slugified key is even considered.
+    dept_ids_by_name = {entry["dept"].name: dept_id for dept_id, entry in by_dept_id.items()}
+    for dept_name, legacy_key in _LEGACY_LANE_KEYS.items():
+        dept_id = dept_ids_by_name.get(dept_name)
+        if dept_id is None:
+            continue
+        entry = by_dept_id[dept_id]
+        lanes[legacy_key] = InboxLane(
+            key=legacy_key, department_id=dept_id, department_name=entry["dept"].name,
+            role_codes=set(entry["role_codes"]), sort_order=entry["sort_order"],
+        )
+        taken_keys.add(legacy_key)
+
+    # Pass 2: everything else, deterministic order, slugified + uniquified
+    # against everything already taken.
+    remaining = [
+        (dept_id, entry) for dept_id, entry in by_dept_id.items()
+        if entry["dept"].name not in _LEGACY_LANE_KEYS
+    ]
+    remaining.sort(key=lambda pair: (pair[1]["sort_order"], pair[1]["dept"].name))
+    for dept_id, entry in remaining:
+        dept = entry["dept"]
+        base_key = re.sub(r"[^a-z0-9]+", "_", dept.name.lower()).strip("_") or "dept"
+        key = base_key
+        n = 2
+        while key in taken_keys:
+            next_key = f"{base_key}_{n}"
+            log.warning("inbox_lane_key_collision dept=%s key=%s -> %s",
+                       dept.name, key, next_key)
+            key = next_key
+            n += 1
+        lanes[key] = InboxLane(
+            key=key, department_id=dept_id, department_name=dept.name,
+            role_codes=set(entry["role_codes"]), sort_order=entry["sort_order"],
+        )
+        taken_keys.add(key)
+
+    return lanes
