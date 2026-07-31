@@ -190,7 +190,10 @@ def _catalog_members_for_role(
 
 
 def role_implies_seeding(
-    role: Optional[str], wp_services: Dict[str, bool], db: Optional[Session] = None
+    role: Optional[str],
+    wp_services: Dict[str, bool],
+    db: Optional[Session] = None,
+    sub_sample: Optional[LimsSubSample] = None,
 ) -> bool:
     """True iff this role's analyses are requested by the WP profile.
 
@@ -199,7 +202,16 @@ def role_implies_seeding(
     Analysis Profiles — THE CATALOG IS AUTHORITATIVE for any role the map
     does not know. Without `db` (legacy callers/tests), catalog roles report
     False rather than raising — matches the prior default-off behavior for
-    any role outside ROLE_TO_WP_KEYS."""
+    any role outside ROLE_TO_WP_KEYS.
+
+    `sub_sample` (optional, default None) is threaded straight through to
+    _catalog_members_for_role on the catalog-role branch, so this gate
+    evaluates the SAME edge-driven membership seed_analyses_for_vial's
+    catalog branch will actually seed — a vial with current custody edges
+    naming an all-native rider must not gate False just because its HOST
+    anchor happens to carry a non-mk1 member (the origin gate is
+    per-profile, not per-vial). Every other caller (tests, any legacy-role
+    path) omits it and keeps today's wp_services-predicate-only behavior."""
     if not role or role == "xtra":
         return False
     if role in ROLE_TO_WP_KEYS:
@@ -207,7 +219,7 @@ def role_implies_seeding(
         return any(wp_services.get(k) for k in role_keys)
     if db is None:
         return False
-    return bool(_catalog_members_for_role(db, role, wp_services))
+    return bool(_catalog_members_for_role(db, role, wp_services, sub_sample=sub_sample))
 
 
 def select_services_for_role(db: Session, role: str) -> List[AnalysisService]:
@@ -479,7 +491,7 @@ def seed_analyses_for_vial(
 
     Returns the list of newly-inserted rows (empty if nothing was needed).
     """
-    if not role_implies_seeding(role, wp_services, db=db):
+    if not role_implies_seeding(role, wp_services, db=db, sub_sample=sub_sample):
         log.info(
             "seeder.skip_no_seeding sub=%s role=%s wp_keys=%s",
             sub_sample.sample_id, role, sorted(wp_services.keys()),

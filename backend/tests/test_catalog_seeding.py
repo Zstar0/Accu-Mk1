@@ -414,3 +414,62 @@ def test_set_assignment_role_wires_real_edge_driven_seeding(db_session, caplog):
     kws = {r.keyword for r in rows}
     assert kws == {"ZZ4-HOST", "ZZ4-RIDER"}
     assert "catalog_seed_no_custody_fallback" not in caplog.text
+
+
+def test_foreign_host_no_longer_blocks_native_rider_gate(db_session, caplog):
+    """Controller-approved scope add (post-review): role_implies_seeding is
+    now edge-aware. Before this fix, role_implies_seeding's own
+    _catalog_members_for_role call never saw sub_sample, so it evaluated the
+    wp_services predicate — which, for a HOST profile carrying a non-mk1
+    member, returns empty (the per-profile origin gate skips the whole
+    profile) — and the gate reported False, so seed_analyses_for_vial
+    returned before ever reaching the catalog branch. An all-native RIDER
+    attached to the SAME vial would then silently seed nothing, with no
+    catalog_seed_skipped_non_native logged for it at all (the gate
+    short-circuited first).
+
+    Now: the host profile has one senaite-origin member (so the host
+    profile itself is fail-closed and contributes nothing — same
+    per-profile origin gate as always), and a fully-native rider profile is
+    attached via a custody edge on the same vial. Because
+    seed_analyses_for_vial threads sub_sample into role_implies_seeding, the
+    gate evaluates edge-driven membership (host+rider union) rather than the
+    wp_services predicate alone — and the union is non-empty (the rider's
+    native member), so the gate passes and seeding proceeds. The rider's
+    member lands in lims_analyses; the host contributes nothing and logs
+    catalog_seed_skipped_non_native."""
+    import logging
+    from lims_analyses.seeder import seed_analyses_for_vial
+    from models import AnalysisProfile, AnalysisService, LimsAnalysis
+
+    svc_host_bad = AnalysisService(title="ZZ5-HOST-BAD", keyword="ZZ5-HOST-BAD", origin="senaite", unit="ppm")
+    svc_rider_ok = AnalysisService(title="ZZ5-RIDER-OK", keyword="ZZ5-RIDER-OK", origin="mk1", unit="ppm")
+    db_session.add_all([svc_host_bad, svc_rider_ok]); db_session.flush()
+
+    host = AnalysisProfile(key="zz5_host", name="ZZ5 Host", is_addon=False,
+                           vials_required=1, fulfillment_role="zz5",
+                           fulfillment_dim="role", active=True)
+    rider = AnalysisProfile(key="zz5_rider", name="ZZ5 Rider", is_addon=True,
+                            vials_required=1, fulfillment_role="zz5_rider_role",
+                            fulfillment_dim="role", active=True)
+    db_session.add_all([host, rider]); db_session.flush()
+    _add_profile_members(db_session, host, [svc_host_bad])
+    _add_profile_members(db_session, rider, [svc_rider_ok])
+    db_session.commit()
+
+    sub = _mk_parent_and_vial(db_session, role="zz5")
+    _mk_edge(db_session, sub, host, "host")
+    _mk_edge(db_session, sub, rider, "rider")
+    db_session.commit()
+
+    with caplog.at_level(logging.WARNING):
+        created = seed_analyses_for_vial(
+            db_session, sub_sample=sub, role="zz5",
+            wp_services={"zz5_host": True}, commit=True)
+
+    kws = {r.keyword for r in created}
+    assert kws == {"ZZ5-RIDER-OK"}
+    assert "ZZ5-HOST-BAD" not in kws
+    assert "catalog_seed_skipped_non_native" in caplog.text
+    rows = db_session.query(LimsAnalysis).filter_by(lims_sub_sample_pk=sub.id).all()
+    assert [r.keyword for r in rows] == ["ZZ5-RIDER-OK"]
