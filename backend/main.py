@@ -894,14 +894,23 @@ async def get_sample_retest_info(
 
 
 @app.get("/samples/{sample_id}/transfer-info")
-def get_sample_transfer_info(sample_id: str):
+def get_sample_transfer_info(
+    sample_id: str,
+    _current_user=Depends(get_current_user),
+):
     """
     Account-transfer lineage for a sample, both directions.
 
-    Mirrors get_sample_retest_info above. transfer_of_senaite_id lives INSIDE
-    the payload JSON (like retest_of_senaite_id does for retests), while
-    is_transfer, transfer_of_order_id, and transfer_source_user_id are real
-    columns on order_submissions.
+    Mirrors get_sample_retest_info above, including the auth gate: this
+    returns source_order_id/source_user_id, cross-account ownership data
+    mapping which customer's samples became which other customer's — exactly
+    what a transfer is supposed to keep internal, so it is no less guarded
+    than the endpoint it was modeled on.
+
+    transfer_of_senaite_id lives INSIDE the payload JSON (like
+    retest_of_senaite_id does for retests), while is_transfer,
+    transfer_of_order_id, and transfer_source_user_id are real columns on
+    order_submissions.
 
     Defined with `def`, not `async def`, on purpose: this does synchronous DB
     work, and an awaitless `async def` blocks the event loop for every other
