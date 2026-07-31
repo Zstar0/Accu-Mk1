@@ -539,4 +539,14 @@ describe('catalog-driven sections (Task 9)', () => {
     renderStep()
     expect(await screen.findByText('P-0144-S02')).toBeInTheDocument()
   })
+
+  it('section grid wraps responsively instead of cutting columns off on narrow viewports', async () => {
+    vi.mocked(getVialPlan).mockResolvedValue(FULL_PLAN)
+    renderStep()
+    await screen.findByText('Analytical')
+    const grid = screen.getByText('Xtra').closest('div.border-2')?.parentElement
+    expect(grid).not.toBeNull()
+    expect((grid as HTMLElement).style.gridTemplateColumns).toContain('auto-fit')
+    expect((grid as HTMLElement).style.gridTemplateColumns).toContain('minmax')
+  })
 })

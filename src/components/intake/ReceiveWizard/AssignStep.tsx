@@ -212,13 +212,11 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
     return !sectionRoleCodes.has(role)
   })
 
-  // Grid: one column per section + the always-on Xtra column. Multi-role
-  // sections keep today's wider Microbiology column (1.2fr); single-role
-  // sections keep today's Analytical column (1fr); Xtra stays narrow (0.8fr).
-  const gridTemplateColumns = [
-    ...sections.map(s => (s.roles.length > 1 ? '1.2fr' : '1fr')),
-    '0.8fr',
-  ].join(' ')
+  // Grid: one column per section + the always-on Xtra column (last in DOM
+  // order). auto-fit collapses empty tracks so 1-2 sections still fill the
+  // row instead of leaving dead space; columns wrap to new rows once the
+  // viewport can't fit another 240px minimum, fixing narrow-viewport cutoff.
+  const gridTemplateColumns = 'repeat(auto-fit, minmax(240px, 1fr))'
 
   return (
     <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
