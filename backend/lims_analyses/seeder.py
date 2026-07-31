@@ -87,30 +87,106 @@ ROLE_TO_KEYWORDS: Dict[str, List[str]] = {
 }
 
 
-def _catalog_members_for_role(
-    db: Session, role: str, wp_services: Dict[str, bool]
+def _members_through_origin_gate(
+    profiles_with_labels: List[tuple],
 ) -> List[AnalysisService]:
-    """Ordered mk1-origin member services of the ordered profiles fulfilling
-    `role`. Fail-closed on origin: a profile with any non-mk1 member seeds
-    nothing (mirrors spec-2's all-native section rule)."""
-    from models import AnalysisProfile
-
+    """Shared per-profile fail-closed origin gate + cross-profile dedup.
+    `profiles_with_labels` is an ordered list of (profile, log_label) pairs
+    — log_label is the profile key (wp_services path) or the profile id
+    (edge path), whichever the caller has handy for the warning line.
+    A profile with zero members or any non-mk1-origin member is skipped in
+    full (mirrors spec-2's all-native section rule); its native siblings do
+    NOT partially seed."""
     out: List[AnalysisService] = []
     seen: Set[int] = set()
-    ordered = [k for k, v in (wp_services or {}).items() if v]
-    for key in ordered:
-        prof = db.query(AnalysisProfile).filter_by(key=key).one_or_none()
-        if prof is None or prof.fulfillment_dim != "role" or prof.fulfillment_role != role:
-            continue
+    for prof, label in profiles_with_labels:
         members = prof.analysis_services
         if not members or any(s.origin != "mk1" for s in members):
-            log.warning("catalog_seed_skipped_non_native profile=%s", key)
+            log.warning("catalog_seed_skipped_non_native profile=%s", label)
             continue
         for s in members:
             if s.id not in seen:
                 seen.add(s.id)
                 out.append(s)
     return out
+
+
+def _members_from_edges(db: Session, edges: list) -> List[AnalysisService]:
+    """Union of member services of the profiles named by `edges` — host
+    edges first, then rider edges, each profile's members in profile-member
+    sort_order (AnalysisProfile.analysis_services is already ordered by the
+    junction row's sort_order). Profile ids are deduped up front (defensive:
+    current edges shouldn't ever name the same profile twice, but a profile
+    appearing as both host and rider must not double-seed its members)."""
+    from models import AnalysisProfile
+
+    host_ids: List[int] = []
+    rider_ids: List[int] = []
+    seen_pid: Set[int] = set()
+    for e in edges:
+        if e.analysis_profile_id in seen_pid:
+            continue
+        seen_pid.add(e.analysis_profile_id)
+        bucket = host_ids if e.relation == "host" else rider_ids
+        bucket.append(e.analysis_profile_id)
+
+    labeled: List[tuple] = []
+    for pid in host_ids + rider_ids:
+        prof = db.get(AnalysisProfile, pid)
+        if prof is None:
+            continue
+        labeled.append((prof, prof.key))
+    return _members_through_origin_gate(labeled)
+
+
+def _catalog_members_for_role(
+    db: Session,
+    role: str,
+    wp_services: Dict[str, bool],
+    sub_sample: Optional[LimsSubSample] = None,
+) -> List[AnalysisService]:
+    """Ordered mk1-origin member services for `role`. Fail-closed on origin:
+    a profile with any non-mk1 member seeds nothing (mirrors spec-2's
+    all-native section rule).
+
+    Edge-driven (spec 4): when `sub_sample` is given AND has current custody
+    edges (sub_samples.custody.current_custody), membership is the union of
+    member services of those edge profiles — HOST profiles first, then
+    RIDER profiles, each profile's members in profile-member sort_order —
+    through the SAME per-profile origin gate and dedup as the legacy path.
+    wp_services is NOT consulted on this path: the edge is the source of
+    truth (the display and the audit trail are the same record), so a later
+    drift in wp_services must never change what a vial with recorded
+    custody seeds.
+
+    Falls back to the legacy fulfilling-profiles predicate (ordered
+    wp_services keys -> profiles whose fulfillment_dim='role' and
+    fulfillment_role==role) when `sub_sample` is None (no vial context —
+    legitimate for callers like role_implies_seeding) or has zero current
+    custody edges — the latter also logs catalog_seed_no_custody_fallback,
+    since a real vial with no edges yet is a genuine gap worth knowing
+    about."""
+    from models import AnalysisProfile
+
+    if sub_sample is not None:
+        from sub_samples.custody import current_custody
+
+        edges = current_custody(db, sub_sample.id)
+        if edges:
+            return _members_from_edges(db, edges)
+        log.warning(
+            "catalog_seed_no_custody_fallback role=%s sub=%s",
+            role, sub_sample.sample_id,
+        )
+
+    ordered = [k for k, v in (wp_services or {}).items() if v]
+    labeled: List[tuple] = []
+    for key in ordered:
+        prof = db.query(AnalysisProfile).filter_by(key=key).one_or_none()
+        if prof is None or prof.fulfillment_dim != "role" or prof.fulfillment_role != role:
+            continue
+        labeled.append((prof, key))
+    return _members_through_origin_gate(labeled)
 
 
 def role_implies_seeding(
@@ -443,7 +519,7 @@ def seed_analyses_for_vial(
     # endo/ster stay on the keyword whitelist below — never re-route legacy
     # roles onto the catalog path.
     if role not in ROLE_TO_KEYWORDS:
-        services = _catalog_members_for_role(db, role, wp_services)
+        services = _catalog_members_for_role(db, role, wp_services, sub_sample=sub_sample)
         if not services:
             log.warning(
                 "seeder.no_matching_catalog_members sub=%s role=%s — nothing to seed",

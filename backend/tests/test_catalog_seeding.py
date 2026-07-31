@@ -168,3 +168,185 @@ def test_catalog_seeding_fails_closed_on_non_native_member(db_session):
     assert created == []
     rows = db_session.query(LimsAnalysis).filter_by(lims_sub_sample_pk=sub.id).all()
     assert rows == []
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Task 6: edge-driven rider-union seeding (spec 4). Custody edges
+# (vial_profile_assignments, current = superseded_at IS NULL) are the
+# source of truth once they exist for a vial: seeding reads the edges
+# instead of re-deriving membership from wp_services. All fixtures below
+# use TEST-ONLY profile keys / roles (zz*) distinct from the "hm" fixtures
+# above so nothing collides if these tests are ever combined in one DB.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _mk_edge(db, sub, prof, relation):
+    from models import VialProfileAssignment
+    e = VialProfileAssignment(
+        lims_sub_sample_pk=sub.id, analysis_profile_id=prof.id, relation=relation,
+    )
+    db.add(e)
+    db.flush()
+    return e
+
+
+def test_host_vial_seeds_union_of_host_and_rider_members(db_session, caplog):
+    """Host profile (2 members) + rider profile (2 members), both attached
+    to the vial via current custody edges -> the vial seeds the UNION of
+    both profiles' members, HOST first then RIDER, each in profile-member
+    sort_order. Members are deliberately added out of alphabetical order so
+    a stray sorted()/set() in the edge path would fail this ordering
+    assertion even while passing a looser set-equality check."""
+    import logging
+    from lims_analyses.seeder import seed_analyses_for_vial
+    from models import AnalysisProfile, AnalysisService, LimsAnalysis
+
+    host_b = AnalysisService(title="ZZ-HOST-B", keyword="ZZ-HOST-B", origin="mk1", unit="ppm")
+    host_a = AnalysisService(title="ZZ-HOST-A", keyword="ZZ-HOST-A", origin="mk1", unit="ppm")
+    rider_b = AnalysisService(title="ZZ-RIDE-B", keyword="ZZ-RIDE-B", origin="mk1", unit="ppm")
+    rider_a = AnalysisService(title="ZZ-RIDE-A", keyword="ZZ-RIDE-A", origin="mk1", unit="ppm")
+    db_session.add_all([host_b, host_a, rider_b, rider_a]); db_session.flush()
+
+    host = AnalysisProfile(key="zz_host", name="ZZ Host", is_addon=False,
+                           vials_required=1, fulfillment_role="zz",
+                           fulfillment_dim="role", active=True)
+    rider = AnalysisProfile(key="zz_rider", name="ZZ Rider", is_addon=True,
+                            vials_required=1, fulfillment_role="zz_rider_role",
+                            fulfillment_dim="role", active=True)
+    db_session.add_all([host, rider]); db_session.flush()
+    _add_profile_members(db_session, host, [host_b, host_a])   # sort_order 0,1
+    _add_profile_members(db_session, rider, [rider_b, rider_a])  # sort_order 0,1
+    db_session.commit()
+
+    sub = _mk_parent_and_vial(db_session, role="zz")
+    _mk_edge(db_session, sub, host, "host")
+    _mk_edge(db_session, sub, rider, "rider")
+    db_session.commit()
+
+    with caplog.at_level(logging.INFO):
+        created = seed_analyses_for_vial(
+            db_session, sub_sample=sub, role="zz",
+            wp_services={"zz_host": True}, commit=True)
+
+    assert [r.keyword for r in created] == [
+        "ZZ-HOST-B", "ZZ-HOST-A", "ZZ-RIDE-B", "ZZ-RIDE-A",
+    ]
+    rows = db_session.query(LimsAnalysis).filter_by(lims_sub_sample_pk=sub.id).all()
+    assert sorted(r.keyword for r in rows) == [
+        "ZZ-HOST-A", "ZZ-HOST-B", "ZZ-RIDE-A", "ZZ-RIDE-B",
+    ]
+    assert caplog.text.count("catalog_seeded") == 4
+
+
+def test_seeding_reads_edges_not_rederivation(db_session):
+    """Edges are pinned to a rider profile even though wp_services would,
+    if re-derived fresh right now, resolve a DIFFERENT rider anchoring the
+    same role -> seeded analyses follow the EDGES, not wp_services. The
+    display and the audit trail cannot disagree."""
+    from lims_analyses.seeder import seed_analyses_for_vial
+    from models import AnalysisProfile, AnalysisService
+
+    svc_host = AnalysisService(title="ZZ2-HOST", keyword="ZZ2-HOST", origin="mk1", unit="ppm")
+    svc_rider_old = AnalysisService(title="ZZ2-RIDER-OLD", keyword="ZZ2-RIDER-OLD", origin="mk1", unit="ppm")
+    svc_rider_new = AnalysisService(title="ZZ2-RIDER-NEW", keyword="ZZ2-RIDER-NEW", origin="mk1", unit="ppm")
+    db_session.add_all([svc_host, svc_rider_old, svc_rider_new]); db_session.flush()
+
+    host = AnalysisProfile(key="zz2_host", name="ZZ2 Host", is_addon=False,
+                           vials_required=1, fulfillment_role="zz2",
+                           fulfillment_dim="role", active=True)
+    rider_old = AnalysisProfile(key="zz2_rider_old", name="ZZ2 Rider Old", is_addon=True,
+                                vials_required=1, fulfillment_role="zz2_rider_old_role",
+                                fulfillment_dim="role", active=True)
+    # Same fulfillment_role as the host ("zz2") -- if seeding mistakenly fell
+    # back to the wp_services predicate instead of reading edges, THIS is
+    # the profile it would pick up instead of rider_old.
+    rider_new = AnalysisProfile(key="zz2_rider_new", name="ZZ2 Rider New", is_addon=True,
+                                vials_required=1, fulfillment_role="zz2",
+                                fulfillment_dim="role", active=True)
+    db_session.add_all([host, rider_old, rider_new]); db_session.flush()
+    _add_profile_members(db_session, host, [svc_host])
+    _add_profile_members(db_session, rider_old, [svc_rider_old])
+    _add_profile_members(db_session, rider_new, [svc_rider_new])
+    db_session.commit()
+
+    sub = _mk_parent_and_vial(db_session, role="zz2")
+    # Edges pinned to the OLD rider at custody-write time.
+    _mk_edge(db_session, sub, host, "host")
+    _mk_edge(db_session, sub, rider_old, "rider")
+    db_session.commit()
+
+    # wp_services NOW would resolve the NEW rider instead (e.g. customer
+    # changed their cart after the vial was already assigned) — seeding must
+    # ignore this and follow the edges pinned above.
+    created = seed_analyses_for_vial(
+        db_session, sub_sample=sub, role="zz2",
+        wp_services={"zz2_host": True, "zz2_rider_new": True}, commit=True)
+
+    kws = {r.keyword for r in created}
+    assert kws == {"ZZ2-HOST", "ZZ2-RIDER-OLD"}
+    assert "ZZ2-RIDER-NEW" not in kws
+
+
+def test_no_edges_falls_back_with_warning(db_session, caplog):
+    """Catalog-role vial with zero current custody edges -> seeding falls
+    back to the legacy fulfilling-profiles predicate (identical result to
+    the pre-task-6 behavior) AND logs catalog_seed_no_custody_fallback."""
+    import logging
+    from lims_analyses.seeder import seed_analyses_for_vial
+    from models import LimsAnalysis
+
+    _mk_catalog(db_session)  # heavy_metals profile, fulfillment_role="hm", no edges written
+    sub = _mk_parent_and_vial(db_session, role="hm")
+
+    with caplog.at_level(logging.WARNING):
+        created = seed_analyses_for_vial(
+            db_session, sub_sample=sub, role="hm",
+            wp_services={"heavy_metals": True}, commit=True)
+
+    assert sorted(r.keyword for r in created) == ["HM-AS", "HM-CD", "HM-HG", "HM-PB"]
+    assert "catalog_seed_no_custody_fallback" in caplog.text
+    rows = db_session.query(LimsAnalysis).filter_by(lims_sub_sample_pk=sub.id).all()
+    assert sorted(r.keyword for r in rows) == ["HM-AS", "HM-CD", "HM-HG", "HM-PB"]
+
+
+def test_rider_members_fail_closed_on_non_native(db_session, caplog):
+    """Rider profile has a senaite-origin member -> that PROFILE is skipped
+    (catalog_seed_skipped_non_native, whole profile, not just the bad
+    member), while the host profile still seeds — the SAME per-profile
+    fail-closed origin gate as the legacy (non-edge) path."""
+    import logging
+    from lims_analyses.seeder import seed_analyses_for_vial
+    from models import AnalysisProfile, AnalysisService, LimsAnalysis
+
+    svc_host = AnalysisService(title="ZZ3-HOST", keyword="ZZ3-HOST", origin="mk1", unit="ppm")
+    svc_rider_native = AnalysisService(title="ZZ3-RIDER-OK", keyword="ZZ3-RIDER-OK", origin="mk1", unit="ppm")
+    svc_rider_foreign = AnalysisService(title="ZZ3-RIDER-BAD", keyword="ZZ3-RIDER-BAD", origin="senaite", unit="ppm")
+    db_session.add_all([svc_host, svc_rider_native, svc_rider_foreign]); db_session.flush()
+
+    host = AnalysisProfile(key="zz3_host", name="ZZ3 Host", is_addon=False,
+                           vials_required=1, fulfillment_role="zz3",
+                           fulfillment_dim="role", active=True)
+    rider = AnalysisProfile(key="zz3_rider", name="ZZ3 Rider", is_addon=True,
+                            vials_required=1, fulfillment_role="zz3_rider_role",
+                            fulfillment_dim="role", active=True)
+    db_session.add_all([host, rider]); db_session.flush()
+    _add_profile_members(db_session, host, [svc_host])
+    _add_profile_members(db_session, rider, [svc_rider_native, svc_rider_foreign])
+    db_session.commit()
+
+    sub = _mk_parent_and_vial(db_session, role="zz3")
+    _mk_edge(db_session, sub, host, "host")
+    _mk_edge(db_session, sub, rider, "rider")
+    db_session.commit()
+
+    with caplog.at_level(logging.WARNING):
+        created = seed_analyses_for_vial(
+            db_session, sub_sample=sub, role="zz3",
+            wp_services={"zz3_host": True}, commit=True)
+
+    kws = {r.keyword for r in created}
+    assert kws == {"ZZ3-HOST"}
+    assert "ZZ3-RIDER-OK" not in kws  # whole rider profile skipped, not just the bad sibling
+    assert "catalog_seed_skipped_non_native" in caplog.text
+    rows = db_session.query(LimsAnalysis).filter_by(lims_sub_sample_pk=sub.id).all()
+    assert [r.keyword for r in rows] == ["ZZ3-HOST"]
