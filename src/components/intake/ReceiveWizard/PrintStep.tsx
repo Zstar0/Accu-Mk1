@@ -228,7 +228,7 @@ export function PrintStep({ parentSampleId, vials, orderNumber, orderDate }: Pro
                   <OrderLabelTemplate
                     orderNumber={orderNumber ?? ''}
                     role={role}
-                    vialCount={orderCounts[role]!}
+                    vialCount={orderCounts[role] ?? 0}
                     orderDate={orderDate ? orderDate.slice(0, 10) : null}
                   />
                 </div>
