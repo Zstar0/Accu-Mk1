@@ -29,6 +29,7 @@ const PLAN: VialPlanResponse = {
   base_demand: { hplc: 1, endo: 0, ster: 0 },
   wp_order_number: null,
   is_unreachable: false,
+  sections: [],
   vials: [
     { sample_id: 'P-0144', is_parent: true, vial_sequence: 0, assignment_role: 'hplc' },
     { sample_id: 'P-0144-S01', is_parent: false, vial_sequence: 1, assignment_role: 'hplc' },
@@ -43,6 +44,7 @@ const VARIANCE_PLAN: VialPlanResponse = {
   base_demand: { hplc: 1, endo: 1, ster: 0 },
   wp_order_number: null,
   is_unreachable: false,
+  sections: [],
   vials: [
     { sample_id: 'P-0144', is_parent: true, vial_sequence: 0, assignment_role: 'hplc', assignment_kind: 'core' },
     { sample_id: 'P-0144-S01', is_parent: false, vial_sequence: 1, assignment_role: 'hplc', assignment_kind: 'core' },
@@ -61,6 +63,7 @@ const CONTAINER_PLAN: VialPlanResponse = {
   wp_order_number: null,
   is_unreachable: false,
   container_mode: true,
+  sections: [],
   vials: [
     { sample_id: 'P-0144-S01', is_parent: false, vial_sequence: 1, assignment_role: 'hplc', assignment_kind: 'core' },
     { sample_id: 'P-0144-S02', is_parent: false, vial_sequence: 2, assignment_role: null, assignment_kind: null },

@@ -5662,7 +5662,11 @@ export interface SubSampleListResponse {
   sub_samples: SubSample[]
 }
 
-export type AssignmentRole = 'hplc' | 'endo' | 'ster' | 'xtra'
+// Widened to string (spec 4, Task 8): a catalog-driven bench can mint any
+// role code (VialRole.code), not just the four legacy buckets. The legacy
+// literals — 'hplc' | 'endo' | 'ster' | 'xtra' — still cover every value the
+// backend emits today; kept here only as documentation, not an enforced type.
+export type AssignmentRole = string
 
 export interface VialPlanItem {
   sample_id: string
@@ -5674,22 +5678,62 @@ export interface VialPlanItem {
   assignment_kind?: 'core' | 'variance' | null
 }
 
+/** One profile riding or anchoring a vial-plan section's role spot (spec 4,
+ *  Task 8). `relation` is 'host' (the profile that anchors/mints the role's
+ *  demand) or 'rider' (attaches its result to the host's vial instead of
+ *  minting its own — see catalog_demand.resolve_catalog_fulfillment). */
+export interface VialPlanRoleProfile {
+  id: number
+  key: string
+  name: string
+  relation: 'host' | 'rider'
+}
+
+/** One assignable role within a vial-plan section — the bench "spot" Task 9's
+ *  dynamic assignment page renders as a drop bucket. */
+export interface VialPlanRoleSpot {
+  code: string
+  label: string
+  sort_order: number
+  variance_eligible: boolean
+  profiles: VialPlanRoleProfile[]
+}
+
+/** One department's role/profile metadata within a vial-plan response (spec 4,
+ *  Task 8) — the data contract Task 9's dynamic assignment page renders from.
+ *  Ordered by department sort_order; xtra NEVER appears here (the FE renders
+ *  its xtra bucket unconditionally, outside this catalog-driven metadata). */
+export interface VialPlanSection {
+  department_id: number
+  department_name: string
+  sort_order: number
+  roles: VialPlanRoleSpot[]
+}
+
 export interface VialPlanResponse {
+  // Shape-driven like VialDemandResponse below: demand/base_demand carry
+  // hplc/endo/ster plus any catalog-only role (e.g. 'hm') the order actually
+  // demanded. `variance` stays the legacy 3-bucket shape BY CONTRACT —
+  // derive_variance_demand only ever emits hplc/endo/ster (a catalog-only
+  // role like hm is never variance-eligible, Task 3).
   /** Base (core) vial demand per role — NOT inflated by variance. */
-  demand: { hplc: number; endo: number; ster: number }
+  demand: Record<string, number>
   /** Per-role variance target: count of variance vials IN ADDITION to core
    *  demand (zeros when none purchased). Display-only paid marker for the
    *  AssignStep variance drop zones — never a drop blocker. */
   variance: { hplc: number; endo: number; ster: number }
   /** Pre-variance lab baseline; equals demand under the separate-bucket
    *  contract. Kept for back-compat. */
-  base_demand: { hplc: number; endo: number; ster: number }
+  base_demand: Record<string, number>
   wp_order_number: string | null
   vials: VialPlanItem[]
   is_unreachable: boolean
   /** Container family: parent is a pure depository — `vials` contains no
    *  parent entry when true (legacy families list the parent first). */
   container_mode?: boolean
+  /** Department-grouped role/profile metadata (spec 4, Task 8) — empty on
+   *  the IS-unreachable and variance-locked early returns. */
+  sections: VialPlanSection[]
 }
 
 /**

@@ -173,11 +173,19 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
   const sterCore = plan.vials.filter(v => v.assignment_role === 'ster' && v.assignment_kind !== 'variance')
   const sterVariance = plan.vials.filter(v => v.assignment_role === 'ster' && v.assignment_kind === 'variance')
 
+  // demand is now Record<string, number> (spec 4, Task 8 widening) — dot
+  // access on the legacy hplc/endo/ster keys is always populated by the
+  // backend (derive_demand's 3-bucket floor), but the wider type reads as
+  // possibly-undefined; ?? 0 matches runtime reality, no behavior change.
+  const hplcDemand = plan.demand.hplc ?? 0
+  const endoDemand = plan.demand.endo ?? 0
+  const sterDemand = plan.demand.ster ?? 0
+
   // Build the bucket list. Microbiology section hidden if neither addon present.
-  const showMicro = (plan.demand.endo + plan.demand.ster) > 0 ||
+  const showMicro = (endoDemand + sterDemand) > 0 ||
     (plan.variance?.endo ?? 0) > 0 || (plan.variance?.ster ?? 0) > 0 ||
     plan.vials.some(v => v.assignment_role === 'endo' || v.assignment_role === 'ster')
-  const showHplc = plan.demand.hplc > 0 ||
+  const showHplc = hplcDemand > 0 ||
     (plan.variance?.hplc ?? 0) > 0 ||
     plan.vials.some(v => v.assignment_role === 'hplc')
   // Xtra is always rendered: it doubles as the drop target for manually
@@ -206,7 +214,7 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
               label="Analyses Dept."
               vials={hplcCore}
               varianceVials={hplcVariance}
-              demand={plan.demand.hplc}
+              demand={hplcDemand}
               varianceN={plan.variance?.hplc ?? 0}
               withVarianceZone={(plan.variance?.hplc ?? 0) > 0 || hplcVariance.length > 0}
               onReset={() => handleResetBucket('hplc')}
@@ -218,8 +226,8 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
               ster={sterCore}
               endoVariance={endoVariance}
               sterVariance={sterVariance}
-              endoDemand={plan.demand.endo}
-              sterDemand={plan.demand.ster}
+              endoDemand={endoDemand}
+              sterDemand={sterDemand}
               endoVarianceN={plan.variance?.endo ?? 0}
               sterVarianceN={plan.variance?.ster ?? 0}
               onResetEndo={() => handleResetBucket('endo')}

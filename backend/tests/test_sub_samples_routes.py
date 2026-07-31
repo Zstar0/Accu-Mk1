@@ -9,6 +9,7 @@ Auth is mocked via app.dependency_overrides per the project pattern.
 from datetime import datetime
 from unittest.mock import patch, MagicMock
 import pytest
+from sqlalchemy import select
 from fastapi.testclient import TestClient
 from main import app
 from auth import get_current_user
@@ -275,6 +276,302 @@ def test_vial_plan_returns_503_envelope_when_is_unreachable():
     body = resp.json()
     assert body["is_unreachable"] is True
     assert body["demand"] == {"hplc": 0, "endo": 0, "ster": 0}
+
+
+# ─── Task 8: vial-plan sections metadata ─────────────────────────────────────
+#
+# Sections is built INSIDE the real compute_vial_plan (role_registry + demand +
+# the vials it's about to return + catalog fulfillment), so — unlike the two
+# tests above, which mock compute_vial_plan wholesale to exercise the route
+# layer only — these call the real function against a real (dev/test)
+# Postgres session, mirroring test_variance_demand.py's SessionLocal + ZZTEST-
+# prefixed throwaway-row idiom. Only the IS fetch is mocked (fixtures/mocking
+# idiom named in the brief); set_assignment_role is stubbed too — the real one
+# drives HPLC's live-SENAITE analyte mirror (mirror_parent_hplc_analyses),
+# which is out of scope here (covered elsewhere) and would make these tests
+# slow/flaky against a ZZTEST parent with no real SENAITE AR. compute_vial_plan
+# already fails soft around that call (try/except + rollback, self-healing on
+# the next GET) — the response's `vials` (and therefore `sections`, which is
+# built from that same in-memory list, never a DB re-read) don't depend on the
+# persist loop's success either way.
+from database import SessionLocal
+from models import AnalysisProfile, LimsSample, LimsSubSample, profile_ride_hosts
+from sqlalchemy import text as sql_text
+from sub_samples import service as sub_service
+
+
+@pytest.fixture()
+def real_db():
+    s = SessionLocal()
+    try:
+        yield s
+    finally:
+        s.rollback()
+        s.close()
+
+
+def _ensure_catalog(db):
+    """Idempotent — guarantees the Analytical/Microbiology/Heavy Metals
+    departments and the five legacy vial_roles rows exist regardless of this
+    DB's seed freshness (mirrors database.py:init_db's own startup order)."""
+    from catalog.departments import backfill_departments
+    from catalog.profile_seed import seed_profiles_from_registry
+    from catalog.vial_roles_seed import seed_vial_roles
+    backfill_departments(db)
+    seed_vial_roles(db)
+    seed_profiles_from_registry(db)
+    db.commit()
+
+
+def _mk_zztest_parent(db, sample_id, n_subs=0):
+    """Committed ZZTEST parent (legacy, container_mode=False) with `n_subs`
+    sub-samples (assignment_role starts NULL — auto-assign fills it)."""
+    parent = LimsSample(sample_id=sample_id, peptide_name="ZZ", status="received")
+    db.add(parent)
+    db.flush()
+    for i in range(1, n_subs + 1):
+        db.add(LimsSubSample(
+            sample_id=f"{sample_id}-S{i:02d}",
+            parent_sample_pk=parent.id,
+            external_lims_uid=f"zz-uid-{sample_id}-{i}",
+            vial_sequence=i,
+            received_at=datetime.utcnow(),
+        ))
+    db.commit()
+    return parent
+
+
+def _cleanup_zztest(db, sample_id):
+    db.rollback()
+    db.execute(sql_text("DELETE FROM lims_sub_samples WHERE sample_id LIKE :p"), {"p": f"{sample_id}%"})
+    db.execute(sql_text("DELETE FROM lims_samples WHERE sample_id = :s"), {"s": sample_id})
+    db.commit()
+
+
+def _stub_set_assignment_role(db, sample_id, role, kind=None, user_id=None, wp_services=None):
+    """Direct column write, skipping custody-edge/seeding machinery (out of
+    scope here — see module comment above)."""
+    sub = db.execute(
+        select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if sub is not None:
+        sub.assignment_role = role
+        sub.assignment_kind = kind
+        db.commit()
+    return {"sample_id": sample_id, "assignment_role": role}
+
+
+class TestVialPlanSections:
+    def test_sections_empty_when_is_unreachable(self, real_db, monkeypatch):
+        _ensure_catalog(real_db)
+        _mk_zztest_parent(real_db, "ZZTEST-SEC-UNRCH")
+        monkeypatch.setattr(sub_service, "fetch_sample_services", lambda sid: None)
+        try:
+            plan = sub_service.compute_vial_plan(real_db, "ZZTEST-SEC-UNRCH")
+            assert plan["is_unreachable"] is True
+            assert plan["sections"] == []
+        finally:
+            _cleanup_zztest(real_db, "ZZTEST-SEC-UNRCH")
+
+    def test_sections_legacy_order_carries_analytical_and_microbiology(self, real_db, monkeypatch):
+        _ensure_catalog(real_db)
+        _mk_zztest_parent(real_db, "ZZTEST-SEC-LEG", n_subs=3)
+        services = {"hplcpurity_identity": True, "endotoxin": True, "sterility_pcr": True}
+        monkeypatch.setattr(
+            sub_service, "fetch_sample_services",
+            lambda sid: {"services": services, "wp_order_number": "WP-SEC-1"},
+        )
+        monkeypatch.setattr(sub_service, "set_assignment_role", _stub_set_assignment_role)
+        try:
+            plan = sub_service.compute_vial_plan(real_db, "ZZTEST-SEC-LEG")
+            sections = plan["sections"]
+            # ordered by department sort_order
+            assert [s["department_name"] for s in sections] == ["Analytical", "Microbiology"]
+            analytical = sections[0]
+            micro = sections[1]
+            assert [r["code"] for r in analytical["roles"]] == ["hplc"]
+            assert [r["code"] for r in micro["roles"]] == ["endo", "ster"]
+            # today's role spot: hplc carries its host profile
+            hplc_spot = analytical["roles"][0]
+            assert any(
+                p == {"id": p["id"], "key": "hplcpurity_identity",
+                      "name": p["name"], "relation": "host"}
+                for p in hplc_spot["profiles"]
+            )
+            # xtra never appears in sections anywhere
+            assert all(r["code"] != "xtra" for s in sections for r in s["roles"])
+        finally:
+            _cleanup_zztest(real_db, "ZZTEST-SEC-LEG")
+
+    def test_sections_hm_order_carries_heavy_metals_section(self, real_db, monkeypatch):
+        _ensure_catalog(real_db)
+        # Test-only profile key — PRODUCT_REGISTRY carries no real "heavy_metals"
+        # product yet (spec 4's WP addon hasn't shipped), so this stands in for
+        # it without depending on / colliding with a future real one.
+        real_db.query(AnalysisProfile).filter_by(key="zztest_heavy_metals").delete()
+        real_db.commit()
+        real_db.add(AnalysisProfile(
+            key="zztest_heavy_metals", name="ZZTEST Heavy Metals", is_addon=True,
+            vials_required=1, fulfillment_role="hm", fulfillment_dim="role", active=True,
+        ))
+        real_db.commit()
+        _mk_zztest_parent(real_db, "ZZTEST-SEC-HM", n_subs=1)
+        services = {"zztest_heavy_metals": True}
+        monkeypatch.setattr(
+            sub_service, "fetch_sample_services",
+            lambda sid: {"services": services, "wp_order_number": "WP-SEC-2"},
+        )
+        monkeypatch.setattr(sub_service, "set_assignment_role", _stub_set_assignment_role)
+        try:
+            plan = sub_service.compute_vial_plan(real_db, "ZZTEST-SEC-HM")
+            sections = plan["sections"]
+            hm_section = next((s for s in sections if s["department_name"] == "Heavy Metals"), None)
+            assert hm_section is not None, sections
+            assert [r["code"] for r in hm_section["roles"]] == ["hm"]
+            hm_spot = hm_section["roles"][0]
+            assert hm_spot["variance_eligible"] is False
+            assert any(
+                p["key"] == "zztest_heavy_metals" and p["relation"] == "host"
+                for p in hm_spot["profiles"]
+            )
+        finally:
+            _cleanup_zztest(real_db, "ZZTEST-SEC-HM")
+            real_db.query(AnalysisProfile).filter_by(key="zztest_heavy_metals").delete()
+            real_db.commit()
+
+    def test_sections_rider_profile_appears_with_relation_rider_on_host_role(self, real_db, monkeypatch):
+        _ensure_catalog(real_db)
+        real_db.query(AnalysisProfile).filter_by(key="zztest_rides_hplc").delete()
+        real_db.commit()
+        rider = AnalysisProfile(
+            key="zztest_rides_hplc", name="ZZTEST Rides HPLC", is_addon=True,
+            vials_required=1, fulfillment_role="zztridehplc", fulfillment_dim="role", active=True,
+        )
+        real_db.add(rider)
+        real_db.flush()
+        real_db.execute(profile_ride_hosts.insert().values(
+            analysis_profile_id=rider.id, host_role_code="hplc", priority=0,
+        ))
+        real_db.commit()
+        _mk_zztest_parent(real_db, "ZZTEST-SEC-RIDE", n_subs=1)
+        services = {"hplcpurity_identity": True, "zztest_rides_hplc": True}
+        monkeypatch.setattr(
+            sub_service, "fetch_sample_services",
+            lambda sid: {"services": services, "wp_order_number": "WP-SEC-3"},
+        )
+        monkeypatch.setattr(sub_service, "set_assignment_role", _stub_set_assignment_role)
+        try:
+            plan = sub_service.compute_vial_plan(real_db, "ZZTEST-SEC-RIDE")
+            sections = plan["sections"]
+            analytical = next(s for s in sections if s["department_name"] == "Analytical")
+            hplc_spot = next(r for r in analytical["roles"] if r["code"] == "hplc")
+            relations = {(p["key"], p["relation"]) for p in hplc_spot["profiles"]}
+            assert ("hplcpurity_identity", "host") in relations
+            assert ("zztest_rides_hplc", "rider") in relations
+            # the rider never self-mints its own role/section
+            assert all(r["code"] != "zztridehplc" for s in sections for r in s["roles"])
+        finally:
+            _cleanup_zztest(real_db, "ZZTEST-SEC-RIDE")
+            real_db.query(AnalysisProfile).filter_by(key="zztest_rides_hplc").delete()
+            real_db.commit()
+
+    def test_sections_empty_when_variance_locked(self, real_db, monkeypatch):
+        """Binding constraint (verbatim from the plan): sections is empty on
+        BOTH early-return paths — IS-unreachable AND the variance-locked
+        branch (no auto-assign runs this call, so there's no fresh role/
+        profile grouping to hand Task 9). Distinct from the two tests above,
+        which exercise the persist-loop path where real sections ARE built."""
+        _ensure_catalog(real_db)
+        parent = _mk_zztest_parent(real_db, "ZZTEST-SEC-LOCKED", n_subs=1)
+        parent.variance_locked_at = datetime.utcnow()
+        real_db.commit()
+        services = {"hplcpurity_identity": True}
+        monkeypatch.setattr(
+            sub_service, "fetch_sample_services",
+            lambda sid: {"services": services, "wp_order_number": "WP-SEC-4"},
+        )
+        try:
+            plan = sub_service.compute_vial_plan(real_db, "ZZTEST-SEC-LOCKED")
+            assert plan["is_unreachable"] is False
+            assert plan["sections"] == []
+        finally:
+            _cleanup_zztest(real_db, "ZZTEST-SEC-LOCKED")
+
+    def test_sections_excludes_unknown_role_and_logs_error(self, real_db, monkeypatch, caplog):
+        """Fail-closed judgment call from the brief: a code with demand > 0
+        but NO vial_roles row (predates the catalog, or a bad WP payload
+        minted a role the registry never learned) is logged and EXCLUDED —
+        never synthesizes a placeholder department."""
+        _ensure_catalog(real_db)
+        real_db.query(AnalysisProfile).filter_by(key="zztest_ghost_role").delete()
+        real_db.commit()
+        real_db.add(AnalysisProfile(
+            key="zztest_ghost_role", name="ZZTEST Ghost Role", is_addon=True,
+            vials_required=1, fulfillment_role="zzghost", fulfillment_dim="role", active=True,
+        ))
+        real_db.commit()
+        _mk_zztest_parent(real_db, "ZZTEST-SEC-GHOST", n_subs=1)
+        services = {"zztest_ghost_role": True}
+        monkeypatch.setattr(
+            sub_service, "fetch_sample_services",
+            lambda sid: {"services": services, "wp_order_number": "WP-SEC-5"},
+        )
+        monkeypatch.setattr(sub_service, "set_assignment_role", _stub_set_assignment_role)
+        try:
+            with caplog.at_level("ERROR"):
+                plan = sub_service.compute_vial_plan(real_db, "ZZTEST-SEC-GHOST")
+            # precondition: the ghost code really did reach the candidate set
+            # (demand > 0) — otherwise this test would pass vacuously.
+            assert plan["demand"].get("zzghost", 0) > 0
+            assert any(
+                "vial_plan_unknown_role" in r.message and "zzghost" in r.message
+                for r in caplog.records
+            )
+            assert all(r["code"] != "zzghost" for s in plan["sections"] for r in s["roles"])
+        finally:
+            _cleanup_zztest(real_db, "ZZTEST-SEC-GHOST")
+            real_db.query(AnalysisProfile).filter_by(key="zztest_ghost_role").delete()
+            real_db.commit()
+
+    def test_sections_survive_persist_loop_failure(self, real_db, monkeypatch):
+        """The realistic outage path: SENAITE flaky -> set_assignment_role
+        raises for every vial -> compute_vial_plan's existing try/except
+        rolls back and logs, per vial (untouched by this task). Sections must
+        still build correctly off the in-memory `assigned` list handed to it
+        — the same invariant that makes `vials` self-healing on the next GET,
+        proven here by asserting NOTHING actually persisted to the DB."""
+        _ensure_catalog(real_db)
+        _mk_zztest_parent(real_db, "ZZTEST-SEC-FAIL", n_subs=2)
+        services = {"hplcpurity_identity": True, "endotoxin": True}
+        monkeypatch.setattr(
+            sub_service, "fetch_sample_services",
+            lambda sid: {"services": services, "wp_order_number": "WP-SEC-6"},
+        )
+
+        def _raising_set_assignment_role(db, sample_id, role, kind=None, user_id=None, wp_services=None):
+            raise RuntimeError("simulated live-SENAITE outage")
+
+        monkeypatch.setattr(sub_service, "set_assignment_role", _raising_set_assignment_role)
+        try:
+            plan = sub_service.compute_vial_plan(real_db, "ZZTEST-SEC-FAIL")
+            # demand hplc=1 (consumed by the pre-set parent), endo=1 (fills
+            # the first sub); the second sub overflows to xtra.
+            non_parent_roles = {v["assignment_role"] for v in plan["vials"] if not v["is_parent"]}
+            assert non_parent_roles == {"endo", "xtra"}
+            sections = plan["sections"]
+            assert {s["department_name"] for s in sections} == {"Analytical", "Microbiology"}
+            analytical = next(s for s in sections if s["department_name"] == "Analytical")
+            micro = next(s for s in sections if s["department_name"] == "Microbiology")
+            assert [r["code"] for r in analytical["roles"]] == ["hplc"]
+            assert [r["code"] for r in micro["roles"]] == ["endo"]
+            # nothing actually persisted — proves this exercised the real
+            # failure/rollback path, not a no-op.
+            subs = real_db.query(LimsSubSample).filter(
+                LimsSubSample.sample_id.like("ZZTEST-SEC-FAIL%")
+            ).all()
+            assert all(s.assignment_role is None for s in subs)
+        finally:
+            _cleanup_zztest(real_db, "ZZTEST-SEC-FAIL")
 
 
 def test_assignment_patch_subsample_to_endo():

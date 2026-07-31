@@ -1274,6 +1274,10 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
         ] + sub_entries
 
     if services_resp is None:
+        # _LEGACY_BUCKETS zero-floor contract (catalog_demand.py) — no
+        # services means no catalog resolution either, so sections is empty
+        # (spec 4, Task 8): the FE banner-renders and falls back to manual
+        # drag with no department metadata to group by.
         return {
             "demand": {"hplc": 0, "endo": 0, "ster": 0},
             "variance": {"hplc": 0, "endo": 0, "ster": 0},
@@ -1282,6 +1286,7 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
             "is_unreachable": True,
             "vials": _current_vials(),
             "container_mode": parent.container_mode,
+            "sections": [],
         }
 
     services = services_resp.get("services") or {}
@@ -1293,6 +1298,11 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
     # (spec §5), so a locked parent must NOT have vials auto-assigned under it.
     # set_assignment_role enforces this per-call; mirror it here by skipping
     # auto-assign entirely and returning the stored state.
+    #
+    # sections: [] here too (spec 4, Task 8 binding constraint) — same as the
+    # IS-unreachable path, this is an "empty plan" as far as the assignment
+    # page's catalog-driven bench is concerned: nothing is being auto-assigned
+    # this call, so there's no fresh role/profile grouping to hand Task 9.
     if parent.variance_locked_at is not None:
         return {
             "demand": demand,
@@ -1302,6 +1312,7 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
             "is_unreachable": False,
             "vials": _current_vials(),
             "container_mode": parent.container_mode,
+            "sections": [],
         }
 
     from catalog.roles import real_bucket_codes
@@ -1352,7 +1363,110 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
         "is_unreachable": False,
         "vials": assigned,
         "container_mode": parent.container_mode,
+        "sections": _build_vial_plan_sections(db, demand, assigned, services),
     }
+
+
+def _build_vial_plan_sections(db: Session, demand: dict, vials: list[dict],
+                              services: dict) -> list[dict]:
+    """Department-grouped role/profile metadata (spec 4, Task 8) — the data
+    contract Task 9's dynamic assignment page renders from.
+
+    Built fresh on every call from role_registry + demand + `vials` (the SAME
+    list the caller is about to return as the response's own `vials` — never
+    a separate DB re-read, so sections and vials can never disagree) +
+    catalog fulfillment (host/rider profile ids resolved from `services`).
+
+    Inclusion: a role code enters sections iff it has demand > 0 OR a
+    non-parent vial currently carries it. Parent-carried roles don't count on
+    their own — the parent is never a physical testing vial under the
+    container model, and under the legacy model its role always mirrors real
+    demand anyway (real_bucket_codes never fills the parent from thin air).
+
+    xtra (and any other NULL-department role) NEVER appears here — the FE
+    renders its xtra bucket unconditionally, outside this catalog-driven
+    metadata.
+
+    Fail-closed: a candidate code entirely absent from the registry (predates
+    the catalog, or a bad WP payload minted no matching role) is logged and
+    EXCLUDED — never synthesizes a placeholder department. The vial itself
+    still renders through the FE's xtra/fallback path; this is a judgment
+    call, not silently dropping data the FE needs.
+    """
+    from catalog.roles import role_registry
+    from sub_samples.catalog_demand import resolve_catalog_fulfillment
+
+    registry = role_registry(db)
+    fulfillment = resolve_catalog_fulfillment(db, services)
+
+    carried = {
+        v["assignment_role"] for v in vials
+        if not v.get("is_parent") and v.get("assignment_role")
+    }
+    candidates = {code for code, n in (demand or {}).items() if n > 0} | carried
+
+    # Batch-resolve every profile id referenced by any candidate role's
+    # fulfillment — one query, no N+1 across roles.
+    all_ids: set = set()
+    for code in candidates:
+        rf = fulfillment.get(code)
+        if rf is not None:
+            all_ids.update(rf.host_profile_ids)
+            all_ids.update(rf.rider_profile_ids)
+    profile_by_id = {}
+    if all_ids:
+        from models import AnalysisProfile
+        profile_by_id = {
+            p.id: p for p in
+            db.query(AnalysisProfile).filter(AnalysisProfile.id.in_(all_ids)).all()
+        }
+
+    sections_by_dept: dict = {}
+    for code in candidates:
+        row = registry.get(code)
+        if row is None:
+            log.error("vial_plan_unknown_role code=%s", code)
+            continue
+        dept = row.department
+        if dept is None:
+            # xtra (NULL department) is expected and silent; any OTHER role
+            # with a NULL department_id (FK gone stale, e.g. its department
+            # was deleted) is the same fail-closed exclusion as an unknown
+            # code — never invent a department to hang it on.
+            if row.department_id is not None:
+                log.error("vial_plan_unknown_role code=%s", code)
+            continue
+
+        rf = fulfillment.get(code)
+        profiles = []
+        if rf is not None:
+            for pid in rf.host_profile_ids:
+                p = profile_by_id.get(pid)
+                if p is not None:
+                    profiles.append({"id": p.id, "key": p.key, "name": p.name, "relation": "host"})
+            for pid in rf.rider_profile_ids:
+                p = profile_by_id.get(pid)
+                if p is not None:
+                    profiles.append({"id": p.id, "key": p.key, "name": p.name, "relation": "rider"})
+
+        section = sections_by_dept.setdefault(dept.id, {
+            "department_id": dept.id,
+            "department_name": dept.name,
+            "sort_order": dept.sort_order,
+            "roles": [],
+        })
+        section["roles"].append({
+            "code": code,
+            "label": row.label,
+            "sort_order": row.sort_order,
+            "variance_eligible": row.variance_eligible,
+            "profiles": profiles,
+        })
+
+    sections = sorted(sections_by_dept.values(), key=lambda s: (s["sort_order"], s["department_id"]))
+    for section in sections:
+        section["roles"].sort(key=lambda r: (r["sort_order"], r["code"]))
+    return sections
 
 
 _LEGACY_BUCKET_PRIORITY = ("hplc", "endo", "ster", "hm")
@@ -1774,6 +1888,8 @@ def aggregate_by_parent(db: Session, parent_sample_ids: list[str]) -> dict[str, 
             result[sample_id] = {
                 "vial_count": 0,
                 "parent_role": role or "unassigned",
+                # _LEGACY_BUCKETS zero-floor contract (catalog_demand.py) —
+                # sub-sample rows carry no override of their own; AR-list hint only.
                 "variance": {"hplc": 0, "endo": 0, "ster": 0},
                 "has_variance_subs": False,
             }
