@@ -174,6 +174,31 @@ def test_delete_refuses_role_referenced_only_by_a_box_until_cleared(client, db_s
     assert client.delete(f"/vial-roles/{box_role_id}").status_code == 204
 
 
+def test_delete_refuses_role_referenced_only_by_a_parent_sample_until_cleared(client, db_session):
+    # The LimsSample.assignment_role branch of the vial-reference OR-check
+    # only runs when the LimsSubSample query comes back empty — prove it
+    # actually 409s on its own (a parent sample with no sub-sample child),
+    # not just that it's reachable dead code behind the sub-sample branch.
+    dep = client.post("/departments", json={"name": "Parent Dept"}).json()
+    parent_role = VialRole(code="parr", label="Parent Ref", department_id=dep["id"])
+    db_session.add(parent_role)
+    db_session.flush()
+    parent_role_id = parent_role.id
+
+    parent = LimsSample(sample_id="P-9002", assignment_role="parr")
+    db_session.add(parent)
+    db_session.commit()
+
+    resp = client.delete(f"/vial-roles/{parent_role_id}")
+    assert resp.status_code == 409
+    assert "vial" in resp.json()["detail"].lower()
+
+    db_session.delete(parent)
+    db_session.commit()
+
+    assert client.delete(f"/vial-roles/{parent_role_id}").status_code == 204
+
+
 def test_patch_updates_flags_but_never_code_on_frozen(client, db_session):
     # frozen row: label/boxable/variance_eligible/sort_order editable, code immutable → 400 on code change
     dep = client.post("/departments", json={"name": "Patch Dept"}).json()
