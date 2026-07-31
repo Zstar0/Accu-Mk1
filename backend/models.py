@@ -273,6 +273,36 @@ analysis_profile_members = Table(
 )
 
 
+class VialRole(Base):
+    """A vial role as a catalog row (spec 4). The role stays the DB join key on vials
+    (lims_sub_samples.assignment_role, VARCHAR(8) — NOT widened); the profile is its face.
+
+    xtra is the ONLY row allowed a NULL department (the reserved unassigned bucket).
+    frozen: set once any vial references the code; retire-don't-delete.
+    """
+
+    __tablename__ = "vial_roles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(8), nullable=False, unique=True)
+    label: Mapped[str] = mapped_column(String(100), nullable=False)
+    department_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("departments.id", ondelete="SET NULL"), nullable=True
+    )
+    boxable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    variance_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    frozen: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    department = relationship("Department", lazy="selectin")
+
+    def __repr__(self) -> str:
+        return f"<VialRole(code='{self.code}', label='{self.label}')>"
+
+
 class AnalysisProfile(Base):
     """A sellable test — the parent of one or more Analysis Services.
 
