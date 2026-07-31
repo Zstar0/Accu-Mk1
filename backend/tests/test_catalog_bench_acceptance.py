@@ -196,6 +196,23 @@ class TestManagerAuthorsLabFollows:
         assert members_resp.status_code == 200
         assert members_resp.json()["count"] == 1
 
+        # ── The parent LimsSample row + its one vial, created EARLY (review
+        # fix round): compute_vial_plan's only SENAITE dependency
+        # (ensure_sample_row) skips SENAITE entirely once a matching row
+        # already exists, so creating it here lets this SAME row serve both
+        # the public compute_vial_plan sections proof below AND the custody/
+        # seeding proof at the end, with nothing but a services-dict mock in
+        # between — no live SENAITE call anywhere in this test. ─────────────
+        parent = LimsSample(sample_id="ZZACC-0001", external_lims_uid="zzacc-0001-uid")
+        db_session.add(parent)
+        db_session.flush()
+        sub = LimsSubSample(
+            sample_id="ZZACC-0001-S01", vial_sequence=1, parent_sample_pk=parent.id,
+            external_lims_uid="zzacc-0001-s01-uid",
+        )
+        db_session.add(sub)
+        db_session.commit()
+
         # ── Simulate an order for the new profile through
         # resolve_catalog_fulfillment ──────────────────────────────────────
         fulfillment = resolve_catalog_fulfillment(db_session, {"zz_accept": 1})
@@ -207,10 +224,17 @@ class TestManagerAuthorsLabFollows:
         assert fulfillment["ster"].demand == 0
 
         # ── Vial-plan sections: ZZ Bench department + zz_acc spot, the
-        # profile as host — zero code changes, a pure catalog read ─────────
-        demand = {role: rf.demand for role, rf in fulfillment.items()}
-        sections = sub_service._build_vial_plan_sections(
-            db_session, demand, [], {"zz_accept": 1})
+        # profile as host — asserted through the PUBLIC compute_vial_plan
+        # composition (not the private _build_vial_plan_sections helper),
+        # so this proves the real end-to-end route the assignment page
+        # calls. fetch_sample_services is mocked the same way the box-label
+        # assertion below mocks it; ensure_sample_row finds the row created
+        # above and never touches SENAITE. ──────────────────────────────────
+        with patch("sub_samples.service.fetch_sample_services",
+                   return_value={"services": {"zz_accept": True}, "wp_order_number": "WP-ZZACC"}):
+            plan = sub_service.compute_vial_plan(db_session, parent.sample_id)
+        assert plan["is_unreachable"] is False
+        sections = plan["sections"]
         zz_section = next(
             (s for s in sections if s["department_name"] == "ZZ Bench"), None)
         assert zz_section is not None, sections
@@ -244,17 +268,11 @@ class TestManagerAuthorsLabFollows:
         assert summary_resp.json()["counts"]["zz_acc"] == 1
 
         # ── set_assignment_role writes the custody edge; seeding seeds the
-        # member service — the real production wiring, one call ───────────
-        parent = LimsSample(sample_id="ZZACC-0001", external_lims_uid="zzacc-0001-uid")
-        db_session.add(parent)
-        db_session.flush()
-        sub = LimsSubSample(
-            sample_id="ZZACC-0001-S01", vial_sequence=1, parent_sample_pk=parent.id,
-            external_lims_uid="zzacc-0001-s01-uid",
-        )
-        db_session.add(sub)
-        db_session.commit()
-
+        # member service — the real production wiring, one call. Reuses the
+        # SAME vial created above: compute_vial_plan's own internal
+        # auto-assign already set its role to 'zz_acc' and seeded it, so
+        # this call also proves set_assignment_role's supersede-and-rewrite
+        # is idempotent-safe on a second call for the same role. ───────────
         result = sub_service.set_assignment_role(
             db_session, sub.sample_id, "zz_acc",
             wp_services={"zz_accept": True}, user_id=7,
@@ -371,11 +389,18 @@ class TestRideHeadlineCases:
         rows = db_session.query(LimsAnalysis).filter_by(lims_sub_sample_pk=sub.id).all()
         assert [r.keyword for r in rows] == ["T13-HOST-SVC", "T13-RIDER-SVC"]  # host, then rider
 
-    def test_fent_plus_endo_analog_never_share_two_separate_vials(self, db_session):
-        """Fent + a TEST endo-analog, neither on the other's ride list (no
-        host on the list) -> two separate vials, never sharing — the spec's
-        'sensitive tests never share by construction' property, proven with
-        a TEST anchor role rather than the real endo bucket."""
+    def test_two_independent_profiles_ordered_together_never_cross_contaminate_seeding(self, db_session):
+        """Fent (self-mints — its ride-list host is absent) and a TEST
+        endo-analog anchor (no ride list at all) ordered together in the
+        SAME wp_services dict -> two separate vials, each seeding ONLY its
+        own profile's members. Proves seeding never cross-contaminates
+        across the shared wp_services / fulfillment_role filter surface
+        both profiles resolve against — NOT the ride-host guard rail (endo/
+        ster can never be a ride TARGET), which is already covered by
+        test_ride_lists.py's test_put_ride_hosts_rejects_endo_ster_xtra_self
+        (Task 4). Uses a TEST anchor role rather than the real endo bucket,
+        per the spec's 'sensitive tests never share by construction'
+        property."""
         fent_svc = _mk_service(db_session, "T13-FENT3-SVC")
         endo_svc = _mk_service(db_session, "T13-ENDOA-SVC")
         fent = _mk_profile(db_session, "t13_fent3", "t13fent3", vials=1,
