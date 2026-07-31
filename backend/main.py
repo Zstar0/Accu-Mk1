@@ -2403,6 +2403,20 @@ class AnalysisProfileMembersRequest(BaseModel):
 # addition here.
 COA_ARCHETYPES = {"limit_table"}
 
+# Spec-3 shadow-compare guard rails, enforced at the profile POST/PATCH edge
+# (not a DB constraint, mirroring COA_ARCHETYPES above):
+#   - The three legacy fulfillment_role values are demand-map keys derive_
+#     base_demand's shadow-compare owns; a NEW profile claiming one would get
+#     silently zero-clamped whenever its key is absent from an order's legacy
+#     flags (derive_base_demand only ever checks the five keys below). Only
+#     the profiles that ARE those legacy keys may hold a legacy role.
+#   - 'xtra' is the reserved no-op bucket (never a real fulfillment target);
+#     no profile may claim it.
+_LEGACY_PROFILE_KEYS = {
+    "hplcpurity_identity", "bac_water_panel", "endotoxin", "sterility_pcr", "variance",
+}
+_RESERVED_LEGACY_ROLES = {"hplc", "endo", "ster"}
+
 
 # ─── SLA tier schemas (sub-project A, revised to tiers) ───
 
@@ -8864,7 +8878,11 @@ def get_order_box_label_summary(
     row = _fetch_order_submission_row(order_number)
     if row is None:
         raise HTTPException(status_code=404, detail=f"Order {order_number} not found")
-    counts = {"hplc": 0, "endo": 0, "ster": 0}
+    # Demand-shape-driven: accumulate whatever buckets derive_base_demand
+    # returns (hplc/endo/ster always, plus any catalog-only role like hm)
+    # rather than a hardcoded 3-bucket list, so a new fulfillment_role needs
+    # no change here.
+    counts: dict = {}
     fetch_error = False
     for entry in (row["sample_results"] or {}).values():
         sid = entry.get("senaite_id") if isinstance(entry, dict) else None
@@ -8884,9 +8902,8 @@ def get_order_box_label_summary(
         # flags dict (mirrors sub_samples.service.build_vial_plan).
         services = services_resp.get("services") or {}
         d = derive_base_demand(services, db=db)
-        counts["hplc"] += d["hplc"]
-        counts["endo"] += d["endo"]
-        counts["ster"] += d["ster"]
+        for bucket, n in d.items():
+            counts[bucket] = counts.get(bucket, 0) + n
     if fetch_error:
         # Don't return a silently-undercounted total (which the FE would print as
         # a misleading/blank box label); let the wizard's soft-fail engage.
@@ -9014,16 +9031,17 @@ def get_order_box_label_summaries(
         if any(s in failed_sids for s in sids):
             errors.append(num)
             continue
-        counts = {"hplc": 0, "endo": 0, "ster": 0}
+        # Same demand-shape-driven accumulation as the single-order endpoint
+        # above (do not hardcode the bucket set here either).
+        counts: dict = {}
         for sid in sids:
             resp = services_by_sid.get(sid)
             if not resp:
                 continue  # legit 404 / unmapped sample → contributes 0
             services = resp.get("services") or {}
             d = derive_base_demand(services, db=db)
-            counts["hplc"] += d["hplc"]
-            counts["endo"] += d["endo"]
-            counts["ster"] += d["ster"]
+            for bucket, n in d.items():
+                counts[bucket] = counts.get(bucket, 0) + n
         created = row.get("created_at")
         summaries[num] = BoxLabelSummary(
             order_number=row["order_number"],
@@ -15645,6 +15663,15 @@ async def create_analysis_profile(
         raise HTTPException(
             400, "fulfillment_role must be lowercase, <= 8 chars "
                  "(assignment_role is VARCHAR(8))")
+    if data.fulfillment_role == "xtra":
+        raise HTTPException(400, "role 'xtra' is the reserved unassigned bucket")
+    if data.fulfillment_dim == "role" and data.fulfillment_role in _RESERVED_LEGACY_ROLES \
+            and data.key not in _LEGACY_PROFILE_KEYS:
+        raise HTTPException(
+            400,
+            f"role '{data.fulfillment_role}' is reserved for the legacy demand map "
+            "while the shadow-compare is active; new families use catalog-only roles",
+        )
     p = AnalysisProfile(**data.model_dump(), updated_by_id=getattr(current_user, "id", None))
     db.add(p)
     db.commit()
@@ -15685,6 +15712,20 @@ async def update_analysis_profile(
             raise HTTPException(
                 400, "fulfillment_role must be lowercase, <= 8 chars "
                      "(assignment_role is VARCHAR(8))")
+    # Effective values (payload-or-existing, exclude_unset-aware so an
+    # untouched field falls back to the persisted row, mirroring the
+    # effective_dim idiom just above) — key is immutable, never in `fields`.
+    effective_role = fields["fulfillment_role"] if "fulfillment_role" in fields else p.fulfillment_role
+    effective_dim = fields.get("fulfillment_dim") or p.fulfillment_dim
+    if effective_role == "xtra":
+        raise HTTPException(400, "role 'xtra' is the reserved unassigned bucket")
+    if effective_dim == "role" and effective_role in _RESERVED_LEGACY_ROLES \
+            and p.key not in _LEGACY_PROFILE_KEYS:
+        raise HTTPException(
+            400,
+            f"role '{effective_role}' is reserved for the legacy demand map "
+            "while the shadow-compare is active; new families use catalog-only roles",
+        )
     for field, value in fields.items():
         setattr(p, field, value)
     p.updated_by_id = getattr(current_user, "id", None)

@@ -74,3 +74,52 @@ def test_box_label_summary_skips_unmapped_sample_services():
          patch("sub_samples.service.fetch_sample_services", side_effect=lambda sid: _SERVICES.get(sid) if sid == "P-0858" else None):
         r = client.get("/orders/WP-3263/box-label-summary")
     assert r.json()["counts"] == {"hplc": 1, "endo": 1, "ster": 2}  # P-0859 skipped
+
+
+@pytest.fixture
+def hm_profile():
+    """A minimal seeded 'heavy_metals' catalog profile (vials_required=1,
+    fulfillment_role='hm', dim='role') — same shape as test_catalog_demand.py's
+    _mk_hm_profile, but inserted through the app's real engine/SessionLocal
+    since this file's endpoint runs against the live get_db() session, not the
+    sqlite db_session fixture. Self-restoring."""
+    from database import SessionLocal
+    from models import AnalysisProfile
+    db = SessionLocal()
+    pid = None
+    try:
+        stale = db.query(AnalysisProfile).filter_by(key="heavy_metals").one_or_none()
+        if stale:
+            db.delete(stale)
+            db.commit()
+        p = AnalysisProfile(key="heavy_metals", name="Heavy Metals", is_addon=True,
+                             vials_required=1, fulfillment_role="hm",
+                             fulfillment_dim="role", active=True)
+        db.add(p)
+        db.commit()
+        db.refresh(p)
+        pid = p.id
+        yield p
+    finally:
+        if pid is not None:
+            db.query(AnalysisProfile).filter_by(id=pid).delete()
+            db.commit()
+        db.close()
+
+
+def test_box_label_summary_counts_hm_bucket(hm_profile):
+    """Finding 1: get_order_box_label_summary must not drop the hm bucket —
+    an order with heavy_metals + hplcpurity_identity demands hplc AND hm."""
+    hm_row = {
+        "order_number": "WP-3269",
+        "created_at": __import__("datetime").datetime(2026, 7, 30, 12, 0, 0),
+        "sample_results": {"1": {"senaite_id": "P-0900"}},
+    }
+    services = {"P-0900": {"services": {"hplcpurity_identity": True, "heavy_metals": True}}}
+    with patch.object(main, "_fetch_order_submission_row", return_value=hm_row), \
+         patch("sub_samples.service.fetch_sample_services", side_effect=lambda sid: services.get(sid)):
+        r = client.get("/orders/WP-3269/box-label-summary")
+    assert r.status_code == 200, r.text
+    counts = r.json()["counts"]
+    assert counts["hm"] == 1
+    assert counts["hplc"] == 1
