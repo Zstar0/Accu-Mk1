@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.7.4 — 2026-07-31
+
+### Added
+
+- **`GET /samples/{id}/transfer-info`** — transfer lineage readback (was this
+  sample created by a transfer; what has it been transferred as). Auth-gated
+  like its retest-info sibling; reads the integration-service Postgres
+  directly. Degrades to an empty shell only when the transfer migration
+  (`w1x2y3z4a5b6`) is unapplied; any other DB failure surfaces as 503 rather
+  than a false "not a transfer".
+
 ## v1.7.3 — 2026-07-28
 
 ### Changed
