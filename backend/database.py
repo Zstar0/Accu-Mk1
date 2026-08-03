@@ -148,6 +148,12 @@ def init_db():
             seed_vial_roles(_db)
     except Exception as e:  # never block startup
         log.warning("catalog_vial_roles_seed_skipped err=%s", e)
+    try:
+        from catalog.service_spec_seed import seed_service_specs
+        with SessionLocal() as _db:
+            seed_service_specs(_db)
+    except Exception as e:  # never block startup
+        log.warning("catalog_service_spec_seed_skipped err=%s", e)
 
 
 def _run_migrations():
