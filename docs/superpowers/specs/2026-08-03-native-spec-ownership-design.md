@@ -244,10 +244,13 @@ regression in auditability**, against an ISO 17025 alignment posture
 
 Two mitigations ship here:
 
-1. **Applied-rule record.** The structured `specification` dict rides into
-   `coa_generations.coa_data` (already persisted per generation by the Integration Service), so every
-   generated certificate carries the machine-readable rule it was judged against — strictly better
-   than today's prose-only `"≤ 0.5 ppm"`.
+1. **Applied-rule record.** COABuilder carries the wire `specification` dict onto the enriched row
+   as a `rule` key, and the enriched sections are what the Integration Service persists per
+   generation in `coa_generations.coa_data` — so every generated certificate carries the
+   machine-readable rule it was judged against alongside the formatted display string. (Enrichment
+   replaces `specification` itself with the display string before persistence; without the `rule`
+   key the persisted record stays prose-only — the slice-1 review caught that an earlier draft
+   wrongly assumed the raw wire dict survived on its own.)
 2. **Spec-change audit rows.** Every write to `analysis_service_specs` writes an `AuditLog` row
    (`operation='analysis_service_spec_changed'`) with before/after values and actor. The table has an
    `updated_by_id`; changes are appended, and rows are deactivated rather than deleted.
@@ -318,9 +321,12 @@ divergence is asserted explicitly so it can never be mistaken for a regression.
 ## Rollout and rollback
 
 - Additive only ([[feedback_additive_only]]). New table, new module, two touched functions.
-- **Deploy order is COABuilder → Mk1.** Old COABuilder receiving a dict `specification` would treat it
-  as truthy prose and render a garbage cell, so its tolerance ships first. This matches the spec-2
-  finding that COABuilder-before-Mk1 is the only safe partial order.
+- **Deploy order is COABuilder → Mk1** — belt-and-braces, NOT load-bearing. Verified against
+  `64e5981` during the slice-1 final review: old COABuilder unconditionally overwrites an incoming
+  `specification` from the baked lookup (`{**row, "specification": spec.get("display", "")}`) and
+  re-verdicts via `_verdict`, so a dict arriving early is discarded and the certificate degrades to
+  today's baked behaviour — not the garbage-prose cell an earlier draft of this spec claimed. Ship
+  COABuilder first anyway; it costs nothing inside the one combined window.
 - **Rollback = deactivate the seeded spec rows.** Resolution then finds nothing… which now *aborts*.
   So the real rollback is reverting the Mk1 image (COABuilder's baked fallback is still present until
   slice 3). State this in the deploy runbook.
