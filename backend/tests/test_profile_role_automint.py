@@ -261,3 +261,38 @@ def test_patch_mint_never_bypasses_spec3_guards(client, db_session):
     })
     assert resp.status_code == 400, resp.text
     assert db_session.query(VialRole).filter_by(code="ster").count() == 0
+
+
+def test_post_role_boxable_true_mints_boxable_role(client, db_session):
+    # role_boxable is auto-mint-only (like role_department_id): it configures
+    # the newly-minted vial_roles row from the profile form, so a 1:1 family
+    # is fully set up in one call instead of a second trip to /vial-roles.
+    dep = client.post("/departments", json={"name": "Boxable Dept"}).json()
+    r = client.post("/analysis-profiles", json={
+        "key": "zz_boxable_family", "name": "ZZ Boxable", "is_addon": True,
+        "fulfillment_dim": "role", "fulfillment_role": "zzbox",
+        "role_department_id": dep["id"], "role_boxable": True,
+        "vials_required": 1})
+    assert r.status_code == 201, r.text
+    role = db_session.query(VialRole).filter_by(code="zzbox").one()
+    assert role.boxable is True
+    # still not a persisted profile column — it must never reach AnalysisProfile
+    assert "role_boxable" not in r.json()
+
+
+def test_role_boxable_does_not_mutate_an_existing_role(client, db_session):
+    # Mint-only, matching role_department_id: a profile pointing at a role that
+    # already exists must not silently re-configure that shared role, which
+    # other profiles may also ride.
+    dep = client.post("/departments", json={"name": "Shared Box Dept"}).json()
+    client.post("/vial-roles", json={
+        "code": "shbox", "label": "Shared Role", "department_id": dep["id"],
+        "boxable": False,
+    })
+    r = client.post("/analysis-profiles", json={
+        "key": "zz_shared_box", "name": "ZZ Shared", "is_addon": True,
+        "fulfillment_dim": "role", "fulfillment_role": "shbox",
+        "role_boxable": True, "vials_required": 1})
+    assert r.status_code == 201, r.text
+    role = db_session.query(VialRole).filter_by(code="shbox").one()
+    assert role.boxable is False

@@ -2432,10 +2432,24 @@ class AnalysisProfileCreate(BaseModel):
     # Task 11: optional at create time — validated against sla_tiers in the
     # route (400 on an unknown id), same as PATCH below.
     sla_tier_id: Optional[int] = None
+    # COA *display* settings are accepted here because they are inert while
+    # coa_archetype is NULL — build_native_sections skips the profile before
+    # it reads either (coa/native_sections.py). Configuring them up front
+    # saves a round-trip; arming still takes a deliberate later PATCH.
+    coa_section_title: Optional[str] = None
+    coa_sort_order: int = 0
+    # Declared ONLY so an explicit value can be refused with a clear 400
+    # instead of being silently dropped as an unknown field — arming is
+    # PATCH-only. See create_analysis_profile's docstring for why.
+    coa_archetype: Optional[str] = None
     # Not a persisted profile column — consumed only by the auto-mint path
     # (POST/PATCH /analysis-profiles) to seed a newly-minted vial_roles row's
     # department. Stripped from model_dump() before constructing AnalysisProfile.
     role_department_id: Optional[int] = None
+    # Same auto-mint-only contract as role_department_id: sets `boxable` on a
+    # role minted by THIS request. Never re-configures a pre-existing role —
+    # roles can be shared by several profiles.
+    role_boxable: Optional[bool] = None
 
 
 class AnalysisProfileUpdate(BaseModel):
@@ -15768,10 +15782,24 @@ async def create_analysis_profile(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """AnalysisProfileCreate deliberately has no coa_* fields: a new profile
-    always starts unreported (coa_archetype NULL) and the lab opts it into a
-    COA section via a later edit (PATCH), never at creation time."""
+    """A new profile always starts UNREPORTED (coa_archetype NULL).
+
+    coa_section_title / coa_sort_order are settable here — they are inert
+    while the archetype is NULL, so pre-configuring them costs nothing.
+    coa_archetype itself is not: arming applies RETROACTIVELY, because
+    build_native_sections' rule A2 then refuses the entire COA of any sample
+    already carrying this profile key without a verified parent-tier row.
+    That window is real (IS declares a key before the WP product ships, and
+    catalog_demand fails open on an unknown key), so going live stays a
+    separate deliberate PATCH rather than a side effect of creation."""
     from models import AnalysisProfile, VialRole
+    if data.coa_archetype is not None:
+        raise HTTPException(
+            400,
+            "coa_archetype is not settable at create — a profile starts "
+            "unreported and is armed with a later PATCH (arming is "
+            "retroactive across in-flight samples)",
+        )
     existing = db.execute(
         select(AnalysisProfile).where(AnalysisProfile.key == data.key)
     ).scalar_one_or_none()
@@ -15813,12 +15841,16 @@ async def create_analysis_profile(
             db.add(VialRole(
                 code=data.fulfillment_role, label=data.name,
                 department_id=data.role_department_id,
-                boxable=False, variance_eligible=False,
+                boxable=bool(data.role_boxable), variance_eligible=False,
                 sort_order=max_sort + 1, frozen=False, is_system=False,
             ))
             logger.info("vial_role_minted code=%s for_profile=%s", data.fulfillment_role, data.key)
+    # role_* are auto-mint-only, never AnalysisProfile columns. coa_archetype
+    # IS a real column and is deliberately NOT excluded — the guard above has
+    # already forced it to None, so it lands as the intended NULL; keeping the
+    # plumbing intact means a future decision to allow it needs one change, not two.
     p = AnalysisProfile(
-        **data.model_dump(exclude={"role_department_id"}),
+        **data.model_dump(exclude={"role_department_id", "role_boxable"}),
         updated_by_id=getattr(current_user, "id", None),
     )
     db.add(p)

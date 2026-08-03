@@ -65,6 +65,36 @@ def test_profile_coa_columns_roundtrip():
     assert body["coa_sort_order"] == 10
 
 
+def test_coa_display_fields_settable_at_create():
+    # Section title and sort order are inert while coa_archetype is NULL
+    # (build_native_sections skips the profile before reading either), so
+    # accepting them at create is safe and saves a round-trip: the lab
+    # configures the section up front, then arms it with one later PATCH.
+    r = client.post("/analysis-profiles", json={
+        "key": "hm_create_display_test", "name": "HM Display", "is_addon": True,
+        "coa_section_title": "Heavy Metals Analysis", "coa_sort_order": 10,
+    })
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["coa_section_title"] == "Heavy Metals Analysis"
+    assert body["coa_sort_order"] == 10
+    # ...but the profile is still NOT reported until archetype is set.
+    assert body["coa_archetype"] is None
+
+
+def test_coa_archetype_rejected_at_create():
+    # Arming is deliberately a separate act: setting coa_archetype applies
+    # RETROACTIVELY (fail-closed rule A2 refuses the whole COA for any sample
+    # already carrying this profile key without a verified parent-tier row).
+    # Silently ignoring it would let a caller believe they had gone live.
+    r = client.post("/analysis-profiles", json={
+        "key": "hm_create_archetype_test", "name": "HM Arch", "is_addon": True,
+        "coa_archetype": "limit_table",
+    })
+    assert r.status_code == 400, r.text
+    assert "coa_archetype" in r.json()["detail"]
+
+
 def test_profile_coa_archetype_rejects_unknown_value():
     r = client.post("/analysis-profiles", json={
         "key": "hm2_coa_test", "name": "HM2", "is_addon": True,

@@ -78,6 +78,8 @@ interface FormState {
   // Auto-mint (Task 3): department for a role this save might newly mint.
   // Not a persisted profile field — see api.ts's role_department_id doc.
   role_department_id: number | null
+  // Same auto-mint-only contract: boxable for a role this save might mint.
+  role_boxable: boolean
 }
 
 const DEFAULT_FORM: FormState = {
@@ -95,6 +97,7 @@ const DEFAULT_FORM: FormState = {
   fulfillment_dim: 'role',
   sla_tier_id: null,
   role_department_id: null,
+  role_boxable: false,
 }
 
 // Mirrors the backend's assignment_role format check (main.py, both POST and
@@ -192,6 +195,7 @@ export default function AnalysisProfilesPage() {
       coa_section_title: profile.coa_section_title ?? '',
       coa_archetype: profile.coa_archetype,
       coa_sort_order: String(profile.coa_sort_order),
+      role_boxable: false,
       fulfillment_role: profile.fulfillment_role ?? '',
       fulfillment_dim: profile.fulfillment_dim,
       sla_tier_id: profile.sla_tier_id,
@@ -295,7 +299,13 @@ export default function AnalysisProfilesPage() {
           sort_order: parseInt(form.sort_order, 10) || 0,
           fulfillment_role: roleForPayload,
           fulfillment_dim: form.fulfillment_dim,
+          // Inert until the profile is armed with a later PATCH — see the
+          // COA Section block's create-mode note. coa_archetype is NOT sent:
+          // the backend 400s on it at create, deliberately.
+          coa_section_title: form.coa_section_title.trim() || null,
+          coa_sort_order: parseInt(form.coa_sort_order, 10) || 0,
           role_department_id: form.role_department_id,
+          role_boxable: form.role_boxable,
         })
         toast.success(`"${form.name.trim()}" created`)
       }
@@ -810,6 +820,27 @@ export default function AnalysisProfilesPage() {
                               ))}
                             </SelectContent>
                           </Select>
+                          {/* Boxable rides the same auto-mint-only contract as
+                              the department Select above: it configures the
+                              role THIS save mints, so it only shows when one
+                              will actually be minted. An existing role is
+                              re-configured on the Vial Roles page instead —
+                              roles can be shared by several profiles. */}
+                          <div className="flex items-center gap-2 pt-1">
+                            <Checkbox
+                              id="role-boxable"
+                              checked={form.role_boxable}
+                              onCheckedChange={checked =>
+                                setForm(f => ({ ...f, role_boxable: checked === true }))
+                              }
+                            />
+                            <label htmlFor="role-boxable" className="text-xs leading-none">
+                              Boxable
+                              <span className="block text-[11px] font-normal text-muted-foreground">
+                                Vials in this role appear in the boxing flow.
+                              </span>
+                            </label>
+                          </div>
                         </div>
                       )}
                       {!trimmedFulfillmentRole && !editingProfile && (
@@ -844,11 +875,15 @@ export default function AnalysisProfilesPage() {
                   </div>
                 )}
 
-                {/* COA section wiring — edit only. A new profile always
-                    starts unreported (coa_archetype NULL); the lab opts in
-                    here once the profile exists. */}
-                {editingProfile && (
-                  <div className="space-y-4 border-t pt-4">
+                {/* COA section wiring. Title/order are settable at CREATE —
+                    they are inert until the profile is armed, so configuring
+                    them up front costs nothing. The archetype Select stays
+                    EDIT-only: arming applies retroactively (rule A2 refuses
+                    the COA of any in-flight sample missing a result), so it
+                    is a deliberate second act, and the backend 400s on
+                    coa_archetype at create to say so out loud. */}
+                <div className="space-y-4 border-t pt-4">
+                  {editingProfile && (
                     <div className="space-y-1.5">
                       <div className="flex items-center gap-1.5">
                         <label className="text-sm font-medium">COA Section</label>
@@ -888,6 +923,15 @@ export default function AnalysisProfilesPage() {
                         </SelectContent>
                       </Select>
                     </div>
+                  )}
+                  {!editingProfile && (
+                    <p className="text-xs text-muted-foreground">
+                      <span className="font-medium text-foreground">COA Section</span> — the profile
+                      is created <span className="font-medium">not reported</span>. Set these now if
+                      you like; they take effect when you turn on certificate reporting from the edit
+                      panel.
+                    </p>
+                  )}
 
                     <div className="flex gap-4">
                       <div className="flex-1 space-y-1.5">
@@ -895,7 +939,11 @@ export default function AnalysisProfilesPage() {
                         <Input
                           placeholder={form.name || 'Section title'}
                           value={form.coa_section_title}
-                          disabled={form.coa_archetype === null}
+                          // On EDIT the archetype gates its own parameters. On
+                          // CREATE there is no archetype to pick yet, so the
+                          // fields stay open — the note above explains that
+                          // they are dormant until reporting is turned on.
+                          disabled={!!editingProfile && form.coa_archetype === null}
                           onChange={e =>
                             setForm(f => ({ ...f, coa_section_title: e.target.value }))
                           }
@@ -914,8 +962,7 @@ export default function AnalysisProfilesPage() {
                         />
                       </div>
                     </div>
-                  </div>
-                )}
+                </div>
 
                 {/* SLA tier (Task 11) — edit only. Beats the member services'
                     group tier, loses to a priority override. Inheriting the

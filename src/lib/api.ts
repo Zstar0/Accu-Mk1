@@ -4582,13 +4582,21 @@ export async function createAnalysisProfile(data: {
   fulfillment_role?: string | null
   fulfillment_dim?: 'role' | 'kind'
   // Task 11: optional at create time — the admin UI only exposes the SLA
-  // tier Select on the edit panel (mirrors the COA-section fields, which are
-  // also edit-only), but the backend accepts it on POST too.
+  // tier Select on the edit panel, but the backend accepts it on POST too.
   sla_tier_id?: number | null
+  // COA *display* settings: inert until coa_archetype is armed, so they are
+  // safe to set up front. `coa_archetype` is deliberately absent — the
+  // backend 400s on it here, because arming is retroactive across in-flight
+  // samples and stays a separate PATCH.
+  coa_section_title?: string | null
+  coa_sort_order?: number
   // Auto-mint (Task 3): department for a newly-minted vial_roles row. Not a
   // persisted AnalysisProfile field — the backend consumes it once, at mint
   // time, and never echoes it back on AnalysisProfileResponse.
   role_department_id?: number | null
+  // Same auto-mint-only contract: `boxable` for a role minted by THIS
+  // request. Ignored when the role already exists (roles can be shared).
+  role_boxable?: boolean | null
 }): Promise<AnalysisProfile> {
   const response = await fetch(`${API_BASE_URL()}/analysis-profiles`, {
     method: 'POST',
