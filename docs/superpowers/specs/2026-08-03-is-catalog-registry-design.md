@@ -131,6 +131,37 @@ The pydantic aliases must stay in the union too — legacy WordPress wire keys l
 `hplcpurity&identity` are model aliases, not profile keys, so a catalog sync alone would not cover
 them.
 
+### Startup: fetch fresh, in an explicit ordered fallback (Handler ruling 2026-08-03)
+
+On boot the Integration Service **reaches out to Mk1 for a fresh full key list** rather than trusting
+whatever it last stored. The fallback chain is ordered and explicit:
+
+```
+1. fresh fetch from Mk1 at startup   ← authoritative when it succeeds
+2. persisted catalog_registry_state  ← last known good
+3. NATIVE_SERVICE_KEYS frozenset     ← floor; never empty
+```
+
+Three properties of that chain are load-bearing:
+
+**It must not block startup.** Blocking the lifespan on Mk1 means a Mk1 outage becomes an *order-intake
+outage* — strictly worse than serving from a slightly stale cache, which is still correct and at worst
+misses a family created in the last hour. The startup fetch is fire-and-forget against the existing
+scheduler (`DateTrigger(now())`), exactly like `reconcile_startup`.
+
+**It must retry, with bounded backoff.** This is the case a single startup attempt gets wrong. During
+the combined deploy window Mk1 and the Integration Service restart together, so **IS very likely comes
+up while Mk1 is still starting** — the most probable moment in the system's life for Mk1 to be
+unreachable. One failed attempt followed by an hour of waiting would leave newly-added families
+unrecognised for that hour. Retry the startup fetch a bounded number of times (proposed: 3 attempts at
+roughly 10s / 30s / 60s) before falling through to the periodic schedule.
+
+**Persistence is what makes step 2 exist, and it is not ceremony.** Without the stored row, a restart
+while Mk1 is down drops straight to the frozenset — which by definition does *not* contain any family
+added since the last IS image was built. That is precisely the failure this spec exists to remove, and
+a combined-deploy restart is when it would fire. The `catalog_registry_state` row earns its migration
+on that case alone.
+
 ### Reading on the order path
 
 The cache is the mechanism. A live fetch is a **freshness optimisation only**, and its value is narrow
@@ -151,7 +182,9 @@ Rules:
 Register on the **existing** `AsyncIOScheduler` singleton
 (`app/services/wc_reconcile_scheduler.py`) — no new dependency, no new lifecycle:
 
-- `catalog_sync_startup` — `DateTrigger(now())`, fire-and-forget after startup.
+- `catalog_sync_startup` — `DateTrigger(now())`, fire-and-forget, with the bounded retry described
+  above (3 attempts, ~10s / 30s / 60s) so a combined-deploy restart does not leave the registry stale
+  for an hour.
 - `catalog_sync_periodic` — hourly.
 - Its own `asyncio.Lock` and `max_instances=1`, matching the reconcile job.
 - A manual `POST /admin/refresh-catalog` mirroring `POST /admin/reconcile-customers`, including the
@@ -209,6 +242,11 @@ Attaches to the ONE combined deploy window; no independent deploy.
 | Sync fails | previous `service_keys` retained, unchanged |
 | Sync returns `{"keys": []}` | treated as failure, cache retained |
 | Empty DB + Mk1 unreachable | boot-floor keys still accepted (== today) |
+| Startup fetch succeeds | stored row replaced with the fresh full list |
+| Startup fetch fails all retries | previous stored row still served; floor union intact; startup completes |
+| Mk1 unreachable at boot, then reachable | a retry (or the hourly job) lands the fresh list without a restart |
+| Restart while Mk1 is down, with a populated stored row | keys added since the last IS image are STILL accepted — the case persistence exists for |
+| Mk1 slow to start during a combined deploy | startup retry backoff covers it; no hour-long stale window |
 | Legacy alias `hplcpurity&identity` | accepted (alias union preserved) |
 | Deactivated profile in Mk1 | still accepted — recognition ≠ salability |
 | Two concurrent refreshes | second returns 409 |
@@ -223,6 +261,8 @@ reader; it gets an explicit comment citing this spec.
 | Live fetch adds latency to order acceptance | 2s timeout; fallback on timeout *and* error; cache is the mechanism |
 | A bad sync empties the registry and rejects every native order | Never shrink on failure; empty result treated as failure; boot floor |
 | Scheduler dies silently, cache goes stale | Staleness WARNING at 24h; `key_count` on the row; manual refresh endpoint |
+| Blocking startup on Mk1 turns a Mk1 outage into an order-intake outage | Startup fetch is fire-and-forget with bounded retry; the lifespan never awaits it |
+| IS boots before Mk1 during a combined deploy | Startup retry backoff + persisted last-known-good; the frozenset is the floor, never the working set |
 | Someone filters the sync on `active` | Explicit test + comment; called out as the top design decision above |
 | Mk1 endpoint leaks catalog data | `require_internal_service_token`, same guard as the other eleven S2S routes; keys are not sensitive |
 | Registry drifts from what WP can actually sell | Out of scope by design — sale gating is WordPress's job, not this registry's |
