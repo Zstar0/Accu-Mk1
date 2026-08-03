@@ -1533,6 +1533,39 @@ def _run_migrations():
         created_at TIMESTAMP NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMP NOT NULL DEFAULT NOW()
     )""",
+        # --- Native spec ownership (slice 1): lab-owned pass/fail rules ---
+        # Full CREATE (not just create_all): migrations run BEFORE create_all
+        # (vial_roles precedent above). CHECK ships inline in the CREATE and
+        # is never DROP/re-ADDed (LAST-BOOT-WINS hazard, see :1399-1413).
+        """
+        CREATE TABLE IF NOT EXISTS analysis_service_specs (
+            id SERIAL PRIMARY KEY,
+            analysis_service_id INTEGER NOT NULL REFERENCES analysis_services(id) ON DELETE CASCADE,
+            matrix VARCHAR(100),
+            rule_kind VARCHAR(16) NOT NULL,
+            min_value NUMERIC,
+            max_value NUMERIC,
+            equals_value TEXT,
+            unit VARCHAR(50),
+            display_override TEXT,
+            active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT now(),
+            updated_at TIMESTAMP DEFAULT now(),
+            updated_by_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            CONSTRAINT ck_analysis_service_specs_rule_shape CHECK (
+                (rule_kind = 'range' AND equals_value IS NULL
+                 AND (min_value IS NOT NULL OR max_value IS NOT NULL)) OR
+                (rule_kind = 'equals' AND equals_value IS NOT NULL
+                 AND min_value IS NULL AND max_value IS NULL)
+            )
+        )
+        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_matrix "
+        "ON analysis_service_specs (analysis_service_id, matrix) "
+        "WHERE active AND matrix IS NOT NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_null_matrix "
+        "ON analysis_service_specs (analysis_service_id) "
+        "WHERE active AND matrix IS NULL",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

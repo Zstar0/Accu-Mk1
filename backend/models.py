@@ -4,9 +4,10 @@ Uses SQLAlchemy 2.0 style with mapped_column.
 """
 
 from datetime import datetime, time, date
+from decimal import Decimal
 from typing import Optional, List
 import uuid
-from sqlalchemy import String, Text, Float, Integer, BigInteger, Boolean, DateTime, Time, Date, ForeignKey, JSON, Column, Table, UniqueConstraint, CheckConstraint
+from sqlalchemy import String, Text, Float, Integer, BigInteger, Boolean, DateTime, Time, Date, ForeignKey, JSON, Column, Table, UniqueConstraint, CheckConstraint, Index, Numeric, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -194,6 +195,71 @@ class AnalysisService(Base):
 
     def __repr__(self) -> str:
         return f"<AnalysisService(id={self.id}, title='{self.title}')>"
+
+
+class AnalysisServiceSpec(Base):
+    """Lab-owned pass/fail rule for a native COA row (spec-ownership slice 1).
+
+    One active spec per (service, matrix); matrix NULL = applies to every
+    matrix — NULL-first is the practical default. The identity join is the
+    FK, never the keyword. Rows are deactivated, never deleted; every write
+    goes through catalog/service_spec_audit.record_spec_change.
+    """
+    __tablename__ = "analysis_service_specs"
+    __table_args__ = (
+        CheckConstraint(
+            "(rule_kind = 'range' AND equals_value IS NULL "
+            "AND (min_value IS NOT NULL OR max_value IS NOT NULL)) OR "
+            "(rule_kind = 'equals' AND equals_value IS NOT NULL "
+            "AND min_value IS NULL AND max_value IS NULL)",
+            name="ck_analysis_service_specs_rule_shape",
+        ),
+        # Postgres treats NULLs as distinct in unique indexes, so the
+        # NULL-matrix default row needs its own partial index.
+        Index(
+            "uq_analysis_service_specs_matrix",
+            "analysis_service_id", "matrix",
+            unique=True,
+            postgresql_where=text("active AND matrix IS NOT NULL"),
+            sqlite_where=text("active AND matrix IS NOT NULL"),
+        ),
+        Index(
+            "uq_analysis_service_specs_null_matrix",
+            "analysis_service_id",
+            unique=True,
+            postgresql_where=text("active AND matrix IS NULL"),
+            sqlite_where=text("active AND matrix IS NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    analysis_service_id: Mapped[int] = mapped_column(
+        ForeignKey("analysis_services.id", ondelete="CASCADE"), nullable=False
+    )
+    matrix: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    rule_kind: Mapped[str] = mapped_column(String(16), nullable=False)  # range | equals
+    min_value: Mapped[Optional[Decimal]] = mapped_column(Numeric, nullable=True)
+    max_value: Mapped[Optional[Decimal]] = mapped_column(Numeric, nullable=True)
+    equals_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # The spec's own unit; COABuilder warns when it diverges from the row's.
+    unit: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # NULL = COABuilder formats the display string from the bounds.
+    display_override: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+    updated_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    def __repr__(self) -> str:
+        return (f"<AnalysisServiceSpec(id={self.id}, "
+                f"service={self.analysis_service_id}, matrix={self.matrix!r}, "
+                f"rule={self.rule_kind})>")
 
 
 class ServiceGroup(Base):
