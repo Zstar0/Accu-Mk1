@@ -19253,6 +19253,26 @@ def get_sample_coa_sections(
         raise HTTPException(status_code=502, detail=e.detail)
 
 
+@app.get("/s2s/catalog/service-keys")
+def s2s_catalog_service_keys(
+    db: Session = Depends(get_db),
+    _: None = Depends(require_internal_service_token),
+):
+    """Declared service-key catalog for the Integration Service registry
+    sync (IS catalog-registry spec 2026-08-03). Ships EVERY profile key,
+    active or not, ON PURPOSE: the registry answers "is this key real?",
+    never "is this key sellable?" — analysis_profiles.active means retired
+    from the bench (fulfilment of sold orders continues), and sale gating
+    belongs to WordPress. Do NOT filter on active. Read-only, no pagination
+    (the catalog is single-digit rows).
+    """
+    from models import AnalysisProfile
+
+    keys = sorted(k for (k,) in db.execute(select(AnalysisProfile.key)).all())
+    generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return {"keys": keys, "generated_at": generated_at}
+
+
 # ── Registry creation signal (integration-service bridge) ────────────
 # Called server-to-server by integration-service immediately after it creates
 # a SENAITE AR (dual-write slice 1, 2026-07-06 spec). Idempotent upsert into
