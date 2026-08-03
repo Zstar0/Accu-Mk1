@@ -72,7 +72,12 @@ def evaluate(spec, result: str) -> bool:
     a rule that ran; anything else fails closed. Bounds are INCLUSIVE."""
     text = str(result or "").strip()
     if spec.rule_kind == "equals":
-        return text.lower() == str(spec.equals_value or "").strip().lower()
+        expected = str(spec.equals_value or "").strip()
+        if not expected:
+            raise SpecRuleError(
+                "spec has a blank equals_value — file a real expected value on the catalog row"
+            )
+        return text.lower() == expected.lower()
     if spec.rule_kind != "range":
         raise SpecRuleError(f"unknown rule_kind {spec.rule_kind!r}")
     try:

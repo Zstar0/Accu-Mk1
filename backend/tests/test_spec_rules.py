@@ -151,3 +151,9 @@ def test_unknown_rule_kind_aborts():
     with pytest.raises(SpecRuleError):
         evaluate(SimpleNamespace(rule_kind="fancy", equals_value=None,
                                  min_value=None, max_value=None), "1")
+
+
+def test_blank_equals_value_aborts():
+    with pytest.raises(SpecRuleError):
+        evaluate(SimpleNamespace(rule_kind="equals", equals_value="   ",
+                                 min_value=None, max_value=None), "anything")

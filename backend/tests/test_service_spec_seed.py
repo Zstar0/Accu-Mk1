@@ -65,6 +65,18 @@ def test_seed_leaves_edited_rows_alone(db_session):
     assert row.max_value == Decimal("9.9")   # the lab's edit survives
 
 
+def test_seed_does_not_resurrect_deactivated_rows(db_session):
+    from models import AnalysisServiceSpec
+    svcs = _mk_native_services(db_session, keywords=("HM-PB",))
+    seed_service_specs(db_session)
+    row = db_session.query(AnalysisServiceSpec).one()
+    row.active = False
+    db_session.commit()
+    assert seed_service_specs(db_session) == 0
+    rows = db_session.query(AnalysisServiceSpec).all()
+    assert len(rows) == 1 and rows[0].active is False   # the lab's deactivation survives boots
+
+
 def test_seed_writes_audit_rows(db_session):
     from models import AuditLog
     _mk_native_services(db_session)
