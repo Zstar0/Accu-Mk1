@@ -216,8 +216,12 @@ cannot reach the endpoint (404 or otherwise) logs a failed sync and falls back t
 is today's behaviour. Deploying IS first is merely inert, not harmful — but Mk1-first means the first
 sync succeeds.
 
-Rollback is the stored row: clear `service_keys` and the union collapses to the boot floor. No image
-revert required, which is a notably better rollback story than most of this program.
+Rollback: fix the offending `analysis_profiles` row in Mk1 and run `POST /admin/refresh-catalog` —
+a successful sync legitimately replaces the synced set (floor always preserved), so a bad key is
+gone within one refresh. No image revert required. (An earlier draft said "clear the stored row's
+`service_keys`" — the slice-1 final review corrected this: a row-clear never touches a running
+process's module memory, and the startup/hourly sync repopulates both within the hour, so the
+row is not a rollback lever on its own.)
 
 Attaches to the ONE combined deploy window; no independent deploy.
 
