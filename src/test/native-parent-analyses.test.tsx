@@ -309,7 +309,7 @@ describe('NativeParentAnalysesCard', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Analysis actions' }))
     await userEvent.click(await screen.findByRole('menuitem', { name: 'Retest' }))
 
-    expect(await screen.findByText(/no promoted source results/i)).toBeInTheDocument()
+    expect(await screen.findByText(/no promoted source results are visible for this row/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^retest$/i })).toBeDisabled()
     expect(parentRetestAnalysis).not.toHaveBeenCalled()
   })

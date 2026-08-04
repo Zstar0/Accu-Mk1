@@ -28,7 +28,8 @@ describe('ParentRetestConfirmDialog', () => {
         pending={false} onCancel={() => {}} onConfirm={() => {}}
       />
     )
-    expect(screen.getByText(/no promoted source results/i)).toBeInTheDocument()
+    expect(screen.getByText(/no promoted source results are visible for this row/i)).toBeInTheDocument()
+    expect(screen.getByText(/promotion record may still be loading, or failed to load/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^retest$/i })).toBeDisabled()
   })
   it('renders nothing when state is null', () => {

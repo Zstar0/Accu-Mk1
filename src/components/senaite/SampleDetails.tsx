@@ -3944,7 +3944,12 @@ export function SampleDetails() {
         setPromotionsByKeyword(new Map(records.map(r => [r.keyword, r])))
       })
       .catch(() => {
-        // Non-fatal: badge simply won't appear if the fetch fails
+        // Best-effort: promotionsByKeyword stays whatever it was (empty on
+        // first load) — this map feeds BOTH the promotion badge AND the
+        // native parent card's retest confirm (buildBulkParentRetestImpact
+        // reads it for the blast-radius/fail-closed gate), so a swallowed
+        // failure here doesn't just hide a badge — it also disables Retest
+        // on the card until the next successful refresh.
       })
   }, [])
 

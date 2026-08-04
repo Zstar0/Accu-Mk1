@@ -38,8 +38,9 @@ export function ParentRetestConfirmDialog({
               <div><strong>{state?.titles.join(', ')}</strong></div>
               {blocked ? (
                 <div>
-                  No promoted source results found for this row — a retest here
-                  would have no effect. Retest the vial rows directly instead.
+                  No promoted source results are visible for this row — the
+                  promotion record may still be loading, or failed to load.
+                  Retest is unavailable here until it can be shown.
                 </div>
               ) : (
                 <div>
