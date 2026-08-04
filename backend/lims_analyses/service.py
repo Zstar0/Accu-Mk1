@@ -934,6 +934,45 @@ def list_native_parent_analyses(db: Session, sample_id: str) -> list:
     return [NativeParentAnalysisRow.model_validate(a) for a in deduped]
 
 
+def list_native_parent_analyses_senaite_shape(
+    db: Session, sample_id: str
+) -> List["SenaiteShapeAnalysisResponse"]:
+    """Native (origin='mk1') parent-tier rows projected to the FE's
+    SenaiteAnalysis shape for the shared AnalysisTable (native parent
+    analyses card).
+
+    Row set intentionally differs from list_native_parent_analyses (the
+    6-field card read): ALL review states and the full lineage (retracted
+    old roots, retest rows) are included with no latest-per-service dedup —
+    the table groups by title and renders history rows itself, taking the
+    LAST row as current (hence ORDER BY keyword, id). Shadow rows and
+    senaite-origin services stay excluded: this is the native section, not
+    a mirror of the SENAITE AR (that surface is
+    list_parent_analyses_senaite_shape).
+    """
+    from models import AnalysisService, LimsSample
+
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        raise NotFoundError(f"sample {sample_id!r} not known to Mk1")
+    rows = list(
+        db.execute(
+            select(LimsAnalysis)
+            .join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
+            .where(
+                LimsAnalysis.lims_sample_pk == parent.id,
+                LimsAnalysis.lims_sub_sample_pk.is_(None),
+                LimsAnalysis.provenance == "canonical",
+                AnalysisService.origin == "mk1",
+            )
+            .order_by(LimsAnalysis.keyword, LimsAnalysis.id)
+        ).scalars().all()
+    )
+    return _serialize_senaite_shape_rows(db, rows)
+
+
 # ─── Phase 4b: parent promotions read ───────────────────────────────────────
 
 

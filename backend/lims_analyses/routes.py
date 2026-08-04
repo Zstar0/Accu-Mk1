@@ -217,9 +217,13 @@ def list_promotions(
         raise _handle_service_error(e)
 
 
-@router.get("/parent/{sample_id}/native-analyses", response_model=List[NativeParentAnalysisRow])
+@router.get(
+    "/parent/{sample_id}/native-analyses",
+    response_model=Union[List[NativeParentAnalysisRow], List[SenaiteShapeAnalysisResponse]],
+)
 def list_native_parent_analyses(
     sample_id: str,
+    as_: Literal["default", "senaite_shape"] = Query("default", alias="as"),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -229,8 +233,13 @@ def list_native_parent_analyses(
     the separate reader that surfaces native results (e.g. Heavy Metals) that
     table structurally can't show. 404 when the sample is unknown to Mk1
     (service.NotFoundError, translated by _handle_service_error).
+
+    ?as=senaite_shape projects the rows through the shared senaite-shape
+    serializer for the AnalysisTable-backed card — full lineage, all states.
     """
     try:
+        if as_ == "senaite_shape":
+            return service.list_native_parent_analyses_senaite_shape(db, sample_id)
         return service.list_native_parent_analyses(db, sample_id)
     except Exception as e:
         raise _handle_service_error(e)
