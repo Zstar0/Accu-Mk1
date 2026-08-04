@@ -25,7 +25,7 @@ export function ParentRetestConfirmDialog({
   const impact = state?.impact
   const blocked = !impact || impact.sourceCount === 0
   return (
-    <AlertDialog open={!!state} onOpenChange={open => { if (!open) onCancel() }}>
+    <AlertDialog open={!!state} onOpenChange={open => { if (!open && !pending) onCancel() }}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>
@@ -57,8 +57,8 @@ export function ParentRetestConfirmDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel onClick={onCancel}>Cancel</AlertDialogCancel>
-          <AlertDialogAction disabled={blocked || pending} onClick={onConfirm}>
+          <AlertDialogCancel disabled={pending} onClick={onCancel}>Cancel</AlertDialogCancel>
+          <AlertDialogAction disabled={blocked || pending} onClick={e => { e.preventDefault(); onConfirm() }}>
             {pending ? 'Retesting…' : 'Retest'}
           </AlertDialogAction>
         </AlertDialogFooter>

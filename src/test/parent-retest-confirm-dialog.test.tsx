@@ -37,4 +37,18 @@ describe('ParentRetestConfirmDialog', () => {
     )
     expect(container).toBeEmptyDOMElement()
   })
+  it('retest button prevents auto-close: calls onConfirm only, dialog stays open', async () => {
+    const onConfirm = vi.fn()
+    const onCancel = vi.fn()
+    render(<ParentRetestConfirmDialog state={state} pending={false} onCancel={onCancel} onConfirm={onConfirm} />)
+    await userEvent.click(screen.getByRole('button', { name: /^retest$/i }))
+    expect(onConfirm).toHaveBeenCalledOnce()
+    expect(onCancel).not.toHaveBeenCalled()
+    expect(screen.getByText(/retracts 2 promoted source results/i)).toBeInTheDocument()
+  })
+  it('pending state disables both buttons and shows "Retesting…"', () => {
+    render(<ParentRetestConfirmDialog state={state} pending={true} onCancel={() => {}} onConfirm={() => {}} />)
+    expect(screen.getByRole('button', { name: /^retesting/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /^cancel$/i })).toBeDisabled()
+  })
 })
