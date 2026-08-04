@@ -122,10 +122,20 @@ import {
   listPackagingPhotos,
   fetchPackagingPhotoUrl,
   type PackagingPhoto,
-  getNativeParentAnalyses,
+  listNativeParentAnalysesShaped,
+  parentRetestAnalysis,
   type VialRoleRow,
   type Department,
+  type SenaiteAnalysis,
 } from '@/lib/api'
+import {
+  NATIVE_PARENT_ANALYSES_QUERY_KEY,
+  buildBulkParentRetestImpact,
+} from '@/lib/native-parent-analyses'
+import {
+  ParentRetestConfirmDialog,
+  type ParentRetestConfirmState,
+} from '@/components/senaite/ParentRetestConfirmDialog'
 import {
   ZoomableImage,
   parseAssignedVialFilename,
@@ -3332,8 +3342,11 @@ function WooOrderFlyout({
   )
 }
 
-// Task 5b: read-only "Accu-Mk1 Analyses" card. The main Analyses table on
-// the parent page stays SENAITE-sourced by design (see the Phase 3 swap
+// Task 7: read-only "Accu-Mk1 Analyses" card — now renders the shared
+// AnalysisTable (verbPolicy='parent-native') instead of its own flat-list
+// markup, so this section gets the same columns/history-chain/SLA/sort
+// affordances as the main table for free. The main Analyses table on the
+// parent page stays SENAITE-sourced by design (see the Phase 3 swap
 // effect's comment inside SampleDetails, below) — native (origin='mk1')
 // parent-tier results have no SENAITE AR line to appear in, so this is the
 // separate section that surfaces them (e.g. Heavy Metals on P-0120).
@@ -3342,75 +3355,136 @@ function WooOrderFlyout({
 // state. `isParentPage` is threaded in rather than re-derived here so this
 // component doesn't own the sub-sample-id regex; SampleDetails already
 // computes `parentSampleId === null` for the sibling overlay queries.
+const EMPTY_ANALYTE_NAME_MAP = new Map<number, string>()
+
 export function NativeParentAnalysesCard({
   sampleId,
   isParentPage,
+  lookup,
+  promotionsByKeyword,
+  onParentDataStale,
 }: {
   sampleId: string | null | undefined
   isParentPage: boolean
+  lookup: SenaiteLookupResult | null
+  promotionsByKeyword: Map<string, ParentPromotionInfo>
+  onParentDataStale?: () => void
 }) {
+  const queryClient = useQueryClient()
   const { data: rows } = useQuery({
-    queryKey: ['native-parent-analyses', sampleId],
-    queryFn: () => getNativeParentAnalyses(sampleId!),
+    queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY, sampleId, 'senaite_shape'],
+    queryFn: () => listNativeParentAnalysesShaped(sampleId!),
     enabled: isParentPage && !!sampleId,
     staleTime: 30_000,
   })
+  const analyses = rows ?? []
+  // Same code path the Vials Quick Look uses: SLA needs a lookup whose
+  // analyses are THESE rows (the page's map is keyed off the SENAITE rows,
+  // which never contain native keywords) and a non-null date_received.
+  const slaLookup = useMemo(
+    () => (lookup ? { ...lookup, analyses } : null),
+    [lookup, analyses]
+  )
+  const sla = useAnalysisSlaMap(slaLookup)
+  const [confirm, setConfirm] = useState<ParentRetestConfirmState | null>(null)
+  const [retestPending, setRetestPending] = useState(false)
 
-  if (!rows || rows.length === 0) return null
+  if (analyses.length === 0) return null
 
-  return (
-    <Card className="p-4 space-y-3">
-      <div className="flex items-center gap-1.5">
-        <h3 className="text-sm font-semibold">Accu-Mk1 Analyses</h3>
-        <HoverTooltip>
-          <TooltipTrigger asChild>
-            <span
-              className="inline-flex text-muted-foreground/70"
-              aria-label="Accu-Mk1 Analyses: provenance"
-            >
-              <Info size={12} />
-            </span>
-          </TooltipTrigger>
-          <TooltipContent className="p-0 max-w-xs">
-            <div className="flex flex-col gap-1.5 p-3 text-xs font-mono">
-              <div className="font-semibold border-b border-primary-foreground/20 pb-1.5">
-                native to Accu-Mk1
-              </div>
-              <div>
-                Results measured and promoted natively in Accu-Mk1 — not part
-                of the SENAITE AR.
-              </div>
-              <div className="border-t border-primary-foreground/20 pt-1.5">
-                Read-only here. Lifecycle stays with the promote / un-promote
-                flows.
-              </div>
-            </div>
-          </TooltipContent>
-        </HoverTooltip>
-      </div>
-      <div className="divide-y divide-border">
-        {rows.map(row => (
-          <div
-            key={row.keyword}
-            className="flex items-center justify-between gap-3 py-2 text-sm"
+  const requestRetest = (targets: SenaiteAnalysis[]) => {
+    const keywords = targets
+      .map(a => a.keyword)
+      .filter((k): k is string => !!k)
+    setConfirm({
+      titles: targets.map(a => a.title),
+      keywords,
+      impact: buildBulkParentRetestImpact(keywords, promotionsByKeyword),
+    })
+  }
+
+  const executeRetest = async () => {
+    if (!confirm || !sampleId) return
+    setRetestPending(true)
+    try {
+      let retested = 0
+      for (const keyword of confirm.keywords) {
+        const resp = await parentRetestAnalysis(sampleId, keyword)
+        retested += resp.new_row_ids.length
+      }
+      if (retested > 0) {
+        toast.success(`Retest cascaded — ${retested} source row${retested === 1 ? '' : 's'} retested`)
+      } else {
+        toast.warning('No eligible source rows — nothing changed')
+      }
+    } catch (e) {
+      toast.error('Parent retest failed', {
+        description: e instanceof Error ? e.message : String(e),
+      })
+    } finally {
+      setRetestPending(false)
+      setConfirm(null)
+      void queryClient.invalidateQueries({ queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY] })
+      onParentDataStale?.()
+    }
+  }
+
+  const header = (
+    <div className="flex items-center gap-1.5">
+      <h3 className="text-sm font-semibold">Accu-Mk1 Analyses</h3>
+      <HoverTooltip>
+        <TooltipTrigger asChild>
+          <span
+            className="inline-flex text-muted-foreground/70"
+            aria-label="Accu-Mk1 Analyses: provenance"
           >
-            <div className="min-w-0">
-              <div className="font-medium truncate">{row.title}</div>
-              <div className="text-xs font-mono text-muted-foreground truncate">
-                {row.keyword}
-              </div>
+            <Info size={12} />
+          </span>
+        </TooltipTrigger>
+        <TooltipContent className="p-0 max-w-xs">
+          <div className="flex flex-col gap-1.5 p-3 text-xs font-mono">
+            <div className="font-semibold border-b border-primary-foreground/20 pb-1.5">
+              native to Accu-Mk1
             </div>
-            <div className="flex items-center gap-3 shrink-0">
-              <span className="font-mono text-sm">
-                {row.result_value ?? '—'}
-                {row.result_unit ? ` ${row.result_unit}` : ''}
-              </span>
-              <StatusBadge state={row.review_state} />
+            <div>
+              Results measured and promoted natively in Accu-Mk1 — not part
+              of the SENAITE AR.
+            </div>
+            <div className="border-t border-primary-foreground/20 pt-1.5">
+              Results are entered and submitted on the vials. Retesting a
+              verified row here retracts its promoted source results and
+              un-promotes the parent value.
             </div>
           </div>
-        ))}
-      </div>
-    </Card>
+        </TooltipContent>
+      </HoverTooltip>
+    </div>
+  )
+
+  return (
+    <>
+      <AnalysisTable
+        analyses={analyses}
+        analyteNameMap={EMPTY_ANALYTE_NAME_MAP}
+        promotionsByKeyword={promotionsByKeyword}
+        headerContent={header}
+        hideProgress
+        resultsReadOnly
+        verbPolicy="parent-native"
+        onParentRetest={a => requestRetest([a])}
+        onParentBulkRetest={requestRetest}
+        analysisSlaMap={sla.byKeyword}
+        isAnalysisSlaLoading={sla.isLoading}
+        isAnalysisSlaError={sla.isError}
+        isAnalysisSlaPublished={sla.isPublished}
+        analysisSlaPriority={sla.priority}
+      />
+      <ParentRetestConfirmDialog
+        state={confirm}
+        pending={retestPending}
+        onCancel={() => setConfirm(null)}
+        onConfirm={executeRetest}
+      />
+    </>
   )
 }
 
@@ -4119,9 +4193,11 @@ export function SampleDetails() {
   }
 
   /** Silent re-fetch: updates data without triggering full-page loading state.
-   *  Refreshes all three parent-page surfaces a QuickLook mutation can touch —
-   *  the AR rows (`data`), the per-vial overlay column, and the promotion badges
-   *  — so a promote/transition/add/remove reflects immediately without a reload. */
+   *  Refreshes all four parent-page surfaces a QuickLook/card mutation can
+   *  touch — the AR rows (`data`), the per-vial overlay column, the
+   *  promotion badges, and the native parent analyses card — so a
+   *  promote/transition/add/remove/retest reflects immediately without a
+   *  reload. */
   const refreshSample = (id: string) => {
     resolveSampleData(id)
       .then(result => setData(result))
@@ -4130,10 +4206,11 @@ export function SampleDetails() {
           description: e instanceof Error ? e.message : String(e),
         })
       )
-    // Overlay + promotion badges only exist on parent pages; skip on sub-samples.
+    // Overlay + promotion badges + native card only exist on parent pages; skip on sub-samples.
     if (parentSampleId === null) {
       invalidateParentVialOverlay(queryClient)
       refreshPromotions(id)
+      void queryClient.invalidateQueries({ queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY] })
     }
   }
 
@@ -6568,6 +6645,9 @@ export function SampleDetails() {
         <NativeParentAnalysesCard
           sampleId={data.sample_id}
           isParentPage={parentSampleId === null}
+          lookup={data}
+          promotionsByKeyword={promotionsByKeyword}
+          onParentDataStale={() => refreshSample(data.sample_id)}
         />
       )}
 

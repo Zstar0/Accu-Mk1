@@ -1,82 +1,270 @@
 /**
- * Task 5b: NativeParentAnalysesCard — the read-only "Accu-Mk1 Analyses"
- * section on the sample-details parent page. Separate from the SENAITE-
- * sourced Analyses table by design (task-5b-brief.md), so this is a
- * standalone render test of the exported card component, not a full
- * SampleDetails page render (that component's transitive dependency graph
- * is enormous and untested as a whole elsewhere — see select-root-
- * generations.test.ts for the same "import the pure/small export directly"
- * precedent this file follows for a .tsx render instead of a .ts unit test).
+ * Task 7: NativeParentAnalysesCard now renders the shared AnalysisTable
+ * (verbPolicy='parent-native') instead of its own flat-list markup — see
+ * task-7-brief.md. Reads shaped rows via listNativeParentAnalysesShaped;
+ * retest cascades through parentRetestAnalysis, gated by
+ * ParentRetestConfirmDialog (blast-radius confirm, fails closed with no
+ * promotion record).
  *
- * isParentPage is passed as an explicit prop rather than derived from a
- * sampleId regex — that keeps the "never fetches on sub-sample pages" case
- * a real assertion against the query's `enabled` gate (the mock is called
- * or not), not a tautological check of a hand-rolled predicate.
+ * isParentPage / gating behavior (never fetches on sub-sample pages) is
+ * exercised by the lib/component units this card composes (AnalysisTable's
+ * own tests, native-parent-analyses-lib.test.ts, parent-retest-confirm-
+ * dialog.test.tsx); this file focuses on the integration: does the card wire
+ * the shared table with the right props and drive the retest route.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { NativeParentAnalysesCard } from '@/components/senaite/SampleDetails'
-import { getNativeParentAnalyses, type NativeParentAnalysisRow } from '@/lib/api'
+import {
+  listNativeParentAnalysesShaped,
+  parentRetestAnalysis,
+  type SenaiteAnalysis,
+  type SenaiteLookupResult,
+  type ParentPromotionInfo,
+} from '@/lib/api'
+import { NATIVE_PARENT_ANALYSES_QUERY_KEY } from '@/lib/native-parent-analyses'
+
+// AnalysisTable uses IntersectionObserver for its sticky-toolbar effect; jsdom doesn't have it.
+// Must be a real class (not arrow function) since AnalysisTable does `new IntersectionObserver(...)`.
+class MockIntersectionObserver {
+  observe = vi.fn()
+  unobserve = vi.fn()
+  disconnect = vi.fn()
+  constructor(_cb: IntersectionObserverCallback, _opts?: IntersectionObserverInit) {}
+}
+Object.defineProperty(window, 'IntersectionObserver', {
+  writable: true,
+  configurable: true,
+  value: MockIntersectionObserver,
+})
+
+// Radix DropdownMenu (row action menu) + AlertDialog drive pointer-capture APIs jsdom lacks.
+window.HTMLElement.prototype.hasPointerCapture = vi.fn()
+window.HTMLElement.prototype.setPointerCapture = vi.fn()
+window.HTMLElement.prototype.releasePointerCapture = vi.fn()
+window.HTMLElement.prototype.scrollIntoView = vi.fn()
 
 vi.mock('@/lib/api', async importOriginal => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
-    getNativeParentAnalyses: vi.fn(),
+    listNativeParentAnalysesShaped: vi.fn(),
+    parentRetestAnalysis: vi.fn(),
   }
 })
 
-function renderCard(props: { sampleId: string | null; isParentPage: boolean }) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(
-    <QueryClientProvider client={qc}>
-      <NativeParentAnalysesCard {...props} />
-    </QueryClientProvider>
-  )
+// Mock the SLA hook wholesale — same pattern as src/test/vials-quicklook.test.tsx:
+// protects this render test from real services/groups/sample-sla queries firing;
+// the hook's own internals are covered by analysis-sla.test.tsx.
+vi.mock('@/services/analysis-sla', () => ({
+  useAnalysisSlaMap: vi.fn(() => ({
+    byKeyword: new Map(),
+    isLoading: false,
+    isError: false,
+    isPublished: false,
+    priority: null,
+  })),
+}))
+
+// AnalysisTable calls useSidebar internally; stub it so tests don't need a full SidebarProvider.
+vi.mock('@/components/ui/sidebar', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/components/ui/sidebar')>()
+  return {
+    ...actual,
+    useSidebar: () => ({
+      state: 'expanded' as const,
+      open: true,
+      setOpen: vi.fn(),
+      openMobile: false,
+      setOpenMobile: vi.fn(),
+      isMobile: false,
+      toggleSidebar: vi.fn(),
+    }),
+  }
+})
+
+// Copy of Task 5's shapedRow builder (analysis-table-verb-policy.test.tsx).
+const shapedRow = (over: Partial<SenaiteAnalysis>): SenaiteAnalysis => ({
+  uid: 'mk1:7', keyword: 'HM', title: 'Heavy Metals', result: '1', result_options: [],
+  unit: null, method: null, method_uid: null, method_options: [], instrument: null,
+  instrument_uid: null, instrument_options: [], analyst: null, due_date: null,
+  review_state: 'verified', sort_key: null, captured: null, retested: false,
+  service_group_id: null, service_group_name: null, ...over,
+})
+
+function fakeLookup(overrides: Partial<SenaiteLookupResult> = {}): SenaiteLookupResult {
+  return {
+    sample_id: 'P-0120',
+    sample_uid: 'uid-P-0120',
+    client: null,
+    contact: null,
+    sample_type: null,
+    date_received: '2026-08-01T00:00:00',
+    date_sampled: null,
+    profiles: [],
+    client_order_number: null,
+    client_sample_id: null,
+    client_lot: null,
+    review_state: 'sample_received',
+    declared_weight_mg: null,
+    analytes: [],
+    remarks: [],
+    analyses: [],
+    attachments: [],
+    published_coa: null,
+    senaite_url: null,
+    cached_at: null,
+    ...overrides,
+  } as unknown as SenaiteLookupResult
 }
 
-const ROW: NativeParentAnalysisRow = {
-  keyword: 'HM-PB',
-  title: 'Heavy Metals — Lead',
-  result_value: '0.12',
-  result_unit: 'ppm',
-  review_state: 'verified',
-  updated_at: '2026-07-30T00:00:00Z',
+const promo = (keyword: string, ids: (string | null)[]): ParentPromotionInfo => ({
+  keyword,
+  parent_analysis_id: 1,
+  promoted_at: '2026-08-01T00:00:00Z',
+  sources: ids.map(sample_id => ({ sample_id, contribution_kind: 'primary' })),
+})
+
+function renderCard(
+  rows: SenaiteAnalysis[],
+  promos: Map<string, ParentPromotionInfo> = new Map(),
+  opts: { staleSpy?: () => void; qc?: QueryClient } = {}
+) {
+  vi.mocked(listNativeParentAnalysesShaped).mockResolvedValue(rows)
+  const qc = opts.qc ?? new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const utils = render(
+    <QueryClientProvider client={qc}>
+      <NativeParentAnalysesCard
+        sampleId="P-0120"
+        isParentPage
+        lookup={fakeLookup({ date_received: '2026-08-01' })}
+        promotionsByKeyword={promos}
+        onParentDataStale={opts.staleSpy}
+      />
+    </QueryClientProvider>
+  )
+  return { ...utils, qc }
 }
 
 describe('NativeParentAnalysesCard', () => {
   beforeEach(() => {
-    vi.mocked(getNativeParentAnalyses).mockReset()
+    vi.mocked(listNativeParentAnalysesShaped).mockReset()
+    vi.mocked(parentRetestAnalysis).mockReset()
   })
 
-  it('renders the card and its rows on a parent page with data', async () => {
-    vi.mocked(getNativeParentAnalyses).mockResolvedValue([ROW])
-    renderCard({ sampleId: 'P-0120', isParentPage: true })
+  it('renders the shared AnalysisTable with the card header folded in', async () => {
+    const { container } = renderCard([shapedRow({})])
 
     expect(await screen.findByText('Accu-Mk1 Analyses')).toBeInTheDocument()
-    expect(screen.getByText('Heavy Metals — Lead')).toBeInTheDocument()
-    expect(screen.getByText('HM-PB')).toBeInTheDocument()
-    expect(screen.getByText('0.12 ppm')).toBeInTheDocument()
-    expect(getNativeParentAnalyses).toHaveBeenCalledWith('P-0120')
+    // A table row with the analysis title + a state badge. Scoped to the
+    // <table> — "Verified" also appears as a filter-tab label outside it.
+    const table = screen.getByRole('table')
+    expect(within(table).getByText('Heavy Metals')).toBeInTheDocument()
+    expect(within(table).getByText('Verified')).toBeInTheDocument()
+    // The shared table's column headers and filter tabs are visible — the
+    // old flat-list markup (a `divide-y` div, no headers/tabs) is gone.
+    expect(screen.getByText('Result')).toBeInTheDocument()
+    expect(screen.getByText('Method')).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /All/ })).toBeInTheDocument()
+    expect(container.querySelector('.divide-y')).not.toBeInTheDocument()
   })
 
-  it('renders nothing when the list comes back empty', async () => {
-    vi.mocked(getNativeParentAnalyses).mockResolvedValue([])
-    const { container } = renderCard({ sampleId: 'P-0121', isParentPage: true })
+  it('renders nothing while empty', async () => {
+    const { container } = renderCard([])
 
-    await waitFor(() => expect(getNativeParentAnalyses).toHaveBeenCalled())
+    await waitFor(() => expect(listNativeParentAnalysesShaped).toHaveBeenCalledWith('P-0120'))
     expect(container).toBeEmptyDOMElement()
     expect(screen.queryByText('Accu-Mk1 Analyses')).not.toBeInTheDocument()
   })
 
-  it('never fetches on a sub-sample page', async () => {
-    vi.mocked(getNativeParentAnalyses).mockResolvedValue([ROW])
-    const { container } = renderCard({ sampleId: 'P-0120-S01', isParentPage: false })
+  it('verified row offers only Retest; lineage rows are display-only', async () => {
+    // Same title/keyword → one retest-chain group: the last row in the
+    // array is `current`, the earlier one is its history entry (`1 prev`).
+    // The history row is 'verified'+retested (NOT 'retracted') on purpose:
+    // AnalysisTable's default 'All' filter drops retracted/rejected rows
+    // from `filteredAnalyses` before grouping even runs (SENAITE's "Valid"
+    // view convention — see the `all` branch of its filter), so a genuinely
+    // retracted row can never surface as a collapsed history entry under
+    // the default tab; it would only ever appear on its own under the
+    // Invalid tab. A superseded-but-still-valid row (retested: true) is
+    // the real shape of a history entry here.
+    renderCard([
+      shapedRow({ uid: 'mk1:1', retested: true }),
+      shapedRow({ uid: 'mk1:2' }),
+    ])
+    await screen.findByText('Heavy Metals')
 
-    // Give any (incorrect) fetch a chance to fire before asserting it didn't.
-    await new Promise(resolve => setTimeout(resolve, 0))
-    expect(getNativeParentAnalyses).not.toHaveBeenCalled()
-    expect(container).toBeEmptyDOMElement()
+    const historyToggle = screen.getByRole('button', { name: /1 prev/i })
+    expect(historyToggle).toBeInTheDocument()
+
+    // Verified (current) row's menu offers only Retest.
+    await userEvent.click(screen.getByRole('button', { name: 'Analysis actions' }))
+    expect(await screen.findByRole('menuitem', { name: 'Retest' })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Promote' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Verify (Variance)' })).not.toBeInTheDocument()
+    await userEvent.keyboard('{Escape}')
+
+    // Expanding history reveals the retracted lineage row with no menu
+    // trigger of its own — only the current row's trigger exists.
+    await userEvent.click(historyToggle)
+    expect(await screen.findByText('Superseded')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Analysis actions' })).toHaveLength(1)
+  })
+
+  it('results and method/instrument are not editable', async () => {
+    // mk1: uid + to_be_verified would normally be result-editable
+    // (isResultEditable's MK1_EDITABLE_STATES) — resultsReadOnly must
+    // override that, or this assertion is tautological.
+    renderCard([
+      shapedRow({ uid: 'mk1:3', review_state: 'to_be_verified', result: '1' }),
+    ])
+    await screen.findByText('Heavy Metals')
+
+    expect(screen.queryByRole('button', { name: /Edit result for/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Edit method for/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Edit instrument for/i })).not.toBeInTheDocument()
+  })
+
+  it('retest confirm names the blast radius and fires the parent-retest route', async () => {
+    const promos = new Map([['HM', promo('HM', ['P-0120-S01', 'P-0120-S02'])]])
+    vi.mocked(parentRetestAnalysis).mockResolvedValue({ new_row_ids: [101, 102], parent_review_state: null })
+    const staleSpy = vi.fn()
+    const { qc } = renderCard(
+      [shapedRow({ uid: 'mk1:4', keyword: 'HM', title: 'Heavy Metals', review_state: 'verified' })],
+      promos,
+      { staleSpy }
+    )
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
+    await screen.findByText('Heavy Metals')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Analysis actions' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Retest' }))
+
+    expect(await screen.findByText(/retracts 2 promoted source results/i)).toBeInTheDocument()
+    expect(screen.getByText(/P-0120-S01, P-0120-S02/)).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /^retest$/i }))
+
+    await waitFor(() => expect(parentRetestAnalysis).toHaveBeenCalledTimes(1))
+    expect(parentRetestAnalysis).toHaveBeenCalledWith('P-0120', 'HM')
+    await waitFor(() => expect(staleSpy).toHaveBeenCalled())
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY] })
+  })
+
+  it('retest confirm fails closed with no promotion record', async () => {
+    renderCard(
+      [shapedRow({ uid: 'mk1:5', keyword: 'HM', title: 'Heavy Metals', review_state: 'verified' })],
+      new Map()
+    )
+    await screen.findByText('Heavy Metals')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Analysis actions' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Retest' }))
+
+    expect(await screen.findByText(/no promoted source results/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^retest$/i })).toBeDisabled()
+    expect(parentRetestAnalysis).not.toHaveBeenCalled()
   })
 })
