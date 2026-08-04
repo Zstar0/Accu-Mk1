@@ -50,7 +50,14 @@ def _live_parent_line_states(db: Session, sample: LimsSample) -> dict[str, str]:
         if r.provenance == "canonical":
             if r.retested or r.review_state in _EXCLUDED_LINE_STATES:
                 continue
-            out[r.keyword] = r.review_state
+            # 'parent_to_verify' (Task 3's native second-sign-off submission
+            # state) reads as 'to_be_verified' for these SENAITE-mirror
+            # sample-scope gates: semantically equivalent (submitted,
+            # awaiting sign-off) to the seeded all_analyses_in_state value
+            # lists; real catalog modeling of the state ships with the
+            # catalog release, not here.
+            out[r.keyword] = ("to_be_verified" if r.review_state == "parent_to_verify"
+                              else r.review_state)
         elif r.provenance == "shadow":
             st = r.mirror_review_state
             if not st or st in _EXCLUDED_LINE_STATES:

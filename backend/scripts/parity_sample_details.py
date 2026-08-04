@@ -589,8 +589,25 @@ def _canonical_publish_rule(sample_published: bool) -> Callable[[Any, Any], Opti
     exact by-design pair is suppressed -- any other state combination
     ('unassigned' vs 'published', 'retracted' vs 'published', ...) is
     untouched.
+
+    canonical_parent_to_verify_vs_senaite_verified (Task 8 / R1,
+    2026-08-04): a native promote (Task 3) mints the canonical parent-tier
+    row directly into 'parent_to_verify' -- submission, not sign-off; the
+    Mk1-side verify action is a SEPARATE explicit step. When the source
+    result being promoted was itself already verified on the SENAITE side, a
+    SENAITE-origin promote yields SENAITE line 'verified' while the freshly-
+    minted mk1 canonical row awaits that separate sign-off. Structural, not
+    lag -- UNGATED (unlike the pair above): a sample can publish while one of
+    its lines is left un-signed-off (the shadow engine's all_analyses_in_
+    state gates already collapse 'parent_to_verify' to 'to_be_verified',
+    see workflow/engine.py _live_parent_line_states), so this pair is
+    suppressed regardless of sample_published. Only this EXACT pair is
+    suppressed -- 'parent_to_verify' against any other SENAITE state stays a
+    REAL diff.
     """
     def rule(mk1v: Any, sv: Any) -> Optional[str]:
+        if mk1v == "parent_to_verify" and sv == "verified":
+            return "canonical_parent_to_verify_vs_senaite_verified"
         if not sample_published:
             return None
         if mk1v == "verified" and sv == "published":

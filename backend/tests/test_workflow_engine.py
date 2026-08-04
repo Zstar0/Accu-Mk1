@@ -175,6 +175,29 @@ def test_all_analyses_in_state_comma_list_and_canonical_wins(
     assert met2 is False   # TEST-KW2 is to_be_verified
 
 
+def test_parent_to_verify_collapses_to_to_be_verified(
+        db, test_sample, any_service, sbs_cleanup):
+    """Task 8 / R1 routing: a canonical parent-tier line minted by Task 3's
+    native promote sits in 'parent_to_verify' (submitted, awaiting the
+    separate Mk1-side verify sign-off) until someone explicitly verifies it.
+    The sample-scope shadow gates (all_analyses_in_state) were seeded before
+    that state existed and only know 'to_be_verified,verified,published' --
+    without a collapse, a promoted-but-unverified line would permanently
+    stall the seeded submit edge. _live_parent_line_states reports
+    'parent_to_verify' as 'to_be_verified' for these gates: semantically
+    equivalent (submitted, awaiting sign-off); real catalog modeling of the
+    state ships with the catalog release."""
+    from workflow.engine import _live_parent_line_states, evaluate_requirements
+    _add_parent_line(db, test_sample, any_service, "parent_to_verify")
+    states = _live_parent_line_states(db, test_sample)
+    assert states[any_service.keyword] == "to_be_verified"
+    met, outcomes = evaluate_requirements(
+        db, test_sample,
+        [{"kind": "all_analyses_in_state",
+          "value": "to_be_verified,verified,published", "note": None}])
+    assert met is True, outcomes
+
+
 def test_coa_published_attested_and_unknown_kind_fail_closed(db, test_sample):
     from workflow.engine import evaluate_requirements
     met, _ = evaluate_requirements(
