@@ -11,6 +11,7 @@ from database import SessionLocal
 from main import app
 from models import (
     AnalysisService, LimsAnalysis, LimsAnalysisTransition, LimsSubSample,
+    LimsSubSampleEvent,
 )
 
 
@@ -68,6 +69,17 @@ def analysis_service(db):
 @pytest.fixture(autouse=True)
 def cleanup(db):
     yield
+    # Task 7: parent_analysis_verified events are hosted on lims_sample_pk
+    # (the LimsSample), not the LimsAnalysis row itself, so the FK cascade
+    # below doesn't reach them — delete by embedded analysis_id BEFORE the
+    # LimsAnalysis rows they reference disappear.
+    db.execute(text(
+        "DELETE FROM lims_sub_sample_events "
+        "WHERE event = 'parent_analysis_verified' "
+        "AND (details->>'analysis_id')::int IN ("
+        "  SELECT id FROM lims_analyses WHERE title LIKE 'HTTP-TEST:%'"
+        ")"
+    ))
     db.execute(delete(LimsAnalysisTransition).where(
         LimsAnalysisTransition.reason.like("HTTP-TEST:%")
     ))
@@ -561,12 +573,39 @@ def test_parent_verify_via_generic_endpoint(_stable_auth, analysis_service):
         .where(LimsAnalysisTransition.analysis_id == parent_id)
         .order_by(LimsAnalysisTransition.occurred_at.desc())
     ).scalars().first()
+    # Filtered on the embedded analysis_id, not just lims_sample_pk: this is
+    # a shared, persistent real DB — other tests (this file and others) can
+    # promote+verify other keywords under the SAME parent sample, leaving
+    # their own parent_analysis_verified rows on the same lims_sample_pk.
+    event = db.execute(
+        select(LimsSubSampleEvent).where(
+            LimsSubSampleEvent.event == "parent_analysis_verified",
+            LimsSubSampleEvent.lims_sample_pk == parent_row.lims_sample_pk,
+            text("(details->>'analysis_id')::int = :pid"),
+        ).params(pid=parent_id)
+    ).scalars().first()
     db.close()
     assert verified_at is not None
     assert transition.to_state == "verified"
     assert transition.transition_kind == "verify"
     assert transition.from_state == "parent_to_verify"
     assert transition.user_id == _FakeUser.id  # the module's auth stub (None)
+
+    # Task 7: activity event, hosted on the parent (not any vial), written
+    # in the same commit as the verify transition above. service_origin is
+    # asserted against the fixture's OWN service row rather than a hardcoded
+    # literal — the live catalog happens to carry no mk1-origin service
+    # today, but pinning "senaite" here would silently rot if that changes.
+    # Both origin values are covered directly (with a fixed, known service)
+    # in test_source_retest_route.py's
+    # test_verify_writes_parent_analysis_verified_event_{mk1,senaite_origin}.
+    assert event is not None
+    assert event.sub_sample_pk is None
+    assert event.details == {
+        "keyword": analysis_service.keyword,
+        "analysis_id": parent_id,
+        "service_origin": analysis_service.origin,
+    }
 
 
 def test_verify_on_vial_row_still_409(_stable_auth, sub_sample, analysis_service):

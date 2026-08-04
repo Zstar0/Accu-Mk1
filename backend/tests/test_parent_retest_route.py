@@ -270,6 +270,38 @@ def client_with_already_retested_source(client, db_session):
     return client, parent.sample_id, keyword
 
 
+@pytest.fixture
+def client_with_promoted_parent_senaite_origin(client, db_session):
+    """Same shape as client_with_promoted_parent, but the vial source (and
+    therefore the parent row it mints, which inherits the source's
+    analysis_service_id) is SENAITE-origin — covers the other
+    service_origin value for the Task 7 parent_analysis_retested event.
+
+    Returns (client, sample_id, keyword, source_ids).
+    """
+    parent, subs = _seed_parent_and_subs(db_session, sample_id="P-RETEST-005", n_subs=1)
+    keyword = "PURITY-HPLC"
+    svc = _mk_service(db_session, keyword=keyword, origin="senaite")
+
+    vial = _make_vial_tbv(db_session, subs[0], svc, result="97.00")
+
+    parent_row, _ = promote_to_parent(
+        db_session,
+        keyword=keyword,
+        result_value="97.00",
+        result_unit=None,
+        method_id=None,
+        instrument_id=None,
+        sources=[{"analysis_id": vial.id, "contribution_kind": "chosen"}],
+        user_id=None,
+        reason=None,
+        commit=True,
+    )
+    apply_transition(db_session, analysis_id=parent_row.id, kind="verify")
+
+    return client, parent.sample_id, keyword, [vial.id]
+
+
 # ─── Tests ───────────────────────────────────────────────────────────────────
 
 
@@ -286,7 +318,7 @@ def test_parent_retest_happy_path(client_with_promoted_parent, db_session):
     assert len(body["new_row_ids"]) == 2
     assert body["parent_review_state"] == "retracted"
 
-    from models import LimsAnalysis, LimsSample
+    from models import LimsAnalysis, LimsSample, LimsSubSampleEvent
 
     # Sources flagged retested.
     db_session.expire_all()
@@ -315,6 +347,21 @@ def test_parent_retest_happy_path(client_with_promoted_parent, db_session):
     assert parent_row is not None
     assert parent_row.review_state == "retracted"
     assert parent_row.result_value is None
+
+    # Task 7: parent_analysis_retested, hosted on the parent — source_row_ids
+    # is the ORIGINAL (pre-retest) source ids, not the new replacement rows.
+    event = db_session.execute(
+        select(LimsSubSampleEvent).where(
+            LimsSubSampleEvent.event == "parent_analysis_retested",
+            LimsSubSampleEvent.lims_sample_pk == parent.id,
+        )
+    ).scalars().first()
+    assert event is not None
+    assert event.sub_sample_pk is None
+    assert set(event.details["source_row_ids"]) == set(source_ids)
+    assert event.details["keyword"] == keyword
+    assert event.details["unpromoted"] is True
+    assert event.details["service_origin"] == "mk1"
 
 
 def test_parent_retest_on_awaiting_parent_unpromotes(
@@ -379,9 +426,15 @@ def test_parent_retest_not_verified_409(client_with_promoted_parent_published, d
         assert src.retested is False
 
 
-def test_parent_retest_no_eligible_sources_returns_empty(client_with_already_retested_source):
+def test_parent_retest_no_eligible_sources_returns_empty(
+    client_with_already_retested_source, db_session,
+):
     """Sources already retested → 200, new_row_ids [], parent STAYS verified
-    (the cascade only un-promotes when it actually created retest rows)."""
+    (the cascade only un-promotes when it actually created retest rows).
+
+    Task 7: the event still fires (writers write unconditionally) with an
+    empty source_row_ids and unpromoted=False — this is the "no un-promote
+    happened" leg of parent_analysis_retested."""
     client, sample_id, keyword = client_with_already_retested_source
     r = client.post(
         f"/api/lims-analyses/parent/{sample_id}/retest", json={"keyword": keyword}
@@ -389,6 +442,49 @@ def test_parent_retest_no_eligible_sources_returns_empty(client_with_already_ret
     assert r.status_code == 200, r.text
     assert r.json()["new_row_ids"] == []
     assert r.json()["parent_review_state"] == "verified"
+
+    from models import LimsSample, LimsSubSampleEvent
+
+    parent = db_session.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one()
+    event = db_session.execute(
+        select(LimsSubSampleEvent).where(
+            LimsSubSampleEvent.event == "parent_analysis_retested",
+            LimsSubSampleEvent.lims_sample_pk == parent.id,
+        )
+    ).scalars().first()
+    assert event is not None
+    assert event.details["source_row_ids"] == []
+    assert event.details["unpromoted"] is False
+    assert event.details["service_origin"] == "mk1"
+
+
+def test_parent_retest_writes_event_senaite_origin(
+    client_with_promoted_parent_senaite_origin, db_session,
+):
+    client, sample_id, keyword, source_ids = client_with_promoted_parent_senaite_origin
+    r = client.post(
+        f"/api/lims-analyses/parent/{sample_id}/retest",
+        json={"keyword": keyword},
+    )
+    assert r.status_code == 200, r.text
+
+    from models import LimsSample, LimsSubSampleEvent
+
+    parent = db_session.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one()
+    event = db_session.execute(
+        select(LimsSubSampleEvent).where(
+            LimsSubSampleEvent.event == "parent_analysis_retested",
+            LimsSubSampleEvent.lims_sample_pk == parent.id,
+        )
+    ).scalars().first()
+    assert event is not None
+    assert event.details["service_origin"] == "senaite"
+    assert set(event.details["source_row_ids"]) == set(source_ids)
+    assert event.details["unpromoted"] is True
 
 
 def test_parent_retest_unknown_sample_404(plain_client):

@@ -1228,6 +1228,7 @@ async def get_sample_activity(
     direct_sub = db.execute(
         select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
     ).scalar_one_or_none()
+    parent = None
     if direct_sub is not None:
         family_subs = [direct_sub]
     else:
@@ -1379,6 +1380,46 @@ async def get_sample_activity(
             event_details = dict(se.details or {})
             event_details["by"] = actor_email
             event_details["vial"] = sub_row.sample_id
+            events.append({
+                "timestamp": se.created_at.isoformat() if se.created_at else None,
+                "event": se.event,
+                "label": label,
+                "details": event_details,
+                "source": "lims_sub_sample_events",
+            })
+
+    # Section B (parent-hosted): Task 7's parent verify/retest events live on
+    # lims_sample_pk, not any one family vial — only surfaced when sample_id
+    # itself resolves to the parent (the vial-direct branch above has no
+    # single parent to scope this to).
+    if parent is not None:
+        parent_events = db.execute(
+            select(LimsSubSampleEvent).where(
+                LimsSubSampleEvent.lims_sample_pk == parent.id
+            )
+        ).scalars().all()
+        for se in parent_events:
+            actor_email = None
+            if se.user_id:
+                actor = db.execute(
+                    select(User).where(User.id == se.user_id)
+                ).scalar_one_or_none()
+                actor_email = actor.email if actor else None
+
+            d = se.details or {}
+            if se.event == "parent_analysis_verified":
+                label = f"{d.get('keyword', '?')} verified (parent)"
+            elif se.event == "parent_analysis_retested":
+                n = len(d.get("source_row_ids") or [])
+                label = (
+                    f"{d.get('keyword', '?')} retested (parent) — "
+                    f"{n} source{'s' if n != 1 else ''}"
+                )
+            else:
+                label = se.event
+
+            event_details = dict(d)
+            event_details["by"] = actor_email
             events.append({
                 "timestamp": se.created_at.isoformat() if se.created_at else None,
                 "event": se.event,

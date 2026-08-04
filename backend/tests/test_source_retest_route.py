@@ -272,7 +272,7 @@ def test_source_retest_unverifies_verified_parent(
     assert body["parent_review_state"] == "retracted"
     assert isinstance(body["new_row_id"], int)
 
-    from models import LimsAnalysis, LimsSample
+    from models import LimsAnalysis, LimsSample, LimsSubSampleEvent
 
     db_session.expire_all()
     src = db_session.get(LimsAnalysis, source_id)
@@ -296,6 +296,24 @@ def test_source_retest_unverifies_verified_parent(
     assert parent_row is not None
     assert parent_row.review_state == "retracted"
     assert parent_row.result_value is None
+
+    # Task 7: promoted_source_retested — hosted on the VIAL, un-promote
+    # happened so the event rides that same commit.
+    event = db_session.execute(
+        select(LimsSubSampleEvent).where(
+            LimsSubSampleEvent.event == "promoted_source_retested",
+            LimsSubSampleEvent.sub_sample_pk == src.lims_sub_sample_pk,
+        )
+    ).scalars().first()
+    assert event is not None
+    assert event.lims_sample_pk is None
+    assert event.details == {
+        "keyword": keyword,
+        "new_row_id": body["new_row_id"],
+        "parent_state_before": "verified",
+        "parent_unverified": True,
+        "service_origin": "mk1",
+    }
 
 
 def test_source_retest_unverifies_awaiting_parent(
@@ -340,7 +358,7 @@ def test_source_retest_published_parent_untouched(
     assert body["parent_unverified"] is False
     assert body["parent_review_state"] == "published"
 
-    from models import LimsAnalysis, LimsSample
+    from models import LimsAnalysis, LimsSample, LimsSubSampleEvent
 
     # The source itself still retests — only the un-promote step is gated on
     # parent state.
@@ -362,6 +380,23 @@ def test_source_retest_published_parent_untouched(
     assert parent_row is not None
     assert parent_row.review_state == "published"
     assert parent_row.result_value == "1.20"
+
+    # Task 7: event still fires even though there was no un-promote — it
+    # gets its own commit rather than riding one.
+    event = db_session.execute(
+        select(LimsSubSampleEvent).where(
+            LimsSubSampleEvent.event == "promoted_source_retested",
+            LimsSubSampleEvent.sub_sample_pk == src.lims_sub_sample_pk,
+        )
+    ).scalars().first()
+    assert event is not None
+    assert event.details == {
+        "keyword": keyword,
+        "new_row_id": body["new_row_id"],
+        "parent_state_before": "published",
+        "parent_unverified": False,
+        "service_origin": "mk1",
+    }
 
 
 def test_source_retest_senaite_origin_400(
@@ -537,6 +572,86 @@ def test_source_retest_default_reason_and_unpromote_audit_reason(
     ).scalars().first()
     assert unpromote_transition is not None
     assert unpromote_transition.reason == "un-promoted: source retested from vial"
+
+
+# ─── Task 7: parent_analysis_verified event (both service_origin values) ────
+#
+# These fixtures already walk their parent-tier row through apply_transition
+# (kind='verify') as part of seeding — apply_transition is the actual verify
+# act (it writes the event) regardless of whether it's invoked directly, as
+# here, or via the HTTP generic transitions endpoint (test_lims_analyses_
+# routes.py::test_parent_verify_via_generic_endpoint covers that HTTP path,
+# but the live catalog it runs against carries no mk1-origin service, so
+# BOTH origin values are pinned here instead against fixtures with a known,
+# fixed service).
+
+
+def test_verify_writes_parent_analysis_verified_event_mk1(
+    client_with_promoted_source_verified_parent, db_session,
+):
+    _client, _source_id, sample_id, keyword = client_with_promoted_source_verified_parent
+
+    from models import LimsAnalysis, LimsSample, LimsSubSampleEvent
+
+    parent = db_session.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one()
+    parent_row = db_session.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+            LimsAnalysis.keyword == keyword,
+        )
+    ).scalars().first()
+    assert parent_row is not None
+    assert parent_row.review_state == "verified"
+
+    event = db_session.execute(
+        select(LimsSubSampleEvent).where(
+            LimsSubSampleEvent.event == "parent_analysis_verified",
+            LimsSubSampleEvent.lims_sample_pk == parent.id,
+        )
+    ).scalars().first()
+    assert event is not None
+    assert event.sub_sample_pk is None
+    assert event.details == {
+        "keyword": keyword,
+        "analysis_id": parent_row.id,
+        "service_origin": "mk1",
+    }
+
+
+def test_verify_writes_parent_analysis_verified_event_senaite_origin(
+    client_with_promoted_senaite_origin_source, db_session,
+):
+    _client, _source_id = client_with_promoted_senaite_origin_source
+
+    from models import LimsAnalysis, LimsSample, LimsSubSampleEvent
+
+    parent = db_session.execute(
+        select(LimsSample).where(LimsSample.sample_id == "S-RETEST-004")
+    ).scalar_one()
+    parent_row = db_session.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+        )
+    ).scalars().first()
+    assert parent_row is not None
+    assert parent_row.review_state == "verified"
+
+    event = db_session.execute(
+        select(LimsSubSampleEvent).where(
+            LimsSubSampleEvent.event == "parent_analysis_verified",
+            LimsSubSampleEvent.lims_sample_pk == parent.id,
+        )
+    ).scalars().first()
+    assert event is not None
+    assert event.details == {
+        "keyword": "PURITY-HPLC",
+        "analysis_id": parent_row.id,
+        "service_origin": "senaite",
+    }
 
 
 def test_senaite_shape_rows_carry_service_origin(client_with_mixed_origin_vial_rows):

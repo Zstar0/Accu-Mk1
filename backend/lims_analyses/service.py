@@ -404,6 +404,23 @@ def apply_transition(
     row.review_state = to_state
     row.updated_at = now
 
+    # Activity event (Task 7): parent-tier verify is the second sign-off on
+    # a promoted result — the only tier-gated event, written right before
+    # the transition commit so it rides the same transaction.
+    if kind == "verify" and row_tier == TIER_PARENT:
+        from models import AnalysisService
+        svc = db.get(AnalysisService, row.analysis_service_id)
+        db.add(LimsSubSampleEvent(
+            lims_sample_pk=row.lims_sample_pk,
+            event="parent_analysis_verified",
+            details={
+                "keyword": row.keyword,
+                "analysis_id": row.id,
+                "service_origin": svc.origin if svc else None,
+            },
+            user_id=user_id,
+        ))
+
     db.add(LimsAnalysisTransition(
         analysis_id=row.id,
         from_state=from_state,
@@ -1466,6 +1483,14 @@ def parent_retest(
     direct API caller could retract vial results under a PUBLISHED parent
     (the cascade retests sources regardless of parent state; only its
     un-promote step checks review_state).
+
+    Activity event (Task 7): 'parent_analysis_retested' is written AFTER the
+    cascade returns, in a commit of its own — not literally inside the
+    cascade's transaction, since cascade_parent_retest_to_sources owns and
+    commits its own per-source retests plus the un-promote step before this
+    function regains control. This is a known, structural deviation from
+    "same transaction as the act": the event lands in the commit
+    immediately following the state change, not folded into it.
     """
     from models import LimsSample
 
@@ -1506,6 +1531,34 @@ def parent_retest(
         source_reason=reason or "retested from parent (native)",
     )
     db.refresh(active)
+
+    # source_row_ids = the ORIGINAL (now-retested) source rows, not the new
+    # replacement rows cascade minted — same vocabulary as
+    # LimsAnalysisPromotion.source_analysis_id.
+    source_row_ids: list[int] = []
+    if new_ids:
+        source_row_ids = [
+            sid for sid in db.execute(
+                select(LimsAnalysis.retest_of_id).where(LimsAnalysis.id.in_(new_ids))
+            ).scalars().all()
+            if sid is not None
+        ]
+
+    from models import AnalysisService
+    svc = db.get(AnalysisService, active.analysis_service_id)
+    db.add(LimsSubSampleEvent(
+        lims_sample_pk=active.lims_sample_pk,
+        event="parent_analysis_retested",
+        details={
+            "keyword": keyword,
+            "source_row_ids": source_row_ids,
+            "unpromoted": active.review_state == "retracted",
+            "service_origin": svc.origin if svc else None,
+        },
+        user_id=user_id,
+    ))
+    db.commit()
+
     return new_ids, active.review_state
 
 
@@ -1550,19 +1603,24 @@ def vial_source_retest(
     own single-row transaction (new retest row insert + retested=True flag
     + audit, all before it returns) — that commit boundary is intentionally
     not widened here, same as cascade_parent_retest_to_sources's per-source
-    retest calls. The un-promote step is a SEPARATE commit issued after,
-    once the retest is confirmed durable. This is deliberately two commits,
-    not one wrapping transaction: if the un-promote step were to fail, the
-    retest stays durable and visible (correct — the source really was
-    retested) while the parent is left carrying a now-stale promoted value
-    — a display-staleness gap. Recovery for THAT gap is NOT re-running this
-    route (guard 3 above now 409s on the already-retested row) — it's the
-    parent-tier retest route (which cascades off the parent+keyword rather
-    than this row) or an admin fix. That is the same accepted trade-off
-    cascade_parent_retest_to_sources already makes for the down-cascade's
-    multi-source loop; sequencing the un-promote AFTER the retest commit
-    (never before) is what guarantees "retest committed, un-promote lost"
-    is the only possible partial-failure shape — never the reverse.
+    retest calls. Everything after is a SECOND, separate commit: the
+    un-promote mutation (when the parent is still 'verified' or
+    'parent_to_verify') AND the 'promoted_source_retested' activity event
+    (Task 7, written unconditionally — even when there's no un-promote to
+    do) now share that one commit. This is deliberately two commits, not
+    one wrapping transaction: if the second commit were to fail, the retest
+    stays durable and visible (correct — the source really was retested)
+    while the parent is left carrying a now-stale promoted value AND no
+    activity event is recorded for this act — a display-staleness gap that
+    now also means the event log is incomplete for that one call. Recovery
+    for THAT gap is NOT re-running this route (guard 3 above now 409s on
+    the already-retested row) — it's the parent-tier retest route (which
+    cascades off the parent+keyword rather than this row) or an admin fix.
+    That is the same accepted trade-off cascade_parent_retest_to_sources
+    already makes for the down-cascade's multi-source loop; sequencing the
+    un-promote+event AFTER the retest commit (never before) is what
+    guarantees "retest committed, un-promote-and-event lost" is the only
+    possible partial-failure shape — never the reverse.
     """
     from models import AnalysisService, LimsAnalysisPromotion
 
@@ -1628,6 +1686,8 @@ def vial_source_retest(
 
     parent_unverified = False
     parent_review_state: Optional[str] = None
+    parent_state_before: Optional[str] = None
+    parent = None
 
     # No unique constraint on source_analysis_id — a row that somehow gets
     # promoted twice (e.g. reopened outside apply_transition, as the
@@ -1649,6 +1709,7 @@ def vial_source_retest(
     if promo is not None:
         parent = db.get(LimsAnalysis, promo.parent_analysis_id)
         if parent is not None:
+            parent_state_before = parent.review_state
             if parent.review_state in ("verified", "parent_to_verify"):
                 prior_state = parent.review_state
                 parent.review_state = "retracted"
@@ -1667,10 +1728,28 @@ def vial_source_retest(
                     user_id=user_id,
                     reason="un-promoted: source retested from vial",
                 ))
-                db.commit()
-                db.refresh(parent)
                 parent_unverified = True
-            parent_review_state = parent.review_state
+
+    # Activity event (Task 7): written unconditionally — rides the
+    # un-promote commit above when there is one, otherwise gets this commit
+    # to itself. svc.origin is always 'mk1' here (guard 4 above fails
+    # closed on anything else before this point is reachable).
+    db.add(LimsSubSampleEvent(
+        sub_sample_pk=row.lims_sub_sample_pk,
+        event="promoted_source_retested",
+        details={
+            "keyword": row.keyword,
+            "new_row_id": new_row.id,
+            "parent_state_before": parent_state_before,
+            "parent_unverified": parent_unverified,
+            "service_origin": svc.origin,
+        },
+        user_id=user_id,
+    ))
+    db.commit()
+    if parent is not None:
+        db.refresh(parent)
+        parent_review_state = parent.review_state
 
     return new_row.id, parent_unverified, parent_review_state
 
