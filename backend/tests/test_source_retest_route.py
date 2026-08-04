@@ -394,6 +394,42 @@ def test_source_retest_not_promoted_409(client_with_unpromoted_mk1_source, db_se
     assert src.review_state == "to_be_verified"
 
 
+def test_source_retest_double_call_is_rejected_not_duplicated(
+    client_with_promoted_source_verified_parent, db_session,
+):
+    """Idempotency: apply_transition's retest branch never flips
+    review_state away from 'promoted', so a second identical POST (e.g. a
+    double-click or a retried request) would otherwise still clear the
+    vial-hosted+promoted guard and mint a SECOND orphan retest row — one
+    the partial unique index (retest_of_id IS NULL only) can't catch. The
+    first call must succeed; the second must 409 without creating anything
+    new."""
+    client, source_id, _sample_id, _keyword = client_with_promoted_source_verified_parent
+
+    r1 = client.post(f"/api/lims-analyses/{source_id}/source-retest", json={})
+    assert r1.status_code == 200, r1.text
+
+    r2 = client.post(f"/api/lims-analyses/{source_id}/source-retest", json={})
+    assert r2.status_code == 409
+    assert r2.json()["detail"]["code"] == "invalid_transition"
+
+    from models import LimsAnalysis, LimsAnalysisTransition
+
+    db_session.expire_all()
+    retest_rows = db_session.execute(
+        select(LimsAnalysis).where(LimsAnalysis.retest_of_id == source_id)
+    ).scalars().all()
+    assert len(retest_rows) == 1
+
+    retest_transitions = db_session.execute(
+        select(LimsAnalysisTransition).where(
+            LimsAnalysisTransition.analysis_id == source_id,
+            LimsAnalysisTransition.transition_kind == "retest",
+        )
+    ).scalars().all()
+    assert len(retest_transitions) == 1
+
+
 def test_source_retest_unknown_id_404(client):
     """A missing route would also 404 — assert on the service's message so
     this discriminates the route existing-but-rejecting from the route

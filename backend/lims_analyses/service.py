@@ -1530,7 +1530,14 @@ def vial_source_retest(
          this explicitly excludes the "parent acting as a vial" promotion
          source (state_machine.tier_of's other TIER_VIAL shape); that one
          has no dedicated up-cascade route yet.
-      3. the row's AnalysisService.origin must be 'mk1' (BadRequestError ->
+      3. row must not already be retested (InvalidTransitionError -> 409)
+         — apply_transition's retest branch never mutates review_state
+         (only retested + a new linked row), so a row stays 'promoted'
+         forever after being retested once and would otherwise still
+         clear guard 2 on a second call. See the idempotency comment at
+         the guard site for why this is a 409, not the pristine-delete
+         path's 400.
+      4. the row's AnalysisService.origin must be 'mk1' (BadRequestError ->
          400) — SENAITE-origin sources retest from the parent AR; this
          route only understands the native identity path.
 
@@ -1547,9 +1554,11 @@ def vial_source_retest(
     once the retest is confirmed durable. This is deliberately two commits,
     not one wrapping transaction: if the un-promote step were to fail, the
     retest stays durable and visible (correct — the source really was
-    retested) while the parent is left carrying a now-stale promoted value,
-    a display-staleness gap a human can close by re-running this route or
-    the parent-tier retest route. That is the same accepted trade-off
+    retested) while the parent is left carrying a now-stale promoted value
+    — a display-staleness gap. Recovery for THAT gap is NOT re-running this
+    route (guard 3 above now 409s on the already-retested row) — it's the
+    parent-tier retest route (which cascades off the parent+keyword rather
+    than this row) or an admin fix. That is the same accepted trade-off
     cascade_parent_retest_to_sources already makes for the down-cascade's
     multi-source loop; sequencing the un-promote AFTER the retest commit
     (never before) is what guarantees "retest committed, un-promote lost"
@@ -1571,6 +1580,34 @@ def vial_source_retest(
                     if row.lims_sub_sample_pk is None
                     else f"{row.review_state!r}"
                 )
+            ),
+        )
+
+    # Idempotency guard: apply_transition's retest branch (service.py
+    # ~284-343) only sets retested=True and inserts the new linked row —
+    # it never touches review_state, so the row above stays 'promoted'
+    # forever and would otherwise still pass the guard just above on a
+    # second identical POST (double-click, retried request). Without this,
+    # a repeat call would mint a SECOND unassigned retest row with
+    # retest_of_id == row.id — an orphan the partial unique index doesn't
+    # catch (it only covers retest_of_id IS NULL) — plus a second
+    # un-promote pass. retested=True is the codebase's established
+    # has-activity sentinel (mirrors the per-source skip in
+    # cascade_parent_retest_to_sources: `if src.retested: continue`,
+    # service.py ~1400, and the pristine-delete guard at ~2410). We raise
+    # InvalidTransitionError/409 here — not that pristine-delete
+    # function's BadRequestError/400 — because this is the SAME kind of
+    # question as the guard immediately above (is this row's state shape
+    # legal for a retest transition right now), not a structural
+    # request-shape question like the mk1-origin check below.
+    if row.retested:
+        raise InvalidTransitionError(
+            row.review_state,
+            "retest",
+            message=(
+                f"analysis id={row.id} has already been retested "
+                "(retested=True) — source retest is not repeatable "
+                "from this row"
             ),
         )
 
