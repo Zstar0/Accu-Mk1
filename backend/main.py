@@ -1374,6 +1374,23 @@ async def get_sample_activity(
             elif se.event == "bench_scanned":
                 d = se.details or {}
                 label = f"Scanned in at {d.get('station_name') or '?'}"
+            elif se.event == "promoted_source_retested":
+                # Task 7 writer (vial_source_retest): host is sub_sample_pk,
+                # so this is a vial-hosted event — no "(vial)"/"(parent)"
+                # marker, matching every OTHER case in this branch (only the
+                # parent-hosted branch below marks its events, since those
+                # are the ones merged into an otherwise vial-centric feed).
+                # The un-promote only fires when the parent was still
+                # verified/parent_to_verify at retest time (a published
+                # parent is a citable COA source and is left untouched) —
+                # label reflects the row's own parent_unverified flag rather
+                # than assuming un-verify always happened.
+                d = se.details or {}
+                kw = d.get("keyword", "?")
+                if d.get("parent_unverified"):
+                    label = f"{kw} retested — parent un-verified"
+                else:
+                    label = f"{kw} retested — parent untouched"
             else:
                 label = se.event
 

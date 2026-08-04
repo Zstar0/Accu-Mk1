@@ -219,6 +219,30 @@ export function isPromotable(a: SenaiteAnalysis, vialKind?: string | null): bool
   return isNativeAwaitingSignoff(a)
 }
 
+/** Task 10: the "promoted, native, mk1-origin" seam — additive alongside
+ *  ALLOWED_TRANSITIONS (not baked into it), so a row's default-policy
+ *  behavior is byte-identical on every page that doesn't opt in via the
+ *  onPromotedNativeRetest prop. A promoted, mk1: vial-tier row whose
+ *  backing service is ITSELF mk1-origin (no SENAITE AR line exists for it)
+ *  can retest directly from the vial — the up-cascade mirror of the
+ *  parent-native card's onParentRetest. That retest un-verifies the
+ *  parent-tier promotion, so the caller routes it through a dedicated
+ *  warning confirm (PromotedSourceRetestDialog) rather than the generic
+ *  transition endpoint. `retested` excludes a row that's already been
+ *  retested once — apply_transition's retest branch never flips
+ *  review_state off 'promoted', so without this a retested row would keep
+ *  offering an action the backend's own idempotency guard 409s on (source
+ *  retest is not repeatable from the same row; see vial_source_retest's
+ *  guard 3 in backend/lims_analyses/service.py). */
+export function isPromotedSourceRetestEligible(a: SenaiteAnalysis): boolean {
+  return (
+    a.review_state === 'promoted' &&
+    !!a.uid?.startsWith('mk1:') &&
+    a.service_origin === 'mk1' &&
+    !a.retested
+  )
+}
+
 /** Verify (Variance) is offered on a native, unpromoted, to_be_verified row
  *  whose host vial is assigned to a variance bucket (assignment_kind =
  *  'variance', set at check-in). Deliberately NOT gated on isLockedByParent
@@ -1256,6 +1280,7 @@ function AnalysisRow({
   resultsReadOnly = false,
   verbPolicy = 'default',
   onParentRetest,
+  onPromotedNativeRetest,
 }: {
   analysis: SenaiteAnalysis
   analyteNameMap: Map<number, string>
@@ -1289,6 +1314,12 @@ function AnalysisRow({
   verbPolicy?: AnalysisVerbPolicy
   /** parent-native only: row retest requested — open the card's confirm. */
   onParentRetest?: (analysis: SenaiteAnalysis) => void
+  /** Task 10: default-policy only. When provided, a promoted, native
+   *  (mk1:), mk1-origin row offers Retest routed through this callback
+   *  instead of the (empty) ALLOWED_TRANSITIONS['promoted'] set — see
+   *  isPromotedSourceRetestEligible. Omitted (every existing surface) →
+   *  byte-identical to today. */
+  onPromotedNativeRetest?: (analysis: SenaiteAnalysis) => void
 }) {
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
@@ -1299,7 +1330,21 @@ function AnalysisRow({
   // Phase 4b promote affordance — see isPromotable; verify is hidden on
   // promotable rows via visibleRowTransitions.
   const locked = isLockedByParent(analysis, parentLineStates)
-  const allowedTransitions = visibleRowTransitionsForPolicy(analysis, verbPolicy, parentLineStates)
+  // Task 10 seam: deliberately bypasses isLockedByParent/parentLineStates —
+  // that map encodes the SENAITE AR line's state (see its own docstring),
+  // which is meaningless for a promoted row whose backing service is
+  // mk1-origin and so has no SENAITE AR line to lock against in the first
+  // place. verbPolicy is excluded defensively (SampleDetails only ever
+  // passes onPromotedNativeRetest on the default-policy sub-sample
+  // instance, never the parent-native card), so the parent-native policy
+  // path can't reach this even if that wiring changed.
+  const promotedSourceRetestSeam =
+    verbPolicy !== 'parent-native' &&
+    !!onPromotedNativeRetest &&
+    isPromotedSourceRetestEligible(analysis)
+  const allowedTransitions = promotedSourceRetestSeam
+    ? ['retest']
+    : visibleRowTransitionsForPolicy(analysis, verbPolicy, parentLineStates)
   const canPromote = verbPolicy !== 'parent-native' && isPromotable(analysis, vialKind) && !locked
   const canVarVerify = verbPolicy !== 'parent-native' && canVarianceVerify(analysis, vialKind)
   const isPromoted = analysis.promoted_to_parent_id != null
@@ -1457,9 +1502,19 @@ function AnalysisRow({
                 </span>
               </TooltipTrigger>
               <TooltipContent className="max-w-xs text-left">
-                This result has been promoted to the parent. To correct it,
-                retest the line on the parent AR — the retest cascades back
-                down to this vial.
+                {promotedSourceRetestSeam ? (
+                  <>
+                    This result has been promoted to the parent. Retest here
+                    to un-verify the parent value directly, or retest the
+                    line on the parent AR to cascade down the same way.
+                  </>
+                ) : (
+                  <>
+                    This result has been promoted to the parent. To correct
+                    it, retest the line on the parent AR — the retest
+                    cascades back down to this vial.
+                  </>
+                )}
               </TooltipContent>
             </Tooltip>
           )}
@@ -1525,7 +1580,9 @@ function AnalysisRow({
                   variant={DESTRUCTIVE_TRANSITIONS.has(t) ? 'destructive' : 'default'}
                   onClick={() => {
                     if (!analysis.uid) return
-                    if (verbPolicy === 'parent-native') {
+                    if (promotedSourceRetestSeam) {
+                      onPromotedNativeRetest?.(analysis)
+                    } else if (verbPolicy === 'parent-native') {
                       if (t === 'verify') {
                         void transition.executeTransition(analysis.uid, 'verify')
                       } else {
@@ -1733,6 +1790,9 @@ interface AnalysisTableProps {
   onParentRetest?: (analysis: SenaiteAnalysis) => void
   /** parent-native only: bulk retest over the selected current rows. */
   onParentBulkRetest?: (analyses: SenaiteAnalysis[]) => void
+  /** Task 10: default-policy only — see isPromotedSourceRetestEligible.
+   *  Omitted (every existing surface) → byte-identical to today. */
+  onPromotedNativeRetest?: (analysis: SenaiteAnalysis) => void
 }
 
 export function AnalysisTable({
@@ -1759,6 +1819,7 @@ export function AnalysisTable({
   verbPolicy = 'default',
   onParentRetest,
   onParentBulkRetest,
+  onPromotedNativeRetest,
 }: AnalysisTableProps) {
   const [analysisFilter, setAnalysisFilter] = useState<'all' | 'verified' | 'pending' | 'invalid'>('all')
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null)
@@ -2095,6 +2156,7 @@ export function AnalysisTable({
                       resultsReadOnly={resultsReadOnly}
                       verbPolicy={verbPolicy}
                       onParentRetest={onParentRetest}
+                      onPromotedNativeRetest={onPromotedNativeRetest}
                     />
                     {isExpanded && group.history.map(h => (
                       <HistoryRow

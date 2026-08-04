@@ -124,6 +124,7 @@ import {
   type PackagingPhoto,
   listNativeParentAnalysesShaped,
   parentRetestAnalysis,
+  vialSourceRetest,
   type VialRoleRow,
   type Department,
   type SenaiteAnalysis,
@@ -131,11 +132,17 @@ import {
 import {
   NATIVE_PARENT_ANALYSES_QUERY_KEY,
   buildBulkParentRetestImpact,
+  resolvePromotedSourceParentState,
+  runPromotedSourceRetest,
 } from '@/lib/native-parent-analyses'
 import {
   ParentRetestConfirmDialog,
   type ParentRetestConfirmState,
 } from '@/components/senaite/ParentRetestConfirmDialog'
+import {
+  PromotedSourceRetestDialog,
+  type PromotedSourceRetestState,
+} from '@/components/senaite/PromotedSourceRetestDialog'
 import {
   ZoomableImage,
   parseAssignedVialFilename,
@@ -3645,6 +3652,13 @@ export function SampleDetails() {
     oldPeptideId: number | null
     oldPeptideName: string
   } | null>(null)
+  // Task 10: promoted-source (vial-side) retest warning — sub-sample pages
+  // only. Carries the target row's uid alongside the dialog's own state
+  // shape (superset — PromotedSourceRetestDialog only reads its 3 fields).
+  const [promotedRetest, setPromotedRetest] = useState<
+    (PromotedSourceRetestState & { uid: string }) | null
+  >(null)
+  const [promotedRetestPending, setPromotedRetestPending] = useState(false)
   // Hide HPLC identity/purity/quantity from Manage Analyses (managed via Replace).
   // Default on — manual add/remove of these leaves the slot + vials out of sync.
   const [hideHplcServices, setHideHplcServices] = useState<boolean>(() => {
@@ -4220,6 +4234,51 @@ export function SampleDetails() {
       invalidateParentVialOverlay(queryClient)
       refreshPromotions(id)
       void queryClient.invalidateQueries({ queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY] })
+    }
+  }
+
+  /** Task 10: sub-sample-page-only seam — a promoted, native (mk1-origin)
+   *  vial row can retest directly, which un-verifies its parent-tier
+   *  promotion. Resolves the parent's CURRENT state for this keyword before
+   *  opening the dialog (not after) so the copy shown is never stale/
+   *  loading — matches the brief's "fetch → newest row for the keyword →
+   *  parentState; open dialog" ordering. A fetch failure or no-match leaves
+   *  parentState null, which PromotedSourceRetestDialog fails closed on. */
+  const handlePromotedNativeRetest = async (analysis: SenaiteAnalysis) => {
+    if (!parentSampleId || !analysis.uid) return
+    let parentState: string | null = null
+    try {
+      const rows = await listNativeParentAnalysesShaped(parentSampleId)
+      parentState = resolvePromotedSourceParentState(rows, analysis.keyword)
+    } catch {
+      parentState = null
+    }
+    setPromotedRetest({
+      uid: analysis.uid,
+      title: analysis.title,
+      parentSampleId,
+      parentState,
+    })
+  }
+
+  const executePromotedRetest = async () => {
+    if (!promotedRetest || !data) return
+    setPromotedRetestPending(true)
+    try {
+      const outcome = await runPromotedSourceRetest(promotedRetest.uid, vialSourceRetest)
+      toast.success(
+        outcome.parentUnverified
+          ? `Retested — parent value on ${promotedRetest.parentSampleId} returned to awaiting re-promotion`
+          : 'Retested — parent value untouched'
+      )
+    } catch (e) {
+      toast.error('Retest failed', {
+        description: e instanceof Error ? e.message : String(e),
+      })
+    } finally {
+      setPromotedRetestPending(false)
+      setPromotedRetest(null)
+      refreshSample(data.sample_id)
     }
   }
 
@@ -6605,6 +6664,9 @@ export function SampleDetails() {
         parentLineStates={
           parentSampleId !== null ? parentLineStates : undefined
         }
+        onPromotedNativeRetest={
+          parentSampleId !== null ? handlePromotedNativeRetest : undefined
+        }
         resultsReadOnly={parentSampleId === null && !showParentResultEditing}
         onResultSaved={(uid, newResult, newReviewState) => {
           setData(prev => {
@@ -6645,6 +6707,17 @@ export function SampleDetails() {
         isAnalysisSlaPublished={analysisSla.isPublished}
         analysisSlaPriority={analysisSla.priority}
         vialKind={currentVialKind}
+      />
+
+      {/* Task 10: promoted-source (vial-side) retest warning — sub-sample
+          pages only (state is null on parent pages, so this is a no-op
+          render there regardless). Deliberately NOT nested inside a
+          parentSampleId === null block — this dialog is the opposite gate. */}
+      <PromotedSourceRetestDialog
+        state={promotedRetest}
+        pending={promotedRetestPending}
+        onCancel={() => setPromotedRetest(null)}
+        onConfirm={() => { void executePromotedRetest() }}
       />
 
       {/* Native (Accu-Mk1) parent analyses — separate read-only card, not a

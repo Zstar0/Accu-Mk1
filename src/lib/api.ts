@@ -5957,6 +5957,41 @@ export interface ParentRetestResponse {
   parent_review_state: string | null
 }
 
+export interface SourceRetestResponse {
+  new_row_id: number
+  parent_unverified: boolean
+  parent_review_state: string | null
+}
+
+/** Task 10 / Task 5 route: native vial-side (source) retest for ONE named
+ *  promoted, mk1-origin row — the up-cascade mirror of parentRetestAnalysis.
+ *  Retests the row directly, then un-promotes its parent when the parent is
+ *  still verified/parent_to_verify; a published parent (a citable COA
+ *  source) is left untouched — see PromotedSourceRetestDialog for the
+ *  caller-facing warning copy. */
+export async function vialSourceRetest(
+  analysisId: number,
+  reason?: string
+): Promise<SourceRetestResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/lims-analyses/${analysisId}/source-retest`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(reason ? { reason } : {}),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    const detail = err?.detail
+    throw new Error(
+      (typeof detail === 'string' ? detail : detail?.message) ||
+        `vialSourceRetest failed: ${response.status}`
+    )
+  }
+  return response.json()
+}
+
 /** Native parent-tier retest for one keyword: retests the promoted source
  *  vial rows and un-promotes the verified parent (existing cascade
  *  semantics — published parents 409 server-side). The generic

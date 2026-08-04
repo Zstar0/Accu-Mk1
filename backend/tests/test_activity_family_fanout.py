@@ -36,6 +36,22 @@ def seeded_client():
         details={"keyword": "PURITY-HPLC", "analysis_id": 999, "service_origin": "mk1"},
         created_at=datetime(2026, 8, 1, 13, 0, 0),
     ))
+    # R1 (routed from Task 9's review): promoted_source_retested had no
+    # label case in main.py's vial-hosted branch — fell to the raw event
+    # name. Two rows, one per parent_unverified branch, so the label's
+    # conditional phrasing is pinned both ways.
+    s.add(LimsSubSampleEvent(
+        sub_sample_pk=v1.id, event="promoted_source_retested",
+        details={"keyword": "HM", "new_row_id": 501, "parent_state_before": "verified",
+                 "parent_unverified": True, "service_origin": "mk1"},
+        created_at=datetime(2026, 8, 1, 11, 0, 0),
+    ))
+    s.add(LimsSubSampleEvent(
+        sub_sample_pk=v1.id, event="promoted_source_retested",
+        details={"keyword": "HM2", "new_row_id": 502, "parent_state_before": "published",
+                 "parent_unverified": False, "service_origin": "mk1"},
+        created_at=datetime(2026, 8, 1, 11, 30, 0),
+    ))
     s.commit(); s.close()
 
     def _override_get_db():
@@ -87,3 +103,19 @@ def test_parent_activity_fans_out_parent_hosted_events_newest_first(seeded_clien
     assert parent_event["details"]["analysis_id"] == 999
     assert parent_event["details"]["service_origin"] == "mk1"
     assert "vial" not in parent_event["details"]
+
+
+def test_promoted_source_retested_label_reflects_parent_unverified(seeded_client):
+    """R1 (routed from Task 9's review): promoted_source_retested had NO
+    label case in either of main.py's two event-label branches, so it fell
+    to `label = se.event` (the raw event name). It's a vial-hosted event
+    (host = sub_sample_pk, per Task 7's writer) — the label must reflect the
+    row's own parent_unverified flag (un-promote only fires when the parent
+    was still verified/parent_to_verify; a published parent is untouched),
+    not a fixed phrase."""
+    r = seeded_client.get("/samples/P-7000/activity")
+    assert r.status_code == 200
+    events = [e for e in r.json()["events"] if e["event"] == "promoted_source_retested"]
+    by_keyword = {e["details"]["keyword"]: e["label"] for e in events}
+    assert by_keyword["HM"] == "HM retested — parent un-verified"
+    assert by_keyword["HM2"] == "HM2 retested — parent untouched"
