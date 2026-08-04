@@ -132,7 +132,7 @@ import {
 import {
   NATIVE_PARENT_ANALYSES_QUERY_KEY,
   buildBulkParentRetestImpact,
-  resolvePromotedSourceParentState,
+  resolvePromotedSourceDialogParentState,
   runPromotedSourceRetest,
 } from '@/lib/native-parent-analyses'
 import {
@@ -4239,20 +4239,17 @@ export function SampleDetails() {
 
   /** Task 10: sub-sample-page-only seam — a promoted, native (mk1-origin)
    *  vial row can retest directly, which un-verifies its parent-tier
-   *  promotion. Resolves the parent's CURRENT state for this keyword before
-   *  opening the dialog (not after) so the copy shown is never stale/
-   *  loading — matches the brief's "fetch → newest row for the keyword →
-   *  parentState; open dialog" ordering. A fetch failure or no-match leaves
-   *  parentState null, which PromotedSourceRetestDialog fails closed on. */
+   *  promotion (when it still has one — see
+   *  resolvePromotedSourceDialogParentState's own doc comment for the
+   *  retracted-parent case, fixed in review round 1). Resolves the parent
+   *  state before opening the dialog (not after) so the copy shown is
+   *  never stale/loading. */
   const handlePromotedNativeRetest = async (analysis: SenaiteAnalysis) => {
     if (!parentSampleId || !analysis.uid) return
-    let parentState: string | null = null
-    try {
-      const rows = await listNativeParentAnalysesShaped(parentSampleId)
-      parentState = resolvePromotedSourceParentState(rows, analysis.keyword)
-    } catch {
-      parentState = null
-    }
+    const parentState = await resolvePromotedSourceDialogParentState(
+      analysis,
+      () => listNativeParentAnalysesShaped(parentSampleId)
+    )
     setPromotedRetest({
       uid: analysis.uid,
       title: analysis.title,

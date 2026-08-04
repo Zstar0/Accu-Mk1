@@ -243,6 +243,29 @@ export function isPromotedSourceRetestEligible(a: SenaiteAnalysis): boolean {
   )
 }
 
+/** Task 10 fix round 1: which "How to correct a promoted result" tooltip
+ *  copy a row shows, and whether it renders at all. Pulled out of the JSX
+ *  ternary into a pure function so the 3-way branch is directly testable —
+ *  Radix Tooltip's content only mounts on open (hover/focus), and this
+ *  repo has no established, reliable pattern for driving that under jsdom.
+ *  'retracted-parent': seam active, row not currently linked to a live
+ *  parent (isPromoted false) — can ONLY mean this row's own promotion
+ *  parent was retracted/rejected (a row reaches 'promoted' review_state
+ *  only by having been promoted once). 'seam-active': seam active AND
+ *  currently linked (normal case). 'default': isPromoted, seam inactive —
+ *  the pre-Task-10 copy, byte-identical. null: neither — no tooltip. */
+export type PromotedRowTooltipCopy = 'retracted-parent' | 'seam-active' | 'default'
+
+export function promotedRowTooltipCopy(
+  isPromoted: boolean,
+  promotedSourceRetestSeam: boolean
+): PromotedRowTooltipCopy | null {
+  if (!isPromoted && !promotedSourceRetestSeam) return null
+  if (!isPromoted && promotedSourceRetestSeam) return 'retracted-parent'
+  if (promotedSourceRetestSeam) return 'seam-active'
+  return 'default'
+}
+
 /** Verify (Variance) is offered on a native, unpromoted, to_be_verified row
  *  whose host vial is assigned to a variance bucket (assignment_kind =
  *  'variance', set at check-in). Deliberately NOT gated on isLockedByParent
@@ -1348,6 +1371,7 @@ function AnalysisRow({
   const canPromote = verbPolicy !== 'parent-native' && isPromotable(analysis, vialKind) && !locked
   const canVarVerify = verbPolicy !== 'parent-native' && canVarianceVerify(analysis, vialKind)
   const isPromoted = analysis.promoted_to_parent_id != null
+  const tooltipCopy = promotedRowTooltipCopy(isPromoted, promotedSourceRetestSeam)
   const vialAssign = analysis.keyword ? vialAssignmentByKeyword?.get(analysis.keyword) : undefined
   const vialOverlay = vialAssign?.matches[0]?.mk1Analysis ?? null
   const vialOverlayEditable = vialAssign?.editable ?? false
@@ -1491,7 +1515,11 @@ function AnalysisRow({
               Promoted → #{analysis.promoted_to_parent_id}
             </span>
           )}
-          {isPromoted && (
+          {/* Task 10 fix round 1: tooltipCopy (promotedRowTooltipCopy) covers
+              the seam-active-but-not-currently-promoted case too — see its
+              own doc comment. The "Promoted → #N" badge above stays
+              isPromoted-only (there's no live parent id to show there). */}
+          {tooltipCopy !== null && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <span
@@ -1502,7 +1530,13 @@ function AnalysisRow({
                 </span>
               </TooltipTrigger>
               <TooltipContent className="max-w-xs text-left">
-                {promotedSourceRetestSeam ? (
+                {tooltipCopy === 'retracted-parent' ? (
+                  <>
+                    This promoted result&apos;s parent value was already
+                    retracted. Retesting here creates a fresh run and does
+                    not change any parent value.
+                  </>
+                ) : tooltipCopy === 'seam-active' ? (
                   <>
                     This result has been promoted to the parent. Retest here
                     to un-verify the parent value directly, or retest the

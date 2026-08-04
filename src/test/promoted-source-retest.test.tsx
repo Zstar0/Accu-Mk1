@@ -1,18 +1,30 @@
 /**
  * Task 10: the promoted-source (vial-side) retest seam + warning modal —
  * the up-cascade mirror of Task 7-9's parent-native retest/verify work.
- * Four surfaces:
+ * Surfaces:
  *   - isPromotedSourceRetestEligible (AnalysisTable.tsx): the pure seam
  *     gate — promoted + mk1: + service_origin='mk1' + not already retested.
  *   - AnalysisTable's row menu: wires the gate to onPromotedNativeRetest,
  *     additive alongside ALLOWED_TRANSITIONS['promoted'] (still []).
- *   - resolvePromotedSourceParentState / runPromotedSourceRetest
- *     (native-parent-analyses.ts): the confirm-flow logic extracted out of
- *     SampleDetails so it's directly testable — SampleDetails() itself has
- *     no render harness in this repo (six nested queries; see
- *     sample-details-assignment-label.test.ts).
+ *   - resolvePromotedSourceParentState / resolvePromotedSourceDialogParentState
+ *     / runPromotedSourceRetest (native-parent-analyses.ts): the
+ *     confirm-flow logic extracted out of SampleDetails so it's directly
+ *     testable — SampleDetails() itself has no render harness in this repo
+ *     (six nested queries; see sample-details-assignment-label.test.ts).
  *   - PromotedSourceRetestDialog: the warning copy, state-dependent on the
  *     parent's current review_state, failing closed when unknown.
+ *   - promotedRowTooltipCopy (AnalysisTable.tsx, fix round 1): which help
+ *     tooltip copy a row shows, covering the retracted-parent case
+ *     (review round 1 fix) alongside the pre-existing seam-active/default
+ *     cases.
+ *
+ * Fix round 1 (review feedback): the dialog's parent-state resolution
+ * originally used a keyword-newest-row heuristic, which diverges from what
+ * the backend actually acts on (THIS row's own LimsAnalysisPromotion
+ * record) in the retracted-parent window — see
+ * resolvePromotedSourceDialogParentState's doc comment for the full
+ * discriminator. Fixed to branch on the row's own promoted_to_parent_id
+ * first (no extra fetch needed for that branch).
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
@@ -22,10 +34,13 @@ import {
   AnalysisTable,
   ALLOWED_TRANSITIONS_TEST_EXPORT as ALLOWED_TRANSITIONS,
   isPromotedSourceRetestEligible,
+  promotedRowTooltipCopy,
 } from '@/components/senaite/AnalysisTable'
 import {
   resolvePromotedSourceParentState,
+  resolvePromotedSourceDialogParentState,
   runPromotedSourceRetest,
+  NO_ACTIVE_PROMOTION_PARENT_STATE,
 } from '@/lib/native-parent-analyses'
 import {
   PromotedSourceRetestDialog,
@@ -44,6 +59,20 @@ Object.defineProperty(window, 'IntersectionObserver', {
   writable: true,
   configurable: true,
   value: MockIntersectionObserver,
+})
+
+// Radix Tooltip (the "How to correct a promoted result" help icon, hovered
+// in the fix-round-1 tooltip tests below) uses @radix-ui/react-use-size,
+// which needs ResizeObserver; jsdom doesn't have it.
+class MockResizeObserver {
+  observe = vi.fn()
+  unobserve = vi.fn()
+  disconnect = vi.fn()
+}
+Object.defineProperty(window, 'ResizeObserver', {
+  writable: true,
+  configurable: true,
+  value: MockResizeObserver,
 })
 
 // Radix DropdownMenu (the row action menu) drives pointer-capture APIs jsdom lacks.
@@ -133,6 +162,45 @@ describe('resolvePromotedSourceParentState', () => {
   })
 })
 
+describe('resolvePromotedSourceDialogParentState (fix round 1: row-first discriminator)', () => {
+  it('promoted_to_parent_id null: returns the sentinel WITHOUT calling the fetch — no active promotion to look up', async () => {
+    const fetchParentRows = vi.fn()
+    const result = await resolvePromotedSourceDialogParentState(
+      { promoted_to_parent_id: null, keyword: 'HM' },
+      fetchParentRows
+    )
+    expect(result).toBe(NO_ACTIVE_PROMOTION_PARENT_STATE)
+    expect(fetchParentRows).not.toHaveBeenCalled()
+  })
+  it('promoted_to_parent_id undefined (field omitted): same as null — fetch skipped', async () => {
+    const fetchParentRows = vi.fn()
+    const result = await resolvePromotedSourceDialogParentState(
+      { keyword: 'HM' },
+      fetchParentRows
+    )
+    expect(result).toBe(NO_ACTIVE_PROMOTION_PARENT_STATE)
+    expect(fetchParentRows).not.toHaveBeenCalled()
+  })
+  it('promoted_to_parent_id set: fetches and resolves via the keyword-newest lookup', async () => {
+    const rows: SenaiteAnalysis[] = [row({ uid: 'mk1:9', keyword: 'HM', review_state: 'verified' })]
+    const fetchParentRows = vi.fn().mockResolvedValue(rows)
+    const result = await resolvePromotedSourceDialogParentState(
+      { promoted_to_parent_id: 9, keyword: 'HM' },
+      fetchParentRows
+    )
+    expect(fetchParentRows).toHaveBeenCalledOnce()
+    expect(result).toBe('verified')
+  })
+  it('promoted_to_parent_id set, fetch fails: null (dialog fails closed)', async () => {
+    const fetchParentRows = vi.fn().mockRejectedValue(new Error('network'))
+    const result = await resolvePromotedSourceDialogParentState(
+      { promoted_to_parent_id: 9, keyword: 'HM' },
+      fetchParentRows
+    )
+    expect(result).toBeNull()
+  })
+})
+
 describe('runPromotedSourceRetest', () => {
   it('parses the mk1: uid and calls the injected retest fn with the numeric id', async () => {
     const retest = vi.fn().mockResolvedValue({
@@ -181,6 +249,20 @@ describe('PromotedSourceRetestDialog', () => {
     )
     expect(screen.getByText(/NOT touched/)).toBeInTheDocument()
     expect(screen.getByText(/cannot be re-promoted until the COA-snapshot release/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^retest$/i })).not.toBeDisabled()
+  })
+
+  it('no-active-promotion sentinel (row-first discriminator, fix round 1): enabled, distinct copy — parent already retracted', () => {
+    render(
+      <PromotedSourceRetestDialog
+        state={{ ...base, parentState: NO_ACTIVE_PROMOTION_PARENT_STATE }}
+        pending={false} onCancel={() => {}} onConfirm={() => {}}
+      />
+    )
+    expect(screen.getByText(/already retracted/i)).toBeInTheDocument()
+    expect(screen.getByText(/does not change any parent value/i)).toBeInTheDocument()
+    expect(screen.queryByText(/could not be determined/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/un-verify the parent value on/i)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^retest$/i })).not.toBeDisabled()
   })
 
@@ -323,5 +405,42 @@ describe('AnalysisTable render — promoted-source-retest seam (default policy)'
     expect(await screen.findByRole('menuitem', { name: 'Retest' })).toBeInTheDocument()
     await userEvent.click(screen.getByRole('menuitem', { name: 'Retest' }))
     expect(spy).toHaveBeenCalledOnce()
+  })
+
+  // Fix round 1 (LOW, adjacent to the dialog-state-resolution fix): the
+  // "How to correct a promoted result" tooltip was gated on isPromoted
+  // (promoted_to_parent_id != null), so it rendered nothing at all in the
+  // retracted-parent state even though the seam is active there. Widened
+  // via promotedRowTooltipCopy (see its own pure-fn tests below) — these
+  // are cheap presence-only checks (trigger renders / doesn't), since
+  // opening Radix Tooltip's content (hover/focus) has no reliable pattern
+  // under jsdom in this repo — attempted and abandoned; the copy-selection
+  // logic itself is what's actually load-bearing, and that's covered
+  // directly and reliably by the pure-fn tests instead.
+  it('tooltip trigger renders for a promoted_to_parent_id-null row when the seam is active (would previously render nothing)', () => {
+    renderTable([row({ promoted_to_parent_id: null })], vi.fn())
+    expect(screen.getByLabelText('How to correct a promoted result')).toBeInTheDocument()
+    // The "Promoted → #N" badge needs a real id — stays isPromoted-only.
+    expect(screen.queryByText(/Promoted →/)).not.toBeInTheDocument()
+  })
+
+  it('tooltip trigger does not render when neither isPromoted nor the seam is active', () => {
+    renderTable([row({ promoted_to_parent_id: null, review_state: 'verified' })], vi.fn())
+    expect(screen.queryByLabelText('How to correct a promoted result')).not.toBeInTheDocument()
+  })
+})
+
+describe('promotedRowTooltipCopy (fix round 1)', () => {
+  it('retracted-parent: seam active, not currently linked to a live parent', () => {
+    expect(promotedRowTooltipCopy(false, true)).toBe('retracted-parent')
+  })
+  it('seam-active: seam active AND currently linked (the normal case)', () => {
+    expect(promotedRowTooltipCopy(true, true)).toBe('seam-active')
+  })
+  it('default: isPromoted only, seam inactive — the pre-Task-10 copy, unchanged', () => {
+    expect(promotedRowTooltipCopy(true, false)).toBe('default')
+  })
+  it('null: neither isPromoted nor the seam — no tooltip at all', () => {
+    expect(promotedRowTooltipCopy(false, false)).toBeNull()
   })
 })
