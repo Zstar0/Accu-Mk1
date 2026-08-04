@@ -1230,3 +1230,20 @@ gh pr create --repo <Mk1 repo> --base feat/s2s-catalog-keys --title "feat: nativ
 - **Spec coverage:** data read → Task 2; adapter → obsoleted by server-side projection (correction 2); read-only results → `resultsReadOnly` (Task 7); parent verb map + no side channels → Task 5; bulk retest → Tasks 5+7; SLA chips → Task 7 synthetic lookup (correction 3); retest confirm blast radius → Tasks 4+6; verbs via existing cascade semantics → Task 3 (correction 1: dedicated route, state machine untouched); "what does not change" → verb-policy default pins + default-shape pin + untouched main-table instance; testing section → route-level tier_mismatch pin (the exact gap recon found), read-field tests, FE gating tests; risks table → confirm naming (T6), no-drift-by-construction serializer (T2), prop gating + absence test (T5), burn-in untouched (no main-table edits).
 - **Placeholder scan:** the `...` bodies in Task 2/3 test skeletons are explicitly instructed to be written from named existing fixtures at named line numbers; no TBDs remain.
 - **Type consistency:** `ParentRetestImpact`/`ParentRetestConfirmState`/`ParentRetestResponse`/`verbPolicy` names and shapes match across Tasks 4→5→6→7; `parent_review_state` naming matches backend schema ↔ FE interface.
+
+## Execution corrections (2026-08-04, shipped in PR #95 — this section supersedes the task code above where they differ)
+
+1. **Task 6 dialog — Radix auto-close.** `AlertDialogAction` is `DialogPrimitive.Close`: it composes the
+   user onClick with `onOpenChange(false)`, so the plan's given code fired `onConfirm` then `onCancel`
+   in one batch and the `pending` UI could never render. Shipped fix: `onClick={e => { e.preventDefault(); onConfirm() }}`,
+   dismissal ignored while `pending` (`if (!open && !pending) onCancel()`), Cancel `disabled={pending}`;
+   the card's `executeRetest` `finally` (`setConfirm(null)`) is what closes the dialog.
+2. **Task 6 dialog — fail-closed copy.** The planned copy asserted "No promoted source results found…
+   Retest the vial rows directly instead" — unknowable from an empty promotions map (unloaded / failed
+   fetch / genuinely none) and a wrong remedy (vial retest does not un-promote the parent). Shipped copy
+   states the confirm's blind spot: "No promoted source results are visible for this row — the promotion
+   record may still be loading, or failed to load. Retest is unavailable here until it can be shown."
+3. **Task 7 lineage test fixture.** Retracted rows are excluded from the table's default "All" filter
+   before grouping (SENAITE "Valid"-view convention), so the planned "retracted history row" fixture
+   cannot produce a history chevron; the shipped test uses `retested: true` for the superseded row and
+   the verb-policy suite pins retracted rows display-only via the Invalid tab.
