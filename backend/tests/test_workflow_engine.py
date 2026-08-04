@@ -188,13 +188,17 @@ def test_parent_to_verify_collapses_to_to_be_verified(
     equivalent (submitted, awaiting sign-off); real catalog modeling of the
     state ships with the catalog release."""
     from workflow.engine import _live_parent_line_states, evaluate_requirements
+    from workflow.seeds import SEED_TRANSITIONS
+    # Sourced from the real seed (not hand-copied) so a future edit to the
+    # submit edge's value list can't silently desync this test from it.
+    submit_reqs = next(
+        row[5] for row in SEED_TRANSITIONS
+        if row[0] == "sample" and row[1] == "sample_received"
+        and row[2] == "to_be_verified" and row[3] == "submit")
     _add_parent_line(db, test_sample, any_service, "parent_to_verify")
     states = _live_parent_line_states(db, test_sample)
     assert states[any_service.keyword] == "to_be_verified"
-    met, outcomes = evaluate_requirements(
-        db, test_sample,
-        [{"kind": "all_analyses_in_state",
-          "value": "to_be_verified,verified,published", "note": None}])
+    met, outcomes = evaluate_requirements(db, test_sample, submit_reqs)
     assert met is True, outcomes
 
 

@@ -596,22 +596,31 @@ def _canonical_publish_rule(sample_published: bool) -> Callable[[Any, Any], Opti
     Mk1-side verify action is a SEPARATE explicit step. When the source
     result being promoted was itself already verified on the SENAITE side, a
     SENAITE-origin promote yields SENAITE line 'verified' while the freshly-
-    minted mk1 canonical row awaits that separate sign-off. Structural, not
-    lag -- UNGATED (unlike the pair above): a sample can publish while one of
-    its lines is left un-signed-off (the shadow engine's all_analyses_in_
-    state gates already collapse 'parent_to_verify' to 'to_be_verified',
-    see workflow/engine.py _live_parent_line_states), so this pair is
-    suppressed regardless of sample_published. Only this EXACT pair is
-    suppressed -- 'parent_to_verify' against any other SENAITE state stays a
-    REAL diff.
+    minted mk1 canonical row awaits that separate sign-off.
+
+    GATED on the mk1 sample NOT yet being published -- the mirror image of
+    the gate above. An in-flight parent line awaiting its own Mk1-side
+    verify sign-off is unremarkable (structural consequence of Task 3's
+    submit/verify split; the shadow engine's all_analyses_in_state gates
+    already collapse 'parent_to_verify' to 'to_be_verified' for the SAME
+    reason, see workflow/engine.py _live_parent_line_states). But a line
+    still sitting in 'parent_to_verify' on an ALREADY-published sample is a
+    genuinely open question, not swept: parent_to_verify rows never resolve
+    as a COA source (test_coa_source_resolver_integration.py::test_resolve_
+    sources_mk1_parent_to_verify_row_does_not_resolve), so an already-
+    published sample carrying one for a keyword the COA cites is exactly the
+    kind of thing the read-flip Handler needs to see, not a by-design
+    non-diff. Only this EXACT pair is suppressed, and only pre-publish --
+    'parent_to_verify' against any other SENAITE state, or against
+    'verified' post-publish, stays a REAL diff.
     """
     def rule(mk1v: Any, sv: Any) -> Optional[str]:
+        if sample_published:
+            if mk1v == "verified" and sv == "published":
+                return "canonical_verified_vs_senaite_published"
+            return None
         if mk1v == "parent_to_verify" and sv == "verified":
             return "canonical_parent_to_verify_vs_senaite_verified"
-        if not sample_published:
-            return None
-        if mk1v == "verified" and sv == "published":
-            return "canonical_verified_vs_senaite_published"
         return None
     return rule
 

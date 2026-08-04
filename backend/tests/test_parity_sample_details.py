@@ -976,22 +976,25 @@ def test_other_state_pairs_on_published_sample_stay_real():
 # straight into 'parent_to_verify' (submission, not sign-off) even when the
 # source result being promoted was already verified on the SENAITE side --
 # SENAITE reads 'verified' immediately while mk1's canonical row awaits the
-# separate Mk1-side verify action. Structural, not lag: UNGATED by
-# sample_published (unlike the pair above), since the sample can publish
-# while an individual line is left un-signed-off.
+# separate Mk1-side verify action. GATED on NOT-yet-published -- the mirror
+# image of the pair above: in-flight is unremarkable, but a line still
+# awaiting sign-off on an ALREADY-published sample is a real open question
+# (parent_to_verify rows never resolve as a COA source), so it stays visible.
 
 
-def test_parent_to_verify_vs_senaite_verified_is_known_expected():
+def test_parent_to_verify_vs_senaite_verified_is_known_expected_pre_publish():
     d = _rs("parent_to_verify", "verified", sample_published=False)
     assert d.classification == "known_expected"
     assert d.rule_id == "canonical_parent_to_verify_vs_senaite_verified"
 
 
-def test_parent_to_verify_vs_senaite_verified_unaffected_by_publish_gate():
-    """Ungated: fires the same whether or not the sample is published."""
+def test_parent_to_verify_vs_senaite_verified_stays_real_once_published():
+    """The gate's whole purpose: a line still awaiting Mk1 sign-off on an
+    ALREADY-published sample is not swept -- it's exactly the kind of thing
+    the read-flip Handler needs to see."""
     d = _rs("parent_to_verify", "verified", sample_published=True)
-    assert d.classification == "known_expected"
-    assert d.rule_id == "canonical_parent_to_verify_vs_senaite_verified"
+    assert d.classification == "differing"
+    assert d.rule_id is None
 
 
 def test_parent_to_verify_against_other_senaite_states_stays_real():
