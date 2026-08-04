@@ -136,6 +136,76 @@ def test_publish_on_vial_tier_returns_409_tier_mismatch(sub_sample, analysis_ser
     assert detail["kind"] == "publish"
 
 
+def _find_clean_sub_avoiding_variance(db, svc, *, parent_pk=None):
+    """Like _find_clean_sub_for_route, but also skips vials already assigned
+    to a variance bucket — promote_to_parent 400s on those, which is an
+    unrelated blocker for a tier-mismatch pin test."""
+    exclude: list[int] = []
+    for _ in range(50):
+        candidate = _find_clean_sub_for_route(
+            db, svc, exclude_ids=tuple(exclude), parent_pk=parent_pk,
+        )
+        if candidate is None:
+            return None
+        if candidate.assignment_kind != "variance":
+            return candidate
+        exclude.append(candidate.id)
+    return None
+
+
+def test_retest_on_parent_tier_returns_409_tier_mismatch(analysis_service):
+    """Pins WHY the dedicated parent-retest route exists: the generic
+    transitions endpoint tier-blocks retest on a verified parent row.
+
+    Uses _find_clean_sub_avoiding_variance (not the shared `sub_sample`
+    fixture) so promotion can't be blocked by an unrelated variance-bucket
+    assignment on whatever row happens to sort first in the shared dev DB —
+    mirrors test_promote_endpoint_happy_path_single_vial's fixture idiom.
+
+    Re-asserts the module's auth override locally (save/restore) instead of
+    trusting the module-level `app.dependency_overrides` write at the top of
+    this file: several other test modules (e.g. test_parent_mirror_hooks.py,
+    test_registry_debug_endpoint.py) call `app.dependency_overrides.clear()`
+    unconditionally in teardown, which wipes this module's override without
+    restoring it — confirmed as the cause of the pre-existing baseline
+    401s/KeyErrors across most of this file in a full-suite run. This test
+    doesn't depend on that shared, order-fragile state to pass.
+    """
+    prev_user = app.dependency_overrides.get(auth.get_current_user)
+    app.dependency_overrides[auth.get_current_user] = lambda: _FakeUser()
+    try:
+        db = SessionLocal()
+        clean_sub = _find_clean_sub_avoiding_variance(db, analysis_service)
+        db.close()
+        if clean_sub is None:
+            pytest.skip("no non-variance sub-sample free of keyword for parent-tier pin test")
+
+        created = client.post("/api/lims-analyses", json=_create_payload(clean_sub, analysis_service)).json()
+        aid = created["id"]
+        _walk_to_to_be_verified(aid)
+
+        promote_resp = client.post("/api/lims-analyses/promote", json={
+            "keyword": analysis_service.keyword,
+            "result_value": "98.55",
+            "sources": [{"analysis_id": aid, "contribution_kind": "chosen"}],
+            "reason": "HTTP-TEST: promote",
+        })
+        assert promote_resp.status_code == 201, promote_resp.text
+        parent_row_id = promote_resp.json()["parent"]["id"]
+        _rename_parent_for_cleanup(parent_row_id)
+
+        r = client.post(f"/api/lims-analyses/{parent_row_id}/transitions",
+                        json={"kind": "retest", "reason": "HTTP-TEST: retest parent"})
+        assert r.status_code == 409
+        detail = r.json()["detail"]
+        assert detail["code"] == "tier_mismatch"
+    finally:
+        if prev_user is None:
+            app.dependency_overrides.pop(auth.get_current_user, None)
+        else:
+            app.dependency_overrides[auth.get_current_user] = prev_user
+
+
 def test_submit_without_result_returns_400(sub_sample, analysis_service):
     created = client.post("/api/lims-analyses", json=_create_payload(sub_sample, analysis_service)).json()
     aid = created["id"]
