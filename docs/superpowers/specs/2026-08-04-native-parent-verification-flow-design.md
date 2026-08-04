@@ -156,8 +156,16 @@ linger, same rationale as the verified case).
 
 ### 6. Activity records
 
-Every act below writes an activity event in the same transaction, with `user_id`, timestamp,
-and a `service_origin` detail (`"senaite"` | `"mk1"`, from the analysis service's origin):
+Every act below writes an activity event with `user_id`, timestamp, and a `service_origin`
+detail (`"senaite"` | `"mk1"`, from the analysis service's origin). **Transaction shape as
+shipped (execution correction, 2026-08-04):** the parent-verify event rides the same
+transaction as its state change (inside `apply_transition`); the two retest events are
+written in a commit window FOLLOWING their cascades, because the cascades own their own
+per-source commits (a shared shape with the pre-existing down-cascade — the only reachable
+partial-failure state is "retest durable, event lost", never a false event). Folding the
+events into single transactions requires restructuring the cascades' commit discipline and
+is carried to the catalog release alongside the `_schedule_sbs_cascade` wiring for the two
+dedicated retest routes.
 
 | Act | Event | Details |
 |---|---|---|
@@ -228,7 +236,7 @@ the catalog and its seeds are untouched this release.
 | Risk | Mitigation |
 |---|---|
 | New promotions now require a verify click before COA — turnaround adds a human step | By design (Handler ruling); the card surfaces To Verify rows prominently; bulk verify keeps it one click per sample |
-| `parent_to_verify` leaks into a surface that hardcodes state lists | New-slug strategy makes omissions VISIBLE (row shows raw state / display-only) rather than misclassified; test sweep enumerates the known lists (§1, §4, COA, FE maps, shadow §7) |
+| `parent_to_verify` leaks into a surface that hardcodes state lists | **Corrected at final review:** the new-slug strategy only self-announces on surfaces that bucket via lookup maps with no fallback; surfaces using if/else chains with a catch-all (families state, explorer counts, status-board columns) MISCLASSIFIED the slug silently and needed explicit cases (landed in the final-review fix wave). Structural lesson for the next slug: sweep for catch-all buckets, not just state lists |
 | Vial-side retest unlock surprises a bench tech on SENAITE rows | Unlock is native-origin-only; SENAITE rows keep the suppression and its documented rationale |
 | Un-promote cascade races a concurrent verify/publish | Both cascades resolve the parent row and act in one transaction; published is checked inside the transaction and never touched |
 | Activity host extension breaks the existing feed | Additive nullable column + CHECK; family fan-out extended behind existing tests |
