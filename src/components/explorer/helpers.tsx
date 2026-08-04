@@ -39,6 +39,7 @@ export function groupAnalysisStates(
     const state = a.review_state?.toLowerCase()
     if (state === 'assigned') counts.assigned++
     else if (state === 'to_be_verified') counts.to_verify++
+    else if (state === 'parent_to_verify') counts.to_verify++
     else if (state === 'published') counts.published++
     else if (state === 'verified') counts.verified++
     else if (

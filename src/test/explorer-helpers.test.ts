@@ -101,6 +101,18 @@ describe('groupAnalysisStates', () => {
       pending: 0,
     })
   })
+
+  // 'parent_to_verify' (promoted parent awaiting sign-off) is semantically
+  // equivalent to 'to_be_verified' for this board's purposes — it must not
+  // fall into the catch-all `else counts.pending++` leg.
+  it('counts parent_to_verify toward to_verify, not pending', () => {
+    const analyses = [
+      { review_state: 'parent_to_verify' } as unknown as SenaiteAnalysis,
+    ]
+    const result = groupAnalysisStates(analyses, null)
+    expect(result.to_verify).toBe(1)
+    expect(result.pending).toBe(0)
+  })
 })
 
 // isOrderDone drives the greyed-out (opacity-45) row treatment on the Order

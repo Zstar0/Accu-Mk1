@@ -267,7 +267,8 @@ def parent_retest(
     """Native parent-tier retest (AnalysisTable card verb): retests the
     promoted source vial rows and un-promotes the verified parent row via
     cascade_parent_retest_to_sources. 409 invalid_transition unless the
-    active parent row is 'verified' — published parents are protected."""
+    active parent row is 'verified' or 'parent_to_verify' (awaiting
+    sign-off) — published parents are protected."""
     try:
         new_ids, state = service.parent_retest(
             db,

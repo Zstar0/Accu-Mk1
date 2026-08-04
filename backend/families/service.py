@@ -156,7 +156,17 @@ def _derive_state(analytes: Dict[str, AnalyteBreakdown]) -> FamilyState:
         return any(v in _VIAL_PENDING for v in ab.vial_states)
 
     def has_to_be_verified_vial(ab: AnalyteBreakdown) -> bool:
-        return any(v == "to_be_verified" for v in ab.vial_states)
+        # 'parent_to_verify' (the promoted-parent-awaiting-sign-off state)
+        # counts as to-be-verified work here too — mirrors the read-flip
+        # collapse in workflow/engine.py's _live_parent_line_states. Without
+        # this, a promote (source vial -> 'promoted', parent -> non-vial
+        # 'parent_to_verify') has no vial in 'to_be_verified' and no settled
+        # parent_state, so the family would fall through to the Rule 4/5
+        # fallback and regress backward to 'pending' post-promote.
+        return (
+            any(v == "to_be_verified" for v in ab.vial_states)
+            or ab.parent_state == "parent_to_verify"
+        )
 
     # Rule 1: pending — any unsettled analyte has unassigned/assigned vial
     for ab in analytes.values():

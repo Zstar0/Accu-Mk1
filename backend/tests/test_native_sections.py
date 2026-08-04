@@ -5,7 +5,19 @@ pass-through to Integration Service.
 """
 import pytest
 
-from coa.native_sections import NativeSectionsError, build_native_sections
+from coa import source_resolver
+from coa.native_sections import ELIGIBLE_STATES, NativeSectionsError, build_native_sections
+
+
+def test_eligible_states_matches_source_resolver_parent_result_states():
+    """Drift guard: the ("verified", "published") COA-eligibility policy is
+    dual-encoded — coa/native_sections.py:ELIGIBLE_STATES (this module) and
+    coa/source_resolver.py:_PARENT_RESULT_STATES both gate which parent-tier
+    review_states may be cited on a COA. They must change together; a lone
+    edit to one silently reopens or narrows COA eligibility on the other
+    resolution path (native sections vs. the SENAITE-parity source
+    resolver) without either test suite catching it."""
+    assert tuple(ELIGIBLE_STATES) == tuple(source_resolver._PARENT_RESULT_STATES)
 
 
 def _mk_native_profile(db, *, key, services, archetype="limit_table",
