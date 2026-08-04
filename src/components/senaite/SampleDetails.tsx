@@ -3472,6 +3472,10 @@ export function NativeParentAnalysesCard({
         verbPolicy="parent-native"
         onParentRetest={a => requestRetest([a])}
         onParentBulkRetest={requestRetest}
+        onTransitionComplete={() => {
+          void queryClient.invalidateQueries({ queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY] })
+          onParentDataStale?.()
+        }}
         analysisSlaMap={sla.byKeyword}
         isAnalysisSlaLoading={sla.isLoading}
         isAnalysisSlaError={sla.isError}

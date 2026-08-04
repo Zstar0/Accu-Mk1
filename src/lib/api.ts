@@ -3661,6 +3661,10 @@ export interface SenaiteAnalysis {
   // canonical result, this is the parent-tier row's id. Used to render
   // the "Promoted → #N" badge in AnalysisTable.
   promoted_to_parent_id?: number | null
+  /** Native-verification (Task 5): which side owns the analysis_service row
+   *  backing this line ('mk1' | 'senaite'). Type-only here — not yet read
+   *  by any FE display logic. */
+  service_origin?: string | null
 }
 
 export interface SenaiteAttachment {

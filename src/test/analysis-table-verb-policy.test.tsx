@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
@@ -69,6 +69,11 @@ describe('visibleRowTransitionsForPolicy', () => {
   it('parent-native: verified row offers exactly retest', () => {
     expect(visibleRowTransitionsForPolicy(row({}), 'parent-native')).toEqual(['retest'])
   })
+  it('parent-native: parent_to_verify (awaiting) row offers verify + retest', () => {
+    expect(
+      visibleRowTransitionsForPolicy(row({ review_state: 'parent_to_verify' }), 'parent-native')
+    ).toEqual(['verify', 'retest'])
+  })
   it.each(['retracted', 'published', 'to_be_verified', 'unassigned'])(
     'parent-native: %s row is display-only',
     state => {
@@ -98,10 +103,26 @@ describe('deriveBulkActionsForPolicy', () => {
       actions: ['retest'], showPromote: false, showVarianceVerify: false,
     })
   })
+  it('parent-native: all-parent_to_verify selection offers verify only', () => {
+    expect(
+      deriveBulkActionsForPolicy(
+        [row({ review_state: 'parent_to_verify' }), row({ uid: 'mk1:8', review_state: 'parent_to_verify' })],
+        'parent-native'
+      )
+    ).toEqual({ actions: ['verify'], showPromote: false, showVarianceVerify: false })
+  })
   it('parent-native: mixed states offer nothing', () => {
     expect(
       deriveBulkActionsForPolicy([row({}), row({ review_state: 'retracted' })], 'parent-native')
         .actions
+    ).toEqual([])
+  })
+  it('parent-native: mixed parent_to_verify/verified offer nothing', () => {
+    expect(
+      deriveBulkActionsForPolicy(
+        [row({ review_state: 'parent_to_verify' }), row({ uid: 'mk1:8', review_state: 'verified' })],
+        'parent-native'
+      ).actions
     ).toEqual([])
   })
   it('default policy delegates to the legacy fn unchanged', () => {
@@ -143,6 +164,10 @@ describe('AnalysisTable render — parent-native verb policy', () => {
     )
   }
 
+  beforeEach(() => {
+    vi.mocked(transitionAnalysis).mockReset()
+  })
+
   it('verified row offers only Retest, routes through onParentRetest, and never opens the built-in destructive confirm', async () => {
     const spy = vi.fn()
     const verifiedRow = row({ uid: 'mk1:7', review_state: 'verified' })
@@ -173,5 +198,45 @@ describe('AnalysisTable render — parent-native verb policy', () => {
     await userEvent.click(screen.getByRole('tab', { name: /Invalid/ }))
     expect(await screen.findByText('Heavy Metals 2')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Analysis actions' })).not.toBeInTheDocument()
+  })
+
+  it('parent_to_verify (awaiting) row offers Verify + Retest; clicking Verify routes through the generic transition endpoint, not onParentRetest', async () => {
+    vi.mocked(transitionAnalysis).mockResolvedValue({
+      success: true, message: 'ok', new_review_state: 'verified', keyword: 'HM',
+    })
+    const spy = vi.fn()
+    const awaitingRow = row({ uid: 'mk1:9', review_state: 'parent_to_verify' })
+    renderTable([awaitingRow], spy)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Analysis actions' }))
+    expect(await screen.findByRole('menuitem', { name: 'Verify' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Retest' })).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Verify' }))
+
+    await waitFor(() => expect(transitionAnalysis).toHaveBeenCalledWith('mk1:9', 'verify'))
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('bulk: two parent_to_verify rows selected offer "Verify selected", firing transitionAnalysis per uid', async () => {
+    vi.mocked(transitionAnalysis).mockResolvedValue({
+      success: true, message: 'ok', new_review_state: 'verified', keyword: 'HM',
+    })
+    const spy = vi.fn()
+    const rowA = row({ uid: 'mk1:10', keyword: 'HM', title: 'Heavy Metals', review_state: 'parent_to_verify' })
+    const rowB = row({
+      uid: 'mk1:11', keyword: 'HM2', title: 'Heavy Metals 2', review_state: 'parent_to_verify',
+    })
+    renderTable([rowA, rowB], spy)
+
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select Heavy Metals' }))
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select Heavy Metals 2' }))
+
+    expect(screen.queryByRole('button', { name: 'Retest selected' })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Verify selected' }))
+
+    await waitFor(() => expect(transitionAnalysis).toHaveBeenCalledWith('mk1:10', 'verify'))
+    await waitFor(() => expect(transitionAnalysis).toHaveBeenCalledWith('mk1:11', 'verify'))
+    expect(spy).not.toHaveBeenCalled()
   })
 })

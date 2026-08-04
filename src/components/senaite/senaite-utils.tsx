@@ -9,6 +9,10 @@ export const STATE_LABELS: Record<string, { label: string; className: string }> 
   waiting_for_addon_results: { label: 'Waiting Addon',     className: 'bg-indigo-900 text-indigo-300' },
   ready_for_review:          { label: 'Ready for Review',  className: 'bg-cyan-900 text-cyan-300' },
   to_be_verified:            { label: 'To Verify',         className: 'bg-orange-900 text-orange-300' },
+  // Native parent-verification (Task 9): a parent-tier row awaiting Verify
+  // in the Accu-Mk1 Analyses card — distinct review_state from SENAITE's
+  // to_be_verified, same "awaiting sign-off" meaning, same styling.
+  parent_to_verify:          { label: 'To Verify',         className: 'bg-orange-900 text-orange-300' },
   verified:                  { label: 'Verified',          className: 'bg-green-900 text-green-300' },
   published:                 { label: 'Published',         className: 'bg-purple-900 text-purple-300' },
   cancelled:                 { label: 'Cancelled',         className: 'bg-red-900 text-red-300' },

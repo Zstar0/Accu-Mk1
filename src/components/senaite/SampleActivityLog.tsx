@@ -52,6 +52,13 @@ function eventToLevel(event: string): EventLevel {
     case 'analysis_transition': return 'info'
     case 'analysis_promoted': return 'success'
     case 'analysis_promoted_to_parent': return 'success'
+    // Task 7 (native parent-verification): parent-hosted verify/retest and
+    // the vial-hosted un-promote-on-retest. Verify reads as a positive
+    // sign-off (matches coa_published/prep_completed); retested/un-promote
+    // reads as a warning (matches retested_as's level).
+    case 'parent_analysis_verified': return 'success'
+    case 'parent_analysis_retested': return 'warn'
+    case 'promoted_source_retested': return 'warn'
     case 'variance_verified': return 'accent'
     case 'role_assigned':     return 'accent'
     case 'remarks_updated':   return 'info'
@@ -71,7 +78,7 @@ export function eventLevelFor(ev: SampleActivityEvent): EventLevel {
   return eventToLevel(ev.event)
 }
 
-function eventIcon(event: string): string {
+export function eventIcon(event: string): string {
   switch (event) {
     case 'status_change':       return '\u25cf' // ●
     case 'coa_published':       return '\u2714' // ✔
@@ -87,6 +94,12 @@ function eventIcon(event: string): string {
     case 'analysis_added':      return '+'
     case 'analysis_promoted':   return '↑'
     case 'analysis_promoted_to_parent': return '↑'
+    // Task 7 (native parent-verification): verify -> check (matches
+    // coa_published/prep_completed); retested/un-promote -> rotate (matches
+    // retest_created's glyph -- both represent "a retest happened".
+    case 'parent_analysis_verified': return '✔' // ✔
+    case 'parent_analysis_retested': return '↻' // ↻
+    case 'promoted_source_retested':  return '↻' // ↻
     case 'variance_verified':   return '◈' // ◈ variance replicate verified
     case 'worksheet_assigned':        return '+'
     case 'worksheet_removed':         return '−' // −

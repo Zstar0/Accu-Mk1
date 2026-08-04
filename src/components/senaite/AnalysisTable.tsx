@@ -55,6 +55,11 @@ export const STATUS_COLORS: Record<string, string> = {
     'bg-purple-100 text-purple-700 border-purple-200 dark:bg-purple-500/15 dark:text-purple-400 dark:border-purple-500/20',
   to_be_verified:
     'bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-500/15 dark:text-orange-400 dark:border-orange-500/20',
+  // Native parent-verification (Task 9): parent-tier row awaiting Verify on
+  // the Accu-Mk1 Analyses card. Same "awaiting sign-off" meaning and styling
+  // as to_be_verified, kept as a distinct review_state on the backend.
+  parent_to_verify:
+    'bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-500/15 dark:text-orange-400 dark:border-orange-500/20',
   sample_received:
     'bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-500/15 dark:text-blue-400 dark:border-blue-500/20',
   sample_due:
@@ -86,6 +91,7 @@ export const STATUS_LABELS: Record<string, string> = {
   promoted: 'Promoted',
   published: 'Published',
   to_be_verified: 'To Verify',
+  parent_to_verify: 'To Verify',
   sample_received: 'Received',
   sample_due: 'Due',
   sample_registered: 'Registered',
@@ -292,17 +298,21 @@ export function visibleRowTransitions(
 export type AnalysisVerbPolicy = 'default' | 'parent-native'
 
 /** Policy-aware row verbs. 'parent-native' (the native parent analyses card)
- *  offers exactly one verb — retest on a 'verified' row — and routes it via
- *  onParentRetest (the generic transition endpoint tier-blocks parent
- *  retest; the card calls the dedicated parent-retest route and owns the
- *  destructive confirm). Everything else is display-only. */
+ *  offers retest on a 'verified' row (routed via onParentRetest — the
+ *  generic transition endpoint tier-blocks parent retest; the card calls
+ *  the dedicated parent-retest route and owns the destructive confirm) and,
+ *  on a 'parent_to_verify' row awaiting sign-off, both verify and retest —
+ *  verify is non-destructive and routes through the generic transition
+ *  endpoint directly. Everything else is display-only. */
 export function visibleRowTransitionsForPolicy(
   a: SenaiteAnalysis,
   policy: AnalysisVerbPolicy,
   parentLineStates?: Record<string, string>,
 ): string[] {
   if (policy === 'parent-native') {
-    return a.uid && a.review_state === 'verified' ? ['retest'] : []
+    if (!a.uid) return []
+    if (a.review_state === 'parent_to_verify') return ['verify', 'retest']
+    return a.review_state === 'verified' ? ['retest'] : []
   }
   return visibleRowTransitions(a, parentLineStates)
 }
@@ -311,7 +321,11 @@ const BULK_TRANSITIONS = ['submit', 'retest', 'verify', 'retract', 'reject'] as 
 export type BulkTransition = (typeof BULK_TRANSITIONS)[number]
 
 /** Policy-aware bulk actions. 'parent-native' reduces the toolbar to bulk
- *  retest over an all-verified selection; promote/variance never show. */
+ *  retest over an all-verified selection, or bulk verify over an
+ *  all-parent_to_verify selection; promote/variance never show. Mixed
+ *  selections (any other combination, including a mix of the two states)
+ *  offer nothing — same "simplest safe rule" as the default policy's
+ *  locked-row handling. */
 export function deriveBulkActionsForPolicy(
   selected: SenaiteAnalysis[],
   policy: AnalysisVerbPolicy,
@@ -321,7 +335,10 @@ export function deriveBulkActionsForPolicy(
   if (policy === 'parent-native') {
     const allVerified =
       selected.length > 0 && selected.every(a => a.review_state === 'verified')
-    return { actions: allVerified ? ['retest'] : [], showPromote: false, showVarianceVerify: false }
+    const allToVerify =
+      selected.length > 0 && selected.every(a => a.review_state === 'parent_to_verify')
+    const actions: BulkTransition[] = allVerified ? ['retest'] : allToVerify ? ['verify'] : []
+    return { actions, showPromote: false, showVarianceVerify: false }
   }
   return deriveBulkActions(selected, parentLineStates, vialKind)
 }
@@ -1509,7 +1526,11 @@ function AnalysisRow({
                   onClick={() => {
                     if (!analysis.uid) return
                     if (verbPolicy === 'parent-native') {
-                      onParentRetest?.(analysis)
+                      if (t === 'verify') {
+                        void transition.executeTransition(analysis.uid, 'verify')
+                      } else {
+                        onParentRetest?.(analysis)
+                      }
                     } else if (DESTRUCTIVE_TRANSITIONS.has(t)) {
                       transition.requestConfirm(analysis.uid, t, analysis.title)
                     } else {
@@ -1970,7 +1991,11 @@ export function AnalysisTable({
                     disabled={toolbarDisabled}
                     onClick={() => {
                       if (verbPolicy === 'parent-native') {
-                        onParentBulkRetest?.(selectedAnalyses)
+                        if (t === 'verify') {
+                          void bulk.executeBulk([...bulk.selectedUids], 'verify')
+                        } else {
+                          onParentBulkRetest?.(selectedAnalyses)
+                        }
                         return
                       }
                       if (DESTRUCTIVE_TRANSITIONS.has(t)) {

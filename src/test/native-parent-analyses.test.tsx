@@ -21,6 +21,7 @@ import { NativeParentAnalysesCard } from '@/components/senaite/SampleDetails'
 import {
   listNativeParentAnalysesShaped,
   parentRetestAnalysis,
+  transitionAnalysis,
   type SenaiteAnalysis,
   type SenaiteLookupResult,
   type ParentPromotionInfo,
@@ -54,6 +55,7 @@ vi.mock('@/lib/api', async importOriginal => {
     ...actual,
     listNativeParentAnalysesShaped: vi.fn(),
     parentRetestAnalysis: vi.fn(),
+    transitionAnalysis: vi.fn(),
   }
 })
 
@@ -165,6 +167,7 @@ describe('NativeParentAnalysesCard', () => {
   beforeEach(() => {
     vi.mocked(listNativeParentAnalysesShaped).mockReset()
     vi.mocked(parentRetestAnalysis).mockReset()
+    vi.mocked(transitionAnalysis).mockReset()
     vi.mocked(useAnalysisSlaMap).mockClear()
   })
 
@@ -312,5 +315,36 @@ describe('NativeParentAnalysesCard', () => {
     expect(await screen.findByText(/no promoted source results are visible for this row/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^retest$/i })).toBeDisabled()
     expect(parentRetestAnalysis).not.toHaveBeenCalled()
+  })
+
+  it('parent_to_verify row renders the "To Verify" badge', async () => {
+    renderCard([
+      shapedRow({ uid: 'mk1:6', keyword: 'HM', title: 'Heavy Metals', review_state: 'parent_to_verify' }),
+    ])
+    await screen.findByText('Heavy Metals')
+
+    const table = screen.getByRole('table')
+    expect(within(table).getByText('To Verify')).toBeInTheDocument()
+  })
+
+  it('verify completion invalidates the native-parent-analyses query and calls onParentDataStale', async () => {
+    vi.mocked(transitionAnalysis).mockResolvedValue({
+      success: true, message: 'ok', new_review_state: 'verified', keyword: 'HM',
+    })
+    const staleSpy = vi.fn()
+    const { qc } = renderCard(
+      [shapedRow({ uid: 'mk1:6', keyword: 'HM', title: 'Heavy Metals', review_state: 'parent_to_verify' })],
+      new Map(),
+      { staleSpy }
+    )
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
+    await screen.findByText('Heavy Metals')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Analysis actions' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Verify' }))
+
+    await waitFor(() => expect(transitionAnalysis).toHaveBeenCalledWith('mk1:6', 'verify'))
+    await waitFor(() => expect(staleSpy).toHaveBeenCalled())
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY] })
   })
 })
