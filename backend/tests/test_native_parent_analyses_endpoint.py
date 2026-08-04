@@ -184,6 +184,7 @@ def test_sub_sample_rows_are_excluded(client, db_session):
 
 def test_senaite_shape_returns_full_table_fields(client, db_session):
     """?as=senaite_shape projects rows through the shared serializer."""
+    from lims_analyses.schemas import SenaiteShapeAnalysisResponse
     from models import LimsAnalysis, LimsSample
 
     parent = LimsSample(sample_id="P-9101")
@@ -210,6 +211,12 @@ def test_senaite_shape_returns_full_table_fields(client, db_session):
     ):
         assert field in row, f"missing {field}"
     assert row["uid"].startswith("mk1:")
+    # Full key-set pin: verifies empirically (not just spot-checked fields)
+    # that the row is the real SenaiteShapeAnalysisResponse shape, not a
+    # coincidental partial match — protects the AnalysisTable dropdown
+    # fields (method_options, instrument_options, result_type, etc.) that
+    # later tasks depend on.
+    assert set(row.keys()) == set(SenaiteShapeAnalysisResponse.model_fields)
 
 
 def test_senaite_shape_includes_lineage_current_last(client, db_session):
@@ -308,6 +315,10 @@ def test_senaite_shape_excludes_shadow_and_senaite_origin_and_subsample_rows(cli
     r = client.get(f"/api/lims-analyses/parent/{parent.sample_id}/native-analyses?as=senaite_shape")
     assert r.status_code == 200, r.text
     resp = r.json()
+    # Discriminates against the default (6-field) shape: every row must
+    # actually be the senaite_shape projection, not the default rows this
+    # exclusion set would also happen to pass against if ?as= were ignored.
+    assert all(row["uid"].startswith("mk1:") for row in resp)
     keywords = {row["keyword"] for row in resp}
     assert SHADOW_KW not in keywords
     assert SENAITE_ORIGIN_KW not in keywords
