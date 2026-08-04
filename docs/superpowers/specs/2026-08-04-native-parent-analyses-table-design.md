@@ -124,3 +124,25 @@ is out of scope here.
    else defer.
 2. **PR #41 un-promote** — surfaced here only if merged into the base branch by build time;
    confirm at planning.
+
+## Planning corrections (2026-08-04, recon on `feat/s2s-catalog-keys` @ `838ebec`)
+
+Behavior as ruled is unchanged; three mechanisms this spec assumed were corrected during
+planning (see `docs/superpowers/plans/2026-08-04-native-parent-analyses-table.md`):
+
+1. **Retest does NOT go through the existing transition endpoint.**
+   `state_machine._TIER_ALLOWED_KINDS[TIER_PARENT]` is `{publish, retract, auto}` — a parent-tier
+   `retest` 409s with `tier_mismatch`, and `apply_transition` never calls
+   `cascade_parent_retest_to_sources` (its only caller is the SENAITE proxy, `main.py:15299`).
+   The plan adds a dedicated additive route `POST /api/lims-analyses/parent/{sample_id}/retest`
+   fronting the existing cascade, fail-closed on non-verified parents. The state machine is not
+   touched.
+2. **No FE adapter function.** The sub-sample "adapter" is a server-side `senaite_shape`
+   projection (`_serialize_senaite_shape_rows`, shared helper); the plan extends the native
+   parent read with `?as=senaite_shape` through the same serializer — parity by construction.
+3. **The page's `analysisSlaMap` cannot serve the card** — it's keyed off the SENAITE
+   `lookup.analyses`, which never contain native keywords. The card computes its own map from
+   a synthetic lookup (`{...lookup, analyses: nativeRows}`), the `VialsQuickLookDialog` pattern.
+
+Open questions resolved: **remarks deferred** (`lims_analyses` has no remarks column);
+**PR #41 un-promote out of scope** (no un-promote endpoint exists on the base branch).
