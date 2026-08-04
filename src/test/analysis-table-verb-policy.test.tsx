@@ -80,6 +80,15 @@ describe('visibleRowTransitionsForPolicy', () => {
   it('default policy delegates to the legacy fn unchanged', () => {
     const a = row({ review_state: 'to_be_verified' })
     expect(visibleRowTransitionsForPolicy(a, 'default')).toEqual(visibleRowTransitions(a))
+    // Regression pin for the optional 3rd arg: a delegation that silently
+    // dropped parentLineStates would still pass the no-args case above. Use
+    // a parentLineStates map that actually changes the output (locks the
+    // row, per isLockedByParent) so a dropped arg is caught, not masked.
+    const locked: Record<string, string> = { HM: 'verified' }
+    expect(visibleRowTransitionsForPolicy(a, 'default', locked)).toEqual(
+      visibleRowTransitions(a, locked)
+    )
+    expect(visibleRowTransitionsForPolicy(a, 'default', locked)).toEqual([])
   })
 })
 
@@ -98,6 +107,18 @@ describe('deriveBulkActionsForPolicy', () => {
   it('default policy delegates to the legacy fn unchanged', () => {
     const sel = [row({ review_state: 'to_be_verified' })]
     expect(deriveBulkActionsForPolicy(sel, 'default')).toEqual(deriveBulkActions(sel))
+    // Regression pin for the optional 3rd/4th args: a delegation that
+    // silently dropped parentLineStates and/or vialKind would still pass
+    // the no-args case above. vialKind='variance' flips showVarianceVerify
+    // true for this selection (mk1 uid, to_be_verified, unpromoted) — a
+    // value that actually changes the output, so a dropped arg is caught.
+    const parentLineStates: Record<string, string> = {}
+    expect(deriveBulkActionsForPolicy(sel, 'default', parentLineStates, 'variance')).toEqual(
+      deriveBulkActions(sel, parentLineStates, 'variance')
+    )
+    expect(
+      deriveBulkActionsForPolicy(sel, 'default', parentLineStates, 'variance').showVarianceVerify
+    ).toBe(true)
   })
 })
 
