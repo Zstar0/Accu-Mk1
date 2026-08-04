@@ -6,11 +6,12 @@
  * ParentRetestConfirmDialog (blast-radius confirm, fails closed with no
  * promotion record).
  *
- * isParentPage / gating behavior (never fetches on sub-sample pages) is
- * exercised by the lib/component units this card composes (AnalysisTable's
- * own tests, native-parent-analyses-lib.test.ts, parent-retest-confirm-
- * dialog.test.tsx); this file focuses on the integration: does the card wire
- * the shared table with the right props and drive the retest route.
+ * isParentPage is passed as an explicit prop rather than derived from a
+ * sampleId regex — SampleDetails already computes `parentSampleId === null`
+ * for the sibling overlay queries — so "never fetches on a sub-sample page"
+ * below is a real assertion against the query's `enabled` gate (the mock is
+ * called or not), not a tautological check of a hand-rolled predicate. That
+ * gate is unique to this card; nothing else in the suite can reach it.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
@@ -25,6 +26,7 @@ import {
   type ParentPromotionInfo,
 } from '@/lib/api'
 import { NATIVE_PARENT_ANALYSES_QUERY_KEY } from '@/lib/native-parent-analyses'
+import { useAnalysisSlaMap } from '@/services/analysis-sla'
 
 // AnalysisTable uses IntersectionObserver for its sticky-toolbar effect; jsdom doesn't have it.
 // Must be a real class (not arrow function) since AnalysisTable does `new IntersectionObserver(...)`.
@@ -57,7 +59,13 @@ vi.mock('@/lib/api', async importOriginal => {
 
 // Mock the SLA hook wholesale — same pattern as src/test/vials-quicklook.test.tsx:
 // protects this render test from real services/groups/sample-sla queries firing;
-// the hook's own internals are covered by analysis-sla.test.tsx.
+// the hook's own internals are covered by analysis-sla.test.tsx. Imported below
+// so the "wires the native rows in" test can assert on its call arguments —
+// the card's one novel piece of SLA wiring is building a synthetic lookup
+// ({...lookup, analyses: nativeRows}) instead of passing the page lookup
+// straight through, and only a call-args assertion can catch a regression
+// back to the latter (the rendered table looks identical either way since
+// this mock ignores its argument).
 vi.mock('@/services/analysis-sla', () => ({
   useAnalysisSlaMap: vi.fn(() => ({
     byKeyword: new Map(),
@@ -130,15 +138,20 @@ const promo = (keyword: string, ids: (string | null)[]): ParentPromotionInfo => 
 function renderCard(
   rows: SenaiteAnalysis[],
   promos: Map<string, ParentPromotionInfo> = new Map(),
-  opts: { staleSpy?: () => void; qc?: QueryClient } = {}
+  opts: {
+    staleSpy?: () => void
+    qc?: QueryClient
+    sampleId?: string
+    isParentPage?: boolean
+  } = {}
 ) {
   vi.mocked(listNativeParentAnalysesShaped).mockResolvedValue(rows)
   const qc = opts.qc ?? new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const utils = render(
     <QueryClientProvider client={qc}>
       <NativeParentAnalysesCard
-        sampleId="P-0120"
-        isParentPage
+        sampleId={opts.sampleId ?? 'P-0120'}
+        isParentPage={opts.isParentPage ?? true}
         lookup={fakeLookup({ date_received: '2026-08-01' })}
         promotionsByKeyword={promos}
         onParentDataStale={opts.staleSpy}
@@ -152,6 +165,7 @@ describe('NativeParentAnalysesCard', () => {
   beforeEach(() => {
     vi.mocked(listNativeParentAnalysesShaped).mockReset()
     vi.mocked(parentRetestAnalysis).mockReset()
+    vi.mocked(useAnalysisSlaMap).mockClear()
   })
 
   it('renders the shared AnalysisTable with the card header folded in', async () => {
@@ -177,6 +191,38 @@ describe('NativeParentAnalysesCard', () => {
     await waitFor(() => expect(listNativeParentAnalysesShaped).toHaveBeenCalledWith('P-0120'))
     expect(container).toBeEmptyDOMElement()
     expect(screen.queryByText('Accu-Mk1 Analyses')).not.toBeInTheDocument()
+  })
+
+  it('never fetches on a sub-sample page', async () => {
+    const { container } = renderCard([shapedRow({})], new Map(), {
+      sampleId: 'P-0120-S01',
+      isParentPage: false,
+    })
+
+    // Give any (incorrect) fetch a chance to fire before asserting it didn't.
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(listNativeParentAnalysesShaped).not.toHaveBeenCalled()
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('wires the native rows into useAnalysisSlaMap, not the page lookup straight through', async () => {
+    // The card's one novel piece of SLA wiring: it must build a synthetic
+    // lookup ({...lookup, analyses: nativeRows}) since the page's own
+    // lookup.analyses are SENAITE rows that never contain native keywords
+    // (see the card's slaLookup comment). A regression back to passing
+    // `lookup` straight through would still render an identical table (the
+    // hook is mocked), so only a call-args assertion catches it.
+    renderCard([shapedRow({ keyword: 'HM' })])
+    await screen.findByText('Heavy Metals')
+
+    expect(useAnalysisSlaMap).toHaveBeenCalledWith(
+      expect.objectContaining({
+        date_received: '2026-08-01',
+        analyses: expect.arrayContaining([
+          expect.objectContaining({ keyword: 'HM' }),
+        ]),
+      })
+    )
   })
 
   it('verified row offers only Retest; lineage rows are display-only', async () => {
@@ -206,7 +252,7 @@ describe('NativeParentAnalysesCard', () => {
     expect(screen.queryByRole('menuitem', { name: 'Verify (Variance)' })).not.toBeInTheDocument()
     await userEvent.keyboard('{Escape}')
 
-    // Expanding history reveals the retracted lineage row with no menu
+    // Expanding history reveals the superseded lineage row with no menu
     // trigger of its own — only the current row's trigger exists.
     await userEvent.click(historyToggle)
     expect(await screen.findByText('Superseded')).toBeInTheDocument()
