@@ -109,16 +109,21 @@ describe('deriveBulkActionsForPolicy', () => {
     expect(deriveBulkActionsForPolicy(sel, 'default')).toEqual(deriveBulkActions(sel))
     // Regression pin for the optional 3rd/4th args: a delegation that
     // silently dropped parentLineStates and/or vialKind would still pass
-    // the no-args case above. vialKind='variance' flips showVarianceVerify
-    // true for this selection (mk1 uid, to_be_verified, unpromoted) — a
-    // value that actually changes the output, so a dropped arg is caught.
-    const parentLineStates: Record<string, string> = {}
+    // the no-args case above. An EMPTY parentLineStates object is NOT a
+    // discriminating value here — isLockedByParent treats {} the same as
+    // undefined (no key matches), and showVarianceVerify doesn't consult
+    // anyLocked at all — so {} would pass even with parentLineStates
+    // silently dropped. Use a map keyed to the row's own keyword ('HM')
+    // that actually locks it, flipping `actions` from ['retest','retract',
+    // 'reject'] (unlocked, per the no-args case above) to [] (locked).
+    // vialKind='variance' independently flips showVarianceVerify true.
+    const parentLineStates: Record<string, string> = { HM: 'verified' }
     expect(deriveBulkActionsForPolicy(sel, 'default', parentLineStates, 'variance')).toEqual(
       deriveBulkActions(sel, parentLineStates, 'variance')
     )
-    expect(
-      deriveBulkActionsForPolicy(sel, 'default', parentLineStates, 'variance').showVarianceVerify
-    ).toBe(true)
+    expect(deriveBulkActionsForPolicy(sel, 'default', parentLineStates, 'variance')).toEqual({
+      actions: [], showPromote: false, showVarianceVerify: true,
+    })
   })
 })
 
