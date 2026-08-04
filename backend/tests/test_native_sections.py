@@ -119,6 +119,24 @@ def test_rule4_ineligible_state_aborts_not_skips(db_session, monkeypatch):
         build_native_sections(db_session, parent)
 
 
+def test_rule4_parent_to_verify_state_aborts_not_skips(db_session, monkeypatch):
+    """Task 6 pin: a promoted-but-unreviewed row (parent_to_verify — awaiting
+    the reviewer's verify sign-off) is not certifiable, same as to_be_verified.
+    ELIGIBLE_STATES is already ('verified', 'published') here — narrower than
+    coa/source_resolver's pre-Task-6 _LIVE_RESULT_STATES by design (native
+    services have no SENAITE verify step) — so this was already correct
+    before Task 6; pinned as an explicit control alongside the resolver fix."""
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")])
+    parent = _mk_parent_with_rows(db_session, svcs, state="parent_to_verify")
+    monkeypatch.setattr(
+        "coa.native_sections.fetch_sample_services",
+        lambda sample_id: {"services": {"heavy_metals": True}, "package": None},
+    )
+    with pytest.raises(NativeSectionsError, match="no eligible result"):
+        build_native_sections(db_session, parent)
+
+
 def test_rule3_empty_result_aborts(db_session, monkeypatch):
     prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
                                     services=[("HM-PB", "mk1")])

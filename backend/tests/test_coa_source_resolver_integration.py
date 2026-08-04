@@ -120,12 +120,11 @@ def _promote_to_parent_row(db, src, svc, value):
     """Promote `src` to a parent-tier row, verify it, return the parent_row.
 
     Task 3: promote mints 'parent_to_verify', not 'verified' — this helper's
-    callers exercise the resolver's live-candidate path, which (pre-Task-6)
-    still requires 'verified'/'published'. The verify step here keeps this
-    fixture's fixtures matching what it always meant to seed: a reviewed,
-    resolvable parent-tier row. Task 6 narrows parent-tier resolution to
-    (verified, published) only — a verified fixture stays green under that
-    change too.
+    callers exercise the resolver's live-candidate path, which requires
+    'verified'/'published'. The verify step here keeps this fixture matching
+    what it always meant to seed: a reviewed, resolvable parent-tier row.
+    Task 6 narrowed parent-tier resolution to (verified, published) only —
+    this verified fixture stays green under that change.
     """
     parent_row, _ = promote_to_parent(
         db, keyword=svc.keyword, result_value=value, result_unit=None,
@@ -290,9 +289,13 @@ def test_resolve_sources_excludes_senaite_superseded_retest(db, analysis_service
     assert d.chosen.value == "99.93"
 
 
-def test_resolve_sources_mk1_to_be_verified_row_resolves(db, clean_sub, analysis_service):
-    """A parent-tier row in to_be_verified state (not yet verified) now resolves
-    as mode='auto' under the relaxed policy. Previously would have been blocked."""
+def test_resolve_sources_mk1_to_be_verified_row_does_not_resolve(db, clean_sub, analysis_service):
+    """Task 6: a parent-tier row in to_be_verified state (not yet the
+    reviewer's verify sign-off) must NOT resolve as a live candidate — this
+    pins the fail-closed fix for the divergence where _resolve_mk1_parent_tier
+    passed _LIVE_RESULT_STATES (submitted/to_be_verified/verified/published)
+    while its own docstring claimed verified/published-only. Before the fix a
+    to_be_verified row would have been silently certified onto a COA."""
     # Insert a parent-tier row directly at to_be_verified to exercise the state
     # gate in _resolve_mk1_parent_tier without going through the full promote path.
     parent = db.get(LimsSample, clean_sub.parent_sample_pk)
@@ -306,16 +309,103 @@ def test_resolve_sources_mk1_to_be_verified_row_resolves(db, clean_sub, analysis
     parent_row.reportable = True
     db.commit()
 
+    # Precondition: the fixture really did write a to_be_verified row with a
+    # live result — otherwise the "does not resolve" assertion below would
+    # pass vacuously for the wrong reason (e.g. a broken fixture).
+    reloaded = db.get(LimsAnalysis, parent_row.id)
+    assert reloaded.review_state == "to_be_verified"
+    assert reloaded.result_value == "95.1"
+
     reader = _FakeSenaiteReader()
     res = asyncio.run(resolve_sources(parent.sample_id, db, reader))
 
     matching = [d for d in res.decisions if d.analyte_keyword == analysis_service.keyword]
-    assert matching, f"no decision for {analysis_service.keyword!r}"
+    assert not any(
+        d.chosen is not None and d.chosen.source_analysis_uid == f"mk1:{parent_row.id}"
+        for d in matching
+    ), f"to_be_verified parent-tier row {parent_row.id} must not resolve; got {matching}"
+
+
+def test_resolve_sources_mk1_parent_to_verify_row_does_not_resolve(db, clean_sub, analysis_service):
+    """A parent-tier row in parent_to_verify state (promoted, awaiting the
+    reviewer's verify sign-off) must not resolve as a live candidate either.
+    parent_to_verify was never in _LIVE_RESULT_STATES, so this was already
+    excluded before Task 6 — pinned here as an explicit control alongside
+    the to_be_verified fail-closed fix."""
+    parent = db.get(LimsSample, clean_sub.parent_sample_pk)
+    parent_row = create_analysis(
+        db, host_kind="sample", host_pk=parent.id,
+        analysis_service_id=analysis_service.id, keyword=analysis_service.keyword,
+        title=f"TEST: ptv {analysis_service.keyword}",
+    )
+    parent_row.review_state = "parent_to_verify"
+    parent_row.result_value = "95.1"
+    parent_row.reportable = True
+    db.commit()
+
+    reloaded = db.get(LimsAnalysis, parent_row.id)
+    assert reloaded.review_state == "parent_to_verify"
+    assert reloaded.result_value == "95.1"
+
+    reader = _FakeSenaiteReader()
+    res = asyncio.run(resolve_sources(parent.sample_id, db, reader))
+
+    matching = [d for d in res.decisions if d.analyte_keyword == analysis_service.keyword]
+    assert not any(
+        d.chosen is not None and d.chosen.source_analysis_uid == f"mk1:{parent_row.id}"
+        for d in matching
+    ), f"parent_to_verify parent-tier row {parent_row.id} must not resolve; got {matching}"
+
+
+def test_resolve_sources_mk1_pin_to_be_verified_row_blocks_stale_pin(db, clean_sub, analysis_service):
+    """Task 6 self-review: _apply_pin_override's mk1: branch reads the SAME
+    parent-tier rows _resolve_mk1_parent_tier does (both keyed by the
+    'mk1:{id}' uid _resolve_mk1_parent_tier mints), and its own docstring
+    already claims 'verify it's still verified/published' — but the code
+    passed the broader _LIVE_RESULT_STATES. An admin pin targeting a
+    to_be_verified parent-tier row must block as stale_pin, not resolve.
+
+    SENAITE must surface *something* for this keyword (even an empty/missing
+    candidate) so the analyte enters resolve_sources' merged keyword set at
+    all — otherwise the pin override layer is never reached and this test
+    would vacuously pass for the wrong reason (no decision emitted)."""
+    parent = db.get(LimsSample, clean_sub.parent_sample_pk)
+    parent_row = create_analysis(
+        db, host_kind="sample", host_pk=parent.id,
+        analysis_service_id=analysis_service.id, keyword=analysis_service.keyword,
+        title=f"TEST: tbv pin {analysis_service.keyword}",
+    )
+    parent_row.review_state = "to_be_verified"
+    parent_row.result_value = "95.1"
+    parent_row.reportable = True
+    db.commit()
+
+    db.add(CoaResultPin(
+        parent_sample_id=parent.sample_id,
+        analyte_keyword=analysis_service.keyword,
+        mode="pin",
+        source_sample_id=parent.sample_id,
+        source_analysis_uid=f"mk1:{parent_row.id}",
+    ))
+    db.commit()
+
+    fake_payload = {
+        parent.sample_id: [
+            {"uid": "senaite-placeholder", "keyword": analysis_service.keyword,
+             "result": None, "unit": "%", "review_state": "verified"},
+        ],
+    }
+    reader = _FakeSenaiteReader(payload=fake_payload)
+    res = asyncio.run(resolve_sources(parent.sample_id, db, reader))
+
+    matching = [d for d in res.decisions if d.analyte_keyword == analysis_service.keyword]
+    assert matching, f"expected a decision for {analysis_service.keyword!r} once SENAITE surfaces the keyword"
     d = matching[0]
-    assert d.blocked is None, f"expected resolved, got blocked={d.blocked!r}: {d.blocked_detail}"
-    assert d.mode == "auto"
-    assert d.chosen is not None
-    assert d.chosen.value == "95.1"
+    assert d.blocked == "stale_pin", (
+        f"pin on a to_be_verified mk1 row must block as stale_pin; "
+        f"got mode={d.mode!r} blocked={d.blocked!r} chosen={d.chosen!r}"
+    )
+    assert d.chosen is None
 
 
 def test_resolve_sources_mk1_pin_override_marks_decision_as_pin(db, clean_sub, analysis_service):

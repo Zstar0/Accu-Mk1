@@ -40,6 +40,16 @@ from models import (
 # Retracted / rejected / invalid / no-result states are intentionally absent.
 _LIVE_RESULT_STATES = ("submitted", "to_be_verified", "verified", "published")
 
+# Parent-tier states a Mk1 lims_analyses row must be in to be certifiable on
+# a COA: the reviewer's verify sign-off (or later publish), nothing earlier.
+# Narrower than _LIVE_RESULT_STATES on purpose — 'submitted'/'to_be_verified'
+# are bench-tier/pre-review states, and 'parent_to_verify' is the promoted-
+# but-not-yet-reviewed state (the promoting user's act is the submission,
+# not the sign-off; see lims_analyses/state_machine.py). Used by both
+# _resolve_mk1_parent_tier (the base decision) and _apply_pin_override's
+# mk1: branch (the admin pin-override path) — both read the SAME rows.
+_PARENT_RESULT_STATES = ("verified", "published")
+
 
 class SenaiteAnalysesReader(Protocol):
     """
@@ -266,13 +276,13 @@ def _resolve_mk1_parent_tier(
     rows = db.execute(
         select(LimsAnalysis).where(
             LimsAnalysis.lims_sample_pk == parent.id,
-            LimsAnalysis.review_state.in_(_LIVE_RESULT_STATES),
+            LimsAnalysis.review_state.in_(_PARENT_RESULT_STATES),
             LimsAnalysis.reportable == True,  # noqa: E712 — SQL equality
             LimsAnalysis.retest_of_id.is_(None),
             LimsAnalysis.result_value.isnot(None),
             LimsAnalysis.result_value != "",
             # SENAITE phase-out defense-in-depth: the sentinel review_state
-            # 'senaite_mirror' already isn't in _LIVE_RESULT_STATES, so a shadow
+            # 'senaite_mirror' already isn't in _PARENT_RESULT_STATES, so a shadow
             # row can never reach this COA-facing query — this clause makes that
             # exclusion explicit rather than incidental.
             LimsAnalysis.provenance == "canonical",
@@ -359,10 +369,10 @@ def _apply_pin_override(
         row = db.get(LimsAnalysis, row_id)
         if (
             row is None
-            or row.review_state not in _LIVE_RESULT_STATES
+            or row.review_state not in _PARENT_RESULT_STATES
             # SENAITE phase-out defense-in-depth: a shadow row's sentinel
             # review_state already fails the check above (it's never in
-            # _LIVE_RESULT_STATES), so this can't currently change behavior —
+            # _PARENT_RESULT_STATES), so this can't currently change behavior —
             # kept explicit so a pin can never resolve to a shadow row even if
             # the state list changes later.
             or row.provenance != "canonical"
