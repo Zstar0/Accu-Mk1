@@ -1095,7 +1095,7 @@ def _run_migrations():
             CHECK (review_state IN (
                 'unassigned', 'assigned', 'to_be_verified', 'verified',
                 'published', 'rejected', 'retracted', 'promoted',
-                'variance_verified', 'senaite_mirror'
+                'variance_verified', 'senaite_mirror', 'parent_to_verify'
             ))
         """,
         # Make the parent-tier root index provenance-aware: a shadow mirror

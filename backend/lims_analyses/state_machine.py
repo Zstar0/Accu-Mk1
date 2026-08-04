@@ -22,10 +22,11 @@ legal-from-state-x transitions DIFFER per tier:
 
   parent-tier (canonical): lims_sample_pk set with the row NOT being
                    a vial-tier run. These are created by the future
-                   promote_to_parent service (Phase 4) in 'verified'
-                   state directly. Lifecycle:
-                     verified → published
-                   plus admin retract.
+                   promote_to_parent service (Phase 4) directly in
+                   'parent_to_verify' — the native second-sign-off state.
+                   Lifecycle:
+                     parent_to_verify → verified → published
+                   plus admin retract (legal from parent_to_verify or verified).
                    CANNOT assign/submit — bench data is at the vial tier.
 
 Phase 1 ships the discriminator + the tier_allows() matrix; promote_to_parent
@@ -45,8 +46,11 @@ Decision flow per kind (vial-tier):
             assignment_kind='variance' — service-layer guards)
 
 Decision flow per kind (parent-tier):
+  verify:   parent_to_verify -> verified       (second sign-off; promotion
+            is the submission, verify is the reviewer's act)
   publish:  verified -> published
-  retract:  verified -> retracted              (admin override)
+  retract:  parent_to_verify -> retracted      (admin override)
+            verified -> retracted              (admin override)
 
 Cross-tier:
   auto:     reserved for system-driven transitions (audit-only writes
@@ -71,6 +75,7 @@ STATES: FrozenSet[str] = frozenset({
     "unassigned",
     "assigned",
     "to_be_verified",
+    "parent_to_verify",
     "verified",
     "published",
     "promoted",
@@ -119,6 +124,13 @@ _ALLOWED: Dict[Tuple[str, str], str] = {
     ("to_be_verified", "retract"):          "retracted",
     ("to_be_verified", "reject"):           "rejected",
 
+    # Native second sign-off: promotion mints a parent-tier row directly in
+    # 'parent_to_verify' (Task 3+). 'verify' is the parent-tier sign-off verb —
+    # the promoting user submitted; a (possibly different) reviewer verifies.
+    ("parent_to_verify", "verify"):   "verified",
+    ("parent_to_verify", "retract"):  "retracted",
+    ("parent_to_verify", "auto"):     "parent_to_verify",
+
     ("verified",       "publish"):  "published",
     ("verified",       "retract"):  "retracted",
 
@@ -130,16 +142,19 @@ _ALLOWED: Dict[Tuple[str, str], str] = {
 
 # Tier × kind matrix. Sub-sample (vial) rows do bench work (assign through
 # to_be_verified, plus retract/reject/reset/retest); they NEVER self-verify —
-# verification is promotion (promote_to_parent moves the source to 'promoted').
-# 'verify'/'publish' are parent-tier concerns; parent rows are created in
-# 'verified' by promote and only publish or admin-retract from there.
+# 'verify' is a parent-tier concern only. What changed: verification is no
+# longer bundled into promotion — promote_to_parent mints the parent-tier row
+# directly in 'parent_to_verify' (the promoting user's act is the submission,
+# not the sign-off), and 'verify' is now a real parent-tier verb that a
+# reviewer performs from there to reach 'verified'. 'publish' still follows
+# from 'verified'; 'retract' is the admin override at any parent-tier state.
 _TIER_ALLOWED_KINDS: Dict[str, FrozenSet[str]] = {
     TIER_VIAL: frozenset({
         "assign", "submit", "retract", "reject", "reset", "retest", "auto",
         "variance_verify",
     }),
     TIER_PARENT: frozenset({
-        "publish", "retract", "auto",
+        "publish", "retract", "auto", "verify",
     }),
 }
 
@@ -190,12 +205,15 @@ def tier_of(*, lims_sample_pk: Optional[int],
     Vial-tier: lims_sub_sample_pk set (always vial), OR lims_sample_pk
         set with the row currently in unassigned/assigned/to_be_verified
         (the parent acting as a vial in a variance set, mid-run).
-    Parent-tier: lims_sample_pk set with the row in verified/published
-        (canonical chosen result, created by promote_to_parent).
+    Parent-tier: lims_sample_pk set with the row in
+        parent_to_verify/verified/published/retracted (the native
+        second-sign-off state through canonical chosen result, all
+        created by promote_to_parent).
 
     Edge: a parent-attached row in retracted is parent-tier — it was
-    promoted then retracted by admin. A vial-attached row in retracted/
-    rejected is vial-tier (the run failed/was abandoned).
+    promoted (or promoted-and-verified) then retracted by admin. A
+    vial-attached row in retracted/rejected is vial-tier (the run
+    failed/was abandoned).
     """
     if (lims_sample_pk is None) == (lims_sub_sample_pk is None):
         raise ValueError(
@@ -206,7 +224,7 @@ def tier_of(*, lims_sample_pk: Optional[int],
     # Parent-attached. State decides whether it's a vial-style run or canonical.
     # 'promoted' is a sub-sample-tier state only (promote sets it on the source
     # sub-sample), so it correctly falls through to TIER_VIAL below.
-    if review_state in ("verified", "published", "retracted"):
+    if review_state in ("parent_to_verify", "verified", "published", "retracted"):
         return TIER_PARENT
     return TIER_VIAL
 

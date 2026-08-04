@@ -51,7 +51,7 @@ class ParentPromotionInfo(BaseModel):
 # ─── Enums (string-literal aliases for documentation) ────────────────────────
 
 ReviewState = Literal[
-    "unassigned", "assigned", "to_be_verified",
+    "unassigned", "assigned", "to_be_verified", "parent_to_verify",
     "verified", "published", "rejected", "retracted",
 ]
 

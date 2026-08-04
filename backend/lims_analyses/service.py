@@ -281,7 +281,12 @@ def apply_transition(
         # (kept for backward-compat); "promoted": cascade-driven (parent retest);
         # "variance_verified": variance replicates re-run safely — they never
         # touched the parent, so there is no SENAITE lock to collide with.
-        if from_state not in ("to_be_verified", "verified", "promoted", "variance_verified"):
+        # "parent_to_verify": the native second-sign-off state — a parent row
+        # awaiting its verify can still be retested (pre-wires Task 4's guards).
+        if from_state not in (
+            "to_be_verified", "verified", "promoted", "variance_verified",
+            "parent_to_verify",
+        ):
             raise InvalidTransitionError(from_state, kind)
 
         now = datetime.utcnow()
