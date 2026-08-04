@@ -239,6 +239,11 @@ class SenaiteShapeAnalysisResponse(BaseModel):
     promoted_to_parent_id: Optional[int] = None
     # Result type + dropdown options, sourced from the analysis_service.
     result_type: Optional[str] = None
+    # Task 5: AnalysisService.origin ('mk1' / 'senaite') for the row's
+    # service, resolved from the already-bulk-loaded services map in
+    # _serialize_senaite_shape_rows. None only when the service FK is
+    # somehow unresolvable (should not happen in practice).
+    service_origin: Optional[str] = None
 
 
 # ─── Phase 4a: promote_to_parent response shapes ─────────────────────────────
@@ -273,4 +278,17 @@ class ParentRetestRequest(BaseModel):
 
 class ParentRetestResponse(BaseModel):
     new_row_ids: list[int]
+    parent_review_state: Optional[str] = None
+
+
+# ─── Task 5: dedicated native vial-side (source) retest route ────────────────
+
+
+class SourceRetestRequest(BaseModel):
+    reason: Optional[str] = None
+
+
+class SourceRetestResponse(BaseModel):
+    new_row_id: int
+    parent_unverified: bool
     parent_review_state: Optional[str] = None

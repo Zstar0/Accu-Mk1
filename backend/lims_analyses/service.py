@@ -1509,6 +1509,135 @@ def parent_retest(
     return new_ids, active.review_state
 
 
+def vial_source_retest(
+    db: Session,
+    *,
+    analysis_id: int,
+    user_id: Optional[int],
+    reason: Optional[str] = None,
+) -> tuple[int, bool, Optional[str]]:
+    """Native origination of a vial-side (source) retest: the up-cascade
+    mirror of parent_retest's down-cascade. Retests ONE named promoted
+    source row directly (rather than every source under a parent+keyword),
+    then resolves its promotion and un-promotes the parent if it's still
+    unverified-citable.
+
+    Fail-closed guards (resolve -> guard -> act -> re-read), in the order
+    the route's error table specifies:
+      1. row must exist (NotFoundError -> 404)
+      2. row must be vial-hosted (lims_sub_sample_pk IS NOT NULL) and in
+         review_state == 'promoted' (InvalidTransitionError -> 409) —
+         this explicitly excludes the "parent acting as a vial" promotion
+         source (state_machine.tier_of's other TIER_VIAL shape); that one
+         has no dedicated up-cascade route yet.
+      3. the row's AnalysisService.origin must be 'mk1' (BadRequestError ->
+         400) — SENAITE-origin sources retest from the parent AR; this
+         route only understands the native identity path.
+
+    Un-promote guard mirrors cascade_parent_retest_to_sources step 5
+    exactly: parent in ('verified', 'parent_to_verify') -> retract + clear
+    result + audit; parent 'published' (a citable COA source) is left
+    untouched and parent_unverified is False.
+
+    Transaction shape: apply_transition(kind='retest') owns and commits its
+    own single-row transaction (new retest row insert + retested=True flag
+    + audit, all before it returns) — that commit boundary is intentionally
+    not widened here, same as cascade_parent_retest_to_sources's per-source
+    retest calls. The un-promote step is a SEPARATE commit issued after,
+    once the retest is confirmed durable. This is deliberately two commits,
+    not one wrapping transaction: if the un-promote step were to fail, the
+    retest stays durable and visible (correct — the source really was
+    retested) while the parent is left carrying a now-stale promoted value,
+    a display-staleness gap a human can close by re-running this route or
+    the parent-tier retest route. That is the same accepted trade-off
+    cascade_parent_retest_to_sources already makes for the down-cascade's
+    multi-source loop; sequencing the un-promote AFTER the retest commit
+    (never before) is what guarantees "retest committed, un-promote lost"
+    is the only possible partial-failure shape — never the reverse.
+    """
+    from models import AnalysisService, LimsAnalysisPromotion
+
+    row = get_analysis(db, analysis_id)  # NotFoundError -> 404
+
+    if row.lims_sub_sample_pk is None or row.review_state != "promoted":
+        raise InvalidTransitionError(
+            row.review_state,
+            "retest",
+            message=(
+                "source retest requires a vial-hosted row in 'promoted' "
+                "state; row is "
+                + (
+                    "parent-hosted"
+                    if row.lims_sub_sample_pk is None
+                    else f"{row.review_state!r}"
+                )
+            ),
+        )
+
+    svc = db.get(AnalysisService, row.analysis_service_id)
+    if svc is None or svc.origin != "mk1":
+        raise BadRequestError(
+            "SENAITE-origin rows retest from the parent AR — sub-side "
+            "retest dead-ends on the write-back"
+        )
+
+    new_row = apply_transition(
+        db,
+        analysis_id=row.id,
+        kind="retest",
+        reason=reason or "retested from vial (source retest)",
+        user_id=user_id,
+    )
+
+    parent_unverified = False
+    parent_review_state: Optional[str] = None
+
+    # No unique constraint on source_analysis_id — a row that somehow gets
+    # promoted twice (e.g. reopened outside apply_transition, as the
+    # review_state CHECK-constraint backfill in database.py demonstrates is
+    # possible for this exact column) would otherwise resolve
+    # nondeterministically. order_by(id.desc()) + first-wins mirrors
+    # list_native_parent_analyses' latest-per-service dedup (service.py
+    # ~963) for the identical reason: "rather than depending on an
+    # invariant this function doesn't own." Unlike the down-cascade's
+    # active-parent query (retest_of_id IS NULL, not
+    # retracted/rejected, provenance='canonical'), this doesn't filter on
+    # parent state — a stale promotion's parent naturally reads as
+    # published/retracted/etc. below and the un-promote step no-ops.
+    promo = db.execute(
+        select(LimsAnalysisPromotion)
+        .where(LimsAnalysisPromotion.source_analysis_id == row.id)
+        .order_by(LimsAnalysisPromotion.id.desc())
+    ).scalars().first()
+    if promo is not None:
+        parent = db.get(LimsAnalysis, promo.parent_analysis_id)
+        if parent is not None:
+            if parent.review_state in ("verified", "parent_to_verify"):
+                prior_state = parent.review_state
+                parent.review_state = "retracted"
+                # Clear the promoted figure too — mirrors
+                # cascade_parent_retest_to_sources step 5 exactly: the
+                # display serialization filters by retest_of_id, not
+                # state, so a retracted parent still renders otherwise.
+                parent.result_value = None
+                parent.result_unit = None
+                parent.updated_at = datetime.utcnow()
+                db.add(LimsAnalysisTransition(
+                    analysis_id=parent.id,
+                    from_state=prior_state,
+                    to_state="retracted",
+                    transition_kind="auto",
+                    user_id=user_id,
+                    reason="un-promoted: source retested from vial",
+                ))
+                db.commit()
+                db.refresh(parent)
+                parent_unverified = True
+            parent_review_state = parent.review_state
+
+    return new_row.id, parent_unverified, parent_review_state
+
+
 # ─── Parent-reject cascade ───────────────────────────────────────────────────
 
 
@@ -2448,6 +2577,7 @@ def _serialize_senaite_shape_rows(
             service_group_id=None,
             service_group_name=None,
             promoted_to_parent_id=promo_by_source.get(r.id),
+            service_origin=svc.origin if svc else None,
         ))
     return out
 
