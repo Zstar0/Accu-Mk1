@@ -44,6 +44,13 @@ class BadRequestError(ValueError):
     the (from_state, kind) edge."""
 
 
+class ConflictError(Exception):
+    """A conflicting existing row blocks the requested write (mapped to 409
+    by the route layer). Distinct from the raw IntegrityError the DB's
+    partial unique index raises — this is for cases the service layer can
+    diagnose ahead of the flush and explain in the caller-facing message."""
+
+
 # ─── Parent keyword translation ──────────────────────────────────────────────
 
 
@@ -589,8 +596,11 @@ def promote_to_parent(
       - 'reference' may accompany 'chosen' but not 'aggregated_in'
 
     Performs in one transaction:
-      1. INSERT parent-tier lims_analyses row (review_state='verified',
-         verified_at=NOW, analyst_user_id=user_id).
+      1. INSERT parent-tier lims_analyses row (review_state='parent_to_verify',
+         verified_at=NULL, analyst_user_id=user_id). Promotion is the
+         submission, not the sign-off — a reviewer calls the generic
+         transitions endpoint with kind='verify' to reach 'verified'
+         (spec 2026-08-04).
       2. INSERT one lims_analysis_promotions per source.
       3. INSERT one audit transition per source (state-unchanged 'auto'
          kind, reason='promoted to parent #N (kind=...)').
@@ -771,17 +781,20 @@ def promote_to_parent(
                 LimsAnalysis.lims_sample_pk == parent_sample_pk,
                 _ident_clause,
                 LimsAnalysis.retest_of_id.is_(None),
-                # Only VERIFIED parents are superseded. A published parent is
-                # a citable COA source — superseding it silently could invalidate
-                # an issued COA; that conflict surfaces as the 409 instead.
-                LimsAnalysis.review_state == "verified",
+                # Awaiting (parent_to_verify) or fully VERIFIED parents are
+                # both superseded — neither has been published, so neither is
+                # a citable COA source yet. A published parent IS a citable
+                # COA source — superseding it silently could invalidate an
+                # issued COA; that conflict is diagnosed explicitly below
+                # instead (ConflictError naming the COA-snapshot deferral).
+                LimsAnalysis.review_state.in_(("verified", "parent_to_verify")),
                 LimsAnalysis.lims_sub_sample_pk.is_(None),
-                # SENAITE phase-out defense-in-depth: review_state=='verified'
-                # already excludes the shadow sentinel ('senaite_mirror'), so
-                # this can't change behavior — the canonical partial unique
-                # index this lookup protects already scopes to
-                # provenance='canonical' (Task 1), so this is a correctness
-                # clarification, not a behavior change.
+                # SENAITE phase-out defense-in-depth: these states already
+                # exclude the shadow sentinel ('senaite_mirror'), so this
+                # can't change behavior — the canonical partial unique index
+                # this lookup protects already scopes to provenance='canonical'
+                # (Task 1), so this is a correctness clarification, not a
+                # behavior change.
                 LimsAnalysis.provenance == "canonical",
             )
         ).scalars().first()
@@ -798,8 +811,35 @@ def promote_to_parent(
                 reason="superseded by retest promotion",
             ))
             db.flush()   # emit UPDATE before INSERT so Postgres sees vacated index slot
+        else:
+            # No verified/parent_to_verify row to supersede — but if the
+            # active blocker is a PUBLISHED parent, the naked IntegrityError
+            # the insert below would raise gives the caller no way to tell
+            # "already exists" apart from "this one is a citable COA source
+            # and needs a deliberate supersede/republish decision". Diagnose
+            # it here so the 409 names the real deferral instead.
+            published_blocker = db.execute(
+                select(LimsAnalysis).where(
+                    LimsAnalysis.lims_sample_pk == parent_sample_pk,
+                    _ident_clause,
+                    LimsAnalysis.retest_of_id.is_(None),
+                    LimsAnalysis.review_state == "published",
+                    LimsAnalysis.lims_sub_sample_pk.is_(None),
+                    LimsAnalysis.provenance == "canonical",
+                )
+            ).scalars().first()
+            if published_blocker is not None:
+                raise ConflictError(
+                    f"active parent-tier row for keyword={eff_parent_keyword!r} "
+                    f"is a published parent — supersede/republish ships with "
+                    f"the COA-snapshot release"
+                )
     # ── end retest-source supersession ───────────────────────────────────────
 
+    # Promotion mints the parent-tier row in 'parent_to_verify' — it is the
+    # submission, not the sign-off. verified_at stays NULL until a reviewer
+    # calls the generic transitions endpoint with kind='verify' (state
+    # machine: parent_to_verify -> verified, spec 2026-08-04).
     parent_row = LimsAnalysis(
         lims_sample_pk=parent_sample_pk,
         lims_sub_sample_pk=None,
@@ -808,11 +848,10 @@ def promote_to_parent(
         title=eff_title,
         result_value=result_value,
         result_unit=eff_result_unit,
-        review_state="verified",
+        review_state="parent_to_verify",
         method_id=method_id,
         instrument_id=instrument_id,
         analyst_user_id=user_id,
-        verified_at=now,
         created_by_user_id=user_id,
     )
     db.add(parent_row)
@@ -821,7 +860,7 @@ def promote_to_parent(
     db.add(LimsAnalysisTransition(
         analysis_id=parent_row.id,
         from_state=None,
-        to_state="verified",
+        to_state="parent_to_verify",
         transition_kind="auto",
         user_id=user_id,
         reason=f"promoted from sources {source_ids}",

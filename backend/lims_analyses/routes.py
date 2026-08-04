@@ -60,6 +60,14 @@ def _handle_service_error(e: Exception) -> HTTPException:
         return HTTPException(status_code=404, detail=str(e))
     if isinstance(e, service.BadRequestError):
         return HTTPException(status_code=400, detail=str(e))
+    if isinstance(e, service.ConflictError):
+        return HTTPException(
+            status_code=409,
+            detail={
+                "code": "published_parent_conflict",
+                "message": str(e),
+            },
+        )
     if isinstance(e, InvalidTransitionError):
         return HTTPException(
             status_code=409,

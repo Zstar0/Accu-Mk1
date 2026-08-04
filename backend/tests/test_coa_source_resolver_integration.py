@@ -117,13 +117,24 @@ def _make_vial_to_be_verified(db, sub, svc, result="98.55"):
 
 
 def _promote_to_parent_row(db, src, svc, value):
-    """Promote `src` to a parent-tier row, return the parent_row."""
+    """Promote `src` to a parent-tier row, verify it, return the parent_row.
+
+    Task 3: promote mints 'parent_to_verify', not 'verified' — this helper's
+    callers exercise the resolver's live-candidate path, which (pre-Task-6)
+    still requires 'verified'/'published'. The verify step here keeps this
+    fixture's fixtures matching what it always meant to seed: a reviewed,
+    resolvable parent-tier row. Task 6 narrows parent-tier resolution to
+    (verified, published) only — a verified fixture stays green under that
+    change too.
+    """
     parent_row, _ = promote_to_parent(
         db, keyword=svc.keyword, result_value=value, result_unit=None,
         method_id=None, instrument_id=None,
         sources=[{"analysis_id": src.id, "contribution_kind": "chosen"}],
         reason="TEST: integration promote",
     )
+    apply_transition(db, analysis_id=parent_row.id, kind="verify",
+                     reason="TEST: integration verify")
     parent_row.title = "TEST: parent " + parent_row.title
     db.commit()
     return parent_row

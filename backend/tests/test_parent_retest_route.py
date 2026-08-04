@@ -139,7 +139,7 @@ def client_with_promoted_parent(client, db_session):
     vial1 = _make_vial_tbv(db_session, subs[0], svc, result="97.00")
     vial2 = _make_vial_tbv(db_session, subs[1], svc, result="98.00")
 
-    promote_to_parent(
+    parent_row, _ = promote_to_parent(
         db_session,
         keyword=keyword,
         result_value="97.50",
@@ -154,6 +154,10 @@ def client_with_promoted_parent(client, db_session):
         reason=None,
         commit=True,
     )
+    # Task 3: promote mints 'parent_to_verify', not 'verified' — this fixture's
+    # name/contract promises a VERIFIED parent, so the verify sign-off is part
+    # of the seed, not the behavior under test.
+    apply_transition(db_session, analysis_id=parent_row.id, kind="verify")
 
     return client, parent.sample_id, keyword, [vial1.id, vial2.id]
 
@@ -187,6 +191,9 @@ def client_with_promoted_parent_published(client, db_session):
         reason=None,
         commit=True,
     )
+    # Task 3: promote mints 'parent_to_verify' — verify before publish (publish
+    # is legal only from 'verified').
+    apply_transition(db_session, analysis_id=parent_row.id, kind="verify")
     apply_transition(db_session, analysis_id=parent_row.id, kind="publish")
 
     return client, parent.sample_id, keyword, [vial1.id, vial2.id]
@@ -205,7 +212,7 @@ def client_with_already_retested_source(client, db_session):
 
     vial = _make_vial_tbv(db_session, subs[0], svc, result="98.55")
 
-    promote_to_parent(
+    parent_row, _ = promote_to_parent(
         db_session,
         keyword=keyword,
         result_value="98.55",
@@ -217,6 +224,9 @@ def client_with_already_retested_source(client, db_session):
         reason=None,
         commit=True,
     )
+    # Task 3: promote mints 'parent_to_verify' — verify so the parent lands in
+    # 'verified', matching this fixture's "parent STAYS verified" contract.
+    apply_transition(db_session, analysis_id=parent_row.id, kind="verify")
 
     # Retest the source BEFORE calling the route — it's no longer eligible.
     apply_transition(db_session, analysis_id=vial.id, kind="retest")

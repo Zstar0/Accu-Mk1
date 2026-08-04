@@ -428,8 +428,8 @@ def test_retest_source_promote_supersedes_old_parent_row(
         commit=True,
     )
 
-    # New parent row is verified
-    assert new_parent.review_state == "verified"
+    # New parent row is parent_to_verify (Task 3: promote submits, verify signs off)
+    assert new_parent.review_state == "parent_to_verify"
     assert new_parent.id != old_parent_id
     new_parent.title = "TEST: parent-" + (new_parent.title or "")
     db.commit()

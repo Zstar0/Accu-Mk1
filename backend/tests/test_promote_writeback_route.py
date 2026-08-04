@@ -157,7 +157,7 @@ def test_promote_writeback_success(route_client, promote_fixture):
 
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    assert body["parent"]["review_state"] == "verified"
+    assert body["parent"]["review_state"] == "parent_to_verify"  # Task 3: promote submits, verify signs off
     assert body["parent"]["lims_sample_pk"] == parent.id
 
     # Write-back was called exactly once
