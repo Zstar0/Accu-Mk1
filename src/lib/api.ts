@@ -5930,6 +5930,57 @@ export async function getNativeParentAnalyses(
   return response.json()
 }
 
+/** Native parent rows projected to the SenaiteAnalysis shape for the shared
+ *  AnalysisTable (native parent analyses card). Full lineage, all states;
+ *  uids carry the mk1: prefix. 404 (sample unknown to Mk1) is treated as
+ *  "no native rows", same as getNativeParentAnalyses. */
+export async function listNativeParentAnalysesShaped(
+  sampleId: string
+): Promise<SenaiteAnalysis[]> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/lims-analyses/parent/${encodeURIComponent(sampleId)}/native-analyses?as=senaite_shape`,
+    { headers: getBearerHeaders() }
+  )
+  if (response.status === 404) return []
+  if (!response.ok) {
+    throw new Error(`listNativeParentAnalysesShaped failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+export interface ParentRetestResponse {
+  new_row_ids: number[]
+  parent_review_state: string | null
+}
+
+/** Native parent-tier retest for one keyword: retests the promoted source
+ *  vial rows and un-promotes the verified parent (existing cascade
+ *  semantics — published parents 409 server-side). The generic
+ *  /transitions endpoint tier-blocks parent retest; only this route works. */
+export async function parentRetestAnalysis(
+  sampleId: string,
+  keyword: string,
+  reason?: string
+): Promise<ParentRetestResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/lims-analyses/parent/${encodeURIComponent(sampleId)}/retest`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(reason ? { keyword, reason } : { keyword }),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    const detail = err?.detail
+    throw new Error(
+      (typeof detail === 'string' ? detail : detail?.message) ||
+        `parentRetestAnalysis failed: ${response.status}`
+    )
+  }
+  return response.json()
+}
+
 /**
  * Fetch SENAITE analysis states for all lines on a parent AR, keyed by keyword.
  * Returns {"states": {"STER-PCR": "verified", ...}}.
