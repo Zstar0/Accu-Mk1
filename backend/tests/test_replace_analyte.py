@@ -214,6 +214,52 @@ def test_force_retract_unpromotes_then_rejects(db_mem):
     assert link is None
 
 
+def test_force_retract_unpromotes_awaiting_canonical(db_mem):
+    """Routed from Task 3 review (R1): a promoted source whose canonical
+    parent row is 'parent_to_verify' (awaiting sign-off, not yet verified) —
+    force_retract must still retract the canonical, not just skip it. Left
+    unwidened, a Replace on a wrong analyte would delete the promotion link
+    and reject the source while leaving the parent row ORPHANED with a stale
+    value a reviewer could later verify onto a COA."""
+    from datetime import datetime
+    from lims_analyses.service import create_analysis, force_retract_analysis
+    from models import AnalysisService, LimsAnalysisPromotion, LimsSample, LimsSubSample
+
+    svc = AnalysisService(title="ID_Z", keyword="ID_Z")
+    db_mem.add(svc); db_mem.flush()
+    parent = LimsSample(sample_id="P-FR-3", external_lims_uid="uid-fr-3")
+    db_mem.add(parent); db_mem.flush()
+    sub = LimsSubSample(parent_sample_pk=parent.id, external_lims_uid="mk1://fr-3-S01",
+                        sample_id="P-FR-3-S01", vial_sequence=1, assignment_role="hplc")
+    db_mem.add(sub); db_mem.flush()
+
+    # source vial row, promoted
+    source = create_analysis(db_mem, host_kind="sub_sample", host_pk=sub.id,
+                             analysis_service_id=svc.id, keyword="ID_Z", title="ID_Z",
+                             result_value="match")
+    source.review_state = "promoted"
+    # parent canonical row, AWAITING sign-off (parent-tier)
+    canonical = create_analysis(db_mem, host_kind="sample", host_pk=parent.id,
+                                analysis_service_id=svc.id, keyword="ID_Z", title="ID_Z",
+                                result_value="match")
+    canonical.review_state = "parent_to_verify"
+    db_mem.flush()
+    db_mem.add(LimsAnalysisPromotion(
+        parent_analysis_id=canonical.id, source_analysis_id=source.id,
+        contribution_kind="result", promoted_at=datetime(2026, 1, 1)))
+    db_mem.commit()
+
+    force_retract_analysis(db_mem, analysis_id=source.id, user_id=None)
+
+    db_mem.refresh(source); db_mem.refresh(canonical)
+    assert source.review_state == "rejected"
+    assert canonical.review_state == "retracted"
+    link = db_mem.execute(
+        select(LimsAnalysisPromotion).where(LimsAnalysisPromotion.source_analysis_id == source.id)
+    ).scalar_one_or_none()
+    assert link is None
+
+
 def test_force_retract_published_raises(db_mem):
     from lims_analyses.service import create_analysis, force_retract_analysis, BadRequestError
     from models import AnalysisService, LimsSample, LimsSubSample

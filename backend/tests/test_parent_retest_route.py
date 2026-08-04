@@ -200,6 +200,42 @@ def client_with_promoted_parent_published(client, db_session):
 
 
 @pytest.fixture
+def client_with_promoted_parent_awaiting(client, db_session):
+    """Same shape as client_with_promoted_parent, but the active parent row is
+    LEFT in 'parent_to_verify' (no verify sign-off) — the awaiting leg of the
+    guard widened by Task 4.
+
+    Returns (client, sample_id, keyword, source_ids).
+    """
+    parent, subs = _seed_parent_and_subs(db_session, sample_id="P-RETEST-004")
+    keyword = "PURITY-HPLC"
+    svc = _mk_service(db_session, keyword=keyword)
+
+    vial1 = _make_vial_tbv(db_session, subs[0], svc, result="97.00")
+    vial2 = _make_vial_tbv(db_session, subs[1], svc, result="98.00")
+
+    parent_row, _ = promote_to_parent(
+        db_session,
+        keyword=keyword,
+        result_value="97.50",
+        result_unit=None,
+        method_id=None,
+        instrument_id=None,
+        sources=[
+            {"analysis_id": vial1.id, "contribution_kind": "aggregated_in"},
+            {"analysis_id": vial2.id, "contribution_kind": "aggregated_in"},
+        ],
+        user_id=None,
+        reason=None,
+        commit=True,
+    )
+    # No verify sign-off — parent_row stays 'parent_to_verify'.
+    assert parent_row.review_state == "parent_to_verify"
+
+    return client, parent.sample_id, keyword, [vial1.id, vial2.id]
+
+
+@pytest.fixture
 def client_with_already_retested_source(client, db_session):
     """Single promoted source, retested BEFORE the route is called — the
     cascade must find nothing eligible.
@@ -265,6 +301,51 @@ def test_parent_retest_happy_path(client_with_promoted_parent, db_session):
     assert new_of_ids == set(source_ids)
 
     # Parent row retracted with result_value cleared.
+    parent = db_session.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one()
+    parent_row = db_session.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+            LimsAnalysis.keyword == keyword,
+            LimsAnalysis.retest_of_id.is_(None),
+        )
+    ).scalars().first()
+    assert parent_row is not None
+    assert parent_row.review_state == "retracted"
+    assert parent_row.result_value is None
+
+
+def test_parent_retest_on_awaiting_parent_unpromotes(
+    client_with_promoted_parent_awaiting, db_session,
+):
+    """Task 4: the guard also accepts 'parent_to_verify' — an awaiting parent
+    (promoted but not yet verified) can still be retested. Both sources get
+    retest rows and the parent is un-promoted (retracted, result cleared) —
+    same outcome as the verified leg (test_parent_retest_happy_path)."""
+    client, sample_id, keyword, source_ids = client_with_promoted_parent_awaiting
+    r = client.post(
+        f"/api/lims-analyses/parent/{sample_id}/retest",
+        json={"keyword": keyword},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["new_row_ids"]) == 2
+    assert body["parent_review_state"] == "retracted"
+
+    from models import LimsAnalysis, LimsSample
+
+    db_session.expire_all()
+    for sid in source_ids:
+        src = db_session.get(LimsAnalysis, sid)
+        assert src.retested is True
+
+    new_of_ids = {
+        db_session.get(LimsAnalysis, nid).retest_of_id for nid in body["new_row_ids"]
+    }
+    assert new_of_ids == set(source_ids)
+
     parent = db_session.execute(
         select(LimsSample).where(LimsSample.sample_id == sample_id)
     ).scalar_one()

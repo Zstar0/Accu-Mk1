@@ -606,12 +606,14 @@ def promote_to_parent(
          kind, reason='promoted to parent #N (kind=...)').
 
     Retest-source supersession: if ALL sources carry retest_of_id IS NOT NULL
-    (retest promotion), any active (non-retracted/non-rejected) non-retest
-    parent-tier row for (parent_sample_pk, keyword) is retracted inside the
-    same transaction before the new parent row is inserted — vacating the
-    partial unique index slot. An audit transition (reason="superseded by
-    retest promotion") is written on the old row. Non-retest sources leave
-    the existing 409 protection intact.
+    (retest promotion), the active non-retest parent-tier row for
+    (parent_sample_pk, keyword) — if 'verified' or 'parent_to_verify' — is
+    retracted inside the same transaction before the new parent row is
+    inserted, vacating the partial unique index slot. An audit transition
+    (reason="superseded by retest promotion") is written on the old row. A
+    'published' row is NOT silently retracted — it's a citable COA source, so
+    this raises ConflictError instead. Non-retest sources leave the existing
+    409 protection intact.
 
     Parent-target overrides (per-substance promotion): parent_keyword,
     parent_analysis_service_id, and parent_title decouple the parent-tier
@@ -1421,7 +1423,9 @@ def cascade_parent_retest_to_sources(
     #    and vacates the partial unique index (which excludes 'retracted'), so
     #    the eventual re-promote inserts cleanly. NEVER retract a PUBLISHED
     #    parent — it's a citable COA source; that path is invalidate→retest.
-    if new_row_ids and parent_analysis.review_state == "verified":
+    #    'parent_to_verify' (awaiting sign-off) un-promotes too — an unverified
+    #    row is not yet citable, but its stale value must not linger either.
+    if new_row_ids and parent_analysis.review_state in ("verified", "parent_to_verify"):
         prior_state = parent_analysis.review_state
         parent_analysis.review_state = "retracted"
         # Clear the promoted figure too: the display serialization
@@ -1453,14 +1457,15 @@ def parent_retest(
     reason: Optional[str] = None,
 ) -> tuple[list[int], Optional[str]]:
     """Native origination of a parent-tier retest: validate, then run the
-    existing cascade (retest promoted sources + un-promote the verified
-    parent). The generic transitions endpoint tier-blocks 'retest' at
+    existing cascade (retest promoted sources + un-promote the verified or
+    awaiting parent). The generic transitions endpoint tier-blocks 'retest' at
     TIER_PARENT on purpose — this is the dedicated, fail-closed path.
 
     Fail-closed guard: the active canonical parent row for the keyword must
-    be 'verified'. Without it, a direct API caller could retract vial
-    results under a PUBLISHED parent (the cascade retests sources
-    regardless of parent state; only its un-promote step checks verified).
+    be 'verified' or 'parent_to_verify' (awaiting sign-off). Without it, a
+    direct API caller could retract vial results under a PUBLISHED parent
+    (the cascade retests sources regardless of parent state; only its
+    un-promote step checks review_state).
     """
     from models import LimsSample
 
@@ -1483,14 +1488,14 @@ def parent_retest(
         raise NotFoundError(
             f"no active native parent row for keyword {keyword!r} on {sample_id!r}"
         )
-    if active.review_state != "verified":
+    if active.review_state not in ("verified", "parent_to_verify"):
         raise InvalidTransitionError(
             active.review_state,
             "retest",
             message=(
-                "parent retest requires the parent row to be 'verified'; "
-                f"row is {active.review_state!r} (published parents go "
-                "through invalidate→retest)"
+                "parent retest requires the parent row to be 'verified' or "
+                f"'parent_to_verify'; row is {active.review_state!r} "
+                "(published parents go through invalidate→retest)"
             ),
         )
     new_ids = cascade_parent_retest_to_sources(
@@ -1913,8 +1918,9 @@ def force_retract_analysis(
       - published      -> refuse (BadRequestError): a published COA result must
                           be invalidated via SENAITE, not auto-retracted here.
       - promoted       -> un-promote: retract each parent canonical row it fed
-                          (verified -> retracted), drop the promotion link(s),
-                          then reject the source (promoted -> rejected).
+                          (verified or parent_to_verify -> retracted), drop the
+                          promotion link(s), then reject the source
+                          (promoted -> rejected).
       - verified (vial)-> retract (verified -> retracted).
       - else (worked)  -> reject.
 
@@ -1938,7 +1944,7 @@ def force_retract_analysis(
         for link in links:
             canonical = db.get(LimsAnalysis, link.parent_analysis_id)
             if canonical is not None and not is_terminal(canonical.review_state):
-                if canonical.review_state == "verified":
+                if canonical.review_state in ("verified", "parent_to_verify"):
                     apply_transition(
                         db, analysis_id=canonical.id, kind="retract",
                         reason="wrong-variant Replace: canonical result invalidated",

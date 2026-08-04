@@ -277,6 +277,58 @@ def test_cascade_no_op_when_parent_sample_missing(seed):
     assert new_ids == []
 
 
+# ─── Task 4: step-5 un-promote fires for BOTH the verified and the awaiting
+# (parent_to_verify) leg — asserts the parent's post-cascade state, which none
+# of the tests above did. ───────────────────────────────────────────────────
+
+
+def test_cascade_unpromotes_verified_parent(seed):
+    """Canonical parent walked to 'verified' before the cascade: step-5
+    un-promote retracts it and clears the stale result."""
+    db, parent, sub, svc = seed
+
+    vial = _make_vial_tbv(db, sub, svc)
+    parent_row = _promote_single(db, vial, svc)
+    apply_transition(db, analysis_id=parent_row.id, kind="verify")
+    db.refresh(parent_row)
+    assert parent_row.review_state == "verified"
+
+    new_ids = cascade_parent_retest_to_sources(
+        db,
+        parent_sample_id=parent.sample_id,
+        keyword=svc.keyword,
+        user_id=None,
+    )
+
+    assert len(new_ids) == 1
+    db.refresh(parent_row)
+    assert parent_row.review_state == "retracted"
+    assert parent_row.result_value is None
+
+
+def test_cascade_unpromotes_awaiting_parent(seed):
+    """Canonical parent LEFT in 'parent_to_verify' (no verify sign-off): the
+    stale figure must not linger there either — step-5 un-promote retracts it
+    and clears the result, same as the verified leg."""
+    db, parent, sub, svc = seed
+
+    vial = _make_vial_tbv(db, sub, svc)
+    parent_row = _promote_single(db, vial, svc)
+    assert parent_row.review_state == "parent_to_verify"
+
+    new_ids = cascade_parent_retest_to_sources(
+        db,
+        parent_sample_id=parent.sample_id,
+        keyword=svc.keyword,
+        user_id=None,
+    )
+
+    assert len(new_ids) == 1
+    db.refresh(parent_row)
+    assert parent_row.review_state == "retracted"
+    assert parent_row.result_value is None
+
+
 # ─── Bonus: source in unassigned state → skipped ─────────────────────────────
 
 
