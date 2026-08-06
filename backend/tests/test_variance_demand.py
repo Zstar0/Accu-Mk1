@@ -78,7 +78,7 @@ class TestDeriveDemandCore:
 
     def test_no_variance_unchanged(self):
         assert sub_service.derive_demand(BASE_SERVICES) == {
-            "hplc": 1, "endo": 1, "ster": 2,
+            "hplc": 1, "endo": 1, "ster": 1,
         }
 
     def test_variance_does_not_inflate_core_demand(self):
@@ -86,7 +86,7 @@ class TestDeriveDemandCore:
             **BASE_SERVICES,
             "variance": {"hplcpurity_identity": 3, "endotoxin": 2},
         })
-        assert out == {"hplc": 1, "endo": 1, "ster": 2}
+        assert out == {"hplc": 1, "endo": 1, "ster": 1}
 
     def test_unordered_service_stays_zero(self):
         # core demand is the lab baseline; a (contract-invalid) variance key
@@ -95,7 +95,7 @@ class TestDeriveDemandCore:
             "sterility_pcr": True,
             "variance": {"sterility_pcr": 2, "hplcpurity_identity": 5},
         })
-        assert out["ster"] == 2
+        assert out["ster"] == 1
         assert out["hplc"] == 0
 
 
@@ -105,7 +105,7 @@ class TestDeriveBaseDemand:
             **BASE_SERVICES,
             "variance": {"hplcpurity_identity": 5},
         })
-        assert out == {"hplc": 1, "endo": 1, "ster": 2}
+        assert out == {"hplc": 1, "endo": 1, "ster": 1}
 
 
 # ─── Fixtures for compute_vial_plan tests (ZZTEST throwaway parent) ──────────
@@ -439,5 +439,5 @@ class TestApplyVarianceOverride:
         }
         # core demand untouched by the override
         assert sub_service.derive_demand(merged["services"]) == {
-            "hplc": 1, "endo": 1, "ster": 2,
+            "hplc": 1, "endo": 1, "ster": 1,
         }

@@ -121,7 +121,7 @@ def test_seed_backfills_demand_fields(db_session):
     assert (rows["endotoxin"].vials_required,
             rows["endotoxin"].fulfillment_role) == (1, "endo")
     assert (rows["sterility_pcr"].vials_required,
-            rows["sterility_pcr"].fulfillment_role) == (2, "ster")
+            rows["sterility_pcr"].fulfillment_role) == (1, "ster")
     assert rows["variance"].vials_required == 0  # variance NEVER folds into base
 
 
@@ -155,6 +155,6 @@ def test_seed_backfills_on_fresh_db_under_production_autoflush_config():
         assert (rows["endotoxin"].vials_required,
                 rows["endotoxin"].fulfillment_role) == (1, "endo")
         assert (rows["sterility_pcr"].vials_required,
-                rows["sterility_pcr"].fulfillment_role) == (2, "ster")
+                rows["sterility_pcr"].fulfillment_role) == (1, "ster")
     finally:
         db.close()

@@ -1197,7 +1197,12 @@ def derive_base_demand(services: dict, db=None) -> dict:
     legacy = {
         "hplc": 1 if hplc else 0,
         "endo": 1 if endo else 0,
-        "ster": 2 if ster else 0,
+        # Ruling 2026-08-05: PCR and USP<71> are separately sold products, one
+        # vial each. Was 2 back when a single "Sterility" add-on covered both
+        # tests from one pair of vials. Matches
+        # analysis_profiles.sterility_pcr.vials_required, which this map used to
+        # override.
+        "ster": 1 if ster else 0,
     }
     if db is None:
         return legacy
@@ -1217,8 +1222,9 @@ def derive_demand(services: dict, db=None) -> dict:
     """Translate WP services dict to CORE vial demand per bucket.
 
     HPLC is satisfied by either `hplcpurity_identity` or `bac_water_panel` —
-    both result in chromatography vials. Sterility is the only bucket that
-    needs more than one vial (2 per the lab's protocol).
+    both result in chromatography vials. No legacy bucket needs more than
+    one vial (ruling 2026-08-05: PCR and USP<71> are separately sold
+    products, one vial each).
 
     Explicit-bucket model (2026-06-10-variance-bucket-assignment-design.md §2):
     variance is a SEPARATE bucket with its own target (derive_variance_demand),

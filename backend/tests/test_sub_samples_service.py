@@ -352,14 +352,14 @@ def test_derive_demand_endo_only():
     assert service.derive_demand(services) == {"hplc": 0, "endo": 1, "ster": 0}
 
 
-def test_derive_demand_ster_is_2_vials():
+def test_derive_demand_ster_is_1_vial():
     services = {"hplcpurity_identity": False, "endotoxin": False, "sterility_pcr": True, "bac_water_panel": False, "samplevariance": False, "residualsolvents": False}
-    assert service.derive_demand(services) == {"hplc": 0, "endo": 0, "ster": 2}
+    assert service.derive_demand(services) == {"hplc": 0, "endo": 0, "ster": 1}
 
 
 def test_derive_demand_full_bw_all_addons():
     services = {"hplcpurity_identity": False, "endotoxin": True, "sterility_pcr": True, "bac_water_panel": True, "samplevariance": False, "residualsolvents": False}
-    assert service.derive_demand(services) == {"hplc": 1, "endo": 1, "ster": 2}
+    assert service.derive_demand(services) == {"hplc": 1, "endo": 1, "ster": 1}
 
 
 def test_derive_demand_handles_missing_keys():

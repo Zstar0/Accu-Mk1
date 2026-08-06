@@ -50,7 +50,7 @@ def seed_profiles_from_registry(db: Session) -> None:
         "hplcpurity_identity": (1, "hplc"),
         "bac_water_panel": (1, "hplc"),
         "endotoxin": (1, "endo"),
-        "sterility_pcr": (2, "ster"),
+        "sterility_pcr": (1, "ster"),
     }
     for key, (vials, role) in _DEMAND_DEFAULTS.items():
         row = db.query(AnalysisProfile).filter_by(key=key).one_or_none()
