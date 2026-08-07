@@ -241,3 +241,30 @@ def test_canonical_wins_over_placeholder_after_promote(db, parent_sample, usp71_
     rows = list_native_parent_analyses_senaite_shape(db, parent_sample.sample_id)
     assert len(rows) == 1
     assert rows[0].review_state != "unassigned"
+
+
+def test_placeholder_survives_a_retracted_canonical_row(db, parent_sample, usp71_profile):
+    """A retracted (dead) canonical row does NOT discharge the placeholder:
+    the result was thrown away, so the paid-for test is outstanding again
+    and the bench must still see it. Suppression is scoped to LIVE
+    canonical rows only — a dead one must not silently hide the
+    placeholder, and (full-lineage contract) the dead row itself must still
+    surface too."""
+    svc = usp71_profile.analysis_services[0]
+    dead = LimsAnalysis(
+        lims_sample_pk=parent_sample.id,
+        lims_sub_sample_pk=None,
+        analysis_service_id=svc.id,
+        keyword=svc.keyword,
+        title=svc.title,
+        provenance="canonical",
+        review_state="retracted",
+    )
+    db.add(dead)
+    db.commit()
+
+    seed_parent_placeholders(db, parent=parent_sample, services={"sterility_usp71": True})
+    db.commit()
+
+    rows = list_native_parent_analyses_senaite_shape(db, parent_sample.sample_id)
+    assert [r.review_state for r in rows] == ["retracted", "unassigned"]
