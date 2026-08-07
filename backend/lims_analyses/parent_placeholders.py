@@ -34,12 +34,20 @@ def seed_parent_placeholders(db, *, parent, services: dict, package=None) -> dic
 
     Only native (origin='mk1') services are placeheld — SENAITE-sourced ones
     already get their 'shadow' row from the registration mirror.
+
+    Calls _ordered_native_profiles with require_archetype=False: a profile's
+    coa_archetype governs whether a COA section can be RENDERED, not whether
+    the customer paid for the test. A native profile that is ordered but has
+    no archetype configured yet must still surface on the bench — deferring
+    to the archetype gate here would reintroduce the exact invisibility this
+    feature exists to remove.
     """
     from models import LimsAnalysis
     from coa.native_sections import _ordered_native_profiles
 
     stats = {"created": 0, "existing": 0, "skipped": 0}
-    profiles = _ordered_native_profiles(db, services or {}, package)
+    profiles = _ordered_native_profiles(db, services or {}, package,
+                                        require_archetype=False)
 
     for prof in profiles:
         for svc in prof.analysis_services:

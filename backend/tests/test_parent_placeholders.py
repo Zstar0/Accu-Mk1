@@ -143,6 +143,36 @@ def test_legacy_senaite_service_is_not_placeheld(db, parent_sample):
     assert stats["created"] == 0
 
 
+def test_ordered_profile_without_archetype_still_gets_a_placeholder(db, parent_sample):
+    """coa_archetype governs COA RENDERING, not whether the bench must run the
+    test. A paid native profile with no archetype configured yet must still
+    appear on the parent — that invisibility is the bug this feature fixes."""
+    svc = _mk_service(db, keyword="HM-PB", title="Lead", origin="mk1")
+    _mk_profile(db, key="heavy_metals", name="Heavy Metals",
+                members=[svc], coa_archetype=None)
+
+    stats = seed_parent_placeholders(
+        db, parent=parent_sample, services={"heavy_metals": True}
+    )
+    db.commit()
+    assert stats["created"] == 1
+    row = db.query(LimsAnalysis).filter_by(
+        lims_sample_pk=parent_sample.id, provenance=PROVENANCE_ORDERED
+    ).one()
+    assert row.keyword == "HM-PB"
+
+
+def test_coa_path_still_requires_an_archetype(db, parent_sample):
+    """The COA caller's behaviour must be untouched: default require_archetype=True."""
+    from coa.native_sections import _ordered_native_profiles
+    svc = _mk_service(db, keyword="HM-PB2", title="Lead", origin="mk1")
+    _mk_profile(db, key="heavy_metals_2", name="HM2", members=[svc], coa_archetype=None)
+
+    assert _ordered_native_profiles(db, {"heavy_metals_2": True}, None) == []
+    assert len(_ordered_native_profiles(
+        db, {"heavy_metals_2": True}, None, require_archetype=False)) == 1
+
+
 # ── Task 3: registration hook ───────────────────────────────────────────────
 
 
