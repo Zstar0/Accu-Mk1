@@ -592,8 +592,10 @@ def _run_migrations():
             reportable_reason     TEXT,
 
             -- SENAITE phase-out (parent analysis mirror): 'canonical' (native/
-            -- promoted) vs 'shadow' (SENAITE mirror). mirror_review_state holds
-            -- the true SENAITE state for shadow rows only (NULL on canonical).
+            -- promoted) vs 'shadow' (SENAITE mirror) vs 'ordered' (native
+            -- placeholder minted at registration, lims_analyses/
+            -- parent_placeholders.py). mirror_review_state holds the true
+            -- SENAITE state for shadow rows only (NULL otherwise).
             provenance            TEXT NOT NULL DEFAULT 'canonical',
             mirror_review_state   TEXT,
 
@@ -1607,6 +1609,19 @@ def _run_migrations():
                         CHECK ((sub_sample_pk IS NULL) <> (lims_sample_pk IS NULL));
             END IF;
         END $$""",
+        # Native parent placeholders (Task 1): registration-time 'ordered'
+        # rows for native tests the customer already paid for, minted before
+        # any vial exists. Mirrors the shadow index's (sample, service) key
+        # above — not the root index's keyword key — because native identity
+        # is service-id-based. A third provenance needs a third partial
+        # unique index so 'canonical', 'shadow', and 'ordered' rows can all
+        # coexist for the same (sample, service) without colliding.
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_parent_service_ordered
+            ON lims_analyses (lims_sample_pk, analysis_service_id)
+            WHERE provenance = 'ordered' AND lims_sample_pk IS NOT NULL
+              AND review_state NOT IN ('retracted', 'rejected')
+        """,
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
