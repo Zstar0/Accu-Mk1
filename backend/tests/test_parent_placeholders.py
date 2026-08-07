@@ -268,3 +268,25 @@ def test_placeholder_survives_a_retracted_canonical_row(db, parent_sample, usp71
 
     rows = list_native_parent_analyses_senaite_shape(db, parent_sample.sample_id)
     assert [r.review_state for r in rows] == ["retracted", "unassigned"]
+
+
+# ── Task 4b: keep placeholders OUT of the registry inbox ───────────────────
+
+
+def test_registry_inbox_ignores_placeholders(db, parent_sample, usp71_profile):
+    """The inbox has no canonical-wins dedupe, so a placeholder would show as
+    an extra 'unassigned' analysis — and would DOUBLE UP with the canonical row
+    after promotion. Placeholders are a parent-card concern; the inbox keeps
+    today's behaviour until it gets a dedupe rule of its own."""
+    from sub_samples.registry_inbox import inbox_candidates_from_registry
+
+    seed_parent_placeholders(db, parent=parent_sample, services={"sterility_usp71": True})
+    # inbox_candidates_from_registry only considers status='sample_received'
+    # parents; the shared parent_sample fixture is 'received', so flip it
+    # here rather than touching the fixture other tests in this file rely on.
+    parent_sample.status = "sample_received"
+    db.commit()
+
+    _, analyses_by_sample = inbox_candidates_from_registry(db)
+    rows = analyses_by_sample.get(parent_sample.sample_id, [])
+    assert not any(r["keyword"] == "STER-USP71" for r in rows)
