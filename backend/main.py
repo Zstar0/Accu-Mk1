@@ -14683,6 +14683,47 @@ def _shadow_analyses_at_registration_bg(sample_id: str) -> None:
             db.close()
 
 
+def _native_placeholders_at_registration_bg(sample_id: str) -> None:
+    """Native sibling of _shadow_analyses_at_registration_bg: mint pending
+    parent-tier rows for every ORDERED native analysis service.
+
+    Same hardening rationale as its sibling — own session, never raises. A
+    catalog miss or IS outage must not fail the registration; check-in
+    re-seeds via the same function later.
+    """
+    db = None
+    try:
+        from database import SessionLocal
+        from lims_analyses.parent_placeholders import seed_parent_placeholders
+        from sub_samples.service import fetch_sample_services
+        from models import LimsSample
+
+        raw = fetch_sample_services(sample_id)
+        if not raw:
+            return
+        db = SessionLocal()
+        parent = db.query(LimsSample).filter_by(sample_id=sample_id).one_or_none()
+        if parent is None:
+            return
+        stats = seed_parent_placeholders(
+            db, parent=parent,
+            services=raw.get("services") or {}, package=raw.get("package"),
+        )
+        db.commit()
+        logger.info(
+            "registry.native_placeholder_seed sample_id=%s created=%s existing=%s skipped=%s",
+            sample_id, stats["created"], stats["existing"], stats["skipped"],
+        )
+    except Exception as seed_err:  # noqa: BLE001
+        logger.warning(
+            "registry.native_placeholder_seed_failed sample_id=%s err=%s",
+            sample_id, seed_err,
+        )
+    finally:
+        if db is not None:
+            db.close()
+
+
 def _arm_native_status_at_registration_bg(sample_id: str) -> None:
     """Registration-time arming sibling of `_shadow_analyses_at_registration_bg`
     (2026-07-27, P-0140 coverage-decay finding): a sample minted AFTER the
@@ -19379,6 +19420,10 @@ def s2s_upsert_lims_sample(
     db.commit()
     if row.external_lims_system != "mk1":
         background_tasks.add_task(_shadow_analyses_at_registration_bg, row.sample_id)
+    # Native parent-tier placeholders (2026-08-06): unlike the shadow sync
+    # above, this is NOT gated on external_lims_system — an ordered native
+    # test must show up on the parent regardless of which LIMS owns the AR.
+    background_tasks.add_task(_native_placeholders_at_registration_bg, row.sample_id)
     # Side-by-side engine (2026-07-27, P-0140 coverage-decay finding):
     # arm native_status at the one true creation-time hook, for BOTH
     # SENAITE-attached and SENAITE-free rows — unrelated to (and never

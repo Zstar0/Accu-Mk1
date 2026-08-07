@@ -141,3 +141,22 @@ def test_legacy_senaite_service_is_not_placeheld(db, parent_sample):
     stats = seed_parent_placeholders(db, parent=parent_sample, services={"endotoxin": True})
     db.commit()
     assert stats["created"] == 0
+
+
+# ── Task 3: registration hook ───────────────────────────────────────────────
+
+
+def test_registration_hook_never_raises_when_is_unreachable(monkeypatch, parent_sample):
+    """A catalog/IS failure must leave registration itself untouched — the
+    sample row is still created and the next check-in heals the placeholders."""
+    import main
+    calls = []
+    def boom(_sample_id):
+        calls.append(_sample_id)
+        raise RuntimeError("IS down")
+    monkeypatch.setattr("sub_samples.service.fetch_sample_services", boom)
+    main._native_placeholders_at_registration_bg(parent_sample.sample_id)  # must not raise
+    # Proves the patch was the thing that actually raised — not that the
+    # exception swallower is masking a different, unpatched failure path
+    # (e.g. the real fetch_sample_services blowing up on missing env vars).
+    assert calls == [parent_sample.sample_id]
