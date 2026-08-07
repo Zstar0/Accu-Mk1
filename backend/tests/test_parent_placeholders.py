@@ -26,6 +26,7 @@ import models  # noqa: F401 — registers AnalysisProfile/AnalysisService before
 from database import Base
 from models import AnalysisProfile, AnalysisService, LimsAnalysis, LimsSample
 
+from coa.native_sections import _eligible_parent_row
 from lims_analyses.parent_placeholders import PROVENANCE_ORDERED, seed_parent_placeholders
 from lims_analyses.service import list_native_parent_analyses_senaite_shape
 
@@ -290,3 +291,18 @@ def test_registry_inbox_ignores_placeholders(db, parent_sample, usp71_profile):
     _, analyses_by_sample = inbox_candidates_from_registry(db)
     rows = analyses_by_sample.get(parent_sample.sample_id, [])
     assert not any(r["keyword"] == "STER-USP71" for r in rows)
+
+
+# ── Task 5: harden the COA row selector ─────────────────────────────────────
+
+
+def test_a_placeholder_can_never_be_certified(db, parent_sample, usp71_profile):
+    """Belt-and-braces: even if a placeholder somehow reached 'verified',
+    it must not be selectable as a certifiable result — its result_value is
+    empty and it would abort or, worse, print blank."""
+    seed_parent_placeholders(db, parent=parent_sample, services={"sterility_usp71": True})
+    db.commit()
+    ph = db.query(LimsAnalysis).filter_by(provenance=PROVENANCE_ORDERED).one()
+    ph.review_state = "verified"          # simulate the anomaly
+    db.commit()
+    assert _eligible_parent_row(db, parent_sample.id, ph.analysis_service_id) is None

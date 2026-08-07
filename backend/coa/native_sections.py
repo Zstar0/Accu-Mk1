@@ -103,6 +103,10 @@ def _eligible_parent_row(db: Session, parent_pk: int, service_id: int):
             LimsAnalysis.lims_sample_pk == parent_pk,
             LimsAnalysis.lims_sub_sample_pk.is_(None),
             LimsAnalysis.analysis_service_id == service_id,
+            # Only a promoted canonical row can be certified. An 'ordered'
+            # placeholder has no result; without this clause the only thing
+            # keeping it out of a certificate is its review_state.
+            LimsAnalysis.provenance == "canonical",
             LimsAnalysis.review_state.in_(ELIGIBLE_STATES),
             LimsAnalysis.retest_of_id.is_(None),
         ).order_by(LimsAnalysis.id.desc())
