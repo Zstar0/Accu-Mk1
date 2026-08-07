@@ -27,6 +27,7 @@ from database import Base
 from models import AnalysisProfile, AnalysisService, LimsAnalysis, LimsSample
 
 from lims_analyses.parent_placeholders import PROVENANCE_ORDERED, seed_parent_placeholders
+from lims_analyses.service import list_native_parent_analyses_senaite_shape
 
 
 def test_provenance_ordered_is_a_third_distinct_value():
@@ -190,3 +191,53 @@ def test_registration_hook_never_raises_when_is_unreachable(monkeypatch, parent_
     # exception swallower is masking a different, unpatched failure path
     # (e.g. the real fetch_sample_services blowing up on missing env vars).
     assert calls == [parent_sample.sample_id]
+
+
+# ── Task 4: placeholders on the native parent card ─────────────────────────
+
+
+@pytest.fixture
+def promoted_usp71_row(db, parent_sample, usp71_profile):
+    """A promoted (provenance='canonical') parent-tier row for the SAME
+    analysis_service_id as the sterility_usp71 placeholder — built directly
+    rather than via promote_to_parent (which needs vial-tier source rows in
+    to_be_verified state and would drag in unrelated machinery for no
+    benefit here). review_state='parent_to_verify' is what promote actually
+    produces and is a legal value under the DB CHECK."""
+    svc = usp71_profile.analysis_services[0]
+    row = LimsAnalysis(
+        lims_sample_pk=parent_sample.id,
+        lims_sub_sample_pk=None,
+        analysis_service_id=svc.id,
+        keyword=svc.keyword,
+        title=svc.title,
+        provenance="canonical",
+        review_state="parent_to_verify",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def test_placeholder_appears_on_native_parent_card(db, parent_sample, usp71_profile):
+    seed_parent_placeholders(db, parent=parent_sample, services={"sterility_usp71": True})
+    db.commit()
+    rows = list_native_parent_analyses_senaite_shape(db, parent_sample.sample_id)
+    # SenaiteShapeAnalysisResponse is a plain pydantic BaseModel (no
+    # __getitem__), so rows are read via attribute access — matching every
+    # other consumer of this shape (e.g. test_senaite_shape_result_type.py).
+    assert [r.keyword for r in rows] == ["STER-USP71"]
+    assert rows[0].review_state == "unassigned"
+
+
+def test_canonical_wins_over_placeholder_after_promote(db, parent_sample, usp71_profile,
+                                                       promoted_usp71_row):
+    """Post-promotion the card shows ONE row, the canonical one — the
+    placeholder is left in the table (like a SENAITE shadow row) and
+    deduped here."""
+    seed_parent_placeholders(db, parent=parent_sample, services={"sterility_usp71": True})
+    db.commit()
+    rows = list_native_parent_analyses_senaite_shape(db, parent_sample.sample_id)
+    assert len(rows) == 1
+    assert rows[0].review_state != "unassigned"
