@@ -14715,6 +14715,11 @@ def _native_placeholders_at_registration_bg(sample_id: str) -> None:
             sample_id, stats["created"], stats["existing"], stats["skipped"],
         )
     except Exception as seed_err:  # noqa: BLE001
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
         logger.warning(
             "registry.native_placeholder_seed_failed sample_id=%s err=%s",
             sample_id, seed_err,
