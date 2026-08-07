@@ -24,7 +24,7 @@ from sqlalchemy.orm import sessionmaker
 
 import models  # noqa: F401 — registers AnalysisProfile/AnalysisService before create_all()
 from database import Base
-from models import AnalysisProfile, AnalysisService, LimsAnalysis, LimsSample
+from models import AnalysisProfile, AnalysisService, LimsAnalysis, LimsSample, LimsSubSample
 
 from coa.native_sections import _eligible_parent_row
 from lims_analyses.parent_placeholders import PROVENANCE_ORDERED, seed_parent_placeholders
@@ -306,3 +306,247 @@ def test_a_placeholder_can_never_be_certified(db, parent_sample, usp71_profile):
     ph.review_state = "verified"          # simulate the anomaly
     db.commit()
     assert _eligible_parent_row(db, parent_sample.id, ph.analysis_service_id) is None
+
+
+# ── Task 6: regression gate + non-perturbation proof ────────────────────────
+#
+# The task-6 brief sketches three fixtures/helpers by inferred name —
+# `to_be_verified_vial_row`, `verified_parent_row`, `_parent_line_states` —
+# that do not exist anywhere in the codebase. All three below are built from
+# scratch against real production code paths (create_analysis/apply_transition
+# for the vial, the actual workflow/engine.py function name found by reading
+# the file). See each fixture's docstring for how faithful it is to a real
+# promote_to_parent / build_native_sections call, and the load-bearing test's
+# docstring for exactly what it does NOT prove.
+
+
+def _make_vial_in_to_be_verified(db, sub, svc, result="Not Detected"):
+    """Walks a vial-tier analysis through the REAL state machine
+    (create_analysis -> assign -> submit) to reach 'to_be_verified' — the
+    same helper shape as test_lims_analyses_service.py's
+    `_make_vial_in_to_be_verified` (that file drives promote_to_parent
+    against the live Postgres dev DB; this one drives the identical service
+    functions against the in-memory SQLite fixture). Deliberately NOT a
+    hand-built LimsAnalysis(review_state="to_be_verified", ...) row: routing
+    through create_analysis + apply_transition means the fixture is exactly
+    the shape a real vial submission produces, not a guess at one."""
+    from lims_analyses.service import apply_transition, create_analysis
+
+    row = create_analysis(
+        db, host_kind="sub_sample", host_pk=sub.id,
+        analysis_service_id=svc.id, keyword=svc.keyword, title=svc.title,
+    )
+    apply_transition(db, analysis_id=row.id, kind="assign",
+                     reason="TEST: assign for promote")
+    apply_transition(db, analysis_id=row.id, kind="submit",
+                     result_value=result, reason="TEST: submit for promote")
+    return row
+
+
+@pytest.fixture
+def to_be_verified_vial_row(db, parent_sample, usp71_profile):
+    """A real vial (LimsSubSample) hung off parent_sample, carrying a
+    vial-tier analysis for the sterility_usp71 member service, walked to
+    'to_be_verified' via the production state machine — the exact shape
+    promote_to_parent's source validation requires (service.py:697-738):
+    review_state == 'to_be_verified', analysis_service_id matching the
+    native identity, and a resolvable parent via lims_sub_sample_pk ->
+    LimsSubSample.parent_sample_pk."""
+    vial = LimsSubSample(
+        parent_sample_pk=parent_sample.id,
+        external_lims_uid="TEST-PLACEHOLDER-VIAL-UID-1",
+        sample_id="TEST-PLACEHOLDER-PARENT-S01",
+        vial_sequence=1,
+    )
+    db.add(vial)
+    db.commit()
+    db.refresh(vial)
+
+    svc = usp71_profile.analysis_services[0]
+    return _make_vial_in_to_be_verified(db, vial, svc)
+
+
+def test_promote_still_succeeds_with_a_placeholder_present(db, parent_sample, usp71_profile,
+                                                           to_be_verified_vial_row):
+    """THE load-bearing invariant. If this ever fails, the placeholder has
+    landed in the canonical slot and the whole design is wrong.
+
+    WHAT THIS PROVES: promote_to_parent's Python code path runs cleanly —
+    reads sources, validates, inserts a 'canonical' parent-tier row, writes
+    promotions/audit — while an 'ordered' placeholder already occupies the
+    same (parent_sample_pk, analysis_service_id) slot. That is a real,
+    useful assertion: nothing in promote_to_parent raises, filters on, or is
+    otherwise confused by a placeholder's presence.
+
+    WHAT THIS DOES NOT PROVE (read before trusting this test further):
+    the whole design's safety rests on Postgres's partial unique index
+    `uq_lims_analyses_parent_service_root`, which is scoped
+    `WHERE ... AND provenance = 'canonical'` (backend/database.py, the
+    "Make the parent-tier root index provenance-aware" migration) so an
+    'ordered' row structurally cannot occupy the same slot as a 'canonical'
+    one. That index is created EXCLUSIVELY by raw SQL inside
+    _run_migrations() against a live Postgres connection — it is not a
+    SQLAlchemy Index() anywhere on the LimsAnalysis model (confirmed: `grep
+    -n "uq_lims_analyses_parent_service" backend/models.py` returns nothing).
+    This test's `db` fixture is `Base.metadata.create_all()` against
+    sqlite:///:memory: — that call builds tables and columns from the ORM
+    models only; it never runs _run_migrations() and so never creates any of
+    the three partial unique indexes (root / shadow / ordered). A
+    LimsAnalysisEvent comment elsewhere in models.py confirms this is
+    deliberate: "the CHECK lives in database.py DDL only, not here... SQLite
+    test fixtures stay unconstrained."
+    So this test would still pass exactly as written even if a future change
+    silently dropped the `provenance = 'canonical'` clause from the real
+    index — it cannot detect that regression. Proving the index itself holds
+    requires a real Postgres connection; that is explicitly deferred to a
+    later task per the brief, not covered here.
+
+    This IS the adversarial shape for that later Postgres check: the
+    placeholder and the freshly-promoted row end up sharing BOTH partial
+    indexes' keys at once — (lims_sample_pk, keyword) for
+    uq_lims_analyses_parent_service_root (native promote derives the parent
+    row's keyword from the service, same as the placeholder's), AND
+    (lims_sample_pk, analysis_service_id) for
+    uq_lims_analyses_parent_service_ordered. If the `provenance = 'canonical'`
+    predicate were ever dropped from the root index, THIS exact pair of rows
+    is what would collide.
+    """
+    from lims_analyses.service import promote_to_parent
+
+    seed_parent_placeholders(db, parent=parent_sample, services={"sterility_usp71": True})
+    db.commit()
+    row, _ = promote_to_parent(
+        # keyword="STERILITY_USP71" is inert here, not the row's real
+        # identity: is_native (origin='mk1' source) makes promote_to_parent
+        # re-derive eff_parent_keyword from the SOURCE SERVICE's own keyword
+        # (service.py:750-754), so the inserted row actually carries
+        # "STER-USP71" (usp71_profile's real keyword), not this string.
+        db, keyword="STERILITY_USP71", result_value="Not Detected",
+        result_unit=None, method_id=None, instrument_id=None,
+        sources=[{"analysis_id": to_be_verified_vial_row.id, "contribution_kind": "chosen"}],
+    )
+    assert row.provenance == "canonical"
+    assert row.review_state == "parent_to_verify"
+    # Confirm the placeholder is still there, unaffected, for the SAME
+    # (parent, service) as the row promote just inserted — this is the exact
+    # pair of rows the Postgres partial index has to tolerate co-existing.
+    placeholder = db.query(LimsAnalysis).filter_by(
+        lims_sample_pk=parent_sample.id, provenance=PROVENANCE_ORDERED
+    ).one()
+    assert placeholder.analysis_service_id == row.analysis_service_id
+    # Same keyword too, not just the same service id — this pair of rows
+    # shares BOTH partial indexes' keys simultaneously (see docstring).
+    assert placeholder.keyword == row.keyword == "STER-USP71"
+
+
+@pytest.fixture
+def verified_parent_row(db, parent_sample, usp71_profile):
+    """A promoted AND reviewer-verified canonical parent-tier row
+    (review_state='verified', which IS in coa.native_sections.ELIGIBLE_STATES
+    — 'parent_to_verify', the state Task 4's `promoted_usp71_row` fixture
+    uses, is NOT) for sterility_usp71, plus the active NULL-matrix 'equals'
+    spec build_native_sections needs to resolve a verdict
+    (coa/spec_rules.resolve_spec) — without a resolvable spec the section
+    build aborts (rule 5) before a placeholder ever enters the picture,
+    which would make the byte-identity test below vacuous. Modelled directly
+    on test_native_sections.py::test_equals_spec_fills_and_verdicts, the
+    existing test that already exercises an 'equals' spec end-to-end."""
+    from models import AnalysisServiceSpec
+
+    svc = usp71_profile.analysis_services[0]
+    db.add(AnalysisServiceSpec(
+        analysis_service_id=svc.id, matrix=None, rule_kind="equals",
+        equals_value="Not Detected",
+    ))
+    row = LimsAnalysis(
+        lims_sample_pk=parent_sample.id,
+        lims_sub_sample_pk=None,
+        analysis_service_id=svc.id,
+        keyword=svc.keyword,
+        title=svc.title,
+        result_value="Not Detected",
+        provenance="canonical",
+        review_state="verified",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def test_coa_sections_are_byte_identical_with_and_without_placeholders(
+        db, parent_sample, usp71_profile, verified_parent_row, monkeypatch):
+    """build_native_sections' row selector (_eligible_parent_row) already
+    filters provenance='canonical' — pinning the assembled DOCUMENT
+    byte-for-byte (rather than re-deriving that one filter clause) catches
+    any future change anywhere in the build path — ordering, dedup,
+    formatting — that could let a placeholder leak into a published COA.
+
+    Deviates from the brief's sketch by adding `monkeypatch`: it is required,
+    not optional. build_native_sections calls fetch_sample_services
+    unconditionally, which is a live HTTP call to Integration Service
+    (sub_samples/service.py:1057-1078); unmocked it raises RuntimeError
+    (INTEGRATION_SERVICE_URL / API key unset in tests) before ever reaching
+    the code this test exists to check. Pattern matches every test in
+    test_native_sections.py, all of which monkeypatch this same call.
+
+    The first assertion below is REDUNDANT by itself: _eligible_parent_row
+    (coa/native_sections.py:83-113) filters on BOTH `provenance == 'canonical'`
+    AND `review_state IN ELIGIBLE_STATES`, and the seeded placeholder fails
+    both (provenance='ordered', review_state='unassigned') — so that
+    assertion alone would stay green even if the `provenance == 'canonical'`
+    clause (the one this whole plan depends on) were deleted from
+    _eligible_parent_row; the review_state clause would still save it. The
+    second block closes that gap: it flips the placeholder's review_state to
+    'verified' (defeating the review_state gate) so provenance is the ONLY
+    clause left standing between the placeholder and the document. With the
+    clause present the document is still unchanged; if it were ever removed,
+    _eligible_parent_row's `.order_by(id.desc())` would pick the
+    higher-id placeholder over the real result, its empty result_value would
+    fail rule 3, and this assertion would fail loudly.
+    """
+    from coa.native_sections import build_native_sections
+
+    monkeypatch.setattr(
+        "coa.native_sections.fetch_sample_services",
+        lambda sample_id: {"services": {"sterility_usp71": True}, "package": None},
+    )
+    before = build_native_sections(db, parent_sample)
+    seed_parent_placeholders(db, parent=parent_sample, services={"sterility_usp71": True})
+    db.commit()
+    assert build_native_sections(db, parent_sample) == before
+
+    # Defeat the review_state gate too, so provenance='canonical' is the
+    # ONLY thing left keeping the placeholder out of the document.
+    ph = db.query(LimsAnalysis).filter_by(provenance=PROVENANCE_ORDERED).one()
+    ph.review_state = "verified"
+    db.commit()
+    assert build_native_sections(db, parent_sample) == before
+
+
+def test_workflow_engine_ignores_placeholders(db, parent_sample, usp71_profile,
+                                              verified_parent_row):
+    """workflow/engine.py branches if-canonical/elif-shadow with no else, so
+    an 'ordered' row must contribute nothing to sample-scope state gates.
+
+    The brief names this helper `_parent_line_states`; that name does not
+    exist. The real function, found by reading workflow/engine.py:38 (the
+    one containing the if-canonical/elif-shadow loop the brief describes),
+    is `_live_parent_line_states`.
+
+    `_EXCLUDED_LINE_STATES` (engine.py:28) is {'retracted', 'rejected',
+    'cancelled'} — 'verified' is not in it — so `verified_parent_row` makes
+    `before` a genuinely non-empty {'STER-USP71': 'verified'}, not `{} == {}`
+    (which the placeholder-loop's missing else-branch would trivially pass
+    regardless of whether provenance filtering worked at all). Both the
+    canonical row and the placeholder share the SAME keyword
+    ('STER-USP71') and `out` is keyed by keyword — so this additionally pins
+    that seeding a same-keyword placeholder does not clobber the canonical
+    row's entry in the dict, not just that an empty dict stays empty."""
+    from workflow.engine import _live_parent_line_states
+
+    before = _live_parent_line_states(db, parent_sample)
+    assert before == {"STER-USP71": "verified"}
+    seed_parent_placeholders(db, parent=parent_sample, services={"sterility_usp71": True})
+    db.commit()
+    assert _live_parent_line_states(db, parent_sample) == before
