@@ -24,3 +24,45 @@ what lets promote stay completely untouched.
 from __future__ import annotations
 
 PROVENANCE_ORDERED = "ordered"
+
+
+def seed_parent_placeholders(db, *, parent, services: dict, package=None) -> dict:
+    """Mint a pending parent-tier row per ORDERED native analysis service.
+
+    Idempotent: relies on uq_lims_analyses_parent_service_ordered, and also
+    checks first so a re-run reports `existing` rather than raising.
+
+    Only native (origin='mk1') services are placeheld — SENAITE-sourced ones
+    already get their 'shadow' row from the registration mirror.
+    """
+    from models import LimsAnalysis
+    from coa.native_sections import _ordered_native_profiles
+
+    stats = {"created": 0, "existing": 0, "skipped": 0}
+    profiles = _ordered_native_profiles(db, services or {}, package)
+
+    for prof in profiles:
+        for svc in prof.analysis_services:
+            if (getattr(svc, "origin", None) or "") != "mk1":
+                stats["skipped"] += 1
+                continue
+            exists = db.query(LimsAnalysis).filter_by(
+                lims_sample_pk=parent.id,
+                analysis_service_id=svc.id,
+                provenance=PROVENANCE_ORDERED,
+            ).first()
+            if exists is not None:
+                stats["existing"] += 1
+                continue
+            db.add(LimsAnalysis(
+                lims_sample_pk=parent.id,
+                lims_sub_sample_pk=None,
+                analysis_service_id=svc.id,
+                keyword=svc.keyword,
+                title=svc.title,
+                result_value=None,
+                review_state="unassigned",
+                provenance=PROVENANCE_ORDERED,
+            ))
+            stats["created"] += 1
+    return stats
