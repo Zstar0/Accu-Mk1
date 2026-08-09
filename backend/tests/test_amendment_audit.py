@@ -166,7 +166,7 @@ def test_retest_flags_old_row_and_seeds_new(db, vial_row):
     assert new_first.details == {"changed": {}}
 
 
-import re
+import ast
 from pathlib import Path
 
 from lims_analyses.service import (
@@ -228,25 +228,29 @@ def test_unpromote_captures_cleared_parent_value(db, vial_row):
 
 
 def test_grep_guard_every_construction_passes_details():
-    """No future write site may regress to value-blind. Forward-scan every
-    LimsAnalysisTransition( construction in service.py and require a details=
-    kwarg inside its balanced parens."""
-    src = Path(__file__).resolve().parents[1].joinpath(
-        "lims_analyses", "service.py").read_text(encoding="utf-8")
-    sites = [m.start() for m in re.finditer(r"LimsAnalysisTransition\(", src)]
-    assert sites, "expected construction sites in service.py"
-    for pos in sites:
-        depth, i = 0, src.index("(", pos)
-        start = i
-        while True:
-            if src[i] == "(":
-                depth += 1
-            elif src[i] == ")":
-                depth -= 1
-                if depth == 0:
-                    break
-            i += 1
-        assert "details=" in src[start:i], (
-            f"LimsAnalysisTransition at offset {pos} lacks details= — "
-            "amendment audit regression"
+    """No future write site may regress to value-blind. Parse service.py's
+    AST, find every LimsAnalysisTransition(...) call, and require a details=
+    keyword on each. AST-based (not a char/paren scan) so it's blind to
+    string literals and comments — a reason="...(..." with unbalanced parens
+    can't desync it."""
+    path = Path(__file__).resolve().parents[1].joinpath(
+        "lims_analyses", "service.py")
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    sites = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "LimsAnalysisTransition"
+    ]
+    # Guards against an import-shape change (e.g. aliasing or calling via a
+    # module attribute) silently hiding call sites from this scan.
+    assert len(sites) >= 11, (
+        f"expected >= 11 LimsAnalysisTransition(...) construction sites in "
+        f"service.py, found {len(sites)} — a site may have gone undetected"
+    )
+    for node in sites:
+        has_details = any(kw.arg == "details" for kw in node.keywords)
+        assert has_details, (
+            f"LimsAnalysisTransition(...) at service.py:{node.lineno} lacks "
+            "details= — amendment audit regression"
         )
