@@ -226,6 +226,7 @@ def create_analysis(
         transition_kind="auto",
         user_id=created_by_user_id,
         reason="initial insert",
+        details={"changed": {}},
     ))
     if commit:
         db.commit()
@@ -551,6 +552,7 @@ def set_reportable(
     if row.reportable == reportable:
         return row  # no-op
 
+    before = _snapshot(row)
     row.reportable = reportable
     row.reportable_reason = reason
     row.updated_at = datetime.utcnow()
@@ -564,6 +566,7 @@ def set_reportable(
         reason=(
             f"reportable={reportable}" + (f": {reason}" if reason else "")
         ),
+        details=_deltas(before, row),
     ))
     db.commit()
     db.refresh(row)
@@ -589,6 +592,7 @@ def set_method_instrument(
     if row.method_id == method_id and row.instrument_id == instrument_id:
         return row
 
+    before = _snapshot(row)
     row.method_id = method_id
     row.instrument_id = instrument_id
     row.updated_at = datetime.utcnow()
@@ -600,6 +604,7 @@ def set_method_instrument(
         transition_kind="auto",
         user_id=user_id,
         reason=f"method_id={method_id},instrument_id={instrument_id}",
+        details=_deltas(before, row),
     ))
     db.commit()
     db.refresh(row)
@@ -849,6 +854,7 @@ def promote_to_parent(
         ).scalars().first()
         if old_parent is not None:
             prior_state = old_parent.review_state
+            old_parent_before = _snapshot(old_parent)
             old_parent.review_state = "retracted"
             old_parent.updated_at = now
             db.add(LimsAnalysisTransition(
@@ -858,6 +864,7 @@ def promote_to_parent(
                 transition_kind="auto",
                 user_id=user_id,
                 reason="superseded by retest promotion",
+                details=_deltas(old_parent_before, old_parent),
             ))
             db.flush()   # emit UPDATE before INSERT so Postgres sees vacated index slot
         else:
@@ -913,6 +920,7 @@ def promote_to_parent(
         transition_kind="auto",
         user_id=user_id,
         reason=f"promoted from sources {source_ids}",
+        details={"changed": {}},
     ))
 
     promotion_rows: List[LimsAnalysisPromotion] = []
@@ -935,6 +943,7 @@ def promote_to_parent(
         kind = s["contribution_kind"]
         src = source_rows[sid]
         prev_state = src.review_state
+        src_before = _snapshot(src)
         src.review_state = "promoted"
         src.updated_at = now
         # "auto": a promote is a system-driven side-effect, not a user-initiated
@@ -946,6 +955,7 @@ def promote_to_parent(
             transition_kind="auto",
             user_id=user_id,
             reason=f"promoted to parent #{parent_row.id} (kind={kind})",
+            details=_deltas(src_before, src),
         ))
 
     if commit:
@@ -1511,6 +1521,7 @@ def cascade_parent_retest_to_sources(
     #    row is not yet citable, but its stale value must not linger either.
     if new_row_ids and parent_analysis.review_state in ("verified", "parent_to_verify"):
         prior_state = parent_analysis.review_state
+        parent_before = _snapshot(parent_analysis)
         parent_analysis.review_state = "retracted"
         # Clear the promoted figure too: the display serialization
         # (list_analyses_for_host) filters by retest_of_id, NOT state, so a
@@ -1526,6 +1537,7 @@ def cascade_parent_retest_to_sources(
             transition_kind="auto",
             user_id=user_id,
             reason="un-promoted: source vial retested",
+            details=_deltas(parent_before, parent_analysis),
         ))
         db.commit()
 
@@ -1779,6 +1791,7 @@ def vial_source_retest(
             parent_state_before = parent.review_state
             if parent.review_state in ("verified", "parent_to_verify"):
                 prior_state = parent.review_state
+                parent_before = _snapshot(parent)
                 parent.review_state = "retracted"
                 # Clear the promoted figure too — mirrors
                 # cascade_parent_retest_to_sources step 5 exactly: the
@@ -1794,6 +1807,7 @@ def vial_source_retest(
                     transition_kind="auto",
                     user_id=user_id,
                     reason="un-promoted: source retested from vial",
+                    details=_deltas(parent_before, parent),
                 ))
                 parent_unverified = True
 

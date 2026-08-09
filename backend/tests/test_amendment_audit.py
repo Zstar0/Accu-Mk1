@@ -164,3 +164,89 @@ def test_retest_flags_old_row_and_seeds_new(db, vial_row):
     assert old_last.details["changed"]["retested"] == {"before": False, "after": True}
     new_first = _transitions_for(db, new_row.id)[0]
     assert new_first.details == {"changed": {}}
+
+
+import re
+from pathlib import Path
+
+from lims_analyses.service import (
+    promote_to_parent,
+    set_method_instrument,
+    set_reportable,
+)
+
+
+def test_set_method_instrument_captures_old_and_new(db, vial_row):
+    set_method_instrument(db, analysis_id=vial_row.id, method_id=3,
+                          instrument_id=None, user_id=1)
+    set_method_instrument(db, analysis_id=vial_row.id, method_id=5,
+                          instrument_id=None, user_id=1)
+    t = _transitions_for(db, vial_row.id)[-1]
+    assert t.details["changed"]["method_id"] == {"before": 3, "after": 5}
+
+
+def test_set_reportable_captures_flag_and_reason(db, vial_row):
+    set_reportable(db, analysis_id=vial_row.id, reportable=False,
+                   reason="client withdrew", user_id=1)
+    t = _transitions_for(db, vial_row.id)[-1]
+    assert t.details["changed"]["reportable"] == {"before": True, "after": False}
+    assert t.details["changed"]["reportable_reason"]["after"] == "client withdrew"
+
+
+def test_promote_rows_carry_empty_changed(db, vial_row):
+    apply_transition(db, analysis_id=vial_row.id, kind="submit",
+                     result_value="Not Detected", user_id=1)
+    parent_row, _ = promote_to_parent(
+        db, keyword="STERILITY_USP71", result_value="Not Detected",
+        result_unit=None, method_id=None, instrument_id=None,
+        sources=[{"analysis_id": vial_row.id, "contribution_kind": "chosen"}],
+        user_id=1,
+    )
+    # source row's to->promoted transition: state-only
+    src_last = _transitions_for(db, vial_row.id)[-1]
+    assert src_last.to_state == "promoted" and src_last.details == {"changed": {}}
+    # new parent row's initial transition: state-only
+    parent_first = _transitions_for(db, parent_row.id)[0]
+    assert parent_first.details == {"changed": {}}
+
+
+def test_unpromote_captures_cleared_parent_value(db, vial_row):
+    from lims_analyses.service import vial_source_retest
+    apply_transition(db, analysis_id=vial_row.id, kind="submit",
+                     result_value="Not Detected", user_id=1)
+    parent_row, _ = promote_to_parent(
+        db, keyword="STERILITY_USP71", result_value="Not Detected",
+        result_unit="Pos/Neg", method_id=None, instrument_id=None,
+        sources=[{"analysis_id": vial_row.id, "contribution_kind": "chosen"}],
+        user_id=1,
+    )
+    vial_source_retest(db, analysis_id=vial_row.id, user_id=1)
+    t = _transitions_for(db, parent_row.id)[-1]
+    assert t.to_state == "retracted"
+    assert t.details["changed"]["result_value"] == {"before": "Not Detected", "after": None}
+    assert t.details["changed"]["result_unit"] == {"before": "Pos/Neg", "after": None}
+
+
+def test_grep_guard_every_construction_passes_details():
+    """No future write site may regress to value-blind. Forward-scan every
+    LimsAnalysisTransition( construction in service.py and require a details=
+    kwarg inside its balanced parens."""
+    src = Path(__file__).resolve().parents[1].joinpath(
+        "lims_analyses", "service.py").read_text(encoding="utf-8")
+    sites = [m.start() for m in re.finditer(r"LimsAnalysisTransition\(", src)]
+    assert sites, "expected construction sites in service.py"
+    for pos in sites:
+        depth, i = 0, src.index("(", pos)
+        start = i
+        while True:
+            if src[i] == "(":
+                depth += 1
+            elif src[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        assert "details=" in src[start:i], (
+            f"LimsAnalysisTransition at offset {pos} lacks details= — "
+            "amendment audit regression"
+        )
