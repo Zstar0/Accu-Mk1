@@ -235,6 +235,32 @@ def create_analysis(
     return row
 
 
+# ─── Amendment audit (spec 2026-08-07) ───────────────────────────────────────
+# Fields whose changes are captured as before/after into
+# lims_analysis_transitions.details. Values must stay JSON-serializable
+# (str/int/bool/None) — never add a datetime here; per-state timestamps are
+# derivable from the transition rows themselves.
+TRACKED_FIELDS = (
+    "result_value", "result_unit", "method_id", "instrument_id",
+    "reportable", "reportable_reason", "analyst_user_id", "retested",
+)
+
+
+def _snapshot(row) -> dict:
+    return {f: getattr(row, f) for f in TRACKED_FIELDS}
+
+
+def _deltas(before: dict, row) -> dict:
+    """{"changed": {field: {before, after}}} for tracked fields that differ.
+    Always returns the envelope (possibly empty changed) — NULL details is
+    reserved for rows that predate capture."""
+    after = _snapshot(row)
+    return {"changed": {
+        f: {"before": before[f], "after": after[f]}
+        for f in TRACKED_FIELDS if before[f] != after[f]
+    }}
+
+
 # ─── Transitions ─────────────────────────────────────────────────────────────
 
 
@@ -258,6 +284,7 @@ def apply_transition(
     """
     row = get_analysis(db, analysis_id)
     from_state = row.review_state
+    before = _snapshot(row)
 
     if is_terminal(from_state):
         # State machine will also reject this, but we surface a clearer
@@ -321,6 +348,7 @@ def apply_transition(
             transition_kind="auto",
             user_id=user_id,
             reason="initial insert",
+            details={"changed": {}},
         ))
 
         # Mark old row as retested + write audit on old row
@@ -336,6 +364,7 @@ def apply_transition(
                 f"retested: new analysis #{new_row.id}"
                 + (f"; {reason}" if reason else "")
             ),
+            details=_deltas(before, row),
         ))
 
         db.commit()
@@ -428,6 +457,7 @@ def apply_transition(
         transition_kind=kind,
         user_id=user_id,
         reason=reason,
+        details=_deltas(before, row),
     ))
     db.commit()
     db.refresh(row)

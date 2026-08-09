@@ -84,3 +84,83 @@ def test_details_is_nullable(db):
     ))
     db.commit()
     assert db.execute(select(LimsAnalysisTransition)).scalars().one().details is None
+
+
+from lims_analyses.service import apply_transition
+
+
+@pytest.fixture
+def vial_row(db):
+    """A vial-tier analysis in 'unassigned', ready for bench transitions."""
+    parent = LimsSample(sample_id="AA-P3", sample_type="x", status="received")
+    db.add(parent)
+    db.commit()
+    vial = LimsSubSample(
+        parent_sample_pk=parent.id, external_lims_uid="u1",
+        sample_id="AA-P3-S01", vial_sequence=1,
+    )
+    db.add(vial)
+    db.commit()
+    svc = AnalysisService(title="Sterility USP<71>", keyword="STERILITY_USP71", origin="mk1")
+    db.add(svc)
+    db.commit()
+    row = LimsAnalysis(
+        lims_sub_sample_pk=vial.id, analysis_service_id=svc.id,
+        keyword="STERILITY_USP71", title="Sterility USP<71>",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def _transitions_for(db, analysis_id):
+    return db.execute(
+        select(LimsAnalysisTransition)
+        .where(LimsAnalysisTransition.analysis_id == analysis_id)
+        .order_by(LimsAnalysisTransition.id)
+    ).scalars().all()
+
+
+def test_submit_captures_first_entry(db, vial_row):
+    apply_transition(db, analysis_id=vial_row.id, kind="submit",
+                     result_value="0.92", user_id=1)
+    t = _transitions_for(db, vial_row.id)[-1]
+    assert t.details["changed"]["result_value"] == {"before": None, "after": "0.92"}
+
+
+def test_self_edge_correction_captures_before_and_after(db, vial_row):
+    """THE §7.5.2 test: in-place correction keeps the prior value."""
+    apply_transition(db, analysis_id=vial_row.id, kind="submit",
+                     result_value="0.92", user_id=1)
+    apply_transition(db, analysis_id=vial_row.id, kind="submit",
+                     result_value="0.95", user_id=1)
+    t = _transitions_for(db, vial_row.id)[-1]
+    assert t.from_state == "to_be_verified" and t.to_state == "to_be_verified"
+    assert t.details["changed"]["result_value"] == {"before": "0.92", "after": "0.95"}
+
+
+def test_pure_state_move_writes_empty_changed_not_null(db, vial_row):
+    apply_transition(db, analysis_id=vial_row.id, kind="assign", user_id=1)
+    t = _transitions_for(db, vial_row.id)[-1]
+    assert t.details == {"changed": {}}
+
+
+def test_reset_captures_cleared_fields(db, vial_row):
+    apply_transition(db, analysis_id=vial_row.id, kind="assign", user_id=1)
+    vial_row.result_value = "draft"   # draft value, as the bench UI writes it
+    vial_row.method_id = None
+    db.commit()
+    apply_transition(db, analysis_id=vial_row.id, kind="reset", user_id=1)
+    t = _transitions_for(db, vial_row.id)[-1]
+    assert t.details["changed"]["result_value"] == {"before": "draft", "after": None}
+
+
+def test_retest_flags_old_row_and_seeds_new(db, vial_row):
+    apply_transition(db, analysis_id=vial_row.id, kind="submit",
+                     result_value="0.92", user_id=1)
+    new_row = apply_transition(db, analysis_id=vial_row.id, kind="retest", user_id=1)
+    old_last = _transitions_for(db, vial_row.id)[-1]
+    assert old_last.details["changed"]["retested"] == {"before": False, "after": True}
+    new_first = _transitions_for(db, new_row.id)[0]
+    assert new_first.details == {"changed": {}}
