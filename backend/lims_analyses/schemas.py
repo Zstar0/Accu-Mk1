@@ -144,6 +144,9 @@ class TransitionInfo(BaseModel):
     user_id: Optional[int]
     reason: Optional[str]
     occurred_at: datetime
+    # Amendment audit: {"changed": {field: {before, after}}}; None on rows
+    # that predate capture.
+    details: Optional[dict] = None
 
     model_config = ConfigDict(from_attributes=True)
 

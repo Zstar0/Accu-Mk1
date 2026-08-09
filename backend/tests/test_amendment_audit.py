@@ -254,3 +254,21 @@ def test_grep_guard_every_construction_passes_details():
             f"LimsAnalysisTransition(...) at service.py:{node.lineno} lacks "
             "details= — amendment audit regression"
         )
+
+
+def test_transition_info_serializes_details_and_tolerates_null(db, vial_row):
+    from lims_analyses.schemas import TransitionInfo
+    apply_transition(db, analysis_id=vial_row.id, kind="submit",
+                     result_value="1", user_id=1)
+    captured = _transitions_for(db, vial_row.id)[-1]
+    info = TransitionInfo.model_validate(captured)
+    assert info.details["changed"]["result_value"]["after"] == "1"
+
+    # grandfathered NULL row
+    db.add(LimsAnalysisTransition(
+        analysis_id=vial_row.id, from_state=None, to_state="unassigned",
+        transition_kind="auto",
+    ))
+    db.commit()
+    legacy = _transitions_for(db, vial_row.id)[-1]
+    assert TransitionInfo.model_validate(legacy).details is None
