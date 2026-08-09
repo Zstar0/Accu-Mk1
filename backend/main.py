@@ -1059,6 +1059,10 @@ async def get_sample_activity(
             "source": "lims_analysis_transitions",
         })
 
+    # --- Mk1 DB: amendment audit (result entries + corrections) ---
+    from lims_analyses.service import list_analysis_change_events_for_parent
+    events.extend(list_analysis_change_events_for_parent(db, sample_id))
+
     # --- Mk1 DB: variance-set lock/unlock (audit_logs, append-only) ---
     var_audits = db.execute(
         select(AuditLog).where(

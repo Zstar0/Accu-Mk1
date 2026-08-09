@@ -1410,6 +1410,91 @@ def list_variance_verifications_for_parent(
     return out
 
 
+def list_analysis_change_events_for_parent(
+    db: Session,
+    parent_sample_id: str,
+) -> list[dict]:
+    """Amendment-audit events for the federated sample activity log
+    (spec 2026-08-07 §2.6).
+
+    Emits ONLY transitions whose details["changed"] is non-empty — the
+    change history. State-only rows ({"changed": {}}) are skipped (promote /
+    verify / variance already have richer dedicated events in the timeline);
+    NULL-details rows predate capture and have nothing to render.
+
+    Two event types:
+      result_entered   — result_value went None -> value and nothing outside
+                         {result_value, result_unit} changed
+      analysis_amended — every other non-empty change (corrections,
+                         method/instrument, reportable, un-promote clears)
+    """
+    from models import LimsAnalysisTransition, LimsSample, LimsSubSample, User
+
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        return []
+
+    vials = db.execute(
+        select(LimsSubSample).where(LimsSubSample.parent_sample_pk == parent.id)
+    ).scalars().all()
+    vial_by_id = {v.id: v for v in vials}
+
+    host_filter = LimsAnalysis.lims_sample_pk == parent.id
+    if vial_by_id:
+        host_filter = host_filter | LimsAnalysis.lims_sub_sample_pk.in_(
+            list(vial_by_id.keys())
+        )
+
+    rows = db.execute(
+        select(LimsAnalysisTransition, LimsAnalysis)
+        .join(LimsAnalysis, LimsAnalysisTransition.analysis_id == LimsAnalysis.id)
+        .where(host_filter, LimsAnalysisTransition.details.isnot(None))
+        .order_by(LimsAnalysisTransition.occurred_at)
+    ).all()
+
+    events: list[dict] = []
+    for t, a in rows:
+        changed = (t.details or {}).get("changed") or {}
+        if not changed:
+            continue  # state-only move — dedicated events cover these
+
+        by_email = None
+        if t.user_id:
+            u = db.get(User, t.user_id)
+            by_email = u.email if u else None
+
+        vial = vial_by_id.get(a.lims_sub_sample_pk)
+        where = f" ({vial.sample_id})" if vial else ""
+
+        rv = changed.get("result_value")
+        only_result = set(changed) <= {"result_value", "result_unit"}
+        if rv and rv["before"] is None and rv["after"] is not None and only_result:
+            event = "result_entered"
+            label = f"Result entered — {a.title}: {rv['after']}{where}"
+        else:
+            event = "analysis_amended"
+            frags = ", ".join(
+                f"{f} {c['before']} → {c['after']}" if f != "result_value"
+                else f"{c['before']} → {c['after']}"
+                for f, c in changed.items()
+            )
+            verb = "Result corrected" if rv else "Analysis amended"
+            label = f"{verb} — {a.title}: {frags}{where}"
+
+        events.append({
+            "timestamp": t.occurred_at.isoformat() if t.occurred_at else None,
+            "event": event,
+            "label": label,
+            "details": {"changed": changed, "by": by_email,
+                        "vial": vial.sample_id if vial else None,
+                        "analysis_id": a.id, "keyword": a.keyword},
+            "source": "lims_analysis_transitions",
+        })
+    return events
+
+
 # ─── Phase 4c: parent-retest cascade ────────────────────────────────────────
 
 

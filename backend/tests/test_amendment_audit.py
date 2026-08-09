@@ -272,3 +272,39 @@ def test_transition_info_serializes_details_and_tolerates_null(db, vial_row):
     db.commit()
     legacy = _transitions_for(db, vial_row.id)[-1]
     assert TransitionInfo.model_validate(legacy).details is None
+
+
+def test_activity_events_entry_then_amendment(db, vial_row):
+    from lims_analyses.service import list_analysis_change_events_for_parent
+    apply_transition(db, analysis_id=vial_row.id, kind="submit",
+                     result_value="0.92", user_id=1)
+    apply_transition(db, analysis_id=vial_row.id, kind="submit",
+                     result_value="0.95", user_id=1)
+    events = list_analysis_change_events_for_parent(db, "AA-P3")
+    assert [e["event"] for e in events] == ["result_entered", "analysis_amended"]
+    entered, amended = events
+    assert "Sterility USP<71>" in entered["label"]
+    assert "AA-P3-S01" in entered["label"]          # vial context
+    assert "0.92 → 0.95" in amended["label"]        # before → after inline
+    assert amended["details"]["changed"]["result_value"]["before"] == "0.92"
+    assert amended["source"] == "lims_analysis_transitions"
+
+
+def test_activity_skips_state_only_and_null_details(db, vial_row):
+    from lims_analyses.service import list_analysis_change_events_for_parent
+    apply_transition(db, analysis_id=vial_row.id, kind="assign", user_id=1)  # {"changed": {}}
+    db.add(LimsAnalysisTransition(                                            # grandfathered NULL
+        analysis_id=vial_row.id, from_state=None, to_state="unassigned",
+        transition_kind="auto",
+    ))
+    db.commit()
+    assert list_analysis_change_events_for_parent(db, "AA-P3") == []
+
+
+def test_activity_non_result_change_is_amended(db, vial_row):
+    from lims_analyses.service import list_analysis_change_events_for_parent
+    set_method_instrument(db, analysis_id=vial_row.id, method_id=3,
+                          instrument_id=None, user_id=1)
+    events = list_analysis_change_events_for_parent(db, "AA-P3")
+    assert len(events) == 1 and events[0]["event"] == "analysis_amended"
+    assert "method_id" in events[0]["label"]
