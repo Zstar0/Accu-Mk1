@@ -1451,7 +1451,7 @@ def list_analysis_change_events_for_parent(
         select(LimsAnalysisTransition, LimsAnalysis)
         .join(LimsAnalysis, LimsAnalysisTransition.analysis_id == LimsAnalysis.id)
         .where(host_filter, LimsAnalysisTransition.details.isnot(None))
-        .order_by(LimsAnalysisTransition.occurred_at)
+        .order_by(LimsAnalysisTransition.occurred_at, LimsAnalysisTransition.id)
     ).all()
 
     events: list[dict] = []

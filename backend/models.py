@@ -1764,10 +1764,12 @@ class LimsAnalysisTransition(Base):
     # fields changed by the mutation that wrote this row. Shape contract:
     #   {"changed": {"<field>": {"before": <raw>, "after": <raw>}}}
     # `changed` holds ONLY fields whose value differs; a pure state move
-    # writes {"changed": {}}. NULL means "row predates capture" — never
-    # write NULL from new code. review_state is NOT in `changed` (it lives
-    # in the typed from_state/to_state columns). Enforced by tests, not
-    # CHECKs (last-boot-wins class).
+    # writes {"changed": {}}. NULL means "row predates capture, OR was
+    # written by the exempt SENAITE-mirror paths (parent_mirror.py /
+    # workflow/observer.py)" — Mk1-native write sites must never write
+    # NULL. review_state is NOT in `changed` (it lives in the typed
+    # from_state/to_state columns). Enforced by tests, not CHECKs
+    # (last-boot-wins class).
     details: Mapped[Optional[dict]] = mapped_column(
         JSONB().with_variant(JSON(), "sqlite"), nullable=True
     )

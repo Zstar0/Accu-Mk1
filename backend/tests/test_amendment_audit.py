@@ -7,8 +7,6 @@ create_all().
 """
 from __future__ import annotations
 
-from datetime import datetime
-
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -21,7 +19,6 @@ from models import (
     LimsAnalysisTransition,
     LimsSample,
     LimsSubSample,
-    User,
 )
 
 
@@ -239,8 +236,10 @@ def test_grep_guard_every_construction_passes_details():
     sites = [
         node for node in ast.walk(tree)
         if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "LimsAnalysisTransition"
+        and (
+            (isinstance(node.func, ast.Name) and node.func.id == "LimsAnalysisTransition")
+            or (isinstance(node.func, ast.Attribute) and node.func.attr == "LimsAnalysisTransition")
+        )
     ]
     # Guards against an import-shape change (e.g. aliasing or calling via a
     # module attribute) silently hiding call sites from this scan.
@@ -308,3 +307,34 @@ def test_activity_non_result_change_is_amended(db, vial_row):
     events = list_analysis_change_events_for_parent(db, "AA-P3")
     assert len(events) == 1 and events[0]["event"] == "analysis_amended"
     assert "method_id" in events[0]["label"]
+
+
+def test_activity_parent_tier_amendment_has_no_vial_suffix(db, vial_row):
+    """PARENT-hosted analysis (lims_sample_pk set, lims_sub_sample_pk None)
+    exercises the parent-tier arm of host_filter — used together with
+    vial_row's vial so the query's OR composition (parent clause | vial
+    clause) is actually exercised, not just the parent-only case. vial
+    must be None and the label carries no ` (vial-id)` suffix."""
+    from lims_analyses.service import list_analysis_change_events_for_parent
+    vial = db.get(LimsSubSample, vial_row.lims_sub_sample_pk)
+    parent_id = vial.parent_sample_pk
+    svc = AnalysisService(title="Sterility USP<71>", keyword="STERILITY_USP71b", origin="mk1")
+    db.add(svc)
+    db.commit()
+    row = LimsAnalysis(
+        lims_sample_pk=parent_id, analysis_service_id=svc.id,
+        keyword="STERILITY_USP71b", title="Sterility USP<71>",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    set_reportable(db, analysis_id=row.id, reportable=False,
+                   reason="x", user_id=1)
+
+    events = list_analysis_change_events_for_parent(db, "AA-P3")
+    assert len(events) == 1
+    event = events[0]
+    assert event["event"] == "analysis_amended"
+    assert event["details"]["vial"] is None
+    assert event["label"].endswith("→ x")
