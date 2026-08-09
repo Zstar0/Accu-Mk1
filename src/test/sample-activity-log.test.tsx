@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { eventLevelFor, eventIcon } from '@/components/senaite/SampleActivityLog'
+import type { SampleActivityEvent } from '@/lib/api'
 
 describe('SampleActivityLog', () => {
   it('move out of variance is warn', () => {
@@ -31,5 +32,36 @@ describe('SampleActivityLog', () => {
     ['promoted_source_retested', '↻'],
   ] as const)('%s icon is %s', (event, icon) => {
     expect(eventIcon(event)).toBe(icon)
+  })
+
+  // Task 6 (analysis-amendment-audit): the two new activity-log event types
+  // from Task 5's before/after capture. result_entered is a routine info-level
+  // event; analysis_amended must be visually loud (warn) — that's the ISO
+  // point of this slice, since amendments to a submitted result need to stand
+  // out from ordinary result entry.
+  it('renders a result_entered event with its label', () => {
+    const event: SampleActivityEvent = {
+      timestamp: '2026-08-08T12:00:00',
+      event: 'result_entered',
+      label: 'Result entered — Sterility USP<71>: Not Detected (P-0145-S02)',
+      details: {},
+      source: 'lims_analysis_transitions',
+    }
+    expect(event.label).toBe('Result entered — Sterility USP<71>: Not Detected (P-0145-S02)')
+    expect(eventLevelFor(event)).toBe('info')
+    expect(eventIcon(event.event)).toBe('■')
+  })
+
+  it('renders an analysis_amended event with warn styling', () => {
+    const event: SampleActivityEvent = {
+      timestamp: '2026-08-08T12:05:00',
+      event: 'analysis_amended',
+      label: 'Result corrected — Sterility USP<71>: 0.92 → 0.95 (P-0145-S02)',
+      details: {},
+      source: 'lims_analysis_transitions',
+    }
+    expect(event.label).toBe('Result corrected — Sterility USP<71>: 0.92 → 0.95 (P-0145-S02)')
+    expect(eventLevelFor(event)).toBe('warn')
+    expect(eventIcon(event.event)).toBe('✎')
   })
 })

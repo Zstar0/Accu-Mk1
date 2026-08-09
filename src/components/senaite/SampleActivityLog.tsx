@@ -66,6 +66,11 @@ function eventToLevel(event: string): EventLevel {
     case 'worksheet_assigned':        return 'info'
     case 'worksheet_removed':         return 'warn'
     case 'worksheet_analyst_changed': return 'accent'
+    // Task 6 (analysis-amendment-audit): result_entered is routine info;
+    // analysis_amended is deliberately warn — amendments to a submitted
+    // result must be visually loud, per the ISO intent of this slice.
+    case 'result_entered':    return 'info'
+    case 'analysis_amended':  return 'warn'
     default:                  return 'dim'
   }
 }
@@ -106,6 +111,8 @@ export function eventIcon(event: string): string {
     case 'worksheet_analyst_changed': return '◈' // ◈
     case 'role_assigned':       return '◈'
     case 'analysis_removed':    return '−'
+    case 'result_entered':      return '■' // ■
+    case 'analysis_amended':    return '✎' // ✎
     default:                    return '\u2022' // •
   }
 }
