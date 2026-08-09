@@ -1760,6 +1760,17 @@ class LimsAnalysisTransition(Base):
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )
+    # Amendment audit (spec 2026-08-07): before/after values for tracked
+    # fields changed by the mutation that wrote this row. Shape contract:
+    #   {"changed": {"<field>": {"before": <raw>, "after": <raw>}}}
+    # `changed` holds ONLY fields whose value differs; a pure state move
+    # writes {"changed": {}}. NULL means "row predates capture" — never
+    # write NULL from new code. review_state is NOT in `changed` (it lives
+    # in the typed from_state/to_state columns). Enforced by tests, not
+    # CHECKs (last-boot-wins class).
+    details: Mapped[Optional[dict]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True
+    )
 
     analysis: Mapped["LimsAnalysis"] = relationship(
         "LimsAnalysis", back_populates="transitions"

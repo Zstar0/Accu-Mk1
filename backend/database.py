@@ -634,7 +634,8 @@ def _run_migrations():
                                    'retest','publish','reset','auto','variance_verify','observed')),
             user_id           INTEGER REFERENCES users(id) ON DELETE SET NULL,
             reason            TEXT,
-            occurred_at       TIMESTAMP NOT NULL DEFAULT NOW()
+            occurred_at       TIMESTAMP NOT NULL DEFAULT NOW(),
+            details           JSONB
         )
         """,
         "CREATE INDEX IF NOT EXISTS ix_lims_analysis_transitions_analysis ON lims_analysis_transitions (analysis_id)",
@@ -1622,6 +1623,9 @@ def _run_migrations():
             WHERE provenance = 'ordered' AND lims_sample_pk IS NOT NULL
               AND review_state NOT IN ('retracted', 'rejected')
         """,
+        # Amendment audit (spec 2026-08-07): before/after capture. Nullable,
+        # no default, no backfill — NULL = pre-slice row, by contract.
+        "ALTER TABLE lims_analysis_transitions ADD COLUMN IF NOT EXISTS details JSONB",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
