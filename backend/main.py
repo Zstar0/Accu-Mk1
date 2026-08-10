@@ -1259,7 +1259,11 @@ async def get_sample_activity(
             ).scalars().all()
             from lims_analyses.service import transition_has_amendment
             for t in transitions:
-                if transition_has_amendment(t.details):
+                # Only suppress when the curated source can actually render this
+                # row instead: it keys off parent_sample_id (LimsSample lookup),
+                # so a direct vial-id request (parent is None) never reaches it —
+                # skipping there would drop the event to zero lines, not one.
+                if parent is not None and transition_has_amendment(t.details):
                     continue  # curated amendment source renders this row (one line per event)
                 kw = keyword_by_id.get(t.analysis_id, "?")
                 actor_email = None

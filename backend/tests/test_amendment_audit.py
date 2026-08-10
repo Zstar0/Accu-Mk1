@@ -448,6 +448,52 @@ def test_activity_a1_skips_amendment_bearing_rows(activity_client):
     assert curated_events[0]["event"] == "result_entered"
 
 
+def test_activity_vial_scoped_request_still_renders_the_event(activity_client):
+    """The curated amendment source only fires when queried by PARENT
+    sample_id (list_analysis_change_events_for_parent does a LimsSample
+    lookup and returns [] for a vial id). A1's skip must not suppress a row
+    on a request where nothing else will render it — "render once", not
+    "render zero times". GET by the VIIAL's own sample_id and confirm the
+    amendment-bearing submit still produces exactly one line (A1's own,
+    since the curated source can't see this request)."""
+    db = activity_client._test_session
+
+    user = User(email="bench2@test.com", hashed_password="x", role="standard")
+    db.add(user)
+    db.flush()
+    svc = AnalysisService(title="Sterility USP<71>", keyword="STERILITY_USP71", origin="mk1")
+    db.add(svc)
+    db.flush()
+    parent = LimsSample(sample_id="AA-P9", external_lims_uid="SENAITE-PARENT")
+    db.add(parent)
+    db.flush()
+    vial = LimsSubSample(
+        sample_id="AA-P9-S01", parent_sample_pk=parent.id,
+        vial_sequence=1, external_lims_uid="SENAITE-SUB",
+    )
+    db.add(vial)
+    db.flush()
+    analysis = LimsAnalysis(
+        lims_sub_sample_pk=vial.id, analysis_service_id=svc.id,
+        keyword="STERILITY_USP71", title="Sterility USP<71>",
+    )
+    db.add(analysis)
+    db.commit()
+
+    apply_transition(db, analysis_id=analysis.id, kind="submit",
+                     result_value="0.92", user_id=user.id)
+
+    resp = activity_client.get("/samples/AA-P9-S01/activity")
+    assert resp.status_code == 200
+    events = resp.json()["events"]
+
+    txn_events = [e for e in events if e["source"] == "lims_analysis_transitions"]
+    assert len(txn_events) == 1, (
+        "vial-scoped request must still surface the amendment-bearing "
+        f"transition somewhere; got {txn_events!r}"
+    )
+
+
 def test_activity_parent_tier_amendment_has_no_vial_suffix(db, vial_row):
     """PARENT-hosted analysis (lims_sample_pk set, lims_sub_sample_pk None)
     exercises the parent-tier arm of host_filter — used together with
