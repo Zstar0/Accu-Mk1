@@ -560,10 +560,21 @@ def set_reportable(
     reason: Optional[str] = None,
     user_id: Optional[int] = None,
 ) -> LimsAnalysis:
-    """Flip the reportable flag. Not a state-machine transition — written
-    to the audit log with transition_kind='auto' and from_state==to_state."""
+    """Flip the reportable flag and/or its reason. Not a state-machine
+    transition — written to the audit log with transition_kind='auto' and
+    from_state==to_state. A reason-only edit (same flag, different non-None
+    reason) is an audited amendment, not a silent overwrite; reason=None on
+    a same-flag call is a no-op (never clears an existing reason)."""
     row = get_analysis(db, analysis_id)
-    if row.reportable == reportable:
+    # No-op iff nothing would change: same flag AND the caller either supplied
+    # no reason (None = "not provided", never "clear it" on a same-flag call)
+    # or the same reason. A reason-ONLY edit (same flag, different non-None
+    # reason) falls through: it updates reportable_reason and writes an
+    # audited transition row like any other amendment (Handler ruling
+    # 2026-08-10 — closes the last known ISO 7.5.2 hole in this module).
+    if row.reportable == reportable and (
+        reason is None or reason == row.reportable_reason
+    ):
         return row  # no-op
 
     before = _snapshot(row)

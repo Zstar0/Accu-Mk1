@@ -192,6 +192,42 @@ def test_set_reportable_captures_flag_and_reason(db, vial_row):
     assert t.details["changed"]["reportable_reason"]["after"] == "client withdrew"
 
 
+def test_set_reportable_reason_only_edit_is_audited(db, vial_row):
+    set_reportable(db, analysis_id=vial_row.id, reportable=False,
+                   reason="client withdrew", user_id=1)
+    n_before = len(_transitions_for(db, vial_row.id))
+    set_reportable(db, analysis_id=vial_row.id, reportable=False,
+                   reason="client withdrew — ticket #4412", user_id=1)
+    ts = _transitions_for(db, vial_row.id)
+    assert len(ts) == n_before + 1
+    t = ts[-1]
+    assert t.details["changed"]["reportable_reason"] == {
+        "before": "client withdrew", "after": "client withdrew — ticket #4412"}
+    assert "reportable" not in t.details["changed"]  # flag did not change
+    db.refresh(vial_row)
+    assert vial_row.reportable_reason == "client withdrew — ticket #4412"
+
+
+def test_set_reportable_same_flag_same_reason_is_noop(db, vial_row):
+    set_reportable(db, analysis_id=vial_row.id, reportable=False,
+                   reason="client withdrew", user_id=1)
+    n = len(_transitions_for(db, vial_row.id))
+    set_reportable(db, analysis_id=vial_row.id, reportable=False,
+                   reason="client withdrew", user_id=1)
+    assert len(_transitions_for(db, vial_row.id)) == n
+
+
+def test_set_reportable_none_reason_same_flag_does_not_clear(db, vial_row):
+    set_reportable(db, analysis_id=vial_row.id, reportable=False,
+                   reason="client withdrew", user_id=1)
+    n = len(_transitions_for(db, vial_row.id))
+    set_reportable(db, analysis_id=vial_row.id, reportable=False,
+                   reason=None, user_id=1)
+    assert len(_transitions_for(db, vial_row.id)) == n
+    db.refresh(vial_row)
+    assert vial_row.reportable_reason == "client withdrew"
+
+
 def test_promote_rows_carry_empty_changed(db, vial_row):
     apply_transition(db, analysis_id=vial_row.id, kind="submit",
                      result_value="Not Detected", user_id=1)
