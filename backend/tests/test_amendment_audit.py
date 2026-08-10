@@ -523,3 +523,20 @@ def test_activity_parent_tier_amendment_has_no_vial_suffix(db, vial_row):
     assert event["event"] == "analysis_amended"
     assert event["details"]["vial"] is None
     assert event["label"].endswith("→ x")
+
+
+def test_apply_transition_kwargs_capture_instrument_change(db, vial_row):
+    apply_transition(db, analysis_id=vial_row.id, kind="submit",
+                     result_value="0.9", user_id=1, instrument_id=7)
+    t = _transitions_for(db, vial_row.id)[-1]
+    assert t.details["changed"]["instrument_id"] == {"before": None, "after": 7}
+    assert t.details["changed"]["result_value"]["after"] == "0.9"
+
+
+def test_apply_transition_kwargs_none_is_noop(db, vial_row):
+    apply_transition(db, analysis_id=vial_row.id, kind="submit",
+                     result_value="0.9", user_id=1,
+                     method_id=None, instrument_id=None)
+    t = _transitions_for(db, vial_row.id)[-1]
+    assert "instrument_id" not in t.details["changed"]
+    assert "method_id" not in t.details["changed"]

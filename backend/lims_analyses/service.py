@@ -273,6 +273,8 @@ def apply_transition(
     result_value: Optional[str] = None,
     reason: Optional[str] = None,
     user_id: Optional[int] = None,
+    method_id: Optional[int] = None,
+    instrument_id: Optional[int] = None,
 ) -> LimsAnalysis:
     """
     Validate (from_state, kind) via the state machine, apply the
@@ -282,10 +284,22 @@ def apply_transition(
       - 'submit' requires a result_value (either already on the row or
         supplied in this call).
       - 'verify' requires the row to already carry a result_value.
+
+    method_id: optional method stamp, applied after the snapshot; None is a no-op.
+    instrument_id: optional instrument stamp, applied after the snapshot; None is a no-op.
     """
     row = get_analysis(db, analysis_id)
     from_state = row.review_state
     before = _snapshot(row)
+
+    # Amendment audit (Handler ruling 2026-08-10): callers that used to stamp
+    # method/instrument directly on the row pre-call (prep_bridge) pass them
+    # here instead — applied AFTER the snapshot so the change lands in
+    # details["changed"] on this transition's audit row.
+    if method_id is not None:
+        row.method_id = method_id
+    if instrument_id is not None:
+        row.instrument_id = instrument_id
 
     if is_terminal(from_state):
         # State machine will also reject this, but we surface a clearer

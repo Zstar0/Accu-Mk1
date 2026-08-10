@@ -451,9 +451,9 @@ def bridge_prep_result_to_vial(
         if value is None:
             continue
         # Instrument from the HPLC run; method is not carried on HPLCAnalysis
-        # (left for the bench/overlay to set).
-        if analysis.instrument_id is not None:
-            row.instrument_id = analysis.instrument_id
+        # (left for the bench/overlay to set). Passed through apply_transition
+        # (not stamped on the row) so the change is captured in the audit
+        # details (Handler ruling 2026-08-10).
         apply_transition(
             db,
             analysis_id=row.id,
@@ -461,6 +461,7 @@ def bridge_prep_result_to_vial(
             result_value=value,
             reason=f"auto: HPLC sample-prep result (analysis #{analysis.id})",
             user_id=user_id,
+            instrument_id=analysis.instrument_id,
         )
         submitted.append(row.id)
 
