@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 import models  # noqa: F401 — registers models on Base.metadata
 from database import Base
@@ -19,6 +20,7 @@ from models import (
     LimsAnalysisTransition,
     LimsSample,
     LimsSubSample,
+    User,
 )
 
 
@@ -307,6 +309,143 @@ def test_activity_non_result_change_is_amended(db, vial_row):
     events = list_analysis_change_events_for_parent(db, "AA-P3")
     assert len(events) == 1 and events[0]["event"] == "analysis_amended"
     assert "method_id" in events[0]["label"]
+
+
+def test_transition_has_amendment_matrix():
+    from lims_analyses.service import transition_has_amendment
+    assert transition_has_amendment({"changed": {"result_value": {"before": None, "after": "1"}}})
+    assert not transition_has_amendment({"changed": {}})
+    assert not transition_has_amendment(None)
+    assert not transition_has_amendment({})
+
+
+@pytest.fixture
+def activity_client():
+    """TestClient with a single-connection in-memory SQLite engine.
+
+    Copied from tests/test_subsample_activity.py's fixture of the same name —
+    patches out the mk1_db block (sample_preps) and the integration DB block
+    so the test only exercises the Mk1-DB activity sections (A1 + curated
+    amendment source), which is all Task 8's rule wiring touches.
+    """
+    from database import Base, get_db
+    from auth import get_current_user
+    from main import app
+    from fastapi.testclient import TestClient
+    from unittest.mock import MagicMock, patch
+
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    shared_session = Session()
+
+    def _override_get_db():
+        yield shared_session
+
+    prev_db = app.dependency_overrides.get(get_db)
+    prev_user = app.dependency_overrides.get(get_current_user)
+    app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_current_user] = lambda: MagicMock(id=1, email="tester@lab.com")
+
+    with (
+        patch("mk1_db.ensure_sample_preps_table"),
+        patch("mk1_db.get_mk1_db") as mock_mk1_db,
+        patch("main.get_integration_db") as mock_int_db,
+    ):
+        mk1_conn = MagicMock()
+        mk1_conn.__enter__ = MagicMock(return_value=mk1_conn)
+        mk1_conn.__exit__ = MagicMock(return_value=False)
+        mk1_cursor = MagicMock()
+        mk1_cursor.__enter__ = MagicMock(return_value=mk1_cursor)
+        mk1_cursor.__exit__ = MagicMock(return_value=False)
+        mk1_cursor.fetchall.return_value = []
+        mk1_conn.cursor.return_value = mk1_cursor
+        mock_mk1_db.return_value = mk1_conn
+
+        mock_int_db.side_effect = Exception("no integration db in tests")
+
+        tc = TestClient(app)
+        tc._test_session = shared_session
+        yield tc
+
+    if prev_db is None:
+        app.dependency_overrides.pop(get_db, None)
+    else:
+        app.dependency_overrides[get_db] = prev_db
+    if prev_user is None:
+        app.dependency_overrides.pop(get_current_user, None)
+    else:
+        app.dependency_overrides[get_current_user] = prev_user
+    shared_session.close()
+
+
+def test_activity_a1_skips_amendment_bearing_rows(activity_client):
+    """Endpoint-level rule wiring (Handler ruling 2026-08-10): a submit-with-
+    result transition renders ONCE, via the curated amendment source — A1's
+    generic line for that same row is suppressed. Analysis-added and
+    state-only (assign) transitions are untouched and still render in A1."""
+    db = activity_client._test_session
+
+    user = User(email="bench@test.com", hashed_password="x", role="standard")
+    db.add(user)
+    db.flush()
+    svc = AnalysisService(title="Sterility USP<71>", keyword="STERILITY_USP71", origin="mk1")
+    db.add(svc)
+    db.flush()
+    parent = LimsSample(sample_id="AA-P8", external_lims_uid="SENAITE-PARENT")
+    db.add(parent)
+    db.flush()
+    vial = LimsSubSample(
+        sample_id="AA-P8-S01", parent_sample_pk=parent.id,
+        vial_sequence=1, external_lims_uid="SENAITE-SUB",
+    )
+    db.add(vial)
+    db.flush()
+    analysis = LimsAnalysis(
+        lims_sub_sample_pk=vial.id, analysis_service_id=svc.id,
+        keyword="STERILITY_USP71", title="Sterility USP<71>",
+    )
+    db.add(analysis)
+    db.flush()
+
+    # Analysis added (initial insert, {"changed": {}}) — must survive.
+    db.add(LimsAnalysisTransition(
+        analysis_id=analysis.id, from_state=None, to_state="unassigned",
+        transition_kind="auto", user_id=user.id, reason="initial insert",
+        details={"changed": {}},
+    ))
+    db.commit()
+
+    # State-only transition (assign, {"changed": {}}) — must survive.
+    apply_transition(db, analysis_id=analysis.id, kind="assign", user_id=user.id)
+
+    # Amendment-bearing transition (submit with a result) — A1 line must be
+    # suppressed; the curated source renders "result_entered" instead.
+    apply_transition(db, analysis_id=analysis.id, kind="submit",
+                     result_value="0.92", user_id=user.id)
+
+    resp = activity_client.get("/samples/AA-P8/activity")
+    assert resp.status_code == 200
+    events = resp.json()["events"]
+
+    txn_events = [e for e in events if e["source"] == "lims_analysis_transitions"]
+    a1_events = [e for e in txn_events if e["event"] in ("analysis_added", "analysis_transition")]
+    curated_events = [e for e in txn_events if e["event"] in ("result_entered", "analysis_amended")]
+
+    assert any(e["event"] == "analysis_added" for e in a1_events)
+    assert any(
+        e["event"] == "analysis_transition" and e["details"]["to"] == "assigned"
+        for e in a1_events
+    )
+    # The submit's generic A1 line ("STERILITY_USP71: assigned→to_be_verified")
+    # must be ABSENT — only the curated line renders it.
+    assert not any(e["details"].get("to") == "to_be_verified" for e in a1_events)
+    assert len(curated_events) == 1
+    assert curated_events[0]["event"] == "result_entered"
 
 
 def test_activity_parent_tier_amendment_has_no_vial_suffix(db, vial_row):

@@ -1410,6 +1410,15 @@ def list_variance_verifications_for_parent(
     return out
 
 
+def transition_has_amendment(details) -> bool:
+    """True when a transition row carries a non-empty details["changed"] —
+    i.e. the curated amendment source will render it and the generic A1
+    activity line should NOT (Handler ruling 2026-08-10, one line per event).
+    NULL details (pre-slice / mirror-exempt) and {"changed": {}} both return
+    False — those rows keep their generic line."""
+    return bool((details or {}).get("changed"))
+
+
 def list_analysis_change_events_for_parent(
     db: Session,
     parent_sample_id: str,

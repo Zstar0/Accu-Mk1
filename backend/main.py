@@ -1257,7 +1257,10 @@ async def get_sample_activity(
                     LimsAnalysisTransition.analysis_id.in_(analysis_ids)
                 )
             ).scalars().all()
+            from lims_analyses.service import transition_has_amendment
             for t in transitions:
+                if transition_has_amendment(t.details):
+                    continue  # curated amendment source renders this row (one line per event)
                 kw = keyword_by_id.get(t.analysis_id, "?")
                 actor_email = None
                 if t.user_id:
