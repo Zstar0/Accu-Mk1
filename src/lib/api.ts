@@ -4687,6 +4687,9 @@ export interface VialRoleRow {
   sort_order: number
   frozen: boolean
   is_system: boolean
+  color?: string | null
+  short_label?: string | null
+  badge_glyph?: string | null
 }
 
 export interface VialRoleCreate {
@@ -4696,6 +4699,9 @@ export interface VialRoleCreate {
   boxable?: boolean
   variance_eligible?: boolean
   sort_order?: number
+  color?: string | null
+  short_label?: string | null
+  badge_glyph?: string | null
 }
 
 export async function getVialRoles(): Promise<VialRoleRow[]> {
