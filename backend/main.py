@@ -40,6 +40,7 @@ from sqlalchemy.exc import IntegrityError
 from database import get_db, init_db
 from sla_engine import BusinessSchedule, compute_business_minutes, sla_status_dict
 from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment
+from catalog.change_log import apply_and_log, log_create, log_delete
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -3235,16 +3236,30 @@ async def get_analysis_services(
     return [AnalysisServiceResponse.model_validate(s) for s in services]
 
 
+# Fields snapshotted on create/delete change-log rows — the full editable
+# catalog surface of a service plus origin (always deliberately set on
+# create, never blank).
+SERVICE_LOG_FIELDS = (
+    "title", "keyword", "category", "unit", "department_id",
+    "result_type", "result_options", "variance_capable", "origin", "active",
+)
+
+
 @app.post("/analysis-services", response_model=AnalysisServiceResponse, status_code=201)
 async def create_analysis_service(
     data: AnalysisServiceCreate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Create an Mk1-native analysis service. NEVER creates anything in SENAITE."""
     validate_new_keyword(db, data.keyword)
     svc = AnalysisService(**data.model_dump(), origin="mk1")
     db.add(svc)
+    db.flush()
+    log_create(
+        db, svc, SERVICE_LOG_FIELDS,
+        entity_type="service", entity_pk=svc.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(svc)
     return AnalysisServiceResponse.model_validate(svc)
@@ -3255,7 +3270,7 @@ async def update_analysis_service(
     service_id: int,
     data: AnalysisServiceUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Full-field edit. On a SENAITE-origin row, every sync-owned field touched
     here is recorded in local_overrides so the next sync leaves it alone."""
@@ -3272,14 +3287,22 @@ async def update_analysis_service(
     # Only a genuine value change locks a sync-owned field into local_overrides.
     # Resubmitting the current value (e.g. a full-object-save from a UI edit
     # flyout that touches nothing) must be a no-op, not a permanent ownership
-    # transfer away from the SENAITE sync.
-    overrides = set(svc.local_overrides or [])
-    for field, value in fields.items():
-        if svc.origin == "senaite" and field in SYNC_OWNED_FIELDS and value != getattr(svc, field):
-            overrides.add(field)
-        setattr(svc, field, value)
+    # transfer away from the SENAITE sync. Computed here (against svc's
+    # pre-mutation state) and folded into apply_fields so apply_and_log does
+    # the actual setattr + before/after logging for every field, local_overrides
+    # included — it shows up in the log row's changed dict iff it itself changed.
+    apply_fields = dict(fields)
     if svc.origin == "senaite":
-        svc.local_overrides = sorted(overrides)
+        overrides = set(svc.local_overrides or [])
+        for field, value in fields.items():
+            if field in SYNC_OWNED_FIELDS and value != getattr(svc, field):
+                overrides.add(field)
+        apply_fields["local_overrides"] = sorted(overrides)
+
+    apply_and_log(
+        db, svc, apply_fields,
+        entity_type="service", entity_pk=svc.id, user_id=getattr(current_user, "id", None),
+    )
 
     db.commit()
     db.refresh(svc)
@@ -3290,7 +3313,7 @@ async def update_analysis_service(
 async def delete_analysis_service(
     service_id: int,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Delete an Mk1-native service. Refused if any analysis references it —
     deactivate instead. SENAITE-origin rows are never deletable here."""
@@ -3301,6 +3324,10 @@ async def delete_analysis_service(
         raise HTTPException(400, "only Mk1-native services can be deleted; deactivate instead")
     if _is_service_referenced(db, svc.id):
         raise HTTPException(409, "service is referenced by existing analyses; deactivate instead")
+    log_delete(
+        db, svc, SERVICE_LOG_FIELDS,
+        entity_type="service", entity_pk=svc.id, user_id=getattr(current_user, "id", None),
+    )
     db.delete(svc)
     db.commit()
 
@@ -3314,7 +3341,7 @@ async def update_analysis_service_peptide(
     service_id: int,
     data: AnalysisServicePeptideUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Link or unlink a peptide to an analysis service."""
     service = db.execute(
@@ -3329,11 +3356,14 @@ async def update_analysis_service_peptide(
         ).scalar_one_or_none()
         if not peptide:
             raise HTTPException(404, f"Peptide {data.peptide_id} not found")
-        service.peptide_id = peptide.id
-        service.peptide_name = peptide.name
+        new_peptide_id, new_peptide_name = peptide.id, peptide.name
     else:
-        service.peptide_id = None
-        service.peptide_name = None
+        new_peptide_id, new_peptide_name = None, None
+
+    apply_and_log(
+        db, service, {"peptide_id": new_peptide_id, "peptide_name": new_peptide_name},
+        entity_type="service", entity_pk=service.id, user_id=getattr(current_user, "id", None),
+    )
 
     db.commit()
     db.refresh(service)
@@ -3350,7 +3380,7 @@ async def update_analysis_service_result_type(
     service_id: int,
     data: AnalysisServiceResultTypeUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Set a service's result type + options (local-authoritative once set)."""
     service = db.execute(
@@ -3358,10 +3388,15 @@ async def update_analysis_service_result_type(
     ).scalar_one_or_none()
     if not service:
         raise HTTPException(404, f"Analysis service {service_id} not found")
+    fields = {}
     if "result_type" in data.model_fields_set:
-        service.result_type = data.result_type
+        fields["result_type"] = data.result_type
     if "result_options" in data.model_fields_set:
-        service.result_options = data.result_options
+        fields["result_options"] = data.result_options
+    apply_and_log(
+        db, service, fields,
+        entity_type="service", entity_pk=service.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(service)
     return AnalysisServiceResponse.model_validate(service)
@@ -3376,7 +3411,7 @@ async def update_analysis_service_variance_capable(
     service_id: int,
     data: AnalysisServiceVarianceCapableUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Lab-managed toggle: mark an analyte as a variance figure. Mk1-owned —
     never touched by the SENAITE sync."""
@@ -3385,7 +3420,10 @@ async def update_analysis_service_variance_capable(
     ).scalar_one_or_none()
     if not service:
         raise HTTPException(404, f"Analysis service {service_id} not found")
-    service.variance_capable = data.variance_capable
+    apply_and_log(
+        db, service, {"variance_capable": data.variance_capable},
+        entity_type="service", entity_pk=service.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(service)
     return AnalysisServiceResponse.model_validate(service)
