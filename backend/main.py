@@ -2424,6 +2424,12 @@ ALLOWED_ROLE_COLORS = {"green", "orange", "purple", "sky", "slate", "amber",
                        "blue", "emerald", "red", "violet", "zinc", "rose"}
 
 
+def _validate_role_color(v):
+    if v is not None and v not in ALLOWED_ROLE_COLORS:
+        raise ValueError(f"unknown color {v!r}; allowed: {sorted(ALLOWED_ROLE_COLORS)}")
+    return v
+
+
 class VialRoleCreate(BaseModel):
     code: str
     label: str
@@ -2437,9 +2443,7 @@ class VialRoleCreate(BaseModel):
 
     @validator("color")
     def color_must_be_known(cls, v):
-        if v is not None and v not in ALLOWED_ROLE_COLORS:
-            raise ValueError(f"unknown color {v!r}; allowed: {sorted(ALLOWED_ROLE_COLORS)}")
-        return v
+        return _validate_role_color(v)
 
 
 class VialRoleUpdate(BaseModel):
@@ -2455,9 +2459,7 @@ class VialRoleUpdate(BaseModel):
 
     @validator("color")
     def color_must_be_known(cls, v):
-        if v is not None and v not in ALLOWED_ROLE_COLORS:
-            raise ValueError(f"unknown color {v!r}; allowed: {sorted(ALLOWED_ROLE_COLORS)}")
-        return v
+        return _validate_role_color(v)
 
 
 class VialRoleResponse(BaseModel):
