@@ -940,7 +940,7 @@ def _run_migrations():
             updated_at   TIMESTAMP NOT NULL DEFAULT NOW()
         )
         """,
-        # Seed the 5 built-ins idempotently (mirrors flags/catalog.py FLAG_TYPES
+        # Seed the built-ins idempotently (mirrors flags/catalog.py FLAG_TYPES
         # + FLAG_TYPE_ORDER). entity_types='[]' = global. is_builtin=true blocks
         # hard-delete (deactivate only). Existing flags reference these slugs.
         """
@@ -978,6 +978,12 @@ def _run_migrations():
         INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
         SELECT 'feature_request', 'Feature Request', '#ec4899', 'issue', FALSE, TRUE, 6, '[]'::jsonb, TRUE
         WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='feature_request')
+        """,
+        # S8 adoption guard: external-counter identity collisions (2026-08-11).
+        """
+        INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
+        SELECT 'identity_collision', 'Identity Collision', '#e5484d', 'issue', TRUE, TRUE, 7, '[]'::jsonb, TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='identity_collision')
         """,
         # Extend the NAMED status CHECK to admit 'blocked' (Plan 5). A dedicated
         # DROP+ADD statement — NOT an edit to the IF-NOT-EXISTS flag_flags create
@@ -1626,6 +1632,9 @@ def _run_migrations():
         # Amendment audit (spec 2026-08-07): before/after capture. Nullable,
         # no default, no backfill — NULL = pre-slice row, by contract.
         "ALTER TABLE lims_analysis_transitions ADD COLUMN IF NOT EXISTS details JSONB",
+        # S8 adoption guard (2026-08-11): collision quarantine markers.
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS quarantined BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS quarantine_reason TEXT",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
