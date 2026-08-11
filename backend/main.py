@@ -19973,6 +19973,23 @@ def get_catalog_departments_debug(
     return department_totality_report(db)
 
 
+@app.post("/catalog/reconcile-per-substance")
+def reconcile_per_substance_route(
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin on-demand heal (S6b): re-run the per-substance ID_/PUR_/QTY_
+    derivation and return a report. Historically this only ran inside
+    `_run_migrations()` at boot, so healing a drifted catalog (P-1500)
+    required restarting the backend container — this endpoint does the
+    same work without one. Idempotent; safe to call repeatedly.
+    """
+    from catalog.per_substance_reconciler import reconcile_per_substance_services
+    report = reconcile_per_substance_services(db)
+    db.commit()
+    return report
+
+
 @app.get("/registry/sample/{sample_id}/details", response_model=RegistrySampleReadResult)
 async def get_sample_read_from_registry(
     sample_id: str,
