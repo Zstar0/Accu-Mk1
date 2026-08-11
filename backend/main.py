@@ -3658,6 +3658,17 @@ async def sync_analysis_services(db: Session = Depends(get_db), _current_user=De
         created += 1
 
     db.commit()
+
+    # S6a department totality: freshly synced services must not linger
+    # department-less until the next boot — run the (idempotent, NULL-only)
+    # bridge in-request. Never fails the sync.
+    if created:
+        try:
+            from catalog.departments import backfill_departments
+            backfill_departments(db)
+        except Exception as e:
+            logger.warning("catalog.sync_department_backfill_skipped err=%s", e)
+
     total = db.execute(select(func.count()).select_from(AnalysisService)).scalar()
     return {"created": created, "total": total}
 
@@ -19935,6 +19946,21 @@ def get_sample_registry_parity(
     }
     return {"sample_id": sample_id, "fields": fields, "summary": summary,
             "verdict": summary["real"] == 0, "error": None}
+
+
+@app.get("/debug/catalog-departments")
+def get_catalog_departments_debug(
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin drift diagnostic (S6a): department-assignment totality across
+    the live catalog — the ACTIVE-scoped invariant the fail-closed HPLC-
+    mirror allow-list depends on. Pure DB read, zero SENAITE I/O, zero
+    writes. Plain `def` for consistency with the debug-registry siblings
+    above (nothing blocking here, but the panel's routes share one posture).
+    """
+    from catalog.departments import department_totality_report
+    return department_totality_report(db)
 
 
 @app.get("/registry/sample/{sample_id}/details", response_model=RegistrySampleReadResult)
