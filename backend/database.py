@@ -1505,7 +1505,10 @@ def _run_migrations():
         frozen BOOLEAN NOT NULL DEFAULT FALSE,
         is_system BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        color VARCHAR(50),
+        short_label VARCHAR(16),
+        badge_glyph VARCHAR(2)
     )""",
         # --- Catalog-driven bench (spec 4): ride lists ---
         # host_role_code deliberately NOT an FK to vial_roles (route-edge
@@ -1626,6 +1629,17 @@ def _run_migrations():
         # Amendment audit (spec 2026-08-07): before/after capture. Nullable,
         # no default, no backfill — NULL = pre-slice row, by contract.
         "ALTER TABLE lims_analysis_transitions ADD COLUMN IF NOT EXISTS details JSONB",
+        # S1 roles-as-data (2026-08-11): display faces on vial_roles, seeded
+        # to match the pre-catalog hardcoded rendering exactly. WHERE color
+        # IS NULL = idempotent, never clobbers admin edits.
+        "ALTER TABLE vial_roles ADD COLUMN IF NOT EXISTS color VARCHAR(50)",
+        "ALTER TABLE vial_roles ADD COLUMN IF NOT EXISTS short_label VARCHAR(16)",
+        "ALTER TABLE vial_roles ADD COLUMN IF NOT EXISTS badge_glyph VARCHAR(2)",
+        "UPDATE vial_roles SET color='green', short_label='HPLC', badge_glyph='H' WHERE code='hplc' AND color IS NULL",
+        "UPDATE vial_roles SET color='orange', short_label='ENDO', badge_glyph='E' WHERE code='endo' AND color IS NULL",
+        "UPDATE vial_roles SET color='purple', short_label='PCR', badge_glyph='P' WHERE code='ster' AND color IS NULL",
+        "UPDATE vial_roles SET color='sky', short_label='XTRA', badge_glyph='X' WHERE code='xtra' AND color IS NULL",
+        "UPDATE vial_roles SET color='slate', short_label='HM', badge_glyph='M' WHERE code='hm' AND color IS NULL",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
