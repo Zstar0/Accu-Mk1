@@ -354,3 +354,59 @@ def test_sync_created_row_gets_a_department(db_session, monkeypatch):
     svc = db_session.query(AnalysisService).filter_by(
         senaite_id="analysisservice-99").one()
     assert svc.department_id is not None
+
+
+def test_sync_rolls_back_session_when_backfill_raises(db_session, monkeypatch):
+    """Fix round: the except block around backfill_departments must roll
+    back the session before returning, not just log — otherwise on Postgres
+    a failure partway through backfill leaves this session's transaction
+    ABORTED, and the very next statement (the total-count query, run outside
+    the try/except on the same session) raises InFailedSqlTransaction /
+    PendingRollbackError — the sync fails after all, defeating "never fails
+    the sync".
+
+    SQLite does not reproduce Postgres's transaction-abort semantics
+    (empirically verified: re-running a valid query on the same session
+    after an un-rolled-back failed statement succeeds silently on SQLite),
+    so this can't be pinned by reproducing the abort and asserting recovery.
+    Instead it pins the CODE PROPERTY directly via a rollback() spy, and
+    separately confirms the route still completes normally (the except
+    swallows the error and execution reaches the return statement) —
+    together those are the two things "never fails the sync" requires,
+    backend-agnostically."""
+    import asyncio
+    import main
+    from models import AnalysisService
+
+    def fake_get(url, **kw):
+        if kw.get("params", {}).get("portal_type") == "AnalysisService":
+            return _Resp({"items": [{
+                "id": "analysisservice-100", "uid": "U100", "title": "Purity Z",
+                "getKeyword": "PUR_Z",
+            }]})
+        return _Resp({"items": []})  # AnalysisCategory pull
+
+    monkeypatch.setattr("httpx.get", fake_get)
+    monkeypatch.setattr(main, "SENAITE_URL", "http://senaite.test")
+
+    def _boom(db):
+        raise RuntimeError("simulated backfill failure")
+    monkeypatch.setattr("catalog.departments.backfill_departments", _boom)
+
+    rollback_calls = []
+    orig_rollback = db_session.rollback
+
+    def _spy_rollback():
+        rollback_calls.append(True)
+        return orig_rollback()
+    monkeypatch.setattr(db_session, "rollback", _spy_rollback)
+
+    result = asyncio.run(main.sync_analysis_services(db=db_session, _current_user=None))
+
+    assert rollback_calls, "db.rollback() must be called when backfill_departments raises"
+    # The route still completed normally: created the row, computed the
+    # total, and returned — the exception never propagated past the except.
+    assert result["created"] == 1
+    svc = db_session.query(AnalysisService).filter_by(
+        senaite_id="analysisservice-100").one()
+    assert svc.department_id is None  # backfill never ran to completion

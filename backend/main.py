@@ -3661,12 +3661,22 @@ async def sync_analysis_services(db: Session = Depends(get_db), _current_user=De
 
     # S6a department totality: freshly synced services must not linger
     # department-less until the next boot — run the (idempotent, NULL-only)
-    # bridge in-request. Never fails the sync.
+    # bridge in-request. Never fails the sync. On Postgres, a failure partway
+    # through backfill_departments leaves this session's transaction ABORTED;
+    # without an explicit rollback() here, the very next statement below
+    # (the total-count query, run outside this try/except on the same
+    # session) would raise InFailedSqlTransaction/PendingRollbackError and
+    # the sync would fail after all — defeating "never fails the sync".
+    # SQLite doesn't reproduce this abort semantics, so this can't be pinned
+    # by re-running the failing statement on sqlite; it's exercised by a
+    # rollback()-was-called spy instead (test_sync_rolls_back_session_when_
+    # backfill_raises).
     if created:
         try:
             from catalog.departments import backfill_departments
             backfill_departments(db)
         except Exception as e:
+            db.rollback()
             logger.warning("catalog.sync_department_backfill_skipped err=%s", e)
 
     total = db.execute(select(func.count()).select_from(AnalysisService)).scalar()
