@@ -149,3 +149,56 @@ def test_refresh_null_stored_uid_populates(db):
                return_value=fake_meta):
         _refresh_parent_from_senaite(db, row)
     assert row.external_lims_uid == "UID-FRESH"
+
+
+def test_refresh_missing_uid_preserves_stored_uid(db):
+    """FIX 1: a malformed fetch response with no `uid` key must never NULL a
+    stored uid -- that would prime the NULL-adopt rule to silently rebind
+    the row to ANY future uid on the next refresh. Other fields still
+    refresh normally, and no collision flag is raised (this isn't a
+    mismatch, just a sparse payload)."""
+    from sub_samples.service import _refresh_parent_from_senaite
+    row = LimsSample(sample_id="P-0207", external_lims_uid="UID-KEEP",
+                     client_sample_id="OLD-CS")
+    db.add(row)
+    db.commit()
+    fake_meta = {"ClientSampleID": "NEW-CS", "review_state": "received"}
+    with patch("sub_samples.service.senaite.fetch_parent_metadata",
+               return_value=fake_meta):
+        _refresh_parent_from_senaite(db, row)
+    assert row.external_lims_uid == "UID-KEEP"    # uid survives
+    assert row.client_sample_id == "NEW-CS"        # other fields still refresh
+    from flags.models import FlagFlag
+    assert db.query(FlagFlag).filter_by(type="identity_collision").count() == 0
+
+
+def test_flag_dedupe_pointered_flag_survives_open_refusal(db):
+    """FIX 2: an open pointer-less refusal flag must not suppress a later
+    pointered quarantine flag -- a human following the refusal flag has no
+    way to find the parked quarantine row without it. Quarantine-signal
+    replays stay idempotent (same deterministic title -> no dup)."""
+    _seeded_flags(db)
+    from sub_samples.service import _refresh_parent_from_senaite
+    row = LimsSample(sample_id="P-0208", external_lims_uid="UID-OLD")
+    db.add(row)
+    db.commit()
+    from flags.models import FlagFlag
+    # 1. refusal flag (pointer-less) via the refresh guard
+    fake_meta = {"uid": "UID-DIFFERENT", "review_state": "received"}
+    with patch("sub_samples.service.senaite.fetch_parent_metadata",
+               return_value=fake_meta):
+        _refresh_parent_from_senaite(db, row)
+    assert db.query(FlagFlag).filter_by(type="identity_collision").count() == 1
+    # 2. quarantine event on the same original sample -> a SECOND, pointered
+    #    flag, not suppressed by the open refusal flag
+    upsert_sample_from_signal(db, "P-0208", "UID-NEW-99999999", {})
+    flags = db.query(FlagFlag).filter_by(type="identity_collision").all()
+    assert len(flags) == 2
+    titles = {f.title for f in flags}
+    quarantine_id = f"P-0208{QUARANTINE_SEP}UID-NEW-9999"  # senaite_uid[:12]
+    assert any("; refresh refused" in t for t in titles)
+    assert any(f"; incoming data parked on {quarantine_id}" in t for t in titles)
+    # 3. quarantine replay -> idempotent on the pointered flag's exact
+    #    title, still 2 (not 3)
+    upsert_sample_from_signal(db, "P-0208", "UID-NEW-99999999", {})
+    assert db.query(FlagFlag).filter_by(type="identity_collision").count() == 2

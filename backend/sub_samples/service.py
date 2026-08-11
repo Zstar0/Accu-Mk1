@@ -173,29 +173,40 @@ class _SystemActor:
 
 def _flag_identity_collision(db: Session, sample: LimsSample,
                              quarantine_id: Optional[str]) -> None:
-    """Best-effort, open-once identity_collision flag on the ORIGINAL sample.
+    """Identity_collision flag on the ORIGINAL sample. Dedupe shape depends
+    on the call: a refusal (quarantine_id=None) dedupes on ANY open
+    identity_collision flag for this sample -- one open flag already covers
+    the collision, there's no pointer to add. A quarantine event
+    (quarantine_id set) dedupes on the EXACT computed title instead, which
+    is deterministic per quarantine row (sample_id + uid fragment) -- this
+    keeps quarantine-signal replays idempotent (same title -> no dup)
+    WITHOUT letting an already-open pointer-less refusal flag suppress the
+    pointered flag a human needs to find the parked row.
+
     NOTE flags.service.create_flag COMMITS the session — call only after all
     row work is flushed, and never let flag machinery break the caller."""
     try:
         from flags import service as flags_service
         from flags.models import FlagFlag
-        open_flag = db.execute(
-            select(FlagFlag).where(
-                FlagFlag.entity_type == "sample",
-                FlagFlag.entity_id == str(sample.id),
-                FlagFlag.type == "identity_collision",
-                FlagFlag.status == "open",
-            )
-        ).scalars().first()
-        if open_flag is not None:
-            return
         parked = (f"; incoming data parked on {quarantine_id}"
                   if quarantine_id else "; refresh refused")
+        title = (f"Identity collision on {sample.sample_id}: incoming "
+                 f"SENAITE uid disagrees with stored uid{parked}")
+        dupe_query = select(FlagFlag).where(
+            FlagFlag.entity_type == "sample",
+            FlagFlag.entity_id == str(sample.id),
+            FlagFlag.type == "identity_collision",
+            FlagFlag.status == "open",
+        )
+        if quarantine_id:
+            dupe_query = dupe_query.where(FlagFlag.title == title)
+        existing_flag = db.execute(dupe_query).scalars().first()
+        if existing_flag is not None:
+            return
         flags_service.create_flag(
             db, user=_SystemActor(), entity_type="sample",
             entity_id=str(sample.id), type="identity_collision",
-            title=(f"Identity collision on {sample.sample_id}: incoming "
-                   f"SENAITE uid disagrees with stored uid{parked}"),
+            title=title,
             event_details={"automated": True,
                            "quarantine_sample_id": quarantine_id},
         )
@@ -456,7 +467,10 @@ def _refresh_parent_from_senaite(db: Session, parent: LimsSample) -> None:
     Logging-only failure: never let the log write break the refresh.
 
     S8 guard: a fetch whose uid disagrees with the stored uid refuses the
-    whole refresh (fail closed) and raises an identity_collision flag."""
+    whole refresh (fail closed) and raises an identity_collision flag. A
+    fetch missing `uid` entirely never NULLs a stored uid either — that
+    would silently prime the NULL-adopt rule to rebind the row to ANY
+    future uid on the next refresh."""
     old_status = parent.status
     meta = senaite.fetch_parent_metadata(parent.sample_id)
     incoming_uid = meta.get("uid")
@@ -475,7 +489,19 @@ def _refresh_parent_from_senaite(db: Session, parent: LimsSample) -> None:
         )
         _flag_identity_collision(db, parent, quarantine_id=None)
         return
+    prior_uid = parent.external_lims_uid
+    prior_system = parent.external_lims_system
     _populate_basic_info(parent, meta)
+    if not incoming_uid and prior_uid:
+        # Malformed/partial fetch response: restore identity instead of
+        # letting _populate_basic_info NULL it (same prior-identity-restore
+        # idiom as upsert_sample_from_signal's uid-less-replay guard).
+        parent.external_lims_uid = prior_uid
+        parent.external_lims_system = prior_system
+        log.warning(
+            "sub_samples.refresh_uid_missing sample_id=%s; stored uid preserved",
+            parent.sample_id,
+        )
     db.flush()
     if parent.status != old_status:
         from workflow.sample_log import record_sample_transition
