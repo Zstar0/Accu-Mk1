@@ -453,9 +453,28 @@ def _refresh_parent_from_senaite(db: Session, parent: LimsSample) -> None:
     log so drift caught here (not via an explicit mk1/senaite hook) still
     shows up in history. The recorder's 60-min explained-window means this
     is a no-op when a mk1/senaite row already accounts for the transition.
-    Logging-only failure: never let the log write break the refresh."""
+    Logging-only failure: never let the log write break the refresh.
+
+    S8 guard: a fetch whose uid disagrees with the stored uid refuses the
+    whole refresh (fail closed) and raises an identity_collision flag."""
     old_status = parent.status
     meta = senaite.fetch_parent_metadata(parent.sample_id)
+    incoming_uid = meta.get("uid")
+    if (parent.external_lims_uid and incoming_uid
+            and parent.external_lims_uid != incoming_uid):
+        # S8 fail-closed: the id string now resolves to a DIFFERENT SENAITE
+        # object (external counter regression). Refusing the refresh keeps
+        # this row's data frozen instead of silently rebinding it; the flag
+        # routes a human to resolve. NOTE: this also fail-closes the
+        # parent_uid_stale heal path (_create_sub_sample_legacy) — a dead
+        # stored uid now needs manual resolution, by design.
+        log.error(
+            "sub_samples.identity_collision_refresh sample_id=%s "
+            "stored_uid=%s incoming_uid=%s; refresh refused",
+            parent.sample_id, parent.external_lims_uid, incoming_uid,
+        )
+        _flag_identity_collision(db, parent, quarantine_id=None)
+        return
     _populate_basic_info(parent, meta)
     db.flush()
     if parent.status != old_status:

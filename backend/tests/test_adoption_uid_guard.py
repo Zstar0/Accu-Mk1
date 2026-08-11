@@ -102,3 +102,50 @@ def test_signal_uid_mismatch_replay_idempotent(db):
         LimsSample.quarantined.is_(True)).count() == 1
     from flags.models import FlagFlag
     assert db.query(FlagFlag).filter_by(type="identity_collision").count() == 1
+
+
+def test_refresh_uid_mismatch_refuses_fail_closed(db, caplog):
+    _seeded_flags(db)
+    from sub_samples.service import _refresh_parent_from_senaite
+    row = LimsSample(sample_id="P-0204", external_lims_uid="UID-OLD",
+                     client_id="KEEP-ME")
+    db.add(row)
+    db.commit()
+    fake_meta = {"uid": "UID-DIFFERENT", "ClientID": "OTHER",
+                 "review_state": "received"}
+    with patch("sub_samples.service.senaite.fetch_parent_metadata",
+               return_value=fake_meta):
+        with caplog.at_level("ERROR"):
+            _refresh_parent_from_senaite(db, row)
+    assert row.external_lims_uid == "UID-OLD"   # refused, nothing written
+    assert row.client_id == "KEEP-ME"
+    assert "identity_collision_refresh" in caplog.text
+    from flags.models import FlagFlag
+    assert db.query(FlagFlag).filter_by(type="identity_collision").count() == 1
+
+
+def test_refresh_uid_mismatch_no_duplicate_flag(db):
+    _seeded_flags(db)
+    from sub_samples.service import _refresh_parent_from_senaite
+    row = LimsSample(sample_id="P-0205", external_lims_uid="UID-OLD")
+    db.add(row)
+    db.commit()
+    fake_meta = {"uid": "UID-DIFFERENT", "review_state": "received"}
+    with patch("sub_samples.service.senaite.fetch_parent_metadata",
+               return_value=fake_meta):
+        _refresh_parent_from_senaite(db, row)
+        _refresh_parent_from_senaite(db, row)
+    from flags.models import FlagFlag
+    assert db.query(FlagFlag).filter_by(type="identity_collision").count() == 1
+
+
+def test_refresh_null_stored_uid_populates(db):
+    from sub_samples.service import _refresh_parent_from_senaite
+    row = LimsSample(sample_id="P-0206", external_lims_uid=None)
+    db.add(row)
+    db.commit()
+    fake_meta = {"uid": "UID-FRESH", "review_state": "received"}
+    with patch("sub_samples.service.senaite.fetch_parent_metadata",
+               return_value=fake_meta):
+        _refresh_parent_from_senaite(db, row)
+    assert row.external_lims_uid == "UID-FRESH"
