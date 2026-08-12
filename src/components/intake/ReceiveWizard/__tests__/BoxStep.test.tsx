@@ -304,18 +304,18 @@ describe('BoxStep — capacity-driven boxing', () => {
 
   describe('roleLabel — known roles + fallback for the next one', () => {
     it('labels the four boxable roles as before', () => {
-      expect(roleLabel('hplc')).toBe('HPLC')
-      expect(roleLabel('endo')).toBe('Endotoxin')
-      expect(roleLabel('ster')).toBe('Sterility')
-      expect(roleLabel('xtra')).toBe('Extras')
+      expect(roleLabel('hplc', DEFAULT_VIAL_ROLES)).toBe('HPLC')
+      expect(roleLabel('endo', DEFAULT_VIAL_ROLES)).toBe('Endotoxin')
+      expect(roleLabel('ster', DEFAULT_VIAL_ROLES)).toBe('Sterility')
+      expect(roleLabel('xtra', DEFAULT_VIAL_ROLES)).toBe('Extras')
     })
 
     it('labels hm as Heavy Metals, ahead of it becoming boxable', () => {
-      expect(roleLabel('hm')).toBe('Heavy Metals')
+      expect(roleLabel('hm', DEFAULT_VIAL_ROLES)).toBe('Heavy Metals')
     })
 
     it('falls back to the uppercased key for an unrecognized role', () => {
-      expect(roleLabel('future_role')).toBe('FUTURE_ROLE')
+      expect(roleLabel('future_role', DEFAULT_VIAL_ROLES)).toBe('FUTURE_ROLE')
     })
   })
 

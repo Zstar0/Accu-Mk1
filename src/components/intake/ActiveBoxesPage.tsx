@@ -15,10 +15,8 @@ import { roleBadgeClass, roleTextClass } from '@/lib/assignment-colors'
 import { invalidateBoxCaches } from '@/lib/box-cache'
 import { groupSamplesByOrder } from '@/lib/inbox-orders'
 import { useUIStore } from '@/store/ui-store'
-
-const ROLE_LABEL: Record<string, string> = {
-  hplc: 'HPLC', endo: 'Endotoxin', ster: 'Sterility', xtra: 'Extras', hm: 'Heavy Metals',
-}
+import { useVialRoles } from '@/services/vial-roles'
+import { roleFullLabel } from '@/lib/role-display'
 
 const stripWp = (s: string) => s.replace(/^wp-/i, '')
 const inc = (hay: string, needle: string) => hay.toLowerCase().includes(needle.trim().toLowerCase())
@@ -62,6 +60,8 @@ function OrderLink({ orderKey }: { orderKey: string }) {
  *  deferred bench-scan slices land (see the box-location-tracking spec). */
 export function ActiveBoxesPage() {
   const qc = useQueryClient()
+  const vialRolesQ = useVialRoles()
+  const vialRoles = vialRolesQ.data
   const [closing, setClosing] = useState<LimsBox | null>(null)
   // A label click opens that order's check-in overlay (OrderReceiveSession)
   // in place, landed on the Boxing tab — all boxes of one order share it.
@@ -249,7 +249,7 @@ export function ActiveBoxesPage() {
                       </td>
                       <td className="py-2 pr-4">
                         <span className={`rounded px-2 py-0.5 text-xs ${roleBadgeClass(b.role)}`}>
-                          {ROLE_LABEL[b.role] ?? b.role}
+                          {roleFullLabel(b.role, vialRoles)}
                         </span>
                       </td>
                       <td className="py-2 pr-4">{b.vial_count}</td>
@@ -289,7 +289,7 @@ export function ActiveBoxesPage() {
                         </td>
                         <td className="py-1.5 pr-4">
                           <span className={`rounded px-2 py-0.5 text-xs ${roleBadgeClass(v.assignment_role)}`}>
-                            {ROLE_LABEL[v.assignment_role ?? ''] ?? (v.assignment_role ?? '—')}
+                            {v.assignment_role ? roleFullLabel(v.assignment_role, vialRoles) : '—'}
                           </span>
                         </td>
                         <td colSpan={4} />

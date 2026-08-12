@@ -34,8 +34,9 @@ vi.mock('sonner', () => ({
 import { getVialPlan, patchVialAssignment, putVarianceOverride } from '@/lib/api'
 
 // Mirrors the backend acceptance test's exact shapes: department "ZZ
-// Bench", role code "zz_acc" (never in ROLE_SHORT_DEFAULTS, so its chip
-// falls back to the uppercased code), profile "ZZ Acceptance" as host.
+// Bench", role code "zz_acc" (never seeded in the vial_roles catalog here,
+// so its chip falls back to the uppercased code via roleShortLabel),
+// profile "ZZ Acceptance" as host.
 const ZZ_BENCH_PLAN: VialPlanResponse = {
   demand: { hplc: 0, endo: 0, ster: 0, zz_acc: 1 },
   variance: { hplc: 0, endo: 0, ster: 0 },
@@ -90,8 +91,8 @@ describe('AssignStep — manager authors, lab follows (fixture-level acceptance)
     expect(screen.getByText('ZZACC-0001-S01')).toBeInTheDocument()
     expect(screen.getByText('1 / 1')).toBeInTheDocument()
 
-    // Its chip badge falls back to the uppercased role code (roleShort's
-    // documented fallback for any code outside ROLE_SHORT_DEFAULTS) — proof
+    // Its chip badge falls back to the uppercased role code (roleShortLabel's
+    // documented fallback for any code the catalog hasn't seeded) — proof
     // this is the generic path, not a hardcoded literal for 'zz_acc'.
     expect(screen.getByText('ZZ_ACC')).toBeInTheDocument()
 

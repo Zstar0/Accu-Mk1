@@ -9,14 +9,15 @@ import { Printer, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { usePrintLabel } from '@/components/samples/usePrintLabel'
-import { BoxLabelTemplate, ROLE_SHORT } from './BoxLabelTemplate'
+import { BoxLabelTemplate } from './BoxLabelTemplate'
 import {
   listOrderBoxes, createBox, assignVialsToBox, unassignVialsFromBox, deleteBox, printBox,
   listSubSamples, type LimsBox, type SubSample,
 } from '@/lib/api'
 import { ROLE_CHIP_CLASS, roleBadgeClass, roleTextClass } from '@/lib/assignment-colors'
 import { invalidateBoxCaches } from '@/lib/box-cache'
-import { useVialRoles } from '@/services/vial-roles'
+import { useVialRoles, type VialRoleRow } from '@/services/vial-roles'
+import { roleFullLabel, roleShortLabel } from '@/lib/role-display'
 
 // Snap the drag preview's CENTER to the cursor. Without it, the overlay is
 // offset by wherever inside the chip the grab started, so the "held" copy
@@ -83,16 +84,16 @@ type BoxRole = string
 // BoxStep's useVialRoles() call. hm ships boxable=false today (spec-3
 // Handler ruling, not reversed here), so it renders no column yet; flipping
 // that flag in the Vial Roles admin page lights the column with zero code
-// change (the dark-launch rehearsal this task's tests exercise). ROLE_LABEL
-// keeps its hm entry ahead of that flip so the label + fallback are already
-// correct the day it lands.
-const ROLE_LABEL: Record<string, string> = {
-  hplc: 'HPLC', endo: 'Endotoxin', ster: 'Sterility', xtra: 'Extras', hm: 'Heavy Metals',
-}
+// change (the dark-launch rehearsal this task's tests exercise).
+//
+// S1 roles-as-data: the label itself now comes from the catalog
+// (roleFullLabel), not a hardcoded map — the hm entry (label "Heavy
+// Metals") lives in the seeded catalog row, so it's already correct ahead
+// of the boxable flip with zero code change here either.
 // Exported for testing (same idiom as boxKeyboardCoordinates/boxLabelLines
 // below).
-export function roleLabel(role: string): string {
-  return ROLE_LABEL[role] ?? role.toUpperCase()
+export function roleLabel(role: string, roles?: VialRoleRow[]): string {
+  return roleFullLabel(role, roles)
 }
 
 // Default per-box capacity: the lab's smallest box holds 6 vials. Auto-assign
@@ -105,8 +106,8 @@ const DEFAULT_BOX_CAPACITY = 6
 type OrderVial = SubSample
 
 /** Pure: the lines printed on a box label. Tested directly. */
-export function boxLabelLines(box: LimsBox): string[] {
-  const meta = `${ROLE_SHORT[box.role] ?? box.role.toUpperCase()} · ${box.vial_count} vial${box.vial_count === 1 ? '' : 's'}`
+export function boxLabelLines(box: LimsBox, roles?: VialRoleRow[]): string[] {
+  const meta = `${roleShortLabel(box.role, roles)} · ${box.vial_count} vial${box.vial_count === 1 ? '' : 's'}`
   return [
     box.label_code,
     box.created_at ? `${meta} · ${box.created_at.slice(0, 10)}` : meta,
@@ -392,7 +393,7 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
       <>
         {printableBoxes.map(b => (
           <BoxLabelTemplate key={b.id} boxId={b.id} labelCode={b.label_code}
-            role={b.role} vialCount={b.vial_count} createdAt={b.created_at} />
+            role={b.role} vialCount={b.vial_count} createdAt={b.created_at} roles={vialRoles} />
         ))}
       </>,
     )
@@ -425,7 +426,7 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
               return (
                 <div key={role} className="flex flex-col gap-3">
                   <div className="flex items-center justify-between">
-                    <h3 className={`font-semibold ${roleTextClass(role)}`}>{roleLabel(role)}</h3>
+                    <h3 className={`font-semibold ${roleTextClass(role)}`}>{roleLabel(role, vialRoles)}</h3>
                     {/* Disabled (not hidden) when this column is on the grid
                         only via the existing-box union: the column and its
                         boxes stay usable, but minting a NEW box for a role
@@ -446,6 +447,7 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
                       onCapacityChange={n => setCapacities(c => ({ ...c, [b.id]: n }))}
                       onAutoAssign={() => void handleAutoAssign(b)}
                       onRemove={() => void handleRemoveBox(b)}
+                      roles={vialRoles}
                     />
                   ))}
                 </div>
@@ -455,7 +457,8 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
 
           {/* RIGHT: unboxed vials, grouped by role — drag source for overrides and
               a drop target: drag a boxed chip here to clear its box membership. */}
-          <UnboxedPanel orderLabel={orderLabel} vials={unboxedVials} activeId={activeId} roles={roles} />
+          <UnboxedPanel orderLabel={orderLabel} vials={unboxedVials} activeId={activeId} roles={roles}
+            vialRoles={vialRoles} />
         </div>
       </div>
 
@@ -474,8 +477,8 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
   )
 }
 
-function UnboxedPanel({ orderLabel, vials, activeId, roles }:
-  { orderLabel: string; vials: OrderVial[]; activeId: string | null; roles: string[] }) {
+function UnboxedPanel({ orderLabel, vials, activeId, roles, vialRoles }:
+  { orderLabel: string; vials: OrderVial[]; activeId: string | null; roles: string[]; vialRoles?: VialRoleRow[] }) {
   // Sentinel-id droppable: dropping a boxed chip here unassigns it (drag out).
   const { setNodeRef, isOver } = useDroppable({ id: 'unboxed' })
   return (
@@ -487,7 +490,7 @@ function UnboxedPanel({ orderLabel, vials, activeId, roles }:
         if (rv.length === 0) return null
         return (
           <div key={role} className="mb-2">
-            <div className={`mb-1 text-xs ${roleTextClass(role)}`}>{roleLabel(role)}</div>
+            <div className={`mb-1 text-xs ${roleTextClass(role)}`}>{roleLabel(role, vialRoles)}</div>
             <div className="flex flex-wrap gap-1">
               {rv.map(v => (
                 <VialChip key={v.sample_id} id={v.sample_id} role={role} dimmed={activeId === v.sample_id} />
@@ -522,9 +525,12 @@ interface BoxCardProps {
   onCapacityChange: (n: number) => void
   onAutoAssign: () => void
   onRemove: () => void
+  // Threaded to the print template below — a print template must not grow
+  // its own query hook.
+  roles?: VialRoleRow[]
 }
 
-function BoxCard({ box, boxVials, capacity, activeId, onCapacityChange, onAutoAssign, onRemove }: BoxCardProps) {
+function BoxCard({ box, boxVials, capacity, activeId, onCapacityChange, onAutoAssign, onRemove, roles }: BoxCardProps) {
   const qc = useQueryClient()
   const { setNodeRef, isOver } = useDroppable({ id: String(box.id) })
   const { printNode } = usePrintLabel()
@@ -537,7 +543,7 @@ function BoxCard({ box, boxVials, capacity, activeId, onCapacityChange, onAutoAs
           <Button size="sm" variant="outline" className="gap-2"
             onClick={() => { void printBox(box.id).then(() => invalidateBoxCaches(qc, box.order_key)); printNode(
               <BoxLabelTemplate boxId={box.id} labelCode={box.label_code}
-                role={box.role} vialCount={box.vial_count} createdAt={box.created_at} />,
+                role={box.role} vialCount={box.vial_count} createdAt={box.created_at} roles={roles} />,
             ) }}>
             <Printer className="w-4 h-4" aria-hidden="true" />
             {box.printed_at ? 'Reprint' : 'Print label'}

@@ -2,17 +2,21 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ActiveBoxesPage } from '../ActiveBoxesPage'
-import { closeBox, getSenaiteSamples, listActiveBoxes } from '@/lib/api'
+import { closeBox, getSenaiteSamples, getVialRoles, listActiveBoxes } from '@/lib/api'
 import { toast } from 'sonner'
 
+// S1 roles-as-data: ActiveBoxesPage now calls useVialRoles() for its role
+// labels — without this mock the real fetcher would fire a real network call.
 vi.mock('@/lib/api', () => ({
   listActiveBoxes: vi.fn(),
   closeBox: vi.fn(),
   getSenaiteSamples: vi.fn(),
+  getVialRoles: vi.fn(),
 }))
 const mockList = vi.mocked(listActiveBoxes)
 const mockClose = vi.mocked(closeBox)
 const mockSamples = vi.mocked(getSenaiteSamples)
+const mockVialRoles = vi.mocked(getVialRoles)
 
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
 
@@ -94,6 +98,7 @@ describe('ActiveBoxesPage', () => {
     mockList.mockReset()
     mockClose.mockReset()
     mockSamples.mockReset()
+    mockVialRoles.mockReset().mockResolvedValue([])
     vi.mocked(toast.error).mockClear()
   })
 
