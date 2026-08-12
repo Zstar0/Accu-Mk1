@@ -61,6 +61,7 @@ def test_freezes_service_ids_and_vials_required(db_session):
         "key": "heavy_metals",
         "profile_id": prof.id,
         "fulfillment_role": "hm",
+        "role_sort_order": None,  # no VialRole row seeded for 'hm' in this test
         "vials_required": 2,
         "service_ids": [svc1.id, svc2.id],
         "ride_host_roles": [],
@@ -124,6 +125,48 @@ def test_ride_host_roles_tiebreak_matches_live_path(db_session):
     assert snap["profiles"][0]["ride_host_roles"] == ["endo", "ster"]
 
 
+def test_anchor_and_rider_are_distinguished_in_the_snapshot(db_session):
+    """A real anchor (role 'ster' with live demand) plus a rider whose
+    declared host list targets that role: the rider must land in the
+    snapshot via RIDER inclusion (resolve_catalog_fulfillment's
+    rider_profile_ids, not host_profile_ids — its own role 'ster_rider'
+    carries no demand of its own), the anchor/rider distinction must survive
+    as ride_host_roles empty vs non-empty, and fulfillment_role stays each
+    profile's OWN declared role — never the host the rider actually rode."""
+    from models import VialRole
+
+    db_session.add(VialRole(code="ster", label="Sterility", sort_order=3))
+    db_session.commit()
+
+    anchor_svc = _mk_service(db_session, keyword="STER-PCR", title="Sterility PCR")
+    anchor = _mk_profile(db_session, key="sterility_pcr", vials=2, role="ster",
+                          members=[anchor_svc])
+
+    rider_svc = _mk_service(db_session, keyword="STER-ADDON", title="Sterility Addon")
+    rider = _mk_profile(db_session, key="ster_addon", vials=0, role="ster_rider",
+                         members=[rider_svc])
+    db_session.execute(profile_ride_hosts.insert().values(
+        analysis_profile_id=rider.id, host_role_code="ster", priority=1,
+    ))
+    db_session.commit()
+
+    snap = compute_catalog_snapshot(
+        db_session, {"sterility_pcr": True, "ster_addon": True}, None,
+    )
+    by_key = {p["key"]: p for p in snap["profiles"]}
+    assert set(by_key) == {"sterility_pcr", "ster_addon"}
+
+    assert by_key["sterility_pcr"]["ride_host_roles"] == []
+    assert by_key["sterility_pcr"]["fulfillment_role"] == "ster"
+    assert by_key["sterility_pcr"]["role_sort_order"] == 3
+
+    assert by_key["ster_addon"]["ride_host_roles"] == ["ster"]
+    # Own declared role, NOT the host ('ster') it actually rode.
+    assert by_key["ster_addon"]["fulfillment_role"] == "ster_rider"
+    # No VialRole row for 'ster_rider' — frozen as None, not a KeyError/0.
+    assert by_key["ster_addon"]["role_sort_order"] is None
+
+
 # ── registration bg task: stamps once, frozen values survive a live edit ───
 
 
@@ -171,6 +214,7 @@ def test_registration_bg_task_stamps_catalog_snapshot(bg_env):
         "key": "heavy_metals",
         "profile_id": prof_id,
         "fulfillment_role": "hm",
+        "role_sort_order": None,  # no VialRole row seeded for 'hm' in bg_env
         "vials_required": 2,
         "service_ids": [svc_id],
         "ride_host_roles": [],
@@ -202,6 +246,73 @@ def test_replayed_signal_does_not_restamp_even_after_a_live_catalog_edit(bg_env)
     parent = check_db.query(LimsSample).filter_by(
         sample_id="TEST-SNAPSHOT-PARENT").one()
     assert parent.catalog_snapshot["profiles"][0]["vials_required"] == 2
+    check_db.close()
+
+
+def test_role_sort_order_is_frozen_across_a_live_vial_role_edit(bg_env):
+    """role_sort_order must survive a live VialRole.sort_order edit the same
+    way vials_required does above — Task 6's rebuild reads the FROZEN value,
+    never the live vial_roles table."""
+    import main
+    from models import VialRole
+
+    Session, prof_id, svc_id = bg_env
+    seed_db = Session()
+    seed_db.add(VialRole(code="hm", label="Heavy Metals", sort_order=4))
+    seed_db.commit()
+    seed_db.close()
+
+    main._native_placeholders_at_registration_bg("TEST-SNAPSHOT-PARENT")
+
+    check_db = Session()
+    parent = check_db.query(LimsSample).filter_by(
+        sample_id="TEST-SNAPSHOT-PARENT").one()
+    assert parent.catalog_snapshot["profiles"][0]["role_sort_order"] == 4
+    check_db.close()
+
+    edit_db = Session()
+    role = edit_db.query(VialRole).filter_by(code="hm").one()
+    role.sort_order = 99
+    edit_db.commit()
+    edit_db.close()
+
+    main._native_placeholders_at_registration_bg("TEST-SNAPSHOT-PARENT")  # replay
+
+    check_db2 = Session()
+    parent2 = check_db2.query(LimsSample).filter_by(
+        sample_id="TEST-SNAPSHOT-PARENT").one()
+    assert parent2.catalog_snapshot["profiles"][0]["role_sort_order"] == 4
+    check_db2.close()
+
+
+def test_snapshot_stamp_failure_does_not_roll_back_placeholder_seeding(bg_env, monkeypatch, caplog):
+    """A compute_catalog_snapshot failure must not undo the placeholder seed
+    that already succeeded in the SAME transaction — that seed is the
+    load-bearing bench-visibility guarantee `_native_placeholders_at_
+    registration_bg` exists for. catalog_snapshot stays NULL so the
+    once-only guard retries the stamp on the next signal/replay."""
+    import main
+    from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
+    from models import LimsAnalysis
+
+    Session, prof_id, svc_id = bg_env
+    monkeypatch.setattr(
+        "catalog.snapshot.compute_catalog_snapshot",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    with caplog.at_level("WARNING"):
+        main._native_placeholders_at_registration_bg("TEST-SNAPSHOT-PARENT")  # must not raise
+
+    assert any("catalog_snapshot.stamp_failed" in r.message for r in caplog.records)
+
+    check_db = Session()
+    parent = check_db.query(LimsSample).filter_by(
+        sample_id="TEST-SNAPSHOT-PARENT").one()
+    assert parent.catalog_snapshot is None
+    rows = check_db.query(LimsAnalysis).filter_by(
+        lims_sample_pk=parent.id, provenance=PROVENANCE_ORDERED).all()
+    assert len(rows) == 1  # heavy_metals placeholder still seeded despite the snapshot failure
     check_db.close()
 
 

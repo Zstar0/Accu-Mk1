@@ -14766,10 +14766,23 @@ def _native_placeholders_at_registration_bg(sample_id: str) -> None:
         # resolved the FIRST time. System write (s2s has no user); no
         # change-log row for the stamp itself (that ledger is task 7's
         # audited reprovision, a deliberate human/API action).
+        #
+        # Isolated in its own try/except: a snapshot-compute failure (bad
+        # catalog row, unexpected shape) must NOT roll back the placeholder
+        # seed that already succeeded above — that seed is the load-bearing
+        # bench-visibility guarantee this sibling exists for. catalog_snapshot
+        # stays NULL on failure, so the once-only guard retries on the next
+        # registration signal / replay instead of stamping half-built data.
         if parent.catalog_snapshot is None:
-            parent.catalog_snapshot = compute_catalog_snapshot(
-                db, raw.get("services") or {}, raw.get("package"),
-            )
+            try:
+                parent.catalog_snapshot = compute_catalog_snapshot(
+                    db, raw.get("services") or {}, raw.get("package"),
+                )
+            except Exception as snapshot_err:  # noqa: BLE001
+                logger.warning(
+                    "catalog_snapshot.stamp_failed sample_id=%s err=%s",
+                    sample_id, snapshot_err,
+                )
         db.commit()
         logger.info(
             "registry.native_placeholder_seed sample_id=%s created=%s existing=%s skipped=%s",

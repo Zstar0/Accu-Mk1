@@ -19,6 +19,13 @@ already-resolved/effective per-role value:
   - `fulfillment_role` is the profile's own declared role, not the role its
     result ends up attached to (a rider that successfully rides a host still
     freezes its OWN role here).
+  - `role_sort_order` is `fulfillment_role`'s VialRole.sort_order AT
+    RESOLUTION TIME (null when the role has no VialRole row). Frozen for the
+    same reason as the two fields below: catalog_demand.py's rider sort
+    (line ~103) orders both anchors and riders by (live VialRole.sort_order,
+    key) BEFORE deciding which host a rider attaches to — that ordering
+    decides self-mint-vs-attach, and therefore total demand. Task 6's
+    snapshot-sourced rebuild must not read the live VialRole table to get it.
   - `vials_required` is the profile's own catalog value, not the MAX-per-role
     demand (a role can have >1 anchor) and not the rider "or 1" self-mint
     fallback.
@@ -58,7 +65,7 @@ def compute_catalog_snapshot(db, services: dict, package) -> dict:
     seeding is a separate, pre-existing mechanism outside task 6's
     catalog-role-vial scope.
     """
-    from models import AnalysisProfile, profile_ride_hosts
+    from models import AnalysisProfile, VialRole, profile_ride_hosts
     from sub_samples.catalog_demand import resolve_catalog_fulfillment
 
     services = services or {}
@@ -67,6 +74,10 @@ def compute_catalog_snapshot(db, services: dict, package) -> dict:
     for rf in fulfillment.values():
         in_demand_ids.update(rf.host_profile_ids)
         in_demand_ids.update(rf.rider_profile_ids)
+
+    # Same live source resolve_catalog_fulfillment's own `sort_of` uses
+    # (catalog_demand.py:95) — read once, frozen per profile below.
+    role_sort_of = {r.code: r.sort_order for r in db.query(VialRole).all()}
 
     profiles_out = []
     for key, val in services.items():
@@ -88,6 +99,10 @@ def compute_catalog_snapshot(db, services: dict, package) -> dict:
             "key": prof.key,
             "profile_id": prof.id,
             "fulfillment_role": prof.fulfillment_role,
+            "role_sort_order": (
+                role_sort_of.get(prof.fulfillment_role)
+                if prof.fulfillment_role else None
+            ),
             "vials_required": prof.vials_required,
             "service_ids": [svc.id for svc in prof.analysis_services],
             "ride_host_roles": list(ride_rows),
