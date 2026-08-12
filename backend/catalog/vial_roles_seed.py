@@ -47,15 +47,19 @@ def seed_vial_roles(db) -> int:
                 row.department_id = dept_id
                 healed += 1
             # S1: same NULL-only self-heal shape for display faces — a row
-            # seeded before this slice shipped has color IS NULL; stamp the
-            # legacy values once, never clobber an admin's own color pick.
-            # color is the single sentinel for the whole (color, short_label,
-            # badge_glyph) triple — mirrors the SQL backfill's coupled
-            # `WHERE color IS NULL` guard. An admin who sets color has
-            # claimed the display face; short_label/badge_glyph stop
-            # healing too, even if left NULL (deliberate — no per-field
-            # admin-edit tracking exists to heal them independently).
-            if row.color is None:
+            # seeded before this slice shipped has all three faces NULL;
+            # stamp the legacy values once, never clobber an admin's own
+            # pick. Triple-NULL is the sentinel (fix round: color alone
+            # isn't enough — an admin who chose Auto (color=NULL) but set
+            # short_label/badge_glyph must NOT have those two re-stamped on
+            # the next boot). Mirrors the SQL backfill's matching
+            # `AND color IS NULL AND short_label IS NULL AND badge_glyph
+            # IS NULL` guard. Residual (accepted, Handler-surfaced): a
+            # legacy role an admin sets fully to Auto (all three NULL) still
+            # reverts to the legacy display on the next restart — no
+            # per-field admin-edit tracking exists to distinguish "never
+            # touched" from "deliberately reset to Auto".
+            if row.color is None and row.short_label is None and row.badge_glyph is None:
                 row.color = color
                 row.short_label = short_label
                 row.badge_glyph = badge_glyph

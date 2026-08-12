@@ -173,3 +173,24 @@ def test_seed_color_is_sentinel_for_whole_display_face_triple(db_session):
     assert healed_ster.color == "rose"
     assert healed_ster.short_label is None
     assert healed_ster.badge_glyph is None
+
+
+def test_seed_never_clobbers_short_label_when_color_is_null(db_session):
+    # Fix round regression: an admin choosing Auto (color=NULL) but setting
+    # short_label/badge_glyph explicitly must survive a re-seed untouched.
+    # The old `if row.color is None` guard fired on exactly this state and
+    # re-stamped short_label/badge_glyph back to the legacy values — the
+    # triple-NULL guard (color AND short_label AND badge_glyph all NULL)
+    # only heals a row nobody has touched at all.
+    seed_vial_roles(db_session)
+    endo = db_session.query(VialRole).filter_by(code="endo").one()
+    endo.color = None
+    endo.short_label = "MYLABEL"
+    endo.badge_glyph = "Z"
+    db_session.commit()
+    db_session.expire_all()
+    seed_vial_roles(db_session)
+    healed_endo = db_session.query(VialRole).filter_by(code="endo").one()
+    assert healed_endo.color is None
+    assert healed_endo.short_label == "MYLABEL"
+    assert healed_endo.badge_glyph == "Z"

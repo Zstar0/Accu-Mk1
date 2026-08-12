@@ -194,6 +194,7 @@ import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { useVialRoles } from '@/services/vial-roles'
 import { useDepartments } from '@/services/departments'
+import { ROLE_COLOR_TEXT, roleColorForCode } from '@/lib/role-display'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
 import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
 import { SampleRegistryDebug } from '@/components/senaite/SampleRegistryDebug'
@@ -5309,15 +5310,7 @@ export function SampleDetails() {
                         Assigned to
                       </span>
                       <span
-                        className={`text-sm font-semibold ${
-                          {
-                            // Matches PRIMARY_TITLE_COLOR role tints in AnalysisTable
-                            hplc: 'text-sky-700 dark:text-sky-300',
-                            endo: 'text-emerald-700 dark:text-emerald-300',
-                            ster: 'text-violet-700 dark:text-violet-300',
-                            xtra: 'text-zinc-700 dark:text-zinc-300',
-                          }[currentAssignment ?? ''] ?? 'text-foreground'
-                        }`}
+                        className={`text-sm font-semibold ${ROLE_COLOR_TEXT[roleColorForCode(currentAssignment, vialRolesQ.data, departmentsQ.data)]}`}
                       >
                         {assignmentLabel}
                       </span>
