@@ -516,8 +516,26 @@ function SampleTable({
                   // For multi-vial parents, this is the parent AR's own role
                   // (sub-sample roles render on expand). For sub-sample rows
                   // (vial_count == 0, surfaced via search), this is the
-                  // sub-sample's own assignment_role.
-                  <RoleBadge role={agg.parent_role} form="glyph" unassignedLabel="?" />
+                  // sub-sample's own assignment_role. Adjacent-span structure
+                  // (bold glyph + full code) restored from the pre-conversion
+                  // markup — RoleBadge owns the glyph half, the second span
+                  // is the plain uppercased code (the "HM HM" fix's contract:
+                  // the glyph stays single-char BECAUSE the code sits beside it).
+                  <span className="inline-flex items-center gap-1">
+                    <RoleBadge
+                      role={agg.parent_role}
+                      form="glyph"
+                      unassignedLabel="?"
+                      makeTitle={() =>
+                        `${agg.vial_count > 0 ? 'Parent' : 'Sub-sample'} vial: ${agg.parent_role}`
+                      }
+                    />
+                    <span className="text-[11px] font-medium">
+                      {agg.parent_role === 'unassigned'
+                        ? 'Unassigned'
+                        : agg.parent_role.toUpperCase()}
+                    </span>
+                  </span>
                 ) : (
                   <span className="text-muted-foreground/50 text-xs">—</span>
                 )}
@@ -596,26 +614,35 @@ function SampleTable({
                           <span>Assigned</span>
                           <span>Remarks</span>
                         </div>
-                        {subs.map(sub => (
-                          <button
-                            key={sub.id}
-                            type="button"
-                            className="w-full grid grid-cols-[7rem_3rem_5rem_1fr] gap-3 text-xs py-1 px-1 -mx-1 rounded hover:bg-muted/30 transition-colors text-left"
-                            onClick={e => { e.stopPropagation(); onSelectSample?.(sub.sample_id) }}
-                          >
-                            <span className={`font-mono inline-flex items-center gap-1 ${
-                              subIsVarianceMember(sub) ? 'text-sky-600 dark:text-sky-400' : ''
-                            }`}>
-                              {subIsVarianceMember(sub) && <Layers className="h-3 w-3 shrink-0" aria-hidden="true" />}
-                              {sub.sample_id}
-                            </span>
-                            <span className="text-center text-muted-foreground">{sub.vial_sequence}</span>
-                            <span>
-                              <RoleBadge role={sub.assignment_role} form="glyph" unassignedLabel="?" />
-                            </span>
-                            <span className="text-muted-foreground truncate">{sub.remarks ?? '—'}</span>
-                          </button>
-                        ))}
+                        {subs.map(sub => {
+                          const role = sub.assignment_role ?? 'unassigned'
+                          return (
+                            <button
+                              key={sub.id}
+                              type="button"
+                              className="w-full grid grid-cols-[7rem_3rem_5rem_1fr] gap-3 text-xs py-1 px-1 -mx-1 rounded hover:bg-muted/30 transition-colors text-left"
+                              onClick={e => { e.stopPropagation(); onSelectSample?.(sub.sample_id) }}
+                            >
+                              <span className={`font-mono inline-flex items-center gap-1 ${
+                                subIsVarianceMember(sub) ? 'text-sky-600 dark:text-sky-400' : ''
+                              }`}>
+                                {subIsVarianceMember(sub) && <Layers className="h-3 w-3 shrink-0" aria-hidden="true" />}
+                                {sub.sample_id}
+                              </span>
+                              <span className="text-center text-muted-foreground">{sub.vial_sequence}</span>
+                              <span>
+                                {/* Adjacent-span structure restored: glyph half via
+                                    RoleBadge (component default title), plain code
+                                    span beside it — same "HM HM" fix contract. */}
+                                <span className="inline-flex items-center gap-0.5">
+                                  <RoleBadge role={sub.assignment_role} form="glyph" unassignedLabel="?" />
+                                  <span className="capitalize">{role}</span>
+                                </span>
+                              </span>
+                              <span className="text-muted-foreground truncate">{sub.remarks ?? '—'}</span>
+                            </button>
+                          )
+                        })}
                       </div>
                     )}
                   </div>

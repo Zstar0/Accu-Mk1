@@ -146,11 +146,24 @@ describe('RoleBadge', () => {
     expect(screen.getByText('P')).toBeInTheDocument()
   })
 
+  it('defaults the glyph-form title to the short label, not the glyph character', () => {
+    renderWithRoles(<RoleBadge role="ster" form="glyph" />)
+    const badge = screen.getByText('P')
+    expect(badge).toHaveAttribute('title', 'Role: PCR')
+  })
+
   it('renders the uppercased code in zinc while the roles query has no data yet (no Unassigned flash)', () => {
     renderWithRoles(<RoleBadge role="ster" />, { seedRoles: false })
     const badge = screen.getByText('STER')
     expect(badge.className).toContain('zinc')
     expect(screen.queryByText('Unassigned')).not.toBeInTheDocument()
+  })
+
+  it('renders only the first char in zinc for glyph form while the roles query has no data yet (no "HPLC"→"H" snap)', () => {
+    renderWithRoles(<RoleBadge role="ster" form="glyph" />, { seedRoles: false })
+    const badge = screen.getByText('S')
+    expect(badge.className).toContain('zinc')
+    expect(screen.queryByText('STER')).not.toBeInTheDocument()
   })
 
   it('renders the loading-state badge even with hideUnassigned set (loading is not "unassigned")', () => {
