@@ -94,8 +94,36 @@ def test_create_sub_sample_refuses_when_parent_has_no_contact(db):
     assert db.query(LimsSubSample).count() == 0
 
 
-def test_create_sub_sample_refreshes_stale_uid_then_retries(db):
-    """Defense-in-depth #2: if the cached parent UID is stale, refetch and retry."""
+def test_create_sub_sample_stale_uid_fail_closes(db, caplog):
+    """Defense-in-depth #2, S8-revised: the parent_uid_stale heal path used
+    to blindly trust whatever uid the refresh fetch returned and retry with
+    it. Pre-S8 this fixture (STALE_UID stored, fetch returns a genuinely
+    DIFFERENT FRESH_UID) exercised that blind heal. Under the S8 fail-closed
+    guard (Task 3), a refresh whose fetched uid disagrees with the stored
+    uid is an identity collision, not a stale cache — the refresh is refused,
+    the stored uid stays frozen on the dead STALE_UID, and a human is routed
+    to resolve via the identity_collision flag instead of the cache silently
+    rebinding to a different SENAITE object.
+
+    create_sub_sample still proceeds best-effort with the frozen (dead) uid
+    -- _create_sub_sample_legacy doesn't block on refresh refusal, only the
+    heal is closed off. In real SENAITE that dead uid would itself surface
+    loudly via SecondaryFalloutError (defense-in-depth #3, covered by
+    test_create_sub_sample_propagates_fallthrough_with_orphan_info); this
+    test pins the mocked-create path honestly rather than asserting a retry
+    that no longer happens."""
+    from database import Base
+    import flags.models  # noqa: F401  (register flag_* tables on Base)
+    from flags import seams, types_service
+    # This file's `db` fixture already ran create_all() before flags.models
+    # was registered on Base.metadata -- create the newly-registered flag_*
+    # tables on THIS test's own engine only (checkfirst=True default skips
+    # tables that already exist; other tests' separate in-memory engines are
+    # untouched). Same import-then-register idiom as
+    # tests/test_flags_types_model.py's `session` fixture.
+    Base.metadata.create_all(db.get_bind())
+    types_service.seed_builtins(db)
+    seams.register_mk1_entities()
     db.add(LimsSample(sample_id="P-0134", external_lims_uid="STALE_UID",
                       client_uid="C_UID", contact_uid="CT_UID", sample_type="ST_UID"))
     db.commit()
@@ -105,17 +133,25 @@ def test_create_sub_sample_refreshes_stale_uid_then_retries(db):
          patch("sub_samples.service.senaite.create_secondary",
                return_value=_create_result("UID1", "P-0134-S01")) as cs, \
          patch("sub_samples.service.senaite.upload_photo", return_value=None):
-        sub = create_sub_sample(db, parent_sample_id="P-0134",
-                                photo_bytes=b"abc", photo_filename="vial.jpg",
-                                remarks=None, user_id=1)
-    assert sub.vial_sequence == 1
-    # fetch_parent_metadata is called twice now: once by _refresh_parent_from_senaite
-    # (stale-cache recovery) and once by create_sub_sample's new field-inheritance
-    # step. Both must hit the mock.
+        with caplog.at_level("ERROR"):
+            sub = create_sub_sample(db, parent_sample_id="P-0134",
+                                    photo_bytes=b"abc", photo_filename="vial.jpg",
+                                    remarks=None, user_id=1)
+    assert sub.vial_sequence == 1   # create still proceeds
+    parent = db.query(LimsSample).filter_by(sample_id="P-0134").one()
+    assert parent.external_lims_uid == "STALE_UID"   # refused; never rebound
+    assert "identity_collision_refresh" in caplog.text
+    from flags.models import FlagFlag
+    assert db.query(FlagFlag).filter_by(type="identity_collision").count() == 1
+    # fetch_parent_metadata is still called twice: once by
+    # _refresh_parent_from_senaite (now refused) and once by
+    # create_sub_sample's field-inheritance step. Both hit the mock
+    # regardless of the guard's outcome.
     assert fpm.call_count == 2
     cs.assert_called_once()
-    # Verify the create call used the FRESH UID, not the stale one
-    assert cs.call_args.kwargs["parent_uid"] == "FRESH_UID"
+    # Honest pin: the create call used the FROZEN stale uid, NOT the
+    # refused fetch's uid -- the heal that used to happen here is gone.
+    assert cs.call_args.kwargs["parent_uid"] == "STALE_UID"
 
 
 def test_create_sub_sample_propagates_fallthrough_with_orphan_info(db):
