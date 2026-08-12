@@ -24,6 +24,11 @@ vi.mock('@/lib/api', async importOriginal => {
     patchVialAssignment: vi.fn(),
     updateSenaiteSampleFields: vi.fn(),
     putVarianceOverride: vi.fn(),
+    // S1 roles-as-data: AssignStep now calls useVialRoles(); without this the
+    // real fetcher would fire a real network call. Resolves empty so
+    // roleShortLabel's uppercased-code fallback still applies to 'zz_acc' —
+    // the assertion below is unchanged.
+    getVialRoles: vi.fn(),
   }
 })
 
@@ -31,7 +36,7 @@ vi.mock('sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }))
 
-import { getVialPlan, patchVialAssignment, putVarianceOverride } from '@/lib/api'
+import { getVialPlan, getVialRoles, patchVialAssignment, putVarianceOverride } from '@/lib/api'
 
 // Mirrors the backend acceptance test's exact shapes: department "ZZ
 // Bench", role code "zz_acc" (never seeded in the vial_roles catalog here,
@@ -67,6 +72,7 @@ beforeEach(() => {
     assignment_role: null,
   })
   vi.mocked(putVarianceOverride).mockResolvedValue({ variance: {} })
+  vi.mocked(getVialRoles).mockResolvedValue([])
 })
 
 function renderStep() {

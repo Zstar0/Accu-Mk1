@@ -174,7 +174,13 @@ export function PrintStep({ parentSampleId, vials, orderNumber, orderDate }: Pro
           <Button
             type="button"
             onClick={() => window.print()}
-            disabled={selectedCount === 0}
+            // vialRolesQ.isLoading: a physical label must never print the
+            // uppercased-code fallback (e.g. "STER" instead of "PCR") because
+            // the catalog hadn't resolved yet — same principle as BoxStep's
+            // whole-render vialRolesQ.isLoading gate, scoped here to just the
+            // print action since the rest of this screen (checkboxes, counts)
+            // doesn't depend on role labels.
+            disabled={selectedCount === 0 || vialRolesQ.isLoading}
             className="gap-2"
           >
             <Printer className="w-4 h-4" aria-hidden="true" />

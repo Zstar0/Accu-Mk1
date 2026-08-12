@@ -249,7 +249,7 @@ export function ActiveBoxesPage() {
                       </td>
                       <td className="py-2 pr-4">
                         <span className={`rounded px-2 py-0.5 text-xs ${roleBadgeClass(b.role)}`}>
-                          {roleFullLabel(b.role, vialRoles)}
+                          {vialRolesQ.isLoading ? '…' : roleFullLabel(b.role, vialRoles)}
                         </span>
                       </td>
                       <td className="py-2 pr-4">{b.vial_count}</td>
@@ -289,7 +289,11 @@ export function ActiveBoxesPage() {
                         </td>
                         <td className="py-1.5 pr-4">
                           <span className={`rounded px-2 py-0.5 text-xs ${roleBadgeClass(v.assignment_role)}`}>
-                            {v.assignment_role ? roleFullLabel(v.assignment_role, vialRoles) : '—'}
+                            {vialRolesQ.isLoading
+                              ? '…'
+                              : v.assignment_role
+                                ? roleFullLabel(v.assignment_role, vialRoles)
+                                : '—'}
                           </span>
                         </td>
                         <td colSpan={4} />

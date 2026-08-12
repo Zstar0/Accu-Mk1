@@ -175,7 +175,13 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
     [plan, refresh, queryClient, parentSampleId],
   )
 
-  if (loading && !plan) {
+  // vialRolesQ.isLoading is included: rendering the sections/chips before the
+  // catalog resolves would let roleShort fall back to uppercased codes off a
+  // cold cache (e.g. "STER" instead of "PCR") for one render, then pop to the
+  // real short form — same class of flash BoxStep's own vialRolesQ gate
+  // avoids. isLoading clears on either success or failure, so a catalog fetch
+  // error still falls through to the fallback-labeled render, not a stall.
+  if ((loading && !plan) || vialRolesQ.isLoading) {
     return (
       <div className="flex items-center justify-center h-full">
         <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
