@@ -20286,6 +20286,102 @@ def download_registry_parent_attachment(
     )
 
 
+@app.post("/lims-samples/{sample_id}/reprovision-snapshot")
+def reprovision_catalog_snapshot(
+    sample_id: str,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """S4 snapshot rider, Task 7: the ONLY other writer of LimsSample.
+    catalog_snapshot besides the once-only registration stamp
+    (_native_placeholders_at_registration_bg). Handler ruling: applying a
+    catalog fix to an in-flight order is a deliberate, AUDITED reprovision
+    action, never an implicit side effect — so this route both overwrites
+    the frozen snapshot and appends one catalog_change_log row for it.
+
+    Recomputes fresh against the LIVE catalog via compute_catalog_snapshot,
+    fed by a FRESH fetch_sample_services read — never threads the sample's
+    existing snapshot back into compute_catalog_snapshot, which would
+    re-freeze stale data instead of updating it. entity_type='sample_snapshot'
+    keeps this ledger distinct from the per-catalog-row entity types (service/
+    profile/vial_role/...) the rest of change_log.py's callers use.
+
+    action='create' (log_create, before=None) when the stored snapshot was
+    NULL; action='update' (apply_and_log, which performs the setattr AND the
+    before/after diff in one call) otherwise — apply_and_log only writes a
+    row when the value actually changed, which in practice is always true
+    here since compute_catalog_snapshot stamps a fresh resolved_at on every
+    call.
+
+    Plain `def`, not `async def`: fetch_sample_services (sub_samples/
+    service.py) is a blocking `requests` call — FastAPI runs sync `def`
+    routes in the threadpool so it can't stall the event loop, same
+    reasoning as the sibling /debug/sample-registry/{sample_id}/refresh
+    route above. IS fetch failure -> 502 with NO writes (raised before
+    either the snapshot column or the change-log row is touched).
+    """
+    from catalog.change_log import apply_and_log, log_create
+    from catalog.snapshot import compute_catalog_snapshot
+    from sub_samples.service import fetch_sample_services
+
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        raise HTTPException(status_code=404, detail=f"Sample {sample_id} not found")
+
+    try:
+        raw = fetch_sample_services(sample_id)
+    except Exception as e:  # noqa: BLE001 — surfaced as 502, no writes made yet
+        logger.warning(
+            "catalog_snapshot.reprovision_fetch_failed sample_id=%s err=%s",
+            sample_id, e,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to fetch live services for {sample_id}",
+        ) from e
+    if raw is None:
+        # fetch_sample_services' OWN 404 (no order_submissions row for this
+        # sample_id) — distinct from a network/5xx failure but must be
+        # refused the same way: reprovisioning to an empty services dict
+        # would overwrite a good frozen snapshot with an empty one and audit
+        # it as a deliberate reprovision. The registration bg task treats
+        # this the same falsy-raw signal as a skip (`if not raw: return`);
+        # this route can't skip silently (it's a deliberate user action), so
+        # it refuses loudly instead.
+        raise HTTPException(
+            status_code=502,
+            detail=f"No live order services found for sample {sample_id}",
+        )
+
+    new_snapshot = compute_catalog_snapshot(
+        db, raw.get("services") or {}, raw.get("package"),
+    )
+
+    user_id = getattr(current_user, "id", None)
+    was_null = parent.catalog_snapshot is None
+    if was_null:
+        parent.catalog_snapshot = new_snapshot
+        log_create(
+            db, parent, ["catalog_snapshot"],
+            entity_type="sample_snapshot", entity_pk=parent.id, user_id=user_id,
+        )
+    else:
+        apply_and_log(
+            db, parent, {"catalog_snapshot": new_snapshot},
+            entity_type="sample_snapshot", entity_pk=parent.id, user_id=user_id,
+        )
+    db.commit()
+    db.refresh(parent)
+
+    return {
+        "sample_id": parent.sample_id,
+        "action": "create" if was_null else "update",
+        "catalog_snapshot": parent.catalog_snapshot,
+    }
+
+
 @app.get("/registry/samples", response_model=SenaiteSamplesResponse)
 async def list_samples_from_registry(
     review_state: Optional[str] = None,

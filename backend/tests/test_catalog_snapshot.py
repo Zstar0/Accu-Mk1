@@ -759,6 +759,230 @@ def test_snapshot_sourced_seeding_preserves_frozen_member_order(db_session):
     assert [r.keyword for r in created] == ["HM-PB", "HM-AS", "HM-CD"]
 
 
+# ── Task 7: audited reprovision route ───────────────────────────────────────
+#
+# POST /lims-samples/{sample_id}/reprovision-snapshot — the ONLY other writer
+# of catalog_snapshot besides the once-only registration stamp. Recomputes
+# fresh against the LIVE catalog (never threads the existing snapshot back
+# in) and writes one catalog_change_log row: action="create" when the stored
+# snapshot was NULL, else action="update". Fixture mirrors test_catalog_
+# change_log.py's route_client (StaticPool SQLite, MagicMock(id=7) actor).
+
+from unittest.mock import MagicMock
+from sqlalchemy.pool import StaticPool
+from fastapi.testclient import TestClient
+
+from auth import get_current_user
+from database import get_db
+from main import app
+from models import CatalogChangeLog
+
+
+@pytest.fixture
+def snapshot_route_client():
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    shared_session = Session()
+
+    def _override_get_db():
+        yield shared_session
+
+    prev_db = app.dependency_overrides.get(get_db)
+    prev_user = app.dependency_overrides.get(get_current_user)
+    app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_current_user] = lambda: MagicMock(id=7)
+    tc = TestClient(app)
+    tc._test_session = shared_session
+    yield tc
+    if prev_db is None:
+        app.dependency_overrides.pop(get_db, None)
+    else:
+        app.dependency_overrides[get_db] = prev_db
+    if prev_user is None:
+        app.dependency_overrides.pop(get_current_user, None)
+    else:
+        app.dependency_overrides[get_current_user] = prev_user
+    shared_session.close()
+
+
+def test_reprovision_overwrites_stale_snapshot_and_writes_update_log(
+    snapshot_route_client, monkeypatch,
+):
+    db = snapshot_route_client._test_session
+    svc = _mk_service(db, keyword="HM-PB", title="Lead")
+    _mk_profile(db, key="heavy_metals", vials=2, role="hm", members=[svc])
+    stale_snapshot = {"resolved_at": "2020-01-01T00:00:00", "profiles": []}
+    parent = LimsSample(sample_id="T7-STALE", sample_type="x", status="received",
+                        catalog_snapshot=stale_snapshot)
+    db.add(parent)
+    db.commit()
+    parent_id = parent.id
+
+    monkeypatch.setattr(
+        "sub_samples.service.fetch_sample_services",
+        lambda _sid: {"services": {"heavy_metals": True}, "package": None},
+    )
+
+    resp = snapshot_route_client.post("/lims-samples/T7-STALE/reprovision-snapshot")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["action"] == "update"
+    assert body["catalog_snapshot"]["profiles"][0]["key"] == "heavy_metals"
+
+    updated = db.query(LimsSample).filter_by(sample_id="T7-STALE").one()
+    assert updated.catalog_snapshot["profiles"][0]["key"] == "heavy_metals"
+    assert updated.catalog_snapshot != stale_snapshot
+
+    rows = db.query(CatalogChangeLog).filter_by(
+        entity_type="sample_snapshot", entity_pk=parent_id).all()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.action == "update"
+    assert row.user_id == 7
+    changed = row.details["changed"]["catalog_snapshot"]
+    assert changed["before"] == stale_snapshot
+    assert changed["after"]["profiles"][0]["key"] == "heavy_metals"
+
+
+def test_reprovision_null_snapshot_writes_create_log(snapshot_route_client, monkeypatch):
+    db = snapshot_route_client._test_session
+    svc = _mk_service(db, keyword="HM-AS", title="Arsenic")
+    _mk_profile(db, key="heavy_metals", vials=1, role="hm", members=[svc])
+    parent = LimsSample(sample_id="T7-NULL", sample_type="x", status="received")
+    db.add(parent)
+    db.commit()
+    parent_id = parent.id
+    assert parent.catalog_snapshot is None
+
+    monkeypatch.setattr(
+        "sub_samples.service.fetch_sample_services",
+        lambda _sid: {"services": {"heavy_metals": True}, "package": None},
+    )
+
+    resp = snapshot_route_client.post("/lims-samples/T7-NULL/reprovision-snapshot")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["action"] == "create"
+
+    rows = db.query(CatalogChangeLog).filter_by(
+        entity_type="sample_snapshot", entity_pk=parent_id).all()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.action == "create"
+    assert row.user_id == 7
+    changed = row.details["changed"]["catalog_snapshot"]
+    assert changed["before"] is None
+    assert changed["after"]["profiles"][0]["key"] == "heavy_metals"
+
+    updated = db.query(LimsSample).filter_by(sample_id="T7-NULL").one()
+    assert updated.catalog_snapshot is not None
+
+
+def test_reprovision_unknown_sample_404(snapshot_route_client):
+    resp = snapshot_route_client.post("/lims-samples/T7-NOPE/reprovision-snapshot")
+    assert resp.status_code == 404
+
+
+def test_reprovision_is_fetch_failure_502_and_no_writes(snapshot_route_client, monkeypatch):
+    db = snapshot_route_client._test_session
+    existing_snapshot = {"resolved_at": "2020-01-01T00:00:00", "profiles": []}
+    parent = LimsSample(sample_id="T7-ISDOWN", sample_type="x", status="received",
+                        catalog_snapshot=existing_snapshot)
+    db.add(parent)
+    db.commit()
+    parent_id = parent.id
+
+    def boom(_sid):
+        raise RuntimeError("IS down")
+    monkeypatch.setattr("sub_samples.service.fetch_sample_services", boom)
+
+    resp = snapshot_route_client.post("/lims-samples/T7-ISDOWN/reprovision-snapshot")
+    assert resp.status_code == 502
+
+    updated = db.query(LimsSample).filter_by(sample_id="T7-ISDOWN").one()
+    assert updated.catalog_snapshot == existing_snapshot
+
+    rows = db.query(CatalogChangeLog).filter_by(
+        entity_type="sample_snapshot", entity_pk=parent_id).all()
+    assert rows == []
+
+
+def test_reprovision_is_none_response_502_and_no_writes(snapshot_route_client, monkeypatch):
+    """fetch_sample_services' OWN 404 (no order_submissions row for this
+    sample_id — distinct from a network/5xx failure, no exception raised)
+    must be refused the same way as an outright fetch failure: reprovisioning
+    to an empty services dict would silently overwrite a good frozen
+    snapshot with an empty one and audit it as a deliberate reprovision."""
+    db = snapshot_route_client._test_session
+    existing_snapshot = {"resolved_at": "2020-01-01T00:00:00",
+                         "profiles": [{"key": "heavy_metals"}]}
+    parent = LimsSample(sample_id="T7-NOORDER", sample_type="x", status="received",
+                        catalog_snapshot=existing_snapshot)
+    db.add(parent)
+    db.commit()
+    parent_id = parent.id
+
+    monkeypatch.setattr(
+        "sub_samples.service.fetch_sample_services", lambda _sid: None,
+    )
+
+    resp = snapshot_route_client.post("/lims-samples/T7-NOORDER/reprovision-snapshot")
+    assert resp.status_code == 502
+
+    updated = db.query(LimsSample).filter_by(sample_id="T7-NOORDER").one()
+    assert updated.catalog_snapshot == existing_snapshot
+
+    rows = db.query(CatalogChangeLog).filter_by(
+        entity_type="sample_snapshot", entity_pk=parent_id).all()
+    assert rows == []
+
+
+def test_reprovision_applies_a_live_catalog_fix_to_an_in_flight_order(
+    snapshot_route_client, monkeypatch,
+):
+    """The feature's actual purpose (Handler ruling): a catalog fix made
+    AFTER registration (here, a corrected vials_required) only reaches an
+    already-registered sample via this deliberate, audited action — never
+    implicitly. Builds the ORIGINAL snapshot via compute_catalog_snapshot
+    itself (not a hand-written stub), matching how registration actually
+    stamps it."""
+    db = snapshot_route_client._test_session
+    svc = _mk_service(db, keyword="HM-PB", title="Lead")
+    prof = _mk_profile(db, key="heavy_metals", vials=2, role="hm", members=[svc])
+    original_snapshot = compute_catalog_snapshot(db, {"heavy_metals": True}, None)
+    parent = LimsSample(sample_id="T7-LIVEFIX", sample_type="x", status="received",
+                        catalog_snapshot=original_snapshot)
+    db.add(parent)
+    db.commit()
+    parent_id = parent.id
+    assert original_snapshot["profiles"][0]["vials_required"] == 2
+
+    # Catalog fix made AFTER registration — corrected vials_required.
+    prof.vials_required = 5
+    db.commit()
+
+    monkeypatch.setattr(
+        "sub_samples.service.fetch_sample_services",
+        lambda _sid: {"services": {"heavy_metals": True}, "package": None},
+    )
+
+    resp = snapshot_route_client.post("/lims-samples/T7-LIVEFIX/reprovision-snapshot")
+    assert resp.status_code == 200, resp.text
+
+    updated = db.query(LimsSample).filter_by(sample_id="T7-LIVEFIX").one()
+    assert updated.catalog_snapshot["profiles"][0]["vials_required"] == 5
+
+    row = db.query(CatalogChangeLog).filter_by(
+        entity_type="sample_snapshot", entity_pk=parent_id).one()
+    changed = row.details["changed"]["catalog_snapshot"]
+    assert changed["before"]["profiles"][0]["vials_required"] == 2
+    assert changed["after"]["profiles"][0]["vials_required"] == 5
+
+
 def test_seed_analyses_for_vial_snapshot_vs_null_identical_when_catalog_unedited(db_session):
     """Minor 2 (fix round 1): equivalence at the seeder layer, mirroring
     test_snapshot_resolution_mirrors_live_resolution_with_no_edit's

@@ -1,9 +1,9 @@
 """AST guard for S4's catalog_change_log (Slice 4): every wired route
-function across Wave A (analysis-services), Wave B (profiles/SLA), and
-Wave C (vial-roles/departments/service-groups/bench-stations) must route
-its mutation through catalog/change_log.py's apply_and_log/log_create/
-log_delete/log_members — never a bare setattr-loop, db.add(), or
-db.delete() with no corresponding log call.
+function across Wave A (analysis-services), Wave B (profiles/SLA), Wave C
+(vial-roles/departments/service-groups/bench-stations), and Task 7's
+snapshot reprovision route must route its mutation through catalog/
+change_log.py's apply_and_log/log_create/log_delete/log_members — never a
+bare setattr-loop, db.add(), or db.delete() with no corresponding log call.
 
 Amendment-audit idiom (test_amendment_audit.py's
 test_grep_guard_every_construction_passes_details): parse main.py's AST
@@ -82,6 +82,10 @@ WIRED_FUNCTIONS = [
     "set_service_group_members",
     "create_bench_station",
     "update_bench_station",
+    # Task 7 — audited snapshot reprovision (2 branches: log_create when the
+    # stored snapshot was NULL, else apply_and_log; either satisfies the
+    # floor check below since both call nodes are present in the source).
+    "reprovision_catalog_snapshot",
 ]
 
 LOG_CALL_NAMES = {"apply_and_log", "log_create", "log_delete", "log_members"}
