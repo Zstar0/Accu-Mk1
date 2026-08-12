@@ -693,3 +693,296 @@ def test_delete_sla_priority_tier_writes_delete_log_row(route_client):
     assert len(rows) == 2
     assert rows[-1].action == "delete"
     assert rows[-1].details["changed"]["sla_tier_id"] == {"before": tier.id, "after": None}
+
+
+# ─── Wave C: vial-roles / departments / service-groups / bench-stations ─────
+# Reuses route_client (StaticPool SQLite, MagicMock(id=7) actor) from Wave A above.
+
+from models import ServiceGroup, Department, BenchStation
+
+
+def test_create_department_writes_create_log_row(route_client):
+    resp = route_client.post("/departments", json={"name": "WC Dept 1"})
+    assert resp.status_code == 201, resp.text
+    dept_id = resp.json()["id"]
+
+    db = route_client._test_session
+    rows = db.query(CatalogChangeLog).filter_by(entity_type="department", entity_pk=dept_id).all()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.action == "create"
+    assert row.user_id == 7
+    assert row.details["changed"]["name"] == {"before": None, "after": "WC Dept 1"}
+
+
+def test_patch_department_changed_field_writes_update_log_row(route_client):
+    db = route_client._test_session
+    dept = Department(name="WC Dept 2", sort_order=0, color="blue", is_system=False)
+    db.add(dept)
+    db.commit()
+
+    resp = route_client.patch(f"/departments/{dept.id}", json={"color": "red"})
+    assert resp.status_code == 200, resp.text
+
+    rows = db.query(CatalogChangeLog).filter_by(entity_type="department", entity_pk=dept.id).all()
+    assert len(rows) == 1
+    assert rows[0].action == "update"
+    assert rows[0].details == {"changed": {"color": {"before": "blue", "after": "red"}}}
+    assert rows[0].user_id == 7
+
+
+def test_patch_department_resubmit_identical_writes_no_row(route_client):
+    db = route_client._test_session
+    dept = Department(name="WC Dept 3", sort_order=1, color="green", is_system=False)
+    db.add(dept)
+    db.commit()
+
+    resp = route_client.patch(f"/departments/{dept.id}", json={"sort_order": 1, "color": "green"})
+    assert resp.status_code == 200, resp.text
+
+    rows = db.query(CatalogChangeLog).filter_by(entity_type="department", entity_pk=dept.id).all()
+    assert rows == []
+
+
+def test_delete_department_writes_delete_log_row(route_client):
+    db = route_client._test_session
+    dept = Department(name="WC Dept 4", sort_order=0, color="blue", is_system=False)
+    db.add(dept)
+    db.commit()
+    dept_id = dept.id
+
+    resp = route_client.delete(f"/departments/{dept_id}")
+    assert resp.status_code == 204, resp.text
+
+    rows = db.query(CatalogChangeLog).filter_by(entity_type="department", entity_pk=dept_id).all()
+    assert len(rows) == 1
+    assert rows[0].action == "delete"
+    assert rows[0].details["changed"]["name"] == {"before": "WC Dept 4", "after": None}
+    assert rows[0].user_id == 7
+
+
+def test_create_vial_role_writes_create_log_row(route_client):
+    db = route_client._test_session
+    dept = Department(name="WC VR Dept", sort_order=0, color="blue", is_system=False)
+    db.add(dept)
+    db.commit()
+
+    resp = route_client.post("/vial-roles", json={
+        "code": "wc1", "label": "WC Role 1", "department_id": dept.id,
+    })
+    assert resp.status_code == 201, resp.text
+    role_id = resp.json()["id"]
+
+    rows = db.query(CatalogChangeLog).filter_by(entity_type="vial_role", entity_pk=role_id).all()
+    assert len(rows) == 1
+    assert rows[0].action == "create"
+    assert rows[0].user_id == 7
+    assert rows[0].details["changed"]["code"] == {"before": None, "after": "wc1"}
+
+
+def test_patch_vial_role_changed_field_writes_update_log_row(route_client):
+    db = route_client._test_session
+    dept = Department(name="WC VR Dept 2", sort_order=0, color="blue", is_system=False)
+    db.add(dept)
+    db.commit()
+    role = VialRole(code="wc2", label="Old Label", department_id=dept.id, boxable=False,
+                     variance_eligible=False, sort_order=0, frozen=False, is_system=False)
+    db.add(role)
+    db.commit()
+
+    resp = route_client.patch(f"/vial-roles/{role.id}", json={"label": "New Label"})
+    assert resp.status_code == 200, resp.text
+
+    rows = db.query(CatalogChangeLog).filter_by(entity_type="vial_role", entity_pk=role.id).all()
+    assert len(rows) == 1
+    assert rows[0].action == "update"
+    assert rows[0].details == {"changed": {"label": {"before": "Old Label", "after": "New Label"}}}
+
+
+def test_patch_vial_role_resubmit_identical_writes_no_row(route_client):
+    db = route_client._test_session
+    dept = Department(name="WC VR Dept 3", sort_order=0, color="blue", is_system=False)
+    db.add(dept)
+    db.commit()
+    role = VialRole(code="wc3", label="Same Label", department_id=dept.id, boxable=False,
+                     variance_eligible=False, sort_order=0, frozen=False, is_system=False)
+    db.add(role)
+    db.commit()
+
+    resp = route_client.patch(f"/vial-roles/{role.id}", json={"label": "Same Label"})
+    assert resp.status_code == 200, resp.text
+
+    rows = db.query(CatalogChangeLog).filter_by(entity_type="vial_role", entity_pk=role.id).all()
+    assert rows == []
+
+
+def test_delete_vial_role_writes_delete_log_row(route_client):
+    db = route_client._test_session
+    dept = Department(name="WC VR Dept 4", sort_order=0, color="blue", is_system=False)
+    db.add(dept)
+    db.commit()
+    role = VialRole(code="wc4", label="Deletable", department_id=dept.id, boxable=False,
+                     variance_eligible=False, sort_order=0, frozen=False, is_system=False)
+    db.add(role)
+    db.commit()
+    role_id = role.id
+
+    resp = route_client.delete(f"/vial-roles/{role_id}")
+    assert resp.status_code == 204, resp.text
+
+    rows = db.query(CatalogChangeLog).filter_by(entity_type="vial_role", entity_pk=role_id).all()
+    assert len(rows) == 1
+    assert rows[0].action == "delete"
+    assert rows[0].details["changed"]["code"] == {"before": "wc4", "after": None}
+
+
+def test_create_service_group_writes_create_log_row(route_client):
+    resp = route_client.post("/service-groups", json={"name": "WC Group 1"})
+    assert resp.status_code == 201, resp.text
+    group_id = resp.json()["id"]
+
+    db = route_client._test_session
+    rows = db.query(CatalogChangeLog).filter_by(entity_type="service_group", entity_pk=group_id).all()
+    assert len(rows) == 1
+    assert rows[0].action == "create"
+    assert rows[0].user_id == 7
+    assert rows[0].details["changed"]["name"] == {"before": None, "after": "WC Group 1"}
+
+
+def test_put_service_group_changed_field_writes_update_log_row(route_client):
+    db = route_client._test_session
+    group = ServiceGroup(name="WC Group 2", color="blue", sort_order=0, is_default=False)
+    db.add(group)
+    db.commit()
+
+    resp = route_client.put(f"/service-groups/{group.id}", json={"color": "red"})
+    assert resp.status_code == 200, resp.text
+
+    rows = db.query(CatalogChangeLog).filter_by(entity_type="service_group", entity_pk=group.id).all()
+    assert len(rows) == 1
+    assert rows[0].action == "update"
+    assert rows[0].details == {"changed": {"color": {"before": "blue", "after": "red"}}}
+
+
+def test_put_service_group_resubmit_identical_writes_no_row(route_client):
+    db = route_client._test_session
+    group = ServiceGroup(name="WC Group 3", color="green", sort_order=2, is_default=False)
+    db.add(group)
+    db.commit()
+
+    resp = route_client.put(f"/service-groups/{group.id}", json={"color": "green", "sort_order": 2})
+    assert resp.status_code == 200, resp.text
+
+    rows = db.query(CatalogChangeLog).filter_by(entity_type="service_group", entity_pk=group.id).all()
+    assert rows == []
+
+
+def test_delete_service_group_writes_delete_log_row(route_client):
+    db = route_client._test_session
+    group = ServiceGroup(name="WC Group 4", color="blue", sort_order=0, is_default=False)
+    db.add(group)
+    db.commit()
+    group_id = group.id
+
+    resp = route_client.delete(f"/service-groups/{group_id}")
+    assert resp.status_code == 200, resp.text
+
+    rows = db.query(CatalogChangeLog).filter_by(entity_type="service_group", entity_pk=group_id).all()
+    assert len(rows) == 1
+    assert rows[0].action == "delete"
+    assert rows[0].details["changed"]["name"] == {"before": "WC Group 4", "after": None}
+
+
+def test_service_group_members_put_before_capture_writes_row(route_client):
+    db = route_client._test_session
+    svc_a = AnalysisService(title="WC Member A", keyword="WC-MEMBER-A", origin="mk1")
+    svc_b = AnalysisService(title="WC Member B", keyword="WC-MEMBER-B", origin="mk1")
+    group = ServiceGroup(name="WC Group Members", color="blue", sort_order=0, is_default=False)
+    db.add_all([svc_a, svc_b, group])
+    db.commit()
+
+    resp1 = route_client.put(f"/service-groups/{group.id}/members",
+                              json={"analysis_service_ids": [svc_a.id]})
+    assert resp1.status_code == 200, resp1.text
+    resp2 = route_client.put(f"/service-groups/{group.id}/members",
+                              json={"analysis_service_ids": [svc_a.id, svc_b.id]})
+    assert resp2.status_code == 200, resp2.text
+
+    rows = db.query(CatalogChangeLog).filter_by(
+        entity_type="service_group_members", entity_pk=group.id
+    ).order_by(CatalogChangeLog.id).all()
+    assert len(rows) == 2  # empty->[a], [a]->[a,b]
+    second = rows[-1]
+    assert second.action == "update"
+    assert second.details == {"changed": {"member_ids": {
+        "before": [svc_a.id], "after": [svc_a.id, svc_b.id],
+    }}}
+
+
+def test_service_group_members_put_identical_set_writes_no_row(route_client):
+    db = route_client._test_session
+    svc = AnalysisService(title="WC Member C", keyword="WC-MEMBER-C", origin="mk1")
+    group = ServiceGroup(name="WC Group Members Noop", color="blue", sort_order=0, is_default=False)
+    db.add_all([svc, group])
+    db.commit()
+
+    route_client.put(f"/service-groups/{group.id}/members", json={"analysis_service_ids": [svc.id]})
+    resp = route_client.put(f"/service-groups/{group.id}/members",
+                             json={"analysis_service_ids": [svc.id]})
+    assert resp.status_code == 200, resp.text
+
+    rows = db.query(CatalogChangeLog).filter_by(
+        entity_type="service_group_members", entity_pk=group.id
+    ).all()
+    assert len(rows) == 1  # only the first PUT is a real change
+
+
+def test_create_bench_station_writes_create_log_row(route_client):
+    db = route_client._test_session
+    dept = Department(name="WC Bench Dept", sort_order=0, color="blue", is_system=False)
+    db.add(dept)
+    db.commit()
+
+    resp = route_client.post("/bench-stations", json={"name": "WC Bench 1", "department_id": dept.id})
+    assert resp.status_code == 201, resp.text
+    station_id = resp.json()["id"]
+
+    rows = db.query(CatalogChangeLog).filter_by(entity_type="bench_station", entity_pk=station_id).all()
+    assert len(rows) == 1
+    assert rows[0].action == "create"
+    assert rows[0].user_id == 7
+    assert rows[0].details["changed"]["name"] == {"before": None, "after": "WC Bench 1"}
+
+
+def test_patch_bench_station_changed_field_writes_update_log_row(route_client):
+    db = route_client._test_session
+    dept = Department(name="WC Bench Dept 2", sort_order=0, color="blue", is_system=False)
+    db.add(dept)
+    db.commit()
+    station = BenchStation(name="WC Bench 2", department_id=dept.id, active=True, sort_order=0)
+    db.add(station)
+    db.commit()
+
+    resp = route_client.patch(f"/bench-stations/{station.id}", json={"sort_order": 5})
+    assert resp.status_code == 200, resp.text
+
+    rows = db.query(CatalogChangeLog).filter_by(entity_type="bench_station", entity_pk=station.id).all()
+    assert len(rows) == 1
+    assert rows[0].action == "update"
+    assert rows[0].details == {"changed": {"sort_order": {"before": 0, "after": 5}}}
+
+
+def test_patch_bench_station_resubmit_identical_writes_no_row(route_client):
+    db = route_client._test_session
+    dept = Department(name="WC Bench Dept 3", sort_order=0, color="blue", is_system=False)
+    db.add(dept)
+    db.commit()
+    station = BenchStation(name="WC Bench 3", department_id=dept.id, active=True, sort_order=3)
+    db.add(station)
+    db.commit()
+
+    resp = route_client.patch(f"/bench-stations/{station.id}", json={"sort_order": 3})
+    assert resp.status_code == 200, resp.text
+
+    rows = db.query(CatalogChangeLog).filter_by(entity_type="bench_station", entity_pk=station.id).all()
+    assert rows == []

@@ -15631,6 +15631,15 @@ async def stream_scale_weight(
 
 # ─── Service Groups ───────────────────────────────────────────────────────────
 
+# Fields snapshotted on create/delete change-log rows — the group's own
+# catalog surface. Membership (service_group_members) is logged separately
+# via log_members in set_service_group_members below.
+SERVICE_GROUP_LOG_FIELDS = (
+    "name", "description", "color", "sort_order", "is_default",
+    "sla_tier_id", "department_id",
+)
+
+
 @app.get("/service-groups", response_model=list[ServiceGroupResponse])
 async def get_service_groups(
     db: Session = Depends(get_db),
@@ -15667,7 +15676,7 @@ async def get_service_groups(
 async def create_service_group(
     data: ServiceGroupCreate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Create a new service group."""
     existing = db.execute(
@@ -15681,8 +15690,18 @@ async def create_service_group(
         db.execute(
             select(ServiceGroup).where(ServiceGroup.is_default == True)  # noqa: E712
         )
+        # Bulk demotion of every OTHER default group — not logged (mirrors
+        # the sla_tier _demote_other_default_tiers ruling: converting a
+        # bulk UPDATE into a per-row loop for logging purposes would be a
+        # behavior change outside this task's scope; the winner's own
+        # create row below is what's logged).
         db.query(ServiceGroup).filter(ServiceGroup.is_default == True).update({"is_default": False})  # noqa: E712
     db.add(group)
+    db.flush()
+    log_create(
+        db, group, SERVICE_GROUP_LOG_FIELDS,
+        entity_type="service_group", entity_pk=group.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(group)
     return ServiceGroupResponse(
@@ -15705,7 +15724,7 @@ async def update_service_group(
     group_id: int,
     data: ServiceGroupUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Update an existing service group."""
     group = db.execute(
@@ -15718,11 +15737,15 @@ async def update_service_group(
 
     update_data = data.model_dump(exclude_unset=True)
     if update_data.get("is_default"):
+        # Bulk demotion of every OTHER default group — not logged, same
+        # ruling as create_service_group's mint-time demotion above.
         db.query(ServiceGroup).filter(
             ServiceGroup.is_default == True, ServiceGroup.id != group_id  # noqa: E712
         ).update({"is_default": False})
-    for field, value in update_data.items():
-        setattr(group, field, value)
+    apply_and_log(
+        db, group, update_data,
+        entity_type="service_group", entity_pk=group.id, user_id=getattr(current_user, "id", None),
+    )
 
     db.commit()
     db.refresh(group)
@@ -15746,7 +15769,7 @@ async def update_service_group(
 async def delete_service_group(
     group_id: int,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Delete a service group. Membership rows cascade-delete."""
     group = db.execute(
@@ -15755,6 +15778,10 @@ async def delete_service_group(
     if not group:
         raise HTTPException(404, f"Service group {group_id} not found")
 
+    log_delete(
+        db, group, SERVICE_GROUP_LOG_FIELDS,
+        entity_type="service_group", entity_pk=group.id, user_id=getattr(current_user, "id", None),
+    )
     db.delete(group)
     db.commit()
     return {"message": f"Service group '{group.name}' deleted"}
@@ -15786,7 +15813,7 @@ async def set_service_group_members(
     group_id: int,
     req: ServiceGroupMembersRequest,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Replace the full membership set for a service group."""
     group = db.execute(
@@ -15801,12 +15828,27 @@ async def set_service_group_members(
         select(AnalysisService).where(AnalysisService.id.in_(req.analysis_service_ids))
     ).scalars().all()
 
+    # Captured BEFORE reassignment below — the log's before/after pair. This
+    # route replaces membership via ORM relationship assignment (not a raw
+    # junction-table delete+insert like set_analysis_profile_members), so
+    # the before snapshot has to come from the relationship itself.
+    before_ids = [s.id for s in group.analysis_services]
     group.analysis_services = list(services)
+    after_ids = [s.id for s in services]
+    log_members(
+        db, entity_type="service_group_members", entity_pk=group_id,
+        user_id=getattr(current_user, "id", None),
+        field="member_ids", before_ids=before_ids, after_ids=after_ids,
+    )
     db.commit()
     return {"count": len(services)}
 
 
 # ─── Departments ───────────────────────────────────────────────────────────────
+
+# Fields snapshotted on create/delete change-log rows.
+DEPARTMENT_LOG_FIELDS = ("name", "sort_order", "color", "is_system")
+
 
 @app.get("/departments", response_model=list[DepartmentResponse])
 async def get_departments(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
@@ -15821,7 +15863,7 @@ async def get_departments(db: Session = Depends(get_db), _current_user=Depends(g
 async def create_department(
     data: DepartmentCreate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     from models import Department
     existing = db.execute(
@@ -15831,6 +15873,11 @@ async def create_department(
         raise HTTPException(400, f"Department '{data.name}' already exists")
     dept = Department(**data.model_dump())
     db.add(dept)
+    db.flush()
+    log_create(
+        db, dept, DEPARTMENT_LOG_FIELDS,
+        entity_type="department", entity_pk=dept.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(dept)
     return dept
@@ -15841,7 +15888,7 @@ async def update_department(
     department_id: int,
     data: DepartmentUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """name is immutable on is_system rows (fix round, spec 4 Task 7): the
     worksheet-inbox legacy lane keys (catalog.roles._LEGACY_LANE_KEYS) are
@@ -15865,8 +15912,10 @@ async def update_department(
         ).scalar_one_or_none()
         if existing:
             raise HTTPException(400, f"Department '{update_data['name']}' already exists")
-    for field, value in update_data.items():
-        setattr(dept, field, value)
+    apply_and_log(
+        db, dept, update_data,
+        entity_type="department", entity_pk=dept.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(dept)
     return dept
@@ -15874,7 +15923,7 @@ async def update_department(
 
 @app.delete("/departments/{department_id}", status_code=204)
 async def delete_department(
-    department_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)
+    department_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)
 ):
     """Refused while any service, group, or bench station still points at
     it — reassign first. A silently orphaned service would be excluded from
@@ -15897,6 +15946,10 @@ async def delete_department(
     ).scalars().first()
     if in_use is not None:
         raise HTTPException(409, "department still has services, groups, or bench stations; reassign them first")
+    log_delete(
+        db, dept, DEPARTMENT_LOG_FIELDS,
+        entity_type="department", entity_pk=dept.id, user_id=getattr(current_user, "id", None),
+    )
     db.delete(dept)
     db.commit()
 
@@ -16465,7 +16518,7 @@ def get_vial_roles(db: Session = Depends(get_db), _current_user=Depends(get_curr
 def create_vial_role(
     data: VialRoleCreate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     from models import VialRole
     if not re.fullmatch(r"[a-z][a-z0-9_]{0,7}", data.code):
@@ -16480,6 +16533,11 @@ def create_vial_role(
         raise HTTPException(400, f"role code '{data.code}' already exists")
     r = VialRole(**data.model_dump())
     db.add(r)
+    db.flush()
+    log_create(
+        db, r, VIAL_ROLE_LOG_FIELDS,
+        entity_type="vial_role", entity_pk=r.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(r)
     return r
@@ -16490,7 +16548,7 @@ def update_vial_role(
     role_id: int,
     data: VialRoleUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     from models import VialRole
     r = db.get(VialRole, role_id)
@@ -16513,8 +16571,10 @@ def update_vial_role(
         effective_code = fields.get("code", r.code)
         if fields["department_id"] is None and effective_code != "xtra":
             raise HTTPException(400, "only xtra may have no department")
-    for field, value in fields.items():
-        setattr(r, field, value)
+    apply_and_log(
+        db, r, fields,
+        entity_type="vial_role", entity_pk=r.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(r)
     return r
@@ -16522,7 +16582,7 @@ def update_vial_role(
 
 @app.delete("/vial-roles/{role_id}", status_code=204)
 def delete_vial_role(
-    role_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)
+    role_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)
 ):
     """is_system → 400 outright. Otherwise refused (409, naming the reference)
     if a profile still fulfills via this role, any vial (parent sample or
@@ -16554,6 +16614,10 @@ def delete_vial_role(
     if box_ref is not None:
         raise HTTPException(
             409, f"role '{r.code}' is still referenced by a box; reassign it first")
+    log_delete(
+        db, r, VIAL_ROLE_LOG_FIELDS,
+        entity_type="vial_role", entity_pk=r.id, user_id=getattr(current_user, "id", None),
+    )
     db.delete(r)
     db.commit()
 
@@ -16564,6 +16628,10 @@ def delete_vial_role(
 # never gates result entry (Handler ruling Q2, deviation 7). Ships EMPTY
 # (G-STATION pending, no seed). No DELETE route — deactivate via active=false
 # (same idiom as /vial-roles' department FK and /departments itself).
+
+# Fields snapshotted on create change-log rows (no delete route to snapshot).
+BENCH_STATION_LOG_FIELDS = ("name", "department_id", "active", "sort_order")
+
 
 @app.get("/bench-stations", response_model=list[BenchStationResponse])
 def get_bench_stations(
@@ -16579,7 +16647,7 @@ def get_bench_stations(
 def create_bench_station(
     data: BenchStationCreate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     from models import BenchStation, Department
     dept = db.get(Department, data.department_id)
@@ -16592,6 +16660,11 @@ def create_bench_station(
         raise HTTPException(400, f"bench station '{data.name}' already exists")
     s = BenchStation(**data.model_dump())
     db.add(s)
+    db.flush()
+    log_create(
+        db, s, BENCH_STATION_LOG_FIELDS,
+        entity_type="bench_station", entity_pk=s.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(s)
     return s
@@ -16602,7 +16675,7 @@ def update_bench_station(
     station_id: int,
     data: BenchStationUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     from models import BenchStation, Department
     s = db.get(BenchStation, station_id)
@@ -16621,8 +16694,10 @@ def update_bench_station(
         ).scalar_one_or_none()
         if dup:
             raise HTTPException(400, f"bench station '{fields['name']}' already exists")
-    for field, value in fields.items():
-        setattr(s, field, value)
+    apply_and_log(
+        db, s, fields,
+        entity_type="bench_station", entity_pk=s.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(s)
     return s
