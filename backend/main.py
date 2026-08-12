@@ -40,7 +40,7 @@ from sqlalchemy.exc import IntegrityError
 from database import get_db, init_db
 from sla_engine import BusinessSchedule, compute_business_minutes, sla_status_dict
 from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment
-from catalog.change_log import apply_and_log, log_create, log_delete
+from catalog.change_log import apply_and_log, log_create, log_delete, log_members
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -15906,6 +15906,24 @@ async def delete_department(
 # carrier of COA section identity. Deliberately distinct from ServiceGroup
 # (bench work) — see models.AnalysisProfile docstring.
 
+# Fields snapshotted on create/delete change-log rows — mirrors
+# SERVICE_LOG_FIELDS above. Excludes updated_by_id/created_at/updated_at:
+# bookkeeping, not catalog data.
+PROFILE_LOG_FIELDS = (
+    "key", "name", "description", "is_addon", "vials_required",
+    "fulfillment_role", "fulfillment_dim", "sort_order", "active",
+    "coa_section_title", "coa_archetype", "coa_sort_order", "sla_tier_id",
+)
+
+# Shared with the two profile-route mint side doors below (POST/PATCH) and
+# the members-PUT department backfill — one field list for every vial_role
+# change-log write in this file.
+VIAL_ROLE_LOG_FIELDS = (
+    "code", "label", "department_id", "boxable", "variance_eligible",
+    "sort_order", "frozen", "is_system",
+)
+
+
 def _profile_to_response(p) -> AnalysisProfileResponse:
     member_ids = [s.id for s in p.analysis_services]
     return AnalysisProfileResponse(
@@ -15991,12 +16009,19 @@ async def create_analysis_profile(
         reg = role_registry(db)
         if data.fulfillment_role not in reg:
             max_sort = db.query(func.coalesce(func.max(VialRole.sort_order), 0)).scalar()
-            db.add(VialRole(
+            role = VialRole(
                 code=data.fulfillment_role, label=data.name,
                 department_id=data.role_department_id,
                 boxable=bool(data.role_boxable), variance_eligible=False,
                 sort_order=max_sort + 1, frozen=False, is_system=False,
-            ))
+            )
+            db.add(role)
+            db.flush()
+            log_create(
+                db, role, VIAL_ROLE_LOG_FIELDS,
+                entity_type="vial_role", entity_pk=role.id,
+                user_id=getattr(current_user, "id", None),
+            )
             logger.info("vial_role_minted code=%s for_profile=%s", data.fulfillment_role, data.key)
     # role_* are auto-mint-only, never AnalysisProfile columns. coa_archetype
     # IS a real column and is deliberately NOT excluded — the guard above has
@@ -16007,6 +16032,11 @@ async def create_analysis_profile(
         updated_by_id=getattr(current_user, "id", None),
     )
     db.add(p)
+    db.flush()
+    log_create(
+        db, p, PROFILE_LOG_FIELDS,
+        entity_type="profile", entity_pk=p.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(p)
     return _profile_to_response(p)
@@ -16104,15 +16134,24 @@ async def update_analysis_profile(
         if effective_role not in reg:
             max_sort = db.query(func.coalesce(func.max(VialRole.sort_order), 0)).scalar()
             effective_name = fields["name"] if "name" in fields else p.name
-            db.add(VialRole(
+            role = VialRole(
                 code=effective_role, label=effective_name,
                 department_id=data.role_department_id,
                 boxable=False, variance_eligible=False,
                 sort_order=max_sort + 1, frozen=False, is_system=False,
-            ))
+            )
+            db.add(role)
+            db.flush()
+            log_create(
+                db, role, VIAL_ROLE_LOG_FIELDS,
+                entity_type="vial_role", entity_pk=role.id,
+                user_id=getattr(current_user, "id", None),
+            )
             logger.info("vial_role_minted code=%s for_profile=%s", effective_role, p.key)
-    for field, value in fields.items():
-        setattr(p, field, value)
+    apply_and_log(
+        db, p, fields,
+        entity_type="profile", entity_pk=p.id, user_id=getattr(current_user, "id", None),
+    )
     p.updated_by_id = getattr(current_user, "id", None)
     db.commit()
     db.refresh(p)
@@ -16121,7 +16160,7 @@ async def update_analysis_profile(
 
 @app.delete("/analysis-profiles/{profile_id}", status_code=204)
 async def delete_analysis_profile(
-    profile_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)
+    profile_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)
 ):
     from models import AnalysisProfile, VialProfileAssignment
     p = db.get(AnalysisProfile, profile_id)
@@ -16146,6 +16185,10 @@ async def delete_analysis_profile(
             f"profile '{p.key}' has vial custody history (current or superseded) "
             "and cannot be deleted — deactivate it instead (active=false)",
         )
+    log_delete(
+        db, p, PROFILE_LOG_FIELDS,
+        entity_type="profile", entity_pk=p.id, user_id=getattr(current_user, "id", None),
+    )
     db.delete(p)
     db.commit()
 
@@ -16175,7 +16218,7 @@ async def set_analysis_profile_members(
     profile_id: int,
     data: AnalysisProfileMembersRequest,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Replace membership. Position in the list becomes sort_order — the row
     order within the profile's COA section.
@@ -16196,6 +16239,13 @@ async def set_analysis_profile_members(
     # only drop ids that don't exist.
     ordered_ids = [sid for sid in data.analysis_service_ids if sid in valid_ids]
 
+    # Captured BEFORE the delete-all below — the log's before/after pair.
+    before_ids = [row.analysis_service_id for row in db.execute(
+        select(analysis_profile_members.c.analysis_service_id)
+        .where(analysis_profile_members.c.analysis_profile_id == profile_id)
+        .order_by(analysis_profile_members.c.sort_order)
+    ).all()]
+
     db.execute(
         analysis_profile_members.delete().where(
             analysis_profile_members.c.analysis_profile_id == profile_id
@@ -16204,6 +16254,11 @@ async def set_analysis_profile_members(
     for i, svc_id in enumerate(ordered_ids):
         db.execute(analysis_profile_members.insert().values(
             analysis_profile_id=profile_id, analysis_service_id=svc_id, sort_order=i))
+    log_members(
+        db, entity_type="profile_members", entity_pk=profile_id,
+        user_id=getattr(current_user, "id", None),
+        field="member_ids", before_ids=before_ids, after_ids=ordered_ids,
+    )
     db.commit()
 
     # Member-department backfill (Task 3): a role minted without a department
@@ -16226,7 +16281,11 @@ async def set_analysis_profile_members(
             # member has the same department."
             dept_ids.discard(None)
             if len(dept_ids) == 1:
-                role.department_id = dept_ids.pop()
+                apply_and_log(
+                    db, role, {"department_id": dept_ids.pop()},
+                    entity_type="vial_role", entity_pk=role.id,
+                    user_id=getattr(current_user, "id", None),
+                )
                 db.commit()
                 logger.info(
                     "vial_role_department_backfilled code=%s department_id=%s for_profile=%s",
@@ -16260,7 +16319,7 @@ async def set_analysis_profile_ride_hosts(
     profile_id: int,
     data: RideHostsRequest,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Replace-all, mirroring set_analysis_profile_members: list position
     becomes priority. A ride host names a role this profile's result may
@@ -16314,6 +16373,13 @@ async def set_analysis_profile_ride_hosts(
         if code == p.fulfillment_role:
             raise HTTPException(400, "a profile may not ride its own role")
 
+    # Captured BEFORE the delete-all below — the log's before/after pair.
+    before_codes = [row.host_role_code for row in db.execute(
+        select(profile_ride_hosts.c.host_role_code)
+        .where(profile_ride_hosts.c.analysis_profile_id == profile_id)
+        .order_by(profile_ride_hosts.c.priority)
+    ).all()]
+
     db.execute(
         profile_ride_hosts.delete().where(
             profile_ride_hosts.c.analysis_profile_id == profile_id
@@ -16322,6 +16388,11 @@ async def set_analysis_profile_ride_hosts(
     for i, code in enumerate(data.host_role_codes):
         db.execute(profile_ride_hosts.insert().values(
             analysis_profile_id=profile_id, host_role_code=code, priority=i))
+    log_members(
+        db, entity_type="ride_hosts", entity_pk=profile_id,
+        user_id=getattr(current_user, "id", None),
+        field="host_role_codes", before_ids=before_codes, after_ids=data.host_role_codes,
+    )
     db.commit()
     return {"count": len(data.host_role_codes)}
 
@@ -16662,10 +16733,24 @@ def create_bench_scan(
 
 # ─── SLA tiers (sub-project A, revised to tiers) ──────────────────────────────
 
+SLA_TIER_LOG_FIELDS = (
+    "name", "target_minutes", "business_hours_only", "is_default",
+    "amber_threshold_percent",
+)
+SLA_PRIORITY_TIER_LOG_FIELDS = ("priority", "sla_tier_id", "service_group_id")
+
 
 def _demote_other_default_tiers(db: Session, keep_id: Optional[int] = None) -> None:
     """Clear is_default on every tier except keep_id, flushing before the caller
-    inserts/updates the promoted row (the partial unique index is immediate)."""
+    inserts/updates the promoted row (the partial unique index is immediate).
+
+    NOT routed through change_log: a bulk .update() demoting N other tiers
+    at once, not a single deliberate edit to one row. Logging it would mean
+    either N synthetic rows attributed to a request that never named those
+    tiers, or converting this to a per-row loop — a behavior change outside
+    this task's scope. Net effect: promoting a tier to default is logged as
+    an is_default=True update on the winner; the implicit demotion of the
+    previous default is NOT separately logged."""
     q = db.query(SlaTier).filter(SlaTier.is_default == True)  # noqa: E712
     if keep_id is not None:
         q = q.filter(SlaTier.id != keep_id)
@@ -16689,13 +16774,18 @@ async def list_sla_tiers(
 async def create_sla_tier(
     data: SlaTierCreate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Create a tier. Setting is_default demotes any existing default."""
     tier = SlaTier(**data.model_dump())
     if tier.is_default:
         _demote_other_default_tiers(db)
     db.add(tier)
+    db.flush()
+    log_create(
+        db, tier, SLA_TIER_LOG_FIELDS,
+        entity_type="sla_tier", entity_pk=tier.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(tier)
     return tier
@@ -16706,7 +16796,7 @@ async def update_sla_tier(
     tier_id: int,
     data: SlaTierUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Update a tier. Promoting demotes the rest; demoting the only default is
     rejected (it's the 24h backstop for unmatched samples)."""
@@ -16722,8 +16812,10 @@ async def update_sla_tier(
                 409,
                 "Cannot unset the only default SLA tier; set another as default instead",
             )
-    for field, value in update_data.items():
-        setattr(tier, field, value)
+    apply_and_log(
+        db, tier, update_data,
+        entity_type="sla_tier", entity_pk=tier.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(tier)
     return tier
@@ -16733,7 +16825,7 @@ async def update_sla_tier(
 async def delete_sla_tier(
     tier_id: int,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Delete a tier. The default cannot be deleted. Groups referencing it have
     sla_tier_id set NULL (FK); priority overrides referencing it cascade-delete."""
@@ -16742,6 +16834,10 @@ async def delete_sla_tier(
         raise HTTPException(404, f"SLA tier {tier_id} not found")
     if tier.is_default:
         raise HTTPException(409, "Cannot delete the default SLA tier; promote another first")
+    log_delete(
+        db, tier, SLA_TIER_LOG_FIELDS,
+        entity_type="sla_tier", entity_pk=tier.id, user_id=getattr(current_user, "id", None),
+    )
     db.delete(tier)
     db.commit()
     return {"message": f"SLA tier {tier_id} deleted"}
@@ -16761,7 +16857,7 @@ async def set_sla_priority_tier(
     priority: SlaPriority,
     data: SlaPriorityTierSet,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Upsert a priority -> tier override.
 
@@ -16787,7 +16883,11 @@ async def set_sla_priority_tier(
         q = q.where(SlaPriorityTier.service_group_id == data.service_group_id)
     row = db.execute(q).scalar_one_or_none()
     if row:
-        row.sla_tier_id = data.sla_tier_id
+        apply_and_log(
+            db, row, {"sla_tier_id": data.sla_tier_id},
+            entity_type="sla_priority_tier", entity_pk=row.id,
+            user_id=getattr(current_user, "id", None),
+        )
     else:
         row = SlaPriorityTier(
             priority=priority,
@@ -16795,6 +16895,12 @@ async def set_sla_priority_tier(
             service_group_id=data.service_group_id,
         )
         db.add(row)
+        db.flush()
+        log_create(
+            db, row, SLA_PRIORITY_TIER_LOG_FIELDS,
+            entity_type="sla_priority_tier", entity_pk=row.id,
+            user_id=getattr(current_user, "id", None),
+        )
     db.commit()
     db.refresh(row)
     return row
@@ -16805,7 +16911,7 @@ async def delete_sla_priority_tier(
     priority: SlaPriority,
     service_group_id: int | None = None,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Remove a priority override.
 
@@ -16821,6 +16927,11 @@ async def delete_sla_priority_tier(
     if not row:
         scope = "global" if service_group_id is None else f"group_id={service_group_id}"
         raise HTTPException(404, f"No override for priority '{priority}' ({scope})")
+    log_delete(
+        db, row, SLA_PRIORITY_TIER_LOG_FIELDS,
+        entity_type="sla_priority_tier", entity_pk=row.id,
+        user_id=getattr(current_user, "id", None),
+    )
     db.delete(row)
     db.commit()
     scope = "global" if service_group_id is None else f"group_id={service_group_id}"

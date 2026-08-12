@@ -17,6 +17,14 @@ Exempt write paths — do NOT route these through this module:
     already has its own dedicated before/after AuditLog trail; don't double-log.
   - The vial_roles.frozen flip (sub_samples/service.py, ~line 1717): a
     system-derived side effect of vial assignment, not a deliberate catalog edit.
+
+Actor idiom: every call site passes user_id=getattr(current_user, "id", None),
+never current_user.id directly. Several route test fixtures override
+get_current_user with a dict-shaped user ({"id": 0, ...}), which has no .id
+attribute — bare access raises AttributeError on those live-DB tests.
+getattr(...) degrades to a NULL actor instead, which is FK-safe (user_id is
+a nullable FK to users.id) and matches this module's existing tolerance for
+an unattributed write.
 """
 from datetime import datetime
 from decimal import Decimal
