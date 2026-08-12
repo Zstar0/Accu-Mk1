@@ -30,9 +30,9 @@ import { Textarea } from '@/components/ui/textarea'
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
 import { invalidateVialAssignmentCaches } from '@/lib/vial-assignment'
-import { ROLE_CHIP_CLASS } from '@/lib/assignment-colors'
 import { useVialRoles } from '@/services/vial-roles'
-import { roleShortLabel } from '@/lib/role-display'
+import { useDepartments } from '@/services/departments'
+import { ROLE_COLOR_CHIP, roleColorForCode, roleShortLabel } from '@/lib/role-display'
 
 /** A role code → short display string. Bound to the vial_roles catalog data
  *  once, in AssignStep (the only useVialRoles() call in this tree), then
@@ -40,6 +40,9 @@ import { roleShortLabel } from '@/lib/role-display'
  *  plain function taking this as a parameter instead of growing its own
  *  query hook. */
 type RoleShortFn = (code: string) => string
+/** A role code → chip class string, threaded alongside RoleShortFn from the
+ *  same AssignStep catalog reads (useVialRoles + useDepartments). */
+type RoleColorFn = (code: string) => string
 
 interface Props {
   parentSampleId: string
@@ -98,7 +101,10 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
   // S1 roles-as-data: AssignStep's vial-plan sections carry full labels but
   // not short forms — the one useVialRoles() call for this tree.
   const vialRolesQ = useVialRoles()
+  const departmentsQ = useDepartments()
   const roleShort: RoleShortFn = code => roleShortLabel(code, vialRolesQ.data)
+  const roleColor: RoleColorFn = code =>
+    ROLE_COLOR_CHIP[roleColorForCode(code, vialRolesQ.data, departmentsQ.data)]
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -242,6 +248,7 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
               vialsForRole={vialsForRole}
               onReset={handleResetBucket}
               roleShort={roleShort}
+              roleColor={roleColor}
             />
           ))}
           <Bucket
@@ -252,6 +259,7 @@ export function AssignStep({ parentSampleId, parentSampleUid }: Props) {
             demand={null}
             onReset={null}
             roleShort={roleShort}
+            roleColor={roleColor}
           />
         </div>
         <VarianceOverrideEditor
@@ -517,7 +525,7 @@ function VariancePill({ n }: { n: number }) {
 }
 
 function Bucket({
-  id, label, shortLabel, vials, demand, onReset, varianceN = 0, varianceVials, withVarianceZone = false, roleShort,
+  id, label, shortLabel, vials, demand, onReset, varianceN = 0, varianceVials, withVarianceZone = false, roleShort, roleColor,
 }: {
   id: BucketId
   label: string
@@ -542,6 +550,8 @@ function Bucket({
   /** S1 roles-as-data: threaded from AssignStep's single useVialRoles() call
    *  down to each DraggableVial chip this bucket (and its variance zone) renders. */
   roleShort: RoleShortFn
+  /** Paired with roleShort — same threading, chip color instead of label. */
+  roleColor: RoleColorFn
 }) {
   const varianceBucketId = `${id}_variance` as BucketId
   const { setNodeRef, isOver } = useDroppable({ id })
@@ -589,7 +599,7 @@ function Bucket({
         {vials.length === 0 && !withVarianceZone && (
           <p className="text-xs text-muted-foreground italic">empty</p>
         )}
-        {vials.map(v => <DraggableVial key={v.sample_id} vial={v} roleShort={roleShort} />)}
+        {vials.map(v => <DraggableVial key={v.sample_id} vial={v} roleShort={roleShort} roleColor={roleColor} />)}
       </div>
       {withVarianceZone && (
         <VarianceDropZone
@@ -598,6 +608,7 @@ function Bucket({
           vials={varianceVials ?? []}
           roleLabel={shortLabel}
           roleShort={roleShort}
+          roleColor={roleColor}
         />
       )}
     </div>
@@ -636,6 +647,7 @@ function DepartmentSection(props: {
   vialsForRole: (code: string) => { core: VialPlanItem[]; variance: VialPlanItem[] }
   onReset: (bucket: BucketId) => void
   roleShort: RoleShortFn
+  roleColor: RoleColorFn
 }) {
   const [onlyRole, ...rest] = props.section.roles
   if (onlyRole && rest.length === 0) {
@@ -649,7 +661,7 @@ function DepartmentSection(props: {
  *  variance zone and rider chips through the same generic path a multi-role
  *  section uses. */
 function SingleRoleSection({
-  section, role, plan, vialsForRole, onReset, roleShort,
+  section, role, plan, vialsForRole, onReset, roleShort, roleColor,
 }: {
   section: VialPlanSection
   role: VialPlanSection['roles'][number]
@@ -657,6 +669,7 @@ function SingleRoleSection({
   vialsForRole: (code: string) => { core: VialPlanItem[]; variance: VialPlanItem[] }
   onReset: (bucket: BucketId) => void
   roleShort: RoleShortFn
+  roleColor: RoleColorFn
 }) {
   const { core, variance } = vialsForRole(role.code)
   const demand = plan.demand[role.code] ?? 0
@@ -683,6 +696,7 @@ function SingleRoleSection({
         withVarianceZone={withVarianceZone}
         onReset={() => onReset(role.code)}
         roleShort={roleShort}
+        roleColor={roleColor}
       />
       <RiderChips profiles={role.profiles} />
     </div>
@@ -706,13 +720,14 @@ function SingleRoleSection({
  *  landing, just one level up; only the per-role SubDropZone/
  *  VarianceDropZone below are real drop targets. */
 function MultiRoleSection({
-  section, plan, vialsForRole, onReset, roleShort,
+  section, plan, vialsForRole, onReset, roleShort, roleColor,
 }: {
   section: VialPlanSection
   plan: VialPlanResponse
   vialsForRole: (code: string) => { core: VialPlanItem[]; variance: VialPlanItem[] }
   onReset: (bucket: BucketId) => void
   roleShort: RoleShortFn
+  roleColor: RoleColorFn
 }) {
   const totals = section.roles.reduce(
     (acc, r) => {
@@ -765,6 +780,7 @@ function MultiRoleSection({
               varianceN={roleVarianceN}
               onReset={() => onReset(role.code)}
               roleShort={roleShort}
+              roleColor={roleColor}
             />
             <RiderChips profiles={role.profiles} />
             {showVarianceZone && (
@@ -774,6 +790,7 @@ function MultiRoleSection({
                 vials={variance}
                 roleLabel={roleShort(role.code)}
                 roleShort={roleShort}
+                roleColor={roleColor}
               />
             )}
           </div>
@@ -786,13 +803,14 @@ function MultiRoleSection({
 /** Droppable sub-zone for variance vials within a role bucket.
  *  Shows "HPLC Variance · paid N" header and accepts drops into `{role}_variance`. */
 function VarianceDropZone({
-  id, paidCount, vials, roleLabel, roleShort,
+  id, paidCount, vials, roleLabel, roleShort, roleColor,
 }: {
   id: BucketId
   paidCount: number
   vials: VialPlanItem[]
   roleLabel: string
   roleShort: RoleShortFn
+  roleColor: RoleColorFn
 }) {
   const { setNodeRef, isOver } = useDroppable({ id })
   const extraCount = Math.max(0, vials.length - paidCount)
@@ -817,14 +835,14 @@ function VarianceDropZone({
         {vials.length === 0 && (
           <p className="text-xs text-muted-foreground italic">drop here</p>
         )}
-        {vials.map(v => <DraggableVial key={v.sample_id} vial={v} roleShort={roleShort} />)}
+        {vials.map(v => <DraggableVial key={v.sample_id} vial={v} roleShort={roleShort} roleColor={roleColor} />)}
       </div>
     </div>
   )
 }
 
 function SubDropZone({
-  id, label, vials, demand, onReset, varianceN = 0, roleShort,
+  id, label, vials, demand, onReset, varianceN = 0, roleShort, roleColor,
 }: {
   id: BucketId
   label: string
@@ -833,6 +851,7 @@ function SubDropZone({
   onReset: () => void
   varianceN?: number
   roleShort: RoleShortFn
+  roleColor: RoleColorFn
 }) {
   const { setNodeRef, isOver } = useDroppable({ id })
   const isShort = vials.length < demand
@@ -867,13 +886,19 @@ function SubDropZone({
         )}
       </div>
       <div className="flex flex-wrap gap-1.5">
-        {vials.map(v => <DraggableVial key={v.sample_id} vial={v} roleShort={roleShort} />)}
+        {vials.map(v => <DraggableVial key={v.sample_id} vial={v} roleShort={roleShort} roleColor={roleColor} />)}
       </div>
     </div>
   )
 }
 
-function DraggableVial({ vial, roleShort }: { vial: VialPlanItem; roleShort: RoleShortFn }) {
+function DraggableVial({
+  vial, roleShort, roleColor,
+}: {
+  vial: VialPlanItem
+  roleShort: RoleShortFn
+  roleColor: RoleColorFn
+}) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: vial.sample_id,
   })
@@ -881,7 +906,7 @@ function DraggableVial({ vial, roleShort }: { vial: VialPlanItem; roleShort: Rol
     ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` }
     : undefined
   const role = vial.assignment_role ?? 'xtra'
-  const roleColor = ROLE_CHIP_CLASS[role] ?? ROLE_CHIP_CLASS.xtra
+  const chipColor = roleColor(role)
   return (
     <div
       ref={setNodeRef}
@@ -897,7 +922,7 @@ function DraggableVial({ vial, roleShort }: { vial: VialPlanItem; roleShort: Rol
       )}
     >
       <span>{vial.sample_id}</span>
-      <span className={cn('text-[9px] px-1.5 py-0.5 rounded uppercase tracking-wide', roleColor)}>
+      <span className={cn('text-[9px] px-1.5 py-0.5 rounded uppercase tracking-wide', chipColor)}>
         {roleShort(role)}
       </span>
     </div>

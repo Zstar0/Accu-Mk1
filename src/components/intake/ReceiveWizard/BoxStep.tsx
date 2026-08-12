@@ -14,10 +14,17 @@ import {
   listOrderBoxes, createBox, assignVialsToBox, unassignVialsFromBox, deleteBox, printBox,
   listSubSamples, type LimsBox, type SubSample,
 } from '@/lib/api'
-import { ROLE_CHIP_CLASS, roleBadgeClass, roleTextClass } from '@/lib/assignment-colors'
 import { invalidateBoxCaches } from '@/lib/box-cache'
 import { useVialRoles, type VialRoleRow } from '@/services/vial-roles'
-import { roleFullLabel, roleShortLabel } from '@/lib/role-display'
+import { useDepartments, type Department } from '@/services/departments'
+import {
+  ROLE_COLOR_BADGE,
+  ROLE_COLOR_CHIP,
+  ROLE_COLOR_TEXT,
+  roleColorForCode,
+  roleFullLabel,
+  roleShortLabel,
+} from '@/lib/role-display'
 
 // Snap the drag preview's CENTER to the cursor. Without it, the overlay is
 // offset by wherever inside the chip the grab started, so the "held" copy
@@ -94,6 +101,19 @@ type BoxRole = string
 // below).
 export function roleLabel(role: string, roles?: VialRoleRow[]): string {
   return roleFullLabel(role, roles)
+}
+
+// S1 roles-as-data: badge/chip/text color, same catalog-then-department
+// fallback chain as roleLabel above — every box/vial-chip surface in this
+// file threads (roles, departments) through instead of a hardcoded map.
+export function roleBadgeClassFor(role: string, roles?: VialRoleRow[], departments?: Department[]): string {
+  return ROLE_COLOR_BADGE[roleColorForCode(role, roles, departments)]
+}
+export function roleTextClassFor(role: string, roles?: VialRoleRow[], departments?: Department[]): string {
+  return ROLE_COLOR_TEXT[roleColorForCode(role, roles, departments)]
+}
+export function roleChipClassFor(role: string, roles?: VialRoleRow[], departments?: Department[]): string {
+  return ROLE_COLOR_CHIP[roleColorForCode(role, roles, departments)]
 }
 
 // Default per-box capacity: the lab's smallest box holds 6 vials. Auto-assign
@@ -199,6 +219,8 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
   })
 
   const vialRolesQ = useVialRoles()
+  const departmentsQ = useDepartments()
+  const departments = departmentsQ.data
 
   const boxes = boxesQ.data ?? []
   const vials = (vialsQ.data ?? []).filter(v => v.assignment_role)
@@ -426,7 +448,7 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
               return (
                 <div key={role} className="flex flex-col gap-3">
                   <div className="flex items-center justify-between">
-                    <h3 className={`font-semibold ${roleTextClass(role)}`}>{roleLabel(role, vialRoles)}</h3>
+                    <h3 className={`font-semibold ${roleTextClassFor(role, vialRoles, departments)}`}>{roleLabel(role, vialRoles)}</h3>
                     {/* Disabled (not hidden) when this column is on the grid
                         only via the existing-box union: the column and its
                         boxes stay usable, but minting a NEW box for a role
@@ -448,6 +470,7 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
                       onAutoAssign={() => void handleAutoAssign(b)}
                       onRemove={() => void handleRemoveBox(b)}
                       roles={vialRoles}
+                      departments={departments}
                     />
                   ))}
                 </div>
@@ -458,7 +481,7 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
           {/* RIGHT: unboxed vials, grouped by role — drag source for overrides and
               a drop target: drag a boxed chip here to clear its box membership. */}
           <UnboxedPanel orderLabel={orderLabel} vials={unboxedVials} activeId={activeId} roles={roles}
-            vialRoles={vialRoles} />
+            vialRoles={vialRoles} departments={departments} />
         </div>
       </div>
 
@@ -468,7 +491,7 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
           (which reads backwards). */}
       <DragOverlay dropAnimation={null} modifiers={[snapCenterToCursor]}>
         {activeVial ? (
-          <span className={`cursor-grabbing rounded ${ROLE_CHIP_CLASS[activeVial.assignment_role ?? ''] ?? 'bg-muted'} px-2 py-0.5 font-mono text-xs`}>
+          <span className={`cursor-grabbing rounded ${roleChipClassFor(activeVial.assignment_role ?? '', vialRoles, departments)} px-2 py-0.5 font-mono text-xs`}>
             {activeVial.sample_id}
           </span>
         ) : null}
@@ -477,8 +500,8 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
   )
 }
 
-function UnboxedPanel({ orderLabel, vials, activeId, roles, vialRoles }:
-  { orderLabel: string; vials: OrderVial[]; activeId: string | null; roles: string[]; vialRoles?: VialRoleRow[] }) {
+function UnboxedPanel({ orderLabel, vials, activeId, roles, vialRoles, departments }:
+  { orderLabel: string; vials: OrderVial[]; activeId: string | null; roles: string[]; vialRoles?: VialRoleRow[]; departments?: Department[] }) {
   // Sentinel-id droppable: dropping a boxed chip here unassigns it (drag out).
   const { setNodeRef, isOver } = useDroppable({ id: 'unboxed' })
   return (
@@ -490,10 +513,11 @@ function UnboxedPanel({ orderLabel, vials, activeId, roles, vialRoles }:
         if (rv.length === 0) return null
         return (
           <div key={role} className="mb-2">
-            <div className={`mb-1 text-xs ${roleTextClass(role)}`}>{roleLabel(role, vialRoles)}</div>
+            <div className={`mb-1 text-xs ${roleTextClassFor(role, vialRoles, departments)}`}>{roleLabel(role, vialRoles)}</div>
             <div className="flex flex-wrap gap-1">
               {rv.map(v => (
-                <VialChip key={v.sample_id} id={v.sample_id} role={role} dimmed={activeId === v.sample_id} />
+                <VialChip key={v.sample_id} id={v.sample_id} role={role} dimmed={activeId === v.sample_id}
+                  roles={vialRoles} departments={departments} />
               ))}
             </div>
           </div>
@@ -504,11 +528,17 @@ function UnboxedPanel({ orderLabel, vials, activeId, roles, vialRoles }:
   )
 }
 
-function VialChip({ id, role, dimmed }: { id: string; role: string; dimmed?: boolean }) {
+function VialChip({ id, role, dimmed, roles, departments }: {
+  id: string
+  role: string
+  dimmed?: boolean
+  roles?: VialRoleRow[]
+  departments?: Department[]
+}) {
   const { attributes, listeners, setNodeRef } = useDraggable({ id })
   return (
     <span ref={setNodeRef} {...listeners} {...attributes}
-      className={`cursor-grab rounded ${ROLE_CHIP_CLASS[role] ?? 'bg-muted'} px-2 py-0.5 font-mono text-xs ${dimmed ? 'opacity-40' : ''}`}>
+      className={`cursor-grab rounded ${roleChipClassFor(role, roles, departments)} px-2 py-0.5 font-mono text-xs ${dimmed ? 'opacity-40' : ''}`}>
       {id}
     </span>
   )
@@ -528,17 +558,18 @@ interface BoxCardProps {
   // Threaded to the print template below — a print template must not grow
   // its own query hook.
   roles?: VialRoleRow[]
+  departments?: Department[]
 }
 
-function BoxCard({ box, boxVials, capacity, activeId, onCapacityChange, onAutoAssign, onRemove, roles }: BoxCardProps) {
+function BoxCard({ box, boxVials, capacity, activeId, onCapacityChange, onAutoAssign, onRemove, roles, departments }: BoxCardProps) {
   const qc = useQueryClient()
   const { setNodeRef, isOver } = useDroppable({ id: String(box.id) })
   const { printNode } = usePrintLabel()
   return (
     <div ref={setNodeRef}
-      className={`rounded border p-2 ${roleBadgeClass(box.role)} ${isOver ? 'ring-2 ring-primary' : ''}`}>
+      className={`rounded border p-2 ${roleBadgeClassFor(box.role, roles, departments)} ${isOver ? 'ring-2 ring-primary' : ''}`}>
       <div className="flex items-center justify-between">
-        <span className={`font-mono font-semibold ${roleTextClass(box.role)}`}>{box.label_code}</span>
+        <span className={`font-mono font-semibold ${roleTextClassFor(box.role, roles, departments)}`}>{box.label_code}</span>
         <div className="flex items-center gap-1">
           <Button size="sm" variant="outline" className="gap-2"
             onClick={() => { void printBox(box.id).then(() => invalidateBoxCaches(qc, box.order_key)); printNode(
@@ -560,7 +591,7 @@ function BoxCard({ box, boxVials, capacity, activeId, onCapacityChange, onAutoAs
         <div className="mt-1 flex flex-wrap gap-1">
           {boxVials.map(v => (
             <VialChip key={v.sample_id} id={v.sample_id} role={v.assignment_role ?? ''}
-              dimmed={activeId === v.sample_id} />
+              dimmed={activeId === v.sample_id} roles={roles} departments={departments} />
           ))}
         </div>
       )}

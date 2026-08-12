@@ -11,12 +11,12 @@ import {
 import { OrderReceiveSession } from '@/components/intake/OrderReceiveSession'
 import { closeBox, getSenaiteSamples, listActiveBoxes, type LimsBox } from '@/lib/api'
 import { getWordpressUrl } from '@/lib/api-profiles'
-import { roleBadgeClass, roleTextClass } from '@/lib/assignment-colors'
 import { invalidateBoxCaches } from '@/lib/box-cache'
 import { groupSamplesByOrder } from '@/lib/inbox-orders'
 import { useUIStore } from '@/store/ui-store'
 import { useVialRoles } from '@/services/vial-roles'
-import { roleFullLabel } from '@/lib/role-display'
+import { useDepartments } from '@/services/departments'
+import { ROLE_COLOR_BADGE, ROLE_COLOR_TEXT, roleColorForCode, roleFullLabel } from '@/lib/role-display'
 
 const stripWp = (s: string) => s.replace(/^wp-/i, '')
 const inc = (hay: string, needle: string) => hay.toLowerCase().includes(needle.trim().toLowerCase())
@@ -62,6 +62,8 @@ export function ActiveBoxesPage() {
   const qc = useQueryClient()
   const vialRolesQ = useVialRoles()
   const vialRoles = vialRolesQ.data
+  const departmentsQ = useDepartments()
+  const departments = departmentsQ.data
   const [closing, setClosing] = useState<LimsBox | null>(null)
   // A label click opens that order's check-in overlay (OrderReceiveSession)
   // in place, landed on the Boxing tab — all boxes of one order share it.
@@ -239,7 +241,7 @@ export function ActiveBoxesPage() {
                           type="button"
                           onClick={() => setSessionOrderKey(b.order_key)}
                           disabled={sessionOrderKey === b.order_key && sessionQ.isPending}
-                          className={`inline-flex items-center gap-1.5 font-mono font-semibold hover:underline ${roleTextClass(b.role)}`}
+                          className={`inline-flex items-center gap-1.5 font-mono font-semibold hover:underline ${ROLE_COLOR_TEXT[roleColorForCode(b.role, vialRoles, departments)]}`}
                         >
                           {b.label_code}
                           {sessionOrderKey === b.order_key && sessionQ.isPending && (
@@ -248,7 +250,7 @@ export function ActiveBoxesPage() {
                         </button>
                       </td>
                       <td className="py-2 pr-4">
-                        <span className={`rounded px-2 py-0.5 text-xs ${roleBadgeClass(b.role)}`}>
+                        <span className={`rounded px-2 py-0.5 text-xs ${ROLE_COLOR_BADGE[roleColorForCode(b.role, vialRoles, departments)]}`}>
                           {vialRolesQ.isLoading ? '…' : roleFullLabel(b.role, vialRoles)}
                         </span>
                       </td>
@@ -288,7 +290,7 @@ export function ActiveBoxesPage() {
                           )}
                         </td>
                         <td className="py-1.5 pr-4">
-                          <span className={`rounded px-2 py-0.5 text-xs ${roleBadgeClass(v.assignment_role)}`}>
+                          <span className={`rounded px-2 py-0.5 text-xs ${ROLE_COLOR_BADGE[roleColorForCode(v.assignment_role, vialRoles, departments)]}`}>
                             {vialRolesQ.isLoading
                               ? '…'
                               : v.assignment_role

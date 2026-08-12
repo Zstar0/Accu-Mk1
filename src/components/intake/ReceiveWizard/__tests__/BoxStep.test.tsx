@@ -33,7 +33,7 @@ vi.mock('@/components/samples/usePrintLabel', () => ({
 
 import {
   listOrderBoxes, createBox, assignVialsToBox, unassignVialsFromBox, deleteBox, listSubSamples,
-  printBox, getVialRoles, type LimsBox, type SubSample, type VialRoleRow,
+  printBox, getVialRoles, getDepartments, type LimsBox, type SubSample, type VialRoleRow,
 } from '@/lib/api'
 
 vi.mock('@/lib/api', () => ({
@@ -45,6 +45,7 @@ vi.mock('@/lib/api', () => ({
   printBox: vi.fn(),
   listSubSamples: vi.fn(),
   getVialRoles: vi.fn(),
+  getDepartments: vi.fn(),
 }))
 
 import { BoxStep, boxKeyboardCoordinates, roleLabel } from '@/components/intake/ReceiveWizard/BoxStep'
@@ -57,6 +58,7 @@ const mockDeleteBox = vi.mocked(deleteBox)
 const mockListSubSamples = vi.mocked(listSubSamples)
 const mockPrintBox = vi.mocked(printBox)
 const mockGetVialRoles = vi.mocked(getVialRoles)
+const mockGetDepartments = vi.mocked(getDepartments)
 
 // The catalog-driven default: the same four boxable roles + order BoxStep
 // hardcoded before this task (hm stays boxable=false — spec-3 Handler
@@ -105,6 +107,7 @@ function setupBackend(vials: Vial[]) {
   let nextNumber = 1
 
   mockGetVialRoles.mockResolvedValue(DEFAULT_VIAL_ROLES)
+  mockGetDepartments.mockResolvedValue([])
   mockListSubSamples.mockResolvedValue({
     parent: { sub_sample_count: vials.length },
     sub_samples: vials,
