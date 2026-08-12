@@ -1100,6 +1100,17 @@ class LimsSample(Base):
     # Authority note: lims_workflow_shadow_evaluations is the authoritative
     # history; this column is its O(1) materialization.
     native_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # S4 snapshot rider (2026-08-11): frozen catalog resolution stamped ONCE
+    # by the registration bg task (backend/catalog/snapshot.py), NULL for
+    # every pre-slice row and for a sample whose registration signal never
+    # reached the bg task. Shape: {"resolved_at": iso-utc, "profiles": [...]}
+    # — see compute_catalog_snapshot's docstring for the per-profile fields.
+    # Task 6 reads this first (snapshot-sourced resolve_catalog_fulfillment /
+    # seeder member resolution) with NULL/missing-profile live-catalog
+    # fallback; Task 7 adds the only OTHER writer (audited reprovision).
+    catalog_snapshot: Mapped[Optional[dict]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

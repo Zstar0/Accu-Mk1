@@ -14734,7 +14734,9 @@ def _shadow_analyses_at_registration_bg(sample_id: str) -> None:
 
 def _native_placeholders_at_registration_bg(sample_id: str) -> None:
     """Native sibling of _shadow_analyses_at_registration_bg: mint pending
-    parent-tier rows for every ORDERED native analysis service.
+    parent-tier rows for every ORDERED native analysis service, then stamp
+    the S4 snapshot rider (catalog_snapshot) so check-in seeds what the
+    customer bought (task 6), not whatever the catalog looks like later.
 
     Same hardening rationale as its sibling — own session, never raises. A
     catalog miss or IS outage must not fail the registration; check-in
@@ -14746,6 +14748,7 @@ def _native_placeholders_at_registration_bg(sample_id: str) -> None:
         from lims_analyses.parent_placeholders import seed_parent_placeholders
         from sub_samples.service import fetch_sample_services
         from models import LimsSample
+        from catalog.snapshot import compute_catalog_snapshot
 
         raw = fetch_sample_services(sample_id)
         if not raw:
@@ -14758,6 +14761,15 @@ def _native_placeholders_at_registration_bg(sample_id: str) -> None:
             db, parent=parent,
             services=raw.get("services") or {}, package=raw.get("package"),
         )
+        # Once-only: a replayed registration signal (IS retry, duplicate
+        # webhook) must NOT restamp — the whole point is freezing what was
+        # resolved the FIRST time. System write (s2s has no user); no
+        # change-log row for the stamp itself (that ledger is task 7's
+        # audited reprovision, a deliberate human/API action).
+        if parent.catalog_snapshot is None:
+            parent.catalog_snapshot = compute_catalog_snapshot(
+                db, raw.get("services") or {}, raw.get("package"),
+            )
         db.commit()
         logger.info(
             "registry.native_placeholder_seed sample_id=%s created=%s existing=%s skipped=%s",

@@ -1639,6 +1639,10 @@ def _run_migrations():
         occurred_at TIMESTAMP NOT NULL DEFAULT NOW()
     )""",
         "CREATE INDEX IF NOT EXISTS ix_catalog_change_log_entity ON catalog_change_log (entity_type, entity_pk)",
+        # S4 snapshot rider (2026-08-11): frozen catalog resolution stamped
+        # once by registration, so check-in seeds what the customer bought
+        # even after a later catalog edit (backend/catalog/snapshot.py).
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS catalog_snapshot JSONB",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
