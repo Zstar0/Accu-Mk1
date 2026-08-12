@@ -604,6 +604,13 @@ class PeptideAnalyte(Base):
     Junction row connecting a Peptide Standard to one AnalysisService.
     Each peptide has up to 4 analyte slots (slot 1-4).
     sample_id is the Senaite sample ID for the standard reference vial.
+
+    4-slot ceiling (product decision, S6c 2026-08-11): the entire pipeline is
+    shaped around SENAITE's Analyte1..Analyte4 fields (parent meta, seeder
+    slot maps, conformance, alias slots) — widening requires a program, not a
+    CHECK edit. NOTE ck_peptide_analyte_slot_range exists only where
+    create_all built this table after 2026-XX; older DBs rely on this API-edge
+    validation (the only gate before the DB).
     """
     __tablename__ = "peptide_analytes"
 

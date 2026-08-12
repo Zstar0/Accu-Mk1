@@ -2812,7 +2812,7 @@ class MethodResponse(BaseModel):
 
 class AnalyteInput(BaseModel):
     """One analyte slot for peptide create/update."""
-    slot: int
+    slot: int = Field(ge=1, le=4)
     analysis_service_id: int
     sample_id: Optional[str] = None
     component_peptide_id: Optional[int] = None
@@ -3885,6 +3885,11 @@ async def create_peptide(data: PeptideCreate, db: Session = Depends(get_db), cur
                     )
                 ).scalar_one_or_none()
                 if comp_analyte:
+                    if slot_num > 4:
+                        raise HTTPException(
+                            400,
+                            detail="blend resolves more than 4 analyte slots (peptide_analytes carries a 4-slot ceiling — a product decision, see PeptideAnalyte docstring)",
+                        )
                     db.add(PeptideAnalyte(
                         peptide_id=peptide.id,
                         analysis_service_id=comp_analyte.analysis_service_id,
@@ -4069,6 +4074,11 @@ async def update_peptide(peptide_id: int, data: PeptideUpdate, db: Session = Dep
                         )
                     ).scalar_one_or_none()
                     if comp_analyte:
+                        if slot_num > 4:
+                            raise HTTPException(
+                                400,
+                                detail="blend resolves more than 4 analyte slots (peptide_analytes carries a 4-slot ceiling — a product decision, see PeptideAnalyte docstring)",
+                            )
                         db.add(PeptideAnalyte(
                             peptide_id=peptide.id,
                             analysis_service_id=comp_analyte.analysis_service_id,
