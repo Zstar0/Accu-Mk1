@@ -50,26 +50,62 @@ def resolve_catalog_fulfillment(db, services: dict, snapshot: Optional[dict] = N
     iterate by (role sort_order, profile key) — never by dict/query
     iteration order.
 
-    snapshot (S4 rider, task 6): when given a frozen catalog_snapshot dict
-    (backend/catalog/snapshot.py's shape — LimsSample.catalog_snapshot),
-    the entire walk below is skipped — no AnalysisProfile/VialRole/
-    profile_ride_hosts queries run at all — and the result is rebuilt from
-    the snapshot's frozen per-profile fields instead (_resolve_from_
-    snapshot mirrors this same algorithm over frozen data). `services` is
-    NOT walked for fulfillment in that branch; it is only used for a
-    cheap, DB-free diagnostic (_log_snapshot_divergence) comparing its
-    truthy keys against the snapshot's profile keys, since a purchase made
-    after registration (a post-order add-on) can never be reflected by an
-    already-frozen snapshot and that gap is otherwise silent. NULL (the
-    default) is the live path below, unchanged.
+    snapshot (S4 rider, task 6, fix round 1 — per-profile hybrid merge): when
+    given a frozen catalog_snapshot dict (backend/catalog/snapshot.py's
+    shape — LimsSample.catalog_snapshot), `services` is partitioned by
+    profile key into snapshot-covered and uncovered. Covered keys resolve
+    from the frozen snapshot ONLY (_resolve_from_snapshot, zero live
+    catalog queries) — a live catalog edit to one of those profiles can
+    never retroactively change an already-registered sample's fulfillment.
+    Uncovered keys (a post-order add-on, purchased after the snapshot was
+    frozen — logged catalog_snapshot.fallback_live per key) run through the
+    SAME live walk as the NULL-snapshot path below (_resolve_live), merged
+    INTO the snapshot-seeded result rather than a separate one: per role,
+    demand is max(frozen, live), profile-id lists are appended (never
+    overwritten), and a live-resolved rider's host-attachment check
+    (`result.get(h) and result[h].demand > 0`) sees the ALREADY-MERGED
+    result — so a post-order rider can attach to a snapshot-frozen host
+    that already carries real demand, exactly as if both had resolved
+    together live. NULL (the default) skips the snapshot machinery
+    entirely and returns _resolve_live's fresh result, unchanged from
+    before this task.
     """
-    if snapshot is not None:
-        _log_snapshot_divergence(services, snapshot)
-        return _resolve_from_snapshot(snapshot)
+    if snapshot is None:
+        return _resolve_live(db, services)
 
+    result = _resolve_from_snapshot(snapshot)
+
+    snapshot_keys = {p["key"] for p in (snapshot.get("profiles") or [])}
+    uncovered = {}
+    for key, val in (services or {}).items():
+        if key in _QUIET_KEYS or not val or key in snapshot_keys:
+            continue
+        uncovered[key] = val
+        log.warning(
+            "catalog_snapshot.fallback_live reason=profile_not_in_snapshot key=%s",
+            key,
+        )
+    if uncovered:
+        _resolve_live(db, uncovered, result=result)
+    return result
+
+
+def _resolve_live(db, services: dict, result: Optional[dict] = None) -> dict:
+    """The live anchor/rider walk: queries AnalysisProfile/VialRole/
+    profile_ride_hosts fresh and resolves `services` against them.
+
+    `result` is the dict to build INTO — defaults to a fresh legacy-bucket
+    floor (the NULL-snapshot / no-merge case), or the snapshot-seeded dict
+    from resolve_catalog_fulfillment's merge branch (fix round 1) so this
+    same code, unmodified, both merges (`rf.demand = max(rf.demand, ...)`
+    against whatever the snapshot already put there, `rf.host_profile_ids.
+    append(...)` onto the snapshot's own list) and lets the rider
+    self-mint-vs-attach check below see snapshot-derived demand that's
+    already sitting in `result` before this function ever ran."""
     from models import AnalysisProfile, VialRole, profile_ride_hosts
 
-    result = {b: RoleFulfillment() for b in _LEGACY_BUCKETS}
+    if result is None:
+        result = {b: RoleFulfillment() for b in _LEGACY_BUCKETS}
     ordered = []
     for key, val in (services or {}).items():
         if key in _QUIET_KEYS or not val:
@@ -178,28 +214,6 @@ def _resolve_from_snapshot(snapshot: dict) -> dict:
             rf.demand = max(rf.demand, p["vials_required"] or 1)  # standalone rider mints its own vial
             rf.host_profile_ids.append(p["profile_id"])
     return result
-
-
-def _log_snapshot_divergence(services: dict, snapshot: dict) -> None:
-    """Pure dict/set comparison, no DB access (keeps the snapshot branch of
-    resolve_catalog_fulfillment free of live catalog queries): a truthy,
-    non-quiet-key `services` entry with no matching profile key in the
-    frozen snapshot means the live order changed after registration in a
-    way the frozen snapshot can never reflect — most visibly, a post-order
-    add-on's own vial demand, which (unlike the legacy hplc/endo/ster
-    buckets) has no legacy-value floor to catch the drift elsewhere. Logged
-    here since a precise diagnosis would need a live profile lookup this
-    branch deliberately avoids: an unknown key or a kind-dim (non-role) key
-    looks identical to a real divergence from here and will also log —
-    accepted as noise, the signal is "services now disagrees with what was
-    frozen," not a precise classification of why.
-    """
-    snapshot_keys = {p["key"] for p in (snapshot.get("profiles") or [])}
-    for key, val in (services or {}).items():
-        if key in _QUIET_KEYS or not val:
-            continue
-        if key not in snapshot_keys:
-            log.warning("catalog_snapshot.services_diverged_from_snapshot key=%s", key)
 
 
 def derive_base_demand_catalog(db, services: dict, snapshot: Optional[dict] = None) -> dict:

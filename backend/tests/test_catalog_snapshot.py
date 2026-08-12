@@ -357,10 +357,17 @@ def test_registration_hook_still_never_raises_when_is_unreachable(monkeypatch):
 # NULL snapshot leaves the whole check-in chain byte-identical to today, (d)
 # rider attachment uses the FROZEN role_sort_order (not a live re-read) for
 # its sort, (e) with no catalog edit at all the snapshot-sourced rebuild is
-# structurally identical to the live walk it mirrors, and (f)/(g)/(h) the
-# fallback-to-live paths (profile not in the snapshot, a snapshot service id
-# that no longer resolves, a services key the snapshot never saw) each log
-# their own catalog_snapshot.* line.
+# structurally identical to the live walk it mirrors, (f)/(g) the seeder's
+# own fallback-to-live paths (an edge naming a profile not in the snapshot,
+# a snapshot service id that no longer resolves) each log their own
+# catalog_snapshot.* line, and — fix round 1, per-profile hybrid merge,
+# ruled — a services key with no matching snapshot profile (a post-order
+# add-on) merges REAL live demand + custody-visible fulfillment into the
+# frozen result rather than only logging a divergence, including a
+# live-merged rider attaching to a snapshot-frozen host; two more minors
+# close out the round: frozen member ORDER survives a live re-order on the
+# seeding path, and snapshot vs NULL seeding is identical when the catalog
+# is unedited between the two.
 
 
 def _mk_edge(db, sub, prof, relation):
@@ -634,25 +641,154 @@ def test_seeder_logs_when_snapshot_service_id_no_longer_resolves(db_session, cap
     assert "catalog_snapshot.service_id_missing" in caplog.text
 
 
-def test_resolve_catalog_fulfillment_logs_when_services_diverge_from_snapshot(db_session, caplog):
-    """(h) a post-order add-on shows up as a truthy key in the LIVE
-    services dict that the frozen snapshot never saw -> logged as
-    catalog_snapshot.services_diverged_from_snapshot (a pure dict/set
-    comparison, no live catalog query — the snapshot branch never queries
-    the DB), while a key the snapshot DOES know about never false-positives."""
+def test_uncovered_services_key_merges_live_demand_into_frozen_result(db_session, caplog):
+    """Fix round 1 (per-profile hybrid merge, ruled): a post-order add-on
+    (a services key with no matching profile in the frozen snapshot) gets
+    REAL live demand + custody-visible fulfillment merged into the result —
+    not just a log line — while every snapshot-covered profile stays
+    frozen despite a live edit made after the snapshot. Non-legacy role
+    (heavy_metals-style — no legacy-value floor the way hplc/endo/ster
+    have, so before this fix a non-legacy add-on would silently under-
+    provision instead of self-healing)."""
     import logging
     from sub_samples.catalog_demand import resolve_catalog_fulfillment
 
     svc = _mk_service(db_session, keyword="HM-PB", title="Lead")
-    _mk_profile(db_session, key="heavy_metals", vials=1, role="hm", members=[svc])
+    hm_prof = _mk_profile(db_session, key="heavy_metals", vials=1, role="hm", members=[svc])
     snap = compute_catalog_snapshot(db_session, {"heavy_metals": True}, None)
 
+    # Live edit to the SNAPSHOT-COVERED profile after the snapshot — must
+    # stay frozen in the merged result.
+    hm_prof.vials_required = 9
+    db_session.commit()
+
+    # A second profile, purchased post-order — never part of the snapshot.
     svc2 = _mk_service(db_session, keyword="ZZ-ADDON", title="Addon")
-    _mk_profile(db_session, key="zz_addon_key", vials=1, role="zz_addon", members=[svc2])
+    addon_prof = _mk_profile(db_session, key="zz_addon_key", vials=3,
+                             role="zz_addon", members=[svc2])
 
     with caplog.at_level(logging.WARNING):
-        resolve_catalog_fulfillment(
+        merged = resolve_catalog_fulfillment(
             db_session, {"heavy_metals": True, "zz_addon_key": True}, snapshot=snap)
 
-    assert "catalog_snapshot.services_diverged_from_snapshot key=zz_addon_key" in caplog.text
+    # Snapshot-covered profile stays frozen despite the live edit.
+    assert merged["hm"].demand == 1
+    assert merged["hm"].host_profile_ids == [hm_prof.id]
+    # Uncovered post-order add-on gets REAL live demand + a real edge-ready id.
+    assert merged["zz_addon"].demand == 3
+    assert merged["zz_addon"].host_profile_ids == [addon_prof.id]
+    assert ("catalog_snapshot.fallback_live reason=profile_not_in_snapshot "
+            "key=zz_addon_key") in caplog.text
     assert "key=heavy_metals" not in caplog.text
+
+
+def test_uncovered_rider_attaches_to_a_snapshot_frozen_host(db_session):
+    """A post-order rider (uncovered by the snapshot) whose ride_host_roles
+    targets a role that's ALREADY carrying frozen demand from the snapshot
+    attaches to that frozen host — the merge's rider walk sees the
+    snapshot's demand already sitting in `result` before the live pass
+    ever runs its own self-mint-vs-attach check."""
+    from models import VialRole, profile_ride_hosts
+    from sub_samples.catalog_demand import resolve_catalog_fulfillment
+
+    db_session.add(VialRole(code="ster", label="Sterility", sort_order=1))
+    db_session.commit()
+
+    host_svc = _mk_service(db_session, keyword="STER-PCR", title="Sterility PCR")
+    host = _mk_profile(db_session, key="ster_host", vials=2, role="ster", members=[host_svc])
+    snap = compute_catalog_snapshot(db_session, {"ster_host": True}, None)
+
+    # A post-order rider, purchased after registration, rides "ster".
+    rider_svc = _mk_service(db_session, keyword="STER-ADDON", title="Sterility Addon")
+    rider = _mk_profile(db_session, key="ster_addon", vials=0, role="ster_addon_role",
+                        members=[rider_svc])
+    db_session.execute(profile_ride_hosts.insert().values(
+        analysis_profile_id=rider.id, host_role_code="ster", priority=1))
+    db_session.commit()
+
+    merged = resolve_catalog_fulfillment(
+        db_session, {"ster_host": True, "ster_addon": True}, snapshot=snap)
+
+    assert merged["ster"].demand == 2  # the frozen host's demand, unchanged
+    assert merged["ster"].host_profile_ids == [host.id]
+    assert merged["ster"].rider_profile_ids == [rider.id]  # attached, not self-minted
+
+
+def test_snapshot_sourced_seeding_preserves_frozen_member_order(db_session):
+    """Minor 1 (fix round 1): frozen service_ids order is preserved
+    verbatim into insertion order on the snapshot-sourced seeding path —
+    mirrors test_catalog_seeding.py's test_hm_vial_seeds_exactly_profile_
+    members load-bearing order assertion. A live re-order AFTER the
+    snapshot must not change what was already frozen."""
+    from lims_analyses.seeder import seed_analyses_for_vial
+    from models import analysis_profile_members
+
+    svc_pb = _mk_service(db_session, keyword="HM-PB", title="Lead")
+    svc_as = _mk_service(db_session, keyword="HM-AS", title="Arsenic")
+    svc_cd = _mk_service(db_session, keyword="HM-CD", title="Cadmium")
+    prof = _mk_profile(db_session, key="heavy_metals", vials=1, role="hm",
+                       members=[svc_pb, svc_as, svc_cd])
+    for svc, order in ((svc_pb, 0), (svc_as, 1), (svc_cd, 2)):
+        db_session.execute(
+            analysis_profile_members.update()
+            .where(analysis_profile_members.c.analysis_service_id == svc.id)
+            .values(sort_order=order)
+        )
+    db_session.commit()
+    db_session.expire(prof)
+
+    snap = compute_catalog_snapshot(db_session, {"heavy_metals": True}, None)
+
+    # Live re-order AFTER the snapshot: send HM-PB to the back.
+    db_session.execute(
+        analysis_profile_members.update()
+        .where(analysis_profile_members.c.analysis_service_id == svc_pb.id)
+        .values(sort_order=9)
+    )
+    db_session.commit()
+    db_session.expire(prof)
+
+    parent, sub = _mk_parent_and_vial(db_session, sample_id="ZZ8", role="hm", snapshot=snap)
+    _mk_edge(db_session, sub, prof, "host")
+    db_session.commit()
+
+    created = seed_analyses_for_vial(
+        db_session, sub_sample=sub, role="hm",
+        wp_services={"heavy_metals": True}, commit=True)
+    # FROZEN order (PB, AS, CD) survives — not the live-reordered (AS, CD, PB).
+    assert [r.keyword for r in created] == ["HM-PB", "HM-AS", "HM-CD"]
+
+
+def test_seed_analyses_for_vial_snapshot_vs_null_identical_when_catalog_unedited(db_session):
+    """Minor 2 (fix round 1): equivalence at the seeder layer, mirroring
+    test_snapshot_resolution_mirrors_live_resolution_with_no_edit's
+    demand-layer proof — with the catalog UNEDITED between the snapshot
+    and the seed call, seeding through a snapshot-stamped parent produces
+    the exact same keyword list as seeding through a NULL-snapshot parent."""
+    from lims_analyses.seeder import seed_analyses_for_vial
+
+    svc_a = _mk_service(db_session, keyword="HM-PB", title="Lead")
+    svc_b = _mk_service(db_session, keyword="HM-AS", title="Arsenic")
+    prof = _mk_profile(db_session, key="heavy_metals", vials=1, role="hm",
+                       members=[svc_a, svc_b])
+    snap = compute_catalog_snapshot(db_session, {"heavy_metals": True}, None)
+
+    parent_snap, sub_snap = _mk_parent_and_vial(
+        db_session, sample_id="ZZ9SNAP", role="hm", snapshot=snap)
+    _mk_edge(db_session, sub_snap, prof, "host")
+    parent_null, sub_null = _mk_parent_and_vial(
+        db_session, sample_id="ZZ9NULL", role="hm", snapshot=None)
+    _mk_edge(db_session, sub_null, prof, "host")
+    db_session.commit()
+
+    created_snap = seed_analyses_for_vial(
+        db_session, sub_sample=sub_snap, role="hm",
+        wp_services={"heavy_metals": True}, commit=True)
+    created_null = seed_analyses_for_vial(
+        db_session, sub_sample=sub_null, role="hm",
+        wp_services={"heavy_metals": True}, commit=True)
+
+    snap_kws = [r.keyword for r in created_snap]
+    null_kws = [r.keyword for r in created_null]
+    assert snap_kws == null_kws
+    assert set(snap_kws) == {"HM-PB", "HM-AS"}

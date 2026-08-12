@@ -1191,15 +1191,17 @@ def derive_base_demand(services: dict, db=None, snapshot: Optional[dict] = None)
     on any divergence in a LEGACY bucket the legacy value wins and an error
     is logged (fail-open to known-good, never to under-provisioning).
 
-    snapshot (task 6): threaded straight through to derive_base_demand_catalog
-    / resolve_catalog_fulfillment when db is given. `legacy` above is always
-    computed from the LIVE `services` dict (hplc/endo/ster have no frozen
-    representation of their own — a fixed boolean-per-key read), so a
-    legacy-bucket purchase made after registration still shows up on this
-    side of the shadow-compare; since the frozen `catalog` side can't
-    reflect it, that logs demand_divergence (self-healing to the legacy
-    value, same as any other divergence) rather than under-provisioning
-    silently.
+    snapshot (task 6, fix round 1 — per-profile hybrid merge): threaded
+    straight through to derive_base_demand_catalog / resolve_catalog_
+    fulfillment when db is given. `legacy` above is always computed from
+    the LIVE `services` dict (hplc/endo/ster have no frozen representation
+    of their own — a fixed boolean-per-key read); `catalog` merges the
+    frozen snapshot with a live resolution of any services key the
+    snapshot didn't cover (a post-order add-on), so a legacy-bucket
+    purchase made after registration now agrees with `legacy` here too —
+    demand_divergence still exists as a safety net for a genuine mismatch,
+    not as the expected steady-state noise it would otherwise be for every
+    post-registration legacy-bucket purchase.
     """
     hplc = bool(services.get("hplcpurity_identity") or services.get("bac_water_panel"))
     endo = bool(services.get("endotoxin"))
@@ -1304,13 +1306,16 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
         }
 
     services = services_resp.get("services") or {}
-    # S4 snapshot rider (task 6): a non-NULL catalog_snapshot freezes what
-    # THIS sample's demand/fulfillment resolves against — a later catalog
-    # edit (or, per resolve_catalog_fulfillment's own diagnostic, a
-    # post-order services change) must never retroactively reprovision an
-    # already-registered sample. NULL (pre-slice-4 rows, or a sample whose
-    # registration signal never reached the bg stamp) falls through to the
-    # live catalog, unchanged from before this task.
+    # S4 snapshot rider (task 6, fix round 1 — per-profile hybrid merge): a
+    # non-NULL catalog_snapshot freezes what THIS sample's demand/fulfillment
+    # resolves against, PER PROFILE — a later catalog edit to a profile
+    # already covered by the snapshot can never retroactively reprovision an
+    # already-registered sample. A `services` key the snapshot never saw
+    # (a post-order add-on) still resolves live and merges in on top,
+    # exactly as if it had shipped with the original order. NULL (pre-slice-4
+    # rows, or a sample whose registration signal never reached the bg
+    # stamp) falls through to the live catalog entirely, unchanged from
+    # before this task.
     snapshot = parent.catalog_snapshot
     demand = derive_demand(services, db=db, snapshot=snapshot)  # core demand == base (inflation retired)
     variance = derive_variance_demand(services)
