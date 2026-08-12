@@ -189,3 +189,15 @@ describe('color vocabulary', () => {
     }
   })
 })
+
+describe('S1 regression: null-role fallback stays amber post-migration', () => {
+  // Pins AnalysisTable.tsx's AnalysisRow vial-label link
+  // (`ROLE_COLOR_TEXT[roleColorForCode(m.assignmentRole, vialRoles, departments)]`,
+  // ~line 1447) — a null assignment_role must resolve the amber text class,
+  // not the retired hardcoded map's sky fallback (S1 Task 7 review, delta 4).
+  it('resolves the amber text class for a null vial assignment role', () => {
+    expect(ROLE_COLOR_TEXT[roleColorForCode(null, ROLES, DEPARTMENTS)]).toBe(
+      ROLE_COLOR_TEXT.amber
+    )
+  })
+})
