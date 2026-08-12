@@ -188,6 +188,7 @@ import {
   PARENT_OVERLAY_QUERY_KEY,
   invalidateParentVialOverlay,
 } from '@/lib/vial-assignment'
+import type { VialAssignment } from '@/lib/vial-assignment'
 import { vialLabel, vialPosition, vialTotal } from '@/lib/vial-label'
 import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
@@ -3369,12 +3370,14 @@ export function NativeParentAnalysesCard({
   isParentPage,
   lookup,
   promotionsByKeyword,
+  vialAssignmentByKeyword,
   onParentDataStale,
 }: {
   sampleId: string | null | undefined
   isParentPage: boolean
   lookup: SenaiteLookupResult | null
   promotionsByKeyword: Map<string, ParentPromotionInfo>
+  vialAssignmentByKeyword?: Map<string, VialAssignment>
   onParentDataStale?: () => void
 }) {
   const queryClient = useQueryClient()
@@ -3473,6 +3476,7 @@ export function NativeParentAnalysesCard({
         analyses={analyses}
         analyteNameMap={EMPTY_ANALYTE_NAME_MAP}
         promotionsByKeyword={promotionsByKeyword}
+        vialAssignmentByKeyword={vialAssignmentByKeyword}
         headerContent={header}
         hideProgress
         resultsReadOnly
@@ -6726,6 +6730,7 @@ export function SampleDetails() {
           isParentPage={parentSampleId === null}
           lookup={data}
           promotionsByKeyword={promotionsByKeyword}
+          vialAssignmentByKeyword={vialAssignmentByKeyword}
           onParentDataStale={() => refreshSample(data.sample_id)}
         />
       )}
