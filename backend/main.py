@@ -20289,7 +20289,7 @@ def download_registry_parent_attachment(
 @app.post("/lims-samples/{sample_id}/reprovision-snapshot")
 def reprovision_catalog_snapshot(
     sample_id: str,
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """S4 snapshot rider, Task 7: the ONLY other writer of LimsSample.
@@ -20298,6 +20298,22 @@ def reprovision_catalog_snapshot(
     catalog fix to an in-flight order is a deliberate, AUDITED reprovision
     action, never an implicit side effect — so this route both overwrites
     the frozen snapshot and appends one catalog_change_log row for it.
+
+    `require_admin` (fix round 1, not the original plan text's
+    `get_current_user`): overwriting a frozen provisioning contract is an
+    ops-grade action — fail-closed wins here even though the plan wrote
+    "any authenticated user". `require_admin` itself depends on
+    `get_current_user` and returns that same user object on success, so
+    actor attribution below (`getattr(current_user, "id", None)`) is
+    unchanged.
+
+    Scope boundary (fix round 1, ruled): this route rewrites ONLY
+    `catalog_snapshot`. It does NOT touch vials/analyses already assigned
+    at check-in — a sample that's already past check-in gets an updated
+    snapshot but no re-seed of existing custody/analyses rows. Healing
+    already-seeded rows against a reprovisioned snapshot is deliberately
+    out of scope for this slice; the snapshot only governs FUTURE seeding
+    (task 6's snapshot-sourced resolve/seed path).
 
     Recomputes fresh against the LIVE catalog via compute_catalog_snapshot,
     fed by a FRESH fetch_sample_services read — never threads the sample's

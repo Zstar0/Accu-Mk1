@@ -765,14 +765,17 @@ def test_snapshot_sourced_seeding_preserves_frozen_member_order(db_session):
 # of catalog_snapshot besides the once-only registration stamp. Recomputes
 # fresh against the LIVE catalog (never threads the existing snapshot back
 # in) and writes one catalog_change_log row: action="create" when the stored
-# snapshot was NULL, else action="update". Fixture mirrors test_catalog_
-# change_log.py's route_client (StaticPool SQLite, MagicMock(id=7) actor).
+# snapshot was NULL, else action="update". Gated by require_admin (fix round
+# 1 — overwriting a frozen provisioning contract is an ops-grade action, not
+# any-authenticated-user). Fixture mirrors test_workflow_catalog_api.py's
+# require_admin house pattern (override BOTH get_current_user and
+# require_admin to the same admin object for the happy path).
 
-from unittest.mock import MagicMock
+from types import SimpleNamespace
 from sqlalchemy.pool import StaticPool
 from fastapi.testclient import TestClient
 
-from auth import get_current_user
+from auth import get_current_user, require_admin
 from database import get_db
 from main import app
 from models import CatalogChangeLog
@@ -780,6 +783,13 @@ from models import CatalogChangeLog
 
 @pytest.fixture
 def snapshot_route_client():
+    """Admin-shaped happy-path client (fix round 1: the route now gates on
+    require_admin, not get_current_user). Overrides BOTH dependencies to the
+    SAME admin object — test_workflow_catalog_api.py's house pattern for
+    require_admin-gated routes ("short-circuits the real role check" rather
+    than relying on override-cascading through require_admin's own internal
+    Depends(get_current_user)). `id=7` preserved so existing actor-
+    attribution assertions (`user_id == 7`) keep passing unchanged."""
     engine = create_engine(
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},
@@ -792,10 +802,13 @@ def snapshot_route_client():
     def _override_get_db():
         yield shared_session
 
+    admin = SimpleNamespace(id=7, role="admin", email="admin@test")
     prev_db = app.dependency_overrides.get(get_db)
     prev_user = app.dependency_overrides.get(get_current_user)
+    prev_admin = app.dependency_overrides.get(require_admin)
     app.dependency_overrides[get_db] = _override_get_db
-    app.dependency_overrides[get_current_user] = lambda: MagicMock(id=7)
+    app.dependency_overrides[get_current_user] = lambda: admin
+    app.dependency_overrides[require_admin] = lambda: admin
     tc = TestClient(app)
     tc._test_session = shared_session
     yield tc
@@ -807,6 +820,10 @@ def snapshot_route_client():
         app.dependency_overrides.pop(get_current_user, None)
     else:
         app.dependency_overrides[get_current_user] = prev_user
+    if prev_admin is None:
+        app.dependency_overrides.pop(require_admin, None)
+    else:
+        app.dependency_overrides[require_admin] = prev_admin
     shared_session.close()
 
 
@@ -885,6 +902,46 @@ def test_reprovision_null_snapshot_writes_create_log(snapshot_route_client, monk
 def test_reprovision_unknown_sample_404(snapshot_route_client):
     resp = snapshot_route_client.post("/lims-samples/T7-NOPE/reprovision-snapshot")
     assert resp.status_code == 404
+
+
+def test_reprovision_non_admin_gets_403(monkeypatch):
+    """The REAL require_admin gate (not overridden — test_workflow_
+    catalog_api.py's 'prove the 403 gate' pattern): a non-admin authenticated
+    actor is rejected before the route body ever runs, regardless of whether
+    the sample exists."""
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    shared_session = Session()
+
+    def _override_get_db():
+        yield shared_session
+
+    prev_db = app.dependency_overrides.get(get_db)
+    prev_user = app.dependency_overrides.get(get_current_user)
+    app.dependency_overrides[get_db] = _override_get_db
+    # get_current_user is overridden; require_admin is NOT — its real role
+    # check runs against this non-admin user.
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+        id=42, role="standard", email="t@test")
+    tc = TestClient(app)
+    try:
+        resp = tc.post("/lims-samples/T7-ANY/reprovision-snapshot")
+        assert resp.status_code == 403
+    finally:
+        if prev_db is None:
+            app.dependency_overrides.pop(get_db, None)
+        else:
+            app.dependency_overrides[get_db] = prev_db
+        if prev_user is None:
+            app.dependency_overrides.pop(get_current_user, None)
+        else:
+            app.dependency_overrides[get_current_user] = prev_user
+        shared_session.close()
 
 
 def test_reprovision_is_fetch_failure_502_and_no_writes(snapshot_route_client, monkeypatch):
