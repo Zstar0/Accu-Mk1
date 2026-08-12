@@ -274,7 +274,15 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
     refused and the incoming order parks on a quarantine row (S8 guard)."""
     meta = dict(meta)
     meta.setdefault("review_state", "sample_due")
-    if senaite_uid and not meta.get("uid"):
+    # Normalize unconditionally: the trusted senaite_uid PARAM must always
+    # win over whatever meta["uid"] the payload happens to carry. A
+    # self-inconsistent payload (senaite_uid agreeing with the stored uid,
+    # but meta["uid"] carrying something else) would otherwise pass the
+    # mismatch guard below on the param, then _populate_basic_info would
+    # silently write the payload's disagreeing meta["uid"] -- a rebind the
+    # guard just approved differently. Also keeps a quarantine row's stored
+    # uid consistent with the uid fragment baked into its mangled id.
+    if senaite_uid:
         meta["uid"] = senaite_uid
 
     existing = None

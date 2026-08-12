@@ -202,3 +202,19 @@ def test_flag_dedupe_pointered_flag_survives_open_refusal(db):
     #    title, still 2 (not 3)
     upsert_sample_from_signal(db, "P-0208", "UID-NEW-99999999", {})
     assert db.query(FlagFlag).filter_by(type="identity_collision").count() == 2
+
+
+def test_signal_self_inconsistent_payload_normalizes_to_param_uid(db):
+    """FIX: meta/param uid normalization used to be conditional
+    (`if senaite_uid and not meta.get("uid")`), so a self-inconsistent
+    payload -- the trusted `senaite_uid` param agreeing with the stored
+    uid, but `meta["uid"]` carrying a DIFFERENT value -- passed the
+    mismatch guard on the param, then _populate_basic_info silently wrote
+    the payload's disagreeing uid. Normalizing unconditionally closes that:
+    the trusted param always wins, so the guard and the write agree."""
+    db.add(LimsSample(sample_id="P-0209", external_lims_uid="A"))
+    db.commit()
+    row = upsert_sample_from_signal(db, "P-0209", "A", {"uid": "B"})
+    assert row.external_lims_uid == "A"    # no rebind to the payload's "B"
+    assert row.quarantined is False         # param agreed with stored -> no collision
+    assert db.query(LimsSample).count() == 1
