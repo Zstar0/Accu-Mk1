@@ -13,6 +13,20 @@ audited, deliberate reprovision action — which must always call this
 function fresh against the LIVE catalog, never thread an existing snapshot
 into it (that would re-freeze stale data instead of updating it).
 
+The freeze extends to order-edit REMOVALS, not just catalog edits: a
+snapshot-covered profile keeps provisioning even if its wp_services key
+later goes falsy/absent (resolve_catalog_fulfillment's _resolve_from_snapshot
+reads only the frozen `profiles` list, never re-checking `services` for a
+key it already covers) — additions merge live (the per-profile hybrid
+merge), removals take effect only via Task 7's reprovision action. Pending
+Handler confirmation that the freeze ruling was meant to extend this far
+(catalog edits vs. order edits are distinct kinds of drift). Asymmetric with
+the legacy hplc/endo/ster floor (sub_samples/service.py's
+`derive_base_demand`): those three buckets have no frozen representation of
+their own — a live boolean-per-key read off `services` every call — so an
+order-edit removal DOES take effect there, and legacy wins on any
+legacy/catalog divergence.
+
 Each profile entry freezes the profile's OWN catalog facts — never an
 already-resolved/effective per-role value:
 
