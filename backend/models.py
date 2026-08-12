@@ -609,8 +609,8 @@ class PeptideAnalyte(Base):
     shaped around SENAITE's Analyte1..Analyte4 fields (parent meta, seeder
     slot maps, conformance, alias slots) — widening requires a program, not a
     CHECK edit. NOTE ck_peptide_analyte_slot_range exists only where
-    create_all built this table after 2026-XX; older DBs rely on this API-edge
-    validation (the only gate before the DB).
+    create_all built this table after 2026-03-05 (v0.19.0, commit bc88c366);
+    older DBs rely on this API-edge validation (the only gate before the DB).
     """
     __tablename__ = "peptide_analytes"
 
