@@ -15631,35 +15631,8 @@ async def create_service_group(
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
-    """Create a new service group."""
-    existing = db.execute(
-        select(ServiceGroup).where(ServiceGroup.name == data.name)
-    ).scalar_one_or_none()
-    if existing:
-        raise HTTPException(400, f"Service group '{data.name}' already exists")
-
-    group = ServiceGroup(**data.model_dump())
-    if group.is_default:
-        db.execute(
-            select(ServiceGroup).where(ServiceGroup.is_default == True)  # noqa: E712
-        )
-        db.query(ServiceGroup).filter(ServiceGroup.is_default == True).update({"is_default": False})  # noqa: E712
-    db.add(group)
-    db.commit()
-    db.refresh(group)
-    return ServiceGroupResponse(
-        id=group.id,
-        name=group.name,
-        description=group.description,
-        color=group.color,
-        sort_order=group.sort_order,
-        is_default=group.is_default,
-        sla_tier_id=group.sla_tier_id,
-        department_id=group.department_id,
-        member_count=0,
-        created_at=group.created_at,
-        updated_at=group.updated_at,
-    )
+    """Service groups are legacy — departments own routing now (S2)."""
+    raise HTTPException(410, "service groups are legacy; departments own routing now")
 
 
 @app.put("/service-groups/{group_id}", response_model=ServiceGroupResponse)
@@ -15679,6 +15652,12 @@ async def update_service_group(
         raise HTTPException(404, f"Service group {group_id} not found")
 
     update_data = data.model_dump(exclude_unset=True)
+    if "name" in update_data and update_data["name"] != group.name:
+        raise HTTPException(
+            400,
+            "service group names are frozen (legacy); FE keyword maps and the COA "
+            "gate's group half key on them",
+        )
     if update_data.get("is_default"):
         db.query(ServiceGroup).filter(
             ServiceGroup.is_default == True, ServiceGroup.id != group_id  # noqa: E712
@@ -15710,12 +15689,31 @@ async def delete_service_group(
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
-    """Delete a service group. Membership rows cascade-delete."""
+    """Delete a service group. Refused while any worksheet item, SLA priority
+    tier, or member row still references it — group rows are frozen legacy
+    rows that worksheet history and sla_priority_tiers (ON DELETE CASCADE)
+    depend on surviving (S2 Task 3)."""
     group = db.execute(
         select(ServiceGroup).where(ServiceGroup.id == group_id)
     ).scalar_one_or_none()
     if not group:
         raise HTTPException(404, f"Service group {group_id} not found")
+
+    in_use = db.execute(
+        select(WorksheetItem.id).where(WorksheetItem.service_group_id == group_id).limit(1)
+    ).scalars().first() or db.execute(
+        select(SlaPriorityTier.id).where(SlaPriorityTier.service_group_id == group_id).limit(1)
+    ).scalars().first() or db.execute(
+        select(service_group_members.c.id).where(
+            service_group_members.c.service_group_id == group_id
+        ).limit(1)
+    ).scalars().first()
+    if in_use is not None:
+        raise HTTPException(
+            409,
+            "service group is still referenced (worksheet items, SLA tiers, or members); "
+            "groups are frozen legacy rows — do not delete while in use",
+        )
 
     db.delete(group)
     db.commit()
