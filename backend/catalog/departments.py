@@ -93,7 +93,13 @@ def department_id_for_service(db: Session, analysis_service_id: int) -> Optional
 
 
 def department_id_for_role(db: Session, role_code: str) -> Optional[int]:
-    """The department owning a vial assignment_role code (e.g. 'ster' -> Microbiology)."""
+    """The department owning a vial assignment_role code (e.g. 'ster' -> Microbiology).
+
+    None is returned for two distinct reasons a caller doing fallback logic
+    must not conflate: an unknown role_code, and the known 'xtra' role, which
+    is the one VialRole row deliberately seeded with a NULL department (the
+    reserved unassigned bucket — see VialRole's docstring in models.py).
+    """
     from models import VialRole
     row = db.query(VialRole).filter_by(code=role_code).one_or_none()
     return row.department_id if row is not None else None
