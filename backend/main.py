@@ -19033,53 +19033,6 @@ async def delete_worksheet(
     return {"status": "deleted"}
 
 
-@app.delete("/worksheets/{worksheet_id}/items/{sample_uid}/{service_group_id}")
-async def remove_worksheet_item(
-    worksheet_id: int,
-    sample_uid: str,
-    service_group_id: int,
-    db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
-):
-    """Remove a single service group item from a worksheet. Analysis returns to inbox."""
-    gid = None if service_group_id == 0 else service_group_id
-    gid_filter = WorksheetItem.service_group_id.is_(None) if gid is None else (WorksheetItem.service_group_id == gid)
-    item = db.execute(
-        select(WorksheetItem).where(
-            WorksheetItem.worksheet_id == worksheet_id,
-            WorksheetItem.sample_uid == sample_uid,
-            gid_filter,
-        )
-    ).scalar_one_or_none()
-    if not item:
-        raise HTTPException(404, "Item not found")
-
-    # Analyst-from-worksheet: clear vial-tier stamps; analysis returns to inbox.
-    # Best-effort: stamping failures must not break item removal.
-    from lims_analyses.worksheet_analyst import clear_for_item
-    import logging as _logging
-    ws_title = db.execute(
-        select(Worksheet.title).where(Worksheet.id == worksheet_id)
-    ).scalar_one_or_none()
-    try:
-        clear_for_item(
-            db,
-            sample_uid=sample_uid,
-            service_group_id=gid,
-            acting_user_id=getattr(_current_user, "id", None),
-            worksheet_id=worksheet_id,
-            worksheet_title=ws_title,
-        )
-    except Exception:
-        _logging.getLogger(__name__).warning(
-            "analyst stamp clear failed during remove-worksheet-item", exc_info=True
-        )
-
-    db.delete(item)
-    db.commit()
-    return {"status": "removed"}
-
-
 @app.delete("/worksheets/{worksheet_id}/items/{item_id}")
 async def remove_worksheet_item_by_id(
     worksheet_id: int,
@@ -19152,66 +19105,6 @@ async def complete_worksheet(
     ws.completed_at = datetime.utcnow()
     db.commit()
     return {"status": "completed", "completed_by": current_user.email, "completed_at": ws.completed_at.isoformat()}
-
-
-@app.post("/worksheets/{worksheet_id}/items/{sample_uid}/{service_group_id}/reassign")
-async def reassign_worksheet_item(
-    worksheet_id: int,
-    sample_uid: str,
-    service_group_id: int,
-    data: ReassignRequest,
-    db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
-):
-    """Move a worksheet item to a different (open) worksheet."""
-    gid = None if service_group_id == 0 else service_group_id
-    gid_filter = WorksheetItem.service_group_id.is_(None) if gid is None else (WorksheetItem.service_group_id == gid)
-    item = db.execute(
-        select(WorksheetItem).where(
-            WorksheetItem.worksheet_id == worksheet_id,
-            WorksheetItem.sample_uid == sample_uid,
-            gid_filter,
-        )
-    ).scalar_one_or_none()
-    if not item:
-        raise HTTPException(404, "Item not found")
-    target = db.execute(
-        select(Worksheet).where(Worksheet.id == data.target_worksheet_id, Worksheet.status == "open")
-    ).scalar_one_or_none()
-    if not target:
-        raise HTTPException(404, "Target worksheet not found or not open")
-    # Analyst-from-worksheet: reassign = remove from source + add to target.
-    # Best-effort: stamping failures must not break the reassign. The
-    # item.worksheet_id move stays OUTSIDE the try so the reassign always
-    # happens; only the stamp side-effects are guarded.
-    from lims_analyses.worksheet_analyst import clear_for_item, stamp_for_item
-    import logging as _logging
-    acting_id = getattr(_current_user, "id", None)
-    src_ws_title = db.execute(
-        select(Worksheet.title).where(Worksheet.id == worksheet_id)
-    ).scalar_one_or_none()
-    item.worksheet_id = data.target_worksheet_id
-    # Target's worksheet-level analyst wins; else keep the item's own.
-    if target.assigned_analyst_id:
-        item.assigned_analyst_id = target.assigned_analyst_id
-    try:
-        clear_for_item(
-            db, sample_uid=sample_uid, service_group_id=gid,
-            acting_user_id=acting_id, worksheet_id=worksheet_id,
-            worksheet_title=src_ws_title,
-        )
-        stamp_for_item(
-            db, sample_uid=sample_uid, service_group_id=gid,
-            analyst_user_id=target.assigned_analyst_id or item.assigned_analyst_id,
-            acting_user_id=acting_id,
-            worksheet_id=target.id, worksheet_title=target.title,
-        )
-    except Exception:
-        _logging.getLogger(__name__).warning(
-            "analyst stamp failed during reassign-worksheet-item", exc_info=True
-        )
-    db.commit()
-    return {"status": "reassigned", "target_worksheet_id": data.target_worksheet_id}
 
 
 @app.post("/worksheets/{worksheet_id}/items/{item_id}/reassign")
