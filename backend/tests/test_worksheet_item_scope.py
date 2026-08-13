@@ -77,10 +77,16 @@ def client(db, monkeypatch):
 
     # NOT inside a try in the routes — a non-awaitable stub would surface as a 500.
     monkeypatch.setattr(main, "_notify_worksheet_assigned", _no_notify)
+    # Snapshot/restore rather than .clear(): sibling test modules install their
+    # overrides at IMPORT time (e.g. test_api_service_group_sla_tier.py binds
+    # auth.get_current_user at module scope), and a blanket clear() strips them
+    # for every file that runs after this one.
+    previous = dict(app.dependency_overrides)
     app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[get_current_user] = lambda: MagicMock(id=1)
     yield TestClient(app)
     app.dependency_overrides.clear()
+    app.dependency_overrides.update(previous)
 
 
 @pytest.fixture
@@ -375,6 +381,111 @@ def test_bulk_staging_updates_existing_row_across_key_shapes(client, db, catalog
     item = _item(db)
     assert item.instrument_uid == "HPLC-7"
     assert item.assigned_analyst_id == 1
+
+
+def _seed_staging_pair(db, catalog):
+    """Two staging rows for one vial in two legacy groups that collapse to the
+    SAME department — the shape the many-to-one bridge produces."""
+    ws = Worksheet(title="__inbox_staging__", status="staging")
+    db.add(ws)
+    db.flush()
+    micro_row = WorksheetItem(
+        worksheet_id=ws.id, sample_uid=VIAL_UID, sample_id=VIAL_SID,
+        service_group_id=catalog["g_micro"], department_id=catalog["micro"],
+        assigned_analyst_id=3, instrument_uid="OLD-1",
+    )
+    endo_row = WorksheetItem(
+        worksheet_id=ws.id, sample_uid=VIAL_UID, sample_id=VIAL_SID,
+        service_group_id=catalog["g_endo"], department_id=catalog["micro"],
+        assigned_analyst_id=4, instrument_uid="OLD-2",
+    )
+    db.add_all([micro_row, endo_row])
+    db.commit()
+    return micro_row, endo_row
+
+
+def test_bulk_staging_updates_every_row_in_the_department(client, db, catalog):
+    """Two staging rows collapsing to one department are duplicates of a single
+    lane: a department-keyed bulk edit writes BOTH. Writing only the lowest id
+    would misdirect the assignment and strand the sibling."""
+    micro_row, endo_row = _seed_staging_pair(db, catalog)
+
+    resp = client.put(
+        "/worksheets/inbox/bulk",
+        json={
+            "sample_uids": [VIAL_UID],
+            "department_id": catalog["micro"],
+            "analyst_id": 9,
+            "instrument_uid": "HPLC-9",
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert db.query(WorksheetItem).count() == 2, "no new row — both were matched"
+    for row in (micro_row, endo_row):
+        db.refresh(row)
+        assert row.assigned_analyst_id == 9
+        assert row.instrument_uid == "HPLC-9"
+
+
+def test_bulk_staging_group_edit_reaches_the_sibling_lane(client, db, catalog):
+    """The live misdirection this fix closes: a LEGACY group-keyed bulk edit for
+    Endotoxin derives the Microbiology department, so it must land on both rows
+    — not silently write only the Microbiology row."""
+    micro_row, endo_row = _seed_staging_pair(db, catalog)
+
+    resp = client.put(
+        "/worksheets/inbox/bulk",
+        json={
+            "sample_uids": [VIAL_UID],
+            "service_group_id": catalog["g_endo"],
+            "analyst_id": 11,
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    db.refresh(micro_row)
+    db.refresh(endo_row)
+    assert endo_row.assigned_analyst_id == 11, "the addressed lane must be written"
+    assert micro_row.assigned_analyst_id == 11, "its duplicate must not be left stale"
+
+
+def test_add_consumes_every_staging_row_in_scope(client, db, catalog, stamp_calls):
+    """Adding the vial to a worksheet consumes BOTH staging rows: one item is
+    created, the analyst is donated by the lowest id, and no orphan survives."""
+    micro_row, endo_row = _seed_staging_pair(db, catalog)
+    lowest_analyst = micro_row.assigned_analyst_id
+    ws = _worksheet(db)
+
+    resp = _add(client, ws.id, department_id=catalog["micro"])
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "added"
+    remaining = db.query(WorksheetItem).order_by(WorksheetItem.id).all()
+    assert len(remaining) == 1, "both staging rows must be consumed, not just the first"
+    assert remaining[0].worksheet_id == ws.id
+    assert remaining[0].assigned_analyst_id == lowest_analyst
+    assert remaining[0].instrument_uid == "OLD-1"
+
+
+def test_create_from_drop_consumes_every_staging_row_in_scope(client, db, catalog, stamp_calls):
+    """create-from-drop mirrors add-group: no staging orphans."""
+    _seed_staging_pair(db, catalog)
+
+    resp = client.post(
+        "/worksheets/create-from-drop",
+        json={
+            "sample_uid": VIAL_UID,
+            "sample_id": VIAL_SID,
+            "service_group_id": catalog["g_endo"],
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    remaining = db.query(WorksheetItem).all()
+    assert len(remaining) == 1
+    assert remaining[0].worksheet_id == resp.json()["id"]
+    assert remaining[0].assigned_analyst_id == 3, "lowest-id staging row donates"
 
 
 def test_staging_pickup_bridges_key_shapes(client, db, catalog, stamp_calls):

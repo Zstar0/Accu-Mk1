@@ -18229,8 +18229,10 @@ async def bulk_update_inbox(
         dept_id = _resolve_item_scope(db, data.department_id, gid)
 
         # Find existing staging items in this bench scope. A department match can
-        # hit two historical rows per uid (many-to-one group→department collapse)
-        # — lowest id wins, matching _first_item_in_scope.
+        # hit two rows per uid (many-to-one group→department collapse); in the
+        # department world those are one lane's duplicates, so EVERY match gets
+        # the edit — writing only the lowest would misdirect the assignment and
+        # strand the sibling.
         existing_items = db.execute(
             select(WorksheetItem)
             .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
@@ -18241,9 +18243,9 @@ async def bulk_update_inbox(
             )
             .order_by(WorksheetItem.id)
         ).scalars().all()
-        existing_item_map: dict[str, WorksheetItem] = {}
+        existing_item_map: dict[str, list[WorksheetItem]] = {}
         for row in existing_items:
-            existing_item_map.setdefault(row.sample_uid, row)
+            existing_item_map.setdefault(row.sample_uid, []).append(row)
 
         # Get or create staging worksheet
         missing_uids = [uid for uid in data.sample_uids if uid not in existing_item_map]
@@ -18266,11 +18268,11 @@ async def bulk_update_inbox(
 
         for uid in data.sample_uids:
             if uid in existing_item_map:
-                item = existing_item_map[uid]
-                if data.analyst_id is not None:
-                    item.assigned_analyst_id = data.analyst_id
-                if data.instrument_uid is not None:
-                    item.instrument_uid = data.instrument_uid
+                for item in existing_item_map[uid]:
+                    if data.analyst_id is not None:
+                        item.assigned_analyst_id = data.analyst_id
+                    if data.instrument_uid is not None:
+                        item.instrument_uid = data.instrument_uid
             else:
                 db.add(WorksheetItem(
                     worksheet_id=staging_ws.id,
@@ -18707,8 +18709,11 @@ def _item_scope_filter(department_id: int | None, service_group_id: int | None):
     else the legacy group; both None → the legacy NULL-scope rows (a whole-
     sample claim). NOTE: the group→department collapse is many-to-one
     (Microbiology+Endotoxin→Microbiology), so a department match can hit two
-    historical rows — callers use ordered .first() + the
-    worksheet.item_scope_ambiguous warning, never scalar_one_or_none().
+    historical rows — never scalar_one_or_none(). In the department world those
+    two rows are the SAME lane, i.e. duplicates: staging callers merge across
+    all of them (_items_in_scope), and the open-worksheet collision guard picks
+    the lowest id with a worksheet.item_scope_ambiguous warning
+    (_first_item_in_scope).
 
     The both-None branch is deliberately NARROWER than the legacy
     `service_group_id IS NULL` filter it replaces: a row carrying a department
@@ -18724,9 +18729,14 @@ def _item_scope_filter(department_id: int | None, service_group_id: int | None):
     )
 
 
-def _first_item_in_scope(db, *, sample_uid: str, department_id: int | None,
-                         service_group_id: int | None, status: str) -> "WorksheetItem | None":
-    rows = db.execute(
+def _items_in_scope(db, *, sample_uid: str, department_id: int | None,
+                    service_group_id: int | None, status: str) -> "list[WorksheetItem]":
+    """EVERY item for this vial in the given bench scope, lowest id first.
+
+    Two rows in one (vial, department) scope are duplicates of a single lane,
+    not rivals — staging callers merge across the whole list so no sibling is
+    left behind when the lowest-id row is consumed."""
+    return list(db.execute(
         select(WorksheetItem)
         .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
         .where(
@@ -18735,7 +18745,17 @@ def _first_item_in_scope(db, *, sample_uid: str, department_id: int | None,
             Worksheet.status == status,
         )
         .order_by(WorksheetItem.id)
-    ).scalars().all()
+    ).scalars().all())
+
+
+def _first_item_in_scope(db, *, sample_uid: str, department_id: int | None,
+                         service_group_id: int | None, status: str) -> "WorksheetItem | None":
+    """The lowest-id item in scope, for the callers that must pick exactly one
+    (the open-worksheet collision guard, where any match blocks the add)."""
+    rows = _items_in_scope(
+        db, sample_uid=sample_uid, department_id=department_id,
+        service_group_id=service_group_id, status=status,
+    )
     if len(rows) > 1:
         logger.warning(
             "worksheet.item_scope_ambiguous sample_uid=%s department_id=%s "
@@ -18804,11 +18824,14 @@ async def add_group_to_worksheet(
             detail=f"Sample {data.sample_id} is already in worksheet \"{owner_ws or 'unknown'}\"",
         )
 
-    # Pick up any staging pre-assignments for this sample+scope
-    staging_item = _first_item_in_scope(
+    # Pick up any staging pre-assignments for this sample+scope. Every matching
+    # row is one lane's pre-assignment, so ALL of them are consumed below;
+    # the lowest id donates (deterministic, and identical to the single-row case).
+    staging_items = _items_in_scope(
         db, sample_uid=data.sample_uid, department_id=dept_id,
         service_group_id=gid, status="staging",
     )
+    staging_item = staging_items[0] if staging_items else None
 
     # Look up actual priority from sample_priorities
     sample_priority = db.execute(
@@ -18856,9 +18879,10 @@ async def add_group_to_worksheet(
             "analyst stamp failed during add-group-to-worksheet", exc_info=True
         )
 
-    # Remove staging item if picked up
-    if staging_item:
-        db.delete(staging_item)
+    # Remove EVERY staging row picked up — leaving a sibling behind would strand
+    # an invisible pre-assignment no later add can reach.
+    for _staged in staging_items:
+        db.delete(_staged)
 
     db.commit()
 
@@ -18909,11 +18933,13 @@ async def create_worksheet_from_drop(
     ).scalar_one_or_none()
     priority = sample_priority.priority if sample_priority else "normal"
 
-    # Pick up staging pre-assignments
-    staging_item = _first_item_in_scope(
+    # Pick up staging pre-assignments — all rows in scope are consumed, lowest
+    # id donates. Mirrors add_group_to_worksheet.
+    staging_items = _items_in_scope(
         db, sample_uid=data.sample_uid, department_id=dept_id,
         service_group_id=gid, status="staging",
     )
+    staging_item = staging_items[0] if staging_items else None
 
     item = WorksheetItem(
         worksheet_id=ws.id,
@@ -18949,8 +18975,8 @@ async def create_worksheet_from_drop(
             "analyst stamp failed during create-worksheet-from-drop", exc_info=True
         )
 
-    if staging_item:
-        db.delete(staging_item)
+    for _staged in staging_items:
+        db.delete(_staged)
 
     db.commit()
 
