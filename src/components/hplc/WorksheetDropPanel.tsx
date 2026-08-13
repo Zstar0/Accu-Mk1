@@ -252,7 +252,11 @@ function WorksheetDropZone({
               <div className="flex-1" />
               <PriorityBadge priority={item.priority as InboxPriority} />
               <SlaAgeIndicator
-                snapshot={dropSlaByKey.get(itemScopeKey(item.sample_uid, item.department_id, item.service_group_id)) ?? null}
+                snapshot={
+                  dropSlaByKey.get(
+                    itemScopeKey(item.sample_uid, item.department_id, item.service_group_id)
+                  ) ?? null
+                }
                 isLoading={dropSlaLoading}
                 isError={dropSlaError}
                 compact
