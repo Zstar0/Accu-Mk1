@@ -276,6 +276,10 @@ class PromoteResponse(BaseModel):
 
 class ParentRetestRequest(BaseModel):
     keyword: str
+    # S3: the native identity key. When present it alone identifies the parent
+    # row (keyword is ignored for the match); keyword stays the compatibility
+    # alias and remains the only thing today's FE sends.
+    analysis_service_id: Optional[int] = None
     reason: Optional[str] = None
 
 

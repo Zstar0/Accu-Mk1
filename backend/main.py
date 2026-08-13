@@ -15413,6 +15413,11 @@ async def transition_analysis(
                     if _parent_sample_id and keyword:
                         _user_id = getattr(current_user, "id", None)
                         if req.transition == "retest":
+                            # Keyword-only on purpose (S3): this is the SENAITE
+                            # wire, which speaks keyword and whose services are
+                            # senaite-origin — they keep the keyword as their
+                            # identity contract. The cascade's optional
+                            # analysis_service_id is for native callers.
                             _row_ids = cascade_parent_retest_to_sources(
                                 db,
                                 parent_sample_id=_parent_sample_id,

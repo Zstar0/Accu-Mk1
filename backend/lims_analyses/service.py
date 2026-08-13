@@ -1532,6 +1532,86 @@ def list_analysis_change_events_for_parent(
 # ─── Phase 4c: parent-retest cascade ────────────────────────────────────────
 
 
+def _find_active_parent_row(
+    db: Session,
+    *,
+    parent_sample_pk: int,
+    keyword: str,
+    analysis_service_id: Optional[int] = None,
+) -> Optional[LimsAnalysis]:
+    """Resolve the one active canonical parent-tier row a retest lineage hangs
+    off. Shared by cascade_parent_retest_to_sources and parent_retest so the
+    two can never drift apart — their predicates were already identical.
+
+    Identity resolution (S3), in order:
+
+      1. explicit `analysis_service_id` — the caller already holds the native
+         identity key, so match on the service FK alone with no keyword term.
+      2. exact stored keyword — byte-identical to the pre-S3 lookup.
+      3. mk1 catalog rescue — ONLY when (2) misses: resolve `keyword` against
+         the catalog scoped to origin='mk1' (unique per
+         uq_analysis_services_mk1_keyword) and retry by service FK. This is
+         what reaches a native row whose stored keyword drifted away from its
+         catalog keyword.
+
+    Deliberately NOT promote's `_ident_clause` ternary (:850-857). Promote
+    holds the source ROW and reads its service FK before querying; these two
+    callers hold only a keyword off a keyword-boundary wire, so a ternary
+    would have to resolve keyword→service up front — which mis-routes when a
+    drifted row squats on ANOTHER service's catalog keyword. Both root indexes
+    permit row X (service 42, stored 'PUR_OLD', catalog 'PUR_NEW') and row Y
+    (service 99, stored 'PUR_NEW') to be live on the same parent at once, and
+    a caller sending 'PUR_NEW' means Y — that is the string Y answers to, and
+    what the FE echoes (it sends row.keyword; see _serialize_senaite_shape_rows).
+    Exact-first keeps that caller on Y and reaches X only when nothing answers
+    to the string at all.
+
+    senaite-origin services get no rescue leg: their keyword IS their identity
+    contract, grandfathered.
+
+    provenance == 'canonical' is REQUIRED here, not defense-in-depth: unlike
+    the other readers in this module, review_state.not_in(("retracted",
+    "rejected")) does NOT exclude the shadow sentinel state ('senaite_mirror'),
+    so a shadow row for this (parent, keyword) would match. Without the
+    provenance term, `.first()` (no ORDER BY) could nondeterministically return
+    the shadow row instead of the real canonical parent row when both exist.
+    That shadow row never has a LimsAnalysisPromotion link, so the caller would
+    find no sources and silently no-op instead of retesting the vials the
+    canonical row actually promoted — a real (not cosmetic) correctness gap.
+    """
+    from models import AnalysisService
+
+    base = (
+        LimsAnalysis.lims_sample_pk == parent_sample_pk,
+        LimsAnalysis.lims_sub_sample_pk.is_(None),
+        LimsAnalysis.retest_of_id.is_(None),
+        LimsAnalysis.review_state.not_in(("retracted", "rejected")),
+        LimsAnalysis.provenance == "canonical",
+    )
+
+    def _first(ident):
+        return db.execute(
+            select(LimsAnalysis).where(*base, ident)
+        ).scalars().first()
+
+    if analysis_service_id is not None:
+        return _first(LimsAnalysis.analysis_service_id == analysis_service_id)
+
+    row = _first(LimsAnalysis.keyword == keyword)
+    if row is not None:
+        return row
+
+    native_svc = db.execute(
+        select(AnalysisService).where(
+            AnalysisService.keyword == keyword,
+            AnalysisService.origin == "mk1",
+        )
+    ).scalars().first()
+    if native_svc is None:
+        return None
+    return _first(LimsAnalysis.analysis_service_id == native_svc.id)
+
+
 def cascade_parent_retest_to_sources(
     db: Session,
     *,
@@ -1539,6 +1619,7 @@ def cascade_parent_retest_to_sources(
     keyword: str,
     user_id: Optional[int],
     source_reason: str = "cascaded from parent SENAITE retest",
+    analysis_service_id: Optional[int] = None,
 ) -> list[int]:
     """When a PARENT-tier analysis is retested (via SENAITE), cascade the retest
     down to each source vial-tier analysis that was promoted into that parent.
@@ -1546,7 +1627,7 @@ def cascade_parent_retest_to_sources(
     Resolution chain:
       parent_sample_id → LimsSample → active parent-tier LimsAnalysis
         (lims_sub_sample_pk IS NULL, retest_of_id IS NULL, not retracted/rejected)
-        with matching keyword
+        identified per _find_active_parent_row
       → LimsAnalysisPromotion.source_analysis_id rows
       → source LimsAnalysis rows that are eligible for retest
         (state in to_be_verified/verified/promoted AND not already retested)
@@ -1568,30 +1649,17 @@ def cascade_parent_retest_to_sources(
     if parent_sample is None:
         return []
 
-    # 2. Find the active parent-tier analysis for this keyword
-    #    (lims_sub_sample_pk IS NULL, retest_of_id IS NULL, state not terminal-bad)
-    #
-    # SENAITE phase-out fail-closed (REQUIRED, not defense-in-depth): unlike
-    # the other readers in this module, `review_state.not_in(("retracted",
-    # "rejected"))` does NOT exclude the shadow sentinel state
-    # ('senaite_mirror') — a shadow row for this (parent, keyword) would match
-    # this filter. Without provenance=='canonical', `.scalars().first()` (no
-    # ORDER BY) could nondeterministically return the shadow row instead of
-    # the real canonical parent row when both exist for the same keyword. That
-    # shadow row never has a LimsAnalysisPromotion link, so step 3 below would
-    # find `promo_rows == []` and this cascade would silently no-op instead of
-    # retesting the vial sources the canonical row actually promoted — a real
-    # (not cosmetic) correctness gap.
-    parent_analysis = db.execute(
-        select(LimsAnalysis).where(
-            LimsAnalysis.lims_sample_pk == parent_sample.id,
-            LimsAnalysis.lims_sub_sample_pk.is_(None),
-            LimsAnalysis.keyword == keyword,
-            LimsAnalysis.retest_of_id.is_(None),
-            LimsAnalysis.review_state.not_in(("retracted", "rejected")),
-            LimsAnalysis.provenance == "canonical",
-        )
-    ).scalars().first()
+    # 2. Find the active parent-tier analysis. Identity resolution (service id
+    #    → exact keyword → mk1 catalog rescue) and the reason the shape differs
+    #    from promote's ternary both live in _find_active_parent_row. main.py's
+    #    SENAITE-transition caller passes keyword only, on purpose — that wire
+    #    speaks keyword and its services are senaite-origin.
+    parent_analysis = _find_active_parent_row(
+        db,
+        parent_sample_pk=parent_sample.id,
+        keyword=keyword,
+        analysis_service_id=analysis_service_id,
+    )
     if parent_analysis is None:
         return []
 
@@ -1670,6 +1738,7 @@ def parent_retest(
     keyword: str,
     user_id: Optional[int],
     reason: Optional[str] = None,
+    analysis_service_id: Optional[int] = None,
 ) -> tuple[list[int], Optional[str]]:
     """Native origination of a parent-tier retest: validate, then run the
     existing cascade (retest promoted sources + un-promote the verified or
@@ -1697,16 +1766,14 @@ def parent_retest(
     ).scalar_one_or_none()
     if parent is None:
         raise NotFoundError(f"sample {sample_id!r} not known to Mk1")
-    active = db.execute(
-        select(LimsAnalysis).where(
-            LimsAnalysis.lims_sample_pk == parent.id,
-            LimsAnalysis.lims_sub_sample_pk.is_(None),
-            LimsAnalysis.keyword == keyword,
-            LimsAnalysis.retest_of_id.is_(None),
-            LimsAnalysis.review_state.not_in(("retracted", "rejected")),
-            LimsAnalysis.provenance == "canonical",
-        )
-    ).scalars().first()
+    # Identity resolution (service id → exact keyword → mk1 catalog rescue) and
+    # why the shape differs from promote's ternary: see _find_active_parent_row.
+    active = _find_active_parent_row(
+        db,
+        parent_sample_pk=parent.id,
+        keyword=keyword,
+        analysis_service_id=analysis_service_id,
+    )
     if active is None:
         raise NotFoundError(
             f"no active native parent row for keyword {keyword!r} on {sample_id!r}"
@@ -1721,12 +1788,19 @@ def parent_retest(
                 "(published parents go through invalidate→retest)"
             ),
         )
+    # Thread the resolved row's own service FK down rather than letting the
+    # cascade re-derive identity from the keyword: whatever leg found `active`
+    # above, the cascade must act on the row this function just guarded — the
+    # pre-S3 shape re-resolved and could in principle land elsewhere. Safe for
+    # senaite rows too: uq_lims_analyses_parent_service_id_root (Task 2) is
+    # origin-agnostic, so at most one live canonical row per (parent, service).
     new_ids = cascade_parent_retest_to_sources(
         db,
         parent_sample_id=sample_id,
         keyword=keyword,
         user_id=user_id,
         source_reason=reason or "retested from parent (native)",
+        analysis_service_id=active.analysis_service_id,
     )
     db.refresh(active)
 
