@@ -902,6 +902,9 @@ class WorksheetItem(Base):
     sample_id: Mapped[str] = mapped_column(String(100), nullable=False)
     analysis_uid: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     service_group_id: Mapped[Optional[int]] = mapped_column(ForeignKey("service_groups.id", ondelete="SET NULL"), nullable=True)
+    department_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("departments.id", ondelete="SET NULL"), nullable=True
+    )
     priority: Mapped[str] = mapped_column(String(20), default="normal", nullable=False)
     assigned_analyst_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     instrument_uid: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
