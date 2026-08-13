@@ -18433,6 +18433,16 @@ def list_worksheets(
         query = query.where(Worksheet.status == status)
 
     worksheets = db.execute(query).scalars().all()
+
+    # department_name state 1 (Task 8): WorksheetItem.department_id, when set,
+    # is the primary signal — resolved via one id->name map for the whole
+    # request (Department is a small, request-static catalog table, so this
+    # is not re-queried per worksheet or per item).
+    from models import Department
+    department_id_name_map: dict[int, str] = {
+        d.id: d.name for d in db.execute(select(Department)).scalars()
+    }
+
     result = []
     for ws in worksheets:
         items = db.execute(
@@ -18497,7 +18507,8 @@ def list_worksheets(
         item_department_fallback_map: dict[int, str | None] = {}
         _needs_department_fallback = [
             it for it in items
-            if not (it.service_group_id and group_department_name_map.get(it.service_group_id))
+            if not (it.department_id and department_id_name_map.get(it.department_id))
+            and not (it.service_group_id and group_department_name_map.get(it.service_group_id))
         ]
         if _needs_department_fallback:
             item_first_keyword: dict[int, str | None] = {}
@@ -18621,9 +18632,15 @@ def list_worksheets(
                     "sample_id": it.sample_id,
                     "sample_uid": it.sample_uid,
                     "service_group_id": it.service_group_id,
+                    "department_id": it.department_id,
+                    # Four-state resolution (Task 8): own department_id ->
+                    # legacy service_group bridge -> analyses_json keyword
+                    # fallback -> "Legacy" literal (fail-visible, was None).
                     "department_name": (
-                        (group_department_name_map.get(it.service_group_id) if it.service_group_id else None)
+                        (department_id_name_map.get(it.department_id) if it.department_id else None)
+                        or (group_department_name_map.get(it.service_group_id) if it.service_group_id else None)
                         or item_department_fallback_map.get(it.id)
+                        or "Legacy"
                     ),
                     "group_name": group_name_map.get(it.service_group_id, "—") if it.service_group_id else "—",
                     "group_color": group_color_map.get(it.service_group_id, "zinc") if it.service_group_id else "zinc",
