@@ -1185,3 +1185,23 @@ def test_senaite_shape_wire_service_id_survives_an_unresolvable_service(host):
 
     assert out[0].analysis_service_id == orphan_id
     assert out[0].service_origin is None
+
+
+def test_native_parent_listing_ships_the_identity_key(host):
+    """The surface tier 0 actually serves: the native parent-analyses listing
+    the FE reads with ?as=senaite_shape. It routes through the same single
+    SenaiteShapeAnalysisResponse construction site, so the key ships there
+    too — asserted end-to-end rather than inferred."""
+    from lims_analyses.service import list_native_parent_analyses_senaite_shape
+
+    db, parent, _sub = host
+    svc = _service(db, keyword="PUR_NEW", origin="mk1")
+    row = _parent_row(db, parent, svc, stored_keyword="PUR_OLD")
+    row.provenance = "canonical"
+    db.commit()
+
+    out = list_native_parent_analyses_senaite_shape(db, parent.sample_id)
+
+    assert [o.analysis_service_id for o in out] == [svc.id]
+    # Drifted keyword still on the wire — the id is what the FE joins on.
+    assert out[0].keyword == "PUR_OLD"
