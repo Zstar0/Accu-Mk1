@@ -197,6 +197,20 @@ def test_add_both_disagreeing_is_400(client, db, catalog, stamp_calls):
     assert stamp_calls == []
 
 
+def test_add_with_unknown_group_id_is_400(client, db, catalog, stamp_calls):
+    """A service_group_id that resolves to NO ServiceGroup row is a stale-client
+    bug — e.g. an inbox client sending a department id in the group field — not
+    a dangling id to silently keep and let the item-insert FK 500 on later."""
+    ws = _worksheet(db)
+
+    resp = _add(client, ws.id, service_group_id=999999)
+
+    assert resp.status_code == 400, resp.text
+    assert "unknown service_group_id" in resp.json()["detail"]
+    assert db.query(WorksheetItem).count() == 0
+    assert stamp_calls == []
+
+
 def test_add_both_agreeing_is_accepted(client, db, catalog):
     """Both keys pointing at the same department is the post-Task-10 FE payload."""
     ws = _worksheet(db)
@@ -352,6 +366,23 @@ def test_bulk_staging_requires_one_scope_key(client, db, catalog):
 
     assert resp.status_code == 400, resp.text
     assert "department_id" in resp.json()["detail"]
+    assert db.query(WorksheetItem).count() == 0
+
+
+def test_bulk_staging_unknown_group_id_is_400(client, db, catalog):
+    """Same stale-client guard as add-group: an unresolvable service_group_id
+    must 400, not silently persist a dangling id in a new staging row."""
+    resp = client.put(
+        "/worksheets/inbox/bulk",
+        json={
+            "sample_uids": [VIAL_UID],
+            "service_group_id": 999999,
+            "analyst_id": 1,
+        },
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "unknown service_group_id" in resp.json()["detail"]
     assert db.query(WorksheetItem).count() == 0
 
 

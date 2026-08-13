@@ -51,9 +51,18 @@ describe('isPrepStarted', () => {
     expect(isPrepStarted(new Set(['P-9999-d2']), 'P-0144', 2, 5)).toBe(false)
   })
 
-  it('does not treat an equal-numbered group flag as a department flag', () => {
-    // department 2 must not read a flag written for group 2.
+  it('does not read a group-shaped flag when the row has no group id', () => {
+    // No serviceGroupId means the legacy-fallback branch never runs, so a
+    // department-only key must not accidentally match a group-shaped flag.
     expect(isPrepStarted(new Set(['P-0144-2']), 'P-0144', 2, null)).toBe(false)
+  })
+
+  it('reads a legacy group-shaped flag for a row that now has BOTH ids', () => {
+    // Intentional overlap, not a bug: the fallback reads the row's OWN
+    // service_group_id under the legacy key, so a row that has since gained
+    // a department still finds a pre-cutover flag written under its group id.
+    // Ruled one-time-loss-avoidance behavior (2026-08-13).
+    expect(isPrepStarted(new Set(['P-0144-2']), 'P-0144', 2, 2)).toBe(true)
   })
 
   it('matches on the legacy shape alone for a row with no department', () => {

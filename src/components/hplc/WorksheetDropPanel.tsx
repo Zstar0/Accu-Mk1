@@ -27,7 +27,6 @@ import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
 import { useSlaForSubjects, type SlaSubject } from '@/services/sla-subjects'
 import type { WorksheetUser, InboxPriority } from '@/lib/api'
 import { itemRoleBadges, type InboxRoleTag } from '@/lib/inbox-filters'
-import { itemScopeKey } from '@/lib/worksheet-scope-key'
 import { ROLE_BADGE_CLASS } from '@/lib/assignment-colors'
 
 export interface WorksheetSummaryItem {
@@ -128,7 +127,7 @@ function WorksheetDropZone({
 
   const dropSubjects: SlaSubject[] = useMemo(() =>
     worksheet.items.map(item => ({
-      key: itemScopeKey(item.sample_uid, item.department_id, item.service_group_id),
+      key: String(item.id),
       priority: (item.priority as InboxPriority) || 'normal',
       // SLA tiers are still keyed on service groups — departments take that
       // over in S7, so this stays the group id on purpose.
@@ -252,11 +251,7 @@ function WorksheetDropZone({
               <div className="flex-1" />
               <PriorityBadge priority={item.priority as InboxPriority} />
               <SlaAgeIndicator
-                snapshot={
-                  dropSlaByKey.get(
-                    itemScopeKey(item.sample_uid, item.department_id, item.service_group_id)
-                  ) ?? null
-                }
+                snapshot={dropSlaByKey.get(String(item.id)) ?? null}
                 isLoading={dropSlaLoading}
                 isError={dropSlaError}
                 compact

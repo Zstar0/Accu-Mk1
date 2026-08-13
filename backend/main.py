@@ -10296,8 +10296,9 @@ async def generate_sample_coa(
                 resolver_result = None
 
             if resolver_result is not None:
-                # Micro analytes (ENDO/STER/KF) never block: the lab finishes them
-                # after the analytical COA and re-generates. Only NON-micro
+                # Micro (ENDO/STER/KF) and Heavy Metals analytes never block: micro
+                # finishes after the analytical COA and re-generates; HM is exempt per
+                # the 2026-08-12 ruling (see coa_exempt_keywords). Only other
                 # unresolved analytes hold up generation.
                 from coa.block_summary import (
                     build_name_resolver,
@@ -18792,11 +18793,20 @@ def _first_item_in_scope(db, *, sample_uid: str, department_id: int | None,
 def _resolve_item_scope(db, department_id: int | None, service_group_id: int | None) -> int | None:
     """Reconcile the two scope keys on the wire. Department wins; a group whose
     bridge disagrees is a caller bug (400); a group-only payload DERIVES the
-    department so new rows always store both keys."""
+    department so new rows always store both keys. An id that resolves to NO
+    ServiceGroup row is a stale-client bug (400), not a dangling id to keep —
+    the inbox now emits department ids, so a caller still sending a group id
+    that doesn't exist is likely sending a department id in the wrong field."""
     if service_group_id is None:
         return department_id
     group = db.get(ServiceGroup, service_group_id)
-    group_dept = group.department_id if group is not None else None
+    if group is None:
+        raise HTTPException(
+            400,
+            f"unknown service_group_id {service_group_id} — inbox now emits "
+            "department ids; send department_id (stale client?)",
+        )
+    group_dept = group.department_id
     if department_id is not None and group_dept is not None and group_dept != department_id:
         raise HTTPException(400, "department_id and service_group_id disagree")
     return department_id if department_id is not None else group_dept
