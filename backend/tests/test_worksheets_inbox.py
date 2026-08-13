@@ -154,9 +154,20 @@ def test_microbiology_filter_excludes_hplc_vials(client, auth_headers):
 
 # ── Analysis filtering by service group ──────────────────────────────────────
 
+# S2 Task 7: group_name now carries the DEPARTMENT name on SENAITE-sourced
+# analyses (sanctioned wire re-meaning, sub-spec D4) — the HPLC lane's is
+# "Analytical", not the "Analytics" service group. mk1:-sourced analyses are
+# skipped: _fetch_mk1_inbox_analyses_for_sub_sample still emits the service
+# GROUP, which is the open cross-branch ruling tracked by the strict-xfail in
+# test_worksheets_inbox_departments.py. Widen these back to one operand once
+# that is settled.
+
 def test_hplc_vial_analyses_are_analytics_only(client, auth_headers):
-    """A vial on the HPLC filter must show only Analytics analyses, even if the
-    underlying SENAITE AR carries Micro keywords (the inert duplicates decision)."""
+    """A vial on the HPLC filter must show only Analytical-department analyses,
+    even if the underlying SENAITE AR carries Micro keywords (the inert
+    duplicates decision)."""
+    with SessionLocal() as db:
+        expected = inbox_lanes(db)["hplc"].department_name
     resp = client.get(
         "/worksheets/inbox",
         params={"role": "hplc", "hide_test_orders": "false"},
@@ -164,12 +175,16 @@ def test_hplc_vial_analyses_are_analytics_only(client, auth_headers):
     )
     for item in resp.json()["items"]:
         for analysis in item["analyses"]:
-            assert analysis["group_name"] == "Analytics", (
-                f"HPLC vial {item['sample_id']} has non-Analytics analysis: {analysis}"
+            if str(analysis.get("uid") or "").startswith("mk1:"):
+                continue
+            assert analysis["group_name"] == expected, (
+                f"HPLC vial {item['sample_id']} has non-{expected} analysis: {analysis}"
             )
 
 
 def test_microbiology_vial_analyses_are_micro_only(client, auth_headers):
+    with SessionLocal() as db:
+        expected = inbox_lanes(db)["microbiology"].department_name
     resp = client.get(
         "/worksheets/inbox",
         params={"role": "microbiology", "hide_test_orders": "false"},
@@ -177,8 +192,10 @@ def test_microbiology_vial_analyses_are_micro_only(client, auth_headers):
     )
     for item in resp.json()["items"]:
         for analysis in item["analyses"]:
-            assert analysis["group_name"] == "Microbiology", (
-                f"Micro vial {item['sample_id']} has non-Micro analysis: {analysis}"
+            if str(analysis.get("uid") or "").startswith("mk1:"):
+                continue
+            assert analysis["group_name"] == expected, (
+                f"Micro vial {item['sample_id']} has non-{expected} analysis: {analysis}"
             )
 
 

@@ -17043,28 +17043,15 @@ class InboxResponse(BaseModel):
 
 # Worksheet-inbox lanes are catalog-driven (spec 4, Task 7): one lane per
 # department that owns >=1 vial role, via catalog.roles.inbox_lanes(db).
-# Department drives the lane: a new Microbiology-department group lands in
-# the micro lane automatically, with no name-pinning. hm (Heavy Metals) is
-# catalog-only and gets its own lane rather than folding into an existing
-# bench (spec-3 Task 3) — its services carry no service group, so
-# _inbox_allowed_group_ids resolves an empty set for it; the native-vial inbox
-# path (Phase 3.5, main.py _fetch_mk1_inbox_analyses_for_sub_sample) filters
-# hm vials by assignment_role via the lane's role_codes instead, not by group id.
-
-
-def _inbox_allowed_group_ids(db, lanes: dict, role: Optional[str]) -> Optional[set[int]]:
-    """Resolve a worksheet-inbox lane key to the set of service-group ids in
-    that lane's DEPARTMENT. None role -> None (no filter; pass all groups).
-    `lanes` is the caller's `inbox_lanes(db)` (one read per request, passed
-    down — never re-queried here)."""
-    if role is None:
-        return None
-    dept_id = lanes[role].department_id
-    return {
-        r[0] for r in db.execute(
-            select(ServiceGroup.id).where(ServiceGroup.department_id == dept_id)
-        ).all()
-    }
+# The lane key IS the department (S2 Task 7 — the group translation shim is
+# gone): a new Microbiology-department group lands in the micro lane
+# automatically, with no name-pinning. hm (Heavy Metals) is catalog-only and
+# gets its own lane rather than folding into an existing bench (spec-3 Task 3);
+# its services carry no service group, which used to translate to an empty
+# allowed-group set — the lane now filters on the analysis's own department, so
+# a group-less service is laned like any other. The native-vial inbox path
+# (Phase 3.5, _fetch_mk1_inbox_analyses_for_sub_sample) filters vials by
+# assignment_role via the lane's role_codes.
 
 
 class PriorityUpdate(BaseModel):
@@ -17391,8 +17378,8 @@ async def get_worksheets_inbox(
     if not SENAITE_URL and not use_registry_source:
         raise HTTPException(status_code=503, detail="SENAITE not configured")
 
-    # Resolve role → allowed service_group IDs. None means "no filter; pass all groups".
-    allowed_group_ids: Optional[set[int]] = _inbox_allowed_group_ids(db, lanes, role)
+    # Lane key IS the department (catalog.roles.inbox_lanes). None = no filter.
+    allowed_department_id: Optional[int] = None if role is None else lanes[role].department_id
 
     # Resolve allowed vial assignment_role values. NULL roles always excluded (auto-
     # assign on /vial-plan is the cure for those). XTRA gated by show_xtra.
@@ -17518,24 +17505,38 @@ async def get_worksheets_inbox(
     except Exception:
         pass  # If integration DB is unavailable, show all samples (graceful degradation)
 
-    # Step 2: Build set of (sample_uid, service_group_id) pairs already in open worksheets
-    # Only exclude specific service groups, not the entire sample — a sample can have
-    # Microbiology in a worksheet while Core HPLC is still available in the inbox.
-    open_worksheet_pairs = db.execute(
-        select(WorksheetItem.sample_uid, WorksheetItem.service_group_id)
+    # Step 2: Build set of (sample_uid, department_id) pairs already in open worksheets
+    # Only exclude specific departments, not the entire sample — a sample can have
+    # Microbiology in a worksheet while Analytical is still available in the inbox.
+    # Historical items carry only a group; those bridge through their group's
+    # department, so old and new rows land in one key space (S2 Task 7).
+    open_worksheet_rows = db.execute(
+        select(WorksheetItem.sample_uid, WorksheetItem.department_id,
+               WorksheetItem.service_group_id)
         .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
         .where(Worksheet.status == "open")
     ).all()
-    assigned_pairs: set[tuple[str, int | None]] = {
-        (row.sample_uid, row.service_group_id) for row in open_worksheet_pairs
+    group_dept_bridge: dict[int, int | None] = {
+        g.id: g.department_id for g in db.execute(select(ServiceGroup)).scalars().all()
     }
-    # Also track fully-assigned samples (all groups in worksheets) for backward compat
-    # We'll filter at the group level later in step 6, not at the sample level here
-    assigned_uids_for_null_group: set[str] = set()
-    # Samples with service_group_id=None in a worksheet are fully claimed
-    for uid, gid in assigned_pairs:
-        if gid is None:
-            assigned_uids_for_null_group.add(uid)
+
+    def _row_department(dept_id: int | None, gid: int | None) -> int | None:
+        if dept_id is not None:
+            return dept_id
+        if gid is not None:
+            return group_dept_bridge.get(gid)
+        return None
+
+    assigned_pairs: set[tuple[str, int | None]] = {
+        (r.sample_uid, _row_department(r.department_id, r.service_group_id))
+        for r in open_worksheet_rows
+    }
+    # Also track fully-assigned samples (no resolvable scope) for backward compat
+    # We'll filter at the department level later in step 6, not at the sample level here
+    # A row with neither key — and a group whose bridge is NULL — is a whole-sample claim
+    assigned_uids_for_null_group: set[str] = {
+        uid for uid, dept in assigned_pairs if dept is None
+    }
 
     # Step 2b: Load SENAITE sample IDs that already have a sample prep
     prepped_senaite_ids: set[str] = set()
@@ -17561,20 +17562,16 @@ async def get_worksheets_inbox(
         if not hide_prepped or str(it.get("id", "")) not in prepped_senaite_ids
     ]
 
-    # Step 3: Build keyword → service group map
-    group_rows = db.execute(
-        select(
-            AnalysisService.keyword,
-            ServiceGroup.id,
-            ServiceGroup.name,
-            ServiceGroup.color,
-        )
-        .join(service_group_members, AnalysisService.id == service_group_members.c.analysis_service_id)
-        .join(ServiceGroup, ServiceGroup.id == service_group_members.c.service_group_id)
+    # Step 3: Build keyword → department map (the service's own department
+    # column — no service_group_members hop; S2 Task 7)
+    from models import Department
+    dept_rows = db.execute(
+        select(AnalysisService.keyword, Department.id, Department.name, Department.color)
+        .join(Department, Department.id == AnalysisService.department_id)
         .where(AnalysisService.keyword.isnot(None))
     ).all()
-    keyword_to_group: dict[str, tuple[int, str, str]] = {
-        row.keyword: (row.id, row.name, row.color) for row in group_rows
+    keyword_to_department: dict[str, tuple[int, str, str]] = {
+        row.keyword: (row[1], row[2], row[3]) for row in dept_rows
     }
 
     # Step 3b: Build keyword → local enrichment map (peptide name + method)
@@ -17603,15 +17600,9 @@ async def get_worksheets_inbox(
             # Use first active method as the display method
             peptide_to_method[pep.name] = pep.methods[0].name
 
-    # Default group for unmatched analyses
-    default_group_row = db.execute(
-        select(ServiceGroup).where(ServiceGroup.is_default == True)  # noqa: E712
-    ).scalar_one_or_none()
-    default_group = (
-        (default_group_row.id, default_group_row.name, default_group_row.color)
-        if default_group_row
-        else (0, "Other", "gray")
-    )
+    # Unresolved keyword → explicit legacy bucket. Fail-visible by design:
+    # no Department.is_default analogue exists and none is added (S2 ruling).
+    default_department = (0, "Other", "gray")
 
     # Step 4: Load local priorities for these samples
     uids = [str(it.get("uid", "")) for it in filtered_items if it.get("uid")]
@@ -17725,8 +17716,9 @@ async def get_worksheets_inbox(
                 "container_mode": parent_container_mode.get(r.parent_sample_pk, False),
             }
 
-    # Step 5: Load per-group worksheet_item assignments (analyst + instrument)
-    # Key is (sample_uid, service_group_id) → WorksheetItem
+    # Step 5: Load per-department worksheet_item assignments (analyst + instrument)
+    # Key is (sample_uid, department_id) → WorksheetItem, bridged the same way
+    # assigned_pairs is so legacy group-only rows still match (S2 Task 7).
     item_rows = db.execute(
         select(WorksheetItem)
         .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
@@ -17736,7 +17728,8 @@ async def get_worksheets_inbox(
         )
     ).scalars().all()
     assignment_map: dict[tuple[str, int | None], WorksheetItem] = {
-        (row.sample_uid, row.service_group_id): row for row in item_rows
+        (row.sample_uid, _row_department(row.department_id, row.service_group_id)): row
+        for row in item_rows
     }
 
     # Collect analyst IDs to load emails
@@ -17942,13 +17935,15 @@ async def get_worksheets_inbox(
                     if isinstance(method_obj, dict):
                         method = method_obj.get("title")
 
-            group_id, group_name, group_color = keyword_to_group.get(keyword, default_group)
+            dept_id_, dept_name_, dept_color_ = keyword_to_department.get(
+                keyword, default_department
+            )
 
-            # Role → allowed_group_ids filter (None == pass all)
-            if allowed_group_ids is not None and group_id not in allowed_group_ids:
+            # Lane filter (None == pass all lanes)
+            if allowed_department_id is not None and dept_id_ != allowed_department_id:
                 continue
-            # Already on an open worksheet for this (vial, group) — drop the analysis
-            if (uid, group_id) in assigned_pairs:
+            # Already on an open worksheet for this (vial, department) — drop it
+            if (uid, dept_id_) in assigned_pairs:
                 continue
 
             flat_analyses.append(
@@ -17959,9 +17954,12 @@ async def get_worksheets_inbox(
                     peptide_name=resolved_peptide,
                     method=str(method) if method else None,
                     review_state=str(review_state) if review_state else None,
-                    group_id=group_id,
-                    group_name=group_name,
-                    group_color=group_color,
+                    # Wire field NAMES stay; they now carry DEPARTMENT identity
+                    # (sanctioned re-meaning, sub-spec D4 — the FE's itemBench()
+                    # is already department-name-based).
+                    group_id=dept_id_,
+                    group_name=dept_name_,
+                    group_color=dept_color_,
                 )
             )
 
