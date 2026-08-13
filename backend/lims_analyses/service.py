@@ -1618,7 +1618,7 @@ def _find_active_parent_row(
         select(AnalysisService).where(
             AnalysisService.keyword == keyword,
             AnalysisService.origin == "mk1",
-        )
+        ).order_by(AnalysisService.id)
     ).scalars().first()
     if native_svc is None:
         return None

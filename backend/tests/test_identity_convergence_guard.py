@@ -271,7 +271,12 @@ MATCHED_SITE_FLOOR = 24
 # on arrival; test_every_swept_file_parses covers its outright disappearance.
 PER_FILE_FLOOR = {
     "lims_analyses/service.py": 12,
-    "lims_analyses/seeder.py": 3,
+    # floor = PERMANENT-only count, survives SHRINKING retirements — same
+    # convention as the service.py/main.py floors: both seeder.py SHRINKING
+    # entries (mirror_parent_hplc_analyses/svc, _seed_rows_from_services/svc)
+    # retire together on the documented index-drop condition, leaving only
+    # select_services_for_role/AnalysisService (PERMANENT).
+    "lims_analyses/seeder.py": 1,
     "lims_analyses/parent_mirror.py": 1,
     "workflow/observer.py": 1,
     "coa/source_resolver.py": 2,

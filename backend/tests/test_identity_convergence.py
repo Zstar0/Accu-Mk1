@@ -546,6 +546,36 @@ def test_seeder_senaite_row_still_skips_by_stored_keyword(host):
     assert _seed_endo(db, sub) == [], "senaite keyword skip must be unchanged"
 
 
+def test_seeder_skips_drifted_senaite_row_by_service_id(host):
+    """Pins the RULED union skip (2026-08-13): the id leg is origin-agnostic.
+    A senaite-origin candidate whose service id already has a live row (with a
+    DIFFERENT stored keyword) must skip — reverting the union to an
+    origin-ternary re-seeds it into a keyword/id-index IntegrityError at
+    check-in.
+
+    select_services_for_role matches on keyword alone (no origin filter), so
+    a senaite-origin service can be the candidate here exactly like the mk1
+    case in test_seeder_skips_drifted_native_row_by_service_id — the only
+    difference is origin, and the id leg must not care."""
+    db, parent, sub = host
+    svc = _endo_svc(db, origin="senaite")
+    _vial_row(db, sub, svc, stored_keyword="ENDO-LAL-OLD")   # drifted, id-leg only
+    db.commit()
+
+    created = _seed_endo(db, sub)
+
+    assert created == [], (
+        "senaite-origin candidate sharing an existing row's service id must "
+        f"skip via the id leg regardless of origin; re-seeded {[r.keyword for r in created]}"
+    )
+    rows = db.execute(
+        LimsAnalysis.__table__.select().where(
+            LimsAnalysis.lims_sub_sample_pk == sub.id
+        )
+    ).all()
+    assert len(rows) == 1, "the vial must still carry exactly one row for this service"
+
+
 def test_seeder_dead_rows_block_nothing_in_either_set(host):
     """The comment contract at the skip-set query: rejected/retracted rows do
     NOT block, so a service rejected on the vial and later re-added resurrects

@@ -6,6 +6,16 @@ Exit codes: 0 clean · 2 canary failed (existing keyword index missing —
 investigate the migration mechanism before anything else) · 3 violations.
 Violations are reported, never auto-healed (humans decide repairs).
 
+The deploy gate has two halves, both diagnostics that never affect the exit
+code: origin_split_diagnostic/drift_sizer attribute violation rows to WHOSE
+they are, and cross_origin_keyword_collisions (the second half) flags the
+same catalog keyword shared across different analysis_services.origin
+values — legal today (uq_analysis_services_mk1_keyword is PARTIAL on
+origin='mk1'), but a risk flag for the mk1 catalog-rescue legs
+(lims_analyses/service.py's _find_active_parent_row leg 3, coa/
+source_resolver.py's _pin_row_identity_matches leg 2) that resolve a keyword
+string against the origin='mk1' catalog scope.
+
 Usage:
     python scripts/s3_identity_precheck.py --env-label s3rehe
     (reads the same MK1_DB_* / .env config the app connects with — see
@@ -120,6 +130,22 @@ SELECT svc.origin AS origin, COUNT(*) AS n_rows
  ORDER BY n_rows DESC
 """
 
+# Same catalog keyword shared across DIFFERENT origins. Legal today —
+# uq_analysis_services_mk1_keyword is PARTIAL on origin='mk1', so an mk1
+# service and a senaite service CAN carry the identical keyword string — but
+# a risk flag for the mk1 catalog-rescue legs (service.py leg 3,
+# source_resolver leg 2): each resolves a keyword string against the
+# origin='mk1' catalog scope, and a collision here means an unrelated
+# other-origin service shares the exact string a native rescue is matching.
+_CROSS_ORIGIN_COLLISION_SQL = """
+SELECT keyword, array_agg(DISTINCT origin) AS origins,
+       array_agg(id ORDER BY id) AS service_ids
+  FROM analysis_services
+ WHERE keyword IS NOT NULL
+ GROUP BY keyword
+HAVING COUNT(DISTINCT origin) > 1
+"""
+
 
 def keyword_index_canary(db) -> list[dict]:
     """Run FIRST. Non-empty ⇒ the EXISTING keyword index is absent/invalid
@@ -150,21 +176,34 @@ def drift_sizer(db) -> list[dict]:
     return [dict(r) for r in db.execute(text(_DRIFT_SIZER_SQL)).mappings().all()]
 
 
+def cross_origin_keyword_collisions(db) -> list[dict]:
+    """Diagnostic only — never gates the exit code. The second half of the
+    deploy gate (see module docstring): flags the same analysis_services
+    keyword shared across different origins, a risk flag for the mk1
+    catalog-rescue legs (lims_analyses/service.py's _find_active_parent_row
+    leg 3, coa/source_resolver.py's _pin_row_identity_matches leg 2)."""
+    return [dict(r) for r in db.execute(text(_CROSS_ORIGIN_COLLISION_SQL)).mappings().all()]
+
+
 def run_precheck(db, env_label: str) -> int:
     """Run the full pre-check against `db` and print the report. Returns the
     exit code: 0 clean, 2 canary failed, 3 violations found. Split out of
     main() so the decision/reporting logic is testable without a real CLI
     invocation or SessionLocal() of its own.
 
-    The two diagnostics (origin split + drift sizer) ALWAYS run once the two
-    gates have computed their hits — they must never be skipped just because
-    a violation was found. origin_split_diagnostic shares the gates' own
-    `HAVING COUNT(*) > 1` predicate, so on the clean path it is
-    mathematically guaranteed empty; the one moment it can have real content
-    to attribute IS the violation case, which is exactly when an operator
-    needs "whose rows to repair." An early `return 3` before these ran would
-    make that diagnostic permanently unreachable — this was a real bug
-    caught in review, not a hypothetical (see test_violation_path_still_runs_diagnostics).
+    The three diagnostics (origin split, drift sizer, cross-origin keyword
+    collisions) ALWAYS run once the two gates have computed their hits — they
+    must never be skipped just because a violation was found. origin_split_
+    diagnostic shares the gates' own `HAVING COUNT(*) > 1` predicate, so on
+    the clean path it is mathematically guaranteed empty; the one moment it
+    can have real content to attribute IS the violation case, which is
+    exactly when an operator needs "whose rows to repair." An early
+    `return 3` before these ran would make that diagnostic permanently
+    unreachable — this was a real bug caught in review, not a hypothetical
+    (see test_violation_path_still_runs_diagnostics). cross_origin_keyword_
+    collisions is unrelated to the gates' predicate (it scans
+    analysis_services, not lims_analyses) and is equally unconditional — the
+    deploy gate's second half, named in the module docstring.
     """
     print(f"=== S3 identity pre-check — environment: {env_label} ===")
 
@@ -210,6 +249,20 @@ def run_precheck(db, env_label: str) -> int:
     print(f"drift sizer: {len(drift_rows)} origin group(s) with keyword drift")
     for row in drift_rows:
         print(row)
+
+    # Second half of the deploy gate (see module docstring) — same as the two
+    # diagnostics above, this ALWAYS runs and never affects the exit code.
+    collision_rows = cross_origin_keyword_collisions(db)
+    print(f"cross-origin keyword collisions: {len(collision_rows)} keyword(s) "
+         "shared across origins")
+    if collision_rows:
+        print("RISK: shared keyword across origins is a risk flag for the "
+             "mk1 catalog-rescue legs (service.py leg 3, source_resolver "
+             "leg 2) — a rescue resolving this keyword against the mk1 scope "
+             "could collide with the other origin's row sharing the same "
+             "string.")
+        for row in collision_rows:
+            print(row)
 
     if has_violations:
         return 3

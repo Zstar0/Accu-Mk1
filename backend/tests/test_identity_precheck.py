@@ -190,3 +190,52 @@ def test_canary_runs_first_and_detects(db):
 def test_drift_sizer_returns_rows_not_failures(db):
     from scripts.s3_identity_precheck import drift_sizer
     drift_sizer(db)  # diagnostic — must not raise on any data
+
+
+def test_cross_origin_keyword_collision_detected(db):
+    """An mk1 service and a senaite service sharing the same keyword is legal
+    today (uq_analysis_services_mk1_keyword is PARTIAL on origin='mk1') but
+    is exactly the shape cross_origin_keyword_collisions must surface — the
+    risk flag for the mk1 catalog-rescue legs. Built raw and rolled back, no
+    index drop needed: this pair violates nothing."""
+    from scripts.s3_identity_precheck import cross_origin_keyword_collisions
+
+    uid = uuid.uuid4().hex[:8]
+    kw = f"TEST-S3-XORIGIN-{uid}"
+    mk1_svc = AnalysisService(title="TEST S3 mk1 collision", keyword=kw, origin="mk1")
+    senaite_svc = AnalysisService(title="TEST S3 senaite collision", keyword=kw, origin="senaite")
+    db.add_all([mk1_svc, senaite_svc])
+    db.flush()
+
+    hits = cross_origin_keyword_collisions(db)
+    match = next((h for h in hits if h["keyword"] == kw), None)
+
+    assert match is not None, f"collision on {kw!r} not reported: {hits}"
+    assert set(match["origins"]) == {"mk1", "senaite"}
+    assert sorted(match["service_ids"]) == sorted([mk1_svc.id, senaite_svc.id])
+    # (teardown = fixture rollback)
+
+
+def test_run_precheck_includes_cross_origin_collision_section(db, capsys):
+    """The cross-origin keyword-collision diagnostic is the deploy gate's
+    second half (module docstring) — it must appear in run_precheck's
+    printed report unconditionally, exactly like origin_split_diagnostic/
+    drift_sizer, and must NOT affect the exit code: this is a catalog-only
+    collision, no lims_analyses violation exists alongside it."""
+    from scripts.s3_identity_precheck import run_precheck
+
+    uid = uuid.uuid4().hex[:8]
+    kw = f"TEST-S3-XORIGIN-{uid}"
+    mk1_svc = AnalysisService(title="TEST S3 mk1 collision", keyword=kw, origin="mk1")
+    senaite_svc = AnalysisService(title="TEST S3 senaite collision", keyword=kw, origin="senaite")
+    db.add_all([mk1_svc, senaite_svc])
+    db.flush()
+
+    code = run_precheck(db, "test-env")
+    out = capsys.readouterr().out
+
+    assert code == 0, "a catalog-only keyword collision must not gate the exit code"
+    m = re.search(r"cross-origin keyword collisions: (\d+) keyword\(s\)", out)
+    assert m is not None and int(m.group(1)) >= 1
+    assert kw in out
+    assert "RISK:" in out

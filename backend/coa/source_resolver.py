@@ -349,8 +349,9 @@ def _pin_row_identity_matches(db: Session, row, analyte_keyword: str) -> bool:
     (validate_new_keyword covers Mk1-side creation, not SENAITE sync). Drop
     the scoping and a senaite row with a drifted echo gets matched by an
     unrelated native service that merely shares the string.
-    DEPLOY GATE: the cross-origin keyword-collision query in task-3-report §2
-    bears on this site too — run it against s3rehe and prod before shipping.
+    DEPLOY GATE: run scripts/s3_identity_precheck.py (includes the
+    cross-origin keyword-collision diagnostic) against s3rehe AND prod
+    before shipping.
 
     ORDER BY id is for determinism only: the partial unique index makes mk1
     keywords unique, so this can select from at most one row unless that index
