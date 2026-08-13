@@ -17087,9 +17087,10 @@ _INBOX_CACHE_TTL_SECONDS = 30 * 60  # 30 minutes
 # ── Phase 3.5: Mk1-sourced inbox analyses for sub-samples ───────────────────
 
 
-# Color fallback when the ServiceGroup join misses (rare — only if a vial's
-# analysis_service has no service_group_members row). Mirrors the FE's role
-# palette.
+# Color fallback when the Department join misses (a vial whose analysis_service
+# carries no department — catalog-only services until S6 totality lands).
+# Mirrors the FE's role palette, so the Other bucket still reads as its bench
+# rather than going flat gray on the native path.
 _INBOX_ROLE_COLOR_FALLBACK = {
     "hplc": "sky",
     "endo": "violet",
@@ -17135,17 +17136,22 @@ def _fetch_mk1_inbox_analyses_for_sub_sample(
 
     Returns an empty list if the vial has no Mk1 rows — caller falls back
     to the SENAITE path.
+
+    S2 Task 7: group_id/group_name/group_color carry DEPARTMENT identity here
+    too. get_worksheets_inbox keys assigned_pairs and assignment_map by
+    department and matches these rows against them, so the two must be drawn
+    from one id space — and the response would otherwise sort and label native
+    vials by service group while every SENAITE-sourced vial in the same payload
+    used departments. The department join is also on a scalar FK, so it cannot
+    fan out the way the old service_group_members hop did for a service in two
+    groups (which duplicated that analysis in the vial's list).
     """
-    from models import LimsAnalysis  # local import; not at module top
+    from models import Department, LimsAnalysis  # local import; not at module top
 
     rows = db.execute(
-        select(LimsAnalysis, AnalysisService, ServiceGroup)
+        select(LimsAnalysis, AnalysisService, Department)
         .join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
-        .outerjoin(
-            service_group_members,
-            service_group_members.c.analysis_service_id == AnalysisService.id,
-        )
-        .outerjoin(ServiceGroup, ServiceGroup.id == service_group_members.c.service_group_id)
+        .outerjoin(Department, Department.id == AnalysisService.department_id)
         .where(LimsAnalysis.lims_sub_sample_pk == sub_sample_pk)
         # Current/live row per (vial, service) is retested=False — NOT
         # retest_of_id IS NULL, which selects the superseded original after a
@@ -17166,16 +17172,18 @@ def _fetch_mk1_inbox_analyses_for_sub_sample(
         "promoted", "verified", "published", "variance_verified",
     }
     out: list[InboxAnalysisItem] = []
-    for la, svc, sg in rows:
+    for la, svc, dept in rows:
         if la.review_state in EXCLUDED_STATES:
             continue
-        if sg is not None:
-            grp_id = sg.id
-            grp_name = sg.name or ""
-            grp_color = getattr(sg, "color", None) or _INBOX_ROLE_COLOR_FALLBACK.get(role or "", "zinc")
+        if dept is not None:
+            grp_id = dept.id
+            grp_name = dept.name or ""
+            grp_color = getattr(dept, "color", None) or _INBOX_ROLE_COLOR_FALLBACK.get(role or "", "zinc")
         else:
+            # Same explicit legacy bucket the SENAITE path uses, but keeping the
+            # role-derived color the native path already had (S2 Task 7 ruling).
             grp_id = 0
-            grp_name = ""
+            grp_name = "Other"
             grp_color = _INBOX_ROLE_COLOR_FALLBACK.get(role or "", "zinc")
 
         out.append(InboxAnalysisItem(

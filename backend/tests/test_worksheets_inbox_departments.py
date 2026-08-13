@@ -276,13 +276,6 @@ def test_native_vial_claim_uses_the_same_key_space_as_assigned_pairs(client, db)
     """A native (mk1://) vial claimed by an open worksheet must not appear in
     the inbox.
 
-    CURRENTLY RED — S2 Task 7 open ruling. The brief holds the Mk1-native
-    emitter at service-group identity while get_worksheets_inbox re-keys
-    assigned_pairs/assignment_map to departments, so a claimed native vial
-    comes back. Left as a plain failure on purpose: it is a live regression,
-    and an xfail would report the suite green over exactly the behavior under
-    escalation. Delete nothing here — port the emitter (see task-7-report.md).
-
     The native branch (_build_native_vial_inbox_items) does not build
     assigned_pairs — get_worksheets_inbox builds it and passes it down, and the
     native rows are matched against it by the group_id
@@ -308,4 +301,73 @@ def test_native_vial_claim_uses_the_same_key_space_as_assigned_pairs(client, db)
     assert "P-9002-S01" not in sids, (
         "native vial claimed by an open worksheet is still in the inbox — the "
         "claim key and the native rows' group_id are no longer the same id space"
+    )
+
+
+def _native_vial(db, *, parent, uid, sid, role="hplc", seq=1):
+    sub = LimsSubSample(parent_sample_pk=parent.id, external_lims_uid=uid,
+                        sample_id=sid, vial_sequence=seq, assignment_role=role)
+    db.add(sub)
+    db.flush()
+    return sub
+
+
+def test_native_vial_analyses_carry_department_identity_and_sort_by_it(client, db):
+    """The native emitter speaks the same vocabulary as the SENAITE path, so
+    one response has one set of labels and one sort operand.
+
+    The two services are chosen so the orderings DISAGREE: by service-group
+    name it is "Alpha Bench" then "Analytics"; by department name it is
+    "Analytical" then "Microbiology" — the reverse. A sort still keyed on
+    groups would come back in the other order.
+    """
+    db.add(ServiceGroup(id=204, name="Alpha Bench", color="rose",
+                        department_id=DEPT_MICRO, is_default=False))
+    db.flush()
+    parent = _parent(db, uid="uid-s2-9003", sid="P-9003")
+    analytical = _service(db, keyword="PURITY_A", department_id=DEPT_ANALYTICAL,
+                          group_id=GROUP_ANALYTICS)
+    micro = _service(db, keyword="STER_ALPHA", department_id=DEPT_MICRO, group_id=204)
+    _analysis(db, service=analytical, parent_pk=parent.id)
+    sub = _native_vial(db, parent=parent, uid="mk1://s2-native-3", sid="P-9003-S01")
+    _analysis(db, service=analytical, sub_pk=sub.id)
+    _analysis(db, service=micro, sub_pk=sub.id)
+    db.commit()
+
+    items = _get_inbox(client, role="hplc")
+    vial = [it for it in items if it["sample_id"] == "P-9003-S01"]
+    assert vial, "seeded native vial missing from the hplc lane"
+    analyses = vial[0]["analyses"]
+    by_kw = {a["keyword"]: a for a in analyses}
+
+    a = by_kw["PURITY_A"]
+    assert (a["group_id"], a["group_name"], a["group_color"]) == (
+        DEPT_ANALYTICAL, "Analytical", "blue"
+    ), "native rows must carry DEPARTMENT identity, not the Analytics group's"
+    assert by_kw["STER_ALPHA"]["group_name"] == "Microbiology"
+
+    assert [x["group_name"] for x in analyses] == ["Analytical", "Microbiology"], (
+        "native rows must sort by the same operand as the SENAITE path"
+    )
+
+
+def test_native_vial_departmentless_service_lands_in_other_bucket(client, db):
+    """Unresolved on the native path is (0, 'Other', <role color>) — the same
+    explicit bucket as the SENAITE path, keeping the role-derived color the
+    native rows already had (S2 Task 7 ruling)."""
+    parent = _parent(db, uid="uid-s2-9004", sid="P-9004")
+    keeper = _service(db, keyword="PURITY_A", department_id=DEPT_ANALYTICAL,
+                      group_id=GROUP_ANALYTICS)
+    orphan = _service(db, keyword="ORPHAN_X", department_id=None, group_id=GROUP_ANALYTICS)
+    _analysis(db, service=keeper, parent_pk=parent.id)
+    sub = _native_vial(db, parent=parent, uid="mk1://s2-native-4", sid="P-9004-S01")
+    _analysis(db, service=orphan, sub_pk=sub.id)
+    db.commit()
+
+    items = _get_inbox(client, role="hplc")
+    vial = [it for it in items if it["sample_id"] == "P-9004-S01"]
+    assert vial, "seeded native vial missing from the hplc lane"
+    a = vial[0]["analyses"][0]
+    assert (a["group_id"], a["group_name"], a["group_color"]) == (0, "Other", "sky"), (
+        "a department-less service must not fall back to its service group"
     )

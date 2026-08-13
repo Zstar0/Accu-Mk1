@@ -154,13 +154,10 @@ def test_microbiology_filter_excludes_hplc_vials(client, auth_headers):
 
 # ── Analysis filtering by service group ──────────────────────────────────────
 
-# S2 Task 7: group_name now carries the DEPARTMENT name on SENAITE-sourced
-# analyses (sanctioned wire re-meaning, sub-spec D4) — the HPLC lane's is
-# "Analytical", not the "Analytics" service group. mk1:-sourced analyses are
-# skipped: _fetch_mk1_inbox_analyses_for_sub_sample still emits the service
-# GROUP, which is the open cross-branch ruling tracked by the strict-xfail in
-# test_worksheets_inbox_departments.py. Widen these back to one operand once
-# that is settled.
+# S2 Task 7: group_name carries the DEPARTMENT name (sanctioned wire
+# re-meaning, sub-spec D4) — the HPLC lane's is "Analytical", not the
+# "Analytics" service group. Both source paths were ported, so mk1:- and
+# SENAITE-sourced analyses are held to the SAME operand here on purpose.
 
 def test_hplc_vial_analyses_are_analytics_only(client, auth_headers):
     """A vial on the HPLC filter must show only Analytical-department analyses,
@@ -175,8 +172,6 @@ def test_hplc_vial_analyses_are_analytics_only(client, auth_headers):
     )
     for item in resp.json()["items"]:
         for analysis in item["analyses"]:
-            if str(analysis.get("uid") or "").startswith("mk1:"):
-                continue
             assert analysis["group_name"] == expected, (
                 f"HPLC vial {item['sample_id']} has non-{expected} analysis: {analysis}"
             )
@@ -192,8 +187,6 @@ def test_microbiology_vial_analyses_are_micro_only(client, auth_headers):
     )
     for item in resp.json()["items"]:
         for analysis in item["analyses"]:
-            if str(analysis.get("uid") or "").startswith("mk1:"):
-                continue
             assert analysis["group_name"] == expected, (
                 f"Micro vial {item['sample_id']} has non-{expected} analysis: {analysis}"
             )
