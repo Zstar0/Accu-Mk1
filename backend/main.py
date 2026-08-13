@@ -10304,9 +10304,9 @@ async def generate_sample_coa(
                     has_blocking_unresolved,
                     summarize_unresolved,
                 )
-                from lims_analyses.seeder import _micro_group_keywords
+                from lims_analyses.seeder import coa_exempt_keywords
 
-                micro_kw = _micro_group_keywords(db)
+                micro_kw = coa_exempt_keywords(db)
                 if has_blocking_unresolved(resolver_result, micro_keywords=micro_kw):
                     name_for = _build_coa_analyte_name_resolver(db, sample_id, alias_map=_load_sample_aliases(db, sample_id))
                     _unresolved = summarize_unresolved(
@@ -10323,7 +10323,7 @@ async def generate_sample_coa(
             # SENAITE is truly down).
             kinds = await _parent_attachment_kinds(sample_id, _get_senaite_auth(current_user))
             if kinds is not None:
-                from lims_analyses.seeder import _micro_group_keywords as _micro_kws
+                from lims_analyses.seeder import coa_exempt_keywords as _micro_kws
                 if resolver_result is not None:
                     _micro = _micro_kws(db)
                     needs_chromatogram = any(
