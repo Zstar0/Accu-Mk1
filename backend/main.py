@@ -34,7 +34,7 @@ from fastapi import BackgroundTasks, FastAPI, Body, Depends, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import select, desc, delete, update, func, extract
+from sqlalchemy import select, desc, delete, update, func, extract, and_
 from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
@@ -17074,11 +17074,13 @@ class PriorityUpdate(BaseModel):
 class BulkInboxUpdate(BaseModel):
     sample_uids: list[str]
     priority: Optional[str] = None
-    service_group_id: Optional[int] = None  # required when setting analyst or instrument
+    # One of the two scope keys is required when setting analyst or instrument.
+    service_group_id: Optional[int] = None
+    department_id: Optional[int] = None
     analyst_id: Optional[int] = None
     instrument_uid: Optional[str] = None
 
-    @validator("service_group_id", pre=True, always=True)
+    @validator("service_group_id", "department_id", pre=True, always=True)
     def zero_to_none(cls, v):
         return None if v == 0 else v
 
@@ -18216,25 +18218,32 @@ async def bulk_update_inbox(
             else:
                 db.add(SamplePriority(sample_uid=uid, priority=data.priority))
 
-    # Upsert analyst/instrument per service group as staging worksheet_items
+    # Upsert analyst/instrument per bench scope as staging worksheet_items
     if data.analyst_id is not None or data.instrument_uid is not None:
-        if data.service_group_id is None:
+        if data.service_group_id is None and data.department_id is None:
             raise HTTPException(
                 status_code=400,
-                detail="service_group_id is required when setting analyst or instrument",
+                detail="one of department_id / service_group_id is required when setting analyst or instrument",
             )
+        gid = data.service_group_id
+        dept_id = _resolve_item_scope(db, data.department_id, gid)
 
-        # Find existing staging items keyed by (sample_uid, service_group_id)
+        # Find existing staging items in this bench scope. A department match can
+        # hit two historical rows per uid (many-to-one group→department collapse)
+        # — lowest id wins, matching _first_item_in_scope.
         existing_items = db.execute(
             select(WorksheetItem)
             .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
             .where(
                 WorksheetItem.sample_uid.in_(data.sample_uids),
-                WorksheetItem.service_group_id == data.service_group_id,
+                _item_scope_filter(dept_id, gid),
                 Worksheet.status == "staging",
             )
+            .order_by(WorksheetItem.id)
         ).scalars().all()
-        existing_item_map = {row.sample_uid: row for row in existing_items}
+        existing_item_map: dict[str, WorksheetItem] = {}
+        for row in existing_items:
+            existing_item_map.setdefault(row.sample_uid, row)
 
         # Get or create staging worksheet
         missing_uids = [uid for uid in data.sample_uids if uid not in existing_item_map]
@@ -18267,7 +18276,8 @@ async def bulk_update_inbox(
                     worksheet_id=staging_ws.id,
                     sample_uid=uid,
                     sample_id=uid,
-                    service_group_id=data.service_group_id,
+                    service_group_id=gid,
+                    department_id=dept_id,
                     assigned_analyst_id=data.analyst_id,
                     instrument_uid=data.instrument_uid,
                 ))
@@ -18692,14 +18702,72 @@ class AddToWorksheetAnalysis(BaseModel):
     method: Optional[str] = None
 
 
+def _item_scope_filter(department_id: int | None, service_group_id: int | None):
+    """Locate a worksheet item by bench scope. Department wins when present;
+    else the legacy group; both None → the legacy NULL-scope rows (a whole-
+    sample claim). NOTE: the group→department collapse is many-to-one
+    (Microbiology+Endotoxin→Microbiology), so a department match can hit two
+    historical rows — callers use ordered .first() + the
+    worksheet.item_scope_ambiguous warning, never scalar_one_or_none().
+
+    The both-None branch is deliberately NARROWER than the legacy
+    `service_group_id IS NULL` filter it replaces: a row carrying a department
+    but no group is that department's claim, not a whole-sample one.
+    """
+    if department_id is not None:
+        return WorksheetItem.department_id == department_id
+    if service_group_id is not None:
+        return WorksheetItem.service_group_id == service_group_id
+    return and_(
+        WorksheetItem.department_id.is_(None),
+        WorksheetItem.service_group_id.is_(None),
+    )
+
+
+def _first_item_in_scope(db, *, sample_uid: str, department_id: int | None,
+                         service_group_id: int | None, status: str) -> "WorksheetItem | None":
+    rows = db.execute(
+        select(WorksheetItem)
+        .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
+        .where(
+            WorksheetItem.sample_uid == sample_uid,
+            _item_scope_filter(department_id, service_group_id),
+            Worksheet.status == status,
+        )
+        .order_by(WorksheetItem.id)
+    ).scalars().all()
+    if len(rows) > 1:
+        logger.warning(
+            "worksheet.item_scope_ambiguous sample_uid=%s department_id=%s "
+            "service_group_id=%s status=%s n=%d — many-to-one group→department "
+            "collapse matched multiple historical rows; using lowest id",
+            sample_uid, department_id, service_group_id, status, len(rows),
+        )
+    return rows[0] if rows else None
+
+
+def _resolve_item_scope(db, department_id: int | None, service_group_id: int | None) -> int | None:
+    """Reconcile the two scope keys on the wire. Department wins; a group whose
+    bridge disagrees is a caller bug (400); a group-only payload DERIVES the
+    department so new rows always store both keys."""
+    if service_group_id is None:
+        return department_id
+    group = db.get(ServiceGroup, service_group_id)
+    group_dept = group.department_id if group is not None else None
+    if department_id is not None and group_dept is not None and group_dept != department_id:
+        raise HTTPException(400, "department_id and service_group_id disagree")
+    return department_id if department_id is not None else group_dept
+
+
 class AddToWorksheetRequest(BaseModel):
     sample_uid: str
     sample_id: str
     service_group_id: int | None = None
+    department_id: int | None = None
     date_received: Optional[str] = None
     analyses: Optional[list[AddToWorksheetAnalysis]] = None
 
-    @validator("service_group_id", pre=True, always=True)
+    @validator("service_group_id", "department_id", pre=True, always=True)
     def zero_to_none(cls, v):
         return None if v == 0 else v
 
@@ -18718,18 +18786,13 @@ async def add_group_to_worksheet(
     if not ws:
         raise HTTPException(404, "Worksheet not found")
 
-    # Check if this sample+group is already in ANY open worksheet (collision guard)
+    # Check if this sample+scope is already in ANY open worksheet (collision guard)
     gid = data.service_group_id
-    gid_filter = WorksheetItem.service_group_id.is_(None) if gid is None else (WorksheetItem.service_group_id == gid)
-    existing_anywhere = db.execute(
-        select(WorksheetItem)
-        .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
-        .where(
-            WorksheetItem.sample_uid == data.sample_uid,
-            gid_filter,
-            Worksheet.status == "open",
-        )
-    ).scalar_one_or_none()
+    dept_id = _resolve_item_scope(db, data.department_id, gid)
+    existing_anywhere = _first_item_in_scope(
+        db, sample_uid=data.sample_uid, department_id=dept_id,
+        service_group_id=gid, status="open",
+    )
     if existing_anywhere:
         owner_ws = db.execute(
             select(Worksheet.title).where(Worksheet.id == existing_anywhere.worksheet_id)
@@ -18741,16 +18804,11 @@ async def add_group_to_worksheet(
             detail=f"Sample {data.sample_id} is already in worksheet \"{owner_ws or 'unknown'}\"",
         )
 
-    # Pick up any staging pre-assignments for this sample+group
-    staging_item = db.execute(
-        select(WorksheetItem)
-        .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
-        .where(
-            WorksheetItem.sample_uid == data.sample_uid,
-            gid_filter,
-            Worksheet.status == "staging",
-        )
-    ).scalar_one_or_none()
+    # Pick up any staging pre-assignments for this sample+scope
+    staging_item = _first_item_in_scope(
+        db, sample_uid=data.sample_uid, department_id=dept_id,
+        service_group_id=gid, status="staging",
+    )
 
     # Look up actual priority from sample_priorities
     sample_priority = db.execute(
@@ -18767,7 +18825,8 @@ async def add_group_to_worksheet(
         worksheet_id=worksheet_id,
         sample_uid=data.sample_uid,
         sample_id=data.sample_id,
-        service_group_id=data.service_group_id,
+        service_group_id=gid,
+        department_id=dept_id,
         assigned_analyst_id=analyst_id,
         instrument_uid=staging_item.instrument_uid if staging_item else None,
         priority=priority,
@@ -18785,7 +18844,8 @@ async def add_group_to_worksheet(
         stamp_for_item(
             db,
             sample_uid=data.sample_uid,
-            service_group_id=data.service_group_id,
+            service_group_id=gid,
+            department_id=dept_id,
             analyst_user_id=analyst_id,
             acting_user_id=getattr(_current_user, "id", None),
             worksheet_id=worksheet_id,
@@ -18816,18 +18876,13 @@ async def create_worksheet_from_drop(
     current_user=Depends(get_current_user),
 ):
     """Create a new worksheet from a drag-and-drop action."""
-    # Collision guard: check if sample+group is already in any open worksheet
+    # Collision guard: check if sample+scope is already in any open worksheet
     gid = data.service_group_id
-    gid_filter = WorksheetItem.service_group_id.is_(None) if gid is None else (WorksheetItem.service_group_id == gid)
-    existing_anywhere = db.execute(
-        select(WorksheetItem)
-        .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
-        .where(
-            WorksheetItem.sample_uid == data.sample_uid,
-            gid_filter,
-            Worksheet.status == "open",
-        )
-    ).scalar_one_or_none()
+    dept_id = _resolve_item_scope(db, data.department_id, gid)
+    existing_anywhere = _first_item_in_scope(
+        db, sample_uid=data.sample_uid, department_id=dept_id,
+        service_group_id=gid, status="open",
+    )
     if existing_anywhere:
         owner_ws = db.execute(
             select(Worksheet.title).where(Worksheet.id == existing_anywhere.worksheet_id)
@@ -18855,23 +18910,17 @@ async def create_worksheet_from_drop(
     priority = sample_priority.priority if sample_priority else "normal"
 
     # Pick up staging pre-assignments
-    gid = data.service_group_id
-    gid_filter = WorksheetItem.service_group_id.is_(None) if gid is None else (WorksheetItem.service_group_id == gid)
-    staging_item = db.execute(
-        select(WorksheetItem)
-        .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
-        .where(
-            WorksheetItem.sample_uid == data.sample_uid,
-            gid_filter,
-            Worksheet.status == "staging",
-        )
-    ).scalar_one_or_none()
+    staging_item = _first_item_in_scope(
+        db, sample_uid=data.sample_uid, department_id=dept_id,
+        service_group_id=gid, status="staging",
+    )
 
     item = WorksheetItem(
         worksheet_id=ws.id,
         sample_uid=data.sample_uid,
         sample_id=data.sample_id,
         service_group_id=gid,
+        department_id=dept_id,
         assigned_analyst_id=staging_item.assigned_analyst_id if staging_item else None,
         instrument_uid=staging_item.instrument_uid if staging_item else None,
         priority=priority,
@@ -18889,6 +18938,7 @@ async def create_worksheet_from_drop(
             db,
             sample_uid=data.sample_uid,
             service_group_id=gid,
+            department_id=dept_id,
             analyst_user_id=item.assigned_analyst_id,
             acting_user_id=getattr(current_user, "id", None),
             worksheet_id=ws.id,
@@ -18937,6 +18987,7 @@ async def delete_worksheet(
             clear_for_item(
                 db, sample_uid=ws_item.sample_uid,
                 service_group_id=ws_item.service_group_id,
+                department_id=ws_item.department_id,
                 acting_user_id=acting_id, worksheet_id=worksheet_id,
                 worksheet_title=ws.title,
             )
@@ -19039,6 +19090,7 @@ async def remove_worksheet_item_by_id(
             db,
             sample_uid=item.sample_uid,
             service_group_id=item.service_group_id,
+            department_id=item.department_id,
             acting_user_id=getattr(_current_user, "id", None),
             worksheet_id=worksheet_id,
             worksheet_title=ws_title,
@@ -19173,17 +19225,18 @@ async def reassign_worksheet_item_by_id(
     ).scalar_one_or_none()
     sample_uid = item.sample_uid
     gid = item.service_group_id
+    dept_id = item.department_id
     item.worksheet_id = data.target_worksheet_id
     if target.assigned_analyst_id:
         item.assigned_analyst_id = target.assigned_analyst_id
     try:
         clear_for_item(
-            db, sample_uid=sample_uid, service_group_id=gid,
+            db, sample_uid=sample_uid, service_group_id=gid, department_id=dept_id,
             acting_user_id=acting_id, worksheet_id=worksheet_id,
             worksheet_title=src_ws_title,
         )
         stamp_for_item(
-            db, sample_uid=sample_uid, service_group_id=gid,
+            db, sample_uid=sample_uid, service_group_id=gid, department_id=dept_id,
             analyst_user_id=target.assigned_analyst_id or item.assigned_analyst_id,
             acting_user_id=acting_id,
             worksheet_id=target.id, worksheet_title=target.title,
