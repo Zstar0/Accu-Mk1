@@ -25,7 +25,7 @@ def test_clean_db_reports_no_vial_violations(db):
     assert vial_tier_violations(db) == []
 
 
-def _skip_if_service_id_index_exists(db, index_name):
+def _drop_index_in_txn(db, index_name):
     """S3 Task 2 (database.py) added two service-id-keyed unique indexes
     whose WHERE clauses mirror this script's _VIAL_VIOLATIONS_SQL /
     _PARENT_VIOLATIONS_SQL byte-for-byte (confirmed by reading
@@ -34,19 +34,23 @@ def _skip_if_service_id_index_exists(db, index_name):
     IntegrityError at flush — before vial_tier_violations/
     parent_tier_violations are ever called. That is not a fixture bug: this
     precheck is a PRE-deploy gate, and its violation fixtures inherently
-    require a pre-index database. Skip (don't fail) once Task 2's migration
-    has run against this DB, which is the state of any dev DB the app has
-    booted against since this branch's database.py changes landed."""
-    exists = db.execute(text(
-        "SELECT 1 FROM pg_indexes WHERE tablename = 'lims_analyses' AND indexname = :n"
-    ), {"n": index_name}).scalar()
-    if exists:
-        pytest.skip(
-            f"{index_name} exists on this DB (S3 Task 2 shipped) — this "
-            "violation shape is structurally unconstructible once the index "
-            "is present; the precheck's violation fixtures are a pre-deploy-"
-            "only scenario, not a post-deploy one."
-        )
+    require a pre-index database.
+
+    Postgres DDL is transactional: drop the index inside this test's already
+    -open transaction instead of skipping the test. The violation rows can
+    then be built and detected exactly as before, and the fixture's
+    `finally: s.rollback()` restores the index wholesale via catalog
+    rollback — zero residue, and it keeps the suite's only positive-
+    detection coverage of vial_tier_violations/parent_tier_violations alive
+    on a migrated DB instead of skipping it forever.
+
+    SET LOCAL lock_timeout first: fails fast instead of hanging if a sibling
+    worktree holds a conflicting lock on lims_analyses (the known
+    concurrent-flake class — re-run in isolation if this trips). Plain DROP,
+    not DROP INDEX CONCURRENTLY: CONCURRENTLY cannot run inside a
+    transaction block."""
+    db.execute(text("SET LOCAL lock_timeout = '5s'"))
+    db.execute(text(f"DROP INDEX IF EXISTS {index_name}"))
 
 
 def _construct_vial_violation(db):
@@ -54,7 +58,7 @@ def _construct_vial_violation(db):
     DIFFERENT keywords — the exact drift shape the new index forbids.
     Shared by the vial-tier detection test and the diagnostics-always-run
     covering test below. Returns (sub, svc)."""
-    _skip_if_service_id_index_exists(db, "uq_lims_analyses_sub_service_id_root")
+    _drop_index_in_txn(db, "uq_lims_analyses_sub_service_id_root")
     uid = uuid.uuid4().hex[:8]
     svc = AnalysisService(title="TEST S3 Precheck Service", keyword="TEST-S3-CURRENT",
                           origin="mk1")
@@ -148,7 +152,7 @@ def test_constructed_parent_violation_detected(db):
     still tripping the new (lims_sample_pk, analysis_service_id) gate."""
     from scripts.s3_identity_precheck import parent_tier_violations
 
-    _skip_if_service_id_index_exists(db, "uq_lims_analyses_parent_service_id_root")
+    _drop_index_in_txn(db, "uq_lims_analyses_parent_service_id_root")
     uid = uuid.uuid4().hex[:8]
     svc = AnalysisService(title="TEST S3 Precheck Parent Service",
                           keyword="TEST-S3-PARENT-CURRENT", origin="mk1")
