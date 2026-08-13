@@ -67,12 +67,15 @@ SHRINKING: dict[tuple[str, str, str], tuple[int, str]] = {
         1,
         "The keyword arm of the exactly-one-identifier contract: selects the "
         "ANALYSIS row to hard-delete by string, so a drifted stored keyword "
-        "makes a live row unreachable. Retires when "
-        "DELETE /explorer/samples/{id}/analyses/{keyword} stops taking the "
-        "keyword as a PATH param -- Task 5 added analysis_service_id only as a "
-        "query param, so today every caller that omits it still lands on the "
-        "string arm. NOTE: that route change is UNOWNED -- no slice is "
-        "scheduled to make it. Real condition, unscheduled work.",
+        "makes a live row unreachable. TWO conditions must both hold before it "
+        "retires: (1) every external caller passes analysis_service_id -- the "
+        "route already drops the path keyword whenever the id is supplied "
+        "(main.py:9485), so what keeps the string arm alive is callers OMITTING "
+        "the id, a client-side change; (2) cascade_parent_remove_from_vials "
+        "(service.py:2250) threads the row's analysis_service_id instead of kw "
+        "-- its select can project it alongside the keyword it already returns "
+        "for the caller-facing report. NOTE: neither change is owned by a slice "
+        "today. Real conditions, unscheduled work.",
     ),
     ("main.py", "list_worksheets", "AnalysisService"): (
         1,
@@ -81,6 +84,25 @@ SHRINKING: dict[tuple[str, str, str], tuple[int, str]] = {
         "department through service-group membership (S2's subject) and the "
         "keyword fallback becomes dead. Classified as debt rather than a SENAITE "
         "boundary precisely because a parallel slice is converging on it.",
+    ),
+    # Task-4 ruled UNION skip (`svc.id in ... or svc.keyword in ...`):
+    # already-seeded is the union of BOTH live root indexes. Debt, not a ruling
+    # -- the union exists only because two indexes enforce the same invariant on
+    # different keys, so the keyword leg has a real removal condition. Listing
+    # it PERMANENT would fire "restore this site" on the day the keyword index
+    # drops, which is the wrong instruction.
+    ("lims_analyses/seeder.py", "mirror_parent_hplc_analyses", "svc"): (
+        1,
+        "Keyword leg of the Task-4 ruled union skip. Retires when the keyword "
+        "root index (uq_lims_analyses_sub_service_root, database.py:696) is "
+        "dropped -- RULED deferred past mirror decommission. Until then the "
+        "union is collision-correct and the leg must stay: dropping it early "
+        "lets a duplicate slip past the still-live index and raise on insert.",
+    ),
+    ("lims_analyses/seeder.py", "_seed_rows_from_services", "svc"): (
+        1,
+        "Same Task-4 ruled union skip, shared row-construction path. Retires "
+        "with the same keyword root index drop (database.py:696).",
     ),
 }
 
@@ -227,19 +249,6 @@ PERMANENT: dict[tuple[str, str, str], tuple[int, str]] = {
         "a service-id match is exactly what is unavailable here. Scoped "
         "origin='senaite'; mk1 rows are never adoption candidates.",
     ),
-    # --- Task-4 ruled union skip ---
-    ("lims_analyses/seeder.py", "mirror_parent_hplc_analyses", "svc"): (
-        1,
-        "Task-4 ruled UNION skip (`svc.id in ... or svc.keyword in ...`): "
-        "already-seeded is the union of BOTH live root indexes. Collision-"
-        "correct while the keyword index is still live (its retirement is RULED "
-        "deferred past mirror decommission) -- dropping the keyword leg would let "
-        "a duplicate slip past the index and raise on insert.",
-    ),
-    ("lims_analyses/seeder.py", "_seed_rows_from_services", "svc"): (
-        1,
-        "Same Task-4 ruled union skip, shared row-construction path.",
-    ),
 }
 
 
@@ -377,6 +386,19 @@ def test_every_swept_file_parses():
         path = BACKEND.joinpath(*rel.split("/"))
         assert path.is_file(), f"swept file missing: {rel}"
         ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+
+def test_lists_are_disjoint():
+    """A key in BOTH lists would satisfy every other assertion here while
+    carrying two contradictory dispositions -- the failure mode of moving an
+    entry between lists and leaving the original behind."""
+    both = sorted(set(SHRINKING) & set(PERMANENT))
+    assert not both, (
+        "key(s) classified as both SHRINKING and PERMANENT:\n"
+        + "\n".join(f"    {k}" for k in both)
+        + "\n  A site is either debt that retires or keyword by ruling, never "
+        "both. Delete the entry from the list it no longer belongs to."
+    )
 
 
 def test_no_unclassified_keyword_identity_site():
