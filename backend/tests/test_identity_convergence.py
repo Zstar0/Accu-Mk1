@@ -1135,3 +1135,53 @@ def test_pin_service_match_does_not_bypass_the_liveness_guards(host):
 
     assert out.blocked == "stale_pin"
     assert out.chosen is None
+
+
+# ─── (h) Task 7: the senaite-shape wire carries the native identity key ──────
+
+
+def test_senaite_shape_wire_emits_the_rows_own_service_fk(host):
+    """Both native and senaite-origin rows ship `analysis_service_id`.
+
+    It is the ROW's FK, not the resolved catalog service's id: the two agree
+    whenever the FK resolves, and only the row's own column is still truthful
+    when it does not (services_by_id.get() returns None there).
+    """
+    from lims_analyses.service import _serialize_senaite_shape_rows
+
+    db, parent, sub = host
+    native_svc = _service(db, keyword="PUR_NEW", origin="mk1")
+    native_row = _parent_row(db, parent, native_svc, stored_keyword="PUR_OLD")
+    senaite_svc = _service(db, keyword="ENDO-LAL", origin="senaite")
+    senaite_row = _vial_row(db, sub, senaite_svc, stored_keyword="ENDO-LAL")
+    db.commit()
+
+    out = _serialize_senaite_shape_rows(db, [native_row, senaite_row])
+
+    by_uid = {o.uid: o for o in out}
+    native = by_uid[f"mk1:{native_row.id}"]
+    senaite = by_uid[f"mk1:{senaite_row.id}"]
+    assert native.analysis_service_id == native_svc.id
+    assert senaite.analysis_service_id == senaite_svc.id
+    # The keyword the FE would join on is the DRIFTED one — which is exactly
+    # why the service id has to ride alongside it.
+    assert native.keyword == "PUR_OLD"
+    assert native.service_origin == "mk1"
+
+
+def test_senaite_shape_wire_service_id_survives_an_unresolvable_service(host):
+    """FK pointing at no catalog row: service-derived fields go None, but the
+    identity key itself still ships — it is read off the row, not off svc."""
+    from lims_analyses.service import _serialize_senaite_shape_rows
+
+    db, parent, _sub = host
+    svc = _service(db, keyword="PUR_NEW", origin="mk1")
+    row = _parent_row(db, parent, svc, stored_keyword="PUR_NEW")
+    orphan_id = svc.id
+    db.delete(svc)
+    db.commit()
+
+    out = _serialize_senaite_shape_rows(db, [row])
+
+    assert out[0].analysis_service_id == orphan_id
+    assert out[0].service_origin is None

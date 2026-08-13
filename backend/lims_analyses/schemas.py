@@ -247,6 +247,12 @@ class SenaiteShapeAnalysisResponse(BaseModel):
     # _serialize_senaite_shape_rows. None only when the service FK is
     # somehow unresolvable (should not happen in practice).
     service_origin: Optional[str] = None
+    # S3 Task 7: the row's OWN analysis_service_id — the native identity key
+    # the FE joins parent rows to vial rows on. Read off the row, never off
+    # the resolved service (which service_origin above goes None on when the
+    # FK doesn't resolve — the identity key still ships in that case).
+    # Keyword stays alongside it as the display / compatibility alias.
+    analysis_service_id: Optional[int] = None
 
 
 # ─── Phase 4a: promote_to_parent response shapes ─────────────────────────────
