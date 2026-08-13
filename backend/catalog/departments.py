@@ -85,6 +85,20 @@ def department_id_by_name(db: Session, name: str) -> Optional[int]:
     return row.id if row else None
 
 
+def department_id_for_service(db: Session, analysis_service_id: int) -> Optional[int]:
+    """The service's structural department (direct column — no M2M fan-out)."""
+    from models import AnalysisService
+    svc = db.get(AnalysisService, analysis_service_id)
+    return svc.department_id if svc is not None else None
+
+
+def department_id_for_role(db: Session, role_code: str) -> Optional[int]:
+    """The department owning a vial assignment_role code (e.g. 'ster' -> Microbiology)."""
+    from models import VialRole
+    row = db.query(VialRole).filter_by(code=role_code).one_or_none()
+    return row.department_id if row is not None else None
+
+
 def backfill_departments(db: Session) -> None:
     """Idempotently seed departments and assign department_id from live groups.
 

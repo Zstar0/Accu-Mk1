@@ -17,6 +17,22 @@ def db_session():
         s.close()
 
 
+@pytest.fixture
+def db():
+    """Live-PG session (S2 Task 1 idiom — see test_worksheet_department_schema.py).
+    department_id_for_service/_for_role are read helpers against real seeded
+    catalog data (Analytical/Microbiology departments + vial_roles), so these
+    tests exercise the actual dev DB rather than a from-scratch sqlite seed.
+    Read-only in practice; rolled back regardless so nothing can persist."""
+    from database import SessionLocal
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.rollback()
+        session.close()
+
+
 def test_department_persists_with_defaults(db_session):
     from models import Department
     d = Department(name="Microbiology")
@@ -267,3 +283,30 @@ def test_backfill_does_not_log_error_on_a_genuinely_empty_catalog(db_session, ca
         "catalog.backfill.analytical_department_empty" in r.message
         for r in caplog.records
     )
+
+
+# ── department_id_for_service / department_id_for_role (Task 2) ────────────
+
+
+def test_department_id_for_service_reads_direct_column(db):
+    from catalog.departments import department_id_for_service
+    from models import AnalysisService, Department
+    dept = db.query(Department).filter_by(name="Analytical").one()
+    svc = db.query(AnalysisService).filter(
+        AnalysisService.department_id == dept.id
+    ).first()
+    assert svc is not None, "seeded Analytical services expected"
+    assert department_id_for_service(db, svc.id) == dept.id
+
+
+def test_department_id_for_service_unknown_id_is_none(db):
+    from catalog.departments import department_id_for_service
+    assert department_id_for_service(db, -1) is None
+
+
+def test_department_id_for_role(db):
+    from catalog.departments import department_id_for_role
+    from models import Department
+    micro = db.query(Department).filter_by(name="Microbiology").one()
+    assert department_id_for_role(db, "ster") == micro.id
+    assert department_id_for_role(db, "no_such_role") is None
