@@ -344,6 +344,8 @@ def seed_default_settings(db: Session):
 async def lifespan(app: FastAPI):
     """Initialize database on startup and seed defaults."""
     init_db()
+    from database import engine as _db_engine, verify_identity_indexes
+    verify_identity_indexes(_db_engine)
     from flags import seams as _flag_seams
     _flag_seams.register_mk1_entities()
     # Flag attachments reuse the S3 blob store used by vial photos when
