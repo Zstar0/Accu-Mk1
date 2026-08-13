@@ -272,17 +272,16 @@ def test_inbox_claimed_pair_is_department_keyed(client, db):
 # ── Cross-branch consistency: the Mk1-native inbox path ──────────────────────
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="S2 Task 7 OPEN RULING — the brief holds the Mk1-native emitter at "
-           "service-group identity while get_worksheets_inbox re-keys "
-           "assigned_pairs/assignment_map to departments, so a claimed native "
-           "vial returns to the inbox. strict=True: this flips to a FAILURE the "
-           "moment the emitter is ported — delete the marker then.",
-)
 def test_native_vial_claim_uses_the_same_key_space_as_assigned_pairs(client, db):
     """A native (mk1://) vial claimed by an open worksheet must not appear in
     the inbox.
+
+    CURRENTLY RED — S2 Task 7 open ruling. The brief holds the Mk1-native
+    emitter at service-group identity while get_worksheets_inbox re-keys
+    assigned_pairs/assignment_map to departments, so a claimed native vial
+    comes back. Left as a plain failure on purpose: it is a live regression,
+    and an xfail would report the suite green over exactly the behavior under
+    escalation. Delete nothing here — port the emitter (see task-7-report.md).
 
     The native branch (_build_native_vial_inbox_items) does not build
     assigned_pairs — get_worksheets_inbox builds it and passes it down, and the
