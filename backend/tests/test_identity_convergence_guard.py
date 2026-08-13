@@ -69,8 +69,10 @@ SHRINKING: dict[tuple[str, str, str], tuple[int, str]] = {
         "ANALYSIS row to hard-delete by string, so a drifted stored keyword "
         "makes a live row unreachable. Retires when "
         "DELETE /explorer/samples/{id}/analyses/{keyword} stops taking the "
-        "keyword as a path param (Task 5 added analysis_service_id as a query "
-        "param; the string arm is the compatibility path).",
+        "keyword as a PATH param -- Task 5 added analysis_service_id only as a "
+        "query param, so today every caller that omits it still lands on the "
+        "string arm. NOTE: that route change is UNOWNED -- no slice is "
+        "scheduled to make it. Real condition, unscheduled work.",
     ),
     ("main.py", "list_worksheets", "AnalysisService"): (
         1,
@@ -247,6 +249,25 @@ PERMANENT: dict[tuple[str, str, str], tuple[int, str]] = {
 # under the true count keeps a legitimately-added SHRINKING site from failing
 # here for the wrong reason.
 MATCHED_SITE_FLOOR = 24
+
+# The global floor cannot see ONE file drop to zero while the rest still clear
+# it: repointing the observer.py entry at another swept path leaves 27 sites,
+# comfortably over 24. These per-file minimums close that -- they catch a
+# SWEPT_FILES path edited to an existing-but-wrong module, and a module emptied
+# into a re-export shim while its code moves elsewhere. Both are the
+# "import-shape change silently emptying the scan" case, per file.
+#
+# native_sections.py is deliberately absent: it matches nothing today, and that
+# zero is honest. It stays in SWEPT_FILES so a comparison added there is caught
+# on arrival; test_every_swept_file_parses covers its outright disappearance.
+PER_FILE_FLOOR = {
+    "lims_analyses/service.py": 12,
+    "lims_analyses/seeder.py": 3,
+    "lims_analyses/parent_mirror.py": 1,
+    "workflow/observer.py": 1,
+    "coa/source_resolver.py": 2,
+    "main.py": 6,
+}
 
 
 def _keyword_attr_owner(node: ast.AST) -> str | None:
@@ -445,6 +466,40 @@ def test_matched_site_floor():
         f"floor of {MATCHED_SITE_FLOOR} -- the scan has likely stopped seeing "
         "the code rather than the code having been cleaned up. Check "
         "SWEPT_FILES against the real paths before lowering this."
+    )
+
+
+def test_per_file_floor():
+    """One file dropping to zero is invisible to the global floor -- the other
+    six still clear it. This is the finer instrument: a swept path pointed at
+    the wrong module, or a module emptied into a re-export shim while its code
+    moves, goes red here."""
+    dropped = [rel for rel in PER_FILE_FLOOR if rel not in SWEPT_FILES]
+    assert not dropped, (
+        f"file(s) with a per-file floor are no longer swept: {dropped}. "
+        "Removing a path from SWEPT_FILES removes its sites from every "
+        "assertion in this guard -- if the module genuinely moved, re-point "
+        "SWEPT_FILES and re-key its entries; do not drop the floor."
+    )
+    per_file: dict[str, int] = {rel: 0 for rel in SWEPT_FILES}
+    for (rel, _func, _owner), _ln, _text in _all_sites():
+        per_file[rel] += 1
+    short = {
+        rel: (per_file[rel], minimum)
+        for rel, minimum in PER_FILE_FLOOR.items()
+        if per_file[rel] < minimum
+    }
+    assert not short, (
+        "keyword-identity sweep came up short per file:\n"
+        + "\n".join(
+            f"    {rel}: matched {got}, floor {minimum}"
+            for rel, (got, minimum) in sorted(short.items())
+        )
+        + "\n\n  A file matching far fewer sites than its classified entries is "
+        "usually the sweep losing sight of the code -- a renamed module, a "
+        "path in SWEPT_FILES pointing somewhere else, or the code moved behind "
+        "a re-export -- not a genuine cleanup. Confirm against the SHRINKING "
+        "and PERMANENT entries for that file before lowering the floor."
     )
 
 
