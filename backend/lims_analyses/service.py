@@ -1538,6 +1538,7 @@ def _find_active_parent_row(
     parent_sample_pk: int,
     keyword: str,
     analysis_service_id: Optional[int] = None,
+    allow_native_rescue: bool = True,
 ) -> Optional[LimsAnalysis]:
     """Resolve the one active canonical parent-tier row a retest lineage hangs
     off. Shared by cascade_parent_retest_to_sources and parent_retest so the
@@ -1569,6 +1570,18 @@ def _find_active_parent_row(
     senaite-origin services get no rescue leg: their keyword IS their identity
     contract, grandfathered.
 
+    `allow_native_rescue=False` disables leg 3 entirely, for callers whose
+    keyword arrives off a FOREIGN namespace — main.py's SENAITE-transition
+    webhook. Scoping leg 3 to origin='mk1' is not sufficient protection there:
+    uq_analysis_services_mk1_keyword is PARTIAL on origin='mk1', so it does not
+    stop an mk1 service and a senaite service from sharing a keyword string
+    (validate_new_keyword covers Mk1-side creation, not SENAITE sync). Without
+    this opt-out a SENAITE retest for keyword K, finding no live canonical row
+    for K, would rescue into an unrelated NATIVE line that merely shares the
+    string and retract its vial results — and that caller swallows exceptions,
+    so it would fail silently. For the SENAITE wire, legs 1-2 alone ARE the
+    grandfathered pre-S3 behavior.
+
     provenance == 'canonical' is REQUIRED here, not defense-in-depth: unlike
     the other readers in this module, review_state.not_in(("retracted",
     "rejected")) does NOT exclude the shadow sentinel state ('senaite_mirror'),
@@ -1598,7 +1611,7 @@ def _find_active_parent_row(
         return _first(LimsAnalysis.analysis_service_id == analysis_service_id)
 
     row = _first(LimsAnalysis.keyword == keyword)
-    if row is not None:
+    if row is not None or not allow_native_rescue:
         return row
 
     native_svc = db.execute(
@@ -1620,6 +1633,7 @@ def cascade_parent_retest_to_sources(
     user_id: Optional[int],
     source_reason: str = "cascaded from parent SENAITE retest",
     analysis_service_id: Optional[int] = None,
+    allow_native_rescue: bool = True,
 ) -> list[int]:
     """When a PARENT-tier analysis is retested (via SENAITE), cascade the retest
     down to each source vial-tier analysis that was promoted into that parent.
@@ -1650,15 +1664,15 @@ def cascade_parent_retest_to_sources(
         return []
 
     # 2. Find the active parent-tier analysis. Identity resolution (service id
-    #    → exact keyword → mk1 catalog rescue) and the reason the shape differs
-    #    from promote's ternary both live in _find_active_parent_row. main.py's
-    #    SENAITE-transition caller passes keyword only, on purpose — that wire
-    #    speaks keyword and its services are senaite-origin.
+    #    → exact keyword → mk1 catalog rescue), the reason the shape differs
+    #    from promote's ternary, and why the SENAITE wire passes
+    #    allow_native_rescue=False all live in _find_active_parent_row.
     parent_analysis = _find_active_parent_row(
         db,
         parent_sample_pk=parent_sample.id,
         keyword=keyword,
         analysis_service_id=analysis_service_id,
+        allow_native_rescue=allow_native_rescue,
     )
     if parent_analysis is None:
         return []

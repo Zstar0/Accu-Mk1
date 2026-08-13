@@ -300,6 +300,49 @@ def test_senaite_origin_gets_no_catalog_rescue(host):
     assert db.get(LimsAnalysis, new_ids[0]).retest_of_id == vial.id
 
 
+# ─── the SENAITE wire opts out of the rescue leg ────────────────────────────
+
+
+def test_senaite_wire_does_not_rescue_into_a_colliding_native_line(host):
+    """uq_analysis_services_mk1_keyword is PARTIAL on origin='mk1', so nothing
+    stops an mk1 service and a senaite service from sharing a keyword string.
+    A SENAITE retest for that string, finding no live row of its own, must NOT
+    rescue into the native line that merely shares it — that would retract real
+    vial results, silently (main.py's caller swallows exceptions).
+
+    Both halves are asserted: with allow_native_rescue=False nothing is
+    touched, and with the default the rescue DOES fire — so the guard is what
+    prevents it here, not an accident of the fixture."""
+    db, parent, sub = host
+
+    # The native line, drifted: its catalog keyword is 'COLLIDE'.
+    svc_mk1 = _service(db, keyword="COLLIDE", origin="mk1")
+    native_row = _parent_row(db, parent, svc_mk1, stored_keyword="PUR_OLD")
+    native_vial = _promoted_vial(db, sub, svc_mk1, stored_keyword="PUR_OLD")
+    _link(db, native_row, native_vial)
+
+    # A senaite service sharing the string, with no live row on this parent.
+    _service(db, keyword="COLLIDE", origin="senaite")
+    db.commit()
+
+    assert cascade_parent_retest_to_sources(
+        db,
+        parent_sample_id=parent.sample_id,
+        keyword="COLLIDE",
+        user_id=None,
+        allow_native_rescue=False,
+    ) == [], "SENAITE wire must not rescue into the colliding native line"
+    db.refresh(native_row)
+    db.refresh(native_vial)
+    assert native_row.review_state == "verified"
+    assert native_vial.retested is False
+
+    # Control: the native wire (default) does rescue — the guard is load-bearing.
+    assert cascade_parent_retest_to_sources(
+        db, parent_sample_id=parent.sample_id, keyword="COLLIDE", user_id=None,
+    ), "default path should still rescue; the fixture is not proving the guard"
+
+
 # ─── the audit event names the row that was retested ────────────────────────
 
 
