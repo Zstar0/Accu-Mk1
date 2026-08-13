@@ -26,7 +26,9 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from catalog.departments import ANALYTICAL_DEPARTMENT
 from database import Base
+from lims_analyses.seeder import seed_analyses_for_vial
 from lims_analyses.service import (
     NotFoundError,
     cascade_parent_retest_to_sources,
@@ -34,6 +36,7 @@ from lims_analyses.service import (
 )
 from models import (
     AnalysisService,
+    Department,
     LimsAnalysis,
     LimsAnalysisPromotion,
     LimsSample,
@@ -110,6 +113,23 @@ def _promoted_vial(db, sub, svc, *, stored_keyword):
         title=f"TEST: vial {stored_keyword}",
         review_state="promoted",
         result_value="99.00",
+        retest_of_id=None,
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def _vial_row(db, sub, svc, *, stored_keyword, state="unassigned"):
+    """A vial-tier root row — the population the seeder's already-seeded skip
+    set is built from. `state` lets a test construct a DEAD (rejected/
+    retracted) row, which must NOT contribute to either set."""
+    row = LimsAnalysis(
+        lims_sub_sample_pk=sub.id,
+        analysis_service_id=svc.id,
+        keyword=stored_keyword,
+        title=f"TEST: vial {stored_keyword}",
+        review_state=state,
         retest_of_id=None,
     )
     db.add(row)
@@ -451,3 +471,125 @@ def test_all_legs_target_canonical_not_shadow(host):
         assert shadow.review_state == "senaite_mirror", f"{leg} leg touched the shadow"
         assert shadow.result_value == "88.8"
         assert shadow.retested is False
+
+
+# ═══ Task 4: the seeder's already-seeded skip set ════════════════════════════
+#
+# The skip set exists to answer one question — WOULD THIS INSERT COLLIDE? — so
+# it mirrors the vial-tier root indexes, and BOTH of them are live with
+# byte-identical predicates (database.py:696 keyword-keyed, :1641 service-id-
+# keyed). The check is therefore a UNION, not the origin ternary Task 3's
+# identity RESOLUTION uses: a candidate is already-seeded if it collides on
+# either key. The service-id index is deliberately origin-agnostic
+# (database.py:1635), so the id set is not scoped to mk1 rows.
+#
+# Harness note: Base.metadata.create_all does NOT build the partial unique
+# indexes (raw SQL in run_migrations), so a pre-change double-seed SUCCEEDS
+# here rather than raising IntegrityError — these assert on what was seeded,
+# not on the exception prod would get.
+
+
+def _endo_svc(db, *, origin, keyword="ENDO-LAL"):
+    """The endo role's whole whitelist is one keyword, so seed_analyses_for_vial
+    (role='endo') is the narrowest end-to-end probe of the skip set."""
+    return _service(db, keyword=keyword, origin=origin)
+
+
+def _seed_endo(db, sub, commit=False):
+    return seed_analyses_for_vial(
+        db,
+        sub_sample=sub,
+        role="endo",
+        wp_services={"endotoxin": True},
+        commit=commit,
+    )
+
+
+def test_seeder_skips_drifted_native_row_by_service_id(host):
+    """A native vial row whose stored keyword has drifted from the catalog must
+    STILL count as already-seeded, keyed by service id.
+
+    Before Task 4 the drifted keyword missed the keyword-only skip set and the
+    seeder re-seeded the same service — which under the new
+    uq_lims_analyses_sub_service_id_root is an IntegrityError, i.e. check-in
+    breaks on exactly the rows S3 exists to converge."""
+    db, parent, sub = host
+    svc = _endo_svc(db, origin="mk1")
+    _vial_row(db, sub, svc, stored_keyword="ENDO-LAL-OLD")   # drifted
+    db.commit()
+
+    created = _seed_endo(db, sub)
+
+    assert created == [], (
+        "drifted native row must skip by service id; the seeder re-seeded "
+        f"{[r.keyword for r in created]}"
+    )
+    rows = db.execute(
+        LimsAnalysis.__table__.select().where(
+            LimsAnalysis.lims_sub_sample_pk == sub.id
+        )
+    ).all()
+    assert len(rows) == 1, "the vial must still carry exactly one row for this service"
+
+
+def test_seeder_senaite_row_still_skips_by_stored_keyword(host):
+    """The unchanged twin: a senaite row keeps the keyword as its identity
+    contract, and an undrifted one skips exactly as it did pre-S3."""
+    db, parent, sub = host
+    svc = _endo_svc(db, origin="senaite")
+    _vial_row(db, sub, svc, stored_keyword="ENDO-LAL")
+    db.commit()
+
+    assert _seed_endo(db, sub) == [], "senaite keyword skip must be unchanged"
+
+
+def test_seeder_dead_rows_block_nothing_in_either_set(host):
+    """The comment contract at the skip-set query: rejected/retracted rows do
+    NOT block, so a service rejected on the vial and later re-added resurrects
+    as a fresh active row next to the dead one. This row is dead on BOTH keys
+    (same service id AND same keyword) — if either set had picked it up, the
+    resurrection would silently no-op."""
+    db, parent, sub = host
+    svc = _endo_svc(db, origin="mk1")
+    _vial_row(db, sub, svc, stored_keyword="ENDO-LAL", state="rejected")
+    db.commit()
+
+    created = _seed_endo(db, sub)
+
+    assert len(created) == 1, "a dead row must not block resurrection-seeding"
+    assert created[0].analysis_service_id == svc.id
+
+
+def test_seeder_mirror_skips_drifted_native_but_still_seeds_a_new_service(host, monkeypatch):
+    """The second consumer — the HPLC parent mirror — converts coherently, and
+    the skip does not over-reach: PUR_A is skipped because a drifted row for
+    that SERVICE already exists, while PUR_B (a service with no row at all)
+    still seeds. Before Task 4 both were seeded."""
+    db, parent, sub = host
+    dept = Department(name=ANALYTICAL_DEPARTMENT)
+    db.add(dept)
+    db.flush()
+
+    svc_a = _service(db, keyword="PUR_A", origin="mk1")
+    svc_b = _service(db, keyword="PUR_B", origin="mk1")
+    svc_a.department_id = dept.id
+    svc_b.department_id = dept.id
+    _vial_row(db, sub, svc_a, stored_keyword="PUR_A_OLD")     # drifted
+    db.commit()
+
+    monkeypatch.setattr(
+        "sub_samples.senaite.fetch_parent_analysis_keywords",
+        lambda _sid: ["PUR_A", "PUR_B"],
+    )
+    created = seed_analyses_for_vial(
+        db,
+        sub_sample=sub,
+        role="hplc",
+        wp_services={"hplcpurity_identity": True},
+        parent_sample_id=parent.sample_id,
+        commit=False,
+    )
+
+    assert [r.keyword for r in created] == ["PUR_B"], (
+        "mirror must skip the drifted native service and still seed the new one"
+    )
