@@ -1,35 +1,35 @@
-"""S3 identity-convergence guard — every keyword-identity COMPARISON in the
+"""S3 identity-convergence guard -- every keyword-identity COMPARISON in the
 native-analysis path is classified, and stays classified.
 
 Native (mk1-origin) analysis rows key identity on `analysis_service_id`; a
 row's `keyword` is a denormalized display echo that drifts when the catalog is
 renamed. Comparing that echo is the drift class this slice retires. What
 survives is either **debt with a named retirement condition** (SHRINKING) or
-**keyword-by-ruling** (PERMANENT) — a SENAITE boundary whose wire speaks
+**keyword-by-ruling** (PERMANENT) -- a SENAITE boundary whose wire speaks
 keyword, a catalog resolve whose input contract IS a string, or a site where
 the keyword is the datum rather than the key.
 
 The guard sweeps the seven files that carry the native path and requires every
 matched site to appear in exactly one list. Both lists are also asserted
 PRESENT: a listed site that stops matching fails, because an entry that no
-longer names anything is a stale green — the list stops describing the code and
+longer names anything is a stale green -- the list stops describing the code and
 a genuinely new violation can hide behind a passing test.
 
 Matcher scope: COMPARISONS only. `ast.Compare` with a `.keyword` attribute on
 either side, and `.keyword.in_(...)` / `.notin_(...)` / `.not_in(...)` calls.
 Projections (`select(X.keyword)`), `.order_by(X.keyword)`, dict/set
 construction and audit-detail payloads are NOT identity decisions and are
-deliberately out of scope — see test_matcher_ignores_projections_and_payloads,
+deliberately out of scope -- see test_matcher_ignores_projections_and_payloads,
 which pins that boundary against a synthetic source.
 
-Keys are `(relative_path, enclosing_function, compared_attribute_owner)` —
+Keys are `(relative_path, enclosing_function, compared_attribute_owner)` --
 never line numbers, which rot on every edit above them. The owner component
 splits functions that carry several legs with DIFFERENT dispositions (notably
 `_find_active_parent_row`, whose LimsAnalysis leg is debt and whose
 AnalysisService leg is sanctioned). Each entry also carries the number of sites
 it covers, so deleting one leg of a two-leg site fails instead of passing on
 set membership. The owner is a source-level name: renaming the local also fails
-the guard, which is intended — the classification is re-confirmed by hand.
+the guard, which is intended -- the classification is re-confirmed by hand.
 """
 import ast
 from pathlib import Path
@@ -60,7 +60,7 @@ SHRINKING: dict[tuple[str, str, str], tuple[int, str]] = {
         1,
         "Leg 2 of the resolve ladder: selects a parent ANALYSIS row by the "
         "caller's keyword string. Retires when every retest sender (the SENAITE "
-        "cascade and parent_retest callers) carries analysis_service_id — leg 1 "
+        "cascade and parent_retest callers) carries analysis_service_id -- leg 1 "
         "already short-circuits on it. Leg 3 below is a different disposition.",
     ),
     ("lims_analyses/service.py", "delete_pristine_analysis", "LimsAnalysis"): (
@@ -94,7 +94,7 @@ PERMANENT: dict[tuple[str, str, str], tuple[int, str]] = {
     ),
     ("workflow/observer.py", "_live_shadow", "LimsAnalysis"): (
         1,
-        "Hook-site payloads carry only keyword — it is the sole identifier both "
+        "Hook-site payloads carry only keyword -- it is the sole identifier both "
         "call sites supply (see the function's own docstring). Shadow rows are "
         "SENAITE-provenance; keyword is their identity contract.",
     ),
@@ -105,7 +105,7 @@ PERMANENT: dict[tuple[str, str, str], tuple[int, str]] = {
     ),
     ("main.py", "lookup_senaite_sample", "a"): (
         1,
-        "Same SENAITE payload, consumer half — the map is keyed by the payload's "
+        "Same SENAITE payload, consumer half -- the map is keyed by the payload's "
         "own identifier, so the membership test must use it too.",
     ),
     ("main.py", "_build_analysis_debug_rows", "AnalysisService"): (
@@ -123,7 +123,7 @@ PERMANENT: dict[tuple[str, str, str], tuple[int, str]] = {
     ("lims_analyses/service.py", "promote_to_parent", "LimsAnalysis"): (
         1,
         "The `else` arm of the _ident_clause ternary in retest-source "
-        "supersession — the sanctioned grandfathering shape this slice "
+        "supersession -- the sanctioned grandfathering shape this slice "
         "propagates, not a site it converts.",
     ),
     ("lims_analyses/service.py", "add_analysis_to_native_vial", "LimsAnalysis"): (
@@ -136,14 +136,14 @@ PERMANENT: dict[tuple[str, str, str], tuple[int, str]] = {
         1,
         "Leg 3, the native rescue: resolves the caller's string against the "
         "CATALOG scoped origin='mk1', then re-queries by the resolved service "
-        "id. Task-6-sanctioned catalog-resolve class — it is what lets a "
+        "id. Task-6-sanctioned catalog-resolve class -- it is what lets a "
         "keyword-speaking caller reach a row whose stored echo drifted.",
     ),
     ("lims_analyses/service.py", "add_analysis_to_native_vial", "AnalysisService"): (
         1,
         "Catalog resolve of the wire's keyword param (third in the "
         "service_id -> senaite_uid -> keyword order). Resolves a CATALOG row, "
-        "whose keyword column is authoritative — not an analysis row's echo. "
+        "whose keyword column is authoritative -- not an analysis row's echo. "
         "Task 5 RULED keyword a kept compatibility alias.",
     ),
     ("lims_analyses/seeder.py", "select_services_for_role", "AnalysisService"): (
@@ -151,19 +151,19 @@ PERMANENT: dict[tuple[str, str, str], tuple[int, str]] = {
         "Resolves the role's frozen ROLE_TO_KEYWORDS whitelist against the "
         "catalog. seeder.py's own ruling: the map is never extended, catalog "
         "roles seed from Analysis Profile membership instead, and endo/ster "
-        "'stay pinned here' — never re-routed onto the catalog path.",
+        "'stay pinned here' -- never re-routed onto the catalog path.",
     ),
     ("coa/source_resolver.py", "_pin_row_identity_matches", "AnalysisService"): (
         1,
         "Leg 2 of the Task-6 OR-form: resolves the requested keyword against the "
         "catalog scoped origin='mk1' and matches THIS row's service id. "
-        "Monotone freshness — it can only un-block a false stale.",
+        "Monotone freshness -- it can only un-block a false stale.",
     ),
     ("coa/source_resolver.py", "_pin_row_identity_matches", "row"): (
         1,
         "Leg 1, byte-identical to the pre-S3 guard: the exact stored keyword, "
         "and the whole answer for senaite rows. Retained deliberately so the "
-        "OR-form stays widening — dropping it would newly stale a pin that "
+        "OR-form stays widening -- dropping it would newly stale a pin that "
         "generates a COA today (Task 6 report, section 2).",
     ),
     # --- ANALYTE-slot translation / degradation contract ---
@@ -176,25 +176,25 @@ PERMANENT: dict[tuple[str, str, str], tuple[int, str]] = {
     ),
     ("lims_analyses/service.py", "cascade_parent_reject_to_vials", "LimsAnalysis"): (
         1,
-        "Consumes _candidate_vial_keywords — the degradation contract that maps "
+        "Consumes _candidate_vial_keywords -- the degradation contract that maps "
         "a parent ANALYTE slot back to the vial keywords that can satisfy it. "
         "The candidate set is a set of STRINGS by construction; there is no "
         "service id to widen to without changing that contract.",
     ),
     ("lims_analyses/service.py", "cascade_parent_remove_from_vials", "LimsAnalysis"): (
         1,
-        "Second _candidate_vial_keywords consumer — same degradation contract.",
+        "Second _candidate_vial_keywords consumer -- same degradation contract.",
     ),
     ("lims_analyses/service.py", "classify_removal_impact", "LimsAnalysis"): (
         1,
-        "Third _candidate_vial_keywords consumer — same degradation contract. "
+        "Third _candidate_vial_keywords consumer -- same degradation contract. "
         "Must stay identical to the two cascades above or the impact preview "
         "would disagree with what the cascade then does.",
     ),
     # --- Cross-provenance collapse ---
     ("lims_analyses/service.py", "list_parent_analyses_senaite_shape", "r"): (
         1,
-        "P-0143 cross-provenance keyword collapse. Keyword — NOT service id — is "
+        "P-0143 cross-provenance keyword collapse. Keyword -- NOT service id -- is "
         "the collapse key on purpose: the mirror resolves duplicate-keyword "
         "services to the lowest id, so canonical and shadow can legitimately "
         "hold different service ids for the same logical line. Converting this "
@@ -209,19 +209,19 @@ PERMANENT: dict[tuple[str, str, str], tuple[int, str]] = {
     ),
     ("main.py", "update_analysis_service", "svc"): (
         1,
-        "Catalog administration — keyword is the field being EDITED. The compare "
+        "Catalog administration -- keyword is the field being EDITED. The compare "
         "detects a genuine value change before locking a sync-owned field into "
         "local_overrides. Not an identity lookup.",
     ),
     ("main.py", "validate_new_keyword", "AnalysisService"): (
         1,
-        "Catalog keyword uniqueness check — keyword is the subject of the "
+        "Catalog keyword uniqueness check -- keyword is the subject of the "
         "validation, not a key standing in for one.",
     ),
     ("main.py", "_find_adoptable_orphan", "AnalysisService"): (
         1,
         "SENAITE delete/recreate adoption: when SENAITE re-mints a service under "
-        "a new id, the keyword is the ONLY stable handle across the id change — "
+        "a new id, the keyword is the ONLY stable handle across the id change -- "
         "a service-id match is exactly what is unavailable here. Scoped "
         "origin='senaite'; mk1 rows are never adoption candidates.",
     ),
@@ -231,7 +231,7 @@ PERMANENT: dict[tuple[str, str, str], tuple[int, str]] = {
         "Task-4 ruled UNION skip (`svc.id in ... or svc.keyword in ...`): "
         "already-seeded is the union of BOTH live root indexes. Collision-"
         "correct while the keyword index is still live (its retirement is RULED "
-        "deferred past mirror decommission) — dropping the keyword leg would let "
+        "deferred past mirror decommission) -- dropping the keyword leg would let "
         "a duplicate slip past the index and raise on insert.",
     ),
     ("lims_analyses/seeder.py", "_seed_rows_from_services", "svc"): (
@@ -280,7 +280,7 @@ def _enclosing_functions(tree: ast.AST) -> dict[ast.AST, str]:
 
 def _matched_owner(node: ast.AST) -> str | None:
     """THE matcher. Returns the compared attribute's owner for a keyword-identity
-    comparison, else None. Comparisons only — a projection, an `.order_by`, a
+    comparison, else None. Comparisons only -- a projection, an `.order_by`, a
     dict/set build or an audit payload reaches `.keyword` without deciding
     identity, and none of those produce a Compare or a membership call."""
     if isinstance(node, ast.Compare):
@@ -373,8 +373,8 @@ def test_no_unclassified_keyword_identity_site():
         "display echo that drifts on catalog rename. Either key this site by "
         "service id, or classify it in "
         "backend/tests/test_identity_convergence_guard.py: SHRINKING (keyword "
-        "identity that retires — the reason must name what removes it) or "
-        "PERMANENT (keyword by ruling — the reason must say why it can never "
+        "identity that retires -- the reason must name what removes it) or "
+        "PERMANENT (keyword by ruling -- the reason must say why it can never "
         "be a service id).\n"
         "  Key the entry by (relative_path, enclosing_function, "
         "compared-attribute owner) exactly as printed above, with the number of "
@@ -383,7 +383,7 @@ def test_no_unclassified_keyword_identity_site():
 
 
 def test_no_stale_shrinking_entry():
-    """A SHRINKING entry that stops matching is a stale green — the debt list
+    """A SHRINKING entry that stops matching is a stale green -- the debt list
     would no longer describe the code, and a new violation could hide behind a
     passing test. Retiring a site means deleting its entry in the same PR."""
     by_key = _counts_by_key(_all_sites())
@@ -437,12 +437,12 @@ def test_permanent_sites_all_present_with_reasons():
 
 def test_matched_site_floor():
     """Guards against a change that empties the sweep (a moved file, a renamed
-    module, an import shape the matcher stops recognizing) — which would make
+    module, an import shape the matcher stops recognizing) -- which would make
     every assertion above pass vacuously."""
     total = len(_all_sites())
     assert total >= MATCHED_SITE_FLOOR, (
         f"the keyword-identity sweep matched only {total} site(s), below the "
-        f"floor of {MATCHED_SITE_FLOOR} — the scan has likely stopped seeing "
+        f"floor of {MATCHED_SITE_FLOOR} -- the scan has likely stopped seeing "
         "the code rather than the code having been cleaned up. Check "
         "SWEPT_FILES against the real paths before lowering this."
     )
@@ -473,8 +473,8 @@ def test_matched_site_floor():
 def test_matcher_ignores_projections_and_payloads(snippet, expected):
     """Pins the matcher's scope: comparisons in, projections/ordering/dict and
     set construction out. Runs the REAL collector (not a copy of its logic), so
-    narrowing the matcher — which would empty the unlisted-site assertion and
-    look like a clean refactor — fails here."""
+    narrowing the matcher -- which would empty the unlisted-site assertion and
+    look like a clean refactor -- fails here."""
     hits = _collect_from_source(snippet, "<probe>", "<probe>")
     assert len(hits) == expected, (
         f"matcher scope changed for {snippet!r}: expected {expected} match(es), "
