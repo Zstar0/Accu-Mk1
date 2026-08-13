@@ -1775,8 +1775,16 @@ def parent_retest(
         analysis_service_id=analysis_service_id,
     )
     if active is None:
+        # Name the identity that was actually used, not always the keyword —
+        # a service-id caller passes keyword only as the legacy alias, so
+        # echoing it would point the operator at the wrong thing.
+        _asked = (
+            f"analysis_service_id={analysis_service_id}"
+            if analysis_service_id is not None
+            else f"keyword {keyword!r}"
+        )
         raise NotFoundError(
-            f"no active native parent row for keyword {keyword!r} on {sample_id!r}"
+            f"no active native parent row for {_asked} on {sample_id!r}"
         )
     if active.review_state not in ("verified", "parent_to_verify"):
         raise InvalidTransitionError(
@@ -1818,15 +1826,23 @@ def parent_retest(
 
     from models import AnalysisService
     svc = db.get(AnalysisService, active.analysis_service_id)
+    # Record the RESOLVED row's identity, not the caller's input string: since
+    # S3 the two can differ (service-id caller, or the catalog-rescue leg), and
+    # an audit row whose keyword doesn't name the row that was retested is
+    # worse than no keyword at all. Identical for every pre-S3 caller.
+    _details = {
+        "keyword": active.keyword,
+        "analysis_service_id": active.analysis_service_id,
+        "source_row_ids": source_row_ids,
+        "unpromoted": active.review_state == "retracted",
+        "service_origin": svc.origin if svc else None,
+    }
+    if keyword != active.keyword:
+        _details["requested_keyword"] = keyword
     db.add(LimsSubSampleEvent(
         lims_sample_pk=active.lims_sample_pk,
         event="parent_analysis_retested",
-        details={
-            "keyword": keyword,
-            "source_row_ids": source_row_ids,
-            "unpromoted": active.review_state == "retracted",
-            "service_origin": svc.origin if svc else None,
-        },
+        details=_details,
         user_id=user_id,
     ))
     db.commit()

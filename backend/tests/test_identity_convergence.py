@@ -38,6 +38,7 @@ from models import (
     LimsAnalysisPromotion,
     LimsSample,
     LimsSubSample,
+    LimsSubSampleEvent,
 )
 
 
@@ -297,6 +298,52 @@ def test_senaite_origin_gets_no_catalog_rescue(host):
     )
     assert len(new_ids) == 1
     assert db.get(LimsAnalysis, new_ids[0]).retest_of_id == vial.id
+
+
+# ─── the audit event names the row that was retested ────────────────────────
+
+
+def test_retest_event_records_resolved_identity_not_requested_keyword(host):
+    """parent_retest's activity event used to echo the caller's keyword. Since
+    the rescue leg can resolve a row whose stored keyword differs from the one
+    asked for, the event must name the ROW's identity — otherwise the audit
+    trail carries a keyword that doesn't identify what was retested. The
+    requested string is kept alongside it, only when it differed."""
+    db, parent, sub = host
+    svc, prow, vial = _drifted_native(db, parent, sub, catalog_kw="PUR_NEW", stored_kw="PUR_OLD")
+
+    parent_retest(db, sample_id=parent.sample_id, keyword="PUR_NEW", user_id=None)
+
+    ev = db.execute(
+        LimsSubSampleEvent.__table__.select().where(
+            LimsSubSampleEvent.event == "parent_analysis_retested"
+        )
+    ).mappings().one()
+    assert ev["details"]["keyword"] == "PUR_OLD", "must record the resolved row's keyword"
+    assert ev["details"]["analysis_service_id"] == svc.id
+    assert ev["details"]["requested_keyword"] == "PUR_NEW"
+    assert ev["details"]["service_origin"] == "mk1"
+
+
+def test_retest_event_omits_requested_keyword_when_it_matches(host):
+    """The pre-S3 shape: caller named the row's own keyword, so there is no
+    divergence to record."""
+    db, parent, sub = host
+    svc = _service(db, keyword="PUR_SAME", origin="mk1")
+    prow = _parent_row(db, parent, svc, stored_keyword="PUR_SAME")
+    vial = _promoted_vial(db, sub, svc, stored_keyword="PUR_SAME")
+    _link(db, prow, vial)
+    db.commit()
+
+    parent_retest(db, sample_id=parent.sample_id, keyword="PUR_SAME", user_id=None)
+
+    ev = db.execute(
+        LimsSubSampleEvent.__table__.select().where(
+            LimsSubSampleEvent.event == "parent_analysis_retested"
+        )
+    ).mappings().one()
+    assert ev["details"]["keyword"] == "PUR_SAME"
+    assert "requested_keyword" not in ev["details"]
 
 
 # ─── regression: the provenance term survives the refactor ──────────────────
