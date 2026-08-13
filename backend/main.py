@@ -19542,10 +19542,11 @@ def _build_analysis_debug_rows(db: Session, row: LimsSample, sample_id: str) -> 
     ).scalars().all()
 
     def _is_live_canonical(r) -> bool:
-        # Mirrors the DB's own `uq_lims_analyses_parent_service_root` partial
-        # unique index definition (database.py) exactly: at most one
-        # canonical row per (parent, keyword) may have retest_of_id IS NULL
-        # AND review_state NOT IN ('retracted', 'rejected') at a time.
+        # Liveness mirrors the parent-tier root indexes (database.py): at most
+        # one canonical row per (parent, keyword) — and, since S3, per
+        # (parent, analysis_service_id) — may be live at a time. This panel
+        # keys by KEYWORD on purpose: it diffs Mk1 rows against a SENAITE
+        # payload that only speaks keyword (senaite_map above).
         return r.retest_of_id is None and r.review_state not in ("retracted", "rejected")
 
     # Newest-wins per keyword, same "prefer live, else fallback to newest"

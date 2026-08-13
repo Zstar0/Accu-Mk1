@@ -317,6 +317,65 @@ def _resolve_mk1_parent_tier(
     return decisions
 
 
+def _pin_row_identity_matches(db: Session, row, analyte_keyword: str) -> bool:
+    """Does this parent-tier row carry the identity of `analyte_keyword`? (S3)
+
+    Two ACCEPTING legs, OR'd — the guard is never narrower than the pre-S3
+    string compare it replaces:
+
+      1. exact stored keyword — byte-identical to the pre-S3 guard, and the
+         whole answer for senaite-origin rows: their keyword IS their identity
+         contract, grandfathered.
+      2. mk1 catalog resolve — the requested keyword resolves, scoped to
+         origin='mk1', to THIS row's service. This is what reaches a native
+         row whose stored keyword echo drifted away from its catalog keyword
+         after a rename; leg 1 reads that row as stale and blocks the COA.
+
+    Leg 1 is RETAINED, not replaced, for the same reason Task 3's
+    `_find_active_parent_row` tries the exact keyword before its catalog
+    rescue: both parent-tier root indexes permit row X (service 42, stored
+    'PUR_OLD', catalog 'PUR_NEW') and row Y (service 99, stored 'PUR_NEW') to
+    be live on the same parent, and a pin on Y for 'PUR_NEW' is fresh TODAY.
+    A bare service comparison would newly block that COA. This guard is only
+    ever allowed to un-block a false stale, never to mint a new one — see
+    tests/test_identity_convergence.py::
+    test_pin_exact_keyword_still_wins_over_the_catalog_resolve.
+
+    Leg 2 needs no separate origin check on the ROW's service: the resolve is
+    scoped to origin='mk1' and matched by id, so a senaite row can only pass
+    it by being that mk1 service, which it is not. That scoping is load-
+    bearing, not cosmetic — `uq_analysis_services_mk1_keyword` is PARTIAL on
+    origin='mk1', so an mk1 and a senaite service CAN share a keyword string
+    (validate_new_keyword covers Mk1-side creation, not SENAITE sync). Drop
+    the scoping and a senaite row with a drifted echo gets matched by an
+    unrelated native service that merely shares the string.
+    DEPLOY GATE: the cross-origin keyword-collision query in task-3-report §2
+    bears on this site too — run it against s3rehe and prod before shipping.
+
+    ORDER BY id is for determinism only: the partial unique index makes mk1
+    keywords unique, so this can select from at most one row unless that index
+    is violated, and then lowest-id wins instead of whatever the plan returns.
+    """
+    from models import AnalysisService
+
+    # Leg 1 — the pre-S3 compare, unchanged.
+    if row.keyword == analyte_keyword:
+        return True
+    if row.analysis_service_id is None:
+        return False
+
+    # Leg 2 — mk1 catalog resolve.
+    native_svc = db.execute(
+        select(AnalysisService)
+        .where(
+            AnalysisService.keyword == analyte_keyword,
+            AnalysisService.origin == "mk1",
+        )
+        .order_by(AnalysisService.id)
+    ).scalars().first()
+    return native_svc is not None and native_svc.id == row.analysis_service_id
+
+
 def _apply_pin_override(
     db: Session,
     parent_sample_id: str,
@@ -378,7 +437,13 @@ def _apply_pin_override(
             or row.provenance != "canonical"
             or not row.reportable
             or row.retest_of_id is not None
-            or row.keyword != analyte_keyword
+            # S3: identity, not the stored keyword echo. Native rows also match
+            # by service id so a catalog rename can't falsely stale a good pin;
+            # senaite rows keep the string compare (_pin_row_identity_matches).
+            # Every OTHER disjunct here is a LIVENESS guard and is untouched —
+            # a service match never buys a retracted/shadow/unreportable row a
+            # pass.
+            or not _pin_row_identity_matches(db, row, analyte_keyword)
             or row.result_value in (None, "")
         ):
             return base.model_copy(update={

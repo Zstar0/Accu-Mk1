@@ -985,3 +985,153 @@ def test_delete_pristine_route_keyword_only_is_unchanged(route_client):
 
     assert resp.status_code == 200, resp.text
     assert db.get(LimsAnalysis, row_id) is None
+
+
+# ─── Task 6: COA pin staleness — native rows compare by service id ───────────
+#
+# `_apply_pin_override`'s mk1 branch guarded the pinned row with
+# `row.keyword != analyte_keyword`. That disjunct reads the row's DENORMALIZED
+# keyword echo, so a catalog rename after the row was stamped made a perfectly
+# good pin look stale and blocked the COA. The guard now also accepts the row
+# when the requested keyword resolves, through the mk1 catalog, to the row's
+# own service — with the exact-keyword compare RETAINED as the pre-S3
+# grandfather (Task 3's leg-2-before-leg-3, same reasoning).
+#
+# Pin STORAGE stays keyword-keyed (`CoaResultPin.analyte_keyword`) — ruled out
+# of S3. Every test here therefore stores the pin under the keyword being
+# resolved; only the ROW's echo drifts.
+
+
+def _pin(db, *, parent_sample_id, analyte_keyword, row):
+    from models import CoaResultPin
+
+    db.add(CoaResultPin(
+        parent_sample_id=parent_sample_id,
+        analyte_keyword=analyte_keyword,
+        mode="pin",
+        source_sample_id=parent_sample_id,
+        source_analysis_uid=f"mk1:{row.id}",
+    ))
+    db.flush()
+
+
+def _base_decision(analyte_keyword):
+    """A no-pin base decision, as the merge layer hands it to the override."""
+    from coa.schemas import SourceDecision
+
+    return SourceDecision(
+        analyte_keyword=analyte_keyword,
+        mode="auto",
+        chosen=None,
+        candidates=[],
+        blocked=None,
+    )
+
+
+def test_pin_survives_native_keyword_rename(host):
+    """Native row pinned; the catalog keyword was renamed after the row was
+    stamped, so the row's stored echo has drifted. The staleness check must
+    NOT flag stale_pin — the requested keyword resolves through the mk1
+    catalog to this row's own service, which IS its identity."""
+    from coa.source_resolver import _apply_pin_override
+
+    db, parent, _sub = host
+    svc = _service(db, keyword="PUR_NEW", origin="mk1")     # catalog: renamed
+    row = _parent_row(db, parent, svc, stored_keyword="PUR_OLD")   # echo: stale
+    _pin(db, parent_sample_id=parent.sample_id, analyte_keyword="PUR_NEW", row=row)
+    db.commit()
+
+    out = _apply_pin_override(db, parent.sample_id, "PUR_NEW", _base_decision("PUR_NEW"))
+
+    assert out.blocked is None, out.blocked_detail
+    assert out.mode == "pin"
+    assert out.chosen is not None
+    assert out.chosen.source_analysis_uid == f"mk1:{row.id}"
+    assert out.chosen.value == "99.00"
+
+
+def test_pin_exact_keyword_still_wins_over_the_catalog_resolve(host):
+    """The pre-S3 leg is RETAINED, not replaced: a pinned row whose stored
+    keyword IS the requested string stays fresh even when a DIFFERENT mk1
+    service owns that catalog keyword (the drifted-squatter shape both root
+    indexes permit — see _find_active_parent_row). A bare service comparison
+    would newly block this COA."""
+    from coa.source_resolver import _apply_pin_override
+
+    db, parent, _sub = host
+    # Service 1 drifted: its catalog keyword is now the string service 2's rows
+    # are stored under.
+    _service(db, keyword="PUR_KW", origin="mk1")
+    other = _service(db, keyword="PUR_OTHER", origin="mk1")
+    row = _parent_row(db, parent, other, stored_keyword="PUR_KW")
+    _pin(db, parent_sample_id=parent.sample_id, analyte_keyword="PUR_KW", row=row)
+    db.commit()
+
+    out = _apply_pin_override(db, parent.sample_id, "PUR_KW", _base_decision("PUR_KW"))
+
+    assert out.blocked is None, out.blocked_detail
+    assert out.mode == "pin"
+    assert out.chosen.source_analysis_uid == f"mk1:{row.id}"
+
+
+def test_pin_senaite_origin_row_keeps_the_string_compare(host):
+    """senaite-origin rows are byte-unchanged: their keyword IS their identity
+    contract, grandfathered. The colliding mk1 service is here to mutation-
+    check the resolve's `origin='mk1'` scoping — drop that term and the
+    lowest-id match for 'PUR_NEW' becomes the SENAITE service itself, whose id
+    is the row's, so this pin would wrongly resolve fresh."""
+    from coa.source_resolver import _apply_pin_override
+
+    db, parent, _sub = host
+    sen = _service(db, keyword="PUR_NEW", origin="senaite")
+    row = _parent_row(db, parent, sen, stored_keyword="PUR_OLD")   # drifted echo
+    # Cross-origin keyword collision: uq_analysis_services_mk1_keyword is
+    # PARTIAL on origin='mk1', so nothing stops this from existing.
+    _service(db, keyword="PUR_NEW", origin="mk1")
+    _pin(db, parent_sample_id=parent.sample_id, analyte_keyword="PUR_NEW", row=row)
+    db.commit()
+
+    out = _apply_pin_override(db, parent.sample_id, "PUR_NEW", _base_decision("PUR_NEW"))
+
+    assert out.blocked == "stale_pin"
+    assert out.chosen is None
+
+
+def test_pin_falls_through_to_string_compare_with_no_native_resolution(host):
+    """Requested keyword resolves to NO mk1 catalog service: the guard is the
+    pre-S3 string compare, unchanged — a drifted native row is still stale."""
+    from coa.source_resolver import _apply_pin_override
+
+    db, parent, _sub = host
+    svc = _service(db, keyword="PUR_CATALOG", origin="mk1")
+    row = _parent_row(db, parent, svc, stored_keyword="PUR_OLD")
+    # 'PUR_UNKNOWN' names no mk1 service at all.
+    _pin(db, parent_sample_id=parent.sample_id, analyte_keyword="PUR_UNKNOWN", row=row)
+    db.commit()
+
+    out = _apply_pin_override(
+        db, parent.sample_id, "PUR_UNKNOWN", _base_decision("PUR_UNKNOWN")
+    )
+
+    assert out.blocked == "stale_pin"
+    assert out.chosen is None
+
+
+def test_pin_service_match_does_not_bypass_the_liveness_guards(host):
+    """The service leg only answers the IDENTITY question. A retracted row
+    whose service matches the requested keyword is still stale — fail-closed
+    on state/provenance/reportable is untouched."""
+    from coa.source_resolver import _apply_pin_override
+
+    db, parent, _sub = host
+    svc = _service(db, keyword="PUR_NEW", origin="mk1")
+    row = _parent_row(
+        db, parent, svc, stored_keyword="PUR_OLD", state="retracted"
+    )
+    _pin(db, parent_sample_id=parent.sample_id, analyte_keyword="PUR_NEW", row=row)
+    db.commit()
+
+    out = _apply_pin_override(db, parent.sample_id, "PUR_NEW", _base_decision("PUR_NEW"))
+
+    assert out.blocked == "stale_pin"
+    assert out.chosen is None
