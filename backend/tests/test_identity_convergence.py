@@ -30,8 +30,11 @@ from catalog.departments import ANALYTICAL_DEPARTMENT
 from database import Base
 from lims_analyses.seeder import seed_analyses_for_vial
 from lims_analyses.service import (
+    BadRequestError,
     NotFoundError,
+    add_analysis_to_native_vial,
     cascade_parent_retest_to_sources,
+    delete_pristine_analysis,
     parent_retest,
 )
 from models import (
@@ -593,3 +596,392 @@ def test_seeder_mirror_skips_drifted_native_but_still_seeds_a_new_service(host, 
     assert [r.keyword for r in created] == ["PUR_B"], (
         "mirror must skip the drifted native service and still seed the new one"
     )
+
+
+# ═══ Task 5: native vial add / delete ════════════════════════════════════════
+#
+# Both functions took keyword-only identity off the Manage Analyses wire. The
+# add path is the sharper one: it RESOLVED a service and then guarded on that
+# service's keyword string — so a vial already carrying the service under a
+# drifted stored keyword read as "not present" and a second row was minted.
+# Under Task 2's uq_lims_analyses_sub_service_id_root that insert is now an
+# IntegrityError, so the guard has to catch it first and raise the clean 409.
+#
+# Harness note (same as Task 4's): create_all does NOT build the partial unique
+# indexes, so these assert on the guard, not on the index behind it.
+
+
+def _native_vial_svc(db, *, keyword, origin="mk1", senaite_uid=None):
+    svc = _service(db, keyword=keyword, origin=origin)
+    svc.senaite_uid = senaite_uid
+    db.flush()
+    return svc
+
+
+# ─── add: resolution order ───────────────────────────────────────────────────
+
+
+def test_add_analysis_to_native_vial_by_service_id(host):
+    """analysis_service_id alone resolves the service — no keyword, no uid."""
+    db, parent, sub = host
+    svc = _native_vial_svc(db, keyword="PUR_NEW")
+    db.commit()
+
+    row = add_analysis_to_native_vial(
+        db,
+        sub_sample_pk=sub.id,
+        senaite_service_uid=None,
+        keyword=None,
+        analysis_service_id=svc.id,
+        user_id=None,
+    )
+
+    assert row.analysis_service_id == svc.id
+    assert row.keyword == "PUR_NEW", "the row is stamped with the catalog keyword"
+    assert row.review_state == "unassigned"
+
+
+def test_add_analysis_to_native_vial_keyword_alias_still_works(host):
+    """The pre-S3 wire is untouched: keyword alone still resolves."""
+    db, parent, sub = host
+    svc = _native_vial_svc(db, keyword="PUR_KW")
+    db.commit()
+
+    row = add_analysis_to_native_vial(
+        db,
+        sub_sample_pk=sub.id,
+        senaite_service_uid=None,
+        keyword="PUR_KW",
+        user_id=None,
+    )
+
+    assert row.analysis_service_id == svc.id
+
+
+def test_add_analysis_to_native_vial_service_id_wins_over_the_aliases(host):
+    """Resolution order is service_id → senaite_uid → keyword. When more than
+    one is on the wire the service id decides, so a stale keyword/uid the FE
+    happens to echo alongside it can never route the add to another service."""
+    db, parent, sub = host
+    wanted = _native_vial_svc(db, keyword="PUR_WANTED", senaite_uid="SN-WANTED")
+    _native_vial_svc(db, keyword="PUR_OTHER", senaite_uid="SN-OTHER")
+    db.commit()
+
+    row = add_analysis_to_native_vial(
+        db,
+        sub_sample_pk=sub.id,
+        senaite_service_uid="SN-OTHER",
+        keyword="PUR_OTHER",
+        analysis_service_id=wanted.id,
+        user_id=None,
+    )
+
+    assert row.analysis_service_id == wanted.id
+
+
+def test_add_analysis_to_native_vial_requires_an_identifier(host):
+    """No identifier at all is still a BadRequest, exactly as before."""
+    db, parent, sub = host
+    db.commit()
+
+    with pytest.raises(BadRequestError):
+        add_analysis_to_native_vial(
+            db, sub_sample_pk=sub.id, senaite_service_uid=None,
+            keyword=None, user_id=None,
+        )
+
+
+def test_add_analysis_to_native_vial_unknown_service_id_404s(host):
+    db, parent, sub = host
+    db.commit()
+
+    with pytest.raises(NotFoundError):
+        add_analysis_to_native_vial(
+            db, sub_sample_pk=sub.id, senaite_service_uid=None, keyword=None,
+            analysis_service_id=999_999, user_id=None,
+        )
+
+
+# ─── add: the duplicate guard ────────────────────────────────────────────────
+
+
+def test_add_analysis_to_native_vial_duplicate_guard_catches_drifted_keyword(host):
+    """The defect this task retires.
+
+    The vial already carries the service, stored under a drifted keyword. The
+    pre-S3 guard resolved the service and then compared svc.keyword to the
+    stored string — a miss — so it minted a SECOND row for the same service.
+    The service-FK guard sees it."""
+    db, parent, sub = host
+    svc = _native_vial_svc(db, keyword="PUR_NEW")
+    existing = _vial_row(db, sub, svc, stored_keyword="PUR_OLD")   # drifted
+    db.commit()
+
+    with pytest.raises(BadRequestError):
+        add_analysis_to_native_vial(
+            db, sub_sample_pk=sub.id, senaite_service_uid=None, keyword=None,
+            analysis_service_id=svc.id, user_id=None,
+        )
+
+    rows = db.execute(
+        LimsAnalysis.__table__.select().where(
+            LimsAnalysis.lims_sub_sample_pk == sub.id
+        )
+    ).all()
+    assert len(rows) == 1, "no duplicate may be minted"
+    assert rows[0].id == existing.id
+
+
+def test_add_analysis_to_native_vial_dead_row_does_not_block(host):
+    """The guard's active-set contract survives the rekey: a rejected row for
+    the same SERVICE must not block re-adding it."""
+    db, parent, sub = host
+    svc = _native_vial_svc(db, keyword="PUR_DEAD")
+    _vial_row(db, sub, svc, stored_keyword="PUR_DEAD", state="rejected")
+    db.commit()
+
+    row = add_analysis_to_native_vial(
+        db, sub_sample_pk=sub.id, senaite_service_uid=None, keyword=None,
+        analysis_service_id=svc.id, user_id=None,
+    )
+    assert row.analysis_service_id == svc.id
+
+
+def test_add_analysis_to_native_vial_senaite_origin_keeps_keyword_guard(host):
+    """senaite services keep the keyword as their identity contract, so their
+    guard leg is byte-identical to pre-S3: same keyword blocks."""
+    db, parent, sub = host
+    svc = _native_vial_svc(db, keyword="SEN_KW", origin="senaite")
+    _vial_row(db, sub, svc, stored_keyword="SEN_KW")
+    db.commit()
+
+    with pytest.raises(BadRequestError):
+        add_analysis_to_native_vial(
+            db, sub_sample_pk=sub.id, senaite_service_uid=None,
+            keyword="SEN_KW", user_id=None,
+        )
+
+
+# ─── delete: identity + the exactly-one rule ─────────────────────────────────
+
+
+def test_delete_pristine_by_service_id(host):
+    """A drifted native row is reachable by its service FK; the caller never
+    has to know what string the row happens to store."""
+    db, parent, sub = host
+    svc = _native_vial_svc(db, keyword="PUR_NEW")
+    row = _vial_row(db, sub, svc, stored_keyword="PUR_OLD")       # drifted
+    db.commit()
+    row_id = row.id
+
+    delete_pristine_analysis(
+        db, sub_sample_pk=sub.id, analysis_service_id=svc.id, user_id=7,
+    )
+
+    assert db.get(LimsAnalysis, row_id) is None
+
+
+def test_delete_pristine_by_service_id_event_names_the_resolved_keyword(host):
+    """The analysis_removed event is the only trace left after the hard-delete,
+    so it must carry the ROW's keyword — on this path the caller passed none."""
+    db, parent, sub = host
+    svc = _native_vial_svc(db, keyword="PUR_NEW")
+    _vial_row(db, sub, svc, stored_keyword="PUR_OLD")
+    db.commit()
+
+    delete_pristine_analysis(
+        db, sub_sample_pk=sub.id, analysis_service_id=svc.id, user_id=7,
+    )
+
+    ev = db.execute(
+        LimsSubSampleEvent.__table__.select().where(
+            LimsSubSampleEvent.event == "analysis_removed"
+        )
+    ).mappings().one()
+    assert ev["details"] == {"keyword": "PUR_OLD"}, (
+        "the event must name the row that was removed, not the caller's input"
+    )
+
+
+def test_delete_pristine_keyword_alias_still_works(host):
+    db, parent, sub = host
+    svc = _native_vial_svc(db, keyword="PUR_KW")
+    row = _vial_row(db, sub, svc, stored_keyword="PUR_KW")
+    db.commit()
+    row_id = row.id
+
+    delete_pristine_analysis(db, sub_sample_pk=sub.id, keyword="PUR_KW", user_id=7)
+
+    assert db.get(LimsAnalysis, row_id) is None
+
+
+def test_delete_pristine_requires_exactly_one_identifier(host):
+    """Neither → BadRequest. Both → BadRequest: two identifiers can disagree,
+    and silently preferring one would delete a row the caller didn't name."""
+    db, parent, sub = host
+    svc = _native_vial_svc(db, keyword="PUR_BOTH")
+    row = _vial_row(db, sub, svc, stored_keyword="PUR_BOTH")
+    db.commit()
+    row_id = row.id
+
+    with pytest.raises(BadRequestError):
+        delete_pristine_analysis(db, sub_sample_pk=sub.id, user_id=7)
+
+    with pytest.raises(BadRequestError):
+        delete_pristine_analysis(
+            db, sub_sample_pk=sub.id, keyword="PUR_BOTH",
+            analysis_service_id=svc.id, user_id=7,
+        )
+
+    assert db.get(LimsAnalysis, row_id) is not None, "neither call may delete"
+
+
+def test_delete_pristine_by_service_id_still_guards_activity(host):
+    """The pristine guards are identity-agnostic: reaching a worked row by its
+    service id must still refuse and point at retract."""
+    db, parent, sub = host
+    svc = _native_vial_svc(db, keyword="PUR_WORKED")
+    row = _vial_row(db, sub, svc, stored_keyword="PUR_OLD", state="to_be_verified")
+    row.result_value = "99.00"
+    db.commit()
+
+    with pytest.raises(BadRequestError):
+        delete_pristine_analysis(
+            db, sub_sample_pk=sub.id, analysis_service_id=svc.id, user_id=7,
+        )
+    assert db.get(LimsAnalysis, row.id) is not None
+
+
+# ─── HTTP layer: the new field reaches the service ───────────────────────────
+#
+# Route pins, because the service-layer tests above pass just as well when the
+# route never forwards the field. Fixture follows test_native_manage_analyses'
+# route_client (StaticPool so the ASGI thread shares the in-memory DB).
+
+
+@pytest.fixture
+def route_client():
+    from unittest.mock import MagicMock
+
+    from fastapi.testclient import TestClient
+    from sqlalchemy.pool import StaticPool
+
+    from auth import get_current_user
+    from database import get_db
+    from main import app
+
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    shared = sessionmaker(bind=engine)()
+
+    def _override_get_db():
+        yield shared
+
+    prev_db = app.dependency_overrides.get(get_db)
+    prev_user = app.dependency_overrides.get(get_current_user)
+    app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_current_user] = lambda: MagicMock(id=42)
+
+    tc = TestClient(app)
+    tc._test_session = shared
+    yield tc
+
+    for dep, prev in ((get_db, prev_db), (get_current_user, prev_user)):
+        if prev is None:
+            app.dependency_overrides.pop(dep, None)
+        else:
+            app.dependency_overrides[dep] = prev
+    shared.close()
+
+
+def _native_host(db, *, sample_id="P-S3-R01"):
+    """Parent + one mk1:// vial — the shape the explorer routes' native branch
+    keys on (external_lims_uid LIKE 'mk1://%')."""
+    parent = LimsSample(sample_id=sample_id, external_lims_system="mk1")
+    db.add(parent)
+    db.flush()
+    sub = LimsSubSample(
+        parent_sample_pk=parent.id,
+        external_lims_uid=f"mk1://{sample_id}-v1",
+        sample_id=f"{sample_id}-S01",
+        vial_sequence=1,
+    )
+    db.add(sub)
+    db.flush()
+    return parent, sub
+
+
+def test_add_analysis_to_native_vial_route_threads_service_id(route_client):
+    """POST body carries analysis_service_id and nothing else — no service_uid,
+    which is the only identifier the route forwarded before."""
+    db = route_client._test_session
+    parent, sub = _native_host(db, sample_id="P-S3-R01")
+    svc = _native_vial_svc(db, keyword="PUR_ROUTE")
+    db.commit()
+
+    resp = route_client.post(
+        f"/explorer/samples/{sub.sample_id}/analyses",
+        json={"analysis_service_id": svc.id},
+    )
+
+    assert resp.status_code == 200, resp.text
+    row = db.execute(
+        LimsAnalysis.__table__.select().where(
+            LimsAnalysis.lims_sub_sample_pk == sub.id
+        )
+    ).mappings().one()
+    assert row["analysis_service_id"] == svc.id
+
+
+def test_add_analysis_to_native_vial_route_rejects_non_integer_service_id(route_client):
+    """The body is an untyped dict, so a non-int must be refused at the edge
+    rather than reaching a SQLAlchemy comparison."""
+    db = route_client._test_session
+    parent, sub = _native_host(db, sample_id="P-S3-R02")
+    db.commit()
+
+    resp = route_client.post(
+        f"/explorer/samples/{sub.sample_id}/analyses",
+        json={"analysis_service_id": "not-an-int"},
+    )
+
+    assert resp.status_code == 400, resp.text
+
+
+def test_delete_pristine_route_threads_service_id_past_a_drifted_keyword(route_client):
+    """The keyword stays in the path (it is the route's shape), but when
+    ?analysis_service_id= is supplied the service id decides — here the path
+    keyword names nothing at all and the drifted row is still removed."""
+    db = route_client._test_session
+    parent, sub = _native_host(db, sample_id="P-S3-R03")
+    svc = _native_vial_svc(db, keyword="PUR_NEW")
+    row = _vial_row(db, sub, svc, stored_keyword="PUR_OLD")     # drifted
+    db.commit()
+    row_id = row.id
+
+    resp = route_client.delete(
+        f"/explorer/samples/{sub.sample_id}/analyses/PUR_NEW"
+        f"?analysis_service_id={svc.id}"
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert db.get(LimsAnalysis, row_id) is None
+
+
+def test_delete_pristine_route_keyword_only_is_unchanged(route_client):
+    """The pre-S3 wire — no query param — still resolves by the path keyword."""
+    db = route_client._test_session
+    parent, sub = _native_host(db, sample_id="P-S3-R04")
+    svc = _native_vial_svc(db, keyword="PUR_KW", origin="senaite")
+    row = _vial_row(db, sub, svc, stored_keyword="PUR_KW")
+    db.commit()
+    row_id = row.id
+
+    resp = route_client.delete(f"/explorer/samples/{sub.sample_id}/analyses/PUR_KW")
+
+    assert resp.status_code == 200, resp.text
+    assert db.get(LimsAnalysis, row_id) is None

@@ -2722,23 +2722,35 @@ def add_analysis_to_native_vial(
     senaite_service_uid: Optional[str],
     keyword: Optional[str],
     user_id: Optional[int],
+    analysis_service_id: Optional[int] = None,
 ) -> "LimsAnalysis":
     """Add an analysis to a native (mk1://) sub-sample.
 
     Resolution order:
-      1. If senaite_service_uid is given → match analysis_services.senaite_uid.
-      2. Else if keyword is given → match analysis_services.keyword.
-      3. Else → BadRequestError (no identifier).
+      1. If analysis_service_id is given → match analysis_services.id.
+      2. Else if senaite_service_uid is given → match analysis_services.senaite_uid.
+      3. Else if keyword is given → match analysis_services.keyword.
+      4. Else → BadRequestError (no identifier).
+
+    The service id is checked first because it is the only identifier that
+    cannot drift; the other two stay as compatibility aliases for the callers
+    (and the FE wire) that still send them.
 
     Raises:
       - BadRequestError when no identifier is supplied.
       - NotFoundError when the AnalysisService cannot be resolved.
-      - BadRequestError (409-style) when an active non-retest row for that
-        keyword already exists on the vial (idempotent guard).
+      - BadRequestError (409-style) when the vial already carries an active
+        non-retest row for that service (idempotent guard).
     """
     from models import AnalysisService
 
-    if senaite_service_uid is not None:
+    if analysis_service_id is not None:
+        svc = db.get(AnalysisService, analysis_service_id)
+        if svc is None:
+            raise NotFoundError(
+                f"AnalysisService with id={analysis_service_id!r} not found"
+            )
+    elif senaite_service_uid is not None:
         svc = db.execute(
             select(AnalysisService).where(AnalysisService.senaite_uid == senaite_service_uid)
         ).scalars().first()
@@ -2756,22 +2768,35 @@ def add_analysis_to_native_vial(
             )
     else:
         raise BadRequestError(
-            "add_analysis_to_native_vial requires either senaite_service_uid or keyword"
+            "add_analysis_to_native_vial requires analysis_service_id, "
+            "senaite_service_uid or keyword"
         )
 
-    # Duplicate guard: active (non-retest) row with same keyword on this vial
+    # Duplicate guard (S3): native services guard by the service FK — the
+    # pre-S3 keyword guard resolved a service then compared strings, the exact
+    # drift class this slice retires (a vial already carrying the service under
+    # a drifted stored keyword read as "not present" and a second row was
+    # minted). senaite services keep the keyword as their identity contract.
+    # scalar_one_or_none stays: uq_lims_analyses_sub_service_id_root enforces
+    # singularity for the FK leg, and the keyword leg is unchanged.
+    _ident = (
+        LimsAnalysis.analysis_service_id == svc.id
+        if svc.origin == "mk1"
+        else LimsAnalysis.keyword == svc.keyword
+    )
     existing = db.execute(
         select(LimsAnalysis).where(
             LimsAnalysis.lims_sub_sample_pk == sub_sample_pk,
-            LimsAnalysis.keyword == svc.keyword,
+            _ident,
             LimsAnalysis.retest_of_id.is_(None),
             LimsAnalysis.review_state.notin_(["retracted", "rejected"]),
         )
     ).scalar_one_or_none()
     if existing is not None:
         raise BadRequestError(
-            f"vial already has an active analysis with keyword={svc.keyword!r} "
-            f"(id={existing.id}); remove or retract it first"
+            f"vial already has an active analysis for service "
+            f"{svc.keyword!r} (id={existing.id}, keyword={existing.keyword!r}); "
+            f"remove or retract it first"
         )
 
     return create_analysis(
@@ -2790,32 +2815,54 @@ def delete_pristine_analysis(
     db: Session,
     *,
     sub_sample_pk: int,
-    keyword: str,
+    keyword: Optional[str] = None,
     user_id: Optional[int],
+    analysis_service_id: Optional[int] = None,
 ) -> None:
     """Hard-delete a pristine (mistake-correction) analysis from a native vial.
 
     "Pristine" means: review_state == 'unassigned' AND result_value IS NULL
     AND not retested AND no promotion link. Any other state raises BadRequestError.
 
+    The row is identified by EXACTLY ONE of analysis_service_id (S3: reaches a
+    row whose stored keyword has drifted from its catalog's) or keyword (the
+    pre-S3 wire, kept as a compatibility alias). Both together is a
+    BadRequestError rather than a precedence rule: the two can name different
+    rows, and silently preferring one would delete a row the caller didn't ask
+    for — on a surface whose whole job is a hard delete.
+
     Raises:
-      - NotFoundError when no active row with that keyword exists on the vial.
+      - BadRequestError when the identifiers are not exactly one.
+      - NotFoundError when no active row with that identity exists on the vial.
       - BadRequestError when the row has activity (result, non-unassigned state,
         retested flag, or promotion link) — instruct caller to retract instead.
     """
     from models import LimsAnalysisPromotion
 
+    if (analysis_service_id is None) == (keyword is None):
+        raise BadRequestError(
+            "delete_pristine_analysis requires exactly one of "
+            "analysis_service_id or keyword"
+        )
+
+    if analysis_service_id is not None:
+        _ident = LimsAnalysis.analysis_service_id == analysis_service_id
+        _named = f"analysis_service_id={analysis_service_id!r}"
+    else:
+        _ident = LimsAnalysis.keyword == keyword
+        _named = f"keyword={keyword!r}"
+
     row = db.execute(
         select(LimsAnalysis).where(
             LimsAnalysis.lims_sub_sample_pk == sub_sample_pk,
-            LimsAnalysis.keyword == keyword,
+            _ident,
             LimsAnalysis.retest_of_id.is_(None),
             LimsAnalysis.review_state.notin_(["retracted", "rejected"]),
         )
     ).scalar_one_or_none()
     if row is None:
         raise NotFoundError(
-            f"no active lims_analysis with keyword={keyword!r} on sub_sample_pk={sub_sample_pk}"
+            f"no active lims_analysis with {_named} on sub_sample_pk={sub_sample_pk}"
         )
 
     # Pristine guards
@@ -2843,11 +2890,13 @@ def delete_pristine_analysis(
         )
 
     # Write event before hard-delete: the analysis row is gone after commit,
-    # but the event preserves the fact that it existed and was removed.
+    # but the event preserves the fact that it existed and was removed. The
+    # keyword recorded is the ROW's, not the caller's input — on the service-id
+    # path there is no caller keyword, and a drifted one would name nothing.
     db.add(LimsSubSampleEvent(
         sub_sample_pk=sub_sample_pk,
         event="analysis_removed",
-        details={"keyword": keyword},
+        details={"keyword": row.keyword},
         user_id=user_id,
     ))
     # Hard-delete: transition rows first (FK), then the row itself.

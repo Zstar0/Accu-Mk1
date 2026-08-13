@@ -9298,12 +9298,26 @@ async def add_sample_analysis(
     if sub is not None:
         # Native branch
         senaite_service_uid = body.get("service_uid")
+        # S3: the service id is the drift-proof identifier. The body is an
+        # untyped dict, so coerce here rather than letting a string reach a
+        # SQLAlchemy comparison. Both identifiers are forwarded when both are
+        # present — the service owns the resolution order, not the route.
+        _svc_id = body.get("analysis_service_id")
+        if _svc_id is not None:
+            try:
+                _svc_id = int(_svc_id)
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=400,
+                    detail="analysis_service_id must be an integer",
+                )
         try:
             add_analysis_to_native_vial(
                 db,
                 sub_sample_pk=sub.id,
                 senaite_service_uid=senaite_service_uid,
                 keyword=None,
+                analysis_service_id=_svc_id,
                 user_id=_current_user.id,
             )
         except _NotFoundError as e:
@@ -9399,6 +9413,7 @@ async def remove_sample_analysis(
     sample_id: str,
     keyword: str,
     confirm_retract: bool = False,
+    analysis_service_id: Optional[int] = None,
     _current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -9412,7 +9427,10 @@ async def remove_sample_analysis(
 
     Native branch: if sample_id maps to a lims_sub_samples row whose
     external_lims_uid starts with 'mk1://', the analysis is hard-deleted
-    (if pristine) via delete_pristine_analysis.
+    (if pristine) via delete_pristine_analysis. The optional
+    ?analysis_service_id= (S3) identifies the row by its service FK instead of
+    the path keyword, which is what reaches a row whose stored keyword has
+    drifted; the keyword stays in the path because it is the route's shape.
 
     Non-native fallthrough: proxied to the Integration Service unchanged.
     """
@@ -9456,12 +9474,16 @@ async def remove_sample_analysis(
     ).scalar_one_or_none()
 
     if sub is not None:
-        # Native branch
+        # Native branch. Exactly one identifier reaches the service: when the
+        # caller supplied a service id it decides, and the path keyword — which
+        # is only ever the FE's echo of a possibly-drifted stored string — is
+        # dropped rather than sent alongside it.
         try:
             delete_pristine_analysis(
                 db,
                 sub_sample_pk=sub.id,
-                keyword=keyword,
+                keyword=None if analysis_service_id is not None else keyword,
+                analysis_service_id=analysis_service_id,
                 user_id=_current_user.id,
             )
         except _NotFoundError as e:
