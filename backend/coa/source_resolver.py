@@ -393,7 +393,10 @@ def _apply_pin_override(
       pin source no longer valid  → blocked='stale_pin'
 
     For pins targeting a Mk1 row (uid like 'mk1:N'), we look up the row by
-    id and verify it's still verified/published + reportable + non-retest.
+    id and verify it's still verified/published + reportable + non-retest,
+    and that it still carries the requested analyte's identity
+    (_pin_row_identity_matches — service id for native rows, keyword for
+    senaite ones).
     For SENAITE-side pins (32-char hex uid), we match against the base's
     candidates list (which carries SENAITE candidates when the base came
     from _resolve_analyte).
