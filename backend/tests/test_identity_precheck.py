@@ -1,5 +1,6 @@
 """Live-PG tests for the S3 identity pre-check (violations constructed in a
 rolled-back transaction — nothing persists)."""
+import re
 import uuid
 
 import pytest
@@ -24,12 +25,11 @@ def test_clean_db_reports_no_vial_violations(db):
     assert vial_tier_violations(db) == []
 
 
-def test_constructed_vial_violation_detected(db):
-    """Two live rows, same (vial, service), DIFFERENT keywords — the exact
-    drift shape the new index forbids. Built raw and rolled back."""
-    from scripts.s3_identity_precheck import vial_tier_violations
-
-    # Arrange: minimal parent sample + sub sample + catalog service + two rows.
+def _construct_vial_violation(db):
+    """Build (but do not commit) two live rows, same (vial, service),
+    DIFFERENT keywords — the exact drift shape the new index forbids.
+    Shared by the vial-tier detection test and the diagnostics-always-run
+    covering test below. Returns (sub, svc)."""
     uid = uuid.uuid4().hex[:8]
     svc = AnalysisService(title="TEST S3 Precheck Service", keyword="TEST-S3-CURRENT",
                           origin="mk1")
@@ -66,10 +66,47 @@ def test_constructed_vial_violation_detected(db):
     )
     db.add_all([row_a, row_b])
     db.flush()
+    return sub, svc
+
+
+def test_constructed_vial_violation_detected(db):
+    """Two live rows, same (vial, service), DIFFERENT keywords — the exact
+    drift shape the new index forbids. Built raw and rolled back."""
+    from scripts.s3_identity_precheck import vial_tier_violations
+
+    _construct_vial_violation(db)
 
     hits = vial_tier_violations(db)
     assert any(h["distinct_keywords"] and len(h["row_ids"]) == 2 for h in hits)
     # (teardown = fixture rollback)
+
+
+def test_violation_path_still_runs_diagnostics(db, capsys):
+    """Regression for a review finding: run_precheck's violation branch used
+    to print + `return 3` BEFORE origin_split_diagnostic()/drift_sizer() ever
+    ran. The diagnostics only executed on the clean path — where
+    origin_split_diagnostic is mathematically guaranteed empty, since it
+    shares the same `HAVING COUNT(*) > 1` predicate as the gates it segments
+    (no count>1 group at the coarser grouping means none at the
+    origin-tagged one either). So the "tells you WHOSE rows to repair"
+    diagnostic could never fire at the one moment repair attribution is
+    actually needed. run_precheck must run both diagnostics unconditionally,
+    with the exit-code decision made only afterward."""
+    from scripts.s3_identity_precheck import run_precheck
+
+    _construct_vial_violation(db)
+
+    code = run_precheck(db, "test-env")
+    out = capsys.readouterr().out
+
+    assert code == 3
+    assert "VIOLATIONS FOUND" in out
+    # Non-empty origin-split section: the numbered count line, not the
+    # clean-path "nothing to attribute" phrasing, and at least one row printed.
+    m = re.search(r"origin split diagnostic: (\d+) row\(s\)", out)
+    assert m is not None and int(m.group(1)) >= 1
+    assert "nothing to attribute" not in out
+    assert "drift sizer:" in out
 
 
 def test_clean_db_reports_no_parent_violations(db):

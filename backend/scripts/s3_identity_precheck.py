@@ -150,6 +150,74 @@ def drift_sizer(db) -> list[dict]:
     return [dict(r) for r in db.execute(text(_DRIFT_SIZER_SQL)).mappings().all()]
 
 
+def run_precheck(db, env_label: str) -> int:
+    """Run the full pre-check against `db` and print the report. Returns the
+    exit code: 0 clean, 2 canary failed, 3 violations found. Split out of
+    main() so the decision/reporting logic is testable without a real CLI
+    invocation or SessionLocal() of its own.
+
+    The two diagnostics (origin split + drift sizer) ALWAYS run once the two
+    gates have computed their hits — they must never be skipped just because
+    a violation was found. origin_split_diagnostic shares the gates' own
+    `HAVING COUNT(*) > 1` predicate, so on the clean path it is
+    mathematically guaranteed empty; the one moment it can have real content
+    to attribute IS the violation case, which is exactly when an operator
+    needs "whose rows to repair." An early `return 3` before these ran would
+    make that diagnostic permanently unreachable — this was a real bug
+    caught in review, not a hypothetical (see test_violation_path_still_runs_diagnostics).
+    """
+    print(f"=== S3 identity pre-check — environment: {env_label} ===")
+
+    canary_hits = keyword_index_canary(db)
+    if canary_hits:
+        print(f"CANARY FAILED: {len(canary_hits)} (host, keyword) group(s) "
+             "resolve to >1 service.")
+        print("The EXISTING keyword-uniqueness index is absent or invalid "
+             "on this DB — investigate the migration mechanism FIRST, "
+             "before trusting anything below.")
+        for row in canary_hits:
+            print(row)
+        return 2
+    print("canary: OK — existing keyword index enforced")
+
+    vial_hits = vial_tier_violations(db)
+    parent_hits = parent_tier_violations(db)
+    has_violations = bool(vial_hits or parent_hits)
+    if has_violations:
+        print(f"VIOLATIONS FOUND: {len(vial_hits)} vial-tier, "
+             f"{len(parent_hits)} parent-tier.")
+        print("These rows would violate the new S3 identity indexes. "
+             "Reported only — NOT auto-healed; a human decides repairs.")
+        for row in vial_hits:
+            print("[vial]", row)
+        for row in parent_hits:
+            print("[parent]", row)
+    else:
+        print("vial-tier: clean (0 violations)")
+        print("parent-tier: clean (0 violations)")
+
+    # Diagnostics — unconditional, run on BOTH the clean and violation paths
+    # (see docstring above for why the violation path matters most).
+    origin_rows = origin_split_diagnostic(db)
+    if origin_rows:
+        print(f"origin split diagnostic: {len(origin_rows)} row(s)")
+        for row in origin_rows:
+            print(row)
+    else:
+        print("origin split diagnostic: 0 row(s) — nothing to attribute (both gates are clean)")
+
+    drift_rows = drift_sizer(db)
+    print(f"drift sizer: {len(drift_rows)} origin group(s) with keyword drift")
+    for row in drift_rows:
+        print(row)
+
+    if has_violations:
+        return 3
+
+    print("=== clean ===")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="S3 identity pre-check — REQUIRED pre-deploy gate. Run "
@@ -175,52 +243,9 @@ def main(argv=None) -> int:
     except (AttributeError, ValueError):
         pass
 
-    print(f"=== S3 identity pre-check — environment: {args.env_label} ===")
-
     db = SessionLocal()
     try:
-        canary_hits = keyword_index_canary(db)
-        if canary_hits:
-            print(f"CANARY FAILED: {len(canary_hits)} (host, keyword) group(s) "
-                 "resolve to >1 service.")
-            print("The EXISTING keyword-uniqueness index is absent or invalid "
-                 "on this DB — investigate the migration mechanism FIRST, "
-                 "before trusting anything below.")
-            for row in canary_hits:
-                print(row)
-            return 2
-        print("canary: OK — existing keyword index enforced")
-
-        vial_hits = vial_tier_violations(db)
-        parent_hits = parent_tier_violations(db)
-        if vial_hits or parent_hits:
-            print(f"VIOLATIONS FOUND: {len(vial_hits)} vial-tier, "
-                 f"{len(parent_hits)} parent-tier.")
-            print("These rows would violate the new S3 identity indexes. "
-                 "Reported only — NOT auto-healed; a human decides repairs.")
-            for row in vial_hits:
-                print("[vial]", row)
-            for row in parent_hits:
-                print("[parent]", row)
-            return 3
-        print("vial-tier: clean (0 violations)")
-        print("parent-tier: clean (0 violations)")
-
-        origin_rows = origin_split_diagnostic(db)
-        if origin_rows:
-            print(f"origin split diagnostic: {len(origin_rows)} row(s)")
-            for row in origin_rows:
-                print(row)
-        else:
-            print("origin split diagnostic: 0 row(s) — nothing to attribute (both gates are clean)")
-
-        drift_rows = drift_sizer(db)
-        print(f"drift sizer: {len(drift_rows)} origin group(s) with keyword drift")
-        for row in drift_rows:
-            print(row)
-
-        print("=== clean ===")
-        return 0
+        return run_precheck(db, args.env_label)
     finally:
         # No writes anywhere in this script — rollback is belt-and-braces,
         # never a commit, on a connection that is read-only by convention.
