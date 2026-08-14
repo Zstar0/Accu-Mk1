@@ -2,38 +2,9 @@
 silent-zero path the retired legacy-wins override used to mask."""
 import logging
 
-from models import AnalysisProfile, VialRole, Department
+from models import AnalysisProfile
 from catalog.demand_verify import verify_demand_catalog
-
-
-def _mk_profile(db, key, *, vials=1, role="endo", dim="role", active=True):
-    p = AnalysisProfile(
-        key=key, name=f"T {key}", is_addon=True, vials_required=vials,
-        fulfillment_dim=dim, fulfillment_role=role, active=active,
-    )
-    db.add(p)
-    db.flush()
-    return p
-
-
-def _mk_role(db, code, *, dept=True):
-    d = None
-    if dept:
-        d = Department(name=f"Dept {code}")
-        db.add(d)
-        db.flush()
-    r = VialRole(code=code, label=code.upper(), department_id=(d.id if d else None))
-    db.add(r)
-    db.flush()
-    return r
-
-
-def _seed_legacy_ok(db):
-    _mk_role(db, "hplc"); _mk_role(db, "endo"); _mk_role(db, "ster")
-    _mk_profile(db, "hplcpurity_identity", role="hplc")
-    _mk_profile(db, "bac_water_panel", role="hplc")
-    _mk_profile(db, "endotoxin", role="endo")
-    _mk_profile(db, "sterility_pcr", role="ster")
+from tests._demand_catalog_helpers import _mk_profile, _mk_role, _seed_legacy_ok
 
 
 def test_empty_catalog_is_not_a_violation(db_session, caplog):
