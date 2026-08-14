@@ -147,6 +147,26 @@ HAVING COUNT(DISTINCT origin) > 1
 """
 
 
+# A pre-catalog-layer DB (prod before this arc's first boot) has no
+# analysis_services.origin column: the three origin-keyed diagnostics are
+# undefined there and must SKIP loudly instead of crashing — a diagnostic
+# crash breaks this script's contract that diagnostics never affect the
+# exit code (observed live: the 2026-08-14 prod run died mid-report on
+# UndefinedColumn after both gates had already passed).
+_CATALOG_LAYER_PROBE_SQL = """
+SELECT 1
+  FROM information_schema.columns
+ WHERE table_name = 'analysis_services' AND column_name = 'origin'
+"""
+
+
+def catalog_layer_present(db) -> bool:
+    """True when analysis_services.origin exists on this DB. The two gates
+    are schema-independent of the catalog layer; only the diagnostics need
+    this probe."""
+    return db.execute(text(_CATALOG_LAYER_PROBE_SQL)).first() is not None
+
+
 def keyword_index_canary(db) -> list[dict]:
     """Run FIRST. Non-empty ⇒ the EXISTING keyword index is absent/invalid
     on this DB — investigate the migration mechanism before anything else."""
@@ -204,6 +224,12 @@ def run_precheck(db, env_label: str) -> int:
     collisions is unrelated to the gates' predicate (it scans
     analysis_services, not lims_analyses) and is equally unconditional — the
     deploy gate's second half, named in the module docstring.
+
+    ONE exception to "always run": all three diagnostics are keyed on
+    analysis_services.origin, which does not exist on a pre-catalog-layer DB
+    (prod before this arc's first boot). There they SKIP with an explicit
+    note — never crash, never touch the exit code — and the report says to
+    re-run post-boot for the diagnostic half.
     """
     print(f"=== S3 identity pre-check — environment: {env_label} ===")
 
@@ -236,7 +262,24 @@ def run_precheck(db, env_label: str) -> int:
         print("parent-tier: clean (0 violations)")
 
     # Diagnostics — unconditional, run on BOTH the clean and violation paths
-    # (see docstring above for why the violation path matters most).
+    # (see docstring above for why the violation path matters most). Sole
+    # exception: a pre-catalog-layer DB lacks analysis_services.origin, so
+    # the origin-keyed diagnostics are undefined — skip loudly, exit-neutral.
+    if not catalog_layer_present(db):
+        print(
+            "diagnostics: SKIPPED — catalog layer not present on this DB "
+            "(analysis_services.origin missing; pre-first-boot). The origin "
+            "split / drift sizer / cross-origin collision diagnostics are "
+            "undefined until the catalog migrations run at this arc's first "
+            "boot — re-run this script post-boot for the diagnostic half. "
+            "The two gates above are schema-independent and remain "
+            "authoritative."
+        )
+        if has_violations:
+            return 3
+        print("=== clean (diagnostics deferred to post-boot) ===")
+        return 0
+
     origin_rows = origin_split_diagnostic(db)
     if origin_rows:
         print(f"origin split diagnostic: {len(origin_rows)} row(s)")

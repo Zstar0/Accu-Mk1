@@ -239,3 +239,38 @@ def test_run_precheck_includes_cross_origin_collision_section(db, capsys):
     assert m is not None and int(m.group(1)) >= 1
     assert kw in out
     assert "RISK:" in out
+
+
+def test_precatalog_db_skips_diagnostics_exit_zero(db, capsys):
+    """A pre-catalog-layer DB (prod before this arc's first boot) has no
+    analysis_services.origin column. The 2026-08-14 prod gate run crashed
+    mid-report on UndefinedColumn there — AFTER both gates had passed —
+    breaking the script's contract that diagnostics never affect the exit
+    code. Pin the graceful-degrade path: gates still run and stay
+    authoritative, the three origin-keyed diagnostics skip with an explicit
+    post-boot note, exit stays 0 on a clean DB.
+
+    Same in-transaction-DDL idiom as _drop_index_in_txn: Postgres DDL is
+    transactional, the fixture rollback restores the column (and the partial
+    unique index its predicate carries) wholesale. ACCESS EXCLUSIVE on
+    analysis_services — same concurrent-flake class as the index-drop tests;
+    re-run in isolation if it trips."""
+    from scripts.s3_identity_precheck import run_precheck
+
+    db.execute(text("SET LOCAL lock_timeout = '5s'"))
+    db.execute(text("ALTER TABLE analysis_services DROP COLUMN IF EXISTS origin CASCADE"))
+
+    code = run_precheck(db, "test-precatalog")
+    out = capsys.readouterr().out
+
+    assert code == 0
+    assert "diagnostics: SKIPPED" in out
+    assert "re-run this script post-boot" in out
+    # The gate half must still have run and reported.
+    assert "canary: OK" in out
+    assert "vial-tier: clean (0 violations)" in out
+    # None of the origin-keyed sections may appear on the skip path.
+    assert "origin split diagnostic:" not in out
+    assert "drift sizer:" not in out
+    assert "cross-origin keyword collisions:" not in out
+    # (teardown = fixture rollback restores the column + dependent index)
