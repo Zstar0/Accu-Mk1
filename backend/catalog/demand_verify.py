@@ -5,11 +5,21 @@ demand), a misconfigured catalog row can under-provision vials with no
 request-time error. Every check here covers one silent path:
 
   1. legacy-key completeness  — the four legacy wire keys must resolve to
-     active, role-bearing, vials>=1 profiles (post-flip, their absence is
-     real under-provisioning, not a clamped no-op);
-  2. role-less active profile — sub_samples.catalog_demand.resolve_catalog_
-     fulfillment's `if prof.fulfillment_dim != "role" or not
-     prof.fulfillment_role: continue` skips these with NO log;
+     active, role-bearing, role-dim, vials>=1 profiles (post-flip, their
+     absence is real under-provisioning, not a clamped no-op);
+  2. role-less profile, active OR inactive — sub_samples.catalog_demand.
+     resolve_catalog_fulfillment's `if prof.fulfillment_dim != "role" or
+     not prof.fulfillment_role: continue` skips these with NO log; that
+     same resolver's `if not prof.active: log.warning(...still fulfilling:
+     paid order)` branch (catalog_demand.py:67) means an inactive profile
+     is NOT excluded from fulfillment either, so a role-less profile is
+     exactly as silent-zero whether active or not — this check's scope
+     covers both. Checks 3-4 below stay active-only by controller ruling:
+     an inactive profile's role wiring is not treated as a live
+     under-provisioning path here (catalog.roles.real_bucket_codes itself
+     has no notion of profile activity — it filters VialRole rows only, by
+     department, so this is a scope decision for THIS check, not a fact
+     about the resolver);
   3. zero-vials role profile  — admin-created rows default vials_required=0
      and plan zero;
   4. unfillable role          — roles absent from vial_roles or with a NULL
@@ -47,26 +57,38 @@ def verify_demand_catalog(db) -> list[str]:
                 f"carrying it will plan ZERO vials for its bucket"
             )
             continue
-        if not row.fulfillment_role or row.vials_required < 1:
+        if (not row.fulfillment_role or row.vials_required < 1
+                or row.fulfillment_dim != "role"):
             violations.append(
                 f"legacy demand key '{key}' misconfigured "
                 f"(vials_required={row.vials_required}, "
-                f"fulfillment_role={row.fulfillment_role!r}) — plans zero"
+                f"fulfillment_role={row.fulfillment_role!r}, "
+                f"fulfillment_dim={row.fulfillment_dim!r}) — plans zero"
             )
 
-    role_dim = (
+    # role-less scan covers active AND inactive rows (see docstring point 2)
+    # — the resolver still fulfills inactive profiles for paid orders, so a
+    # role-less inactive profile is exactly as silent-zero as an active one.
+    role_dim_any = (
         db.query(AnalysisProfile)
-        .filter(AnalysisProfile.active.is_(True),
-                AnalysisProfile.fulfillment_dim == "role")
+        .filter(AnalysisProfile.fulfillment_dim == "role")
         .all()
     )
-    for p in role_dim:
+    role_dim = [p for p in role_dim_any if p.active]
+    for p in role_dim_any:
         if not p.fulfillment_role:
-            violations.append(
-                f"active role-dim profile '{p.key}' has NO fulfillment_role — "
-                f"silently skipped by resolve_catalog_fulfillment"
-            )
-        elif p.vials_required == 0:
+            if p.active:
+                violations.append(
+                    f"active role-dim profile '{p.key}' has NO fulfillment_role — "
+                    f"silently skipped by resolve_catalog_fulfillment"
+                )
+            else:
+                violations.append(
+                    f"inactive role-dim profile '{p.key}' has NO fulfillment_role — "
+                    f"inactive but still fulfilled by the resolver for paid orders"
+                )
+    for p in role_dim:
+        if p.fulfillment_role and p.vials_required == 0:
             violations.append(
                 f"active role-dim profile '{p.key}' has vials_required=0 — "
                 f"plans zero vials"

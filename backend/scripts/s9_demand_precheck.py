@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sqlalchemy import inspect as sa_inspect
 
 from database import SessionLocal
-from catalog.demand_verify import verify_demand_catalog
+from catalog.demand_verify import verify_demand_catalog, LEGACY_DEMAND_KEYS
 
 
 # Both tables verify_demand_catalog reads directly (AnalysisProfile,
@@ -55,6 +55,13 @@ def run_precheck(db, env_label: str) -> int:
     legacy-completeness check and the zero-vials check and appear twice.
     Treat the list as truthy/falsy plus print-all; the printed count below
     is a line count, not a distinct-row count.
+
+    After the violations (if any), prints one line per LEGACY_DEMAND_KEYS
+    entry with its current vials_required/fulfillment_role/fulfillment_dim/
+    active state (or MISSING) — always, on both the clean and violation
+    paths. This absorbs the slice's manual pre-deploy SQL audit into every
+    gate run, so e.g. the sterility 2-vs-1 vials_required value is visible
+    without a separate ad hoc query.
 
     Table probe uses db.connection() (the session's OWN bound connection),
     NOT db.get_bind() (the Engine). inspect(engine) checks out a SEPARATE
@@ -99,9 +106,22 @@ def run_precheck(db, env_label: str) -> int:
         return 0
 
     violations = verify_demand_catalog(db)
+    for v in violations:
+        print(v)
+
+    from models import AnalysisProfile
+    for key in LEGACY_DEMAND_KEYS:
+        row = db.query(AnalysisProfile).filter_by(key=key).one_or_none()
+        if row is None:
+            print(f"legacy key {key}: MISSING")
+        else:
+            print(
+                f"legacy key {key}: vials_required={row.vials_required} "
+                f"fulfillment_role={row.fulfillment_role} "
+                f"fulfillment_dim={row.fulfillment_dim} active={row.active}"
+            )
+
     if violations:
-        for v in violations:
-            print(v)
         print(f"=== VIOLATIONS: {len(violations)} ===")
         return 3
 

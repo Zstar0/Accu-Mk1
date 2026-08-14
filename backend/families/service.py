@@ -50,6 +50,11 @@ def _build_hplc_classifier(db: Session) -> Callable[[str], bool]:
     family (e.g. an HM-* keyword under Heavy Metals) classify as addon
     without a code change. `_is_hplc`'s prefix rule is the fallback for
     keywords the catalog doesn't know about (SENAITE-legacy rows, unknowns).
+
+    The query below INNER JOINs Department, so a mk1 AnalysisService with a
+    NULL department_id is invisible to catalog_map and falls back to the
+    prefix rule BY DESIGN — flagging department-less mk1 services is the
+    demand-catalog verify's follow-up territory (S9), not this classifier's.
     """
     from catalog.departments import ANALYTICAL_DEPARTMENT
     from models import AnalysisService, Department

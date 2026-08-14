@@ -4,6 +4,7 @@ import logging
 
 from sqlalchemy import text
 
+from models import AnalysisProfile
 from scripts.s9_demand_precheck import run_precheck
 from tests._demand_catalog_helpers import _seed_legacy_ok, _mk_profile
 
@@ -14,6 +15,31 @@ def test_clean_db_exits_zero(db_session, capsys):
     out = capsys.readouterr().out
     assert "environment: test-env" in out
     assert "=== clean ===" in out
+
+
+def test_legacy_key_states_reported(db_session, capsys):
+    """Absorbs the slice's manual pre-deploy SQL audit — the four legacy
+    rows' vials_required/fulfillment_role/fulfillment_dim/active state is
+    visible in every gate run, clean or not."""
+    _seed_legacy_ok(db_session)
+    assert run_precheck(db_session, "test-env") == 0
+    out = capsys.readouterr().out
+    assert ("legacy key hplcpurity_identity: vials_required=1 "
+            "fulfillment_role=hplc fulfillment_dim=role active=True") in out
+    assert ("legacy key bac_water_panel: vials_required=1 "
+            "fulfillment_role=hplc fulfillment_dim=role active=True") in out
+    assert ("legacy key endotoxin: vials_required=1 "
+            "fulfillment_role=endo fulfillment_dim=role active=True") in out
+    assert ("legacy key sterility_pcr: vials_required=1 "
+            "fulfillment_role=ster fulfillment_dim=role active=True") in out
+
+
+def test_legacy_key_missing_reported(db_session, capsys):
+    _seed_legacy_ok(db_session)
+    db_session.query(AnalysisProfile).filter_by(key="endotoxin").delete()
+    assert run_precheck(db_session, "test-env") == 3
+    out = capsys.readouterr().out
+    assert "legacy key endotoxin: MISSING" in out
 
 
 def test_empty_catalog_exits_zero_with_note(db_session, capsys):

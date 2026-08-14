@@ -120,11 +120,28 @@ def test_divergence_catalog_zero_prevails_and_screams(db_session, caplog):
     must fire so ops sees it. The boot-time verify (Task 3) is the guard
     that keeps this state from persisting silently."""
     from sub_samples.service import derive_base_demand
-    # No profile row for endotoxin at all -> catalog contributes 0
+    # EXISTING row with vials_required=0 — the production-realistic shape
+    # (admin-created rows default to 0, per demand_verify's check 3), not a
+    # missing-row hypothetical.
+    _mk_profile(db_session, "endotoxin", vials=0, role="endo")
     with caplog.at_level(logging.ERROR):
         d = derive_base_demand({"endotoxin": True}, db=db_session)
     assert d["endo"] == 0
     assert any("demand_divergence" in r.message for r in caplog.records)
+
+
+def test_hm_passes_through_divergence_loop_untouched(db_session):
+    """derive_base_demand's divergence loop iterates only the 3 legacy
+    buckets (hplc/endo/ster) — hm (or any other catalog-only role) is never
+    touched by it and reaches the caller straight from the catalog.
+    vials=2 (not the default 1) makes this discriminating: the legacy map
+    has no 'hm' entry at all, so only an untouched catalog passthrough can
+    produce 2 here — a loop that (wrongly) swept hm in would clamp/compare
+    it against a legacy value that doesn't exist."""
+    from sub_samples.service import derive_base_demand
+    _mk_hm_profile(db_session, vials=2)
+    d = derive_base_demand({"heavy_metals": True}, db=db_session)
+    assert d["hm"] == 2
 
 
 def test_legacy_wins_kill_switch(db_session, monkeypatch, caplog):
