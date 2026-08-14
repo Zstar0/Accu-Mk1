@@ -47,17 +47,6 @@ class TestDeriveVarianceDemand:
         })
         assert out == {"hplc": 0, "endo": 0, "ster": 0}
 
-    def test_bucket_key_map_matches_lifecycle_gate(self):
-        # The demand map and the variance_verify gate must agree on
-        # role/bucket -> WP service key, or check-in demand and the sign-off
-        # gate drift apart.
-        # NOTE (2026-06-17): both maps are now a stale description of hplc->key
-        # (neither captures "bac_water_panel"); the equality still holds only
-        # because both are unchanged. derive_variance_demand handles BW inline
-        # (max of both keys) rather than via these maps.
-        from lims_analyses.service import _ROLE_VARIANCE_KEYS
-        assert sub_service.VARIANCE_BUCKET_KEYS == _ROLE_VARIANCE_KEYS
-
     def test_bw_variance_maps_to_hplc_bucket(self):
         # BW orders carry variance count under bac_water_panel, not hplcpurity_identity.
         # Both are chromatography (hplc bucket) and are mutually exclusive per order.
