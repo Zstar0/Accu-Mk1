@@ -3,12 +3,18 @@ Task 3): POST/PATCH /analysis-profiles mint a vial_roles row for an unknown
 fulfillment_role code, and PUT .../members backfills a NULL department onto
 the profile's role once its member set agrees on exactly one department.
 
-The spec-3 guard chain (dim check, role regex, xtra 400, legacy-role 400)
-runs FIRST and is untouched by this task — mint logic sits strictly after it,
-so a request that would 400 on those guards never reaches mint. That
-ordering is what keeps route-hook minting compatible with the zero-clamp
-rider: mint can never create a legacy or xtra code, because those requests
-already 400'd before the mint block runs.
+The spec-3 guard chain (dim check, role regex, xtra 400) runs FIRST and is
+untouched by this task — mint logic sits strictly after it, so a request
+that would 400 on those guards never reaches mint. S9 Task 2 retired the
+legacy-role-for-a-new-key 400 (a NEW profile may now be assigned hplc/endo/
+ster) — mint's own reach is unaffected by that retirement: hplc/endo/ster
+are always-seeded system rows in the real app (seed_vial_roles runs every
+boot), so mint's own "code not in registry" gate never opens for them
+regardless of the route guard. This file's isolated in-memory DB does NOT
+auto-seed like the real boot sequence does, so the tests that need to prove
+that reach call seed_vial_roles explicitly first (mirroring the same idiom
+in test_ride_lists.py / test_hm_role_sites.py / test_catalog_seeding.py /
+test_custody_edges.py).
 
 Fixture idiom copied from test_api_vial_roles.py's `client`/`db_session`
 (StaticPool in-memory SQLite + get_db/get_current_user dependency overrides)
@@ -99,11 +105,25 @@ def test_post_with_existing_role_reuses_it(client, db_session):
     assert role.label == "Pre-Existing Role"
 
 
-def test_mint_never_bypasses_spec3_guards(client):
-    # legacy role for new key still 400s; xtra still 400s — BEFORE any mint
+def test_post_accepts_legacy_role_for_new_key_mint_reuses_seeded_row(client, db_session):
+    """S9 Task 2: the legacy-role-for-a-new-key 400 retired (superseded name
+    for the old test_mint_never_bypasses_spec3_guards — that guard is gone).
+    Mint's own reach is unchanged: seeds first to mirror the real app's boot
+    sequence (this file's isolated DB doesn't auto-seed), so 'hplc' already
+    exists as a frozen system row when the POST reaches the mint block — mint
+    must reuse it, not mint a second, non-system 'hplc' row."""
+    from catalog.vial_roles_seed import seed_vial_roles
+    seed_vial_roles(db_session)
+    seeded = db_session.query(VialRole).filter_by(code="hplc").one()
+
     r = client.post("/analysis-profiles", json={"key": "zz_new", "name": "x", "is_addon": True,
                                                 "fulfillment_dim": "role", "fulfillment_role": "hplc"})
-    assert r.status_code == 400
+    assert r.status_code == 201, r.text
+
+    assert db_session.query(VialRole).filter_by(code="hplc").count() == 1
+    reused = db_session.query(VialRole).filter_by(code="hplc").one()
+    assert reused.id == seeded.id  # reused the seeded system row, not a mint duplicate
+    assert reused.frozen is True and reused.is_system is True  # untouched by mint
 
 
 def test_mint_never_bypasses_xtra_guard(client, db_session):
@@ -249,7 +269,14 @@ def test_patch_role_change_to_known_role_does_not_mint(client, db_session):
     assert db_session.query(VialRole).filter_by(code="known").count() == 1
 
 
-def test_patch_mint_never_bypasses_spec3_guards(client, db_session):
+def test_patch_accepts_legacy_role_for_new_key_mint_reuses_seeded_row(client, db_session):
+    """S9 Task 2 PATCH counterpart to
+    test_post_accepts_legacy_role_for_new_key_mint_reuses_seeded_row — same
+    retirement, same reused-not-duplicated mint-reach invariant."""
+    from catalog.vial_roles_seed import seed_vial_roles
+    seed_vial_roles(db_session)
+    seeded = db_session.query(VialRole).filter_by(code="ster").one()
+
     create = client.post("/analysis-profiles", json={
         "key": "zz_patch_guard", "name": "ZZ Patch Guard", "is_addon": True,
     })
@@ -259,8 +286,12 @@ def test_patch_mint_never_bypasses_spec3_guards(client, db_session):
     resp = client.patch(f"/analysis-profiles/{profile_id}", json={
         "fulfillment_role": "ster", "fulfillment_dim": "role",
     })
-    assert resp.status_code == 400, resp.text
-    assert db_session.query(VialRole).filter_by(code="ster").count() == 0
+    assert resp.status_code == 200, resp.text
+
+    assert db_session.query(VialRole).filter_by(code="ster").count() == 1
+    reused = db_session.query(VialRole).filter_by(code="ster").one()
+    assert reused.id == seeded.id  # reused the seeded system row, not a mint duplicate
+    assert reused.frozen is True and reused.is_system is True  # untouched by mint
 
 
 def test_post_role_boxable_true_mints_boxable_role(client, db_session):
