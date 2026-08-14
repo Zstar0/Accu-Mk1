@@ -54,15 +54,27 @@ def _build_hplc_classifier(db: Session) -> Callable[[str], bool]:
     from catalog.departments import ANALYTICAL_DEPARTMENT
     from models import AnalysisService, Department
 
+    # AnalysisService.keyword carries no unique constraint (the mk1 keyword
+    # unique index is PARTIAL on origin='mk1' — senaite-origin duplicates
+    # exist legitimately), so the SAME keyword string can legally appear
+    # under two different departments. Resolve deterministically to the
+    # lowest AnalysisService.id — the same precedent
+    # lims_analyses/parent_mirror.py:resolve_shadow_target and
+    # lims_analyses/service.py:88,125 use (`.order_by(AnalysisService.id)`
+    # before taking the first match) — via first-wins over an id-ordered
+    # scan below, rather than leaving this execution-plan-dependent.
     rows = db.execute(
         select(AnalysisService.keyword, Department.name)
         .join(Department, AnalysisService.department_id == Department.id)
         .where(AnalysisService.keyword.isnot(None))
+        .order_by(AnalysisService.id)
     ).all()
-    catalog_map: Dict[str, bool] = {
-        keyword.upper(): (dept_name == ANALYTICAL_DEPARTMENT)
-        for keyword, dept_name in rows
-    }
+    catalog_map: Dict[str, bool] = {}
+    for keyword, dept_name in rows:
+        upper_kw = keyword.upper()
+        if upper_kw in catalog_map:
+            continue  # lowest-id row already claimed this keyword
+        catalog_map[upper_kw] = (dept_name == ANALYTICAL_DEPARTMENT)
 
     def classify(keyword: str) -> bool:
         catalog_hit = catalog_map.get(keyword.upper())
