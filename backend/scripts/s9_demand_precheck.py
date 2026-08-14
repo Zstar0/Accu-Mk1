@@ -26,6 +26,23 @@ from database import SessionLocal
 from catalog.demand_verify import verify_demand_catalog
 
 
+# Both tables verify_demand_catalog reads directly (AnalysisProfile,
+# VialRole.code / .department_id) — NOT just analysis_profiles. database.py's
+# _run_migrations runs each CREATE TABLE statement in its OWN commit with a
+# per-statement try/except that logs a mere "migration_skipped" warning on
+# failure and moves on (database.py:1636-1649) — the exact swallowing
+# behavior the S3 precheck's docstring exists to guard against. vial_roles'
+# CREATE TABLE statement also comes AFTER analysis_profiles' in that list, so
+# analysis_profiles-present-but-vial_roles-absent is a real partial-migration
+# shape, not just a superseded-history one: a single silently-skipped
+# CREATE TABLE vial_roles leaves it permanently missing while
+# analysis_profiles keeps accumulating rows. Probing only analysis_profiles
+# would let that state reach verify_demand_catalog's `db.query(VialRole.code)
+# ...` call and crash — the same class of failure the S3 script hit in prod
+# on 2026-08-14 (UndefinedColumn, after gates had already passed).
+_REQUIRED_CATALOG_TABLES = ("analysis_profiles", "vial_roles")
+
+
 def run_precheck(db, env_label: str) -> int:
     """Run the demand-catalog check against `db` and print the report.
     Returns the exit code: 0 clean (including empty-catalog and a
@@ -51,11 +68,16 @@ def run_precheck(db, env_label: str) -> int:
     and real Postgres alike)."""
     print(f"=== S9 demand pre-check — environment: {env_label} ===")
 
-    if not sa_inspect(db.connection()).has_table("analysis_profiles"):
+    inspector = sa_inspect(db.connection())
+    missing = [t for t in _REQUIRED_CATALOG_TABLES if not inspector.has_table(t)]
+    if missing:
         print(
-            "catalog layer absent — no analysis_profiles table on this DB "
-            "(pre-first-boot). The demand flip is inert until the first "
-            "boot seeds profiles — re-run this script post-boot."
+            f"catalog layer absent — table(s) not yet present on this DB: "
+            f"{', '.join(missing)} (pre-first-boot, or a partial migration — "
+            f"database.py's migration runner commits each CREATE TABLE "
+            f"individually and can silently skip one on failure). The demand "
+            f"flip is inert until the full catalog schema exists — re-run "
+            f"this script once it does."
         )
         print("=== clean (catalog layer absent) ===")
         return 0
