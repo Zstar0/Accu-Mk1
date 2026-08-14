@@ -129,3 +129,25 @@ def test_to_be_verified_parent_awaiting_wins_over_verified_addon():
         "ENDO-LAL":       _ab("ENDO-LAL", parent_state="verified"),
     }
     assert _derive_state(analytes) == "to_be_verified"
+
+
+def test_catalog_family_keyword_classifies_as_addon(db_session):
+    """S9/D19: a keyword belonging to a NON-Analytical catalog service must
+    classify as addon even though it matches no legacy prefix. Pre-S9 this
+    misclassified as HPLC and suppressed waiting_for_addon_results."""
+    from models import AnalysisService, Department
+
+    hm_dept = Department(name="Heavy Metals TEST")
+    db_session.add(hm_dept)
+    db_session.flush()
+    db_session.add(AnalysisService(
+        title="Heavy Metals Panel", keyword="HM-ICPMS", origin="mk1",
+        department_id=hm_dept.id,
+    ))
+    db_session.flush()
+
+    from families.service import _build_hplc_classifier
+    is_hplc = _build_hplc_classifier(db_session)
+    assert is_hplc("HM-ICPMS") is False          # catalog wins
+    assert is_hplc("ENDO-LAL") is False           # prefix fallback intact
+    assert is_hplc("IDENTITY_BPC157") is True     # non-catalog keyword falls back to prefix rule

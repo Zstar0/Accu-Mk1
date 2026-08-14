@@ -11,7 +11,7 @@ Spec: docs/superpowers/specs/2026-06-02-mk1-native-analyses-design.md
 
 from __future__ import annotations
 
-from typing import Dict, List, Protocol
+from typing import Callable, Dict, List, Protocol
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -40,6 +40,39 @@ def _is_hplc(keyword: str) -> bool:
     return not keyword.upper().startswith(_ADDON_PREFIXES)
 
 
+def _build_hplc_classifier(db: Session) -> Callable[[str], bool]:
+    """Catalog-first is_hplc classifier, built once per family-state
+    computation (never per-row).
+
+    A keyword's catalog department wins when the keyword is known to the
+    catalog: Analytical -> HPLC, anything else (Microbiology, Heavy Metals,
+    future departments) -> addon. This is what makes a brand-new catalog
+    family (e.g. an HM-* keyword under Heavy Metals) classify as addon
+    without a code change. `_is_hplc`'s prefix rule is the fallback for
+    keywords the catalog doesn't know about (SENAITE-legacy rows, unknowns).
+    """
+    from catalog.departments import ANALYTICAL_DEPARTMENT
+    from models import AnalysisService, Department
+
+    rows = db.execute(
+        select(AnalysisService.keyword, Department.name)
+        .join(Department, AnalysisService.department_id == Department.id)
+        .where(AnalysisService.keyword.isnot(None))
+    ).all()
+    catalog_map: Dict[str, bool] = {
+        keyword.upper(): (dept_name == ANALYTICAL_DEPARTMENT)
+        for keyword, dept_name in rows
+    }
+
+    def classify(keyword: str) -> bool:
+        catalog_hit = catalog_map.get(keyword.upper())
+        if catalog_hit is not None:
+            return catalog_hit
+        return _is_hplc(keyword)
+
+    return classify
+
+
 # ─── Internal: gather per-analyte facts ──────────────────────────────────────
 
 
@@ -47,6 +80,7 @@ def _gather_analytes(
     db: Session,
     parent: LimsSample,
     senaite_parent_payload: List[Dict],
+    is_hplc: Callable[[str], bool] = _is_hplc,
 ) -> Dict[str, AnalyteBreakdown]:
     """Build {keyword: AnalyteBreakdown} merging:
       - Mk1 parent-tier rows (parent.id, lims_sub_sample_pk IS NULL)
@@ -76,7 +110,7 @@ def _gather_analytes(
     for r in parent_rows:
         breakdown[r.keyword] = AnalyteBreakdown(
             keyword=r.keyword,
-            is_hplc=_is_hplc(r.keyword),
+            is_hplc=is_hplc(r.keyword),
             parent_state=r.review_state,
             vial_states=[],
         )
@@ -102,7 +136,7 @@ def _gather_analytes(
         for r in vial_rows:
             ab = breakdown.setdefault(r.keyword, AnalyteBreakdown(
                 keyword=r.keyword,
-                is_hplc=_is_hplc(r.keyword),
+                is_hplc=is_hplc(r.keyword),
                 parent_state=None,
                 vial_states=[],
             ))
@@ -119,7 +153,7 @@ def _gather_analytes(
             continue
         ab = breakdown.setdefault(kw, AnalyteBreakdown(
             keyword=kw,
-            is_hplc=_is_hplc(kw),
+            is_hplc=is_hplc(kw),
             parent_state=None,
             vial_states=[],
         ))
@@ -229,6 +263,10 @@ async def derive_family_state(
             f"no parent {parent_sample_id!r} in lims_samples and no SENAITE analyses"
         )
 
+    # Built once per computation (never per-row) and threaded into both
+    # branches below, so a single catalog query backs the whole response.
+    is_hplc = _build_hplc_classifier(db)
+
     if parent is None:
         # SENAITE-only: build breakdown directly from the SENAITE payload.
         analytes: Dict[str, AnalyteBreakdown] = {}
@@ -239,12 +277,12 @@ async def derive_family_state(
                 continue
             analytes[kw] = AnalyteBreakdown(
                 keyword=kw,
-                is_hplc=_is_hplc(kw),
+                is_hplc=is_hplc(kw),
                 parent_state=state,
                 vial_states=[],
             )
     else:
-        analytes = _gather_analytes(db, parent, senaite_payload)
+        analytes = _gather_analytes(db, parent, senaite_payload, is_hplc)
 
     state = _derive_state(analytes)
     return FamilyStateResponse(
