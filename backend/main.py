@@ -15936,14 +15936,15 @@ async def create_analysis_profile(
     if data.sla_tier_id is not None and not db.get(SlaTier, data.sla_tier_id):
         raise HTTPException(400, f"SLA tier {data.sla_tier_id} not found")
     # Auto-mint (Task 3): a 'role' fulfillment naming a code not yet in the
-    # vial_roles catalog mints one here, AFTER every guard above — the only
-    # remaining guard above 400s on 'xtra' (S9 Task 2: the legacy-code-for-
-    # a-new-key 400 retired with Task 1's flip, so mint may now create a
-    # legacy row for a new family — that's the point). role_department_id is
-    # optional and NULL is legal here — unlike a manual /vial-roles POST
-    # (which requires a department for anything but 'xtra'), a minted row
-    # may start department-less and get backfilled by the members PUT below
-    # once its member set agrees on one.
+    # vial_roles catalog mints one here, AFTER every guard above. Mint's own
+    # reach is unaffected by S9 Task 2: hplc/endo/ster are always-seeded
+    # system rows (seed_vial_roles, every boot), so mint never fires for
+    # them, before or after this guard retired — what changed is that a
+    # new-key profile may now be *assigned* one of those roles at all.
+    # role_department_id is optional and NULL is legal here — unlike a
+    # manual /vial-roles POST (which requires a department for anything but
+    # 'xtra'), a minted row may start department-less and get backfilled by
+    # the members PUT below once its member set agrees on one.
     if data.fulfillment_dim == "role" and data.fulfillment_role:
         from catalog.roles import role_registry
         reg = role_registry(db)
@@ -16047,13 +16048,13 @@ async def update_analysis_profile(
             )
     # Auto-mint (Task 3): mirrors the POST mint block, using the same
     # effective_* values the guards above just validated — a role change to
-    # an unknown code mints here, AFTER every guard. The only remaining
-    # rejections above are 'xtra' and a legacy role paired with an existing
-    # ride list (S9 Task 2: the legacy-code-for-a-new-key 400 retired), so
-    # mint can still never create an 'xtra' row, but may now mint a legacy
-    # role for a new family. Self-limiting: once a code is minted (or
-    # already existed), every later PATCH sees it in the registry and
-    # no-ops here.
+    # an unknown code mints here, AFTER every guard. Mint's own reach is
+    # unaffected by S9 Task 2: hplc/endo/ster are always-seeded system rows
+    # (seed_vial_roles, every boot), so mint never fires for them, before or
+    # after this guard retired — what changed is that a profile may now be
+    # *assigned* one of those roles at all (subject to the ride-list closure
+    # above). Self-limiting: once a code is minted (or already existed),
+    # every later PATCH sees it in the registry and no-ops here.
     if effective_dim == "role" and effective_role:
         from catalog.roles import role_registry
         reg = role_registry(db)
