@@ -287,6 +287,7 @@ def test_patch_accepts_legacy_role_for_new_key_mint_reuses_seeded_row(client, db
         "fulfillment_role": "ster", "fulfillment_dim": "role",
     })
     assert resp.status_code == 200, resp.text
+    assert resp.json()["fulfillment_role"] == "ster"  # 200 alone doesn't prove the write landed
 
     assert db_session.query(VialRole).filter_by(code="ster").count() == 1
     reused = db_session.query(VialRole).filter_by(code="ster").one()
