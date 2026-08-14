@@ -1188,8 +1188,9 @@ def derive_base_demand(services: dict, db=None) -> dict:
 
     db=None -> pure legacy map (unchanged behavior, used by legacy callers
     and as the shadow reference). With a db, the catalog is authoritative;
-    on any divergence in a LEGACY bucket the legacy value wins and an error
-    is logged (fail-open to known-good, never to under-provisioning).
+    on divergence the catalog value prevails and the divergence is logged —
+    the legacy map is a shadow reference, removed one release after the S9
+    flip (2026-08-14).
     """
     hplc = bool(services.get("hplcpurity_identity") or services.get("bac_water_panel"))
     endo = bool(services.get("endotoxin"))
@@ -1208,13 +1209,23 @@ def derive_base_demand(services: dict, db=None) -> dict:
         return legacy
     from sub_samples.catalog_demand import derive_base_demand_catalog
     catalog = derive_base_demand_catalog(db, services)
+    # S9 ruling 2026-08-14: the catalog is authoritative; the legacy ternary
+    # above is a shadow reference only. On divergence the catalog value
+    # prevails and the divergence is logged (ERROR: ops must see it — the
+    # boot-time verify_demand_catalog keeps misconfigured states loud).
+    # MK1_DEMAND_LEGACY_WINS=1 restores the old clamp as a deploy rollback
+    # path; both the switch and the shadow compare are slated for removal
+    # one release after the flip.
+    legacy_wins = os.environ.get("MK1_DEMAND_LEGACY_WINS") == "1"
     for bucket, legacy_n in legacy.items():
         if catalog.get(bucket, 0) != legacy_n:
             log.error(
-                "demand_divergence bucket=%s legacy=%s catalog=%s services=%s",
+                "demand_divergence bucket=%s legacy_shadow=%s catalog=%s services=%s"
+                " (catalog prevails)",
                 bucket, legacy_n, catalog.get(bucket, 0), sorted(services or {}),
             )
-            catalog[bucket] = legacy_n
+            if legacy_wins:
+                catalog[bucket] = legacy_n
     return catalog
 
 
