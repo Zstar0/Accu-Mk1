@@ -1219,13 +1219,19 @@ def derive_base_demand(services: dict, db=None) -> dict:
     legacy_wins = os.environ.get("MK1_DEMAND_LEGACY_WINS") == "1"
     for bucket, legacy_n in legacy.items():
         if catalog.get(bucket, 0) != legacy_n:
-            log.error(
-                "demand_divergence bucket=%s legacy_shadow=%s catalog=%s services=%s"
-                " (catalog prevails)",
-                bucket, legacy_n, catalog.get(bucket, 0), sorted(services or {}),
-            )
             if legacy_wins:
+                log.error(
+                    "demand_divergence bucket=%s legacy_shadow=%s catalog=%s services=%s"
+                    " (legacy clamp active — MK1_DEMAND_LEGACY_WINS)",
+                    bucket, legacy_n, catalog.get(bucket, 0), sorted(services or {}),
+                )
                 catalog[bucket] = legacy_n
+            else:
+                log.error(
+                    "demand_divergence bucket=%s legacy_shadow=%s catalog=%s services=%s"
+                    " (catalog prevails)",
+                    bucket, legacy_n, catalog.get(bucket, 0), sorted(services or {}),
+                )
     return catalog
 
 

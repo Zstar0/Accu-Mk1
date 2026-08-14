@@ -127,14 +127,24 @@ def test_divergence_catalog_zero_prevails_and_screams(db_session, caplog):
     assert any("demand_divergence" in r.message for r in caplog.records)
 
 
-def test_legacy_wins_kill_switch(db_session, monkeypatch):
+def test_legacy_wins_kill_switch(db_session, monkeypatch, caplog):
     """MK1_DEMAND_LEGACY_WINS=1 restores the old clamp — the deploy rollback
-    path. Temporary: dies with the shadow one release after the flip."""
+    path. Temporary: dies with the shadow one release after the flip.
+
+    The divergence log must still fire under the switch (an operator reading
+    it during a rollback incident needs to know a clamp happened) and must
+    say so accurately — never "catalog prevails" while the clamp is active."""
     from sub_samples.service import derive_base_demand
     monkeypatch.setenv("MK1_DEMAND_LEGACY_WINS", "1")
     _mk_profile(db_session, "endotoxin", vials=2, role="endo")
-    d = derive_base_demand({"endotoxin": True}, db=db_session)
+    with caplog.at_level(logging.ERROR):
+        d = derive_base_demand({"endotoxin": True}, db=db_session)
     assert d["endo"] == 1, "kill switch must restore legacy-wins clamping"
+    divergence_logs = [r.message for r in caplog.records if "demand_divergence" in r.message]
+    assert divergence_logs, "divergence must still be logged under the kill switch"
+    assert all("legacy clamp active" in m for m in divergence_logs)
+    assert not any("catalog prevails" in m for m in divergence_logs), \
+        "must not claim catalog prevails while the clamp is active"
 
 
 def test_seed_backfills_demand_fields(db_session):
