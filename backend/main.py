@@ -3458,13 +3458,22 @@ def _validate_spec_shape(*, rule_kind, min_value, max_value, equals_value,
 
 def _parse_decimal(value: Optional[str], field: str) -> Optional[Decimal]:
     """Malformed numeric strings (e.g. "abc", "n/a") must 422 by name, not
-    fall through to an unhandled decimal.InvalidOperation -> 500."""
+    fall through to an unhandled decimal.InvalidOperation -> 500.
+
+    "nan"/"inf"/"-inf" parse to a valid, non-finite Decimal without raising
+    InvalidOperation, so they need an explicit reject too: a NaN max_value
+    makes every comparison against it False, and this codebase deliberately
+    fails closed on non-finite RESULTS — bounds must match that or a NaN
+    bound would silently PASS every certificate."""
     if value is None:
         return None
     try:
-        return Decimal(value)
+        parsed = Decimal(value)
     except InvalidOperation:
         raise HTTPException(422, f"{field} must be a decimal number")
+    if not parsed.is_finite():
+        raise HTTPException(422, f"{field} must be a finite decimal number")
+    return parsed
 
 
 def _dec_to_str(value: Optional[Decimal]) -> Optional[str]:

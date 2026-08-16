@@ -330,7 +330,10 @@ export function ServiceSpecsSection({
                 value={form.matrix}
                 onValueChange={v => setForm(f => ({ ...f, matrix: v }))}
               >
-                <SelectTrigger aria-label="Matrix" className="h-8 w-full text-sm">
+                <SelectTrigger
+                  aria-label="Matrix"
+                  className="h-8 w-full text-sm"
+                >
                   <SelectValue placeholder="Select matrix…" />
                 </SelectTrigger>
                 <SelectContent>

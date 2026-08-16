@@ -141,6 +141,25 @@ def test_create_rejects_malformed_min_value(client, svc):
     assert "min_value" in r.json()["detail"]
 
 
+def test_create_rejects_non_finite_min_value(client, svc):
+    """decimal.Decimal("nan") parses fine (no InvalidOperation) but a NaN
+    bound makes every comparison against it False -- a NaN max_value would
+    silently PASS every certificate. Bounds must fail closed like results
+    do."""
+    r = client.post(f"/analysis-services/{svc.id}/specs",
+                    json={"rule_kind": "range", "min_value": "nan"})
+    assert r.status_code == 422
+    assert "min_value" in r.json()["detail"]
+
+
+def test_patch_rejects_non_finite_max_value(client, svc):
+    sid = client.post(f"/analysis-services/{svc.id}/specs",
+                      json={"rule_kind": "range", "max_value": "1"}).json()["id"]
+    r = client.patch(f"/analysis-service-specs/{sid}", json={"max_value": "inf"})
+    assert r.status_code == 422
+    assert "max_value" in r.json()["detail"]
+
+
 def test_patch_rejects_malformed_max_value(client, svc):
     sid = client.post(f"/analysis-services/{svc.id}/specs",
                       json={"rule_kind": "range", "max_value": "1"}).json()["id"]

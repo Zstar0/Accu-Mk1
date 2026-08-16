@@ -5,7 +5,8 @@ fixes the Bacteriostatic Water 422 for free). Values frozen at the
 2026-08-03 BAKED_SPECS state; G-A gate: the lab confirms or replaces the
 numbers before the combined deploy.
 
-Idempotent: keyed on (service, matrix IS NULL); any existing row in the
+Idempotent: keyed on (service, matrix IS NULL AND peptide_id IS NULL) —
+the wildcard slot, matching main.py's resolver; any existing row in the
 slot — active or deactivated — is left alone. The service is resolved by
 keyword AT SEED TIME ONLY; the stored row holds the FK. Missing services
 skip silently (a fresh DB may not carry the native services).
@@ -47,7 +48,8 @@ def seed_service_specs(db: Session) -> int:
         existing = (
             db.query(AnalysisServiceSpec)
             .filter(AnalysisServiceSpec.analysis_service_id == svc.id,
-                    AnalysisServiceSpec.matrix.is_(None))
+                    AnalysisServiceSpec.matrix.is_(None),
+                    AnalysisServiceSpec.peptide_id.is_(None))
             .one_or_none()
         )
         if existing is not None:
