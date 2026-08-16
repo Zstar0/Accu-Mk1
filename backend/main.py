@@ -12,7 +12,7 @@ import subprocess
 import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, date, time, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Literal, Optional, Union
@@ -3456,6 +3456,17 @@ def _validate_spec_shape(*, rule_kind, min_value, max_value, equals_value,
             raise HTTPException(422, "equals rule needs equals_value only")
 
 
+def _parse_decimal(value: Optional[str], field: str) -> Optional[Decimal]:
+    """Malformed numeric strings (e.g. "abc", "n/a") must 422 by name, not
+    fall through to an unhandled decimal.InvalidOperation -> 500."""
+    if value is None:
+        return None
+    try:
+        return Decimal(value)
+    except InvalidOperation:
+        raise HTTPException(422, f"{field} must be a decimal number")
+
+
 def _dec_to_str(value: Optional[Decimal]) -> Optional[str]:
     """SQLite's NUMERIC column has no native decimal support, so DBAPI hands
     back a float that SQLAlchemy converts to Decimal at a padded default
@@ -3517,8 +3528,8 @@ def create_service_spec(service_id: int, req: ServiceSpecCreate,
     spec = AnalysisServiceSpec(
         analysis_service_id=service_id, matrix=req.matrix,
         peptide_id=req.peptide_id, rule_kind=req.rule_kind,
-        min_value=Decimal(req.min_value) if req.min_value is not None else None,
-        max_value=Decimal(req.max_value) if req.max_value is not None else None,
+        min_value=_parse_decimal(req.min_value, "min_value"),
+        max_value=_parse_decimal(req.max_value, "max_value"),
         equals_value=req.equals_value, unit=req.unit,
         display_override=req.display_override,
         updated_by_id=current_user.id,
@@ -3545,6 +3556,16 @@ def patch_service_spec(spec_id: int, req: ServiceSpecPatch,
         raise HTTPException(404, "spec not found")
     before = snapshot_spec(spec)
     fields = req.model_dump(exclude_unset=True)
+    # exclude_unset lets a field be OMITTED (leave as-is) vs sent explicitly
+    # -- but rule_kind and active are NOT NULL columns, so an explicit JSON
+    # null must 422 by name here, not slide into _validate_spec_shape's
+    # equals arm (rule_kind=None) or skip validation outright (active=None)
+    # and die at db.flush() as an IntegrityError the 409 handler below would
+    # misdiagnose as a uniqueness conflict. min_value/max_value/equals_value/
+    # unit/display_override stay genuinely nullable -- not touched here.
+    for _control_field in ("rule_kind", "active"):
+        if _control_field in fields and fields[_control_field] is None:
+            raise HTTPException(422, f"{_control_field} cannot be null")
     merged = {
         "rule_kind": fields.get("rule_kind", spec.rule_kind),
         "min_value": fields.get("min_value",
@@ -3556,7 +3577,7 @@ def patch_service_spec(spec_id: int, req: ServiceSpecPatch,
     _validate_spec_shape(matrix=spec.matrix, peptide_id=spec.peptide_id, db=db, **merged)
     for k, v in fields.items():
         if k in ("min_value", "max_value") and v is not None:
-            v = Decimal(v)
+            v = _parse_decimal(v, k)
         setattr(spec, k, v)
     spec.updated_by_id = current_user.id
     try:

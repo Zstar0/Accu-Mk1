@@ -115,6 +115,40 @@ def test_patch_reactivate_conflicts_with_freed_wildcard_slot(client, svc):
     assert [s["id"] for s in body] == [second_id]
 
 
+def test_patch_null_rule_kind_rejected(client, svc):
+    """Explicit JSON null for a NOT-NULL control field must 422 with a
+    diagnosis naming the field — not fall through to _validate_spec_shape's
+    equals arm and die at db.flush() as a misleading 409."""
+    sid = client.post(f"/analysis-services/{svc.id}/specs",
+                      json={"rule_kind": "range", "max_value": "1"}).json()["id"]
+    r = client.patch(f"/analysis-service-specs/{sid}", json={"rule_kind": None})
+    assert r.status_code == 422
+    assert "rule_kind" in r.json()["detail"]
+
+
+def test_patch_null_active_rejected(client, svc):
+    sid = client.post(f"/analysis-services/{svc.id}/specs",
+                      json={"rule_kind": "range", "max_value": "1"}).json()["id"]
+    r = client.patch(f"/analysis-service-specs/{sid}", json={"active": None})
+    assert r.status_code == 422
+    assert "active" in r.json()["detail"]
+
+
+def test_create_rejects_malformed_min_value(client, svc):
+    r = client.post(f"/analysis-services/{svc.id}/specs",
+                    json={"rule_kind": "range", "min_value": "abc"})
+    assert r.status_code == 422
+    assert "min_value" in r.json()["detail"]
+
+
+def test_patch_rejects_malformed_max_value(client, svc):
+    sid = client.post(f"/analysis-services/{svc.id}/specs",
+                      json={"rule_kind": "range", "max_value": "1"}).json()["id"]
+    r = client.patch(f"/analysis-service-specs/{sid}", json={"max_value": "n/a"})
+    assert r.status_code == 422
+    assert "max_value" in r.json()["detail"]
+
+
 def test_create_rejects_unknown_matrix(client, svc):
     r = client.post(f"/analysis-services/{svc.id}/specs",
                     json={"rule_kind": "range", "max_value": "1", "matrix": "Plasma"})
