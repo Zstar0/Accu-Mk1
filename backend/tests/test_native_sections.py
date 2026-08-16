@@ -542,6 +542,18 @@ def test_blend_family_skips_peptide_tier(db_session, monkeypatch):
     assert row["specification"]["max"] == 1.0     # matrix, not the 0.01 peptide row
     assert row["conforms"] is True
 
+    # Control: collapse the family to a SINGLE anchor (both services now
+    # point at pep_a) — sample_peptide_id must flip to pep_a.id and the
+    # peptide-tier row (0.01) must now be the one that resolves. Proves the
+    # skip above is actually caused by the two-anchor discriminator, not
+    # some other reason the peptide tier never fires.
+    svcs[1].peptide_id = pep_a.id
+    db_session.flush()
+    doc = build_native_sections(db_session, parent)
+    row = next(r for r in doc["sections"][0]["rows"] if r["keyword"] == "HM-PB")
+    assert row["specification"]["max"] == 0.01
+    assert row["conforms"] is False               # 0.12 > 0.01
+
 
 def test_unresolvable_peptide_coarsens_to_matrix_never_aborts(db_session, monkeypatch):
     """R4: a real peptide anchor with no spec filed AT that peptide_id must
