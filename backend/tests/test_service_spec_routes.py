@@ -149,6 +149,23 @@ def test_patch_rejects_malformed_max_value(client, svc):
     assert "max_value" in r.json()["detail"]
 
 
+def test_patch_partial_failure_leaves_no_trace(client, svc):
+    """A 422 must apply nothing. min_value parses fine; max_value doesn't —
+    if conversion and mutation were interleaved, min_value would land on
+    the session before the abort. Verify through a GET on the same shared
+    session that BOTH fields are exactly as they were pre-PATCH."""
+    sid = client.post(f"/analysis-services/{svc.id}/specs",
+                      json={"rule_kind": "range", "max_value": "1"}).json()["id"]
+    r = client.patch(f"/analysis-service-specs/{sid}",
+                      json={"min_value": "1", "max_value": "n/a"})
+    assert r.status_code == 422
+
+    body = client.get(f"/analysis-services/{svc.id}/specs").json()
+    assert body[0]["id"] == sid
+    assert body[0]["min_value"] is None
+    assert body[0]["max_value"] == "1"
+
+
 def test_create_rejects_unknown_matrix(client, svc):
     r = client.post(f"/analysis-services/{svc.id}/specs",
                     json={"rule_kind": "range", "max_value": "1", "matrix": "Plasma"})

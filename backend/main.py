@@ -3575,9 +3575,17 @@ def patch_service_spec(spec_id: int, req: ServiceSpecPatch,
         "equals_value": fields.get("equals_value", spec.equals_value),
     }
     _validate_spec_shape(matrix=spec.matrix, peptide_id=spec.peptide_id, db=db, **merged)
-    for k, v in fields.items():
-        if k in ("min_value", "max_value") and v is not None:
-            v = _parse_decimal(v, k)
+    # Parse every convertible field into a plain local dict BEFORE any
+    # setattr — a 422 partway through (e.g. min_value parses, max_value
+    # doesn't) must never leave the spec partially mutated on the session.
+    # This is a dict comprehension over `fields`, not the ORM object, so a
+    # mid-comprehension _parse_decimal raise discards the whole dict and
+    # the mutation loop below never runs.
+    converted = {
+        k: (_parse_decimal(v, k) if k in ("min_value", "max_value") and v is not None else v)
+        for k, v in fields.items()
+    }
+    for k, v in converted.items():
         setattr(spec, k, v)
     spec.updated_by_id = current_user.id
     try:
