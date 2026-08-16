@@ -92,7 +92,17 @@ def sample_peptide_id(db: Session, parent_pk: int) -> Optional[int]:
     AnalysisService.peptide_id FK — never _fuzzy_match_peptide or a
     peptide_name string. Exactly one distinct id -> that id; zero (no
     peptide-linked service) or many (a blend) -> None, so the caller
-    coarsens to the matrix/wildcard tier (R4/R5) instead of aborting."""
+    coarsens to the matrix/wildcard tier (R4/R5) instead of aborting.
+
+    review_state != 'retracted' is the ONLY state filter here, on purpose: a
+    retracted row is a real incident class (a sample relabeled from one
+    peptide to another leaves the old, wrong-identity analysis behind as
+    retracted) and must not add a phantom second anchor that demotes a
+    single-peptide sample to blend-treatment. Every other state — including
+    'ordered' placeholders and 'shadow' SENAITE mirror rows — stays IN the
+    anchor query; over-filtering would return None for samples whose anchor
+    is in fact knowable, which is exactly the coarsening R4 wants avoided
+    when it isn't necessary."""
     from models import AnalysisService, LimsAnalysis, LimsSubSample
 
     ids = db.execute(
@@ -101,6 +111,7 @@ def sample_peptide_id(db: Session, parent_pk: int) -> Optional[int]:
         .outerjoin(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
         .where(
             AnalysisService.peptide_id.is_not(None),
+            LimsAnalysis.review_state != "retracted",
             (LimsAnalysis.lims_sample_pk == parent_pk)
             | (LimsSubSample.parent_sample_pk == parent_pk),
         )

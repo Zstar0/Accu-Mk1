@@ -56,15 +56,21 @@ def _mk_family(db, sample_id, *, parent_analyses=(), sub_analyses=()):
     """Parent LimsSample with LimsAnalysis rows for parent_analyses (hosted
     directly on the parent) and sub_analyses (hosted on a single sub-sample
     vial under the parent) — the two homes sample_peptide_id's join must
-    cover."""
+    cover. Each entry is a service, or a (service, review_state) pair when a
+    test needs a specific state (e.g. 'retracted')."""
     from models import LimsAnalysis, LimsSample, LimsSubSample
+
+    def _svc_state(entry):
+        return entry if isinstance(entry, tuple) else (entry, "unassigned")
+
     parent = LimsSample(sample_id=sample_id)
     db.add(parent)
     db.flush()
-    for svc in parent_analyses:
+    for entry in parent_analyses:
+        svc, state = _svc_state(entry)
         db.add(LimsAnalysis(
             lims_sample_pk=parent.id, analysis_service_id=svc.id,
-            keyword=svc.keyword, title=svc.title,
+            keyword=svc.keyword, title=svc.title, review_state=state,
         ))
     if sub_analyses:
         sub = LimsSubSample(
@@ -73,10 +79,11 @@ def _mk_family(db, sample_id, *, parent_analyses=(), sub_analyses=()):
         )
         db.add(sub)
         db.flush()
-        for svc in sub_analyses:
+        for entry in sub_analyses:
+            svc, state = _svc_state(entry)
             db.add(LimsAnalysis(
                 lims_sub_sample_pk=sub.id, analysis_service_id=svc.id,
-                keyword=svc.keyword, title=svc.title,
+                keyword=svc.keyword, title=svc.title, review_state=state,
             ))
     db.flush()
     return parent
@@ -217,6 +224,22 @@ def test_sample_peptide_id_blend_or_none_returns_none(db_session):
 
     assert sample_peptide_id(db_session, two_peptide_parent.id) is None
     assert sample_peptide_id(db_session, no_identity_parent.id) is None
+
+
+def test_sample_peptide_id_ignores_retracted_wrong_identity_row(db_session):
+    """Real incident class: a sample relabeled from one peptide to another
+    leaves the OLD, wrong-identity analysis behind as retracted. That
+    retracted row must not count as a second anchor and demote the sample
+    to blend-treatment — the live row (peptide A) is the only anchor."""
+    pep_a = _mk_peptide(db_session, "BPC157")
+    pep_b = _mk_peptide(db_session, "TB500")
+    svc_a = _mk_identity_service(db_session, pep_a.id, "BPC157-PURITY")
+    svc_b = _mk_identity_service(db_session, pep_b.id, "TB500-PURITY")
+    parent = _mk_family(
+        db_session, "P-RETRACTED-1",
+        parent_analyses=[svc_a, (svc_b, "retracted")],
+    )
+    assert sample_peptide_id(db_session, parent.id) == pep_a.id
 
 
 # ── Cross-repo parity table — DO NOT EDIT without editing the twin ──────────
