@@ -1560,6 +1560,7 @@ def _run_migrations():
             id SERIAL PRIMARY KEY,
             analysis_service_id INTEGER NOT NULL REFERENCES analysis_services(id) ON DELETE CASCADE,
             matrix VARCHAR(100),
+            peptide_id INTEGER REFERENCES peptides(id),
             rule_kind VARCHAR(16) NOT NULL,
             min_value NUMERIC,
             max_value NUMERIC,
@@ -1575,15 +1576,21 @@ def _run_migrations():
                  AND (min_value IS NOT NULL OR max_value IS NOT NULL)) OR
                 (rule_kind = 'equals' AND equals_value IS NOT NULL
                  AND min_value IS NULL AND max_value IS NULL)
+            ),
+            CONSTRAINT ck_analysis_service_specs_tier CHECK (
+                NOT (matrix IS NOT NULL AND peptide_id IS NOT NULL)
             )
         )
         """,
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_matrix "
         "ON analysis_service_specs (analysis_service_id, matrix) "
         "WHERE active AND matrix IS NOT NULL",
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_null_matrix "
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_peptide "
+        "ON analysis_service_specs (analysis_service_id, peptide_id) "
+        "WHERE active AND peptide_id IS NOT NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_wildcard "
         "ON analysis_service_specs (analysis_service_id) "
-        "WHERE active AND matrix IS NULL",
+        "WHERE active AND matrix IS NULL AND peptide_id IS NULL",
         # --- Task 7: activity events, parent-hosted (native parent verification) ---
         # Already-migrated DBs need explicit ALTERs; the CREATE TABLE above
         # only covers fresh installs. All three are idempotent — safe to
@@ -1626,6 +1633,33 @@ def _run_migrations():
         # Amendment audit (spec 2026-08-07): before/after capture. Nullable,
         # no default, no backfill — NULL = pre-slice row, by contract.
         "ALTER TABLE lims_analysis_transitions ADD COLUMN IF NOT EXISTS details JSONB",
+        # --- spec-ownership slice 2: peptide tier ---
+        "ALTER TABLE analysis_service_specs ADD COLUMN IF NOT EXISTS peptide_id "
+        "INTEGER REFERENCES peptides(id)",
+        # Named CHECK, added only if absent (union-preserve idiom, ck_lims_sub_sample_events_one_host precedent)
+        """DO $$ BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'ck_analysis_service_specs_tier'
+                  AND conrelid = 'analysis_service_specs'::regclass
+            ) THEN
+                ALTER TABLE analysis_service_specs
+                    ADD CONSTRAINT ck_analysis_service_specs_tier
+                        CHECK (NOT (matrix IS NOT NULL AND peptide_id IS NOT NULL));
+            END IF;
+        END $$""",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_peptide "
+        "ON analysis_service_specs (analysis_service_id, peptide_id) "
+        "WHERE active AND peptide_id IS NOT NULL",
+        # The old null_matrix slot must not collide peptide rows with the
+        # wildcard: retire it and re-key the wildcard on BOTH columns NULL.
+        # DROP IF EXISTS is idempotent; an older image booting later
+        # recreates the old index (its list still carries the CREATE) —
+        # accepted LAST-BOOT-WINS class, documented here.
+        "DROP INDEX IF EXISTS uq_analysis_service_specs_null_matrix",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_wildcard "
+        "ON analysis_service_specs (analysis_service_id) "
+        "WHERE active AND matrix IS NULL AND peptide_id IS NULL",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
