@@ -135,7 +135,11 @@ def _spec_wire_dict(spec) -> dict:
         "max": float(spec.max_value) if spec.max_value is not None else None,
         "unit": spec.unit,
         "display": spec.display_override,
-        "loq": float(spec.loq) if spec.loq is not None else None,
+        # Range-only: equals rows never censor, so publishing a stray loq
+        # filed on one (tolerated at write time) would contradict the wire's
+        # own convention and light the consumer's LOQ column regardless.
+        "loq": (float(spec.loq)
+                if spec.rule_kind == "range" and spec.loq is not None else None),
     }
 
 
@@ -257,7 +261,13 @@ def build_native_sections(db: Session, parent) -> dict:
             "basis_note": prof.coa_basis_note,
             "method_text": prof.coa_method_text,
             "prep_text": prof.coa_prep_text,
-            "footnotes": list(prof.coa_footnotes or []),
+            # Fail-open to [] on a malformed container is deliberate: the
+            # certificate must not 500 on a bad footnote row (module's
+            # NativeSectionsError-only failure surface). The validated
+            # routes enforce list shape on every authored write — a non-list
+            # here means seed/migration/direct SQL, not user input.
+            "footnotes": (list(prof.coa_footnotes)
+                          if isinstance(prof.coa_footnotes, list) else []),
             "rows": rows,
         })
 

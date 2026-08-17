@@ -698,6 +698,27 @@ def test_equals_rows_never_censor(db_session, monkeypatch):
     row = doc["sections"][0]["rows"][0]
     assert row["result_display"] is None
     assert row["conforms"] is True
+    assert row["specification"]["loq"] is None
+
+
+def test_malformed_footnotes_container_yields_empty_list(db_session, monkeypatch):
+    """A non-list coa_footnotes (reachable only via a write that bypasses the
+    validated routes: seed/migration/direct SQL) must fail open to [] rather
+    than raising or silently becoming a list of dict keys."""
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")])
+    parent = _mk_parent_with_rows(db_session, svcs)
+    _order_lookup(monkeypatch)
+
+    prof.coa_footnotes = {"label": "x", "text": "y"}
+    db_session.flush()
+    doc = build_native_sections(db_session, parent)
+    assert doc["sections"][0]["footnotes"] == []
+
+    prof.coa_footnotes = 42
+    db_session.flush()
+    doc = build_native_sections(db_session, parent)
+    assert doc["sections"][0]["footnotes"] == []
 
 
 def test_unset_fields_wire_shape(db_session, monkeypatch):
