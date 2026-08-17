@@ -2456,6 +2456,7 @@ export interface AnalysisServiceSpecRecord {
   equals_value: string | null
   unit: string | null
   display_override: string | null
+  loq: string | null
   active: boolean
   updated_at: string | null
 }
@@ -2469,6 +2470,7 @@ export interface ServiceSpecPayload {
   equals_value?: string | null
   unit?: string | null
   display_override?: string | null
+  loq?: string | null
 }
 
 /**
