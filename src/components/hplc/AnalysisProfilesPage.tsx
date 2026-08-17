@@ -17,6 +17,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { Checkbox } from '@/components/ui/checkbox'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Label } from '@/components/ui/label'
@@ -70,6 +71,12 @@ interface FormState {
   coa_section_title: string
   coa_archetype: string | null
   coa_sort_order: string
+  // Task 6: certificate display copy — same "inert until archetype armed"
+  // contract as coa_section_title/coa_sort_order above.
+  coa_basis_note: string
+  coa_method_text: string
+  coa_prep_text: string
+  coa_footnotes: { label: string; text: string }[]
   fulfillment_role: string
   fulfillment_dim: 'role' | 'kind'
   // Task 11: beats the member services' group tier, loses to a priority
@@ -93,6 +100,10 @@ const DEFAULT_FORM: FormState = {
   coa_section_title: '',
   coa_archetype: null,
   coa_sort_order: '0',
+  coa_basis_note: '',
+  coa_method_text: '',
+  coa_prep_text: '',
+  coa_footnotes: [],
   fulfillment_role: '',
   fulfillment_dim: 'role',
   sla_tier_id: null,
@@ -195,6 +206,10 @@ export default function AnalysisProfilesPage() {
       coa_section_title: profile.coa_section_title ?? '',
       coa_archetype: profile.coa_archetype,
       coa_sort_order: String(profile.coa_sort_order),
+      coa_basis_note: profile.coa_basis_note ?? '',
+      coa_method_text: profile.coa_method_text ?? '',
+      coa_prep_text: profile.coa_prep_text ?? '',
+      coa_footnotes: profile.coa_footnotes ?? [],
       role_boxable: false,
       fulfillment_role: profile.fulfillment_role ?? '',
       fulfillment_dim: profile.fulfillment_dim,
@@ -272,6 +287,15 @@ export default function AnalysisProfilesPage() {
           ? suggestedRoleCode
           : (trimmedFulfillmentRole || null)
 
+      // Footnotes: drop rows where BOTH sides are blank (never-filled-in
+      // rows added then abandoned), but keep a row with only one side
+      // filled — trimmed, not silently discarded — so the backend's 400 on
+      // a malformed row (blank label or text) surfaces to the admin instead
+      // of quietly losing half their input.
+      const cleanedFootnotes = form.coa_footnotes
+        .filter(row => row.label.trim() !== '' || row.text.trim() !== '')
+        .map(row => ({ label: row.label.trim(), text: row.text.trim() }))
+
       if (editingProfile) {
         await updateAnalysisProfile(editingProfile.id, {
           name: form.name.trim(),
@@ -283,6 +307,10 @@ export default function AnalysisProfilesPage() {
           coa_section_title: form.coa_section_title.trim() || null,
           coa_archetype: form.coa_archetype,
           coa_sort_order: parseInt(form.coa_sort_order, 10) || 0,
+          coa_basis_note: form.coa_basis_note.trim() || null,
+          coa_method_text: form.coa_method_text.trim() || null,
+          coa_prep_text: form.coa_prep_text.trim() || null,
+          coa_footnotes: cleanedFootnotes.length ? cleanedFootnotes : null,
           fulfillment_role: roleForPayload,
           fulfillment_dim: form.fulfillment_dim,
           sla_tier_id: form.sla_tier_id,
@@ -304,6 +332,10 @@ export default function AnalysisProfilesPage() {
           // the backend 400s on it at create, deliberately.
           coa_section_title: form.coa_section_title.trim() || null,
           coa_sort_order: parseInt(form.coa_sort_order, 10) || 0,
+          coa_basis_note: form.coa_basis_note.trim() || null,
+          coa_method_text: form.coa_method_text.trim() || null,
+          coa_prep_text: form.coa_prep_text.trim() || null,
+          coa_footnotes: cleanedFootnotes.length ? cleanedFootnotes : null,
           role_department_id: form.role_department_id,
           role_boxable: form.role_boxable,
         })
@@ -368,6 +400,38 @@ export default function AnalysisProfilesPage() {
     } finally {
       setSavingMembers(false)
     }
+  }
+
+  // ── COA footnotes (Task 6) ── part of the main form state (not a
+  // separate save action like Members/Ride Hosts above) — these ride along
+  // in handleSave's payload, same as coa_section_title.
+
+  const addFootnote = () => {
+    setForm(f => ({ ...f, coa_footnotes: [...f.coa_footnotes, { label: '', text: '' }] }))
+  }
+
+  const removeFootnote = (index: number) => {
+    setForm(f => ({ ...f, coa_footnotes: f.coa_footnotes.filter((_, i) => i !== index) }))
+  }
+
+  const updateFootnote = (index: number, patch: Partial<{ label: string; text: string }>) => {
+    setForm(f => ({
+      ...f,
+      coa_footnotes: f.coa_footnotes.map((row, i) => (i === index ? { ...row, ...patch } : row)),
+    }))
+  }
+
+  const moveFootnote = (index: number, direction: -1 | 1) => {
+    setForm(f => {
+      const target = index + direction
+      const indexRow = f.coa_footnotes[index]
+      const targetRow = f.coa_footnotes[target]
+      if (!indexRow || !targetRow) return f
+      const next = [...f.coa_footnotes]
+      next[index] = targetRow
+      next[target] = indexRow
+      return { ...f, coa_footnotes: next }
+    })
   }
 
   // ── Ride hosts (spec 4) ──
@@ -962,6 +1026,198 @@ export default function AnalysisProfilesPage() {
                         />
                       </div>
                     </div>
+                </div>
+
+                {/* COA display copy (Task 6) — basis note / method / prep
+                    text and footnotes, printed on the certificate for this
+                    section. Same "settable at CREATE, inert until archetype
+                    armed" contract as Section Title/Order above. */}
+                <div className="space-y-4 border-t pt-4">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <label htmlFor="coa-basis-note" className="text-sm font-medium">
+                        Basis Note
+                      </label>
+                      <TooltipProvider delayDuration={200}>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-3.5 w-3.5 text-muted-foreground cursor-default" />
+                          </TooltipTrigger>
+                          <TooltipContent side="right" className="max-w-xs">
+                            <div className="flex flex-col gap-1 p-1 text-xs font-mono">
+                              <div className="font-semibold border-b border-primary-foreground/20 pb-1">
+                                Certificate reporting
+                              </div>
+                              <div>
+                                Short qualifier printed under the section heading — e.g. the basis for pass/fail limits.
+                              </div>
+                            </div>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
+                    <Input
+                      id="coa-basis-note"
+                      placeholder="e.g. Limits per USP <232>"
+                      value={form.coa_basis_note}
+                      onChange={e =>
+                        setForm(f => ({ ...f, coa_basis_note: e.target.value }))
+                      }
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <label htmlFor="coa-method-text" className="text-sm font-medium">
+                        Method
+                      </label>
+                      <TooltipProvider delayDuration={200}>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-3.5 w-3.5 text-muted-foreground cursor-default" />
+                          </TooltipTrigger>
+                          <TooltipContent side="right" className="max-w-xs">
+                            <div className="flex flex-col gap-1 p-1 text-xs font-mono">
+                              <div className="font-semibold border-b border-primary-foreground/20 pb-1">
+                                Certificate reporting
+                              </div>
+                              <div>Test method printed on the certificate for this section.</div>
+                            </div>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
+                    <Textarea
+                      id="coa-method-text"
+                      className="min-h-[72px]"
+                      placeholder="e.g. ICP-MS"
+                      value={form.coa_method_text}
+                      onChange={e =>
+                        setForm(f => ({ ...f, coa_method_text: e.target.value }))
+                      }
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <label htmlFor="coa-prep-text" className="text-sm font-medium">
+                        Prep
+                      </label>
+                      <TooltipProvider delayDuration={200}>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-3.5 w-3.5 text-muted-foreground cursor-default" />
+                          </TooltipTrigger>
+                          <TooltipContent side="right" className="max-w-xs">
+                            <div className="flex flex-col gap-1 p-1 text-xs font-mono">
+                              <div className="font-semibold border-b border-primary-foreground/20 pb-1">
+                                Certificate reporting
+                              </div>
+                              <div>Sample preparation printed on the certificate for this section.</div>
+                            </div>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
+                    <Textarea
+                      id="coa-prep-text"
+                      className="min-h-[72px]"
+                      placeholder="e.g. Microwave digestion"
+                      value={form.coa_prep_text}
+                      onChange={e =>
+                        setForm(f => ({ ...f, coa_prep_text: e.target.value }))
+                      }
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <label className="text-sm font-medium">Footnotes</label>
+                        <TooltipProvider delayDuration={200}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Info className="h-3.5 w-3.5 text-muted-foreground cursor-default" />
+                            </TooltipTrigger>
+                            <TooltipContent side="right" className="max-w-xs">
+                              <div className="flex flex-col gap-1 p-1 text-xs font-mono">
+                                <div className="font-semibold border-b border-primary-foreground/20 pb-1">
+                                  Certificate reporting
+                                </div>
+                                <div>
+                                  Printed below the section, in list order. Both label and text are required per row on save — a half-filled row is kept and rejected by the backend rather than silently dropped.
+                                </div>
+                              </div>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </div>
+                      <Button type="button" size="sm" variant="outline" onClick={addFootnote}>
+                        <Plus className="mr-1 h-3.5 w-3.5" />
+                        Add Footnote
+                      </Button>
+                    </div>
+
+                    {form.coa_footnotes.length === 0 ? (
+                      <p className="py-2 text-xs text-muted-foreground">No footnotes.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {form.coa_footnotes.map((footnote, index) => (
+                          <div key={index} className="flex gap-2 rounded-md border p-2">
+                            <div className="flex-1 space-y-1.5">
+                              <Input
+                                aria-label={`Footnote ${index + 1} label`}
+                                placeholder="Label"
+                                value={footnote.label}
+                                onChange={e => updateFootnote(index, { label: e.target.value })}
+                              />
+                              <Textarea
+                                aria-label={`Footnote ${index + 1} text`}
+                                className="min-h-[52px] text-xs"
+                                placeholder="Footnote text"
+                                value={footnote.text}
+                                onChange={e => updateFootnote(index, { text: e.target.value })}
+                              />
+                            </div>
+                            <div className="flex flex-col gap-0.5 shrink-0">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6"
+                                disabled={index === 0}
+                                aria-label={`Move footnote ${index + 1} up`}
+                                onClick={() => moveFootnote(index, -1)}
+                              >
+                                <ChevronUp className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6"
+                                disabled={index === form.coa_footnotes.length - 1}
+                                aria-label={`Move footnote ${index + 1} down`}
+                                onClick={() => moveFootnote(index, 1)}
+                              >
+                                <ChevronDown className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6 text-destructive hover:text-destructive"
+                                aria-label={`Remove footnote ${index + 1}`}
+                                onClick={() => removeFootnote(index)}
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* SLA tier (Task 11) — edit only. Beats the member services'
