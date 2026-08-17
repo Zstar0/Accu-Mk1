@@ -128,11 +128,17 @@ describe('ServiceSpecsSection', () => {
     })
   })
 
-  it('sends loq: null for an equals-kind spec (LOQ input is not shown)', async () => {
+  it('sends loq: null for an equals-kind spec, even carrying a stale LOQ value typed before switching Rule', async () => {
     const { createServiceSpec } = await import('@/lib/api')
     const user = userEvent.setup()
     render(<ServiceSpecsSection serviceId={42} peptides={[]} />)
     await screen.findByText('Specs (2)')
+
+    // Fill LOQ while still on the range shape so form.loq carries a
+    // non-empty value into the Rule switch below — otherwise this test
+    // can't distinguish the ruleKind gate from an always-empty string.
+    await user.type(screen.getByLabelText('Max'), '100')
+    await user.type(screen.getByLabelText('LOQ'), '0.5')
 
     // Radix Select doesn't fire change from userEvent's full pointer-event
     // sequence under jsdom (hasPointerCapture isn't implemented there) —
@@ -141,6 +147,9 @@ describe('ServiceSpecsSection', () => {
     fireEvent.click(screen.getByRole('combobox', { name: 'Rule' }))
     fireEvent.click(await screen.findByRole('option', { name: 'Equals' }))
 
+    // Unmounting the LOQ input does not clear form.loq (state lives in the
+    // parent useState) — the payload gate, not a cleared field, is what
+    // must null it out below.
     expect(screen.queryByLabelText('LOQ')).not.toBeInTheDocument()
 
     await user.type(screen.getByLabelText('Equals'), 'Not Detected')
