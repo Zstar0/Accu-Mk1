@@ -4,9 +4,10 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import React from 'react'
 import type { AnalysisProfile, Department } from '@/lib/api'
+import type * as ApiModule from '@/lib/api'
 
 vi.mock('@/lib/api', async importOriginal => {
-  const actual = await importOriginal<typeof import('@/lib/api')>()
+  const actual = await importOriginal<typeof ApiModule>()
   return {
     ...actual,
     getAnalysisProfiles: vi.fn(),
