@@ -276,3 +276,34 @@ def test_patch_equals_rule_kind_change(client, svc):
     assert body["rule_kind"] == "equals"
     assert body["equals_value"] == "Not Detected"
     assert body["min_value"] is None and body["max_value"] is None
+
+
+def test_create_spec_with_loq(client, svc):
+    r = client.post(f"/analysis-services/{svc.id}/specs",
+                    json={"rule_kind": "range", "max_value": "100",
+                          "unit": "µg/g", "loq": "0.5"})
+    assert r.status_code == 201 and r.json()["loq"] == "0.5"
+
+
+def test_patch_spec_loq_and_clear(client, svc):
+    sid = client.post(f"/analysis-services/{svc.id}/specs",
+                      json={"rule_kind": "range", "max_value": "1"}).json()["id"]
+    r = client.patch(f"/analysis-service-specs/{sid}", json={"loq": "0.25"})
+    assert r.status_code == 200 and r.json()["loq"] == "0.25"
+    r = client.patch(f"/analysis-service-specs/{sid}", json={"loq": None})
+    assert r.status_code == 200 and r.json()["loq"] is None
+
+
+def test_loq_rejects_negative_and_nonfinite(client, svc):
+    for bad in ("-1", "nan", "abc"):
+        r = client.post(f"/analysis-services/{svc.id}/specs",
+                        json={"rule_kind": "range", "max_value": "100", "loq": bad})
+        assert r.status_code == 422, bad
+
+
+def test_loq_in_audit_snapshot(client, db_session, svc):
+    client.post(f"/analysis-services/{svc.id}/specs",
+                json={"rule_kind": "range", "max_value": "100", "loq": "0.5"})
+    log = db_session.execute(select(AuditLog).where(
+        AuditLog.operation == "analysis_service_spec_changed")).scalars().all()[-1]
+    assert log.details["after"]["loq"] == "0.5"

@@ -3415,6 +3415,7 @@ class ServiceSpecResponse(BaseModel):
     equals_value: Optional[str] = None
     unit: Optional[str] = None
     display_override: Optional[str] = None
+    loq: Optional[str] = None
     active: bool
     updated_at: Optional[datetime] = None
 
@@ -3428,6 +3429,7 @@ class ServiceSpecCreate(BaseModel):
     equals_value: Optional[str] = None
     unit: Optional[str] = None
     display_override: Optional[str] = None
+    loq: Optional[str] = None
 
 
 class ServiceSpecPatch(BaseModel):
@@ -3437,6 +3439,7 @@ class ServiceSpecPatch(BaseModel):
     equals_value: Optional[str] = None
     unit: Optional[str] = None
     display_override: Optional[str] = None
+    loq: Optional[str] = None
     active: Optional[bool] = None
 
 
@@ -3476,6 +3479,15 @@ def _parse_decimal(value: Optional[str], field: str) -> Optional[Decimal]:
     return parsed
 
 
+def _parse_loq(value: Optional[str]) -> Optional[Decimal]:
+    """LOQ shares _parse_decimal's finite gate and additionally must be
+    non-negative — a negative floor would censor every result."""
+    parsed = _parse_decimal(value, "loq")
+    if parsed is not None and parsed < 0:
+        raise HTTPException(422, "loq must be non-negative")
+    return parsed
+
+
 def _dec_to_str(value: Optional[Decimal]) -> Optional[str]:
     """SQLite's NUMERIC column has no native decimal support, so DBAPI hands
     back a float that SQLAlchemy converts to Decimal at a padded default
@@ -3500,7 +3512,8 @@ def _spec_response(db, spec) -> ServiceSpecResponse:
         min_value=_dec_to_str(spec.min_value),
         max_value=_dec_to_str(spec.max_value),
         equals_value=spec.equals_value, unit=spec.unit,
-        display_override=spec.display_override, active=spec.active,
+        display_override=spec.display_override, loq=_dec_to_str(spec.loq),
+        active=spec.active,
         updated_at=spec.updated_at,
     )
 
@@ -3541,6 +3554,7 @@ def create_service_spec(service_id: int, req: ServiceSpecCreate,
         max_value=_parse_decimal(req.max_value, "max_value"),
         equals_value=req.equals_value, unit=req.unit,
         display_override=req.display_override,
+        loq=_parse_loq(req.loq),
         updated_by_id=current_user.id,
     )
     db.add(spec)
@@ -3591,7 +3605,9 @@ def patch_service_spec(spec_id: int, req: ServiceSpecPatch,
     # mid-comprehension _parse_decimal raise discards the whole dict and
     # the mutation loop below never runs.
     converted = {
-        k: (_parse_decimal(v, k) if k in ("min_value", "max_value") and v is not None else v)
+        k: (_parse_decimal(v, k) if k in ("min_value", "max_value") and v is not None
+            else _parse_loq(v) if k == "loq" and v is not None
+            else v)
         for k, v in fields.items()
     }
     for k, v in converted.items():
