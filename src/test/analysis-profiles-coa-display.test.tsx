@@ -87,7 +87,9 @@ describe('AnalysisProfilesPage — COA display fields', () => {
     vi.mocked(getAnalysisProfiles).mockReset().mockResolvedValue([PROFILE])
     vi.mocked(getAnalysisProfileMembers).mockReset().mockResolvedValue([])
     vi.mocked(getAnalysisServices).mockReset().mockResolvedValue([])
-    vi.mocked(createAnalysisProfile).mockReset().mockResolvedValue({ ...PROFILE, id: 99 })
+    vi.mocked(createAnalysisProfile)
+      .mockReset()
+      .mockResolvedValue({ ...PROFILE, id: 99 })
     vi.mocked(updateAnalysisProfile).mockReset().mockResolvedValue(PROFILE)
     vi.mocked(getRideHosts).mockReset().mockResolvedValue([])
     vi.mocked(putRideHosts).mockReset().mockResolvedValue({ count: 0 })
@@ -103,17 +105,26 @@ describe('AnalysisProfilesPage — COA display fields', () => {
     const row = await screen.findByText('Heavy Metals')
     await user.click(row)
 
-    await user.type(await screen.findByLabelText('Basis Note'), 'Per USP <232> limits')
+    await user.type(
+      await screen.findByLabelText('Basis Note'),
+      'Per USP <232> limits'
+    )
     await user.type(screen.getByLabelText('Method'), 'ICP-MS')
     await user.type(screen.getByLabelText('Prep'), 'Microwave digestion')
 
     await user.click(screen.getByRole('button', { name: /add footnote/i }))
     await user.type(screen.getByLabelText('Footnote 1 label'), 'note-a')
-    await user.type(screen.getByLabelText('Footnote 1 text'), 'First footnote text')
+    await user.type(
+      screen.getByLabelText('Footnote 1 text'),
+      'First footnote text'
+    )
 
     await user.click(screen.getByRole('button', { name: /add footnote/i }))
     await user.type(screen.getByLabelText('Footnote 2 label'), 'note-b')
-    await user.type(screen.getByLabelText('Footnote 2 text'), 'Second footnote text')
+    await user.type(
+      screen.getByLabelText('Footnote 2 text'),
+      'Second footnote text'
+    )
 
     await user.click(screen.getByRole('button', { name: 'Save Changes' }))
 
@@ -215,7 +226,9 @@ describe('AnalysisProfilesPage — COA display fields', () => {
     await user.type(screen.getByLabelText('Footnote 2 label'), 'second')
     await user.type(screen.getByLabelText('Footnote 2 text'), 'second-text')
 
-    await user.click(screen.getByRole('button', { name: /move footnote 2 up/i }))
+    await user.click(
+      screen.getByRole('button', { name: /move footnote 2 up/i })
+    )
 
     await user.click(screen.getByRole('button', { name: 'Save Changes' }))
 
@@ -239,8 +252,14 @@ describe('AnalysisProfilesPage — COA display fields', () => {
     await screen.findByText('Heavy Metals')
     await user.click(screen.getByRole('button', { name: /add profile/i }))
 
-    await user.type(await screen.findByPlaceholderText('e.g. bpc157-core'), 'zzauto')
-    await user.type(screen.getByPlaceholderText('e.g. BPC-157 Core Panel'), 'ZZ Auto')
+    await user.type(
+      await screen.findByPlaceholderText('e.g. bpc157-core'),
+      'zzauto'
+    )
+    await user.type(
+      screen.getByPlaceholderText('e.g. BPC-157 Core Panel'),
+      'ZZ Auto'
+    )
     await user.click(screen.getByRole('radio', { name: 'Primary test' }))
 
     await user.type(screen.getByLabelText('Basis Note'), 'Basis on create')
