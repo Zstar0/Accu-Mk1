@@ -15,7 +15,7 @@ from datetime import datetime, date, time, timezone
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 from pathlib import Path
-from typing import Literal, Optional, Union
+from typing import Any, Literal, Optional, Union
 from uuid import UUID
 
 # App version: prefer APP_VERSION env var (set by Docker build-arg),
@@ -2512,6 +2512,15 @@ class AnalysisProfileCreate(BaseModel):
     # instead of being silently dropped as an unknown field — arming is
     # PATCH-only. See create_analysis_profile's docstring for why.
     coa_archetype: Optional[str] = None
+    # Task 3: free-text COA display fields (Task 1 columns) — inert like
+    # coa_section_title above until coa_archetype is armed, so settable here.
+    coa_basis_note: Optional[str] = None
+    coa_method_text: Optional[str] = None
+    coa_prep_text: Optional[str] = None
+    # [{label, text}, ...] or None — shape enforced by _validate_coa_footnotes,
+    # not Pydantic, so a bad shape 400s with a field-pointing message instead
+    # of pydantic's generic validation-error payload.
+    coa_footnotes: Optional[Any] = None
     # Not a persisted profile column — consumed only by the auto-mint path
     # (POST/PATCH /analysis-profiles) to seed a newly-minted vial_roles row's
     # department. Stripped from model_dump() before constructing AnalysisProfile.
@@ -2534,6 +2543,13 @@ class AnalysisProfileUpdate(BaseModel):
     coa_section_title: Optional[str] = None
     coa_archetype: Optional[str] = None
     coa_sort_order: Optional[int] = None
+    # Task 3: see AnalysisProfileCreate — same fields, same inertness while
+    # coa_archetype is NULL. Explicit null clears via the usual exclude_unset
+    # semantics (no special-casing needed for these four).
+    coa_basis_note: Optional[str] = None
+    coa_method_text: Optional[str] = None
+    coa_prep_text: Optional[str] = None
+    coa_footnotes: Optional[Any] = None
     # Task 11: beats the member services' group tier, loses to a priority
     # override. Explicit null clears it (inherit group SLA again) — see
     # exclude_unset handling in update_analysis_profile.
@@ -2556,6 +2572,11 @@ class AnalysisProfileResponse(BaseModel):
     coa_section_title: Optional[str] = None
     coa_archetype: Optional[str] = None
     coa_sort_order: int = 0
+    # Task 3: see AnalysisProfileCreate for why these are settable pre-arming.
+    coa_basis_note: Optional[str] = None
+    coa_method_text: Optional[str] = None
+    coa_prep_text: Optional[str] = None
+    coa_footnotes: Optional[Any] = None
     sla_tier_id: Optional[int] = None
     member_ids: list[int] = []
     # Task 11: byte-identical to member_ids (same analysis_services relationship,
@@ -16112,10 +16133,28 @@ def _profile_to_response(p) -> AnalysisProfileResponse:
         fulfillment_role=p.fulfillment_role, fulfillment_dim=p.fulfillment_dim,
         sort_order=p.sort_order, active=p.active,
         coa_section_title=p.coa_section_title, coa_archetype=p.coa_archetype,
-        coa_sort_order=p.coa_sort_order, sla_tier_id=p.sla_tier_id,
+        coa_sort_order=p.coa_sort_order,
+        coa_basis_note=p.coa_basis_note, coa_method_text=p.coa_method_text,
+        coa_prep_text=p.coa_prep_text, coa_footnotes=p.coa_footnotes,
+        sla_tier_id=p.sla_tier_id,
         member_ids=member_ids, member_service_ids=member_ids,
         created_at=p.created_at, updated_at=p.updated_at,
     )
+
+
+def _validate_coa_footnotes(value) -> None:
+    """[{label, text}] and nothing else — the renderer trusts this shape."""
+    if value is None:
+        return
+    if not isinstance(value, list):
+        raise HTTPException(400, "coa_footnotes must be a list of {label, text} objects")
+    for i, note in enumerate(value):
+        if (not isinstance(note, dict) or set(note.keys()) != {"label", "text"}
+                or not isinstance(note.get("label"), str)
+                or not isinstance(note.get("text"), str)
+                or not note["label"].strip() or not note["text"].strip()):
+            raise HTTPException(
+                400, f"coa_footnotes[{i}] must be {{label, text}} with non-empty strings")
 
 
 @app.get("/analysis-profiles", response_model=list[AnalysisProfileResponse])
@@ -16151,6 +16190,7 @@ async def create_analysis_profile(
             "unreported and is armed with a later PATCH (arming is "
             "retroactive across in-flight samples)",
         )
+    _validate_coa_footnotes(data.coa_footnotes)
     existing = db.execute(
         select(AnalysisProfile).where(AnalysisProfile.key == data.key)
     ).scalar_one_or_none()
@@ -16231,6 +16271,8 @@ async def update_analysis_profile(
             f"unknown coa_archetype {fields['coa_archetype']!r}; "
             f"allowed: {sorted(COA_ARCHETYPES)} or null (not reported)",
         )
+    if "coa_footnotes" in fields:
+        _validate_coa_footnotes(fields["coa_footnotes"])
     # Task 11: reject an unknown sla_tier_id with a 400. An explicit null
     # (present in `fields` thanks to exclude_unset) is legal — it clears the
     # profile's own tier and falls back to inheriting the group's tier.
