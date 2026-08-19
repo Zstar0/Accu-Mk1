@@ -1680,13 +1680,14 @@ export async function listAnalysisServices(): Promise<AnalysisService[]> {
 export async function addAnalysisToSample(
   sampleId: string,
   serviceUid: string,
+  extra?: { keyword?: string; analysis_service_id?: number },
 ): Promise<ManageAnalysisResult> {
   const response = await fetch(
     `${API_BASE_URL()}/explorer/samples/${encodeURIComponent(sampleId)}/analyses`,
     {
       method: 'POST',
       headers: getBearerHeaders('application/json'),
-      body: JSON.stringify({ service_uid: serviceUid }),
+      body: JSON.stringify({ service_uid: serviceUid || undefined, ...(extra ?? {}) }),
     }
   )
   if (!response.ok) {
@@ -3665,6 +3666,8 @@ export interface SenaiteAnalysis {
    *  backing this line ('mk1' | 'senaite'). Type-only here — not yet read
    *  by any FE display logic. */
   service_origin?: string | null
+  // senaite-shape rows from Mk1: 'ordered' | 'canonical' | 'shadow'
+  provenance?: string | null
 }
 
 export interface SenaiteAttachment {
@@ -5950,6 +5953,106 @@ export async function listNativeParentAnalysesShaped(
     throw new Error(`listNativeParentAnalysesShaped failed: ${response.status}`)
   }
   return response.json()
+}
+
+// ── Native Manage Analyses (spec 2026-08-18) ────────────────────────────────
+
+export interface NativeProfileMember { service_id: number; keyword: string; title: string }
+export interface NativeProfile {
+  id: number
+  key: string
+  name: string
+  fulfillment_role: string | null
+  members: NativeProfileMember[]
+  on_sample: 'none' | 'partial' | 'full'
+  host_vials: string[]
+}
+export interface AddNativeProfileResult {
+  profile_key: string
+  profile_name: string
+  placeholders_created: number
+  placeholders_existing: number
+  hosts: { vial_id: string; edge_created: boolean; vial_rows_created: number }[]
+  no_host_vial: boolean
+}
+export interface RemoveNativeAnalysisResult {
+  analysis_id: number
+  keyword: string
+  analysis_service_id: number
+  vial_rows_deleted: number
+  vial_rows_rejected: number
+  edges_superseded: number
+}
+export interface ResyncFromOrderResult { placeholders_created: number; edges_created: number; vial_rows_created: number }
+
+/** Thrown by removeNativeParentAnalysis on HTTP 412 — carries the impact for RemovalConfirmModal. */
+export class NativeRemovalNeedsConfirm extends Error {
+  impact: RemovalImpact
+  constructor(impact: RemovalImpact) {
+    super('confirm_required')
+    this.name = 'NativeRemovalNeedsConfirm'
+    this.impact = impact
+  }
+}
+
+async function _detailMessage(response: Response, fallback: string): Promise<string> {
+  const err = await response.json().catch(() => null)
+  const d = err?.detail
+  if (typeof d === 'string') return d
+  if (d && typeof d.message === 'string') return d.message
+  return `${fallback}: ${response.status}`
+}
+
+export async function listNativeProfilesForParent(sampleId: string): Promise<NativeProfile[]> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/lims-analyses/parent/${encodeURIComponent(sampleId)}/native-profiles`,
+    { headers: getAuthHeaders() }
+  )
+  if (!response.ok) throw new Error(await _detailMessage(response, 'Failed to list native profiles'))
+  return response.json()
+}
+
+export async function addNativeProfileToParent(sampleId: string, profileId: number): Promise<AddNativeProfileResult> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/lims-analyses/parent/${encodeURIComponent(sampleId)}/profiles`,
+    { method: 'POST', headers: getBearerHeaders('application/json'), body: JSON.stringify({ profile_id: profileId }) }
+  )
+  if (!response.ok) throw new Error(await _detailMessage(response, 'Failed to add profile'))
+  return response.json()
+}
+
+export async function removeNativeParentAnalysis(
+  sampleId: string, analysisId: number, confirm = false,
+): Promise<RemoveNativeAnalysisResult> {
+  const qs = confirm ? '?confirm=true' : ''
+  const response = await fetch(
+    `${API_BASE_URL()}/api/lims-analyses/parent/${encodeURIComponent(sampleId)}/native-analyses/${analysisId}${qs}`,
+    { method: 'DELETE', headers: getAuthHeaders() }
+  )
+  if (response.status === 412) {
+    const err = await response.json().catch(() => null)
+    throw new NativeRemovalNeedsConfirm((err?.detail?.impact ?? { pristine: [], worked_unverified: [], blocked: [] }) as RemovalImpact)
+  }
+  if (!response.ok) throw new Error(await _detailMessage(response, 'Failed to remove analysis'))
+  return response.json()
+}
+
+export async function resyncParentFromOrder(sampleId: string): Promise<ResyncFromOrderResult> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/lims-analyses/parent/${encodeURIComponent(sampleId)}/resync-from-order`,
+    { method: 'POST', headers: getBearerHeaders('application/json') }
+  )
+  if (!response.ok) throw new Error(await _detailMessage(response, 'Re-sync failed'))
+  return response.json()
+}
+
+/** Local mk1-origin services (for the native vial picker) shaped like the SENAITE picker rows:
+ *  uid = "" (no SENAITE uid), plus `id` for the backend's analysis_service_id resolution. */
+export async function listNativeAnalysisServices(): Promise<(AnalysisService & { id: number })[]> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-services?origin=mk1&active=true`, { headers: getAuthHeaders() })
+  if (!response.ok) throw new Error(`Failed to list native services: ${response.status}`)
+  const rows: { id: number; keyword: string | null; title: string; senaite_uid: string | null }[] = await response.json()
+  return rows.map(r => ({ uid: r.senaite_uid ?? '', keyword: r.keyword ?? '', title: r.title, id: r.id }) as AnalysisService & { id: number })
 }
 
 export interface ParentRetestResponse {
