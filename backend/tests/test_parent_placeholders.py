@@ -180,7 +180,9 @@ def test_coa_path_still_requires_an_archetype(db, parent_sample):
 
 def test_registration_hook_never_raises_when_is_unreachable(monkeypatch, parent_sample):
     """A catalog/IS failure must leave registration itself untouched — the
-    sample row is still created and the next check-in heals the placeholders."""
+    sample row is still created; there is no automatic re-seed after registration;
+    the admin Re-sync action (`lims_analyses.manage_native.resync_parent_from_order`)
+    is the recovery path."""
     import main
     calls = []
     def boom(_sample_id):

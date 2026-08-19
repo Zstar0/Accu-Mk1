@@ -14753,8 +14753,9 @@ def _native_placeholders_at_registration_bg(sample_id: str) -> None:
     parent-tier rows for every ORDERED native analysis service.
 
     Same hardening rationale as its sibling — own session, never raises. A
-    catalog miss or IS outage must not fail the registration; check-in
-    re-seeds via the same function later.
+    catalog miss or IS outage must not fail the registration; there is no
+    automatic re-seed after registration; the admin "Re-sync from order"
+    action (lims_analyses.manage_native.resync_parent_from_order) is the heal.
     """
     db = None
     try:
