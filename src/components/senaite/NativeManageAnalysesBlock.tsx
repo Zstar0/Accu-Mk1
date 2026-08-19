@@ -2,10 +2,12 @@
  * Native (Accu-Mk1) block inside the Manage Analyses overlay — parent pages only.
  * Spec: docs/superpowers/specs/2026-08-18-native-manage-analyses-design.md §5.1
  *
- * Reads the SAME query the native parent card uses (NATIVE_PARENT_ANALYSES_QUERY_KEY,
- * listNativeParentAnalysesShaped) so list and card can never disagree; adds a
- * profile picker (GET native-profiles), per-row remove (trash, ordered rows only)
- * and an admin-only "Re-sync from order".
+ * Reads the SAME query the native parent card uses — the exact
+ * [NATIVE_PARENT_ANALYSES_QUERY_KEY, sampleId, 'senaite_shape'] cache entry
+ * (see SampleDetails.tsx's native card, staleTime 30s) via
+ * listNativeParentAnalysesShaped — so list and card can never disagree; adds
+ * a profile picker (GET native-profiles), per-row remove (trash, ordered rows
+ * only) and an admin-only "Re-sync from order".
  */
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -39,14 +41,20 @@ interface Props {
 
 type NativeRow = SenaiteAnalysis & { provenance?: string | null }
 
-/** senaite-shape rows carry the Mk1 id inside uid ("mk1:144"); NaN when not an mk1 row. */
-const mk1IdOf = (r: NativeRow): number => Number((r.uid ?? '').replace(/^mk1:/, ''))
+/** senaite-shape rows carry the Mk1 id inside uid ("mk1:144"); NaN when not an mk1 row.
+ *  `Number('')` is 0, not NaN — must not fall through the mk1: prefix check on empty/missing uid. */
+const mk1IdOf = (r: NativeRow): number => {
+  const uid = r.uid ?? ''
+  const idStr = uid.startsWith('mk1:') ? uid.slice(4) : ''
+  return idStr ? Number(idStr) : NaN
+}
 
 export function NativeManageAnalysesBlock({ sampleId, isAdmin, onChanged, search = '' }: Props) {
   const qc = useQueryClient()
   const rowsQ = useQuery<NativeRow[]>({
-    queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY, sampleId],
+    queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY, sampleId, 'senaite_shape'],
     queryFn: () => listNativeParentAnalysesShaped(sampleId) as Promise<NativeRow[]>,
+    staleTime: 30_000,
   })
   const profilesQ = useQuery<NativeProfile[]>({
     queryKey: [NATIVE_PROFILES_QUERY_KEY, sampleId],

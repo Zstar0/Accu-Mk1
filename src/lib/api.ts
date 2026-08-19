@@ -6050,7 +6050,7 @@ export async function resyncParentFromOrder(sampleId: string): Promise<ResyncFro
  *  uid = "" (no SENAITE uid), plus `id` for the backend's analysis_service_id resolution. */
 export async function listNativeAnalysisServices(): Promise<(AnalysisService & { id: number })[]> {
   const response = await fetch(`${API_BASE_URL()}/analysis-services?origin=mk1&active=true`, { headers: getAuthHeaders() })
-  if (!response.ok) throw new Error(`Failed to list native services: ${response.status}`)
+  if (!response.ok) throw new Error(await _detailMessage(response, 'Failed to list native services'))
   const rows: { id: number; keyword: string | null; title: string; senaite_uid: string | null }[] = await response.json()
   return rows.map(r => ({ uid: r.senaite_uid ?? '', keyword: r.keyword ?? '', title: r.title, id: r.id }) as AnalysisService & { id: number })
 }
