@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.7.5 — 2026-08-18
+
+### Fixed
+
+- **Variance COA series silently dropped for an analyte whose catalog
+  `peptides.name` differs from its identity service title** (PB-0354,
+  PB-0272 — TB4 provisioned as `ID_THYMOSINBETA4` "Thymosin Beta-4" while
+  peptide 63 is named "TB500 (Thymosin Beta 4)"). `build_variance_replicates`
+  / `build_vial_figures` keyed the per-vial series by `peptides.name`, but
+  COABuilder looks it up under the name it derives from `Analyte{i}Peptide`
+  (`title.split(" - Identity")[0]`), so the slot rendered as a plain single
+  value with no mean/SD/n and no "Conforms N/N". The series is now keyed by
+  the identity-service title prefix present on the vial, falling back to
+  `peptides.name` when a peptide has no identity row. Fleet check on prod:
+  191 variance parents, record content byte-identical, keys change on exactly
+  the two affected samples. Regenerate PB-0354 (draft) and — with sign-off —
+  PB-0272 (published) to pick it up.
+
 ## v1.7.4 — 2026-07-31
 
 ### Added
