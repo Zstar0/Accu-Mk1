@@ -5,7 +5,9 @@ recorded inline. Builds on PR #97 (native parent placeholder rows, `provenance='
 PR #98 (amendment audit), which are in the catalog-arc base (`b30d9fc0`), and on spec 4's custody
 edges (`VialProfileAssignment`). Citations are against the arc composition
 `C:/tmp/Accu-Mk1-arcitest` (`integration/catalog-arc-itest` @ `96dd0f14`); the devbox arcitest
-Mk1 (`~/worktrees/mk1-arcitest` @ `9714cd42`) is the same base plus PR #106.*
+Mk1 (`~/worktrees/mk1-arcitest` @ `9714cd42`) is the same base plus PR #106. **Build base: `b30d9fc0`**
+(the #98 tip) — every S-slice is based there and merged into the composition; this slice follows the
+same convention. Custody edges exist at that base; S4's `catalog_snapshot` does not (see §4.2 Re-sync).*
 
 ## 1. Problem
 
@@ -45,7 +47,7 @@ placed, and the parent must reflect the current state of what is on the sample.
 | 2 | Heal for existing orders is an **explicit, admin-gated "Re-sync from order"** action. No automatic re-seed at role-flip/check-in. IS→Mk1 re-signal on add-on purchase = deferred follow-up. | One new admin route; `set_assignment_role` is not re-wired for placeholders (only the §4.3 union hook). |
 | P | **Profile-level add, service-level remove.** | Add reuses the registration seed byte-for-byte; remove matches the overlay's per-row trash. |
 | Y | **Dedicated native routes under `/api/lims-analyses` + a native block in the same overlay.** | Explorer routes untouched; identity is `analysis_service_id`. |
-| R1 | Parent placeholder removal is a **soft remove** (`review_state='rejected'` + audited transition), not a hard delete. | Trail survives (no parent-level event table exists); partial-index slot freed for re-add; row shows in the card's Invalid tab. Alternative (rejected): hard delete + event on host vials only. Cost if wrong: low, reversible. |
+| R1 | Parent placeholder removal is a **soft remove** (`review_state='rejected'` + audited transition + parent-scoped `LimsSubSampleEvent`), not a hard delete. | The row and its transitions survive; partial-index slot freed for re-add; row shows in the card's Invalid tab. Alternative (rejected): hard delete + event only. Cost if wrong: low, reversible. |
 | R2 | Fix the one reader that still counts placeholders: `backend/coa/spec_rules.py:101-119` `sample_peptide_id` gains `provenance='canonical'`. | One-line, tested; placeholders will now be minted more often. Cost if wrong: low. |
 
 Open (Handler may veto at review): none blocking. R1/R2 are controller rulings recorded above.
@@ -72,12 +74,20 @@ Open (Handler may veto at review): none blocking. R1/R2 are controller rulings r
   (`coa/variance_series.py:101`), and the partial unique index
   `uq_lims_analyses_parent_service_ordered` (`database.py:1610-1615`, excludes
   `retracted`/`rejected` — which is what makes R1's soft remove re-addable).
-- The *why* lives on the creating transition's `reason`:
-  `manage_analyses:add profile=<key>` · `manage_analyses:vial_add` · `resync_from_order`.
-  `details={"changed": {}}` per the amendment-audit contract; the AST guard
-  (`tests/test_amendment_audit.py:265`, floor `>= 11` at `:285`) gets its floor bumped for each
-  new `LimsAnalysisTransition(...)` site in `lims_analyses/service.py`. New sites live in
-  `lims_analyses/service.py` (inside the guard's scope), not in `parent_placeholders.py`.
+- `seed_parent_placeholders` inserts rows **without** any transition today (registration rows are
+  "ordered", nothing more to say). Lab-driven mints get a *why*: `seed_parent_placeholders` gains
+  keyword-only `reason: str | None = None` and `created_by_user_id: int | None = None`; when
+  `reason` is given each created row also gets an `auto` transition (`from_state=None`,
+  `to_state='unassigned'`, `reason`, `details={"changed": {}}`, `user_id`) written by a helper
+  `record_placeholder_created(db, row, *, reason, user_id)` that lives in `lims_analyses/service.py`
+  (inside the amendment-audit AST guard's scope, `tests/test_amendment_audit.py:265`; bump the
+  `>= 11` floor at `:285` per new site). Reasons: `manage_analyses:add profile=<key>` ·
+  `manage_analyses:vial_add` · `resync_from_order`. Soft removes write a `reject` transition
+  (`reason='manage_analyses:remove'`).
+- **Bug fix folded in:** `seed_parent_placeholders`'s `exists` check (`parent_placeholders.py:57-61`)
+  ignores `review_state`, so a soft-removed (`rejected`) placeholder would report `existing` and block
+  a re-add. It must filter `review_state NOT IN ('rejected','retracted')` — exactly the partial
+  index's predicate.
 - Vial-side truth is the **custody edge** (`VialProfileAssignment`, `models.py:2047`,
   `relation in ('host','rider')`, `superseded_at`, `assigned_by_id`). Since spec 4 the seeder
   reads edges first and ignores `wp_services` whenever edges exist
@@ -104,7 +114,8 @@ Open (Handler may veto at review): none blocking. R1/R2 are controller rulings r
    then `seed_analyses_for_vial(db, sub_sample=sub, role=sub.assignment_role, wp_services={profile.key: True}, parent_sample_id=parent.sample_id, created_by_user_id=user_id, commit=False)`
    (`seeder.py:556`; edge-driven, idempotent — skips `existing_service_ids`). Do **not** call
    `write_custody_edges` (it supersedes every current edge).
-4. One transaction, caller commits. Result: `{profile_key, placeholders_created, placeholders_existing, hosts: [{vial_id, edge_created, vial_rows_created}], no_host_vial: bool}`.
+4. Writes a parent-scoped `LimsSubSampleEvent(lims_sample_pk=parent.id, event='native_profile_added', details={profile_key, profile_name, placeholders_created, hosts:[…]}, user_id)`.
+5. One transaction, caller commits. Result: `{profile_key, placeholders_created, placeholders_existing, hosts: [{vial_id, edge_created, vial_rows_created}], no_host_vial: bool}`.
 
 **`remove_parent_native_analysis(db, *, parent, analysis_id, confirm, user_id) -> RemoveResult`**
 (keyed by the placeholder row; identity by its `analysis_service_id`)
@@ -127,7 +138,8 @@ Open (Handler may veto at review): none blocking. R1/R2 are controller rulings r
 5. Placeholder soft remove (R1): `review_state='rejected'` and a `LimsAnalysisTransition(kind='reject', from_state='unassigned', to_state='rejected', reason='manage_analyses:remove', details={"changed": {}}, user_id=…)` written **directly** by this function (the generic
    `apply_transition` tier gate forbids parent `reject` — that gate is untouched; this is a
    placeholder-only primitive, documented at the site).
-6. One transaction. Result: `{analysis_id, vial_rows_deleted, vial_rows_rejected, edges_superseded}`.
+6. Writes a parent-scoped `LimsSubSampleEvent(lims_sample_pk=parent.id, event='native_analysis_removed', details={keyword, analysis_service_id, vial_rows_deleted, vial_rows_rejected, edges_superseded}, user_id)`.
+7. One transaction. Result: `{analysis_id, vial_rows_deleted, vial_rows_rejected, edges_superseded}`.
 
 **`resync_parent_from_order(db, *, parent, user_id) -> ResyncResult`** (admin)
 1. `raw = fetch_sample_services(parent.sample_id)` (`sub_samples/service.py:1192`); exception or
@@ -135,11 +147,11 @@ Open (Handler may veto at review): none blocking. R1/R2 are controller rulings r
 2. `seed_parent_placeholders(db, parent=parent, services=raw['services'], package=raw.get('package'))`
    with `reason='resync_from_order'`.
 3. For every ordered native profile (`_ordered_native_profiles(db, services, package, require_archetype=False)`) and every existing vial whose `assignment_role` matches its resolved host role: add the missing edge (never supersede) and `seed_analyses_for_vial(... commit=False)` as in add.
-4. If `parent.catalog_snapshot IS NULL`, stamp it via `compute_catalog_snapshot` (closes G5 — the
-   IS-down-at-registration case) and append the same `catalog_change_log` row shape
-   `reprovision-snapshot` writes (`main.py:20826-20836`, `entity_type='sample_snapshot'`, create).
-   If non-NULL: leave it (this action is additive; snapshot rewrite stays `reprovision-snapshot`'s job).
-5. Result: `{placeholders_created, edges_created, vial_rows_created, snapshot_stamped: bool}`.
+4. `catalog_snapshot` is **not** touched (S4 is not in the build base; its `reprovision-snapshot`
+   route owns snapshot repair). Ledgered follow-up: once S4 and this slice are both merged, Re-sync
+   may stamp a NULL snapshot (closes the IS-down-at-registration gap G5).
+5. Writes a parent-scoped `LimsSubSampleEvent(lims_sample_pk=parent.id, event='native_resync', details={counts…}, user_id)`.
+6. Result: `{placeholders_created, edges_created, vial_rows_created}`.
 
 **`ensure_parent_placeholder(db, *, parent, service, user_id, reason)`** — one row for one service
 (used by the native **vial** add, §4.5). Same insert-only/idempotent contract as
@@ -176,25 +188,31 @@ appears" true. Snapshot untouched.
 | DELETE | `/parent/{sample_id}/native-analyses/{analysis_id}` | user | `?confirm=true` | `remove_parent_native_analysis` → 200; 404; 409 promoted; 412 worked+unconfirmed (body = impact) |
 | POST | `/parent/{sample_id}/resync-from-order` | `require_admin` | — | `resync_parent_from_order` → 200; 502 IS |
 
-Existing explorer routes: `POST /explorer/samples/{id}/analyses` native branch (`main.py:9719-9763`)
-additionally calls `ensure_parent_placeholder` after `add_analysis_to_native_vial` (reason
-`manage_analyses:vial_add`). The FE starts sending `analysis_service_id` (already accepted at
-`main.py:9733`). Nothing else in `main.py` changes.
+Existing explorer routes: `POST /explorer/samples/{id}/analyses` native branch (at the build base
+`main.py:9266-9310`; composition `:9719-9763`) additionally (a) reads `keyword` from the body and
+passes it to `add_analysis_to_native_vial(keyword=…)` (the base passes `keyword=None`, so mk1-only
+services with no `senaite_uid` are unreachable today), and (b) calls `ensure_parent_placeholder`
+after the add (reason `manage_analyses:vial_add`). The FE sends `{service_uid?, keyword,
+analysis_service_id}`; the base resolves by keyword, the composition (S3) also accepts the id —
+expect a trivial merge conflict at that call site. Nothing else in `main.py` changes.
 
 `GET /analysis-services` (`main.py:3358`, local table) gains `?origin=mk1&active=true` filters
 (additive query params) to feed the native vial picker.
 
 ### 4.5 Audit & activity
 
-- Every created row's `auto` transition carries `reason` (§4.1). Soft-removed placeholders carry a
-  `reject` transition. Vial-tier deletes keep the existing `LimsSubSampleEvent` (`analysis_deleted`).
-- `list_analysis_change_events_for_parent` (`service.py:1374`) emits two additional info events —
-  `analysis_added` (transition `kind='auto'`, `to_state='unassigned'`, `reason` starts with
-  `manage_analyses:` or `== 'resync_from_order'`) and `analysis_removed` (`kind='reject'`,
-  `reason == 'manage_analyses:remove'`) — so the sample activity flyout shows who added/removed
-  what. Today `{"changed": {}}` transitions are silent (only non-empty `changed` emits); this is
-  an additive rule keyed on `reason`, the `details` vocabulary is unchanged.
-- Custody edges carry `assigned_by_id` / `superseded_at` (existing).
+- Row-level: lab-minted placeholders carry an `auto` transition with `reason` (§4.1); soft-removed
+  placeholders carry a `reject` transition; vial-tier deletes keep the existing vial-scoped
+  `LimsSubSampleEvent` (`analysis_removed`, `service.py:2745` at base); rejected vial rows carry
+  their `reject` transition. Custody edges carry `assigned_by_id` / `superseded_at`.
+- Sample-level: three **parent-scoped** `LimsSubSampleEvent` rows (`lims_sample_pk=parent.id`,
+  `sub_sample_pk=NULL` — the model already allows it, `models.py:1933-1936` at base, and
+  `GET /samples/{id}/activity` already reads them in its "Section B (parent-hosted)" branch,
+  `main.py:1424-1447` at base): `native_profile_added`, `native_analysis_removed`, `native_resync`.
+  That branch gains three `elif se.event == …` label lines (e.g. `"Residual Moisture added
+  (native) — 1 analysis on PB-0156-S04"`); unknown events already fall back to the raw event name,
+  so nothing breaks if the label is missing. `list_analysis_change_events_for_parent`
+  (`service.py:1447` at base) is **unchanged** — its `{"changed": {}}`-is-silent contract stands.
 
 ### 4.6 R2 — `sample_peptide_id`
 
@@ -272,9 +290,9 @@ Loading spinners per action (existing pattern `addingService` / `removingKeyword
   adds nothing for a normal order; remove: 409 canonical, 412 worked → confirm rejects, pristine →
   vial rows deleted + placeholder `rejected` + `reject` transition + edge superseded; re-add after
   remove creates a fresh placeholder; Re-sync: mints missing placeholders/edges/rows, never
-  supersedes a lab-added edge, IS failure → 502 + zero writes, snapshot stamped only when NULL,
-  admin-only; activity source emits `analysis_added`/`analysis_removed`; R2 test; amendment-audit
-  guard floor updated. Real-Postgres index behavior (soft-removed placeholder → re-add) proven on
+  supersedes a lab-added edge, IS failure → 502 + zero writes, admin-only; parent-scoped events
+  written and labeled by the activity endpoint; `seed_parent_placeholders` re-add after `rejected`;
+  R2 test; amendment-audit guard floor updated. Real-Postgres index behavior (soft-removed placeholder → re-add) proven on
   arcitest, not SQLite (fixtures never run `_run_migrations()`).
 - **Full backend suite**: failure-**set** diff against the composition baseline (never a count).
 - **Frontend** (vitest + msw): native block gating (rows/profiles/none), trash enable rules, 412 →
@@ -289,8 +307,9 @@ Loading spinners per action (existing pattern `addingService` / `removingKeyword
 ## 8. Rollout / risk
 
 - Additive only: no schema change, no state-machine change, no touch to promote/COA/publish paths.
-- Ships inside the catalog arc (needs #97/#98/S4 custody edges); belongs to the Mk1 wave of the
-  release plan v2. No IS/WP change in this slice.
+- Branch `feat/native-manage-analyses` off `b30d9fc0` (#98 tip; custody edges present), merged into
+  the arc composition for testing like every S-slice; belongs to the Mk1 wave of the release plan
+  v2. No IS/WP change in this slice.
 - Threat model: authenticated lab users can now add/remove native rows on the parent (already
   possible on vials and on SENAITE ARs); Re-sync is admin-only; every write is audited via
   transitions/events/edges; nothing external is called except the existing IS read on Re-sync.
@@ -305,6 +324,7 @@ Loading spinners per action (existing pattern `addingService` / `removingKeyword
    checks or remove it.
 3. Empty-members profile guard at save time (warn / fail-closed on activation) — the PB-0156 cause.
 4. Vial demand from lab-added profiles (`compute_vial_plan` reads WP services only).
-5. *(In this slice, docs-only touch, listed here so it is not lost:)* correct the false comment at
+5. Re-sync stamps a NULL `catalog_snapshot` once S4 + this slice are both merged (G5).
+6. *(In this slice, docs-only touch, listed here so it is not lost:)* correct the false comment at
    `main.py:15158` and the test docstring at `test_parent_placeholders.py:183` — nothing re-seeds
    automatically; Re-sync is the heal.
