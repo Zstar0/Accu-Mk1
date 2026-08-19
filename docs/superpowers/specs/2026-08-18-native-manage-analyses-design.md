@@ -106,7 +106,7 @@ Open (Handler may veto at review): none blocking. R1/R2 are controller rulings r
    Stamp `reason` on the created rows' transitions (`seed_parent_placeholders` → `create_analysis`
    writes the `auto` transition at `service.py:242-249`; thread a `reason` kwarg through — additive,
    default `None`).
-3. Hosts: `hosts = [sub for sub in parent's vials if sub.assignment_role == profile.fulfillment_role]`
+3. *(As-built deviation, final-review ruled 2026-08-19: only `fulfillment_dim == 'role'` profiles host here; an all-mk1 RIDER profile adds placeholder-only and seeds via the later role-flip union — no such profile exists today; tripwire fires when one first does.)* Hosts: `hosts = [sub for sub in parent's vials if sub.assignment_role == profile.fulfillment_role]`
    (`fulfillment_dim == 'role'` only; a rider profile with `ride_host_roles` resolves via
    `resolve_catalog_fulfillment(db, {profile.key: True}, snapshot=None)` and hosts on the returned
    role — same algorithm as check-in). For each host: if no current edge for `profile.id`, add
