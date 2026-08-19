@@ -51,6 +51,7 @@ import {
   type AnalysisProfile,
   type AnalysisServiceRecord,
 } from '@/lib/api'
+import NewTestOnboardingGuide from '@/components/hplc/NewTestOnboardingGuide'
 import { useAnalysisProfiles, analysisProfilesQueryKeys } from '@/services/analysis-profiles'
 import { useVialRoles, vialRolesQueryKeys } from '@/services/vial-roles'
 import { useDepartments } from '@/services/departments'
@@ -523,10 +524,13 @@ export default function AnalysisProfilesPage() {
             </p>
           </div>
         </div>
-        <Button onClick={openCreate}>
-          <Plus className="mr-1 h-4 w-4" />
-          Add Profile
-        </Button>
+        <div className="flex items-center gap-2">
+          <NewTestOnboardingGuide />
+          <Button onClick={openCreate}>
+            <Plus className="mr-1 h-4 w-4" />
+            Add Profile
+          </Button>
+        </div>
       </div>
 
       {/* Error */}
