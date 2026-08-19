@@ -214,11 +214,16 @@ expect a trivial merge conflict at that call site. Nothing else in `main.py` cha
   so nothing breaks if the label is missing. `list_analysis_change_events_for_parent`
   (`service.py:1447` at base) is **unchanged** — its `{"changed": {}}`-is-silent contract stands.
 
-### 4.6 R2 — `sample_peptide_id`
+### 4.6 R2 — `sample_peptide_id` — **DROPPED (controller re-ruling, 2026-08-19)**
 
-`backend/coa/spec_rules.py:108-119`: add `LimsAnalysis.provenance == 'canonical'` to the anchor
-query. Test: an `ordered` placeholder on a peptide-linked service must not change the resolved
-`peptide_id`.
+Not in this slice. `sample_peptide_id` does not exist at the build base (`b30d9fc0`) — it ships
+with the specs-editor slice, whose docstring **deliberately includes** `'ordered'` rows in the
+anchor query (only `retracted` is excluded, to keep the relabel-incident class from minting a
+phantom second anchor). The failure mode R2 guarded is currently unreachable (no peptide-linked
+service is a member of any all-mk1 profile, so no placeholder can carry a `peptide_id`) and
+degrades conservatively if ever reached (two distinct ids → `None` → coarsen to matrix/wildcard —
+visible, never silently wrong). Follow-up (§9): add a tripwire when a peptide-linked mk1 service
+becomes a profile member.
 
 ## 5. Frontend design
 
@@ -325,6 +330,7 @@ Loading spinners per action (existing pattern `addingService` / `removingKeyword
 3. Empty-members profile guard at save time (warn / fail-closed on activation) — the PB-0156 cause.
 4. Vial demand from lab-added profiles (`compute_vial_plan` reads WP services only).
 5. Re-sync stamps a NULL `catalog_snapshot` once S4 + this slice are both merged (G5).
-6. *(In this slice, docs-only touch, listed here so it is not lost:)* correct the false comment at
+6. R2 revisit at composition level: tripwire/ruling if a peptide-linked mk1 service ever becomes an analysis-profile member (see §4.6).
+7. *(In this slice, docs-only touch, listed here so it is not lost:)* correct the false comment at
    `main.py:15158` and the test docstring at `test_parent_placeholders.py:183` — nothing re-seeds
    automatically; Re-sync is the heal.
