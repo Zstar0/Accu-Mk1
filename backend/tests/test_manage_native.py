@@ -442,3 +442,69 @@ def test_remove_treats_retest_child_as_worked_not_pristine(db, parent, moisture)
     edge = db.execute(select(VialProfileAssignment).where(
         VialProfileAssignment.lims_sub_sample_pk == v.id)).scalars().one()
     assert edge.superseded_at is not None
+
+
+# ── resync_parent_from_order ──────────────────────────────────────────────────
+
+def test_resync_mints_missing_placeholders_edges_and_vial_rows(db, parent, moisture, monkeypatch):
+    v = _vial(db, parent, sid="MN-PARENT-S04", seq=4, role="kf")
+    monkeypatch.setattr(mn, "fetch_sample_services",
+                        lambda sid: {"services": {"moisture": True, "hplcpurity_identity": True}, "package": None})
+    res = mn.resync_parent_from_order(db, parent=parent, user_id=3)
+    db.commit()
+    assert res == {"placeholders_created": 1, "edges_created": 1, "vial_rows_created": 1}
+    assert db.query(VialProfileAssignment).filter_by(lims_sub_sample_pk=v.id, superseded_at=None).count() == 1
+    ev = [e for e in db.execute(select(LimsSubSampleEvent).where(
+        LimsSubSampleEvent.lims_sample_pk == parent.id)).scalars().all() if e.event == "native_resync"]
+    assert len(ev) == 1 and ev[0].details == res
+    # second run is a no-op
+    res2 = mn.resync_parent_from_order(db, parent=parent, user_id=3)
+    db.commit()
+    assert res2 == {"placeholders_created": 0, "edges_created": 0, "vial_rows_created": 0}
+
+
+def test_resync_never_supersedes_lab_added_edges(db, parent, moisture, heavy_metals, monkeypatch):
+    v = _vial(db, parent, sid="MN-PARENT-S02", seq=2, role="hm")
+    mn.add_profile_to_parent(db, parent=parent, profile=heavy_metals, user_id=1)  # lab-added
+    db.commit()
+    monkeypatch.setattr(mn, "fetch_sample_services", lambda sid: {"services": {"moisture": True}, "package": None})
+    mn.resync_parent_from_order(db, parent=parent, user_id=3)
+    db.commit()
+    edges = db.execute(select(VialProfileAssignment).where(
+        VialProfileAssignment.lims_sub_sample_pk == v.id)).scalars().all()
+    assert [(e.analysis_profile_id, e.superseded_at) for e in edges] == [(heavy_metals.id, None)]
+
+
+def test_resync_is_unavailable_when_is_fails_and_writes_nothing(db, parent, moisture, monkeypatch):
+    def boom(sid):
+        raise RuntimeError("IS down")
+    monkeypatch.setattr(mn, "fetch_sample_services", boom)
+    with pytest.raises(mn.OrderServicesUnavailable):
+        mn.resync_parent_from_order(db, parent=parent, user_id=3)
+    monkeypatch.setattr(mn, "fetch_sample_services", lambda sid: None)
+    with pytest.raises(mn.OrderServicesUnavailable):
+        mn.resync_parent_from_order(db, parent=parent, user_id=3)
+    assert db.query(LimsAnalysis).count() == 0 and db.query(LimsSubSampleEvent).count() == 0
+
+
+# ── ensure_parent_placeholder ─────────────────────────────────────────────────
+
+def test_ensure_parent_placeholder_mints_once_and_skips_live_rows(db, parent, moisture):
+    kf = moisture.analysis_services[0]
+    row = mn.ensure_parent_placeholder(db, parent=parent, service=kf, user_id=4, reason="manage_analyses:vial_add")
+    db.commit()
+    assert row is not None and row.provenance == PROVENANCE_ORDERED and row.review_state == "unassigned"
+    tr = db.execute(select(LimsAnalysisTransition).where(LimsAnalysisTransition.analysis_id == row.id)).scalars().one()
+    assert tr.reason == "manage_analyses:vial_add" and tr.user_id == 4
+    assert mn.ensure_parent_placeholder(db, parent=parent, service=kf, user_id=4, reason="x") is None
+    # a live canonical also counts as present
+    row.review_state = "rejected"; db.commit()
+    db.add(LimsAnalysis(lims_sample_pk=parent.id, analysis_service_id=kf.id, keyword="MOISTURE-KF",
+                        title="Residual Moisture", review_state="verified", provenance="canonical")); db.commit()
+    assert mn.ensure_parent_placeholder(db, parent=parent, service=kf, user_id=4, reason="x") is None
+
+
+def test_ensure_parent_placeholder_refuses_non_native(db, parent):
+    sen = _svc(db, keyword="ENDO-LAL", title="Endotoxin", origin="senaite")
+    with pytest.raises(mn.ProfileNotNativeError):
+        mn.ensure_parent_placeholder(db, parent=parent, service=sen, user_id=None, reason="x")

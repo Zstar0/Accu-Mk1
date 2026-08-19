@@ -412,3 +412,73 @@ def remove_parent_native_analysis(db: Session, *, parent: LimsSample, analysis_i
              parent.sample_id, row.keyword, deleted, rejected, superseded)
     return {"analysis_id": row.id, "keyword": row.keyword, "analysis_service_id": service_id,
             "vial_rows_deleted": deleted, "vial_rows_rejected": rejected, "edges_superseded": superseded}
+
+
+# ── write path: re-sync from order (admin) ───────────────────────────────────
+
+class OrderServicesUnavailable(Exception):
+    """The IS could not supply the order's services (transport error or 404)."""
+
+
+def resync_parent_from_order(db: Session, *, parent: LimsSample, user_id: Optional[int]) -> dict:
+    """Ruling 2: explicit, additive heal from the WP order. Re-fetches the
+    sample's services from the IS, mints missing placeholders for every
+    ordered native profile, and on every existing vial whose role hosts such
+    a profile adds the missing host edge + seeds the members. Never prunes,
+    never supersedes. Raises OrderServicesUnavailable (→ 502) with zero
+    writes when the IS fails or knows no order. Caller commits."""
+    from coa.native_sections import _ordered_native_profiles
+    try:
+        raw = fetch_sample_services(parent.sample_id)
+    except Exception as exc:  # transport / auth / 5xx — nothing was written
+        raise OrderServicesUnavailable(str(exc)) from exc
+    if not raw:
+        raise OrderServicesUnavailable(f"no order services for {parent.sample_id}")
+    services = raw.get("services") or {}
+    package = raw.get("package")
+
+    stats = seed_parent_placeholders(
+        db, parent=parent, services=services, package=package,
+        reason="resync_from_order", created_by_user_id=user_id,
+    )
+    edges = 0
+    vial_rows = 0
+    for prof in _ordered_native_profiles(db, services, package, require_archetype=False):
+        members = list(prof.analysis_services)
+        for vial in _host_vials(db, parent, prof):
+            if _ensure_host_edge(db, vial=vial, profile=prof, user_id=user_id):
+                edges += 1
+            vial_rows += _seed_members_on_vial(db, vial=vial, members=members, user_id=user_id)
+
+    result = {"placeholders_created": stats["created"], "edges_created": edges,
+              "vial_rows_created": vial_rows}
+    db.add(LimsSubSampleEvent(lims_sample_pk=parent.id, event="native_resync",
+                              details=result, user_id=user_id))
+    db.flush()
+    log.info("manage_native.resync parent=%s %s", parent.sample_id, result)
+    return result
+
+
+# ── vial-page helper: one service, one placeholder ───────────────────────────
+
+def ensure_parent_placeholder(db: Session, *, parent: LimsSample, service: AnalysisService,
+                              user_id: Optional[int], reason: str) -> Optional[LimsAnalysis]:
+    """Used by the native VIAL add (explorer POST): when the lab puts a single
+    mk1 service on a vial, the parent gets a placeholder for it too, so the
+    parent card tells the truth before promote. No-op (None) when a live
+    'ordered' or 'canonical' row already exists. Refuses non-mk1 services."""
+    from lims_analyses.service import record_placeholder_created
+    if (getattr(service, "origin", None) or "") != "mk1":
+        raise ProfileNotNativeError(f"service {service.keyword!r} is not native")
+    if service.id in _live_parent_service_ids(db, parent):
+        return None
+    row = LimsAnalysis(
+        lims_sample_pk=parent.id, lims_sub_sample_pk=None,
+        analysis_service_id=service.id, keyword=service.keyword, title=service.title,
+        result_value=None, review_state="unassigned", provenance=PROVENANCE_ORDERED,
+        created_by_user_id=user_id,
+    )
+    db.add(row)
+    db.flush()
+    record_placeholder_created(db, row, reason=reason, user_id=user_id)
+    return row
