@@ -1390,6 +1390,7 @@ cd "C:/tmp/Accu-Mk1-manage-analyses" && git add backend/lims_analyses/manage_nat
 - Modify: `backend/lims_analyses/schemas.py` (append)
 - Modify: `backend/lims_analyses/routes.py` (append 4 routes after `parent_retest`, ~line 283)
 - Modify: `backend/main.py` — explorer POST native branch (~`:9266-9310`, `add_sample_analysis`), `GET /analysis-services` (~`:3215`), activity Section B labels (~`:1436-1447`)
+- Modify: `backend/lims_analyses/schemas.py` `SenaiteShapeAnalysisResponse` (~`:208`) — add `provenance: Optional[str] = None`; `backend/lims_analyses/service.py` `_serialize_senaite_shape_rows` (~`:2762`) — set `provenance=r.provenance`
 - Test: `backend/tests/test_manage_native_routes.py` (new)
 
 **Interfaces:**
@@ -1401,6 +1402,7 @@ cd "C:/tmp/Accu-Mk1-manage-analyses" && git add backend/lims_analyses/manage_nat
   - `POST /api/lims-analyses/parent/{sample_id}/resync-from-order` (admin) → 200 `ResyncResponse` | 502 `{code:"order_services_unavailable"}`
   - `GET /analysis-services?origin=mk1&active=true` (existing route, two new optional filters)
   - Explorer `POST /explorer/samples/{id}/analyses` native branch reads `body.get("keyword")` and calls `ensure_parent_placeholder`.
+  - `GET /api/lims-analyses/parent/{id}/native-analyses?as=senaite_shape` rows carry `provenance` (`"ordered"` / `"canonical"`) — the FE block (Task 9) enables remove only on `ordered` rows and derives the numeric analysis id from `uid` (`"mk1:<id>"`).
 
 - [ ] **Step 1: Write the failing route tests** — create `backend/tests/test_manage_native_routes.py`:
 
@@ -1566,6 +1568,15 @@ def test_explorer_native_vial_add_by_keyword_ensures_parent_placeholder(client, 
     assert ph.keyword == "MOISTURE-KF"
 
 
+def test_senaite_shape_rows_carry_provenance(client, world):
+    client.post("/api/lims-analyses/parent/RT-PARENT/profiles", json={"profile_id": world["profile"].id})
+    r = client.get("/api/lims-analyses/parent/RT-PARENT/native-analyses?as=senaite_shape")
+    assert r.status_code == 200, r.text
+    rows = r.json()
+    assert [(x["keyword"], x["provenance"], x["review_state"]) for x in rows] == [("MOISTURE-KF", "ordered", "unassigned")]
+    assert rows[0]["uid"].startswith("mk1:")
+
+
 def test_activity_labels_native_events(client, world, db_session):
     client.post("/api/lims-analyses/parent/RT-PARENT/profiles", json={"profile_id": world["profile"].id})
     r = client.get("/samples/RT-PARENT/activity")
@@ -1723,6 +1734,15 @@ def resync_from_order(sample_id: str, db: Session = Depends(get_db), current_use
         raise _manage_native_error(e)
 ```
 
+- [ ] **Step 4b: Expose `provenance` on the senaite-shape rows** — in `backend/lims_analyses/schemas.py` `SenaiteShapeAnalysisResponse` add, after `service_origin`:
+```python
+    # Manage-analyses slice: 'ordered' (registration/lab placeholder) vs
+    # 'canonical' (promoted result) vs 'shadow'. The overlay's native block
+    # enables remove only on 'ordered' rows. None for legacy callers.
+    provenance: Optional[str] = None
+```
+and in `backend/lims_analyses/service.py` `_serialize_senaite_shape_rows`, where each `SenaiteShapeAnalysisResponse(...)` is constructed, add `provenance=r.provenance,` (the loop variable may be named `r`/`row` — match it). This is additive: the FE `SenaiteAnalysis` type gains an optional `provenance?: string | null` in Task 9.
+
 - [ ] **Step 5: `backend/main.py` — three edits**
 
 (a) `GET /analysis-services` (~`:3215`): add two optional query params and filters:
@@ -1799,7 +1819,7 @@ Expected: all pass. If the explorer POST test returns 404 because the route requ
 - [ ] **Step 7: Commit**
 
 ```bash
-cd "C:/tmp/Accu-Mk1-manage-analyses" && git add backend/lims_analyses/schemas.py backend/lims_analyses/routes.py backend/main.py backend/tests/test_manage_native_routes.py && git commit -m "feat(manage-native): parent native-profiles/profiles/native-analyses/resync routes; vial add ensures placeholder; analysis-services origin/active filters; activity labels"
+cd "C:/tmp/Accu-Mk1-manage-analyses" && git add backend/lims_analyses/schemas.py backend/lims_analyses/routes.py backend/lims_analyses/service.py backend/main.py backend/tests/test_manage_native_routes.py && git commit -m "feat(manage-native): parent native-profiles/profiles/native-analyses/resync routes; senaite-shape provenance; vial add ensures placeholder; analysis-services origin/active filters; activity labels"
 ```
 
 ---
@@ -1927,10 +1947,11 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.f
 
 import { NativeManageAnalysesBlock } from '@/components/senaite/NativeManageAnalysesBlock'
 
+// senaite-shape rows: id travels in uid ("mk1:<id>"); provenance is the new optional field
 const ordered = (id: number, keyword: string, title: string): SenaiteAnalysis =>
-  ({ id, uid: `mk1:${id}`, keyword, title, review_state: 'unassigned', provenance: 'ordered' } as unknown as SenaiteAnalysis)
+  ({ uid: `mk1:${id}`, keyword, title, review_state: 'unassigned', provenance: 'ordered' } as unknown as SenaiteAnalysis)
 const canonical = (id: number, keyword: string, title: string): SenaiteAnalysis =>
-  ({ id, uid: `mk1:${id}`, keyword, title, review_state: 'verified', provenance: 'canonical' } as unknown as SenaiteAnalysis)
+  ({ uid: `mk1:${id}`, keyword, title, review_state: 'verified', provenance: 'canonical' } as unknown as SenaiteAnalysis)
 
 function renderBlock(props: Partial<React.ComponentProps<typeof NativeManageAnalysesBlock>> = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -2207,7 +2228,10 @@ interface Props {
   search?: string
 }
 
-type NativeRow = SenaiteAnalysis & { id?: number; provenance?: string }
+type NativeRow = SenaiteAnalysis & { provenance?: string | null }
+
+/** senaite-shape rows carry the Mk1 id inside uid ("mk1:144"); NaN when not an mk1 row. */
+const mk1IdOf = (r: NativeRow): number => Number((r.uid ?? '').replace(/^mk1:/, ''))
 
 export function NativeManageAnalysesBlock({ sampleId, isAdmin, onChanged, search = '' }: Props) {
   const qc = useQueryClient()
@@ -2256,10 +2280,11 @@ export function NativeManageAnalysesBlock({ sampleId, isAdmin, onChanged, search
   }
 
   const doRemove = async (row: NativeRow, confirm: boolean) => {
-    if (row.id == null) return
-    setRemovingId(row.id)
+    const id = mk1IdOf(row)
+    if (!Number.isFinite(id)) return
+    setRemovingId(id)
     try {
-      const res = await removeNativeParentAnalysis(sampleId, row.id, confirm)
+      const res = await removeNativeParentAnalysis(sampleId, id, confirm)
       toast.success(`Removed ${row.title}`, {
         description: `${res.vial_rows_deleted} vial row(s) deleted, ${res.vial_rows_rejected} rejected`,
       })
@@ -2312,11 +2337,12 @@ export function NativeManageAnalysesBlock({ sampleId, isAdmin, onChanged, search
       <div className="space-y-1 mb-3">
         {rows.length === 0 && <p className="text-[11px] text-muted-foreground/70 px-2">none</p>}
         {rows.map(r => {
+          const id = mk1IdOf(r)
           const isOrdered = r.provenance === 'ordered'
           const host = roleByServiceKeyword.get(r.keyword ?? '')
           const hostChip = host && host.hosts.length > 0 ? `${host.role ?? '?'} · ${host.hosts.join(', ')}` : 'no host vial'
           return (
-            <div key={r.id ?? r.keyword} data-testid="native-row" className="flex items-center justify-between py-1 px-2 rounded bg-muted/40">
+            <div key={r.uid ?? r.keyword} data-testid="native-row" className="flex items-center justify-between py-1 px-2 rounded bg-muted/40">
               <div className="flex items-center gap-2 min-w-0">
                 <span className="text-xs font-mono text-muted-foreground shrink-0">{r.keyword}</span>
                 <span className="text-xs truncate">{r.title}</span>
@@ -2326,11 +2352,11 @@ export function NativeManageAnalysesBlock({ sampleId, isAdmin, onChanged, search
               <Button
                 variant="ghost" size="sm" aria-label={`Remove ${r.title}`}
                 className="h-6 w-6 p-0 shrink-0 text-muted-foreground hover:text-destructive"
-                disabled={!isOrdered || removingId === r.id}
+                disabled={!isOrdered || removingId === id}
                 title={isOrdered ? undefined : 'Promoted result — use retest/retract on the card'}
                 onClick={() => doRemove(r, false)}
               >
-                {removingId === r.id ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                {removingId === id ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
               </Button>
             </div>
           )
@@ -2361,7 +2387,7 @@ export function NativeManageAnalysesBlock({ sampleId, isAdmin, onChanged, search
         open={confirmFor !== null}
         serviceTitle={confirmFor?.row.title ?? ''}
         impact={confirmFor?.impact ?? null}
-        pending={confirmFor !== null && removingId === confirmFor.row.id}
+        pending={confirmFor !== null && removingId === mk1IdOf(confirmFor.row)}
         onConfirm={() => confirmFor && doRemove(confirmFor.row, true)}
         onCancel={() => setConfirmFor(null)}
       />
@@ -2369,7 +2395,7 @@ export function NativeManageAnalysesBlock({ sampleId, isAdmin, onChanged, search
   )
 }
 ```
-(Verify `SenaiteAnalysis` in `api.ts` exposes `id`/`provenance` for the senaite-shape rows — the serializer returns them; if the TS type lacks them, keep the local `NativeRow` intersection as written. `RemovalConfirmModal`'s confirm button text: read the component to match the regex in the test.)
+(Add `provenance?: string | null` to the `SenaiteAnalysis` interface in `api.ts` (~`:3637`) with a comment `// senaite-shape rows from Mk1: 'ordered' | 'canonical' | 'shadow'`. `RemovalConfirmModal`'s confirm button text: read the component to match the regex in the test.)
 
 - [ ] **Step 5: Run the test + typecheck**
 
