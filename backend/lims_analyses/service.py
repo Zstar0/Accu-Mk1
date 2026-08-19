@@ -2960,6 +2960,7 @@ def _serialize_senaite_shape_rows(
             service_group_name=None,
             promoted_to_parent_id=promo_by_source.get(r.id),
             service_origin=svc.origin if svc else None,
+            provenance=r.provenance,
         ))
     return out
 

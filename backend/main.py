@@ -1443,6 +1443,18 @@ async def get_sample_activity(
                     f"{d.get('keyword', '?')} retested (parent) — "
                     f"{n} source{'s' if n != 1 else ''}"
                 )
+            elif se.event == "native_profile_added":
+                hosts = d.get("hosts") or []
+                n = sum(int(h.get("vial_rows_created") or 0) for h in hosts)
+                where = ", ".join(h.get("vial_id", "?") for h in hosts) or "no host vial"
+                label = (f"{d.get('profile_name', d.get('profile_key', '?'))} added (native) — "
+                         f"{n} analys{'is' if n == 1 else 'es'} on {where}")
+            elif se.event == "native_analysis_removed":
+                label = (f"{d.get('keyword', '?')} removed (native) — "
+                         f"{d.get('vial_rows_deleted', 0)} deleted, {d.get('vial_rows_rejected', 0)} rejected")
+            elif se.event == "native_resync":
+                label = (f"Re-synced from order — {d.get('placeholders_created', 0)} placeholders, "
+                         f"{d.get('edges_created', 0)} edges, {d.get('vial_rows_created', 0)} vial analyses")
             else:
                 label = se.event
 
@@ -3216,13 +3228,19 @@ def _extract_peptide_name(title: str) -> Optional[str]:
 async def get_analysis_services(
     search: Optional[str] = None,
     category: Optional[str] = None,
+    origin: Optional[str] = None,
+    active: Optional[bool] = None,
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
-    """List all analysis services. Optional search by title, keyword, or category. Optional exact category filter."""
+    """List all analysis services. Optional search by title, keyword, or category. Optional exact category / origin / active filters."""
     query = select(AnalysisService).order_by(AnalysisService.title)
     if category:
         query = query.where(AnalysisService.category == category)
+    if origin:
+        query = query.where(AnalysisService.origin == origin)
+    if active is not None:
+        query = query.where(AnalysisService.active.is_(active))
     if search:
         q = f"%{search}%"
         query = query.where(
@@ -9295,15 +9313,34 @@ async def add_sample_analysis(
 
     if sub is not None:
         # Native branch
-        senaite_service_uid = body.get("service_uid")
+        senaite_service_uid = body.get("service_uid") or None
+        keyword = body.get("keyword") or None
         try:
-            add_analysis_to_native_vial(
+            row = add_analysis_to_native_vial(
                 db,
                 sub_sample_pk=sub.id,
                 senaite_service_uid=senaite_service_uid,
-                keyword=None,
+                keyword=keyword,
                 user_id=_current_user.id,
             )
+            # Manage-analyses slice: the parent tells the truth before promote —
+            # a native vial add also ensures the parent placeholder (no-op when
+            # a live ordered/canonical row exists, or when the service isn't
+            # origin='mk1' — pre-existing native-vial adds aren't scoped to
+            # mk1-origin services, so ProfileNotNativeError is swallowed here
+            # rather than turning an otherwise-successful vial add into a 409).
+            from lims_analyses.manage_native import ProfileNotNativeError, ensure_parent_placeholder
+            from models import AnalysisService as _Svc
+            parent_row = db.get(LimsSample, sub.parent_sample_pk)
+            svc_row = db.get(_Svc, row.analysis_service_id)
+            if parent_row is not None and svc_row is not None:
+                try:
+                    ensure_parent_placeholder(db, parent=parent_row, service=svc_row,
+                                              user_id=getattr(_current_user, "id", None),
+                                              reason="manage_analyses:vial_add")
+                    db.commit()
+                except ProfileNotNativeError:
+                    db.rollback()
         except _NotFoundError as e:
             raise HTTPException(status_code=404, detail=str(e))
         except _BadRequestError as e:
