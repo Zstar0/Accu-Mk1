@@ -281,10 +281,26 @@ def _placeholder_row(db: Session, parent: LimsSample, analysis_id: int) -> LimsA
 def _classify_vial_rows(db: Session, parent: LimsSample, service_id: int) -> dict:
     """Vial-tier rows for `service_id` on the parent's vials, bucketed like
     service.classify_removal_impact but keyed by SERVICE ID (S3-aligned):
-    pristine (unassigned, no result, not retested, no promotion link, not a
-    retest child) / worked_unverified (anything else live, including retest
-    children) / blocked (promoted, i.e. a promotion link exists — the
-    parent-tier canonical check upstream already 409s, this is defence).
+    pristine (unassigned, no result, not retested, not a retest child — a
+    row shaped like this is normally link-free too, but the predicate below
+    does not itself check for a promotion link; a dead-link row that
+    happens to match falls through to pristine, per the ruling in the next
+    paragraph, not into blocked) / worked_unverified (anything else live,
+    including retest children and un-promoted sources with only DEAD
+    promotion links) / blocked (verified/published, OR a LIVE promotion
+    link — a LimsAnalysisPromotion whose parent_analysis_id row is not
+    retracted/rejected. The parent-tier canonical check upstream already
+    409s on a live canonical; this is defence for a live canonical fed by a
+    DIFFERENT promotion than the one this row would need).
+
+    A promotion link only blocks while the promoted result is still live on
+    the parent: un-promote (parent retest cascade) retracts the parent
+    canonical but leaves the link row and the source's 'promoted' state
+    intact (P-0157). Once the parent is dead, that link is a stale cul-de-sac
+    — the source is a removable worked row, not blocked. Every entry carries
+    `has_promotion_link` (any link, live or dead) so the confirm path below
+    knows to route it through force_retract_analysis instead of a bare
+    reject, to also clear the stale link row.
 
     A retest CHILD (retest_of_id IS NOT NULL) is never pristine even though
     it is freshly 'unassigned' with no result: delete_pristine_analysis
@@ -309,14 +325,22 @@ def _classify_vial_rows(db: Session, parent: LimsSample, service_id: int) -> dic
             LimsAnalysis.review_state.notin_(DEAD_STATES),
         )
     ).scalars().all()
-    promoted_ids = set(db.execute(
-        select(LimsAnalysisPromotion.source_analysis_id).where(
-            LimsAnalysisPromotion.source_analysis_id.in_([r.id for r in rows] or [-1]))
-    ).scalars().all())
+    # One join query: source_analysis_id -> [parent review_state, ...] for
+    # every link (live or dead) touching these rows. Avoids N+1.
+    links_by_source: dict[int, list[str]] = {}
+    for source_id, parent_state in db.execute(
+        select(LimsAnalysisPromotion.source_analysis_id, LimsAnalysis.review_state)
+        .join(LimsAnalysis, LimsAnalysis.id == LimsAnalysisPromotion.parent_analysis_id)
+        .where(LimsAnalysisPromotion.source_analysis_id.in_([r.id for r in rows] or [-1]))
+    ).all():
+        links_by_source.setdefault(source_id, []).append(parent_state)
     for r in rows:
+        link_states = links_by_source.get(r.id, [])
+        has_live_link = any(st not in DEAD_STATES for st in link_states)
         entry = {"sample_id": vials[r.lims_sub_sample_pk].sample_id, "analysis_id": r.id,
-                 "review_state": r.review_state, "keyword": r.keyword}
-        if r.id in promoted_ids or r.review_state in ("verified", "published", "promoted"):
+                 "review_state": r.review_state, "keyword": r.keyword,
+                 "has_promotion_link": bool(link_states)}
+        if r.review_state in ("verified", "published") or has_live_link:
             out["blocked"].append(entry)
         elif r.retest_of_id is not None:
             out["worked_unverified"].append(entry)
@@ -361,13 +385,16 @@ def remove_parent_native_analysis(db: Session, *, parent: LimsSample, analysis_i
     validate → 409 on a live canonical row → classify vial rows → 412 unless
     confirm when worked rows exist → delete pristine vial rows
     (delete_pristine_analysis, commits per row, writes the vial event first)
-    → reject worked rows (apply_transition, commits per row) → supersede
-    orphaned custody edges → soft-reject the placeholder → parent event →
-    commit. The vial-tier primitives commit as they go (same as the SENAITE
-    overlay's path); the placeholder flip is last so a mid-way failure leaves
-    the parent row live and the action visibly incomplete, never the reverse."""
+    → reject worked rows (apply_transition, or force_retract_analysis for a
+    row still carrying a promotion link — live or stale — which also clears
+    the link row; commits per row) → supersede orphaned custody edges →
+    soft-reject the placeholder → parent event → commit. The vial-tier
+    primitives commit as they go (same as the SENAITE overlay's path); the
+    placeholder flip is last so a mid-way failure leaves the parent row live
+    and the action visibly incomplete, never the reverse."""
     from lims_analyses.service import (
-        apply_transition, delete_pristine_analysis, soft_reject_parent_placeholder,
+        apply_transition, delete_pristine_analysis, force_retract_analysis,
+        soft_reject_parent_placeholder,
     )
     row = _placeholder_row(db, parent, analysis_id)
     service_id = row.analysis_service_id
@@ -394,8 +421,16 @@ def remove_parent_native_analysis(db: Session, *, parent: LimsSample, analysis_i
         deleted += 1
     rejected = 0
     for e in impact["worked_unverified"]:
-        apply_transition(db, analysis_id=e["analysis_id"], kind="reject",
-                         reason="manage_analyses:remove", user_id=user_id)
+        if e["review_state"] == "promoted" or e.get("has_promotion_link"):
+            # Still promoted, or a stale link from an earlier un-promote
+            # (P-0157): force_retract_analysis retracts any still-live
+            # parent canonical, deletes the link row(s), then rejects the
+            # source — a bare reject would leave the link row orphaned.
+            force_retract_analysis(db, analysis_id=e["analysis_id"], user_id=user_id,
+                                   reason="manage_analyses:remove")
+        else:
+            apply_transition(db, analysis_id=e["analysis_id"], kind="reject",
+                             reason="manage_analyses:remove", user_id=user_id)
         rejected += 1
 
     superseded = _supersede_orphan_edges(db, parent=parent, service_id=service_id)

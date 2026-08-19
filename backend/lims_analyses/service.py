@@ -2421,6 +2421,7 @@ def peptide_has_full_service_set(db: Session, *, peptide_id: int) -> bool:
 
 def force_retract_analysis(
     db: Session, *, analysis_id: int, user_id: Optional[int],
+    reason: Optional[str] = None,
 ) -> None:
     """Strong-confirm retract of a worked/promoted/verified vial row, for the
     wrong-variant Replace: the whole analyte is invalid, so its results are
@@ -2434,6 +2435,16 @@ def force_retract_analysis(
                           (promoted -> rejected).
       - verified (vial)-> retract (verified -> retracted).
       - else (worked)  -> reject.
+
+    `reason` is keyword-only and defaults to None, in which case every
+    internal apply_transition call keeps its current, call-site-specific
+    string (byte-identical default behavior for the wrong-variant Replace
+    callers). When given, that string is used for every transition this call
+    applies (canonical retract(s), and the source's own retract/reject) —
+    used by manage_native's remove path to stamp "manage_analyses:remove"
+    instead of the wrong-variant Replace wording. Goes through
+    apply_transition throughout, so it never constructs a
+    LimsAnalysisTransition directly.
 
     Idempotent on the canonical row (skipped if already terminal). Raises only
     on published; transition errors propagate to the caller's per-row guard.
@@ -2458,14 +2469,14 @@ def force_retract_analysis(
                 if canonical.review_state in ("verified", "parent_to_verify"):
                     apply_transition(
                         db, analysis_id=canonical.id, kind="retract",
-                        reason="wrong-variant Replace: canonical result invalidated",
+                        reason=reason or "wrong-variant Replace: canonical result invalidated",
                         user_id=user_id,
                     )
             db.delete(link)
         db.flush()
         apply_transition(
             db, analysis_id=analysis_id, kind="reject",
-            reason="wrong-variant Replace: promoted source abandoned",
+            reason=reason or "wrong-variant Replace: promoted source abandoned",
             user_id=user_id,
         )
         return
@@ -2473,7 +2484,7 @@ def force_retract_analysis(
     kind = "retract" if row.review_state == "verified" else "reject"
     apply_transition(
         db, analysis_id=analysis_id, kind=kind,
-        reason="wrong-variant Replace: result discarded", user_id=user_id,
+        reason=reason or "wrong-variant Replace: result discarded", user_id=user_id,
     )
 
 

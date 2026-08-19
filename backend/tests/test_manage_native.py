@@ -12,8 +12,9 @@ from sqlalchemy.orm import sessionmaker
 import models  # noqa: F401
 from database import Base
 from models import (
-    AnalysisProfile, AnalysisService, LimsAnalysis, LimsAnalysisTransition,
-    LimsSample, LimsSubSample, LimsSubSampleEvent, VialProfileAssignment,
+    AnalysisProfile, AnalysisService, LimsAnalysis, LimsAnalysisPromotion,
+    LimsAnalysisTransition, LimsSample, LimsSubSample, LimsSubSampleEvent,
+    VialProfileAssignment,
 )
 from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
 from lims_analyses import manage_native as mn
@@ -442,6 +443,110 @@ def test_remove_treats_retest_child_as_worked_not_pristine(db, parent, moisture)
     edge = db.execute(select(VialProfileAssignment).where(
         VialProfileAssignment.lims_sub_sample_pk == v.id)).scalars().one()
     assert edge.superseded_at is not None
+
+
+def _stale_cul_de_sac(db, parent, moisture, v, *, canonical_state):
+    """P-0157 UAT shape: vial row promoted+retested, a parent canonical row
+    for the same service, a promotion link between them, and a rejected
+    retest child hanging off the vial row (retest_of_id set). Returns the
+    vial row (the promotion source)."""
+    kf = moisture.analysis_services[0]
+    vr = db.execute(select(LimsAnalysis).where(LimsAnalysis.lims_sub_sample_pk == v.id)).scalars().one()
+    vr.result_value = "12"; vr.review_state = "promoted"; vr.retested = True
+    canonical = LimsAnalysis(lims_sample_pk=parent.id, analysis_service_id=kf.id, keyword="MOISTURE-KF",
+                             title="Residual Moisture", review_state=canonical_state, provenance="canonical")
+    db.add(canonical); db.flush()
+    db.add(LimsAnalysisPromotion(parent_analysis_id=canonical.id, source_analysis_id=vr.id,
+                                 contribution_kind="result"))
+    child = LimsAnalysis(lims_sub_sample_pk=v.id, analysis_service_id=kf.id, keyword="MOISTURE-KF",
+                         title="Residual Moisture", review_state="rejected", provenance="canonical",
+                         retest_of_id=vr.id)
+    db.add(child)
+    db.commit()
+    return vr
+
+
+def test_stale_promotion_link_does_not_block_remove(db, parent, moisture):
+    """Un-promote (parent retest cascade) retracted the parent canonical but
+    left the promotion link and the source's 'promoted'+retested state
+    intact. The link is dead — it must not block removal."""
+    v = _vial(db, parent, sid="MN-PARENT-S04", seq=4, role="kf")
+    mn.add_profile_to_parent(db, parent=parent, profile=moisture, user_id=1)
+    db.commit()
+    kf = moisture.analysis_services[0]
+    ph = _placeholder_of(db, parent, kf.id)
+    vr = _stale_cul_de_sac(db, parent, moisture, v, canonical_state="retracted")
+
+    with pytest.raises(mn.RemovalNeedsConfirm) as ei:
+        mn.remove_parent_native_analysis(db, parent=parent, analysis_id=ph.id, confirm=False, user_id=2)
+    assert ei.value.impact["blocked"] == []
+    assert ei.value.impact["pristine"] == []
+    assert [r["analysis_id"] for r in ei.value.impact["worked_unverified"]] == [vr.id]
+
+
+def test_confirm_clears_promoted_cul_de_sac(db, parent, moisture):
+    v = _vial(db, parent, sid="MN-PARENT-S04", seq=4, role="kf")
+    mn.add_profile_to_parent(db, parent=parent, profile=moisture, user_id=1)
+    db.commit()
+    kf = moisture.analysis_services[0]
+    ph = _placeholder_of(db, parent, kf.id)
+    vr = _stale_cul_de_sac(db, parent, moisture, v, canonical_state="retracted")
+
+    res = mn.remove_parent_native_analysis(db, parent=parent, analysis_id=ph.id, confirm=True, user_id=2)
+
+    assert res["vial_rows_rejected"] == 1 and res["vial_rows_deleted"] == 0
+    db.refresh(vr)
+    assert vr.review_state == "rejected"
+    assert db.query(LimsAnalysisPromotion).count() == 0
+    tr = db.execute(select(LimsAnalysisTransition).where(
+        LimsAnalysisTransition.analysis_id == vr.id).order_by(LimsAnalysisTransition.id)).scalars().all()
+    assert tr[-1].transition_kind == "reject"
+    assert tr[-1].reason == "manage_analyses:remove"
+    db.refresh(ph)
+    assert ph.review_state == "rejected"
+    edge = db.execute(select(VialProfileAssignment).where(
+        VialProfileAssignment.lims_sub_sample_pk == v.id)).scalars().one()
+    assert edge.superseded_at is not None
+
+
+def test_live_promotion_link_still_blocks(db, parent, moisture):
+    """Same shape, but the parent canonical is still live (parent_to_verify):
+    the parent-tier live-canonical check 409s before classify is even
+    reached. Separately assert _classify_vial_rows itself buckets the row
+    as blocked (defence-in-depth, per the docstring)."""
+    v = _vial(db, parent, sid="MN-PARENT-S04", seq=4, role="kf")
+    mn.add_profile_to_parent(db, parent=parent, profile=moisture, user_id=1)
+    db.commit()
+    kf = moisture.analysis_services[0]
+    ph = _placeholder_of(db, parent, kf.id)
+    vr = _stale_cul_de_sac(db, parent, moisture, v, canonical_state="parent_to_verify")
+
+    with pytest.raises(mn.PromotedResultExistsError):
+        mn.remove_parent_native_analysis(db, parent=parent, analysis_id=ph.id, confirm=True, user_id=2)
+
+    impact = mn._classify_vial_rows(db, parent, kf.id)
+    assert [r["analysis_id"] for r in impact["blocked"]] == [vr.id]
+
+
+def test_force_retract_default_reason_unchanged(db, parent, moisture):
+    """No reason passed -> the else/worked-branch default string, unchanged."""
+    from lims_analyses.service import force_retract_analysis
+
+    v = _vial(db, parent, sid="MN-PARENT-S04", seq=4, role="kf")
+    mn.add_profile_to_parent(db, parent=parent, profile=moisture, user_id=1)
+    db.commit()
+    vr = db.execute(select(LimsAnalysis).where(LimsAnalysis.lims_sub_sample_pk == v.id)).scalars().one()
+    vr.result_value = "0.42"; vr.review_state = "to_be_verified"
+    db.commit()
+
+    force_retract_analysis(db, analysis_id=vr.id, user_id=None)
+
+    db.refresh(vr)
+    assert vr.review_state == "rejected"
+    tr = db.execute(select(LimsAnalysisTransition).where(
+        LimsAnalysisTransition.analysis_id == vr.id).order_by(LimsAnalysisTransition.id)).scalars().all()
+    assert tr[-1].transition_kind == "reject"
+    assert tr[-1].reason == "wrong-variant Replace: result discarded"
 
 
 # ── resync_parent_from_order ──────────────────────────────────────────────────
