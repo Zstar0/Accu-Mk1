@@ -91,7 +91,9 @@ function FieldTable({ rows }: { rows: [React.ReactNode, React.ReactNode][] }) {
               <TableCell className="whitespace-nowrap align-top font-medium">
                 {field}
               </TableCell>
-              <TableCell className="text-muted-foreground">{what}</TableCell>
+              <TableCell className="whitespace-normal text-muted-foreground">
+                {what}
+              </TableCell>
             </TableRow>
           ))}
         </TableBody>
@@ -439,7 +441,7 @@ export function NewTestOnboardingGuide() {
           New Test Guide
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
+      <DialogContent className="max-h-[90vh] w-[90vw] overflow-y-auto sm:max-w-[90vw]">
         <DialogHeader>
           <DialogTitle className="text-xl">
             Bringing a New Test Online
@@ -452,7 +454,7 @@ export function NewTestOnboardingGuide() {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="text-sm leading-relaxed [&_p]:my-2">
+        <div className="min-w-0 text-sm leading-relaxed [&_p]:my-2">
           <LifecycleDiagram />
 
           {/* ── The model ── */}
