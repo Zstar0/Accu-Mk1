@@ -405,3 +405,40 @@ def test_remove_rejects_non_placeholder_targets(db, parent, moisture):
         mn.remove_parent_native_analysis(db, parent=parent, analysis_id=can.id, confirm=False, user_id=2)
     with pytest.raises(NotFoundError):
         mn.remove_parent_native_analysis(db, parent=parent, analysis_id=999999, confirm=False, user_id=2)
+
+
+def test_remove_treats_retest_child_as_worked_not_pristine(db, parent, moisture):
+    """Fix round 1: a retest child (retest_of_id set) is never pristine — it
+    belongs to a worked lineage. Both the OLD root and the NEW child must be
+    classified worked_unverified, so confirm=False 412s and confirm=True
+    rejects both via apply_transition rather than the pristine loop
+    mis-targeting the root through delete_pristine_analysis's keyword lookup
+    (which filters retest_of_id IS NULL and would otherwise resolve to the
+    worked root, raising a misleading BadRequestError)."""
+    v = _vial(db, parent, sid="MN-PARENT-S04", seq=4, role="kf")
+    mn.add_profile_to_parent(db, parent=parent, profile=moisture, user_id=1)
+    db.commit()
+    kf = moisture.analysis_services[0]
+    ph = _placeholder_of(db, parent, kf.id)
+    old = db.execute(select(LimsAnalysis).where(LimsAnalysis.lims_sub_sample_pk == v.id)).scalars().one()
+    old.result_value = "0.9"; old.review_state = "to_be_verified"; old.retested = True
+    db.commit()
+    new = LimsAnalysis(lims_sub_sample_pk=v.id, analysis_service_id=kf.id, keyword="MOISTURE-KF",
+                       title="Residual Moisture", review_state="unassigned", provenance="canonical",
+                       retest_of_id=old.id)
+    db.add(new); db.commit()
+
+    with pytest.raises(mn.RemovalNeedsConfirm) as ei:
+        mn.remove_parent_native_analysis(db, parent=parent, analysis_id=ph.id, confirm=False, user_id=2)
+    assert ei.value.impact["pristine"] == []
+    assert {r["analysis_id"] for r in ei.value.impact["worked_unverified"]} == {old.id, new.id}
+
+    res = mn.remove_parent_native_analysis(db, parent=parent, analysis_id=ph.id, confirm=True, user_id=2)
+    assert res["vial_rows_rejected"] == 2 and res["vial_rows_deleted"] == 0
+    db.refresh(old); db.refresh(new); db.refresh(ph)
+    assert old.review_state == "rejected"
+    assert new.review_state == "rejected"
+    assert ph.review_state == "rejected"
+    edge = db.execute(select(VialProfileAssignment).where(
+        VialProfileAssignment.lims_sub_sample_pk == v.id)).scalars().one()
+    assert edge.superseded_at is not None

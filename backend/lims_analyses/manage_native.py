@@ -281,10 +281,22 @@ def _placeholder_row(db: Session, parent: LimsSample, analysis_id: int) -> LimsA
 def _classify_vial_rows(db: Session, parent: LimsSample, service_id: int) -> dict:
     """Vial-tier rows for `service_id` on the parent's vials, bucketed like
     service.classify_removal_impact but keyed by SERVICE ID (S3-aligned):
-    pristine (unassigned, no result, not retested, no promotion link) /
-    worked_unverified (anything else live) / blocked (promoted, i.e. a
-    promotion link exists — the parent-tier canonical check upstream already
-    409s, this is defence)."""
+    pristine (unassigned, no result, not retested, no promotion link, not a
+    retest child) / worked_unverified (anything else live, including retest
+    children) / blocked (promoted, i.e. a promotion link exists — the
+    parent-tier canonical check upstream already 409s, this is defence).
+
+    A retest CHILD (retest_of_id IS NOT NULL) is never pristine even though
+    it is freshly 'unassigned' with no result: delete_pristine_analysis
+    resolves its target by KEYWORD and filters retest_of_id IS NULL
+    (service.py), so it always targets the lineage's ROOT row, never the
+    child. Bucketing the child as pristine here would tell the pristine loop
+    it deleted the child while delete_pristine_analysis actually inspected —
+    and, since the root is worked, rejected with a misleading message — the
+    root. Routing the child (and its root, which independently lands here
+    via the worked_unverified branch below) into worked_unverified instead
+    means the whole lineage is rejected via apply_transition, never deleted,
+    and the pristine loop never touches a keyword with a live retest child."""
     from models import LimsAnalysisPromotion
     vials = {v.id: v for v in _vials_of(db, parent)}
     out = {"pristine": [], "worked_unverified": [], "blocked": []}
@@ -306,6 +318,8 @@ def _classify_vial_rows(db: Session, parent: LimsSample, service_id: int) -> dic
                  "review_state": r.review_state, "keyword": r.keyword}
         if r.id in promoted_ids or r.review_state in ("verified", "published", "promoted"):
             out["blocked"].append(entry)
+        elif r.retest_of_id is not None:
+            out["worked_unverified"].append(entry)
         elif r.review_state == "unassigned" and r.result_value is None and not r.retested:
             out["pristine"].append(entry)
         else:
