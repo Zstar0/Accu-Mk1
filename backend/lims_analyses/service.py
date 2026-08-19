@@ -265,6 +265,43 @@ def record_placeholder_created(
     return tr
 
 
+def soft_reject_parent_placeholder(
+    db: Session,
+    row: LimsAnalysis,
+    *,
+    reason: str,
+    user_id: Optional[int],
+) -> LimsAnalysis:
+    """Ruling R1 (manage-analyses slice): a parent PLACEHOLDER (provenance
+    'ordered', never worked) is removed by marking it 'rejected' — the row and
+    its transitions survive as the trail, and the partial unique index
+    (…_parent_service_ordered excludes rejected/retracted) frees the slot for
+    a re-add. Written directly rather than through apply_transition: the
+    generic tier gate forbids parent-tier 'reject' on purpose (workflow rows),
+    and that gate is untouched — this is a placeholder-only primitive.
+    Raises BadRequestError on anything that is not a live placeholder.
+    Flushes, never commits.
+    """
+    if row.provenance != "ordered" or row.lims_sub_sample_pk is not None:
+        raise BadRequestError(f"analysis id={row.id} is not a parent placeholder")
+    if row.review_state in ("rejected", "retracted"):
+        raise BadRequestError(f"analysis id={row.id} is already {row.review_state}")
+    from_state = row.review_state
+    row.review_state = "rejected"
+    row.updated_at = datetime.utcnow()
+    db.add(LimsAnalysisTransition(
+        analysis_id=row.id,
+        from_state=from_state,
+        to_state="rejected",
+        transition_kind="reject",
+        user_id=user_id,
+        reason=reason,
+        details={"changed": {}},
+    ))
+    db.flush()
+    return row
+
+
 # ─── Amendment audit (spec 2026-08-07) ───────────────────────────────────────
 # Fields whose changes are captured as before/after into
 # lims_analysis_transitions.details. Values must stay JSON-serializable

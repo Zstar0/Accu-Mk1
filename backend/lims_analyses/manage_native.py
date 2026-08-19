@@ -253,3 +253,148 @@ def add_profile_to_parent(db: Session, *, parent: LimsSample, profile: AnalysisP
         "hosts": hosts,
         "no_host_vial": not hosts,
     }
+
+
+# ── write path: remove ───────────────────────────────────────────────────────
+
+class PromotedResultExistsError(ConflictError):
+    code = "promoted_result_exists"
+
+
+class RemovalNeedsConfirm(Exception):
+    """Worked vial rows would be rejected — the caller must confirm (412)."""
+
+    def __init__(self, impact: dict):
+        super().__init__("removal touches worked vial rows; confirm required")
+        self.impact = impact
+
+
+def _placeholder_row(db: Session, parent: LimsSample, analysis_id: int) -> LimsAnalysis:
+    from lims_analyses.service import NotFoundError
+    row = db.get(LimsAnalysis, analysis_id)
+    if (row is None or row.lims_sample_pk != parent.id or row.lims_sub_sample_pk is not None
+            or row.provenance != PROVENANCE_ORDERED or row.review_state in DEAD_STATES):
+        raise NotFoundError(f"no live parent placeholder id={analysis_id} on {parent.sample_id}")
+    return row
+
+
+def _classify_vial_rows(db: Session, parent: LimsSample, service_id: int) -> dict:
+    """Vial-tier rows for `service_id` on the parent's vials, bucketed like
+    service.classify_removal_impact but keyed by SERVICE ID (S3-aligned):
+    pristine (unassigned, no result, not retested, no promotion link) /
+    worked_unverified (anything else live) / blocked (promoted, i.e. a
+    promotion link exists — the parent-tier canonical check upstream already
+    409s, this is defence)."""
+    from models import LimsAnalysisPromotion
+    vials = {v.id: v for v in _vials_of(db, parent)}
+    out = {"pristine": [], "worked_unverified": [], "blocked": []}
+    if not vials:
+        return out
+    rows = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sub_sample_pk.in_(list(vials)),
+            LimsAnalysis.analysis_service_id == service_id,
+            LimsAnalysis.review_state.notin_(DEAD_STATES),
+        )
+    ).scalars().all()
+    promoted_ids = set(db.execute(
+        select(LimsAnalysisPromotion.source_analysis_id).where(
+            LimsAnalysisPromotion.source_analysis_id.in_([r.id for r in rows] or [-1]))
+    ).scalars().all())
+    for r in rows:
+        entry = {"sample_id": vials[r.lims_sub_sample_pk].sample_id, "analysis_id": r.id,
+                 "review_state": r.review_state, "keyword": r.keyword}
+        if r.id in promoted_ids or r.review_state in ("verified", "published", "promoted"):
+            out["blocked"].append(entry)
+        elif r.review_state == "unassigned" and r.result_value is None and not r.retested:
+            out["pristine"].append(entry)
+        else:
+            out["worked_unverified"].append(entry)
+    return out
+
+
+def _supersede_orphan_edges(db: Session, *, parent: LimsSample, service_id: int) -> int:
+    """For every all-native profile containing `service_id`, on every vial of
+    the parent that has a current edge for that profile: if NO live vial row
+    of ANY member remains on that vial, stamp superseded_at. Returns count."""
+    now = datetime.utcnow()
+    n = 0
+    profiles = [p for p in db.execute(select(AnalysisProfile)).scalars()
+                if _is_all_native(p) and any(m.id == service_id for m in p.analysis_services)]
+    for prof in profiles:
+        member_ids = [m.id for m in prof.analysis_services]
+        for vial in _vials_of(db, parent):
+            edge = db.execute(select(VialProfileAssignment).where(
+                VialProfileAssignment.lims_sub_sample_pk == vial.id,
+                VialProfileAssignment.analysis_profile_id == prof.id,
+                VialProfileAssignment.superseded_at.is_(None))).scalars().first()
+            if edge is None:
+                continue
+            remaining = db.execute(select(LimsAnalysis.id).where(
+                LimsAnalysis.lims_sub_sample_pk == vial.id,
+                LimsAnalysis.analysis_service_id.in_(member_ids),
+                LimsAnalysis.review_state.notin_(DEAD_STATES))).first()
+            if remaining is None:
+                edge.superseded_at = now
+                n += 1
+    db.flush()
+    return n
+
+
+def remove_parent_native_analysis(db: Session, *, parent: LimsSample, analysis_id: int,
+                                  confirm: bool, user_id: Optional[int]) -> dict:
+    """Ruling P (service-level remove) + R1 (soft remove). Order of operations:
+    validate → 409 on a live canonical row → classify vial rows → 412 unless
+    confirm when worked rows exist → delete pristine vial rows
+    (delete_pristine_analysis, commits per row, writes the vial event first)
+    → reject worked rows (apply_transition, commits per row) → supersede
+    orphaned custody edges → soft-reject the placeholder → parent event →
+    commit. The vial-tier primitives commit as they go (same as the SENAITE
+    overlay's path); the placeholder flip is last so a mid-way failure leaves
+    the parent row live and the action visibly incomplete, never the reverse."""
+    from lims_analyses.service import (
+        apply_transition, delete_pristine_analysis, soft_reject_parent_placeholder,
+    )
+    row = _placeholder_row(db, parent, analysis_id)
+    service_id = row.analysis_service_id
+    canonical_live = db.execute(select(LimsAnalysis.id).where(
+        LimsAnalysis.lims_sample_pk == parent.id, LimsAnalysis.lims_sub_sample_pk.is_(None),
+        LimsAnalysis.analysis_service_id == service_id, LimsAnalysis.provenance == "canonical",
+        LimsAnalysis.review_state.notin_(DEAD_STATES))).first()
+    if canonical_live is not None:
+        raise PromotedResultExistsError(
+            f"{row.keyword} has a promoted result on {parent.sample_id}; use retest/retract")
+
+    impact = _classify_vial_rows(db, parent, service_id)
+    if impact["blocked"]:
+        raise PromotedResultExistsError(
+            f"{row.keyword} has verified/promoted vial rows on {parent.sample_id}")
+    if impact["worked_unverified"] and not confirm:
+        raise RemovalNeedsConfirm(impact)
+
+    vials = {v.id: v for v in _vials_of(db, parent)}
+    deleted = 0
+    for e in impact["pristine"]:
+        vial = next(v for v in vials.values() if v.sample_id == e["sample_id"])
+        delete_pristine_analysis(db, sub_sample_pk=vial.id, keyword=e["keyword"], user_id=user_id)
+        deleted += 1
+    rejected = 0
+    for e in impact["worked_unverified"]:
+        apply_transition(db, analysis_id=e["analysis_id"], kind="reject",
+                         reason="manage_analyses:remove", user_id=user_id)
+        rejected += 1
+
+    superseded = _supersede_orphan_edges(db, parent=parent, service_id=service_id)
+    soft_reject_parent_placeholder(db, row, reason="manage_analyses:remove", user_id=user_id)
+    db.add(LimsSubSampleEvent(
+        lims_sample_pk=parent.id, event="native_analysis_removed",
+        details={"keyword": row.keyword, "analysis_service_id": service_id, "analysis_id": row.id,
+                 "vial_rows_deleted": deleted, "vial_rows_rejected": rejected,
+                 "edges_superseded": superseded},
+        user_id=user_id,
+    ))
+    db.commit()
+    log.info("manage_native.analysis_removed parent=%s keyword=%s deleted=%s rejected=%s edges=%s",
+             parent.sample_id, row.keyword, deleted, rejected, superseded)
+    return {"analysis_id": row.id, "keyword": row.keyword, "analysis_service_id": service_id,
+            "vial_rows_deleted": deleted, "vial_rows_rejected": rejected, "edges_superseded": superseded}

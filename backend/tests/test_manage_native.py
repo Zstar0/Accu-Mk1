@@ -309,3 +309,99 @@ def test_role_flip_placeholder_wins_over_wp_false_on_same_key(db, parent, heavy_
         VialProfileAssignment.lims_sub_sample_pk == v.id,
         VialProfileAssignment.superseded_at.is_(None))).scalars().all()
     assert [(e.analysis_profile_id, e.relation) for e in edges] == [(heavy_metals.id, "host")]
+
+
+# ── remove_parent_native_analysis ─────────────────────────────────────────────
+
+def _placeholder_of(db, parent, svc_id):
+    return db.execute(select(LimsAnalysis).where(
+        LimsAnalysis.lims_sample_pk == parent.id, LimsAnalysis.analysis_service_id == svc_id,
+        LimsAnalysis.provenance == PROVENANCE_ORDERED,
+        LimsAnalysis.review_state.notin_(("rejected", "retracted")))).scalars().one()
+
+
+def test_remove_pristine_deletes_vial_rows_soft_rejects_placeholder_supersedes_edge(db, parent, moisture):
+    v = _vial(db, parent, sid="MN-PARENT-S04", seq=4, role="kf")
+    mn.add_profile_to_parent(db, parent=parent, profile=moisture, user_id=1)
+    db.commit()
+    kf = moisture.analysis_services[0]
+    ph = _placeholder_of(db, parent, kf.id)
+
+    res = mn.remove_parent_native_analysis(db, parent=parent, analysis_id=ph.id, confirm=False, user_id=2)
+
+    assert res == {"analysis_id": ph.id, "keyword": "MOISTURE-KF", "analysis_service_id": kf.id,
+                   "vial_rows_deleted": 1, "vial_rows_rejected": 0, "edges_superseded": 1}
+    db.refresh(ph)
+    assert ph.review_state == "rejected"
+    tr = db.execute(select(LimsAnalysisTransition).where(
+        LimsAnalysisTransition.analysis_id == ph.id).order_by(LimsAnalysisTransition.id)).scalars().all()
+    assert [t.transition_kind for t in tr] == ["auto", "reject"]
+    assert tr[-1].reason == "manage_analyses:remove" and tr[-1].details == {"changed": {}}
+    assert db.query(LimsAnalysis).filter(LimsAnalysis.lims_sub_sample_pk == v.id).count() == 0
+    edge = db.execute(select(VialProfileAssignment).where(
+        VialProfileAssignment.lims_sub_sample_pk == v.id)).scalars().one()
+    assert edge.superseded_at is not None
+    evs = [e.event for e in db.execute(select(LimsSubSampleEvent).where(
+        LimsSubSampleEvent.lims_sample_pk == parent.id)).scalars().all()]
+    assert "native_analysis_removed" in evs
+    # re-add works: the rejected placeholder does not block, a fresh one mints
+    res2 = mn.add_profile_to_parent(db, parent=parent, profile=moisture, user_id=1)
+    db.commit()
+    assert res2["placeholders_created"] == 1
+
+
+def test_remove_worked_vial_row_requires_confirm_then_rejects(db, parent, moisture):
+    v = _vial(db, parent, sid="MN-PARENT-S04", seq=4, role="kf")
+    mn.add_profile_to_parent(db, parent=parent, profile=moisture, user_id=1)
+    db.commit()
+    kf = moisture.analysis_services[0]
+    ph = _placeholder_of(db, parent, kf.id)
+    vr = db.execute(select(LimsAnalysis).where(LimsAnalysis.lims_sub_sample_pk == v.id)).scalars().one()
+    vr.result_value = "0.42"; vr.review_state = "to_be_verified"; db.commit()
+
+    with pytest.raises(mn.RemovalNeedsConfirm) as ei:
+        mn.remove_parent_native_analysis(db, parent=parent, analysis_id=ph.id, confirm=False, user_id=2)
+    assert [r["sample_id"] for r in ei.value.impact["worked_unverified"]] == ["MN-PARENT-S04"]
+    db.refresh(ph); assert ph.review_state == "unassigned"  # nothing changed
+
+    res = mn.remove_parent_native_analysis(db, parent=parent, analysis_id=ph.id, confirm=True, user_id=2)
+    assert res["vial_rows_rejected"] == 1 and res["vial_rows_deleted"] == 0
+    db.refresh(vr); assert vr.review_state == "rejected"
+    db.refresh(ph); assert ph.review_state == "rejected"
+
+
+def test_remove_blocked_when_a_live_canonical_row_exists(db, parent, moisture):
+    mn.add_profile_to_parent(db, parent=parent, profile=moisture, user_id=1)
+    db.commit()
+    kf = moisture.analysis_services[0]
+    ph = _placeholder_of(db, parent, kf.id)
+    db.add(LimsAnalysis(lims_sample_pk=parent.id, analysis_service_id=kf.id, keyword="MOISTURE-KF",
+                        title="Residual Moisture", review_state="verified", provenance="canonical"))
+    db.commit()
+    with pytest.raises(mn.PromotedResultExistsError):
+        mn.remove_parent_native_analysis(db, parent=parent, analysis_id=ph.id, confirm=True, user_id=2)
+
+
+def test_remove_only_supersedes_edge_when_no_member_row_remains(db, parent, heavy_metals):
+    v = _vial(db, parent, sid="MN-PARENT-S02", seq=2, role="hm")
+    mn.add_profile_to_parent(db, parent=parent, profile=heavy_metals, user_id=1)
+    db.commit()
+    lead = heavy_metals.analysis_services[0]
+    ph = _placeholder_of(db, parent, lead.id)
+    res = mn.remove_parent_native_analysis(db, parent=parent, analysis_id=ph.id, confirm=False, user_id=2)
+    assert res["edges_superseded"] == 0  # 3 members still live on the vial
+    edge = db.execute(select(VialProfileAssignment).where(
+        VialProfileAssignment.lims_sub_sample_pk == v.id)).scalars().one()
+    assert edge.superseded_at is None
+
+
+def test_remove_rejects_non_placeholder_targets(db, parent, moisture):
+    kf = moisture.analysis_services[0]
+    can = LimsAnalysis(lims_sample_pk=parent.id, analysis_service_id=kf.id, keyword="MOISTURE-KF",
+                       title="Residual Moisture", review_state="verified", provenance="canonical")
+    db.add(can); db.commit()
+    from lims_analyses.service import NotFoundError
+    with pytest.raises(NotFoundError):
+        mn.remove_parent_native_analysis(db, parent=parent, analysis_id=can.id, confirm=False, user_id=2)
+    with pytest.raises(NotFoundError):
+        mn.remove_parent_native_analysis(db, parent=parent, analysis_id=999999, confirm=False, user_id=2)
