@@ -550,3 +550,53 @@ def test_workflow_engine_ignores_placeholders(db, parent_sample, usp71_profile,
     seed_parent_placeholders(db, parent=parent_sample, services={"sterility_usp71": True})
     db.commit()
     assert _live_parent_line_states(db, parent_sample) == before
+
+
+# ── Manage-analyses slice: re-add after soft remove + audited reason ─────────
+
+
+def test_rejected_placeholder_does_not_block_re_add(db, parent_sample, usp71_profile):
+    """R1 soft-remove sets review_state='rejected'; the partial unique index
+    excludes rejected rows, and so must the pre-check — otherwise a re-add
+    reports `existing` and mints nothing."""
+    first = seed_parent_placeholders(db, parent=parent_sample, services={"sterility_usp71": True})
+    db.commit()
+    assert first["created"] == 1
+    row = db.get(LimsAnalysis, first["created_ids"][0])
+    row.review_state = "rejected"
+    db.commit()
+
+    again = seed_parent_placeholders(db, parent=parent_sample, services={"sterility_usp71": True})
+    db.commit()
+    assert again["created"] == 1 and again["existing"] == 0
+    live = db.query(LimsAnalysis).filter_by(
+        lims_sample_pk=parent_sample.id, provenance=PROVENANCE_ORDERED
+    ).all()
+    assert sorted(r.review_state for r in live) == ["rejected", "unassigned"]
+
+
+def test_reason_writes_an_auto_transition_with_empty_changed(db, parent_sample, usp71_profile):
+    from models import LimsAnalysisTransition
+    stats = seed_parent_placeholders(
+        db, parent=parent_sample, services={"sterility_usp71": True},
+        reason="manage_analyses:add profile=sterility_usp71", created_by_user_id=7,
+    )
+    db.commit()
+    (aid,) = stats["created_ids"]
+    trs = db.query(LimsAnalysisTransition).filter_by(analysis_id=aid).all()
+    assert len(trs) == 1
+    t = trs[0]
+    assert t.transition_kind == "auto" and t.from_state is None and t.to_state == "unassigned"
+    assert t.reason == "manage_analyses:add profile=sterility_usp71"
+    assert t.user_id == 7
+    assert t.details == {"changed": {}}
+
+
+def test_no_reason_writes_no_transition(db, parent_sample, usp71_profile):
+    """Registration-time seeding is unchanged: no transition row (today's behavior)."""
+    from models import LimsAnalysisTransition
+    stats = seed_parent_placeholders(db, parent=parent_sample, services={"sterility_usp71": True})
+    db.commit()
+    assert db.query(LimsAnalysisTransition).filter(
+        LimsAnalysisTransition.analysis_id.in_(stats["created_ids"])
+    ).count() == 0

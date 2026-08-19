@@ -236,6 +236,35 @@ def create_analysis(
     return row
 
 
+def record_placeholder_created(
+    db: Session,
+    row: LimsAnalysis,
+    *,
+    reason: str,
+    user_id: Optional[int],
+) -> LimsAnalysisTransition:
+    """Audit row for a lab-minted parent placeholder (manage-analyses slice).
+
+    Registration-time placeholders carry no transition (they are 'ordered' and
+    nothing more); a lab-driven mint records *why it exists* on an 'auto'
+    transition (from NULL → unassigned) whose `reason` names the action.
+    Lives here — not in parent_placeholders.py — so the amendment-audit AST
+    guard sees the construction and enforces details=. Flushes, never commits.
+    """
+    tr = LimsAnalysisTransition(
+        analysis_id=row.id,
+        from_state=None,
+        to_state="unassigned",
+        transition_kind="auto",
+        user_id=user_id,
+        reason=reason,
+        details={"changed": {}},
+    )
+    db.add(tr)
+    db.flush()
+    return tr
+
+
 # ─── Amendment audit (spec 2026-08-07) ───────────────────────────────────────
 # Fields whose changes are captured as before/after into
 # lims_analysis_transitions.details. Values must stay JSON-serializable

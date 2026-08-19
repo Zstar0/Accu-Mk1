@@ -26,14 +26,24 @@ from __future__ import annotations
 PROVENANCE_ORDERED = "ordered"
 
 
-def seed_parent_placeholders(db, *, parent, services: dict, package=None) -> dict:
+def seed_parent_placeholders(
+    db, *, parent, services: dict, package=None,
+    reason: str | None = None, created_by_user_id: int | None = None,
+) -> dict:
     """Mint a pending parent-tier row per ORDERED native analysis service.
 
     Idempotent: relies on uq_lims_analyses_parent_service_ordered, and also
-    checks first so a re-run reports `existing` rather than raising.
+    checks first so a re-run reports `existing` rather than raising. The
+    pre-check mirrors the index predicate exactly — a 'rejected'/'retracted'
+    placeholder (manage-analyses soft remove) does NOT block a fresh mint.
 
     Only native (origin='mk1') services are placeheld — SENAITE-sourced ones
     already get their 'shadow' row from the registration mirror.
+
+    reason / created_by_user_id (manage-analyses slice): when `reason` is
+    given, every CREATED row also gets an 'auto' transition naming the action
+    (service.record_placeholder_created). Registration-time callers pass
+    neither and behave exactly as before (no transition).
 
     Calls _ordered_native_profiles with require_archetype=False: a profile's
     coa_archetype governs whether a COA section can be RENDERED, not whether
@@ -44,8 +54,9 @@ def seed_parent_placeholders(db, *, parent, services: dict, package=None) -> dic
     """
     from models import LimsAnalysis
     from coa.native_sections import _ordered_native_profiles
+    from lims_analyses.service import record_placeholder_created
 
-    stats = {"created": 0, "existing": 0, "skipped": 0}
+    stats = {"created": 0, "existing": 0, "skipped": 0, "created_ids": []}
     profiles = _ordered_native_profiles(db, services or {}, package,
                                         require_archetype=False)
 
@@ -54,15 +65,20 @@ def seed_parent_placeholders(db, *, parent, services: dict, package=None) -> dic
             if (getattr(svc, "origin", None) or "") != "mk1":
                 stats["skipped"] += 1
                 continue
-            exists = db.query(LimsAnalysis).filter_by(
-                lims_sample_pk=parent.id,
-                analysis_service_id=svc.id,
-                provenance=PROVENANCE_ORDERED,
-            ).first()
+            exists = (
+                db.query(LimsAnalysis)
+                .filter_by(
+                    lims_sample_pk=parent.id,
+                    analysis_service_id=svc.id,
+                    provenance=PROVENANCE_ORDERED,
+                )
+                .filter(LimsAnalysis.review_state.notin_(("rejected", "retracted")))
+                .first()
+            )
             if exists is not None:
                 stats["existing"] += 1
                 continue
-            db.add(LimsAnalysis(
+            row = LimsAnalysis(
                 lims_sample_pk=parent.id,
                 lims_sub_sample_pk=None,
                 analysis_service_id=svc.id,
@@ -71,6 +87,12 @@ def seed_parent_placeholders(db, *, parent, services: dict, package=None) -> dic
                 result_value=None,
                 review_state="unassigned",
                 provenance=PROVENANCE_ORDERED,
-            ))
+                created_by_user_id=created_by_user_id,
+            )
+            db.add(row)
+            db.flush()
+            if reason:
+                record_placeholder_created(db, row, reason=reason, user_id=created_by_user_id)
             stats["created"] += 1
+            stats["created_ids"].append(row.id)
     return stats

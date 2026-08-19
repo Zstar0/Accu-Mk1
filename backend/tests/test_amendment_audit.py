@@ -280,9 +280,10 @@ def test_grep_guard_every_construction_passes_details():
         )
     ]
     # Guards against an import-shape change (e.g. aliasing or calling via a
-    # module attribute) silently hiding call sites from this scan.
-    assert len(sites) >= 11, (
-        f"expected >= 11 LimsAnalysisTransition(...) construction sites in "
+    # module attribute) silently hiding call sites from this scan. Floor
+    # bumped 11 -> 12 for record_placeholder_created (manage-analyses slice).
+    assert len(sites) >= 12, (
+        f"expected >= 12 LimsAnalysisTransition(...) construction sites in "
         f"service.py, found {len(sites)} — a site may have gone undetected"
     )
     for node in sites:
