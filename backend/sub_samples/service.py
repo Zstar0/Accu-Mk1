@@ -1771,7 +1771,11 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
             # parent (live 'ordered' placeholders) is not in the WP order, so
             # union its key in — resolve_catalog_fulfillment then hosts it and
             # the seeder seeds it. Adds nothing for a normal order (those keys
-            # are already present); reads only, never writes.
+            # are already present); reads only, never writes. Placeholder
+            # keys are merged in LAST, so on a same-key collision a live
+            # 'ordered' placeholder (True) wins over an incoming WP False —
+            # the placeholder is the parent's current truth of what's on the
+            # sample; removing it goes through Manage Analyses, not the order.
             from lims_analyses.manage_native import placeholder_profile_keys
             services_map = {**services_map, **placeholder_profile_keys(db, parent_row)}
         from sub_samples.custody import write_custody_edges

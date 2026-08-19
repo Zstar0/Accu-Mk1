@@ -251,3 +251,61 @@ def test_role_flip_without_placeholders_is_unchanged(db, parent, monkeypatch):
     svc.set_assignment_role(db, v.sample_id, "hm", user_id=1)
     assert db.query(LimsAnalysis).filter(LimsAnalysis.lims_sub_sample_pk == v.id).count() == 0
     assert db.query(VialProfileAssignment).count() == 0
+
+
+def test_role_flip_union_merges_wp_ordered_and_placeholder_derived_profiles(db, parent, heavy_metals, monkeypatch):
+    """Merge, not replace (review fix round 1): a WP-ordered profile — a REAL
+    key present in the fetched services map, unlike the earlier tests' inert
+    'hplcpurity_identity' — and a lab-added placeholder profile share the
+    SAME role ('hm'), so the union is observable in what actually seeds and
+    gets a custody edge. Proves the implementation merges both sources
+    rather than one substituting for the other."""
+    import sub_samples.service as svc
+    from catalog.vial_roles_seed import seed_vial_roles
+    seed_vial_roles(db)
+    selenium = _svc(db, keyword="SELENIUM-PPM", title="Selenium")
+    hm_extra = _profile(db, key="hm_extra", name="HM Extra", members=[selenium], role="hm")
+
+    # heavy_metals is lab-added: placeholder only, no host vial exists yet.
+    mn.add_profile_to_parent(db, parent=parent, profile=heavy_metals, user_id=1)
+    db.commit()
+    v = _vial(db, parent, sid="MN-PARENT-S04", seq=4, role=None)
+    # hm_extra arrives through the WP order — a real, resolvable profile key.
+    monkeypatch.setattr(svc, "_fetch_wp_services_for_parent", lambda sid: {"hm_extra": True})
+
+    svc.set_assignment_role(db, v.sample_id, "hm", user_id=1)
+
+    hm_member_ids = {m.id for m in heavy_metals.analysis_services}
+    rows = db.execute(select(LimsAnalysis).where(LimsAnalysis.lims_sub_sample_pk == v.id)).scalars().all()
+    assert len(rows) == 5
+    assert {r.analysis_service_id for r in rows} == hm_member_ids | {selenium.id}
+    edges = db.execute(select(VialProfileAssignment).where(
+        VialProfileAssignment.lims_sub_sample_pk == v.id,
+        VialProfileAssignment.superseded_at.is_(None))).scalars().all()
+    assert {(e.analysis_profile_id, e.relation) for e in edges} == {
+        (heavy_metals.id, "host"), (hm_extra.id, "host"),
+    }
+
+
+def test_role_flip_placeholder_wins_over_wp_false_on_same_key(db, parent, heavy_metals, monkeypatch):
+    """Precedence (review fix round 1): a live 'ordered' placeholder is the
+    parent's current truth of what's on the sample. When the WP-fetched
+    services map disagrees on the SAME key (stale/false), the
+    placeholder-derived value still wins and the profile seeds."""
+    import sub_samples.service as svc
+    from catalog.vial_roles_seed import seed_vial_roles
+    seed_vial_roles(db)
+    mn.add_profile_to_parent(db, parent=parent, profile=heavy_metals, user_id=1)
+    db.commit()
+    v = _vial(db, parent, sid="MN-PARENT-S04", seq=4, role=None)
+    monkeypatch.setattr(svc, "_fetch_wp_services_for_parent", lambda sid: {"heavy_metals": False})
+
+    svc.set_assignment_role(db, v.sample_id, "hm", user_id=1)
+
+    member_ids = [m.id for m in heavy_metals.analysis_services]
+    rows = db.execute(select(LimsAnalysis).where(LimsAnalysis.lims_sub_sample_pk == v.id)).scalars().all()
+    assert [r.analysis_service_id for r in rows] == member_ids
+    edges = db.execute(select(VialProfileAssignment).where(
+        VialProfileAssignment.lims_sub_sample_pk == v.id,
+        VialProfileAssignment.superseded_at.is_(None))).scalars().all()
+    assert [(e.analysis_profile_id, e.relation) for e in edges] == [(heavy_metals.id, "host")]
