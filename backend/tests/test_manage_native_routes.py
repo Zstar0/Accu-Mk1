@@ -186,6 +186,26 @@ def test_explorer_native_vial_add_of_non_mk1_service_does_not_409_after_commit(c
     assert ph == []  # no parent placeholder minted for a non-mk1 service
 
 
+def test_explorer_native_vial_add_survives_placeholder_integrity_error(client, world, db_session, monkeypatch):
+    # Regression: a concurrent duplicate-placeholder race trips the partial
+    # unique index uq_lims_analyses_parent_service_ordered (real Postgres
+    # only) and ensure_parent_placeholder's db.flush() raises IntegrityError.
+    # The explorer route's inner guard must swallow that too — the vial add
+    # already committed and is the primary action; the placeholder ensure is
+    # best-effort.
+    from sqlalchemy.exc import IntegrityError
+
+    def _boom(*args, **kwargs):
+        raise IntegrityError("INSERT ...", {}, Exception("dup key value violates unique constraint"))
+
+    monkeypatch.setattr(mn, "ensure_parent_placeholder", _boom)
+    r = client.post("/explorer/samples/RT-PARENT-S04/analyses", json={"keyword": "MOISTURE-KF"})
+    assert r.status_code in (200, 201), r.text
+    vial_rows = db_session.execute(select(LimsAnalysis).where(
+        LimsAnalysis.lims_sub_sample_pk == world["vial"].id, LimsAnalysis.keyword == "MOISTURE-KF")).scalars().all()
+    assert len(vial_rows) == 1
+
+
 def test_senaite_shape_rows_carry_provenance(client, world):
     client.post("/api/lims-analyses/parent/RT-PARENT/profiles", json={"profile_id": world["profile"].id})
     r = client.get("/api/lims-analyses/parent/RT-PARENT/native-analyses?as=senaite_shape")

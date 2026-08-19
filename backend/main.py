@@ -9325,10 +9325,17 @@ async def add_sample_analysis(
             )
             # Manage-analyses slice: the parent tells the truth before promote —
             # a native vial add also ensures the parent placeholder (no-op when
-            # a live ordered/canonical row exists, or when the service isn't
-            # origin='mk1' — pre-existing native-vial adds aren't scoped to
-            # mk1-origin services, so ProfileNotNativeError is swallowed here
-            # rather than turning an otherwise-successful vial add into a 409).
+            # a live ordered/canonical row exists). This is best-effort: the
+            # vial add above is the primary action and has already committed,
+            # so a failure here must never fail the request. Two known ways
+            # it can fail: (1) ProfileNotNativeError — pre-existing native-vial
+            # adds aren't scoped to mk1-origin services (senaite-origin is a
+            # normal path via senaite_uid/keyword); (2) IntegrityError — a
+            # concurrent duplicate-placeholder race against the partial unique
+            # index uq_lims_analyses_parent_service_ordered (raw-SQL migration,
+            # database.py, real Postgres only — not present against in-memory
+            # SQLite in tests). Both are caught explicitly (no bare except) and
+            # logged, never silent, never surfaced as a false 409.
             from lims_analyses.manage_native import ProfileNotNativeError, ensure_parent_placeholder
             from models import AnalysisService as _Svc
             parent_row = db.get(LimsSample, sub.parent_sample_pk)
@@ -9339,8 +9346,18 @@ async def add_sample_analysis(
                                               user_id=getattr(_current_user, "id", None),
                                               reason="manage_analyses:vial_add")
                     db.commit()
-                except ProfileNotNativeError:
+                except ProfileNotNativeError as e:
                     db.rollback()
+                    logger.warning(
+                        "manage_native.vial_add_placeholder_skipped sample=%s keyword=%s reason=%s",
+                        sample_id, svc_row.keyword, e,
+                    )
+                except SQLIntegrityError as e:
+                    db.rollback()
+                    logger.warning(
+                        "manage_native.vial_add_placeholder_skipped sample=%s keyword=%s reason=%s",
+                        sample_id, svc_row.keyword, e,
+                    )
         except _NotFoundError as e:
             raise HTTPException(status_code=404, detail=str(e))
         except _BadRequestError as e:
