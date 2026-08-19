@@ -207,3 +207,47 @@ def test_add_rejects_inactive_non_native_and_empty(db, parent):
     with pytest.raises(mn.ProfileHasNoMembersError):
         mn.add_profile_to_parent(db, parent=parent, profile=empty, user_id=1)
     assert db.query(LimsAnalysis).count() == 0
+
+
+# ── role-flip union hook ──────────────────────────────────────────────────────
+# NOTE: the brief's literal test text uses role 'kf' (the `moisture` fixture's
+# fulfillment_role) but seed_vial_roles only seeds hplc/endo/ster/hm/xtra —
+# 'kf' is not a catalog-registered role, so set_assignment_role(..., 'kf', ...)
+# would raise ValueError: Invalid role. Per the brief's fallback instruction,
+# both tests below use role 'hm' + the `heavy_metals` fixture instead; the
+# assertions are adapted for its 4 members rather than moisture's 1 (the
+# assertion is about the union, not the specific role).
+
+def test_role_flip_seeds_a_lab_added_profile_with_no_prior_host_vial(db, parent, heavy_metals, monkeypatch):
+    """Ruling A: placeholder first, vial later. When the vial gets role 'hm',
+    set_assignment_role must union the placeholder-derived key {'heavy_metals'}
+    into its services map (the WP order doesn't carry it) so the custody edge
+    is written and the members seed."""
+    import sub_samples.service as svc
+    from catalog.vial_roles_seed import seed_vial_roles
+    seed_vial_roles(db)  # role gate is catalog-driven
+    mn.add_profile_to_parent(db, parent=parent, profile=heavy_metals, user_id=1)
+    db.commit()
+    v = _vial(db, parent, sid="MN-PARENT-S04", seq=4, role=None)
+    monkeypatch.setattr(svc, "_fetch_wp_services_for_parent", lambda sid: {"hplcpurity_identity": True})
+
+    svc.set_assignment_role(db, v.sample_id, "hm", user_id=1)
+
+    member_ids = [m.id for m in heavy_metals.analysis_services]
+    rows = db.execute(select(LimsAnalysis).where(LimsAnalysis.lims_sub_sample_pk == v.id)).scalars().all()
+    assert [r.analysis_service_id for r in rows] == member_ids
+    edges = db.execute(select(VialProfileAssignment).where(
+        VialProfileAssignment.lims_sub_sample_pk == v.id,
+        VialProfileAssignment.superseded_at.is_(None))).scalars().all()
+    assert [(e.analysis_profile_id, e.relation) for e in edges] == [(heavy_metals.id, "host")]
+
+
+def test_role_flip_without_placeholders_is_unchanged(db, parent, monkeypatch):
+    import sub_samples.service as svc
+    from catalog.vial_roles_seed import seed_vial_roles
+    seed_vial_roles(db)
+    v = _vial(db, parent, sid="MN-PARENT-S04", seq=4, role=None)
+    monkeypatch.setattr(svc, "_fetch_wp_services_for_parent", lambda sid: {"hplcpurity_identity": True})
+    svc.set_assignment_role(db, v.sample_id, "hm", user_id=1)
+    assert db.query(LimsAnalysis).filter(LimsAnalysis.lims_sub_sample_pk == v.id).count() == 0
+    assert db.query(VialProfileAssignment).count() == 0

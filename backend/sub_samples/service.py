@@ -1767,6 +1767,13 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
                 wp_services if wp_services is not None
                 else _fetch_wp_services_for_parent(parent_sid) or {}
             )
+            # Manage-analyses slice (ruling A): a profile the lab added on the
+            # parent (live 'ordered' placeholders) is not in the WP order, so
+            # union its key in — resolve_catalog_fulfillment then hosts it and
+            # the seeder seeds it. Adds nothing for a normal order (those keys
+            # are already present); reads only, never writes.
+            from lims_analyses.manage_native import placeholder_profile_keys
+            services_map = {**services_map, **placeholder_profile_keys(db, parent_row)}
         from sub_samples.custody import write_custody_edges
         write_custody_edges(db, sub=sub, role=role, wp_services=services_map, user_id=user_id)
         # flush (not commit): makes the fresh custody rows visible to
