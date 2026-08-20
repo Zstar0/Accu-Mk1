@@ -13283,11 +13283,22 @@ async def lookup_senaite_sample(
                     analyte_declared_qty = float(raw_analyte_qty)
                 except (ValueError, TypeError):
                     analyte_declared_qty = None
+            # HPLC results key analytes by ABBREVIATION while the fuzzy match
+            # returns the peptide NAME — when they diverge (e.g. Thymosin
+            # Beta-4 vs TB500 (Thymosin Beta 4)) slot->analysis matching in
+            # the results view fails silently. Ship the abbreviation too.
+            matched_abbrev = None
+            if match:
+                matched_abbrev = next(
+                    (p.abbreviation for p in all_peptides if p.id == match[0]),
+                    None,
+                )
             analytes.append(SenaiteAnalyte(
                 raw_name=raw_name,
                 slot_number=slot,
                 matched_peptide_id=match[0] if match else None,
                 matched_peptide_name=match[1] if match else None,
+                matched_peptide_abbreviation=matched_abbrev,
                 declared_quantity=analyte_declared_qty,
             ))
 

@@ -3675,6 +3675,9 @@ export interface SenaiteAnalyte {
   slot_number: number // 1-4, corresponding to Analyte1..Analyte4 in SENAITE
   matched_peptide_id: number | null
   matched_peptide_name: string | null
+  /** Abbreviation of the matched peptide — HPLC results key analytes by
+   *  abbreviation, so slot matching must prefer this over the name. */
+  matched_peptide_abbreviation?: string | null
   declared_quantity: number | null // per-analyte declared qty (mg)
 }
 

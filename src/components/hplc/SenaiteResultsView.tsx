@@ -32,6 +32,14 @@ import { AnalysisTable, StatusBadge } from '@/components/senaite/AnalysisTable'
 /** States where we can write a result value. */
 const FILLABLE_STATES = new Set<string | null>(['unassigned', 'assigned', null])
 
+/** Round to 2 decimals — the precision written to AR result fields.
+ *  Blend totals must be the sum of the ROUNDED per-analyte values (lab
+ *  ruling 2026-08-20): round each item first, then add — so the total on
+ *  the AR always equals the sum of the per-analyte results it sits next
+ *  to. Summing full-precision values and rounding once can differ in the
+ *  last decimal. */
+export const round2 = (n: number) => Math.round(n * 100) / 100
+
 interface AutoFillMapping {
   analysis: SenaiteAnalysis
   value: string
@@ -137,7 +145,9 @@ function buildAutoFillMappings(
  * Also fills blend-level aggregates: Blend Purity, Peptide Total Quantity,
  * Peptide ID (HPLC).
  */
-function buildAllAutoFillMappings(
+// Exported for tests (senaite-autofill-qty.test.ts) — not part of the
+// component API.
+export function buildAllAutoFillMappings(
   results: HPLCAnalysisResult[],
   analyses: SenaiteAnalysis[],
   nameMap: Map<number, string>,
@@ -158,7 +168,8 @@ function buildAllAutoFillMappings(
 
   // Aggregate analyses: Peptide Total Quantity, Blend Purity, Peptide ID (HPLC)
   {
-    const totalQty = results.reduce((sum, r) => sum + (r.quantity_mg ?? 0), 0)
+    // Round-then-sum (see round2) so the total matches the per-analyte fields.
+    const totalQty = results.reduce((sum, r) => sum + round2(r.quantity_mg ?? 0), 0)
     const weightedPuritySum = results.reduce(
       (sum, r) => sum + (r.quantity_mg ?? 0) * (r.purity_percent ?? 0), 0
     )
@@ -282,11 +293,16 @@ export function SenaiteResultsView({ prep, results: hplcResults, onBack, onCompl
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Build analyteNameMap from loaded data
+  // Build analyteNameMap from loaded data. Prefer the matched peptide's
+  // ABBREVIATION: HPLC results key analytes by abbreviation, and when it
+  // diverges from the peptide name (e.g. TB500 (Thymosin Beta 4) vs
+  // Thymosin Beta-4) name-based slot matching fails silently — the blend's
+  // per-analyte QTY/purity fields then never auto-fill.
   const analyteNameMap = new Map<number, string>()
   if (senaiteData) {
     for (const analyte of senaiteData.analytes) {
       const displayName =
+        analyte.matched_peptide_abbreviation ??
         analyte.matched_peptide_name ??
         analyte.raw_name.replace(/\s*-\s*[^-]+\([^)]+\)\s*$/, '')
       analyteNameMap.set(analyte.slot_number, displayName)
@@ -493,7 +509,7 @@ export function SenaiteResultsView({ prep, results: hplcResults, onBack, onCompl
             </div>
 
             {hplcResults.length > 1 && (() => {
-              const totalQty = hplcResults.reduce((sum, r) => sum + (r.quantity_mg ?? 0), 0)
+              const totalQty = hplcResults.reduce((sum, r) => sum + round2(r.quantity_mg ?? 0), 0)
               const weightedPuritySum = hplcResults.reduce(
                 (sum, r) => sum + (r.quantity_mg ?? 0) * (r.purity_percent ?? 0), 0
               )
