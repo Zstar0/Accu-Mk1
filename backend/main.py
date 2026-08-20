@@ -3157,17 +3157,8 @@ def _build_component_briefs(db: Session, blend_id: int) -> list[ComponentBrief]:
 
 
 def _method_to_response(db: Session, method: HplcMethod) -> MethodResponse:
-    """Convert HplcMethod model to response with common peptides, instruments, and services.
-
-    Validate from a column-only dict, not the ORM object: HplcMethod.services
-    (Task 1's bare m2m relationship to AnalysisService) shares its name with
-    MethodResponse.services (junction rows carrying is_default) — from_attributes
-    auto-population would grab the ORM relationship and fail validating plain
-    AnalysisService rows against MethodServiceOut. instrument_ids/instruments/
-    common_peptides/services are all set explicitly below regardless.
-    """
-    data = {c.name: getattr(method, c.name) for c in HplcMethod.__table__.columns}
-    resp = MethodResponse.model_validate(data)
+    """Convert HplcMethod model to response with common peptides, instruments, and services."""
+    resp = MethodResponse.model_validate(method)
     resp.instrument_ids = [i.id for i in method.instruments]
     resp.instruments = [_instrument_to_brief(i) for i in method.instruments]
     resp.common_peptides = [PeptideBrief.model_validate(p) for p in method.peptides]
@@ -4122,6 +4113,16 @@ async def put_method_services(method_id: int, links: list[MethodServiceLinkIn],
         db.execute(method_services.insert().values(
             method_id=method_id, analysis_service_id=ln.analysis_service_id,
             is_default=ln.is_default))
+    try:
+        db.flush()
+    except IntegrityError:
+        # The app-level 400 check above is TOCTOU-racy against a concurrent PUT
+        # on another method claiming the same default; the partial unique index
+        # (uq_method_service_default) is the real backstop (create_service_spec/
+        # patch_service_spec precedent, ~3636/~3691).
+        db.rollback()
+        raise HTTPException(
+            409, "default conflict — another method claimed a default for one of these services concurrently")
     db.commit()
     return _method_service_rows(db, method_id)
 

@@ -599,8 +599,10 @@ class HplcMethod(Base):
     # Relationships
     instruments: Mapped[list["Instrument"]] = relationship("Instrument", secondary=instrument_methods, back_populates="methods")
     peptides: Mapped[list["Peptide"]] = relationship("Peptide", secondary=peptide_methods, back_populates="methods")
-    services: Mapped[list["AnalysisService"]] = relationship(
-        "AnalysisService", secondary=method_services)
+    # No ORM relationship to AnalysisService via method_services (R-P1-3): it
+    # would collide in name with MethodResponse.services (main.py) — junction
+    # rows carrying is_default, not plain AnalysisService rows. Query
+    # method_services directly (see main.py's _method_service_rows) instead.
 
     def __repr__(self) -> str:
         return f"<HplcMethod(id={self.id}, name='{self.name}')>"
