@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { ClipboardList } from 'lucide-react'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
 import {
@@ -27,7 +28,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { useUIStore } from '@/store/ui-store'
 import { useAuthStore } from '@/store/auth-store'
 import { useWorksheetDrawer } from '@/hooks/use-worksheet-drawer'
-import { getWorksheetUsers, getInstruments } from '@/lib/api'
+import { getWorksheetUsers, getInstruments, getMethods } from '@/lib/api'
 import WorksheetDrawerHeader from './WorksheetDrawerHeader'
 import WorksheetDrawerItems from './WorksheetDrawerItems'
 import AddSamplesModal from './AddSamplesModal'
@@ -52,6 +53,7 @@ export function WorksheetDrawer() {
     completeMutation,
     reassignMutation,
     updateItemMutation,
+    applyMethodInstrumentMutation,
     reorderMutation,
     addItemMutation,
   } = useWorksheetDrawer()
@@ -80,6 +82,27 @@ export function WorksheetDrawer() {
     queryFn: getInstruments,
     staleTime: 5 * 60 * 1000,
   })
+
+  const { data: methods = [] } = useQuery({
+    queryKey: ['hplc-methods'],
+    queryFn: getMethods,
+    staleTime: 5 * 60 * 1000,
+  })
+
+  // Apply bar (run context): method + instrument selection for "Apply to
+  // all". Instrument options are the chosen method's linked instruments
+  // intersected with active instruments — deliberately NOT sorted by
+  // worksheet department (spec §4.6 nicety dropped; the list is already
+  // method-scoped to 1-3 rows, see task-6 brief).
+  const [applyMethodId, setApplyMethodId] = useState<number | null>(null)
+  const [applyInstrumentId, setApplyInstrumentId] = useState<number | null>(null)
+  const activeMethods = useMemo(() => methods.filter(m => m.active), [methods])
+  const selectedApplyMethod = activeMethods.find(m => m.id === applyMethodId) ?? null
+  const applyInstrumentOptions = useMemo(() => {
+    if (!selectedApplyMethod) return []
+    const ids = new Set(selectedApplyMethod.instrument_ids)
+    return instruments.filter(i => i.active && ids.has(i.id))
+  }, [selectedApplyMethod, instruments])
 
   // Auto-select first worksheet when drawer opens or filter changes
   useEffect(() => {
@@ -113,6 +136,28 @@ export function WorksheetDrawer() {
     const text = typeof parsed.text === 'string' ? parsed.text : ''
     return { userNotes: text, prepStartedItems: set }
   }, [activeWorksheet?.notes])
+
+  function handleApplyToAll() {
+    if (!activeWorksheet || applyMethodId == null || applyInstrumentId == null) return
+    applyMethodInstrumentMutation.mutate(
+      {
+        worksheetId: activeWorksheet.id,
+        data: { method_id: applyMethodId, instrument_id: applyInstrumentId },
+      },
+      {
+        onSuccess: res => {
+          let message = `Stamped ${res.stamped} analyses on ${res.items_updated} items`
+          if (res.skipped_state.length) {
+            message += ` — ${res.skipped_state.length} locked`
+          }
+          if (res.skipped_uncovered.length) {
+            message += `, ${res.skipped_uncovered.length} not covered by this method`
+          }
+          toast.success(message)
+        },
+      }
+    )
+  }
 
   return (
     <>
@@ -254,6 +299,64 @@ export function WorksheetDrawer() {
                   <span className="text-xs text-muted-foreground">
                     View only — worksheet is completed
                   </span>
+                </div>
+              )}
+
+              {/* Apply bar — run context (method + instrument) for "Apply to
+                  all". Instrument options are the selected method's linked
+                  instruments intersected with active instruments; disabled
+                  until a method is chosen. */}
+              {!isCompleted && (
+                <div className="px-4 py-2 border-b flex items-center gap-2">
+                  <span className="text-xs font-semibold text-muted-foreground shrink-0">
+                    Run context
+                  </span>
+                  <Select
+                    value={applyMethodId != null ? String(applyMethodId) : ''}
+                    onValueChange={value => {
+                      setApplyMethodId(Number(value))
+                      setApplyInstrumentId(null)
+                    }}
+                  >
+                    <SelectTrigger size="sm" aria-label="Method" className="w-48 h-8 text-xs">
+                      <SelectValue placeholder="Method…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {activeMethods.map(m => (
+                        <SelectItem key={m.id} value={String(m.id)}>
+                          {m.code ?? m.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select
+                    value={applyInstrumentId != null ? String(applyInstrumentId) : ''}
+                    onValueChange={value => setApplyInstrumentId(Number(value))}
+                    disabled={!selectedApplyMethod}
+                  >
+                    <SelectTrigger size="sm" aria-label="Instrument" className="w-40 h-8 text-xs">
+                      <SelectValue placeholder="Instrument…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {applyInstrumentOptions.map(inst => (
+                        <SelectItem key={inst.id} value={String(inst.id)}>
+                          {inst.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={
+                      applyMethodId == null ||
+                      applyInstrumentId == null ||
+                      applyMethodInstrumentMutation.isPending
+                    }
+                    onClick={handleApplyToAll}
+                  >
+                    Apply to all
+                  </Button>
                 </div>
               )}
 
