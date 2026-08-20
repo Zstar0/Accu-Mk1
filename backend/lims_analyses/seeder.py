@@ -139,6 +139,44 @@ def _members_from_edges(db: Session, edges: list) -> List[AnalysisService]:
     return _members_through_origin_gate(labeled)
 
 
+def _seed_rider_members(
+    db: Session,
+    *,
+    sub_sample: LimsSubSample,
+    existing_kw: set,
+    existing_service_ids: set,
+    created_by_user_id: Optional[int],
+    commit: bool,
+) -> List[LimsAnalysis]:
+    """Seed member services of this vial's live RIDER custody edges (spec
+    2026-08-20-rider-vial-visibility). The hplc mirror reads the parent's
+    SENAITE keywords, which know nothing about catalog riders — so a rider
+    riding a legacy host would otherwise never get its analyses on the host
+    vial. Host edges are deliberately excluded here: on the hplc branch the
+    mirror owns host content. Variance replicates never carry rider work."""
+    if sub_sample.assignment_kind == "variance":
+        return []
+    from sub_samples.custody import current_custody
+
+    rider_edges = [e for e in current_custody(db, sub_sample.id) if e.relation == "rider"]
+    if not rider_edges:
+        return []
+    snapshot = sub_sample.parent_sample.catalog_snapshot
+    services = _members_from_edges(db, rider_edges, snapshot=snapshot)
+    if not services:
+        return []
+    return _seed_rows_from_services(
+        db,
+        sub_sample=sub_sample,
+        services=services,
+        existing_kw=existing_kw,
+        existing_service_ids=existing_service_ids,
+        created_by_user_id=created_by_user_id,
+        commit=commit,
+        log_event="rider_seeded",
+    )
+
+
 def _catalog_members_for_role(
     db: Session,
     role: str,
@@ -517,7 +555,7 @@ def seed_analyses_for_vial(
             raise ValueError(
                 "seed_analyses_for_vial(role='hplc') requires parent_sample_id"
             )
-        return mirror_parent_hplc_analyses(
+        inserted = mirror_parent_hplc_analyses(
             db,
             sub_sample=sub_sample,
             parent_sample_id=parent_sample_id,
@@ -525,6 +563,17 @@ def seed_analyses_for_vial(
             created_by_user_id=created_by_user_id,
             commit=commit,
         )
+        # Rider custody edges seed too (mirror mutates existing_kw/ids as it
+        # inserts, so the dedupe composes).
+        inserted.extend(_seed_rider_members(
+            db,
+            sub_sample=sub_sample,
+            existing_kw=existing_kw,
+            existing_service_ids=existing_service_ids,
+            created_by_user_id=created_by_user_id,
+            commit=commit,
+        ))
+        return inserted
 
     # ── catalog roles (spec 3): seed from Analysis Profile membership ────────
     # Any role not in ROLE_TO_KEYWORDS is a catalog role (first tenant: "hm").
