@@ -133,3 +133,16 @@ def test_update_method_generic_fields(client, db_session):
     r = client.put(f"/hplc/methods/{mid}", json={"technique": "PCR", "reference": "USP <71>"})
     assert r.status_code == 200
     assert r.json()["technique"] == "PCR"
+
+
+def test_create_method_empty_string_code_normalizes_to_null(client, db_session):
+    # R-P1-2: "" must not reach the DB partial unique index (WHERE code IS NOT
+    # NULL) as a real value — a second "" would collide there and 500 instead
+    # of hitting the app-level 400 dup-check.
+    r1 = client.post("/hplc/methods", json={"name": "M-Empty-1", "code": ""})
+    assert r1.status_code == 201, r1.text
+    assert r1.json()["code"] is None
+
+    r2 = client.post("/hplc/methods", json={"name": "M-Empty-2", "code": ""})
+    assert r2.status_code == 201, r2.text  # no dup 400, no 500
+    assert r2.json()["code"] is None

@@ -3955,6 +3955,12 @@ async def get_methods(db: Session = Depends(get_db), _current_user=Depends(get_c
 @app.post("/hplc/methods", response_model=MethodResponse, status_code=201)
 async def create_method(data: MethodCreate, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
     """Create a new HPLC method."""
+    if data.code is not None:
+        # R-P1-2: normalize "" -> None at the route edge. The DB partial unique
+        # index is `WHERE code IS NOT NULL`; Postgres treats '' as a distinct
+        # value, so a second '' code would 500 at the index instead of 400 here.
+        data.code = data.code.strip() or None
+
     existing = db.execute(select(HplcMethod).where(HplcMethod.name == data.name)).scalar_one_or_none()
     if existing:
         raise HTTPException(400, f"Method with name '{data.name}' already exists")
@@ -3987,6 +3993,10 @@ async def update_method(method_id: int, data: MethodUpdate, db: Session = Depend
     ).scalars().unique().first()
     if not method:
         raise HTTPException(404, f"Method {method_id} not found")
+
+    if data.code is not None:
+        # R-P1-2: same edge-normalization as create_method.
+        data.code = data.code.strip() or None
 
     if data.code:
         dup_code = db.execute(
