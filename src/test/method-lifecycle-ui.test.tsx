@@ -288,6 +288,13 @@ describe('MethodsPage — status badge + revision suffix', () => {
       .mockReset()
       .mockResolvedValue({} as never)
     vi.mocked(getMethodAttachments).mockReset().mockResolvedValue([])
+    vi.mocked(newMethodRevision).mockReset().mockResolvedValue(ACTIVE_M)
+    vi.mocked(activateMethod).mockReset().mockResolvedValue(ACTIVE_M)
+    vi.mocked(retireMethod).mockReset().mockResolvedValue(ACTIVE_M)
+    vi.mocked(uploadMethodAttachment)
+      .mockReset()
+      .mockResolvedValue({} as never)
+    vi.mocked(deleteMethodAttachment).mockReset().mockResolvedValue(undefined)
   })
 
   it('shows a status badge per row and a rev suffix only when revision > 1', async () => {
