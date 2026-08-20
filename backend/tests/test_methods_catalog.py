@@ -58,3 +58,78 @@ def test_instrument_department_and_origin_columns(db_session):
     got = db_session.execute(select(Instrument)).scalar_one()
     assert got.origin == "mk1"
     assert got.senaite_id is None and got.senaite_uid is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Task 2 — route-level tests: generic fields on CRUD, R0 create shape
+#
+# route_client idiom copied from tests/test_native_manage_analyses.py /
+# tests/test_department_routes.py (the plan's `tests/test_manage_native_routes.py`
+# does not exist on this branch). Shaped as a `_client` generator helper so the
+# `client` fixture can wire it to *this* file's `db_session` fixture, keeping
+# client-issued requests and direct db_session queries on the same connection.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _client(db_session, admin=True):
+    from unittest.mock import MagicMock
+
+    from fastapi.testclient import TestClient
+
+    from auth import get_current_user
+    from database import get_db
+    from main import app
+
+    def _override_get_db():
+        yield db_session
+
+    prev_db = app.dependency_overrides.get(get_db)
+    prev_user = app.dependency_overrides.get(get_current_user)
+    app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_current_user] = lambda: MagicMock(
+        id=1, role="admin" if admin else "standard", email="admin@test")
+
+    tc = TestClient(app)
+    yield tc
+
+    if prev_db is None:
+        app.dependency_overrides.pop(get_db, None)
+    else:
+        app.dependency_overrides[get_db] = prev_db
+    if prev_user is None:
+        app.dependency_overrides.pop(get_current_user, None)
+    else:
+        app.dependency_overrides[get_current_user] = prev_user
+
+
+@pytest.fixture
+def client(db_session):
+    yield from _client(db_session, admin=True)
+
+
+def test_create_method_generic_fields_and_r0(client, db_session):
+    r = client.post("/hplc/methods", json={
+        "name": "Residual Moisture by KF", "code": "AM-KF-001",
+        "technique": "KF", "reference": "USP <921>",
+        "procedure_summary": "Karl Fischer titration.",
+        "senaite_id": "MET-SHOULD-BE-IGNORED",
+    })
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["code"] == "AM-KF-001" and body["technique"] == "KF"
+    assert body["origin"] == "mk1"
+    assert body["senaite_id"] is None  # R0: field not accepted at create
+
+
+def test_create_method_duplicate_code_400(client, db_session):
+    client.post("/hplc/methods", json={"name": "M1", "code": "AM-X-1"})
+    r = client.post("/hplc/methods", json={"name": "M2", "code": "AM-X-1"})
+    assert r.status_code == 400
+    assert "code" in r.json()["detail"].lower()
+
+
+def test_update_method_generic_fields(client, db_session):
+    mid = client.post("/hplc/methods", json={"name": "M3"}).json()["id"]
+    r = client.put(f"/hplc/methods/{mid}", json={"technique": "PCR", "reference": "USP <71>"})
+    assert r.status_code == 200
+    assert r.json()["technique"] == "PCR"

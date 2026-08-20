@@ -2763,10 +2763,19 @@ class SlaStatusResponse(BaseModel):
 # ─── HPLC Method schemas ───
 
 class MethodCreate(BaseModel):
-    """Schema for creating an HPLC method."""
+    """Schema for creating an HPLC method.
+
+    R0: no `senaite_id` — new rows are mk1-originated only (model default
+    `origin='mk1'`); extra keys (e.g. a stray senaite_id) are dropped by
+    pydantic's default extra='ignore'.
+    """
     name: str
-    senaite_id: Optional[str] = None
     instrument_ids: list[int] = []
+    code: Optional[str] = None
+    technique: Optional[str] = None
+    department_id: Optional[int] = None
+    reference: Optional[str] = None
+    procedure_summary: Optional[str] = None
     size_peptide: Optional[str] = None
     starting_organic_pct: Optional[float] = None
     temperature_mct_c: Optional[float] = None
@@ -2775,10 +2784,14 @@ class MethodCreate(BaseModel):
 
 
 class MethodUpdate(BaseModel):
-    """Schema for updating an HPLC method."""
+    """Schema for updating an HPLC method. No senaite_id/origin/supersedes_id (R0)."""
     name: Optional[str] = None
-    senaite_id: Optional[str] = None
     instrument_ids: Optional[list[int]] = None
+    code: Optional[str] = None
+    technique: Optional[str] = None
+    department_id: Optional[int] = None
+    reference: Optional[str] = None
+    procedure_summary: Optional[str] = None
     size_peptide: Optional[str] = None
     starting_organic_pct: Optional[float] = None
     temperature_mct_c: Optional[float] = None
@@ -2816,6 +2829,13 @@ class MethodResponse(BaseModel):
     senaite_id: Optional[str] = None
     instrument_ids: list[int] = []
     instruments: list[InstrumentBrief] = []
+    code: Optional[str] = None
+    technique: Optional[str] = None
+    department_id: Optional[int] = None
+    reference: Optional[str] = None
+    procedure_summary: Optional[str] = None
+    supersedes_id: Optional[int] = None
+    origin: str = "mk1"
     size_peptide: Optional[str] = None
     starting_organic_pct: Optional[float] = None
     temperature_mct_c: Optional[float] = None
@@ -3939,10 +3959,14 @@ async def create_method(data: MethodCreate, db: Session = Depends(get_db), _curr
     if existing:
         raise HTTPException(400, f"Method with name '{data.name}' already exists")
 
-    if data.senaite_id:
-        dup = db.execute(select(HplcMethod).where(HplcMethod.senaite_id == data.senaite_id)).scalar_one_or_none()
-        if dup:
-            raise HTTPException(400, f"Method with Senaite ID '{data.senaite_id}' already exists")
+    if data.code:
+        dup_code = db.execute(select(HplcMethod).where(HplcMethod.code == data.code)).scalar_one_or_none()
+        if dup_code:
+            raise HTTPException(400, f"Method code '{data.code}' already exists on '{dup_code.name}'")
+    if data.department_id is not None:
+        from models import Department
+        if not db.get(Department, data.department_id):
+            raise HTTPException(400, f"Department {data.department_id} not found")
 
     method = HplcMethod(**data.model_dump(exclude={"instrument_ids"}))
     if data.instrument_ids:
@@ -3963,6 +3987,17 @@ async def update_method(method_id: int, data: MethodUpdate, db: Session = Depend
     ).scalars().unique().first()
     if not method:
         raise HTTPException(404, f"Method {method_id} not found")
+
+    if data.code:
+        dup_code = db.execute(
+            select(HplcMethod).where(HplcMethod.code == data.code, HplcMethod.id != method_id)
+        ).scalar_one_or_none()
+        if dup_code:
+            raise HTTPException(400, f"Method code '{data.code}' already exists on '{dup_code.name}'")
+    if data.department_id is not None:
+        from models import Department
+        if not db.get(Department, data.department_id):
+            raise HTTPException(400, f"Department {data.department_id} not found")
 
     update_data = data.model_dump(exclude_unset=True)
     instrument_ids = update_data.pop("instrument_ids", None)
