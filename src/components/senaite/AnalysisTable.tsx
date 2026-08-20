@@ -177,6 +177,15 @@ function canSetMethodInstrument(a: { uid?: string | null; review_state: string |
   return !!a.uid && a.uid.startsWith('mk1:') && STAMPABLE_STATES.has(a.review_state)
 }
 
+/** Parses an mk1 int-as-string method/instrument uid, guarding against a
+ *  non-numeric value (defeats the dialog's default-preselection fallback
+ *  rather than shipping a NaN through to the PATCH body). */
+function toIntOrNull(raw: string | null | undefined): number | null {
+  if (!raw) return null
+  const n = parseInt(raw, 10)
+  return Number.isFinite(n) ? n : null
+}
+
 /** Maps review_state to valid transition action names. */
 const ALLOWED_TRANSITIONS: Record<string, readonly string[]> = {
   unassigned: ['submit', 'reject'],
@@ -1396,8 +1405,13 @@ function AnalysisRow({
   // serviceId is resolved lazily on open — SenaiteAnalysis carries no
   // analysis_service_id, so it's found by matching this row's keyword
   // against each candidate method's services[].keyword (documented
-  // fallback route in the task brief; see openMethodDialog below).
-  const showSetMethodInstrument = canSetMethodInstrument(analysis)
+  // fallback route in the task brief; see openMethodDialog below). Excluded
+  // for verbPolicy 'parent-native' — that policy's whole point is
+  // display-only rows outside its own verify/retest verbs (mirrors how
+  // canPromote/canVarVerify above are excluded), even though a parent-tier
+  // row can sit in a state STAMPABLE_STATES would otherwise allow.
+  const showSetMethodInstrument =
+    verbPolicy !== 'parent-native' && canSetMethodInstrument(analysis)
   const [methodDialogOpen, setMethodDialogOpen] = useState(false)
   const [methodDialogServiceId, setMethodDialogServiceId] = useState<number | null>(null)
   async function openMethodDialog() {
@@ -1702,8 +1716,8 @@ function AnalysisRow({
           <SetMethodInstrumentDialog
             analysisId={Number(analysis.uid.slice('mk1:'.length))}
             serviceId={methodDialogServiceId ?? 0}
-            currentMethodId={analysis.method_uid ? parseInt(analysis.method_uid, 10) : null}
-            currentInstrumentId={analysis.instrument_uid ? parseInt(analysis.instrument_uid, 10) : null}
+            currentMethodId={toIntOrNull(analysis.method_uid)}
+            currentInstrumentId={toIntOrNull(analysis.instrument_uid)}
             open={methodDialogOpen}
             onOpenChange={setMethodDialogOpen}
             onSaved={() => {

@@ -201,7 +201,7 @@ export function SetMethodInstrumentDialog({
           </Button>
           <Button
             onClick={() => void handleSave()}
-            disabled={loading || pending}
+            disabled={loading || pending || coveringMethods.length === 0}
           >
             {pending ? 'Saving…' : 'Save'}
           </Button>
