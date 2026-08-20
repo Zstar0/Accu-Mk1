@@ -758,7 +758,8 @@ export function MethodPanel({ method, onUpdated, onSelectMethod }: MethodPanelPr
         </div>
         {services.length === 0 && !editing ? (
           <p className="text-sm text-muted-foreground">
-            No services covered by this method yet.
+            No services covered by this method yet — click Edit to link
+            services.
           </p>
         ) : (
           <div className="space-y-1.5">

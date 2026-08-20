@@ -152,4 +152,63 @@ describe('MethodsPage / MethodPanel — catalog fields + covered services', () =
       )
     })
   })
+
+  it('create form links covered services: POST then PUT with the new id', async () => {
+    vi.mocked(getAnalysisServices).mockResolvedValue([
+      {
+        id: 5,
+        title: 'Lead',
+        keyword: 'LEAD-PPM',
+        category: null,
+        unit: null,
+        methods: null,
+        peptide_name: null,
+        peptide_id: null,
+        senaite_id: null,
+        senaite_uid: null,
+        active: true,
+        origin: 'mk1',
+        local_overrides: null,
+        department_id: null,
+        default_method_id: null,
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+      },
+    ])
+    const user = userEvent.setup()
+    render(<MethodsPage />)
+    await user.click(await screen.findByRole('button', { name: /new method/i }))
+
+    await user.type(screen.getByPlaceholderText('Method 1'), 'MP-AES Elemental')
+    const picker = await screen.findByRole('combobox', { name: /add service/i })
+    await user.selectOptions(picker, '5')
+
+    // Chip appears; mark it as the service's default
+    const chip = screen.getByText('LEAD-PPM').parentElement as HTMLElement
+    await user.click(within(chip).getByRole('checkbox'))
+
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+
+    await waitFor(() => {
+      expect(createMethod).toHaveBeenCalled()
+    })
+    // Links ride a chained PUT against the id the POST returned
+    await waitFor(() => {
+      expect(putMethodServices).toHaveBeenCalledWith(METHOD.id, [
+        { analysis_service_id: 5, is_default: true },
+      ])
+    })
+  })
+
+  it('create form without services never calls the services endpoint', async () => {
+    const user = userEvent.setup()
+    render(<MethodsPage />)
+    await user.click(await screen.findByRole('button', { name: /new method/i }))
+    await user.type(screen.getByPlaceholderText('Method 1'), 'Plain Method')
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => {
+      expect(createMethod).toHaveBeenCalled()
+    })
+    expect(putMethodServices).not.toHaveBeenCalled()
+  })
 })

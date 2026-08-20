@@ -36,7 +36,9 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { MethodPanel, StatusBadge } from './MethodPanel'
+import { MethodsGuide } from './MethodsGuide'
 import { useUIStore } from '@/store/ui-store'
+import { toast } from 'sonner'
 import {
   getMethods,
   createMethod,
@@ -44,9 +46,12 @@ import {
   updateMethod,
   getInstruments,
   getDepartments,
+  getAnalysisServices,
+  putMethodServices,
   type HplcMethod,
   type Instrument,
   type Department,
+  type AnalysisServiceRecord,
 } from '@/lib/api'
 
 const INSTRUMENT_COLORS = new Map<number, string>()
@@ -158,10 +163,13 @@ export function MethodsPage() {
             </p>
           </div>
         </div>
-        <Button onClick={() => setShowAddForm(true)} disabled={showAddForm}>
-          <Plus className="mr-1 h-4 w-4" />
-          New Method
-        </Button>
+        <div className="flex items-center gap-2">
+          <MethodsGuide />
+          <Button onClick={() => setShowAddForm(true)} disabled={showAddForm}>
+            <Plus className="mr-1 h-4 w-4" />
+            New Method
+          </Button>
+        </div>
       </div>
 
       {/* Error */}
@@ -549,13 +557,31 @@ function AddMethodForm({
   const [instrumentId, setInstrumentId] = useState<number | null>(null)
   const [instruments, setInstruments] = useState<Instrument[]>([])
   const [departments, setDepartments] = useState<Department[]>([])
+  const [allServices, setAllServices] = useState<AnalysisServiceRecord[]>([])
+  const [selectedServices, setSelectedServices] = useState<
+    { id: number; title: string; keyword: string | null; is_default: boolean }[]
+  >([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     getInstruments().then(setInstruments).catch(console.error)
     getDepartments().then(setDepartments).catch(console.error)
+    getAnalysisServices().then(setAllServices).catch(console.error)
   }, [])
+
+  const availableServices = allServices.filter(
+    s => !selectedServices.some(sel => sel.id === s.id)
+  )
+
+  const handleAddService = (serviceId: number) => {
+    const svc = allServices.find(s => s.id === serviceId)
+    if (!svc) return
+    setSelectedServices(prev => [
+      ...prev,
+      { id: svc.id, title: svc.title, keyword: svc.keyword, is_default: false },
+    ])
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -563,13 +589,32 @@ function AddMethodForm({
     setSaving(true)
     setError(null)
     try {
-      await createMethod({
+      const created = await createMethod({
         name: name.trim(),
         instrument_ids: instrumentId ? [instrumentId] : [],
         code: code.trim() || null,
         technique: technique.trim() || null,
         department_id: departmentId,
       })
+      if (selectedServices.length > 0) {
+        try {
+          await putMethodServices(
+            created.id,
+            selectedServices.map(s => ({
+              analysis_service_id: s.id,
+              is_default: s.is_default,
+            }))
+          )
+        } catch (err) {
+          // The method exists at this point — closing the form and pointing
+          // at the panel beats leaving a re-submittable duplicate create.
+          toast.error(
+            `Method created, but linking services failed: ${
+              err instanceof Error ? err.message : 'unknown error'
+            } — open the method and link them from Covered Services.`
+          )
+        }
+      }
       onSaved()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create method')
@@ -641,6 +686,80 @@ function AddMethodForm({
               </select>
             </div>
           </div>
+
+          {/* Covered Services — mirrors the MethodPanel editor idiom */}
+          <div className="space-y-2">
+            <Label>Covered Services</Label>
+            <p className="text-xs text-muted-foreground">
+              Analyses this method can be stamped onto. Tick Default where the
+              bench should auto-apply it (one default per service). You can
+              also manage these later from the method panel.
+            </p>
+            {selectedServices.length > 0 && (
+              <div className="space-y-1.5">
+                {selectedServices.map(s => (
+                  <div
+                    key={s.id}
+                    className="flex items-center gap-2 rounded-md border bg-muted/50 px-2.5 py-1.5 text-sm"
+                  >
+                    <span className="font-medium">{s.keyword ?? s.title}</span>
+                    <div className="ml-auto flex items-center gap-2">
+                      <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                        <Checkbox
+                          checked={s.is_default}
+                          onCheckedChange={checked =>
+                            setSelectedServices(prev =>
+                              prev.map(sel =>
+                                sel.id === s.id
+                                  ? { ...sel, is_default: checked === true }
+                                  : sel
+                              )
+                            )
+                          }
+                        />
+                        Default
+                      </label>
+                      <button
+                        type="button"
+                        className="text-muted-foreground transition-colors hover:text-destructive"
+                        aria-label={`Remove ${s.keyword ?? s.title}`}
+                        onClick={() =>
+                          setSelectedServices(prev =>
+                            prev.filter(sel => sel.id !== s.id)
+                          )
+                        }
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {availableServices.length > 0 && (
+              <select
+                aria-label="Add service"
+                className="flex h-9 w-full max-w-sm rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                defaultValue=""
+                onChange={e => {
+                  if (e.target.value) {
+                    handleAddService(parseInt(e.target.value, 10))
+                    e.target.value = ''
+                  }
+                }}
+              >
+                <option value="" disabled>
+                  Add service...
+                </option>
+                {availableServices.map(s => (
+                  <option key={s.id} value={s.id}>
+                    {s.keyword ? `${s.keyword} — ${s.title}` : s.title}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
           {error && <p className="text-sm text-destructive">{error}</p>}
           <div className="flex gap-2">
             <Button type="submit" disabled={saving || !name.trim()}>
