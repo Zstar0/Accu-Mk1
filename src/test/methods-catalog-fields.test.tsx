@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { HplcMethod, MethodServiceLink } from '@/lib/api'
 
@@ -106,5 +106,43 @@ describe('MethodsPage / MethodPanel — catalog fields + covered services', () =
     expect(await screen.findByText(/covered services/i)).toBeInTheDocument()
     expect(screen.getByText('LEAD-PPM')).toBeInTheDocument()
     expect(screen.getByText(/default/i)).toBeInTheDocument()
+  })
+
+  it('fix round 1: a covered-services mutation refreshes the parent methods list (onUpdated wiring)', async () => {
+    const link: MethodServiceLink = {
+      analysis_service_id: 5,
+      keyword: 'LEAD-PPM',
+      title: 'Lead',
+      is_default: true,
+    }
+    vi.mocked(getMethodServices).mockResolvedValue([link])
+    vi.mocked(putMethodServices).mockResolvedValue([
+      { ...link, is_default: false },
+    ])
+    const user = userEvent.setup()
+    render(<MethodsPage />)
+    await user.click(await screen.findByText('Elemental Impurities by ICP-MS'))
+    await screen.findByText('LEAD-PPM')
+
+    const getMethodsCallsBefore = vi.mocked(getMethods).mock.calls.length
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    // Toggle the row's "Default" checkbox — scoped to the LEAD-PPM row so it
+    // doesn't collide with the table's bulk-select checkboxes rendered
+    // underneath the slide-out panel.
+    const row = screen.getByText('LEAD-PPM').parentElement as HTMLElement
+    await user.click(within(row).getByRole('checkbox'))
+
+    await waitFor(() => {
+      expect(putMethodServices).toHaveBeenCalled()
+    })
+    // The parent's methods list must be refetched after the mutation
+    // (onUpdated -> load()) so table rows carrying stale `services` don't
+    // linger — not just the panel's own local `services` state.
+    await waitFor(() => {
+      expect(vi.mocked(getMethods).mock.calls.length).toBeGreaterThan(
+        getMethodsCallsBefore
+      )
+    })
   })
 })

@@ -73,6 +73,7 @@ export function MethodPanel({ method, onUpdated }: MethodPanelProps) {
     try {
       const updated = await putMethodServices(method.id, links)
       setServices(updated)
+      onUpdated()
       toast.success('Services updated')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to update services')
