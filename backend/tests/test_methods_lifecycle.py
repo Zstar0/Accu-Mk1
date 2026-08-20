@@ -300,3 +300,68 @@ def test_activate_second_parallel_draft_retires_first(client, db_session):
 
     active_same_code = [m for m in rows if m["code"] == rev3_row["code"] and m["status"] == "active"]
     assert len(active_same_code) == 1
+
+
+def test_activate_second_parallel_draft_retires_first_codeless(client, db_session):
+    """Same shape as test_activate_second_parallel_draft_retires_first but the
+    source method has no code — exercises the null-code (name-keyed) branch
+    of the generalized retire query directly."""
+    mid = client.post("/hplc/methods", json={"name": "KF Codeless"}).json()["id"]
+    assert client.post(f"/hplc/methods/{mid}/activate").status_code == 200
+    rev2 = client.post(f"/hplc/methods/{mid}/new-revision").json()["id"]
+    rev3 = client.post(f"/hplc/methods/{mid}/new-revision").json()["id"]
+
+    assert client.post(f"/hplc/methods/{rev2}/activate").status_code == 200
+    r = client.post(f"/hplc/methods/{rev3}/activate")
+    assert r.status_code == 200
+
+    rows = client.get("/hplc/methods").json()
+    mid_row = next(m for m in rows if m["id"] == mid)
+    rev2_row = next(m for m in rows if m["id"] == rev2)
+    rev3_row = next(m for m in rows if m["id"] == rev3)
+    assert mid_row["status"] == "retired"
+    assert rev2_row["status"] == "retired" and rev2_row["active"] is False
+    assert rev3_row["status"] == "active" and rev3_row["active"] is True
+    assert rev3_row["code"] is None
+
+    active_same_name_codeless = [m for m in rows if m["name"] == "KF Codeless"
+                                  and m["status"] == "active" and m["code"] is None]
+    assert len(active_same_name_codeless) == 1
+
+
+def test_null_code_fallback_does_not_retire_unrelated_coded_active_method(client, db_session):
+    """Fix-round finding: the null-code name-fallback must not cross into rows
+    that DO carry a code — those are guarded by uq_hplc_methods_code_active
+    (keyed on code), not by name. Reachable bug without `code IS NULL` in the
+    fallback filter: update_method's rename guard only checks the (name,
+    revision) pair — not status, not code — so a draft sitting at a revision
+    number the target hasn't occupied can be renamed onto an existing active
+    CODED method's name without tripping it. Activating the renamed,
+    still-codeless draft must NOT retire the unrelated coded method."""
+    target_r1 = client.post("/hplc/methods",
+                             json={"name": "ICP-MS Shared", "code": "AM-SHR-1"}).json()
+    assert client.post(f"/hplc/methods/{target_r1['id']}/activate").status_code == 200
+    target_r2_id = client.post(f"/hplc/methods/{target_r1['id']}/new-revision").json()["id"]
+    assert client.post(f"/hplc/methods/{target_r2_id}/activate").status_code == 200
+    # target_r2_id: active, code="AM-SHR-1", occupies revisions 1 (retired) and 2 (active)
+
+    # Walk an unrelated series up to revision 3 — a revision number the
+    # "ICP-MS Shared" family hasn't touched — so the rename below lands
+    # cross-revision and the (name, revision) guard in update_method has
+    # nothing to collide with.
+    tmp_r1 = client.post("/hplc/methods", json={"name": "Temp Unrelated"}).json()
+    assert client.post(f"/hplc/methods/{tmp_r1['id']}/activate").status_code == 200
+    tmp_r2 = client.post(f"/hplc/methods/{tmp_r1['id']}/new-revision").json()
+    assert client.post(f"/hplc/methods/{tmp_r2['id']}/activate").status_code == 200
+    draft = client.post(f"/hplc/methods/{tmp_r2['id']}/new-revision").json()
+    assert draft["revision"] == 3 and draft["code"] is None
+
+    rename = client.put(f"/hplc/methods/{draft['id']}", json={"name": "ICP-MS Shared"})
+    assert rename.status_code == 200   # no (name=ICP-MS Shared, revision=3) row exists yet
+
+    assert client.post(f"/hplc/methods/{draft['id']}/activate").status_code == 200
+
+    rows = client.get("/hplc/methods").json()
+    target_row = next(m for m in rows if m["id"] == target_r2_id)
+    assert target_row["status"] == "active" and target_row["active"] is True
+    assert target_row["code"] == "AM-SHR-1"

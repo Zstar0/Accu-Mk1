@@ -4392,9 +4392,19 @@ async def activate_method(method_id: int, db: Session = Depends(get_db),
             HplcMethod.code == m.code, HplcMethod.status == "active",
             HplcMethod.id != m.id)).scalars().all()
     else:
+        # Fix round 1: scope the name-keyed fallback to other codeless rows
+        # only (code IS NULL) — mirrors the DB partial index's own split
+        # (uq_hplc_methods_code_active is WHERE code IS NOT NULL). Without
+        # this, an unrelated active method that DOES carry a code (protected
+        # by that index, not by name) could get name-matched and silently
+        # retired: update_method's rename guard only checks the (name,
+        # revision) pair, so a fresh codeless draft can be renamed onto an
+        # existing coded active method's name when they sit at different
+        # revisions. Costs nothing for genuine codeless series — new-revision
+        # clones always carry code=None forward alongside name.
         stale_active = db.execute(select(HplcMethod).where(
             HplcMethod.name == m.name, HplcMethod.status == "active",
-            HplcMethod.id != m.id)).scalars().all()
+            HplcMethod.code.is_(None), HplcMethod.id != m.id)).scalars().all()
     for row in stale_active:
         apply_and_log(db, row, {"status": "retired", "active": False,
                                 "retired_at": datetime.utcnow()},
