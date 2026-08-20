@@ -168,6 +168,11 @@ def test_put_services_links_and_defaults(client, db_session):
     assert r.status_code == 200
     got = client.get(f"/hplc/methods/{mid}/services").json()
     assert {(s["analysis_service_id"], s["is_default"]) for s in got} == {(lead.id, True), (ars.id, True)}
+    # MethodResponse.services (via GET /hplc/methods) carries the same links —
+    # this is the field _method_to_response fills, exercising the column-dict
+    # rewrite that avoids the HplcMethod.services ORM-relationship name collision.
+    listed = next(m for m in client.get("/hplc/methods").json() if m["id"] == mid)
+    assert {(s["analysis_service_id"], s["is_default"]) for s in listed["services"]} == {(lead.id, True), (ars.id, True)}
 
 
 def test_second_default_for_service_400(client, db_session):
