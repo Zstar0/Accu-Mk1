@@ -43,8 +43,10 @@ import {
   deleteMethod,
   updateMethod,
   getInstruments,
+  getDepartments,
   type HplcMethod,
   type Instrument,
+  type Department,
 } from '@/lib/api'
 
 const INSTRUMENT_COLORS = new Map<number, string>()
@@ -299,6 +301,7 @@ export function MethodsPage() {
                 />
               </TableHead>
               <TableHead>Method</TableHead>
+              <TableHead>Technique</TableHead>
               <TableHead>Instruments</TableHead>
               <TableHead>Size Peptide</TableHead>
               <TableHead>Organic %</TableHead>
@@ -310,13 +313,13 @@ export function MethodsPage() {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={8} className="py-8 text-center">
+                <TableCell colSpan={9} className="py-8 text-center">
                   <Loader2 className="mx-auto h-5 w-5 animate-spin text-muted-foreground" />
                 </TableCell>
               </TableRow>
             ) : filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">
+                <TableCell colSpan={9} className="py-8 text-center text-muted-foreground">
                   {methods.length === 0
                     ? 'No methods yet. Click "New Method" to create one.'
                     : 'No methods match your search.'}
@@ -351,6 +354,9 @@ export function MethodsPage() {
                         <div className="text-xs text-muted-foreground">{m.senaite_id}</div>
                       )}
                     </div>
+                  </TableCell>
+                  <TableCell>
+                    <span className="text-sm">{m.technique ?? '—'}</span>
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1">
@@ -525,14 +531,18 @@ function AddMethodForm({
   onCancel: () => void
 }) {
   const [name, setName] = useState('')
-  const [senaiteId, setSenaiteId] = useState('')
+  const [code, setCode] = useState('')
+  const [technique, setTechnique] = useState('')
+  const [departmentId, setDepartmentId] = useState<number | null>(null)
   const [instrumentId, setInstrumentId] = useState<number | null>(null)
   const [instruments, setInstruments] = useState<Instrument[]>([])
+  const [departments, setDepartments] = useState<Department[]>([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     getInstruments().then(setInstruments).catch(console.error)
+    getDepartments().then(setDepartments).catch(console.error)
   }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -544,6 +554,9 @@ function AddMethodForm({
       await createMethod({
         name: name.trim(),
         instrument_ids: instrumentId ? [instrumentId] : [],
+        code: code.trim() || null,
+        technique: technique.trim() || null,
+        department_id: departmentId,
       })
       onSaved()
     } catch (err) {
@@ -571,12 +584,36 @@ function AddMethodForm({
               />
             </div>
             <div className="space-y-2">
-              <Label>Senaite ID</Label>
+              <Label htmlFor="new-method-code">Code</Label>
               <Input
-                value={senaiteId}
-                onChange={e => setSenaiteId(e.target.value)}
-                placeholder="MET-HPLC1-PURITY-1290A"
+                id="new-method-code"
+                value={code}
+                onChange={e => setCode(e.target.value)}
+                placeholder="AM-ELEM-001"
               />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="new-method-technique">Technique</Label>
+              <Input
+                id="new-method-technique"
+                value={technique}
+                onChange={e => setTechnique(e.target.value)}
+                placeholder="ICP-MS"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="new-method-department">Department</Label>
+              <select
+                id="new-method-department"
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                value={departmentId ?? ''}
+                onChange={e => setDepartmentId(e.target.value ? parseInt(e.target.value, 10) : null)}
+              >
+                <option value="">None</option>
+                {departments.map(dept => (
+                  <option key={dept.id} value={dept.id}>{dept.name}</option>
+                ))}
+              </select>
             </div>
             <div className="space-y-2">
               <Label>Instrument</Label>
