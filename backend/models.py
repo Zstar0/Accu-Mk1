@@ -137,6 +137,11 @@ class Instrument(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # Slice 1: scoping for pickers; 'senaite' only on sync-created rows (R0).
+    department_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("departments.id", ondelete="SET NULL"), nullable=True)
+    origin: Mapped[str] = mapped_column(String(20), nullable=False, default="mk1",
+                                        server_default="mk1")
 
     # Relationships
     methods: Mapped[list["HplcMethod"]] = relationship("HplcMethod", secondary="instrument_methods", back_populates="instruments")
@@ -541,6 +546,23 @@ peptide_methods = Table(
 )
 
 
+# M2M junction: method <-> analysis service (slice 1, methods foundation).
+# is_default: at most one default per service, enforced by a partial unique
+# index (Postgres AND SQLite both support partial indexes — declared below
+# so the app-level 400 in the routes has a real DB backstop in tests too).
+method_services = Table(
+    "method_services",
+    Base.metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("method_id", Integer, ForeignKey("hplc_methods.id", ondelete="CASCADE"), nullable=False),
+    Column("analysis_service_id", Integer, ForeignKey("analysis_services.id", ondelete="CASCADE"), nullable=False),
+    Column("is_default", Boolean, nullable=False, default=False, server_default=text("false")),
+    UniqueConstraint("method_id", "analysis_service_id", name="uq_method_service"),
+    Index("uq_method_service_default", "analysis_service_id", unique=True,
+          postgresql_where=text("is_default"), sqlite_where=text("is_default")),
+)
+
+
 class HplcMethod(Base):
     """
     HPLC analytical method definition.
@@ -560,10 +582,25 @@ class HplcMethod(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # Slice 1 (methods foundation): generic catalog identity. NULL technique
+    # is legal; the HPLC columns above are only meaningful for technique='HPLC'.
+    code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    technique: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    department_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("departments.id", ondelete="SET NULL"), nullable=True)
+    reference: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    procedure_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    supersedes_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("hplc_methods.id", ondelete="SET NULL"), nullable=True)
+    # 'senaite' only on legacy clone-time rows; every new row is 'mk1' (R0).
+    origin: Mapped[str] = mapped_column(String(20), nullable=False, default="mk1",
+                                        server_default="mk1")
 
     # Relationships
     instruments: Mapped[list["Instrument"]] = relationship("Instrument", secondary=instrument_methods, back_populates="methods")
     peptides: Mapped[list["Peptide"]] = relationship("Peptide", secondary=peptide_methods, back_populates="methods")
+    services: Mapped[list["AnalysisService"]] = relationship(
+        "AnalysisService", secondary=method_services)
 
     def __repr__(self) -> str:
         return f"<HplcMethod(id={self.id}, name='{self.name}')>"

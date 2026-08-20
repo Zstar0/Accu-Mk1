@@ -1667,6 +1667,37 @@ def _run_migrations():
         "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_method_text TEXT",
         "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_prep_text TEXT",
         "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_footnotes JSONB",
+        # --- Methods foundation (slice 1): generic method catalog ---
+        "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS code VARCHAR(50)",
+        "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS technique VARCHAR(100)",
+        "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL",
+        "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS reference VARCHAR(500)",
+        "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS procedure_summary TEXT",
+        "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS supersedes_id INTEGER REFERENCES hplc_methods(id) ON DELETE SET NULL",
+        "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS origin VARCHAR(20) NOT NULL DEFAULT 'mk1'",
+        # Provenance backfill: only clone-time rows carry senaite_id; new rows
+        # never do (R0), so this stays a no-op forever after first boot.
+        "UPDATE hplc_methods SET origin = 'senaite' WHERE senaite_id IS NOT NULL AND origin = 'mk1'",
+        # Technique backfill: the table only ever held HPLC methods pre-slice.
+        # Date-gated so a future non-HPLC row created without technique is
+        # never silently relabeled on a later boot.
+        "UPDATE hplc_methods SET technique = 'HPLC' WHERE technique IS NULL AND created_at < TIMESTAMP '2026-08-21 00:00:00'",
+        # code uniqueness (among rows that have one)
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_hplc_methods_code ON hplc_methods (code) WHERE code IS NOT NULL",
+        """
+        CREATE TABLE IF NOT EXISTS method_services (
+            id SERIAL PRIMARY KEY,
+            method_id INTEGER NOT NULL REFERENCES hplc_methods(id) ON DELETE CASCADE,
+            analysis_service_id INTEGER NOT NULL REFERENCES analysis_services(id) ON DELETE CASCADE,
+            is_default BOOLEAN NOT NULL DEFAULT FALSE,
+            CONSTRAINT uq_method_service UNIQUE (method_id, analysis_service_id)
+        )
+        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_method_service_default ON method_services (analysis_service_id) WHERE is_default",
+        # Instruments: local creation + picker scoping
+        "ALTER TABLE instruments ADD COLUMN IF NOT EXISTS department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL",
+        "ALTER TABLE instruments ADD COLUMN IF NOT EXISTS origin VARCHAR(20) NOT NULL DEFAULT 'mk1'",
+        "UPDATE instruments SET origin = 'senaite' WHERE senaite_id IS NOT NULL AND origin = 'mk1'",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
