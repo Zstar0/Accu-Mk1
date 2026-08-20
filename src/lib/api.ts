@@ -3831,6 +3831,14 @@ export interface SenaiteAnalysis {
    *  backing this line ('mk1' | 'senaite'). Type-only here — not yet read
    *  by any FE display logic. */
   service_origin?: string | null
+  /** Task 7 fix round 1 (R-P2-3): the row's own analysis_service_id FK.
+   *  Lets SetMethodInstrumentDialog's serviceId resolution key off the id
+   *  directly instead of a keyword scan — keywords are not unique across
+   *  service origins (the migration pattern produces exactly that
+   *  collision), so a keyword-only match can resolve the wrong service.
+   *  Optional/nullable: older cached rows or non-mk1 (SENAITE) rows may not
+   *  carry it. */
+  analysis_service_id?: number | null
 }
 
 export interface SenaiteAttachment {

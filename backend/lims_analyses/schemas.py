@@ -250,6 +250,13 @@ class SenaiteShapeAnalysisResponse(BaseModel):
     # _serialize_senaite_shape_rows. None only when the service FK is
     # somehow unresolvable (should not happen in practice).
     service_origin: Optional[str] = None
+    # Task 7 fix round 1 (R-P2-3): the row's own analysis_service_id FK,
+    # straight off the ORM row (never unresolvable, unlike service_origin
+    # above which depends on the bulk-loaded services map). Lets the FE's
+    # SetMethodInstrumentDialog key its method-catalog lookup by id instead
+    # of a keyword scan — keywords are not unique across service origins,
+    # so a keyword-only match can resolve the wrong service.
+    analysis_service_id: Optional[int] = None
 
 
 # ─── Phase 4a: promote_to_parent response shapes ─────────────────────────────

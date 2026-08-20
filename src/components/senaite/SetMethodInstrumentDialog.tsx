@@ -71,7 +71,18 @@ export function SetMethodInstrumentDialog({
             s => s.analysis_service_id === serviceId && s.is_default
           )
         )
-        const initialMethodId = currentMethodId ?? defaultMethod?.id ?? null
+        // Validate currentMethodId against the covering set before trusting
+        // it — mirrors the instrument validation below. An id that isn't
+        // in `covering` (inactive method, or a stale/mismatched serviceId)
+        // must not be silently carried into the PATCH body: fall back to
+        // the service default (or null) the same way an invalid
+        // currentInstrumentId already falls back to null.
+        const currentMethodValid =
+          currentMethodId != null &&
+          covering.some(m => m.id === currentMethodId)
+        const initialMethodId = currentMethodValid
+          ? currentMethodId
+          : (defaultMethod?.id ?? null)
         setMethodId(initialMethodId)
 
         const initialMethod =
@@ -201,7 +212,7 @@ export function SetMethodInstrumentDialog({
           </Button>
           <Button
             onClick={() => void handleSave()}
-            disabled={loading || pending || coveringMethods.length === 0}
+            disabled={loading || pending || selectedMethod == null}
           >
             {pending ? 'Saving…' : 'Save'}
           </Button>

@@ -119,7 +119,7 @@ describe('SetMethodInstrumentDialog', () => {
     )
   })
 
-  it('renders with no crash when no methods cover this service', async () => {
+  it('renders with no crash when no methods cover this service, Save disabled', async () => {
     vi.mocked(getMethods).mockResolvedValue([] as never)
     render(
       <SetMethodInstrumentDialog
@@ -132,11 +132,84 @@ describe('SetMethodInstrumentDialog', () => {
         onSaved={vi.fn()}
       />
     )
-    // Loading resolves; no crash, Save still present.
-    expect(
-      await screen.findByRole('button', { name: /save/i })
-    ).toBeInTheDocument()
+    // Loading resolves; no crash, Save still present but disabled — there's
+    // nothing valid to save.
+    expect(await screen.findByRole('button', { name: /save/i })).toBeDisabled()
     // No covering methods -> no default preselection text rendered.
     expect(screen.queryByText(/am-g-1|icp-ms g/i)).not.toBeInTheDocument()
+  })
+
+  // Fix round 1 (quality review, Medium-High: silent data loss): a stale
+  // currentMethodId (inactive method, or a mismatched serviceId resolution)
+  // must never be trusted as-is — it has to be validated against the
+  // covering set the same way currentInstrumentId already is, both when a
+  // service default exists to fall back to and when it doesn't.
+
+  it('falls back to the service default when currentMethodId is not in the covering set', async () => {
+    vi.mocked(getMethods).mockResolvedValue([METHOD] as never)
+    vi.mocked(stampAnalysisMethodInstrument).mockResolvedValue({} as never)
+    const user = userEvent.setup()
+    render(
+      <SetMethodInstrumentDialog
+        analysisId={99}
+        serviceId={5}
+        currentMethodId={999} // not among covering methods (only id 11 covers service 5)
+        currentInstrumentId={null}
+        open
+        onOpenChange={vi.fn()}
+        onSaved={vi.fn()}
+      />
+    )
+
+    // Falls back to the service's default method (11), not the stale 999.
+    expect(await screen.findByText(/am-g-1|icp-ms g/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /save/i })).toBeEnabled()
+
+    await user.click(screen.getByRole('button', { name: /save/i }))
+
+    await waitFor(() =>
+      expect(stampAnalysisMethodInstrument).toHaveBeenCalledWith(
+        99,
+        expect.objectContaining({ method_id: 11 })
+      )
+    )
+    // The stale id must never appear in the PATCH body.
+    expect(stampAnalysisMethodInstrument).not.toHaveBeenCalledWith(
+      99,
+      expect.objectContaining({ method_id: 999 })
+    )
+  })
+
+  it('with no service default either, an invalid currentMethodId leaves Save disabled and never PATCHes the stale id', async () => {
+    const methodNoDefault = {
+      ...METHOD,
+      services: [
+        {
+          analysis_service_id: 5,
+          keyword: 'LEAD-PPM',
+          title: 'Lead',
+          is_default: false,
+        },
+      ],
+    }
+    vi.mocked(getMethods).mockResolvedValue([methodNoDefault] as never)
+    render(
+      <SetMethodInstrumentDialog
+        analysisId={99}
+        serviceId={5}
+        currentMethodId={999} // not among covering methods, no default to fall back to
+        currentInstrumentId={null}
+        open
+        onOpenChange={vi.fn()}
+        onSaved={vi.fn()}
+      />
+    )
+
+    // Placeholder, not the stale id's (nonexistent) label, and not the
+    // covering method's label either — nothing is preselected.
+    expect(await screen.findByText('Method…')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /save/i })).toBeDisabled()
+
+    expect(stampAnalysisMethodInstrument).not.toHaveBeenCalled()
   })
 })

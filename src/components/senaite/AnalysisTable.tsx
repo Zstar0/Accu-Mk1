@@ -1402,10 +1402,11 @@ function AnalysisRow({
   const vialOverlayEditable = vialAssign?.editable ?? false
   const [promoteOpen, setPromoteOpen] = useState(false)
   // Task 7 (methods bench-stamping): the Wrench row action's dialog.
-  // serviceId is resolved lazily on open — SenaiteAnalysis carries no
-  // analysis_service_id, so it's found by matching this row's keyword
-  // against each candidate method's services[].keyword (documented
-  // fallback route in the task brief; see openMethodDialog below). Excluded
+  // serviceId is resolved on open — preferring the row's own
+  // analysis_service_id FK (fix round 1, R-P2-3) when the backend supplied
+  // it; only falling back to a keyword scan of active methods'
+  // services[].keyword when it's absent (see openMethodDialog below).
+  // Excluded
   // for verbPolicy 'parent-native' — that policy's whole point is
   // display-only rows outside its own verify/retest verbs (mirrors how
   // canPromote/canVarVerify above are excluded), even though a parent-tier
@@ -1415,10 +1416,24 @@ function AnalysisRow({
   const [methodDialogOpen, setMethodDialogOpen] = useState(false)
   const [methodDialogServiceId, setMethodDialogServiceId] = useState<number | null>(null)
   async function openMethodDialog() {
+    // Fix round 1 (R-P2-3, controller ruling): prefer the row's own FK when
+    // the backend supplied it — no fetch needed, and no ambiguity. Only
+    // fall back to the keyword scan when analysis_service_id is absent
+    // (older cached rows, or a non-mk1 origin somehow reaching here), and
+    // scope that scan to ACTIVE methods only — keywords are not unique
+    // across service origins (the migration pattern produces exactly that
+    // collision), so scanning inactive/superseded methods too widens the
+    // chance of resolving the wrong service.
+    if (analysis.analysis_service_id != null) {
+      setMethodDialogServiceId(analysis.analysis_service_id)
+      setMethodDialogOpen(true)
+      return
+    }
     let serviceId: number | null = null
     try {
       const methods = await getMethods()
       for (const m of methods) {
+        if (!m.active) continue
         const link = m.services.find(s => s.keyword === analysis.keyword)
         if (link) {
           serviceId = link.analysis_service_id
