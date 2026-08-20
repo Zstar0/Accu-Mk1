@@ -432,6 +432,15 @@ def test_attachment_delete_succeeds_while_draft(client, db_session, tmp_path, mo
         f"/hplc/methods/{mid}/attachments/{att['id']}/download").status_code == 404
 
 
+def test_attachment_upload_empty_file_rejected(client, db_session, tmp_path, monkeypatch):
+    _use_tmp_photo_storage(tmp_path, monkeypatch)
+
+    mid = _draft(client, "ATT-M5")
+    r = client.post(f"/hplc/methods/{mid}/attachments",
+                    files={"file": ("empty.pdf", b"", "application/pdf")})
+    assert r.status_code == 400
+
+
 def test_attachment_upload_writes_change_log(client, db_session, tmp_path, monkeypatch):
     from models import CatalogChangeLog
     _use_tmp_photo_storage(tmp_path, monkeypatch)

@@ -4487,6 +4487,8 @@ async def upload_method_attachment(method_id: int, file: UploadFile,
         raise HTTPException(404, f"Method {method_id} not found")
 
     file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(400, "empty file")
     filename = (file.filename or "attachment")[:255]
 
     from sub_samples.photo_storage import get_storage
