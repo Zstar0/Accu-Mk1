@@ -54,6 +54,36 @@ class AuditLog(Base):
         return f"<AuditLog(id={self.id}, operation='{self.operation}', entity_type='{self.entity_type}')>"
 
 
+class CatalogChangeLog(Base):
+    """Append-only change log for catalog mutations (S4, ISO 8.3/7.5.1 document
+    control). details uses the amendment-audit vocabulary (LimsAnalysisTransition
+    precedent, :1773 above):
+        {"changed": {"<field>": {"before": <raw>, "after": <raw>}}}
+    Written only via catalog/change_log.py — never db.add() this directly from
+    a route. See that module's docstring for the exempt write paths.
+    """
+
+    __tablename__ = "catalog_change_log"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    entity_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    entity_pk: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    action: Mapped[str] = mapped_column(String(20), nullable=False)
+    details: Mapped[Optional[dict]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True
+    )
+    user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    def __repr__(self) -> str:
+        return (
+            f"<CatalogChangeLog(entity_type='{self.entity_type}', "
+            f"entity_pk={self.entity_pk}, action='{self.action}')>"
+        )
+
+
 class Job(Base):
     """
     Represents a batch import job.

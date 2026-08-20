@@ -1716,6 +1716,20 @@ def _run_migrations():
         "DROP INDEX IF EXISTS uq_hplc_methods_code",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_hplc_methods_code_revision ON hplc_methods (code, revision) WHERE code IS NOT NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_hplc_methods_code_active ON hplc_methods (code) WHERE status = 'active' AND code IS NOT NULL",
+        # S4 catalog change log (ported from feat/s4-catalog-change-log @ f430a966,
+        # unmerged as of this branch's cut — see task-2/3 report for provenance):
+        # append-only ISO 8.3/7.5.1 document control for the catalog. details uses
+        # the amendment-audit vocabulary {"changed": {field: {before, after}}}.
+        """CREATE TABLE IF NOT EXISTS catalog_change_log (
+        id SERIAL PRIMARY KEY,
+        entity_type VARCHAR(40) NOT NULL,
+        entity_pk INTEGER,
+        action VARCHAR(20) NOT NULL,
+        details JSONB,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        occurred_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )""",
+        "CREATE INDEX IF NOT EXISTS ix_catalog_change_log_entity ON catalog_change_log (entity_type, entity_pk)",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
