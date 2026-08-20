@@ -4343,8 +4343,9 @@ async def activate_method(method_id: int, db: Session = Depends(get_db),
     every service the supersedes_id source holds a default on — regardless of
     the source's current status (R11 amendment) — flip the source link's
     is_default off and this revision's link for the same service on (insert
-    the link if the clone lost it). If the source is still active, retire it.
-    Self goes active. Both rows audited via apply_and_log."""
+    the link if the clone lost it). Then retire any other same-identity
+    row still marked active (R-P3-2 — see below). Self goes active. All
+    retired rows and self are audited via apply_and_log."""
     m = db.get(HplcMethod, method_id)
     if not m:
         raise HTTPException(404, f"Method {method_id} not found")
@@ -4374,14 +4375,60 @@ async def activate_method(method_id: int, db: Session = Depends(get_db),
             if updated.rowcount == 0:
                 db.execute(method_services.insert().values(
                     method_id=m.id, analysis_service_id=service_id, is_default=True))
-        if src.status == "active":
-            apply_and_log(db, src, {"status": "retired", "active": False,
-                                    "retired_at": datetime.utcnow()},
-                          entity_type="method", entity_pk=src.id,
-                          user_id=getattr(current_user, "id", None))
+
+    # R-P3-2: two drafts independently new-revision'd off the same source can
+    # both be activated. Scoping the predecessor-retire to `src` alone (the
+    # original behavior) misses this — src is only the DIRECT supersedes
+    # source, and by the time the second draft activates src may already be
+    # retired (by the first activation) while a DIFFERENT same-code row is
+    # now active, so committing self would still trip
+    # uq_hplc_methods_code_active. Generalize: retire ANY other row sharing
+    # this method's identity that is still active — keyed by code (the DB
+    # constraint's own key) when code is set, else by name. This subsumes
+    # the old src-only retire, so that branch is folded in here. Defaults
+    # still harvest from `src` only, per R11 — untouched above.
+    if m.code is not None:
+        stale_active = db.execute(select(HplcMethod).where(
+            HplcMethod.code == m.code, HplcMethod.status == "active",
+            HplcMethod.id != m.id)).scalars().all()
+    else:
+        stale_active = db.execute(select(HplcMethod).where(
+            HplcMethod.name == m.name, HplcMethod.status == "active",
+            HplcMethod.id != m.id)).scalars().all()
+    for row in stale_active:
+        apply_and_log(db, row, {"status": "retired", "active": False,
+                                "retired_at": datetime.utcnow()},
+                      entity_type="method", entity_pk=row.id,
+                      user_id=getattr(current_user, "id", None))
 
     apply_and_log(db, m, {"status": "active", "active": True,
                           "activated_at": datetime.utcnow()},
+                  entity_type="method", entity_pk=m.id,
+                  user_id=getattr(current_user, "id", None))
+
+    db.commit()
+    db.refresh(m)
+    return _method_to_response(db, m)
+
+
+@app.post("/hplc/methods/{method_id}/retire", response_model=MethodResponse)
+async def retire_method(method_id: int, db: Session = Depends(get_db),
+                        current_user=Depends(get_current_user)):
+    """Retire an active method. Active-only (400 otherwise). Defaults are
+    left in place on the junction — the slice-1 fail-open rule
+    (default_method_id requires HplcMethod.active) makes them inert once
+    this row goes inactive; a later activation harvests them from this row
+    regardless (Task 3's superseded-row read, R11)."""
+    m = db.get(HplcMethod, method_id)
+    if not m:
+        raise HTTPException(404, f"Method {method_id} not found")
+    if m.status != "active":
+        raise HTTPException(400, f"only active methods retire (this row is {m.status})")
+
+    from catalog.change_log import apply_and_log
+
+    apply_and_log(db, m, {"status": "retired", "active": False,
+                          "retired_at": datetime.utcnow()},
                   entity_type="method", entity_pk=m.id,
                   user_id=getattr(current_user, "id", None))
 

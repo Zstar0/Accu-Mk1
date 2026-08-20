@@ -244,13 +244,11 @@ def test_activate_moves_defaults_and_retires_predecessor(client, db_session):
     assert next(s for s in svc_rows if s["id"] == lead.id)["default_method_id"] == rev2
 
 
-@pytest.mark.skip(reason="retire lands in the next task (Task 4) — this needs "
-                         "POST /hplc/methods/{id}/retire, which doesn't exist yet")
 def test_activate_after_manual_retire_still_moves_defaults(client, db_session):
     """R11 amendment: defaults come from the SUPERSEDED row regardless of status."""
     mid, lead = _icp_world(client, db_session)
     rev2 = client.post(f"/hplc/methods/{mid}/new-revision").json()["id"]
-    client.post(f"/hplc/methods/{mid}/retire")   # Task 4 provides retire; ordering as Task 2's note
+    client.post(f"/hplc/methods/{mid}/retire")   # manual retire, ahead of activate
     r = client.post(f"/hplc/methods/{rev2}/activate")
     assert r.status_code == 200
     svc_rows = client.get("/analysis-services").json()
@@ -262,3 +260,43 @@ def test_drafts_invisible_to_default_resolution(client, db_session):
     client.post(f"/hplc/methods/{mid}/new-revision")   # draft exists
     svc_rows = client.get("/analysis-services").json()
     assert next(s for s in svc_rows if s["id"] == lead.id)["default_method_id"] == mid  # rev1 still
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Task 4 — retire verb + R-P3-2 (parallel-drafts generalized retire on activate)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def test_retire_fail_open_defaults(client, db_session):
+    mid, lead = _icp_world(client, db_session)
+    r = client.post(f"/hplc/methods/{mid}/retire")
+    assert r.status_code == 200 and r.json()["status"] == "retired"
+    svc_rows = client.get("/analysis-services").json()
+    assert next(s for s in svc_rows if s["id"] == lead.id)["default_method_id"] is None
+    # stamped history untouched: FK intact, DELETE still guarded
+    assert client.post(f"/hplc/methods/{mid}/retire").status_code == 400  # not active anymore
+
+
+def test_activate_second_parallel_draft_retires_first(client, db_session):
+    """R-P3-2: two drafts new-revision'd off the SAME source, both activated.
+    The second activate must retire the first (now-active) revision — not
+    just `src`, which is already retired by the time the second one runs —
+    or it 500s on uq_hplc_methods_code_active."""
+    mid, lead = _icp_world(client, db_session)
+    rev2 = client.post(f"/hplc/methods/{mid}/new-revision").json()["id"]
+    rev3 = client.post(f"/hplc/methods/{mid}/new-revision").json()["id"]
+
+    assert client.post(f"/hplc/methods/{rev2}/activate").status_code == 200
+    r = client.post(f"/hplc/methods/{rev3}/activate")
+    assert r.status_code == 200
+
+    rows = client.get("/hplc/methods").json()
+    mid_row = next(m for m in rows if m["id"] == mid)
+    rev2_row = next(m for m in rows if m["id"] == rev2)
+    rev3_row = next(m for m in rows if m["id"] == rev3)
+    assert mid_row["status"] == "retired"
+    assert rev2_row["status"] == "retired" and rev2_row["active"] is False
+    assert rev3_row["status"] == "active" and rev3_row["active"] is True
+
+    active_same_code = [m for m in rows if m["code"] == rev3_row["code"] and m["status"] == "active"]
+    assert len(active_same_code) == 1
