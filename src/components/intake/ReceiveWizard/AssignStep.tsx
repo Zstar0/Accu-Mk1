@@ -604,12 +604,20 @@ function RiderChips({ profiles }: { profiles: VialPlanRoleProfile[] }) {
   if (riders.length === 0) return null
   return (
     <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] uppercase tracking-wide text-muted-foreground mt-1 pl-3">
-      {riders.map(r => (
-        <span key={r.id}>
-          {r.name}
-          <span className="ml-1 normal-case">· rider</span>
-        </span>
-      ))}
+      {riders.map(r => {
+        const landing = (r.host_vials ?? [])
+          .map(v => v.split('-').pop())
+          .filter(Boolean)
+          .join(', ')
+        return (
+          <span key={r.id} title={(r.host_vials ?? []).join(', ') || undefined}>
+            {r.name}
+            <span className="ml-1 normal-case">
+              · rider{landing ? ` → ${landing}` : ''}
+            </span>
+          </span>
+        )
+      })}
     </div>
   )
 }

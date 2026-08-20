@@ -507,6 +507,17 @@ describe('catalog-driven sections (Task 9)', () => {
     expect(screen.getByText(/· rider/)).toBeInTheDocument()
   })
 
+  it('renders the rider chip landing vial when host_vials is present (spec 2026-08-20-rider-vial-visibility)', async () => {
+    const plan: VialPlanResponse = JSON.parse(JSON.stringify(FULL_PLAN))
+    const endoRole = plan.sections[1]!.roles.find(r => r.code === 'endo')!
+    const riderProfile = endoRole.profiles.find(p => p.relation === 'rider')!
+    riderProfile.host_vials = ['P-0001-S01']
+    vi.mocked(getVialPlan).mockResolvedValue(plan)
+    renderStep()
+    await screen.findByText('Microbiology')
+    expect(await screen.findByText(/· rider → S01/)).toBeInTheDocument()
+  })
+
   it('round-trips a novel role (t_role): renders its section+spot, is a valid drag target, chip falls back to the uppercased code', async () => {
     expect(bucketToAssignment('t_role')).toEqual({ role: 't_role', kind: 'core' })
     vi.mocked(getVialPlan).mockResolvedValue(T_ROLE_PLAN)

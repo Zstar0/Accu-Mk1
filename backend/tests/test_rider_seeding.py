@@ -324,3 +324,39 @@ def test_sections_include_lab_added_rider_via_placeholder_union(db, monkeypatch)
     spot = next(r for r in section["roles"] if r["code"] == "zzsechost")
     riders = [p for p in spot["profiles"] if p["relation"] == "rider"]
     assert [p["key"] for p in riders] == ["zzs_rider"]
+
+
+# ─── rider landing (S3) ────────────────────────────────────────────────────
+
+def test_sections_rider_profile_carries_host_vials(db, monkeypatch):
+    """The rider chip's landing: sections rider entries name the vial(s)
+    holding a live rider edge, in vial_sequence order."""
+    from sub_samples.service import _build_vial_plan_sections
+    dept = Department(name="ZZ Land Dept")
+    db.add(dept)
+    db.flush()
+    db.add(VialRole(code="zzlhost", label="zzlhost", department_id=dept.id,
+                    boxable=False, variance_eligible=False, sort_order=901,
+                    frozen=False, is_system=False))
+    db.flush()
+    host_svc = _svc(db, "ZZL-HOST")
+    rider_svc = _svc(db, "ZZL-RIDER")
+    host = _profile(db, "zzl_host", "zzlhost", [host_svc], vials=1)
+    rider = _profile(db, "zzl_rider", "zzlrider", [rider_svc], rides=["zzlhost"])
+    parent, sub = _vial(db, "ZZL-0001", role="zzlhost")
+    _rider_edge(db, sub, rider)
+
+    sections = _build_vial_plan_sections(
+        db,
+        {"zzlhost": 1},
+        [{"sample_id": sub.sample_id, "is_parent": False, "vial_sequence": 1,
+          "assignment_role": "zzlhost", "assignment_kind": "core"}],
+        {"zzl_host": True, "zzl_rider": True},
+    )
+
+    section = next(s for s in sections if s["department_name"] == "ZZ Land Dept")
+    spot = next(r for r in section["roles"] if r["code"] == "zzlhost")
+    rider_entry = next(p for p in spot["profiles"] if p["relation"] == "rider")
+    assert rider_entry["host_vials"] == [sub.sample_id]
+    host_entry = next(p for p in spot["profiles"] if p["relation"] == "host")
+    assert "host_vials" not in host_entry

@@ -5739,6 +5739,8 @@ export interface VialPlanRoleProfile {
   key: string
   name: string
   relation: 'host' | 'rider'
+  /** rider entries only: vial sample_ids holding a live rider edge (vial_sequence order) */
+  host_vials?: string[]
 }
 
 /** One assignable role within a vial-plan section — the bench "spot" Task 9's

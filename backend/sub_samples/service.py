@@ -1441,6 +1441,30 @@ def _build_vial_plan_sections(db: Session, demand: dict, vials: list[dict],
             db.query(AnalysisProfile).filter(AnalysisProfile.id.in_(all_ids)).all()
         }
 
+    # Rider landing (spec 2026-08-20-rider-vial-visibility): which of THIS
+    # plan's vials hold a live rider edge, per profile — one query, keyed by
+    # profile id. Display metadata only; failures here must never 500 the
+    # vial plan, so the shape stays a plain default-empty lookup.
+    rider_vials_by_pid: dict = {}
+    vial_sample_ids = [v["sample_id"] for v in vials if not v.get("is_parent")]
+    if all_ids and vial_sample_ids:
+        from models import VialProfileAssignment
+        edge_rows = db.execute(
+            select(VialProfileAssignment.analysis_profile_id,
+                   LimsSubSample.sample_id)
+            .join(LimsSubSample,
+                  LimsSubSample.id == VialProfileAssignment.lims_sub_sample_pk)
+            .where(
+                VialProfileAssignment.relation == "rider",
+                VialProfileAssignment.superseded_at.is_(None),
+                VialProfileAssignment.analysis_profile_id.in_(all_ids),
+                LimsSubSample.sample_id.in_(vial_sample_ids),
+            )
+            .order_by(LimsSubSample.vial_sequence)
+        ).all()
+        for pid, sid in edge_rows:
+            rider_vials_by_pid.setdefault(pid, []).append(sid)
+
     sections_by_dept: dict = {}
     for code in candidates:
         row = registry.get(code)
@@ -1467,7 +1491,11 @@ def _build_vial_plan_sections(db: Session, demand: dict, vials: list[dict],
             for pid in rf.rider_profile_ids:
                 p = profile_by_id.get(pid)
                 if p is not None:
-                    profiles.append({"id": p.id, "key": p.key, "name": p.name, "relation": "rider"})
+                    profiles.append({
+                        "id": p.id, "key": p.key, "name": p.name,
+                        "relation": "rider",
+                        "host_vials": rider_vials_by_pid.get(pid, []),
+                    })
 
         section = sections_by_dept.setdefault(dept.id, {
             "department_id": dept.id,
