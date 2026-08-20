@@ -2870,11 +2870,35 @@ export async function deleteMethodAttachment(
   }
 }
 
-export function methodAttachmentDownloadUrl(
+// R-P3-4: the download route is Bearer-gated like every other method-
+// attachment endpoint, so a plain `<a href>` 401s and a token-in-query
+// fallback is rejected (leaks into logs/history). Mirrors
+// fetchFlagAttachmentUrl/fetchPackagingPhotoUrl's authed-blob-fetch
+// pattern, but triggers an actual file save (via a throwaway anchor's
+// `download` attribute) instead of returning a renderable object URL —
+// there's nothing to cache or re-render here, so the URL is revoked
+// immediately after the click instead of being kept around.
+export async function downloadMethodAttachment(
   methodId: number,
-  attachmentId: number
-): string {
-  return `${API_BASE_URL()}/hplc/methods/${methodId}/attachments/${attachmentId}/download`
+  attachmentId: number,
+  filename: string
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/methods/${methodId}/attachments/${attachmentId}/download`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    throw new Error(`Download attachment failed: ${response.status}`)
+  }
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
 }
 
 // ─── Calibration CRUD ───

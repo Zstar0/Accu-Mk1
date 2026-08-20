@@ -43,7 +43,7 @@ import {
   getMethodAttachments,
   uploadMethodAttachment,
   deleteMethodAttachment,
-  methodAttachmentDownloadUrl,
+  downloadMethodAttachment,
   type HplcMethod,
   type PeptideBrief,
   type PeptideRecord,
@@ -77,6 +77,7 @@ export function MethodPanel({ method, onUpdated, onSelectMethod }: MethodPanelPr
   const [attachments, setAttachments] = useState<MethodAttachment[]>([])
   const [uploadingAttachment, setUploadingAttachment] = useState(false)
   const [deletingAttachmentId, setDeletingAttachmentId] = useState<number | null>(null)
+  const [downloadingAttachmentId, setDownloadingAttachmentId] = useState<number | null>(null)
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null)
   const [actionBusy, setActionBusy] = useState(false)
 
@@ -162,6 +163,17 @@ export function MethodPanel({ method, onUpdated, onSelectMethod }: MethodPanelPr
       toast.error(err instanceof Error ? err.message : 'Failed to delete attachment')
     } finally {
       setDeletingAttachmentId(null)
+    }
+  }
+
+  const handleDownloadAttachment = async (attachmentId: number, filename: string) => {
+    setDownloadingAttachmentId(attachmentId)
+    try {
+      await downloadMethodAttachment(method.id, attachmentId, filename)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to download attachment')
+    } finally {
+      setDownloadingAttachmentId(null)
     }
   }
 
@@ -875,14 +887,14 @@ export function MethodPanel({ method, onUpdated, onSelectMethod }: MethodPanelPr
                   {formatAttachmentSize(att.size_bytes)} · {formatShortDate(att.created_at)}
                 </span>
                 <div className="ml-auto flex items-center gap-2">
-                  <a
-                    href={methodAttachmentDownloadUrl(method.id, att.id)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs text-primary hover:underline"
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadAttachment(att.id, att.filename)}
+                    disabled={downloadingAttachmentId === att.id}
+                    className="text-xs text-primary hover:underline disabled:pointer-events-none disabled:opacity-50"
                   >
-                    Download
-                  </a>
+                    {downloadingAttachmentId === att.id ? 'Downloading…' : 'Download'}
+                  </button>
                   {method.status === 'draft' && (
                     <button
                       type="button"

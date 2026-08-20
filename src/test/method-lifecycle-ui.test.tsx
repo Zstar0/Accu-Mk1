@@ -24,6 +24,7 @@ vi.mock('@/lib/api', async importOriginal => {
     getMethodAttachments: vi.fn(),
     uploadMethodAttachment: vi.fn(),
     deleteMethodAttachment: vi.fn(),
+    downloadMethodAttachment: vi.fn(),
   }
 })
 
@@ -49,6 +50,7 @@ import {
   getMethodAttachments,
   uploadMethodAttachment,
   deleteMethodAttachment,
+  downloadMethodAttachment,
 } from '@/lib/api'
 import { MethodPanel } from '@/components/hplc/MethodPanel'
 import { MethodsPage } from '@/components/hplc/MethodsPage'
@@ -105,6 +107,7 @@ describe('MethodPanel — lifecycle UI', () => {
       .mockReset()
       .mockResolvedValue({} as never)
     vi.mocked(deleteMethodAttachment).mockReset().mockResolvedValue(undefined)
+    vi.mocked(downloadMethodAttachment).mockReset().mockResolvedValue(undefined)
   })
 
   it('active method offers Retire + New Revision, never Activate', async () => {
@@ -151,6 +154,32 @@ describe('MethodPanel — lifecycle UI', () => {
     expect(
       screen.getByRole('button', { name: /delete attachment/i })
     ).toBeInTheDocument()
+  })
+
+  it('Download button fetches the attachment via authenticated blob, not a bare link', async () => {
+    const user = userEvent.setup()
+    vi.mocked(getMethodAttachments).mockResolvedValue([
+      {
+        id: 5,
+        filename: 'sop.pdf',
+        content_type: 'application/pdf',
+        size_bytes: 9,
+        created_at: '2026-08-19T00:00:00Z',
+      },
+    ] as MethodAttachment[])
+    render(<MethodPanel method={ACTIVE_M} onUpdated={vi.fn()} />)
+    const downloadButton = await screen.findByRole('button', {
+      name: /download/i,
+    })
+    expect(downloadButton.tagName).toBe('BUTTON') // not an <a href> — R-P3-4
+    await user.click(downloadButton)
+    await waitFor(() =>
+      expect(downloadMethodAttachment).toHaveBeenCalledWith(
+        ACTIVE_M.id,
+        5,
+        'sop.pdf'
+      )
+    )
   })
 
   it('saving a locked method sends only notes/department/instruments', async () => {
@@ -295,6 +324,7 @@ describe('MethodsPage — status badge + revision suffix', () => {
       .mockReset()
       .mockResolvedValue({} as never)
     vi.mocked(deleteMethodAttachment).mockReset().mockResolvedValue(undefined)
+    vi.mocked(downloadMethodAttachment).mockReset().mockResolvedValue(undefined)
   })
 
   it('shows a status badge per row and a rev suffix only when revision > 1', async () => {
