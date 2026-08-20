@@ -3312,6 +3312,10 @@ async def update_instrument(instrument_id: int, data: InstrumentUpdate,
     if not inst:
         raise HTTPException(404, f"Instrument {instrument_id} not found")
     fields = data.model_dump(exclude_unset=True)
+    # R1: Reject explicit nulls on NOT-NULL columns
+    for field in ("name", "active"):
+        if field in fields and fields[field] is None:
+            raise HTTPException(400, f"{field} cannot be null")
     if "name" in fields and fields["name"] != inst.name:
         if db.execute(select(Instrument).where(Instrument.name == fields["name"],
                                                Instrument.id != instrument_id)).scalar_one_or_none():

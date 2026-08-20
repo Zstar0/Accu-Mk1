@@ -246,3 +246,15 @@ def test_patch_instrument(client, db_session):
     r = client.patch(f"/instruments/{iid}", json={"brand": "Mettler Toledo", "active": False})
     assert r.status_code == 200
     assert r.json()["brand"] == "Mettler Toledo" and r.json()["active"] is False
+
+
+def test_patch_instrument_explicit_null_400(client, db_session):
+    iid = client.post("/instruments", json={"name": "KF Titrator V40"}).json()["id"]
+    # Explicit null on NOT-NULL name → 400 (R1)
+    r = client.patch(f"/instruments/{iid}", json={"name": None})
+    assert r.status_code == 400
+    assert "name" in r.json()["detail"].lower()
+    # Explicit null on NOT-NULL active → 400 (R1)
+    r = client.patch(f"/instruments/{iid}", json={"active": None})
+    assert r.status_code == 400
+    assert "active" in r.json()["detail"].lower()
