@@ -51,7 +51,7 @@ describe('FlagTable', () => {
       'Title',
       'Assignee',
       'Status',
-      'Age',
+      'Created',
     ]) {
       expect(screen.getByText(label)).toBeInTheDocument()
     }

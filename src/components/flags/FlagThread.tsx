@@ -292,8 +292,10 @@ export function FlagThread({
         <span className="text-foreground/70">{tabLabel}</span>
       </button>
 
-      {/* Header */}
-      <div className="border-b px-4 py-3">
+      {/* Header — capped so a tall title/description/chip stack can never
+          starve the timeline on short screens (the squeezed timeline read as
+          "can't scroll down" in the field); overflows internally instead. */}
+      <div className="max-h-[45%] shrink-0 overflow-y-auto border-b px-4 py-3">
         <div className="flex items-center justify-between gap-2">
           <span className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-1 text-[11px] font-bold text-foreground/80">
             <Icon className="h-3.5 w-3.5" />

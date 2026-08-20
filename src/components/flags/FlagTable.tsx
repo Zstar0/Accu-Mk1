@@ -20,7 +20,7 @@ import {
   avatarColor,
   avatarUrlForUser,
 } from '@/components/flags/flag-users'
-import { relativeTime, dueLabel } from '@/components/flags/flag-format'
+import { formatDateTime, dueLabel } from '@/components/flags/flag-format'
 import {
   STATUS_LABELS,
   STATUS_DOT,
@@ -41,7 +41,7 @@ import type { FlagSearchMeta } from '@/components/flags/flag-search'
  * Columns: accent · Entity · Type · Title · Assignee · Status · Due · Age
  */
 const GRID_TEMPLATE =
-  'grid grid-cols-[3px_130px_104px_minmax(0,1fr)_120px_108px_88px_44px] items-center gap-x-2'
+  'grid grid-cols-[3px_130px_104px_minmax(0,1fr)_120px_108px_88px_118px] items-center gap-x-2'
 
 /** Due sort key: ascending by due date, nulls (no due date) last. */
 function dueSortKey(f: FlagResponse): number {
@@ -135,7 +135,7 @@ function FlagTableHeader({
       >
         Due <ArrowUpDown className="h-2.5 w-2.5" />
       </button>
-      <span className="truncate text-end">Age</span>
+      <span className="truncate text-end">Created</span>
     </div>
   )
 }
@@ -292,9 +292,12 @@ function FlagTableRow({
         {due?.text ?? '—'}
       </span>
 
-      {/* Age */}
-      <span className="truncate text-end text-[11px] tabular-nums text-muted-foreground">
-        {relativeTime(flag.updated_at)}
+      {/* Created — absolute date+time (was relative 'age' of last update) */}
+      <span
+        className="truncate text-end text-[11px] tabular-nums text-muted-foreground"
+        title={new Date(flag.created_at).toLocaleString()}
+      >
+        {formatDateTime(flag.created_at)}
       </span>
     </div>
   )
