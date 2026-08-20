@@ -220,3 +220,29 @@ def test_delete_method_referenced_by_analysis_409(client, db_session):
     assert r.status_code == 409
     assert "deactivate" in r.json()["detail"].lower()
     assert db_session.get(HplcMethod, mid) is not None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Task 5 — Instrument local CRUD: POST/PATCH, R0, department scope
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def test_create_instrument_local(client, db_session):
+    r = client.post("/instruments", json={"name": "Agilent 7900 ICP-MS",
+                                          "instrument_type": "ICP-MS",
+                                          "senaite_uid": "should-be-ignored"})
+    assert r.status_code == 201
+    b = r.json()
+    assert b["origin"] == "mk1" and b["senaite_id"] is None and b["senaite_uid"] is None
+
+
+def test_create_instrument_duplicate_name_400(client, db_session):
+    client.post("/instruments", json={"name": "KF Titrator V20"})
+    assert client.post("/instruments", json={"name": "KF Titrator V20"}).status_code == 400
+
+
+def test_patch_instrument(client, db_session):
+    iid = client.post("/instruments", json={"name": "KF Titrator V30"}).json()["id"]
+    r = client.patch(f"/instruments/{iid}", json={"brand": "Mettler Toledo", "active": False})
+    assert r.status_code == 200
+    assert r.json()["brand"] == "Mettler Toledo" and r.json()["active"] is False

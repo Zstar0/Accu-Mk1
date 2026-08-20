@@ -2278,11 +2278,38 @@ class InstrumentResponse(BaseModel):
     brand: Optional[str] = None
     model: Optional[str] = None
     active: bool
+    department_id: Optional[int] = None
+    origin: str = "mk1"
     created_at: datetime
     updated_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class InstrumentCreate(BaseModel):
+    """Create instrument (R0: never carries SENAITE identity)."""
+    name: str
+    instrument_type: Optional[str] = None
+    brand: Optional[str] = None
+    model: Optional[str] = None
+    department_id: Optional[int] = None
+
+    class Config:
+        extra = "ignore"  # Silently ignore senaite_uid, senaite_id
+
+
+class InstrumentUpdate(BaseModel):
+    """Update instrument (all fields optional)."""
+    name: Optional[str] = None
+    instrument_type: Optional[str] = None
+    brand: Optional[str] = None
+    model: Optional[str] = None
+    department_id: Optional[int] = None
+    active: Optional[bool] = None
+
+    class Config:
+        extra = "ignore"
 
 
 # ─── Analysis Service schemas ───
@@ -3254,6 +3281,50 @@ async def sync_instruments(db: Session = Depends(get_db), _current_user=Depends(
     db.commit()
     total = db.execute(select(func.count()).select_from(Instrument)).scalar()
     return {"created": created, "updated": updated, "total": total}
+
+
+# ─── Instrument Endpoints (Local CRUD) ───
+
+
+@app.post("/instruments", response_model=InstrumentResponse, status_code=201)
+async def create_instrument(data: InstrumentCreate, db: Session = Depends(get_db),
+                            _current_user=Depends(get_current_user)):
+    """Local instrument registration (R0: never carries SENAITE identity)."""
+    if db.execute(select(Instrument).where(Instrument.name == data.name)).scalar_one_or_none():
+        raise HTTPException(400, f"Instrument named '{data.name}' already exists")
+    if data.department_id is not None:
+        from models import Department
+        if not db.get(Department, data.department_id):
+            raise HTTPException(400, f"Department {data.department_id} not found")
+    inst = Instrument(**data.model_dump())
+    db.add(inst)
+    db.commit()
+    db.refresh(inst)
+    return InstrumentResponse.model_validate(inst)
+
+
+@app.patch("/instruments/{instrument_id}", response_model=InstrumentResponse)
+async def update_instrument(instrument_id: int, data: InstrumentUpdate,
+                            db: Session = Depends(get_db),
+                            _current_user=Depends(get_current_user)):
+    """Update an instrument."""
+    inst = db.get(Instrument, instrument_id)
+    if not inst:
+        raise HTTPException(404, f"Instrument {instrument_id} not found")
+    fields = data.model_dump(exclude_unset=True)
+    if "name" in fields and fields["name"] != inst.name:
+        if db.execute(select(Instrument).where(Instrument.name == fields["name"],
+                                               Instrument.id != instrument_id)).scalar_one_or_none():
+            raise HTTPException(400, f"Instrument named '{fields['name']}' already exists")
+    if fields.get("department_id") is not None:
+        from models import Department
+        if not db.get(Department, fields["department_id"]):
+            raise HTTPException(400, f"Department {fields['department_id']} not found")
+    for k, v in fields.items():
+        setattr(inst, k, v)
+    db.commit()
+    db.refresh(inst)
+    return InstrumentResponse.model_validate(inst)
 
 
 # ─── Analysis Service Endpoints ───
