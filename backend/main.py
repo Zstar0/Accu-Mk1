@@ -19079,6 +19079,11 @@ def list_worksheets(
         # distinct -> the literal "mixed"; none -> None. Same eager-map
         # idiom as sub_sample_pk_map above -- one grouped query per
         # worksheet, never per-item queries in the loop.
+        # Dead rows (rejected/retracted) are excluded (controller ruling
+        # R-P2-2): the writer's state guard (STAMPABLE_STATES) means a dead
+        # row's stamp can never be cleared, so an unfiltered read would let a
+        # post-retest vial read "mixed" forever even though only the live
+        # row's stamp still matters.
         from models import LimsAnalysis
         vial_pks = {pk for pk in sub_sample_pk_map.values() if pk}
         stamped_method_map: dict[int, str | None] = {}
@@ -19089,6 +19094,7 @@ def list_worksheets(
                 .outerjoin(HplcMethod, HplcMethod.id == LimsAnalysis.method_id)
                 .outerjoin(Instrument, Instrument.id == LimsAnalysis.instrument_id)
                 .where(LimsAnalysis.lims_sub_sample_pk.in_(vial_pks))
+                .where(LimsAnalysis.review_state.notin_(("rejected", "retracted")))
             ).all()
             method_names_by_pk: dict[int, set[str]] = {}
             instrument_names_by_pk: dict[int, set[str]] = {}

@@ -338,3 +338,42 @@ def test_payload_carries_stamped_names(client, db_session):
     item = client.get("/worksheets").json()[0]["items"][0]
     assert item["stamped_method_name"] == "ICP-MS F"
     assert item["stamped_instrument_name"] == "7900F"
+
+
+def test_payload_mixed_when_stamps_diverge_then_excludes_dead_rows(client, db_session):
+    """Two distinct stamped method/instrument names on one vial -> 'mixed'
+    (fix round 1, finding 2). Retracting one of the two stamped rows must
+    drop it from the grouped read (controller ruling R-P2-2, finding 1) --
+    the writer's state guard means a dead row's stamp can never be cleared,
+    so without the exclusion the vial would read 'mixed' forever."""
+    from lims_analyses import service as svc_mod
+    from models import Instrument as InstrumentModel
+
+    ws, it, inst, mid, rows = _hm_world(client, db_session)
+    # Stamp LEAD-PPM + ARSENIC-PPM with method "ICP-MS F" / instrument "7900F".
+    client.post(f"/worksheets/{ws.id}/apply-method-instrument",
+                json={"method_id": mid, "instrument_id": inst.id})
+
+    # Re-stamp ARSENIC-PPM directly with a different method/instrument pair.
+    # Goes through the service layer (not the bulk route), which only cares
+    # about STAMPABLE_STATES -- no coverage/instrument-link check -- giving
+    # the vial two distinct stamped names without needing a second method's
+    # service coverage wired up.
+    mid2 = client.post("/hplc/methods", json={"name": "ICP-MS G", "technique": "ICP-MS"}).json()["id"]
+    inst2 = InstrumentModel(name="7900G", origin="mk1", active=True)
+    db_session.add(inst2); db_session.commit()
+    svc_mod.set_method_instrument(db_session, analysis_id=rows["ARSENIC-PPM"][1].id,
+                                  method_id=mid2, instrument_id=inst2.id, user_id=None)
+
+    item = client.get("/worksheets").json()[0]["items"][0]
+    assert item["stamped_method_name"] == "mixed"
+    assert item["stamped_instrument_name"] == "mixed"
+
+    # Retract the divergent row (dead state) -- the payload must fall back to
+    # the single remaining live stamp, not stay stuck on "mixed".
+    rows["ARSENIC-PPM"][1].review_state = "retracted"
+    db_session.commit()
+
+    item = client.get("/worksheets").json()[0]["items"][0]
+    assert item["stamped_method_name"] == "ICP-MS F"
+    assert item["stamped_instrument_name"] == "7900F"
