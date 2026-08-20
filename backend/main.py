@@ -4359,9 +4359,10 @@ async def activate_method(method_id: int, db: Session = Depends(get_db),
     every service the supersedes_id source holds a default on — regardless of
     the source's current status (R11 amendment) — flip the source link's
     is_default off and this revision's link for the same service on (insert
-    the link if the clone lost it). Then retire any other same-identity
-    row still marked active (R-P3-2 — see below). Self goes active. All
-    retired rows and self are audited via apply_and_log."""
+    the link if the clone lost it). Also moves the source's peptide_methods
+    links onto this revision (R-P3-6 — see below). Then retire any other
+    same-identity row still marked active (R-P3-2 — see below). Self goes
+    active. All retired rows and self are audited via apply_and_log."""
     m = db.get(HplcMethod, method_id)
     if not m:
         raise HTTPException(404, f"Method {method_id} not found")
@@ -4391,6 +4392,31 @@ async def activate_method(method_id: int, db: Session = Depends(get_db),
             if updated.rowcount == 0:
                 db.execute(method_services.insert().values(
                     method_id=m.id, analysis_service_id=service_id, is_default=True))
+
+        # R-P3-6: peptide_methods links (the peptide<->method m2m the HPLC
+        # prep wizard + worksheet method-derivation resolve through) are
+        # deliberately NOT cloned at new-revision time (see
+        # new_method_revision) — otherwise stale drafts would keep piling up
+        # links no one asked them to hold. They ride the activation instead,
+        # harvested from `src` only, symmetric with the defaults handover
+        # above. (R-P3-2's sibling retire step below does NOT harvest links —
+        # only the direct supersedes source's rows move.) Check-before-insert
+        # against uq_peptide_method: the draft may already be manually linked
+        # to one of src's peptides, and re-inserting would trip the unique
+        # constraint. No apply_and_log here — same as the defaults handover,
+        # this junction-table move isn't itself an audited field change.
+        src_peptide_ids = db.execute(select(peptide_methods.c.peptide_id).where(
+            peptide_methods.c.method_id == src.id)).scalars().all()
+        for peptide_id in src_peptide_ids:
+            exists = db.execute(select(peptide_methods.c.id).where(
+                peptide_methods.c.method_id == m.id,
+                peptide_methods.c.peptide_id == peptide_id)).scalar_one_or_none()
+            if exists is None:
+                db.execute(peptide_methods.insert().values(
+                    peptide_id=peptide_id, method_id=m.id))
+            db.execute(peptide_methods.delete().where(
+                peptide_methods.c.method_id == src.id,
+                peptide_methods.c.peptide_id == peptide_id))
 
     # R-P3-2: two drafts independently new-revision'd off the same source can
     # both be activated. Scoping the predecessor-retire to `src` alone (the

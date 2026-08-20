@@ -17,7 +17,7 @@ from sqlalchemy.pool import StaticPool
 
 import models  # noqa: F401
 from database import Base
-from models import AnalysisService, HplcMethod
+from models import AnalysisService, HplcMethod, Peptide, peptide_methods
 
 
 @pytest.fixture
@@ -466,3 +466,86 @@ def test_instrument_crud_audited(client, db_session):
     assert actions == {"create", "update"}
     upd = next(l for l in logs if l.action == "update")
     assert upd.details["changed"]["brand"]["after"] == "Agilent"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# R-P3-6 — peptide_methods links ride activation
+#
+# new_method_revision deliberately doesn't clone peptide_methods (the m2m the
+# HPLC prep wizard + worksheet method-derivation resolve through). Without
+# this, activating a revision leaves the retired predecessor holding the
+# peptide links and the new active revision with none. activate_method now
+# moves them from the supersedes_id source, symmetric with the
+# method_services defaults handover.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _peptide(db, name, abbr):
+    p = Peptide(name=name, abbreviation=abbr)
+    db.add(p)
+    db.flush()
+    return p
+
+
+def test_activate_moves_peptide_links_from_source(client, db_session):
+    mid = client.post("/hplc/methods", json={"name": "TB-500 Method"}).json()["id"]
+    assert client.post(f"/hplc/methods/{mid}/activate").status_code == 200
+
+    p1 = _peptide(db_session, "TB-500", "TB500")
+    p2 = _peptide(db_session, "BPC-157", "BPC157")
+    db_session.execute(peptide_methods.insert().values(peptide_id=p1.id, method_id=mid))
+    db_session.execute(peptide_methods.insert().values(peptide_id=p2.id, method_id=mid))
+    db_session.commit()
+
+    rev2 = client.post(f"/hplc/methods/{mid}/new-revision").json()["id"]
+    r = client.post(f"/hplc/methods/{rev2}/activate")
+    assert r.status_code == 200
+
+    src_links = db_session.execute(select(peptide_methods.c.peptide_id).where(
+        peptide_methods.c.method_id == mid)).scalars().all()
+    assert src_links == []
+
+    new_links = set(db_session.execute(select(peptide_methods.c.peptide_id).where(
+        peptide_methods.c.method_id == rev2)).scalars().all())
+    assert new_links == {p1.id, p2.id}
+
+
+def test_activate_peptide_link_idempotent_on_manual_overlap(client, db_session):
+    """Draft manually pre-linked to one of the source's peptides ahead of
+    activation — check-before-insert against uq_peptide_method must not
+    IntegrityError, and the peptide ends up linked exactly once."""
+    mid = client.post("/hplc/methods", json={"name": "GHK-Cu Method"}).json()["id"]
+    assert client.post(f"/hplc/methods/{mid}/activate").status_code == 200
+
+    p1 = _peptide(db_session, "GHK-Cu", "GHKCU")
+    p2 = _peptide(db_session, "Ipamorelin", "IPAM")
+    db_session.execute(peptide_methods.insert().values(peptide_id=p1.id, method_id=mid))
+    db_session.execute(peptide_methods.insert().values(peptide_id=p2.id, method_id=mid))
+    db_session.commit()
+
+    rev2 = client.post(f"/hplc/methods/{mid}/new-revision").json()["id"]
+    # manually pre-link the draft to p1 ahead of activation — the overlap case
+    db_session.execute(peptide_methods.insert().values(peptide_id=p1.id, method_id=rev2))
+    db_session.commit()
+
+    r = client.post(f"/hplc/methods/{rev2}/activate")
+    assert r.status_code == 200   # no IntegrityError from the pre-existing p1 link
+
+    new_links = db_session.execute(select(peptide_methods.c.peptide_id).where(
+        peptide_methods.c.method_id == rev2)).scalars().all()
+    assert sorted(new_links) == sorted([p1.id, p2.id])
+    assert len(new_links) == len(set(new_links))   # p1 linked exactly once
+
+    src_links = db_session.execute(select(peptide_methods.c.peptide_id).where(
+        peptide_methods.c.method_id == mid)).scalars().all()
+    assert src_links == []
+
+
+def test_activate_first_ever_no_peptide_link_changes(client, db_session):
+    """No supersedes_id (first-ever activation) — no-op, no error."""
+    mid = client.post("/hplc/methods", json={"name": "First Ever Method"}).json()["id"]
+    r = client.post(f"/hplc/methods/{mid}/activate")
+    assert r.status_code == 200
+    links = db_session.execute(select(peptide_methods.c.peptide_id).where(
+        peptide_methods.c.method_id == mid)).scalars().all()
+    assert links == []
