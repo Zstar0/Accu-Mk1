@@ -295,15 +295,33 @@ def apply_transition(
 
     method_id: optional method stamp, applied after the snapshot; None is a no-op.
     instrument_id: optional instrument stamp, applied after the snapshot; None is a no-op.
+    Either raises BadRequestError up front if kind != 'submit' (Task 3,
+    2026-08-19 bench-stamping slice) — see the guard right after the row load.
     """
     row = get_analysis(db, analysis_id)
+
+    # Task 3 (2026-08-19 bench-stamping slice): the public transition route
+    # (TransitionRequest) exposes method_id/instrument_id only for
+    # kind='submit' — explicit 400 on any other kind rather than silently
+    # ignoring the fields ("explicit beats silent", per the slice design).
+    # Placed before any state/tier validation so a stray stamp field on an
+    # otherwise-illegal transition still reports the stamp misuse, not a
+    # tier/state error. submit's only legal predecessor states (unassigned,
+    # assigned) already fall inside STAMPABLE_STATES (state_machine.py), so
+    # no separate R7 guard call is needed on this path — it can't trip here.
+    if (method_id is not None or instrument_id is not None) and kind != "submit":
+        raise BadRequestError(
+            "method_id/instrument_id only apply to kind='submit'"
+        )
+
     from_state = row.review_state
     before = _snapshot(row)
 
     # Amendment audit (Handler ruling 2026-08-10): callers that used to stamp
-    # method/instrument directly on the row pre-call (prep_bridge) pass them
-    # here instead — applied AFTER the snapshot so the change lands in
-    # details["changed"] on this transition's audit row.
+    # method/instrument directly on the row pre-call (prep_bridge), and now
+    # also the submit-transition route (Task 3 above), pass them here instead
+    # — applied AFTER the snapshot so the change lands in details["changed"]
+    # on this transition's audit row.
     if method_id is not None:
         row.method_id = method_id
     if instrument_id is not None:

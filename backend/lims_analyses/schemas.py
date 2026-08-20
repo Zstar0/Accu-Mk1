@@ -88,6 +88,9 @@ class TransitionRequest(BaseModel):
     kind: TransitionKind
     result_value: Optional[str] = None
     reason: Optional[str] = None
+    # slice 2: optional stamping at submit; ignored-forbidden on other kinds
+    method_id: Optional[int] = None
+    instrument_id: Optional[int] = None
 
 
 class SetReportableRequest(BaseModel):

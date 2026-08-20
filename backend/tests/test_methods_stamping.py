@@ -179,3 +179,25 @@ def test_worksheet_item_instrument_uid_leg_untouched(client, db_session):
     item = listed[0]["items"][0]
     assert item["instrument_id"] == inst.id
     assert item["instrument_uid"] == "senaite-uid-abc"
+
+
+# ─── Task 3: optional stamping on the submit transition ────────────────────
+
+
+def test_submit_with_method_instrument_stamps_atomically(client, db_session):
+    row = _mk_vial_row(db_session, state="assigned")
+    mid = client.post("/hplc/methods", json={"name": "ICP-MS E"}).json()["id"]
+    r = client.post(f"/api/lims-analyses/{row.id}/transitions",
+                    json={"kind": "submit", "result_value": "1.2",
+                          "method_id": mid, "instrument_id": None,
+                          "reason": "bench-tech result entry"})
+    assert r.status_code == 200
+    b = r.json()
+    assert b["review_state"] == "to_be_verified" and b["method_id"] == mid
+
+
+def test_non_submit_kind_rejects_stamp_fields(client, db_session):
+    row = _mk_vial_row(db_session, state="to_be_verified")
+    r = client.post(f"/api/lims-analyses/{row.id}/transitions",
+                    json={"kind": "verify", "method_id": 1})
+    assert r.status_code == 400

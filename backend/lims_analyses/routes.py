@@ -354,6 +354,8 @@ def transition(
             result_value=req.result_value,
             reason=req.reason,
             user_id=getattr(current_user, "id", None),
+            method_id=req.method_id,
+            instrument_id=req.instrument_id,
         )
         # side-by-side engine: schedules workflow.engine.run_cascades_bg post-response
         _schedule_sbs_cascade(background_tasks, db, row, current_user)
