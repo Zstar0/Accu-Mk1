@@ -40,7 +40,7 @@ from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
 from sla_engine import BusinessSchedule, compute_business_minutes, sla_status_dict
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment, method_services
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -2308,6 +2308,7 @@ class AnalysisServiceResponse(BaseModel):
     origin: str = "senaite"
     local_overrides: Optional[list] = None
     department_id: Optional[int] = None
+    default_method_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -2822,6 +2823,18 @@ class MethodBrief(BaseModel):
         from_attributes = True
 
 
+class MethodServiceLinkIn(BaseModel):
+    analysis_service_id: int
+    is_default: bool = False
+
+
+class MethodServiceOut(BaseModel):
+    analysis_service_id: int
+    keyword: Optional[str] = None
+    title: str
+    is_default: bool
+
+
 class MethodResponse(BaseModel):
     """Full HPLC method response with common peptides."""
     id: int
@@ -2845,6 +2858,7 @@ class MethodResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     common_peptides: list[PeptideBrief] = []
+    services: list[MethodServiceOut] = []
 
     class Config:
         from_attributes = True
@@ -3142,12 +3156,22 @@ def _build_component_briefs(db: Session, blend_id: int) -> list[ComponentBrief]:
     ]
 
 
-def _method_to_response(method: HplcMethod) -> MethodResponse:
-    """Convert HplcMethod model to response with common peptides and instruments."""
-    resp = MethodResponse.model_validate(method)
+def _method_to_response(db: Session, method: HplcMethod) -> MethodResponse:
+    """Convert HplcMethod model to response with common peptides, instruments, and services.
+
+    Validate from a column-only dict, not the ORM object: HplcMethod.services
+    (Task 1's bare m2m relationship to AnalysisService) shares its name with
+    MethodResponse.services (junction rows carrying is_default) — from_attributes
+    auto-population would grab the ORM relationship and fail validating plain
+    AnalysisService rows against MethodServiceOut. instrument_ids/instruments/
+    common_peptides/services are all set explicitly below regardless.
+    """
+    data = {c.name: getattr(method, c.name) for c in HplcMethod.__table__.columns}
+    resp = MethodResponse.model_validate(data)
     resp.instrument_ids = [i.id for i in method.instruments]
     resp.instruments = [_instrument_to_brief(i) for i in method.instruments]
     resp.common_peptides = [PeptideBrief.model_validate(p) for p in method.peptides]
+    resp.services = _method_service_rows(db, method.id)
     return resp
 
 
@@ -3274,7 +3298,17 @@ async def get_analysis_services(
             | AnalysisService.peptide_name.ilike(q)
         )
     services = db.execute(query).scalars().all()
-    return [AnalysisServiceResponse.model_validate(s) for s in services]
+    default_map = dict(db.execute(
+        select(method_services.c.analysis_service_id, method_services.c.method_id)
+        .join(HplcMethod, HplcMethod.id == method_services.c.method_id)
+        .where(method_services.c.is_default.is_(True), HplcMethod.active.is_(True))
+    ).all())
+    results = []
+    for s in services:
+        resp = AnalysisServiceResponse.model_validate(s)
+        resp.default_method_id = default_map.get(s.id)
+        results.append(resp)
+    return results
 
 
 @app.post("/analysis-services", response_model=AnalysisServiceResponse, status_code=201)
@@ -3949,7 +3983,7 @@ async def get_methods(db: Session = Depends(get_db), _current_user=Depends(get_c
         .options(joinedload(HplcMethod.instruments), joinedload(HplcMethod.peptides))
         .order_by(HplcMethod.name)
     ).scalars().unique().all()
-    return [_method_to_response(m) for m in methods]
+    return [_method_to_response(db, m) for m in methods]
 
 
 @app.post("/hplc/methods", response_model=MethodResponse, status_code=201)
@@ -3981,7 +4015,7 @@ async def create_method(data: MethodCreate, db: Session = Depends(get_db), _curr
     db.add(method)
     db.commit()
     db.refresh(method)
-    return _method_to_response(method)
+    return _method_to_response(db, method)
 
 
 @app.put("/hplc/methods/{method_id}", response_model=MethodResponse)
@@ -4019,7 +4053,7 @@ async def update_method(method_id: int, data: MethodUpdate, db: Session = Depend
 
     db.commit()
     db.refresh(method)
-    return _method_to_response(method)
+    return _method_to_response(db, method)
 
 
 @app.delete("/hplc/methods/{method_id}")
@@ -4032,6 +4066,64 @@ async def delete_method(method_id: int, db: Session = Depends(get_db), _current_
     db.delete(method)
     db.commit()
     return {"message": f"Method '{method.name}' deleted"}
+
+
+def _method_service_rows(db: Session, method_id: int) -> list[MethodServiceOut]:
+    rows = db.execute(
+        select(method_services.c.analysis_service_id, method_services.c.is_default,
+               AnalysisService.keyword, AnalysisService.title)
+        .join(AnalysisService, AnalysisService.id == method_services.c.analysis_service_id)
+        .where(method_services.c.method_id == method_id)
+        .order_by(AnalysisService.keyword)
+    ).all()
+    return [MethodServiceOut(analysis_service_id=r[0], is_default=r[1], keyword=r[2], title=r[3])
+            for r in rows]
+
+
+@app.get("/hplc/methods/{method_id}/services", response_model=list[MethodServiceOut])
+async def get_method_services(method_id: int, db: Session = Depends(get_db),
+                              _current_user=Depends(get_current_user)):
+    if not db.get(HplcMethod, method_id):
+        raise HTTPException(404, f"Method {method_id} not found")
+    return _method_service_rows(db, method_id)
+
+
+@app.put("/hplc/methods/{method_id}/services", response_model=list[MethodServiceOut])
+async def put_method_services(method_id: int, links: list[MethodServiceLinkIn],
+                              db: Session = Depends(get_db),
+                              current_user=Depends(get_current_user)):
+    """Replace-set semantics (profile-members precedent). One default per
+    service across ALL methods — 400 names the conflicting method; the
+    partial unique index is the backstop."""
+    method = db.get(HplcMethod, method_id)
+    if not method:
+        raise HTTPException(404, f"Method {method_id} not found")
+    seen: set[int] = set()
+    for ln in links:
+        if ln.analysis_service_id in seen:
+            raise HTTPException(400, f"service {ln.analysis_service_id} listed twice")
+        seen.add(ln.analysis_service_id)
+        if not db.get(AnalysisService, ln.analysis_service_id):
+            raise HTTPException(400, f"analysis service {ln.analysis_service_id} not found")
+        if ln.is_default:
+            conflict = db.execute(
+                select(HplcMethod.name)
+                .join(method_services, method_services.c.method_id == HplcMethod.id)
+                .where(method_services.c.analysis_service_id == ln.analysis_service_id,
+                       method_services.c.is_default.is_(True),
+                       method_services.c.method_id != method_id)
+            ).scalar_one_or_none()
+            if conflict:
+                raise HTTPException(
+                    400, f"service {ln.analysis_service_id} already has default method "
+                         f"'{conflict}' — clear that default first")
+    db.execute(method_services.delete().where(method_services.c.method_id == method_id))
+    for ln in links:
+        db.execute(method_services.insert().values(
+            method_id=method_id, analysis_service_id=ln.analysis_service_id,
+            is_default=ln.is_default))
+    db.commit()
+    return _method_service_rows(db, method_id)
 
 
 # ─── Peptide Endpoints ───

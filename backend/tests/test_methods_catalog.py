@@ -146,3 +146,50 @@ def test_create_method_empty_string_code_normalizes_to_null(client, db_session):
     r2 = client.post("/hplc/methods", json={"name": "M-Empty-2", "code": ""})
     assert r2.status_code == 201, r2.text  # no dup 400, no 500
     assert r2.json()["code"] is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Task 3 — method<->service links: GET/PUT services, defaults, default_method_id
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _mk_method(client, name, **kw):
+    return client.post("/hplc/methods", json={"name": name, **kw}).json()["id"]
+
+
+def test_put_services_links_and_defaults(client, db_session):
+    lead = _svc(db_session, "LEAD-PPM"); ars = _svc(db_session, "ARSENIC-PPM")
+    db_session.commit()
+    mid = _mk_method(client, "ICP-MS", code="AM-ELEM-001", technique="ICP-MS")
+    r = client.put(f"/hplc/methods/{mid}/services", json=[
+        {"analysis_service_id": lead.id, "is_default": True},
+        {"analysis_service_id": ars.id, "is_default": True},
+    ])
+    assert r.status_code == 200
+    got = client.get(f"/hplc/methods/{mid}/services").json()
+    assert {(s["analysis_service_id"], s["is_default"]) for s in got} == {(lead.id, True), (ars.id, True)}
+
+
+def test_second_default_for_service_400(client, db_session):
+    lead = _svc(db_session, "LEAD-PPM"); db_session.commit()
+    m1 = _mk_method(client, "ICP-MS A"); m2 = _mk_method(client, "ICP-MS B")
+    client.put(f"/hplc/methods/{m1}/services", json=[{"analysis_service_id": lead.id, "is_default": True}])
+    r = client.put(f"/hplc/methods/{m2}/services", json=[{"analysis_service_id": lead.id, "is_default": True}])
+    assert r.status_code == 400
+    assert "ICP-MS A" in r.json()["detail"]  # names the conflicting method
+    # non-default link is fine
+    r2 = client.put(f"/hplc/methods/{m2}/services", json=[{"analysis_service_id": lead.id, "is_default": False}])
+    assert r2.status_code == 200
+
+
+def test_default_method_id_fail_open(client, db_session):
+    lead = _svc(db_session, "LEAD-PPM"); db_session.commit()
+    mid = _mk_method(client, "ICP-MS C")
+    client.put(f"/hplc/methods/{mid}/services", json=[{"analysis_service_id": lead.id, "is_default": True}])
+    rows = client.get("/analysis-services").json()
+    row = next(s for s in rows if s["id"] == lead.id)
+    assert row["default_method_id"] == mid
+    client.put(f"/hplc/methods/{mid}", json={"active": False})
+    rows = client.get("/analysis-services").json()
+    row = next(s for s in rows if s["id"] == lead.id)
+    assert row["default_method_id"] is None  # fail-open (§4.2)
