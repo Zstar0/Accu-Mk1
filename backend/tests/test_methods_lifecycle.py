@@ -365,3 +365,82 @@ def test_null_code_fallback_does_not_retire_unrelated_coded_active_method(client
     target_row = next(m for m in rows if m["id"] == target_r2_id)
     assert target_row["status"] == "active" and target_row["active"] is True
     assert target_row["code"] == "AM-SHR-1"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Task 5 — method attachments (controlled documents)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _draft(client, name="ATT-M"):
+    return client.post("/hplc/methods", json={"name": name}).json()["id"]
+
+
+def _use_tmp_photo_storage(tmp_path, monkeypatch):
+    """Force filesystem PhotoStorage rooted in tmp_path. MK1_PHOTO_S3_BUCKET
+    is already unset in the test env (get_storage() resolves filesystem by
+    default — test_photo_storage_selection.py), so no env var needs setting;
+    only the singleton's root needs redirecting away from the real default
+    dir. monkeypatch.setattr on the module global auto-restores at teardown
+    (same net effect as the set_storage_for_tests()/prev-restore idiom in
+    test_sub_sample_attachments.py's `storage` fixture)."""
+    from sub_samples.photo_storage import FilesystemPhotoStorage
+    monkeypatch.setattr("sub_samples.photo_storage._storage",
+                        FilesystemPhotoStorage(root=str(tmp_path)))
+
+
+def test_attachment_upload_list_download(client, db_session, tmp_path, monkeypatch):
+    _use_tmp_photo_storage(tmp_path, monkeypatch)
+
+    mid = _draft(client)
+    r = client.post(f"/hplc/methods/{mid}/attachments",
+                    files={"file": ("sop-am-elem-001.pdf", b"%PDF-fake", "application/pdf")})
+    assert r.status_code == 201
+    att = r.json()
+    assert att["filename"] == "sop-am-elem-001.pdf" and att["size_bytes"] == 9
+    listed = client.get(f"/hplc/methods/{mid}/attachments").json()
+    assert [a["id"] for a in listed] == [att["id"]]
+    dl = client.get(f"/hplc/methods/{mid}/attachments/{att['id']}/download")
+    assert dl.status_code == 200 and dl.content == b"%PDF-fake"
+    assert dl.headers["content-type"].startswith("application/pdf")
+
+
+def test_attachment_delete_draft_only(client, db_session, tmp_path, monkeypatch):
+    _use_tmp_photo_storage(tmp_path, monkeypatch)
+
+    mid = _draft(client, "ATT-M2")
+    att = client.post(f"/hplc/methods/{mid}/attachments",
+                      files={"file": ("sop.pdf", b"x", "application/pdf")}).json()
+    client.post(f"/hplc/methods/{mid}/activate")
+    assert client.delete(f"/hplc/methods/{mid}/attachments/{att['id']}").status_code == 409
+    # uploads stay allowed on issued methods
+    r = client.post(f"/hplc/methods/{mid}/attachments",
+                    files={"file": ("amendment.pdf", b"y", "application/pdf")})
+    assert r.status_code == 201
+
+
+def test_attachment_delete_succeeds_while_draft(client, db_session, tmp_path, monkeypatch):
+    _use_tmp_photo_storage(tmp_path, monkeypatch)
+
+    mid = _draft(client, "ATT-M3")
+    att = client.post(f"/hplc/methods/{mid}/attachments",
+                      files={"file": ("draft-sop.pdf", b"zz", "application/pdf")}).json()
+    r = client.delete(f"/hplc/methods/{mid}/attachments/{att['id']}")
+    assert r.status_code == 200
+    assert client.get(f"/hplc/methods/{mid}/attachments").json() == []
+    assert client.get(
+        f"/hplc/methods/{mid}/attachments/{att['id']}/download").status_code == 404
+
+
+def test_attachment_upload_writes_change_log(client, db_session, tmp_path, monkeypatch):
+    from models import CatalogChangeLog
+    _use_tmp_photo_storage(tmp_path, monkeypatch)
+
+    mid = _draft(client, "ATT-M4")
+    att = client.post(f"/hplc/methods/{mid}/attachments",
+                      files={"file": ("audited.pdf", b"abc", "application/pdf")}).json()
+    logs = db_session.execute(select(CatalogChangeLog).where(
+        CatalogChangeLog.entity_type == "method_attachment",
+        CatalogChangeLog.entity_pk == att["id"])).scalars().all()
+    assert any(l.action == "create" and l.details["changed"]["filename"]["after"] == "audited.pdf"
+              for l in logs)

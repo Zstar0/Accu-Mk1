@@ -1730,6 +1730,22 @@ def _run_migrations():
         occurred_at TIMESTAMP NOT NULL DEFAULT NOW()
     )""",
         "CREATE INDEX IF NOT EXISTS ix_catalog_change_log_entity ON catalog_change_log (entity_type, entity_pk)",
+        # Methods controlled documents (slice 3, Task 5): attachments.
+        # storage='s3' only (R0) — via photo_storage (filesystem-backed in
+        # dev). Deletion is gated to draft-status methods at the route layer;
+        # ON DELETE CASCADE here just follows the method row itself away.
+        """CREATE TABLE IF NOT EXISTS method_attachments (
+        id                  SERIAL PRIMARY KEY,
+        method_id           INTEGER NOT NULL REFERENCES hplc_methods(id) ON DELETE CASCADE,
+        filename            VARCHAR(255) NOT NULL,
+        content_type        VARCHAR(100),
+        size_bytes          INTEGER NOT NULL DEFAULT 0,
+        storage             VARCHAR(20) NOT NULL DEFAULT 's3',
+        storage_key         VARCHAR(500),
+        uploaded_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at          TIMESTAMP NOT NULL DEFAULT NOW()
+    )""",
+        "CREATE INDEX IF NOT EXISTS ix_method_attachments_method ON method_attachments (method_id, created_at)",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

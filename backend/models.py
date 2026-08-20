@@ -663,6 +663,33 @@ class HplcMethod(Base):
         return f"<HplcMethod(id={self.id}, name='{self.name}')>"
 
 
+class MethodAttachment(Base):
+    """Controlled-document file on a method revision (slice 3). storage='s3'
+    only (R0) — via photo_storage, which is filesystem-backed in dev/tests.
+    Uploads are legal at any method lifecycle status (amendments land on
+    issued methods too); deletion is gated to status='draft' at the route
+    layer (main.py) — once a method is active/retired its attachments are
+    part of the frozen controlled record. New-revision does NOT clone these
+    rows (Task 3's clone code has no attachment awareness) — each revision
+    accrues its own document set from scratch."""
+    __tablename__ = "method_attachments"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    method_id: Mapped[int] = mapped_column(
+        ForeignKey("hplc_methods.id", ondelete="CASCADE"), nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    storage: Mapped[str] = mapped_column(String(20), nullable=False, default="s3")
+    storage_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    uploaded_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return (f"<MethodAttachment(id={self.id}, method_id={self.method_id}, "
+                f"filename='{self.filename}')>")
+
+
 # M2M junction: blend peptide <-> component peptides
 blend_components = Table(
     "blend_components",

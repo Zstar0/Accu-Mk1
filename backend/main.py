@@ -40,7 +40,7 @@ from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
 from sla_engine import BusinessSchedule, compute_business_minutes, sla_status_dict
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment, method_services
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment, MethodAttachment, method_services
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -2655,6 +2655,10 @@ METHOD_LOCKED_FIELDS = ("name", "code", "technique", "reference", "procedure_sum
 METHOD_LOG_FIELDS = ("name", "code", "technique", "reference", "department_id",
                      "status", "revision", "origin")
 
+# catalog/change_log.py log_create/log_delete field list for method attachments
+# (Task 5) — the row's identity + size, snapshotted at upload/delete time.
+METHOD_ATTACHMENT_LOG_FIELDS = ("filename", "content_type", "size_bytes")
+
 # Spec-3 shadow-compare guard rails, enforced at the profile POST/PATCH edge
 # (not a DB constraint, mirroring COA_ARCHETYPES above):
 #   - The three legacy fulfillment_role values are demand-map keys derive_
@@ -4445,6 +4449,157 @@ async def retire_method(method_id: int, db: Session = Depends(get_db),
     db.commit()
     db.refresh(m)
     return _method_to_response(db, m)
+
+
+class MethodAttachmentResponse(BaseModel):
+    """Controlled-document attachment on a method (slice 3, Task 5)."""
+    id: int
+    filename: str
+    content_type: Optional[str] = None
+    size_bytes: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ─── Methods controlled documents (slice 3): attachments ───
+#
+# storage='s3' only (R0) — get_storage() resolves to the filesystem backend
+# in dev/tests (MK1_PHOTO_S3_BUCKET unset) and S3 in prod; the route layer
+# never branches on which. Uploads are allowed at ANY lifecycle status
+# (amendments land on issued methods too, R10); delete is gated to draft
+# only — once a method is active/retired its attachments are part of the
+# frozen controlled record. new-revision does not clone attachments (Task
+# 3's clone code has no attachment awareness).
+
+
+@app.post("/hplc/methods/{method_id}/attachments",
+         response_model=MethodAttachmentResponse, status_code=201)
+async def upload_method_attachment(method_id: int, file: UploadFile,
+                                   db: Session = Depends(get_db),
+                                   current_user=Depends(get_current_user)):
+    """Attach a controlled-document file to a method. filename truncated to
+    255 (column width — same guard as LimsParentAttachment's capture
+    path)."""
+    method = db.get(HplcMethod, method_id)
+    if not method:
+        raise HTTPException(404, f"Method {method_id} not found")
+
+    file_bytes = await file.read()
+    filename = (file.filename or "attachment")[:255]
+
+    from sub_samples.photo_storage import get_storage
+    key = get_storage().save_photo(f"method-{method_id}", file_bytes, filename)
+
+    att = MethodAttachment(
+        method_id=method_id, filename=filename,
+        content_type=file.content_type, size_bytes=len(file_bytes),
+        storage="s3", storage_key=key,
+        uploaded_by_user_id=getattr(current_user, "id", None),
+    )
+    db.add(att)
+    db.flush()
+
+    from catalog.change_log import log_create
+    log_create(db, att, METHOD_ATTACHMENT_LOG_FIELDS, entity_type="method_attachment",
+              entity_pk=att.id, user_id=getattr(current_user, "id", None))
+
+    db.commit()
+    db.refresh(att)
+    return att
+
+
+@app.get("/hplc/methods/{method_id}/attachments",
+        response_model=list[MethodAttachmentResponse])
+async def get_method_attachments(method_id: int, db: Session = Depends(get_db),
+                                 _current_user=Depends(get_current_user)):
+    if not db.get(HplcMethod, method_id):
+        raise HTTPException(404, f"Method {method_id} not found")
+    rows = db.execute(
+        select(MethodAttachment).where(MethodAttachment.method_id == method_id)
+        .order_by(MethodAttachment.created_at)
+    ).scalars().all()
+    return rows
+
+
+@app.get("/hplc/methods/{method_id}/attachments/{attachment_id}/download")
+def download_method_attachment(method_id: int, attachment_id: int,
+                               db: Session = Depends(get_db),
+                               _current_user=Depends(get_current_user)):
+    """Serve attachment bytes. BINDING CONSTRAINT: Content-Type and
+    Content-Disposition come from the DB row — never the storage-key
+    extension (mirrors download_registry_parent_attachment above). Plain
+    `def` — sync DB + sync storage fetch belong on the threadpool, same
+    posture as that sibling route."""
+    from sub_samples.photo_storage import PhotoNotFoundError, get_storage
+
+    att = db.execute(
+        select(MethodAttachment).where(
+            MethodAttachment.id == attachment_id,
+            MethodAttachment.method_id == method_id,
+        )
+    ).scalar_one_or_none()
+    if att is None:
+        raise HTTPException(404, f"No attachment {attachment_id} on method {method_id}")
+    if not att.storage_key:
+        logger.warning("method_attachment.download_missing_key id=%s method=%s",
+                       att.id, method_id)
+        raise HTTPException(404, "Attachment has no storage key")
+    try:
+        data = get_storage().fetch_photo(att.storage_key)
+    except PhotoNotFoundError:
+        logger.warning("method_attachment.download_object_missing id=%s key=%s",
+                       att.id, att.storage_key)
+        raise HTTPException(404, "Attachment object missing from storage")
+    return Response(
+        content=data,
+        media_type=att.content_type or "application/octet-stream",
+        headers={"Content-Disposition": f'inline; filename="{att.filename}"'},
+    )
+
+
+@app.delete("/hplc/methods/{method_id}/attachments/{attachment_id}")
+async def delete_method_attachment(method_id: int, attachment_id: int,
+                                   db: Session = Depends(get_db),
+                                   current_user=Depends(get_current_user)):
+    """Delete an attachment. Draft-only (409 otherwise) — once a method
+    leaves draft its attachments are part of the controlled record (R10
+    sibling rule; mirrors the content-lock on the method's own fields).
+    The storage object is deleted best-effort AFTER the row delete commits
+    — a failure there just leaves an orphaned object, logged, rather than
+    blocking (or worse, partially completing) the audited row delete."""
+    method = db.get(HplcMethod, method_id)
+    if not method:
+        raise HTTPException(404, f"Method {method_id} not found")
+    att = db.execute(
+        select(MethodAttachment).where(
+            MethodAttachment.id == attachment_id,
+            MethodAttachment.method_id == method_id,
+        )
+    ).scalar_one_or_none()
+    if att is None:
+        raise HTTPException(404, f"No attachment {attachment_id} on method {method_id}")
+    if method.status != "draft":
+        raise HTTPException(
+            409, "attachments on an issued method are part of the controlled record")
+
+    from catalog.change_log import log_delete
+    log_delete(db, att, METHOD_ATTACHMENT_LOG_FIELDS, entity_type="method_attachment",
+              entity_pk=att.id, user_id=getattr(current_user, "id", None))
+    storage_key = att.storage_key
+    db.delete(att)
+    db.commit()
+
+    if storage_key:
+        from sub_samples.photo_storage import get_storage
+        try:
+            get_storage().delete_photo(storage_key)
+        except Exception as e:  # noqa: BLE001 — best-effort cleanup, row is already gone
+            logger.warning("method_attachment.delete_object_failed id=%s key=%s err=%s",
+                           attachment_id, storage_key, e)
+
+    return {"message": "attachment deleted"}
 
 
 # ─── Peptide Endpoints ───
