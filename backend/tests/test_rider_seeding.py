@@ -275,3 +275,52 @@ def test_worked_rider_row_is_never_dropped(db, monkeypatch):
 def _edges(db, sub):
     from sub_samples.custody import current_custody
     return current_custody(db, sub.id)
+
+
+# ─── sections resolve against services ∪ placeholders (S2b) ──────────────────
+
+def test_sections_include_lab_added_rider_via_placeholder_union(db, monkeypatch):
+    """A rider profile that exists only as a live 'ordered' parent placeholder
+    (lab-added, not in the WP order) renders as a rider chip in the vial-plan
+    sections — parity with set_assignment_role's union hook."""
+    import sub_samples.service as sub_service
+    _stub_seeder(monkeypatch)
+    dept = Department(name="ZZ Sec Dept")
+    db.add(dept)
+    db.flush()
+    role = VialRole(code="zzsechost", label="zzsechost", department_id=dept.id,
+                    boxable=False, variance_eligible=False, sort_order=900,
+                    frozen=False, is_system=False)
+    db.add(role)
+    db.flush()
+    host_svc = _svc(db, "ZZS-HOST")
+    rider_svc = _svc(db, "ZZS-RIDER")
+    host = AnalysisProfile(key="zzs_host", name="zzs_host", is_addon=True,
+                           vials_required=1, fulfillment_role="zzsechost",
+                           fulfillment_dim="role", active=True)
+    host.analysis_services = [host_svc]
+    rider = AnalysisProfile(key="zzs_rider", name="ZZS Rider", is_addon=True,
+                            vials_required=0, fulfillment_role="zzsrider",
+                            fulfillment_dim="role", active=True)
+    rider.analysis_services = [rider_svc]
+    db.add_all([host, rider])
+    db.flush()
+    db.execute(profile_ride_hosts.insert().values(
+        analysis_profile_id=rider.id, host_role_code="zzsechost", priority=0))
+    parent = LimsSample(sample_id="ZZS-0001", external_lims_uid="ZZS-0001-uid")
+    db.add(parent)
+    db.flush()
+    db.add(LimsAnalysis(lims_sample_pk=parent.id, lims_sub_sample_pk=None,
+                        analysis_service_id=rider_svc.id, keyword=rider_svc.keyword,
+                        title=rider_svc.title, review_state="unassigned",
+                        provenance="ordered"))
+    db.commit()
+    monkeypatch.setattr("sub_samples.service.fetch_sample_services",
+                        lambda sid: {"services": {"zzs_host": True}, "package": None})
+
+    plan = sub_service.compute_vial_plan(db, "ZZS-0001")
+
+    section = next(s for s in plan["sections"] if s["department_name"] == "ZZ Sec Dept")
+    spot = next(r for r in section["roles"] if r["code"] == "zzsechost")
+    riders = [p for p in spot["profiles"] if p["relation"] == "rider"]
+    assert [p["key"] for p in riders] == ["zzs_rider"]

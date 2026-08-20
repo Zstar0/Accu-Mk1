@@ -1299,6 +1299,12 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
         }
 
     services = services_resp.get("services") or {}
+    # Sections/display parity with set_assignment_role's union hook (spec
+    # 2026-08-20-rider-vial-visibility): a lab-added profile living only
+    # as a live 'ordered' placeholder must render its chip. Display-only —
+    # demand/auto-assign inputs deliberately stay on the raw order dict.
+    from lims_analyses.manage_native import placeholder_profile_keys
+    services_for_sections = {**(services or {}), **placeholder_profile_keys(db, parent)}
     demand = derive_demand(services, db=db)  # core demand == base (inflation retired)
     variance = derive_variance_demand(services)
     base_demand = derive_base_demand(services, db=db)
@@ -1326,7 +1332,7 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
             "is_unreachable": False,
             "vials": locked_vials,
             "container_mode": parent.container_mode,
-            "sections": _build_vial_plan_sections(db, demand, locked_vials, services),
+            "sections": _build_vial_plan_sections(db, demand, locked_vials, services_for_sections, snapshot=snapshot),
         }
 
     from catalog.roles import real_bucket_codes
@@ -1377,7 +1383,7 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
         "is_unreachable": False,
         "vials": assigned,
         "container_mode": parent.container_mode,
-        "sections": _build_vial_plan_sections(db, demand, assigned, services),
+        "sections": _build_vial_plan_sections(db, demand, assigned, services_for_sections, snapshot=snapshot),
     }
 
 
