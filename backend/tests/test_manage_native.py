@@ -14,7 +14,7 @@ from database import Base
 from models import (
     AnalysisProfile, AnalysisService, LimsAnalysis, LimsAnalysisPromotion,
     LimsAnalysisTransition, LimsSample, LimsSubSample, LimsSubSampleEvent,
-    VialProfileAssignment,
+    VialProfileAssignment, profile_ride_hosts,
 )
 from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
 from lims_analyses import manage_native as mn
@@ -613,3 +613,119 @@ def test_ensure_parent_placeholder_refuses_non_native(db, parent):
     sen = _svc(db, keyword="ENDO-LAL", title="Endotoxin", origin="senaite")
     with pytest.raises(mn.ProfileNotNativeError):
         mn.ensure_parent_placeholder(db, parent=parent, service=sen, user_id=None, reason="x")
+
+
+# ── ride-aware _host_vials + rider relation (S2a) ──────────────────────────────
+# NOTE: this file has no callable parent factory (only the `parent` fixture,
+# fixed to sample_id "MN-PARENT") — per the brief's fallback instruction,
+# _mk_parent(db, sid) is defined below rather than reusing the fixture, since
+# these tests each need their own distinct sample_id.
+
+def _mk_parent(db, sid):
+    p = LimsSample(sample_id=sid, external_lims_uid=f"{sid}-uid")
+    db.add(p); db.commit(); db.refresh(p)
+    return p
+
+
+def _ride(db, profile, hosts):
+    for i, code in enumerate(hosts):
+        db.execute(profile_ride_hosts.insert().values(
+            analysis_profile_id=profile.id, host_role_code=code, priority=i))
+    db.commit()
+
+
+def _mk_vial_for(db, parent, seq, role, kind="core"):
+    sub = LimsSubSample(
+        sample_id=f"{parent.sample_id}-S{seq:02d}", vial_sequence=seq,
+        parent_sample_pk=parent.id, assignment_role=role, assignment_kind=kind,
+        external_lims_uid=f"{parent.sample_id}-S{seq:02d}-uid")
+    db.add(sub)
+    db.commit()
+    return sub
+
+
+def test_host_vials_resolves_ride_hosts_in_priority_order(db):
+    from lims_analyses.manage_native import _host_vials
+    svc = _svc(db, keyword="ZMN-RIDER", title="ZMN Rider")
+    rider = _profile(db, key="zmn_rider", name="ZMN Rider", members=[svc], role="zmnrider")
+    _ride(db, rider, ["zmnfirst", "zmnsecond"])
+    parent = _mk_parent(db, "ZMN-P1")
+    second = _mk_vial_for(db, parent, 1, "zmnsecond")
+    first = _mk_vial_for(db, parent, 2, "zmnfirst")
+
+    hosts = _host_vials(db, parent, rider)
+    assert [v.sample_id for v in hosts] == [first.sample_id]  # priority 0 wins
+
+
+def test_host_vials_skips_variance_vials_and_falls_back_to_own_role(db):
+    from lims_analyses.manage_native import _host_vials
+    svc = _svc(db, keyword="ZMN2-RIDER", title="ZMN2 Rider")
+    rider = _profile(db, key="zmn2_rider", name="ZMN2 Rider", members=[svc], role="zmn2rider")
+    _ride(db, rider, ["zmn2host"])
+    parent = _mk_parent(db, "ZMN2-P1")
+    _mk_vial_for(db, parent, 1, "zmn2host", kind="variance")   # only a variance host
+    own = _mk_vial_for(db, parent, 2, "zmn2rider")             # standalone self-mint vial
+
+    hosts = _host_vials(db, parent, rider)
+    assert [v.sample_id for v in hosts] == [own.sample_id]
+
+
+def test_add_rider_profile_writes_rider_edge_and_seeds_host_vial(db):
+    from lims_analyses.manage_native import add_profile_to_parent
+    from sub_samples.custody import current_custody
+    svc = _svc(db, keyword="ZMN3-RIDER", title="ZMN3 Rider")
+    rider = _profile(db, key="zmn3_rider", name="ZMN3 Rider", members=[svc], role="zmn3rider")
+    _ride(db, rider, ["zmn3host"])
+    parent = _mk_parent(db, "ZMN3-P1")
+    host_vial = _mk_vial_for(db, parent, 1, "zmn3host")
+
+    out = add_profile_to_parent(db, parent=parent, profile=rider, user_id=1)
+    db.commit()
+
+    assert out["no_host_vial"] is False
+    assert [h["vial_id"] for h in out["hosts"]] == [host_vial.sample_id]
+    edges = current_custody(db, host_vial.id)
+    assert [(e.analysis_profile_id, e.relation) for e in edges] == [(rider.id, "rider")]
+    kws = [r.keyword for r in db.query(LimsAnalysis)
+           .filter_by(lims_sub_sample_pk=host_vial.id).all()]
+    assert "ZMN3-RIDER" in kws
+
+
+def test_add_host_profile_still_writes_host_edge(db):
+    """Regression pin: the default relation stays 'host' for a profile
+    landing on its OWN role's vial."""
+    from lims_analyses.manage_native import add_profile_to_parent
+    from sub_samples.custody import current_custody
+    svc = _svc(db, keyword="ZMN4-OWN", title="ZMN4 Own")
+    prof = _profile(db, key="zmn4_own", name="ZMN4 Own", members=[svc], role="zmn4own")
+    parent = _mk_parent(db, "ZMN4-P1")
+    vial = _mk_vial_for(db, parent, 1, "zmn4own")
+
+    add_profile_to_parent(db, parent=parent, profile=prof, user_id=1)
+    db.commit()
+
+    edges = current_custody(db, vial.id)
+    assert [(e.analysis_profile_id, e.relation) for e in edges] == [(prof.id, "host")]
+
+
+def test_resync_writes_rider_edge_for_lab_visible_ride_host(db, monkeypatch):
+    """Addition beyond the brief's literal test list: the semantic pin
+    (relation computed per landing vial) covers BOTH add_profile_to_parent
+    AND resync_parent_from_order, but the brief's test bodies only exercise
+    the add path. Pins the resync half so the "resync heal path" dependency
+    called out in the brief's Interfaces section is actually covered."""
+    from sub_samples.custody import current_custody
+    parent = _mk_parent(db, "ZMN5-P1")
+    svc = _svc(db, keyword="ZMN5-RIDER", title="ZMN5 Rider")
+    rider = _profile(db, key="zmn5_rider", name="ZMN5 Rider", members=[svc], role="zmn5rider")
+    _ride(db, rider, ["zmn5host"])
+    host_vial = _mk_vial_for(db, parent, 1, "zmn5host")
+    monkeypatch.setattr(mn, "fetch_sample_services",
+                        lambda sid: {"services": {"zmn5_rider": True}, "package": None})
+
+    res = mn.resync_parent_from_order(db, parent=parent, user_id=3)
+    db.commit()
+
+    assert res["edges_created"] == 1
+    edges = current_custody(db, host_vial.id)
+    assert [(e.analysis_profile_id, e.relation) for e in edges] == [(rider.id, "rider")]
