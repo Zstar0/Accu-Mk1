@@ -4225,6 +4225,38 @@ export async function setAnalysisMethodInstrument(
   return response.json()
 }
 
+// Task 7 (methods bench-stamping): the native per-row override dialog
+// (SetMethodInstrumentDialog) PATCHes lims-analyses directly by numeric id,
+// distinct from setAnalysisMethodInstrument above (uid + string-uid based,
+// pre-existing SENAITE-vintage inline edit cell — EditableSelectCell in
+// AnalysisTable — which already routes mk1: uids through the same
+// endpoint). Named separately (stamp vs set, mirroring the backend's own
+// stamp_method_instrument/set_method_instrument split) to avoid colliding
+// with that existing export's (uid, methodUid, instrumentUid) signature.
+export async function stampAnalysisMethodInstrument(
+  analysisId: number,
+  body: { method_id: number | null; instrument_id: number | null }
+): Promise<unknown> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/lims-analyses/${analysisId}/method-instrument`,
+    {
+      method: 'PATCH',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(body),
+    }
+  )
+  if (!response.ok) {
+    const parsed = await response.json().catch(() => null)
+    const detail = parsed?.detail
+    const msg =
+      typeof detail === 'string'
+        ? detail
+        : `Set method/instrument failed: ${response.status}`
+    throw Object.assign(new Error(msg), { detail })
+  }
+  return response.json()
+}
+
 export async function transitionAnalysis(
   uid: string,
   transition: 'submit' | 'verify' | 'retract' | 'reject' | 'retest' | 'variance_verify'

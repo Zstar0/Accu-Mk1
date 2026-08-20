@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, Fragment, type ReactNode } from 'react'
-import { Activity, ArrowDownUp, ArrowUpDown, Check, ChevronDown, ChevronRight, Database, HelpCircle, Layers, Lock, MoreHorizontal, Pencil, X } from 'lucide-react'
+import { Activity, ArrowDownUp, ArrowUpDown, Check, ChevronDown, ChevronRight, Database, HelpCircle, Layers, Lock, MoreHorizontal, Pencil, Wrench, X } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
@@ -31,7 +31,8 @@ import {
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import type { SenaiteAnalysis, InboxPriority, ParentPromotionInfo } from '@/lib/api'
-import { setAnalysisMethodInstrument, promoteAnalyses } from '@/lib/api'
+import { setAnalysisMethodInstrument, promoteAnalyses, getMethods } from '@/lib/api'
+import { SetMethodInstrumentDialog } from '@/components/senaite/SetMethodInstrumentDialog'
 import type { VialAssignment } from '@/lib/vial-assignment'
 import { ROLE_TEXT_CLASS, roleTextClass } from '@/lib/assignment-colors'
 import { PromotedFromBadge } from '@/components/senaite/PromotedFromBadge'
@@ -159,6 +160,21 @@ export function isResultEditable(a: { uid?: string | null; review_state: string 
   return a.uid.startsWith('mk1:')
     ? MK1_EDITABLE_STATES.has(a.review_state)
     : EDITABLE_STATES.has(a.review_state)
+}
+
+// Task 7 (methods bench-stamping): client-side mirror of the backend's
+// STAMPABLE_STATES (backend/lims_analyses/service.py) — the exact set of
+// review_states where PATCH .../method-instrument succeeds instead of
+// 409ing with state_locked. Deliberately narrower than MK1_EDITABLE_STATES
+// above (which also allows a null review_state for result-cell editing;
+// the backend guard does not) — gates the SetMethodInstrumentDialog's
+// Wrench row action.
+const STAMPABLE_STATES = new Set<string | null>(['unassigned', 'assigned', 'to_be_verified'])
+
+/** True when a native (mk1:) row is in a state where the method/instrument
+ *  PATCH endpoint will accept a stamp instead of 409ing. */
+function canSetMethodInstrument(a: { uid?: string | null; review_state: string | null }): boolean {
+  return !!a.uid && a.uid.startsWith('mk1:') && STAMPABLE_STATES.has(a.review_state)
 }
 
 /** Maps review_state to valid transition action names. */
@@ -1376,6 +1392,32 @@ function AnalysisRow({
   const vialOverlay = vialAssign?.matches[0]?.mk1Analysis ?? null
   const vialOverlayEditable = vialAssign?.editable ?? false
   const [promoteOpen, setPromoteOpen] = useState(false)
+  // Task 7 (methods bench-stamping): the Wrench row action's dialog.
+  // serviceId is resolved lazily on open — SenaiteAnalysis carries no
+  // analysis_service_id, so it's found by matching this row's keyword
+  // against each candidate method's services[].keyword (documented
+  // fallback route in the task brief; see openMethodDialog below).
+  const showSetMethodInstrument = canSetMethodInstrument(analysis)
+  const [methodDialogOpen, setMethodDialogOpen] = useState(false)
+  const [methodDialogServiceId, setMethodDialogServiceId] = useState<number | null>(null)
+  async function openMethodDialog() {
+    let serviceId: number | null = null
+    try {
+      const methods = await getMethods()
+      for (const m of methods) {
+        const link = m.services.find(s => s.keyword === analysis.keyword)
+        if (link) {
+          serviceId = link.analysis_service_id
+          break
+        }
+      }
+    } catch {
+      // Leave serviceId null — the dialog renders its own
+      // "no active methods cover this service" empty state.
+    }
+    setMethodDialogServiceId(serviceId)
+    setMethodDialogOpen(true)
+  }
   const queryClient = useQueryClient()
   const isPending = !!analysis.uid && transition.pendingUids.has(analysis.uid)
   // Highlight the title text when this analysis is one of the "primary"
@@ -1575,7 +1617,7 @@ function AnalysisRow({
         {formatDate(analysis.captured)}
       </td>
       <td className="py-2 px-3 text-right">
-        {analysis.uid && (allowedTransitions.length > 0 || canPromote || canVarVerify) && (
+        {analysis.uid && (allowedTransitions.length > 0 || canPromote || canVarVerify || showSetMethodInstrument) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
@@ -1606,6 +1648,12 @@ function AnalysisRow({
                   }}
                 >
                   Verify (Variance)
+                </DropdownMenuItem>
+              )}
+              {showSetMethodInstrument && (
+                <DropdownMenuItem onClick={() => void openMethodDialog()}>
+                  <Wrench aria-hidden="true" />
+                  Set method / instrument
                 </DropdownMenuItem>
               )}
               {allowedTransitions.map(t => (
@@ -1645,6 +1693,23 @@ function AnalysisRow({
               // AND fire the parent's onPromoted (SampleDetails uses
               // useState/useEffect, not react-query, so this is needed
               // to drive a re-fetch of the senaite_shape rows).
+              queryClient.invalidateQueries()
+              onPromoted?.()
+            }}
+          />
+        )}
+        {showSetMethodInstrument && analysis.uid && (
+          <SetMethodInstrumentDialog
+            analysisId={Number(analysis.uid.slice('mk1:'.length))}
+            serviceId={methodDialogServiceId ?? 0}
+            currentMethodId={analysis.method_uid ? parseInt(analysis.method_uid, 10) : null}
+            currentInstrumentId={analysis.instrument_uid ? parseInt(analysis.instrument_uid, 10) : null}
+            open={methodDialogOpen}
+            onOpenChange={setMethodDialogOpen}
+            onSaved={() => {
+              // Same reload contract as Promote above — invalidate for
+              // react-query callers, fire onPromoted (== the table's
+              // onTransitionComplete) for useState/useEffect callers.
               queryClient.invalidateQueries()
               onPromoted?.()
             }}
