@@ -213,3 +213,116 @@ def test_stamp_fields_on_legal_non_submit_kind_still_400(client, db_session):
     r = client.post(f"/api/lims-analyses/{row.id}/transitions",
                     json={"kind": "assign", "method_id": 1})
     assert r.status_code == 400
+
+
+# ─── Task 4: bulk worksheet apply — service fn + route ─────────────────────
+
+
+def _hm_world(client, db):
+    """Worksheet with one HM vial carrying 2 covered analyses + 1 uncovered."""
+    from models import (AnalysisService, Instrument, LimsAnalysis, LimsSample,
+                        LimsSubSample, Worksheet, WorksheetItem, instrument_methods)
+    mid = client.post("/hplc/methods", json={"name": "ICP-MS F", "technique": "ICP-MS"}).json()["id"]
+    inst = Instrument(name="7900F", origin="mk1", active=True)
+    db.add(inst); db.flush()
+    db.execute(instrument_methods.insert().values(instrument_id=inst.id, method_id=mid))
+    parent = LimsSample(sample_id="P-9200"); db.add(parent); db.flush()
+    vial = LimsSubSample(parent_sample_pk=parent.id, sample_id="P-9200-S01",
+                         external_lims_uid="u-9200", vial_sequence=1)
+    db.add(vial); db.flush()
+    rows = {}
+    for kw in ("LEAD-PPM", "ARSENIC-PPM", "MOISTURE-KF"):
+        s = AnalysisService(title=kw, keyword=kw, origin="mk1", active=True,
+                            variance_capable=False)
+        db.add(s); db.flush()
+        r = LimsAnalysis(lims_sub_sample_pk=vial.id, analysis_service_id=s.id,
+                         keyword=kw, title=kw, review_state="assigned",
+                         provenance="canonical")
+        db.add(r); db.flush()
+        rows[kw] = (s, r)
+    client.put(f"/hplc/methods/{mid}/services", json=[
+        {"analysis_service_id": rows["LEAD-PPM"][0].id, "is_default": True},
+        {"analysis_service_id": rows["ARSENIC-PPM"][0].id, "is_default": True},
+    ])
+    ws = Worksheet(title="hm#1", status="open"); db.add(ws); db.flush()
+    it = WorksheetItem(worksheet_id=ws.id, sample_uid="u-2", sample_id="P-9200-S01")
+    db.add(it); db.commit()
+    # lims_sub_sample_pk resolution in the payload joins on sample_id — the
+    # bulk verb resolves the vial the same way (sub_sample_pk_map idiom).
+    return ws, it, inst, mid, rows
+
+
+def test_bulk_apply_coverage_and_skips(client, db_session):
+    ws, it, inst, mid, rows = _hm_world(client, db_session)
+    # one covered row already verified -> skipped_state
+    rows["ARSENIC-PPM"][1].review_state = "verified"; db_session.commit()
+    r = client.post(f"/worksheets/{ws.id}/apply-method-instrument",
+                    json={"method_id": mid, "instrument_id": inst.id})
+    assert r.status_code == 200, r.text
+    b = r.json()
+    assert b["stamped"] == 1                       # LEAD only
+    assert b["items_updated"] == 1
+    assert b["skipped_state"][0]["review_state"] == "verified"
+    assert b["skipped_uncovered"][0]["keyword"] == "MOISTURE-KF"
+    db_session.expire_all()
+    assert rows["LEAD-PPM"][1].method_id == mid and rows["LEAD-PPM"][1].instrument_id == inst.id
+    assert rows["MOISTURE-KF"][1].method_id is None    # never mis-stamped (R8)
+    assert it.instrument_id == inst.id
+
+
+def test_bulk_apply_unlinked_instrument_400(client, db_session):
+    ws, it, inst, mid, rows = _hm_world(client, db_session)
+    from models import Instrument
+    other = Instrument(name="KF-V20", origin="mk1", active=True)
+    db_session.add(other); db_session.commit()
+    r = client.post(f"/worksheets/{ws.id}/apply-method-instrument",
+                    json={"method_id": mid, "instrument_id": other.id})
+    assert r.status_code == 400
+
+
+def test_bulk_apply_unknown_worksheet_404(client, db_session):
+    ws, it, inst, mid, rows = _hm_world(client, db_session)
+    r = client.post("/worksheets/999999/apply-method-instrument",
+                    json={"method_id": mid, "instrument_id": inst.id})
+    assert r.status_code == 404
+
+
+def test_bulk_apply_inactive_method_400(client, db_session):
+    ws, it, inst, mid, rows = _hm_world(client, db_session)
+    from models import HplcMethod
+    m = db_session.get(HplcMethod, mid)
+    m.active = False
+    db_session.commit()
+    r = client.post(f"/worksheets/{ws.id}/apply-method-instrument",
+                    json={"method_id": mid, "instrument_id": inst.id})
+    assert r.status_code == 400
+
+
+def test_bulk_apply_inactive_instrument_400(client, db_session):
+    ws, it, inst, mid, rows = _hm_world(client, db_session)
+    inst.active = False
+    db_session.commit()
+    r = client.post(f"/worksheets/{ws.id}/apply-method-instrument",
+                    json={"method_id": mid, "instrument_id": inst.id})
+    assert r.status_code == 400
+
+
+def test_bulk_apply_item_ids_scopes_to_subset(client, db_session):
+    """item_ids restricts the bulk apply to a subset of worksheet items."""
+    ws, it, inst, mid, rows = _hm_world(client, db_session)
+    from models import LimsSample, LimsSubSample, WorksheetItem
+    parent2 = LimsSample(sample_id="P-9300"); db_session.add(parent2); db_session.flush()
+    vial2 = LimsSubSample(parent_sample_pk=parent2.id, sample_id="P-9300-S01",
+                          external_lims_uid="u-9300", vial_sequence=1)
+    db_session.add(vial2); db_session.flush()
+    it2 = WorksheetItem(worksheet_id=ws.id, sample_uid="u-3", sample_id="P-9300-S01")
+    db_session.add(it2); db_session.commit()
+
+    r = client.post(f"/worksheets/{ws.id}/apply-method-instrument",
+                    json={"method_id": mid, "instrument_id": inst.id, "item_ids": [it.id]})
+    assert r.status_code == 200, r.text
+    b = r.json()
+    assert b["items_updated"] == 1
+    db_session.expire_all()
+    assert it.instrument_id == inst.id
+    assert it2.instrument_id is None

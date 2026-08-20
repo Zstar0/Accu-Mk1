@@ -19788,6 +19788,68 @@ async def update_worksheet_item(
     return {"status": "updated", "item_id": item_id, "resolved_method": resolved_method}
 
 
+class WorksheetApplyMethodInstrument(BaseModel):
+    method_id: int
+    instrument_id: int
+    item_ids: Optional[list[int]] = None
+
+
+@app.post("/worksheets/{worksheet_id}/apply-method-instrument")
+async def apply_worksheet_method_instrument(
+    worksheet_id: int,
+    data: WorksheetApplyMethodInstrument,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Bulk-stamp method/instrument across a worksheet's covered, bench-editable
+    analyses (R6/R7/R8, slice 2 bench-stamping). Coverage-scoped: only rows whose
+    service the method covers are touched; only STAMPABLE_STATES rows are
+    stamped; everything else comes back in skipped_state/skipped_uncovered
+    rather than being silently dropped."""
+    ws = db.execute(
+        select(Worksheet).where(Worksheet.id == worksheet_id)
+    ).scalar_one_or_none()
+    if not ws:
+        raise HTTPException(404, "Worksheet not found")
+
+    method = db.execute(
+        select(HplcMethod).where(HplcMethod.id == data.method_id)
+    ).scalar_one_or_none()
+    if not method or not method.active:
+        raise HTTPException(400, "Method not found or inactive")
+
+    inst = db.execute(
+        select(Instrument).where(Instrument.id == data.instrument_id)
+    ).scalar_one_or_none()
+    if not inst or not inst.active:
+        raise HTTPException(400, "Instrument not found or inactive")
+
+    linked = db.execute(
+        select(instrument_methods.c.id).where(
+            instrument_methods.c.instrument_id == data.instrument_id,
+            instrument_methods.c.method_id == data.method_id,
+        )
+    ).scalar_one_or_none()
+    if not linked:
+        raise HTTPException(
+            400,
+            f"Instrument '{inst.name}' is not linked to method '{method.name}'",
+        )
+
+    from lims_analyses.worksheet_stamping import apply_method_instrument_to_worksheet
+
+    result = apply_method_instrument_to_worksheet(
+        db,
+        worksheet=ws,
+        method_id=data.method_id,
+        instrument_id=data.instrument_id,
+        item_ids=data.item_ids,
+        user_id=getattr(current_user, "id", None),
+    )
+    db.commit()
+    return result
+
+
 class ReorderRequest(BaseModel):
     item_ids: list[int]  # WorksheetItem IDs in desired order
 
