@@ -61,6 +61,15 @@ Cite these; don't re-derive.
 
 ## 3. Rulings already made (Handler, 2026-08-19 session)
 
+- **R0 — ZERO new SENAITE coupling, program-wide (all three slices).** SENAITE
+  is nearly retired ([[project_senaite_phaseout_program]]). Nothing this
+  program builds may read, write, sync with, or depend on SENAITE:
+  `senaite_id`/`senaite_uid` are frozen legacy provenance on existing rows —
+  **new method and instrument rows never carry them**; `POST /instruments/sync`
+  is left untouched only because removal belongs to the phase-out program, and
+  no new feature may build on it; local creation is the only forward path for
+  instruments and methods. Any plan task that reaches for a SENAITE surface is
+  a spec violation.
 - **R1 — extend `hplc_methods` in place; no second methods table.** Every
   consumer (analyses FK, promote, COA label, `instrument_methods`) points at
   it; a parallel table would force union reads at each — the silent-miss class
@@ -145,7 +154,10 @@ cleanup first).
 - **Instruments become locally manageable**: `POST /instruments`,
   `PATCH /instruments/{id}` (name unique guard; all fields editable; `active`
   flip = retire). New nullable `department_id` column + `origin` derived from
-  `senaite_id` exactly as methods. `/instruments/sync` behavior unchanged.
+  `senaite_id` exactly as methods; locally created rows get `senaite_id`/
+  `senaite_uid` NULL always — no API field accepts them (R0).
+  `/instruments/sync` behavior unchanged (frozen legacy; its removal belongs
+  to the phase-out program, not this slice).
 
 ### 4.4 FE
 
@@ -158,8 +170,10 @@ cleanup first).
   (group them under an "HPLC parameters" subsection so a KF method's form
   isn't dominated by gradient fields).
 - **InstrumentsPage**: Add Instrument + edit (name / type / brand / model /
-  department / active). Sync button and behavior kept; page copy updated
-  ("synced from SENAITE" → provenance shown per row via `origin`).
+  department / active) — local create is the primary, prominent action. The
+  Sync button is kept but demoted to a secondary affordance labeled as legacy
+  (R0); page copy drops "synced from Senaite LIMS" as the page's identity and
+  shows per-row provenance via `origin` instead.
 
 ### 4.5 Explicit non-goals (this slice)
 

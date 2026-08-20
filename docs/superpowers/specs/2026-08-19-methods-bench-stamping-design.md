@@ -45,6 +45,11 @@ onto analysis rows. For a non-HPLC worksheet (the Handler's hm#1 observation):
 
 ## 3. Rulings
 
+- **R0 (program-wide, inherited from slice 1) — zero new SENAITE coupling.**
+  The new stamping path reads/writes `worksheet_items.instrument_id` (FK) and
+  `lims_analyses.method_id`/`instrument_id` only. `instrument_uid` is frozen
+  legacy for the existing HPLC lane — nothing new reads or writes it, and no
+  new code touches a SENAITE surface.
 - **R5 — explicit acts only, never at seeding.** A placeholder must not claim
   a method nobody chose. Stamping happens on exactly two verbs: the
   worksheet-level apply (§4.2) and result submission (§4.4). No background or

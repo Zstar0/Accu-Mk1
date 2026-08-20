@@ -45,6 +45,11 @@ lifecycle around that ruling.
 
 ## 3. Rulings
 
+- **R0 (program-wide, inherited from slice 1) — zero new SENAITE coupling.**
+  Revisions, attachments (`storage='s3'` only — never `'senaite'`), lifecycle
+  verbs, and audit rows are all Mk1-native. Revision clones never copy
+  `senaite_id` (it stays on the original legacy row only, preserving the
+  clone's `(name, revision)` identity without inheriting dead provenance).
 - **R9 — status over boolean, in lockstep.** New `status` column
   (`draft | active | retired`); `active` boolean is kept and maintained by
   the single write path (`active ⇔ status = 'active'`) so every existing
