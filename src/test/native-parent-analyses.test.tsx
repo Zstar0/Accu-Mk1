@@ -28,6 +28,7 @@ import {
 } from '@/lib/api'
 import { NATIVE_PARENT_ANALYSES_QUERY_KEY } from '@/lib/native-parent-analyses'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
+import type { VialAssignment } from '@/lib/vial-assignment'
 
 // AnalysisTable uses IntersectionObserver for its sticky-toolbar effect; jsdom doesn't have it.
 // Must be a real class (not arrow function) since AnalysisTable does `new IntersectionObserver(...)`.
@@ -145,6 +146,7 @@ function renderCard(
     qc?: QueryClient
     sampleId?: string
     isParentPage?: boolean
+    vialAssignmentByKeyword?: Map<string, VialAssignment>
   } = {}
 ) {
   vi.mocked(listNativeParentAnalysesShaped).mockResolvedValue(rows)
@@ -156,6 +158,7 @@ function renderCard(
         isParentPage={opts.isParentPage ?? true}
         lookup={fakeLookup({ date_received: '2026-08-01' })}
         promotionsByKeyword={promos}
+        vialAssignmentByKeyword={opts.vialAssignmentByKeyword}
         onParentDataStale={opts.staleSpy}
       />
     </QueryClientProvider>
@@ -186,6 +189,36 @@ describe('NativeParentAnalysesCard', () => {
     expect(screen.getByText('Method')).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: /All/ })).toBeInTheDocument()
     expect(container.querySelector('.divide-y')).not.toBeInTheDocument()
+  })
+
+  it('renders a clickable assigned-vial chip for a native row', async () => {
+    // Task 6 (spec 2026-08-20-rider-vial-visibility): the card already
+    // forwards vialAssignmentByKeyword straight through to the shared
+    // AnalysisTable (SampleDetails.tsx ~:3483) — this pins that card-level
+    // contract for a NATIVE keyword. The real gap this task closes is one
+    // level up, in SampleDetails' map construction (not exercised by this
+    // component-level test — see task-6-brief.md Step 3).
+    const vialMap = new Map<string, VialAssignment>([
+      ['FENTANYL', {
+        editable: true,
+        matches: [{
+          vialSampleId: 'P-0158-S01',
+          vialLabel: 'Vial 1',
+          mk1Analysis: shapedRow({
+            uid: 'mk1:1', keyword: 'FENTANYL', title: 'Fentanyl', review_state: 'unassigned',
+          }),
+          assignmentRole: 'hplc',
+          assignmentKind: 'core',
+        }],
+      }],
+    ])
+    renderCard(
+      [shapedRow({ uid: 'mk1:9', keyword: 'FENTANYL', title: 'Fentanyl' })],
+      new Map(),
+      { vialAssignmentByKeyword: vialMap }
+    )
+
+    expect(await screen.findByRole('button', { name: /Vial 1 — P-0158-S01/ })).toBeInTheDocument()
   })
 
   it('renders nothing while empty', async () => {

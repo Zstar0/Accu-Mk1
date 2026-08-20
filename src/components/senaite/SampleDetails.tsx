@@ -3820,24 +3820,37 @@ export function SampleDetails() {
 
   // Parent-page only (memo would not help: useQueries' outer array churns each
   // render). The join is a cheap pure function.
+  const overlayVialInputs = overlayVials.map((v, i) => ({
+    sampleId: v.sample_id,
+    label: vialLabel(v.vial_sequence, subData?.parent.container_mode ?? false),
+    analyses: overlayAnalysesQueries[i]?.data ?? [],
+    assignmentRole: v.assignment_role, // vial bench role
+    assignmentKind: v.assignment_kind, // explicit variance bucket — drives overlay treatment
+    varianceLocked: lockedVialIds.has(v.sample_id), // in the LOCKED variance set → Lock icon
+  }))
   const vialAssignmentByKeyword =
     parentSampleId !== null || !data?.analyses
       ? undefined
       : buildVialAssignmentMap(
           data.analyses,
-          overlayVials.map((v, i) => ({
-            sampleId: v.sample_id,
-            label: vialLabel(
-              v.vial_sequence,
-              subData?.parent.container_mode ?? false
-            ),
-            analyses: overlayAnalysesQueries[i]?.data ?? [],
-            assignmentRole: v.assignment_role, // vial bench role
-            assignmentKind: v.assignment_kind, // explicit variance bucket — drives overlay treatment
-            varianceLocked: lockedVialIds.has(v.sample_id), // in the LOCKED variance set → Lock icon
-          })),
+          overlayVialInputs,
           analyteNameMap // analyte bridge: ANALYTE-{n}-PUR/QTY ↔ PUR_/QTY_<X>
         )
+
+  // Native card chips (spec 2026-08-20-rider-vial-visibility): the SENAITE
+  // map above is keyed by SENAITE parent keywords, which never contain
+  // native rows — build the native card its own map from ITS rows. Tier 0
+  // (analysis_service_id) joins exactly; no analyte bridge needed.
+  const { data: nativeShapedRows } = useQuery({
+    queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY, sampleId, 'senaite_shape'],
+    queryFn: () => listNativeParentAnalysesShaped(sampleId!),
+    enabled: parentSampleId === null && !!sampleId,
+    staleTime: 30_000,
+  })
+  const nativeVialAssignmentByKeyword =
+    parentSampleId !== null || !nativeShapedRows?.length
+      ? undefined
+      : buildVialAssignmentMap(nativeShapedRows, overlayVialInputs)
 
   const { data: parentSummary } = useQuery({
     queryKey: ['sub-samples', parentSampleId],
@@ -6753,6 +6766,7 @@ export function SampleDetails() {
           isParentPage={parentSampleId === null}
           lookup={data}
           promotionsByKeyword={promotionsByKeyword}
+          vialAssignmentByKeyword={nativeVialAssignmentByKeyword}
           onParentDataStale={() => refreshSample(data.sample_id)}
         />
       )}

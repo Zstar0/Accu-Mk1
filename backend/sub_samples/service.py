@@ -1332,7 +1332,7 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
             "is_unreachable": False,
             "vials": locked_vials,
             "container_mode": parent.container_mode,
-            "sections": _build_vial_plan_sections(db, demand, locked_vials, services_for_sections, snapshot=snapshot),
+            "sections": _build_vial_plan_sections(db, demand, locked_vials, services_for_sections),
         }
 
     from catalog.roles import real_bucket_codes
@@ -1383,7 +1383,7 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
         "is_unreachable": False,
         "vials": assigned,
         "container_mode": parent.container_mode,
-        "sections": _build_vial_plan_sections(db, demand, assigned, services_for_sections, snapshot=snapshot),
+        "sections": _build_vial_plan_sections(db, demand, assigned, services_for_sections),
     }
 
 
