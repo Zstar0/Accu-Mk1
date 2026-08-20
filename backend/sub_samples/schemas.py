@@ -277,6 +277,7 @@ class OrderedProduct(BaseModel):
     is_addon: bool
     fulfillment_role: Optional[str] = None
     fulfillment_dim: str = "role"
+    ride_host_roles: list[str] = Field(default_factory=list)
 
 
 class OrderedProductsResponse(BaseModel):
