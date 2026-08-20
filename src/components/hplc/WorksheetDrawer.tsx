@@ -29,6 +29,7 @@ import { useUIStore } from '@/store/ui-store'
 import { useAuthStore } from '@/store/auth-store'
 import { useWorksheetDrawer } from '@/hooks/use-worksheet-drawer'
 import { getWorksheetUsers, getInstruments, getMethods } from '@/lib/api'
+import type { HplcMethod, Instrument } from '@/lib/api'
 import WorksheetDrawerHeader from './WorksheetDrawerHeader'
 import WorksheetDrawerItems from './WorksheetDrawerItems'
 import AddSamplesModal from './AddSamplesModal'
@@ -89,20 +90,13 @@ export function WorksheetDrawer() {
     staleTime: 5 * 60 * 1000,
   })
 
-  // Apply bar (run context): method + instrument selection for "Apply to
-  // all". Instrument options are the chosen method's linked instruments
-  // intersected with active instruments — deliberately NOT sorted by
-  // worksheet department (spec §4.6 nicety dropped; the list is already
-  // method-scoped to 1-3 rows, see task-6 brief).
-  const [applyMethodId, setApplyMethodId] = useState<number | null>(null)
-  const [applyInstrumentId, setApplyInstrumentId] = useState<number | null>(null)
+  // Methods available to the apply bar (run context). Instrument options
+  // are computed per-selection inside WorksheetApplyBar, scoped to the
+  // chosen method's linked instruments intersected with active instruments
+  // — deliberately NOT sorted by worksheet department (spec §4.6 nicety
+  // dropped; the list is already method-scoped to 1-3 rows, see task-6
+  // brief).
   const activeMethods = useMemo(() => methods.filter(m => m.active), [methods])
-  const selectedApplyMethod = activeMethods.find(m => m.id === applyMethodId) ?? null
-  const applyInstrumentOptions = useMemo(() => {
-    if (!selectedApplyMethod) return []
-    const ids = new Set(selectedApplyMethod.instrument_ids)
-    return instruments.filter(i => i.active && ids.has(i.id))
-  }, [selectedApplyMethod, instruments])
 
   // Auto-select first worksheet when drawer opens or filter changes
   useEffect(() => {
@@ -137,12 +131,12 @@ export function WorksheetDrawer() {
     return { userNotes: text, prepStartedItems: set }
   }, [activeWorksheet?.notes])
 
-  function handleApplyToAll() {
-    if (!activeWorksheet || applyMethodId == null || applyInstrumentId == null) return
+  function handleApplyToAll(methodId: number, instrumentId: number) {
+    if (!activeWorksheet) return
     applyMethodInstrumentMutation.mutate(
       {
         worksheetId: activeWorksheet.id,
-        data: { method_id: applyMethodId, instrument_id: applyInstrumentId },
+        data: { method_id: methodId, instrument_id: instrumentId },
       },
       {
         onSuccess: res => {
@@ -303,61 +297,22 @@ export function WorksheetDrawer() {
               )}
 
               {/* Apply bar — run context (method + instrument) for "Apply to
-                  all". Instrument options are the selected method's linked
-                  instruments intersected with active instruments; disabled
-                  until a method is chosen. */}
+                  all". Keyed on the worksheet id: remounting on switch is
+                  how the armed selections get cleared (React's recommended
+                  "reset state on prop change" idiom — an effect calling
+                  setState here would trip react-hooks/set-state-in-effect
+                  for no benefit) so a method/instrument armed for worksheet
+                  A can't get one-click applied to worksheet B. Stays sticky
+                  across a successful apply within the SAME worksheet
+                  (repeat-apply convenience) since the key doesn't change. */}
               {!isCompleted && (
-                <div className="px-4 py-2 border-b flex items-center gap-2">
-                  <span className="text-xs font-semibold text-muted-foreground shrink-0">
-                    Run context
-                  </span>
-                  <Select
-                    value={applyMethodId != null ? String(applyMethodId) : ''}
-                    onValueChange={value => {
-                      setApplyMethodId(Number(value))
-                      setApplyInstrumentId(null)
-                    }}
-                  >
-                    <SelectTrigger size="sm" aria-label="Method" className="w-48 h-8 text-xs">
-                      <SelectValue placeholder="Method…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {activeMethods.map(m => (
-                        <SelectItem key={m.id} value={String(m.id)}>
-                          {m.code ?? m.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Select
-                    value={applyInstrumentId != null ? String(applyInstrumentId) : ''}
-                    onValueChange={value => setApplyInstrumentId(Number(value))}
-                    disabled={!selectedApplyMethod}
-                  >
-                    <SelectTrigger size="sm" aria-label="Instrument" className="w-40 h-8 text-xs">
-                      <SelectValue placeholder="Instrument…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {applyInstrumentOptions.map(inst => (
-                        <SelectItem key={inst.id} value={String(inst.id)}>
-                          {inst.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={
-                      applyMethodId == null ||
-                      applyInstrumentId == null ||
-                      applyMethodInstrumentMutation.isPending
-                    }
-                    onClick={handleApplyToAll}
-                  >
-                    Apply to all
-                  </Button>
-                </div>
+                <WorksheetApplyBar
+                  key={activeWorksheet.id}
+                  activeMethods={activeMethods}
+                  instruments={instruments}
+                  isPending={applyMethodInstrumentMutation.isPending}
+                  onApply={handleApplyToAll}
+                />
               )}
 
               {/* Items section */}
@@ -448,6 +403,85 @@ export function WorksheetDrawer() {
         </SheetContent>
       </Sheet>
     </>
+  )
+}
+
+interface WorksheetApplyBarProps {
+  activeMethods: HplcMethod[]
+  instruments: Instrument[]
+  isPending: boolean
+  onApply: (methodId: number, instrumentId: number) => void
+}
+
+/** Method + instrument "run context" picker for the worksheet drawer's
+ *  "Apply to all". Split out from WorksheetDrawer so its armed selections
+ *  reset for free by remounting on `key={worksheet.id}` — see the comment
+ *  at its call site. */
+function WorksheetApplyBar({
+  activeMethods,
+  instruments,
+  isPending,
+  onApply,
+}: WorksheetApplyBarProps) {
+  const [methodId, setMethodId] = useState<number | null>(null)
+  const [instrumentId, setInstrumentId] = useState<number | null>(null)
+  const selectedMethod = activeMethods.find(m => m.id === methodId) ?? null
+  const instrumentOptions = useMemo(() => {
+    if (!selectedMethod) return []
+    const ids = new Set(selectedMethod.instrument_ids)
+    return instruments.filter(i => i.active && ids.has(i.id))
+  }, [selectedMethod, instruments])
+
+  return (
+    <div className="px-4 py-2 border-b flex items-center gap-2">
+      <span className="text-xs font-semibold text-muted-foreground shrink-0">
+        Run context
+      </span>
+      <Select
+        value={methodId != null ? String(methodId) : ''}
+        onValueChange={value => {
+          setMethodId(Number(value))
+          setInstrumentId(null)
+        }}
+      >
+        <SelectTrigger size="sm" aria-label="Method" className="w-48 h-8 text-xs">
+          <SelectValue placeholder="Method…" />
+        </SelectTrigger>
+        <SelectContent>
+          {activeMethods.map(m => (
+            <SelectItem key={m.id} value={String(m.id)}>
+              {m.code ?? m.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Select
+        value={instrumentId != null ? String(instrumentId) : ''}
+        onValueChange={value => setInstrumentId(Number(value))}
+        disabled={!selectedMethod}
+      >
+        <SelectTrigger size="sm" aria-label="Instrument" className="w-40 h-8 text-xs">
+          <SelectValue placeholder="Instrument…" />
+        </SelectTrigger>
+        <SelectContent>
+          {instrumentOptions.map(inst => (
+            <SelectItem key={inst.id} value={String(inst.id)}>
+              {inst.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={methodId == null || instrumentId == null || isPending}
+        onClick={() => {
+          if (methodId != null && instrumentId != null) onApply(methodId, instrumentId)
+        }}
+      >
+        Apply to all
+      </Button>
+    </div>
   )
 }
 

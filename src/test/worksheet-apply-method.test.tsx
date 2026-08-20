@@ -15,7 +15,7 @@
  * under test here (display precedence).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import React from 'react'
@@ -164,6 +164,14 @@ const WORKSHEET: WorksheetListItem = {
   items: [ITEM_STAMPED, ITEM_HPLC],
 }
 
+const WORKSHEET_B: WorksheetListItem = {
+  ...WORKSHEET,
+  id: 2,
+  title: 'WS-2',
+  item_count: 0,
+  items: [],
+}
+
 describe('WorksheetDrawer — run-context apply + stamped display + native instrument select', () => {
   beforeEach(() => {
     vi.mocked(listWorksheets).mockReset().mockResolvedValue([WORKSHEET])
@@ -237,5 +245,45 @@ describe('WorksheetDrawer — run-context apply + stamped display + native instr
     const message = vi.mocked(toast.success).mock.calls[0]?.[0] as string
     expect(message).toContain('1 locked')
     expect(message).toContain('1 not covered by this method')
+  })
+
+  it('resets the armed run context on worksheet switch, but not on a same-worksheet apply', async () => {
+    vi.mocked(listWorksheets).mockResolvedValue([WORKSHEET, WORKSHEET_B])
+    vi.mocked(applyWorksheetMethodInstrument).mockResolvedValue({
+      stamped: 1,
+      items_updated: 1,
+      skipped_state: [],
+      skipped_uncovered: [],
+    })
+    render(<WorksheetDrawer />, { wrapper })
+
+    fireEvent.click(await screen.findByRole('combobox', { name: /method/i }))
+    fireEvent.click(await screen.findByRole('option', { name: /icp-ms f/i }))
+    fireEvent.click(await screen.findByRole('combobox', { name: /instrument/i }))
+    fireEvent.click(await screen.findByRole('option', { name: /7900f/i }))
+    expect(screen.getByRole('button', { name: /apply to all/i })).toBeEnabled()
+
+    // Sticky within the SAME worksheet: a successful apply must not clear
+    // the armed selections (repeat-apply convenience).
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /apply to all/i }))
+    await waitFor(() => expect(applyWorksheetMethodInstrument).toHaveBeenCalledTimes(1))
+    expect(screen.getByRole('button', { name: /apply to all/i })).toBeEnabled()
+
+    // Switch the active worksheet — same store action the real worksheet
+    // switcher's onValueChange calls (setActiveId -> setActiveWorksheetId).
+    act(() => {
+      useUIStore.getState().setActiveWorksheetId(2)
+    })
+
+    await waitFor(() =>
+      expect(screen.getByRole('combobox', { name: /method/i })).toHaveTextContent('Method…')
+    )
+    expect(screen.getByRole('combobox', { name: /instrument/i })).toHaveTextContent('Instrument…')
+    expect(screen.getByRole('button', { name: /apply to all/i })).toBeDisabled()
+
+    // Stale context can't be one-click applied to the new worksheet.
+    await user.click(screen.getByRole('button', { name: /apply to all/i }))
+    expect(applyWorksheetMethodInstrument).toHaveBeenCalledTimes(1)
   })
 })
