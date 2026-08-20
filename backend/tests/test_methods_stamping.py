@@ -326,3 +326,15 @@ def test_bulk_apply_item_ids_scopes_to_subset(client, db_session):
     db_session.expire_all()
     assert it.instrument_id == inst.id
     assert it2.instrument_id is None
+
+
+# ─── Task 5: stamped method/instrument names on the payload ────────────────
+
+
+def test_payload_carries_stamped_names(client, db_session):
+    ws, it, inst, mid, rows = _hm_world(client, db_session)
+    client.post(f"/worksheets/{ws.id}/apply-method-instrument",
+                json={"method_id": mid, "instrument_id": inst.id})
+    item = client.get("/worksheets").json()[0]["items"][0]
+    assert item["stamped_method_name"] == "ICP-MS F"
+    assert item["stamped_instrument_name"] == "7900F"

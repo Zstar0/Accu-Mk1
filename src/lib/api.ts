@@ -5371,11 +5371,14 @@ export interface WorksheetListItem {
     added_at: string | null
     date_received: string | null
     instrument_uid: string | null
+    instrument_id: number | null
     assigned_analyst_id: number | null
     assigned_analyst_email: string | null
     notes: string | null
     peptide_id: number | null
     method_name: string | null
+    stamped_method_name: string | null
+    stamped_instrument_name: string | null
     lims_sub_sample_pk: number | null
     /** 'core' | 'variance' | null — null for parent-sample items. */
     assignment_kind?: 'core' | 'variance' | null
@@ -5487,7 +5490,7 @@ export async function reassignWorksheetItem(
 export async function updateWorksheetItem(
   worksheetId: number,
   itemId: number,
-  data: { instrument_uid?: string; prep_status?: string }
+  data: { instrument_uid?: string; prep_status?: string; instrument_id?: number | null }
 ): Promise<{ status: string; item_id: number }> {
   const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}/items/${itemId}`, {
     method: 'PATCH',
@@ -5495,6 +5498,27 @@ export async function updateWorksheetItem(
     body: JSON.stringify(data),
   })
   if (!response.ok) throw new Error(`Update item failed: ${response.status}`)
+  return response.json()
+}
+
+export async function applyWorksheetMethodInstrument(
+  worksheetId: number,
+  body: { method_id: number; instrument_id: number; item_ids?: number[] }
+): Promise<{
+  stamped: number
+  items_updated: number
+  skipped_state: { analysis_id: number; review_state: string }[]
+  skipped_uncovered: { analysis_id: number; keyword: string }[]
+}> {
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/apply-method-instrument`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(body),
+    }
+  )
+  if (!response.ok) throw new Error(`Apply method/instrument failed: ${response.status}`)
   return response.json()
 }
 

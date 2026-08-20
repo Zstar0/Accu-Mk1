@@ -19073,6 +19073,45 @@ def list_worksheets(
             ).scalars().all()
             box_label_map = {b.id: box_label_code(b) for b in box_rows}
 
+        # Resolve per-item stamped method/instrument names (bench-stamping
+        # slice 2, task 5): the DISTINCT non-null stamped values across a
+        # vial's lims_analyses rows -- one distinct name -> that name; >1
+        # distinct -> the literal "mixed"; none -> None. Same eager-map
+        # idiom as sub_sample_pk_map above -- one grouped query per
+        # worksheet, never per-item queries in the loop.
+        from models import LimsAnalysis
+        vial_pks = {pk for pk in sub_sample_pk_map.values() if pk}
+        stamped_method_map: dict[int, str | None] = {}
+        stamped_instrument_map: dict[int, str | None] = {}
+        if vial_pks:
+            stamp_rows = db.execute(
+                select(LimsAnalysis.lims_sub_sample_pk, HplcMethod.name, Instrument.name)
+                .outerjoin(HplcMethod, HplcMethod.id == LimsAnalysis.method_id)
+                .outerjoin(Instrument, Instrument.id == LimsAnalysis.instrument_id)
+                .where(LimsAnalysis.lims_sub_sample_pk.in_(vial_pks))
+            ).all()
+            method_names_by_pk: dict[int, set[str]] = {}
+            instrument_names_by_pk: dict[int, set[str]] = {}
+            for pk, m_name, i_name in stamp_rows:
+                if m_name:
+                    method_names_by_pk.setdefault(pk, set()).add(m_name)
+                if i_name:
+                    instrument_names_by_pk.setdefault(pk, set()).add(i_name)
+
+            def _resolve_stamped(names: set[str] | None) -> str | None:
+                if not names:
+                    return None
+                if len(names) > 1:
+                    return "mixed"
+                return next(iter(names))
+
+            stamped_method_map = {
+                pk: _resolve_stamped(names) for pk, names in method_names_by_pk.items()
+            }
+            stamped_instrument_map = {
+                pk: _resolve_stamped(names) for pk, names in instrument_names_by_pk.items()
+            }
+
         def _resolve_method(it_instrument_uid: str | None, it_service_group_id: int | None) -> str | None:
             """Resolve HPLC method name from instrument + peptide (via service group)."""
             if not it_instrument_uid or not it_service_group_id:
@@ -19123,6 +19162,8 @@ def list_worksheets(
                     "notes": it.notes,
                     "peptide_id": group_peptide_map.get(it.service_group_id) if it.service_group_id else None,
                     "method_name": _resolve_method(it.instrument_uid, it.service_group_id),
+                    "stamped_method_name": stamped_method_map.get(sub_sample_pk_map.get(it.sample_id)),
+                    "stamped_instrument_name": stamped_instrument_map.get(sub_sample_pk_map.get(it.sample_id)),
                     "lims_sub_sample_pk": sub_sample_pk_map.get(it.sample_id),
                     # 'core' | 'variance' | None — None for parent-sample ids
                     # (no lims_sub_samples row), same join as lims_sub_sample_pk

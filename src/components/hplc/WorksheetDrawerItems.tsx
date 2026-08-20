@@ -64,7 +64,7 @@ interface WorksheetDrawerItemsProps {
   onReassign: (itemId: number, targetWorksheetId: number) => void
   onStartPrep: (item: { sampleId: string; serviceGroupId: number | null; groupName: string; peptideId: number | null; instrumentUid: string | null; limsSubSamplePk: number | null }) => void
   instruments: Instrument[]
-  onUpdateItem: (itemId: number, data: { instrument_uid?: string; prep_status?: string }) => void
+  onUpdateItem: (itemId: number, data: { instrument_uid?: string; prep_status?: string; instrument_id?: number | null }) => void
   onReorder: (itemIds: number[]) => void
 }
 
@@ -203,7 +203,7 @@ interface SortableItemRowProps {
   onRemove: (itemId: number) => void
   onReassign: (itemId: number, targetWorksheetId: number) => void
   onStartPrep: (item: { sampleId: string; serviceGroupId: number | null; groupName: string; peptideId: number | null; instrumentUid: string | null; limsSubSamplePk: number | null }) => void
-  onUpdateItem: (itemId: number, data: { instrument_uid?: string; prep_status?: string }) => void
+  onUpdateItem: (itemId: number, data: { instrument_uid?: string; prep_status?: string; instrument_id?: number | null }) => void
 }
 
 function SortableItemRow({
