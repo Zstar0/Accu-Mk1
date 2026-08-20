@@ -573,13 +573,21 @@ class HplcMethod(Base):
     """
     __tablename__ = "hplc_methods"
     __table_args__ = (
-        Index("uq_hplc_methods_code", "code", unique=True,
+        # Methods controlled documents (slice 3): revisions of the same name
+        # coexist, so name is no longer unique on its own — (name, revision) is.
+        UniqueConstraint("name", "revision", name="uq_hplc_methods_name_revision"),
+        # At most one 'active' row per code, across all revisions.
+        Index("uq_hplc_methods_code_active", "code", unique=True,
+              postgresql_where=text("status = 'active' AND code IS NOT NULL"),
+              sqlite_where=text("status = 'active' AND code IS NOT NULL")),
+        # A given (code, revision) pair is unique (among rows that have a code).
+        Index("uq_hplc_methods_code_revision", "code", "revision", unique=True,
               postgresql_where=text("code IS NOT NULL"),
               sqlite_where=text("code IS NOT NULL")),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
     senaite_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, unique=True)
     size_peptide: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # "Extremely Polar", "3-9 (Very Polar)", etc.
     starting_organic_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # Starting organic amount %
@@ -602,6 +610,16 @@ class HplcMethod(Base):
     # 'senaite' only on legacy clone-time rows; every new row is 'mk1' (R0).
     origin: Mapped[str] = mapped_column(String(20), nullable=False, default="mk1",
                                         server_default="mk1")
+
+    # Methods controlled documents (slice 3): lifecycle. Lockstep invariant
+    # produced here for all later tasks: active is True <=> status == 'active'
+    # — only the lifecycle verbs (Task 3-4) and the backfill write either field.
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="active",
+                                        server_default="active")
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1,
+                                          server_default="1")
+    activated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    retired_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     # Relationships
     instruments: Mapped[list["Instrument"]] = relationship("Instrument", secondary=instrument_methods, back_populates="methods")

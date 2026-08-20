@@ -1702,6 +1702,20 @@ def _run_migrations():
         # instrument_uid (above, on worksheet_items) stays the frozen SENAITE-uid
         # leg for the HPLC lane (R0); this is the new local-FK leg — both may coexist.
         "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS instrument_id INTEGER REFERENCES instruments(id) ON DELETE SET NULL",
+        # --- Methods controlled documents (slice 3): lifecycle ---
+        "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS status VARCHAR(10) NOT NULL DEFAULT 'active'",
+        "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS activated_at TIMESTAMP",
+        "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS retired_at TIMESTAMP",
+        # Lockstep backfill (idempotent: lifecycle verbs are the only writers after this)
+        "UPDATE hplc_methods SET status = 'retired' WHERE active = FALSE AND status = 'active'",
+        # (name) unique constraint -> (name, revision); revisions share the name
+        "ALTER TABLE hplc_methods DROP CONSTRAINT IF EXISTS hplc_methods_name_key",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_hplc_methods_name_revision ON hplc_methods (name, revision)",
+        # code: slice-1 index -> revision-aware pair
+        "DROP INDEX IF EXISTS uq_hplc_methods_code",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_hplc_methods_code_revision ON hplc_methods (code, revision) WHERE code IS NOT NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_hplc_methods_code_active ON hplc_methods (code) WHERE status = 'active' AND code IS NOT NULL",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

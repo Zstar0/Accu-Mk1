@@ -2882,6 +2882,10 @@ class MethodResponse(BaseModel):
     dissolution: Optional[str] = None
     notes: Optional[str] = None
     active: bool
+    status: str = "active"
+    revision: int = 1
+    activated_at: Optional[datetime] = None
+    retired_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
     common_peptides: list[PeptideBrief] = []
