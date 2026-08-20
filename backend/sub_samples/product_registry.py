@@ -18,6 +18,11 @@ class ProductDef:
     is_addon: bool
     fulfillment_role: str | None   # vial value that fulfills it; None = base/always-run
     fulfillment_dim: str           # "role" (assignment_role) or "kind" (assignment_kind)
+    # Rider profiles (spec 2026-08-20-rider-vial-visibility) fulfill on a HOST
+    # role's vial rather than their own — the priority-ordered ride list from
+    # profile_ride_hosts. Empty for every static-registry / fallback ProductDef;
+    # only the db-backed AnalysisProfile lookup ever populates it.
+    ride_host_roles: tuple = ()
 
 
 # Package tier — `package` is not part of the `services` dict, so it is keyed separately.
@@ -40,6 +45,7 @@ def _as_dict(p: ProductDef) -> dict:
     return {
         "key": p.key, "label": p.label, "is_addon": p.is_addon,
         "fulfillment_role": p.fulfillment_role, "fulfillment_dim": p.fulfillment_dim,
+        "ride_host_roles": list(p.ride_host_roles),
     }
 
 
@@ -56,12 +62,20 @@ def lookup_product_def(key: str, db=None) -> ProductDef | None:
     same-input comparison.
     """
     if db is not None:
-        from models import AnalysisProfile
+        from sqlalchemy import select
+
+        from models import AnalysisProfile, profile_ride_hosts
         row = db.query(AnalysisProfile).filter_by(key=key).one_or_none()
         if row is not None:
+            ride_codes = db.execute(
+                select(profile_ride_hosts.c.host_role_code)
+                .where(profile_ride_hosts.c.analysis_profile_id == row.id)
+                .order_by(profile_ride_hosts.c.priority)
+            ).scalars().all()
             return ProductDef(
                 row.key, row.name, row.is_addon,
                 row.fulfillment_role, row.fulfillment_dim,
+                ride_host_roles=tuple(ride_codes),
             )
     return PRODUCT_REGISTRY.get(key)
 

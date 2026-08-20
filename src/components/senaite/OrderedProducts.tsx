@@ -63,8 +63,15 @@ export function OrderedProducts({
   const products = q.data?.products ?? []
   const vials = subData?.sub_samples ?? []
   const unmet = products.filter(p =>
-    p.is_addon && p.fulfillment_role && !vials.some(s =>
-      (p.fulfillment_dim === 'kind' ? s.assignment_kind : s.assignment_role) === p.fulfillment_role,
+    p.is_addon && p.fulfillment_role && !(
+      vials.some(s =>
+        (p.fulfillment_dim === 'kind' ? s.assignment_kind : s.assignment_role) === p.fulfillment_role,
+      ) ||
+      // Riders fulfill on a ride-host vial (spec 2026-08-20-rider-vial-visibility):
+      // no vial ever carries the rider's own role, so check the ride-host roles too.
+      (p.fulfillment_dim === 'role' && (p.ride_host_roles ?? []).some(hr =>
+        vials.some(s => s.assignment_role === hr && s.assignment_kind !== 'variance'),
+      ))
     ),
   )
 
