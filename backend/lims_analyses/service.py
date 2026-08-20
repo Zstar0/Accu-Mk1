@@ -295,8 +295,9 @@ def apply_transition(
 
     method_id: optional method stamp, applied after the snapshot; None is a no-op.
     instrument_id: optional instrument stamp, applied after the snapshot; None is a no-op.
-    Either raises BadRequestError up front if kind != 'submit' (Task 3,
-    2026-08-19 bench-stamping slice) — see the guard right after the row load.
+    If either is provided with kind != 'submit', raises BadRequestError up
+    front (Task 3, 2026-08-19 bench-stamping slice) — see the guard right
+    after the row load.
     """
     row = get_analysis(db, analysis_id)
 

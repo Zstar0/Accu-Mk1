@@ -201,3 +201,15 @@ def test_non_submit_kind_rejects_stamp_fields(client, db_session):
     r = client.post(f"/api/lims-analyses/{row.id}/transitions",
                     json={"kind": "verify", "method_id": 1})
     assert r.status_code == 400
+
+
+def test_stamp_fields_on_legal_non_submit_kind_still_400(client, db_session):
+    """The 'verify' case above 409s on tier mismatch regardless of the new
+    guard, so it doesn't prove the guard does anything. 'assign' from
+    'unassigned' IS a legal transition — without the guard this would 200
+    and silently drop method_id. Pins that the guard fires before the state
+    machine even gets a chance to succeed."""
+    row = _mk_vial_row(db_session, state="unassigned")
+    r = client.post(f"/api/lims-analyses/{row.id}/transitions",
+                    json={"kind": "assign", "method_id": 1})
+    assert r.status_code == 400
