@@ -1685,6 +1685,9 @@ def _drop_stale_rider_rows(db: Session, *, sub: LimsSubSample,
         prof = db.get(AnalysisProfile, pid)
         if prof is not None:
             svc_ids.update(s.id for s in prof.analysis_services)
+        else:
+            log.info("sub_samples.rider_cleanup_unknown_profile sub=%s profile_id=%s",
+                     sub.sample_id, pid)
     if not svc_ids:
         return 0
     stale = db.execute(

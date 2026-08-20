@@ -239,6 +239,25 @@ import {
 // from lib/vial-assignment so the role-change invalidate helper can't drift.
 const VIAL_OVERLAY_QUERY_KEY = PARENT_OVERLAY_QUERY_KEY
 
+// Final-review ruling (2026-08-20, rider-vial-visibility): the native card's
+// vialAssignmentByKeyword map feeds the shared AnalysisTable, which also uses
+// a single-match (`editable: true`) entry to overlay that vial's Method/
+// Instrument/Analyst onto the row. Spec S4 scoped the native card to chips
+// only — the M/I/A overlay was never ruled on for native rows. Force
+// `editable: false` on every entry before handing the map to the native
+// card so the chips still render (they read `matches`, not `editable`) but
+// the overlay never engages. The SENAITE map (vialAssignmentByKeyword) is
+// untouched — this only applies to the native card's map.
+function chipsOnlyVialAssignmentMap(
+  map: Map<string, VialAssignment>,
+): Map<string, VialAssignment> {
+  const out = new Map<string, VialAssignment>()
+  for (const [keyword, assignment] of map) {
+    out.set(keyword, { ...assignment, editable: false })
+  }
+  return out
+}
+
 // --- COA Console ---
 
 type StepStatus = 'waiting' | 'running' | 'ok' | 'error'
@@ -3850,7 +3869,9 @@ export function SampleDetails() {
   const nativeVialAssignmentByKeyword =
     parentSampleId !== null || !nativeShapedRows?.length
       ? undefined
-      : buildVialAssignmentMap(nativeShapedRows, overlayVialInputs)
+      : chipsOnlyVialAssignmentMap(
+          buildVialAssignmentMap(nativeShapedRows, overlayVialInputs)
+        )
 
   const { data: parentSummary } = useQuery({
     queryKey: ['sub-samples', parentSampleId],

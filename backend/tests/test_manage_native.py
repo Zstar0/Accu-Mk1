@@ -670,6 +670,21 @@ def test_host_vials_skips_variance_vials_and_falls_back_to_own_role(db):
     assert [v.sample_id for v in hosts] == [own.sample_id]
 
 
+def test_host_vials_own_role_fallback_excludes_variance_vials(db):
+    # Fix-wave ruling (final review, 2026-08-20): the own-role fallback (no
+    # ride list at all, or a ride list that produced no live host) must
+    # apply the same variance exclusion as the ride-host branch above —
+    # variance replicates never host rider (or any) work, on either path.
+    from lims_analyses.manage_native import _host_vials
+    svc = _svc(db, keyword="ZMN4-RIDER", title="ZMN4 Rider")
+    profile = _profile(db, key="zmn4_rider", name="ZMN4 Rider", members=[svc], role="zmn4role")
+    parent = _mk_parent(db, "ZMN4-P1")
+    _mk_vial_for(db, parent, 1, "zmn4role", kind="variance")  # only own-role vial: variance
+
+    hosts = _host_vials(db, parent, profile)
+    assert hosts == []
+
+
 def test_add_rider_profile_writes_rider_edge_and_seeds_host_vial(db):
     from lims_analyses.manage_native import add_profile_to_parent
     from sub_samples.custody import current_custody

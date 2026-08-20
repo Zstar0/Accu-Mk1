@@ -112,7 +112,8 @@ def _host_vials(db: Session, parent: LimsSample, profile: AnalysisProfile) -> li
     (priority order) that has ≥1 existing non-variance vial — mirroring
     resolve_catalog_fulfillment's hosts-before-riders walk; with no live
     ride-host vial it falls back to its own role's vials (the standalone
-    self-mint case). Variance replicates never host rider work."""
+    self-mint case). Variance replicates never host rider work — including
+    on the own-role fallback."""
     if profile.fulfillment_dim != "role" or not profile.fulfillment_role:
         return []
     vials = _vials_of(db, parent)
@@ -126,7 +127,8 @@ def _host_vials(db: Session, parent: LimsSample, profile: AnalysisProfile) -> li
                  if v.assignment_role == host_role and v.assignment_kind != "variance"]
         if hosts:
             return hosts
-    return [v for v in vials if v.assignment_role == profile.fulfillment_role]
+    return [v for v in vials
+            if v.assignment_role == profile.fulfillment_role and v.assignment_kind != "variance"]
 
 
 def native_profiles_for_parent(db: Session, *, parent: LimsSample) -> list[dict]:

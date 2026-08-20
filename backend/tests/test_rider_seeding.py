@@ -123,6 +123,34 @@ def test_rider_edge_member_seeds_on_hplc_vial(db, monkeypatch):
     assert persisted[0].analysis_service_id == fent_svc.id
 
 
+def test_rider_seeding_multi_vial_host_each_gets_own_row(db, monkeypatch):
+    """Plan-gap (Fix 4, S1): two core hplc vials on the SAME parent, each
+    carrying its own live rider edge for the same rider profile — seeding is
+    per-vial, so each vial must get exactly one rider row, not just the
+    first one seeded."""
+    fent_svc = _svc(db, "ZZM-FENT")
+    fent = _profile(db, "zzm_fent", "zzmfent", [fent_svc], rides=["hplc"])
+    parent, sub1 = _vial(db, "ZZM-0001", seq=1)
+    sub2 = LimsSubSample(sample_id=f"{parent.sample_id}-S02", vial_sequence=2,
+                         parent_sample_pk=parent.id, assignment_role="hplc",
+                         assignment_kind="core",
+                         external_lims_uid=f"{parent.sample_id}-S02-uid")
+    db.add(sub2)
+    db.commit()
+    _rider_edge(db, sub1, fent)
+    _rider_edge(db, sub2, fent)
+
+    rows1 = _seed_hplc(db, sub1, parent, monkeypatch)
+    rows2 = _seed_hplc(db, sub2, parent, monkeypatch)
+
+    assert [r.keyword for r in rows1] == ["ZZM-FENT"]
+    assert [r.keyword for r in rows2] == ["ZZM-FENT"]
+    persisted1 = db.query(LimsAnalysis).filter_by(lims_sub_sample_pk=sub1.id).all()
+    persisted2 = db.query(LimsAnalysis).filter_by(lims_sub_sample_pk=sub2.id).all()
+    assert len(persisted1) == 1 and persisted1[0].keyword == "ZZM-FENT"
+    assert len(persisted2) == 1 and persisted2[0].keyword == "ZZM-FENT"
+
+
 def test_rider_seeding_composes_with_mirror(db, monkeypatch):
     """Mirror rows first (Analytical-department keyword), rider member after —
     both on the vial, no interference."""
@@ -360,3 +388,37 @@ def test_sections_rider_profile_carries_host_vials(db, monkeypatch):
     assert rider_entry["host_vials"] == [sub.sample_id]
     host_entry = next(p for p in spot["profiles"] if p["relation"] == "host")
     assert "host_vials" not in host_entry
+
+
+def test_sections_rider_profile_no_edge_yields_empty_host_vials(db, monkeypatch):
+    """Plan-gap (Fix 4, S3): the rider profile is in `services` (so catalog
+    fulfillment surfaces it as a rider) but the vial carries no live rider
+    edge yet — rider_vials_by_pid.get(pid, []) must default host_vials to []
+    rather than omitting the key or raising."""
+    from sub_samples.service import _build_vial_plan_sections
+    dept = Department(name="ZZE Land Dept")
+    db.add(dept)
+    db.flush()
+    db.add(VialRole(code="zzehost", label="zzehost", department_id=dept.id,
+                    boxable=False, variance_eligible=False, sort_order=902,
+                    frozen=False, is_system=False))
+    db.flush()
+    host_svc = _svc(db, "ZZE-HOST")
+    rider_svc = _svc(db, "ZZE-RIDER")
+    _profile(db, "zze_host", "zzehost", [host_svc], vials=1)
+    _profile(db, "zze_rider", "zzerider", [rider_svc], rides=["zzehost"])
+    parent, sub = _vial(db, "ZZE-0001", role="zzehost")
+    # No _rider_edge call — the vial carries no live rider edge.
+
+    sections = _build_vial_plan_sections(
+        db,
+        {"zzehost": 1},
+        [{"sample_id": sub.sample_id, "is_parent": False, "vial_sequence": 1,
+          "assignment_role": "zzehost", "assignment_kind": "core"}],
+        {"zze_host": True, "zze_rider": True},
+    )
+
+    section = next(s for s in sections if s["department_name"] == "ZZE Land Dept")
+    spot = next(r for r in section["roles"] if r["code"] == "zzehost")
+    rider_entry = next(p for p in spot["profiles"] if p["relation"] == "rider")
+    assert rider_entry["host_vials"] == []
