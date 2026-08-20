@@ -174,6 +174,15 @@ const ALLOWED_TRANSITIONS: Record<string, readonly string[]> = {
   // server-side (cascade_parent_retest_to_sources) — that path is unaffected;
   // only the user-facing row/bulk option is removed.
   promoted: [],
+  // Native parent second sign-off surfaced by the read-flip main table
+  // (registry source, seam fix 2026-08-20): the canonical parent row
+  // awaiting Verify. Verify routes through the generic mk1 transition
+  // endpoint (the same call the Accu-Mk1 card's parent-native policy
+  // makes); the backend tees SENAITE-origin services' sign-off to the AR
+  // line, fail-closed. Retest is deliberately absent here — the generic
+  // endpoint tier-blocks parent retest; that verb lives on the card, which
+  // owns the destructive confirm + cascade.
+  parent_to_verify: ['verify'],
   // Retest-aware promote: a verified row can be retested (vial tier in Mk1;
   // SENAITE allows it on parent lines too).
   verified: ['retest'],
