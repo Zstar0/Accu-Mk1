@@ -1627,6 +1627,53 @@ def _drop_stale_role_rows(db: Session, *, sub: LimsSubSample, old_role: Optional
     return n
 
 
+def _drop_stale_rider_rows(db: Session, *, sub: LimsSubSample,
+                           prev_rider_pids: set) -> int:
+    """Rider companion to _drop_stale_role_rows (spec
+    2026-08-20-rider-vial-visibility): that cleanup is DEPARTMENT-keyed, so a
+    rider row whose service shares the new role's department survives a flip
+    even though its rider edge is gone. Drop this vial's pristine rows whose
+    service belongs to a profile that just LOST its rider edge and holds no
+    current edge of any relation. Same pristine predicate as
+    _drop_stale_role_rows — worked rows are never touched."""
+    if not prev_rider_pids:
+        return 0
+    from sub_samples.custody import current_custody
+
+    current_pids = {e.analysis_profile_id for e in current_custody(db, sub.id)}
+    stale_pids = prev_rider_pids - current_pids
+    if not stale_pids:
+        return 0
+    from models import AnalysisProfile, LimsAnalysis, LimsAnalysisTransition
+
+    svc_ids: set = set()
+    for pid in stale_pids:
+        prof = db.get(AnalysisProfile, pid)
+        if prof is not None:
+            svc_ids.update(s.id for s in prof.analysis_services)
+    if not svc_ids:
+        return 0
+    stale = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sub_sample_pk == sub.id,
+            LimsAnalysis.analysis_service_id.in_(svc_ids),
+            LimsAnalysis.review_state == "unassigned",
+            LimsAnalysis.result_value.is_(None),
+            LimsAnalysis.retest_of_id.is_(None),
+        )
+    ).scalars().all()
+    n = 0
+    for row in stale:
+        db.execute(delete(LimsAnalysisTransition).where(
+            LimsAnalysisTransition.analysis_id == row.id))
+        db.delete(row)
+        n += 1
+    if n:
+        db.flush()
+        log.info("sub_samples.rider_cleanup sub=%s dropped=%s", sub.sample_id, n)
+    return n
+
+
 def set_customer_remarks(db: Session, sample_id: str, remarks: str,
                          include: bool = True,
                          user_id: Optional[int] = None) -> dict:
@@ -1785,7 +1832,12 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
             # sample; removing it goes through Manage Analyses, not the order.
             from lims_analyses.manage_native import placeholder_profile_keys
             services_map = {**services_map, **placeholder_profile_keys(db, parent_row)}
-        from sub_samples.custody import write_custody_edges
+        from sub_samples.custody import current_custody, write_custody_edges
+        prev_rider_pids = {
+            e.analysis_profile_id
+            for e in current_custody(db, sub.id)
+            if e.relation == "rider"
+        }
         write_custody_edges(db, sub=sub, role=role, wp_services=services_map, user_id=user_id)
         # flush (not commit): makes the fresh custody rows visible to
         # in-transaction queries (Task 6's seeder) under production
@@ -1798,6 +1850,7 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
         # analyses. Runs in THIS transaction (before the commit=False seed and
         # the single db.commit() below), so flip + cleanup + seed are atomic.
         _drop_stale_role_rows(db, sub=sub, old_role=old_role, new_role=role, registry=registry)
+        _drop_stale_rider_rows(db, sub=sub, prev_rider_pids=prev_rider_pids)
         # Phase 2 (mk1-native-analyses): if this assignment transitioned the
         # vial into a real (non-XTRA) role, seed its lims_analyses rows.
         # Idempotent — re-running on an already-seeded vial is a no-op.

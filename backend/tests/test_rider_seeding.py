@@ -190,3 +190,88 @@ def test_host_edge_alone_adds_nothing_on_hplc(db, monkeypatch):
     rows = _seed_hplc(db, sub, parent, monkeypatch)
 
     assert rows == []
+
+
+# ─── rider-aware stale-row cleanup on role flip (S1b) ────────────────────────
+
+def _stub_seeder(monkeypatch):
+    monkeypatch.setattr("lims_analyses.seeder.seed_analyses_for_vial",
+                        lambda *a, **k: [])
+
+
+def _manual_row(db, sub, svc, result_value=None):
+    row = LimsAnalysis(lims_sub_sample_pk=sub.id, analysis_service_id=svc.id,
+                       keyword=svc.keyword, title=svc.title,
+                       review_state="unassigned", result_value=result_value)
+    db.add(row)
+    db.commit()
+    return row
+
+
+def test_flip_away_from_host_role_drops_pristine_rider_row(db, monkeypatch):
+    """zzchost -> zzcother: the rider edge disappears (rider rides zzchost
+    only), so its pristine row drops even though the department-keyed
+    cleanup can't see it (test roles carry department_id=None)."""
+    import sub_samples.service as sub_service
+    _stub_seeder(monkeypatch)
+    host_svc = _svc(db, "ZZC-HOST")
+    other_svc = _svc(db, "ZZC-OTHER")
+    rider_svc = _svc(db, "ZZC-RIDER")
+    _profile(db, "zzc_host", "zzchost", [host_svc], vials=1)
+    _profile(db, "zzc_other", "zzcother", [other_svc], vials=1)
+    rider = _profile(db, "zzc_rider", "zzcrider", [rider_svc], rides=["zzchost"])
+    parent, sub = _vial(db, "ZZC-0001", role=None, kind=None)
+    wp = {"zzc_host": True, "zzc_other": True, "zzc_rider": True}
+
+    sub_service.set_assignment_role(db, sub.sample_id, "zzchost", wp_services=wp, user_id=1)
+    assert {e.relation for e in _edges(db, sub)} == {"host", "rider"}
+    _manual_row(db, sub, rider_svc)  # what Task 1 would have seeded
+
+    sub_service.set_assignment_role(db, sub.sample_id, "zzcother", wp_services=wp, user_id=1)
+
+    kws = [r.keyword for r in db.query(LimsAnalysis).filter_by(lims_sub_sample_pk=sub.id).all()]
+    assert "ZZC-RIDER" not in kws
+
+
+def test_same_role_reassign_keeps_rider_row(db, monkeypatch):
+    import sub_samples.service as sub_service
+    _stub_seeder(monkeypatch)
+    host_svc = _svc(db, "ZZC2-HOST")
+    rider_svc = _svc(db, "ZZC2-RIDER")
+    _profile(db, "zzc2_host", "zzc2host", [host_svc], vials=1)
+    _profile(db, "zzc2_rider", "zzc2rider", [rider_svc], rides=["zzc2host"])
+    parent, sub = _vial(db, "ZZC2-0001", role=None, kind=None)
+    wp = {"zzc2_host": True, "zzc2_rider": True}
+
+    sub_service.set_assignment_role(db, sub.sample_id, "zzc2host", wp_services=wp, user_id=1)
+    _manual_row(db, sub, rider_svc)
+    sub_service.set_assignment_role(db, sub.sample_id, "zzc2host", wp_services=wp, user_id=1)
+
+    kws = [r.keyword for r in db.query(LimsAnalysis).filter_by(lims_sub_sample_pk=sub.id).all()]
+    assert "ZZC2-RIDER" in kws
+
+
+def test_worked_rider_row_is_never_dropped(db, monkeypatch):
+    import sub_samples.service as sub_service
+    _stub_seeder(monkeypatch)
+    host_svc = _svc(db, "ZZC3-HOST")
+    other_svc = _svc(db, "ZZC3-OTHER")
+    rider_svc = _svc(db, "ZZC3-RIDER")
+    _profile(db, "zzc3_host", "zzc3host", [host_svc], vials=1)
+    _profile(db, "zzc3_other", "zzc3other", [other_svc], vials=1)
+    _profile(db, "zzc3_rider", "zzc3rider", [rider_svc], rides=["zzc3host"])
+    parent, sub = _vial(db, "ZZC3-0001", role=None, kind=None)
+    wp = {"zzc3_host": True, "zzc3_other": True, "zzc3_rider": True}
+
+    sub_service.set_assignment_role(db, sub.sample_id, "zzc3host", wp_services=wp, user_id=1)
+    _manual_row(db, sub, rider_svc, result_value="0.5")  # worked
+
+    sub_service.set_assignment_role(db, sub.sample_id, "zzc3other", wp_services=wp, user_id=1)
+
+    kws = [r.keyword for r in db.query(LimsAnalysis).filter_by(lims_sub_sample_pk=sub.id).all()]
+    assert "ZZC3-RIDER" in kws
+
+
+def _edges(db, sub):
+    from sub_samples.custody import current_custody
+    return current_custody(db, sub.id)
