@@ -19117,6 +19117,7 @@ def list_worksheets(
                     "added_at": (it.added_at.isoformat() + "Z") if it.added_at else None,
                     "date_received": (it.date_received.isoformat() + "Z") if it.date_received else None,
                     "instrument_uid": it.instrument_uid,
+                    "instrument_id": it.instrument_id,
                     "assigned_analyst_id": it.assigned_analyst_id,
                     "assigned_analyst_email": item_analyst_email_map.get(it.assigned_analyst_id) if it.assigned_analyst_id else None,
                     "notes": it.notes,
@@ -19702,6 +19703,7 @@ async def reassign_worksheet_item_by_id(
 
 class WorksheetItemUpdate(BaseModel):
     instrument_uid: Optional[str] = None
+    instrument_id: Optional[int] = None
     prep_status: Optional[str] = None
 
 
@@ -19762,6 +19764,20 @@ async def update_worksheet_item(
                                 if not a.get("method"):
                                     a["method"] = resolved_method
                             item.analyses_json = json.dumps(analyses)
+
+    if "instrument_id" in data.model_fields_set:
+        # Distinguish "field sent" (incl. explicit null, which clears the FK)
+        # from "field omitted" (no-op) — instrument_id has no falsy-but-valid
+        # sentinel the way instrument_uid's "" does, so None must mean clear.
+        if data.instrument_id:
+            inst_row = db.execute(
+                select(Instrument).where(Instrument.id == data.instrument_id)
+            ).scalar_one_or_none()
+            if not inst_row:
+                raise HTTPException(400, "Instrument not found")
+            item.instrument_id = data.instrument_id
+        else:
+            item.instrument_id = None
 
     if data.prep_status is not None:
         allowed = {"ready", "in_progress", "complete"}

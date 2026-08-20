@@ -1698,6 +1698,10 @@ def _run_migrations():
         "ALTER TABLE instruments ADD COLUMN IF NOT EXISTS department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL",
         "ALTER TABLE instruments ADD COLUMN IF NOT EXISTS origin VARCHAR(20) NOT NULL DEFAULT 'mk1'",
         "UPDATE instruments SET origin = 'senaite' WHERE senaite_id IS NOT NULL AND origin = 'mk1'",
+        # --- Bench stamping (slice 2): local-instrument FK leg on worksheet items ---
+        # instrument_uid (above, on worksheet_items) stays the frozen SENAITE-uid
+        # leg for the HPLC lane (R0); this is the new local-FK leg — both may coexist.
+        "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS instrument_id INTEGER REFERENCES instruments(id) ON DELETE SET NULL",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

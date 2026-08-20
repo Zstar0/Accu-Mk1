@@ -985,6 +985,10 @@ class WorksheetItem(Base):
     priority: Mapped[str] = mapped_column(String(20), default="normal", nullable=False)
     assigned_analyst_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     instrument_uid: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # Slice 2 (bench stamping): local-instrument leg. instrument_uid above is
+    # the frozen SENAITE-uid leg for the HPLC lane (R0) — both may coexist.
+    instrument_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("instruments.id", ondelete="SET NULL"), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     analyses_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON array of {title, keyword, peptide_name, method}
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
