@@ -453,3 +453,16 @@ def test_attachment_upload_writes_change_log(client, db_session, tmp_path, monke
         CatalogChangeLog.entity_pk == att["id"])).scalars().all()
     assert any(l.action == "create" and l.details["changed"]["filename"]["after"] == "audited.pdf"
               for l in logs)
+
+
+def test_instrument_crud_audited(client, db_session):
+    from models import CatalogChangeLog
+    iid = client.post("/instruments", json={"name": "Audit-Inst"}).json()["id"]
+    client.patch(f"/instruments/{iid}", json={"brand": "Agilent"})
+    logs = db_session.execute(select(CatalogChangeLog).where(
+        CatalogChangeLog.entity_type == "instrument",
+        CatalogChangeLog.entity_pk == iid)).scalars().all()
+    actions = {l.action for l in logs}
+    assert actions == {"create", "update"}
+    upd = next(l for l in logs if l.action == "update")
+    assert upd.details["changed"]["brand"]["after"] == "Agilent"

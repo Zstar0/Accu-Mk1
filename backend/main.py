@@ -2659,6 +2659,11 @@ METHOD_LOG_FIELDS = ("name", "code", "technique", "reference", "department_id",
 # (Task 5) — the row's identity + size, snapshotted at upload/delete time.
 METHOD_ATTACHMENT_LOG_FIELDS = ("filename", "content_type", "size_bytes")
 
+# catalog/change_log.py log_create/apply_and_log field list for instrument CRUD
+# (Task 6) — the identity + lifecycle columns worth an audit snapshot.
+INSTRUMENT_LOG_FIELDS = ("name", "instrument_type", "brand", "model", "department_id",
+                         "active", "origin")
+
 # Spec-3 shadow-compare guard rails, enforced at the profile POST/PATCH edge
 # (not a DB constraint, mirroring COA_ARCHETYPES above):
 #   - The three legacy fulfillment_role values are demand-map keys derive_
@@ -3311,7 +3316,7 @@ async def sync_instruments(db: Session = Depends(get_db), _current_user=Depends(
 
 @app.post("/instruments", response_model=InstrumentResponse, status_code=201)
 async def create_instrument(data: InstrumentCreate, db: Session = Depends(get_db),
-                            _current_user=Depends(get_current_user)):
+                            current_user=Depends(get_current_user)):
     """Local instrument registration (R0: never carries SENAITE identity)."""
     if db.execute(select(Instrument).where(Instrument.name == data.name)).scalar_one_or_none():
         raise HTTPException(400, f"Instrument named '{data.name}' already exists")
@@ -3321,6 +3326,12 @@ async def create_instrument(data: InstrumentCreate, db: Session = Depends(get_db
             raise HTTPException(400, f"Department {data.department_id} not found")
     inst = Instrument(**data.model_dump())
     db.add(inst)
+    db.flush()
+
+    from catalog.change_log import log_create
+    log_create(db, inst, INSTRUMENT_LOG_FIELDS, entity_type="instrument", entity_pk=inst.id,
+              user_id=getattr(current_user, "id", None))
+
     db.commit()
     db.refresh(inst)
     return InstrumentResponse.model_validate(inst)
@@ -3329,7 +3340,7 @@ async def create_instrument(data: InstrumentCreate, db: Session = Depends(get_db
 @app.patch("/instruments/{instrument_id}", response_model=InstrumentResponse)
 async def update_instrument(instrument_id: int, data: InstrumentUpdate,
                             db: Session = Depends(get_db),
-                            _current_user=Depends(get_current_user)):
+                            current_user=Depends(get_current_user)):
     """Update an instrument."""
     inst = db.get(Instrument, instrument_id)
     if not inst:
@@ -3347,8 +3358,9 @@ async def update_instrument(instrument_id: int, data: InstrumentUpdate,
         from models import Department
         if not db.get(Department, fields["department_id"]):
             raise HTTPException(400, f"Department {fields['department_id']} not found")
-    for k, v in fields.items():
-        setattr(inst, k, v)
+    from catalog.change_log import apply_and_log
+    apply_and_log(db, inst, fields, entity_type="instrument", entity_pk=inst.id,
+                  user_id=getattr(current_user, "id", None))
     db.commit()
     db.refresh(inst)
     return InstrumentResponse.model_validate(inst)
