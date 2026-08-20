@@ -4054,6 +4054,14 @@ async def delete_method(method_id: int, db: Session = Depends(get_db), _current_
     if not method:
         raise HTTPException(404, f"Method {method_id} not found")
 
+    from models import LimsAnalysis
+    ref = db.execute(select(func.count()).select_from(LimsAnalysis)
+                     .where(LimsAnalysis.method_id == method_id)).scalar()
+    if ref:
+        raise HTTPException(
+            409, f"Method '{method.name}' is referenced by {ref} analyses and is part "
+                 f"of their traceability record — deactivate it instead of deleting")
+
     db.delete(method)
     db.commit()
     return {"message": f"Method '{method.name}' deleted"}

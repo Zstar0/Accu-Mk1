@@ -198,3 +198,25 @@ def test_default_method_id_fail_open(client, db_session):
     rows = client.get("/analysis-services").json()
     row = next(s for s in rows if s["id"] == lead.id)
     assert row["default_method_id"] is None  # fail-open (§4.2)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Task 4 — DELETE referential guard: refuse deletion if analyses reference method
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def test_delete_method_referenced_by_analysis_409(client, db_session):
+    from models import LimsAnalysis, LimsSample
+    mid = _mk_method(client, "ICP-MS D")
+    svc = _svc(db_session, "CADMIUM-PPM")
+    parent = LimsSample(sample_id="P-9001")
+    db_session.add(parent); db_session.flush()
+    db_session.add(LimsAnalysis(lims_sample_pk=parent.id, analysis_service_id=svc.id,
+                                keyword="CADMIUM-PPM", title="Cadmium",
+                                review_state="verified", provenance="canonical",
+                                method_id=mid))
+    db_session.commit()
+    r = client.delete(f"/hplc/methods/{mid}")
+    assert r.status_code == 409
+    assert "deactivate" in r.json()["detail"].lower()
+    assert db_session.get(HplcMethod, mid) is not None
