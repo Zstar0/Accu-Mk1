@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { HplcMethod, MethodAttachment } from '@/lib/api'
 
@@ -232,8 +232,13 @@ describe('MethodPanel — lifecycle UI', () => {
     await waitFor(() => expect(onUpdated).toHaveBeenCalled())
   })
 
-  it('revision history renders the chain and clicking a row selects it', async () => {
-    const predecessor = {
+  it('revision history shows the full family, including sibling drafts off one source (R-P3-5)', async () => {
+    // R-P3-2: two drafts independently new-revision'd off the SAME source
+    // are both legitimately activatable — siblings, not a linear chain. A
+    // supersedes_id chain-walk only follows one successor per node and
+    // silently drops the second one; the family view (grouped by name)
+    // must surface both.
+    const source = {
       ...ACTIVE_M,
       id: 9,
       revision: 1,
@@ -241,25 +246,46 @@ describe('MethodPanel — lifecycle UI', () => {
       supersedes_id: null,
       active: false,
     } as HplcMethod
-    const successor = {
+    const current = {
+      ...ACTIVE_M,
+      id: 20,
+      revision: 2,
+      status: 'draft',
+      supersedes_id: 9,
+      active: false,
+    } as HplcMethod
+    const sibling = {
       ...ACTIVE_M,
       id: 30,
       revision: 3,
       status: 'draft',
-      supersedes_id: 1,
+      supersedes_id: 9,
       active: false,
     } as HplcMethod
-    vi.mocked(getMethods).mockResolvedValue([predecessor, successor])
+    vi.mocked(getMethods).mockResolvedValue([source, current, sibling])
     const onSelectMethod = vi.fn()
     render(
       <MethodPanel
-        method={ACTIVE_M}
+        method={current}
         onUpdated={vi.fn()}
         onSelectMethod={onSelectMethod}
       />
     )
-    const row = await screen.findByRole('button', { name: /rev 3/i })
-    await userEvent.click(row)
+
+    // All three family members are listed, including the current row itself.
+    const sourceRow = await screen.findByRole('button', { name: /rev 1/i })
+    const currentRow = screen.getByRole('button', { name: /rev 2/i })
+    const siblingRow = screen.getByRole('button', { name: /rev 3/i })
+    expect(sourceRow).toBeInTheDocument()
+    expect(siblingRow).toBeInTheDocument()
+
+    // The current row is visually marked and isn't itself click-through.
+    expect(currentRow).toBeDisabled()
+    expect(within(currentRow).getByText(/current/i)).toBeInTheDocument()
+
+    // The sibling is a true sibling (not a linear successor of `current`)
+    // — exactly what the old chain-walk dropped — and is still click-through.
+    await userEvent.click(siblingRow)
     expect(onSelectMethod).toHaveBeenCalledWith(30)
   })
 

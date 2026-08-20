@@ -86,9 +86,14 @@ export function MethodPanel({ method, onUpdated, onSelectMethod }: MethodPanelPr
     method.supersedes_id != null
       ? allMethods.find(m => m.id === method.supersedes_id) ?? null
       : null
-  // The current method's own status is already visible in the header badge —
-  // the history list only needs its other revisions.
-  const otherRevisions = buildRevisionChain(method, allMethods).filter(m => m.id !== method.id)
+  // R-P3-5: the family, not the chain. A supersedes_id walk only follows one
+  // successor per node, so it silently drops sibling drafts minted
+  // independently off the same source (R-P3-2 — two drafts off one source,
+  // both activatable). Every loaded row sharing this method's name IS part
+  // of its revision family regardless of how many branches split off any
+  // one predecessor. Rendered only when there's more than one member —
+  // solo, there's nothing to show and nothing to mark "current" among.
+  const revisionFamily = buildRevisionFamily(method, allMethods)
 
   const loadPeptides = useCallback(() => {
     getPeptides().then(setAllPeptides).catch(console.error)
@@ -823,24 +828,35 @@ export function MethodPanel({ method, onUpdated, onSelectMethod }: MethodPanelPr
           <History className="h-4 w-4 text-muted-foreground" />
           <h4 className="text-sm font-semibold text-muted-foreground">Revision History</h4>
         </div>
-        {otherRevisions.length === 0 ? (
+        {revisionFamily.length <= 1 ? (
           <p className="text-sm text-muted-foreground">No other revisions.</p>
         ) : (
           <div className="space-y-1.5">
-            {otherRevisions.map(rev => (
-              <button
-                key={rev.id}
-                type="button"
-                onClick={() => onSelectMethod?.(rev.id)}
-                className="flex w-full items-center gap-2 rounded-md border bg-muted/50 px-2.5 py-1.5 text-sm text-left transition-colors hover:bg-muted"
-              >
-                <span className="font-mono">rev {rev.revision}</span>
-                <StatusBadge status={rev.status} />
-                <span className="ml-auto text-xs text-muted-foreground">
-                  {formatShortDate(rev.activated_at)}
-                </span>
-              </button>
-            ))}
+            {revisionFamily.map(rev => {
+              const isCurrent = rev.id === method.id
+              return (
+                <button
+                  key={rev.id}
+                  type="button"
+                  disabled={isCurrent}
+                  onClick={() => onSelectMethod?.(rev.id)}
+                  className={`flex w-full items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm text-left transition-colors ${
+                    isCurrent
+                      ? 'border-primary/40 bg-primary/5 cursor-default'
+                      : 'bg-muted/50 hover:bg-muted'
+                  }`}
+                >
+                  <span className="font-mono">rev {rev.revision}</span>
+                  <StatusBadge status={rev.status} />
+                  {isCurrent && (
+                    <span className="text-xs font-medium text-primary">Current</span>
+                  )}
+                  <span className="ml-auto text-xs text-muted-foreground">
+                    {formatShortDate(rev.activated_at)}
+                  </span>
+                </button>
+              )
+            })}
           </div>
         )}
       </div>
@@ -942,34 +958,22 @@ export function StatusBadge({ status }: { status: HplcMethod['status'] }) {
   )
 }
 
-// Walks the loaded methods list both directions from `target` via
-// supersedes_id: predecessors by following the chain up, successors by
-// finding whichever row (if any) names `target` as its own supersedes_id.
+// R-P3-5 (supersedes the original supersedes_id chain-walk): identity, not
+// lineage. Two drafts independently new-revision'd off the SAME source
+// (R-P3-2 — both are legitimately activatable) are siblings, not a linear
+// chain — a predecessor/successor walk only follows one `supersedes_id`
+// match per node and silently drops the second one. Every loaded row
+// sharing `target`'s name is part of its revision family, full stop.
 // `target` itself is always included even when it hasn't shown up yet in
-// `all` (e.g. the initial getMethods() fetch hasn't resolved).
-function buildRevisionChain(target: HplcMethod, all: HplcMethod[]): HplcMethod[] {
-  const chain: HplcMethod[] = [target]
-  const seen = new Set<number>([target.id])
-
-  let cur = target
-  while (cur.supersedes_id != null && !seen.has(cur.supersedes_id)) {
-    const pred = all.find(m => m.id === cur.supersedes_id)
-    if (!pred) break
-    chain.unshift(pred)
-    seen.add(pred.id)
-    cur = pred
+// `all` (e.g. the initial getMethods() fetch hasn't resolved), deduped by
+// id, sorted newest-revision-first.
+function buildRevisionFamily(target: HplcMethod, all: HplcMethod[]): HplcMethod[] {
+  const byId = new Map<number, HplcMethod>()
+  byId.set(target.id, target)
+  for (const m of all) {
+    if (m.name === target.name) byId.set(m.id, m)
   }
-
-  cur = target
-  for (;;) {
-    const succ = all.find(m => m.supersedes_id === cur.id && !seen.has(m.id))
-    if (!succ) break
-    chain.push(succ)
-    seen.add(succ.id)
-    cur = succ
-  }
-
-  return chain
+  return Array.from(byId.values()).sort((a, b) => b.revision - a.revision)
 }
 
 function confirmActionTitle(action: ConfirmAction): string {
