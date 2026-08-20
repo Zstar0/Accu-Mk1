@@ -682,8 +682,6 @@ def test_method_instrument_proxy_preserves_native_mi(
        set — the final assert would pass before AND after the fix, never
        observing a real RED.
     """
-    from lims_analyses import service as la_service
-
     parent, svc = seed_parent_and_service
     proxy_method, proxy_instrument = seed_method_instrument
     native_method, native_instrument = seed_second_method_instrument
@@ -706,12 +704,17 @@ def test_method_instrument_proxy_preserves_native_mi(
         lims_sample_pk=parent.id, provenance="shadow"
     ).one()
 
-    # Native write (the path that must win forever).
-    la_service.set_method_instrument(
-        db, analysis_id=row.id,
-        method_id=native_method.id, instrument_id=native_instrument.id,
-        user_id=None,
-    )
+    # Native write (the path that must win forever). Direct field assignment
+    # rather than set_method_instrument: Task 2 (2026-08-19 bench-stamping)
+    # added a review_state guard (R7) to that service fn, and a shadow row's
+    # sentinel 'senaite_mirror' state is deliberately in the locked list —
+    # this test's subject is the A4-proxy mirror's M/I-blindness, not
+    # set_method_instrument itself, so seeding the row directly is the
+    # correct arrange step (same idiom as test_amendment_audit.py's
+    # test_reset_captures_cleared_fields).
+    row.method_id = native_method.id
+    row.instrument_id = native_instrument.id
+    db.commit()
 
     # Second proxy call carries DIFFERENT resolvable uids.
     proxy = _mock_senaite_update(

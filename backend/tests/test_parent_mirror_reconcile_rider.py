@@ -196,7 +196,6 @@ def test_rider_tick_preserves_native_mi_on_second_pass(
     but this proves the tick() plumbing (env gate, window, checkpoint
     threading) doesn't accidentally bypass or duplicate that behavior."""
     monkeypatch.setenv(ENV_VAR, "true")
-    from lims_analyses import service as la_service
 
     svc_a, _svc_b = two_analysis_services
     parent = LimsSample(sample_id=TEST_SAMPLE_ID, sample_type="x",
@@ -223,10 +222,17 @@ def test_rider_tick_preserves_native_mi_on_second_pass(
     row = db.query(LimsAnalysis).filter_by(
         lims_sample_pk=parent.id, analysis_service_id=svc_a.id, provenance="shadow"
     ).one()
-    la_service.set_method_instrument(
-        db, analysis_id=row.id,
-        method_id=None, instrument_id=seeded_instrument.id, user_id=None,
-    )
+    # Seed the shadow row's "natively-set M/I" directly on the ORM object
+    # (Task 2, 2026-08-19 bench-stamping: set_method_instrument now guards
+    # review_state to STAMPABLE_STATES (R7) and a shadow row's sentinel
+    # 'senaite_mirror' state is deliberately excluded — the service call
+    # would 409-equivalent here. This test's subject is the mirror/backfill
+    # core's M/I-blindness, not set_method_instrument itself, so a direct
+    # field write is the correct arrange step — same idiom as
+    # test_amendment_audit.py's test_reset_captures_cleared_fields).
+    row.method_id = None
+    row.instrument_id = seeded_instrument.id
+    db.commit()
 
     # Resume gotcha (same as the backfill suite's own M/I test): the first
     # tick already advanced this checkpoint past parent.id, so rewind it

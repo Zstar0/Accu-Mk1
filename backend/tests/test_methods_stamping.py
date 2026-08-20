@@ -116,6 +116,52 @@ def test_worksheet_item_instrument_id_omitted_is_noop(client, db_session):
     assert item["instrument_id"] == inst.id
 
 
+_SEQ = iter(range(9100, 9999))
+
+
+def _mk_vial_row(db, *, state="assigned", keyword="LEAD-PPM"):
+    from models import AnalysisService, LimsAnalysis, LimsSample, LimsSubSample
+    n = next(_SEQ)  # unique sample ids per call — LimsSample.sample_id is UNIQUE
+    parent = LimsSample(sample_id=f"P-{n}"); db.add(parent); db.flush()
+    vial = LimsSubSample(parent_sample_pk=parent.id, sample_id=f"P-{n}-S01",
+                         external_lims_uid=f"u-{n}", vial_sequence=1)
+    db.add(vial); db.flush()
+    svc = AnalysisService(title="Lead", keyword=keyword, origin="mk1", active=True,
+                          variance_capable=False)
+    db.add(svc); db.flush()
+    row = LimsAnalysis(lims_sub_sample_pk=vial.id, analysis_service_id=svc.id,
+                       keyword=keyword, title="Lead", review_state=state,
+                       provenance="canonical")
+    db.add(row); db.commit()
+    return row
+
+
+def test_stamp_guard_blocks_verified(db_session):
+    from lims_analyses import service as svc_mod
+    row = _mk_vial_row(db_session, state="verified")
+    with pytest.raises(svc_mod.StateLockedError):
+        svc_mod.set_method_instrument(db_session, analysis_id=row.id,
+                                      method_id=None, instrument_id=None, user_id=None)
+
+
+def test_stamp_allows_prep_bridge_states(db_session):
+    """prep_bridge stamps rows in early states — the guard must not break it."""
+    from lims_analyses import service as svc_mod
+    for state in ("unassigned", "assigned", "to_be_verified"):
+        row = _mk_vial_row(db_session, state=state, keyword=f"K-{state.upper()}")
+        got = svc_mod.set_method_instrument(db_session, analysis_id=row.id,
+                                            method_id=None, instrument_id=1, user_id=None)
+        assert got.instrument_id == 1
+
+
+def test_patch_method_instrument_409_on_published(client, db_session):
+    row = _mk_vial_row(db_session, state="published")
+    r = client.patch(f"/api/lims-analyses/{row.id}/method-instrument",
+                     json={"method_id": None, "instrument_id": 1})
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "state_locked"
+
+
 def test_worksheet_item_instrument_uid_leg_untouched(client, db_session):
     """R0: instrument_uid (SENAITE leg) and instrument_id (local FK leg) are
     independent — setting one must not disturb the other."""

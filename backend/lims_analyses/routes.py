@@ -70,6 +70,14 @@ def _handle_service_error(e: Exception) -> HTTPException:
                 "message": str(e),
             },
         )
+    if isinstance(e, service.StateLockedError):
+        return HTTPException(
+            status_code=409,
+            detail={
+                "code": "state_locked",
+                "review_state": e.review_state,
+            },
+        )
     if isinstance(e, InvalidTransitionError):
         return HTTPException(
             status_code=409,
