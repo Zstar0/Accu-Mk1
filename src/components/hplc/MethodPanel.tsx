@@ -114,7 +114,6 @@ export function MethodPanel({ method, onUpdated }: MethodPanelProps) {
     try {
       await updateMethod(method.id, {
         name: name.trim(),
-        senaite_id: senaiteId.trim() || null,
         instrument_ids: instrumentIds,
         size_peptide: sizePeptide.trim() || null,
         starting_organic_pct: startingOrganicPct ? parseFloat(startingOrganicPct) : null,

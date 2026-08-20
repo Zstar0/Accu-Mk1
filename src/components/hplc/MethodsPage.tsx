@@ -543,7 +543,6 @@ function AddMethodForm({
     try {
       await createMethod({
         name: name.trim(),
-        senaite_id: senaiteId.trim() || null,
         instrument_ids: instrumentId ? [instrumentId] : [],
       })
       onSaved()
