@@ -2,6 +2,7 @@
 Harness: in-memory SQLite, same idiom as tests/test_manage_native_routes.py."""
 import pytest
 from sqlalchemy import create_engine, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -258,3 +259,36 @@ def test_patch_instrument_explicit_null_400(client, db_session):
     r = client.patch(f"/instruments/{iid}", json={"active": None})
     assert r.status_code == 400
     assert "active" in r.json()["detail"].lower()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Final-review fix wave — M-2/#6: DB-level proof that the one-default-per-service
+# partial unique index (uq_method_service_default, models.py method_services
+# Table) is actually enforced by SQLite, not just the app-level 400 in
+# put_method_services. Same Index idiom (postgresql_where/sqlite_where) backs
+# the HplcMethod.code uniqueness index added for M-2, so this also proves that
+# style works under the in-memory SQLite harness.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def test_method_services_default_partial_index_enforced_in_sqlite(db_session):
+    lead = _svc(db_session, "LEAD-PPM")
+    m1 = HplcMethod(name="ICP-MS Default A", origin="mk1", active=True)
+    m2 = HplcMethod(name="ICP-MS Default B", origin="mk1", active=True)
+    db_session.add_all([m1, m2])
+    db_session.flush()
+
+    db_session.execute(method_services.insert().values(
+        method_id=m1.id, analysis_service_id=lead.id, is_default=True))
+    db_session.commit()
+
+    with pytest.raises(IntegrityError):
+        db_session.execute(method_services.insert().values(
+            method_id=m2.id, analysis_service_id=lead.id, is_default=True))
+        db_session.commit()
+    db_session.rollback()
+
+    # first row is untouched; no second default was ever persisted
+    rows = db_session.execute(select(method_services)).all()
+    assert len(rows) == 1
+    assert rows[0].method_id == m1.id and rows[0].is_default is True

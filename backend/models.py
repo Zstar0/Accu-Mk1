@@ -565,11 +565,18 @@ method_services = Table(
 
 class HplcMethod(Base):
     """
-    HPLC analytical method definition.
-    Stores instrument settings and run parameters that apply to groups of peptides.
-    Methods are sourced from Senaite but metadata is stored locally.
+    Analytical method definition for any technique (HPLC, ICP-MS, KF, PCR, etc.).
+    The HPLC-specific run parameters below (size_peptide, starting_organic_pct,
+    temperature_mct_c, dissolution) only apply when technique == 'HPLC'.
+    Legacy rows may carry clone-time senaite_id provenance; every new row is
+    Mk1-native (R0) — see the origin column below.
     """
     __tablename__ = "hplc_methods"
+    __table_args__ = (
+        Index("uq_hplc_methods_code", "code", unique=True,
+              postgresql_where=text("code IS NOT NULL"),
+              sqlite_where=text("code IS NOT NULL")),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)

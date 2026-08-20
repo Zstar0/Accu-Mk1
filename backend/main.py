@@ -3274,6 +3274,7 @@ async def sync_instruments(db: Session = Depends(get_db), _current_user=Depends(
             instrument_type=inst_type,
             brand=brand,
             model=model,
+            origin="senaite",
         )
         db.add(instrument)
         created += 1
@@ -4165,7 +4166,7 @@ async def get_method_services(method_id: int, db: Session = Depends(get_db),
 @app.put("/hplc/methods/{method_id}/services", response_model=list[MethodServiceOut])
 async def put_method_services(method_id: int, links: list[MethodServiceLinkIn],
                               db: Session = Depends(get_db),
-                              current_user=Depends(get_current_user)):
+                              _current_user=Depends(get_current_user)):
     """Replace-set semantics (profile-members precedent). One default per
     service across ALL methods — 400 names the conflicting method; the
     partial unique index is the backstop."""
@@ -4191,22 +4192,24 @@ async def put_method_services(method_id: int, links: list[MethodServiceLinkIn],
                 raise HTTPException(
                     400, f"service {ln.analysis_service_id} already has default method "
                          f"'{conflict}' — clear that default first")
-    db.execute(method_services.delete().where(method_services.c.method_id == method_id))
-    for ln in links:
-        db.execute(method_services.insert().values(
-            method_id=method_id, analysis_service_id=ln.analysis_service_id,
-            is_default=ln.is_default))
     try:
-        db.flush()
+        db.execute(method_services.delete().where(method_services.c.method_id == method_id))
+        for ln in links:
+            db.execute(method_services.insert().values(
+                method_id=method_id, analysis_service_id=ln.analysis_service_id,
+                is_default=ln.is_default))
+        db.commit()
     except IntegrityError:
         # The app-level 400 check above is TOCTOU-racy against a concurrent PUT
         # on another method claiming the same default; the partial unique index
         # (uq_method_service_default) is the real backstop (create_service_spec/
-        # patch_service_spec precedent, ~3636/~3691).
+        # patch_service_spec precedent, ~3636/~3691). The delete + insert loop +
+        # commit all live inside this try so a mid-batch IntegrityError actually
+        # rolls back the whole replace-set instead of leaving a partial delete
+        # committed underneath an inert except clause.
         db.rollback()
         raise HTTPException(
             409, "default conflict — another method claimed a default for one of these services concurrently")
-    db.commit()
     return _method_service_rows(db, method_id)
 
 
