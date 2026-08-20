@@ -223,6 +223,11 @@ def _hm_world(client, db):
     from models import (AnalysisService, Instrument, LimsAnalysis, LimsSample,
                         LimsSubSample, Worksheet, WorksheetItem, instrument_methods)
     mid = client.post("/hplc/methods", json={"name": "ICP-MS F", "technique": "ICP-MS"}).json()["id"]
+    # Methods controlled documents (slice 3, Task 2+3): creates mint drafts
+    # now (active=False) — the bulk apply-method-instrument route 400s on an
+    # inactive method (main.py, "Method not found or inactive"), so every
+    # _hm_world-derived happy path needs this method activated first.
+    client.post(f"/hplc/methods/{mid}/activate")
     inst = Instrument(name="7900F", origin="mk1", active=True)
     db.add(inst); db.flush()
     db.execute(instrument_methods.insert().values(instrument_id=inst.id, method_id=mid))

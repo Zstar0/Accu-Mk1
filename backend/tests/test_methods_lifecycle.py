@@ -1,11 +1,13 @@
 """Methods controlled documents (slice 3) — Task 1: lifecycle columns +
-revision-aware uniqueness. Harness copied verbatim from
-tests/test_methods_catalog.py (in-memory SQLite, same idiom as
-tests/test_manage_native_routes.py).
+revision-aware uniqueness. Task 2+3 (combined per ruling R-P3-0): drafts at
+create, immutability + audited edits, new-revision + activate verbs. Harness
+copied verbatim from tests/test_methods_catalog.py (in-memory SQLite, same
+idiom as tests/test_manage_native_routes.py).
 
-Scope note: create_method still mints active=True/status='active' by default
-in this task — the draft-mint flip is a later task. These tests exercise the
-schema directly via the ORM, as the brief's own Step 1 test does.
+Scope note (Task 1 only): the first block of tests below exercises the
+schema directly via the ORM — create_method still minted active=True/
+status='active' at that point. Task 2 flipped creates to drafts; the
+route-level tests further down assume that.
 """
 import pytest
 from sqlalchemy import create_engine, select
@@ -36,6 +38,45 @@ def _svc(db, kw):
     db.add(s)
     db.flush()
     return s
+
+
+def _client(db_session, admin=True):
+    """Route-level TestClient idiom, copied verbatim from
+    tests/test_methods_catalog.py — wires client-issued requests and direct
+    db_session queries onto the same connection."""
+    from unittest.mock import MagicMock
+
+    from fastapi.testclient import TestClient
+
+    from auth import get_current_user
+    from database import get_db
+    from main import app
+
+    def _override_get_db():
+        yield db_session
+
+    prev_db = app.dependency_overrides.get(get_db)
+    prev_user = app.dependency_overrides.get(get_current_user)
+    app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_current_user] = lambda: MagicMock(
+        id=1, role="admin" if admin else "standard", email="admin@test")
+
+    tc = TestClient(app)
+    yield tc
+
+    if prev_db is None:
+        app.dependency_overrides.pop(get_db, None)
+    else:
+        app.dependency_overrides[get_db] = prev_db
+    if prev_user is None:
+        app.dependency_overrides.pop(get_current_user, None)
+    else:
+        app.dependency_overrides[get_current_user] = prev_user
+
+
+@pytest.fixture
+def client(db_session):
+    yield from _client(db_session, admin=True)
 
 
 def test_lifecycle_columns_and_same_name_revisions(db_session):
@@ -121,3 +162,103 @@ def test_null_code_rows_unconstrained_by_code_indexes(db_session):
 
     rows = db_session.execute(select(HplcMethod).where(HplcMethod.code.is_(None))).scalars().all()
     assert len(rows) == 2
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Task 2 — PUT rework: immutability + audited edits + no direct `active`
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def test_create_mints_draft(client, db_session):
+    b = client.post("/hplc/methods", json={"name": "KF", "technique": "KF"}).json()
+    assert b["status"] == "draft" and b["active"] is False and b["revision"] == 1
+
+
+def test_active_not_settable_via_put(client, db_session):
+    mid = client.post("/hplc/methods", json={"name": "KF3"}).json()["id"]
+    assert client.put(f"/hplc/methods/{mid}", json={"active": False}).status_code == 400
+
+
+def test_put_writes_change_log(client, db_session):
+    from models import CatalogChangeLog
+    mid = client.post("/hplc/methods", json={"name": "KF4"}).json()["id"]
+    client.put(f"/hplc/methods/{mid}", json={"notes": "x"})
+    logs = db_session.execute(select(CatalogChangeLog).where(
+        CatalogChangeLog.entity_type == "method")).scalars().all()
+    assert any(l.action == "update" and "notes" in l.details["changed"] for l in logs)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Task 3 — new-revision + activate verbs (also covers Task 2's locked-field
+# tests, which need `activate` to exist — see task-2-brief's locking-gate note)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def test_locked_field_edit_409_names_fields(client, db_session):
+    mid = client.post("/hplc/methods", json={"name": "KF-L", "technique": "KF"}).json()["id"]
+    client.post(f"/hplc/methods/{mid}/activate")
+    r = client.put(f"/hplc/methods/{mid}", json={"procedure_summary": "changed"})
+    assert r.status_code == 409
+    assert "procedure_summary" in r.json()["detail"]
+
+
+def test_notes_and_department_stay_editable_when_locked(client, db_session):
+    mid = client.post("/hplc/methods", json={"name": "KF-L2"}).json()["id"]
+    client.post(f"/hplc/methods/{mid}/activate")
+    r = client.put(f"/hplc/methods/{mid}", json={"notes": "bench tip"})
+    assert r.status_code == 200 and r.json()["notes"] == "bench tip"
+
+
+def _icp_world(client, db):
+    lead = _svc(db, "LEAD-PPM"); db.commit()
+    mid = client.post("/hplc/methods", json={"name": "ICP-MS G", "code": "AM-G-1"}).json()["id"]
+    client.post(f"/hplc/methods/{mid}/activate")
+    client.put(f"/hplc/methods/{mid}/services",
+               json=[{"analysis_service_id": lead.id, "is_default": True}])
+    return mid, lead
+
+
+def test_new_revision_clones_without_defaults_or_senaite(client, db_session):
+    mid, lead = _icp_world(client, db_session)
+    r = client.post(f"/hplc/methods/{mid}/new-revision")
+    assert r.status_code == 201
+    d = r.json()
+    assert d["status"] == "draft" and d["revision"] == 2 and d["supersedes_id"] == mid
+    assert d["senaite_id"] is None
+    links = client.get(f"/hplc/methods/{d['id']}/services").json()
+    assert links[0]["analysis_service_id"] == lead.id and links[0]["is_default"] is False
+
+
+def test_activate_moves_defaults_and_retires_predecessor(client, db_session):
+    mid, lead = _icp_world(client, db_session)
+    rev2 = client.post(f"/hplc/methods/{mid}/new-revision").json()["id"]
+    r = client.post(f"/hplc/methods/{rev2}/activate")
+    assert r.status_code == 200
+    old = client.get("/hplc/methods").json()
+    old_row = next(m for m in old if m["id"] == mid)
+    new_row = next(m for m in old if m["id"] == rev2)
+    assert old_row["status"] == "retired" and old_row["active"] is False
+    assert new_row["status"] == "active" and new_row["active"] is True
+    # default moved (R11)
+    svc_rows = client.get("/analysis-services").json()
+    assert next(s for s in svc_rows if s["id"] == lead.id)["default_method_id"] == rev2
+
+
+@pytest.mark.skip(reason="retire lands in the next task (Task 4) — this needs "
+                         "POST /hplc/methods/{id}/retire, which doesn't exist yet")
+def test_activate_after_manual_retire_still_moves_defaults(client, db_session):
+    """R11 amendment: defaults come from the SUPERSEDED row regardless of status."""
+    mid, lead = _icp_world(client, db_session)
+    rev2 = client.post(f"/hplc/methods/{mid}/new-revision").json()["id"]
+    client.post(f"/hplc/methods/{mid}/retire")   # Task 4 provides retire; ordering as Task 2's note
+    r = client.post(f"/hplc/methods/{rev2}/activate")
+    assert r.status_code == 200
+    svc_rows = client.get("/analysis-services").json()
+    assert next(s for s in svc_rows if s["id"] == lead.id)["default_method_id"] == rev2
+
+
+def test_drafts_invisible_to_default_resolution(client, db_session):
+    mid, lead = _icp_world(client, db_session)
+    client.post(f"/hplc/methods/{mid}/new-revision")   # draft exists
+    svc_rows = client.get("/analysis-services").json()
+    assert next(s for s in svc_rows if s["id"] == lead.id)["default_method_id"] == mid  # rev1 still

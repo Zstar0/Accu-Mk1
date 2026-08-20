@@ -191,11 +191,24 @@ def test_second_default_for_service_400(client, db_session):
 def test_default_method_id_fail_open(client, db_session):
     lead = _svc(db_session, "LEAD-PPM"); db_session.commit()
     mid = _mk_method(client, "ICP-MS C")
+    # Methods controlled documents (slice 3, Task 2+3): creates mint drafts now
+    # (active=False) — default_method_id only resolves an active method, so
+    # this method must be activated before the fail-open assertion means
+    # anything.
+    client.post(f"/hplc/methods/{mid}/activate")
     client.put(f"/hplc/methods/{mid}/services", json=[{"analysis_service_id": lead.id, "is_default": True}])
     rows = client.get("/analysis-services").json()
     row = next(s for s in rows if s["id"] == lead.id)
     assert row["default_method_id"] == mid
-    client.put(f"/hplc/methods/{mid}", json={"active": False})
+    # PUT no longer accepts `active` (lockstep — managed by the lifecycle
+    # verbs only; see test_active_not_settable_via_put in
+    # test_methods_lifecycle.py). Task 4 provides a `retire` verb; until it
+    # lands, flip the ORM row directly to simulate deactivation for this
+    # fail-open assertion (Task 4 may switch this back to the verb).
+    from sqlalchemy import update
+    db_session.execute(update(HplcMethod).where(HplcMethod.id == mid)
+                       .values(active=False, status="retired"))
+    db_session.commit()
     rows = client.get("/analysis-services").json()
     row = next(s for s in rows if s["id"] == lead.id)
     assert row["default_method_id"] is None  # fail-open (§4.2)

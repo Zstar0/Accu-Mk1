@@ -2641,6 +2641,20 @@ _RIDE_HOST_FORBIDDEN = {"endo", "ster", "xtra"}
 # addition here.
 COA_ARCHETYPES = {"limit_table"}
 
+# Methods controlled documents (slice 3, R10): once a method leaves 'draft'
+# (or is referenced by any lims_analyses row), these fields are content-locked
+# — PUT touching any of them 409s naming the offenders. notes, department_id,
+# and instrument_ids stay editable always (org routing / bench wiring, not
+# method content). Corrections go through new-revision instead.
+METHOD_LOCKED_FIELDS = ("name", "code", "technique", "reference", "procedure_summary",
+                        "size_peptide", "starting_organic_pct", "temperature_mct_c",
+                        "dissolution")
+
+# catalog/change_log.py log_create field list for method create/new-revision —
+# the identity + lifecycle columns worth an audit snapshot at mint time.
+METHOD_LOG_FIELDS = ("name", "code", "technique", "reference", "department_id",
+                     "status", "revision", "origin")
+
 # Spec-3 shadow-compare guard rails, enforced at the profile POST/PATCH edge
 # (not a DB constraint, mirroring COA_ARCHETYPES above):
 #   - The three legacy fulfillment_role values are demand-map keys derive_
@@ -4058,8 +4072,13 @@ async def get_methods(db: Session = Depends(get_db), _current_user=Depends(get_c
 
 
 @app.post("/hplc/methods", response_model=MethodResponse, status_code=201)
-async def create_method(data: MethodCreate, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
-    """Create a new HPLC method."""
+async def create_method(data: MethodCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """Create a new HPLC method.
+
+    Methods controlled documents (slice 3, R9/R12): new rows always mint as
+    a draft — status='draft', active=False in lockstep — invisible to the
+    bench (pickers, default_method_id) until activated via the lifecycle verb.
+    """
     if data.code is not None:
         # R-P1-2: normalize "" -> None at the route edge. The DB partial unique
         # index is `WHERE code IS NOT NULL`; Postgres treats '' as a distinct
@@ -4079,19 +4098,33 @@ async def create_method(data: MethodCreate, db: Session = Depends(get_db), _curr
         if not db.get(Department, data.department_id):
             raise HTTPException(400, f"Department {data.department_id} not found")
 
-    method = HplcMethod(**data.model_dump(exclude={"instrument_ids"}))
+    method = HplcMethod(**data.model_dump(exclude={"instrument_ids"}), status="draft", active=False)
     if data.instrument_ids:
         instruments = db.execute(select(Instrument).where(Instrument.id.in_(data.instrument_ids))).scalars().all()
         method.instruments = list(instruments)
     db.add(method)
+    db.flush()
+
+    from catalog.change_log import log_create
+    log_create(db, method, METHOD_LOG_FIELDS, entity_type="method", entity_pk=method.id,
+              user_id=getattr(current_user, "id", None))
+
     db.commit()
     db.refresh(method)
     return _method_to_response(db, method)
 
 
 @app.put("/hplc/methods/{method_id}", response_model=MethodResponse)
-async def update_method(method_id: int, data: MethodUpdate, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
-    """Update an HPLC method."""
+async def update_method(method_id: int, data: MethodUpdate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """Update an HPLC method.
+
+    Methods controlled documents (slice 3, R9/R10): `active` is not settable
+    here — it's managed in lockstep with `status` by the lifecycle verbs
+    (activate / retire) only. Once a method leaves 'draft' (or is referenced
+    by any analysis), its content fields (METHOD_LOCKED_FIELDS) are locked —
+    409 naming the offenders; notes/department_id/instrument_ids stay
+    editable always. Every applied field is audited via apply_and_log.
+    """
     method = db.execute(
         select(HplcMethod).options(joinedload(HplcMethod.instruments))
         .where(HplcMethod.id == method_id)
@@ -4109,15 +4142,48 @@ async def update_method(method_id: int, data: MethodUpdate, db: Session = Depend
         ).scalar_one_or_none()
         if dup_code:
             raise HTTPException(400, f"Method code '{data.code}' already exists on '{dup_code.name}'")
+    if data.name:
+        # Task 1 review finding #2: (name, revision) is the real uniqueness
+        # constraint now (uq_hplc_methods_name_revision) — a rename onto an
+        # existing (name, revision) pair must 400 here, not IntegrityError-500
+        # at the DB. Only draft rows can reach this in practice (name is a
+        # locked field once issued — see the lock check below), but the guard
+        # itself is unconditional so a bad rename never depends on lock state.
+        dup_name = db.execute(
+            select(HplcMethod).where(HplcMethod.name == data.name,
+                                     HplcMethod.revision == method.revision,
+                                     HplcMethod.id != method_id)
+        ).scalar_one_or_none()
+        if dup_name:
+            raise HTTPException(
+                400, f"Method with name '{data.name}' at revision {method.revision} already exists")
     if data.department_id is not None:
         from models import Department
         if not db.get(Department, data.department_id):
             raise HTTPException(400, f"Department {data.department_id} not found")
 
-    update_data = data.model_dump(exclude_unset=True)
-    instrument_ids = update_data.pop("instrument_ids", None)
-    for field, value in update_data.items():
-        setattr(method, field, value)
+    fields = data.model_dump(exclude_unset=True)
+    if "active" in fields:
+        raise HTTPException(400, "active is managed by the lifecycle verbs "
+                                 "(activate / retire) — not settable directly")
+
+    from models import LimsAnalysis
+    referenced = db.execute(select(func.count()).select_from(LimsAnalysis)
+                            .where(LimsAnalysis.method_id == method_id)).scalar()
+    locked = method.status != "draft" or bool(referenced)
+    if locked:
+        offending = sorted(set(fields) & set(METHOD_LOCKED_FIELDS))
+        if offending:
+            raise HTTPException(
+                409, f"method '{method.name}' rev {method.revision} is issued — "
+                     f"locked fields: {', '.join(offending)}; create a new revision instead")
+
+    instrument_ids = fields.pop("instrument_ids", None)
+
+    from catalog.change_log import apply_and_log
+    apply_and_log(db, method, fields, entity_type="method", entity_pk=method.id,
+                  user_id=getattr(current_user, "id", None))
+
     if instrument_ids is not None:
         instruments = db.execute(select(Instrument).where(Instrument.id.in_(instrument_ids))).scalars().all() if instrument_ids else []
         method.instruments = list(instruments)
@@ -4215,6 +4281,113 @@ async def put_method_services(method_id: int, links: list[MethodServiceLinkIn],
         raise HTTPException(
             409, "default conflict — another method claimed a default for one of these services concurrently")
     return _method_service_rows(db, method_id)
+
+
+# ─── Methods controlled documents (slice 3): lifecycle verbs ───
+#
+# R4/R10: revision = new row, issued content never changes in place. Corrections
+# flow through new-revision (mint a draft clone) -> edit the draft -> activate
+# (atomically retires the predecessor and hands over its method_services
+# defaults). Both verbs audit via catalog/change_log.py, same as update_method.
+
+
+@app.post("/hplc/methods/{method_id}/new-revision", response_model=MethodResponse, status_code=201)
+async def new_method_revision(method_id: int, db: Session = Depends(get_db),
+                              current_user=Depends(get_current_user)):
+    """Clone `method_id` into a new draft revision. Allowed from active/retired
+    (400 from draft — a draft is already editable in place). Clones all
+    content fields + department_id + notes, method_services links (is_default
+    reset to False — defaults only move at activation, R11), and instrument
+    links. Never copies senaite_id (R0; also globally unique)."""
+    src = db.get(HplcMethod, method_id)
+    if not src:
+        raise HTTPException(404, f"Method {method_id} not found")
+    if src.status == "draft":
+        raise HTTPException(400, "already a draft — edit it directly")
+
+    max_rev = db.execute(select(func.max(HplcMethod.revision))
+                         .where(HplcMethod.name == src.name)).scalar() or src.revision
+    clone = HplcMethod(
+        name=src.name, code=src.code, technique=src.technique,
+        department_id=src.department_id, reference=src.reference,
+        procedure_summary=src.procedure_summary, size_peptide=src.size_peptide,
+        starting_organic_pct=src.starting_organic_pct,
+        temperature_mct_c=src.temperature_mct_c, dissolution=src.dissolution,
+        notes=src.notes, origin="mk1", status="draft", active=False,
+        revision=max_rev + 1, supersedes_id=src.id,
+        # senaite_id deliberately NOT copied (R0; also unique)
+    )
+    clone.instruments = list(src.instruments)
+    db.add(clone)
+    db.flush()
+
+    for link in db.execute(select(method_services).where(
+            method_services.c.method_id == src.id)).all():
+        db.execute(method_services.insert().values(
+            method_id=clone.id, analysis_service_id=link.analysis_service_id,
+            is_default=False))
+
+    from catalog.change_log import log_create
+    log_create(db, clone, METHOD_LOG_FIELDS, entity_type="method",
+              entity_pk=clone.id, user_id=getattr(current_user, "id", None))
+
+    db.commit()
+    db.refresh(clone)
+    return _method_to_response(db, clone)
+
+
+@app.post("/hplc/methods/{method_id}/activate", response_model=MethodResponse)
+async def activate_method(method_id: int, db: Session = Depends(get_db),
+                          current_user=Depends(get_current_user)):
+    """Activate a draft. Draft-only (400 otherwise). One transaction: for
+    every service the supersedes_id source holds a default on — regardless of
+    the source's current status (R11 amendment) — flip the source link's
+    is_default off and this revision's link for the same service on (insert
+    the link if the clone lost it). If the source is still active, retire it.
+    Self goes active. Both rows audited via apply_and_log."""
+    m = db.get(HplcMethod, method_id)
+    if not m:
+        raise HTTPException(404, f"Method {method_id} not found")
+    if m.status != "draft":
+        raise HTTPException(400, f"only drafts activate (this row is {m.status})")
+
+    from catalog.change_log import apply_and_log
+
+    src = db.get(HplcMethod, m.supersedes_id) if m.supersedes_id else None
+    if src is not None:
+        defaults = db.execute(select(method_services.c.analysis_service_id).where(
+            method_services.c.method_id == src.id,
+            method_services.c.is_default.is_(True))).scalars().all()
+        for service_id in defaults:
+            # Flag-off-then-on inside one transaction: the partial unique index
+            # (uq_method_service_default) forbids two defaults for the same
+            # service existing at once, so the source's flag must clear before
+            # this revision's flag sets.
+            db.execute(method_services.update()
+                       .where(method_services.c.method_id == src.id,
+                              method_services.c.analysis_service_id == service_id)
+                       .values(is_default=False))
+            updated = db.execute(method_services.update()
+                                 .where(method_services.c.method_id == m.id,
+                                        method_services.c.analysis_service_id == service_id)
+                                 .values(is_default=True))
+            if updated.rowcount == 0:
+                db.execute(method_services.insert().values(
+                    method_id=m.id, analysis_service_id=service_id, is_default=True))
+        if src.status == "active":
+            apply_and_log(db, src, {"status": "retired", "active": False,
+                                    "retired_at": datetime.utcnow()},
+                          entity_type="method", entity_pk=src.id,
+                          user_id=getattr(current_user, "id", None))
+
+    apply_and_log(db, m, {"status": "active", "active": True,
+                          "activated_at": datetime.utcnow()},
+                  entity_type="method", entity_pk=m.id,
+                  user_id=getattr(current_user, "id", None))
+
+    db.commit()
+    db.refresh(m)
+    return _method_to_response(db, m)
 
 
 # ─── Peptide Endpoints ───
