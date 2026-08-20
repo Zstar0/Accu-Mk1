@@ -1,10 +1,30 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Loader2, Save, X, Pencil, FlaskConical } from 'lucide-react'
+import {
+  Loader2,
+  Save,
+  X,
+  Pencil,
+  FlaskConical,
+  Lock,
+  Check,
+  Archive,
+  GitBranch,
+  History,
+  Paperclip,
+  Upload,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Badge } from '@/components/ui/badge'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
 import { useUIStore } from '@/store/ui-store'
 import { toast } from 'sonner'
 import {
@@ -16,6 +36,14 @@ import {
   getAnalysisServices,
   getMethodServices,
   putMethodServices,
+  getMethods,
+  newMethodRevision,
+  activateMethod,
+  retireMethod,
+  getMethodAttachments,
+  uploadMethodAttachment,
+  deleteMethodAttachment,
+  methodAttachmentDownloadUrl,
   type HplcMethod,
   type PeptideBrief,
   type PeptideRecord,
@@ -23,14 +51,18 @@ import {
   type Department,
   type AnalysisServiceRecord,
   type MethodServiceLink,
+  type MethodAttachment,
 } from '@/lib/api'
 
 interface MethodPanelProps {
   method: HplcMethod
   onUpdated: () => void
+  onSelectMethod?: (id: number) => void
 }
 
-export function MethodPanel({ method, onUpdated }: MethodPanelProps) {
+type ConfirmAction = 'activate' | 'retire' | 'new-revision'
+
+export function MethodPanel({ method, onUpdated, onSelectMethod }: MethodPanelProps) {
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -41,6 +73,21 @@ export function MethodPanel({ method, onUpdated }: MethodPanelProps) {
   const [services, setServices] = useState<MethodServiceLink[]>([])
   const [allServices, setAllServices] = useState<AnalysisServiceRecord[]>([])
   const [mutatingServices, setMutatingServices] = useState(false)
+  const [allMethods, setAllMethods] = useState<HplcMethod[]>([])
+  const [attachments, setAttachments] = useState<MethodAttachment[]>([])
+  const [uploadingAttachment, setUploadingAttachment] = useState(false)
+  const [deletingAttachmentId, setDeletingAttachmentId] = useState<number | null>(null)
+  const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null)
+  const [actionBusy, setActionBusy] = useState(false)
+
+  const locked = method.status !== 'draft'
+  const predecessor =
+    method.supersedes_id != null
+      ? allMethods.find(m => m.id === method.supersedes_id) ?? null
+      : null
+  // The current method's own status is already visible in the header badge —
+  // the history list only needs its other revisions.
+  const otherRevisions = buildRevisionChain(method, allMethods).filter(m => m.id !== method.id)
 
   const loadPeptides = useCallback(() => {
     getPeptides().then(setAllPeptides).catch(console.error)
@@ -50,13 +97,73 @@ export function MethodPanel({ method, onUpdated }: MethodPanelProps) {
     getMethodServices(method.id).then(setServices).catch(console.error)
   }, [method.id])
 
+  const loadAllMethods = useCallback(() => {
+    getMethods().then(setAllMethods).catch(console.error)
+  }, [])
+
+  const loadAttachments = useCallback(() => {
+    getMethodAttachments(method.id).then(setAttachments).catch(console.error)
+  }, [method.id])
+
   useEffect(() => {
     getInstruments().then(setInstruments).catch(console.error)
     getDepartments().then(setDepartments).catch(console.error)
     getAnalysisServices().then(setAllServices).catch(console.error)
     loadPeptides()
     loadServices()
-  }, [loadPeptides, loadServices])
+    loadAllMethods()
+    loadAttachments()
+  }, [loadPeptides, loadServices, loadAllMethods, loadAttachments])
+
+  const handleConfirmAction = async () => {
+    if (!confirmAction) return
+    setActionBusy(true)
+    try {
+      if (confirmAction === 'activate') {
+        await activateMethod(method.id)
+        toast.success(`Activated rev ${method.revision}`)
+      } else if (confirmAction === 'retire') {
+        await retireMethod(method.id)
+        toast.success(`Retired rev ${method.revision}`)
+      } else {
+        const draft = await newMethodRevision(method.id)
+        toast.success(`Created draft rev ${draft.revision}`)
+        onSelectMethod?.(draft.id)
+      }
+      setConfirmAction(null)
+      onUpdated()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Action failed')
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
+  const handleUploadAttachment = async (file: File) => {
+    setUploadingAttachment(true)
+    try {
+      await uploadMethodAttachment(method.id, file)
+      toast.success(`Uploaded ${file.name}`)
+      loadAttachments()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to upload attachment')
+    } finally {
+      setUploadingAttachment(false)
+    }
+  }
+
+  const handleDeleteAttachment = async (attachmentId: number) => {
+    setDeletingAttachmentId(attachmentId)
+    try {
+      await deleteMethodAttachment(method.id, attachmentId)
+      toast.success('Attachment deleted')
+      loadAttachments()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete attachment')
+    } finally {
+      setDeletingAttachmentId(null)
+    }
+  }
 
   // Peptides not yet assigned to this method
   const unassignedPeptides = allPeptides.filter(
@@ -174,31 +281,44 @@ export function MethodPanel({ method, onUpdated }: MethodPanelProps) {
   }
 
   const handleSave = async () => {
-    if (!name.trim()) {
+    if (!locked && !name.trim()) {
       setError('Name is required')
       return
     }
     setSaving(true)
     setError(null)
     try {
-      await updateMethod(method.id, {
-        name: name.trim(),
-        instrument_ids: instrumentIds,
-        code: code.trim() || null,
-        technique: technique.trim() || null,
-        department_id: departmentId,
-        reference: reference.trim() || null,
-        procedure_summary: procedureSummary.trim() || null,
-        size_peptide: sizePeptide.trim() || null,
-        starting_organic_pct: startingOrganicPct ? parseFloat(startingOrganicPct) : null,
-        temperature_mct_c: temperatureMctC ? parseFloat(temperatureMctC) : null,
-        dissolution: dissolution.trim() || null,
-        notes: notes.trim() || null,
-      })
+      // Issued methods (status !== 'draft') are content-locked server-side —
+      // send only the fields that stay editable always (notes/department/
+      // instruments) rather than leaning on the server's 409 as the sole
+      // guard.
+      const payload = locked
+        ? {
+            instrument_ids: instrumentIds,
+            department_id: departmentId,
+            notes: notes.trim() || null,
+          }
+        : {
+            name: name.trim(),
+            instrument_ids: instrumentIds,
+            code: code.trim() || null,
+            technique: technique.trim() || null,
+            department_id: departmentId,
+            reference: reference.trim() || null,
+            procedure_summary: procedureSummary.trim() || null,
+            size_peptide: sizePeptide.trim() || null,
+            starting_organic_pct: startingOrganicPct ? parseFloat(startingOrganicPct) : null,
+            temperature_mct_c: temperatureMctC ? parseFloat(temperatureMctC) : null,
+            dissolution: dissolution.trim() || null,
+            notes: notes.trim() || null,
+          }
+      await updateMethod(method.id, payload)
       setEditing(false)
       onUpdated()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save')
+      const message = err instanceof Error ? err.message : 'Failed to save'
+      setError(message)
+      toast.error(message)
     } finally {
       setSaving(false)
     }
@@ -211,10 +331,18 @@ export function MethodPanel({ method, onUpdated }: MethodPanelProps) {
 
   return (
     <div className="space-y-6">
-      {/* Header with edit/save controls */}
+      {/* Header with status, lifecycle verbs, and edit/save controls */}
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold">{method.name}</h3>
+          <div className="flex items-center gap-2">
+            <h3 className="text-lg font-semibold">{method.name}</h3>
+            <StatusBadge status={method.status} />
+            {method.revision > 1 && (
+              <span className="font-mono text-xs text-muted-foreground">
+                rev {method.revision}
+              </span>
+            )}
+          </div>
           {method.senaite_id && (
             <p className="text-sm text-muted-foreground">{method.senaite_id}</p>
           )}
@@ -235,12 +363,59 @@ export function MethodPanel({ method, onUpdated }: MethodPanelProps) {
             </Button>
           </div>
         ) : (
-          <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
-            <Pencil className="mr-1 h-3.5 w-3.5" />
-            Edit
-          </Button>
+          <div className="flex gap-2">
+            {method.status === 'draft' && (
+              <Button size="sm" variant="outline" onClick={() => setConfirmAction('activate')}>
+                <Check className="mr-1 h-3.5 w-3.5" />
+                Activate
+              </Button>
+            )}
+            {method.status === 'active' && (
+              <Button size="sm" variant="outline" onClick={() => setConfirmAction('retire')}>
+                <Archive className="mr-1 h-3.5 w-3.5" />
+                Retire
+              </Button>
+            )}
+            {method.status !== 'draft' && (
+              <Button size="sm" variant="outline" onClick={() => setConfirmAction('new-revision')}>
+                <GitBranch className="mr-1 h-3.5 w-3.5" />
+                New Revision
+              </Button>
+            )}
+            <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+              <Pencil className="mr-1 h-3.5 w-3.5" />
+              Edit
+            </Button>
+          </div>
         )}
       </div>
+
+      {/* Lifecycle verb confirmation modal — clones MethodsPage's delete-confirm card */}
+      {confirmAction && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <Card className="w-full max-w-md">
+            <CardHeader>
+              <CardTitle>{confirmActionTitle(confirmAction)}</CardTitle>
+              <CardDescription>
+                {confirmActionCopy(confirmAction, method, predecessor)}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex justify-end gap-2">
+              <Button
+                variant="ghost"
+                onClick={() => setConfirmAction(null)}
+                disabled={actionBusy}
+              >
+                Cancel
+              </Button>
+              <Button onClick={handleConfirmAction} disabled={actionBusy}>
+                {actionBusy && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
+                {confirmActionVerb(confirmAction)}
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {error && (
         <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -251,28 +426,56 @@ export function MethodPanel({ method, onUpdated }: MethodPanelProps) {
       {/* Method details */}
       {editing ? (
         <div className="space-y-4">
-          <div className="space-y-2">
-            <Label>Name</Label>
-            <Input value={name} onChange={e => setName(e.target.value)} placeholder="Method 1" />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
+          {locked ? (
+            <DetailRow label="Name" value={method.name} locked />
+          ) : (
             <div className="space-y-2">
-              <Label>Code</Label>
-              <Input value={code} onChange={e => setCode(e.target.value)} placeholder="AM-ELEM-001" />
-            </div>
-            <div className="space-y-2">
-              <Label>Technique</Label>
+              <Label htmlFor="method-name">Name</Label>
               <Input
-                value={technique}
-                onChange={e => setTechnique(e.target.value)}
-                placeholder="ICP-MS"
+                id="method-name"
+                value={name}
+                onChange={e => setName(e.target.value)}
+                placeholder="Method 1"
               />
             </div>
+          )}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              {locked ? (
+                <DetailRow label="Code" value={method.code} locked />
+              ) : (
+                <>
+                  <Label htmlFor="method-code">Code</Label>
+                  <Input
+                    id="method-code"
+                    value={code}
+                    onChange={e => setCode(e.target.value)}
+                    placeholder="AM-ELEM-001"
+                  />
+                </>
+              )}
+            </div>
+            <div className="space-y-2">
+              {locked ? (
+                <DetailRow label="Technique" value={method.technique} locked />
+              ) : (
+                <>
+                  <Label htmlFor="method-technique">Technique</Label>
+                  <Input
+                    id="method-technique"
+                    value={technique}
+                    onChange={e => setTechnique(e.target.value)}
+                    placeholder="ICP-MS"
+                  />
+                </>
+              )}
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Department</Label>
+              <Label htmlFor="method-department">Department</Label>
               <select
+                id="method-department"
                 className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 value={departmentId ?? ''}
                 onChange={e => setDepartmentId(e.target.value ? parseInt(e.target.value, 10) : null)}
@@ -284,12 +487,19 @@ export function MethodPanel({ method, onUpdated }: MethodPanelProps) {
               </select>
             </div>
             <div className="space-y-2">
-              <Label>Reference</Label>
-              <Input
-                value={reference}
-                onChange={e => setReference(e.target.value)}
-                placeholder="SOP-1234"
-              />
+              {locked ? (
+                <DetailRow label="Reference" value={method.reference} locked />
+              ) : (
+                <>
+                  <Label htmlFor="method-reference">Reference</Label>
+                  <Input
+                    id="method-reference"
+                    value={reference}
+                    onChange={e => setReference(e.target.value)}
+                    placeholder="SOP-1234"
+                  />
+                </>
+              )}
             </div>
           </div>
           <div className="space-y-2">
@@ -319,62 +529,89 @@ export function MethodPanel({ method, onUpdated }: MethodPanelProps) {
           {/* HPLC parameters */}
           <div className="border-t pt-4">
             <h4 className="mb-3 text-sm font-semibold text-muted-foreground">HPLC parameters</h4>
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Size Peptide</Label>
-                  <Input
-                    value={sizePeptide}
-                    onChange={e => setSizePeptide(e.target.value)}
-                    placeholder="Extremely Polar"
-                  />
+            {locked ? (
+              <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
+                <DetailRow label="Size Peptide" value={method.size_peptide} locked />
+                <DetailRow
+                  label="Starting Organic"
+                  value={method.starting_organic_pct != null ? `${method.starting_organic_pct}%` : null}
+                  locked
+                />
+                <DetailRow
+                  label="MCT Temp"
+                  value={method.temperature_mct_c != null ? `${method.temperature_mct_c}°C` : null}
+                  locked
+                />
+                <DetailRow label="Dissolution" value={method.dissolution} locked />
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="method-size-peptide">Size Peptide</Label>
+                    <Input
+                      id="method-size-peptide"
+                      value={sizePeptide}
+                      onChange={e => setSizePeptide(e.target.value)}
+                      placeholder="Extremely Polar"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="method-starting-organic-pct">Starting Organic %</Label>
+                    <Input
+                      id="method-starting-organic-pct"
+                      type="number"
+                      step="0.1"
+                      value={startingOrganicPct}
+                      onChange={e => setStartingOrganicPct(e.target.value)}
+                      placeholder="2"
+                    />
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  <Label>Starting Organic %</Label>
-                  <Input
-                    type="number"
-                    step="0.1"
-                    value={startingOrganicPct}
-                    onChange={e => setStartingOrganicPct(e.target.value)}
-                    placeholder="2"
-                  />
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="method-temperature-mct-c">MCT Temperature (°C)</Label>
+                    <Input
+                      id="method-temperature-mct-c"
+                      type="number"
+                      step="1"
+                      value={temperatureMctC}
+                      onChange={e => setTemperatureMctC(e.target.value)}
+                      placeholder="25"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="method-dissolution">Dissolution</Label>
+                    <Input
+                      id="method-dissolution"
+                      value={dissolution}
+                      onChange={e => setDissolution(e.target.value)}
+                      placeholder="100% Water"
+                    />
+                  </div>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>MCT Temperature (°C)</Label>
-                  <Input
-                    type="number"
-                    step="1"
-                    value={temperatureMctC}
-                    onChange={e => setTemperatureMctC(e.target.value)}
-                    placeholder="25"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Dissolution</Label>
-                  <Input
-                    value={dissolution}
-                    onChange={e => setDissolution(e.target.value)}
-                    placeholder="100% Water"
-                  />
-                </div>
-              </div>
-            </div>
+            )}
           </div>
 
+          {locked ? (
+            <DetailRow label="Procedure Summary" value={method.procedure_summary} locked />
+          ) : (
+            <div className="space-y-2">
+              <Label htmlFor="method-procedure-summary">Procedure Summary</Label>
+              <textarea
+                id="method-procedure-summary"
+                className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                value={procedureSummary}
+                onChange={e => setProcedureSummary(e.target.value)}
+                placeholder="Procedure summary..."
+              />
+            </div>
+          )}
           <div className="space-y-2">
-            <Label>Procedure Summary</Label>
+            <Label htmlFor="method-notes">Notes</Label>
             <textarea
-              className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-              value={procedureSummary}
-              onChange={e => setProcedureSummary(e.target.value)}
-              placeholder="Procedure summary..."
-            />
-          </div>
-          <div className="space-y-2">
-            <Label>Notes</Label>
-            <textarea
+              id="method-notes"
               className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               value={notes}
               onChange={e => setNotes(e.target.value)}
@@ -567,20 +804,223 @@ export function MethodPanel({ method, onUpdated }: MethodPanelProps) {
           </div>
         )}
       </div>
+
+      {/* Revision history section */}
+      <div className="border-t pt-4">
+        <div className="flex items-center gap-2 mb-3">
+          <History className="h-4 w-4 text-muted-foreground" />
+          <h4 className="text-sm font-semibold text-muted-foreground">Revision History</h4>
+        </div>
+        {otherRevisions.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No other revisions.</p>
+        ) : (
+          <div className="space-y-1.5">
+            {otherRevisions.map(rev => (
+              <button
+                key={rev.id}
+                type="button"
+                onClick={() => onSelectMethod?.(rev.id)}
+                className="flex w-full items-center gap-2 rounded-md border bg-muted/50 px-2.5 py-1.5 text-sm text-left transition-colors hover:bg-muted"
+              >
+                <span className="font-mono">rev {rev.revision}</span>
+                <StatusBadge status={rev.status} />
+                <span className="ml-auto text-xs text-muted-foreground">
+                  {formatShortDate(rev.activated_at)}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Attachments section (controlled documents) */}
+      <div className="border-t pt-4">
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-sm font-semibold text-muted-foreground">
+            Attachments ({attachments.length})
+          </h4>
+          <Button asChild size="sm" variant="outline">
+            <label className="cursor-pointer">
+              {uploadingAttachment ? (
+                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Upload className="mr-1 h-3.5 w-3.5" />
+              )}
+              Upload
+              <input
+                type="file"
+                className="hidden"
+                disabled={uploadingAttachment}
+                onChange={e => {
+                  const file = e.target.files?.[0]
+                  e.target.value = ''
+                  if (file) handleUploadAttachment(file)
+                }}
+              />
+            </label>
+          </Button>
+        </div>
+        {attachments.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No attachments yet.</p>
+        ) : (
+          <div className="space-y-1.5">
+            {attachments.map(att => (
+              <div
+                key={att.id}
+                className="flex items-center gap-2 rounded-md border bg-muted/50 px-2.5 py-1.5 text-sm"
+              >
+                <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="font-medium">{att.filename}</span>
+                <span className="text-xs text-muted-foreground">
+                  {formatAttachmentSize(att.size_bytes)} · {formatShortDate(att.created_at)}
+                </span>
+                <div className="ml-auto flex items-center gap-2">
+                  <a
+                    href={methodAttachmentDownloadUrl(method.id, att.id)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-primary hover:underline"
+                  >
+                    Download
+                  </a>
+                  {method.status === 'draft' && (
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteAttachment(att.id)}
+                      disabled={deletingAttachmentId === att.id}
+                      aria-label="delete attachment"
+                      title={`Delete ${att.filename}`}
+                      className="rounded p-0.5 text-muted-foreground hover:text-destructive transition-colors"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
+}
+
+export function StatusBadge({ status }: { status: HplcMethod['status'] }) {
+  if (status === 'draft') {
+    return (
+      <Badge
+        variant="outline"
+        className="border-amber-500/50 text-amber-600 dark:text-amber-400 text-xs"
+      >
+        Draft
+      </Badge>
+    )
+  }
+  if (status === 'retired') {
+    return (
+      <Badge variant="secondary" className="text-xs">
+        Retired
+      </Badge>
+    )
+  }
+  return (
+    <Badge variant="default" className="text-xs">
+      Active
+    </Badge>
+  )
+}
+
+// Walks the loaded methods list both directions from `target` via
+// supersedes_id: predecessors by following the chain up, successors by
+// finding whichever row (if any) names `target` as its own supersedes_id.
+// `target` itself is always included even when it hasn't shown up yet in
+// `all` (e.g. the initial getMethods() fetch hasn't resolved).
+function buildRevisionChain(target: HplcMethod, all: HplcMethod[]): HplcMethod[] {
+  const chain: HplcMethod[] = [target]
+  const seen = new Set<number>([target.id])
+
+  let cur = target
+  while (cur.supersedes_id != null && !seen.has(cur.supersedes_id)) {
+    const pred = all.find(m => m.id === cur.supersedes_id)
+    if (!pred) break
+    chain.unshift(pred)
+    seen.add(pred.id)
+    cur = pred
+  }
+
+  cur = target
+  for (;;) {
+    const succ = all.find(m => m.supersedes_id === cur.id && !seen.has(m.id))
+    if (!succ) break
+    chain.push(succ)
+    seen.add(succ.id)
+    cur = succ
+  }
+
+  return chain
+}
+
+function confirmActionTitle(action: ConfirmAction): string {
+  if (action === 'activate') return 'Activate Method'
+  if (action === 'retire') return 'Retire Method'
+  return 'New Revision'
+}
+
+function confirmActionVerb(action: ConfirmAction): string {
+  if (action === 'activate') return 'Activate'
+  if (action === 'retire') return 'Retire'
+  return 'Create Draft'
+}
+
+function confirmActionCopy(
+  action: ConfirmAction,
+  method: HplcMethod,
+  predecessor: HplcMethod | null
+): string {
+  if (action === 'activate') {
+    return predecessor
+      ? `Activates rev ${method.revision} and retires rev ${predecessor.revision}; its service defaults move to this revision.`
+      : `Activates rev ${method.revision} of ${method.name}.`
+  }
+  if (action === 'retire') {
+    return `Retires rev ${method.revision} of ${method.name}. It will no longer be available for new analyses.`
+  }
+  return `Creates a new draft revision of ${method.name}, cloned from rev ${method.revision} — the draft opens editable, the current revision stays untouched.`
+}
+
+// Backend timestamps are already human-scale ISO strings; render the date
+// only (SharePointBrowser's formatDate idiom) — the exact hour doesn't
+// matter for a revision/attachment audit trail row.
+function formatShortDate(iso: string | null): string {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+}
+
+function formatAttachmentSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 function DetailRow({
   label,
   value,
+  locked,
 }: {
   label: string
   value: string | null | undefined
+  locked?: boolean
 }) {
   return (
     <div>
-      <dt className="font-medium text-muted-foreground">{label}</dt>
+      <dt className="flex items-center gap-1 font-medium text-muted-foreground">
+        {locked && <Lock className="h-3 w-3" />}
+        {label}
+      </dt>
       <dd className="mt-0.5">{value ?? <span className="text-muted-foreground">—</span>}</dd>
     </div>
   )

@@ -2166,10 +2166,22 @@ export interface HplcMethod {
   supersedes_id: number | null
   origin: string
   active: boolean
+  status: 'draft' | 'active' | 'retired'
+  revision: number
+  activated_at: string | null
+  retired_at: string | null
   created_at: string
   updated_at: string
   common_peptides: PeptideBrief[]
   services: MethodServiceLink[]
+}
+
+export interface MethodAttachment {
+  id: number
+  filename: string
+  content_type: string | null
+  size_bytes: number
+  created_at: string
 }
 
 export interface HplcMethodInput {
@@ -2769,6 +2781,100 @@ export async function putMethodServices(
     )
   }
   return response.json()
+}
+
+// ─── HPLC Method lifecycle (controlled documents) ───
+
+export async function newMethodRevision(methodId: number): Promise<HplcMethod> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/methods/${methodId}/new-revision`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `New revision failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function activateMethod(methodId: number): Promise<HplcMethod> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/methods/${methodId}/activate`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Activate failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function retireMethod(methodId: number): Promise<HplcMethod> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/methods/${methodId}/retire`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Retire failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+// ─── HPLC Method attachments (controlled documents) ───
+
+export async function getMethodAttachments(
+  methodId: number
+): Promise<MethodAttachment[]> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/methods/${methodId}/attachments`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(
+      err?.detail || `Get method attachments failed: ${response.status}`
+    )
+  }
+  return response.json()
+}
+
+export async function uploadMethodAttachment(
+  methodId: number,
+  file: File
+): Promise<MethodAttachment> {
+  const form = new FormData()
+  form.append('file', file, file.name)
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/methods/${methodId}/attachments`,
+    { method: 'POST', headers: getBearerHeaders(), body: form }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Upload attachment failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function deleteMethodAttachment(
+  methodId: number,
+  attachmentId: number
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/methods/${methodId}/attachments/${attachmentId}`,
+    { method: 'DELETE', headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Delete attachment failed: ${response.status}`)
+  }
+}
+
+export function methodAttachmentDownloadUrl(
+  methodId: number,
+  attachmentId: number
+): string {
+  return `${API_BASE_URL()}/hplc/methods/${methodId}/attachments/${attachmentId}/download`
 }
 
 // ─── Calibration CRUD ───

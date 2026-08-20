@@ -16,6 +16,7 @@ vi.mock('@/lib/api', async importOriginal => {
     getAnalysisServices: vi.fn(),
     getMethodServices: vi.fn(),
     putMethodServices: vi.fn(),
+    getMethodAttachments: vi.fn(),
     getPeptides: vi.fn(),
     updatePeptide: vi.fn(),
   }
@@ -35,6 +36,7 @@ import {
   getAnalysisServices,
   getMethodServices,
   putMethodServices,
+  getMethodAttachments,
   getPeptides,
   updatePeptide,
 } from '@/lib/api'
@@ -59,6 +61,10 @@ const METHOD: HplcMethod = {
   supersedes_id: null,
   origin: 'mk1',
   active: true,
+  status: 'active',
+  revision: 1,
+  activated_at: null,
+  retired_at: null,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
   common_peptides: [],
@@ -76,6 +82,7 @@ describe('MethodsPage / MethodPanel — catalog fields + covered services', () =
     vi.mocked(getAnalysisServices).mockReset().mockResolvedValue([])
     vi.mocked(getMethodServices).mockReset().mockResolvedValue([])
     vi.mocked(putMethodServices).mockReset().mockResolvedValue([])
+    vi.mocked(getMethodAttachments).mockReset().mockResolvedValue([])
     vi.mocked(getPeptides).mockReset().mockResolvedValue([])
     vi.mocked(updatePeptide)
       .mockReset()

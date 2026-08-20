@@ -35,7 +35,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { MethodPanel } from './MethodPanel'
+import { MethodPanel, StatusBadge } from './MethodPanel'
 import { useUIStore } from '@/store/ui-store'
 import {
   getMethods,
@@ -301,6 +301,7 @@ export function MethodsPage() {
                 />
               </TableHead>
               <TableHead>Method</TableHead>
+              <TableHead>Status</TableHead>
               <TableHead>Technique</TableHead>
               <TableHead>Instruments</TableHead>
               <TableHead>Size Peptide</TableHead>
@@ -313,13 +314,13 @@ export function MethodsPage() {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={9} className="py-8 text-center">
+                <TableCell colSpan={10} className="py-8 text-center">
                   <Loader2 className="mx-auto h-5 w-5 animate-spin text-muted-foreground" />
                 </TableCell>
               </TableRow>
             ) : filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="py-8 text-center text-muted-foreground">
+                <TableCell colSpan={10} className="py-8 text-center text-muted-foreground">
                   {methods.length === 0
                     ? 'No methods yet. Click "New Method" to create one.'
                     : 'No methods match your search.'}
@@ -349,11 +350,21 @@ export function MethodsPage() {
                   </TableCell>
                   <TableCell>
                     <div>
-                      <div className="font-medium">{m.name}</div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-medium">{m.name}</span>
+                        {m.revision > 1 && (
+                          <span className="font-mono text-xs text-muted-foreground">
+                            rev {m.revision}
+                          </span>
+                        )}
+                      </div>
                       {m.senaite_id && (
                         <div className="text-xs text-muted-foreground">{m.senaite_id}</div>
                       )}
                     </div>
+                  </TableCell>
+                  <TableCell>
+                    <StatusBadge status={m.status} />
                   </TableCell>
                   <TableCell>
                     <span className="text-sm">{m.technique ?? '—'}</span>
@@ -500,6 +511,7 @@ export function MethodsPage() {
                 key={selectedMethod.id}
                 method={selectedMethod}
                 onUpdated={load}
+                onSelectMethod={setSelectedId}
               />
             </div>
           </div>
