@@ -3,7 +3,6 @@ import {
   Loader2,
   AlertCircle,
   Search,
-  RefreshCw,
   Wrench,
   ChevronRight,
   X,
@@ -30,10 +29,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { toast } from 'sonner'
 import {
   getInstruments,
-  syncInstruments,
   getMethods,
   createInstrument,
   updateInstrument,
@@ -50,7 +47,6 @@ export function InstrumentsPage() {
   const [error, setError] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [searchInput, setSearchInput] = useState('')
-  const [syncing, setSyncing] = useState(false)
   const [showAddForm, setShowAddForm] = useState(false)
 
   const load = useCallback(async () => {
@@ -73,22 +69,6 @@ export function InstrumentsPage() {
   useEffect(() => {
     load()
   }, [load])
-
-  const handleSync = async () => {
-    setSyncing(true)
-    setError(null)
-    try {
-      const res = await syncInstruments()
-      toast.success(`Instruments synced — ${res.created} new, ${res.total} total`)
-      await load()
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Sync failed'
-      setError(msg)
-      toast.error(msg)
-    } finally {
-      setSyncing(false)
-    }
-  }
 
   const selectedInstrument = instruments.find(i => i.id === selectedId) ?? null
 
@@ -121,18 +101,6 @@ export function InstrumentsPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            onClick={handleSync}
-            disabled={syncing}
-          >
-            {syncing ? (
-              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="mr-1 h-4 w-4" />
-            )}
-            {syncing ? 'Syncing...' : 'Sync from SENAITE (legacy)'}
-          </Button>
           <Button onClick={() => setShowAddForm(true)} disabled={showAddForm}>
             <Plus className="mr-1 h-4 w-4" />
             Add Instrument
@@ -197,7 +165,7 @@ export function InstrumentsPage() {
               <TableRow>
                 <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
                   {instruments.length === 0
-                    ? 'No instruments yet. Click “Add Instrument” to register one, or sync from SENAITE (legacy).'
+                    ? 'No instruments yet. Click “Add Instrument” to register one.'
                     : 'No instruments match your search.'}
                 </TableCell>
               </TableRow>

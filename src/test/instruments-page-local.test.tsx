@@ -86,12 +86,17 @@ describe('InstrumentsPage — local add/edit, sync demoted', () => {
     vi.mocked(getDepartments).mockReset().mockResolvedValue([])
   })
 
-  it('offers Add Instrument as the primary action and demotes sync', async () => {
+  it('offers Add Instrument as the primary action with no SENAITE sync affordance', async () => {
     render(<InstrumentsPage />)
     expect(
       await screen.findByRole('button', { name: /add instrument/i })
     ).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /legacy/i })).toBeInTheDocument() // sync relabeled
+    // Sync button removed outright (was demoted to "legacy" first) — the
+    // backend route stays frozen for the phase-out program, but the UI no
+    // longer offers it.
+    expect(
+      screen.queryByRole('button', { name: /sync|legacy/i })
+    ).not.toBeInTheDocument()
     expect(
       screen.queryByText(/synced from senaite lims/i)
     ).not.toBeInTheDocument()
