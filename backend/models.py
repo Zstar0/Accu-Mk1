@@ -1114,6 +1114,16 @@ class LimsSample(Base):
     # Authority note: lims_workflow_shadow_evaluations is the authoritative
     # history; this column is its O(1) materialization.
     native_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # S8 adoption guard: collision quarantine. TRUE = row minted to park an
+    # incoming order whose sample_id collided with an existing row under a
+    # different SENAITE uid (external counter regression). The mangled
+    # sample_id keeps it out of every exact-match adoption path; resolution
+    # is a manual action. Interim scaffolding — retires when Mk1 mints its
+    # own sample ids post-phase-out.
+    quarantined: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    quarantine_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # S4 snapshot rider (2026-08-11): frozen catalog resolution stamped ONCE
     # by the registration bg task (backend/catalog/snapshot.py), NULL for
     # every pre-slice row and for a sample whose registration signal never

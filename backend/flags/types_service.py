@@ -18,7 +18,7 @@ from flags.models import FlagFlag
 from models import FlagType
 
 
-# The 5 built-ins, mirroring database._run_migrations seed + catalog.FLAG_TYPES.
+# The built-ins, mirroring database._run_migrations seed + catalog.FLAG_TYPES.
 # (slug, label, color, kind, is_blocking, sort_order)
 _BUILTINS = [
     ("blocker", "Blocker", "#e5484d", "issue", True, 0),
@@ -29,11 +29,13 @@ _BUILTINS = [
     # Phase 2 slice 2: global-scoped task types for general (no-entity) flags.
     ("task", "Task", "#0ea5a5", "issue", False, 5),
     ("feature_request", "Feature Request", "#ec4899", "issue", False, 6),
+    # S8 adoption guard: external-counter identity collisions (2026-08-11).
+    ("identity_collision", "Identity Collision", "#e5484d", "issue", True, 7),
 ]
 
 
 def seed_builtins(db: Session) -> None:
-    """Idempotently seed the 5 built-in types. Production seeds via
+    """Idempotently seed the built-in types. Production seeds via
     database._run_migrations (Postgres); this is the parity path for SQLite test
     sessions (create_all builds the table but runs no migrations)."""
     for slug, label, color, kind, blocking, order in _BUILTINS:

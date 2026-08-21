@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import requests
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, List
 from sqlalchemy import select, func, delete, case
@@ -158,6 +159,93 @@ def _create_sample_row(db: Session, parent_sample_id: str, meta: dict) -> LimsSa
     return row
 
 
+QUARANTINE_SEP = "~Q~"
+
+
+@dataclass
+class _SystemActor:
+    """Minimal actor for automated flag creation from adoption guards —
+    flags permissions only need a non-None user (flags/permissions.py);
+    id 0 = system. Mirrors flags/watches._ActorRef."""
+    id: int = 0
+    role: Optional[str] = None
+
+
+def _flag_identity_collision(db: Session, sample: LimsSample,
+                             quarantine_id: Optional[str]) -> None:
+    """Identity_collision flag on the ORIGINAL sample. Dedupe shape depends
+    on the call: a refusal (quarantine_id=None) dedupes on ANY open
+    identity_collision flag for this sample -- one open flag already covers
+    the collision, there's no pointer to add. A quarantine event
+    (quarantine_id set) dedupes on the EXACT computed title instead, which
+    is deterministic per quarantine row (sample_id + uid fragment) -- this
+    keeps quarantine-signal replays idempotent (same title -> no dup)
+    WITHOUT letting an already-open pointer-less refusal flag suppress the
+    pointered flag a human needs to find the parked row.
+
+    NOTE flags.service.create_flag COMMITS the session — call only after all
+    row work is flushed, and never let flag machinery break the caller."""
+    try:
+        from flags import service as flags_service
+        from flags.models import FlagFlag
+        parked = (f"; incoming data parked on {quarantine_id}"
+                  if quarantine_id else "; refresh refused")
+        title = (f"Identity collision on {sample.sample_id}: incoming "
+                 f"SENAITE uid disagrees with stored uid{parked}")
+        dupe_query = select(FlagFlag).where(
+            FlagFlag.entity_type == "sample",
+            FlagFlag.entity_id == str(sample.id),
+            FlagFlag.type == "identity_collision",
+            FlagFlag.status == "open",
+        )
+        if quarantine_id:
+            dupe_query = dupe_query.where(FlagFlag.title == title)
+        existing_flag = db.execute(dupe_query).scalars().first()
+        if existing_flag is not None:
+            return
+        flags_service.create_flag(
+            db, user=_SystemActor(), entity_type="sample",
+            entity_id=str(sample.id), type="identity_collision",
+            title=title,
+            event_details={"automated": True,
+                           "quarantine_sample_id": quarantine_id},
+        )
+    except Exception as e:
+        log.error("sub_samples.identity_collision_flag_failed sample_id=%s err=%s",
+                  sample.sample_id, e)
+
+
+def _quarantine_collision(db: Session, existing: LimsSample,
+                          senaite_uid: str, meta: dict) -> LimsSample:
+    """S8 counter-regression guard: the signal's sample_id matches an existing
+    row whose stored uid disagrees with the incoming senaite_uid. The adopt is
+    REFUSED — the existing row keeps its identity, vials, and data; the
+    incoming order is parked, losslessly, on a NEW quarantined row under a
+    mangled sample_id. Deterministic id (sample_id + uid fragment) makes IS
+    signal replays idempotent. No native_id is minted for quarantine rows.
+    Interim scaffolding — retires when Mk1 mints its own sample ids."""
+    quarantine_id = f"{existing.sample_id}{QUARANTINE_SEP}{senaite_uid[:12]}"
+    row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == quarantine_id)
+    ).scalar_one_or_none()
+    if row is None:
+        row = _create_sample_row(db, quarantine_id, meta)
+        row.quarantined = True
+        row.quarantine_reason = (
+            f"identity collision: signal for {existing.sample_id} carried uid "
+            f"{senaite_uid}; stored uid {existing.external_lims_uid}"
+        )
+        db.flush()
+    log.error(
+        "sub_samples.identity_collision sample_id=%s stored_uid=%s "
+        "incoming_uid=%s quarantine_row=%s",
+        existing.sample_id, existing.external_lims_uid, senaite_uid,
+        quarantine_id,
+    )
+    _flag_identity_collision(db, existing, quarantine_id)
+    return row
+
+
 def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
                               senaite_uid: Optional[str], meta: dict) -> LimsSample:
     """Create/refresh a registry row from the IS creation signal
@@ -181,10 +269,20 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
     IS-side Idempotency-Key becomes meaningful only when a later slice stores
     it. An echoed-id retry without a senaite_uid preserves the row's native
     identity (external_lims_system stays "mk1"); if a later signal DOES carry
-    a senaite_uid, the attach wins."""
+    a senaite_uid, the attach wins only when the stored uid is NULL or
+    agrees; a disagreeing uid is an identity collision — the adopt is
+    refused and the incoming order parks on a quarantine row (S8 guard)."""
     meta = dict(meta)
     meta.setdefault("review_state", "sample_due")
-    if senaite_uid and not meta.get("uid"):
+    # Normalize unconditionally: the trusted senaite_uid PARAM must always
+    # win over whatever meta["uid"] the payload happens to carry. A
+    # self-inconsistent payload (senaite_uid agreeing with the stored uid,
+    # but meta["uid"] carrying something else) would otherwise pass the
+    # mismatch guard below on the param, then _populate_basic_info would
+    # silently write the payload's disagreeing meta["uid"] -- a rebind the
+    # guard just approved differently. Also keeps a quarantine row's stored
+    # uid consistent with the uid fragment baked into its mangled id.
+    if senaite_uid:
         meta["uid"] = senaite_uid
 
     existing = None
@@ -194,6 +292,9 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
         ).scalar_one_or_none()
 
     if existing:
+        if (senaite_uid and existing.external_lims_uid
+                and existing.external_lims_uid != senaite_uid):
+            return _quarantine_collision(db, existing, senaite_uid, meta)
         prior_status = existing.status
         prior_uid = existing.external_lims_uid
         prior_system = existing.external_lims_system
@@ -371,10 +472,44 @@ def _refresh_parent_from_senaite(db: Session, parent: LimsSample) -> None:
     log so drift caught here (not via an explicit mk1/senaite hook) still
     shows up in history. The recorder's 60-min explained-window means this
     is a no-op when a mk1/senaite row already accounts for the transition.
-    Logging-only failure: never let the log write break the refresh."""
+    Logging-only failure: never let the log write break the refresh.
+
+    S8 guard: a fetch whose uid disagrees with the stored uid refuses the
+    whole refresh (fail closed) and raises an identity_collision flag. A
+    fetch missing `uid` entirely never NULLs a stored uid either — that
+    would silently prime the NULL-adopt rule to rebind the row to ANY
+    future uid on the next refresh."""
     old_status = parent.status
     meta = senaite.fetch_parent_metadata(parent.sample_id)
+    incoming_uid = meta.get("uid")
+    if (parent.external_lims_uid and incoming_uid
+            and parent.external_lims_uid != incoming_uid):
+        # S8 fail-closed: the id string now resolves to a DIFFERENT SENAITE
+        # object (external counter regression). Refusing the refresh keeps
+        # this row's data frozen instead of silently rebinding it; the flag
+        # routes a human to resolve. NOTE: this also fail-closes the
+        # parent_uid_stale heal path (_create_sub_sample_legacy) — a dead
+        # stored uid now needs manual resolution, by design.
+        log.error(
+            "sub_samples.identity_collision_refresh sample_id=%s "
+            "stored_uid=%s incoming_uid=%s; refresh refused",
+            parent.sample_id, parent.external_lims_uid, incoming_uid,
+        )
+        _flag_identity_collision(db, parent, quarantine_id=None)
+        return
+    prior_uid = parent.external_lims_uid
+    prior_system = parent.external_lims_system
     _populate_basic_info(parent, meta)
+    if not incoming_uid and prior_uid:
+        # Malformed/partial fetch response: restore identity instead of
+        # letting _populate_basic_info NULL it (same prior-identity-restore
+        # idiom as upsert_sample_from_signal's uid-less-replay guard).
+        parent.external_lims_uid = prior_uid
+        parent.external_lims_system = prior_system
+        log.warning(
+            "sub_samples.refresh_uid_missing sample_id=%s; stored uid preserved",
+            parent.sample_id,
+        )
     db.flush()
     if parent.status != old_status:
         from workflow.sample_log import record_sample_transition
