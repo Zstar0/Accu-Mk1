@@ -41,12 +41,20 @@ class NativeSectionsError(Exception):
         self.detail = detail
 
 
-def _ordered_native_profiles(db: Session, services: dict, package: Optional[str]) -> list:
-    """Profiles that are ordered AND reportable: the order bought the key,
-    every member is origin='mk1', and coa_archetype is non-NULL.
+def _ordered_native_profiles(db: Session, services: dict, package: Optional[str],
+                             *, require_archetype: bool = True) -> list:
+    """Profiles that are ordered AND (by default) reportable.
 
-    Mixed-origin or NULL-archetype profiles are silently excluded — they are
-    legitimately not-native-reportable, not errors (all-native scope rule).
+    require_archetype=True  — the COA path: a profile with no coa_archetype
+                              cannot be rendered, so it is excluded.
+    require_archetype=False — the placeholder path
+                              (lims_analyses/parent_placeholders.py): the bench
+                              must see a paid test whether or not it can be
+                              printed yet. Archetype is a RENDERING concern;
+                              it must not decide whether a test is visible.
+
+    The all-mk1 member gate is NOT optional either way — a mixed-origin profile
+    is not native, for any caller.
     """
     from models import AnalysisProfile
 
@@ -60,7 +68,9 @@ def _ordered_native_profiles(db: Session, services: dict, package: Optional[str]
         prof = db.execute(
             select(AnalysisProfile).where(AnalysisProfile.key == key)
         ).scalar_one_or_none()
-        if prof is None or prof.coa_archetype is None:
+        if prof is None:
+            continue
+        if require_archetype and prof.coa_archetype is None:
             continue
         members = prof.analysis_services  # ordered by member sort_order (spec 1)
         if not members or any(svc.origin != "mk1" for svc in members):
@@ -93,6 +103,10 @@ def _eligible_parent_row(db: Session, parent_pk: int, service_id: int):
             LimsAnalysis.lims_sample_pk == parent_pk,
             LimsAnalysis.lims_sub_sample_pk.is_(None),
             LimsAnalysis.analysis_service_id == service_id,
+            # Only a promoted canonical row can be certified. An 'ordered'
+            # placeholder has no result; without this clause the only thing
+            # keeping it out of a certificate is its review_state.
+            LimsAnalysis.provenance == "canonical",
             LimsAnalysis.review_state.in_(ELIGIBLE_STATES),
             LimsAnalysis.retest_of_id.is_(None),
         ).order_by(LimsAnalysis.id.desc())

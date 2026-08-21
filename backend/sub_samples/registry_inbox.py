@@ -17,6 +17,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
 from models import HplcMethod, LimsAnalysis, LimsSample
 
 
@@ -92,6 +93,13 @@ def inbox_candidates_from_registry(
             select(LimsAnalysis).where(
                 LimsAnalysis.lims_sample_pk.in_(list(pk_to_sample_id)),
                 LimsAnalysis.lims_sub_sample_pk.is_(None),
+                # Placeholders (provenance='ordered') are deliberately NOT shown
+                # here. This query has no canonical-wins dedupe, so including
+                # them would double up every promoted service — one placeholder
+                # row plus one canonical row. Bench visibility for ordered-but-
+                # unstarted tests lives on the native parent card
+                # (list_native_parent_analyses_senaite_shape), which does dedupe.
+                LimsAnalysis.provenance != PROVENANCE_ORDERED,
             )
         ).scalars().all()
         method_ids = {a.method_id for a in a_rows if a.method_id}

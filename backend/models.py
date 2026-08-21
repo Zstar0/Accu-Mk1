@@ -1694,7 +1694,10 @@ class LimsAnalysis(Base):
     reportable_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # SENAITE phase-out (parent analysis mirror): provenance discriminates a
-    # promoted/native 'canonical' row from a SENAITE 'shadow' mirror row.
+    # promoted/native 'canonical' row from a SENAITE 'shadow' mirror row, and
+    # from an 'ordered' native placeholder minted at registration
+    # (lims_analyses/parent_placeholders.py). Three partial unique indexes
+    # keep the three from colliding on the same (sample, service).
     provenance: Mapped[str] = mapped_column(
         Text, nullable=False, default="canonical", server_default="canonical",
         index=True,

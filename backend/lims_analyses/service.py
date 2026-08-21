@@ -1012,27 +1012,64 @@ def list_native_parent_analyses_senaite_shape(
     senaite-origin services stay excluded: this is the native section, not
     a mirror of the SENAITE AR (that surface is
     list_parent_analyses_senaite_shape).
+
+    provenance also admits PROVENANCE_ORDERED (registration-time
+    placeholders — see lims_analyses/parent_placeholders.py) so a paid-for
+    native test is visible before any vial/promotion exists. Placeholders
+    are never retired once a canonical row lands for the same service
+    (matching SENAITE shadow-row lifecycle), so the two can coexist here;
+    they are deduped after fetch below, canonical winning.
     """
     from models import AnalysisService, LimsSample
+    from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
 
     parent = db.execute(
         select(LimsSample).where(LimsSample.sample_id == sample_id)
     ).scalar_one_or_none()
     if parent is None:
         raise NotFoundError(f"sample {sample_id!r} not known to Mk1")
-    rows = list(
+    fetched = list(
         db.execute(
             select(LimsAnalysis)
             .join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
             .where(
                 LimsAnalysis.lims_sample_pk == parent.id,
                 LimsAnalysis.lims_sub_sample_pk.is_(None),
-                LimsAnalysis.provenance == "canonical",
+                LimsAnalysis.provenance.in_(("canonical", PROVENANCE_ORDERED)),
                 AnalysisService.origin == "mk1",
             )
             .order_by(LimsAnalysis.keyword, LimsAnalysis.id)
         ).scalars().all()
     )
+
+    # A service can legitimately have BOTH an 'ordered' placeholder and a
+    # 'canonical' promoted row (the placeholder is never retired, matching
+    # SENAITE shadow-row behaviour). Suppress the placeholder wherever a
+    # LIVE canonical row exists for the same service — canonical wins. This
+    # must NOT collapse multiple canonical rows for the same service: the
+    # function's own contract (see docstring) is full lineage with no
+    # latest-per-service dedup, e.g. a retracted old root alongside its
+    # active replacement both stay. Only 'ordered' rows are ever dropped
+    # here; 'canonical' rows are never suppressed against each other.
+    #
+    # "Live" excludes retracted/rejected on purpose: a placeholder means
+    # "this paid test is still outstanding," and a retracted or rejected
+    # canonical row does not discharge that — the result was thrown away,
+    # so the test is outstanding again and the bench must still see it.
+    # Suppressing against a dead canonical row would silently hide that
+    # regression, recreating the exact invisibility this feature exists to
+    # remove. Mirrors the live-only collapse in
+    # list_parent_analyses_senaite_shape (shadow-vs-canonical). Do not
+    # "simplify" this back to "any canonical" — that was tried and is wrong.
+    services_with_live_canonical = {
+        r.analysis_service_id for r in fetched
+        if r.provenance == "canonical" and r.review_state not in ("retracted", "rejected")
+    }
+    rows = [
+        r for r in fetched
+        if r.provenance == "canonical" or r.analysis_service_id not in services_with_live_canonical
+    ]
+
     return _serialize_senaite_shape_rows(db, rows)
 
 
