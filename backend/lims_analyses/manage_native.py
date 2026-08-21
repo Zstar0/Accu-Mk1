@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 
 from models import (
     AnalysisProfile, AnalysisService, LimsAnalysis, LimsSample, LimsSubSample,
-    LimsSubSampleEvent, VialProfileAssignment,
+    LimsSubSampleEvent, VialProfileAssignment, profile_ride_hosts,
 )
 from lims_analyses.parent_placeholders import PROVENANCE_ORDERED, seed_parent_placeholders
 from lims_analyses.service import BadRequestError, ConflictError
@@ -105,13 +105,30 @@ def _vials_of(db: Session, parent: LimsSample) -> list[LimsSubSample]:
 
 
 def _host_vials(db: Session, parent: LimsSample, profile: AnalysisProfile) -> list[LimsSubSample]:
-    """Existing vials whose assignment_role is the profile's host role.
-    Role-dimension profiles host on their own fulfillment_role; anything else
-    (rider profiles) hosts nowhere here — they attach at check-in via
-    resolve_catalog_fulfillment and are out of this slice's add path."""
+    """Existing vials that would host this profile's work.
+
+    Role-dimension profiles host on their own fulfillment_role. A profile
+    with a ride list (profile_ride_hosts) hosts on the FIRST listed role
+    (priority order) that has ≥1 existing non-variance vial — mirroring
+    resolve_catalog_fulfillment's hosts-before-riders walk; with no live
+    ride-host vial it falls back to its own role's vials (the standalone
+    self-mint case). Variance replicates never host rider work — including
+    on the own-role fallback."""
     if profile.fulfillment_dim != "role" or not profile.fulfillment_role:
         return []
-    return [v for v in _vials_of(db, parent) if v.assignment_role == profile.fulfillment_role]
+    vials = _vials_of(db, parent)
+    ride_codes = db.execute(
+        select(profile_ride_hosts.c.host_role_code)
+        .where(profile_ride_hosts.c.analysis_profile_id == profile.id)
+        .order_by(profile_ride_hosts.c.priority)
+    ).scalars().all()
+    for host_role in ride_codes:
+        hosts = [v for v in vials
+                 if v.assignment_role == host_role and v.assignment_kind != "variance"]
+        if hosts:
+            return hosts
+    return [v for v in vials
+            if v.assignment_role == profile.fulfillment_role and v.assignment_kind != "variance"]
 
 
 def native_profiles_for_parent(db: Session, *, parent: LimsSample) -> list[dict]:
@@ -168,9 +185,11 @@ def placeholder_profile_keys(db: Session, parent: LimsSample) -> dict[str, bool]
 # ── write path: add ──────────────────────────────────────────────────────────
 
 def _ensure_host_edge(db: Session, *, vial: LimsSubSample, profile: AnalysisProfile,
-                      user_id: Optional[int]) -> bool:
-    """Add a current host edge (vial ↔ profile) if none exists. Returns True
-    when a row was written. Never supersedes anything."""
+                      user_id: Optional[int], relation: str = "host") -> bool:
+    """Add a current custody edge (vial ↔ profile) if none exists. Returns True
+    when a row was written. Never supersedes anything. The existing-edge
+    pre-check stays relation-agnostic: never write a second current edge for
+    the same vial+profile pair, regardless of relation."""
     existing = db.execute(
         select(VialProfileAssignment).where(
             VialProfileAssignment.lims_sub_sample_pk == vial.id,
@@ -182,7 +201,7 @@ def _ensure_host_edge(db: Session, *, vial: LimsSubSample, profile: AnalysisProf
         return False
     db.add(VialProfileAssignment(
         lims_sub_sample_pk=vial.id, analysis_profile_id=profile.id,
-        relation="host", assigned_at=datetime.utcnow(), assigned_by_id=user_id,
+        relation=relation, assigned_at=datetime.utcnow(), assigned_by_id=user_id,
     ))
     db.flush()
     return True
@@ -203,10 +222,9 @@ def _seed_members_on_vial(db: Session, *, vial: LimsSubSample, members: list[Ana
         )
     ).all()
     existing_kw = {kw for kw, _sid in live}
-    # S3 integration (the ruled "rides the second-landing PR" fix): the shared
-    # row builder dedupes on the UNION of live keyword AND live service id
-    # (drift-proof identity) — build both sets the same way
-    # seed_analyses_for_vial does.
+    # S3 integration: the shared row builder dedupes on the UNION of live
+    # keyword AND live service id (drift-proof identity) — build both sets
+    # the same way seed_analyses_for_vial does.
     existing_service_ids = {sid for _kw, sid in live if sid is not None}
     rows = _seed_rows_from_services(
         db, sub_sample=vial, services=members, existing_kw=existing_kw,
@@ -237,7 +255,9 @@ def add_profile_to_parent(db: Session, *, parent: LimsSample, profile: AnalysisP
 
     hosts: list[dict] = []
     for vial in _host_vials(db, parent, profile):
-        edge_created = _ensure_host_edge(db, vial=vial, profile=profile, user_id=user_id)
+        relation = "rider" if vial.assignment_role != profile.fulfillment_role else "host"
+        edge_created = _ensure_host_edge(db, vial=vial, profile=profile,
+                                         user_id=user_id, relation=relation)
         n = _seed_members_on_vial(db, vial=vial, members=members, user_id=user_id)
         hosts.append({"vial_id": vial.sample_id, "edge_created": edge_created, "vial_rows_created": n})
 
@@ -488,7 +508,8 @@ def resync_parent_from_order(db: Session, *, parent: LimsSample, user_id: Option
     for prof in _ordered_native_profiles(db, services, package, require_archetype=False):
         members = list(prof.analysis_services)
         for vial in _host_vials(db, parent, prof):
-            if _ensure_host_edge(db, vial=vial, profile=prof, user_id=user_id):
+            relation = "rider" if vial.assignment_role != prof.fulfillment_role else "host"
+            if _ensure_host_edge(db, vial=vial, profile=prof, user_id=user_id, relation=relation):
                 edges += 1
             vial_rows += _seed_members_on_vial(db, vial=vial, members=members, user_id=user_id)
 
