@@ -212,7 +212,11 @@ export function FlagCard({
             {assigneeName}
           </span>
           <span aria-hidden>·</span>
-          <span>{relativeTime(flag.updated_at)}</span>
+          <span
+            title={`Created ${new Date(flag.created_at).toLocaleString()} · Last activity ${new Date(flag.updated_at).toLocaleString()}`}
+          >
+            {relativeTime(flag.updated_at)}
+          </span>
         </div>
       </div>
     </div>

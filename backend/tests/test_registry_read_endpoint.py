@@ -243,6 +243,7 @@ def test_analytes_are_the_typed_adapter_output(client):
     assert body["analytes"] == [{
         "raw_name": "KPV", "slot_number": 1,
         "matched_peptide_id": None, "matched_peptide_name": None,
+        "matched_peptide_abbreviation": None,
         "declared_quantity": 2.0,
     }]
     assert body["field_sources"]["analytes"] == "mk1"

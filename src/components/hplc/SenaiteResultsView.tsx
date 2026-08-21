@@ -16,6 +16,7 @@ import { toast } from 'sonner'
 import {
   lookupSenaiteSample,
   setAnalysisResult,
+  transitionAnalysis,
   updateSamplePrep,
   uploadChromatogramToSenaite,
   renderChromatogramImage,
@@ -32,11 +33,39 @@ import { AnalysisTable, StatusBadge } from '@/components/senaite/AnalysisTable'
 /** States where we can write a result value. */
 const FILLABLE_STATES = new Set<string | null>(['unassigned', 'assigned', null])
 
+/** Round to 2 decimals — the precision written to AR result fields.
+ *  Blend totals must be the sum of the ROUNDED per-analyte values (lab
+ *  ruling 2026-08-20): round each item first, then add — so the total on
+ *  the AR always equals the sum of the per-analyte results it sits next
+ *  to. Summing full-precision values and rounding once can differ in the
+ *  last decimal. */
+export const round2 = (n: number) => Math.round(n * 100) / 100
+
 interface AutoFillMapping {
   analysis: SenaiteAnalysis
   value: string
   label: string
   type: 'purity' | 'quantity' | 'identity'
+  /** Why this row can't be plain-filled right now. `submitted` rows are
+   *  recoverable via retract-and-refill (SENAITE hard-locks the Result
+   *  field at to_be_verified — proven live 2026-08-20, both per-user and
+   *  service accounts get "Not allowed to set the field 'Result'").
+   *  `verified` rows need the retest verb (retract is silently rejected
+   *  there) — surfaced but not actionable in v1. Absent = fillable. */
+  lock?: 'submitted' | 'verified'
+}
+
+/** Classify a review_state for auto-fill: fillable now (undefined),
+ *  recoverable via retract ('submitted'), needs retest ('verified'),
+ *  or never a fill target ('skip' — retracted/rejected/cancelled rows
+ *  must not match, the fresh post-retract copy matches instead). */
+function lockForState(
+  state: string | null
+): 'submitted' | 'verified' | 'skip' | undefined {
+  if (FILLABLE_STATES.has(state)) return undefined
+  if (state === 'to_be_verified') return 'submitted'
+  if (state === 'verified' || state === 'published') return 'verified'
+  return 'skip'
 }
 
 /**
@@ -80,7 +109,8 @@ function buildAutoFillMappings(
 
   for (const a of analyses) {
     if (!a.uid) continue
-    if (!FILLABLE_STATES.has(a.review_state)) continue
+    const lock = lockForState(a.review_state)
+    if (lock === 'skip') continue
 
     const name = resolveAnalysisName(a.title ?? a.keyword ?? '', nameMap)
     if (!isRelevantAnalysis(name, peptide)) continue
@@ -95,6 +125,7 @@ function buildAutoFillMappings(
         value: result.purity_percent.toFixed(2),
         label: `${result.purity_percent.toFixed(2)}%`,
         type: 'purity',
+        ...(lock ? { lock } : {}),
       })
     } else if (name.includes('quantity') && result.quantity_mg != null) {
       mappings.push({
@@ -102,6 +133,7 @@ function buildAutoFillMappings(
         value: result.quantity_mg.toFixed(2),
         label: `${result.quantity_mg.toFixed(2)} mg`,
         type: 'quantity',
+        ...(lock ? { lock } : {}),
       })
     } else if (name.includes('identity') && result.identity_conforms != null) {
       // Try to match against predefined result_options
@@ -123,6 +155,7 @@ function buildAutoFillMappings(
         value,
         label: result.identity_conforms ? 'Conforms' : 'Does Not Conform',
         type: 'identity',
+        ...(lock ? { lock } : {}),
       })
     }
   }
@@ -137,7 +170,9 @@ function buildAutoFillMappings(
  * Also fills blend-level aggregates: Blend Purity, Peptide Total Quantity,
  * Peptide ID (HPLC).
  */
-function buildAllAutoFillMappings(
+// Exported for tests (senaite-autofill-qty.test.ts) — not part of the
+// component API.
+export function buildAllAutoFillMappings(
   results: HPLCAnalysisResult[],
   analyses: SenaiteAnalysis[],
   nameMap: Map<number, string>,
@@ -158,7 +193,8 @@ function buildAllAutoFillMappings(
 
   // Aggregate analyses: Peptide Total Quantity, Blend Purity, Peptide ID (HPLC)
   {
-    const totalQty = results.reduce((sum, r) => sum + (r.quantity_mg ?? 0), 0)
+    // Round-then-sum (see round2) so the total matches the per-analyte fields.
+    const totalQty = results.reduce((sum, r) => sum + round2(r.quantity_mg ?? 0), 0)
     const weightedPuritySum = results.reduce(
       (sum, r) => sum + (r.quantity_mg ?? 0) * (r.purity_percent ?? 0), 0
     )
@@ -167,7 +203,8 @@ function buildAllAutoFillMappings(
 
     for (const a of analyses) {
       if (!a.uid || claimed.has(a.uid)) continue
-      if (!FILLABLE_STATES.has(a.review_state)) continue
+      const lock = lockForState(a.review_state)
+      if (lock === 'skip') continue
       const name = (a.title ?? a.keyword ?? '').toLowerCase()
 
       if (name.includes('blend purity') && blendPurity > 0) {
@@ -177,6 +214,7 @@ function buildAllAutoFillMappings(
           value: blendPurity.toFixed(2),
           label: `${blendPurity.toFixed(2)}%`,
           type: 'purity',
+          ...(lock ? { lock } : {}),
         })
       } else if (name.includes('total') && name.includes('quantity') && totalQty > 0) {
         claimed.add(a.uid)
@@ -185,6 +223,7 @@ function buildAllAutoFillMappings(
           value: totalQty.toFixed(2),
           label: `${totalQty.toFixed(2)} mg`,
           type: 'quantity',
+          ...(lock ? { lock } : {}),
         })
       } else if (name === 'peptide id (hplc)' || (name.startsWith('peptide') && name.includes('id') && name.includes('hplc'))) {
         // Blend-level identity (Peptide ID) — conforms only if all analytes conform
@@ -207,12 +246,93 @@ function buildAllAutoFillMappings(
           value,
           label: blendIdentity ? 'Conforms' : 'Does Not Conform',
           type: 'identity',
+          ...(lock ? { lock } : {}),
         })
       }
     }
   }
 
   return allMappings
+}
+
+// ── Retract & refill orchestration ───────────────────────────────────────────
+
+export interface RetractRefillDeps {
+  /** transitionAnalysis(uid, 'retract') — the proxy post-verifies the state
+   *  flip and reports SENAITE's silent rejections as success:false. */
+  retract: (uid: string) => Promise<{ success: boolean; message?: string }>
+  refill: (uid: string, value: string) => Promise<{ success: boolean; message?: string }>
+  relookup: () => Promise<SenaiteLookupResult>
+}
+
+/**
+ * Second-run recovery for submitted results: retract each locked row (the
+ * old value stays in the AR history as `retracted`), re-look-up to find the
+ * fresh copy SENAITE minted (same keyword, fillable state, new uid — note
+ * the copy is born carrying the OLD value, which is exactly the hand-typing
+ * trap this replaces), then fill it with the run-2 value.
+ *
+ * Returns per-row status keyed by the ORIGINAL uid (the UI lists rows by
+ * the mapping's analysis uid). Exported for tests.
+ */
+export async function runRetractRefill(
+  mappings: AutoFillMapping[],
+  deps: RetractRefillDeps,
+): Promise<Map<string, 'success' | 'error'>> {
+  const results = new Map<string, 'success' | 'error'>()
+  const retracted: AutoFillMapping[] = []
+
+  for (const m of mappings) {
+    const uid = m.analysis.uid
+    if (!uid) continue
+    try {
+      const resp = await deps.retract(uid)
+      if (resp.success) retracted.push(m)
+      else results.set(uid, 'error')
+    } catch {
+      results.set(uid, 'error')
+    }
+  }
+
+  if (retracted.length === 0) return results
+
+  let fresh: SenaiteLookupResult
+  try {
+    fresh = await deps.relookup()
+  } catch {
+    // Retracts landed but we can't find the copies — mark them errored so
+    // the tech knows to finish in the table below.
+    for (const m of retracted) results.set(m.analysis.uid ?? '', 'error')
+    return results
+  }
+
+  const consumed = new Set<string>()
+  for (const m of retracted) {
+    const oldUid = m.analysis.uid ?? ''
+    const copy = (fresh.analyses ?? []).find(
+      a =>
+        a.uid &&
+        a.uid !== oldUid &&
+        !consumed.has(a.uid) &&
+        FILLABLE_STATES.has(a.review_state) &&
+        (m.analysis.keyword != null
+          ? a.keyword === m.analysis.keyword
+          : a.title === m.analysis.title)
+    )
+    if (!copy?.uid) {
+      results.set(oldUid, 'error')
+      continue
+    }
+    consumed.add(copy.uid)
+    try {
+      const resp = await deps.refill(copy.uid, m.value)
+      results.set(oldUid, resp.success ? 'success' : 'error')
+    } catch {
+      results.set(oldUid, 'error')
+    }
+  }
+
+  return results
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -235,6 +355,11 @@ export function SenaiteResultsView({ prep, results: hplcResults, onBack, onCompl
   // Auto-fill state
   const [filling, setFilling] = useState(false)
   const [fillResults, setFillResults] = useState<Map<string, 'success' | 'error'>>(new Map())
+
+  // Retract-and-refill state (second-run recovery for submitted rows)
+  const [retracting, setRetracting] = useState(false)
+  const [confirmRetract, setConfirmRetract] = useState(false)
+  const [retractResults, setRetractResults] = useState<Map<string, 'success' | 'error'>>(new Map())
 
   // Chromatogram preview
   const [chromUrl, setChromUrl] = useState<string | null>(null)
@@ -282,11 +407,16 @@ export function SenaiteResultsView({ prep, results: hplcResults, onBack, onCompl
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Build analyteNameMap from loaded data
+  // Build analyteNameMap from loaded data. Prefer the matched peptide's
+  // ABBREVIATION: HPLC results key analytes by abbreviation, and when it
+  // diverges from the peptide name (e.g. TB500 (Thymosin Beta 4) vs
+  // Thymosin Beta-4) name-based slot matching fails silently — the blend's
+  // per-analyte QTY/purity fields then never auto-fill.
   const analyteNameMap = new Map<number, string>()
   if (senaiteData) {
     for (const analyte of senaiteData.analytes) {
       const displayName =
+        analyte.matched_peptide_abbreviation ??
         analyte.matched_peptide_name ??
         analyte.raw_name.replace(/\s*-\s*[^-]+\([^)]+\)\s*$/, '')
       analyteNameMap.set(analyte.slot_number, displayName)
@@ -302,15 +432,38 @@ export function SenaiteResultsView({ prep, results: hplcResults, onBack, onCompl
 
   // Auto-fill mappings
   const autoFillMappings = senaiteData ? buildAllAutoFillMappings(hplcResults, analyses, analyteNameMap) : []
+  // Partition: plain-fillable now / submitted (retract-and-refill, SENAITE
+  // rows only — native mk1: rows keep their transitions in the table below) /
+  // verified (needs the retest verb; not actionable in v1).
+  const fillableMappings = autoFillMappings.filter(m => !m.lock)
+  const submittedMappings = autoFillMappings.filter(
+    m => m.lock === 'submitted' && m.analysis.uid && !m.analysis.uid.startsWith('mk1:')
+  )
+  const nativeSubmittedCount = autoFillMappings.filter(
+    m => m.lock === 'submitted' && m.analysis.uid?.startsWith('mk1:')
+  ).length
+  const verifiedLockedCount = autoFillMappings.filter(m => m.lock === 'verified').length
+
+  // "Analyte N ..." titles render with the resolved peptide name.
+  const displayTitle = (m: AutoFillMapping) => {
+    const match = m.analysis.title.match(/^Analyte\s+(\d)\s*(.*)/i)
+    if (match?.[1]) {
+      const slot = parseInt(match[1], 10)
+      const suffix = match[2] ?? ''
+      const name = analyteNameMap.get(slot)
+      if (name) return `${name} ${suffix}`.trim()
+    }
+    return m.analysis.title
+  }
 
   // ── Auto-fill handler ───────────────────────────────────────────────────────
 
   const handleAutoFill = useCallback(async () => {
-    if (autoFillMappings.length === 0) return
+    if (fillableMappings.length === 0) return
     setFilling(true)
     const results = new Map<string, 'success' | 'error'>()
 
-    for (const mapping of autoFillMappings) {
+    for (const mapping of fillableMappings) {
       const uid = mapping.analysis.uid
       if (!uid) continue
       try {
@@ -357,7 +510,39 @@ export function SenaiteResultsView({ prep, results: hplcResults, onBack, onCompl
           .catch(() => { /* best-effort — don't block the user */ })
       }
     }
-  }, [autoFillMappings, senaiteData, hplcResults])
+  }, [fillableMappings, senaiteData, hplcResults])
+
+  const handleRetractRefill = useCallback(async () => {
+    if (submittedMappings.length === 0) return
+    setRetracting(true)
+    setConfirmRetract(false)
+    try {
+      const results = await runRetractRefill(submittedMappings, {
+        retract: uid => transitionAnalysis(uid, 'retract'),
+        refill: (uid, value) => setAnalysisResult(uid, value),
+        relookup: () => lookupSenaiteSample(sampleIdInput.trim() || prep.senaite_sample_id || ''),
+      })
+      setRetractResults(results)
+      const ok = [...results.values()].filter(v => v === 'success').length
+      const bad = [...results.values()].filter(v => v === 'error').length
+      if (bad === 0) {
+        toast.success(
+          `Retracted & refilled ${ok} result${ok !== 1 ? 's' : ''} — review and submit below`
+        )
+      } else {
+        toast.warning(`${ok} refilled, ${bad} failed — finish the failed rows in the table below`)
+      }
+      // Refresh so the table and mappings reflect the fresh copies.
+      try {
+        const data = await lookupSenaiteSample(sampleIdInput.trim() || prep.senaite_sample_id || '')
+        setSenaiteData(data)
+      } catch {
+        /* stale view is recoverable with the Load button */
+      }
+    } finally {
+      setRetracting(false)
+    }
+  }, [submittedMappings, sampleIdInput, prep.senaite_sample_id])
 
   // ── AnalysisTable callbacks ──────────────────────────────────────────────────
 
@@ -493,7 +678,7 @@ export function SenaiteResultsView({ prep, results: hplcResults, onBack, onCompl
             </div>
 
             {hplcResults.length > 1 && (() => {
-              const totalQty = hplcResults.reduce((sum, r) => sum + (r.quantity_mg ?? 0), 0)
+              const totalQty = hplcResults.reduce((sum, r) => sum + round2(r.quantity_mg ?? 0), 0)
               const weightedPuritySum = hplcResults.reduce(
                 (sum, r) => sum + (r.quantity_mg ?? 0) * (r.purity_percent ?? 0), 0
               )
@@ -667,7 +852,10 @@ export function SenaiteResultsView({ prep, results: hplcResults, onBack, onCompl
           </div>
 
           {/* Auto-fill card */}
-          {autoFillMappings.length > 0 && (
+          {(fillableMappings.length > 0 ||
+            submittedMappings.length > 0 ||
+            verifiedLockedCount > 0 ||
+            nativeSubmittedCount > 0) && (
             <div className="rounded-lg border border-amber-200 dark:border-amber-500/20 bg-amber-50/50 dark:bg-amber-500/5 p-4 space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
@@ -678,62 +866,163 @@ export function SenaiteResultsView({ prep, results: hplcResults, onBack, onCompl
                       : `${hplcResults.length} analyte analyses`}
                   </span>
                 </div>
-                <Button
-                  size="sm"
-                  onClick={handleAutoFill}
-                  disabled={filling || fillResults.size > 0}
-                  className="h-7 gap-1.5 text-xs"
-                >
-                  {filling ? (
-                    <>
-                      <Loader2 size={13} className="animate-spin" />
-                      Filling…
-                    </>
-                  ) : fillResults.size > 0 ? (
-                    <>
-                      <Check size={13} />
-                      Filled
-                    </>
-                  ) : (
-                    <>
-                      <Zap size={13} />
-                      Fill {autoFillMappings.length} result{autoFillMappings.length !== 1 ? 's' : ''}
-                    </>
-                  )}
-                </Button>
+                {fillableMappings.length > 0 && (
+                  <Button
+                    size="sm"
+                    onClick={handleAutoFill}
+                    disabled={filling || fillResults.size > 0}
+                    className="h-7 gap-1.5 text-xs"
+                  >
+                    {filling ? (
+                      <>
+                        <Loader2 size={13} className="animate-spin" />
+                        Filling…
+                      </>
+                    ) : fillResults.size > 0 ? (
+                      <>
+                        <Check size={13} />
+                        Filled
+                      </>
+                    ) : (
+                      <>
+                        <Zap size={13} />
+                        Fill {fillableMappings.length} result{fillableMappings.length !== 1 ? 's' : ''}
+                      </>
+                    )}
+                  </Button>
+                )}
               </div>
 
-              <div className="grid gap-1.5">
-                {autoFillMappings.map(m => {
-                  const uid = m.analysis.uid ?? ''
-                  const status = fillResults.get(uid)
-                  return (
-                    <div
-                      key={uid}
-                      className="flex items-center gap-2 text-xs"
-                    >
-                      {status === 'success' ? (
-                        <Check size={12} className="text-emerald-600 shrink-0" />
-                      ) : status === 'error' ? (
-                        <X size={12} className="text-destructive shrink-0" />
-                      ) : (
-                        <div className="w-3 h-3 rounded-full border border-border shrink-0" />
-                      )}
-                      <span className="text-muted-foreground">{(() => {
-                        const match = m.analysis.title.match(/^Analyte\s+(\d)\s*(.*)/i)
-                        if (match?.[1]) {
-                          const slot = parseInt(match[1], 10)
-                          const suffix = match[2] ?? ''
-                          const name = analyteNameMap.get(slot)
-                          if (name) return `${name} ${suffix}`.trim()
-                        }
-                        return m.analysis.title
-                      })()}</span>
-                      <span className="text-foreground font-mono font-medium">{m.label}</span>
-                    </div>
-                  )
-                })}
-              </div>
+              {fillableMappings.length > 0 && (
+                <div className="grid gap-1.5">
+                  {fillableMappings.map(m => {
+                    const uid = m.analysis.uid ?? ''
+                    const status = fillResults.get(uid)
+                    return (
+                      <div
+                        key={uid}
+                        className="flex items-center gap-2 text-xs"
+                      >
+                        {status === 'success' ? (
+                          <Check size={12} className="text-emerald-600 shrink-0" />
+                        ) : status === 'error' ? (
+                          <X size={12} className="text-destructive shrink-0" />
+                        ) : (
+                          <div className="w-3 h-3 rounded-full border border-border shrink-0" />
+                        )}
+                        <span className="text-muted-foreground">{displayTitle(m)}</span>
+                        <span className="text-foreground font-mono font-medium">{m.label}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {/* Submitted rows from a previous run: SENAITE locks the Result
+                  field once submitted; the sanctioned unlock is retract (the
+                  run-1 value stays in the AR history), then filling the fresh
+                  copy SENAITE mints. Confirm-gated. */}
+              {submittedMappings.length > 0 && (
+                <div className="space-y-2 border-t border-amber-200/60 dark:border-amber-500/15 pt-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-xs font-medium text-muted-foreground">
+                      {submittedMappings.length} result{submittedMappings.length !== 1 ? 's' : ''} already
+                      submitted from a previous run
+                    </span>
+                    {!confirmRetract ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setConfirmRetract(true)}
+                        disabled={retracting || retractResults.size > 0}
+                        className="h-7 gap-1.5 text-xs"
+                      >
+                        {retracting ? (
+                          <>
+                            <Loader2 size={13} className="animate-spin" />
+                            Retracting…
+                          </>
+                        ) : retractResults.size > 0 ? (
+                          <>
+                            <Check size={13} />
+                            Refilled
+                          </>
+                        ) : (
+                          <>Retract &amp; refill {submittedMappings.length}</>
+                        )}
+                      </Button>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          onClick={handleRetractRefill}
+                          disabled={retracting}
+                          className="h-7 text-xs"
+                        >
+                          Confirm
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setConfirmRetract(false)}
+                          disabled={retracting}
+                          className="h-7 text-xs"
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                  {confirmRetract && (
+                    <p className="text-[11px] text-muted-foreground">
+                      Retracts each submitted result and fills the fresh copy with the value
+                      below — the previous values stay in the sample&apos;s history as
+                      retracted. You review and submit afterwards, same as the first run.
+                    </p>
+                  )}
+                  <div className="grid gap-1.5">
+                    {submittedMappings.map(m => {
+                      const uid = m.analysis.uid ?? ''
+                      const status = retractResults.get(uid)
+                      return (
+                        <div key={uid} className="flex items-center gap-2 text-xs">
+                          {status === 'success' ? (
+                            <Check size={12} className="text-emerald-600 shrink-0" />
+                          ) : status === 'error' ? (
+                            <X size={12} className="text-destructive shrink-0" />
+                          ) : (
+                            <div className="w-3 h-3 rounded-full border border-amber-400/60 shrink-0" />
+                          )}
+                          <span className="text-muted-foreground">{displayTitle(m)}</span>
+                          <span className="font-mono text-muted-foreground line-through">
+                            {m.analysis.result ?? '—'}
+                          </span>
+                          <span aria-hidden className="text-muted-foreground">→</span>
+                          <span className="text-foreground font-mono font-medium">{m.label}</span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {(verifiedLockedCount > 0 || nativeSubmittedCount > 0) && (
+                <p className="text-[11px] text-muted-foreground">
+                  {verifiedLockedCount > 0 && (
+                    <>
+                      {verifiedLockedCount} verified result{verifiedLockedCount !== 1 ? 's' : ''} can&apos;t
+                      be refilled — a verified value needs a retest via the verification flow.
+                    </>
+                  )}
+                  {verifiedLockedCount > 0 && nativeSubmittedCount > 0 && ' '}
+                  {nativeSubmittedCount > 0 && (
+                    <>
+                      {nativeSubmittedCount} native submitted row{nativeSubmittedCount !== 1 ? 's' : ''} —
+                      manage in the analyses table below.
+                    </>
+                  )}
+                </p>
+              )}
             </div>
           )}
 
