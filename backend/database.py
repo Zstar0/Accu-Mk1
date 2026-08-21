@@ -387,10 +387,14 @@ def _run_migrations():
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS customer_remarks_include BOOLEAN NOT NULL DEFAULT TRUE",
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS customer_remarks_delivered_at TIMESTAMP",
         # Backfill — non-HPLC sub-samples are not variance candidates by default.
-        # Idempotent: re-running matches no rows once already flipped.
+        # Idempotent: re-running matches no rows once already flipped. The
+        # COALESCE preserves an operator-written exclusion reason (audit
+        # 2026-08-21): the POLICY flip re-applies every boot by design, but
+        # boot must never destroy a human's note about why.
         """UPDATE lims_sub_samples
               SET in_variance_set = FALSE,
-                  variance_exclusion_reason = 'auto: assignment_role != hplc'
+                  variance_exclusion_reason = COALESCE(variance_exclusion_reason,
+                      'auto: assignment_role != hplc')
             WHERE assignment_role IN ('endo', 'ster', 'xtra')
               AND in_variance_set = TRUE""",
         # hm-specific backfill (fix round, spec-3 Task 3): split out from the
@@ -404,7 +408,8 @@ def _run_migrations():
         # before that constant existed, or between deploy and next request.
         """UPDATE lims_sub_samples
               SET in_variance_set = FALSE,
-                  variance_exclusion_reason = 'auto: hm is single-vial (vials_required=1); never variance-eligible'
+                  variance_exclusion_reason = COALESCE(variance_exclusion_reason,
+                      'auto: hm is single-vial (vials_required=1); never variance-eligible')
             WHERE assignment_role = 'hm'
               AND in_variance_set = TRUE""",
         # ── SLA tiers (revises the former sla_targets model) ──
@@ -1505,7 +1510,10 @@ def _run_migrations():
         frozen BOOLEAN NOT NULL DEFAULT FALSE,
         is_system BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        color VARCHAR(50),
+        short_label VARCHAR(16),
+        badge_glyph VARCHAR(2)
     )""",
         # --- Catalog-driven bench (spec 4): ride lists ---
         # host_role_code deliberately NOT an FK to vial_roles (route-edge
@@ -1643,6 +1651,22 @@ def _run_migrations():
         # once by registration, so check-in seeds what the customer bought
         # even after a later catalog edit (backend/catalog/snapshot.py).
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS catalog_snapshot JSONB",
+        # S1 roles-as-data (2026-08-11): display faces on vial_roles, seeded
+        # to match the pre-catalog hardcoded rendering exactly. Triple-NULL
+        # guard (fix round) = idempotent, never clobbers admin edits: an
+        # admin who chose Auto (color=NULL) but set short_label/badge_glyph
+        # must not have those two re-stamped on the next boot, so all three
+        # faces must be NULL before this fires. Residual (accepted,
+        # Handler-surfaced): a legacy role reset fully to Auto (all three
+        # NULL) still reverts to the legacy display on the next restart.
+        "ALTER TABLE vial_roles ADD COLUMN IF NOT EXISTS color VARCHAR(50)",
+        "ALTER TABLE vial_roles ADD COLUMN IF NOT EXISTS short_label VARCHAR(16)",
+        "ALTER TABLE vial_roles ADD COLUMN IF NOT EXISTS badge_glyph VARCHAR(2)",
+        "UPDATE vial_roles SET color='green', short_label='HPLC', badge_glyph='H' WHERE code='hplc' AND color IS NULL AND short_label IS NULL AND badge_glyph IS NULL",
+        "UPDATE vial_roles SET color='orange', short_label='ENDO', badge_glyph='E' WHERE code='endo' AND color IS NULL AND short_label IS NULL AND badge_glyph IS NULL",
+        "UPDATE vial_roles SET color='purple', short_label='PCR', badge_glyph='P' WHERE code='ster' AND color IS NULL AND short_label IS NULL AND badge_glyph IS NULL",
+        "UPDATE vial_roles SET color='sky', short_label='XTRA', badge_glyph='X' WHERE code='xtra' AND color IS NULL AND short_label IS NULL AND badge_glyph IS NULL",
+        "UPDATE vial_roles SET color='slate', short_label='HM', badge_glyph='M' WHERE code='hm' AND color IS NULL AND short_label IS NULL AND badge_glyph IS NULL",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

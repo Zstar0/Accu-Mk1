@@ -412,6 +412,13 @@ class VialRole(Base):
     is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    # S1 roles-as-data: display faces (NULL = fall back — color: the role's
+    # department color, then neutral; short_label: code.upper(); badge_glyph:
+    # first char of the short form). Color names come from the FE's closed
+    # class map (role-display.ts) — never free-form CSS.
+    color: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    short_label: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    badge_glyph: Mapped[Optional[str]] = mapped_column(String(2), nullable=True)
 
     department = relationship("Department", lazy="selectin")
 

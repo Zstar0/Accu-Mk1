@@ -894,6 +894,113 @@ async def get_sample_retest_info(
     return result
 
 
+@app.get("/samples/{sample_id}/transfer-info")
+def get_sample_transfer_info(
+    sample_id: str,
+    _current_user=Depends(get_current_user),
+):
+    """
+    Account-transfer lineage for a sample, both directions.
+
+    Mirrors get_sample_retest_info above, including the auth gate: this
+    returns source_order_id/source_user_id, cross-account ownership data
+    mapping which customer's samples became which other customer's — exactly
+    what a transfer is supposed to keep internal, so it is no less guarded
+    than the endpoint it was modeled on.
+
+    transfer_of_senaite_id lives INSIDE the payload JSON (like
+    retest_of_senaite_id does for retests), while is_transfer,
+    transfer_of_order_id, and transfer_source_user_id are real columns on
+    order_submissions.
+
+    Defined with `def`, not `async def`, on purpose: this does synchronous DB
+    work, and an awaitless `async def` blocks the event loop for every other
+    request — a known defect class in this backend (see get_sample_retest_info
+    just above for the existing instance of it). Do not "fix" this back to async.
+
+    Reads from the integration-service Postgres directly. Cheap — bounded
+    queries against indexed columns + JSONB lateral expansions.
+    """
+    from psycopg2 import errors as psycopg2_errors
+    from psycopg2.extras import RealDictCursor
+
+    result = {
+        "is_transfer": False,
+        "source_sample_id": None,
+        "source_order_id": None,
+        "source_user_id": None,
+        "transferred_as": [],
+    }
+
+    try:
+        with get_integration_db() as int_conn:
+            with int_conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # Backward: was THIS sample created by a transfer?
+                # sample_results is a JSONB object keyed by sample "number"
+                # (matching payload.samples[].number) — not a list. Same
+                # shape the retest query above keys off of.
+                cur.execute(
+                    """
+                    SELECT
+                      os.order_id::text AS order_id,
+                      os.transfer_of_order_id,
+                      os.transfer_source_user_id,
+                      s.value->>'transfer_of_senaite_id' AS source_sample_id
+                    FROM order_submissions os,
+                         jsonb_array_elements(os.payload->'samples') s
+                    WHERE os.is_transfer = TRUE
+                      AND s.value->>'transfer_of_senaite_id' IS NOT NULL
+                      AND os.sample_results->(s.value->>'number')->>'senaite_id' = %s
+                    LIMIT 1
+                    """,
+                    [sample_id],
+                )
+                row = cur.fetchone()
+                if row:
+                    result["is_transfer"] = True
+                    result["source_sample_id"] = row["source_sample_id"]
+                    result["source_order_id"] = row["transfer_of_order_id"]
+                    result["source_user_id"] = row["transfer_source_user_id"]
+
+                # Forward: which samples were transferred FROM this one?
+                cur.execute(
+                    """
+                    SELECT
+                      os.order_id::text AS order_id,
+                      os.sample_results->(s.value->>'number')->>'senaite_id' AS new_sample_id
+                    FROM order_submissions os,
+                         jsonb_array_elements(os.payload->'samples') s
+                    WHERE os.is_transfer = TRUE
+                      AND s.value->>'transfer_of_senaite_id' = %s
+                      AND os.sample_results->(s.value->>'number')->>'senaite_id' IS NOT NULL
+                    ORDER BY os.created_at
+                    """,
+                    [sample_id],
+                )
+                for r in cur.fetchall():
+                    result["transferred_as"].append({
+                        "sample_id": r["new_sample_id"],
+                        "order_id": int(r["order_id"]) if r["order_id"] else None,
+                    })
+    except (psycopg2_errors.UndefinedColumn, psycopg2_errors.UndefinedTable):
+        # The transfer columns/migration (w1x2y3z4a5b6) aren't applied in this
+        # environment — the all-empty shell is the DESIGNED answer, and this is
+        # the only failure allowed to degrade silently (deploy-order
+        # tolerance: an Mk1 deploy may precede the IS migration window).
+        pass
+    except Exception as exc:
+        # Narrowed per Task 9 carried-forward verification #5: a lineage
+        # endpoint must never answer "not a transfer" when the truth is
+        # unknown. Connection refusals, timeouts, and any other query failure
+        # surface as an explicit 503 instead of an empty shell.
+        raise HTTPException(
+            status_code=503,
+            detail="transfer lineage temporarily unavailable (integration DB unreachable)",
+        ) from exc
+
+    return result
+
+
 def _activity_bucket_label(kind, role):
     """Helper to map analysis bucket kind/role to display label."""
     if kind == "variance":
@@ -2418,6 +2525,19 @@ class DepartmentResponse(BaseModel):
 
 # ─── Vial Role schemas ───
 
+# S1: closed color-name vocabulary — must stay in sync with the FE's
+# ROLE_COLOR_* class maps (src/lib/role-display.ts). Engineer-owned on
+# purpose: each name has static Tailwind classes behind it.
+ALLOWED_ROLE_COLORS = {"green", "orange", "purple", "sky", "slate", "amber",
+                       "blue", "emerald", "red", "violet", "zinc", "rose"}
+
+
+def _validate_role_color(v):
+    if v is not None and v not in ALLOWED_ROLE_COLORS:
+        raise ValueError(f"unknown color {v!r}; allowed: {sorted(ALLOWED_ROLE_COLORS)}")
+    return v
+
+
 class VialRoleCreate(BaseModel):
     code: str
     label: str
@@ -2425,6 +2545,13 @@ class VialRoleCreate(BaseModel):
     boxable: bool = False
     variance_eligible: bool = False
     sort_order: int = 0
+    color: Optional[str] = None
+    short_label: Optional[str] = None
+    badge_glyph: Optional[str] = None
+
+    @validator("color")
+    def color_must_be_known(cls, v):
+        return _validate_role_color(v)
 
 
 class VialRoleUpdate(BaseModel):
@@ -2434,6 +2561,13 @@ class VialRoleUpdate(BaseModel):
     boxable: Optional[bool] = None
     variance_eligible: Optional[bool] = None
     sort_order: Optional[int] = None
+    color: Optional[str] = None
+    short_label: Optional[str] = None
+    badge_glyph: Optional[str] = None
+
+    @validator("color")
+    def color_must_be_known(cls, v):
+        return _validate_role_color(v)
 
 
 class VialRoleResponse(BaseModel):
@@ -2446,6 +2580,9 @@ class VialRoleResponse(BaseModel):
     sort_order: int
     frozen: bool
     is_system: bool
+    color: Optional[str] = None
+    short_label: Optional[str] = None
+    badge_glyph: Optional[str] = None
 
     class Config:
         from_attributes = True

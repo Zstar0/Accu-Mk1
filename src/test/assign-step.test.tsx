@@ -13,6 +13,12 @@ vi.mock('@/lib/api', async importOriginal => {
     patchVialAssignment: vi.fn(),
     updateSenaiteSampleFields: vi.fn(),
     putVarianceOverride: vi.fn(),
+    // S1 roles-as-data: AssignStep now calls useVialRoles(); without this the
+    // real fetcher would fire a real network call on every render. Resolves
+    // empty so roleShortLabel/roleFullLabel take the same uppercased-code
+    // fallback the unmocked fetch's failure produced before — every
+    // fixture-role assertion below (HM, T_ROLE, etc.) is unchanged.
+    getVialRoles: vi.fn(),
   }
 })
 
@@ -20,7 +26,7 @@ vi.mock('sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }))
 
-import { ApiCodeError, getVialPlan, patchVialAssignment, putVarianceOverride } from '@/lib/api'
+import { ApiCodeError, getVialPlan, getVialRoles, patchVialAssignment, putVarianceOverride } from '@/lib/api'
 import { toast } from 'sonner'
 
 // Section fixtures mirror the real shape emitted by
@@ -251,6 +257,7 @@ beforeEach(() => {
     assignment_role: null,
   })
   vi.mocked(putVarianceOverride).mockResolvedValue({ variance: {} })
+  vi.mocked(getVialRoles).mockResolvedValue([])
 })
 
 /** Probes simulating the parent sample-details page's cached queries.
@@ -548,5 +555,24 @@ describe('catalog-driven sections (Task 9)', () => {
     expect(grid).not.toBeNull()
     expect((grid as HTMLElement).style.gridTemplateColumns).toContain('auto-fit')
     expect((grid as HTMLElement).style.gridTemplateColumns).toContain('minmax')
+  })
+})
+
+describe('vial-roles loading gate (fix round 1)', () => {
+  it('holds the loading state until the vial-roles catalog resolves, even once the plan has loaded', async () => {
+    // The plan resolves immediately; the catalog stays pending — the section
+    // content (which would render roleShort off a cold/undefined cache) must
+    // not appear until both queries have settled.
+    let resolveRoles!: (rows: Awaited<ReturnType<typeof getVialRoles>>) => void
+    vi.mocked(getVialRoles).mockImplementation(() => new Promise(r => { resolveRoles = r }))
+    renderStep()
+
+    // Give the plan fetch a tick to resolve — still no section content, because
+    // the vial-roles gate is still pending.
+    await waitFor(() => expect(getVialPlan).toHaveBeenCalled())
+    expect(screen.queryByText('Analytical')).not.toBeInTheDocument()
+
+    resolveRoles([])
+    expect(await screen.findByText('Analytical')).toBeInTheDocument()
   })
 })
