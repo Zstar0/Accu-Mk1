@@ -1890,10 +1890,23 @@ class LimsSubSampleEvent(Base):
     """
     Lightweight event log for sub-sample actions that have no other audit trail.
 
+    Polymorphic host (Task 7, native parent verification flow): belongs to
+    either a sub-sample (sub_sample_pk) or a parent (lims_sample_pk) —
+    mirrors LimsAnalysis's two-host pattern. The one-host CHECK lives in
+    database.py DDL only, not here (same reason as LimsAnalysis /
+    vial_profile_assignments — SQLite test fixtures stay unconstrained).
+
     Writers (all in the same transaction as the action they record):
       - set_assignment_role   → event='role_assigned'   details={from, to}
       - update_sub_sample     → event='remarks_updated' details={preview}
       - delete_pristine_analysis → event='analysis_removed' details={keyword}
+      - apply_transition (parent verify) → event='parent_analysis_verified'
+        details={keyword, analysis_id, service_origin}
+      - parent_retest → event='parent_analysis_retested'
+        details={keyword, source_row_ids, unpromoted, service_origin}
+      - vial_source_retest → event='promoted_source_retested'
+        details={keyword, new_row_id, parent_state_before, parent_unverified,
+        service_origin}
 
     user_id is nullable so automated / system-initiated paths can still write rows.
     """
@@ -1901,8 +1914,11 @@ class LimsSubSampleEvent(Base):
     __tablename__ = "lims_sub_sample_events"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    sub_sample_pk: Mapped[int] = mapped_column(
-        Integer, ForeignKey("lims_sub_samples.id", ondelete="CASCADE"), nullable=False
+    sub_sample_pk: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("lims_sub_samples.id", ondelete="CASCADE"), nullable=True
+    )
+    lims_sample_pk: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("lims_samples.id", ondelete="CASCADE"), nullable=True
     )
     event: Mapped[str] = mapped_column(Text, nullable=False)
     details: Mapped[Optional[dict]] = mapped_column(
@@ -1916,10 +1932,11 @@ class LimsSubSampleEvent(Base):
     )
 
     def __repr__(self) -> str:
-        return (
-            f"<LimsSubSampleEvent(id={self.id}, sub_sample_pk={self.sub_sample_pk}, "
-            f"event={self.event!r})>"
+        host = (
+            f"sub_sample_pk={self.sub_sample_pk}" if self.sub_sample_pk is not None
+            else f"lims_sample_pk={self.lims_sample_pk}"
         )
+        return f"<LimsSubSampleEvent(id={self.id}, {host}, event={self.event!r})>"
 
 
 class VialProfileAssignment(Base):

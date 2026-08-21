@@ -19,7 +19,7 @@ from lims_analyses.state_machine import (
 
 def test_states_set_is_complete():
     assert STATES == {
-        "unassigned", "assigned", "to_be_verified",
+        "unassigned", "assigned", "to_be_verified", "parent_to_verify",
         "verified", "published", "promoted", "variance_verified",
         "rejected", "retracted",
     }
@@ -229,14 +229,18 @@ def test_next_state_with_tier_allows_legal_kind():
 def test_allowed_kinds_filtered_by_tier():
     # Sub-sample (vial) tier no longer self-verifies — verification is the
     # promote act; the vial moves to_be_verified -> promoted. So 'verify' is
-    # gone from the vial-tier kinds. parent-tier shares only retract here.
-    # variance_verify is the new vial-tier sign-off path for replicate sets.
-    # 'submit' is allowed as an in-place result correction (self-edge) before
-    # the vial is promoted/variance-verified.
+    # gone from the vial-tier kinds. variance_verify is the new vial-tier
+    # sign-off path for replicate sets. 'submit' is allowed as an in-place
+    # result correction (self-edge) before the vial is promoted/variance-verified.
     assert allowed_kinds("to_be_verified", tier=TIER_VIAL) == {
         "submit", "retract", "reject", "variance_verify",
     }
-    assert allowed_kinds("to_be_verified", tier=TIER_PARENT) == {"retract"}
+    # 'verify' is now a real parent-tier kind (native second sign-off), so it
+    # shows up here too — this is the raw (kind-only) tier matrix intersected
+    # with to_be_verified's state-machine-legal kinds; it does not imply a
+    # to_be_verified row is ever actually parent-tier (tier_of() never maps
+    # to_be_verified to TIER_PARENT — see test_tier_of_parent_attached_in_run_states_is_vial).
+    assert allowed_kinds("to_be_verified", tier=TIER_PARENT) == {"retract", "verify"}
 
 
 def test_unknown_tier_raises():

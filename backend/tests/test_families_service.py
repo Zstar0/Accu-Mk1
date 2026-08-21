@@ -105,3 +105,27 @@ def test_pending_fallback_when_unsettled_with_no_vial_activity():
         "IDENTITY_HPLC": _ab("IDENTITY_HPLC", parent_state="unassigned"),
     }
     assert _derive_state(analytes) == "pending"
+
+
+def test_to_be_verified_when_parent_awaiting_verification_post_promote():
+    """Post-promote: the source vial has moved to 'promoted' (no longer
+    'to_be_verified') and the parent row sits in 'parent_to_verify' awaiting
+    sign-off. This must NOT regress the family state backward to 'pending'
+    (Rule 2's has-to_be_verified-work predicate must also recognize
+    parent_state == 'parent_to_verify', mirroring the read-flip collapse in
+    workflow/engine.py's _live_parent_line_states)."""
+    analytes = {
+        "HM-PB": _ab("HM-PB", parent_state="parent_to_verify", vial_states=["promoted"]),
+    }
+    assert _derive_state(analytes) == "to_be_verified"
+
+
+def test_to_be_verified_parent_awaiting_wins_over_verified_addon():
+    """Mixed family: HPLC promoted+awaiting sign-off (parent_to_verify),
+    addon already verified. Rule 2 (awaiting HPLC) must win over Rule 3
+    (waiting_for_addon) — the family isn't done just because the addon is."""
+    analytes = {
+        "IDENTITY_HPLC": _ab("IDENTITY_HPLC", parent_state="parent_to_verify", vial_states=["promoted"]),
+        "ENDO-LAL":       _ab("ENDO-LAL", parent_state="verified"),
+    }
+    assert _derive_state(analytes) == "to_be_verified"

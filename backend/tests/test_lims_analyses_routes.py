@@ -11,6 +11,7 @@ from database import SessionLocal
 from main import app
 from models import (
     AnalysisService, LimsAnalysis, LimsAnalysisTransition, LimsSubSample,
+    LimsSubSampleEvent,
 )
 
 
@@ -68,6 +69,17 @@ def analysis_service(db):
 @pytest.fixture(autouse=True)
 def cleanup(db):
     yield
+    # Task 7: parent_analysis_verified events are hosted on lims_sample_pk
+    # (the LimsSample), not the LimsAnalysis row itself, so the FK cascade
+    # below doesn't reach them — delete by embedded analysis_id BEFORE the
+    # LimsAnalysis rows they reference disappear.
+    db.execute(text(
+        "DELETE FROM lims_sub_sample_events "
+        "WHERE event = 'parent_analysis_verified' "
+        "AND (details->>'analysis_id')::int IN ("
+        "  SELECT id FROM lims_analyses WHERE title LIKE 'HTTP-TEST:%'"
+        ")"
+    ))
     db.execute(delete(LimsAnalysisTransition).where(
         LimsAnalysisTransition.reason.like("HTTP-TEST:%")
     ))
@@ -392,7 +404,7 @@ def test_promote_endpoint_happy_path_single_vial(analysis_service):
     )
     assert r.status_code == 201, r.text
     body = r.json()
-    assert body["parent"]["review_state"] == "verified"
+    assert body["parent"]["review_state"] == "parent_to_verify"
     assert body["parent"]["lims_sub_sample_pk"] is None
     assert len(body["promotions"]) == 1
     _rename_parent_for_cleanup(body["parent"]["id"])
@@ -459,6 +471,256 @@ def test_promote_endpoint_409_on_existing_parent_row(analysis_service):
     )
     assert r2.status_code == 409, r2.text
     assert r2.json()["detail"]["code"] == "parent_row_already_exists"
+
+
+# ── Task 3: promotion mints parent_to_verify; verify via generic endpoint ──
+
+
+@pytest.fixture
+def _stable_auth():
+    """Re-assert this module's auth override for the test's duration.
+
+    Same rationale as test_retest_on_parent_tier_returns_409_tier_mismatch
+    above: several other test modules call app.dependency_overrides.clear()
+    unconditionally in their teardown, which wipes this module's
+    module-level override without restoring it when tests share a
+    full-suite pytest session — confirmed cause of the pre-existing 401s
+    across this file outside per-file isolation. Tests below that promote
+    +verify multi-step flows depend on this instead of the module-level
+    write surviving until they run.
+    """
+    prev_user = app.dependency_overrides.get(auth.get_current_user)
+    app.dependency_overrides[auth.get_current_user] = lambda: _FakeUser()
+    yield
+    if prev_user is None:
+        app.dependency_overrides.pop(auth.get_current_user, None)
+    else:
+        app.dependency_overrides[auth.get_current_user] = prev_user
+
+
+def test_promote_mints_parent_to_verify(_stable_auth, analysis_service):
+    """Promotion is submission, not sign-off (spec 2026-08-04)."""
+    db = SessionLocal()
+    clean_sub = _find_clean_sub_for_route(db, analysis_service)
+    db.close()
+    if clean_sub is None:
+        pytest.skip("no sub-sample free of keyword for parent_to_verify mint test")
+
+    created = client.post("/api/lims-analyses", json=_create_payload(clean_sub, analysis_service)).json()
+    aid = created["id"]
+    _walk_to_to_be_verified(aid)
+    r = client.post(
+        "/api/lims-analyses/promote",
+        json={
+            "keyword": analysis_service.keyword,
+            "result_value": "98.55",
+            "sources": [{"analysis_id": aid, "contribution_kind": "chosen"}],
+            "reason": "HTTP-TEST: promote mints parent_to_verify",
+        },
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["parent"]["review_state"] == "parent_to_verify"
+    assert body["parent"]["verified_at"] is None
+    parent_id = body["parent"]["id"]
+    _rename_parent_for_cleanup(parent_id)
+
+    db = SessionLocal()
+    transition = db.execute(
+        select(LimsAnalysisTransition).where(
+            LimsAnalysisTransition.analysis_id == parent_id,
+            LimsAnalysisTransition.from_state.is_(None),
+        )
+    ).scalars().first()
+    db.close()
+    assert transition is not None
+    assert transition.to_state == "parent_to_verify"
+
+
+def test_parent_verify_via_generic_endpoint(_stable_auth, analysis_service):
+    db = SessionLocal()
+    clean_sub = _find_clean_sub_for_route(db, analysis_service)
+    db.close()
+    if clean_sub is None:
+        pytest.skip("no sub-sample free of keyword for verify-endpoint test")
+
+    created = client.post("/api/lims-analyses", json=_create_payload(clean_sub, analysis_service)).json()
+    aid = created["id"]
+    _walk_to_to_be_verified(aid)
+    promote_resp = client.post(
+        "/api/lims-analyses/promote",
+        json={
+            "keyword": analysis_service.keyword,
+            "result_value": "98.55",
+            "sources": [{"analysis_id": aid, "contribution_kind": "chosen"}],
+            "reason": "HTTP-TEST: promote for verify",
+        },
+    )
+    assert promote_resp.status_code == 201, promote_resp.text
+    parent_id = promote_resp.json()["parent"]["id"]
+    _rename_parent_for_cleanup(parent_id)
+
+    r = client.post(f"/api/lims-analyses/{parent_id}/transitions",
+                    json={"kind": "verify", "reason": "HTTP-TEST: verify parent"})
+    assert r.status_code == 200, r.text
+    assert r.json()["review_state"] == "verified"
+
+    db = SessionLocal()
+    parent_row = db.get(LimsAnalysis, parent_id)
+    verified_at = parent_row.verified_at
+    transition = db.execute(
+        select(LimsAnalysisTransition)
+        .where(LimsAnalysisTransition.analysis_id == parent_id)
+        .order_by(LimsAnalysisTransition.occurred_at.desc())
+    ).scalars().first()
+    # Filtered on the embedded analysis_id, not just lims_sample_pk: this is
+    # a shared, persistent real DB — other tests (this file and others) can
+    # promote+verify other keywords under the SAME parent sample, leaving
+    # their own parent_analysis_verified rows on the same lims_sample_pk.
+    event = db.execute(
+        select(LimsSubSampleEvent).where(
+            LimsSubSampleEvent.event == "parent_analysis_verified",
+            LimsSubSampleEvent.lims_sample_pk == parent_row.lims_sample_pk,
+            text("(details->>'analysis_id')::int = :pid"),
+        ).params(pid=parent_id)
+    ).scalars().first()
+    db.close()
+    assert verified_at is not None
+    assert transition.to_state == "verified"
+    assert transition.transition_kind == "verify"
+    assert transition.from_state == "parent_to_verify"
+    assert transition.user_id == _FakeUser.id  # the module's auth stub (None)
+
+    # Task 7: activity event, hosted on the parent (not any vial), written
+    # in the same commit as the verify transition above. service_origin is
+    # asserted against the fixture's OWN service row rather than a hardcoded
+    # literal — the live catalog happens to carry no mk1-origin service
+    # today, but pinning "senaite" here would silently rot if that changes.
+    # Both origin values are covered directly (with a fixed, known service)
+    # in test_source_retest_route.py's
+    # test_verify_writes_parent_analysis_verified_event_{mk1,senaite_origin}.
+    assert event is not None
+    assert event.sub_sample_pk is None
+    assert event.details == {
+        "keyword": analysis_service.keyword,
+        "analysis_id": parent_id,
+        "service_origin": analysis_service.origin,
+    }
+
+
+def test_verify_on_vial_row_still_409(_stable_auth, sub_sample, analysis_service):
+    """Pin: verify stays illegal at the vial tier."""
+    created = client.post("/api/lims-analyses", json=_create_payload(sub_sample, analysis_service)).json()
+    aid = created["id"]
+    r = client.post(f"/api/lims-analyses/{aid}/transitions",
+                    json={"kind": "verify", "reason": "HTTP-TEST: verify too early"})
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert detail["code"] == "tier_mismatch"
+
+
+def test_repromote_supersedes_parent_to_verify(_stable_auth, analysis_service):
+    """Retest + re-promote over an awaiting parent retires it (retracted),
+    new row takes the slot."""
+    db = SessionLocal()
+    clean_sub = _find_clean_sub_for_route(db, analysis_service)
+    db.close()
+    if clean_sub is None:
+        pytest.skip("no sub-sample free of keyword for repromote-supersedes test")
+
+    created = client.post("/api/lims-analyses", json=_create_payload(clean_sub, analysis_service)).json()
+    aid = created["id"]
+    _walk_to_to_be_verified(aid)
+    promote_resp = client.post(
+        "/api/lims-analyses/promote",
+        json={
+            "keyword": analysis_service.keyword,
+            "result_value": "98.55",
+            "sources": [{"analysis_id": aid, "contribution_kind": "chosen"}],
+            "reason": "HTTP-TEST: initial promote for supersession",
+        },
+    )
+    assert promote_resp.status_code == 201, promote_resp.text
+    old_parent_id = promote_resp.json()["parent"]["id"]
+    assert promote_resp.json()["parent"]["review_state"] == "parent_to_verify"
+    _rename_parent_for_cleanup(old_parent_id)
+
+    retest_resp = client.post(f"/api/lims-analyses/{aid}/transitions",
+                              json={"kind": "retest", "reason": "HTTP-TEST: retest for repromote"})
+    assert retest_resp.status_code == 200, retest_resp.text
+    new_vial_id = retest_resp.json()["id"]
+    _walk_to_to_be_verified(new_vial_id, result="99.00")
+
+    repromote_resp = client.post(
+        "/api/lims-analyses/promote",
+        json={
+            "keyword": analysis_service.keyword,
+            "result_value": "99.00",
+            "sources": [{"analysis_id": new_vial_id, "contribution_kind": "chosen"}],
+            "reason": "HTTP-TEST: repromote supersedes parent_to_verify",
+        },
+    )
+    assert repromote_resp.status_code == 201, repromote_resp.text
+    new_parent = repromote_resp.json()["parent"]
+    assert new_parent["review_state"] == "parent_to_verify"
+    assert new_parent["id"] != old_parent_id
+    _rename_parent_for_cleanup(new_parent["id"])
+
+    db = SessionLocal()
+    old_parent_row = db.get(LimsAnalysis, old_parent_id)
+    db.close()
+    assert old_parent_row.review_state == "retracted"
+
+
+def test_repromote_over_published_409_names_deferral(_stable_auth, analysis_service):
+    """Re-promoting at a keyword whose active parent is published surfaces a
+    409 naming the COA-snapshot deferral, not the generic collision message."""
+    db = SessionLocal()
+    clean_sub = _find_clean_sub_for_route(db, analysis_service)
+    db.close()
+    if clean_sub is None:
+        pytest.skip("no sub-sample free of keyword for published-collision test")
+
+    created = client.post("/api/lims-analyses", json=_create_payload(clean_sub, analysis_service)).json()
+    aid = created["id"]
+    _walk_to_to_be_verified(aid)
+    promote_resp = client.post(
+        "/api/lims-analyses/promote",
+        json={
+            "keyword": analysis_service.keyword,
+            "result_value": "98.55",
+            "sources": [{"analysis_id": aid, "contribution_kind": "chosen"}],
+            "reason": "HTTP-TEST: initial promote for published-collision",
+        },
+    )
+    assert promote_resp.status_code == 201, promote_resp.text
+    parent_id = promote_resp.json()["parent"]["id"]
+    _rename_parent_for_cleanup(parent_id)
+
+    verify_resp = client.post(f"/api/lims-analyses/{parent_id}/transitions",
+                              json={"kind": "verify", "reason": "HTTP-TEST: verify before publish"})
+    assert verify_resp.status_code == 200, verify_resp.text
+    publish_resp = client.post(f"/api/lims-analyses/{parent_id}/transitions",
+                               json={"kind": "publish", "reason": "HTTP-TEST: publish for collision test"})
+    assert publish_resp.status_code == 200, publish_resp.text
+
+    retest_resp = client.post(f"/api/lims-analyses/{aid}/transitions",
+                              json={"kind": "retest", "reason": "HTTP-TEST: retest over published parent"})
+    assert retest_resp.status_code == 200, retest_resp.text
+    new_vial_id = retest_resp.json()["id"]
+    _walk_to_to_be_verified(new_vial_id, result="99.00")
+
+    r = client.post(
+        "/api/lims-analyses/promote",
+        json={
+            "keyword": analysis_service.keyword,
+            "result_value": "99.00",
+            "sources": [{"analysis_id": new_vial_id, "contribution_kind": "chosen"}],
+            "reason": "HTTP-TEST: repromote over published parent",
+        },
+    )
+    assert r.status_code == 409, r.text
+    assert "COA-snapshot release" in str(r.json()["detail"])
 
 
 # ── Phase 4b: senaite_shape promoted_to_parent_id ───────────────────────────

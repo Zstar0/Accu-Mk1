@@ -120,10 +120,14 @@ const COL_PILL_CLASS: Record<string, string> = {
   published: 'bg-purple-500/15 text-purple-400',
 }
 
-// Map column key → analysis review_states that belong in that column
-const COL_ANALYSIS_STATES: Record<string, string[]> = {
+// Map column key → analysis review_states that belong in that column.
+// 'parent_to_verify' (promoted parent awaiting sign-off) belongs alongside
+// 'to_be_verified' — otherwise a row in that state matches no column and
+// vanishes from the board. COMPLETED_ANALYSIS_STATES below correctly omits
+// it (an awaiting parent isn't done).
+export const COL_ANALYSIS_STATES: Record<string, string[]> = {
   assigned: ['assigned'],
-  to_verify: ['to_be_verified'],
+  to_verify: ['to_be_verified', 'parent_to_verify'],
   verified: ['verified'],
   published: ['published'],
 }
@@ -151,7 +155,7 @@ function formatAnalysisTitle(title: string, nameMap: Map<number, string>): strin
   return title
 }
 
-function getAnalysisServicesForCol(analyses: SenaiteAnalysis[], colKey: string, lookup?: SenaiteLookupResult): string[] {
+export function getAnalysisServicesForCol(analyses: SenaiteAnalysis[], colKey: string, lookup?: SenaiteLookupResult): string[] {
   const nameMap = buildAnalyteNameMap(lookup)
   const format = (a: SenaiteAnalysis) => formatAnalysisTitle(a.title, nameMap)
 

@@ -123,5 +123,5 @@ def test_promote_moves_source_to_promoted(db, sub_sample, analysis_service):
         f"Expected 'promoted' but got {src.review_state!r}"
     )
 
-    # Parent-tier row is in 'verified'
-    assert parent_row.review_state == "verified"
+    # Parent-tier row is in 'parent_to_verify' (Task 3: promote submits, verify signs off)
+    assert parent_row.review_state == "parent_to_verify"

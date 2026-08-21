@@ -5,7 +5,19 @@ pass-through to Integration Service.
 """
 import pytest
 
-from coa.native_sections import NativeSectionsError, build_native_sections
+from coa import source_resolver
+from coa.native_sections import ELIGIBLE_STATES, NativeSectionsError, build_native_sections
+
+
+def test_eligible_states_matches_source_resolver_parent_result_states():
+    """Drift guard: the ("verified", "published") COA-eligibility policy is
+    dual-encoded — coa/native_sections.py:ELIGIBLE_STATES (this module) and
+    coa/source_resolver.py:_PARENT_RESULT_STATES both gate which parent-tier
+    review_states may be cited on a COA. They must change together; a lone
+    edit to one silently reopens or narrows COA eligibility on the other
+    resolution path (native sections vs. the SENAITE-parity source
+    resolver) without either test suite catching it."""
+    assert tuple(ELIGIBLE_STATES) == tuple(source_resolver._PARENT_RESULT_STATES)
 
 
 def _mk_native_profile(db, *, key, services, archetype="limit_table",
@@ -111,6 +123,24 @@ def test_rule4_ineligible_state_aborts_not_skips(db_session, monkeypatch):
     prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
                                     services=[("HM-PB", "mk1")])
     parent = _mk_parent_with_rows(db_session, svcs, state="to_be_verified")
+    monkeypatch.setattr(
+        "coa.native_sections.fetch_sample_services",
+        lambda sample_id: {"services": {"heavy_metals": True}, "package": None},
+    )
+    with pytest.raises(NativeSectionsError, match="no eligible result"):
+        build_native_sections(db_session, parent)
+
+
+def test_rule4_parent_to_verify_state_aborts_not_skips(db_session, monkeypatch):
+    """Task 6 pin: a promoted-but-unreviewed row (parent_to_verify — awaiting
+    the reviewer's verify sign-off) is not certifiable, same as to_be_verified.
+    ELIGIBLE_STATES is already ('verified', 'published') here — narrower than
+    coa/source_resolver's pre-Task-6 _LIVE_RESULT_STATES by design (native
+    services have no SENAITE verify step) — so this was already correct
+    before Task 6; pinned as an explicit control alongside the resolver fix."""
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")])
+    parent = _mk_parent_with_rows(db_session, svcs, state="parent_to_verify")
     monkeypatch.setattr(
         "coa.native_sections.fetch_sample_services",
         lambda sample_id: {"services": {"heavy_metals": True}, "package": None},

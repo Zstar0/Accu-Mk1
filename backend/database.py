@@ -663,11 +663,19 @@ def _run_migrations():
         "CREATE INDEX IF NOT EXISTS ix_lims_analysis_promotions_parent ON lims_analysis_promotions (parent_analysis_id)",
         "CREATE INDEX IF NOT EXISTS ix_lims_analysis_promotions_source ON lims_analysis_promotions (source_analysis_id)",
         # Sub-sample event log: lightweight audit for actions with no other trail.
-        # Writers: set_assignment_role, update_sub_sample, delete_pristine_analysis.
+        # Writers: set_assignment_role, update_sub_sample, delete_pristine_analysis,
+        # apply_transition (parent verify), parent_retest, vial_source_retest.
+        # Polymorphic host (Task 7): sub_sample_pk XOR lims_sample_pk, mirroring
+        # lims_analyses' two-host CHECK above. Fresh-install shape only — the
+        # already-migrated DB gets the equivalent additive ALTERs further down
+        # (flag_flags precedent: edit both ends so new DBs match migrated ones).
         """
         CREATE TABLE IF NOT EXISTS lims_sub_sample_events (
             id              SERIAL PRIMARY KEY,
-            sub_sample_pk   INTEGER NOT NULL REFERENCES lims_sub_samples(id) ON DELETE CASCADE,
+            sub_sample_pk   INTEGER REFERENCES lims_sub_samples(id) ON DELETE CASCADE,
+            lims_sample_pk  INTEGER REFERENCES lims_samples(id) ON DELETE CASCADE,
+            CONSTRAINT ck_lims_sub_sample_events_one_host
+                CHECK ((sub_sample_pk IS NULL) <> (lims_sample_pk IS NULL)),
             event           TEXT NOT NULL,
             details         JSONB,
             user_id         INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -675,6 +683,7 @@ def _run_migrations():
         )
         """,
         "CREATE INDEX IF NOT EXISTS ix_lims_sub_sample_events_sub ON lims_sub_sample_events (sub_sample_pk)",
+        "CREATE INDEX IF NOT EXISTS ix_lims_sub_sample_events_parent ON lims_sub_sample_events (lims_sample_pk)",
         # result-type Task 1: result type + options on analysis_services
         "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS result_type TEXT",
         "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS result_options JSONB",
@@ -1100,7 +1109,7 @@ def _run_migrations():
             CHECK (review_state IN (
                 'unassigned', 'assigned', 'to_be_verified', 'verified',
                 'published', 'rejected', 'retracted', 'promoted',
-                'variance_verified', 'senaite_mirror'
+                'variance_verified', 'senaite_mirror', 'parent_to_verify'
             ))
         """,
         # Make the parent-tier root index provenance-aware: a shadow mirror
@@ -1577,6 +1586,32 @@ def _run_migrations():
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_null_matrix "
         "ON analysis_service_specs (analysis_service_id) "
         "WHERE active AND matrix IS NULL",
+        # --- Task 7: activity events, parent-hosted (native parent verification) ---
+        # Already-migrated DBs need explicit ALTERs; the CREATE TABLE above
+        # only covers fresh installs. All three are idempotent — safe to
+        # re-run on every boot (flag_flags DROP NOT NULL precedent, :990-991).
+        "ALTER TABLE lims_sub_sample_events ADD COLUMN IF NOT EXISTS lims_sample_pk "
+        "INTEGER REFERENCES lims_samples(id) ON DELETE CASCADE",
+        "ALTER TABLE lims_sub_sample_events ALTER COLUMN sub_sample_pk DROP NOT NULL",
+        "CREATE INDEX IF NOT EXISTS ix_lims_sub_sample_events_parent "
+        "ON lims_sub_sample_events (lims_sample_pk)",
+        # Named CHECK, added only if absent — union-preserve idiom (LAST-BOOT-WINS
+        # hazard class, see :1417-1419 above): unlike a DROP/re-ADD pair, this
+        # never re-narrows the constraint on an older-image boot, because it
+        # only acts when the constraint doesn't exist yet. Same name as the
+        # CREATE TABLE's inline CHECK above, so a fresh install (which already
+        # has it) makes this a no-op.
+        """DO $$ BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'ck_lims_sub_sample_events_one_host'
+                  AND conrelid = 'lims_sub_sample_events'::regclass
+            ) THEN
+                ALTER TABLE lims_sub_sample_events
+                    ADD CONSTRAINT ck_lims_sub_sample_events_one_host
+                        CHECK ((sub_sample_pk IS NULL) <> (lims_sample_pk IS NULL));
+            END IF;
+        END $$""",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

@@ -139,7 +139,7 @@ def client_with_promoted_parent(client, db_session):
     vial1 = _make_vial_tbv(db_session, subs[0], svc, result="97.00")
     vial2 = _make_vial_tbv(db_session, subs[1], svc, result="98.00")
 
-    promote_to_parent(
+    parent_row, _ = promote_to_parent(
         db_session,
         keyword=keyword,
         result_value="97.50",
@@ -154,6 +154,10 @@ def client_with_promoted_parent(client, db_session):
         reason=None,
         commit=True,
     )
+    # Task 3: promote mints 'parent_to_verify', not 'verified' — this fixture's
+    # name/contract promises a VERIFIED parent, so the verify sign-off is part
+    # of the seed, not the behavior under test.
+    apply_transition(db_session, analysis_id=parent_row.id, kind="verify")
 
     return client, parent.sample_id, keyword, [vial1.id, vial2.id]
 
@@ -187,7 +191,46 @@ def client_with_promoted_parent_published(client, db_session):
         reason=None,
         commit=True,
     )
+    # Task 3: promote mints 'parent_to_verify' — verify before publish (publish
+    # is legal only from 'verified').
+    apply_transition(db_session, analysis_id=parent_row.id, kind="verify")
     apply_transition(db_session, analysis_id=parent_row.id, kind="publish")
+
+    return client, parent.sample_id, keyword, [vial1.id, vial2.id]
+
+
+@pytest.fixture
+def client_with_promoted_parent_awaiting(client, db_session):
+    """Same shape as client_with_promoted_parent, but the active parent row is
+    LEFT in 'parent_to_verify' (no verify sign-off) — the awaiting leg of the
+    guard widened by Task 4.
+
+    Returns (client, sample_id, keyword, source_ids).
+    """
+    parent, subs = _seed_parent_and_subs(db_session, sample_id="P-RETEST-004")
+    keyword = "PURITY-HPLC"
+    svc = _mk_service(db_session, keyword=keyword)
+
+    vial1 = _make_vial_tbv(db_session, subs[0], svc, result="97.00")
+    vial2 = _make_vial_tbv(db_session, subs[1], svc, result="98.00")
+
+    parent_row, _ = promote_to_parent(
+        db_session,
+        keyword=keyword,
+        result_value="97.50",
+        result_unit=None,
+        method_id=None,
+        instrument_id=None,
+        sources=[
+            {"analysis_id": vial1.id, "contribution_kind": "aggregated_in"},
+            {"analysis_id": vial2.id, "contribution_kind": "aggregated_in"},
+        ],
+        user_id=None,
+        reason=None,
+        commit=True,
+    )
+    # No verify sign-off — parent_row stays 'parent_to_verify'.
+    assert parent_row.review_state == "parent_to_verify"
 
     return client, parent.sample_id, keyword, [vial1.id, vial2.id]
 
@@ -205,7 +248,7 @@ def client_with_already_retested_source(client, db_session):
 
     vial = _make_vial_tbv(db_session, subs[0], svc, result="98.55")
 
-    promote_to_parent(
+    parent_row, _ = promote_to_parent(
         db_session,
         keyword=keyword,
         result_value="98.55",
@@ -217,11 +260,46 @@ def client_with_already_retested_source(client, db_session):
         reason=None,
         commit=True,
     )
+    # Task 3: promote mints 'parent_to_verify' — verify so the parent lands in
+    # 'verified', matching this fixture's "parent STAYS verified" contract.
+    apply_transition(db_session, analysis_id=parent_row.id, kind="verify")
 
     # Retest the source BEFORE calling the route — it's no longer eligible.
     apply_transition(db_session, analysis_id=vial.id, kind="retest")
 
     return client, parent.sample_id, keyword
+
+
+@pytest.fixture
+def client_with_promoted_parent_senaite_origin(client, db_session):
+    """Same shape as client_with_promoted_parent, but the vial source (and
+    therefore the parent row it mints, which inherits the source's
+    analysis_service_id) is SENAITE-origin — covers the other
+    service_origin value for the Task 7 parent_analysis_retested event.
+
+    Returns (client, sample_id, keyword, source_ids).
+    """
+    parent, subs = _seed_parent_and_subs(db_session, sample_id="P-RETEST-005", n_subs=1)
+    keyword = "PURITY-HPLC"
+    svc = _mk_service(db_session, keyword=keyword, origin="senaite")
+
+    vial = _make_vial_tbv(db_session, subs[0], svc, result="97.00")
+
+    parent_row, _ = promote_to_parent(
+        db_session,
+        keyword=keyword,
+        result_value="97.00",
+        result_unit=None,
+        method_id=None,
+        instrument_id=None,
+        sources=[{"analysis_id": vial.id, "contribution_kind": "chosen"}],
+        user_id=None,
+        reason=None,
+        commit=True,
+    )
+    apply_transition(db_session, analysis_id=parent_row.id, kind="verify")
+
+    return client, parent.sample_id, keyword, [vial.id]
 
 
 # ─── Tests ───────────────────────────────────────────────────────────────────
@@ -240,7 +318,7 @@ def test_parent_retest_happy_path(client_with_promoted_parent, db_session):
     assert len(body["new_row_ids"]) == 2
     assert body["parent_review_state"] == "retracted"
 
-    from models import LimsAnalysis, LimsSample
+    from models import LimsAnalysis, LimsSample, LimsSubSampleEvent
 
     # Sources flagged retested.
     db_session.expire_all()
@@ -255,6 +333,66 @@ def test_parent_retest_happy_path(client_with_promoted_parent, db_session):
     assert new_of_ids == set(source_ids)
 
     # Parent row retracted with result_value cleared.
+    parent = db_session.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one()
+    parent_row = db_session.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+            LimsAnalysis.keyword == keyword,
+            LimsAnalysis.retest_of_id.is_(None),
+        )
+    ).scalars().first()
+    assert parent_row is not None
+    assert parent_row.review_state == "retracted"
+    assert parent_row.result_value is None
+
+    # Task 7: parent_analysis_retested, hosted on the parent — source_row_ids
+    # is the ORIGINAL (pre-retest) source ids, not the new replacement rows.
+    event = db_session.execute(
+        select(LimsSubSampleEvent).where(
+            LimsSubSampleEvent.event == "parent_analysis_retested",
+            LimsSubSampleEvent.lims_sample_pk == parent.id,
+        )
+    ).scalars().first()
+    assert event is not None
+    assert event.sub_sample_pk is None
+    assert set(event.details["source_row_ids"]) == set(source_ids)
+    assert event.details["keyword"] == keyword
+    assert event.details["unpromoted"] is True
+    assert event.details["service_origin"] == "mk1"
+
+
+def test_parent_retest_on_awaiting_parent_unpromotes(
+    client_with_promoted_parent_awaiting, db_session,
+):
+    """Task 4: the guard also accepts 'parent_to_verify' — an awaiting parent
+    (promoted but not yet verified) can still be retested. Both sources get
+    retest rows and the parent is un-promoted (retracted, result cleared) —
+    same outcome as the verified leg (test_parent_retest_happy_path)."""
+    client, sample_id, keyword, source_ids = client_with_promoted_parent_awaiting
+    r = client.post(
+        f"/api/lims-analyses/parent/{sample_id}/retest",
+        json={"keyword": keyword},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["new_row_ids"]) == 2
+    assert body["parent_review_state"] == "retracted"
+
+    from models import LimsAnalysis, LimsSample
+
+    db_session.expire_all()
+    for sid in source_ids:
+        src = db_session.get(LimsAnalysis, sid)
+        assert src.retested is True
+
+    new_of_ids = {
+        db_session.get(LimsAnalysis, nid).retest_of_id for nid in body["new_row_ids"]
+    }
+    assert new_of_ids == set(source_ids)
+
     parent = db_session.execute(
         select(LimsSample).where(LimsSample.sample_id == sample_id)
     ).scalar_one()
@@ -288,9 +426,15 @@ def test_parent_retest_not_verified_409(client_with_promoted_parent_published, d
         assert src.retested is False
 
 
-def test_parent_retest_no_eligible_sources_returns_empty(client_with_already_retested_source):
+def test_parent_retest_no_eligible_sources_returns_empty(
+    client_with_already_retested_source, db_session,
+):
     """Sources already retested → 200, new_row_ids [], parent STAYS verified
-    (the cascade only un-promotes when it actually created retest rows)."""
+    (the cascade only un-promotes when it actually created retest rows).
+
+    Task 7: the event still fires (writers write unconditionally) with an
+    empty source_row_ids and unpromoted=False — this is the "no un-promote
+    happened" leg of parent_analysis_retested."""
     client, sample_id, keyword = client_with_already_retested_source
     r = client.post(
         f"/api/lims-analyses/parent/{sample_id}/retest", json={"keyword": keyword}
@@ -298,6 +442,49 @@ def test_parent_retest_no_eligible_sources_returns_empty(client_with_already_ret
     assert r.status_code == 200, r.text
     assert r.json()["new_row_ids"] == []
     assert r.json()["parent_review_state"] == "verified"
+
+    from models import LimsSample, LimsSubSampleEvent
+
+    parent = db_session.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one()
+    event = db_session.execute(
+        select(LimsSubSampleEvent).where(
+            LimsSubSampleEvent.event == "parent_analysis_retested",
+            LimsSubSampleEvent.lims_sample_pk == parent.id,
+        )
+    ).scalars().first()
+    assert event is not None
+    assert event.details["source_row_ids"] == []
+    assert event.details["unpromoted"] is False
+    assert event.details["service_origin"] == "mk1"
+
+
+def test_parent_retest_writes_event_senaite_origin(
+    client_with_promoted_parent_senaite_origin, db_session,
+):
+    client, sample_id, keyword, source_ids = client_with_promoted_parent_senaite_origin
+    r = client.post(
+        f"/api/lims-analyses/parent/{sample_id}/retest",
+        json={"keyword": keyword},
+    )
+    assert r.status_code == 200, r.text
+
+    from models import LimsSample, LimsSubSampleEvent
+
+    parent = db_session.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one()
+    event = db_session.execute(
+        select(LimsSubSampleEvent).where(
+            LimsSubSampleEvent.event == "parent_analysis_retested",
+            LimsSubSampleEvent.lims_sample_pk == parent.id,
+        )
+    ).scalars().first()
+    assert event is not None
+    assert event.details["service_origin"] == "senaite"
+    assert set(event.details["source_row_ids"]) == set(source_ids)
+    assert event.details["unpromoted"] is True
 
 
 def test_parent_retest_unknown_sample_404(plain_client):

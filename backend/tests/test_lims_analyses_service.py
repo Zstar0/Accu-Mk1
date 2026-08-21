@@ -551,11 +551,11 @@ def test_promote_single_vial_creates_parent_row_and_one_promotion(db, sub_sample
         user_id=None,
         reason="TEST: single-vial promote",
     )
-    assert parent_row.review_state == "verified"
+    assert parent_row.review_state == "parent_to_verify"  # Task 3: promote submits, verify signs off
     assert parent_row.lims_sample_pk == sub_sample.parent_sample_pk
     assert parent_row.lims_sub_sample_pk is None
     assert parent_row.result_value == "98.55"
-    assert parent_row.verified_at is not None
+    assert parent_row.verified_at is None
     assert len(promotions) == 1
     assert promotions[0].source_analysis_id == src.id
     assert promotions[0].contribution_kind == "chosen"
@@ -798,7 +798,7 @@ def test_promote_succeeds_again_after_parent_row_retracted(db, sub_sample, analy
         method_id=None, instrument_id=None,
         sources=[{"analysis_id": src2.id, "contribution_kind": "chosen"}],
     )
-    assert parent_row2.review_state == "verified"
+    assert parent_row2.review_state == "parent_to_verify"  # Task 3: promote submits, verify signs off
     assert parent_row2.id != parent_row.id
     parent_row2.title = "TEST: parent " + parent_row2.title
     db.commit()
@@ -845,7 +845,7 @@ def test_promote_uses_parent_target_for_parent_row(db, sub_sample, analysis_serv
     assert parent_row.keyword == "ANALYTE-2-PUR"
     assert parent_row.title == "Analyte 2 (Purity)"
     assert parent_row.analysis_service_id == override_service_id
-    assert parent_row.review_state == "verified"
+    assert parent_row.review_state == "parent_to_verify"  # Task 3: promote submits, verify signs off
     # commit=False: the source's transition to 'promoted' is pending in the
     # session (not yet committed). Assert the in-memory state directly — a
     # db.refresh() here would reload the still-committed 'to_be_verified'.

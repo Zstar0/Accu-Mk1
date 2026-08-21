@@ -34,6 +34,8 @@ from lims_analyses.schemas import (
     SenaiteShapeAnalysisResponse,
     SetMethodInstrumentRequest,
     SetReportableRequest,
+    SourceRetestRequest,
+    SourceRetestResponse,
     TransitionInfo,
     TransitionRequest,
 )
@@ -60,6 +62,14 @@ def _handle_service_error(e: Exception) -> HTTPException:
         return HTTPException(status_code=404, detail=str(e))
     if isinstance(e, service.BadRequestError):
         return HTTPException(status_code=400, detail=str(e))
+    if isinstance(e, service.ConflictError):
+        return HTTPException(
+            status_code=409,
+            detail={
+                "code": "published_parent_conflict",
+                "message": str(e),
+            },
+        )
     if isinstance(e, InvalidTransitionError):
         return HTTPException(
             status_code=409,
@@ -257,7 +267,8 @@ def parent_retest(
     """Native parent-tier retest (AnalysisTable card verb): retests the
     promoted source vial rows and un-promotes the verified parent row via
     cascade_parent_retest_to_sources. 409 invalid_transition unless the
-    active parent row is 'verified' — published parents are protected."""
+    active parent row is 'verified' or 'parent_to_verify' (awaiting
+    sign-off) — published parents are protected."""
     try:
         new_ids, state = service.parent_retest(
             db,
@@ -267,6 +278,36 @@ def parent_retest(
             reason=req.reason,
         )
         return ParentRetestResponse(new_row_ids=new_ids, parent_review_state=state)
+    except Exception as e:
+        raise _handle_service_error(e)
+
+
+@router.post("/{analysis_id}/source-retest", response_model=SourceRetestResponse)
+def source_retest(
+    analysis_id: int,
+    req: SourceRetestRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Native vial-side (source) retest (Task 5): the up-cascade mirror of
+    parent_retest. Retests ONE named promoted, mk1-origin, vial-hosted row
+    directly, then un-promotes its promotion parent when the parent is
+    still 'verified' or 'parent_to_verify' — a published parent is a
+    citable COA source and is left untouched. 400 when the row's service
+    is SENAITE-origin; 409 invalid_transition when the row isn't a
+    vial-hosted 'promoted' row."""
+    try:
+        new_row_id, parent_unverified, parent_state = service.vial_source_retest(
+            db,
+            analysis_id=analysis_id,
+            user_id=getattr(current_user, "id", None),
+            reason=req.reason,
+        )
+        return SourceRetestResponse(
+            new_row_id=new_row_id,
+            parent_unverified=parent_unverified,
+            parent_review_state=parent_state,
+        )
     except Exception as e:
         raise _handle_service_error(e)
 

@@ -111,7 +111,7 @@ def test_native_promote_never_touches_senaite(client, db_session):
         })
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    assert body["parent"]["review_state"] == "verified"
+    assert body["parent"]["review_state"] == "parent_to_verify"  # Task 3: promote submits, verify signs off
     assert body["parent"]["analysis_service_id"] == svc.id
 
 

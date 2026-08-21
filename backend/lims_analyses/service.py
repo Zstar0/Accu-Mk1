@@ -44,6 +44,13 @@ class BadRequestError(ValueError):
     the (from_state, kind) edge."""
 
 
+class ConflictError(Exception):
+    """A conflicting existing row blocks the requested write (mapped to 409
+    by the route layer). Distinct from the raw IntegrityError the DB's
+    partial unique index raises — this is for cases the service layer can
+    diagnose ahead of the flush and explain in the caller-facing message."""
+
+
 # ─── Parent keyword translation ──────────────────────────────────────────────
 
 
@@ -281,7 +288,12 @@ def apply_transition(
         # (kept for backward-compat); "promoted": cascade-driven (parent retest);
         # "variance_verified": variance replicates re-run safely — they never
         # touched the parent, so there is no SENAITE lock to collide with.
-        if from_state not in ("to_be_verified", "verified", "promoted", "variance_verified"):
+        # "parent_to_verify": the native second-sign-off state — a parent row
+        # awaiting its verify can still be retested (pre-wires Task 4's guards).
+        if from_state not in (
+            "to_be_verified", "verified", "promoted", "variance_verified",
+            "parent_to_verify",
+        ):
             raise InvalidTransitionError(from_state, kind)
 
         now = datetime.utcnow()
@@ -391,6 +403,23 @@ def apply_transition(
 
     row.review_state = to_state
     row.updated_at = now
+
+    # Activity event (Task 7): parent-tier verify is the second sign-off on
+    # a promoted result — the only tier-gated event, written right before
+    # the transition commit so it rides the same transaction.
+    if kind == "verify" and row_tier == TIER_PARENT:
+        from models import AnalysisService
+        svc = db.get(AnalysisService, row.analysis_service_id)
+        db.add(LimsSubSampleEvent(
+            lims_sample_pk=row.lims_sample_pk,
+            event="parent_analysis_verified",
+            details={
+                "keyword": row.keyword,
+                "analysis_id": row.id,
+                "service_origin": svc.origin if svc else None,
+            },
+            user_id=user_id,
+        ))
 
     db.add(LimsAnalysisTransition(
         analysis_id=row.id,
@@ -584,19 +613,24 @@ def promote_to_parent(
       - 'reference' may accompany 'chosen' but not 'aggregated_in'
 
     Performs in one transaction:
-      1. INSERT parent-tier lims_analyses row (review_state='verified',
-         verified_at=NOW, analyst_user_id=user_id).
+      1. INSERT parent-tier lims_analyses row (review_state='parent_to_verify',
+         verified_at=NULL, analyst_user_id=user_id). Promotion is the
+         submission, not the sign-off — a reviewer calls the generic
+         transitions endpoint with kind='verify' to reach 'verified'
+         (spec 2026-08-04).
       2. INSERT one lims_analysis_promotions per source.
       3. INSERT one audit transition per source (state-unchanged 'auto'
          kind, reason='promoted to parent #N (kind=...)').
 
     Retest-source supersession: if ALL sources carry retest_of_id IS NOT NULL
-    (retest promotion), any active (non-retracted/non-rejected) non-retest
-    parent-tier row for (parent_sample_pk, keyword) is retracted inside the
-    same transaction before the new parent row is inserted — vacating the
-    partial unique index slot. An audit transition (reason="superseded by
-    retest promotion") is written on the old row. Non-retest sources leave
-    the existing 409 protection intact.
+    (retest promotion), the active non-retest parent-tier row for
+    (parent_sample_pk, keyword) — if 'verified' or 'parent_to_verify' — is
+    retracted inside the same transaction before the new parent row is
+    inserted, vacating the partial unique index slot. An audit transition
+    (reason="superseded by retest promotion") is written on the old row. A
+    'published' row is NOT silently retracted — it's a citable COA source, so
+    this raises ConflictError instead. Non-retest sources leave the existing
+    409 protection intact.
 
     Parent-target overrides (per-substance promotion): parent_keyword,
     parent_analysis_service_id, and parent_title decouple the parent-tier
@@ -766,17 +800,20 @@ def promote_to_parent(
                 LimsAnalysis.lims_sample_pk == parent_sample_pk,
                 _ident_clause,
                 LimsAnalysis.retest_of_id.is_(None),
-                # Only VERIFIED parents are superseded. A published parent is
-                # a citable COA source — superseding it silently could invalidate
-                # an issued COA; that conflict surfaces as the 409 instead.
-                LimsAnalysis.review_state == "verified",
+                # Awaiting (parent_to_verify) or fully VERIFIED parents are
+                # both superseded — neither has been published, so neither is
+                # a citable COA source yet. A published parent IS a citable
+                # COA source — superseding it silently could invalidate an
+                # issued COA; that conflict is diagnosed explicitly below
+                # instead (ConflictError naming the COA-snapshot deferral).
+                LimsAnalysis.review_state.in_(("verified", "parent_to_verify")),
                 LimsAnalysis.lims_sub_sample_pk.is_(None),
-                # SENAITE phase-out defense-in-depth: review_state=='verified'
-                # already excludes the shadow sentinel ('senaite_mirror'), so
-                # this can't change behavior — the canonical partial unique
-                # index this lookup protects already scopes to
-                # provenance='canonical' (Task 1), so this is a correctness
-                # clarification, not a behavior change.
+                # SENAITE phase-out defense-in-depth: these states already
+                # exclude the shadow sentinel ('senaite_mirror'), so this
+                # can't change behavior — the canonical partial unique index
+                # this lookup protects already scopes to provenance='canonical'
+                # (Task 1), so this is a correctness clarification, not a
+                # behavior change.
                 LimsAnalysis.provenance == "canonical",
             )
         ).scalars().first()
@@ -793,8 +830,35 @@ def promote_to_parent(
                 reason="superseded by retest promotion",
             ))
             db.flush()   # emit UPDATE before INSERT so Postgres sees vacated index slot
+        else:
+            # No verified/parent_to_verify row to supersede — but if the
+            # active blocker is a PUBLISHED parent, the naked IntegrityError
+            # the insert below would raise gives the caller no way to tell
+            # "already exists" apart from "this one is a citable COA source
+            # and needs a deliberate supersede/republish decision". Diagnose
+            # it here so the 409 names the real deferral instead.
+            published_blocker = db.execute(
+                select(LimsAnalysis).where(
+                    LimsAnalysis.lims_sample_pk == parent_sample_pk,
+                    _ident_clause,
+                    LimsAnalysis.retest_of_id.is_(None),
+                    LimsAnalysis.review_state == "published",
+                    LimsAnalysis.lims_sub_sample_pk.is_(None),
+                    LimsAnalysis.provenance == "canonical",
+                )
+            ).scalars().first()
+            if published_blocker is not None:
+                raise ConflictError(
+                    f"active parent-tier row for keyword={eff_parent_keyword!r} "
+                    f"is a published parent — supersede/republish ships with "
+                    f"the COA-snapshot release"
+                )
     # ── end retest-source supersession ───────────────────────────────────────
 
+    # Promotion mints the parent-tier row in 'parent_to_verify' — it is the
+    # submission, not the sign-off. verified_at stays NULL until a reviewer
+    # calls the generic transitions endpoint with kind='verify' (state
+    # machine: parent_to_verify -> verified, spec 2026-08-04).
     parent_row = LimsAnalysis(
         lims_sample_pk=parent_sample_pk,
         lims_sub_sample_pk=None,
@@ -803,11 +867,10 @@ def promote_to_parent(
         title=eff_title,
         result_value=result_value,
         result_unit=eff_result_unit,
-        review_state="verified",
+        review_state="parent_to_verify",
         method_id=method_id,
         instrument_id=instrument_id,
         analyst_user_id=user_id,
-        verified_at=now,
         created_by_user_id=user_id,
     )
     db.add(parent_row)
@@ -816,7 +879,7 @@ def promote_to_parent(
     db.add(LimsAnalysisTransition(
         analysis_id=parent_row.id,
         from_state=None,
-        to_state="verified",
+        to_state="parent_to_verify",
         transition_kind="auto",
         user_id=user_id,
         reason=f"promoted from sources {source_ids}",
@@ -1377,7 +1440,9 @@ def cascade_parent_retest_to_sources(
     #    and vacates the partial unique index (which excludes 'retracted'), so
     #    the eventual re-promote inserts cleanly. NEVER retract a PUBLISHED
     #    parent — it's a citable COA source; that path is invalidate→retest.
-    if new_row_ids and parent_analysis.review_state == "verified":
+    #    'parent_to_verify' (awaiting sign-off) un-promotes too — an unverified
+    #    row is not yet citable, but its stale value must not linger either.
+    if new_row_ids and parent_analysis.review_state in ("verified", "parent_to_verify"):
         prior_state = parent_analysis.review_state
         parent_analysis.review_state = "retracted"
         # Clear the promoted figure too: the display serialization
@@ -1409,14 +1474,23 @@ def parent_retest(
     reason: Optional[str] = None,
 ) -> tuple[list[int], Optional[str]]:
     """Native origination of a parent-tier retest: validate, then run the
-    existing cascade (retest promoted sources + un-promote the verified
-    parent). The generic transitions endpoint tier-blocks 'retest' at
+    existing cascade (retest promoted sources + un-promote the verified or
+    awaiting parent). The generic transitions endpoint tier-blocks 'retest' at
     TIER_PARENT on purpose — this is the dedicated, fail-closed path.
 
     Fail-closed guard: the active canonical parent row for the keyword must
-    be 'verified'. Without it, a direct API caller could retract vial
-    results under a PUBLISHED parent (the cascade retests sources
-    regardless of parent state; only its un-promote step checks verified).
+    be 'verified' or 'parent_to_verify' (awaiting sign-off). Without it, a
+    direct API caller could retract vial results under a PUBLISHED parent
+    (the cascade retests sources regardless of parent state; only its
+    un-promote step checks review_state).
+
+    Activity event (Task 7): 'parent_analysis_retested' is written AFTER the
+    cascade returns, in a commit of its own — not literally inside the
+    cascade's transaction, since cascade_parent_retest_to_sources owns and
+    commits its own per-source retests plus the un-promote step before this
+    function regains control. This is a known, structural deviation from
+    "same transaction as the act": the event lands in the commit
+    immediately following the state change, not folded into it.
     """
     from models import LimsSample
 
@@ -1439,14 +1513,14 @@ def parent_retest(
         raise NotFoundError(
             f"no active native parent row for keyword {keyword!r} on {sample_id!r}"
         )
-    if active.review_state != "verified":
+    if active.review_state not in ("verified", "parent_to_verify"):
         raise InvalidTransitionError(
             active.review_state,
             "retest",
             message=(
-                "parent retest requires the parent row to be 'verified'; "
-                f"row is {active.review_state!r} (published parents go "
-                "through invalidate→retest)"
+                "parent retest requires the parent row to be 'verified' or "
+                f"'parent_to_verify'; row is {active.review_state!r} "
+                "(published parents go through invalidate→retest)"
             ),
         )
     new_ids = cascade_parent_retest_to_sources(
@@ -1457,7 +1531,227 @@ def parent_retest(
         source_reason=reason or "retested from parent (native)",
     )
     db.refresh(active)
+
+    # source_row_ids = the ORIGINAL (now-retested) source rows, not the new
+    # replacement rows cascade minted — same vocabulary as
+    # LimsAnalysisPromotion.source_analysis_id.
+    source_row_ids: list[int] = []
+    if new_ids:
+        source_row_ids = [
+            sid for sid in db.execute(
+                select(LimsAnalysis.retest_of_id).where(LimsAnalysis.id.in_(new_ids))
+            ).scalars().all()
+            if sid is not None
+        ]
+
+    from models import AnalysisService
+    svc = db.get(AnalysisService, active.analysis_service_id)
+    db.add(LimsSubSampleEvent(
+        lims_sample_pk=active.lims_sample_pk,
+        event="parent_analysis_retested",
+        details={
+            "keyword": keyword,
+            "source_row_ids": source_row_ids,
+            "unpromoted": active.review_state == "retracted",
+            "service_origin": svc.origin if svc else None,
+        },
+        user_id=user_id,
+    ))
+    db.commit()
+
     return new_ids, active.review_state
+
+
+def vial_source_retest(
+    db: Session,
+    *,
+    analysis_id: int,
+    user_id: Optional[int],
+    reason: Optional[str] = None,
+) -> tuple[int, bool, Optional[str]]:
+    """Native origination of a vial-side (source) retest: the up-cascade
+    mirror of parent_retest's down-cascade. Retests ONE named promoted
+    source row directly (rather than every source under a parent+keyword),
+    then resolves its promotion and un-promotes the parent if it's still
+    unverified-citable.
+
+    Fail-closed guards (resolve -> guard -> act -> re-read), in the order
+    the route's error table specifies:
+      1. row must exist (NotFoundError -> 404)
+      2. row must be vial-hosted (lims_sub_sample_pk IS NOT NULL) and in
+         review_state == 'promoted' (InvalidTransitionError -> 409) —
+         this explicitly excludes the "parent acting as a vial" promotion
+         source (state_machine.tier_of's other TIER_VIAL shape); that one
+         has no dedicated up-cascade route yet.
+      3. row must not already be retested (InvalidTransitionError -> 409)
+         — apply_transition's retest branch never mutates review_state
+         (only retested + a new linked row), so a row stays 'promoted'
+         forever after being retested once and would otherwise still
+         clear guard 2 on a second call. See the idempotency comment at
+         the guard site for why this is a 409, not the pristine-delete
+         path's 400.
+      4. the row's AnalysisService.origin must be 'mk1' (BadRequestError ->
+         400) — SENAITE-origin sources retest from the parent AR; this
+         route only understands the native identity path.
+
+    Un-promote guard mirrors cascade_parent_retest_to_sources step 5
+    exactly: parent in ('verified', 'parent_to_verify') -> retract + clear
+    result + audit; parent 'published' (a citable COA source) is left
+    untouched and parent_unverified is False.
+
+    Transaction shape: apply_transition(kind='retest') owns and commits its
+    own single-row transaction (new retest row insert + retested=True flag
+    + audit, all before it returns) — that commit boundary is intentionally
+    not widened here, same as cascade_parent_retest_to_sources's per-source
+    retest calls. Everything after is a SECOND, separate commit: the
+    un-promote mutation (when the parent is still 'verified' or
+    'parent_to_verify') AND the 'promoted_source_retested' activity event
+    (Task 7, written unconditionally — even when there's no un-promote to
+    do) now share that one commit. This is deliberately two commits, not
+    one wrapping transaction: if the second commit were to fail, the retest
+    stays durable and visible (correct — the source really was retested)
+    while the parent is left carrying a now-stale promoted value AND no
+    activity event is recorded for this act — a display-staleness gap that
+    now also means the event log is incomplete for that one call. Recovery
+    for THAT gap is NOT re-running this route (guard 3 above now 409s on
+    the already-retested row) — it's the parent-tier retest route (which
+    cascades off the parent+keyword rather than this row) or an admin fix.
+    That is the same accepted trade-off cascade_parent_retest_to_sources
+    already makes for the down-cascade's multi-source loop; sequencing the
+    un-promote+event AFTER the retest commit (never before) is what
+    guarantees "retest committed, un-promote-and-event lost" is the only
+    possible partial-failure shape — never the reverse.
+    """
+    from models import AnalysisService, LimsAnalysisPromotion
+
+    row = get_analysis(db, analysis_id)  # NotFoundError -> 404
+
+    if row.lims_sub_sample_pk is None or row.review_state != "promoted":
+        raise InvalidTransitionError(
+            row.review_state,
+            "retest",
+            message=(
+                "source retest requires a vial-hosted row in 'promoted' "
+                "state; row is "
+                + (
+                    "parent-hosted"
+                    if row.lims_sub_sample_pk is None
+                    else f"{row.review_state!r}"
+                )
+            ),
+        )
+
+    # Idempotency guard: apply_transition's retest branch (service.py
+    # ~284-343) only sets retested=True and inserts the new linked row —
+    # it never touches review_state, so the row above stays 'promoted'
+    # forever and would otherwise still pass the guard just above on a
+    # second identical POST (double-click, retried request). Without this,
+    # a repeat call would mint a SECOND unassigned retest row with
+    # retest_of_id == row.id — an orphan the partial unique index doesn't
+    # catch (it only covers retest_of_id IS NULL) — plus a second
+    # un-promote pass. retested=True is the codebase's established
+    # has-activity sentinel (mirrors the per-source skip in
+    # cascade_parent_retest_to_sources: `if src.retested: continue`,
+    # service.py ~1400, and the pristine-delete guard at ~2410). We raise
+    # InvalidTransitionError/409 here — not that pristine-delete
+    # function's BadRequestError/400 — because this is the SAME kind of
+    # question as the guard immediately above (is this row's state shape
+    # legal for a retest transition right now), not a structural
+    # request-shape question like the mk1-origin check below.
+    if row.retested:
+        raise InvalidTransitionError(
+            row.review_state,
+            "retest",
+            message=(
+                f"analysis id={row.id} has already been retested "
+                "(retested=True) — source retest is not repeatable "
+                "from this row"
+            ),
+        )
+
+    svc = db.get(AnalysisService, row.analysis_service_id)
+    if svc is None or svc.origin != "mk1":
+        raise BadRequestError(
+            "SENAITE-origin rows retest from the parent AR — sub-side "
+            "retest dead-ends on the write-back"
+        )
+
+    new_row = apply_transition(
+        db,
+        analysis_id=row.id,
+        kind="retest",
+        reason=reason or "retested from vial (source retest)",
+        user_id=user_id,
+    )
+
+    parent_unverified = False
+    parent_review_state: Optional[str] = None
+    parent_state_before: Optional[str] = None
+    parent = None
+
+    # No unique constraint on source_analysis_id — a row that somehow gets
+    # promoted twice (e.g. reopened outside apply_transition, as the
+    # review_state CHECK-constraint backfill in database.py demonstrates is
+    # possible for this exact column) would otherwise resolve
+    # nondeterministically. order_by(id.desc()) + first-wins mirrors
+    # list_native_parent_analyses' latest-per-service dedup (service.py
+    # ~963) for the identical reason: "rather than depending on an
+    # invariant this function doesn't own." Unlike the down-cascade's
+    # active-parent query (retest_of_id IS NULL, not
+    # retracted/rejected, provenance='canonical'), this doesn't filter on
+    # parent state — a stale promotion's parent naturally reads as
+    # published/retracted/etc. below and the un-promote step no-ops.
+    promo = db.execute(
+        select(LimsAnalysisPromotion)
+        .where(LimsAnalysisPromotion.source_analysis_id == row.id)
+        .order_by(LimsAnalysisPromotion.id.desc())
+    ).scalars().first()
+    if promo is not None:
+        parent = db.get(LimsAnalysis, promo.parent_analysis_id)
+        if parent is not None:
+            parent_state_before = parent.review_state
+            if parent.review_state in ("verified", "parent_to_verify"):
+                prior_state = parent.review_state
+                parent.review_state = "retracted"
+                # Clear the promoted figure too — mirrors
+                # cascade_parent_retest_to_sources step 5 exactly: the
+                # display serialization filters by retest_of_id, not
+                # state, so a retracted parent still renders otherwise.
+                parent.result_value = None
+                parent.result_unit = None
+                parent.updated_at = datetime.utcnow()
+                db.add(LimsAnalysisTransition(
+                    analysis_id=parent.id,
+                    from_state=prior_state,
+                    to_state="retracted",
+                    transition_kind="auto",
+                    user_id=user_id,
+                    reason="un-promoted: source retested from vial",
+                ))
+                parent_unverified = True
+
+    # Activity event (Task 7): written unconditionally — rides the
+    # un-promote commit above when there is one, otherwise gets this commit
+    # to itself. svc.origin is always 'mk1' here (guard 4 above fails
+    # closed on anything else before this point is reachable).
+    db.add(LimsSubSampleEvent(
+        sub_sample_pk=row.lims_sub_sample_pk,
+        event="promoted_source_retested",
+        details={
+            "keyword": row.keyword,
+            "new_row_id": new_row.id,
+            "parent_state_before": parent_state_before,
+            "parent_unverified": parent_unverified,
+            "service_origin": svc.origin,
+        },
+        user_id=user_id,
+    ))
+    db.commit()
+    if parent is not None:
+        db.refresh(parent)
+        parent_review_state = parent.review_state
+
+    return new_row.id, parent_unverified, parent_review_state
 
 
 # ─── Parent-reject cascade ───────────────────────────────────────────────────
@@ -1869,8 +2163,9 @@ def force_retract_analysis(
       - published      -> refuse (BadRequestError): a published COA result must
                           be invalidated via SENAITE, not auto-retracted here.
       - promoted       -> un-promote: retract each parent canonical row it fed
-                          (verified -> retracted), drop the promotion link(s),
-                          then reject the source (promoted -> rejected).
+                          (verified or parent_to_verify -> retracted), drop the
+                          promotion link(s), then reject the source
+                          (promoted -> rejected).
       - verified (vial)-> retract (verified -> retracted).
       - else (worked)  -> reject.
 
@@ -1894,7 +2189,7 @@ def force_retract_analysis(
         for link in links:
             canonical = db.get(LimsAnalysis, link.parent_analysis_id)
             if canonical is not None and not is_terminal(canonical.review_state):
-                if canonical.review_state == "verified":
+                if canonical.review_state in ("verified", "parent_to_verify"):
                     apply_transition(
                         db, analysis_id=canonical.id, kind="retract",
                         reason="wrong-variant Replace: canonical result invalidated",
@@ -2398,6 +2693,7 @@ def _serialize_senaite_shape_rows(
             service_group_id=None,
             service_group_name=None,
             promoted_to_parent_id=promo_by_source.get(r.id),
+            service_origin=svc.origin if svc else None,
         ))
     return out
 

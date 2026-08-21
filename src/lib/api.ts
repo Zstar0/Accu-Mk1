@@ -3661,6 +3661,10 @@ export interface SenaiteAnalysis {
   // canonical result, this is the parent-tier row's id. Used to render
   // the "Promoted → #N" badge in AnalysisTable.
   promoted_to_parent_id?: number | null
+  /** Native-verification (Task 5): which side owns the analysis_service row
+   *  backing this line ('mk1' | 'senaite'). Type-only here — not yet read
+   *  by any FE display logic. */
+  service_origin?: string | null
 }
 
 export interface SenaiteAttachment {
@@ -5951,6 +5955,41 @@ export async function listNativeParentAnalysesShaped(
 export interface ParentRetestResponse {
   new_row_ids: number[]
   parent_review_state: string | null
+}
+
+export interface SourceRetestResponse {
+  new_row_id: number
+  parent_unverified: boolean
+  parent_review_state: string | null
+}
+
+/** Task 10 / Task 5 route: native vial-side (source) retest for ONE named
+ *  promoted, mk1-origin row — the up-cascade mirror of parentRetestAnalysis.
+ *  Retests the row directly, then un-promotes its parent when the parent is
+ *  still verified/parent_to_verify; a published parent (a citable COA
+ *  source) is left untouched — see PromotedSourceRetestDialog for the
+ *  caller-facing warning copy. */
+export async function vialSourceRetest(
+  analysisId: number,
+  reason?: string
+): Promise<SourceRetestResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/lims-analyses/${analysisId}/source-retest`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(reason ? { reason } : {}),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    const detail = err?.detail
+    throw new Error(
+      (typeof detail === 'string' ? detail : detail?.message) ||
+        `vialSourceRetest failed: ${response.status}`
+    )
+  }
+  return response.json()
 }
 
 /** Native parent-tier retest for one keyword: retests the promoted source
