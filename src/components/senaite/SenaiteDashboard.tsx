@@ -22,7 +22,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
-import { ROLE_BADGE_CLASS } from '@/lib/assignment-colors'
+import { RoleBadge } from '@/components/shared/RoleBadge'
 import { HighlightMatch } from '@/components/explorer/helpers'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -161,22 +161,6 @@ function SortIcon({ column, sort }: { column: SortColumn; sort: SortConfig }) {
 // --- Sample Table ---
 
 const TEST_CLIENT_ID = 'forrest@valenceanalytical.com'
-
-// Role-pill style + short letter for each assignment_role. Used for
-// the parent's badge on the list page and per-sub-sample badges in the
-// expanded row. Rendered as two adjacent spans (bold glyph + full code,
-// e.g. "H" + "HPLC") with a flex `gap-1` between them — `label` MUST stay a
-// single glyph or it duplicates the second span's text (hm's 'HM' read as
-// "HM HM" before this fix; spec 4, Task 10).
-type RoleKey = 'hplc' | 'endo' | 'ster' | 'xtra' | 'hm' | 'unassigned'
-export const ROLE_BADGES: { key: RoleKey; label: string; cls: string }[] = [
-  { key: 'hplc', label: 'H', cls: ROLE_BADGE_CLASS.hplc },
-  { key: 'endo', label: 'E', cls: ROLE_BADGE_CLASS.endo },
-  { key: 'ster', label: 'P', cls: ROLE_BADGE_CLASS.ster },
-  { key: 'xtra', label: 'X', cls: ROLE_BADGE_CLASS.xtra },
-  { key: 'hm', label: 'M', cls: ROLE_BADGE_CLASS.hm },
-  { key: 'unassigned', label: '?', cls: ROLE_BADGE_CLASS.unassigned },
-]
 
 interface ColumnFilters {
   id: string
@@ -528,26 +512,31 @@ function SampleTable({
                 )}
               </TableCell>
               <TableCell className="text-sm">
-                {agg ? (() => {
+                {agg ? (
                   // For multi-vial parents, this is the parent AR's own role
                   // (sub-sample roles render on expand). For sub-sample rows
                   // (vial_count == 0, surfaced via search), this is the
-                  // sub-sample's own assignment_role.
-                  const rb = ROLE_BADGES.find(b => b.key === agg.parent_role)
-                    ?? ROLE_BADGES[ROLE_BADGES.length - 1]!
-                  const label = rb.key === 'unassigned'
-                    ? 'Unassigned'
-                    : rb.key.toUpperCase()
-                  return (
-                    <span
-                      className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] font-medium ${rb.cls}`}
-                      title={`${agg.vial_count > 0 ? 'Parent' : 'Sub-sample'} vial: ${rb.key}`}
-                    >
-                      <span className="font-bold">{rb.label}</span>
-                      <span>{label}</span>
+                  // sub-sample's own assignment_role. Adjacent-span structure
+                  // (bold glyph + full code) restored from the pre-conversion
+                  // markup — RoleBadge owns the glyph half, the second span
+                  // is the plain uppercased code (the "HM HM" fix's contract:
+                  // the glyph stays single-char BECAUSE the code sits beside it).
+                  <span className="inline-flex items-center gap-1">
+                    <RoleBadge
+                      role={agg.parent_role}
+                      form="glyph"
+                      unassignedLabel="?"
+                      makeTitle={() =>
+                        `${agg.vial_count > 0 ? 'Parent' : 'Sub-sample'} vial: ${agg.parent_role}`
+                      }
+                    />
+                    <span className="text-[11px] font-medium">
+                      {agg.parent_role === 'unassigned'
+                        ? 'Unassigned'
+                        : agg.parent_role.toUpperCase()}
                     </span>
-                  )
-                })() : (
+                  </span>
+                ) : (
                   <span className="text-muted-foreground/50 text-xs">—</span>
                 )}
               </TableCell>
@@ -627,9 +616,6 @@ function SampleTable({
                         </div>
                         {subs.map(sub => {
                           const role = sub.assignment_role ?? 'unassigned'
-                          // Last entry of ROLE_BADGES is the 'unassigned' fallback;
-                          // ROLE_BADGES is non-empty so the assertion is safe.
-                          const badge = ROLE_BADGES.find(b => b.key === role) ?? ROLE_BADGES[ROLE_BADGES.length - 1]!
                           return (
                             <button
                               key={sub.id}
@@ -645,8 +631,11 @@ function SampleTable({
                               </span>
                               <span className="text-center text-muted-foreground">{sub.vial_sequence}</span>
                               <span>
-                                <span className={`inline-flex items-center gap-0.5 rounded border px-1 py-0.5 text-[10px] font-medium ${badge.cls}`}>
-                                  <span>{badge.label}</span>
+                                {/* Adjacent-span structure restored: glyph half via
+                                    RoleBadge (component default title), plain code
+                                    span beside it — same "HM HM" fix contract. */}
+                                <span className="inline-flex items-center gap-0.5">
+                                  <RoleBadge role={sub.assignment_role} form="glyph" unassignedLabel="?" />
                                   <span className="capitalize">{role}</span>
                                 </span>
                               </span>

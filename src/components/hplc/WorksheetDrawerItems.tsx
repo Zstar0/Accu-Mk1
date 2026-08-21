@@ -34,6 +34,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { PriorityBadge } from '@/components/hplc/PriorityBadge'
 import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
 import { useSlaForSubjects, type SlaSubject, type SlaSubjectSnapshot } from '@/services/sla-subjects'
+import { isPrepStarted as itemPrepStarted } from '@/lib/worksheet-scope-key'
 import type { InboxPriority } from '@/lib/api'
 import {
   SERVICE_GROUP_COLORS,
@@ -62,7 +63,7 @@ interface WorksheetDrawerItemsProps {
   prepStartedItems: Set<string>
   onRemove: (itemId: number) => void
   onReassign: (itemId: number, targetWorksheetId: number) => void
-  onStartPrep: (item: { sampleId: string; serviceGroupId: number | null; groupName: string; peptideId: number | null; instrumentUid: string | null; limsSubSamplePk: number | null }) => void
+  onStartPrep: (item: { sampleId: string; departmentId: number | null; serviceGroupId: number | null; groupName: string; peptideId: number | null; instrumentUid: string | null; limsSubSamplePk: number | null }) => void
   instruments: Instrument[]
   onUpdateItem: (itemId: number, data: { instrument_uid?: string; prep_status?: string; instrument_id?: number | null }) => void
   onReorder: (itemIds: number[]) => void
@@ -202,7 +203,7 @@ interface SortableItemRowProps {
   slaError: boolean
   onRemove: (itemId: number) => void
   onReassign: (itemId: number, targetWorksheetId: number) => void
-  onStartPrep: (item: { sampleId: string; serviceGroupId: number | null; groupName: string; peptideId: number | null; instrumentUid: string | null; limsSubSamplePk: number | null }) => void
+  onStartPrep: (item: { sampleId: string; departmentId: number | null; serviceGroupId: number | null; groupName: string; peptideId: number | null; instrumentUid: string | null; limsSubSamplePk: number | null }) => void
   onUpdateItem: (itemId: number, data: { instrument_uid?: string; prep_status?: string; instrument_id?: number | null }) => void
 }
 
@@ -236,8 +237,14 @@ function SortableItemRow({
     zIndex: isDragging ? 10 : undefined,
   }
 
-  const prepKey = `${item.sample_id}-${item.service_group_id}`
-  const isPrepStarted = prepStartedItems.has(prepKey)
+  // Department-shaped key, falling back to the legacy group-shaped one so a
+  // worksheet whose notes were written before S2 keeps showing "Prep".
+  const isPrepStarted = itemPrepStarted(
+    prepStartedItems,
+    item.sample_id,
+    item.department_id,
+    item.service_group_id,
+  )
   const isHplcItem = item.analyses.some(a => a.keyword != null && /PURITY|IDENTITY/i.test(a.keyword))
     || /hplc|core/i.test(item.group_name)
   // Native (non-HPLC) items are keyed by the local instruments table (id),
@@ -443,6 +450,7 @@ function SortableItemRow({
               onClick={() =>
                 onStartPrep({
                   sampleId: item.sample_id,
+                  departmentId: item.department_id,
                   serviceGroupId: item.service_group_id,
                   groupName: item.group_name,
                   peptideId: item.peptide_id,

@@ -30,6 +30,7 @@ import { useAuthStore } from '@/store/auth-store'
 import { useWorksheetDrawer } from '@/hooks/use-worksheet-drawer'
 import { getWorksheetUsers, getInstruments, getMethods } from '@/lib/api'
 import type { HplcMethod, Instrument } from '@/lib/api'
+import { prepStartedKey } from '@/lib/worksheet-scope-key'
 import WorksheetDrawerHeader from './WorksheetDrawerHeader'
 import WorksheetDrawerItems from './WorksheetDrawerItems'
 import AddSamplesModal from './AddSamplesModal'
@@ -345,7 +346,9 @@ export function WorksheetDrawer() {
                   } catch {
                     parsed = { text: currentNotes }
                   }
-                  parsed[`prep_started:${item.sampleId}-${item.serviceGroupId}`] = true
+                  parsed[
+                    `prep_started:${prepStartedKey(item.sampleId, item.departmentId, item.serviceGroupId)}`
+                  ] = true
                   updateMutation.mutate({
                     worksheetId: activeWorksheet.id,
                     data: { notes: JSON.stringify(parsed) },

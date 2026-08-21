@@ -441,6 +441,13 @@ class VialRole(Base):
     is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    # S1 roles-as-data: display faces (NULL = fall back — color: the role's
+    # department color, then neutral; short_label: code.upper(); badge_glyph:
+    # first char of the short form). Color names come from the FE's closed
+    # class map (role-display.ts) — never free-form CSS.
+    color: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    short_label: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    badge_glyph: Mapped[Optional[str]] = mapped_column(String(2), nullable=True)
 
     department = relationship("Department", lazy="selectin")
 
@@ -759,6 +766,13 @@ class PeptideAnalyte(Base):
     Junction row connecting a Peptide Standard to one AnalysisService.
     Each peptide has up to 4 analyte slots (slot 1-4).
     sample_id is the Senaite sample ID for the standard reference vial.
+
+    4-slot ceiling (product decision, S6c 2026-08-11): the entire pipeline is
+    shaped around SENAITE's Analyte1..Analyte4 fields (parent meta, seeder
+    slot maps, conformance, alias slots) — widening requires a program, not a
+    CHECK edit. NOTE ck_peptide_analyte_slot_range exists only where
+    create_all built this table after 2026-03-05 (v0.19.0, commit bc88c366);
+    older DBs rely on this API-edge validation (the only gate before the DB).
     """
     __tablename__ = "peptide_analytes"
 
@@ -1057,6 +1071,9 @@ class WorksheetItem(Base):
     sample_id: Mapped[str] = mapped_column(String(100), nullable=False)
     analysis_uid: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     service_group_id: Mapped[Optional[int]] = mapped_column(ForeignKey("service_groups.id", ondelete="SET NULL"), nullable=True)
+    department_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("departments.id", ondelete="SET NULL"), nullable=True
+    )
     priority: Mapped[str] = mapped_column(String(20), default="normal", nullable=False)
     assigned_analyst_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     instrument_uid: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
@@ -1229,6 +1246,27 @@ class LimsSample(Base):
     # Authority note: lims_workflow_shadow_evaluations is the authoritative
     # history; this column is its O(1) materialization.
     native_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # S8 adoption guard: collision quarantine. TRUE = row minted to park an
+    # incoming order whose sample_id collided with an existing row under a
+    # different SENAITE uid (external counter regression). The mangled
+    # sample_id keeps it out of every exact-match adoption path; resolution
+    # is a manual action. Interim scaffolding — retires when Mk1 mints its
+    # own sample ids post-phase-out.
+    quarantined: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    quarantine_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # S4 snapshot rider (2026-08-11): frozen catalog resolution stamped ONCE
+    # by the registration bg task (backend/catalog/snapshot.py), NULL for
+    # every pre-slice row and for a sample whose registration signal never
+    # reached the bg task. Shape: {"resolved_at": iso-utc, "profiles": [...]}
+    # — see compute_catalog_snapshot's docstring for the per-profile fields.
+    # Task 6 reads this first (snapshot-sourced resolve_catalog_fulfillment /
+    # seeder member resolution) with NULL/missing-profile live-catalog
+    # fallback; Task 7 adds the only OTHER writer (audited reprovision).
+    catalog_snapshot: Mapped[Optional[dict]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

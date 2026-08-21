@@ -304,3 +304,30 @@ describe('AnalysisTable render — Set method / instrument gating', () => {
     expect(screen.queryByRole('button', { name: 'Analysis actions' })).not.toBeInTheDocument()
   })
 })
+
+describe('default policy — parent_to_verify (read-flip main table seam)', () => {
+  // The registry-sourced main table surfaces canonical parent rows in
+  // 'parent_to_verify' (seam between #96's card-scoped verbs and the
+  // read-flip). The default policy offers exactly Verify — retest stays
+  // card-only: the generic endpoint tier-blocks parent retest and the
+  // Accu-Mk1 card owns that destructive confirm + cascade.
+  it('row offers exactly verify', () => {
+    expect(visibleRowTransitions(row({ review_state: 'parent_to_verify' }))).toEqual(['verify'])
+  })
+  it('bulk: all-parent_to_verify selection offers verify', () => {
+    expect(
+      deriveBulkActions([
+        row({ review_state: 'parent_to_verify' }),
+        row({ uid: 'mk1:8', review_state: 'parent_to_verify' }),
+      ])
+    ).toEqual({ actions: ['verify'], showPromote: false, showVarianceVerify: false })
+  })
+  it('bulk: mixed parent_to_verify + verified offers nothing (empty intersection)', () => {
+    expect(
+      deriveBulkActions([
+        row({ review_state: 'parent_to_verify' }),
+        row({ uid: 'mk1:8', review_state: 'verified' }),
+      ]).actions
+    ).toEqual([])
+  })
+})

@@ -43,16 +43,69 @@ class RoleFulfillment:
     rider_profile_ids: list = field(default_factory=list)
 
 
-def resolve_catalog_fulfillment(db, services: dict) -> dict:
+def resolve_catalog_fulfillment(db, services: dict, snapshot: Optional[dict] = None) -> dict:
     """Anchors mint MAX-per-role demand; riders attach to the first ordered
     host on their priority list, else self-mint their own role
     (Handler-locked 2026-07-31). Deterministic: both anchors and riders
     iterate by (role sort_order, profile key) — never by dict/query
     iteration order.
+
+    snapshot (S4 rider, task 6, fix round 1 — per-profile hybrid merge): when
+    given a frozen catalog_snapshot dict (backend/catalog/snapshot.py's
+    shape — LimsSample.catalog_snapshot), `services` is partitioned by
+    profile key into snapshot-covered and uncovered. Covered keys resolve
+    from the frozen snapshot ONLY (_resolve_from_snapshot, zero live
+    catalog queries) — a live catalog edit to one of those profiles can
+    never retroactively change an already-registered sample's fulfillment.
+    Uncovered keys (a post-order add-on, purchased after the snapshot was
+    frozen — logged catalog_snapshot.fallback_live per key) run through the
+    SAME live walk as the NULL-snapshot path below (_resolve_live), merged
+    INTO the snapshot-seeded result rather than a separate one: per role,
+    demand is max(frozen, live), profile-id lists are appended (never
+    overwritten), and a live-resolved rider's host-attachment check
+    (`result.get(h) and result[h].demand > 0`) sees the ALREADY-MERGED
+    result — so a post-order rider can attach to a snapshot-frozen host
+    that already carries real demand, exactly as if both had resolved
+    together live. NULL (the default) skips the snapshot machinery
+    entirely and returns _resolve_live's fresh result, unchanged from
+    before this task.
     """
+    if snapshot is None:
+        return _resolve_live(db, services)
+
+    result = _resolve_from_snapshot(snapshot)
+
+    snapshot_keys = {p["key"] for p in (snapshot.get("profiles") or [])}
+    uncovered = {}
+    for key, val in (services or {}).items():
+        if key in _QUIET_KEYS or not val or key in snapshot_keys:
+            continue
+        uncovered[key] = val
+        log.warning(
+            "catalog_snapshot.fallback_live reason=profile_not_in_snapshot key=%s",
+            key,
+        )
+    if uncovered:
+        _resolve_live(db, uncovered, result=result)
+    return result
+
+
+def _resolve_live(db, services: dict, result: Optional[dict] = None) -> dict:
+    """The live anchor/rider walk: queries AnalysisProfile/VialRole/
+    profile_ride_hosts fresh and resolves `services` against them.
+
+    `result` is the dict to build INTO — defaults to a fresh legacy-bucket
+    floor (the NULL-snapshot / no-merge case), or the snapshot-seeded dict
+    from resolve_catalog_fulfillment's merge branch (fix round 1) so this
+    same code, unmodified, both merges (`rf.demand = max(rf.demand, ...)`
+    against whatever the snapshot already put there, `rf.host_profile_ids.
+    append(...)` onto the snapshot's own list) and lets the rider
+    self-mint-vs-attach check below see snapshot-derived demand that's
+    already sitting in `result` before this function ever ran."""
     from models import AnalysisProfile, VialRole, profile_ride_hosts
 
-    result = {b: RoleFulfillment() for b in _LEGACY_BUCKETS}
+    if result is None:
+        result = {b: RoleFulfillment() for b in _LEGACY_BUCKETS}
     ordered = []
     for key, val in (services or {}).items():
         if key in _QUIET_KEYS or not val:
@@ -112,8 +165,62 @@ def resolve_catalog_fulfillment(db, services: dict) -> dict:
     return result
 
 
-def derive_base_demand_catalog(db, services: dict) -> dict:
+def _resolve_from_snapshot(snapshot: dict) -> dict:
+    """Snapshot-sourced mirror of resolve_catalog_fulfillment's live
+    anchor/rider walk above — same algorithm, sourced from the frozen
+    per-profile fields in `snapshot["profiles"]` instead of live
+    AnalysisProfile/VialRole/profile_ride_hosts queries. See
+    catalog/snapshot.py's docstring for the snapshot's shape and per-field
+    freezing rationale.
+
+    The in-demand gate is already applied: every entry in
+    snapshot["profiles"] passed resolve_catalog_fulfillment's live gate
+    (known key, fulfillment_dim == 'role', landed in host/rider_profile_ids)
+    at registration time (catalog.snapshot.compute_catalog_snapshot calls
+    this same function), so no re-filtering happens here.
+
+    role_sort_order is VialRole.sort_order (NOT NULL in the schema) frozen
+    at resolution time, or None when no VialRole row existed for that
+    profile's fulfillment_role — the exact same signal the live path's
+    `sort_of.get(role, 999)` dict-miss default encodes — so None -> 999
+    below reproduces it precisely ("null sorts last").
+    """
+    result = {b: RoleFulfillment() for b in _LEGACY_BUCKETS}
+    profiles = snapshot.get("profiles") or []
+
+    anchors = [p for p in profiles if not p.get("ride_host_roles")]
+    riders = [p for p in profiles if p.get("ride_host_roles")]
+
+    def _sort_key(p: dict) -> tuple:
+        sort_order = p.get("role_sort_order")
+        return (sort_order if sort_order is not None else 999, p["key"])
+
+    anchors.sort(key=_sort_key)
+    for p in anchors:
+        rf = result.setdefault(p["fulfillment_role"], RoleFulfillment())
+        rf.demand = max(rf.demand, p["vials_required"])
+        rf.host_profile_ids.append(p["profile_id"])
+
+    riders.sort(key=_sort_key)
+    for p in riders:
+        host = next(
+            (h for h in p["ride_host_roles"] if result.get(h) and result[h].demand > 0),
+            None,
+        )
+        if host is not None:
+            result[host].rider_profile_ids.append(p["profile_id"])
+        else:
+            rf = result.setdefault(p["fulfillment_role"], RoleFulfillment())
+            rf.demand = max(rf.demand, p["vials_required"] or 1)  # standalone rider mints its own vial
+            rf.host_profile_ids.append(p["profile_id"])
+    return result
+
+
+def derive_base_demand_catalog(db, services: dict, snapshot: Optional[dict] = None) -> dict:
     """Thin wrapper preserving the pre-spec-4 external shape (role -> int)
-    for derive_base_demand's shadow-compare caller (sub_samples/service.py) —
-    untouched by this task."""
-    return {role: rf.demand for role, rf in resolve_catalog_fulfillment(db, services).items()}
+    for derive_base_demand's shadow-compare caller (sub_samples/service.py).
+    `snapshot` (task 6) threads straight through to resolve_catalog_fulfillment."""
+    return {
+        role: rf.demand
+        for role, rf in resolve_catalog_fulfillment(db, services, snapshot=snapshot).items()
+    }

@@ -268,18 +268,17 @@ def test_patch_role_only_validates_against_existing_dim_when_omitted():
     assert "fulfillment_role" in resp.json()["detail"]
 
 
-def test_post_rejects_legacy_role_for_new_key():
-    """Finding 2: a NEW profile (key not one of the five legacy keys) may not
-    claim a legacy fulfillment_role. While the demand shadow-compare lives,
-    derive_base_demand only ever checks the five legacy keys for a legacy
-    bucket — a new profile parked on 'hplc'/'endo'/'ster' would get silently
-    zero-clamped on every order that doesn't also carry its own legacy key."""
+def test_post_accepts_legacy_role_for_new_key():
+    """S9 Task 2: superseded by test_new_profile_may_anchor_legacy_role_post_flip
+    below. Finding 2's original rule (a NEW profile could not claim a legacy
+    fulfillment_role) retired with Task 1's flip — the catalog now prevails
+    on divergence, so the zero-clamp this 400 protected no longer happens."""
     resp = client.post("/analysis-profiles", json={
         "key": "new_role_reservation_test", "name": "New Role Reservation Test",
         "is_addon": True, "fulfillment_role": "hplc", "fulfillment_dim": "role",
     })
-    assert resp.status_code == 400
-    assert "reserved for the legacy demand map" in resp.json()["detail"]
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["fulfillment_role"] == "hplc"
 
 
 def test_post_rejects_xtra_role():
@@ -292,8 +291,9 @@ def test_post_rejects_xtra_role():
 
 
 def test_post_accepts_non_legacy_role_for_new_key():
-    """Sanity companion to the two rejection tests above: a catalog-only role
-    (not one of hplc/endo/ster/xtra) on a new key is unaffected."""
+    """Sanity companion to the accept tests above (S9 Task 2 retired their
+    old 400s): a catalog-only role (not one of hplc/endo/ster/xtra) on a
+    new key is, and always was, unaffected by the legacy-role guard."""
     resp = client.post("/analysis-profiles", json={
         "key": "catalog_only_role_test", "name": "Catalog Only Role Test",
         "is_addon": True, "fulfillment_role": "hm", "fulfillment_dim": "role",
@@ -301,7 +301,9 @@ def test_post_accepts_non_legacy_role_for_new_key():
     assert resp.status_code == 201, resp.text
 
 
-def test_patch_rejects_legacy_role_for_new_key():
+def test_patch_accepts_legacy_role_for_new_key():
+    """S9 Task 2: PATCH counterpart to test_post_accepts_legacy_role_for_new_key
+    — the same 400 retired on the PATCH edge with Task 1's flip."""
     create = client.post("/analysis-profiles", json={
         "key": "patch_role_reservation_test", "name": "Patch Role Reservation Test",
         "is_addon": True,
@@ -311,15 +313,15 @@ def test_patch_rejects_legacy_role_for_new_key():
     resp = client.patch(f"/analysis-profiles/{profile_id}", json={
         "fulfillment_role": "endo", "fulfillment_dim": "role",
     })
-    assert resp.status_code == 400
-    assert "reserved for the legacy demand map" in resp.json()["detail"]
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["fulfillment_role"] == "endo"
 
 
 def test_patch_rejects_xtra_role_even_on_legacy_key():
-    """The five real legacy-key profiles are exempt from the role-reservation
-    check (they're the allowlist), but 'xtra' is reserved for everyone —
-    even them. Uses the real 'endotoxin' seed row rather than a fixture
-    profile, since the allowlist is genuinely key-based."""
+    """S9 Task 2: the legacy-role reservation guard retired, but 'xtra'
+    remains reserved for every profile — including the five real legacy-key
+    ones. Uses the real 'endotoxin' seed row rather than a fixture profile
+    so a genuine legacy-key profile is the one hitting the xtra guard."""
     from database import SessionLocal
     from models import AnalysisProfile
     db = SessionLocal()
@@ -340,9 +342,9 @@ def test_patch_rejects_xtra_role_even_on_legacy_key():
 
 
 def test_patch_accepts_legacy_key_keeping_its_own_role():
-    """The allowlist is key-based, not role-based: the five legacy-key
-    profiles may keep (or re-set) their own legacy role. No existing profile
-    violates the new rule."""
+    """A legacy-key profile keeping (or re-setting) its own legacy role was
+    always legal and stays legal post-S9 — this pins that the retirement of
+    the new-key guard didn't regress the existing-key path."""
     from database import SessionLocal
     from models import AnalysisProfile
     db = SessionLocal()
@@ -356,6 +358,25 @@ def test_patch_accepts_legacy_key_keeping_its_own_role():
     })
     assert resp.status_code == 200, resp.text
     assert resp.json()["fulfillment_role"] == "endo"
+
+
+def test_new_profile_may_anchor_legacy_role_post_flip():
+    """S9 Task 2: with the catalog authoritative (Task 1 retired the
+    legacy-wins clamp), a NEW profile may legitimately anchor a legacy
+    bucket — the pre-S9 400 protected a zero-clamp that no longer exists.
+    'xtra' stays reserved regardless (never a real fulfillment target)."""
+    resp = client.post("/analysis-profiles", json={
+        "key": "test_new_hplc_family", "name": "Test New HPLC Family",
+        "is_addon": True, "fulfillment_role": "hplc", "fulfillment_dim": "role",
+    })
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["fulfillment_role"] == "hplc"
+
+    resp2 = client.post("/analysis-profiles", json={
+        "key": "test_xtra_grab", "name": "Test Xtra Grab", "is_addon": True,
+        "fulfillment_role": "xtra", "fulfillment_dim": "role",
+    })
+    assert resp2.status_code == 400, "xtra reservation must survive S9"
 
 
 def test_patch_explicit_null_fulfillment_dim_rejected_not_500():

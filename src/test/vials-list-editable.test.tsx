@@ -1,13 +1,29 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { VialsList } from '@/components/intake/ReceiveWizard/VialsList'
 import type { SubSample } from '@/lib/api'
+import type { ReactElement } from 'react'
 
 vi.mock('@/lib/api', async importOriginal => {
   const actual = (await importOriginal()) as Record<string, unknown>
-  return { ...actual, fetchSubSamplePhotoUrl: vi.fn().mockResolvedValue(null) }
+  return {
+    ...actual,
+    fetchSubSamplePhotoUrl: vi.fn().mockResolvedValue(null),
+    // RoleBadge (S1 roles-as-data) reads the catalog via these — stub so the
+    // badge renders its loading-state face instead of firing a real fetch().
+    getVialRoles: vi.fn().mockResolvedValue([]),
+    getDepartments: vi.fn().mockResolvedValue([]),
+  }
 })
+
+// RoleBadge now reads the vial-roles/departments catalog via react-query —
+// wrap every render with a QueryClientProvider (was unnecessary pre-S1).
+function renderWithProviders(ui: ReactElement) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>)
+}
 
 function sub(id: string, seq: number, role: string | null): SubSample {
   return {
@@ -28,7 +44,7 @@ function sub(id: string, seq: number, role: string | null): SubSample {
 describe('VialsList — every sub-sample vial is editable (Feature A)', () => {
   it('renders a PRIOR-session vial as a clickable button and selects it on click', async () => {
     const onSelect = vi.fn()
-    render(
+    renderWithProviders(
       <VialsList
         vials={[{ sub: sub('P-0993-S03', 3, 'ster'), isThisSession: false }]}
         parentVial={null}
@@ -46,7 +62,7 @@ describe('VialsList — every sub-sample vial is editable (Feature A)', () => {
 
   it('still renders this-session vials as clickable buttons', async () => {
     const onSelect = vi.fn()
-    render(
+    renderWithProviders(
       <VialsList
         vials={[{ sub: sub('P-0993-S01', 1, 'hplc'), isThisSession: true }]}
         parentVial={null}

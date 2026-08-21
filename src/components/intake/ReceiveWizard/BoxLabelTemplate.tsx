@@ -1,22 +1,23 @@
 import { QRCodeSVG } from 'qrcode.react'
-
-// "PCR" per the lab's Sterility-Screening-PCR naming (matches the order label).
-// Catalog-only roles beyond these four (e.g. 'hm') fall back to the
-// uppercased code at both read sites below — never print "undefined" on a
-// physical label (spec 4, Task 10).
-export const ROLE_SHORT: Record<string, string> = { hplc: 'HPLC', endo: 'ENDO', ster: 'PCR', xtra: 'XTRA' }
+import { roleShortLabel } from '@/lib/role-display'
+import type { VialRoleRow } from '@/lib/api'
 
 interface Props {
   boxId: number                // lims_boxes.id — the QR payload (scanner-station contract)
   labelCode: string            // e.g. "BOX-3267-1" — the big printed line
   // Widened to string (spec 4, Task 10): boxing is catalog-driven now, not
-  // limited to the four legacy roles. See ROLE_SHORT's fallback.
+  // limited to the four legacy roles. See roleShortLabel's fallback.
   role: string
   vialCount: number
   createdAt: string | null     // ISO; printed as YYYY-MM-DD, omitted when null
+  // S1 roles-as-data: this is a PRINT template — no query hook of its own.
+  // The parent (BoxStep, which already owns useVialRoles()) threads its
+  // catalog data straight through. Undefined while loading/absent — falls
+  // back to the uppercased code, never "undefined" on a physical label.
+  roles?: VialRoleRow[]
 }
 
-export function BoxLabelTemplate({ boxId, labelCode, role, vialCount, createdAt }: Props) {
+export function BoxLabelTemplate({ boxId, labelCode, role, vialCount, createdAt, roles }: Props) {
   return (
     <div className="label">
       {/* QR carries the bare numeric box id, NOT the label code: it must stay
@@ -27,7 +28,7 @@ export function BoxLabelTemplate({ boxId, labelCode, role, vialCount, createdAt 
         <div className="box-label-id">{labelCode}</div>
         <div className="box-label-meta">
           <span className="box-label-dept">
-            {ROLE_SHORT[role] ?? role.toUpperCase()} · {vialCount} vial{vialCount === 1 ? '' : 's'}
+            {roleShortLabel(role, roles)} · {vialCount} vial{vialCount === 1 ? '' : 's'}
           </span>
           {createdAt && <span className="box-label-date">{createdAt.slice(0, 10)}</span>}
         </div>

@@ -1680,13 +1680,14 @@ export async function listAnalysisServices(): Promise<AnalysisService[]> {
 export async function addAnalysisToSample(
   sampleId: string,
   serviceUid: string,
+  extra?: { keyword?: string; analysis_service_id?: number },
 ): Promise<ManageAnalysisResult> {
   const response = await fetch(
     `${API_BASE_URL()}/explorer/samples/${encodeURIComponent(sampleId)}/analyses`,
     {
       method: 'POST',
       headers: getBearerHeaders('application/json'),
-      body: JSON.stringify({ service_uid: serviceUid }),
+      body: JSON.stringify({ service_uid: serviceUid || undefined, ...(extra ?? {}) }),
     }
   )
   if (!response.ok) {
@@ -3905,6 +3906,9 @@ export interface SenaiteAnalyte {
   slot_number: number // 1-4, corresponding to Analyte1..Analyte4 in SENAITE
   matched_peptide_id: number | null
   matched_peptide_name: string | null
+  /** Abbreviation of the matched peptide — HPLC results key analytes by
+   *  abbreviation, so slot matching must prefer this over the name. */
+  matched_peptide_abbreviation?: string | null
   declared_quantity: number | null // per-analyte declared qty (mg)
 }
 
@@ -3961,14 +3965,13 @@ export interface SenaiteAnalysis {
    *  backing this line ('mk1' | 'senaite'). Type-only here — not yet read
    *  by any FE display logic. */
   service_origin?: string | null
-  /** Task 7 fix round 1 (R-P2-3): the row's own analysis_service_id FK.
-   *  Lets SetMethodInstrumentDialog's serviceId resolution key off the id
-   *  directly instead of a keyword scan — keywords are not unique across
-   *  service origins (the migration pattern produces exactly that
-   *  collision), so a keyword-only match can resolve the wrong service.
-   *  Optional/nullable: older cached rows or non-mk1 (SENAITE) rows may not
-   *  carry it. */
+  /** S3: native identity key; keyword is display-only on mk1 rows. Absent on
+   *  SENAITE-sourced rows, which keep keyword as their identity. Also consumed
+   *  by SetMethodInstrumentDialog (R-P2-3): id-keyed service resolution beats
+   *  keyword scans, which collide across origins. */
   analysis_service_id?: number | null
+  // senaite-shape rows from Mk1: 'ordered' | 'canonical' | 'shadow'
+  provenance?: string | null
 }
 
 export interface SenaiteAttachment {
@@ -5035,6 +5038,9 @@ export interface VialRoleRow {
   sort_order: number
   frozen: boolean
   is_system: boolean
+  color?: string | null
+  short_label?: string | null
+  badge_glyph?: string | null
 }
 
 export interface VialRoleCreate {
@@ -5044,6 +5050,9 @@ export interface VialRoleCreate {
   boxable?: boolean
   variance_eligible?: boolean
   sort_order?: number
+  color?: string | null
+  short_label?: string | null
+  badge_glyph?: string | null
 }
 
 export async function getVialRoles(): Promise<VialRoleRow[]> {
@@ -5353,6 +5362,11 @@ export interface InboxAnalysisItem {
   peptide_name: string | null
   method: string | null
   review_state: string | null
+  /** S2: `group_id` / `group_name` / `group_color` carry DEPARTMENT identity,
+   *  not service-group identity — both the SENAITE-derived and the native
+   *  inbox emitters speak departments now. The wire names are unchanged for
+   *  rollback safety, so a value read from here must be sent back as
+   *  `department_id`, never as `service_group_id`. */
   group_id: number
   group_name: string
   group_color: string
@@ -5489,6 +5503,9 @@ export async function getWorksheetUsers(): Promise<WorksheetUser[]> {
 export async function bulkUpdateInbox(data: {
   sample_uids: string[]
   priority?: InboxPriority
+  /** Scope key (S2); required alongside `analyst_id` / `instrument_uid`.
+   *  Takes precedence over `service_group_id` server-side. */
+  department_id?: number
   service_group_id?: number
   analyst_id?: number
   instrument_uid?: string
@@ -5534,6 +5551,9 @@ export interface WorksheetListItem {
     sample_id: string
     sample_uid: string
     service_group_id: number | null
+    /** Owning department (S2). Null only for pre-S2 rows, which fall back to
+     *  the legacy `service_group_id` scope for keys and de-duping. */
+    department_id: number | null
     department_name: string | null
     group_name: string
     group_color: string
@@ -5610,9 +5630,24 @@ export async function updateWorksheet(
   if (!response.ok) throw new Error(`Update worksheet failed: ${response.status}`)
 }
 
+/** Body shared by both add paths (`/add-group` and `/create-from-drop`).
+ *
+ *  `department_id` is the scope key now and takes precedence server-side;
+ *  `service_group_id` stays declared-but-unsent so a rollback needs no type
+ *  change. Nothing sourced from the inbox may travel as `service_group_id` —
+ *  the inbox's `group_id` is a DEPARTMENT id (see InboxAnalysisItem). */
+export interface AddToWorksheetPayload {
+  sample_uid: string
+  sample_id: string
+  department_id?: number
+  service_group_id?: number
+  date_received?: string | null
+  analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[]
+}
+
 export async function addGroupToWorksheet(
   worksheetId: number,
-  data: { sample_uid: string; sample_id: string; service_group_id: number; date_received?: string | null; analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[] }
+  data: AddToWorksheetPayload
 ): Promise<{ status: string; item_id: number }> {
   const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}/add-group`, {
     method: 'POST',
@@ -5706,7 +5741,7 @@ export async function reorderWorksheetItems(
 }
 
 export async function createWorksheetFromDrop(
-  data: { sample_uid: string; sample_id: string; service_group_id: number; date_received?: string | null; analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[] }
+  data: AddToWorksheetPayload
 ): Promise<WorksheetCreateResponse> {
   const response = await fetch(`${API_BASE_URL()}/worksheets/create-from-drop`, {
     method: 'POST',
@@ -6108,6 +6143,8 @@ export interface VialPlanRoleProfile {
   key: string
   name: string
   relation: 'host' | 'rider'
+  /** rider entries only: vial sample_ids holding a live rider edge (vial_sequence order) */
+  host_vials?: string[]
 }
 
 /** One assignable role within a vial-plan section — the bench "spot" Task 9's
@@ -6322,6 +6359,106 @@ export async function listNativeParentAnalysesShaped(
     throw new Error(`listNativeParentAnalysesShaped failed: ${response.status}`)
   }
   return response.json()
+}
+
+// ── Native Manage Analyses (spec 2026-08-18) ────────────────────────────────
+
+export interface NativeProfileMember { service_id: number; keyword: string; title: string }
+export interface NativeProfile {
+  id: number
+  key: string
+  name: string
+  fulfillment_role: string | null
+  members: NativeProfileMember[]
+  on_sample: 'none' | 'partial' | 'full'
+  host_vials: string[]
+}
+export interface AddNativeProfileResult {
+  profile_key: string
+  profile_name: string
+  placeholders_created: number
+  placeholders_existing: number
+  hosts: { vial_id: string; edge_created: boolean; vial_rows_created: number }[]
+  no_host_vial: boolean
+}
+export interface RemoveNativeAnalysisResult {
+  analysis_id: number
+  keyword: string
+  analysis_service_id: number
+  vial_rows_deleted: number
+  vial_rows_rejected: number
+  edges_superseded: number
+}
+export interface ResyncFromOrderResult { placeholders_created: number; edges_created: number; vial_rows_created: number }
+
+/** Thrown by removeNativeParentAnalysis on HTTP 412 — carries the impact for RemovalConfirmModal. */
+export class NativeRemovalNeedsConfirm extends Error {
+  impact: RemovalImpact
+  constructor(impact: RemovalImpact) {
+    super('confirm_required')
+    this.name = 'NativeRemovalNeedsConfirm'
+    this.impact = impact
+  }
+}
+
+async function _detailMessage(response: Response, fallback: string): Promise<string> {
+  const err = await response.json().catch(() => null)
+  const d = err?.detail
+  if (typeof d === 'string') return d
+  if (d && typeof d.message === 'string') return d.message
+  return `${fallback}: ${response.status}`
+}
+
+export async function listNativeProfilesForParent(sampleId: string): Promise<NativeProfile[]> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/lims-analyses/parent/${encodeURIComponent(sampleId)}/native-profiles`,
+    { headers: getAuthHeaders() }
+  )
+  if (!response.ok) throw new Error(await _detailMessage(response, 'Failed to list native profiles'))
+  return response.json()
+}
+
+export async function addNativeProfileToParent(sampleId: string, profileId: number): Promise<AddNativeProfileResult> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/lims-analyses/parent/${encodeURIComponent(sampleId)}/profiles`,
+    { method: 'POST', headers: getBearerHeaders('application/json'), body: JSON.stringify({ profile_id: profileId }) }
+  )
+  if (!response.ok) throw new Error(await _detailMessage(response, 'Failed to add profile'))
+  return response.json()
+}
+
+export async function removeNativeParentAnalysis(
+  sampleId: string, analysisId: number, confirm = false,
+): Promise<RemoveNativeAnalysisResult> {
+  const qs = confirm ? '?confirm=true' : ''
+  const response = await fetch(
+    `${API_BASE_URL()}/api/lims-analyses/parent/${encodeURIComponent(sampleId)}/native-analyses/${analysisId}${qs}`,
+    { method: 'DELETE', headers: getAuthHeaders() }
+  )
+  if (response.status === 412) {
+    const err = await response.json().catch(() => null)
+    throw new NativeRemovalNeedsConfirm((err?.detail?.impact ?? { pristine: [], worked_unverified: [], blocked: [] }) as RemovalImpact)
+  }
+  if (!response.ok) throw new Error(await _detailMessage(response, 'Failed to remove analysis'))
+  return response.json()
+}
+
+export async function resyncParentFromOrder(sampleId: string): Promise<ResyncFromOrderResult> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/lims-analyses/parent/${encodeURIComponent(sampleId)}/resync-from-order`,
+    { method: 'POST', headers: getBearerHeaders('application/json') }
+  )
+  if (!response.ok) throw new Error(await _detailMessage(response, 'Re-sync failed'))
+  return response.json()
+}
+
+/** Local mk1-origin services (for the native vial picker) shaped like the SENAITE picker rows:
+ *  uid = "" (no SENAITE uid), plus `id` for the backend's analysis_service_id resolution. */
+export async function listNativeAnalysisServices(): Promise<(AnalysisService & { id: number })[]> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-services?origin=mk1&active=true`, { headers: getAuthHeaders() })
+  if (!response.ok) throw new Error(await _detailMessage(response, 'Failed to list native services'))
+  const rows: { id: number; keyword: string | null; title: string; senaite_uid: string | null }[] = await response.json()
+  return rows.map(r => ({ uid: r.senaite_uid ?? '', keyword: r.keyword ?? '', title: r.title, id: r.id }) as AnalysisService & { id: number })
 }
 
 export interface ParentRetestResponse {
@@ -7174,6 +7311,9 @@ export interface OrderedProduct {
   is_addon: boolean
   fulfillment_role: string | null
   fulfillment_dim: 'role' | 'kind'
+  // Rider profiles (spec 2026-08-20-rider-vial-visibility) fulfill on a HOST
+  // role's vial rather than their own; empty/absent for non-rider products.
+  ride_host_roles?: string[]
 }
 
 export interface OrderedProductsResponse {

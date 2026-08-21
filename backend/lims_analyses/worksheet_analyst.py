@@ -31,29 +31,52 @@ _DEAD_STATES = ("retracted", "rejected")
 
 
 def _resolve(
-    db: Session, *, sample_uid: str, service_group_id: Optional[int]
+    db: Session, *, sample_uid: str,
+    department_id: Optional[int] = None,
+    service_group_id: Optional[int] = None,
 ) -> Tuple[Optional[LimsSubSample], List[LimsAnalysis]]:
-    """Vial + its live analyses in the given group (all live when group is None)."""
+    """Vial + its live analyses in the given DEPARTMENT (preferred), else the
+    given legacy GROUP, else all live analyses (both None = wildcard — the
+    historical contract; None never means 'department IS NULL').
+
+    Department-miss role fallback: a department filter that matches zero rows
+    on a vial whose assignment_role belongs to that same department returns
+    ALL live rows — catalog-only services (hm, STERILITY_USP71) carry no
+    department/group membership, but the vial was seeded role-scoped so its
+    rows already match its role (main.py Phase-2 seeder contract).
+    """
     sub = db.execute(
         select(LimsSubSample).where(LimsSubSample.external_lims_uid == sample_uid)
     ).scalar_one_or_none()
     if sub is None:
         return None, []
-    q = (
+    base = (
         select(LimsAnalysis)
         .where(LimsAnalysis.lims_sub_sample_pk == sub.id)
         .where(~LimsAnalysis.review_state.in_(_DEAD_STATES))
     )
+    if department_id is not None:
+        q = base.join(
+            AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id
+        ).where(AnalysisService.department_id == department_id)
+        rows = list(db.execute(q).scalars().all())
+        if not rows:
+            from catalog.departments import department_id_for_role
+            role = getattr(sub, "assignment_role", None)
+            if role and department_id_for_role(db, role) == department_id:
+                rows = list(db.execute(base).scalars().all())
+        return sub, rows
     if service_group_id is not None:
         q = (
-            q.join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
+            base.join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
             .join(
                 service_group_members,
                 service_group_members.c.analysis_service_id == AnalysisService.id,
             )
             .where(service_group_members.c.service_group_id == service_group_id)
         )
-    return sub, list(db.execute(q).scalars().all())
+        return sub, list(db.execute(q).scalars().all())
+    return sub, list(db.execute(base).scalars().all())
 
 
 def _email(db: Session, user_id: Optional[int]) -> Optional[str]:
@@ -78,12 +101,15 @@ def stamp_for_item(
     acting_user_id: Optional[int],
     worksheet_id: int,
     worksheet_title: Optional[str] = None,
+    department_id: Optional[int] = None,
 ) -> int:
     """Stamp on add-to-worksheet. Always emits worksheet_assigned when the uid
     resolves to a vial (the add itself is the event), even if no analysis row
     changed value (e.g. analyst unassigned, or no live analyses in the group).
     Returns the number of analysis rows whose analyst changed."""
-    sub, rows = _resolve(db, sample_uid=sample_uid, service_group_id=service_group_id)
+    sub, rows = _resolve(
+        db, sample_uid=sample_uid, department_id=department_id, service_group_id=service_group_id
+    )
     if sub is None:
         return 0
     changed = [r for r in rows if r.analyst_user_id != analyst_user_id]
@@ -107,10 +133,13 @@ def clear_for_item(
     acting_user_id: Optional[int],
     worksheet_id: int,
     worksheet_title: Optional[str] = None,
+    department_id: Optional[int] = None,
 ) -> int:
     """Clear on removal from a worksheet. Emits worksheet_removed when the uid
     resolves to a vial. Returns the number of rows cleared."""
-    sub, rows = _resolve(db, sample_uid=sample_uid, service_group_id=service_group_id)
+    sub, rows = _resolve(
+        db, sample_uid=sample_uid, department_id=department_id, service_group_id=service_group_id
+    )
     if sub is None:
         return 0
     changed = [r for r in rows if r.analyst_user_id is not None]
@@ -140,7 +169,8 @@ def restamp_for_worksheet(
     for item in items:
         effective = worksheet.assigned_analyst_id or item.assigned_analyst_id
         sub, rows = _resolve(
-            db, sample_uid=item.sample_uid, service_group_id=item.service_group_id
+            db, sample_uid=item.sample_uid,
+            department_id=item.department_id, service_group_id=item.service_group_id,
         )
         if sub is None:
             continue

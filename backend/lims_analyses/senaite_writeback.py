@@ -57,18 +57,14 @@ def _get(url: str, **kwargs) -> requests.Response:
 # Public / internal helpers
 # ---------------------------------------------------------------------------
 
-def find_parent_analysis_line(parent_sample_id: str, keyword: str) -> dict:
-    """Locate the analysis line on a parent SENAITE AR that matches *keyword*.
+def _matched_parent_lines(parent_sample_id: str, keyword: str) -> list[dict]:
+    """Fetch the parent AR's analysis lines and return every one matching
+    *keyword* as ``{"uid", "review_state"}``, in SENAITE's order.
 
-    GETs Analysis?getRequestID=<parent_sample_id> and scans the items list for
-    the first item whose ``Keyword`` field matches *keyword*.
-
-    Returns ``{"uid": ..., "review_state": ...}``.
-
-    Raises SenaiteWritebackError if:
-      - HTTP error occurs (including transport failures)
-      - The response contains no items
-      - No item has the requested keyword
+    Shared by find_parent_analysis_line (promote write-back) and
+    writeback_parent_verify (the parent verify tee) — the two differ only in
+    how they treat a verified-only match. Raises SenaiteWritebackError on
+    transport/HTTP errors, an empty AR, or a matched item missing fields.
     """
     url = f"{SENAITE_BASE_URL}/@@API/senaite/v1/Analysis"
     try:
@@ -91,14 +87,6 @@ def find_parent_analysis_line(parent_sample_id: str, keyword: str) -> dict:
             f"(keyword={keyword})"
         )
 
-    # A retract in SENAITE leaves the retracted line in place and adds a
-    # retest copy with the same keyword — prefer ACTIVE lines so write-back
-    # never targets a retracted/rejected/verified one.  Preference order:
-    #   1. Lines not in (retracted, rejected, verified) — write-back targets
-    #      these directly.
-    #   2. If only verified lines remain → error: caller must retest or retract
-    #      in SENAITE first.
-    #   3. All retracted/rejected → error unchanged.
     matched: list[dict] = []
     for item in items:
         # Live SENAITE returns getKeyword on Analysis items; the catalog/brain
@@ -114,6 +102,29 @@ def find_parent_analysis_line(parent_sample_id: str, keyword: str) -> dict:
                     f"uid or review_state: {item}"
                 )
             matched.append({"uid": uid, "review_state": state})
+    return matched
+
+
+def find_parent_analysis_line(parent_sample_id: str, keyword: str) -> dict:
+    """Locate the analysis line on a parent SENAITE AR that matches *keyword*.
+
+    Returns ``{"uid": ..., "review_state": ...}``.
+
+    Raises SenaiteWritebackError if:
+      - HTTP error occurs (including transport failures)
+      - The response contains no items
+      - No item has the requested keyword
+
+    A retract in SENAITE leaves the retracted line in place and adds a
+    retest copy with the same keyword — prefer ACTIVE lines so write-back
+    never targets a retracted/rejected/verified one.  Preference order:
+      1. Lines not in (retracted, rejected, verified) — write-back targets
+         these directly.
+      2. If only verified lines remain → error: caller must retest or retract
+         in SENAITE first.
+      3. All retracted/rejected → error unchanged.
+    """
+    matched = _matched_parent_lines(parent_sample_id, keyword)
     # First preference: active (non-retracted/rejected/verified) line.
     for line in matched:
         if line["review_state"] not in ("retracted", "rejected", "verified"):
@@ -130,6 +141,44 @@ def find_parent_analysis_line(parent_sample_id: str, keyword: str) -> dict:
             f"parent={parent_sample_id} are retracted/rejected"
         )
 
+    raise SenaiteWritebackError(
+        f"SENAITE has no analysis line with keyword={keyword} on parent={parent_sample_id}"
+    )
+
+
+def writeback_parent_verify(parent_sample_id: str, keyword: str) -> str:
+    """Verify the parent AR's analysis line for *keyword* — the parent-tier
+    verify tee (read-flip seam fix, 2026-08-20): the mk1-mode main table's
+    Verify must flip the SENAITE line in the same act as the canonical row,
+    or SENAITE strands at to_be_verified while Mk1 reads verified — a
+    divergence the COA gate trips over later.
+
+    Line preference mirrors find_parent_analysis_line, EXCEPT an
+    already-verified line is SUCCESS instead of an error: the lab may have
+    signed off in SENAITE first (the pre-fix workaround), and the native
+    verify must converge, not 502. Returns the resulting review_state
+    ('verified'). Raises SenaiteWritebackError when there is no line to
+    verify (no match / all retracted-rejected) or SENAITE silently rejects
+    the transition (see _transition's post-state check).
+    """
+    matched = _matched_parent_lines(parent_sample_id, keyword)
+    for line in matched:
+        if line["review_state"] not in ("retracted", "rejected", "verified"):
+            # A line not yet at to_be_verified (e.g. unassigned — promote's
+            # submit never ran) fails _transition's post-state check → the
+            # caller aborts rather than minting a half-verified pair.
+            return _transition(line["uid"], "verify")
+    if any(line["review_state"] == "verified" for line in matched):
+        log.info(
+            "writeback_parent_verify.already_verified parent=%s keyword=%s",
+            parent_sample_id, keyword,
+        )
+        return "verified"
+    if matched:
+        raise SenaiteWritebackError(
+            f"all {len(matched)} SENAITE lines for keyword={keyword} on "
+            f"parent={parent_sample_id} are retracted/rejected"
+        )
     raise SenaiteWritebackError(
         f"SENAITE has no analysis line with keyword={keyword} on parent={parent_sample_id}"
     )
