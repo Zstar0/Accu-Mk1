@@ -251,6 +251,12 @@ class SenaiteShapeAnalysisResponse(BaseModel):
     # 'canonical' (promoted result) vs 'shadow'. The overlay's native block
     # enables remove only on 'ordered' rows. None for legacy callers.
     provenance: Optional[str] = None
+    # S3 Task 7: the row's OWN analysis_service_id — the native identity key
+    # the FE joins parent rows to vial rows on. Read off the row, never off
+    # the resolved service (which service_origin above goes None on when the
+    # FK doesn't resolve — the identity key still ships in that case).
+    # Keyword stays alongside it as the display / compatibility alias.
+    analysis_service_id: Optional[int] = None
 
 
 # ─── Phase 4a: promote_to_parent response shapes ─────────────────────────────
@@ -280,6 +286,10 @@ class PromoteResponse(BaseModel):
 
 class ParentRetestRequest(BaseModel):
     keyword: str
+    # S3: the native identity key. When present it alone identifies the parent
+    # row (keyword is ignored for the match); keyword stays the compatibility
+    # alias and remains the only thing today's FE sends.
+    analysis_service_id: Optional[int] = None
     reason: Optional[str] = None
 
 

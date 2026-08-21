@@ -191,11 +191,13 @@ import {
   PARENT_OVERLAY_QUERY_KEY,
   invalidateParentVialOverlay,
 } from '@/lib/vial-assignment'
+import type { VialAssignment } from '@/lib/vial-assignment'
 import { vialLabel, vialPosition, vialTotal } from '@/lib/vial-label'
 import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { useVialRoles } from '@/services/vial-roles'
 import { useDepartments } from '@/services/departments'
+import { ROLE_COLOR_TEXT, roleColorForCode } from '@/lib/role-display'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
 import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
 import { SampleRegistryDebug } from '@/components/senaite/SampleRegistryDebug'
@@ -3372,12 +3374,14 @@ export function NativeParentAnalysesCard({
   isParentPage,
   lookup,
   promotionsByKeyword,
+  vialAssignmentByKeyword,
   onParentDataStale,
 }: {
   sampleId: string | null | undefined
   isParentPage: boolean
   lookup: SenaiteLookupResult | null
   promotionsByKeyword: Map<string, ParentPromotionInfo>
+  vialAssignmentByKeyword?: Map<string, VialAssignment>
   onParentDataStale?: () => void
 }) {
   const queryClient = useQueryClient()
@@ -3476,6 +3480,7 @@ export function NativeParentAnalysesCard({
         analyses={analyses}
         analyteNameMap={EMPTY_ANALYTE_NAME_MAP}
         promotionsByKeyword={promotionsByKeyword}
+        vialAssignmentByKeyword={vialAssignmentByKeyword}
         headerContent={header}
         hideProgress
         resultsReadOnly
@@ -5316,15 +5321,7 @@ export function SampleDetails() {
                         Assigned to
                       </span>
                       <span
-                        className={`text-sm font-semibold ${
-                          {
-                            // Matches PRIMARY_TITLE_COLOR role tints in AnalysisTable
-                            hplc: 'text-sky-700 dark:text-sky-300',
-                            endo: 'text-emerald-700 dark:text-emerald-300',
-                            ster: 'text-violet-700 dark:text-violet-300',
-                            xtra: 'text-zinc-700 dark:text-zinc-300',
-                          }[currentAssignment ?? ''] ?? 'text-foreground'
-                        }`}
+                        className={`text-sm font-semibold ${ROLE_COLOR_TEXT[roleColorForCode(currentAssignment, vialRolesQ.data, departmentsQ.data)]}`}
                       >
                         {assignmentLabel}
                       </span>
@@ -6753,6 +6750,7 @@ export function SampleDetails() {
           isParentPage={parentSampleId === null}
           lookup={data}
           promotionsByKeyword={promotionsByKeyword}
+          vialAssignmentByKeyword={vialAssignmentByKeyword}
           onParentDataStale={() => refreshSample(data.sample_id)}
         />
       )}

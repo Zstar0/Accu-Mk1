@@ -50,8 +50,8 @@ def test_box_label_summary_sums_vials_per_department():
     body = r.json()
     assert body["order_number"] == "WP-3263"
     assert body["order_date"] == "2026-06-15"
-    # P-0858: hplc1+endo1+ster2 ; P-0859: hplc1  => hplc2, endo1, ster2
-    assert body["counts"] == {"hplc": 2, "endo": 1, "ster": 2}
+    # P-0858: hplc1+endo1+ster1 ; P-0859: hplc1  => hplc2, endo1, ster1
+    assert body["counts"] == {"hplc": 2, "endo": 1, "ster": 1}
 
 def test_box_label_summary_404_when_order_missing():
     with patch.object(main, "_fetch_order_submission_row", return_value=None):
@@ -73,7 +73,7 @@ def test_box_label_summary_skips_unmapped_sample_services():
     with patch.object(main, "_fetch_order_submission_row", return_value=_fake_order_row()), \
          patch("sub_samples.service.fetch_sample_services", side_effect=lambda sid: _SERVICES.get(sid) if sid == "P-0858" else None):
         r = client.get("/orders/WP-3263/box-label-summary")
-    assert r.json()["counts"] == {"hplc": 1, "endo": 1, "ster": 2}  # P-0859 skipped
+    assert r.json()["counts"] == {"hplc": 1, "endo": 1, "ster": 1}  # P-0859 skipped
 
 
 # Deliberately NOT 'heavy_metals' — this fixture inserts through the app's

@@ -85,6 +85,26 @@ def department_id_by_name(db: Session, name: str) -> Optional[int]:
     return row.id if row else None
 
 
+def department_id_for_service(db: Session, analysis_service_id: int) -> Optional[int]:
+    """The service's structural department (direct column — no M2M fan-out)."""
+    from models import AnalysisService
+    svc = db.get(AnalysisService, analysis_service_id)
+    return svc.department_id if svc is not None else None
+
+
+def department_id_for_role(db: Session, role_code: str) -> Optional[int]:
+    """The department owning a vial assignment_role code (e.g. 'ster' -> Microbiology).
+
+    None is returned for two distinct reasons a caller doing fallback logic
+    must not conflate: an unknown role_code, and the known 'xtra' role, which
+    is the one VialRole row deliberately seeded with a NULL department (the
+    reserved unassigned bucket — see VialRole's docstring in models.py).
+    """
+    from models import VialRole
+    row = db.query(VialRole).filter_by(code=role_code).one_or_none()
+    return row.department_id if row is not None else None
+
+
 def backfill_departments(db: Session) -> None:
     """Idempotently seed departments and assign department_id from live groups.
 
@@ -165,6 +185,23 @@ def backfill_departments(db: Session) -> None:
             "(fail-closed). Sample keywords: %s", null_count, samples,
         )
 
+    # ACTIVE-scoped count, alongside the all-rows total above: the fail-closed
+    # HPLC-mirror allow-list only ever touches active services, so an active
+    # NULL-department row is a live gap right now — not just after some
+    # future active flip. S6a's totality invariant ("zero ACTIVE services
+    # with NULL department") is measured by department_totality_report; this
+    # is the same signal surfaced at backfill/startup time.
+    active_null_count = db.query(func.count(AnalysisService.id)).filter(
+        AnalysisService.department_id.is_(None),
+        AnalysisService.active.is_(True),
+    ).scalar()
+    if active_null_count:
+        log.warning(
+            "catalog.backfill.null_department_active count=%s — these are "
+            "ACTIVE services with no department; they are EXCLUDED from "
+            "HPLC-vial mirroring (fail-closed) right now.", active_null_count,
+        )
+
     # Defense in depth, distinct failure mode from the NULL-count warning
     # above: the Analytical department ROW can exist (so the mirror's
     # missing-department abort never fires) while carrying ZERO tagged
@@ -190,3 +227,59 @@ def backfill_departments(db: Session) -> None:
             "against this environment's real service_groups names and "
             "ungrouped keyword prefixes.", ANALYTICAL_DEPARTMENT,
         )
+
+
+def department_totality_report(db: Session) -> dict:
+    """Read-only drift snapshot: how complete is department assignment across
+    the live catalog, right now.
+
+    ACTIVE-scoped, deliberately: only active services drive HPLC-mirror
+    seeding (the fail-closed allow-list), so "zero ACTIVE services with NULL
+    department" is the invariant that matters operationally. An
+    inactive/retired row left NULL is visible only in the all-rows total —
+    it is not, by itself, a live gap. Pure queries, no I/O beyond `db`.
+    """
+    from models import AnalysisService, Department
+
+    active_total = db.query(func.count(AnalysisService.id)).filter(
+        AnalysisService.active.is_(True)
+    ).scalar() or 0
+    active_null_department = db.query(func.count(AnalysisService.id)).filter(
+        AnalysisService.active.is_(True),
+        AnalysisService.department_id.is_(None),
+    ).scalar() or 0
+    total_null_department = db.query(func.count(AnalysisService.id)).filter(
+        AnalysisService.department_id.is_(None)
+    ).scalar() or 0
+
+    by_department: dict[str, int] = {
+        name: count
+        for name, count in (
+            db.query(Department.name, func.count(AnalysisService.id))
+            .join(AnalysisService, AnalysisService.department_id == Department.id)
+            .filter(AnalysisService.active.is_(True))
+            .group_by(Department.name)
+            .all()
+        )
+    }
+
+    # Capped at 50 — this is a diagnostic listing, not a full export; the
+    # uncapped active_null_department count above is the number to alert on.
+    null_active_rows = [
+        {"id": svc.id, "keyword": svc.keyword, "title": svc.title, "origin": svc.origin}
+        for svc in db.query(AnalysisService)
+        .filter(AnalysisService.active.is_(True), AnalysisService.department_id.is_(None))
+        .order_by(AnalysisService.id)
+        .limit(50)
+        .all()
+    ]
+
+    return {
+        "summary": {
+            "active_total": active_total,
+            "active_null_department": active_null_department,
+            "total_null_department": total_null_department,
+            "by_department": by_department,
+        },
+        "null_active_rows": null_active_rows,
+    }

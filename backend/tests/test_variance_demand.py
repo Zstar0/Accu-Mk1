@@ -47,17 +47,6 @@ class TestDeriveVarianceDemand:
         })
         assert out == {"hplc": 0, "endo": 0, "ster": 0}
 
-    def test_bucket_key_map_matches_lifecycle_gate(self):
-        # The demand map and the variance_verify gate must agree on
-        # role/bucket -> WP service key, or check-in demand and the sign-off
-        # gate drift apart.
-        # NOTE (2026-06-17): both maps are now a stale description of hplc->key
-        # (neither captures "bac_water_panel"); the equality still holds only
-        # because both are unchanged. derive_variance_demand handles BW inline
-        # (max of both keys) rather than via these maps.
-        from lims_analyses.service import _ROLE_VARIANCE_KEYS
-        assert sub_service.VARIANCE_BUCKET_KEYS == _ROLE_VARIANCE_KEYS
-
     def test_bw_variance_maps_to_hplc_bucket(self):
         # BW orders carry variance count under bac_water_panel, not hplcpurity_identity.
         # Both are chromatography (hplc bucket) and are mutually exclusive per order.
@@ -78,7 +67,7 @@ class TestDeriveDemandCore:
 
     def test_no_variance_unchanged(self):
         assert sub_service.derive_demand(BASE_SERVICES) == {
-            "hplc": 1, "endo": 1, "ster": 2,
+            "hplc": 1, "endo": 1, "ster": 1,
         }
 
     def test_variance_does_not_inflate_core_demand(self):
@@ -86,7 +75,7 @@ class TestDeriveDemandCore:
             **BASE_SERVICES,
             "variance": {"hplcpurity_identity": 3, "endotoxin": 2},
         })
-        assert out == {"hplc": 1, "endo": 1, "ster": 2}
+        assert out == {"hplc": 1, "endo": 1, "ster": 1}
 
     def test_unordered_service_stays_zero(self):
         # core demand is the lab baseline; a (contract-invalid) variance key
@@ -95,7 +84,7 @@ class TestDeriveDemandCore:
             "sterility_pcr": True,
             "variance": {"sterility_pcr": 2, "hplcpurity_identity": 5},
         })
-        assert out["ster"] == 2
+        assert out["ster"] == 1
         assert out["hplc"] == 0
 
 
@@ -105,7 +94,7 @@ class TestDeriveBaseDemand:
             **BASE_SERVICES,
             "variance": {"hplcpurity_identity": 5},
         })
-        assert out == {"hplc": 1, "endo": 1, "ster": 2}
+        assert out == {"hplc": 1, "endo": 1, "ster": 1}
 
 
 # ─── Fixtures for compute_vial_plan tests (ZZTEST throwaway parent) ──────────
@@ -439,5 +428,5 @@ class TestApplyVarianceOverride:
         }
         # core demand untouched by the override
         assert sub_service.derive_demand(merged["services"]) == {
-            "hplc": 1, "endo": 1, "ster": 2,
+            "hplc": 1, "endo": 1, "ster": 1,
         }

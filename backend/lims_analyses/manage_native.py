@@ -196,14 +196,21 @@ def _seed_members_on_vial(db: Session, *, vial: LimsSubSample, members: list[Ana
     exact service list, and legacy roles (hplc/endo/ster) never take the
     catalog path there."""
     from lims_analyses.seeder import _seed_rows_from_services
-    existing_kw = set(db.execute(
-        select(LimsAnalysis.keyword).where(
+    live = db.execute(
+        select(LimsAnalysis.keyword, LimsAnalysis.analysis_service_id).where(
             LimsAnalysis.lims_sub_sample_pk == vial.id,
             LimsAnalysis.review_state.notin_(DEAD_STATES),
         )
-    ).scalars().all())
+    ).all()
+    existing_kw = {kw for kw, _sid in live}
+    # S3 integration (the ruled "rides the second-landing PR" fix): the shared
+    # row builder dedupes on the UNION of live keyword AND live service id
+    # (drift-proof identity) — build both sets the same way
+    # seed_analyses_for_vial does.
+    existing_service_ids = {sid for _kw, sid in live if sid is not None}
     rows = _seed_rows_from_services(
         db, sub_sample=vial, services=members, existing_kw=existing_kw,
+        existing_service_ids=existing_service_ids,
         created_by_user_id=user_id, commit=False, log_event="manage_native_seeded",
     )
     return len(rows)

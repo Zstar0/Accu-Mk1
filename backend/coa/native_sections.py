@@ -17,12 +17,14 @@ rule 5 — no resolvable active spec — aborts here at the producer.
 from __future__ import annotations
 
 import logging
+import math
 from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from coa.spec_rules import SpecRuleError, evaluate, normalize_matrix, resolve_spec
+from coa.spec_rules import (SpecRuleError, evaluate, normalize_matrix,
+                            resolve_spec, sample_peptide_id)
 from sub_samples.service import fetch_sample_services
 
 log = logging.getLogger(__name__)
@@ -133,7 +135,28 @@ def _spec_wire_dict(spec) -> dict:
         "max": float(spec.max_value) if spec.max_value is not None else None,
         "unit": spec.unit,
         "display": spec.display_override,
+        # Range-only: equals rows never censor, so publishing a stray loq
+        # filed on one (tolerated at write time) would contradict the wire's
+        # own convention and light the consumer's LOQ column regardless.
+        "loq": (float(spec.loq)
+                if spec.rule_kind == "range" and spec.loq is not None else None),
     }
+
+
+def _result_display(spec, result) -> Optional[str]:
+    """Mk1's applied lab-reporting convention for the PRINTED result — the
+    verdict never reads it. Only convention today: LOQ censoring on range
+    rows. Runs after evaluate(), which guarantees a finite numeric for
+    range rows; the guards here are belt-and-braces, not policy."""
+    if spec.rule_kind != "range" or spec.loq is None:
+        return None
+    try:
+        value = float(str(result or "").strip())
+    except ValueError:
+        return None
+    if not math.isfinite(value):
+        return None
+    return "< LOQ" if value < float(spec.loq) else None
 
 
 def build_native_sections(db: Session, parent) -> dict:
@@ -160,6 +183,10 @@ def build_native_sections(db: Session, parent) -> dict:
 
     profiles = _ordered_native_profiles(db, raw.get("services") or {}, raw.get("package"))
     matrix = normalize_matrix(parent.sample_type_title)
+    # R6: the identity anchor is the peptide_id FK, resolved once per parent
+    # (not per row) — a blend or a non-peptide family returns None (R5), and
+    # resolve_spec then coarsens straight to the matrix/wildcard tier.
+    peptide_id = sample_peptide_id(db, parent.id)
 
     sections = []
     for prof in profiles:
@@ -190,16 +217,18 @@ def build_native_sections(db: Session, parent) -> dict:
                     "native_section_blank_unit sample=%s profile=%s keyword=%s",
                     sample_id, prof.key, svc.keyword,
                 )
-            spec = resolve_spec(db, svc.id, matrix)
+            spec = resolve_spec(db, svc.id, matrix, peptide_id=peptide_id)
             if spec is None:
                 # Rule 5 (relocated from COABuilder): a result must not print
-                # without a verdict. Names the service AND matrix so the lab
-                # knows exactly which analysis_service_specs row to file.
+                # without a verdict. Names the service AND every tier
+                # consulted (peptide/matrix/wildcard) so the lab knows
+                # exactly which analysis_service_specs row to file.
                 raise NativeSectionsError(
                     f"native sections: profile '{prof.key}' member service "
-                    f"'{svc.keyword}' (id={svc.id}) has no active spec for "
-                    f"matrix {matrix!r} on {sample_id} — file one in "
-                    f"analysis_service_specs"
+                    f"'{svc.keyword}' (id={svc.id}) has no active spec "
+                    f"(tiers consulted: peptide={peptide_id!r}, "
+                    f"matrix={matrix!r}, wildcard) on {sample_id} — file one "
+                    f"in analysis_service_specs"
                 )
             try:
                 conforms = evaluate(spec, row.result_value)
@@ -216,6 +245,7 @@ def build_native_sections(db: Session, parent) -> dict:
                 "method": _method_label(db, row.method_id),
                 "specification": _spec_wire_dict(spec),
                 "conforms": conforms,
+                "result_display": _result_display(spec, row.result_value),
             })
         if not rows:
             # Rule 3 (section half): unreachable while members are required
@@ -228,6 +258,16 @@ def build_native_sections(db: Session, parent) -> dict:
             "title": prof.coa_section_title or prof.name,
             "archetype": prof.coa_archetype,
             "sort_order": prof.coa_sort_order,
+            "basis_note": prof.coa_basis_note,
+            "method_text": prof.coa_method_text,
+            "prep_text": prof.coa_prep_text,
+            # Fail-open to [] on a malformed container is deliberate: the
+            # certificate must not 500 on a bad footnote row (module's
+            # NativeSectionsError-only failure surface). The validated
+            # routes enforce list shape on every authored write — a non-list
+            # here means seed/migration/direct SQL, not user input.
+            "footnotes": (list(prof.coa_footnotes)
+                          if isinstance(prof.coa_footnotes, list) else []),
             "rows": rows,
         })
 

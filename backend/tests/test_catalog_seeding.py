@@ -95,7 +95,7 @@ def test_hm_vial_seeding_idempotent(db_session):
                            wp_services={"heavy_metals": True}, commit=True)
     again = seed_analyses_for_vial(db_session, sub_sample=sub, role="hm",
                                    wp_services={"heavy_metals": True}, commit=True)
-    assert again == []  # existing_kw skip, mirrors the endo/ster idiom
+    assert again == []  # already-seeded skip (service id OR keyword), as endo/ster
 
 
 def test_hm_never_seeds_on_hplc_vial(db_session, monkeypatch):

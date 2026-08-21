@@ -164,63 +164,6 @@ class TestVarianceVerifyService:
         assert row.review_state == "variance_verified"  # original keeps its state
 
 
-@pytest.mark.skip(reason="superseded: variance_verify gates on assignment_kind, not entitlement (2026-06-10 variance-bucket-assignment)")
-class TestVarianceEntitlementGate:
-    def _fetch(self, services):
-        return lambda parent_sample_id: services
-
-    def test_passes_when_variance_purchased_for_role(self, db, variance_fixture):
-        row = variance_fixture["row"]
-        service.ensure_variance_entitlement(
-            db, analysis_id=row.id,
-            fetch_services=self._fetch({"variance": {"hplcpurity_identity": 3}}),
-        )  # no raise
-
-    def test_rejects_when_not_purchased(self, db, variance_fixture):
-        row = variance_fixture["row"]
-        with pytest.raises(service.BadRequestError, match="not purchased"):
-            service.ensure_variance_entitlement(
-                db, analysis_id=row.id,
-                fetch_services=self._fetch({"variance": {}}),
-            )
-
-    def test_rejects_when_count_below_two(self, db, variance_fixture):
-        row = variance_fixture["row"]
-        with pytest.raises(service.BadRequestError, match="not purchased"):
-            service.ensure_variance_entitlement(
-                db, analysis_id=row.id,
-                fetch_services=self._fetch({"variance": {"hplcpurity_identity": 1}}),
-            )
-
-    def test_fail_closed_when_services_unreachable(self, db, variance_fixture):
-        row = variance_fixture["row"]
-        with pytest.raises(service.BadRequestError, match="could not be verified"):
-            service.ensure_variance_entitlement(
-                db, analysis_id=row.id, fetch_services=self._fetch(None),
-            )
-
-    def test_rejects_role_without_variance_service(self, db, variance_fixture):
-        vial = variance_fixture["vial"]
-        vial.assignment_role = "xtra"
-        db.commit()
-        row = variance_fixture["row"]
-        with pytest.raises(service.BadRequestError, match="no variance service"):
-            service.ensure_variance_entitlement(
-                db, analysis_id=row.id,
-                fetch_services=self._fetch({"variance": {"hplcpurity_identity": 3}}),
-            )
-
-    def test_endo_role_maps_to_endotoxin_key(self, db, variance_fixture):
-        vial = variance_fixture["vial"]
-        vial.assignment_role = "endo"
-        db.commit()
-        row = variance_fixture["row"]
-        service.ensure_variance_entitlement(
-            db, analysis_id=row.id,
-            fetch_services=self._fetch({"variance": {"endotoxin": 2}}),
-        )  # no raise
-
-
 class TestVarianceEntitlementNormalize:
     def test_filters_to_valid_counts(self):
         out = sub_service.normalize_variance_entitlement({

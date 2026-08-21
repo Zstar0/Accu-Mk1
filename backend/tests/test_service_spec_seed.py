@@ -77,6 +77,38 @@ def test_seed_does_not_resurrect_deactivated_rows(db_session):
     assert len(rows) == 1 and rows[0].active is False   # the lab's deactivation survives boots
 
 
+def test_seed_skips_peptide_tier_row_and_still_seeds_wildcard(db_session):
+    """A peptide-tier spec row on a seeded keyword's service must not be
+    mistaken for the wildcard slot: the seeder's existing-row lookup has to
+    filter on peptide_id IS NULL too, or (a) a second boot with more than
+    one seeded keyword raises MultipleResultsFound on .one_or_none() (the
+    peptide row plus a real match), silently killing the whole seed via
+    database.py's broad catch, and (b) a lone peptide row makes the seeder
+    believe the wildcard slot is already taken and skip it forever."""
+    from models import AnalysisServiceSpec
+    svcs = _mk_native_services(db_session, keywords=("HM-PB", "HM-AS"))
+    db_session.add(AnalysisServiceSpec(
+        analysis_service_id=svcs["HM-PB"].id, matrix=None, peptide_id=1,
+        rule_kind="range", max_value=Decimal("9.9"), unit="ppm"))
+    db_session.flush()
+
+    # First boot: must not raise, and must still create both wildcard rows.
+    assert seed_service_specs(db_session) == 2
+    wildcards = (db_session.query(AnalysisServiceSpec)
+                 .filter(AnalysisServiceSpec.matrix.is_(None),
+                         AnalysisServiceSpec.peptide_id.is_(None))
+                 .all())
+    assert len(wildcards) == 2
+
+    # Second boot: idempotent, no raise, no duplicate wildcard row.
+    assert seed_service_specs(db_session) == 0
+    wildcards_again = (db_session.query(AnalysisServiceSpec)
+                       .filter(AnalysisServiceSpec.matrix.is_(None),
+                               AnalysisServiceSpec.peptide_id.is_(None))
+                       .all())
+    assert len(wildcards_again) == 2
+
+
 def test_seed_writes_audit_rows(db_session):
     from models import AuditLog
     _mk_native_services(db_session)

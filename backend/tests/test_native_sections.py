@@ -89,7 +89,7 @@ def test_happy_path_document_shape(db_session, monkeypatch):
     assert row["result"] == "0.12" and row["unit"] == "ppm"
     assert row["specification"] == {"rule_kind": "range", "equals": None,
                                     "min": None, "max": 100.0, "unit": "ppm",
-                                    "display": None}
+                                    "display": None, "loq": None}
     assert row["conforms"] is True
 
 
@@ -377,7 +377,8 @@ def test_equals_spec_fills_and_verdicts(db_session, monkeypatch):
     assert row["conforms"] is True
     assert row["specification"] == {"rule_kind": "equals",
                                     "equals": "Not Detected", "min": None,
-                                    "max": None, "unit": None, "display": None}
+                                    "max": None, "unit": None, "display": None,
+                                    "loq": None}
 
 
 def test_rule5_no_spec_aborts_naming_service_and_matrix(db_session, monkeypatch):
@@ -466,3 +467,270 @@ def test_null_sample_type_title_uses_null_matrix_spec(db_session, monkeypatch):
     _order_lookup(monkeypatch)
     doc = build_native_sections(db_session, parent)
     assert doc["sections"][0]["rows"][0]["conforms"] is True
+
+
+# ── Spec-ownership slice 2: peptide-first precedence + identity anchor ──────
+
+def _mk_peptide(db, abbreviation, name=None):
+    from models import Peptide
+    pep = Peptide(name=name or abbreviation, abbreviation=abbreviation)
+    db.add(pep); db.flush()
+    return pep
+
+
+def test_peptide_tier_spec_beats_matrix_and_wildcard(db_session, monkeypatch):
+    """The parent's identity anchor (R6, sample_peptide_id — the single
+    peptide-linked family service) resolves the peptide-tier spec ahead of
+    both the matrix and wildcard rows filed on the same service."""
+    from decimal import Decimal
+    from models import AnalysisServiceSpec
+    peptide = _mk_peptide(db_session, "BPC157")
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    svcs[0].peptide_id = peptide.id
+    db_session.flush()
+    db_session.add(AnalysisServiceSpec(   # wildcard: 100
+        analysis_service_id=svcs[0].id, matrix=None, rule_kind="range",
+        max_value=Decimal("100"), unit="ppm"))
+    db_session.add(AnalysisServiceSpec(   # matrix: 1
+        analysis_service_id=svcs[0].id, matrix="Peptide", rule_kind="range",
+        max_value=Decimal("1"), unit="ppm"))
+    db_session.add(AnalysisServiceSpec(   # peptide: 0.05
+        analysis_service_id=svcs[0].id, peptide_id=peptide.id, matrix=None,
+        rule_kind="range", max_value=Decimal("0.05"), unit="ppm"))
+    db_session.flush()
+    parent = _mk_parent_with_rows(db_session, svcs, result="0.12")
+    parent.sample_type_title = "Peptide"
+    db_session.flush()
+    _order_lookup(monkeypatch)
+    doc = build_native_sections(db_session, parent)
+    row = doc["sections"][0]["rows"][0]
+    assert row["specification"]["max"] == 0.05
+    assert row["conforms"] is False          # 0.12 > the peptide-tier 0.05
+
+
+def test_blend_family_skips_peptide_tier(db_session, monkeypatch):
+    """R5: two distinct peptide anchors on the family (a blend) makes
+    sample_peptide_id return None — resolution must coarsen straight to the
+    matrix tier, never touching the peptide-tier row filed on the service."""
+    from decimal import Decimal
+    from models import AnalysisServiceSpec
+    pep_a = _mk_peptide(db_session, "BPC157")
+    pep_b = _mk_peptide(db_session, "TB500")
+    prof, svcs = _mk_native_profile(
+        db_session, key="heavy_metals",
+        services=[("HM-PB", "mk1"), ("HM-AS", "mk1")], specs=False,
+    )
+    svcs[0].peptide_id = pep_a.id
+    svcs[1].peptide_id = pep_b.id
+    db_session.flush()
+    db_session.add(AnalysisServiceSpec(   # peptide tier — must NOT be reached
+        analysis_service_id=svcs[0].id, peptide_id=pep_a.id, matrix=None,
+        rule_kind="range", max_value=Decimal("0.01"), unit="ppm"))
+    db_session.add(AnalysisServiceSpec(
+        analysis_service_id=svcs[0].id, matrix="Peptide", rule_kind="range",
+        max_value=Decimal("1"), unit="ppm"))
+    db_session.add(AnalysisServiceSpec(
+        analysis_service_id=svcs[1].id, matrix="Peptide", rule_kind="range",
+        max_value=Decimal("1"), unit="ppm"))
+    db_session.flush()
+    parent = _mk_parent_with_rows(db_session, svcs, result="0.12")
+    parent.sample_type_title = "Peptide Blend"
+    db_session.flush()
+    _order_lookup(monkeypatch)
+    doc = build_native_sections(db_session, parent)
+    row = next(r for r in doc["sections"][0]["rows"] if r["keyword"] == "HM-PB")
+    assert row["specification"]["max"] == 1.0     # matrix, not the 0.01 peptide row
+    assert row["conforms"] is True
+
+    # Control: collapse the family to a SINGLE anchor (both services now
+    # point at pep_a) — sample_peptide_id must flip to pep_a.id and the
+    # peptide-tier row (0.01) must now be the one that resolves. Proves the
+    # skip above is actually caused by the two-anchor discriminator, not
+    # some other reason the peptide tier never fires.
+    svcs[1].peptide_id = pep_a.id
+    db_session.flush()
+    doc = build_native_sections(db_session, parent)
+    row = next(r for r in doc["sections"][0]["rows"] if r["keyword"] == "HM-PB")
+    assert row["specification"]["max"] == 0.01
+    assert row["conforms"] is False               # 0.12 > 0.01
+
+
+def test_unresolvable_peptide_coarsens_to_matrix_never_aborts(db_session, monkeypatch):
+    """R4: a real peptide anchor with no spec filed AT that peptide_id must
+    fall through to the matrix tier, never abort COA generation."""
+    from decimal import Decimal
+    from models import AnalysisServiceSpec
+    peptide = _mk_peptide(db_session, "BPC157")
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    svcs[0].peptide_id = peptide.id
+    db_session.flush()
+    db_session.add(AnalysisServiceSpec(   # only a matrix row — no peptide row
+        analysis_service_id=svcs[0].id, matrix="Peptide", rule_kind="range",
+        max_value=Decimal("1"), unit="ppm"))
+    db_session.flush()
+    parent = _mk_parent_with_rows(db_session, svcs, result="0.12")
+    parent.sample_type_title = "Peptide"
+    db_session.flush()
+    _order_lookup(monkeypatch)
+    doc = build_native_sections(db_session, parent)   # must not raise
+    row = doc["sections"][0]["rows"][0]
+    assert row["specification"]["max"] == 1.0
+    assert row["conforms"] is True
+
+
+def test_rule5_abort_message_names_tiers_consulted(db_session, monkeypatch):
+    """The extended rule-5 abort message names every tier consulted so the
+    lab knows exactly which analysis_service_specs row is missing."""
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    parent = _mk_parent_with_rows(db_session, svcs)
+    _order_lookup(monkeypatch)
+    with pytest.raises(NativeSectionsError,
+                       match=r"tiers consulted: peptide=None, matrix=None, wildcard"):
+        build_native_sections(db_session, parent)
+
+
+# ── COA display fields + LOQ censoring (2026-08-16 spec, task 4) ────────────
+
+def test_wire_carries_loq_and_display_fields(db_session, monkeypatch):
+    """A spec with loq filed + a profile with all four display fields: the
+    section carries the display chrome, the row's specification.loq is on
+    the wire, and a result below the LOQ prints "< LOQ" while the VERDICT
+    (conforms) still judges the raw number."""
+    from decimal import Decimal
+    from models import AnalysisServiceSpec
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    prof.coa_basis_note = "Basis: dry weight"
+    prof.coa_method_text = "ICP-MS per EPA 200.8"
+    prof.coa_prep_text = "Microwave digestion"
+    prof.coa_footnotes = [{"label": "1", "text": "See appendix"}]
+    db_session.add(AnalysisServiceSpec(
+        analysis_service_id=svcs[0].id, matrix=None, rule_kind="range",
+        max_value=Decimal("100"), loq=Decimal("0.5"), unit="ppm"))
+    db_session.flush()
+    parent = _mk_parent_with_rows(db_session, svcs, result="0.2")
+    _order_lookup(monkeypatch)
+    doc = build_native_sections(db_session, parent)
+    sec = doc["sections"][0]
+    assert sec["basis_note"] == "Basis: dry weight"
+    assert sec["method_text"] == "ICP-MS per EPA 200.8"
+    assert sec["prep_text"] == "Microwave digestion"
+    assert sec["footnotes"][0]["label"] == "1"
+    row = sec["rows"][0]
+    assert row["specification"]["loq"] == 0.5
+    assert row["result_display"] == "< LOQ"
+    assert row["conforms"] is True          # verdict on the RAW number (0.2 <= 100)
+
+
+def test_censoring_boundary(db_session, monkeypatch):
+    """result == loq is NOT censored; below is; above is not."""
+    from decimal import Decimal
+    from models import AnalysisServiceSpec, LimsAnalysis, LimsSample
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    db_session.add(AnalysisServiceSpec(
+        analysis_service_id=svcs[0].id, matrix=None, rule_kind="range",
+        max_value=Decimal("100"), loq=Decimal("0.5"), unit="ppm"))
+    db_session.flush()
+    _order_lookup(monkeypatch)
+
+    def _parent(sample_id, result):
+        # _mk_parent_with_rows hardcodes sample_id "P-7001" — each boundary
+        # case needs its own parent, so build inline with a distinct id.
+        p = LimsSample(sample_id=sample_id)
+        db_session.add(p); db_session.flush()
+        db_session.add(LimsAnalysis(
+            lims_sample_pk=p.id, analysis_service_id=svcs[0].id,
+            keyword=svcs[0].keyword, title=svcs[0].title,
+            result_value=result, result_unit=svcs[0].unit, review_state="verified",
+        ))
+        db_session.flush()
+        return p
+
+    doc = build_native_sections(db_session, _parent("P-8001", "0.5"))
+    assert doc["sections"][0]["rows"][0]["result_display"] is None
+
+    doc = build_native_sections(db_session, _parent("P-8002", "0.51"))
+    assert doc["sections"][0]["rows"][0]["result_display"] is None
+
+    doc = build_native_sections(db_session, _parent("P-8003", "0.49"))
+    assert doc["sections"][0]["rows"][0]["result_display"] == "< LOQ"
+
+
+def test_censored_result_can_still_be_non_conforming(db_session, monkeypatch):
+    """Display and verdict are orthogonal: a below-LOQ result censors on the
+    wire AND can independently fail the spec (e.g. a min_value floor) —
+    result_display must not leak into or soften the verdict."""
+    from decimal import Decimal
+    from models import AnalysisServiceSpec
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    db_session.add(AnalysisServiceSpec(
+        analysis_service_id=svcs[0].id, matrix=None, rule_kind="range",
+        min_value=Decimal("1"), loq=Decimal("0.5"), unit="ppm"))
+    db_session.flush()
+    parent = _mk_parent_with_rows(db_session, svcs, result="0.2")
+    _order_lookup(monkeypatch)
+    doc = build_native_sections(db_session, parent)
+    row = doc["sections"][0]["rows"][0]
+    assert row["result_display"] == "< LOQ"
+    assert row["conforms"] is False          # 0.2 < min_value 1, raw-number verdict
+
+
+def test_equals_rows_never_censor(db_session, monkeypatch):
+    """A stray loq filed on an equals-rule spec must never censor — the
+    censoring convention is range-only."""
+    from models import AnalysisServiceSpec
+    from decimal import Decimal
+    prof, svcs = _mk_native_profile(db_session, key="sterility_usp71",
+                                    services=[("STERILITY_USP71", "mk1")],
+                                    specs=False)
+    db_session.add(AnalysisServiceSpec(
+        analysis_service_id=svcs[0].id, matrix=None, rule_kind="equals",
+        equals_value="Not Detected", loq=Decimal("0.5")))
+    db_session.flush()
+    parent = _mk_parent_with_rows(db_session, svcs, result="Not Detected")
+    _order_lookup(monkeypatch, key="sterility_usp71")
+    doc = build_native_sections(db_session, parent)
+    row = doc["sections"][0]["rows"][0]
+    assert row["result_display"] is None
+    assert row["conforms"] is True
+    assert row["specification"]["loq"] is None
+
+
+def test_malformed_footnotes_container_yields_empty_list(db_session, monkeypatch):
+    """A non-list coa_footnotes (reachable only via a write that bypasses the
+    validated routes: seed/migration/direct SQL) must fail open to [] rather
+    than raising or silently becoming a list of dict keys."""
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")])
+    parent = _mk_parent_with_rows(db_session, svcs)
+    _order_lookup(monkeypatch)
+
+    prof.coa_footnotes = {"label": "x", "text": "y"}
+    db_session.flush()
+    doc = build_native_sections(db_session, parent)
+    assert doc["sections"][0]["footnotes"] == []
+
+    prof.coa_footnotes = 42
+    db_session.flush()
+    doc = build_native_sections(db_session, parent)
+    assert doc["sections"][0]["footnotes"] == []
+
+
+def test_unset_fields_wire_shape(db_session, monkeypatch):
+    """Profile with no display fields, spec with no loq: every key is
+    present on the wire (never dropped), with the documented unset values."""
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")])  # specs=True, no loq
+    parent = _mk_parent_with_rows(db_session, svcs)
+    _order_lookup(monkeypatch)
+    doc = build_native_sections(db_session, parent)
+    sec = doc["sections"][0]
+    assert (sec["basis_note"], sec["method_text"], sec["prep_text"]) == (None, None, None)
+    assert sec["footnotes"] == []
+    assert sec["rows"][0]["specification"]["loq"] is None
+    assert sec["rows"][0]["result_display"] is None

@@ -114,3 +114,72 @@ def test_profile_coa_archetype_can_be_cleared():
     r = client.patch(f"/analysis-profiles/{pid}", json={"coa_archetype": None})
     assert r.status_code == 200
     assert r.json()["coa_archetype"] is None
+
+
+def test_profile_patch_coa_display_fields():
+    r = client.post("/analysis-profiles", json={
+        "key": "hm_display_fields_test", "name": "HM Display Fields", "is_addon": True,
+    })
+    assert r.status_code == 201, r.text
+    pid = r.json()["id"]
+    r = client.patch(f"/analysis-profiles/{pid}", json={
+        "coa_basis_note": "USP <232> Parenteral PDE | MDD 50 mg/day",
+        "coa_method_text": "MP-AES", "coa_prep_text": "100 mg / 10 mL digest",
+        "coa_footnotes": [{"label": "Reporting.", "text": "µg/g = ppm."}],
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["coa_basis_note"].startswith("USP") and body["coa_footnotes"][0]["label"] == "Reporting."
+
+
+def test_profile_footnotes_shape_rejected():
+    r = client.post("/analysis-profiles", json={
+        "key": "hm_footnotes_shape_test", "name": "HM Footnotes Shape", "is_addon": True,
+    })
+    assert r.status_code == 201, r.text
+    pid = r.json()["id"]
+    for bad in ("notalist", [{"label": "x"}], [{"label": "", "text": "y"}],
+                [{"label": "a", "text": "b", "extra": 1}], [42]):
+        r = client.patch(f"/analysis-profiles/{pid}", json={"coa_footnotes": bad})
+        assert r.status_code == 400, bad
+
+
+def test_profile_coa_fields_clear_to_null():
+    r = client.post("/analysis-profiles", json={
+        "key": "hm_clear_to_null_test", "name": "HM Clear", "is_addon": True,
+    })
+    assert r.status_code == 201, r.text
+    pid = r.json()["id"]
+    client.patch(f"/analysis-profiles/{pid}", json={"coa_method_text": "MP-AES"})
+    r = client.patch(f"/analysis-profiles/{pid}", json={"coa_method_text": None})
+    assert r.status_code == 200
+    assert r.json()["coa_method_text"] is None
+
+
+def test_coa_display_text_fields_settable_at_create():
+    # Sibling of test_coa_display_fields_settable_at_create above, for the
+    # four Task 3 fields — proves the create route's model_dump ->
+    # constructor flow actually carries them (no parallel plumbing), not
+    # just the PATCH setattr loop covered by test_profile_patch_coa_display_fields.
+    r = client.post("/analysis-profiles", json={
+        "key": "hm_create_display_text_test", "name": "HM Text", "is_addon": True,
+        "coa_basis_note": "USP <232> Parenteral PDE | MDD 50 mg/day",
+        "coa_method_text": "MP-AES", "coa_prep_text": "100 mg / 10 mL digest",
+        "coa_footnotes": [{"label": "Reporting.", "text": "µg/g = ppm."}],
+    })
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["coa_method_text"] == "MP-AES"
+    assert body["coa_footnotes"][0]["text"] == "µg/g = ppm."
+
+
+def test_coa_footnotes_shape_rejected_at_create():
+    # Reachability check for _validate_coa_footnotes on the create route --
+    # confirms it 400s (route-level validator) rather than 422 (Pydantic
+    # type gate), the same distinction test_profile_footnotes_shape_rejected
+    # exercises on PATCH.
+    r = client.post("/analysis-profiles", json={
+        "key": "hm_create_bad_footnotes_test", "name": "HM Bad", "is_addon": True,
+        "coa_footnotes": [{"label": "a", "text": "b", "extra": 1}],
+    })
+    assert r.status_code == 400, r.text

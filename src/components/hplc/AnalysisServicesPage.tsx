@@ -59,6 +59,7 @@ import {
   useDeleteAnalysisService,
 } from '@/services/analysis-services'
 import { ResultOptionsEditor, type ResultOption } from './ResultOptionsEditor'
+import { ServiceSpecsSection } from './ServiceSpecsSection'
 
 export function AnalysisServicesPage() {
   const [services, setServices] = useState<AnalysisServiceRecord[]>([])
@@ -910,9 +911,14 @@ function ServicePanel({
         </Button>
       </div>
 
-      {/* Read-only detail — edit mode only */}
-      {!isCreate && (
+      {/* Read-only detail — edit mode only. Condition narrows `service` for
+          TS (equivalent to `!isCreate`, since `isCreate = service === null`)
+          so this one new line doesn't need a `!` — the rest of the block
+          still uses the pre-existing `service!.x` idiom untouched. */}
+      {service && (
         <>
+          <ServiceSpecsSection serviceId={service.id} peptides={peptides} />
+
           <div className="border-t pt-4">
             <h4 className="mb-3 text-sm font-semibold text-muted-foreground">
               Methods ({service!.methods?.length ?? 0})
