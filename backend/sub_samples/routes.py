@@ -402,6 +402,11 @@ def get_vial_plan(
     Side-effect: runs auto-assign for any sub-sample with NULL assignment_role,
     persisting the result. Subsequent calls with the same DB state are
     idempotent.
+
+    Also carries `sections`: department-grouped role/profile metadata (spec 4,
+    Task 8) built fresh from role_registry + demand + the vials in this same
+    response + catalog fulfillment — the data contract Task 9's dynamic
+    assignment page renders from. Empty on the IS-unreachable early return.
     """
     plan = service.compute_vial_plan(db, parent_sample_id)
     return VialPlanResponse(**plan)
@@ -424,6 +429,8 @@ def get_vial_demand(
     except Exception:
         services_resp = None
     if services_resp is None:
+        # _LEGACY_BUCKETS zero-floor contract (catalog_demand.py) — this
+        # endpoint predates sections (Task 8) and never grew that field.
         return {
             "demand": {"hplc": 0, "endo": 0, "ster": 0},
             "variance": {"hplc": 0, "endo": 0, "ster": 0},

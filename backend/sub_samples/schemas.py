@@ -114,7 +114,12 @@ class VialPlanResponse(BaseModel):
     # Per-bucket variance target (purchased count from the order/override);
     # zeros when none purchased. Informational — auto-assign fills core to
     # demand first, then the variance bucket up to this target. Never blocks.
+    # _LEGACY_BUCKETS zero-floor contract (catalog_demand.py): stays hplc/
+    # endo/ster only — variance is never catalog-role-eligible (Task 3).
     variance: dict = {"hplc": 0, "endo": 0, "ster": 0}
+    # _LEGACY_BUCKETS zero-floor contract (catalog_demand.py) — pre-variance
+    # baseline shape kept 3-bucket for back-compat; real catalog roles (e.g.
+    # 'hm') arrive via compute_vial_plan's actual base_demand, never this default.
     base_demand: dict = {"hplc": 0, "endo": 0, "ster": 0}
     wp_order_number: Optional[str] = None
     vials: list[VialPlanItem]
@@ -122,6 +127,12 @@ class VialPlanResponse(BaseModel):
     # Container family: parent is a pure depository — `vials` contains no
     # parent entry when TRUE (legacy families list the parent first).
     container_mode: bool = False
+    # Department-grouped role/profile metadata (spec 4, Task 8) — the data
+    # contract Task 9's dynamic assignment page renders from. Ordered by
+    # department sort_order; xtra NEVER appears (the FE renders it always,
+    # unconditionally, outside this catalog-driven metadata). Empty on the
+    # IS-unreachable early return.
+    sections: list = []
 
 
 class AssignmentPatchRequest(BaseModel):
@@ -149,6 +160,8 @@ class ParentAggregate(BaseModel):
                     "this badge on the parent row; sub-sample roles are shown "
                     "on expansion. Defaults to 'hplc' if NULL in the DB."
     )
+    # _LEGACY_BUCKETS zero-floor contract (catalog_demand.py) — AR-list
+    # display hint stays 3-bucket; not part of the sections/catalog surface.
     variance: dict[str, int] = Field(
         default_factory=lambda: {"hplc": 0, "endo": 0, "ster": 0},
         description="Per-bucket variance-vial counts (in addition to core "

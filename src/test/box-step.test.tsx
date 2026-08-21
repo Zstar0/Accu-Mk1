@@ -23,4 +23,9 @@ describe('boxLabelLines', () => {
     const lines = boxLabelLines({ ...box, role: 'hplc', vial_count: 1, created_at: null })
     expect(lines[1]).toBe('HPLC · 1 vial')
   })
+
+  it('falls back to the uppercased code for a role ROLE_SHORT has no entry for (prints T_ROLE, not "undefined")', () => {
+    const lines = boxLabelLines({ ...box, role: 't_role', vial_count: 2, created_at: null })
+    expect(lines[1]).toBe('T_ROLE · 2 vials')
+  })
 })

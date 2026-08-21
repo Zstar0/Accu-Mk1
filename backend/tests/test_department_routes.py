@@ -155,6 +155,36 @@ def test_patch_department_rename_to_own_current_name_succeeds(route_client):
     assert resp.json()["sort_order"] == 9
 
 
+def test_patch_system_department_name_rejected(route_client):
+    """is_system rows are load-bearing for the worksheet-inbox legacy lane
+    keys (catalog.roles._LEGACY_LANE_KEYS) — a name change 400s (fix round,
+    spec 4 Task 7)."""
+    db = route_client._test_session
+    dept = Department(name="Analytical", is_system=True)
+    db.add(dept)
+    db.commit()
+
+    resp = route_client.patch(f"/departments/{dept.id}", json={"name": "Analytical Chemistry"})
+    assert resp.status_code == 400
+    assert "system department names" in resp.json()["detail"]
+    db.refresh(dept)
+    assert dept.name == "Analytical"
+
+
+def test_patch_system_department_color_allowed(route_client):
+    """is_system only locks `name` — color/sort_order stay editable."""
+    db = route_client._test_session
+    dept = Department(name="Analytical", is_system=True, color="blue")
+    db.add(dept)
+    db.commit()
+
+    resp = route_client.patch(f"/departments/{dept.id}", json={"color": "rose", "sort_order": 3})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["color"] == "rose"
+    assert body["sort_order"] == 3
+
+
 def test_delete_department_204(route_client):
     db = route_client._test_session
     dept = Department(name="Unused")

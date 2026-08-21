@@ -16,7 +16,9 @@ import { invalidateBoxCaches } from '@/lib/box-cache'
 import { groupSamplesByOrder } from '@/lib/inbox-orders'
 import { useUIStore } from '@/store/ui-store'
 
-const ROLE_LABEL: Record<string, string> = { hplc: 'HPLC', endo: 'Endotoxin', ster: 'Sterility', xtra: 'Extras' }
+const ROLE_LABEL: Record<string, string> = {
+  hplc: 'HPLC', endo: 'Endotoxin', ster: 'Sterility', xtra: 'Extras', hm: 'Heavy Metals',
+}
 
 const stripWp = (s: string) => s.replace(/^wp-/i, '')
 const inc = (hay: string, needle: string) => hay.toLowerCase().includes(needle.trim().toLowerCase())

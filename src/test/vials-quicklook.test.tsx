@@ -40,6 +40,10 @@ vi.mock('@/lib/api', async importOriginal => {
     fetchSubSamplePhotoUrl: vi.fn(),
     patchVialAssignment: vi.fn(),
     transitionAnalysis: vi.fn(),
+    // REASSIGN_OPTIONS is catalog-driven now (spec 4, Task 10) — without
+    // these mocks the real fetchers would fire real network calls.
+    getVialRoles: vi.fn(),
+    getDepartments: vi.fn(),
   }
 })
 
@@ -99,10 +103,32 @@ import {
   fetchSubSamplePhotoUrl,
   patchVialAssignment,
   transitionAnalysis,
+  getVialRoles,
+  getDepartments,
+  type Department,
+  type VialRoleRow,
 } from '@/lib/api'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { VialPhotoThumb } from '@/components/senaite/vial-quicklook-helpers'
 import { AnalysisTable } from '@/components/senaite/AnalysisTable'
+import { buildReassignOptions } from '@/components/senaite/VialsQuickLookDialog'
+
+// The catalog default: the legacy five roles + their departments (parity
+// with backend/catalog/vial_roles_seed.py), so the pre-existing "Microbiology
+// — Endotoxin" / "Microbiology — Sterility" assertions below are unaffected
+// by REASSIGN_OPTIONS becoming catalog-driven.
+const DEFAULT_DEPARTMENTS: Department[] = [
+  { id: 1, name: 'Analytical', sort_order: 0, color: '#000', is_system: true, created_at: '', updated_at: '' },
+  { id: 2, name: 'Microbiology', sort_order: 1, color: '#000', is_system: true, created_at: '', updated_at: '' },
+  { id: 3, name: 'Heavy Metals', sort_order: 2, color: '#000', is_system: true, created_at: '', updated_at: '' },
+]
+const DEFAULT_VIAL_ROLES: VialRoleRow[] = [
+  { id: 1, code: 'hplc', label: 'HPLC', department_id: 1, boxable: true, variance_eligible: true, sort_order: 0, frozen: true, is_system: true },
+  { id: 2, code: 'endo', label: 'Endotoxin', department_id: 2, boxable: true, variance_eligible: true, sort_order: 1, frozen: true, is_system: true },
+  { id: 3, code: 'ster', label: 'Sterility', department_id: 2, boxable: true, variance_eligible: true, sort_order: 2, frozen: true, is_system: true },
+  { id: 4, code: 'hm', label: 'Heavy Metals', department_id: 3, boxable: false, variance_eligible: false, sort_order: 3, frozen: true, is_system: true },
+  { id: 5, code: 'xtra', label: 'Extras', department_id: null, boxable: true, variance_eligible: true, sort_order: 9, frozen: true, is_system: true },
+]
 
 const mkAnalysis = (over: Partial<SenaiteAnalysis>): SenaiteAnalysis =>
   ({
@@ -209,6 +235,8 @@ beforeEach(() => {
     sample_id: 'P-0144-S01',
     assignment_role: 'endo',
   })
+  vi.mocked(getVialRoles).mockResolvedValue(DEFAULT_VIAL_ROLES)
+  vi.mocked(getDepartments).mockResolvedValue(DEFAULT_DEPARTMENTS)
 })
 
 describe('VialsQuickLookDialog', () => {
@@ -411,6 +439,40 @@ describe('VialsQuickLookDialog', () => {
     await waitFor(() => {
       expect(transitionAnalysis).toHaveBeenCalledWith('mk1:101', 'variance_verify')
     })
+  })
+
+  it('re-assign dropdown includes Heavy Metals — a catalog role, unreachable in the old hardcoded 4-entry list', async () => {
+    renderDialog()
+    await screen.findByText('Purity (HPLC)')
+    const triggers = screen.getAllByRole('button', { name: /re-assign vial/i })
+    await userEvent.click(triggers[0]!)
+    expect(await screen.findByText('Heavy Metals — Heavy Metals')).toBeInTheDocument()
+  })
+})
+
+describe('buildReassignOptions (spec 4, Task 10 — catalog-driven REASSIGN_OPTIONS)', () => {
+  it('contains Heavy Metals, ordered by sort_order, with the null Unassigned entry last', () => {
+    const options = buildReassignOptions(DEFAULT_VIAL_ROLES, DEFAULT_DEPARTMENTS)
+    expect(options.map(o => o.label)).toEqual([
+      'Analytical — HPLC',
+      'Microbiology — Endotoxin',
+      'Microbiology — Sterility',
+      'Heavy Metals — Heavy Metals',
+      'Extra — Extras',
+      'Unassigned',
+    ])
+    expect(options.map(o => o.role)).toEqual(['hplc', 'endo', 'ster', 'hm', 'xtra', null])
+  })
+
+  it('falls back to "Extra" for a department-less role and preserves xtra', () => {
+    const options = buildReassignOptions(
+      [{ id: 9, code: 'xtra', label: 'Extras', department_id: null, boxable: true, variance_eligible: true, sort_order: 9, frozen: true, is_system: true }],
+      [],
+    )
+    expect(options).toEqual([
+      { label: 'Extra — Extras', role: 'xtra' },
+      { label: 'Unassigned', role: null },
+    ])
   })
 })
 

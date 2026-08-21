@@ -30,6 +30,7 @@ export type LIMSSubSection =
   | 'service-groups'
   | 'departments'
   | 'analysis-profiles'
+  | 'vial-roles'
 export type HPLCAnalysisSubSection =
   | 'overview'
   | 'new-analysis'

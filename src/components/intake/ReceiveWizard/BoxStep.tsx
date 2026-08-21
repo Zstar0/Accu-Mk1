@@ -16,6 +16,7 @@ import {
 } from '@/lib/api'
 import { ROLE_CHIP_CLASS, roleBadgeClass, roleTextClass } from '@/lib/assignment-colors'
 import { invalidateBoxCaches } from '@/lib/box-cache'
+import { useVialRoles } from '@/services/vial-roles'
 
 // Snap the drag preview's CENTER to the cursor. Without it, the overlay is
 // offset by wherever inside the chip the grab started, so the "held" copy
@@ -76,24 +77,23 @@ export const boxKeyboardCoordinates: KeyboardCoordinateGetter = (
   return best
 }
 
-type BoxRole = 'hplc' | 'endo' | 'ster' | 'xtra'
-// NOT the full role universe — deliberately still just the four boxable
-// roles: BOXABLE_ROLES in backend/boxes/service.py doesn't include 'hm' yet
-// (boxing catalog-only-role vials is a separate, not-yet-built backend
-// change), so ROLES/the column grid below stay as-is. ROLE_LABEL is widened
-// ahead of that so the label + its fallback are ready the day it lands,
-// rather than mislabeling (or crashing on) an unrecognized role then.
+type BoxRole = string
+// Columns are catalog-driven (spec 4, Task 10): the grid below renders one
+// column per vial_roles row with boxable=true, ordered by sort_order — see
+// BoxStep's useVialRoles() call. hm ships boxable=false today (spec-3
+// Handler ruling, not reversed here), so it renders no column yet; flipping
+// that flag in the Vial Roles admin page lights the column with zero code
+// change (the dark-launch rehearsal this task's tests exercise). ROLE_LABEL
+// keeps its hm entry ahead of that flip so the label + fallback are already
+// correct the day it lands.
 const ROLE_LABEL: Record<string, string> = {
   hplc: 'HPLC', endo: 'Endotoxin', ster: 'Sterility', xtra: 'Extras', hm: 'Heavy Metals',
 }
 // Exported for testing (same idiom as boxKeyboardCoordinates/boxLabelLines
-// below): ROLES only ever drives this with the four known roles today, so
-// there's no render path that reaches 'hm' or an unknown key yet — this is
-// the direct, honest way to pin the lookup + fallback themselves.
+// below).
 export function roleLabel(role: string): string {
   return ROLE_LABEL[role] ?? role.toUpperCase()
 }
-const ROLES: BoxRole[] = ['hplc', 'endo', 'ster', 'xtra']
 
 // Default per-box capacity: the lab's smallest box holds 6 vials. Auto-assign
 // fills up to the (possibly-edited) capacity; only this default is fixed at 6.
@@ -106,7 +106,7 @@ type OrderVial = SubSample
 
 /** Pure: the lines printed on a box label. Tested directly. */
 export function boxLabelLines(box: LimsBox): string[] {
-  const meta = `${ROLE_SHORT[box.role]} · ${box.vial_count} vial${box.vial_count === 1 ? '' : 's'}`
+  const meta = `${ROLE_SHORT[box.role] ?? box.role.toUpperCase()} · ${box.vial_count} vial${box.vial_count === 1 ? '' : 's'}`
   return [
     box.label_code,
     box.created_at ? `${meta} · ${box.created_at.slice(0, 10)}` : meta,
@@ -197,8 +197,37 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
     },
   })
 
+  const vialRolesQ = useVialRoles()
+
   const boxes = boxesQ.data ?? []
   const vials = (vialsQ.data ?? []).filter(v => v.assignment_role)
+
+  // Columns are catalog-driven (spec 4, Task 10): every vial_roles row with
+  // boxable=true, ordered by sort_order — UNIONED with any role that already
+  // has a box for this order. The union matters: a boxable flag flipped off
+  // mid-flight must not make an already-physical box vanish from the grid
+  // (same invisibility class as Task 9's variance_eligible finding — stored
+  // reality always wins over the flag). Unrecognized/no-longer-catalog codes
+  // sort after every known one; roleLabel()'s fallback still labels them.
+  //
+  // boxableCodes is the STRICTER set (catalog boxable=true only) — used to
+  // gate the "+ Add box" button and the auto-assign trailing-box create, so
+  // a union-only column (existing box, flag now off) never offers a control
+  // that would 400 against next_box's fail-closed boxable check
+  // (backend/boxes/service.py). The column itself still renders — the union
+  // above is what keeps it visible; this set only disables its NEW-box
+  // affordances, never the existing box card or drag/drop onto it.
+  const vialRoles = vialRolesQ.data ?? []
+  const boxableCodes = new Set(vialRoles.filter(r => r.boxable).map(r => r.code))
+  const sortOrderByCode = new Map(vialRoles.map(r => [r.code, r.sort_order]))
+  const roles: BoxRole[] = Array.from(new Set([
+    ...boxableCodes,
+    ...boxes.map(b => b.role),
+  ])).sort((a, b) => {
+    const sa = sortOrderByCode.get(a) ?? Number.MAX_SAFE_INTEGER
+    const sb = sortOrderByCode.get(b) ?? Number.MAX_SAFE_INTEGER
+    return sa - sb || a.localeCompare(b)
+  })
 
   // Auto-create — FIRST box only. A render effect (ref-guarded): for each role
   // with assigned-but-unboxed vials and zero boxes, mint exactly one box. The
@@ -207,10 +236,10 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
   // Trailing boxes are NOT created here — that is the event-driven path in
   // `handleAutoAssign` below (no double-fire window, no ref needed).
   useEffect(() => {
-    if (boxesQ.isLoading || vialsQ.isLoading) return
+    if (boxesQ.isLoading || vialsQ.isLoading || vialRolesQ.isLoading) return
     let cancelled = false
     const run = async () => {
-      for (const role of ROLES) {
+      for (const role of roles) {
         const unboxed = vials.filter(v => v.assignment_role === role && !v.box_id)
         const roleBoxes = boxes.filter(b => b.role === role)
         const key = `${orderKey}:${role}`
@@ -225,7 +254,7 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
     void run()
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [boxesQ.data, vialsQ.data, boxesQ.isLoading, vialsQ.isLoading, orderKey, qc])
+  }, [boxesQ.data, vialsQ.data, vialRolesQ.data, boxesQ.isLoading, vialsQ.isLoading, vialRolesQ.isLoading, orderKey, qc])
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
     setActiveId(String(event.active.id))
@@ -289,7 +318,7 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
   // create the trailing box if the role still has unboxed vials and no empty
   // box exists. Doing it here means no double-fire window, so no ref guard.
   const handleAutoAssign = async (box: LimsBox) => {
-    const role = box.role as BoxRole
+    const role = box.role
     const roleUnboxed = vials.filter(v => v.assignment_role === role && !v.box_id)
     const capacity = capacities[box.id] ?? DEFAULT_BOX_CAPACITY
     const take = Math.max(0, capacity - box.vial_count)
@@ -307,7 +336,10 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
       const remaining = roleUnboxed.slice(take)
       const otherEmptyBox = boxes.some(b => b.id !== box.id && b.role === role && b.vial_count === 0)
       const thisBoxStillEmpty = box.vial_count + takenIds.length === 0
-      if (remaining.length > 0 && !otherEmptyBox && !thisBoxStillEmpty) {
+      // boxableCodes-gated: a role kept on the grid only via the existing-box
+      // union (its catalog boxable flag is now false) can't mint a NEW box —
+      // createBox -> next_box is fail-closed on boxable server-side.
+      if (remaining.length > 0 && !otherEmptyBox && !thisBoxStillEmpty && boxableCodes.has(role)) {
         const created = await createBox(orderKey, role)
         await cancelBoxRefetches(qc, orderKey)
         patchBoxes(qc, orderKey, old => [...old, created])
@@ -338,14 +370,18 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
     }
   }
 
-  if (boxesQ.isLoading || vialsQ.isLoading) return <div className="p-6">Loading…</div>
+  // vialRolesQ loading is included: rendering an empty grid before the
+  // catalog resolves would flash zero columns, then pop in the real set.
+  if (boxesQ.isLoading || vialsQ.isLoading || vialRolesQ.isLoading) {
+    return <div className="p-6">Loading…</div>
+  }
 
   const unboxedVials = vials.filter(v => !v.box_id)
   const activeVial = activeId ? vials.find(v => v.sample_id === activeId) ?? null : null
 
   // Every vialed box of the order, in the same role/box order as the columns
   // below — one physical label each in a single print job.
-  const printableBoxes = ROLES.flatMap(role =>
+  const printableBoxes = roles.flatMap(role =>
     boxes.filter(b => b.role === role && b.vial_count > 0))
 
   const handlePrintAllLabels = () => {
@@ -379,14 +415,26 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
           {pendingSaves > 0 && <span className="text-xs text-muted-foreground animate-pulse">Saving…</span>}
         </div>
         <div className="flex gap-4 flex-1 min-h-0">
-          {/* LEFT: per-role box columns + in-column drop targets (manual override). */}
-          <div className="flex-1 grid grid-cols-4 gap-4 overflow-y-auto">
-            {ROLES.map(role => {
+          {/* LEFT: per-role box columns + in-column drop targets (manual override).
+              Column count follows `roles` (catalog-driven, Task 10) — a fixed
+              Tailwind grid-cols-N can't survive a variable role count, so the
+              template is computed inline. */}
+          <div className="flex-1 grid gap-4 overflow-y-auto"
+            style={{ gridTemplateColumns: `repeat(${Math.max(roles.length, 1)}, minmax(0, 1fr))` }}>
+            {roles.map(role => {
               return (
                 <div key={role} className="flex flex-col gap-3">
                   <div className="flex items-center justify-between">
                     <h3 className={`font-semibold ${roleTextClass(role)}`}>{roleLabel(role)}</h3>
-                    <Button size="sm" variant="outline" onClick={() => void addBox(role)}>+ Add box</Button>
+                    {/* Disabled (not hidden) when this column is on the grid
+                        only via the existing-box union: the column and its
+                        boxes stay usable, but minting a NEW box for a role
+                        the catalog no longer marks boxable would 400. */}
+                    <Button size="sm" variant="outline" onClick={() => void addBox(role)}
+                      disabled={!boxableCodes.has(role)}
+                      title={boxableCodes.has(role) ? undefined : 'This role is no longer boxable in the catalog'}>
+                      + Add box
+                    </Button>
                   </div>
                   {boxes.filter(b => b.role === role).map(b => (
                     <BoxCard
@@ -407,7 +455,7 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
 
           {/* RIGHT: unboxed vials, grouped by role — drag source for overrides and
               a drop target: drag a boxed chip here to clear its box membership. */}
-          <UnboxedPanel orderLabel={orderLabel} vials={unboxedVials} activeId={activeId} />
+          <UnboxedPanel orderLabel={orderLabel} vials={unboxedVials} activeId={activeId} roles={roles} />
         </div>
       </div>
 
@@ -426,15 +474,15 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
   )
 }
 
-function UnboxedPanel({ orderLabel, vials, activeId }:
-  { orderLabel: string; vials: OrderVial[]; activeId: string | null }) {
+function UnboxedPanel({ orderLabel, vials, activeId, roles }:
+  { orderLabel: string; vials: OrderVial[]; activeId: string | null; roles: string[] }) {
   // Sentinel-id droppable: dropping a boxed chip here unassigns it (drag out).
   const { setNodeRef, isOver } = useDroppable({ id: 'unboxed' })
   return (
     <div ref={setNodeRef}
       className={`w-56 shrink-0 overflow-y-auto rounded border p-3 ${isOver ? 'ring-2 ring-primary' : ''}`}>
       <div className="mb-2 text-sm font-semibold">Unboxed ({orderLabel})</div>
-      {ROLES.map(role => {
+      {roles.map(role => {
         const rv = vials.filter(v => v.assignment_role === role)
         if (rv.length === 0) return null
         return (

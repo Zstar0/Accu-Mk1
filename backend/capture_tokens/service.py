@@ -14,11 +14,15 @@ from typing import Optional
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
-from models import LimsCaptureToken, LimsPackagingPhoto
+from models import LimsCaptureToken, LimsPackagingPhoto, LimsSubSampleEvent
 
 CAPTURE_TOKEN_TTL_HOURS = 2
 MAX_PHOTOS_PER_TOKEN = 50
 MAX_SAMPLES_PER_TOKEN = 50
+# Bench scan-in cap (spec 4 fix round): mirrors MAX_PHOTOS_PER_TOKEN's idiom
+# for the QR bench-scan flow. Enforced in main.py's scan_via_bench_token
+# (this module owns capture-token accounting; main.py owns the bench route).
+MAX_SCANS_PER_TOKEN = 200
 
 
 class UnknownTokenError(Exception):
@@ -78,3 +82,19 @@ def token_photo_count(db: Session, token: LimsCaptureToken) -> int:
     ).scalar_one()
     samples = json.loads(token.context_json)
     return rows // max(1, len(samples))
+
+
+def token_scan_count(db: Session, token_id: int) -> int:
+    """Count of bench_scanned events written via this capture token (spec 4
+    fix round, mirrors token_photo_count/MAX_PHOTOS_PER_TOKEN). Unlike
+    LimsPackagingPhoto, LimsSubSampleEvent has no dedicated capture_token_id
+    column — the id rides inside `details` JSON instead, so this filters at
+    the DB level via the JSON comparator (casts to int: `->>`+CAST on
+    Postgres JSONB, JSON_EXTRACT on SQLite — both verified) rather than
+    pulling every bench_scanned row into Python for an unauthenticated,
+    unbounded-history event log."""
+    return db.execute(
+        select(func.count(LimsSubSampleEvent.id))
+        .where(LimsSubSampleEvent.event == "bench_scanned")
+        .where(LimsSubSampleEvent.details["capture_token_id"].as_integer() == token_id)
+    ).scalar_one()

@@ -17,6 +17,11 @@ const getAnalysisServicesMock = vi.fn().mockResolvedValue([])
 const getServiceGroupsMock = vi.fn().mockResolvedValue([])
 const getSlaTiersMock = vi.fn().mockResolvedValue([])
 const getSlaPriorityTiersMock = vi.fn().mockResolvedValue([])
+// Task 11: useSampleSla now also queries analysis profiles (for the
+// profile-tier precedence step) — mocked the same way as the other four
+// upstream queries below, so this file's "all queries must settle" contract
+// (see the loading-state test) still holds.
+const getAnalysisProfilesMock = vi.fn().mockResolvedValue([])
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof ApiModule>('@/lib/api')
@@ -28,6 +33,7 @@ vi.mock('@/lib/api', async () => {
     getServiceGroups: () => getServiceGroupsMock(),
     getSlaTiers: () => getSlaTiersMock(),
     getSlaPriorityTiers: () => getSlaPriorityTiersMock(),
+    getAnalysisProfiles: () => getAnalysisProfilesMock(),
   }
 })
 
@@ -75,6 +81,7 @@ beforeEach(() => {
     },
   ])
   getSlaPriorityTiersMock.mockClear()
+  getAnalysisProfilesMock.mockClear().mockResolvedValue([])
 })
 
 describe('SampleHeaderSla', () => {

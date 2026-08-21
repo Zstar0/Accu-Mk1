@@ -17,6 +17,9 @@ const getAnalysisServicesMock = vi.fn()
 const getServiceGroupsMock = vi.fn()
 const getSlaTiersMock = vi.fn()
 const getSlaPriorityTiersMock = vi.fn()
+// Task 11: useSampleSla (composed by useAnalysisSlaMap) now also queries
+// analysis profiles for the profile-tier precedence step.
+const getAnalysisProfilesMock = vi.fn()
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof ApiModule>('@/lib/api')
@@ -28,6 +31,7 @@ vi.mock('@/lib/api', async () => {
     getServiceGroups: () => getServiceGroupsMock(),
     getSlaTiers: () => getSlaTiersMock(),
     getSlaPriorityTiers: () => getSlaPriorityTiersMock(),
+    getAnalysisProfiles: () => getAnalysisProfilesMock(),
   }
 })
 
@@ -93,6 +97,7 @@ beforeEach(() => {
   ])
   getSlaTiersMock.mockReset().mockResolvedValue([DEFAULT_TIER, HPLC_TIER])
   getSlaPriorityTiersMock.mockReset().mockResolvedValue([])
+  getAnalysisProfilesMock.mockReset().mockResolvedValue([])
 })
 
 describe('useAnalysisSlaMap', () => {

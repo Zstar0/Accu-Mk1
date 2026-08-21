@@ -15,9 +15,10 @@ Verifies:
 import pytest
 from fastapi.testclient import TestClient
 
-from main import app, ROLE_TO_VIAL_ROLES, VALID_INBOX_ROLES, ROLE_TO_DEPARTMENT_NAME
+from main import app
 from database import SessionLocal
 from models import LimsSample, LimsSubSample
+from catalog.roles import inbox_lanes
 
 
 pytestmark = pytest.mark.integration
@@ -39,26 +40,37 @@ def auth_headers(client):
 
 
 # ── Pure constants sanity ────────────────────────────────────────────────────
+# Lanes are catalog-driven (spec 4, Task 7) — read off the live stack's
+# vial_roles table instead of a hardcoded dict. Legacy lane keys/collapsing
+# are unchanged; this just moves the source of truth.
 
 def test_microbiology_role_collapses_ster_and_endo():
     """Spec Q1: one Microbiology filter, ster + endo collapsed."""
-    assert ROLE_TO_VIAL_ROLES["microbiology"] == {"ster", "endo"}
+    with SessionLocal() as db:
+        lanes = inbox_lanes(db)
+    assert lanes["microbiology"].role_codes == {"ster", "endo"}
 
 
 def test_hplc_role_is_singleton():
-    assert ROLE_TO_VIAL_ROLES["hplc"] == {"hplc"}
+    with SessionLocal() as db:
+        lanes = inbox_lanes(db)
+    assert lanes["hplc"].role_codes == {"hplc"}
 
 
 def test_valid_inbox_roles_exactly_hplc_and_micro():
     # spec-3 Task 3: hm (Heavy Metals) joined as its own catalog-only lane.
     # Name kept as-is (git-blame trail) even though the set has grown.
-    assert VALID_INBOX_ROLES == {"hplc", "microbiology", "hm"}
+    with SessionLocal() as db:
+        lanes = inbox_lanes(db)
+    assert set(lanes) == {"hplc", "microbiology", "hm"}
 
 
 def test_role_to_department_name_present():
-    assert ROLE_TO_DEPARTMENT_NAME["hplc"] == "Analytical"
-    assert ROLE_TO_DEPARTMENT_NAME["microbiology"] == "Microbiology"
-    assert ROLE_TO_DEPARTMENT_NAME["hm"] == "Heavy Metals"
+    with SessionLocal() as db:
+        lanes = inbox_lanes(db)
+    assert lanes["hplc"].department_name == "Analytical"
+    assert lanes["microbiology"].department_name == "Microbiology"
+    assert lanes["hm"].department_name == "Heavy Metals"
 
 
 # ── Route validation ─────────────────────────────────────────────────────────

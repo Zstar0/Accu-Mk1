@@ -13,7 +13,8 @@ export interface SlaBreakdownTooltipProps {
    *  `resolveSampleTiersByGroup`. The multi-tier resolver populates
    *  `priorityScope` ('global' | 'group') on priority-source rows so the
    *  tooltip can distinguish "expedited (all groups)" from
-   *  "expedited (HPLC group only)". */
+   *  "expedited (HPLC group only)". Task 11: `tierSource === 'profile'` rows
+   *  carry `profileName`, rendered as "Profile SLA — {profile name}". */
   reason: SampleSlaReason | null
   /** Resolved priority — drives the "Priority:" line. Optional because some
    *  callers (e.g. order-level summary) may not have a single sample-priority. */
@@ -98,6 +99,14 @@ export function SlaBreakdownTooltip({
         priority: reason.priorityUsed,
       })
     }
+  } else if (reason?.tierSource === 'profile') {
+    // Task 11: a tiered analysis profile beat the bucket's group tier.
+    // profileName is always populated by every producer today, but fall back
+    // to a generic line (mirrors the group branch's groupName fallback)
+    // rather than silently dropping the source line if that ever changes.
+    sourceLine = reason.profileName
+      ? t('orderStatus.sla.breakdown.source.profile', { profile: reason.profileName })
+      : t('orderStatus.sla.breakdown.source.profileGeneric')
   } else if (reason?.tierSource === 'group') {
     sourceLine = groupName
       ? t('orderStatus.sla.breakdown.source.groupNamed', { group: groupName })

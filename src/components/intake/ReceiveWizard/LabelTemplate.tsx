@@ -15,8 +15,11 @@ interface Props {
   vialPosition?: number | null
   /** Total vials in this parent's set (parent + sub-samples); optional. */
   vialTotal?: number | null
-  /** Role from assignment step. If present, renders inline. */
-  role?: 'hplc' | 'endo' | 'ster' | 'xtra' | null
+  /** Role from assignment step. If present, renders inline. Widened to
+   *  string (spec 4, Task 8 — AssignmentRole widening): ROLE_SHORT is
+   *  already a string-keyed lookup, so an unrecognized role code simply
+   *  renders no role text, same as before. */
+  role?: string | null
   /** Check-in date — ISO string, Date, or null. Falls back to "today" so
    *  every printed label carries a date even when caller doesn't provide one. */
   receivedAt?: string | Date | null
@@ -37,7 +40,7 @@ export function LabelTemplate({
   role,
   receivedAt,
 }: Props) {
-  const roleText = role ? ROLE_SHORT[role] : null
+  const roleText = role ? (ROLE_SHORT[role] ?? role.toUpperCase()) : null
   const hasVial = vialPosition && vialTotal
   const dateStr = formatLabelDate(receivedAt)
 

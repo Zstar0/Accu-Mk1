@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Accumark — Bench Scan-In</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #fbfbfa;
+        --fg: #1a1a1a;
+        --muted: #5a5a5a;
+        --border: #e0ddd6;
+        --accent: #2563eb;
+        --accent-fg: #ffffff;
+        --danger: #b91c1c;
+        --success: #15803d;
+        --card-bg: #ffffff;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #181816;
+          --fg: #ededed;
+          --muted: #a8a8a8;
+          --border: #2e2c28;
+          --accent: #3b82f6;
+          --accent-fg: #ffffff;
+          --danger: #f87171;
+          --success: #4ade80;
+          --card-bg: #201f1d;
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family:
+          -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu,
+          Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+        font-size: 16px;
+        line-height: 1.5;
+      }
+
+      body {
+        padding: env(safe-area-inset-top) env(safe-area-inset-right)
+          max(24px, env(safe-area-inset-bottom)) env(safe-area-inset-left);
+      }
+
+      main {
+        max-width: 480px;
+        margin: 0 auto;
+        padding: 20px 16px 40px;
+      }
+
+      header {
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+        color: var(--muted);
+        text-transform: uppercase;
+        padding-bottom: 12px;
+        margin-bottom: 16px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      #station-name {
+        font-size: 22px;
+        font-weight: 700;
+        margin: 0 0 20px;
+      }
+
+      #scan-form {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      #sample-input {
+        width: 100%;
+        min-height: 56px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--card-bg);
+        color: var(--fg);
+        font-size: 18px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        padding: 0 14px;
+      }
+      #sample-input:disabled {
+        opacity: 0.6;
+      }
+
+      .submit-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 56px;
+        width: 100%;
+        border: none;
+        border-radius: 14px;
+        background: var(--accent);
+        color: var(--accent-fg);
+        font-size: 17px;
+        font-weight: 700;
+        cursor: pointer;
+        touch-action: manipulation;
+      }
+      .submit-btn:disabled {
+        opacity: 0.5;
+        pointer-events: none;
+      }
+
+      #status {
+        min-height: 22px;
+        margin: 16px 0 0;
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--muted);
+      }
+      #status.status-success {
+        color: var(--success);
+      }
+      #status.status-error {
+        color: var(--danger);
+      }
+
+      #log {
+        list-style: none;
+        margin: 20px 0 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      #log li {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 13px;
+        color: var(--muted);
+      }
+
+      #expired {
+        text-align: center;
+        padding: 48px 12px;
+        font-size: 16px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>Accumark — Bench Scan-In</header>
+
+      <section id="context">
+        <div id="station-name">Loading…</div>
+
+        <form id="scan-form" autocomplete="off">
+          <input
+            id="sample-input"
+            type="text"
+            inputmode="text"
+            placeholder="Scan or type vial ID"
+            autocomplete="off"
+            autocapitalize="characters"
+            autocorrect="off"
+            spellcheck="false"
+            autofocus
+          />
+          <button type="submit" class="submit-btn">Scan in</button>
+        </form>
+
+        <p id="status"></p>
+        <ul id="log"></ul>
+      </section>
+
+      <section id="expired" hidden>
+        This QR has expired — ask an admin to reissue the station QR.
+      </section>
+    </main>
+    <script src="bench.js"></script>
+  </body>
+</html>

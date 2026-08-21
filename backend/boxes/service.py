@@ -8,8 +8,6 @@ from sqlalchemy.orm import Session
 
 from models import LimsBox, LimsSample, LimsSubSample, LimsSubSampleEvent
 
-BOXABLE_ROLES = {"hplc", "endo", "ster", "xtra"}
-
 
 def box_label_code(box: LimsBox) -> str:
     """Physical box name: 'BOX-<order#>-<n>'. Strips a leading 'WP-' from the
@@ -66,7 +64,9 @@ def vials_for_boxes(db: Session, box_ids: List[int]) -> dict:
 
 
 def next_box(db: Session, order_key: str, role: str, user_id: int) -> LimsBox:
-    if role not in BOXABLE_ROLES:
+    from catalog.roles import role_registry
+    role_row = role_registry(db).get(role)
+    if role_row is None or not role_row.boxable:
         raise ValueError(f"role {role!r} is not boxable")
     # Concurrent creates for one order race on uq_lims_box_order_number:
     # recompute max+1 and retry a few times before giving up.

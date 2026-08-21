@@ -4537,6 +4537,14 @@ export interface AnalysisProfile {
   coa_archetype: string | null
   coa_sort_order: number
   member_ids: number[]
+  // Task 11 (profile SLA tier): byte-identical to `member_ids` — the same
+  // analysis_services relationship, added under the name the SLA resolver
+  // contract expects (`buildServiceToProfileTierMap`). Both fields are kept
+  // so existing `member_ids` consumers don't need to migrate.
+  member_service_ids: number[]
+  // Task 11: optional FK to sla_tiers — beats the member services' group tier,
+  // loses to a priority override. NULL inherits the group tier (or default).
+  sla_tier_id: number | null
   created_at: string
   updated_at: string
 }
@@ -4573,6 +4581,22 @@ export async function createAnalysisProfile(data: {
   sort_order?: number
   fulfillment_role?: string | null
   fulfillment_dim?: 'role' | 'kind'
+  // Task 11: optional at create time — the admin UI only exposes the SLA
+  // tier Select on the edit panel, but the backend accepts it on POST too.
+  sla_tier_id?: number | null
+  // COA *display* settings: inert until coa_archetype is armed, so they are
+  // safe to set up front. `coa_archetype` is deliberately absent — the
+  // backend 400s on it here, because arming is retroactive across in-flight
+  // samples and stays a separate PATCH.
+  coa_section_title?: string | null
+  coa_sort_order?: number
+  // Auto-mint (Task 3): department for a newly-minted vial_roles row. Not a
+  // persisted AnalysisProfile field — the backend consumes it once, at mint
+  // time, and never echoes it back on AnalysisProfileResponse.
+  role_department_id?: number | null
+  // Same auto-mint-only contract: `boxable` for a role minted by THIS
+  // request. Ignored when the role already exists (roles can be shared).
+  role_boxable?: boolean | null
 }): Promise<AnalysisProfile> {
   const response = await fetch(`${API_BASE_URL()}/analysis-profiles`, {
     method: 'POST',
@@ -4584,7 +4608,11 @@ export async function createAnalysisProfile(data: {
 }
 
 export async function updateAnalysisProfile(
-  id: number, data: Partial<AnalysisProfile>
+  id: number,
+  // See createAnalysisProfile's role_department_id — same auto-mint-only
+  // field, widened onto the PATCH payload without polluting the
+  // AnalysisProfile response type it's otherwise Partial<>'d from.
+  data: Partial<AnalysisProfile> & { role_department_id?: number | null }
 ): Promise<AnalysisProfile> {
   const response = await fetch(`${API_BASE_URL()}/analysis-profiles/${id}`, {
     method: 'PATCH',
@@ -4613,6 +4641,95 @@ export async function setAnalysisProfileMembers(
   })
   if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to set members'))
   return response.json()
+}
+
+/**
+ * Ride lists (spec 4): the priority-ordered host role codes this profile's
+ * result may attach to instead of self-minting its own vial. Position in
+ * the list = priority (0 = first choice), same idiom as
+ * getAnalysisProfileMembers/setAnalysisProfileMembers above.
+ */
+export async function getRideHosts(id: number): Promise<string[]> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-profiles/${id}/ride-hosts`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to load ride hosts: ${response.status}`)
+  return response.json()
+}
+
+export async function putRideHosts(
+  id: number, hostRoleCodes: string[]
+): Promise<{ count: number }> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-profiles/${id}/ride-hosts`, {
+    method: 'PUT',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({ host_role_codes: hostRoleCodes }),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to set ride hosts'))
+  return response.json()
+}
+
+// ─── Vial Roles ─────────────────────────────────────────────────────────────
+// Catalog-driven bench roles (spec 4). `code` is the DB join key on vials
+// (assignment_role, VARCHAR(8)); this is its editable face.
+
+export interface VialRoleRow {
+  id: number
+  code: string
+  label: string
+  department_id: number | null
+  boxable: boolean
+  variance_eligible: boolean
+  sort_order: number
+  frozen: boolean
+  is_system: boolean
+}
+
+export interface VialRoleCreate {
+  code: string
+  label: string
+  department_id?: number | null
+  boxable?: boolean
+  variance_eligible?: boolean
+  sort_order?: number
+}
+
+export async function getVialRoles(): Promise<VialRoleRow[]> {
+  const response = await fetch(`${API_BASE_URL()}/vial-roles`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to load vial roles: ${response.status}`)
+  return response.json()
+}
+
+export async function createVialRole(data: VialRoleCreate): Promise<VialRoleRow> {
+  const response = await fetch(`${API_BASE_URL()}/vial-roles`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to create vial role'))
+  return response.json()
+}
+
+export async function updateVialRole(
+  id: number, data: Partial<VialRoleCreate>
+): Promise<VialRoleRow> {
+  const response = await fetch(`${API_BASE_URL()}/vial-roles/${id}`, {
+    method: 'PATCH',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to update vial role'))
+  return response.json()
+}
+
+export async function deleteVialRole(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE_URL()}/vial-roles/${id}`, {
+    method: 'DELETE',
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to delete vial role'))
 }
 
 // ─── SLA tiers (sub-project A revised + C) ──────────────────────────────────
@@ -4869,7 +4986,11 @@ export async function getSenaiteAnalysts(): Promise<SenaiteAnalyst[]> {
 
 export type InboxPriority = 'normal' | 'high' | 'expedited'
 
-export type InboxRole = 'hplc' | 'microbiology'
+// Widened to string (spec 4, Task 10 — catalog-driven worksheet-inbox lanes):
+// was 'hplc' | 'microbiology'. A lane key is now any GET /worksheets/inbox/
+// lanes key — the three legacy aliases ('hplc' | 'microbiology' | 'hm') or a
+// slugified admin-created department name.
+export type InboxRole = string
 
 // Aligns with backend Pydantic InboxAnalysisItem after the vial-inbox
 // redesign — service group context now travels per-analysis.
@@ -4915,6 +5036,27 @@ export interface InboxResponse {
   items: InboxVialItem[]
   total: number
   filter_role: InboxRole | null
+}
+
+/** One worksheet-inbox filter chip (spec 4, Task 10): a department that owns
+ *  >=1 vial role. `label` is the department's display name (e.g.
+ *  'Analytical' for the legacy 'hplc' lane) — deliberately NOT the
+ *  abbreviated bench nickname; see catalog.roles.inbox_lanes on the backend.
+ *  `key` is the value to pass as GetInboxOptions.role. Ordered by
+ *  (sort_order, key) by the backend. */
+export interface InboxLaneRow {
+  key: string
+  label: string
+  role_codes: string[]
+  sort_order: number
+}
+
+export async function getInboxLanes(): Promise<InboxLaneRow[]> {
+  const response = await fetch(`${API_BASE_URL()}/worksheets/inbox/lanes`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to load inbox lanes: ${response.status}`)
+  return response.json()
 }
 
 export interface WorksheetUser {
@@ -5565,7 +5707,11 @@ export interface SubSampleListResponse {
   sub_samples: SubSample[]
 }
 
-export type AssignmentRole = 'hplc' | 'endo' | 'ster' | 'xtra'
+// Widened to string (spec 4, Task 8): a catalog-driven bench can mint any
+// role code (VialRole.code), not just the four legacy buckets. The legacy
+// literals — 'hplc' | 'endo' | 'ster' | 'xtra' — still cover every value the
+// backend emits today; kept here only as documentation, not an enforced type.
+export type AssignmentRole = string
 
 export interface VialPlanItem {
   sample_id: string
@@ -5577,22 +5723,64 @@ export interface VialPlanItem {
   assignment_kind?: 'core' | 'variance' | null
 }
 
+/** One profile riding or anchoring a vial-plan section's role spot (spec 4,
+ *  Task 8). `relation` is 'host' (the profile that anchors/mints the role's
+ *  demand) or 'rider' (attaches its result to the host's vial instead of
+ *  minting its own — see catalog_demand.resolve_catalog_fulfillment). */
+export interface VialPlanRoleProfile {
+  id: number
+  key: string
+  name: string
+  relation: 'host' | 'rider'
+}
+
+/** One assignable role within a vial-plan section — the bench "spot" Task 9's
+ *  dynamic assignment page renders as a drop bucket. */
+export interface VialPlanRoleSpot {
+  code: string
+  label: string
+  sort_order: number
+  variance_eligible: boolean
+  profiles: VialPlanRoleProfile[]
+}
+
+/** One department's role/profile metadata within a vial-plan response (spec 4,
+ *  Task 8) — the data contract Task 9's dynamic assignment page renders from.
+ *  Ordered by department sort_order; xtra NEVER appears here (the FE renders
+ *  its xtra bucket unconditionally, outside this catalog-driven metadata). */
+export interface VialPlanSection {
+  department_id: number
+  department_name: string
+  sort_order: number
+  roles: VialPlanRoleSpot[]
+}
+
 export interface VialPlanResponse {
+  // Shape-driven like VialDemandResponse below: demand/base_demand carry
+  // hplc/endo/ster plus any catalog-only role (e.g. 'hm') the order actually
+  // demanded. `variance` stays the legacy 3-bucket shape BY CONTRACT —
+  // derive_variance_demand only ever emits hplc/endo/ster (a catalog-only
+  // role like hm is never variance-eligible, Task 3).
   /** Base (core) vial demand per role — NOT inflated by variance. */
-  demand: { hplc: number; endo: number; ster: number }
+  demand: Record<string, number>
   /** Per-role variance target: count of variance vials IN ADDITION to core
    *  demand (zeros when none purchased). Display-only paid marker for the
    *  AssignStep variance drop zones — never a drop blocker. */
   variance: { hplc: number; endo: number; ster: number }
   /** Pre-variance lab baseline; equals demand under the separate-bucket
    *  contract. Kept for back-compat. */
-  base_demand: { hplc: number; endo: number; ster: number }
+  base_demand: Record<string, number>
   wp_order_number: string | null
   vials: VialPlanItem[]
   is_unreachable: boolean
   /** Container family: parent is a pure depository — `vials` contains no
    *  parent entry when true (legacy families list the parent first). */
   container_mode?: boolean
+  /** Department-grouped role/profile metadata (spec 4, Task 8) — empty ONLY
+   *  on the IS-unreachable early return (no services to resolve fulfillment
+   *  against). A variance-locked plan still carries real sections grouping
+   *  its stored (non-auto-assigned) vial roles. */
+  sections: VialPlanSection[]
 }
 
 /**
@@ -5984,8 +6172,10 @@ export interface ParentAggregate {
    *  "single-vial; render a dash"). */
   vial_count: number
   /** The parent AR's own assignment_role. Sub-sample roles are surfaced
-   *  inline on expand via /api/sub-samples/{parent}, not here. */
-  parent_role: 'hplc' | 'endo' | 'ster' | 'xtra' | 'unassigned'
+   *  inline on expand via /api/sub-samples/{parent}, not here. Widened to
+   *  string (spec 4, Task 10): was 'hplc' | 'endo' | 'ster' | 'xtra' |
+   *  'unassigned'. */
+  parent_role: string
   /** Per-bucket variance counts from the parent's variance_override (zeros when
    *  none). AR-list display hint; authoritative gate is server-side. Optional
    *  for back-compat with older responses. */
@@ -6079,7 +6269,9 @@ export interface LimsBox {
   id: number
   order_key: string
   box_number: number
-  role: 'hplc' | 'endo' | 'ster' | 'xtra'
+  // Widened to string (spec 4, Task 10): was 'hplc' | 'endo' | 'ster' | 'xtra'.
+  // Boxing is catalog-driven now — any vial_roles code with boxable=true.
+  role: string
   label_code: string
   vial_count: number
   printed_at: string | null
@@ -6099,7 +6291,8 @@ export async function listOrderBoxes(orderKey: string): Promise<LimsBox[]> {
 
 export async function createBox(
   orderKey: string,
-  role: 'hplc' | 'endo' | 'ster' | 'xtra',
+  // Widened to string (spec 4, Task 10): was 'hplc' | 'endo' | 'ster' | 'xtra'.
+  role: string,
 ): Promise<LimsBox> {
   return apiFetch<LimsBox>('/api/boxes', {
     method: 'POST',

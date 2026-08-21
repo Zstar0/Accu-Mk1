@@ -16,6 +16,9 @@ const getAnalysisServicesMock = vi.fn().mockResolvedValue([])
 const getServiceGroupsMock = vi.fn().mockResolvedValue([])
 const getSlaTiersMock = vi.fn().mockResolvedValue([])
 const getSlaPriorityTiersMock = vi.fn().mockResolvedValue([])
+// Task 11: useOrderSlaStatuses now also queries analysis profiles for the
+// profile-tier precedence step.
+const getAnalysisProfilesMock = vi.fn().mockResolvedValue([])
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof ApiModule>('@/lib/api')
@@ -27,6 +30,7 @@ vi.mock('@/lib/api', async () => {
     getServiceGroups: () => getServiceGroupsMock(),
     getSlaTiers: () => getSlaTiersMock(),
     getSlaPriorityTiers: () => getSlaPriorityTiersMock(),
+    getAnalysisProfiles: () => getAnalysisProfilesMock(),
   }
 })
 
@@ -98,6 +102,7 @@ beforeEach(() => {
     },
   ])
   getSlaPriorityTiersMock.mockClear()
+  getAnalysisProfilesMock.mockClear().mockResolvedValue([])
 })
 
 describe('useOrderSlaStatuses', () => {

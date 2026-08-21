@@ -142,6 +142,12 @@ def init_db():
             seed_profiles_from_registry(_s)
     except Exception as e:  # never block startup
         log.warning("catalog_profile_seed_skipped err=%s", e)
+    try:
+        from catalog.vial_roles_seed import seed_vial_roles
+        with SessionLocal() as _db:
+            seed_vial_roles(_db)
+    except Exception as e:  # never block startup
+        log.warning("catalog_vial_roles_seed_skipped err=%s", e)
 
 
 def _run_migrations():
@@ -1467,6 +1473,71 @@ def _run_migrations():
         "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_section_title VARCHAR(200)",
         "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_archetype VARCHAR(50)",
         "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_sort_order INTEGER NOT NULL DEFAULT 0",
+        # --- Profile-level SLA tier (Task 11, spec 4 follow-on): beats the
+        # member services' group tier, loses to a priority override. Same
+        # nullable-FK semantics as service_groups.sla_tier_id above (NULL
+        # inherits the group's own tier / default).
+        "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS sla_tier_id INTEGER REFERENCES sla_tiers(id) ON DELETE SET NULL",
+        # --- Catalog-driven bench (spec 4): vial_roles ---
+        # Full CREATE here (not just create_all): migrations run BEFORE create_all
+        # (lims_capture_tokens precedent, see :1324-1329).
+        """CREATE TABLE IF NOT EXISTS vial_roles (
+        id SERIAL PRIMARY KEY,
+        code VARCHAR(8) NOT NULL UNIQUE,
+        label VARCHAR(100) NOT NULL,
+        department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
+        boxable BOOLEAN NOT NULL DEFAULT FALSE,
+        variance_eligible BOOLEAN NOT NULL DEFAULT FALSE,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        frozen BOOLEAN NOT NULL DEFAULT FALSE,
+        is_system BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )""",
+        # --- Catalog-driven bench (spec 4): ride lists ---
+        # host_role_code deliberately NOT an FK to vial_roles (route-edge
+        # validation, same additive idiom as fulfillment_role above).
+        """CREATE TABLE IF NOT EXISTS profile_ride_hosts (
+        id SERIAL PRIMARY KEY,
+        analysis_profile_id INTEGER NOT NULL REFERENCES analysis_profiles(id) ON DELETE CASCADE,
+        host_role_code VARCHAR(8) NOT NULL,
+        priority INTEGER NOT NULL DEFAULT 0,
+        CONSTRAINT uq_profile_ride_host UNIQUE (analysis_profile_id, host_role_code)
+    )""",
+        # --- Catalog-driven bench (spec 4): vial-profile custody edges ---
+        # Append-only (supersede + insert, never rewrite, no DELETE path).
+        # relation's allowed-value CHECK lives here only — not on the ORM
+        # model — so SQLite test fixtures (Base.metadata.create_all) stay
+        # unconstrained per the plan's binding constraint.
+        """CREATE TABLE IF NOT EXISTS vial_profile_assignments (
+        id SERIAL PRIMARY KEY,
+        lims_sub_sample_pk INTEGER NOT NULL REFERENCES lims_sub_samples(id) ON DELETE CASCADE,
+        analysis_profile_id INTEGER NOT NULL REFERENCES analysis_profiles(id),
+        relation VARCHAR(8) NOT NULL,
+        assigned_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        assigned_by_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        superseded_at TIMESTAMP,
+        CONSTRAINT ck_vpa_relation CHECK (relation IN ('host', 'rider'))
+    )""",
+        # Partial index: fast "current custody for this vial" lookups (the
+        # hot path — write_custody_edges' supersede query and the read
+        # endpoint's current-first ordering) without indexing superseded
+        # history rows.
+        "CREATE INDEX IF NOT EXISTS ix_vpa_sub_current ON vial_profile_assignments "
+        "(lims_sub_sample_pk) WHERE superseded_at IS NULL",
+        # --- Catalog-driven bench (spec 4, Task 12): bench stations ---
+        # Physical bench locations for QR/scanner-gun soft-custody scan-in.
+        # Ships EMPTY (G-STATION pending, no seed). No DELETE path — deactivate
+        # via active=false (vial_roles/departments idiom).
+        """CREATE TABLE IF NOT EXISTS bench_stations (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100) NOT NULL UNIQUE,
+        department_id INTEGER NOT NULL REFERENCES departments(id),
+        active BOOLEAN NOT NULL DEFAULT TRUE,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )""",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

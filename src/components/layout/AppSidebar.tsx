@@ -91,6 +91,7 @@ const navItems: NavItem[] = [
       { id: 'service-groups', label: 'Service Groups', adminOnly: true },
       { id: 'departments', label: 'Departments', adminOnly: true },
       { id: 'analysis-profiles', label: 'Analysis Profiles', adminOnly: true },
+      { id: 'vial-roles', label: 'Vial Roles', adminOnly: true },
     ],
   },
   {

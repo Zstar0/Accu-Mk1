@@ -96,3 +96,31 @@ def test_membership_is_unique_per_pair(db_session):
     with pytest.raises(IntegrityError):
         db_session.execute(ins)
     db_session.rollback()
+
+
+def test_profile_sla_tier_id_defaults_to_none(db_session):
+    """Task 11: a profile with no explicit tier inherits its member services'
+    group tier (or the default) — the column must default to NULL, not 0."""
+    from models import AnalysisProfile
+    p = AnalysisProfile(key="no_tier_profile", name="No Tier Profile", is_addon=True)
+    db_session.add(p)
+    db_session.commit()
+    db_session.refresh(p)
+    assert p.sla_tier_id is None
+
+
+def test_profile_sla_tier_id_persists(db_session):
+    """Task 11: profile-level SLA tier is a plain nullable FK to sla_tiers,
+    same semantics as ServiceGroup.sla_tier_id."""
+    from models import AnalysisProfile, SlaTier
+    tier = SlaTier(name="Rush 4h", target_minutes=240)
+    db_session.add(tier)
+    db_session.commit()
+    p = AnalysisProfile(
+        key="tiered_profile", name="Tiered Profile", is_addon=True,
+        sla_tier_id=tier.id,
+    )
+    db_session.add(p)
+    db_session.commit()
+    db_session.refresh(p)
+    assert p.sla_tier_id == tier.id

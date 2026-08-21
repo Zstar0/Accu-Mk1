@@ -2,11 +2,15 @@
 
 hm is the first catalog-only fulfillment role (profile heavy_metals,
 fulfillment_role='hm', fulfillment_dim='role'). These tests pin the sites
-that let an hm vial be assigned, seeded, laned, and variance-excluded:
-_VALID_ROLES/_BUCKET_PRIORITY/_REAL_BUCKETS, the "Heavy Metals" Department
-(backfill_departments), the inbox lane maps (ROLE_TO_DEPARTMENT_NAME /
-ROLE_TO_VIAL_ROLES), role-flip cleanup keying (_ROLE_DEPARTMENT_NAMES), and
-the live variance-exclusion recompute in set_assignment_role.
+that let an hm vial be assigned, seeded, laned, and variance-excluded.
+
+Spec 4 Task 7 update: every site below is now catalog-driven off the
+vial_roles table (catalog.roles.role_registry / real_bucket_codes /
+inbox_lanes) instead of the hardcoded _VALID_ROLES / _BUCKET_PRIORITY /
+_REAL_BUCKETS / ROLE_TO_DEPARTMENT_NAME / ROLE_TO_VIAL_ROLES /
+_ROLE_DEPARTMENT_NAMES constants those sites used to read. Tests that need a
+resolvable "hm" role now seed the catalog first (seed_vial_roles), since the
+shared db_session fixture starts with an empty vial_roles table.
 """
 import models  # noqa: F401  (register all ORM tables on Base before any
 # db_session fixture's create_all runs — without this, a test in this file
@@ -14,6 +18,15 @@ import models  # noqa: F401  (register all ORM tables on Base before any
 # "no such table" instead of its real assertion, because none of this file's
 # OTHER module-level imports happen to pull in `models` transitively. Matches
 # the idiom in test_departments_catalog.py's own local db_session fixture.)
+
+
+def _seed_catalog(db):
+    """Departments + the five legacy vial_roles rows, parity-exact flags."""
+    from catalog.departments import backfill_departments
+    from catalog.vial_roles_seed import seed_vial_roles
+    backfill_departments(db)
+    seed_vial_roles(db)
+    db.commit()
 
 
 def _mk_parent_and_vial(db, *, role):
@@ -42,9 +55,12 @@ def _mk_parent_and_vial(db, *, role):
     return v
 
 
-def test_hm_is_a_valid_role():
-    from sub_samples.service import _VALID_ROLES, _BUCKET_PRIORITY, _REAL_BUCKETS
-    assert "hm" in _VALID_ROLES and "hm" in _REAL_BUCKETS and "hm" in _BUCKET_PRIORITY
+def test_hm_is_a_valid_role(db_session):
+    _seed_catalog(db_session)
+    from catalog.roles import role_registry, real_bucket_codes
+    registry = role_registry(db_session)
+    assert "hm" in registry
+    assert "hm" in set(real_bucket_codes(db_session))
 
 
 def test_hm_department_exists_after_backfill(db_session):
@@ -54,18 +70,22 @@ def test_hm_department_exists_after_backfill(db_session):
     assert db_session.query(Department).filter_by(name=HEAVY_METALS_DEPARTMENT).one()
 
 
-def test_hm_maps_to_exactly_one_inbox_lane():
-    from main import ROLE_TO_DEPARTMENT_NAME, ROLE_TO_VIAL_ROLES
-    lanes = [k for k, roles in ROLE_TO_VIAL_ROLES.items() if "hm" in roles]
-    assert lanes == ["hm"]
-    assert ROLE_TO_DEPARTMENT_NAME["hm"] == "Heavy Metals"
+def test_hm_maps_to_exactly_one_inbox_lane(db_session):
+    _seed_catalog(db_session)
+    from catalog.roles import inbox_lanes
+    lanes = inbox_lanes(db_session)
+    hm_lanes = [k for k, lane in lanes.items() if "hm" in lane.role_codes]
+    assert hm_lanes == ["hm"]
+    assert lanes["hm"].department_name == "Heavy Metals"
 
 
-def test_role_flip_cleanup_keys_hm_on_its_own_department():
-    from sub_samples.service import _ROLE_DEPARTMENT_NAMES
-    assert _ROLE_DEPARTMENT_NAMES["hm"] == {"Heavy Metals"}
+def test_role_flip_cleanup_keys_hm_on_its_own_department(db_session):
+    _seed_catalog(db_session)
+    from catalog.roles import role_registry
+    registry = role_registry(db_session)
+    assert registry["hm"].department.name == "Heavy Metals"
     # the ambiguity this department exists to prevent:
-    assert "Heavy Metals" not in _ROLE_DEPARTMENT_NAMES["hplc"]
+    assert registry["hplc"].department.name != "Heavy Metals"
 
 
 def test_hm_vial_is_variance_excluded(db_session):
@@ -80,19 +100,26 @@ def test_hm_vial_is_variance_excluded(db_session):
     set_assignment_role skips its WP/IS fetch entirely — no catalog profile
     is set up here, and no live HTTP call should happen in a unit test (see
     test_seeder_mirror.py:88 for the monkeypatch alternative when a call
-    genuinely needs to be stubbed)."""
+    genuinely needs to be stubbed).
+
+    The reason string is the NEW generic runtime string (spec 4, Task 7) —
+    `_VARIANCE_INELIGIBLE_REASON`'s hm-specific wording stays ONLY in the
+    database.py historical backfill; a live set_assignment_role call always
+    writes the generic `auto: role <code> is not variance-eligible` now."""
+    _seed_catalog(db_session)
     sub = _mk_parent_and_vial(db_session, role="hm")
-    from sub_samples.service import set_assignment_role, _VARIANCE_INELIGIBLE_REASON
+    from sub_samples.service import set_assignment_role
     set_assignment_role(db_session, sub.sample_id, "hm", wp_services={})
     db_session.refresh(sub)
     assert sub.in_variance_set is False
-    assert sub.variance_exclusion_reason == _VARIANCE_INELIGIBLE_REASON
+    assert sub.variance_exclusion_reason == "auto: role hm is not variance-eligible"
 
 
 def test_hm_exclusion_reason_clears_on_role_flip_away(db_session):
     """A vial that was hm (excluded, reason set) and gets reassigned to a
     role that's naturally eligible must not keep the stale hm-specific
     reason string once in_variance_set flips back to True."""
+    _seed_catalog(db_session)
     sub = _mk_parent_and_vial(db_session, role="hm")
     from sub_samples.service import set_assignment_role
     set_assignment_role(db_session, sub.sample_id, "hm", wp_services={})

@@ -1477,6 +1477,9 @@ async def get_sample_activity(
                     label = f"Removed from box {bl} (box deleted)"
                 else:
                     label = f"Unboxed from {bl}"
+            elif se.event == "bench_scanned":
+                d = se.details or {}
+                label = f"Scanned in at {d.get('station_name') or '?'}"
             else:
                 label = se.event
 
@@ -2450,6 +2453,77 @@ class DepartmentResponse(BaseModel):
         from_attributes = True
 
 
+# ─── Vial Role schemas ───
+
+class VialRoleCreate(BaseModel):
+    code: str
+    label: str
+    department_id: Optional[int] = None
+    boxable: bool = False
+    variance_eligible: bool = False
+    sort_order: int = 0
+
+
+class VialRoleUpdate(BaseModel):
+    code: Optional[str] = None
+    label: Optional[str] = None
+    department_id: Optional[int] = None
+    boxable: Optional[bool] = None
+    variance_eligible: Optional[bool] = None
+    sort_order: Optional[int] = None
+
+
+class VialRoleResponse(BaseModel):
+    id: int
+    code: str
+    label: str
+    department_id: Optional[int] = None
+    boxable: bool
+    variance_eligible: bool
+    sort_order: int
+    frozen: bool
+    is_system: bool
+
+    class Config:
+        from_attributes = True
+
+
+# ─── Bench Station schemas (spec 4, Task 12) ───
+
+class BenchStationCreate(BaseModel):
+    name: str
+    department_id: int
+    active: bool = True
+    sort_order: int = 0
+
+
+class BenchStationUpdate(BaseModel):
+    name: Optional[str] = None
+    department_id: Optional[int] = None
+    active: Optional[bool] = None
+    sort_order: Optional[int] = None
+
+
+class BenchStationResponse(BaseModel):
+    id: int
+    name: str
+    department_id: int
+    active: bool
+    sort_order: int
+
+    class Config:
+        from_attributes = True
+
+
+class BenchScanIn(BaseModel):
+    station_id: int
+    sample_id: str
+
+
+class BenchTokenScanIn(BaseModel):
+    sample_id: str
+
+
 # ─── Analysis Profile schemas ───
 
 class AnalysisProfileCreate(BaseModel):
@@ -2462,6 +2536,27 @@ class AnalysisProfileCreate(BaseModel):
     fulfillment_dim: str = "role"
     sort_order: int = 0
     active: bool = True
+    # Task 11: optional at create time — validated against sla_tiers in the
+    # route (400 on an unknown id), same as PATCH below.
+    sla_tier_id: Optional[int] = None
+    # COA *display* settings are accepted here because they are inert while
+    # coa_archetype is NULL — build_native_sections skips the profile before
+    # it reads either (coa/native_sections.py). Configuring them up front
+    # saves a round-trip; arming still takes a deliberate later PATCH.
+    coa_section_title: Optional[str] = None
+    coa_sort_order: int = 0
+    # Declared ONLY so an explicit value can be refused with a clear 400
+    # instead of being silently dropped as an unknown field — arming is
+    # PATCH-only. See create_analysis_profile's docstring for why.
+    coa_archetype: Optional[str] = None
+    # Not a persisted profile column — consumed only by the auto-mint path
+    # (POST/PATCH /analysis-profiles) to seed a newly-minted vial_roles row's
+    # department. Stripped from model_dump() before constructing AnalysisProfile.
+    role_department_id: Optional[int] = None
+    # Same auto-mint-only contract as role_department_id: sets `boxable` on a
+    # role minted by THIS request. Never re-configures a pre-existing role —
+    # roles can be shared by several profiles.
+    role_boxable: Optional[bool] = None
 
 
 class AnalysisProfileUpdate(BaseModel):
@@ -2476,6 +2571,12 @@ class AnalysisProfileUpdate(BaseModel):
     coa_section_title: Optional[str] = None
     coa_archetype: Optional[str] = None
     coa_sort_order: Optional[int] = None
+    # Task 11: beats the member services' group tier, loses to a priority
+    # override. Explicit null clears it (inherit group SLA again) — see
+    # exclude_unset handling in update_analysis_profile.
+    sla_tier_id: Optional[int] = None
+    # See AnalysisProfileCreate.role_department_id — same auto-mint-only field.
+    role_department_id: Optional[int] = None
 
 
 class AnalysisProfileResponse(BaseModel):
@@ -2492,7 +2593,12 @@ class AnalysisProfileResponse(BaseModel):
     coa_section_title: Optional[str] = None
     coa_archetype: Optional[str] = None
     coa_sort_order: int = 0
+    sla_tier_id: Optional[int] = None
     member_ids: list[int] = []
+    # Task 11: byte-identical to member_ids (same analysis_services relationship,
+    # lazy="selectin") — added under the name the FE SLA resolver contract
+    # expects. Both are populated so existing member_ids consumers don't churn.
+    member_service_ids: list[int] = []
     created_at: datetime
     updated_at: datetime
 
@@ -2502,6 +2608,19 @@ class AnalysisProfileResponse(BaseModel):
 
 class AnalysisProfileMembersRequest(BaseModel):
     analysis_service_ids: list[int]
+
+
+class RideHostsRequest(BaseModel):
+    # Position = priority (0 = first choice), mirroring analysis_service_ids
+    # on AnalysisProfileMembersRequest.
+    host_role_codes: list[str]
+
+
+# Ride lists (spec 4, Task 4): these three codes may never be a ride-host
+# target. endo/ster because sensitive tests never share a vial with an
+# unrelated result; xtra because it's the reserved unassigned bucket, not a
+# real fulfillment target.
+_RIDE_HOST_FORBIDDEN = {"endo", "ster", "xtra"}
 
 
 # Only legal non-NULL coa_archetype today. NULL = profile is not reported on
@@ -15678,12 +15797,21 @@ async def update_department(
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
+    """name is immutable on is_system rows (fix round, spec 4 Task 7): the
+    worksheet-inbox legacy lane keys (catalog.roles._LEGACY_LANE_KEYS) are
+    pinned to Analytical/Microbiology/Heavy Metals BY NAME — a rename would
+    silently change a stored FE pref / bookmarked ?role= into a 400. color
+    and sort_order stay editable regardless (matches the VialRole
+    frozen-code-immutable-but-otherwise-editable pattern, main.py ~16155)."""
     from models import Department
     dept = db.get(Department, department_id)
     if dept is None:
         raise HTTPException(404, "department not found")
     update_data = data.model_dump(exclude_unset=True)
     if "name" in update_data and update_data["name"] != dept.name:
+        if dept.is_system:
+            raise HTTPException(
+                400, "system department names are load-bearing (inbox lanes); rename is not supported")
         existing = db.execute(
             select(Department).where(
                 Department.name == update_data["name"], Department.id != department_id
@@ -15702,9 +15830,13 @@ async def update_department(
 async def delete_department(
     department_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)
 ):
-    """Refused while any service or group still points at it — reassign first.
-    A silently orphaned service would be excluded from HPLC mirroring."""
-    from models import Department
+    """Refused while any service, group, or bench station still points at
+    it — reassign first. A silently orphaned service would be excluded from
+    HPLC mirroring. bench_stations.department_id is NOT NULL (unlike
+    vial_roles', which is ON DELETE SET NULL and self-heals), so an
+    unguarded delete here would surface as a raw IntegrityError/500 instead
+    of this endpoint's clean 409 (spec 4, Task 12: catalog-driven bench)."""
+    from models import BenchStation, Department
     dept = db.get(Department, department_id)
     if dept is None:
         raise HTTPException(404, "department not found")
@@ -15714,9 +15846,11 @@ async def delete_department(
         select(AnalysisService.id).where(AnalysisService.department_id == department_id).limit(1)
     ).scalars().first() or db.execute(
         select(ServiceGroup.id).where(ServiceGroup.department_id == department_id).limit(1)
+    ).scalars().first() or db.execute(
+        select(BenchStation.id).where(BenchStation.department_id == department_id).limit(1)
     ).scalars().first()
     if in_use is not None:
-        raise HTTPException(409, "department still has services or groups; reassign them first")
+        raise HTTPException(409, "department still has services, groups, or bench stations; reassign them first")
     db.delete(dept)
     db.commit()
 
@@ -15727,14 +15861,15 @@ async def delete_department(
 # (bench work) — see models.AnalysisProfile docstring.
 
 def _profile_to_response(p) -> AnalysisProfileResponse:
+    member_ids = [s.id for s in p.analysis_services]
     return AnalysisProfileResponse(
         id=p.id, key=p.key, name=p.name, description=p.description,
         is_addon=p.is_addon, vials_required=p.vials_required,
         fulfillment_role=p.fulfillment_role, fulfillment_dim=p.fulfillment_dim,
         sort_order=p.sort_order, active=p.active,
         coa_section_title=p.coa_section_title, coa_archetype=p.coa_archetype,
-        coa_sort_order=p.coa_sort_order,
-        member_ids=[s.id for s in p.analysis_services],
+        coa_sort_order=p.coa_sort_order, sla_tier_id=p.sla_tier_id,
+        member_ids=member_ids, member_service_ids=member_ids,
         created_at=p.created_at, updated_at=p.updated_at,
     )
 
@@ -15754,10 +15889,24 @@ async def create_analysis_profile(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """AnalysisProfileCreate deliberately has no coa_* fields: a new profile
-    always starts unreported (coa_archetype NULL) and the lab opts it into a
-    COA section via a later edit (PATCH), never at creation time."""
-    from models import AnalysisProfile
+    """A new profile always starts UNREPORTED (coa_archetype NULL).
+
+    coa_section_title / coa_sort_order are settable here — they are inert
+    while the archetype is NULL, so pre-configuring them costs nothing.
+    coa_archetype itself is not: arming applies RETROACTIVELY, because
+    build_native_sections' rule A2 then refuses the entire COA of any sample
+    already carrying this profile key without a verified parent-tier row.
+    That window is real (IS declares a key before the WP product ships, and
+    catalog_demand fails open on an unknown key), so going live stays a
+    separate deliberate PATCH rather than a side effect of creation."""
+    from models import AnalysisProfile, VialRole
+    if data.coa_archetype is not None:
+        raise HTTPException(
+            400,
+            "coa_archetype is not settable at create — a profile starts "
+            "unreported and is armed with a later PATCH (arming is "
+            "retroactive across in-flight samples)",
+        )
     existing = db.execute(
         select(AnalysisProfile).where(AnalysisProfile.key == data.key)
     ).scalar_one_or_none()
@@ -15779,7 +15928,38 @@ async def create_analysis_profile(
             f"role '{data.fulfillment_role}' is reserved for the legacy demand map "
             "while the shadow-compare is active; new families use catalog-only roles",
         )
-    p = AnalysisProfile(**data.model_dump(), updated_by_id=getattr(current_user, "id", None))
+    # Task 11: reject an unknown sla_tier_id with a clean 400 rather than
+    # letting the FK constraint 500 at commit time.
+    if data.sla_tier_id is not None and not db.get(SlaTier, data.sla_tier_id):
+        raise HTTPException(400, f"SLA tier {data.sla_tier_id} not found")
+    # Auto-mint (Task 3): a 'role' fulfillment naming a code not yet in the
+    # vial_roles catalog mints one here, AFTER every guard above — those
+    # guards already 400 on 'xtra' and on a legacy code for a new key, so
+    # mint can never create a legacy or xtra row (the zero-clamp rider stays
+    # intact). role_department_id is optional and NULL is legal here — unlike
+    # a manual /vial-roles POST (which requires a department for anything but
+    # 'xtra'), a minted row may start department-less and get backfilled by
+    # the members PUT below once its member set agrees on one.
+    if data.fulfillment_dim == "role" and data.fulfillment_role:
+        from catalog.roles import role_registry
+        reg = role_registry(db)
+        if data.fulfillment_role not in reg:
+            max_sort = db.query(func.coalesce(func.max(VialRole.sort_order), 0)).scalar()
+            db.add(VialRole(
+                code=data.fulfillment_role, label=data.name,
+                department_id=data.role_department_id,
+                boxable=bool(data.role_boxable), variance_eligible=False,
+                sort_order=max_sort + 1, frozen=False, is_system=False,
+            ))
+            logger.info("vial_role_minted code=%s for_profile=%s", data.fulfillment_role, data.key)
+    # role_* are auto-mint-only, never AnalysisProfile columns. coa_archetype
+    # IS a real column and is deliberately NOT excluded — the guard above has
+    # already forced it to None, so it lands as the intended NULL; keeping the
+    # plumbing intact means a future decision to allow it needs one change, not two.
+    p = AnalysisProfile(
+        **data.model_dump(exclude={"role_department_id", "role_boxable"}),
+        updated_by_id=getattr(current_user, "id", None),
+    )
     db.add(p)
     db.commit()
     db.refresh(p)
@@ -15793,11 +15973,13 @@ async def update_analysis_profile(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    from models import AnalysisProfile
+    from models import AnalysisProfile, VialRole
     p = db.get(AnalysisProfile, profile_id)
     if p is None:
         raise HTTPException(404, "analysis profile not found")
-    fields = data.model_dump(exclude_unset=True)
+    # role_department_id is not a persisted AnalysisProfile column — it only
+    # feeds the auto-mint block below, never the setattr loop at the bottom.
+    fields = data.model_dump(exclude_unset=True, exclude={"role_department_id"})
     if "coa_archetype" in fields and fields["coa_archetype"] is not None \
             and fields["coa_archetype"] not in COA_ARCHETYPES:
         raise HTTPException(
@@ -15805,6 +15987,12 @@ async def update_analysis_profile(
             f"unknown coa_archetype {fields['coa_archetype']!r}; "
             f"allowed: {sorted(COA_ARCHETYPES)} or null (not reported)",
         )
+    # Task 11: reject an unknown sla_tier_id with a 400. An explicit null
+    # (present in `fields` thanks to exclude_unset) is legal — it clears the
+    # profile's own tier and falls back to inheriting the group's tier.
+    if "sla_tier_id" in fields and fields["sla_tier_id"] is not None \
+            and not db.get(SlaTier, fields["sla_tier_id"]):
+        raise HTTPException(400, f"SLA tier {fields['sla_tier_id']} not found")
     if "fulfillment_dim" in fields and fields["fulfillment_dim"] not in ("role", "kind"):
         # fields (exclude_unset) distinguishes an explicit JSON null from
         # omission — data.fulfillment_dim is None either way, but only an
@@ -15833,6 +16021,50 @@ async def update_analysis_profile(
             f"role '{effective_role}' is reserved for the legacy demand map "
             "while the shadow-compare is active; new families use catalog-only roles",
         )
+    # Ride-list / legacy-role closure (Task 4): the guard above only blocks a
+    # NON-legacy key from CLAIMING a legacy role — it deliberately allows the
+    # five _LEGACY_PROFILE_KEYS profiles to hold their own legacy role. That
+    # whitelist is also a door: one of those five could move its role AWAY
+    # from legacy (e.g. endotoxin: 'endo' -> 'zzhold', legal — 'zzhold' isn't
+    # reserved), pick up a ride list via PUT .../ride-hosts (also legal, its
+    # role isn't legacy anymore), then move back to 'endo' — landing in
+    # exactly the state set_analysis_profile_ride_hosts exists to prevent
+    # (a legacy-bucket anchor that's also a rider), without ever touching
+    # the ride-hosts endpoint's own guard. Closed here: re-entering a legacy
+    # role while a ride list still exists 400s; clear the ride list first
+    # (PUT ride-hosts []).
+    if effective_dim == "role" and effective_role in _RESERVED_LEGACY_ROLES:
+        from models import profile_ride_hosts
+        has_rides = db.execute(
+            select(profile_ride_hosts.c.id)
+            .where(profile_ride_hosts.c.analysis_profile_id == profile_id)
+            .limit(1)
+        ).first() is not None
+        if has_rides:
+            raise HTTPException(
+                400,
+                f"profile '{p.key}' has an existing ride list — clear it "
+                f"(PUT .../ride-hosts with an empty list) before setting "
+                f"fulfillment_role to the legacy role '{effective_role}'",
+            )
+    # Auto-mint (Task 3): mirrors the POST mint block, using the same
+    # effective_* values the guards above just validated — a role change to
+    # an unknown code mints here, AFTER every guard, so mint can never create
+    # a legacy or xtra row. Self-limiting: once a code is minted (or already
+    # existed), every later PATCH sees it in the registry and no-ops here.
+    if effective_dim == "role" and effective_role:
+        from catalog.roles import role_registry
+        reg = role_registry(db)
+        if effective_role not in reg:
+            max_sort = db.query(func.coalesce(func.max(VialRole.sort_order), 0)).scalar()
+            effective_name = fields["name"] if "name" in fields else p.name
+            db.add(VialRole(
+                code=effective_role, label=effective_name,
+                department_id=data.role_department_id,
+                boxable=False, variance_eligible=False,
+                sort_order=max_sort + 1, frozen=False, is_system=False,
+            ))
+            logger.info("vial_role_minted code=%s for_profile=%s", effective_role, p.key)
     for field, value in fields.items():
         setattr(p, field, value)
     p.updated_by_id = getattr(current_user, "id", None)
@@ -15845,10 +16077,29 @@ async def update_analysis_profile(
 async def delete_analysis_profile(
     profile_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)
 ):
-    from models import AnalysisProfile
+    from models import AnalysisProfile, VialProfileAssignment
     p = db.get(AnalysisProfile, profile_id)
     if p is None:
         raise HTTPException(404, "analysis profile not found")
+    # vial_profile_assignments.analysis_profile_id is deliberately NOT
+    # ON DELETE CASCADE (the ISO 17025 custody trail must survive a profile
+    # edit/retirement) — unlike every other FK to analysis_profiles, a bare
+    # delete here raises ForeignKeyViolation as an opaque 500 with a
+    # poisoned session. Guard explicitly instead: ANY custody edge naming
+    # this profile — current OR superseded, history counts — blocks the
+    # delete and steers toward deactivation, which is reversible and keeps
+    # the profile row (and its custody history) intact.
+    has_custody = db.execute(
+        select(VialProfileAssignment.id)
+        .where(VialProfileAssignment.analysis_profile_id == profile_id)
+        .limit(1)
+    ).scalar_one_or_none()
+    if has_custody is not None:
+        raise HTTPException(
+            409,
+            f"profile '{p.key}' has vial custody history (current or superseded) "
+            "and cannot be deleted — deactivate it instead (active=false)",
+        )
     db.delete(p)
     db.commit()
 
@@ -15887,7 +16138,7 @@ async def set_analysis_profile_members(
     that actually exist before writing, and reports the ACTUAL count, not the
     requested one — a bogus id must not dangle a row (SQLite, no FK
     enforcement) or 500 (Postgres, FK enforced)."""
-    from models import AnalysisProfile, AnalysisService, analysis_profile_members
+    from models import AnalysisProfile, AnalysisService, VialRole, analysis_profile_members
     p = db.get(AnalysisProfile, profile_id)
     if p is None:
         raise HTTPException(404, "analysis profile not found")
@@ -15908,7 +16159,459 @@ async def set_analysis_profile_members(
         db.execute(analysis_profile_members.insert().values(
             analysis_profile_id=profile_id, analysis_service_id=svc_id, sort_order=i))
     db.commit()
+
+    # Member-department backfill (Task 3): a role minted without a department
+    # (POST/PATCH's role_department_id omitted) picks one up here, the first
+    # time its member set unanimously agrees on a single department. Never
+    # clobbers a department already set (by this backfill, by a manual
+    # /vial-roles PATCH, or set at mint time) and never touches an is_system
+    # row (the five seeded legacy roles aren't this profile's to reassign).
+    if p.fulfillment_role:
+        role = db.execute(
+            select(VialRole).where(VialRole.code == p.fulfillment_role)
+        ).scalar_one_or_none()
+        if role is not None and role.department_id is None and not role.is_system:
+            dept_ids = set(db.execute(
+                select(AnalysisService.department_id).where(AnalysisService.id.in_(ordered_ids))
+            ).scalars().all())
+            # A department-less member doesn't veto the backfill — it's the
+            # NON-NULL departments that must agree. "exactly one distinct
+            # non-NULL department" per the brief, deliberately, not "every
+            # member has the same department."
+            dept_ids.discard(None)
+            if len(dept_ids) == 1:
+                role.department_id = dept_ids.pop()
+                db.commit()
+                logger.info(
+                    "vial_role_department_backfilled code=%s department_id=%s for_profile=%s",
+                    role.code, role.department_id, p.key,
+                )
     return {"count": len(ordered_ids)}
+
+
+@app.get("/analysis-profiles/{profile_id}/ride-hosts", response_model=list[str])
+async def get_analysis_profile_ride_hosts(
+    profile_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Return the profile's ride-host role codes, in priority order (position
+    0 = first choice)."""
+    from models import AnalysisProfile, profile_ride_hosts
+    p = db.get(AnalysisProfile, profile_id)
+    if p is None:
+        raise HTTPException(404, "analysis profile not found")
+    rows = db.execute(
+        select(profile_ride_hosts.c.host_role_code)
+        .where(profile_ride_hosts.c.analysis_profile_id == profile_id)
+        .order_by(profile_ride_hosts.c.priority)
+    ).all()
+    return [row.host_role_code for row in rows]
+
+
+@app.put("/analysis-profiles/{profile_id}/ride-hosts")
+async def set_analysis_profile_ride_hosts(
+    profile_id: int,
+    data: RideHostsRequest,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Replace-all, mirroring set_analysis_profile_members: list position
+    becomes priority. A ride host names a role this profile's result may
+    attach to instead of self-minting its own vial (see
+    catalog_demand.resolve_catalog_fulfillment) — never endo/ster (sensitive
+    tests never share a vial with an unrelated result), never xtra (the
+    reserved unassigned bucket), never the profile's own fulfillment_role (a
+    profile can't ride itself), never a duplicate code (would 500 on the
+    junction's UNIQUE constraint), and never a code absent from the
+    vial_roles catalog. Only a fulfillment_dim='role' profile has a single
+    role to ride against — a kind-dim profile (e.g. variance) is refused
+    outright.
+
+    A profile that itself anchors a legacy bucket (fulfillment_role in
+    hplc/endo/ster — _RESERVED_LEGACY_ROLES) may never carry a ride list at
+    all: resolve_catalog_fulfillment treats "has a ride row" as "is a
+    rider", so giving hplcpurity_identity/endotoxin/sterility_pcr a ride
+    list would silently zero their own legacy bucket the moment their host
+    is also ordered — the exact bucket-count drift the binding constraint
+    ("ride-list demand must never change a legacy bucket count") forbids.
+    Refused here, structurally, rather than caught downstream by
+    derive_base_demand's shadow-compare — Tasks 5/6/8 consume
+    resolve_catalog_fulfillment directly and never see that shadow-compare.
+
+    Validated fully BEFORE any write, so a bad code in the payload can't
+    partially wipe an existing ride list."""
+    from catalog.roles import role_registry
+    from models import AnalysisProfile, profile_ride_hosts
+    p = db.get(AnalysisProfile, profile_id)
+    if p is None:
+        raise HTTPException(404, "analysis profile not found")
+    if p.fulfillment_dim != "role":
+        raise HTTPException(
+            400, "ride-hosts only applies to fulfillment_dim='role' profiles")
+    if p.fulfillment_role in _RESERVED_LEGACY_ROLES:
+        raise HTTPException(
+            400,
+            f"profile '{p.key}' fulfills the legacy role '{p.fulfillment_role}' — "
+            "legacy buckets always anchor, they never ride",
+        )
+    if len(set(data.host_role_codes)) != len(data.host_role_codes):
+        raise HTTPException(400, "duplicate host codes in one request")
+
+    reg = role_registry(db)
+    for code in data.host_role_codes:
+        if code not in reg:
+            raise HTTPException(400, f"unknown role code '{code}'")
+        if code in _RIDE_HOST_FORBIDDEN:
+            raise HTTPException(
+                400, f"role '{code}' may not be a ride host (sensitive tests never share a vial)")
+        if code == p.fulfillment_role:
+            raise HTTPException(400, "a profile may not ride its own role")
+
+    db.execute(
+        profile_ride_hosts.delete().where(
+            profile_ride_hosts.c.analysis_profile_id == profile_id
+        )
+    )
+    for i, code in enumerate(data.host_role_codes):
+        db.execute(profile_ride_hosts.insert().values(
+            analysis_profile_id=profile_id, host_role_code=code, priority=i))
+    db.commit()
+    return {"count": len(data.host_role_codes)}
+
+
+# ─── Vial-Profile Custody (spec 4, Task 5) ──────────────────────────────────
+# The persisted record of which profile's work is/was on a vial — the ISO
+# 17025 backbone. Written by sub_samples.custody.write_custody_edges inside
+# set_assignment_role's transaction; this is the only read surface, and it
+# doubles as the audit trail (superseded rows are never deleted).
+
+@app.get("/sub-samples/{sample_id}/custody")
+def get_sub_sample_custody(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Full custody history for a vial, current rows first. Plain `def`
+    (not `async def`): this does synchronous ORM/DB work, so FastAPI must
+    run it in the threadpool rather than the event loop."""
+    from models import AnalysisProfile, VialProfileAssignment
+
+    sub = db.execute(
+        select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if sub is None:
+        raise HTTPException(404, f"no sub-sample with sample_id={sample_id}")
+
+    rows = db.execute(
+        select(VialProfileAssignment, AnalysisProfile)
+        .join(AnalysisProfile, AnalysisProfile.id == VialProfileAssignment.analysis_profile_id)
+        .where(VialProfileAssignment.lims_sub_sample_pk == sub.id)
+        .order_by(
+            VialProfileAssignment.superseded_at.isnot(None),
+            VialProfileAssignment.assigned_at.desc(),
+        )
+    ).all()
+
+    return [
+        {
+            "profile_id": profile.id,
+            "profile_key": profile.key,
+            "profile_name": profile.name,
+            "relation": vpa.relation,
+            "assigned_at": vpa.assigned_at.isoformat() if vpa.assigned_at else None,
+            "assigned_by": vpa.assigned_by_id,
+            "superseded_at": vpa.superseded_at.isoformat() if vpa.superseded_at else None,
+        }
+        for vpa, profile in rows
+    ]
+
+
+# ─── Vial Roles ─────────────────────────────────────────────────────────────
+# Catalog-driven bench roles (spec 4, Task 2). code stays the DB join key on
+# vials (lims_sub_samples.assignment_role / lims_samples.assignment_role,
+# VARCHAR(8) — NOT widened); this catalog is its editable face (label,
+# department, bench flags). xtra is the reserved unassigned bucket — the
+# only row allowed a NULL department. frozen (a vial already references the
+# code) refuses a code change but stays otherwise editable; is_system rows
+# can't be deleted at all.
+
+@app.get("/vial-roles", response_model=list[VialRoleResponse])
+def get_vial_roles(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
+    from models import VialRole
+    return db.execute(
+        select(VialRole).order_by(VialRole.sort_order, VialRole.code)
+    ).scalars().all()
+
+
+@app.post("/vial-roles", response_model=VialRoleResponse, status_code=201)
+def create_vial_role(
+    data: VialRoleCreate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    from models import VialRole
+    if not re.fullmatch(r"[a-z][a-z0-9_]{0,7}", data.code):
+        raise HTTPException(
+            400, "code must be lowercase, <= 8 chars (assignment_role is VARCHAR(8))")
+    if data.department_id is None and data.code != "xtra":
+        raise HTTPException(400, "only xtra may have no department")
+    existing = db.execute(
+        select(VialRole).where(VialRole.code == data.code)
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(400, f"role code '{data.code}' already exists")
+    r = VialRole(**data.model_dump())
+    db.add(r)
+    db.commit()
+    db.refresh(r)
+    return r
+
+
+@app.patch("/vial-roles/{role_id}", response_model=VialRoleResponse)
+def update_vial_role(
+    role_id: int,
+    data: VialRoleUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    from models import VialRole
+    r = db.get(VialRole, role_id)
+    if r is None:
+        raise HTTPException(404, "vial role not found")
+    fields = data.model_dump(exclude_unset=True)
+    if "code" in fields and fields["code"] != r.code:
+        if r.frozen:
+            raise HTTPException(
+                400, "code is immutable once frozen (a vial already references it)")
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,7}", fields["code"]):
+            raise HTTPException(
+                400, "code must be lowercase, <= 8 chars (assignment_role is VARCHAR(8))")
+        dup = db.execute(
+            select(VialRole).where(VialRole.code == fields["code"], VialRole.id != role_id)
+        ).scalar_one_or_none()
+        if dup:
+            raise HTTPException(400, f"role code '{fields['code']}' already exists")
+    if "department_id" in fields:
+        effective_code = fields.get("code", r.code)
+        if fields["department_id"] is None and effective_code != "xtra":
+            raise HTTPException(400, "only xtra may have no department")
+    for field, value in fields.items():
+        setattr(r, field, value)
+    db.commit()
+    db.refresh(r)
+    return r
+
+
+@app.delete("/vial-roles/{role_id}", status_code=204)
+def delete_vial_role(
+    role_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)
+):
+    """is_system → 400 outright. Otherwise refused (409, naming the reference)
+    if a profile still fulfills via this role, any vial (parent sample or
+    sub-sample) is still assigned to it, or a box is still keyed to it —
+    matches the department DELETE guard pattern (main.py ~:15594)."""
+    from models import AnalysisProfile, LimsBox, LimsSample, LimsSubSample, VialRole
+    r = db.get(VialRole, role_id)
+    if r is None:
+        raise HTTPException(404, "vial role not found")
+    if r.is_system:
+        raise HTTPException(400, "system roles cannot be deleted")
+    profile_ref = db.execute(
+        select(AnalysisProfile.id).where(AnalysisProfile.fulfillment_role == r.code).limit(1)
+    ).scalars().first()
+    if profile_ref is not None:
+        raise HTTPException(
+            409, f"role '{r.code}' is still referenced by an analysis profile; reassign it first")
+    vial_ref = db.execute(
+        select(LimsSubSample.id).where(LimsSubSample.assignment_role == r.code).limit(1)
+    ).scalars().first() or db.execute(
+        select(LimsSample.id).where(LimsSample.assignment_role == r.code).limit(1)
+    ).scalars().first()
+    if vial_ref is not None:
+        raise HTTPException(
+            409, f"role '{r.code}' is still assigned to a vial; reassign it first")
+    box_ref = db.execute(
+        select(LimsBox.id).where(LimsBox.role == r.code).limit(1)
+    ).scalars().first()
+    if box_ref is not None:
+        raise HTTPException(
+            409, f"role '{r.code}' is still referenced by a box; reassign it first")
+    db.delete(r)
+    db.commit()
+
+
+# ─── Bench Stations (spec 4, Task 12: catalog-driven bench) ─────────────────
+# Physical bench locations vials get soft-custody scanned into (QR via a
+# capture token, or a desktop scanner gun). Recording only — a scan-in event
+# never gates result entry (Handler ruling Q2, deviation 7). Ships EMPTY
+# (G-STATION pending, no seed). No DELETE route — deactivate via active=false
+# (same idiom as /vial-roles' department FK and /departments itself).
+
+@app.get("/bench-stations", response_model=list[BenchStationResponse])
+def get_bench_stations(
+    db: Session = Depends(get_db), _current_user=Depends(get_current_user)
+):
+    from models import BenchStation
+    return db.execute(
+        select(BenchStation).order_by(BenchStation.sort_order, BenchStation.name)
+    ).scalars().all()
+
+
+@app.post("/bench-stations", response_model=BenchStationResponse, status_code=201)
+def create_bench_station(
+    data: BenchStationCreate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    from models import BenchStation, Department
+    dept = db.get(Department, data.department_id)
+    if dept is None:
+        raise HTTPException(400, "department not found")
+    existing = db.execute(
+        select(BenchStation).where(BenchStation.name == data.name)
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(400, f"bench station '{data.name}' already exists")
+    s = BenchStation(**data.model_dump())
+    db.add(s)
+    db.commit()
+    db.refresh(s)
+    return s
+
+
+@app.patch("/bench-stations/{station_id}", response_model=BenchStationResponse)
+def update_bench_station(
+    station_id: int,
+    data: BenchStationUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    from models import BenchStation, Department
+    s = db.get(BenchStation, station_id)
+    if s is None:
+        raise HTTPException(404, "bench station not found")
+    fields = data.model_dump(exclude_unset=True)
+    if "department_id" in fields:
+        dept = db.get(Department, fields["department_id"])
+        if dept is None:
+            raise HTTPException(400, "department not found")
+    if "name" in fields and fields["name"] != s.name:
+        dup = db.execute(
+            select(BenchStation).where(
+                BenchStation.name == fields["name"], BenchStation.id != station_id
+            )
+        ).scalar_one_or_none()
+        if dup:
+            raise HTTPException(400, f"bench station '{fields['name']}' already exists")
+    for field, value in fields.items():
+        setattr(s, field, value)
+    db.commit()
+    db.refresh(s)
+    return s
+
+
+def _resolve_bench_station_from_token(db: Session, token: str):
+    """Shared resolver for both token-authed bench routes below. Every
+    failure mode (unknown/expired/revoked token, a token whose frozen
+    context isn't a bench-station context — e.g. a packaging-photo token —
+    or a station that's since been deactivated) collapses to 404,
+    deliberately not distinguishing 410-gone like the /capture/{token}
+    routes do — an anonymous phone scanning a stale or since-deactivated QR
+    gets no more signal than "try a fresh one". A station deactivated after
+    a QR was printed simply stops resolving, same contract as a revoked
+    token (mint-time also refuses a station that's already inactive —
+    capture_tokens/routes.py's mint branch). Returns (station, tok) — the
+    resolved capture-token row is handed back too so callers that need its
+    id (the scan-cap counter, spec 4 fix round) don't have to re-resolve."""
+    from capture_tokens import service as capture_service
+    from models import BenchStation
+    try:
+        tok = capture_service.resolve_capture_token(db, token)
+    except (capture_service.UnknownTokenError, capture_service.GoneTokenError):
+        raise HTTPException(status_code=404, detail="unknown or expired bench token")
+    try:
+        ctx = json.loads(tok.context_json)
+        station_id = ctx[0]["station_id"]
+    except (ValueError, KeyError, IndexError, TypeError):
+        raise HTTPException(status_code=404, detail="not a bench token")
+    station = db.get(BenchStation, station_id)
+    if station is None or not station.active:
+        raise HTTPException(status_code=404, detail="unknown bench station")
+    return station, tok
+
+
+@app.get("/api/bench/{token}")
+def get_bench_token_context(token: str, db: Session = Depends(get_db)):
+    station, _tok = _resolve_bench_station_from_token(db, token)
+    return {"station_name": station.name}
+
+
+@app.post("/api/bench/{token}/scan", status_code=201)
+def scan_via_bench_token(
+    token: str, data: BenchTokenScanIn, db: Session = Depends(get_db)
+):
+    from capture_tokens import service as capture_service
+    from models import LimsSubSample, LimsSubSampleEvent
+    station, tok = _resolve_bench_station_from_token(db, token)
+    # Per-token scan cap (spec 4 fix round, mirrors MAX_PHOTOS_PER_TOKEN):
+    # the token id rides in this event's details (bench_scanned has no
+    # dedicated capture_token_id column, unlike LimsPackagingPhoto), so the
+    # count is scoped to events written via THIS token, not the JWT
+    # scanner-gun path (/bench-scans, unlimited, real actor).
+    if capture_service.token_scan_count(db, tok.id) >= capture_service.MAX_SCANS_PER_TOKEN:
+        raise HTTPException(status_code=429, detail="scan limit reached for this bench session")
+    # Scanner guns / manual entry can trail whitespace — normalize before the
+    # lookup so a stray space doesn't read as an "unknown vial" 404.
+    sample_id = data.sample_id.strip()
+    sub = db.execute(
+        select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if sub is None:
+        raise HTTPException(status_code=404, detail=f"unknown sample_id '{sample_id}'")
+    ev = LimsSubSampleEvent(
+        sub_sample_pk=sub.id,
+        event="bench_scanned",
+        details={
+            "station_id": station.id, "station_name": station.name,
+            "capture_token_id": tok.id,
+        },
+        user_id=None,
+    )
+    db.add(ev)
+    db.commit()
+    return {"recorded": True, "station_name": station.name, "sample_id": sub.sample_id}
+
+
+@app.post("/bench-scans", status_code=201)
+def create_bench_scan(
+    data: BenchScanIn,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Desktop scanner-gun path: JWT-authed, writes the same bench_scanned
+    event as the phone/token path but with a real user_id."""
+    from models import BenchStation, LimsSubSample, LimsSubSampleEvent
+    sample_id = data.sample_id.strip()
+    sub = db.execute(
+        select(LimsSubSample).where(LimsSubSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if sub is None:
+        raise HTTPException(status_code=404, detail=f"unknown sample_id '{sample_id}'")
+    station = db.get(BenchStation, data.station_id)
+    if station is None:
+        raise HTTPException(status_code=404, detail="unknown bench station")
+    if not station.active:
+        raise HTTPException(status_code=400, detail=f"bench station '{station.name}' is inactive")
+    ev = LimsSubSampleEvent(
+        sub_sample_pk=sub.id,
+        event="bench_scanned",
+        details={"station_id": station.id, "station_name": station.name},
+        user_id=current_user.id,
+    )
+    db.add(ev)
+    db.commit()
+    return {"recorded": True, "station_name": station.name, "sample_id": sub.sample_id}
 
 
 # ─── SLA tiers (sub-project A, revised to tiers) ──────────────────────────────
@@ -16332,44 +17035,30 @@ class InboxResponse(BaseModel):
     filter_role: Optional[str] = None  # echo of the query param so the frontend can confirm
 
 
-# Role -> DEPARTMENT name. Department drives the lane: a new Microbiology-department
-# group lands in the micro lane automatically, with no name-pinning. hm (Heavy
-# Metals) is catalog-only and gets its own lane rather than folding into an
-# existing bench (spec-3 Task 3) — its services carry no service group, so
+# Worksheet-inbox lanes are catalog-driven (spec 4, Task 7): one lane per
+# department that owns >=1 vial role, via catalog.roles.inbox_lanes(db).
+# Department drives the lane: a new Microbiology-department group lands in
+# the micro lane automatically, with no name-pinning. hm (Heavy Metals) is
+# catalog-only and gets its own lane rather than folding into an existing
+# bench (spec-3 Task 3) — its services carry no service group, so
 # _inbox_allowed_group_ids resolves an empty set for it; the native-vial inbox
 # path (Phase 3.5, main.py _fetch_mk1_inbox_analyses_for_sub_sample) filters
-# hm vials by assignment_role via ROLE_TO_VIAL_ROLES instead, not by group id.
-ROLE_TO_DEPARTMENT_NAME: dict[str, str] = {
-    "hplc": "Analytical",
-    "microbiology": "Microbiology",
-    "hm": "Heavy Metals",
-}
-VALID_INBOX_ROLES = set(ROLE_TO_DEPARTMENT_NAME.keys())
+# hm vials by assignment_role via the lane's role_codes instead, not by group id.
 
 
-def _inbox_allowed_group_ids(db, role: Optional[str]) -> Optional[set[int]]:
-    """Resolve a worksheet-inbox role to the set of service-group ids in that
-    role's DEPARTMENT. None role -> None (no filter; pass all groups)."""
+def _inbox_allowed_group_ids(db, lanes: dict, role: Optional[str]) -> Optional[set[int]]:
+    """Resolve a worksheet-inbox lane key to the set of service-group ids in
+    that lane's DEPARTMENT. None role -> None (no filter; pass all groups).
+    `lanes` is the caller's `inbox_lanes(db)` (one read per request, passed
+    down — never re-queried here)."""
     if role is None:
         return None
-    from models import Department
-    dept_name = ROLE_TO_DEPARTMENT_NAME[role]
+    dept_id = lanes[role].department_id
     return {
         r[0] for r in db.execute(
-            select(ServiceGroup.id)
-            .join(Department, Department.id == ServiceGroup.department_id)
-            .where(Department.name == dept_name)
+            select(ServiceGroup.id).where(ServiceGroup.department_id == dept_id)
         ).all()
     }
-
-# Role-set membership for the assignment_role column. Microbiology covers
-# both 'ster' and 'endo' (collapsed into one filter chip per spec Q1). hm maps
-# 1:1 to its own lane (no collapsing — it's the only role in its department).
-ROLE_TO_VIAL_ROLES: dict[str, set[str]] = {
-    "hplc": {"hplc"},
-    "microbiology": {"ster", "endo"},
-    "hm": {"hm"},
-}
 
 
 class PriorityUpdate(BaseModel):
@@ -16411,6 +17100,7 @@ _INBOX_ROLE_COLOR_FALLBACK = {
     "endo": "violet",
     "ster": "violet",
     "xtra": "zinc",
+    "hm": "emerald",
 }
 
 
@@ -16656,8 +17346,9 @@ async def get_worksheets_inbox(
     parent linkage. See `docs/superpowers/specs/2026-06-02-worksheet-vial-inbox-redesign.md`.
 
     Query params:
-      role         — 'hplc' | 'microbiology' | omitted. Omitted means all roles (used by
-                     AddSamplesModal, which adds across both benches). 400 on invalid value.
+      role         — 'hplc' | 'microbiology' | 'hm' | a catalog department's lane
+                     key, or omitted. Omitted means all roles (used by AddSamplesModal,
+                     which adds across every bench). 400 on invalid value.
       show_xtra    — when True, append XTRA-role vials to the active filter's results.
       hide_test_*  — existing behavior.
       force_refresh — bypass the 30-min SENAITE cache (senaite source only).
@@ -16669,11 +17360,17 @@ async def get_worksheets_inbox(
     """
     global _inbox_senaite_cache, _inbox_senaite_cache_time
 
+    # Lanes are catalog-driven (spec 4, Task 7): one read per request, reused
+    # below for validation, group-id resolution, and the allowed-roles union —
+    # never re-queried.
+    from catalog.roles import inbox_lanes
+    lanes = inbox_lanes(db)
+
     # Validate role (None == "all roles", legal)
-    if role is not None and role not in VALID_INBOX_ROLES:
+    if role is not None and role not in lanes:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid role: {role!r}. Expected one of {sorted(VALID_INBOX_ROLES)} or omit.",
+            detail=f"Invalid role: {role!r}. Expected one of {sorted(lanes)} or omit.",
         )
 
     if source is not None and source not in ("mk1", "senaite"):
@@ -16687,19 +17384,20 @@ async def get_worksheets_inbox(
         raise HTTPException(status_code=503, detail="SENAITE not configured")
 
     # Resolve role → allowed service_group IDs. None means "no filter; pass all groups".
-    allowed_group_ids: Optional[set[int]] = _inbox_allowed_group_ids(db, role)
+    allowed_group_ids: Optional[set[int]] = _inbox_allowed_group_ids(db, lanes, role)
 
     # Resolve allowed vial assignment_role values. NULL roles always excluded (auto-
     # assign on /vial-plan is the cure for those). XTRA gated by show_xtra.
     if role is None:
-        # No bench filter: all known roles (union of every ROLE_TO_VIAL_ROLES
-        # value — hm included, else hm vials vanish from the unfiltered view
-        # used by AddSamplesModal). XTRA still gated by the toggle.
-        allowed_vial_roles: set[str] = {"hplc", "ster", "endo", "hm"}
+        # No bench filter: the union of every lane's role codes, ACTUALLY
+        # computed from the catalog (not a hand-duplicated literal) — hm
+        # included, else hm vials vanish from the unfiltered view used by
+        # AddSamplesModal. XTRA still gated by the toggle.
+        allowed_vial_roles: set[str] = set().union(*(l.role_codes for l in lanes.values()))
         if show_xtra:
             allowed_vial_roles.add("xtra")
     else:
-        allowed_vial_roles = set(ROLE_TO_VIAL_ROLES[role])
+        allowed_vial_roles = set(lanes[role].role_codes)
         if show_xtra:
             allowed_vial_roles.add("xtra")
 
@@ -17326,6 +18024,39 @@ async def get_worksheets_inbox(
     result_items.sort(key=lambda v: (v.parent_sample_id, not v.is_parent, v.vial_sequence))
 
     return InboxResponse(items=result_items, total=len(result_items), filter_role=role)
+
+
+class InboxLaneOut(BaseModel):
+    key: str
+    label: str
+    role_codes: list[str]
+    sort_order: int
+
+
+@app.get("/worksheets/inbox/lanes", response_model=list[InboxLaneOut])
+async def get_worksheets_inbox_lanes(
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Catalog-driven worksheet-inbox filter chips (spec 4, Task 10) — one
+    entry per department that owns >=1 vial role, via catalog.roles.inbox_
+    lanes(db) (same helper get_worksheets_inbox itself uses for the `role`
+    query param). `label` is the department's display name (e.g. 'Analytical'
+    for the legacy 'hplc' lane, not the abbreviated bench nickname) — a
+    deliberate FE display delta, same convention as the Task 9 AssignStep
+    section headers. Ordered by (sort_order, key) for stable chip rendering."""
+    from catalog.roles import inbox_lanes
+    lanes = inbox_lanes(db)
+    ordered = sorted(lanes.values(), key=lambda lane: (lane.sort_order, lane.key))
+    return [
+        InboxLaneOut(
+            key=lane.key,
+            label=lane.department_name,
+            role_codes=sorted(lane.role_codes),
+            sort_order=lane.sort_order,
+        )
+        for lane in ordered
+    ]
 
 
 @app.put("/worksheets/inbox/{sample_uid}/priority")

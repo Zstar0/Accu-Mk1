@@ -108,6 +108,27 @@ def test_backfill_never_clobbers_a_manual_reassignment(db_session):
     assert analytics.department_id == micro_id
 
 
+def test_backfill_marks_only_the_three_canonical_departments_is_system(db_session):
+    """The worksheet-inbox legacy lane keys (catalog.roles._LEGACY_LANE_KEYS)
+    are pinned to Analytical/Microbiology/Heavy Metals BY NAME — a rename
+    would silently break a stored FE pref / bookmarked ?role=. backfill
+    marks exactly these three is_system=True (departments PATCH refuses a
+    name change on an is_system row) and never touches any other
+    department (fix round, spec 4 Task 7)."""
+    from catalog.departments import backfill_departments
+    from models import Department
+    extra = Department(name="QC Retain")
+    db_session.add(extra)
+    db_session.commit()
+
+    backfill_departments(db_session)
+
+    system_names = {d.name for d in db_session.query(Department).filter_by(is_system=True).all()}
+    assert system_names == {"Analytical", "Microbiology", "Heavy Metals"}
+    db_session.refresh(extra)
+    assert extra.is_system is False
+
+
 def test_department_id_by_name(db_session):
     from catalog.departments import backfill_departments, department_id_by_name
     _seed_groups_and_services(db_session)

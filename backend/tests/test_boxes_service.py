@@ -8,6 +8,7 @@ from sqlalchemy import select
 from database import Base
 from models import LimsSample, LimsSubSample, LimsSubSampleEvent
 from boxes import service
+from catalog.vial_roles_seed import seed_vial_roles
 
 
 @pytest.fixture
@@ -15,6 +16,11 @@ def db():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     s = sessionmaker(bind=engine)()
+    # Role validity/boxable are catalog-driven (spec 4, Task 7) — seed the
+    # five legacy roles so next_box's real-role calls below keep resolving.
+    # No backfill_departments call: boxable doesn't depend on department_id,
+    # and this file never asserts department linkage.
+    seed_vial_roles(s)
     try:
         yield s
     finally:

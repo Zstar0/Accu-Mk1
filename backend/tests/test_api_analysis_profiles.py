@@ -371,3 +371,95 @@ def test_patch_explicit_null_fulfillment_dim_rejected_not_500():
     resp = client.patch(f"/analysis-profiles/{profile_id}", json={"fulfillment_dim": None})
     assert resp.status_code == 400, resp.text
     assert "fulfillment_dim" in resp.json()["detail"]
+
+
+# ── Task 11: profile-level SLA tier ─────────────────────────────────────────
+
+def _default_tier_id():
+    """Mirrors test_api_service_group_sla_tier.py's helper — reads the
+    seeded catch-all tier rather than minting a throwaway one per test."""
+    with engine.connect() as c:
+        return c.execute(text("SELECT id FROM sla_tiers WHERE is_default")).scalar()
+
+
+def test_post_with_sla_tier_id_echoes_it():
+    tid = _default_tier_id()
+    resp = client.post("/analysis-profiles", json={
+        "key": "sla_tier_post_test", "name": "SLA Tier Post Test", "is_addon": True,
+        "sla_tier_id": tid,
+    })
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["sla_tier_id"] == tid
+
+
+def test_post_rejects_unknown_sla_tier_id():
+    resp = client.post("/analysis-profiles", json={
+        "key": "sla_tier_post_bad_test", "name": "SLA Tier Post Bad Test",
+        "is_addon": True, "sla_tier_id": 999999999,
+    })
+    assert resp.status_code == 400, resp.text
+    assert "SLA tier" in resp.json()["detail"]
+
+
+def test_patch_sets_sla_tier_id():
+    tid = _default_tier_id()
+    create = client.post("/analysis-profiles", json={
+        "key": "sla_tier_patch_test", "name": "SLA Tier Patch Test", "is_addon": True,
+    })
+    assert create.status_code == 201, create.text
+    assert create.json()["sla_tier_id"] is None
+    profile_id = create.json()["id"]
+    resp = client.patch(f"/analysis-profiles/{profile_id}", json={"sla_tier_id": tid})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["sla_tier_id"] == tid
+
+
+def test_patch_null_sla_tier_id_clears_it():
+    tid = _default_tier_id()
+    create = client.post("/analysis-profiles", json={
+        "key": "sla_tier_patch_clear_test", "name": "SLA Tier Patch Clear Test",
+        "is_addon": True, "sla_tier_id": tid,
+    })
+    assert create.status_code == 201, create.text
+    profile_id = create.json()["id"]
+    resp = client.patch(f"/analysis-profiles/{profile_id}", json={"sla_tier_id": None})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["sla_tier_id"] is None
+
+
+def test_patch_rejects_unknown_sla_tier_id():
+    create = client.post("/analysis-profiles", json={
+        "key": "sla_tier_patch_bad_test", "name": "SLA Tier Patch Bad Test",
+        "is_addon": True,
+    })
+    assert create.status_code == 201, create.text
+    profile_id = create.json()["id"]
+    resp = client.patch(f"/analysis-profiles/{profile_id}", json={"sla_tier_id": 999999999})
+    assert resp.status_code == 400, resp.text
+    assert "SLA tier" in resp.json()["detail"]
+
+
+def test_member_service_ids_present_and_correct(two_services):
+    """member_service_ids (Task 11) must mirror member_ids exactly — same
+    analysis_services relationship, added under the name the FE SLA resolver
+    contract expects (buildServiceToProfileTierMap)."""
+    svc_a, svc_b = two_services
+    create = client.post("/analysis-profiles", json={
+        "key": "member_service_ids_test", "name": "Member Service Ids Test",
+        "is_addon": True,
+    })
+    assert create.status_code == 201, create.text
+    assert create.json()["member_service_ids"] == []
+    profile_id = create.json()["id"]
+
+    put_resp = client.put(
+        f"/analysis-profiles/{profile_id}/members",
+        json={"analysis_service_ids": [svc_b, svc_a]},
+    )
+    assert put_resp.status_code == 200, put_resp.text
+
+    list_resp = client.get("/analysis-profiles")
+    assert list_resp.status_code == 200, list_resp.text
+    row = next(r for r in list_resp.json() if r["id"] == profile_id)
+    assert row["member_service_ids"] == [svc_b, svc_a]
+    assert row["member_service_ids"] == row["member_ids"]

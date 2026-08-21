@@ -273,6 +273,87 @@ analysis_profile_members = Table(
 )
 
 
+# Ride lists (spec 4, Task 4): a profile's priority-ordered list of vial
+# roles it may attach ("ride") its result to instead of self-minting its own
+# vial. Position in the list IS priority (0 = first choice), mirroring
+# analysis_profile_members' sort_order idiom. host_role_code is deliberately
+# NOT a foreign key to vial_roles — validated at the route edge instead (the
+# same additive idiom used for AnalysisProfile.fulfillment_role) — so a role
+# retired out from under a stale ride row degrades gracefully (the row is
+# just never a live host) instead of cascading a delete or blocking one.
+profile_ride_hosts = Table(
+    "profile_ride_hosts",
+    Base.metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("analysis_profile_id", Integer,
+           ForeignKey("analysis_profiles.id", ondelete="CASCADE"), nullable=False),
+    Column("host_role_code", String(8), nullable=False),
+    Column("priority", Integer, nullable=False, default=0),
+    UniqueConstraint("analysis_profile_id", "host_role_code", name="uq_profile_ride_host"),
+)
+
+
+class VialRole(Base):
+    """A vial role as a catalog row (spec 4). The role stays the DB join key on vials
+    (lims_sub_samples.assignment_role, VARCHAR(8) — NOT widened); the profile is its face.
+
+    xtra is the ONLY row allowed a NULL department (the reserved unassigned bucket).
+    frozen: set once any vial references the code; retire-don't-delete.
+    """
+
+    __tablename__ = "vial_roles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(8), nullable=False, unique=True)
+    label: Mapped[str] = mapped_column(String(100), nullable=False)
+    department_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("departments.id", ondelete="SET NULL"), nullable=True
+    )
+    boxable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    variance_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    frozen: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    department = relationship("Department", lazy="selectin")
+
+    def __repr__(self) -> str:
+        return f"<VialRole(code='{self.code}', label='{self.label}')>"
+
+
+class BenchStation(Base):
+    """A physical bench location (spec 4, Task 12: catalog-driven bench)
+    vials get soft-custody scanned into — QR (phone, via a capture token
+    scoped to the station) or scanner gun (desktop, JWT-authed). Recording
+    only: a scan-in event never gates result entry (Handler ruling Q2,
+    soft custody — deviation 7).
+
+    Ships EMPTY (G-STATION pending — no seed). No DELETE path: deactivate
+    via active=false, same idiom as VialRole/Department.
+    """
+
+    __tablename__ = "bench_stations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    department_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("departments.id"), nullable=False
+    )
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    department = relationship("Department", lazy="selectin")
+
+    def __repr__(self) -> str:
+        return f"<BenchStation(id={self.id}, name='{self.name}')>"
+
+
 class AnalysisProfile(Base):
     """A sellable test — the parent of one or more Analysis Services.
 
@@ -310,6 +391,13 @@ class AnalysisProfile(Base):
     coa_archetype: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     coa_sort_order: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
+    )
+    # ── Profile-level SLA tier (Task 11) ─────────────────────────────────────
+    # Beats the member services' group tier, loses to a priority override.
+    # NULL inherits the group's own tier (or the catch-all default) — same
+    # nullable-FK semantics as ServiceGroup.sla_tier_id.
+    sla_tier_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("sla_tiers.id", ondelete="SET NULL"), nullable=True
     )
     updated_by_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
@@ -1765,6 +1853,50 @@ class LimsSubSampleEvent(Base):
         return (
             f"<LimsSubSampleEvent(id={self.id}, sub_sample_pk={self.sub_sample_pk}, "
             f"event={self.event!r})>"
+        )
+
+
+class VialProfileAssignment(Base):
+    """Custody edge: which AnalysisProfile's work is on this vial (spec 4,
+    catalog-driven bench — the ISO 17025 backbone). Append-only: a role
+    flip supersedes every current row (stamps superseded_at once) and
+    inserts fresh ones — rows are NEVER UPDATEd otherwise, and application
+    code has no DELETE path for a single row. There IS one delete path by
+    design: `lims_sub_sample_pk` is ON DELETE CASCADE, so deleting a vial
+    deletes its custody history along with it. The table (current +
+    superseded) is the audit trail for as long as the vial it belongs to
+    still exists; it does not survive the vial's deletion, and there's no
+    separate log that would.
+
+    relation in ('host', 'rider') is enforced by a CHECK constraint in the
+    raw DDL only (database.py) — deliberately NOT declared here, so SQLite
+    test fixtures built off Base.metadata.create_all() stay unconstrained.
+    Writer: sub_samples.custody.write_custody_edges (called from
+    sub_samples.service.set_assignment_role, same transaction, no commit
+    here).
+    """
+    __tablename__ = "vial_profile_assignments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    lims_sub_sample_pk: Mapped[int] = mapped_column(
+        Integer, ForeignKey("lims_sub_samples.id", ondelete="CASCADE"), nullable=False
+    )
+    analysis_profile_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("analysis_profiles.id"), nullable=False
+    )
+    relation: Mapped[str] = mapped_column(String(8), nullable=False)
+    assigned_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+    assigned_by_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    superseded_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:
+        return (
+            f"<VialProfileAssignment(id={self.id}, sub={self.lims_sub_sample_pk}, "
+            f"profile={self.analysis_profile_id}, relation={self.relation!r})>"
         )
 
 

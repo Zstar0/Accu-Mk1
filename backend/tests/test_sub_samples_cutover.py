@@ -22,6 +22,10 @@ _PNG = b"\x89PNG\r\n\x1a\n"
 
 @pytest.fixture
 def parent(db_session):
+    # set_assignment_role's role gate is catalog-driven (spec 4, Task 7) —
+    # seed the legacy roles so the "hplc" calls below resolve.
+    from catalog.vial_roles_seed import seed_vial_roles
+    seed_vial_roles(db_session)
     p = LimsSample(
         sample_id="CUT-0001",
         external_lims_uid="parentuid-CUT-0001",

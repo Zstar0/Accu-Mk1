@@ -123,6 +123,8 @@ import {
   fetchPackagingPhotoUrl,
   type PackagingPhoto,
   getNativeParentAnalyses,
+  type VialRoleRow,
+  type Department,
 } from '@/lib/api'
 import {
   ZoomableImage,
@@ -172,6 +174,8 @@ import {
 import { vialLabel, vialPosition, vialTotal } from '@/lib/vial-label'
 import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
+import { useVialRoles } from '@/services/vial-roles'
+import { useDepartments } from '@/services/departments'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
 import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
 import { SampleRegistryDebug } from '@/components/senaite/SampleRegistryDebug'
@@ -3410,6 +3414,39 @@ export function NativeParentAnalysesCard({
   )
 }
 
+/**
+ * The sample-header "Assigned to" label (spec 4, Task 10). Catalog-driven —
+ * was a hardcoded 4-case switch (hplc/endo/ster/xtra), so hm's line was
+ * invisible (fell through to `null`, same as no role at all) even though hm
+ * shipped in spec-3. label = `${department} — ${role label}` — the same
+ * formula VialsQuickLookDialog's buildReassignOptions uses; a deliberate
+ * display delta ('hplc' now reads 'Analytical — HPLC', was 'Analytical
+ * HPLC' with no em-dash), same convention as Task 9's AssignStep section
+ * headers.
+ *
+ * `rolesLoading`/`departmentsLoading` are distinct from "unknown code":
+ * returns null while the catalog hasn't resolved yet, rather than flashing
+ * a bare uppercased code that immediately flips to the real "dept — label"
+ * a beat later. Exported (pure, no hooks) for direct unit testing — the
+ * enclosing SampleDetails component has no render-test harness in this repo.
+ */
+export function resolveAssignmentLabel(
+  currentAssignment: string | null,
+  vialRoles: VialRoleRow[] | undefined,
+  departments: Department[] | undefined,
+  rolesLoading: boolean,
+  departmentsLoading: boolean,
+): string | null {
+  if (!currentAssignment) return null
+  if (rolesLoading || departmentsLoading) return null
+  const role = (vialRoles ?? []).find(r => r.code === currentAssignment)
+  if (!role) return currentAssignment.toUpperCase()
+  const deptName = role.department_id != null
+    ? (departments ?? []).find(d => d.id === role.department_id)?.name
+    : null
+  return `${deptName ?? 'Extra'} — ${role.label}`
+}
+
 // --- Main Component ---
 
 export function SampleDetails() {
@@ -3860,6 +3897,10 @@ export function SampleDetails() {
   const meVial =
     parentSummary?.sub_samples.find(s => s.sample_id === sampleId) ?? null
 
+  // Catalog-driven "Assigned to" label (spec 4, Task 10) — see assignmentLabel below.
+  const vialRolesQ = useVialRoles()
+  const departmentsQ = useDepartments()
+
   // Resolve this sample's vial-assignment role for the header label.
   // Parent pages: pull from lims_samples.assignment_role (defaults to 'hplc'
   // per migration; can change after AssignStep moves the parent into another
@@ -3872,20 +3913,11 @@ export function SampleDetails() {
         null
       : (subData?.parent.assignment_role ?? 'hplc')
     : (meVial?.assignment_role ?? null)
-  const assignmentLabel = (() => {
-    switch (currentAssignment) {
-      case 'hplc':
-        return 'Analytical HPLC'
-      case 'endo':
-        return 'Microbiology — Endotoxin'
-      case 'ster':
-        return 'Microbiology — Sterility'
-      case 'xtra':
-        return 'Extra (unassigned)'
-      default:
-        return null
-    }
-  })()
+  const assignmentLabel = resolveAssignmentLabel(
+    currentAssignment,
+    vialRolesQ.data, departmentsQ.data,
+    vialRolesQ.isLoading, departmentsQ.isLoading,
+  )
 
   const primaryAnalysisUids = useMemo(
     () => computePrimaryAnalysisUids(data?.analyses ?? [], currentAssignment),
