@@ -2950,7 +2950,7 @@ class MethodResponse(BaseModel):
 
 class AnalyteInput(BaseModel):
     """One analyte slot for peptide create/update."""
-    slot: int
+    slot: int = Field(ge=1, le=4)
     analysis_service_id: int
     sample_id: Optional[str] = None
     component_peptide_id: Optional[int] = None
@@ -3833,6 +3833,27 @@ async def sync_analysis_services(db: Session = Depends(get_db), _current_user=De
         created += 1
 
     db.commit()
+
+    # S6a department totality: freshly synced services must not linger
+    # department-less until the next boot — run the (idempotent, NULL-only)
+    # bridge in-request. Never fails the sync. On Postgres, a failure partway
+    # through backfill_departments leaves this session's transaction ABORTED;
+    # without an explicit rollback() here, the very next statement below
+    # (the total-count query, run outside this try/except on the same
+    # session) would raise InFailedSqlTransaction/PendingRollbackError and
+    # the sync would fail after all — defeating "never fails the sync".
+    # SQLite doesn't reproduce this abort semantics, so this can't be pinned
+    # by re-running the failing statement on sqlite; it's exercised by a
+    # rollback()-was-called spy instead (test_sync_rolls_back_session_when_
+    # backfill_raises).
+    if created:
+        try:
+            from catalog.departments import backfill_departments
+            backfill_departments(db)
+        except Exception as e:
+            db.rollback()
+            logger.warning("catalog.sync_department_backfill_skipped err=%s", e)
+
     total = db.execute(select(func.count()).select_from(AnalysisService)).scalar()
     return {"created": created, "total": total}
 
@@ -4039,6 +4060,11 @@ async def create_peptide(data: PeptideCreate, db: Session = Depends(get_db), cur
                     )
                 ).scalar_one_or_none()
                 if comp_analyte:
+                    if slot_num > 4:
+                        raise HTTPException(
+                            400,
+                            detail="blend resolves more than 4 analyte slots (peptide_analytes carries a 4-slot ceiling — a product decision, see PeptideAnalyte docstring)",
+                        )
                     db.add(PeptideAnalyte(
                         peptide_id=peptide.id,
                         analysis_service_id=comp_analyte.analysis_service_id,
@@ -4223,6 +4249,11 @@ async def update_peptide(peptide_id: int, data: PeptideUpdate, db: Session = Dep
                         )
                     ).scalar_one_or_none()
                     if comp_analyte:
+                        if slot_num > 4:
+                            raise HTTPException(
+                                400,
+                                detail="blend resolves more than 4 analyte slots (peptide_analytes carries a 4-slot ceiling — a product decision, see PeptideAnalyte docstring)",
+                            )
                         db.add(PeptideAnalyte(
                             peptide_id=peptide.id,
                             analysis_service_id=comp_analyte.analysis_service_id,
@@ -20321,6 +20352,38 @@ def get_sample_registry_parity(
     }
     return {"sample_id": sample_id, "fields": fields, "summary": summary,
             "verdict": summary["real"] == 0, "error": None}
+
+
+@app.get("/debug/catalog-departments")
+def get_catalog_departments_debug(
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin drift diagnostic (S6a): department-assignment totality across
+    the live catalog — the ACTIVE-scoped invariant the fail-closed HPLC-
+    mirror allow-list depends on. Pure DB read, zero SENAITE I/O, zero
+    writes. Plain `def` for consistency with the debug-registry siblings
+    above (nothing blocking here, but the panel's routes share one posture).
+    """
+    from catalog.departments import department_totality_report
+    return department_totality_report(db)
+
+
+@app.post("/catalog/reconcile-per-substance")
+def reconcile_per_substance_route(
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin on-demand heal (S6b): re-run the per-substance ID_/PUR_/QTY_
+    derivation and return a report. Historically this only ran inside
+    `_run_migrations()` at boot, so healing a drifted catalog (P-1500)
+    required restarting the backend container — this endpoint does the
+    same work without one. Idempotent; safe to call repeatedly.
+    """
+    from catalog.per_substance_reconciler import reconcile_per_substance_services
+    report = reconcile_per_substance_services(db)
+    db.commit()
+    return report
 
 
 @app.get("/registry/sample/{sample_id}/details", response_model=RegistrySampleReadResult)
