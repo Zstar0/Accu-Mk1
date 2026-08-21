@@ -2,8 +2,9 @@
 
 A variance order buys extra physical replicates. Each assignment_kind='variance'
 sub-sample of the parent measures the same analytes; this returns one record per
-variance vial (in vial_sequence order) carrying whatever it measured, keyed by
-canonical peptide name. COABuilder prepends its own parent figure (style 2) and
+variance vial (in vial_sequence order) carrying whatever it measured, keyed by the
+analyte name COABuilder derives (identity service title prefix, else
+peptide.name — see _series_keys). COABuilder prepends its own parent figure (style 2) and
 renders the comma-delimited series, gating each figure by its own identity.
 
 Shape: { peptide_name: [ {vial_sequence, PURITY?, QUANTITY?, IDENTITY?}, ... ] }
@@ -67,6 +68,48 @@ def _fmt(category: str, value: str, unit: Optional[str], default_unit: str = "mg
         u = (unit or default_unit or "").strip()
         return f"{v} {u}" if u and not v.endswith(u) else v
     return v  # identity: raw
+
+
+# COABuilder names each analyte slot from the identity SERVICE TITLE it was
+# provisioned with (`Analyte{i}Peptide`.split(" - Identity")[0] — see
+# conformance_vendored/conformance.py, "Parse Name from ...") and looks the
+# variance series up under THAT name. `peptides.name` is not guaranteed to equal
+# that prefix (peptide 63 'TB500 (Thymosin Beta 4)' vs service
+# 'Thymosin Beta-4 - Identity (HPLC)'; rename ruled out 2026-07-30), so the
+# series must be keyed the way COABuilder derives it or the slot silently loses
+# its mean/SD/n and identity roll-up (PB-0354, PB-0272).
+_IDENTITY_TITLE_SEP = " - Identity"
+
+
+def _identity_title_name(title: Optional[str]) -> Optional[str]:
+    """'Thymosin Beta-4 - Identity (HPLC)' -> 'Thymosin Beta-4'; None when the
+    title doesn't carry the identity suffix (mirror COABuilder's split rule)."""
+    t = (title or "").strip()
+    if _IDENTITY_TITLE_SEP not in t:
+        return None
+    return t.split(_IDENTITY_TITLE_SEP)[0].strip() or None
+
+
+def _series_keys(rows) -> dict:
+    """{peptide.id: series key} from a vial's (analysis, service, peptide) rows.
+
+    A peptide with a peptide-specific identity row is keyed by that identity
+    service's title prefix (first row wins); peptides without one fall back to
+    `peptide.name` at lookup time (see _key_for)."""
+    keys: dict[int, str] = {}
+    for la, svc, pep in rows:
+        if pep is None or pep.id in keys or _category(la.keyword) != "identity":
+            continue
+        name = _identity_title_name(getattr(svc, "title", None)) or _identity_title_name(la.title)
+        if name:
+            keys[pep.id] = name
+    return keys
+
+
+def _key_for(pep, keys: dict) -> Optional[str]:
+    if pep is None:
+        return None
+    return keys.get(pep.id) or pep.name
 
 
 # Real per-analyte MASS units a parent quantity row may carry. mg/mL — the
@@ -156,7 +199,8 @@ def build_variance_replicates(db: Session, parent) -> dict:
         # rows are too). Generic services (HPLC-PUR, PEPT-Total, HPLC-ID) carry
         # no peptide_id, so they can only be attributed when the vial measures a
         # single peptide — which is the production single-peptide case.
-        vial_peptides = {pep.name for la, svc, pep in rows if pep is not None}
+        keys = _series_keys(rows)
+        vial_peptides = {_key_for(pep, keys) for la, svc, pep in rows if pep is not None}
         sole_peptide = next(iter(vial_peptides)) if len(vial_peptides) == 1 else None
 
         # Group this vial's rows by peptide → record.
@@ -169,7 +213,7 @@ def build_variance_replicates(db: Session, parent) -> dict:
             # Peptide-specific row → its own peptide; generic row → the vial's
             # sole peptide (skip a generic row on a multi-peptide vial, where it
             # can't be disambiguated).
-            pname = pep.name if pep is not None else sole_peptide
+            pname = _key_for(pep, keys) if pep is not None else sole_peptide
             if pname is None:
                 continue
             rec = per_peptide.setdefault(pname, {"vial_sequence": sub.vial_sequence})
@@ -204,7 +248,8 @@ def build_vial_figures(db: Session, sub: LimsSubSample, qty_unit: str = "mg") ->
             LimsAnalysis.result_value != "",
         )
     ).all()
-    vial_peptides = {pep.name for la, svc, pep in rows if pep is not None}
+    keys = _series_keys(rows)
+    vial_peptides = {_key_for(pep, keys) for la, svc, pep in rows if pep is not None}
     sole_peptide = next(iter(vial_peptides)) if len(vial_peptides) == 1 else None
     per_peptide: dict[str, dict] = {}
     for la, svc, pep in rows:
@@ -212,7 +257,7 @@ def build_vial_figures(db: Session, sub: LimsSubSample, qty_unit: str = "mg") ->
         key = _CATEGORY_TO_KEY.get(category or "")
         if not key:
             continue
-        pname = pep.name if pep is not None else sole_peptide
+        pname = _key_for(pep, keys) if pep is not None else sole_peptide
         if pname is None:
             continue
         rec = per_peptide.setdefault(pname, {})

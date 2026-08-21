@@ -4,39 +4,11 @@ import {
   fetchSubSamplePhotoUrl,
   type SubSample,
 } from '@/lib/api'
-import { cn } from '@/lib/utils'
 import { vialPosition } from '@/lib/vial-label'
-import { ROLE_BADGE_CLASS } from '@/lib/assignment-colors'
+import { RoleBadge } from '@/components/shared/RoleBadge'
 import { useUIStore } from '@/store/ui-store'
 import { usePrintLabel } from '@/components/samples/usePrintLabel'
 import { PrintLabelPortal } from '@/components/samples/PrintLabelPortal'
-
-// Mirrors the role palette in VialsList.tsx and SenaiteDashboard.tsx — kept
-// inline (third copy) to stay additive. Worth deduping into a shared module
-// when there's appetite to touch all three call sites in one pass.
-const ROLE_BADGES: Record<string, { label: string; cls: string }> = {
-  hplc:       { label: 'HPLC',       cls: ROLE_BADGE_CLASS.hplc },
-  endo:       { label: 'ENDO',       cls: ROLE_BADGE_CLASS.endo },
-  ster:       { label: 'PCR',        cls: ROLE_BADGE_CLASS.ster },
-  xtra:       { label: 'XTRA',       cls: ROLE_BADGE_CLASS.xtra },
-  hm:         { label: 'HM',         cls: ROLE_BADGE_CLASS.hm },
-  unassigned: { label: 'Unassigned', cls: ROLE_BADGE_CLASS.unassigned },
-}
-
-function RoleBadge({ role }: { role: string | null | undefined }) {
-  const b = ROLE_BADGES[role ?? 'unassigned'] ?? ROLE_BADGES.unassigned!
-  return (
-    <span
-      className={cn(
-        'inline-block text-[10px] leading-none px-1.5 py-0.5 rounded border uppercase tracking-wide font-medium',
-        b.cls
-      )}
-      title={`Assigned to ${b.label}`}
-    >
-      {b.label}
-    </span>
-  )
-}
 
 interface Props {
   vials: { sub: SubSample; isThisSession: boolean }[]
@@ -142,7 +114,12 @@ export function VialDetailsTab({ vials, orderNumber, onCloseAndNavigate, contain
                       </button>
                     </td>
                     <td className="px-3 py-2">
-                      <RoleBadge role={s.assignment_role} />
+                      <RoleBadge
+                        role={s.assignment_role}
+                        unassignedLabel="Unassigned"
+                        makeTitle={l => `Assigned to ${l}`}
+                        className="inline-block"
+                      />
                     </td>
                     <td className="px-3 py-2">
                       <SubSamplePhotoCell
