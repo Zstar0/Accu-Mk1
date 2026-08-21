@@ -125,6 +125,7 @@ import {
   listNativeParentAnalysesShaped,
   parentRetestAnalysis,
   vialSourceRetest,
+  listNativeAnalysisServices,
   type VialRoleRow,
   type Department,
   type SenaiteAnalysis,
@@ -135,6 +136,8 @@ import {
   resolvePromotedSourceDialogParentState,
   runPromotedSourceRetest,
 } from '@/lib/native-parent-analyses'
+import { NativeManageAnalysesBlock } from '@/components/senaite/NativeManageAnalysesBlock'
+import { pickerSourceFor } from '@/lib/manage-analyses-picker'
 import {
   ParentRetestConfirmDialog,
   type ParentRetestConfirmState,
@@ -4096,7 +4099,10 @@ export function SampleDetails() {
     if (availableServices.length === 0) {
       setServicesLoading(true)
       try {
-        const services = await listAnalysisServices()
+        const services =
+          pickerSourceFor(parentSampleId ?? null, data?.sample_uid) === 'native'
+            ? await listNativeAnalysisServices()
+            : await listAnalysisServices()
         setAvailableServices(services)
       } catch {
         toast.error('Failed to load analysis services')
@@ -4106,11 +4112,16 @@ export function SampleDetails() {
     }
   }
 
-  const handleAddAnalysis = async (service: AnalysisService) => {
+  const handleAddAnalysis = async (service: AnalysisService & { id?: number }) => {
     if (!data?.sample_id) return
-    setAddingService(service.uid)
+    setAddingService(service.uid || service.keyword)
     try {
-      await addAnalysisToSample(data.sample_id, service.uid)
+      const native = pickerSourceFor(parentSampleId ?? null, data.sample_uid) === 'native'
+      await addAnalysisToSample(
+        data.sample_id,
+        service.uid,
+        native ? { keyword: service.keyword, analysis_service_id: service.id } : undefined,
+      )
       toast.success(`Added ${service.title}`)
       refreshSample(data.sample_id)
     } catch (e) {
@@ -6436,6 +6447,11 @@ export function SampleDetails() {
                       stays — clear it on the vial itself if it really needs to
                       go.
                     </li>
+                    <li>
+                      Native profiles added below are also placed on the
+                      matching vial(s); if none exists yet, the analysis seeds
+                      when a vial gets that role.
+                    </li>
                   </ul>
                 </div>
               </div>
@@ -6526,6 +6542,17 @@ export function SampleDetails() {
               </div>
             </div>
 
+            {/* Native (Accu-Mk1) — parent pages only: native parent rows with
+                  remove, native PROFILE picker, admin Re-sync (spec 2026-08-18) */}
+            {parentSampleId === null && data?.sample_id && (
+              <NativeManageAnalysesBlock
+                sampleId={data.sample_id}
+                isAdmin={isAdmin}
+                search={serviceSearch}
+                onChanged={() => refreshSample(data.sample_id)}
+              />
+            )}
+
             {/* Add new analysis */}
             <div>
               <p className="text-xs text-muted-foreground mb-2">Add analysis</p>
@@ -6573,7 +6600,7 @@ export function SampleDetails() {
                     )
                     .map(s => (
                       <div
-                        key={s.uid}
+                        key={s.uid || s.keyword}
                         className="flex items-center justify-between py-1 px-2 rounded hover:bg-muted/60"
                       >
                         <div className="min-w-0">
@@ -6588,10 +6615,10 @@ export function SampleDetails() {
                           variant="ghost"
                           size="sm"
                           className="h-6 w-6 p-0 shrink-0"
-                          disabled={addingService === s.uid}
+                          disabled={addingService === (s.uid || s.keyword)}
                           onClick={() => handleAddAnalysis(s)}
                         >
-                          {addingService === s.uid ? (
+                          {addingService === (s.uid || s.keyword) ? (
                             <Loader2 size={12} className="animate-spin" />
                           ) : (
                             <Plus size={12} />
