@@ -287,7 +287,7 @@ def test_set_reportable_writes_audit_row(db, sub_sample, analysis_service):
 
 def test_set_reportable_idempotent_no_audit_when_unchanged(db, sub_sample, analysis_service):
     row = _create(db, sub_sample, analysis_service)
-    set_reportable(db, analysis_id=row.id, reportable=True, reason="TEST: noop")
+    set_reportable(db, analysis_id=row.id, reportable=True, reason=None)
     audit_count = db.execute(
         select(LimsAnalysisTransition).where(
             LimsAnalysisTransition.analysis_id == row.id,

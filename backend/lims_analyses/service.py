@@ -226,6 +226,7 @@ def create_analysis(
         transition_kind="auto",
         user_id=created_by_user_id,
         reason="initial insert",
+        details={"changed": {}},
     ))
     if commit:
         db.commit()
@@ -233,6 +234,32 @@ def create_analysis(
     else:
         db.flush()  # row already has an id from the earlier flush; keep it pending in the outer txn
     return row
+
+
+# ─── Amendment audit (spec 2026-08-07) ───────────────────────────────────────
+# Fields whose changes are captured as before/after into
+# lims_analysis_transitions.details. Values must stay JSON-serializable
+# (str/int/bool/None) — never add a datetime here; per-state timestamps are
+# derivable from the transition rows themselves.
+TRACKED_FIELDS = (
+    "result_value", "result_unit", "method_id", "instrument_id",
+    "reportable", "reportable_reason", "analyst_user_id", "retested",
+)
+
+
+def _snapshot(row) -> dict:
+    return {f: getattr(row, f) for f in TRACKED_FIELDS}
+
+
+def _deltas(before: dict, row) -> dict:
+    """{"changed": {field: {before, after}}} for tracked fields that differ.
+    Always returns the envelope (possibly empty changed) — NULL details is
+    reserved for rows that predate capture."""
+    after = _snapshot(row)
+    return {"changed": {
+        f: {"before": before[f], "after": after[f]}
+        for f in TRACKED_FIELDS if before[f] != after[f]
+    }}
 
 
 # ─── Transitions ─────────────────────────────────────────────────────────────
@@ -246,6 +273,8 @@ def apply_transition(
     result_value: Optional[str] = None,
     reason: Optional[str] = None,
     user_id: Optional[int] = None,
+    method_id: Optional[int] = None,
+    instrument_id: Optional[int] = None,
 ) -> LimsAnalysis:
     """
     Validate (from_state, kind) via the state machine, apply the
@@ -255,9 +284,22 @@ def apply_transition(
       - 'submit' requires a result_value (either already on the row or
         supplied in this call).
       - 'verify' requires the row to already carry a result_value.
+
+    method_id: optional method stamp, applied after the snapshot; None is a no-op.
+    instrument_id: optional instrument stamp, applied after the snapshot; None is a no-op.
     """
     row = get_analysis(db, analysis_id)
     from_state = row.review_state
+    before = _snapshot(row)
+
+    # Amendment audit (Handler ruling 2026-08-10): callers that used to stamp
+    # method/instrument directly on the row pre-call (prep_bridge) pass them
+    # here instead — applied AFTER the snapshot so the change lands in
+    # details["changed"] on this transition's audit row.
+    if method_id is not None:
+        row.method_id = method_id
+    if instrument_id is not None:
+        row.instrument_id = instrument_id
 
     if is_terminal(from_state):
         # State machine will also reject this, but we surface a clearer
@@ -321,6 +363,7 @@ def apply_transition(
             transition_kind="auto",
             user_id=user_id,
             reason="initial insert",
+            details={"changed": {}},
         ))
 
         # Mark old row as retested + write audit on old row
@@ -336,6 +379,7 @@ def apply_transition(
                 f"retested: new analysis #{new_row.id}"
                 + (f"; {reason}" if reason else "")
             ),
+            details=_deltas(before, row),
         ))
 
         db.commit()
@@ -428,6 +472,7 @@ def apply_transition(
         transition_kind=kind,
         user_id=user_id,
         reason=reason,
+        details=_deltas(before, row),
     ))
     db.commit()
     db.refresh(row)
@@ -515,12 +560,24 @@ def set_reportable(
     reason: Optional[str] = None,
     user_id: Optional[int] = None,
 ) -> LimsAnalysis:
-    """Flip the reportable flag. Not a state-machine transition — written
-    to the audit log with transition_kind='auto' and from_state==to_state."""
+    """Flip the reportable flag and/or its reason. Not a state-machine
+    transition — written to the audit log with transition_kind='auto' and
+    from_state==to_state. A reason-only edit (same flag, different non-None
+    reason) is an audited amendment, not a silent overwrite; reason=None on
+    a same-flag call is a no-op (never clears an existing reason)."""
     row = get_analysis(db, analysis_id)
-    if row.reportable == reportable:
+    # No-op iff nothing would change: same flag AND the caller either supplied
+    # no reason (None = "not provided", never "clear it" on a same-flag call)
+    # or the same reason. A reason-ONLY edit (same flag, different non-None
+    # reason) falls through: it updates reportable_reason and writes an
+    # audited transition row like any other amendment (Handler ruling
+    # 2026-08-10 — closes the last known ISO 7.5.2 hole in this module).
+    if row.reportable == reportable and (
+        reason is None or reason == row.reportable_reason
+    ):
         return row  # no-op
 
+    before = _snapshot(row)
     row.reportable = reportable
     row.reportable_reason = reason
     row.updated_at = datetime.utcnow()
@@ -534,6 +591,7 @@ def set_reportable(
         reason=(
             f"reportable={reportable}" + (f": {reason}" if reason else "")
         ),
+        details=_deltas(before, row),
     ))
     db.commit()
     db.refresh(row)
@@ -559,6 +617,7 @@ def set_method_instrument(
     if row.method_id == method_id and row.instrument_id == instrument_id:
         return row
 
+    before = _snapshot(row)
     row.method_id = method_id
     row.instrument_id = instrument_id
     row.updated_at = datetime.utcnow()
@@ -570,6 +629,7 @@ def set_method_instrument(
         transition_kind="auto",
         user_id=user_id,
         reason=f"method_id={method_id},instrument_id={instrument_id}",
+        details=_deltas(before, row),
     ))
     db.commit()
     db.refresh(row)
@@ -819,6 +879,7 @@ def promote_to_parent(
         ).scalars().first()
         if old_parent is not None:
             prior_state = old_parent.review_state
+            old_parent_before = _snapshot(old_parent)
             old_parent.review_state = "retracted"
             old_parent.updated_at = now
             db.add(LimsAnalysisTransition(
@@ -828,6 +889,7 @@ def promote_to_parent(
                 transition_kind="auto",
                 user_id=user_id,
                 reason="superseded by retest promotion",
+                details=_deltas(old_parent_before, old_parent),
             ))
             db.flush()   # emit UPDATE before INSERT so Postgres sees vacated index slot
         else:
@@ -883,6 +945,7 @@ def promote_to_parent(
         transition_kind="auto",
         user_id=user_id,
         reason=f"promoted from sources {source_ids}",
+        details={"changed": {}},
     ))
 
     promotion_rows: List[LimsAnalysisPromotion] = []
@@ -905,6 +968,7 @@ def promote_to_parent(
         kind = s["contribution_kind"]
         src = source_rows[sid]
         prev_state = src.review_state
+        src_before = _snapshot(src)
         src.review_state = "promoted"
         src.updated_at = now
         # "auto": a promote is a system-driven side-effect, not a user-initiated
@@ -916,6 +980,7 @@ def promote_to_parent(
             transition_kind="auto",
             user_id=user_id,
             reason=f"promoted to parent #{parent_row.id} (kind={kind})",
+            details=_deltas(src_before, src),
         ))
 
     if commit:
@@ -1370,6 +1435,100 @@ def list_variance_verifications_for_parent(
     return out
 
 
+def transition_has_amendment(details) -> bool:
+    """True when a transition row carries a non-empty details["changed"] —
+    i.e. the curated amendment source will render it and the generic A1
+    activity line should NOT (Handler ruling 2026-08-10, one line per event).
+    NULL details (pre-slice / mirror-exempt) and {"changed": {}} both return
+    False — those rows keep their generic line."""
+    return bool((details or {}).get("changed"))
+
+
+def list_analysis_change_events_for_parent(
+    db: Session,
+    parent_sample_id: str,
+) -> list[dict]:
+    """Amendment-audit events for the federated sample activity log
+    (spec 2026-08-07 §2.6).
+
+    Emits ONLY transitions whose details["changed"] is non-empty — the
+    change history. State-only rows ({"changed": {}}) are skipped (promote /
+    verify / variance already have richer dedicated events in the timeline);
+    NULL-details rows predate capture and have nothing to render.
+
+    Two event types:
+      result_entered   — result_value went None -> value and nothing outside
+                         {result_value, result_unit} changed
+      analysis_amended — every other non-empty change (corrections,
+                         method/instrument, reportable, un-promote clears)
+    """
+    from models import LimsAnalysisTransition, LimsSample, LimsSubSample, User
+
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        return []
+
+    vials = db.execute(
+        select(LimsSubSample).where(LimsSubSample.parent_sample_pk == parent.id)
+    ).scalars().all()
+    vial_by_id = {v.id: v for v in vials}
+
+    host_filter = LimsAnalysis.lims_sample_pk == parent.id
+    if vial_by_id:
+        host_filter = host_filter | LimsAnalysis.lims_sub_sample_pk.in_(
+            list(vial_by_id.keys())
+        )
+
+    rows = db.execute(
+        select(LimsAnalysisTransition, LimsAnalysis)
+        .join(LimsAnalysis, LimsAnalysisTransition.analysis_id == LimsAnalysis.id)
+        .where(host_filter, LimsAnalysisTransition.details.isnot(None))
+        .order_by(LimsAnalysisTransition.occurred_at, LimsAnalysisTransition.id)
+    ).all()
+
+    events: list[dict] = []
+    for t, a in rows:
+        changed = (t.details or {}).get("changed") or {}
+        if not changed:
+            continue  # state-only move — dedicated events cover these
+
+        by_email = None
+        if t.user_id:
+            u = db.get(User, t.user_id)
+            by_email = u.email if u else None
+
+        vial = vial_by_id.get(a.lims_sub_sample_pk)
+        where = f" ({vial.sample_id})" if vial else ""
+
+        rv = changed.get("result_value")
+        only_result = set(changed) <= {"result_value", "result_unit"}
+        if rv and rv["before"] is None and rv["after"] is not None and only_result:
+            event = "result_entered"
+            label = f"Result entered — {a.title}: {rv['after']}{where}"
+        else:
+            event = "analysis_amended"
+            frags = ", ".join(
+                f"{f} {c['before']} → {c['after']}" if f != "result_value"
+                else f"{c['before']} → {c['after']}"
+                for f, c in changed.items()
+            )
+            verb = "Result corrected" if rv else "Analysis amended"
+            label = f"{verb} — {a.title}: {frags}{where}"
+
+        events.append({
+            "timestamp": t.occurred_at.isoformat() if t.occurred_at else None,
+            "event": event,
+            "label": label,
+            "details": {"changed": changed, "by": by_email,
+                        "vial": vial.sample_id if vial else None,
+                        "analysis_id": a.id, "keyword": a.keyword},
+            "source": "lims_analysis_transitions",
+        })
+    return events
+
+
 # ─── Phase 4c: parent-retest cascade ────────────────────────────────────────
 
 
@@ -1481,6 +1640,7 @@ def cascade_parent_retest_to_sources(
     #    row is not yet citable, but its stale value must not linger either.
     if new_row_ids and parent_analysis.review_state in ("verified", "parent_to_verify"):
         prior_state = parent_analysis.review_state
+        parent_before = _snapshot(parent_analysis)
         parent_analysis.review_state = "retracted"
         # Clear the promoted figure too: the display serialization
         # (list_analyses_for_host) filters by retest_of_id, NOT state, so a
@@ -1496,6 +1656,7 @@ def cascade_parent_retest_to_sources(
             transition_kind="auto",
             user_id=user_id,
             reason="un-promoted: source vial retested",
+            details=_deltas(parent_before, parent_analysis),
         ))
         db.commit()
 
@@ -1749,6 +1910,7 @@ def vial_source_retest(
             parent_state_before = parent.review_state
             if parent.review_state in ("verified", "parent_to_verify"):
                 prior_state = parent.review_state
+                parent_before = _snapshot(parent)
                 parent.review_state = "retracted"
                 # Clear the promoted figure too — mirrors
                 # cascade_parent_retest_to_sources step 5 exactly: the
@@ -1764,6 +1926,7 @@ def vial_source_retest(
                     transition_kind="auto",
                     user_id=user_id,
                     reason="un-promoted: source retested from vial",
+                    details=_deltas(parent_before, parent),
                 ))
                 parent_unverified = True
 

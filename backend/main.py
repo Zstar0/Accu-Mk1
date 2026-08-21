@@ -1166,6 +1166,10 @@ async def get_sample_activity(
             "source": "lims_analysis_transitions",
         })
 
+    # --- Mk1 DB: amendment audit (result entries + corrections) ---
+    from lims_analyses.service import list_analysis_change_events_for_parent
+    events.extend(list_analysis_change_events_for_parent(db, sample_id))
+
     # --- Mk1 DB: variance-set lock/unlock (audit_logs, append-only) ---
     var_audits = db.execute(
         select(AuditLog).where(
@@ -1360,7 +1364,14 @@ async def get_sample_activity(
                     LimsAnalysisTransition.analysis_id.in_(analysis_ids)
                 )
             ).scalars().all()
+            from lims_analyses.service import transition_has_amendment
             for t in transitions:
+                # Only suppress when the curated source can actually render this
+                # row instead: it keys off parent_sample_id (LimsSample lookup),
+                # so a direct vial-id request (parent is None) never reaches it —
+                # skipping there would drop the event to zero lines, not one.
+                if parent is not None and transition_has_amendment(t.details):
+                    continue  # curated amendment source renders this row (one line per event)
                 kw = keyword_by_id.get(t.analysis_id, "?")
                 actor_email = None
                 if t.user_id:
