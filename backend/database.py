@@ -1605,6 +1605,23 @@ def _run_migrations():
         # Amendment audit (spec 2026-08-07): before/after capture. Nullable,
         # no default, no backfill — NULL = pre-slice row, by contract.
         "ALTER TABLE lims_analysis_transitions ADD COLUMN IF NOT EXISTS details JSONB",
+        # S2 (worksheets off groups): department becomes the item-tier routing
+        # key. Nullable + SET NULL — additive alongside the frozen legacy
+        # service_group_id. Backfill via the group bridge only (analyses_json
+        # display fallback is NOT used for backfill — write-path purity; NULL
+        # rows read through the serializer's fallback chain instead).
+        """
+        ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS department_id
+            INTEGER REFERENCES departments(id) ON DELETE SET NULL
+        """,
+        """
+        UPDATE worksheet_items wi
+           SET department_id = sg.department_id
+          FROM service_groups sg
+         WHERE wi.service_group_id = sg.id
+           AND wi.department_id IS NULL
+           AND sg.department_id IS NOT NULL
+        """,
         # S8 adoption guard (2026-08-11): collision quarantine markers.
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS quarantined BOOLEAN NOT NULL DEFAULT FALSE",
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS quarantine_reason TEXT",

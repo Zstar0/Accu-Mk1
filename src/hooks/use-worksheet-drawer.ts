@@ -9,7 +9,7 @@ import {
   reorderWorksheetItems,
   updateWorksheetItem,
 } from '@/lib/api'
-import type { WorksheetListItem } from '@/lib/api'
+import type { WorksheetListItem, AddToWorksheetPayload } from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
 import { toast } from 'sonner'
 
@@ -127,7 +127,7 @@ export function useWorksheetDrawer() {
       data,
     }: {
       worksheetId: number
-      data: { sample_uid: string; sample_id: string; service_group_id: number; analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[] }
+      data: AddToWorksheetPayload
     }) => addGroupToWorksheet(worksheetId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })

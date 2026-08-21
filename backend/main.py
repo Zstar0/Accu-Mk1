@@ -34,7 +34,7 @@ from fastapi import BackgroundTasks, FastAPI, Body, Depends, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import select, desc, delete, update, func, extract
+from sqlalchemy import select, desc, delete, update, func, extract, and_
 from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
@@ -10502,17 +10502,18 @@ async def generate_sample_coa(
                 resolver_result = None
 
             if resolver_result is not None:
-                # Micro analytes (ENDO/STER/KF) never block: the lab finishes them
-                # after the analytical COA and re-generates. Only NON-micro
+                # Micro (ENDO/STER/KF) and Heavy Metals analytes never block: micro
+                # finishes after the analytical COA and re-generates; HM is exempt per
+                # the 2026-08-12 ruling (see coa_exempt_keywords). Only other
                 # unresolved analytes hold up generation.
                 from coa.block_summary import (
                     build_name_resolver,
                     has_blocking_unresolved,
                     summarize_unresolved,
                 )
-                from lims_analyses.seeder import _micro_group_keywords
+                from lims_analyses.seeder import coa_exempt_keywords
 
-                micro_kw = _micro_group_keywords(db)
+                micro_kw = coa_exempt_keywords(db)
                 if has_blocking_unresolved(resolver_result, micro_keywords=micro_kw):
                     name_for = _build_coa_analyte_name_resolver(db, sample_id, alias_map=_load_sample_aliases(db, sample_id))
                     _unresolved = summarize_unresolved(
@@ -10529,7 +10530,7 @@ async def generate_sample_coa(
             # SENAITE is truly down).
             kinds = await _parent_attachment_kinds(sample_id, _get_senaite_auth(current_user))
             if kinds is not None:
-                from lims_analyses.seeder import _micro_group_keywords as _micro_kws
+                from lims_analyses.seeder import coa_exempt_keywords as _micro_kws
                 if resolver_result is not None:
                     _micro = _micro_kws(db)
                     needs_chromatogram = any(
@@ -15871,45 +15872,8 @@ async def create_service_group(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Create a new service group."""
-    existing = db.execute(
-        select(ServiceGroup).where(ServiceGroup.name == data.name)
-    ).scalar_one_or_none()
-    if existing:
-        raise HTTPException(400, f"Service group '{data.name}' already exists")
-
-    group = ServiceGroup(**data.model_dump())
-    if group.is_default:
-        db.execute(
-            select(ServiceGroup).where(ServiceGroup.is_default == True)  # noqa: E712
-        )
-        # Bulk demotion of every OTHER default group — not logged (mirrors
-        # the sla_tier _demote_other_default_tiers ruling: converting a
-        # bulk UPDATE into a per-row loop for logging purposes would be a
-        # behavior change outside this task's scope; the winner's own
-        # create row below is what's logged).
-        db.query(ServiceGroup).filter(ServiceGroup.is_default == True).update({"is_default": False})  # noqa: E712
-    db.add(group)
-    db.flush()
-    log_create(
-        db, group, SERVICE_GROUP_LOG_FIELDS,
-        entity_type="service_group", entity_pk=group.id, user_id=getattr(current_user, "id", None),
-    )
-    db.commit()
-    db.refresh(group)
-    return ServiceGroupResponse(
-        id=group.id,
-        name=group.name,
-        description=group.description,
-        color=group.color,
-        sort_order=group.sort_order,
-        is_default=group.is_default,
-        sla_tier_id=group.sla_tier_id,
-        department_id=group.department_id,
-        member_count=0,
-        created_at=group.created_at,
-        updated_at=group.updated_at,
-    )
+    """Service groups are legacy — departments own routing now (S2)."""
+    raise HTTPException(410, "service groups are legacy; departments own routing now")
 
 
 @app.put("/service-groups/{group_id}", response_model=ServiceGroupResponse)
@@ -15929,6 +15893,12 @@ async def update_service_group(
         raise HTTPException(404, f"Service group {group_id} not found")
 
     update_data = data.model_dump(exclude_unset=True)
+    if "name" in update_data and update_data["name"] != group.name:
+        raise HTTPException(
+            400,
+            "service group names are frozen (legacy); FE keyword maps and the COA "
+            "gate's group half key on them",
+        )
     if update_data.get("is_default"):
         # Bulk demotion of every OTHER default group — not logged, same
         # ruling as create_service_group's mint-time demotion above.
@@ -15964,12 +15934,31 @@ async def delete_service_group(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Delete a service group. Membership rows cascade-delete."""
+    """Delete a service group. Refused while any worksheet item, SLA priority
+    tier, or member row still references it — group rows are frozen legacy
+    rows that worksheet history and sla_priority_tiers (ON DELETE CASCADE)
+    depend on surviving (S2 Task 3)."""
     group = db.execute(
         select(ServiceGroup).where(ServiceGroup.id == group_id)
     ).scalar_one_or_none()
     if not group:
         raise HTTPException(404, f"Service group {group_id} not found")
+
+    in_use = db.execute(
+        select(WorksheetItem.id).where(WorksheetItem.service_group_id == group_id).limit(1)
+    ).scalars().first() or db.execute(
+        select(SlaPriorityTier.id).where(SlaPriorityTier.service_group_id == group_id).limit(1)
+    ).scalars().first() or db.execute(
+        select(service_group_members.c.id).where(
+            service_group_members.c.service_group_id == group_id
+        ).limit(1)
+    ).scalars().first()
+    if in_use is not None:
+        raise HTTPException(
+            409,
+            "service group is still referenced (worksheet items, SLA tiers, or members); "
+            "groups are frozen legacy rows — do not delete while in use",
+        )
 
     log_delete(
         db, group, SERVICE_GROUP_LOG_FIELDS,
@@ -17462,28 +17451,15 @@ class InboxResponse(BaseModel):
 
 # Worksheet-inbox lanes are catalog-driven (spec 4, Task 7): one lane per
 # department that owns >=1 vial role, via catalog.roles.inbox_lanes(db).
-# Department drives the lane: a new Microbiology-department group lands in
-# the micro lane automatically, with no name-pinning. hm (Heavy Metals) is
-# catalog-only and gets its own lane rather than folding into an existing
-# bench (spec-3 Task 3) — its services carry no service group, so
-# _inbox_allowed_group_ids resolves an empty set for it; the native-vial inbox
-# path (Phase 3.5, main.py _fetch_mk1_inbox_analyses_for_sub_sample) filters
-# hm vials by assignment_role via the lane's role_codes instead, not by group id.
-
-
-def _inbox_allowed_group_ids(db, lanes: dict, role: Optional[str]) -> Optional[set[int]]:
-    """Resolve a worksheet-inbox lane key to the set of service-group ids in
-    that lane's DEPARTMENT. None role -> None (no filter; pass all groups).
-    `lanes` is the caller's `inbox_lanes(db)` (one read per request, passed
-    down — never re-queried here)."""
-    if role is None:
-        return None
-    dept_id = lanes[role].department_id
-    return {
-        r[0] for r in db.execute(
-            select(ServiceGroup.id).where(ServiceGroup.department_id == dept_id)
-        ).all()
-    }
+# The lane key IS the department (S2 Task 7 — the group translation shim is
+# gone): a new Microbiology-department group lands in the micro lane
+# automatically, with no name-pinning. hm (Heavy Metals) is catalog-only and
+# gets its own lane rather than folding into an existing bench (spec-3 Task 3);
+# its services carry no service group, which used to translate to an empty
+# allowed-group set — the lane now filters on the analysis's own department, so
+# a group-less service is laned like any other. The native-vial inbox path
+# (Phase 3.5, _fetch_mk1_inbox_analyses_for_sub_sample) filters vials by
+# assignment_role via the lane's role_codes.
 
 
 class PriorityUpdate(BaseModel):
@@ -17493,11 +17469,13 @@ class PriorityUpdate(BaseModel):
 class BulkInboxUpdate(BaseModel):
     sample_uids: list[str]
     priority: Optional[str] = None
-    service_group_id: Optional[int] = None  # required when setting analyst or instrument
+    # One of the two scope keys is required when setting analyst or instrument.
+    service_group_id: Optional[int] = None
+    department_id: Optional[int] = None
     analyst_id: Optional[int] = None
     instrument_uid: Optional[str] = None
 
-    @validator("service_group_id", pre=True, always=True)
+    @validator("service_group_id", "department_id", pre=True, always=True)
     def zero_to_none(cls, v):
         return None if v == 0 else v
 
@@ -17517,9 +17495,10 @@ _INBOX_CACHE_TTL_SECONDS = 30 * 60  # 30 minutes
 # ── Phase 3.5: Mk1-sourced inbox analyses for sub-samples ───────────────────
 
 
-# Color fallback when the ServiceGroup join misses (rare — only if a vial's
-# analysis_service has no service_group_members row). Mirrors the FE's role
-# palette.
+# Color fallback when the Department join misses (a vial whose analysis_service
+# carries no department — catalog-only services until S6 totality lands).
+# Mirrors the FE's role palette, so the Other bucket still reads as its bench
+# rather than going flat gray on the native path.
 _INBOX_ROLE_COLOR_FALLBACK = {
     "hplc": "sky",
     "endo": "violet",
@@ -17565,17 +17544,22 @@ def _fetch_mk1_inbox_analyses_for_sub_sample(
 
     Returns an empty list if the vial has no Mk1 rows — caller falls back
     to the SENAITE path.
+
+    S2 Task 7: group_id/group_name/group_color carry DEPARTMENT identity here
+    too. get_worksheets_inbox keys assigned_pairs and assignment_map by
+    department and matches these rows against them, so the two must be drawn
+    from one id space — and the response would otherwise sort and label native
+    vials by service group while every SENAITE-sourced vial in the same payload
+    used departments. The department join is also on a scalar FK, so it cannot
+    fan out the way the old service_group_members hop did for a service in two
+    groups (which duplicated that analysis in the vial's list).
     """
-    from models import LimsAnalysis  # local import; not at module top
+    from models import Department, LimsAnalysis  # local import; not at module top
 
     rows = db.execute(
-        select(LimsAnalysis, AnalysisService, ServiceGroup)
+        select(LimsAnalysis, AnalysisService, Department)
         .join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
-        .outerjoin(
-            service_group_members,
-            service_group_members.c.analysis_service_id == AnalysisService.id,
-        )
-        .outerjoin(ServiceGroup, ServiceGroup.id == service_group_members.c.service_group_id)
+        .outerjoin(Department, Department.id == AnalysisService.department_id)
         .where(LimsAnalysis.lims_sub_sample_pk == sub_sample_pk)
         # Current/live row per (vial, service) is retested=False — NOT
         # retest_of_id IS NULL, which selects the superseded original after a
@@ -17596,16 +17580,18 @@ def _fetch_mk1_inbox_analyses_for_sub_sample(
         "promoted", "verified", "published", "variance_verified",
     }
     out: list[InboxAnalysisItem] = []
-    for la, svc, sg in rows:
+    for la, svc, dept in rows:
         if la.review_state in EXCLUDED_STATES:
             continue
-        if sg is not None:
-            grp_id = sg.id
-            grp_name = sg.name or ""
-            grp_color = getattr(sg, "color", None) or _INBOX_ROLE_COLOR_FALLBACK.get(role or "", "zinc")
+        if dept is not None:
+            grp_id = dept.id
+            grp_name = dept.name or ""
+            grp_color = getattr(dept, "color", None) or _INBOX_ROLE_COLOR_FALLBACK.get(role or "", "zinc")
         else:
+            # Same explicit legacy bucket the SENAITE path uses, but keeping the
+            # role-derived color the native path already had (S2 Task 7 ruling).
             grp_id = 0
-            grp_name = ""
+            grp_name = "Other"
             grp_color = _INBOX_ROLE_COLOR_FALLBACK.get(role or "", "zinc")
 
         out.append(InboxAnalysisItem(
@@ -17808,8 +17794,8 @@ async def get_worksheets_inbox(
     if not SENAITE_URL and not use_registry_source:
         raise HTTPException(status_code=503, detail="SENAITE not configured")
 
-    # Resolve role → allowed service_group IDs. None means "no filter; pass all groups".
-    allowed_group_ids: Optional[set[int]] = _inbox_allowed_group_ids(db, lanes, role)
+    # Lane key IS the department (catalog.roles.inbox_lanes). None = no filter.
+    allowed_department_id: Optional[int] = None if role is None else lanes[role].department_id
 
     # Resolve allowed vial assignment_role values. NULL roles always excluded (auto-
     # assign on /vial-plan is the cure for those). XTRA gated by show_xtra.
@@ -17935,24 +17921,38 @@ async def get_worksheets_inbox(
     except Exception:
         pass  # If integration DB is unavailable, show all samples (graceful degradation)
 
-    # Step 2: Build set of (sample_uid, service_group_id) pairs already in open worksheets
-    # Only exclude specific service groups, not the entire sample — a sample can have
-    # Microbiology in a worksheet while Core HPLC is still available in the inbox.
-    open_worksheet_pairs = db.execute(
-        select(WorksheetItem.sample_uid, WorksheetItem.service_group_id)
+    # Step 2: Build set of (sample_uid, department_id) pairs already in open worksheets
+    # Only exclude specific departments, not the entire sample — a sample can have
+    # Microbiology in a worksheet while Analytical is still available in the inbox.
+    # Historical items carry only a group; those bridge through their group's
+    # department, so old and new rows land in one key space (S2 Task 7).
+    open_worksheet_rows = db.execute(
+        select(WorksheetItem.sample_uid, WorksheetItem.department_id,
+               WorksheetItem.service_group_id)
         .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
         .where(Worksheet.status == "open")
     ).all()
-    assigned_pairs: set[tuple[str, int | None]] = {
-        (row.sample_uid, row.service_group_id) for row in open_worksheet_pairs
+    group_dept_bridge: dict[int, int | None] = {
+        g.id: g.department_id for g in db.execute(select(ServiceGroup)).scalars().all()
     }
-    # Also track fully-assigned samples (all groups in worksheets) for backward compat
-    # We'll filter at the group level later in step 6, not at the sample level here
-    assigned_uids_for_null_group: set[str] = set()
-    # Samples with service_group_id=None in a worksheet are fully claimed
-    for uid, gid in assigned_pairs:
-        if gid is None:
-            assigned_uids_for_null_group.add(uid)
+
+    def _row_department(dept_id: int | None, gid: int | None) -> int | None:
+        if dept_id is not None:
+            return dept_id
+        if gid is not None:
+            return group_dept_bridge.get(gid)
+        return None
+
+    assigned_pairs: set[tuple[str, int | None]] = {
+        (r.sample_uid, _row_department(r.department_id, r.service_group_id))
+        for r in open_worksheet_rows
+    }
+    # Also track fully-assigned samples (no resolvable scope) for backward compat
+    # We'll filter at the department level later in step 6, not at the sample level here
+    # A row with neither key — and a group whose bridge is NULL — is a whole-sample claim
+    assigned_uids_for_null_group: set[str] = {
+        uid for uid, dept in assigned_pairs if dept is None
+    }
 
     # Step 2b: Load SENAITE sample IDs that already have a sample prep
     prepped_senaite_ids: set[str] = set()
@@ -17978,20 +17978,16 @@ async def get_worksheets_inbox(
         if not hide_prepped or str(it.get("id", "")) not in prepped_senaite_ids
     ]
 
-    # Step 3: Build keyword → service group map
-    group_rows = db.execute(
-        select(
-            AnalysisService.keyword,
-            ServiceGroup.id,
-            ServiceGroup.name,
-            ServiceGroup.color,
-        )
-        .join(service_group_members, AnalysisService.id == service_group_members.c.analysis_service_id)
-        .join(ServiceGroup, ServiceGroup.id == service_group_members.c.service_group_id)
+    # Step 3: Build keyword → department map (the service's own department
+    # column — no service_group_members hop; S2 Task 7)
+    from models import Department
+    dept_rows = db.execute(
+        select(AnalysisService.keyword, Department.id, Department.name, Department.color)
+        .join(Department, Department.id == AnalysisService.department_id)
         .where(AnalysisService.keyword.isnot(None))
     ).all()
-    keyword_to_group: dict[str, tuple[int, str, str]] = {
-        row.keyword: (row.id, row.name, row.color) for row in group_rows
+    keyword_to_department: dict[str, tuple[int, str, str]] = {
+        row.keyword: (row[1], row[2], row[3]) for row in dept_rows
     }
 
     # Step 3b: Build keyword → local enrichment map (peptide name + method)
@@ -18020,15 +18016,9 @@ async def get_worksheets_inbox(
             # Use first active method as the display method
             peptide_to_method[pep.name] = pep.methods[0].name
 
-    # Default group for unmatched analyses
-    default_group_row = db.execute(
-        select(ServiceGroup).where(ServiceGroup.is_default == True)  # noqa: E712
-    ).scalar_one_or_none()
-    default_group = (
-        (default_group_row.id, default_group_row.name, default_group_row.color)
-        if default_group_row
-        else (0, "Other", "gray")
-    )
+    # Unresolved keyword → explicit legacy bucket. Fail-visible by design:
+    # no Department.is_default analogue exists and none is added (S2 ruling).
+    default_department = (0, "Other", "gray")
 
     # Step 4: Load local priorities for these samples
     uids = [str(it.get("uid", "")) for it in filtered_items if it.get("uid")]
@@ -18142,8 +18132,9 @@ async def get_worksheets_inbox(
                 "container_mode": parent_container_mode.get(r.parent_sample_pk, False),
             }
 
-    # Step 5: Load per-group worksheet_item assignments (analyst + instrument)
-    # Key is (sample_uid, service_group_id) → WorksheetItem
+    # Step 5: Load per-department worksheet_item assignments (analyst + instrument)
+    # Key is (sample_uid, department_id) → WorksheetItem, bridged the same way
+    # assigned_pairs is so legacy group-only rows still match (S2 Task 7).
     item_rows = db.execute(
         select(WorksheetItem)
         .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
@@ -18153,7 +18144,8 @@ async def get_worksheets_inbox(
         )
     ).scalars().all()
     assignment_map: dict[tuple[str, int | None], WorksheetItem] = {
-        (row.sample_uid, row.service_group_id): row for row in item_rows
+        (row.sample_uid, _row_department(row.department_id, row.service_group_id)): row
+        for row in item_rows
     }
 
     # Collect analyst IDs to load emails
@@ -18359,13 +18351,15 @@ async def get_worksheets_inbox(
                     if isinstance(method_obj, dict):
                         method = method_obj.get("title")
 
-            group_id, group_name, group_color = keyword_to_group.get(keyword, default_group)
+            dept_id_, dept_name_, dept_color_ = keyword_to_department.get(
+                keyword, default_department
+            )
 
-            # Role → allowed_group_ids filter (None == pass all)
-            if allowed_group_ids is not None and group_id not in allowed_group_ids:
+            # Lane filter (None == pass all lanes)
+            if allowed_department_id is not None and dept_id_ != allowed_department_id:
                 continue
-            # Already on an open worksheet for this (vial, group) — drop the analysis
-            if (uid, group_id) in assigned_pairs:
+            # Already on an open worksheet for this (vial, department) — drop it
+            if (uid, dept_id_) in assigned_pairs:
                 continue
 
             flat_analyses.append(
@@ -18376,9 +18370,12 @@ async def get_worksheets_inbox(
                     peptide_name=resolved_peptide,
                     method=str(method) if method else None,
                     review_state=str(review_state) if review_state else None,
-                    group_id=group_id,
-                    group_name=group_name,
-                    group_color=group_color,
+                    # Wire field NAMES stay; they now carry DEPARTMENT identity
+                    # (sanctioned re-meaning, sub-spec D4 — the FE's itemBench()
+                    # is already department-name-based).
+                    group_id=dept_id_,
+                    group_name=dept_name_,
+                    group_color=dept_color_,
                 )
             )
 
@@ -18635,25 +18632,34 @@ async def bulk_update_inbox(
             else:
                 db.add(SamplePriority(sample_uid=uid, priority=data.priority))
 
-    # Upsert analyst/instrument per service group as staging worksheet_items
+    # Upsert analyst/instrument per bench scope as staging worksheet_items
     if data.analyst_id is not None or data.instrument_uid is not None:
-        if data.service_group_id is None:
+        if data.service_group_id is None and data.department_id is None:
             raise HTTPException(
                 status_code=400,
-                detail="service_group_id is required when setting analyst or instrument",
+                detail="one of department_id / service_group_id is required when setting analyst or instrument",
             )
+        gid = data.service_group_id
+        dept_id = _resolve_item_scope(db, data.department_id, gid)
 
-        # Find existing staging items keyed by (sample_uid, service_group_id)
+        # Find existing staging items in this bench scope. A department match can
+        # hit two rows per uid (many-to-one group→department collapse); in the
+        # department world those are one lane's duplicates, so EVERY match gets
+        # the edit — writing only the lowest would misdirect the assignment and
+        # strand the sibling.
         existing_items = db.execute(
             select(WorksheetItem)
             .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
             .where(
                 WorksheetItem.sample_uid.in_(data.sample_uids),
-                WorksheetItem.service_group_id == data.service_group_id,
+                _item_scope_filter(dept_id, gid),
                 Worksheet.status == "staging",
             )
+            .order_by(WorksheetItem.id)
         ).scalars().all()
-        existing_item_map = {row.sample_uid: row for row in existing_items}
+        existing_item_map: dict[str, list[WorksheetItem]] = {}
+        for row in existing_items:
+            existing_item_map.setdefault(row.sample_uid, []).append(row)
 
         # Get or create staging worksheet
         missing_uids = [uid for uid in data.sample_uids if uid not in existing_item_map]
@@ -18676,17 +18682,18 @@ async def bulk_update_inbox(
 
         for uid in data.sample_uids:
             if uid in existing_item_map:
-                item = existing_item_map[uid]
-                if data.analyst_id is not None:
-                    item.assigned_analyst_id = data.analyst_id
-                if data.instrument_uid is not None:
-                    item.instrument_uid = data.instrument_uid
+                for item in existing_item_map[uid]:
+                    if data.analyst_id is not None:
+                        item.assigned_analyst_id = data.analyst_id
+                    if data.instrument_uid is not None:
+                        item.instrument_uid = data.instrument_uid
             else:
                 db.add(WorksheetItem(
                     worksheet_id=staging_ws.id,
                     sample_uid=uid,
                     sample_id=uid,
-                    service_group_id=data.service_group_id,
+                    service_group_id=gid,
+                    department_id=dept_id,
                     assigned_analyst_id=data.analyst_id,
                     instrument_uid=data.instrument_uid,
                 ))
@@ -18834,6 +18841,16 @@ def list_worksheets(
         query = query.where(Worksheet.status == status)
 
     worksheets = db.execute(query).scalars().all()
+
+    # department_name state 1 (Task 8): WorksheetItem.department_id, when set,
+    # is the primary signal — resolved via one id->name map for the whole
+    # request (Department is a small, request-static catalog table, so this
+    # is not re-queried per worksheet or per item).
+    from models import Department
+    department_id_name_map: dict[int, str] = {
+        d.id: d.name for d in db.execute(select(Department)).scalars()
+    }
+
     result = []
     for ws in worksheets:
         items = db.execute(
@@ -18898,7 +18915,8 @@ def list_worksheets(
         item_department_fallback_map: dict[int, str | None] = {}
         _needs_department_fallback = [
             it for it in items
-            if not (it.service_group_id and group_department_name_map.get(it.service_group_id))
+            if not (it.department_id and department_id_name_map.get(it.department_id))
+            and not (it.service_group_id and group_department_name_map.get(it.service_group_id))
         ]
         if _needs_department_fallback:
             item_first_keyword: dict[int, str | None] = {}
@@ -19022,9 +19040,15 @@ def list_worksheets(
                     "sample_id": it.sample_id,
                     "sample_uid": it.sample_uid,
                     "service_group_id": it.service_group_id,
+                    "department_id": it.department_id,
+                    # Four-state resolution (Task 8): own department_id ->
+                    # legacy service_group bridge -> analyses_json keyword
+                    # fallback -> "Legacy" literal (fail-visible, was None).
                     "department_name": (
-                        (group_department_name_map.get(it.service_group_id) if it.service_group_id else None)
+                        (department_id_name_map.get(it.department_id) if it.department_id else None)
+                        or (group_department_name_map.get(it.service_group_id) if it.service_group_id else None)
                         or item_department_fallback_map.get(it.id)
+                        or "Legacy"
                     ),
                     "group_name": group_name_map.get(it.service_group_id, "—") if it.service_group_id else "—",
                     "group_color": group_color_map.get(it.service_group_id, "zinc") if it.service_group_id else "zinc",
@@ -19111,14 +19135,99 @@ class AddToWorksheetAnalysis(BaseModel):
     method: Optional[str] = None
 
 
+def _item_scope_filter(department_id: int | None, service_group_id: int | None):
+    """Locate a worksheet item by bench scope. Department wins when present;
+    else the legacy group; both None → the legacy NULL-scope rows (a whole-
+    sample claim). NOTE: the group→department collapse is many-to-one
+    (Microbiology+Endotoxin→Microbiology), so a department match can hit two
+    historical rows — never scalar_one_or_none(). In the department world those
+    two rows are the SAME lane, i.e. duplicates: staging callers merge across
+    all of them (_items_in_scope), and the open-worksheet collision guard picks
+    the lowest id with a worksheet.item_scope_ambiguous warning
+    (_first_item_in_scope).
+
+    The both-None branch is deliberately NARROWER than the legacy
+    `service_group_id IS NULL` filter it replaces: a row carrying a department
+    but no group is that department's claim, not a whole-sample one.
+    """
+    if department_id is not None:
+        return WorksheetItem.department_id == department_id
+    if service_group_id is not None:
+        return WorksheetItem.service_group_id == service_group_id
+    return and_(
+        WorksheetItem.department_id.is_(None),
+        WorksheetItem.service_group_id.is_(None),
+    )
+
+
+def _items_in_scope(db, *, sample_uid: str, department_id: int | None,
+                    service_group_id: int | None, status: str) -> "list[WorksheetItem]":
+    """EVERY item for this vial in the given bench scope, lowest id first.
+
+    Two rows in one (vial, department) scope are duplicates of a single lane,
+    not rivals — staging callers merge across the whole list so no sibling is
+    left behind when the lowest-id row is consumed."""
+    return list(db.execute(
+        select(WorksheetItem)
+        .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
+        .where(
+            WorksheetItem.sample_uid == sample_uid,
+            _item_scope_filter(department_id, service_group_id),
+            Worksheet.status == status,
+        )
+        .order_by(WorksheetItem.id)
+    ).scalars().all())
+
+
+def _first_item_in_scope(db, *, sample_uid: str, department_id: int | None,
+                         service_group_id: int | None, status: str) -> "WorksheetItem | None":
+    """The lowest-id item in scope, for the callers that must pick exactly one
+    (the open-worksheet collision guard, where any match blocks the add)."""
+    rows = _items_in_scope(
+        db, sample_uid=sample_uid, department_id=department_id,
+        service_group_id=service_group_id, status=status,
+    )
+    if len(rows) > 1:
+        logger.warning(
+            "worksheet.item_scope_ambiguous sample_uid=%s department_id=%s "
+            "service_group_id=%s status=%s n=%d — many-to-one group→department "
+            "collapse matched multiple historical rows; using lowest id",
+            sample_uid, department_id, service_group_id, status, len(rows),
+        )
+    return rows[0] if rows else None
+
+
+def _resolve_item_scope(db, department_id: int | None, service_group_id: int | None) -> int | None:
+    """Reconcile the two scope keys on the wire. Department wins; a group whose
+    bridge disagrees is a caller bug (400); a group-only payload DERIVES the
+    department so new rows always store both keys. An id that resolves to NO
+    ServiceGroup row is a stale-client bug (400), not a dangling id to keep —
+    the inbox now emits department ids, so a caller still sending a group id
+    that doesn't exist is likely sending a department id in the wrong field."""
+    if service_group_id is None:
+        return department_id
+    group = db.get(ServiceGroup, service_group_id)
+    if group is None:
+        raise HTTPException(
+            400,
+            f"unknown service_group_id {service_group_id} — inbox now emits "
+            "department ids; send department_id (stale client?)",
+        )
+    group_dept = group.department_id
+    if department_id is not None and group_dept is not None and group_dept != department_id:
+        raise HTTPException(400, "department_id and service_group_id disagree")
+    return department_id if department_id is not None else group_dept
+
+
 class AddToWorksheetRequest(BaseModel):
     sample_uid: str
     sample_id: str
     service_group_id: int | None = None
+    department_id: int | None = None
     date_received: Optional[str] = None
     analyses: Optional[list[AddToWorksheetAnalysis]] = None
 
-    @validator("service_group_id", pre=True, always=True)
+    @validator("service_group_id", "department_id", pre=True, always=True)
     def zero_to_none(cls, v):
         return None if v == 0 else v
 
@@ -19137,18 +19246,13 @@ async def add_group_to_worksheet(
     if not ws:
         raise HTTPException(404, "Worksheet not found")
 
-    # Check if this sample+group is already in ANY open worksheet (collision guard)
+    # Check if this sample+scope is already in ANY open worksheet (collision guard)
     gid = data.service_group_id
-    gid_filter = WorksheetItem.service_group_id.is_(None) if gid is None else (WorksheetItem.service_group_id == gid)
-    existing_anywhere = db.execute(
-        select(WorksheetItem)
-        .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
-        .where(
-            WorksheetItem.sample_uid == data.sample_uid,
-            gid_filter,
-            Worksheet.status == "open",
-        )
-    ).scalar_one_or_none()
+    dept_id = _resolve_item_scope(db, data.department_id, gid)
+    existing_anywhere = _first_item_in_scope(
+        db, sample_uid=data.sample_uid, department_id=dept_id,
+        service_group_id=gid, status="open",
+    )
     if existing_anywhere:
         owner_ws = db.execute(
             select(Worksheet.title).where(Worksheet.id == existing_anywhere.worksheet_id)
@@ -19160,16 +19264,14 @@ async def add_group_to_worksheet(
             detail=f"Sample {data.sample_id} is already in worksheet \"{owner_ws or 'unknown'}\"",
         )
 
-    # Pick up any staging pre-assignments for this sample+group
-    staging_item = db.execute(
-        select(WorksheetItem)
-        .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
-        .where(
-            WorksheetItem.sample_uid == data.sample_uid,
-            gid_filter,
-            Worksheet.status == "staging",
-        )
-    ).scalar_one_or_none()
+    # Pick up any staging pre-assignments for this sample+scope. Every matching
+    # row is one lane's pre-assignment, so ALL of them are consumed below;
+    # the lowest id donates (deterministic, and identical to the single-row case).
+    staging_items = _items_in_scope(
+        db, sample_uid=data.sample_uid, department_id=dept_id,
+        service_group_id=gid, status="staging",
+    )
+    staging_item = staging_items[0] if staging_items else None
 
     # Look up actual priority from sample_priorities
     sample_priority = db.execute(
@@ -19186,7 +19288,8 @@ async def add_group_to_worksheet(
         worksheet_id=worksheet_id,
         sample_uid=data.sample_uid,
         sample_id=data.sample_id,
-        service_group_id=data.service_group_id,
+        service_group_id=gid,
+        department_id=dept_id,
         assigned_analyst_id=analyst_id,
         instrument_uid=staging_item.instrument_uid if staging_item else None,
         priority=priority,
@@ -19204,7 +19307,8 @@ async def add_group_to_worksheet(
         stamp_for_item(
             db,
             sample_uid=data.sample_uid,
-            service_group_id=data.service_group_id,
+            service_group_id=gid,
+            department_id=dept_id,
             analyst_user_id=analyst_id,
             acting_user_id=getattr(_current_user, "id", None),
             worksheet_id=worksheet_id,
@@ -19215,9 +19319,10 @@ async def add_group_to_worksheet(
             "analyst stamp failed during add-group-to-worksheet", exc_info=True
         )
 
-    # Remove staging item if picked up
-    if staging_item:
-        db.delete(staging_item)
+    # Remove EVERY staging row picked up — leaving a sibling behind would strand
+    # an invisible pre-assignment no later add can reach.
+    for _staged in staging_items:
+        db.delete(_staged)
 
     db.commit()
 
@@ -19235,18 +19340,13 @@ async def create_worksheet_from_drop(
     current_user=Depends(get_current_user),
 ):
     """Create a new worksheet from a drag-and-drop action."""
-    # Collision guard: check if sample+group is already in any open worksheet
+    # Collision guard: check if sample+scope is already in any open worksheet
     gid = data.service_group_id
-    gid_filter = WorksheetItem.service_group_id.is_(None) if gid is None else (WorksheetItem.service_group_id == gid)
-    existing_anywhere = db.execute(
-        select(WorksheetItem)
-        .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
-        .where(
-            WorksheetItem.sample_uid == data.sample_uid,
-            gid_filter,
-            Worksheet.status == "open",
-        )
-    ).scalar_one_or_none()
+    dept_id = _resolve_item_scope(db, data.department_id, gid)
+    existing_anywhere = _first_item_in_scope(
+        db, sample_uid=data.sample_uid, department_id=dept_id,
+        service_group_id=gid, status="open",
+    )
     if existing_anywhere:
         owner_ws = db.execute(
             select(Worksheet.title).where(Worksheet.id == existing_anywhere.worksheet_id)
@@ -19273,24 +19373,20 @@ async def create_worksheet_from_drop(
     ).scalar_one_or_none()
     priority = sample_priority.priority if sample_priority else "normal"
 
-    # Pick up staging pre-assignments
-    gid = data.service_group_id
-    gid_filter = WorksheetItem.service_group_id.is_(None) if gid is None else (WorksheetItem.service_group_id == gid)
-    staging_item = db.execute(
-        select(WorksheetItem)
-        .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
-        .where(
-            WorksheetItem.sample_uid == data.sample_uid,
-            gid_filter,
-            Worksheet.status == "staging",
-        )
-    ).scalar_one_or_none()
+    # Pick up staging pre-assignments — all rows in scope are consumed, lowest
+    # id donates. Mirrors add_group_to_worksheet.
+    staging_items = _items_in_scope(
+        db, sample_uid=data.sample_uid, department_id=dept_id,
+        service_group_id=gid, status="staging",
+    )
+    staging_item = staging_items[0] if staging_items else None
 
     item = WorksheetItem(
         worksheet_id=ws.id,
         sample_uid=data.sample_uid,
         sample_id=data.sample_id,
         service_group_id=gid,
+        department_id=dept_id,
         assigned_analyst_id=staging_item.assigned_analyst_id if staging_item else None,
         instrument_uid=staging_item.instrument_uid if staging_item else None,
         priority=priority,
@@ -19308,6 +19404,7 @@ async def create_worksheet_from_drop(
             db,
             sample_uid=data.sample_uid,
             service_group_id=gid,
+            department_id=dept_id,
             analyst_user_id=item.assigned_analyst_id,
             acting_user_id=getattr(current_user, "id", None),
             worksheet_id=ws.id,
@@ -19318,8 +19415,8 @@ async def create_worksheet_from_drop(
             "analyst stamp failed during create-worksheet-from-drop", exc_info=True
         )
 
-    if staging_item:
-        db.delete(staging_item)
+    for _staged in staging_items:
+        db.delete(_staged)
 
     db.commit()
 
@@ -19356,6 +19453,7 @@ async def delete_worksheet(
             clear_for_item(
                 db, sample_uid=ws_item.sample_uid,
                 service_group_id=ws_item.service_group_id,
+                department_id=ws_item.department_id,
                 acting_user_id=acting_id, worksheet_id=worksheet_id,
                 worksheet_title=ws.title,
             )
@@ -19373,53 +19471,6 @@ async def delete_worksheet(
     db.delete(ws)
     db.commit()
     return {"status": "deleted"}
-
-
-@app.delete("/worksheets/{worksheet_id}/items/{sample_uid}/{service_group_id}")
-async def remove_worksheet_item(
-    worksheet_id: int,
-    sample_uid: str,
-    service_group_id: int,
-    db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
-):
-    """Remove a single service group item from a worksheet. Analysis returns to inbox."""
-    gid = None if service_group_id == 0 else service_group_id
-    gid_filter = WorksheetItem.service_group_id.is_(None) if gid is None else (WorksheetItem.service_group_id == gid)
-    item = db.execute(
-        select(WorksheetItem).where(
-            WorksheetItem.worksheet_id == worksheet_id,
-            WorksheetItem.sample_uid == sample_uid,
-            gid_filter,
-        )
-    ).scalar_one_or_none()
-    if not item:
-        raise HTTPException(404, "Item not found")
-
-    # Analyst-from-worksheet: clear vial-tier stamps; analysis returns to inbox.
-    # Best-effort: stamping failures must not break item removal.
-    from lims_analyses.worksheet_analyst import clear_for_item
-    import logging as _logging
-    ws_title = db.execute(
-        select(Worksheet.title).where(Worksheet.id == worksheet_id)
-    ).scalar_one_or_none()
-    try:
-        clear_for_item(
-            db,
-            sample_uid=sample_uid,
-            service_group_id=gid,
-            acting_user_id=getattr(_current_user, "id", None),
-            worksheet_id=worksheet_id,
-            worksheet_title=ws_title,
-        )
-    except Exception:
-        _logging.getLogger(__name__).warning(
-            "analyst stamp clear failed during remove-worksheet-item", exc_info=True
-        )
-
-    db.delete(item)
-    db.commit()
-    return {"status": "removed"}
 
 
 @app.delete("/worksheets/{worksheet_id}/items/{item_id}")
@@ -19458,6 +19509,7 @@ async def remove_worksheet_item_by_id(
             db,
             sample_uid=item.sample_uid,
             service_group_id=item.service_group_id,
+            department_id=item.department_id,
             acting_user_id=getattr(_current_user, "id", None),
             worksheet_id=worksheet_id,
             worksheet_title=ws_title,
@@ -19493,66 +19545,6 @@ async def complete_worksheet(
     ws.completed_at = datetime.utcnow()
     db.commit()
     return {"status": "completed", "completed_by": current_user.email, "completed_at": ws.completed_at.isoformat()}
-
-
-@app.post("/worksheets/{worksheet_id}/items/{sample_uid}/{service_group_id}/reassign")
-async def reassign_worksheet_item(
-    worksheet_id: int,
-    sample_uid: str,
-    service_group_id: int,
-    data: ReassignRequest,
-    db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
-):
-    """Move a worksheet item to a different (open) worksheet."""
-    gid = None if service_group_id == 0 else service_group_id
-    gid_filter = WorksheetItem.service_group_id.is_(None) if gid is None else (WorksheetItem.service_group_id == gid)
-    item = db.execute(
-        select(WorksheetItem).where(
-            WorksheetItem.worksheet_id == worksheet_id,
-            WorksheetItem.sample_uid == sample_uid,
-            gid_filter,
-        )
-    ).scalar_one_or_none()
-    if not item:
-        raise HTTPException(404, "Item not found")
-    target = db.execute(
-        select(Worksheet).where(Worksheet.id == data.target_worksheet_id, Worksheet.status == "open")
-    ).scalar_one_or_none()
-    if not target:
-        raise HTTPException(404, "Target worksheet not found or not open")
-    # Analyst-from-worksheet: reassign = remove from source + add to target.
-    # Best-effort: stamping failures must not break the reassign. The
-    # item.worksheet_id move stays OUTSIDE the try so the reassign always
-    # happens; only the stamp side-effects are guarded.
-    from lims_analyses.worksheet_analyst import clear_for_item, stamp_for_item
-    import logging as _logging
-    acting_id = getattr(_current_user, "id", None)
-    src_ws_title = db.execute(
-        select(Worksheet.title).where(Worksheet.id == worksheet_id)
-    ).scalar_one_or_none()
-    item.worksheet_id = data.target_worksheet_id
-    # Target's worksheet-level analyst wins; else keep the item's own.
-    if target.assigned_analyst_id:
-        item.assigned_analyst_id = target.assigned_analyst_id
-    try:
-        clear_for_item(
-            db, sample_uid=sample_uid, service_group_id=gid,
-            acting_user_id=acting_id, worksheet_id=worksheet_id,
-            worksheet_title=src_ws_title,
-        )
-        stamp_for_item(
-            db, sample_uid=sample_uid, service_group_id=gid,
-            analyst_user_id=target.assigned_analyst_id or item.assigned_analyst_id,
-            acting_user_id=acting_id,
-            worksheet_id=target.id, worksheet_title=target.title,
-        )
-    except Exception:
-        _logging.getLogger(__name__).warning(
-            "analyst stamp failed during reassign-worksheet-item", exc_info=True
-        )
-    db.commit()
-    return {"status": "reassigned", "target_worksheet_id": data.target_worksheet_id}
 
 
 @app.post("/worksheets/{worksheet_id}/items/{item_id}/reassign")
@@ -19592,17 +19584,18 @@ async def reassign_worksheet_item_by_id(
     ).scalar_one_or_none()
     sample_uid = item.sample_uid
     gid = item.service_group_id
+    dept_id = item.department_id
     item.worksheet_id = data.target_worksheet_id
     if target.assigned_analyst_id:
         item.assigned_analyst_id = target.assigned_analyst_id
     try:
         clear_for_item(
-            db, sample_uid=sample_uid, service_group_id=gid,
+            db, sample_uid=sample_uid, service_group_id=gid, department_id=dept_id,
             acting_user_id=acting_id, worksheet_id=worksheet_id,
             worksheet_title=src_ws_title,
         )
         stamp_for_item(
-            db, sample_uid=sample_uid, service_group_id=gid,
+            db, sample_uid=sample_uid, service_group_id=gid, department_id=dept_id,
             analyst_user_id=target.assigned_analyst_id or item.assigned_analyst_id,
             acting_user_id=acting_id,
             worksheet_id=target.id, worksheet_title=target.title,

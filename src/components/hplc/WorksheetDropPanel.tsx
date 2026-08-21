@@ -34,6 +34,8 @@ export interface WorksheetSummaryItem {
   sample_id: string
   sample_uid: string
   service_group_id: number | null
+  /** Owning department (S2); null on pre-S2 rows. */
+  department_id?: number | null
   department_name?: string | null
   group_name: string
   priority: string
@@ -116,8 +118,10 @@ function WorksheetDropZone({
 
   const dropSubjects: SlaSubject[] = useMemo(() =>
     worksheet.items.map(item => ({
-      key: `${item.sample_uid}|${item.service_group_id}`,
+      key: String(item.id),
       priority: (item.priority as InboxPriority) || 'normal',
+      // SLA tiers are still keyed on service groups — departments take that
+      // over in S7, so this stays the group id on purpose.
       groupId: item.service_group_id,
       receivedAt: item.date_received ?? item.added_at,
     })),
@@ -238,7 +242,7 @@ function WorksheetDropZone({
               <div className="flex-1" />
               <PriorityBadge priority={item.priority as InboxPriority} />
               <SlaAgeIndicator
-                snapshot={dropSlaByKey.get(`${item.sample_uid}|${item.service_group_id}`) ?? null}
+                snapshot={dropSlaByKey.get(String(item.id)) ?? null}
                 isLoading={dropSlaLoading}
                 isError={dropSlaError}
                 compact

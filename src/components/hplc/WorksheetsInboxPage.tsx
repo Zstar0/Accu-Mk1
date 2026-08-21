@@ -225,6 +225,9 @@ export default function WorksheetsInboxPage() {
   const vials = inboxData?.items ?? []
   const total = inboxData?.total ?? 0
   const visibleVials = vials
+    // `${uid}::${departmentId}` — must stay byte-identical to InboxVialCard's
+    // dragId and to the cardKey built from DragData below, or an optimistically
+    // dropped card never hides (or never comes back on failure).
     .filter(v => !pendingDropKeys.has(`${v.uid}::${v.analyses[0]?.group_id ?? 0}`))
     .filter(v => !sampleIdFilter.trim() || vialMatchesSampleId(v, sampleIdFilter))
     .filter(v => role !== 'hplc' || !analyteFilter.trim() || vialMatchesAnalyte(v, analyteFilter))
@@ -289,7 +292,7 @@ export default function WorksheetsInboxPage() {
     }
 
     const dragData = payload
-    const cardKey = `${dragData.sampleUid}::${dragData.groupId}`
+    const cardKey = `${dragData.sampleUid}::${dragData.departmentId}`
 
     // Optimistically hide the card immediately
     setPendingDropKeys(prev => new Set(prev).add(cardKey))
@@ -299,7 +302,7 @@ export default function WorksheetsInboxPage() {
         const result = await createWorksheetFromDrop({
           sample_uid: dragData.sampleUid,
           sample_id: dragData.sampleId,
-          service_group_id: dragData.groupId,
+          department_id: dragData.departmentId,
           date_received: dragData.dateReceived,
           analyses: dragData.analyses,
         })
@@ -309,7 +312,7 @@ export default function WorksheetsInboxPage() {
         await addGroupToWorksheet(worksheetId, {
           sample_uid: dragData.sampleUid,
           sample_id: dragData.sampleId,
-          service_group_id: dragData.groupId,
+          department_id: dragData.departmentId,
           date_received: dragData.dateReceived,
           analyses: dragData.analyses,
         })
@@ -330,9 +333,9 @@ export default function WorksheetsInboxPage() {
   }
 
   async function handleFamilyDrop(dropId: string, fam: FamilyDragData) {
-    const keys = fam.items.map(i => `${i.sampleUid}::${i.groupId}`)
+    const keys = fam.items.map(i => `${i.sampleUid}::${i.departmentId}`)
     setPendingDropKeys(prev => new Set([...prev, ...keys]))
-    const failed: { sampleUid: string; sampleId: string; groupId: number }[] = []
+    const failed: { sampleUid: string; sampleId: string; departmentId: number }[] = []
     let added = 0
     try {
       let worksheetId: number
@@ -344,7 +347,7 @@ export default function WorksheetsInboxPage() {
         const result = await createWorksheetFromDrop({
           sample_uid: first.sampleUid,
           sample_id: first.sampleId,
-          service_group_id: first.groupId,
+          department_id: first.departmentId,
           date_received: first.dateReceived,
           analyses: first.analyses,
         })
@@ -362,7 +365,7 @@ export default function WorksheetsInboxPage() {
           await addGroupToWorksheet(worksheetId, {
             sample_uid: item.sampleUid,
             sample_id: item.sampleId,
-            service_group_id: item.groupId,
+            department_id: item.departmentId,
             date_received: item.dateReceived,
             analyses: item.analyses,
           })
@@ -388,7 +391,7 @@ export default function WorksheetsInboxPage() {
     } finally {
       setPendingDropKeys(prev => {
         const next = new Set(prev)
-        for (const f of failed) next.delete(`${f.sampleUid}::${f.groupId}`)
+        for (const f of failed) next.delete(`${f.sampleUid}::${f.departmentId}`)
         return next
       })
       queryClient.invalidateQueries({ queryKey: ['inbox-samples'] })

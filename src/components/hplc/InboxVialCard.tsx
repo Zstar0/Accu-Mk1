@@ -27,7 +27,10 @@ import type {
 export interface DragData {
   sampleUid: string
   sampleId: string
-  groupId: number
+  /** DEPARTMENT id, read off the inbox's `group_id` wire field (S2). Consumers
+   *  send it as `department_id` — never as `service_group_id`. */
+  departmentId: number
+  /** Department display name (the inbox's `group_name`); label only. */
   groupName: string
   dateReceived: string | null
   analyses: { title: string; keyword: string | null; peptide_name: string | null; method: string | null }[]
@@ -84,22 +87,26 @@ export function InboxVialCard({
   parentHasVarianceSubs,
   onPriorityChange,
 }: InboxVialCardProps) {
-  // Drag uses the first analysis's group_id. Today every vial's analyses[]
-  // collapses to a single group after the server-side role filter (Analytics
-  // for HPLC, Microbiology for ster/endo), so this is always unambiguous.
-  // A future HPLC sub-group split could revisit this for multi-group drops.
+  // Drag uses the first analysis's department (the `group_id` wire field
+  // carries department identity as of S2). Today every vial's analyses[]
+  // collapses to a single department after the server-side role filter
+  // (Analytical for HPLC, Microbiology for ster/endo), so this is always
+  // unambiguous. A future HPLC sub-department split could revisit this.
   const firstGroup = vial.analyses[0]
-  const groupId = firstGroup?.group_id ?? 0
+  const departmentId = firstGroup?.group_id ?? 0
   const groupName = firstGroup?.group_name ?? ''
   const groupColor = firstGroup?.group_color ?? 'zinc'
-  const dragId = `${vial.uid}::${groupId}`
+  // Card key — the un-prefixed `::` shape is shared byte-for-byte with the
+  // inbox page's pending-drop bookkeeping. Do NOT adopt the `d`-prefixed
+  // storage-key shape here; both ends would have to move together.
+  const dragId = `${vial.uid}::${departmentId}`
 
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: dragId,
     data: {
       sampleUid: vial.uid,
       sampleId: vial.sample_id,
-      groupId,
+      departmentId,
       groupName,
       dateReceived: vial.date_received,
       analyses: vial.analyses.map(a => ({
