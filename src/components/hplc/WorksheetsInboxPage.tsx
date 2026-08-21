@@ -6,7 +6,9 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
-import { ROLE_BADGE_CLASS } from '@/lib/assignment-colors'
+import { ROLE_COLOR_BADGE, roleColorForCode } from '@/lib/role-display'
+import { useVialRoles } from '@/services/vial-roles'
+import { useDepartments } from '@/services/departments'
 import { useEffectiveReadSource } from '@/lib/read-source'
 import { toast } from 'sonner'
 import { InboxVialCard, type DragData } from '@/components/hplc/InboxVialCard'
@@ -115,6 +117,15 @@ export default function WorksheetsInboxPage() {
   // worksheets-inbox-lanes.test.tsx.
   const lanesQ = useInboxLanes()
   const lanes = lanesQ.data ?? []
+  const vialRolesQ = useVialRoles()
+  const departmentsQ = useDepartments()
+  // Catalog color for a lane/sub-chip key, IF it's a real vial-role code —
+  // 'microbiology' spans two role codes and isn't itself one, so it (and the
+  // 'All' sub-chip's empty value) keep the neutral-violet fallback below.
+  const laneBadgeClass = (key: string): string =>
+    vialRolesQ.data?.some(r => r.code === key)
+      ? ROLE_COLOR_BADGE[roleColorForCode(key, vialRolesQ.data, departmentsQ.data)]
+      : 'bg-violet-500/15 text-violet-700 border-violet-500/40 dark:text-violet-300'
 
   // Raw stored preference; validated below against the fetched lane set —
   // an admin-deleted department's stale key must never reach the inbox
@@ -506,7 +517,7 @@ export default function WorksheetsInboxPage() {
                       // 'microbiology', which spans two role codes) falls
                       // back to the same neutral-violet active look
                       // Microbiology has always used.
-                      ? (ROLE_BADGE_CLASS[lane.key] ?? 'bg-violet-500/15 text-violet-700 border-violet-500/40 dark:text-violet-300')
+                      ? laneBadgeClass(lane.key)
                       : 'bg-transparent text-muted-foreground border-border hover:bg-muted/40',
                   )}
                 >
@@ -532,7 +543,7 @@ export default function WorksheetsInboxPage() {
                         // Active sub-chip carries its assignment-role colour:
                         // Endotoxin → orange, Sterility(PCR) → purple; the "All"
                         // chip has no role, so it falls back to neutral violet.
-                        ? (ROLE_BADGE_CLASS[c.value] ?? 'bg-violet-500/15 text-violet-700 border-violet-500/40 dark:text-violet-300')
+                        ? laneBadgeClass(c.value)
                         : 'bg-transparent text-muted-foreground border-border hover:bg-muted/40',
                     )}
                   >
