@@ -339,3 +339,116 @@ def test_parent_quantity_unit_rejects_pept_total_concentration(db):
                         result_unit="mg/mL", review_state="verified", reportable=True))
     db.commit()
     assert _parent_quantity_unit(db, parent) is None
+
+
+# ---------------------------------------------------------------------------
+# Series key must be the name COABuilder derives from the identity SERVICE
+# TITLE (`Analyte{i}Peptide`.split(" - Identity")[0]), not `peptides.name`.
+# PB-0354 (2026-08-18): peptide 63 is named 'TB500 (Thymosin Beta 4)' but the
+# sample was provisioned with ID_THYMOSINBETA4 whose title is
+# 'Thymosin Beta-4 - Identity (HPLC)'. COABuilder looked up
+# reps.get('Thymosin Beta-4'), missed, and silently rendered the TB4 slot as a
+# non-variance analyte (no mean/SD/n, no 'Conforms 2/2').
+# ---------------------------------------------------------------------------
+
+def _titled_svc(db, keyword, title, peptide_id=None):
+    svc = AnalysisService(title=title, keyword=keyword, peptide_id=peptide_id)
+    db.add(svc)
+    db.flush()
+    return svc
+
+
+@pytest.fixture
+def pb0354_world(db):
+    """Blend BPC-157 + TB4, one core vial (promoted) + one variance vial, where
+    the TB4 peptide's catalog name diverges from its identity service title."""
+    bpc = Peptide(name="BPC-157", abbreviation="BPC157", active=True)
+    tb4 = Peptide(name="TB500 (Thymosin Beta 4)", abbreviation="TB500", active=True)
+    db.add_all([bpc, tb4]); db.flush()
+    svcs = {
+        "ID_BPC157": _titled_svc(db, "ID_BPC157", "BPC-157 - Identity (HPLC)", bpc.id),
+        "PUR_BPC157": _titled_svc(db, "PUR_BPC157", "BPC-157 - Purity", bpc.id),
+        "QTY_BPC157": _titled_svc(db, "QTY_BPC157", "BPC-157 - Quantity", bpc.id),
+        # Identity title prefix ('Thymosin Beta-4') != peptide.name
+        "ID_THYMOSINBETA4": _titled_svc(db, "ID_THYMOSINBETA4", "Thymosin Beta-4 - Identity (HPLC)", tb4.id),
+        "PUR_TB500BETA4": _titled_svc(db, "PUR_TB500BETA4", "TB500 (Thymosin Beta 4) - Purity", tb4.id),
+        "QTY_TB500BETA4": _titled_svc(db, "QTY_TB500BETA4", "TB500 (Thymosin Beta 4) - Quantity", tb4.id),
+    }
+    parent = LimsSample(sample_id="PB-0354", external_lims_uid="uid-pb0354", container_mode=True)
+    db.add(parent); db.flush()
+    subs = {}
+    for seq, kind in ((1, "core"), (5, "variance")):
+        sub = LimsSubSample(
+            parent_sample_pk=parent.id, external_lims_uid=f"mk1://pb0354-v{seq}",
+            sample_id=f"PB-0354-S{seq:02d}", vial_sequence=seq,
+            assignment_role="hplc", assignment_kind=kind, in_variance_set=True,
+        )
+        db.add(sub); db.flush()
+        subs[seq] = sub
+    core, var = subs[1], subs[5]
+    _row(db, core, svcs["ID_BPC157"], "BPC-157", state="promoted")
+    _row(db, core, svcs["PUR_BPC157"], "99.611", state="promoted")
+    _row(db, core, svcs["QTY_BPC157"], "12.213", state="promoted")
+    _row(db, core, svcs["ID_THYMOSINBETA4"], "Thymosin Beta-4", state="promoted")
+    _row(db, core, svcs["PUR_TB500BETA4"], "99.754", state="promoted")
+    _row(db, core, svcs["QTY_TB500BETA4"], "10.689", state="promoted")
+    _row(db, var, svcs["ID_BPC157"], "BPC-157")
+    _row(db, var, svcs["PUR_BPC157"], "99.626")
+    _row(db, var, svcs["QTY_BPC157"], "11.948")
+    _row(db, var, svcs["ID_THYMOSINBETA4"], "Thymosin Beta-4")
+    _row(db, var, svcs["PUR_TB500BETA4"], "99.662")
+    _row(db, var, svcs["QTY_TB500BETA4"], "10.683")
+    db.commit()
+    return parent, subs
+
+
+def test_series_keyed_by_identity_title_prefix_when_peptide_name_diverges(pb0354_world, db):
+    parent, _ = pb0354_world
+    out = build_variance_replicates(db, parent)
+    # The key COABuilder will look up is the identity-service title prefix.
+    assert set(out) == {"BPC-157", "Thymosin Beta-4"}
+    tb4 = out["Thymosin Beta-4"]
+    assert [r["vial_sequence"] for r in tb4] == [1, 5]
+    # PUR_/QTY_ rows for that peptide (whose own titles use the catalog name)
+    # attach under the SAME key — one record per vial, not split across two.
+    assert tb4[0] == {"vial_sequence": 1, "IDENTITY": "Thymosin Beta-4",
+                      "PURITY": "99.754%", "QUANTITY": "10.689 mg"}
+    assert tb4[1] == {"vial_sequence": 5, "IDENTITY": "Thymosin Beta-4",
+                      "PURITY": "99.662%", "QUANTITY": "10.683 mg"}
+
+
+def test_series_key_unchanged_when_title_prefix_equals_peptide_name(pb0354_world, db):
+    parent, _ = pb0354_world
+    bpc = build_variance_replicates(db, parent)["BPC-157"]
+    assert [r["vial_sequence"] for r in bpc] == [1, 5]
+    assert bpc[1] == {"vial_sequence": 5, "IDENTITY": "BPC-157",
+                      "PURITY": "99.626%", "QUANTITY": "11.948 mg"}
+
+
+def test_vial_figures_use_same_identity_title_key(pb0354_world, db):
+    from coa.variance_series import build_vial_figures
+    _, subs = pb0354_world
+    figs = build_vial_figures(db, subs[5])
+    assert set(figs) == {"BPC-157", "Thymosin Beta-4"}
+    assert figs["Thymosin Beta-4"] == {"IDENTITY": "Thymosin Beta-4",
+                                       "PURITY": "99.662%", "QUANTITY": "10.683 mg"}
+
+
+def test_series_falls_back_to_peptide_name_without_identity_row(db):
+    """No identity row on the vial for that peptide → nothing better than the
+    catalog name (COABuilder N/A-gates a vial with no IDENTITY anyway)."""
+    tb4 = Peptide(name="TB500 (Thymosin Beta 4)", abbreviation="TB500", active=True)
+    db.add(tb4); db.flush()
+    pur = _titled_svc(db, "PUR_TB500BETA4", "TB500 (Thymosin Beta 4) - Purity", tb4.id)
+    parent = LimsSample(sample_id="P-0900", external_lims_uid="uid-p0900", container_mode=True)
+    db.add(parent); db.flush()
+    sub = LimsSubSample(
+        parent_sample_pk=parent.id, external_lims_uid="mk1://p0900-v2",
+        sample_id="P-0900-S02", vial_sequence=2,
+        assignment_role="hplc", assignment_kind="variance", in_variance_set=True,
+    )
+    db.add(sub); db.flush()
+    _row(db, sub, pur, "99.0")
+    db.commit()
+    out = build_variance_replicates(db, parent)
+    assert set(out) == {"TB500 (Thymosin Beta 4)"}

@@ -19,6 +19,7 @@ before.
 """
 import logging
 from datetime import datetime
+from typing import Optional
 
 from models import VialProfileAssignment
 from sub_samples.catalog_demand import resolve_catalog_fulfillment
@@ -36,7 +37,7 @@ def _supersede_current(db, sub_pk: int, now: datetime) -> None:
         row.superseded_at = now
 
 
-def write_custody_edges(db, sub, role, wp_services, user_id) -> int:
+def write_custody_edges(db, sub, role, wp_services, user_id, snapshot: Optional[dict] = None) -> int:
     """Supersede this vial's current custody rows, unconditionally, then —
     for a real role with a resolvable services dict — write fresh
     host/rider edges resolved from the catalog
@@ -48,13 +49,22 @@ def write_custody_edges(db, sub, role, wp_services, user_id) -> int:
       every current row (the flip happened; the old custody is no longer
       true), write nothing new, log 'custody_edge_skipped', return 0. The
       vial then has zero current custody until a later assignment resolves
-      real services — honest, not stale-but-wrong.
+      real services — honest, not stale-but-wrong. This gate fires the
+      SAME way regardless of `snapshot` — a frozen resolution still needs a
+      truthy wp_services to reach it, deliberately unchanged from before
+      task 6 rather than newly reading purely off the snapshot.
     - role is real and wp_services is truthy: supersede current rows, then
       resolve fulfillment for `role` and write one row per host profile id
       (relation='host') and one per rider profile id (relation='rider'),
       all stamped assigned_at=now, assigned_by_id=user_id. Returns the
       number of rows written (0 if the role isn't in the resolved
       fulfillment map, e.g. no purchased service anchors it).
+
+    snapshot (S4 rider, task 6): the sub-sample's PARENT catalog_snapshot
+    (LimsSample.catalog_snapshot), threaded straight through to
+    resolve_catalog_fulfillment. Non-NULL freezes which profiles resolve as
+    host/rider to what was true at registration; NULL (the default) is the
+    live path, unchanged.
     """
     now = datetime.utcnow()
     _supersede_current(db, sub.id, now)
@@ -66,7 +76,7 @@ def write_custody_edges(db, sub, role, wp_services, user_id) -> int:
         log.warning("custody_edge_skipped sub=%s role=%s reason=no_services", sub.sample_id, role)
         return 0
 
-    fulfillment = resolve_catalog_fulfillment(db, wp_services).get(role)
+    fulfillment = resolve_catalog_fulfillment(db, wp_services, snapshot=snapshot).get(role)
     if fulfillment is None:
         return 0
 

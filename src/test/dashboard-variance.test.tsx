@@ -3,9 +3,39 @@ import {
   parentHasVariance,
   parentShowsVariance,
   subIsVarianceMember,
-  ROLE_BADGES,
 } from '@/components/senaite/SenaiteDashboard'
-import type { ParentAggregate, SubSample } from '@/lib/api'
+import { roleGlyph } from '@/lib/role-display'
+import type { ParentAggregate, SubSample, VialRoleRow } from '@/lib/api'
+
+function role(
+  overrides: Partial<VialRoleRow> & Pick<VialRoleRow, 'code' | 'label'>
+): VialRoleRow {
+  return {
+    id: overrides.code.length,
+    department_id: null,
+    boxable: false,
+    variance_eligible: false,
+    sort_order: 0,
+    frozen: false,
+    is_system: true,
+    color: null,
+    short_label: null,
+    badge_glyph: null,
+    ...overrides,
+  }
+}
+
+// The catalog default: the legacy five roles plus an auto-minted role with
+// no seeded short_label/badge_glyph faces (the usp71 idiom) — parity with
+// role-display.test.tsx / role-badge.test.tsx.
+const ROLES: VialRoleRow[] = [
+  role({ code: 'hplc', label: 'HPLC', short_label: 'HPLC', badge_glyph: 'H' }),
+  role({ code: 'endo', label: 'Endotoxin', short_label: 'ENDO', badge_glyph: 'E' }),
+  role({ code: 'ster', label: 'Sterility', short_label: 'PCR', badge_glyph: 'P' }),
+  role({ code: 'xtra', label: 'Extra', short_label: 'XTRA', badge_glyph: 'X' }),
+  role({ code: 'hm', label: 'Heavy Metals', short_label: 'HM', badge_glyph: 'M' }),
+  role({ code: 'usp71', label: 'USP <71> Sterility', short_label: null, badge_glyph: null }),
+]
 
 const agg = (
   variance?: ParentAggregate['variance'],
@@ -48,15 +78,14 @@ describe('parentShowsVariance (entitlement OR assigned variance subs)', () => {
   })
 })
 
-describe('ROLE_BADGES — single-glyph convention (the "HM HM" fix)', () => {
-  it('hm renders a single bold glyph (M), not the duplicated "HM" (spec 4, Task 10)', () => {
-    const hm = ROLE_BADGES.find(b => b.key === 'hm')
-    expect(hm?.label).toBe('M')
+describe('roleGlyph — single-glyph convention over a seeded catalog (the "HM HM" fix)', () => {
+  it('hm resolves to a single glyph (M), not the duplicated "HM" (spec 4, Task 10)', () => {
+    expect(roleGlyph('hm', ROLES)).toBe('M')
   })
 
-  it('every badge label is exactly one visible character (the convention hm now follows)', () => {
-    for (const b of ROLE_BADGES) {
-      expect(Array.from(b.label).length).toBe(1)
+  it('every catalog role, including the auto-minted usp71, resolves to exactly one character', () => {
+    for (const r of ROLES) {
+      expect(roleGlyph(r.code, ROLES)).toHaveLength(1)
     }
   })
 })

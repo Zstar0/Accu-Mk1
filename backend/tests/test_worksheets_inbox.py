@@ -154,9 +154,17 @@ def test_microbiology_filter_excludes_hplc_vials(client, auth_headers):
 
 # ── Analysis filtering by service group ──────────────────────────────────────
 
+# S2 Task 7: group_name carries the DEPARTMENT name (sanctioned wire
+# re-meaning, sub-spec D4) — the HPLC lane's is "Analytical", not the
+# "Analytics" service group. Both source paths were ported, so mk1:- and
+# SENAITE-sourced analyses are held to the SAME operand here on purpose.
+
 def test_hplc_vial_analyses_are_analytics_only(client, auth_headers):
-    """A vial on the HPLC filter must show only Analytics analyses, even if the
-    underlying SENAITE AR carries Micro keywords (the inert duplicates decision)."""
+    """A vial on the HPLC filter must show only Analytical-department analyses,
+    even if the underlying SENAITE AR carries Micro keywords (the inert
+    duplicates decision)."""
+    with SessionLocal() as db:
+        expected = inbox_lanes(db)["hplc"].department_name
     resp = client.get(
         "/worksheets/inbox",
         params={"role": "hplc", "hide_test_orders": "false"},
@@ -164,12 +172,14 @@ def test_hplc_vial_analyses_are_analytics_only(client, auth_headers):
     )
     for item in resp.json()["items"]:
         for analysis in item["analyses"]:
-            assert analysis["group_name"] == "Analytics", (
-                f"HPLC vial {item['sample_id']} has non-Analytics analysis: {analysis}"
+            assert analysis["group_name"] == expected, (
+                f"HPLC vial {item['sample_id']} has non-{expected} analysis: {analysis}"
             )
 
 
 def test_microbiology_vial_analyses_are_micro_only(client, auth_headers):
+    with SessionLocal() as db:
+        expected = inbox_lanes(db)["microbiology"].department_name
     resp = client.get(
         "/worksheets/inbox",
         params={"role": "microbiology", "hide_test_orders": "false"},
@@ -177,8 +187,8 @@ def test_microbiology_vial_analyses_are_micro_only(client, auth_headers):
     )
     for item in resp.json()["items"]:
         for analysis in item["analyses"]:
-            assert analysis["group_name"] == "Microbiology", (
-                f"Micro vial {item['sample_id']} has non-Micro analysis: {analysis}"
+            assert analysis["group_name"] == expected, (
+                f"Micro vial {item['sample_id']} has non-{expected} analysis: {analysis}"
             )
 
 

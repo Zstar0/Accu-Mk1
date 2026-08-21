@@ -3729,6 +3729,9 @@ export interface SenaiteAnalysis {
    *  backing this line ('mk1' | 'senaite'). Type-only here — not yet read
    *  by any FE display logic. */
   service_origin?: string | null
+  /** S3: native identity key; keyword is display-only on mk1 rows. Absent on
+   *  SENAITE-sourced rows, which keep keyword as their identity. */
+  analysis_service_id?: number | null
 }
 
 export interface SenaiteAttachment {
@@ -4751,6 +4754,9 @@ export interface VialRoleRow {
   sort_order: number
   frozen: boolean
   is_system: boolean
+  color?: string | null
+  short_label?: string | null
+  badge_glyph?: string | null
 }
 
 export interface VialRoleCreate {
@@ -4760,6 +4766,9 @@ export interface VialRoleCreate {
   boxable?: boolean
   variance_eligible?: boolean
   sort_order?: number
+  color?: string | null
+  short_label?: string | null
+  badge_glyph?: string | null
 }
 
 export async function getVialRoles(): Promise<VialRoleRow[]> {
@@ -5069,6 +5078,11 @@ export interface InboxAnalysisItem {
   peptide_name: string | null
   method: string | null
   review_state: string | null
+  /** S2: `group_id` / `group_name` / `group_color` carry DEPARTMENT identity,
+   *  not service-group identity — both the SENAITE-derived and the native
+   *  inbox emitters speak departments now. The wire names are unchanged for
+   *  rollback safety, so a value read from here must be sent back as
+   *  `department_id`, never as `service_group_id`. */
   group_id: number
   group_name: string
   group_color: string
@@ -5205,6 +5219,9 @@ export async function getWorksheetUsers(): Promise<WorksheetUser[]> {
 export async function bulkUpdateInbox(data: {
   sample_uids: string[]
   priority?: InboxPriority
+  /** Scope key (S2); required alongside `analyst_id` / `instrument_uid`.
+   *  Takes precedence over `service_group_id` server-side. */
+  department_id?: number
   service_group_id?: number
   analyst_id?: number
   instrument_uid?: string
@@ -5250,6 +5267,9 @@ export interface WorksheetListItem {
     sample_id: string
     sample_uid: string
     service_group_id: number | null
+    /** Owning department (S2). Null only for pre-S2 rows, which fall back to
+     *  the legacy `service_group_id` scope for keys and de-duping. */
+    department_id: number | null
     department_name: string | null
     group_name: string
     group_color: string
@@ -5323,9 +5343,24 @@ export async function updateWorksheet(
   if (!response.ok) throw new Error(`Update worksheet failed: ${response.status}`)
 }
 
+/** Body shared by both add paths (`/add-group` and `/create-from-drop`).
+ *
+ *  `department_id` is the scope key now and takes precedence server-side;
+ *  `service_group_id` stays declared-but-unsent so a rollback needs no type
+ *  change. Nothing sourced from the inbox may travel as `service_group_id` —
+ *  the inbox's `group_id` is a DEPARTMENT id (see InboxAnalysisItem). */
+export interface AddToWorksheetPayload {
+  sample_uid: string
+  sample_id: string
+  department_id?: number
+  service_group_id?: number
+  date_received?: string | null
+  analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[]
+}
+
 export async function addGroupToWorksheet(
   worksheetId: number,
-  data: { sample_uid: string; sample_id: string; service_group_id: number; date_received?: string | null; analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[] }
+  data: AddToWorksheetPayload
 ): Promise<{ status: string; item_id: number }> {
   const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}/add-group`, {
     method: 'POST',
@@ -5398,7 +5433,7 @@ export async function reorderWorksheetItems(
 }
 
 export async function createWorksheetFromDrop(
-  data: { sample_uid: string; sample_id: string; service_group_id: number; date_received?: string | null; analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[] }
+  data: AddToWorksheetPayload
 ): Promise<WorksheetCreateResponse> {
   const response = await fetch(`${API_BASE_URL()}/worksheets/create-from-drop`, {
     method: 'POST',

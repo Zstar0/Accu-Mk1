@@ -61,7 +61,9 @@ export function familyDragItems(vials: InboxVialItem[]): DragData[] {
   return vials.map(v => ({
     sampleUid: v.uid,
     sampleId: v.sample_id,
-    groupId: v.analyses[0]?.group_id ?? 0,
+    // `group_id` is the DEPARTMENT id on the wire (S2) — same derivation as
+    // InboxVialCard's own drag handle, which this must stay identical to.
+    departmentId: v.analyses[0]?.group_id ?? 0,
     groupName: v.analyses[0]?.group_name ?? '',
     dateReceived: v.date_received,
     analyses: v.analyses.map(a => ({

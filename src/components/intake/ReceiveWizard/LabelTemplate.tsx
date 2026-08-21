@@ -1,11 +1,6 @@
 import { QRCodeSVG } from 'qrcode.react'
-
-const ROLE_SHORT: Record<string, string> = {
-  hplc: 'HPLC',
-  endo: 'ENDO',
-  ster: 'PCR',
-  xtra: 'XTRA',
-}
+import { roleShortLabel } from '@/lib/role-display'
+import type { VialRoleRow } from '@/lib/api'
 
 interface Props {
   sampleId: string
@@ -16,13 +11,16 @@ interface Props {
   /** Total vials in this parent's set (parent + sub-samples); optional. */
   vialTotal?: number | null
   /** Role from assignment step. If present, renders inline. Widened to
-   *  string (spec 4, Task 8 — AssignmentRole widening): ROLE_SHORT is
-   *  already a string-keyed lookup, so an unrecognized role code simply
-   *  renders no role text, same as before. */
+   *  string (spec 4, Task 8 — AssignmentRole widening): roleShortLabel
+   *  falls back to the uppercased code, so an unrecognized role code
+   *  simply renders that, same as before. */
   role?: string | null
   /** Check-in date — ISO string, Date, or null. Falls back to "today" so
    *  every printed label carries a date even when caller doesn't provide one. */
   receivedAt?: string | Date | null
+  /** S1 roles-as-data: this is a PRINT template — no query hook of its own.
+   *  The parent (PrintStep) threads its useVialRoles() data straight through. */
+  roles?: VialRoleRow[]
 }
 
 function formatLabelDate(input: string | Date | null | undefined): string {
@@ -39,8 +37,9 @@ export function LabelTemplate({
   vialTotal,
   role,
   receivedAt,
+  roles,
 }: Props) {
-  const roleText = role ? (ROLE_SHORT[role] ?? role.toUpperCase()) : null
+  const roleText = role ? roleShortLabel(role, roles) : null
   const hasVial = vialPosition && vialTotal
   const dateStr = formatLabelDate(receivedAt)
 

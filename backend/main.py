@@ -35,12 +35,13 @@ from fastapi import BackgroundTasks, FastAPI, Body, Depends, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field, validator
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import select, desc, delete, update, func, extract
+from sqlalchemy import select, desc, delete, update, func, extract, and_
 from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
 from sla_engine import BusinessSchedule, compute_business_minutes, sla_status_dict
 from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment
+from catalog.change_log import apply_and_log, log_create, log_delete, log_members
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -345,6 +346,8 @@ def seed_default_settings(db: Session):
 async def lifespan(app: FastAPI):
     """Initialize database on startup and seed defaults."""
     init_db()
+    from database import engine as _db_engine, verify_identity_indexes
+    verify_identity_indexes(_db_engine)
     from flags import seams as _flag_seams
     _flag_seams.register_mk1_entities()
     # Flag attachments reuse the S3 blob store used by vial photos when
@@ -890,6 +893,113 @@ async def get_sample_retest_info(
     except Exception:
         # Integration DB unavailable — return the empty shell so callers can render gracefully
         pass
+
+    return result
+
+
+@app.get("/samples/{sample_id}/transfer-info")
+def get_sample_transfer_info(
+    sample_id: str,
+    _current_user=Depends(get_current_user),
+):
+    """
+    Account-transfer lineage for a sample, both directions.
+
+    Mirrors get_sample_retest_info above, including the auth gate: this
+    returns source_order_id/source_user_id, cross-account ownership data
+    mapping which customer's samples became which other customer's — exactly
+    what a transfer is supposed to keep internal, so it is no less guarded
+    than the endpoint it was modeled on.
+
+    transfer_of_senaite_id lives INSIDE the payload JSON (like
+    retest_of_senaite_id does for retests), while is_transfer,
+    transfer_of_order_id, and transfer_source_user_id are real columns on
+    order_submissions.
+
+    Defined with `def`, not `async def`, on purpose: this does synchronous DB
+    work, and an awaitless `async def` blocks the event loop for every other
+    request — a known defect class in this backend (see get_sample_retest_info
+    just above for the existing instance of it). Do not "fix" this back to async.
+
+    Reads from the integration-service Postgres directly. Cheap — bounded
+    queries against indexed columns + JSONB lateral expansions.
+    """
+    from psycopg2 import errors as psycopg2_errors
+    from psycopg2.extras import RealDictCursor
+
+    result = {
+        "is_transfer": False,
+        "source_sample_id": None,
+        "source_order_id": None,
+        "source_user_id": None,
+        "transferred_as": [],
+    }
+
+    try:
+        with get_integration_db() as int_conn:
+            with int_conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # Backward: was THIS sample created by a transfer?
+                # sample_results is a JSONB object keyed by sample "number"
+                # (matching payload.samples[].number) — not a list. Same
+                # shape the retest query above keys off of.
+                cur.execute(
+                    """
+                    SELECT
+                      os.order_id::text AS order_id,
+                      os.transfer_of_order_id,
+                      os.transfer_source_user_id,
+                      s.value->>'transfer_of_senaite_id' AS source_sample_id
+                    FROM order_submissions os,
+                         jsonb_array_elements(os.payload->'samples') s
+                    WHERE os.is_transfer = TRUE
+                      AND s.value->>'transfer_of_senaite_id' IS NOT NULL
+                      AND os.sample_results->(s.value->>'number')->>'senaite_id' = %s
+                    LIMIT 1
+                    """,
+                    [sample_id],
+                )
+                row = cur.fetchone()
+                if row:
+                    result["is_transfer"] = True
+                    result["source_sample_id"] = row["source_sample_id"]
+                    result["source_order_id"] = row["transfer_of_order_id"]
+                    result["source_user_id"] = row["transfer_source_user_id"]
+
+                # Forward: which samples were transferred FROM this one?
+                cur.execute(
+                    """
+                    SELECT
+                      os.order_id::text AS order_id,
+                      os.sample_results->(s.value->>'number')->>'senaite_id' AS new_sample_id
+                    FROM order_submissions os,
+                         jsonb_array_elements(os.payload->'samples') s
+                    WHERE os.is_transfer = TRUE
+                      AND s.value->>'transfer_of_senaite_id' = %s
+                      AND os.sample_results->(s.value->>'number')->>'senaite_id' IS NOT NULL
+                    ORDER BY os.created_at
+                    """,
+                    [sample_id],
+                )
+                for r in cur.fetchall():
+                    result["transferred_as"].append({
+                        "sample_id": r["new_sample_id"],
+                        "order_id": int(r["order_id"]) if r["order_id"] else None,
+                    })
+    except (psycopg2_errors.UndefinedColumn, psycopg2_errors.UndefinedTable):
+        # The transfer columns/migration (w1x2y3z4a5b6) aren't applied in this
+        # environment — the all-empty shell is the DESIGNED answer, and this is
+        # the only failure allowed to degrade silently (deploy-order
+        # tolerance: an Mk1 deploy may precede the IS migration window).
+        pass
+    except Exception as exc:
+        # Narrowed per Task 9 carried-forward verification #5: a lineage
+        # endpoint must never answer "not a transfer" when the truth is
+        # unknown. Connection refusals, timeouts, and any other query failure
+        # surface as an explicit 503 instead of an empty shell.
+        raise HTTPException(
+            status_code=503,
+            detail="transfer lineage temporarily unavailable (integration DB unreachable)",
+        ) from exc
 
     return result
 
@@ -2418,6 +2528,19 @@ class DepartmentResponse(BaseModel):
 
 # ─── Vial Role schemas ───
 
+# S1: closed color-name vocabulary — must stay in sync with the FE's
+# ROLE_COLOR_* class maps (src/lib/role-display.ts). Engineer-owned on
+# purpose: each name has static Tailwind classes behind it.
+ALLOWED_ROLE_COLORS = {"green", "orange", "purple", "sky", "slate", "amber",
+                       "blue", "emerald", "red", "violet", "zinc", "rose"}
+
+
+def _validate_role_color(v):
+    if v is not None and v not in ALLOWED_ROLE_COLORS:
+        raise ValueError(f"unknown color {v!r}; allowed: {sorted(ALLOWED_ROLE_COLORS)}")
+    return v
+
+
 class VialRoleCreate(BaseModel):
     code: str
     label: str
@@ -2425,6 +2548,13 @@ class VialRoleCreate(BaseModel):
     boxable: bool = False
     variance_eligible: bool = False
     sort_order: int = 0
+    color: Optional[str] = None
+    short_label: Optional[str] = None
+    badge_glyph: Optional[str] = None
+
+    @validator("color")
+    def color_must_be_known(cls, v):
+        return _validate_role_color(v)
 
 
 class VialRoleUpdate(BaseModel):
@@ -2434,6 +2564,13 @@ class VialRoleUpdate(BaseModel):
     boxable: Optional[bool] = None
     variance_eligible: Optional[bool] = None
     sort_order: Optional[int] = None
+    color: Optional[str] = None
+    short_label: Optional[str] = None
+    badge_glyph: Optional[str] = None
+
+    @validator("color")
+    def color_must_be_known(cls, v):
+        return _validate_role_color(v)
 
 
 class VialRoleResponse(BaseModel):
@@ -2446,6 +2583,9 @@ class VialRoleResponse(BaseModel):
     sort_order: int
     frozen: bool
     is_system: bool
+    color: Optional[str] = None
+    short_label: Optional[str] = None
+    badge_glyph: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -2813,7 +2953,7 @@ class MethodResponse(BaseModel):
 
 class AnalyteInput(BaseModel):
     """One analyte slot for peptide create/update."""
-    slot: int
+    slot: int = Field(ge=1, le=4)
     analysis_service_id: int
     sample_id: Optional[str] = None
     component_peptide_id: Optional[int] = None
@@ -3236,16 +3376,30 @@ async def get_analysis_services(
     return [AnalysisServiceResponse.model_validate(s) for s in services]
 
 
+# Fields snapshotted on create/delete change-log rows — the full editable
+# catalog surface of a service plus origin (always deliberately set on
+# create, never blank).
+SERVICE_LOG_FIELDS = (
+    "title", "keyword", "category", "unit", "department_id",
+    "result_type", "result_options", "variance_capable", "origin", "active",
+)
+
+
 @app.post("/analysis-services", response_model=AnalysisServiceResponse, status_code=201)
 async def create_analysis_service(
     data: AnalysisServiceCreate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Create an Mk1-native analysis service. NEVER creates anything in SENAITE."""
     validate_new_keyword(db, data.keyword)
     svc = AnalysisService(**data.model_dump(), origin="mk1")
     db.add(svc)
+    db.flush()
+    log_create(
+        db, svc, SERVICE_LOG_FIELDS,
+        entity_type="service", entity_pk=svc.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(svc)
     return AnalysisServiceResponse.model_validate(svc)
@@ -3256,7 +3410,7 @@ async def update_analysis_service(
     service_id: int,
     data: AnalysisServiceUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Full-field edit. On a SENAITE-origin row, every sync-owned field touched
     here is recorded in local_overrides so the next sync leaves it alone."""
@@ -3273,14 +3427,22 @@ async def update_analysis_service(
     # Only a genuine value change locks a sync-owned field into local_overrides.
     # Resubmitting the current value (e.g. a full-object-save from a UI edit
     # flyout that touches nothing) must be a no-op, not a permanent ownership
-    # transfer away from the SENAITE sync.
-    overrides = set(svc.local_overrides or [])
-    for field, value in fields.items():
-        if svc.origin == "senaite" and field in SYNC_OWNED_FIELDS and value != getattr(svc, field):
-            overrides.add(field)
-        setattr(svc, field, value)
+    # transfer away from the SENAITE sync. Computed here (against svc's
+    # pre-mutation state) and folded into apply_fields so apply_and_log does
+    # the actual setattr + before/after logging for every field, local_overrides
+    # included — it shows up in the log row's changed dict iff it itself changed.
+    apply_fields = dict(fields)
     if svc.origin == "senaite":
-        svc.local_overrides = sorted(overrides)
+        overrides = set(svc.local_overrides or [])
+        for field, value in fields.items():
+            if field in SYNC_OWNED_FIELDS and value != getattr(svc, field):
+                overrides.add(field)
+        apply_fields["local_overrides"] = sorted(overrides)
+
+    apply_and_log(
+        db, svc, apply_fields,
+        entity_type="service", entity_pk=svc.id, user_id=getattr(current_user, "id", None),
+    )
 
     db.commit()
     db.refresh(svc)
@@ -3291,7 +3453,7 @@ async def update_analysis_service(
 async def delete_analysis_service(
     service_id: int,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Delete an Mk1-native service. Refused if any analysis references it —
     deactivate instead. SENAITE-origin rows are never deletable here."""
@@ -3302,6 +3464,10 @@ async def delete_analysis_service(
         raise HTTPException(400, "only Mk1-native services can be deleted; deactivate instead")
     if _is_service_referenced(db, svc.id):
         raise HTTPException(409, "service is referenced by existing analyses; deactivate instead")
+    log_delete(
+        db, svc, SERVICE_LOG_FIELDS,
+        entity_type="service", entity_pk=svc.id, user_id=getattr(current_user, "id", None),
+    )
     db.delete(svc)
     db.commit()
 
@@ -3315,7 +3481,7 @@ async def update_analysis_service_peptide(
     service_id: int,
     data: AnalysisServicePeptideUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Link or unlink a peptide to an analysis service."""
     service = db.execute(
@@ -3330,11 +3496,14 @@ async def update_analysis_service_peptide(
         ).scalar_one_or_none()
         if not peptide:
             raise HTTPException(404, f"Peptide {data.peptide_id} not found")
-        service.peptide_id = peptide.id
-        service.peptide_name = peptide.name
+        new_peptide_id, new_peptide_name = peptide.id, peptide.name
     else:
-        service.peptide_id = None
-        service.peptide_name = None
+        new_peptide_id, new_peptide_name = None, None
+
+    apply_and_log(
+        db, service, {"peptide_id": new_peptide_id, "peptide_name": new_peptide_name},
+        entity_type="service", entity_pk=service.id, user_id=getattr(current_user, "id", None),
+    )
 
     db.commit()
     db.refresh(service)
@@ -3351,7 +3520,7 @@ async def update_analysis_service_result_type(
     service_id: int,
     data: AnalysisServiceResultTypeUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Set a service's result type + options (local-authoritative once set)."""
     service = db.execute(
@@ -3359,10 +3528,15 @@ async def update_analysis_service_result_type(
     ).scalar_one_or_none()
     if not service:
         raise HTTPException(404, f"Analysis service {service_id} not found")
+    fields = {}
     if "result_type" in data.model_fields_set:
-        service.result_type = data.result_type
+        fields["result_type"] = data.result_type
     if "result_options" in data.model_fields_set:
-        service.result_options = data.result_options
+        fields["result_options"] = data.result_options
+    apply_and_log(
+        db, service, fields,
+        entity_type="service", entity_pk=service.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(service)
     return AnalysisServiceResponse.model_validate(service)
@@ -3377,7 +3551,7 @@ async def update_analysis_service_variance_capable(
     service_id: int,
     data: AnalysisServiceVarianceCapableUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Lab-managed toggle: mark an analyte as a variance figure. Mk1-owned —
     never touched by the SENAITE sync."""
@@ -3386,7 +3560,10 @@ async def update_analysis_service_variance_capable(
     ).scalar_one_or_none()
     if not service:
         raise HTTPException(404, f"Analysis service {service_id} not found")
-    service.variance_capable = data.variance_capable
+    apply_and_log(
+        db, service, {"variance_capable": data.variance_capable},
+        entity_type="service", entity_pk=service.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(service)
     return AnalysisServiceResponse.model_validate(service)
@@ -3878,6 +4055,27 @@ async def sync_analysis_services(db: Session = Depends(get_db), _current_user=De
         created += 1
 
     db.commit()
+
+    # S6a department totality: freshly synced services must not linger
+    # department-less until the next boot — run the (idempotent, NULL-only)
+    # bridge in-request. Never fails the sync. On Postgres, a failure partway
+    # through backfill_departments leaves this session's transaction ABORTED;
+    # without an explicit rollback() here, the very next statement below
+    # (the total-count query, run outside this try/except on the same
+    # session) would raise InFailedSqlTransaction/PendingRollbackError and
+    # the sync would fail after all — defeating "never fails the sync".
+    # SQLite doesn't reproduce this abort semantics, so this can't be pinned
+    # by re-running the failing statement on sqlite; it's exercised by a
+    # rollback()-was-called spy instead (test_sync_rolls_back_session_when_
+    # backfill_raises).
+    if created:
+        try:
+            from catalog.departments import backfill_departments
+            backfill_departments(db)
+        except Exception as e:
+            db.rollback()
+            logger.warning("catalog.sync_department_backfill_skipped err=%s", e)
+
     total = db.execute(select(func.count()).select_from(AnalysisService)).scalar()
     return {"created": created, "total": total}
 
@@ -4084,6 +4282,11 @@ async def create_peptide(data: PeptideCreate, db: Session = Depends(get_db), cur
                     )
                 ).scalar_one_or_none()
                 if comp_analyte:
+                    if slot_num > 4:
+                        raise HTTPException(
+                            400,
+                            detail="blend resolves more than 4 analyte slots (peptide_analytes carries a 4-slot ceiling — a product decision, see PeptideAnalyte docstring)",
+                        )
                     db.add(PeptideAnalyte(
                         peptide_id=peptide.id,
                         analysis_service_id=comp_analyte.analysis_service_id,
@@ -4268,6 +4471,11 @@ async def update_peptide(peptide_id: int, data: PeptideUpdate, db: Session = Dep
                         )
                     ).scalar_one_or_none()
                     if comp_analyte:
+                        if slot_num > 4:
+                            raise HTTPException(
+                                400,
+                                detail="blend resolves more than 4 analyte slots (peptide_analytes carries a 4-slot ceiling — a product decision, see PeptideAnalyte docstring)",
+                            )
                         db.add(PeptideAnalyte(
                             peptide_id=peptide.id,
                             analysis_service_id=comp_analyte.analysis_service_id,
@@ -9516,12 +9724,26 @@ async def add_sample_analysis(
     if sub is not None:
         # Native branch
         senaite_service_uid = body.get("service_uid")
+        # S3: the service id is the drift-proof identifier. The body is an
+        # untyped dict, so coerce here rather than letting a string reach a
+        # SQLAlchemy comparison. Both identifiers are forwarded when both are
+        # present — the service owns the resolution order, not the route.
+        _svc_id = body.get("analysis_service_id")
+        if _svc_id is not None:
+            try:
+                _svc_id = int(_svc_id)
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=400,
+                    detail="analysis_service_id must be an integer",
+                )
         try:
             add_analysis_to_native_vial(
                 db,
                 sub_sample_pk=sub.id,
                 senaite_service_uid=senaite_service_uid,
                 keyword=None,
+                analysis_service_id=_svc_id,
                 user_id=_current_user.id,
             )
         except _NotFoundError as e:
@@ -9617,6 +9839,7 @@ async def remove_sample_analysis(
     sample_id: str,
     keyword: str,
     confirm_retract: bool = False,
+    analysis_service_id: Optional[int] = None,
     _current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -9630,7 +9853,10 @@ async def remove_sample_analysis(
 
     Native branch: if sample_id maps to a lims_sub_samples row whose
     external_lims_uid starts with 'mk1://', the analysis is hard-deleted
-    (if pristine) via delete_pristine_analysis.
+    (if pristine) via delete_pristine_analysis. The optional
+    ?analysis_service_id= (S3) identifies the row by its service FK instead of
+    the path keyword, which is what reaches a row whose stored keyword has
+    drifted; the keyword stays in the path because it is the route's shape.
 
     Non-native fallthrough: proxied to the Integration Service unchanged.
     """
@@ -9674,12 +9900,16 @@ async def remove_sample_analysis(
     ).scalar_one_or_none()
 
     if sub is not None:
-        # Native branch
+        # Native branch. Exactly one identifier reaches the service: when the
+        # caller supplied a service id it decides, and the path keyword — which
+        # is only ever the FE's echo of a possibly-drifted stored string — is
+        # dropped rather than sent alongside it.
         try:
             delete_pristine_analysis(
                 db,
                 sub_sample_pk=sub.id,
-                keyword=keyword,
+                keyword=None if analysis_service_id is not None else keyword,
+                analysis_service_id=analysis_service_id,
                 user_id=_current_user.id,
             )
         except _NotFoundError as e:
@@ -10516,17 +10746,18 @@ async def generate_sample_coa(
                 resolver_result = None
 
             if resolver_result is not None:
-                # Micro analytes (ENDO/STER/KF) never block: the lab finishes them
-                # after the analytical COA and re-generates. Only NON-micro
+                # Micro (ENDO/STER/KF) and Heavy Metals analytes never block: micro
+                # finishes after the analytical COA and re-generates; HM is exempt per
+                # the 2026-08-12 ruling (see coa_exempt_keywords). Only other
                 # unresolved analytes hold up generation.
                 from coa.block_summary import (
                     build_name_resolver,
                     has_blocking_unresolved,
                     summarize_unresolved,
                 )
-                from lims_analyses.seeder import _micro_group_keywords
+                from lims_analyses.seeder import coa_exempt_keywords
 
-                micro_kw = _micro_group_keywords(db)
+                micro_kw = coa_exempt_keywords(db)
                 if has_blocking_unresolved(resolver_result, micro_keywords=micro_kw):
                     name_for = _build_coa_analyte_name_resolver(db, sample_id, alias_map=_load_sample_aliases(db, sample_id))
                     _unresolved = summarize_unresolved(
@@ -10543,7 +10774,7 @@ async def generate_sample_coa(
             # SENAITE is truly down).
             kinds = await _parent_attachment_kinds(sample_id, _get_senaite_auth(current_user))
             if kinds is not None:
-                from lims_analyses.seeder import _micro_group_keywords as _micro_kws
+                from lims_analyses.seeder import coa_exempt_keywords as _micro_kws
                 if resolver_result is not None:
                     _micro = _micro_kws(db)
                     needs_chromatogram = any(
@@ -14916,7 +15147,9 @@ def _shadow_analyses_at_registration_bg(sample_id: str) -> None:
 
 def _native_placeholders_at_registration_bg(sample_id: str) -> None:
     """Native sibling of _shadow_analyses_at_registration_bg: mint pending
-    parent-tier rows for every ORDERED native analysis service.
+    parent-tier rows for every ORDERED native analysis service, then stamp
+    the S4 snapshot rider (catalog_snapshot) so check-in seeds what the
+    customer bought (task 6), not whatever the catalog looks like later.
 
     Same hardening rationale as its sibling — own session, never raises. A
     catalog miss or IS outage must not fail the registration; check-in
@@ -14928,6 +15161,7 @@ def _native_placeholders_at_registration_bg(sample_id: str) -> None:
         from lims_analyses.parent_placeholders import seed_parent_placeholders
         from sub_samples.service import fetch_sample_services
         from models import LimsSample
+        from catalog.snapshot import compute_catalog_snapshot
 
         raw = fetch_sample_services(sample_id)
         if not raw:
@@ -14940,6 +15174,28 @@ def _native_placeholders_at_registration_bg(sample_id: str) -> None:
             db, parent=parent,
             services=raw.get("services") or {}, package=raw.get("package"),
         )
+        # Once-only: a replayed registration signal (IS retry, duplicate
+        # webhook) must NOT restamp — the whole point is freezing what was
+        # resolved the FIRST time. System write (s2s has no user); no
+        # change-log row for the stamp itself (that ledger is task 7's
+        # audited reprovision, a deliberate human/API action).
+        #
+        # Isolated in its own try/except: a snapshot-compute failure (bad
+        # catalog row, unexpected shape) must NOT roll back the placeholder
+        # seed that already succeeded above — that seed is the load-bearing
+        # bench-visibility guarantee this sibling exists for. catalog_snapshot
+        # stays NULL on failure, so the once-only guard retries on the next
+        # registration signal / replay instead of stamping half-built data.
+        if parent.catalog_snapshot is None:
+            try:
+                parent.catalog_snapshot = compute_catalog_snapshot(
+                    db, raw.get("services") or {}, raw.get("package"),
+                )
+            except Exception as snapshot_err:  # noqa: BLE001
+                logger.warning(
+                    "catalog_snapshot.stamp_failed sample_id=%s err=%s",
+                    sample_id, snapshot_err,
+                )
         db.commit()
         logger.info(
             "registry.native_placeholder_seed sample_id=%s created=%s existing=%s skipped=%s",
@@ -15631,11 +15887,21 @@ async def transition_analysis(
                     if _parent_sample_id and keyword:
                         _user_id = getattr(current_user, "id", None)
                         if req.transition == "retest":
+                            # S3: this keyword arrives off the SENAITE wire, a
+                            # FOREIGN namespace. allow_native_rescue=False
+                            # confines the lookup to the exact stored keyword
+                            # (the grandfathered pre-S3 behavior) so a SENAITE
+                            # keyword can never resolve into a native line that
+                            # merely shares the string — mk1/senaite keyword
+                            # collisions are not prevented by any index, and
+                            # this call swallows exceptions, so a mis-routed
+                            # retest here would retract vial results silently.
                             _row_ids = cascade_parent_retest_to_sources(
                                 db,
                                 parent_sample_id=_parent_sample_id,
                                 keyword=keyword,
                                 user_id=_user_id,
+                                allow_native_rescue=False,
                             )
                             _verb = "created vial retest rows"
                         else:
@@ -15813,6 +16079,15 @@ async def stream_scale_weight(
 
 # ─── Service Groups ───────────────────────────────────────────────────────────
 
+# Fields snapshotted on create/delete change-log rows — the group's own
+# catalog surface. Membership (service_group_members) is logged separately
+# via log_members in set_service_group_members below.
+SERVICE_GROUP_LOG_FIELDS = (
+    "name", "description", "color", "sort_order", "is_default",
+    "sla_tier_id", "department_id",
+)
+
+
 @app.get("/service-groups", response_model=list[ServiceGroupResponse])
 async def get_service_groups(
     db: Session = Depends(get_db),
@@ -15849,37 +16124,10 @@ async def get_service_groups(
 async def create_service_group(
     data: ServiceGroupCreate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
-    """Create a new service group."""
-    existing = db.execute(
-        select(ServiceGroup).where(ServiceGroup.name == data.name)
-    ).scalar_one_or_none()
-    if existing:
-        raise HTTPException(400, f"Service group '{data.name}' already exists")
-
-    group = ServiceGroup(**data.model_dump())
-    if group.is_default:
-        db.execute(
-            select(ServiceGroup).where(ServiceGroup.is_default == True)  # noqa: E712
-        )
-        db.query(ServiceGroup).filter(ServiceGroup.is_default == True).update({"is_default": False})  # noqa: E712
-    db.add(group)
-    db.commit()
-    db.refresh(group)
-    return ServiceGroupResponse(
-        id=group.id,
-        name=group.name,
-        description=group.description,
-        color=group.color,
-        sort_order=group.sort_order,
-        is_default=group.is_default,
-        sla_tier_id=group.sla_tier_id,
-        department_id=group.department_id,
-        member_count=0,
-        created_at=group.created_at,
-        updated_at=group.updated_at,
-    )
+    """Service groups are legacy — departments own routing now (S2)."""
+    raise HTTPException(410, "service groups are legacy; departments own routing now")
 
 
 @app.put("/service-groups/{group_id}", response_model=ServiceGroupResponse)
@@ -15887,7 +16135,7 @@ async def update_service_group(
     group_id: int,
     data: ServiceGroupUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Update an existing service group."""
     group = db.execute(
@@ -15899,12 +16147,22 @@ async def update_service_group(
         raise HTTPException(404, f"Service group {group_id} not found")
 
     update_data = data.model_dump(exclude_unset=True)
+    if "name" in update_data and update_data["name"] != group.name:
+        raise HTTPException(
+            400,
+            "service group names are frozen (legacy); FE keyword maps and the COA "
+            "gate's group half key on them",
+        )
     if update_data.get("is_default"):
+        # Bulk demotion of every OTHER default group — not logged, same
+        # ruling as create_service_group's mint-time demotion above.
         db.query(ServiceGroup).filter(
             ServiceGroup.is_default == True, ServiceGroup.id != group_id  # noqa: E712
         ).update({"is_default": False})
-    for field, value in update_data.items():
-        setattr(group, field, value)
+    apply_and_log(
+        db, group, update_data,
+        entity_type="service_group", entity_pk=group.id, user_id=getattr(current_user, "id", None),
+    )
 
     db.commit()
     db.refresh(group)
@@ -15928,15 +16186,38 @@ async def update_service_group(
 async def delete_service_group(
     group_id: int,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
-    """Delete a service group. Membership rows cascade-delete."""
+    """Delete a service group. Refused while any worksheet item, SLA priority
+    tier, or member row still references it — group rows are frozen legacy
+    rows that worksheet history and sla_priority_tiers (ON DELETE CASCADE)
+    depend on surviving (S2 Task 3)."""
     group = db.execute(
         select(ServiceGroup).where(ServiceGroup.id == group_id)
     ).scalar_one_or_none()
     if not group:
         raise HTTPException(404, f"Service group {group_id} not found")
 
+    in_use = db.execute(
+        select(WorksheetItem.id).where(WorksheetItem.service_group_id == group_id).limit(1)
+    ).scalars().first() or db.execute(
+        select(SlaPriorityTier.id).where(SlaPriorityTier.service_group_id == group_id).limit(1)
+    ).scalars().first() or db.execute(
+        select(service_group_members.c.id).where(
+            service_group_members.c.service_group_id == group_id
+        ).limit(1)
+    ).scalars().first()
+    if in_use is not None:
+        raise HTTPException(
+            409,
+            "service group is still referenced (worksheet items, SLA tiers, or members); "
+            "groups are frozen legacy rows — do not delete while in use",
+        )
+
+    log_delete(
+        db, group, SERVICE_GROUP_LOG_FIELDS,
+        entity_type="service_group", entity_pk=group.id, user_id=getattr(current_user, "id", None),
+    )
     db.delete(group)
     db.commit()
     return {"message": f"Service group '{group.name}' deleted"}
@@ -15968,7 +16249,7 @@ async def set_service_group_members(
     group_id: int,
     req: ServiceGroupMembersRequest,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Replace the full membership set for a service group."""
     group = db.execute(
@@ -15983,12 +16264,27 @@ async def set_service_group_members(
         select(AnalysisService).where(AnalysisService.id.in_(req.analysis_service_ids))
     ).scalars().all()
 
+    # Captured BEFORE reassignment below — the log's before/after pair. This
+    # route replaces membership via ORM relationship assignment (not a raw
+    # junction-table delete+insert like set_analysis_profile_members), so
+    # the before snapshot has to come from the relationship itself.
+    before_ids = [s.id for s in group.analysis_services]
     group.analysis_services = list(services)
+    after_ids = [s.id for s in services]
+    log_members(
+        db, entity_type="service_group_members", entity_pk=group_id,
+        user_id=getattr(current_user, "id", None),
+        field="member_ids", before_ids=before_ids, after_ids=after_ids,
+    )
     db.commit()
     return {"count": len(services)}
 
 
 # ─── Departments ───────────────────────────────────────────────────────────────
+
+# Fields snapshotted on create/delete change-log rows.
+DEPARTMENT_LOG_FIELDS = ("name", "sort_order", "color", "is_system")
+
 
 @app.get("/departments", response_model=list[DepartmentResponse])
 async def get_departments(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
@@ -16003,7 +16299,7 @@ async def get_departments(db: Session = Depends(get_db), _current_user=Depends(g
 async def create_department(
     data: DepartmentCreate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     from models import Department
     existing = db.execute(
@@ -16013,6 +16309,11 @@ async def create_department(
         raise HTTPException(400, f"Department '{data.name}' already exists")
     dept = Department(**data.model_dump())
     db.add(dept)
+    db.flush()
+    log_create(
+        db, dept, DEPARTMENT_LOG_FIELDS,
+        entity_type="department", entity_pk=dept.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(dept)
     return dept
@@ -16023,7 +16324,7 @@ async def update_department(
     department_id: int,
     data: DepartmentUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """name is immutable on is_system rows (fix round, spec 4 Task 7): the
     worksheet-inbox legacy lane keys (catalog.roles._LEGACY_LANE_KEYS) are
@@ -16047,8 +16348,10 @@ async def update_department(
         ).scalar_one_or_none()
         if existing:
             raise HTTPException(400, f"Department '{update_data['name']}' already exists")
-    for field, value in update_data.items():
-        setattr(dept, field, value)
+    apply_and_log(
+        db, dept, update_data,
+        entity_type="department", entity_pk=dept.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(dept)
     return dept
@@ -16056,7 +16359,7 @@ async def update_department(
 
 @app.delete("/departments/{department_id}", status_code=204)
 async def delete_department(
-    department_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)
+    department_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)
 ):
     """Refused while any service, group, or bench station still points at
     it — reassign first. A silently orphaned service would be excluded from
@@ -16079,6 +16382,10 @@ async def delete_department(
     ).scalars().first()
     if in_use is not None:
         raise HTTPException(409, "department still has services, groups, or bench stations; reassign them first")
+    log_delete(
+        db, dept, DEPARTMENT_LOG_FIELDS,
+        entity_type="department", entity_pk=dept.id, user_id=getattr(current_user, "id", None),
+    )
     db.delete(dept)
     db.commit()
 
@@ -16087,6 +16394,24 @@ async def delete_department(
 # The sellable test: parent of one or more Analysis Services, and the future
 # carrier of COA section identity. Deliberately distinct from ServiceGroup
 # (bench work) — see models.AnalysisProfile docstring.
+
+# Fields snapshotted on create/delete change-log rows — mirrors
+# SERVICE_LOG_FIELDS above. Excludes updated_by_id/created_at/updated_at:
+# bookkeeping, not catalog data.
+PROFILE_LOG_FIELDS = (
+    "key", "name", "description", "is_addon", "vials_required",
+    "fulfillment_role", "fulfillment_dim", "sort_order", "active",
+    "coa_section_title", "coa_archetype", "coa_sort_order", "sla_tier_id",
+)
+
+# Shared with the two profile-route mint side doors below (POST/PATCH) and
+# the members-PUT department backfill — one field list for every vial_role
+# change-log write in this file.
+VIAL_ROLE_LOG_FIELDS = (
+    "code", "label", "department_id", "boxable", "variance_eligible",
+    "sort_order", "frozen", "is_system",
+)
+
 
 def _profile_to_response(p) -> AnalysisProfileResponse:
     member_ids = [s.id for s in p.analysis_services]
@@ -16173,12 +16498,19 @@ async def create_analysis_profile(
         reg = role_registry(db)
         if data.fulfillment_role not in reg:
             max_sort = db.query(func.coalesce(func.max(VialRole.sort_order), 0)).scalar()
-            db.add(VialRole(
+            role = VialRole(
                 code=data.fulfillment_role, label=data.name,
                 department_id=data.role_department_id,
                 boxable=bool(data.role_boxable), variance_eligible=False,
                 sort_order=max_sort + 1, frozen=False, is_system=False,
-            ))
+            )
+            db.add(role)
+            db.flush()
+            log_create(
+                db, role, VIAL_ROLE_LOG_FIELDS,
+                entity_type="vial_role", entity_pk=role.id,
+                user_id=getattr(current_user, "id", None),
+            )
             logger.info("vial_role_minted code=%s for_profile=%s", data.fulfillment_role, data.key)
     # role_* are auto-mint-only, never AnalysisProfile columns. coa_archetype
     # IS a real column and is deliberately NOT excluded — the guard above has
@@ -16189,6 +16521,11 @@ async def create_analysis_profile(
         updated_by_id=getattr(current_user, "id", None),
     )
     db.add(p)
+    db.flush()
+    log_create(
+        db, p, PROFILE_LOG_FIELDS,
+        entity_type="profile", entity_pk=p.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(p)
     return _profile_to_response(p)
@@ -16286,15 +16623,24 @@ async def update_analysis_profile(
         if effective_role not in reg:
             max_sort = db.query(func.coalesce(func.max(VialRole.sort_order), 0)).scalar()
             effective_name = fields["name"] if "name" in fields else p.name
-            db.add(VialRole(
+            role = VialRole(
                 code=effective_role, label=effective_name,
                 department_id=data.role_department_id,
                 boxable=False, variance_eligible=False,
                 sort_order=max_sort + 1, frozen=False, is_system=False,
-            ))
+            )
+            db.add(role)
+            db.flush()
+            log_create(
+                db, role, VIAL_ROLE_LOG_FIELDS,
+                entity_type="vial_role", entity_pk=role.id,
+                user_id=getattr(current_user, "id", None),
+            )
             logger.info("vial_role_minted code=%s for_profile=%s", effective_role, p.key)
-    for field, value in fields.items():
-        setattr(p, field, value)
+    apply_and_log(
+        db, p, fields,
+        entity_type="profile", entity_pk=p.id, user_id=getattr(current_user, "id", None),
+    )
     p.updated_by_id = getattr(current_user, "id", None)
     db.commit()
     db.refresh(p)
@@ -16303,7 +16649,7 @@ async def update_analysis_profile(
 
 @app.delete("/analysis-profiles/{profile_id}", status_code=204)
 async def delete_analysis_profile(
-    profile_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)
+    profile_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)
 ):
     from models import AnalysisProfile, VialProfileAssignment
     p = db.get(AnalysisProfile, profile_id)
@@ -16328,6 +16674,10 @@ async def delete_analysis_profile(
             f"profile '{p.key}' has vial custody history (current or superseded) "
             "and cannot be deleted — deactivate it instead (active=false)",
         )
+    log_delete(
+        db, p, PROFILE_LOG_FIELDS,
+        entity_type="profile", entity_pk=p.id, user_id=getattr(current_user, "id", None),
+    )
     db.delete(p)
     db.commit()
 
@@ -16357,7 +16707,7 @@ async def set_analysis_profile_members(
     profile_id: int,
     data: AnalysisProfileMembersRequest,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Replace membership. Position in the list becomes sort_order — the row
     order within the profile's COA section.
@@ -16378,6 +16728,13 @@ async def set_analysis_profile_members(
     # only drop ids that don't exist.
     ordered_ids = [sid for sid in data.analysis_service_ids if sid in valid_ids]
 
+    # Captured BEFORE the delete-all below — the log's before/after pair.
+    before_ids = [row.analysis_service_id for row in db.execute(
+        select(analysis_profile_members.c.analysis_service_id)
+        .where(analysis_profile_members.c.analysis_profile_id == profile_id)
+        .order_by(analysis_profile_members.c.sort_order)
+    ).all()]
+
     db.execute(
         analysis_profile_members.delete().where(
             analysis_profile_members.c.analysis_profile_id == profile_id
@@ -16386,6 +16743,11 @@ async def set_analysis_profile_members(
     for i, svc_id in enumerate(ordered_ids):
         db.execute(analysis_profile_members.insert().values(
             analysis_profile_id=profile_id, analysis_service_id=svc_id, sort_order=i))
+    log_members(
+        db, entity_type="profile_members", entity_pk=profile_id,
+        user_id=getattr(current_user, "id", None),
+        field="member_ids", before_ids=before_ids, after_ids=ordered_ids,
+    )
     db.commit()
 
     # Member-department backfill (Task 3): a role minted without a department
@@ -16408,7 +16770,11 @@ async def set_analysis_profile_members(
             # member has the same department."
             dept_ids.discard(None)
             if len(dept_ids) == 1:
-                role.department_id = dept_ids.pop()
+                apply_and_log(
+                    db, role, {"department_id": dept_ids.pop()},
+                    entity_type="vial_role", entity_pk=role.id,
+                    user_id=getattr(current_user, "id", None),
+                )
                 db.commit()
                 logger.info(
                     "vial_role_department_backfilled code=%s department_id=%s for_profile=%s",
@@ -16442,7 +16808,7 @@ async def set_analysis_profile_ride_hosts(
     profile_id: int,
     data: RideHostsRequest,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Replace-all, mirroring set_analysis_profile_members: list position
     becomes priority. A ride host names a role this profile's result may
@@ -16496,6 +16862,13 @@ async def set_analysis_profile_ride_hosts(
         if code == p.fulfillment_role:
             raise HTTPException(400, "a profile may not ride its own role")
 
+    # Captured BEFORE the delete-all below — the log's before/after pair.
+    before_codes = [row.host_role_code for row in db.execute(
+        select(profile_ride_hosts.c.host_role_code)
+        .where(profile_ride_hosts.c.analysis_profile_id == profile_id)
+        .order_by(profile_ride_hosts.c.priority)
+    ).all()]
+
     db.execute(
         profile_ride_hosts.delete().where(
             profile_ride_hosts.c.analysis_profile_id == profile_id
@@ -16504,6 +16877,11 @@ async def set_analysis_profile_ride_hosts(
     for i, code in enumerate(data.host_role_codes):
         db.execute(profile_ride_hosts.insert().values(
             analysis_profile_id=profile_id, host_role_code=code, priority=i))
+    log_members(
+        db, entity_type="ride_hosts", entity_pk=profile_id,
+        user_id=getattr(current_user, "id", None),
+        field="host_role_codes", before_ids=before_codes, after_ids=data.host_role_codes,
+    )
     db.commit()
     return {"count": len(data.host_role_codes)}
 
@@ -16576,7 +16954,7 @@ def get_vial_roles(db: Session = Depends(get_db), _current_user=Depends(get_curr
 def create_vial_role(
     data: VialRoleCreate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     from models import VialRole
     if not re.fullmatch(r"[a-z][a-z0-9_]{0,7}", data.code):
@@ -16591,6 +16969,11 @@ def create_vial_role(
         raise HTTPException(400, f"role code '{data.code}' already exists")
     r = VialRole(**data.model_dump())
     db.add(r)
+    db.flush()
+    log_create(
+        db, r, VIAL_ROLE_LOG_FIELDS,
+        entity_type="vial_role", entity_pk=r.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(r)
     return r
@@ -16601,7 +16984,7 @@ def update_vial_role(
     role_id: int,
     data: VialRoleUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     from models import VialRole
     r = db.get(VialRole, role_id)
@@ -16624,8 +17007,10 @@ def update_vial_role(
         effective_code = fields.get("code", r.code)
         if fields["department_id"] is None and effective_code != "xtra":
             raise HTTPException(400, "only xtra may have no department")
-    for field, value in fields.items():
-        setattr(r, field, value)
+    apply_and_log(
+        db, r, fields,
+        entity_type="vial_role", entity_pk=r.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(r)
     return r
@@ -16633,7 +17018,7 @@ def update_vial_role(
 
 @app.delete("/vial-roles/{role_id}", status_code=204)
 def delete_vial_role(
-    role_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)
+    role_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)
 ):
     """is_system → 400 outright. Otherwise refused (409, naming the reference)
     if a profile still fulfills via this role, any vial (parent sample or
@@ -16665,6 +17050,10 @@ def delete_vial_role(
     if box_ref is not None:
         raise HTTPException(
             409, f"role '{r.code}' is still referenced by a box; reassign it first")
+    log_delete(
+        db, r, VIAL_ROLE_LOG_FIELDS,
+        entity_type="vial_role", entity_pk=r.id, user_id=getattr(current_user, "id", None),
+    )
     db.delete(r)
     db.commit()
 
@@ -16675,6 +17064,10 @@ def delete_vial_role(
 # never gates result entry (Handler ruling Q2, deviation 7). Ships EMPTY
 # (G-STATION pending, no seed). No DELETE route — deactivate via active=false
 # (same idiom as /vial-roles' department FK and /departments itself).
+
+# Fields snapshotted on create change-log rows (no delete route to snapshot).
+BENCH_STATION_LOG_FIELDS = ("name", "department_id", "active", "sort_order")
+
 
 @app.get("/bench-stations", response_model=list[BenchStationResponse])
 def get_bench_stations(
@@ -16690,7 +17083,7 @@ def get_bench_stations(
 def create_bench_station(
     data: BenchStationCreate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     from models import BenchStation, Department
     dept = db.get(Department, data.department_id)
@@ -16703,6 +17096,11 @@ def create_bench_station(
         raise HTTPException(400, f"bench station '{data.name}' already exists")
     s = BenchStation(**data.model_dump())
     db.add(s)
+    db.flush()
+    log_create(
+        db, s, BENCH_STATION_LOG_FIELDS,
+        entity_type="bench_station", entity_pk=s.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(s)
     return s
@@ -16713,7 +17111,7 @@ def update_bench_station(
     station_id: int,
     data: BenchStationUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     from models import BenchStation, Department
     s = db.get(BenchStation, station_id)
@@ -16732,8 +17130,10 @@ def update_bench_station(
         ).scalar_one_or_none()
         if dup:
             raise HTTPException(400, f"bench station '{fields['name']}' already exists")
-    for field, value in fields.items():
-        setattr(s, field, value)
+    apply_and_log(
+        db, s, fields,
+        entity_type="bench_station", entity_pk=s.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(s)
     return s
@@ -16844,10 +17244,24 @@ def create_bench_scan(
 
 # ─── SLA tiers (sub-project A, revised to tiers) ──────────────────────────────
 
+SLA_TIER_LOG_FIELDS = (
+    "name", "target_minutes", "business_hours_only", "is_default",
+    "amber_threshold_percent",
+)
+SLA_PRIORITY_TIER_LOG_FIELDS = ("priority", "sla_tier_id", "service_group_id")
+
 
 def _demote_other_default_tiers(db: Session, keep_id: Optional[int] = None) -> None:
     """Clear is_default on every tier except keep_id, flushing before the caller
-    inserts/updates the promoted row (the partial unique index is immediate)."""
+    inserts/updates the promoted row (the partial unique index is immediate).
+
+    NOT routed through change_log: a bulk .update() demoting N other tiers
+    at once, not a single deliberate edit to one row. Logging it would mean
+    either N synthetic rows attributed to a request that never named those
+    tiers, or converting this to a per-row loop — a behavior change outside
+    this task's scope. Net effect: promoting a tier to default is logged as
+    an is_default=True update on the winner; the implicit demotion of the
+    previous default is NOT separately logged."""
     q = db.query(SlaTier).filter(SlaTier.is_default == True)  # noqa: E712
     if keep_id is not None:
         q = q.filter(SlaTier.id != keep_id)
@@ -16871,13 +17285,18 @@ async def list_sla_tiers(
 async def create_sla_tier(
     data: SlaTierCreate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Create a tier. Setting is_default demotes any existing default."""
     tier = SlaTier(**data.model_dump())
     if tier.is_default:
         _demote_other_default_tiers(db)
     db.add(tier)
+    db.flush()
+    log_create(
+        db, tier, SLA_TIER_LOG_FIELDS,
+        entity_type="sla_tier", entity_pk=tier.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(tier)
     return tier
@@ -16888,7 +17307,7 @@ async def update_sla_tier(
     tier_id: int,
     data: SlaTierUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Update a tier. Promoting demotes the rest; demoting the only default is
     rejected (it's the 24h backstop for unmatched samples)."""
@@ -16904,8 +17323,10 @@ async def update_sla_tier(
                 409,
                 "Cannot unset the only default SLA tier; set another as default instead",
             )
-    for field, value in update_data.items():
-        setattr(tier, field, value)
+    apply_and_log(
+        db, tier, update_data,
+        entity_type="sla_tier", entity_pk=tier.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(tier)
     return tier
@@ -16915,7 +17336,7 @@ async def update_sla_tier(
 async def delete_sla_tier(
     tier_id: int,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Delete a tier. The default cannot be deleted. Groups referencing it have
     sla_tier_id set NULL (FK); priority overrides referencing it cascade-delete."""
@@ -16924,6 +17345,10 @@ async def delete_sla_tier(
         raise HTTPException(404, f"SLA tier {tier_id} not found")
     if tier.is_default:
         raise HTTPException(409, "Cannot delete the default SLA tier; promote another first")
+    log_delete(
+        db, tier, SLA_TIER_LOG_FIELDS,
+        entity_type="sla_tier", entity_pk=tier.id, user_id=getattr(current_user, "id", None),
+    )
     db.delete(tier)
     db.commit()
     return {"message": f"SLA tier {tier_id} deleted"}
@@ -16943,7 +17368,7 @@ async def set_sla_priority_tier(
     priority: SlaPriority,
     data: SlaPriorityTierSet,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Upsert a priority -> tier override.
 
@@ -16969,7 +17394,11 @@ async def set_sla_priority_tier(
         q = q.where(SlaPriorityTier.service_group_id == data.service_group_id)
     row = db.execute(q).scalar_one_or_none()
     if row:
-        row.sla_tier_id = data.sla_tier_id
+        apply_and_log(
+            db, row, {"sla_tier_id": data.sla_tier_id},
+            entity_type="sla_priority_tier", entity_pk=row.id,
+            user_id=getattr(current_user, "id", None),
+        )
     else:
         row = SlaPriorityTier(
             priority=priority,
@@ -16977,6 +17406,12 @@ async def set_sla_priority_tier(
             service_group_id=data.service_group_id,
         )
         db.add(row)
+        db.flush()
+        log_create(
+            db, row, SLA_PRIORITY_TIER_LOG_FIELDS,
+            entity_type="sla_priority_tier", entity_pk=row.id,
+            user_id=getattr(current_user, "id", None),
+        )
     db.commit()
     db.refresh(row)
     return row
@@ -16987,7 +17422,7 @@ async def delete_sla_priority_tier(
     priority: SlaPriority,
     service_group_id: int | None = None,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Remove a priority override.
 
@@ -17003,6 +17438,11 @@ async def delete_sla_priority_tier(
     if not row:
         scope = "global" if service_group_id is None else f"group_id={service_group_id}"
         raise HTTPException(404, f"No override for priority '{priority}' ({scope})")
+    log_delete(
+        db, row, SLA_PRIORITY_TIER_LOG_FIELDS,
+        entity_type="sla_priority_tier", entity_pk=row.id,
+        user_id=getattr(current_user, "id", None),
+    )
     db.delete(row)
     db.commit()
     scope = "global" if service_group_id is None else f"group_id={service_group_id}"
@@ -17265,28 +17705,15 @@ class InboxResponse(BaseModel):
 
 # Worksheet-inbox lanes are catalog-driven (spec 4, Task 7): one lane per
 # department that owns >=1 vial role, via catalog.roles.inbox_lanes(db).
-# Department drives the lane: a new Microbiology-department group lands in
-# the micro lane automatically, with no name-pinning. hm (Heavy Metals) is
-# catalog-only and gets its own lane rather than folding into an existing
-# bench (spec-3 Task 3) — its services carry no service group, so
-# _inbox_allowed_group_ids resolves an empty set for it; the native-vial inbox
-# path (Phase 3.5, main.py _fetch_mk1_inbox_analyses_for_sub_sample) filters
-# hm vials by assignment_role via the lane's role_codes instead, not by group id.
-
-
-def _inbox_allowed_group_ids(db, lanes: dict, role: Optional[str]) -> Optional[set[int]]:
-    """Resolve a worksheet-inbox lane key to the set of service-group ids in
-    that lane's DEPARTMENT. None role -> None (no filter; pass all groups).
-    `lanes` is the caller's `inbox_lanes(db)` (one read per request, passed
-    down — never re-queried here)."""
-    if role is None:
-        return None
-    dept_id = lanes[role].department_id
-    return {
-        r[0] for r in db.execute(
-            select(ServiceGroup.id).where(ServiceGroup.department_id == dept_id)
-        ).all()
-    }
+# The lane key IS the department (S2 Task 7 — the group translation shim is
+# gone): a new Microbiology-department group lands in the micro lane
+# automatically, with no name-pinning. hm (Heavy Metals) is catalog-only and
+# gets its own lane rather than folding into an existing bench (spec-3 Task 3);
+# its services carry no service group, which used to translate to an empty
+# allowed-group set — the lane now filters on the analysis's own department, so
+# a group-less service is laned like any other. The native-vial inbox path
+# (Phase 3.5, _fetch_mk1_inbox_analyses_for_sub_sample) filters vials by
+# assignment_role via the lane's role_codes.
 
 
 class PriorityUpdate(BaseModel):
@@ -17296,11 +17723,13 @@ class PriorityUpdate(BaseModel):
 class BulkInboxUpdate(BaseModel):
     sample_uids: list[str]
     priority: Optional[str] = None
-    service_group_id: Optional[int] = None  # required when setting analyst or instrument
+    # One of the two scope keys is required when setting analyst or instrument.
+    service_group_id: Optional[int] = None
+    department_id: Optional[int] = None
     analyst_id: Optional[int] = None
     instrument_uid: Optional[str] = None
 
-    @validator("service_group_id", pre=True, always=True)
+    @validator("service_group_id", "department_id", pre=True, always=True)
     def zero_to_none(cls, v):
         return None if v == 0 else v
 
@@ -17320,9 +17749,10 @@ _INBOX_CACHE_TTL_SECONDS = 30 * 60  # 30 minutes
 # ── Phase 3.5: Mk1-sourced inbox analyses for sub-samples ───────────────────
 
 
-# Color fallback when the ServiceGroup join misses (rare — only if a vial's
-# analysis_service has no service_group_members row). Mirrors the FE's role
-# palette.
+# Color fallback when the Department join misses (a vial whose analysis_service
+# carries no department — catalog-only services until S6 totality lands).
+# Mirrors the FE's role palette, so the Other bucket still reads as its bench
+# rather than going flat gray on the native path.
 _INBOX_ROLE_COLOR_FALLBACK = {
     "hplc": "sky",
     "endo": "violet",
@@ -17368,17 +17798,22 @@ def _fetch_mk1_inbox_analyses_for_sub_sample(
 
     Returns an empty list if the vial has no Mk1 rows — caller falls back
     to the SENAITE path.
+
+    S2 Task 7: group_id/group_name/group_color carry DEPARTMENT identity here
+    too. get_worksheets_inbox keys assigned_pairs and assignment_map by
+    department and matches these rows against them, so the two must be drawn
+    from one id space — and the response would otherwise sort and label native
+    vials by service group while every SENAITE-sourced vial in the same payload
+    used departments. The department join is also on a scalar FK, so it cannot
+    fan out the way the old service_group_members hop did for a service in two
+    groups (which duplicated that analysis in the vial's list).
     """
-    from models import LimsAnalysis  # local import; not at module top
+    from models import Department, LimsAnalysis  # local import; not at module top
 
     rows = db.execute(
-        select(LimsAnalysis, AnalysisService, ServiceGroup)
+        select(LimsAnalysis, AnalysisService, Department)
         .join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
-        .outerjoin(
-            service_group_members,
-            service_group_members.c.analysis_service_id == AnalysisService.id,
-        )
-        .outerjoin(ServiceGroup, ServiceGroup.id == service_group_members.c.service_group_id)
+        .outerjoin(Department, Department.id == AnalysisService.department_id)
         .where(LimsAnalysis.lims_sub_sample_pk == sub_sample_pk)
         # Current/live row per (vial, service) is retested=False — NOT
         # retest_of_id IS NULL, which selects the superseded original after a
@@ -17399,16 +17834,18 @@ def _fetch_mk1_inbox_analyses_for_sub_sample(
         "promoted", "verified", "published", "variance_verified",
     }
     out: list[InboxAnalysisItem] = []
-    for la, svc, sg in rows:
+    for la, svc, dept in rows:
         if la.review_state in EXCLUDED_STATES:
             continue
-        if sg is not None:
-            grp_id = sg.id
-            grp_name = sg.name or ""
-            grp_color = getattr(sg, "color", None) or _INBOX_ROLE_COLOR_FALLBACK.get(role or "", "zinc")
+        if dept is not None:
+            grp_id = dept.id
+            grp_name = dept.name or ""
+            grp_color = getattr(dept, "color", None) or _INBOX_ROLE_COLOR_FALLBACK.get(role or "", "zinc")
         else:
+            # Same explicit legacy bucket the SENAITE path uses, but keeping the
+            # role-derived color the native path already had (S2 Task 7 ruling).
             grp_id = 0
-            grp_name = ""
+            grp_name = "Other"
             grp_color = _INBOX_ROLE_COLOR_FALLBACK.get(role or "", "zinc")
 
         out.append(InboxAnalysisItem(
@@ -17611,8 +18048,8 @@ async def get_worksheets_inbox(
     if not SENAITE_URL and not use_registry_source:
         raise HTTPException(status_code=503, detail="SENAITE not configured")
 
-    # Resolve role → allowed service_group IDs. None means "no filter; pass all groups".
-    allowed_group_ids: Optional[set[int]] = _inbox_allowed_group_ids(db, lanes, role)
+    # Lane key IS the department (catalog.roles.inbox_lanes). None = no filter.
+    allowed_department_id: Optional[int] = None if role is None else lanes[role].department_id
 
     # Resolve allowed vial assignment_role values. NULL roles always excluded (auto-
     # assign on /vial-plan is the cure for those). XTRA gated by show_xtra.
@@ -17738,24 +18175,38 @@ async def get_worksheets_inbox(
     except Exception:
         pass  # If integration DB is unavailable, show all samples (graceful degradation)
 
-    # Step 2: Build set of (sample_uid, service_group_id) pairs already in open worksheets
-    # Only exclude specific service groups, not the entire sample — a sample can have
-    # Microbiology in a worksheet while Core HPLC is still available in the inbox.
-    open_worksheet_pairs = db.execute(
-        select(WorksheetItem.sample_uid, WorksheetItem.service_group_id)
+    # Step 2: Build set of (sample_uid, department_id) pairs already in open worksheets
+    # Only exclude specific departments, not the entire sample — a sample can have
+    # Microbiology in a worksheet while Analytical is still available in the inbox.
+    # Historical items carry only a group; those bridge through their group's
+    # department, so old and new rows land in one key space (S2 Task 7).
+    open_worksheet_rows = db.execute(
+        select(WorksheetItem.sample_uid, WorksheetItem.department_id,
+               WorksheetItem.service_group_id)
         .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
         .where(Worksheet.status == "open")
     ).all()
-    assigned_pairs: set[tuple[str, int | None]] = {
-        (row.sample_uid, row.service_group_id) for row in open_worksheet_pairs
+    group_dept_bridge: dict[int, int | None] = {
+        g.id: g.department_id for g in db.execute(select(ServiceGroup)).scalars().all()
     }
-    # Also track fully-assigned samples (all groups in worksheets) for backward compat
-    # We'll filter at the group level later in step 6, not at the sample level here
-    assigned_uids_for_null_group: set[str] = set()
-    # Samples with service_group_id=None in a worksheet are fully claimed
-    for uid, gid in assigned_pairs:
-        if gid is None:
-            assigned_uids_for_null_group.add(uid)
+
+    def _row_department(dept_id: int | None, gid: int | None) -> int | None:
+        if dept_id is not None:
+            return dept_id
+        if gid is not None:
+            return group_dept_bridge.get(gid)
+        return None
+
+    assigned_pairs: set[tuple[str, int | None]] = {
+        (r.sample_uid, _row_department(r.department_id, r.service_group_id))
+        for r in open_worksheet_rows
+    }
+    # Also track fully-assigned samples (no resolvable scope) for backward compat
+    # We'll filter at the department level later in step 6, not at the sample level here
+    # A row with neither key — and a group whose bridge is NULL — is a whole-sample claim
+    assigned_uids_for_null_group: set[str] = {
+        uid for uid, dept in assigned_pairs if dept is None
+    }
 
     # Step 2b: Load SENAITE sample IDs that already have a sample prep
     prepped_senaite_ids: set[str] = set()
@@ -17781,20 +18232,16 @@ async def get_worksheets_inbox(
         if not hide_prepped or str(it.get("id", "")) not in prepped_senaite_ids
     ]
 
-    # Step 3: Build keyword → service group map
-    group_rows = db.execute(
-        select(
-            AnalysisService.keyword,
-            ServiceGroup.id,
-            ServiceGroup.name,
-            ServiceGroup.color,
-        )
-        .join(service_group_members, AnalysisService.id == service_group_members.c.analysis_service_id)
-        .join(ServiceGroup, ServiceGroup.id == service_group_members.c.service_group_id)
+    # Step 3: Build keyword → department map (the service's own department
+    # column — no service_group_members hop; S2 Task 7)
+    from models import Department
+    dept_rows = db.execute(
+        select(AnalysisService.keyword, Department.id, Department.name, Department.color)
+        .join(Department, Department.id == AnalysisService.department_id)
         .where(AnalysisService.keyword.isnot(None))
     ).all()
-    keyword_to_group: dict[str, tuple[int, str, str]] = {
-        row.keyword: (row.id, row.name, row.color) for row in group_rows
+    keyword_to_department: dict[str, tuple[int, str, str]] = {
+        row.keyword: (row[1], row[2], row[3]) for row in dept_rows
     }
 
     # Step 3b: Build keyword → local enrichment map (peptide name + method)
@@ -17823,15 +18270,9 @@ async def get_worksheets_inbox(
             # Use first active method as the display method
             peptide_to_method[pep.name] = pep.methods[0].name
 
-    # Default group for unmatched analyses
-    default_group_row = db.execute(
-        select(ServiceGroup).where(ServiceGroup.is_default == True)  # noqa: E712
-    ).scalar_one_or_none()
-    default_group = (
-        (default_group_row.id, default_group_row.name, default_group_row.color)
-        if default_group_row
-        else (0, "Other", "gray")
-    )
+    # Unresolved keyword → explicit legacy bucket. Fail-visible by design:
+    # no Department.is_default analogue exists and none is added (S2 ruling).
+    default_department = (0, "Other", "gray")
 
     # Step 4: Load local priorities for these samples
     uids = [str(it.get("uid", "")) for it in filtered_items if it.get("uid")]
@@ -17945,8 +18386,9 @@ async def get_worksheets_inbox(
                 "container_mode": parent_container_mode.get(r.parent_sample_pk, False),
             }
 
-    # Step 5: Load per-group worksheet_item assignments (analyst + instrument)
-    # Key is (sample_uid, service_group_id) → WorksheetItem
+    # Step 5: Load per-department worksheet_item assignments (analyst + instrument)
+    # Key is (sample_uid, department_id) → WorksheetItem, bridged the same way
+    # assigned_pairs is so legacy group-only rows still match (S2 Task 7).
     item_rows = db.execute(
         select(WorksheetItem)
         .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
@@ -17956,7 +18398,8 @@ async def get_worksheets_inbox(
         )
     ).scalars().all()
     assignment_map: dict[tuple[str, int | None], WorksheetItem] = {
-        (row.sample_uid, row.service_group_id): row for row in item_rows
+        (row.sample_uid, _row_department(row.department_id, row.service_group_id)): row
+        for row in item_rows
     }
 
     # Collect analyst IDs to load emails
@@ -18162,13 +18605,15 @@ async def get_worksheets_inbox(
                     if isinstance(method_obj, dict):
                         method = method_obj.get("title")
 
-            group_id, group_name, group_color = keyword_to_group.get(keyword, default_group)
+            dept_id_, dept_name_, dept_color_ = keyword_to_department.get(
+                keyword, default_department
+            )
 
-            # Role → allowed_group_ids filter (None == pass all)
-            if allowed_group_ids is not None and group_id not in allowed_group_ids:
+            # Lane filter (None == pass all lanes)
+            if allowed_department_id is not None and dept_id_ != allowed_department_id:
                 continue
-            # Already on an open worksheet for this (vial, group) — drop the analysis
-            if (uid, group_id) in assigned_pairs:
+            # Already on an open worksheet for this (vial, department) — drop it
+            if (uid, dept_id_) in assigned_pairs:
                 continue
 
             flat_analyses.append(
@@ -18179,9 +18624,12 @@ async def get_worksheets_inbox(
                     peptide_name=resolved_peptide,
                     method=str(method) if method else None,
                     review_state=str(review_state) if review_state else None,
-                    group_id=group_id,
-                    group_name=group_name,
-                    group_color=group_color,
+                    # Wire field NAMES stay; they now carry DEPARTMENT identity
+                    # (sanctioned re-meaning, sub-spec D4 — the FE's itemBench()
+                    # is already department-name-based).
+                    group_id=dept_id_,
+                    group_name=dept_name_,
+                    group_color=dept_color_,
                 )
             )
 
@@ -18438,25 +18886,34 @@ async def bulk_update_inbox(
             else:
                 db.add(SamplePriority(sample_uid=uid, priority=data.priority))
 
-    # Upsert analyst/instrument per service group as staging worksheet_items
+    # Upsert analyst/instrument per bench scope as staging worksheet_items
     if data.analyst_id is not None or data.instrument_uid is not None:
-        if data.service_group_id is None:
+        if data.service_group_id is None and data.department_id is None:
             raise HTTPException(
                 status_code=400,
-                detail="service_group_id is required when setting analyst or instrument",
+                detail="one of department_id / service_group_id is required when setting analyst or instrument",
             )
+        gid = data.service_group_id
+        dept_id = _resolve_item_scope(db, data.department_id, gid)
 
-        # Find existing staging items keyed by (sample_uid, service_group_id)
+        # Find existing staging items in this bench scope. A department match can
+        # hit two rows per uid (many-to-one group→department collapse); in the
+        # department world those are one lane's duplicates, so EVERY match gets
+        # the edit — writing only the lowest would misdirect the assignment and
+        # strand the sibling.
         existing_items = db.execute(
             select(WorksheetItem)
             .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
             .where(
                 WorksheetItem.sample_uid.in_(data.sample_uids),
-                WorksheetItem.service_group_id == data.service_group_id,
+                _item_scope_filter(dept_id, gid),
                 Worksheet.status == "staging",
             )
+            .order_by(WorksheetItem.id)
         ).scalars().all()
-        existing_item_map = {row.sample_uid: row for row in existing_items}
+        existing_item_map: dict[str, list[WorksheetItem]] = {}
+        for row in existing_items:
+            existing_item_map.setdefault(row.sample_uid, []).append(row)
 
         # Get or create staging worksheet
         missing_uids = [uid for uid in data.sample_uids if uid not in existing_item_map]
@@ -18479,17 +18936,18 @@ async def bulk_update_inbox(
 
         for uid in data.sample_uids:
             if uid in existing_item_map:
-                item = existing_item_map[uid]
-                if data.analyst_id is not None:
-                    item.assigned_analyst_id = data.analyst_id
-                if data.instrument_uid is not None:
-                    item.instrument_uid = data.instrument_uid
+                for item in existing_item_map[uid]:
+                    if data.analyst_id is not None:
+                        item.assigned_analyst_id = data.analyst_id
+                    if data.instrument_uid is not None:
+                        item.instrument_uid = data.instrument_uid
             else:
                 db.add(WorksheetItem(
                     worksheet_id=staging_ws.id,
                     sample_uid=uid,
                     sample_id=uid,
-                    service_group_id=data.service_group_id,
+                    service_group_id=gid,
+                    department_id=dept_id,
                     assigned_analyst_id=data.analyst_id,
                     instrument_uid=data.instrument_uid,
                 ))
@@ -18637,6 +19095,16 @@ def list_worksheets(
         query = query.where(Worksheet.status == status)
 
     worksheets = db.execute(query).scalars().all()
+
+    # department_name state 1 (Task 8): WorksheetItem.department_id, when set,
+    # is the primary signal — resolved via one id->name map for the whole
+    # request (Department is a small, request-static catalog table, so this
+    # is not re-queried per worksheet or per item).
+    from models import Department
+    department_id_name_map: dict[int, str] = {
+        d.id: d.name for d in db.execute(select(Department)).scalars()
+    }
+
     result = []
     for ws in worksheets:
         items = db.execute(
@@ -18701,7 +19169,8 @@ def list_worksheets(
         item_department_fallback_map: dict[int, str | None] = {}
         _needs_department_fallback = [
             it for it in items
-            if not (it.service_group_id and group_department_name_map.get(it.service_group_id))
+            if not (it.department_id and department_id_name_map.get(it.department_id))
+            and not (it.service_group_id and group_department_name_map.get(it.service_group_id))
         ]
         if _needs_department_fallback:
             item_first_keyword: dict[int, str | None] = {}
@@ -18825,9 +19294,15 @@ def list_worksheets(
                     "sample_id": it.sample_id,
                     "sample_uid": it.sample_uid,
                     "service_group_id": it.service_group_id,
+                    "department_id": it.department_id,
+                    # Four-state resolution (Task 8): own department_id ->
+                    # legacy service_group bridge -> analyses_json keyword
+                    # fallback -> "Legacy" literal (fail-visible, was None).
                     "department_name": (
-                        (group_department_name_map.get(it.service_group_id) if it.service_group_id else None)
+                        (department_id_name_map.get(it.department_id) if it.department_id else None)
+                        or (group_department_name_map.get(it.service_group_id) if it.service_group_id else None)
                         or item_department_fallback_map.get(it.id)
+                        or "Legacy"
                     ),
                     "group_name": group_name_map.get(it.service_group_id, "—") if it.service_group_id else "—",
                     "group_color": group_color_map.get(it.service_group_id, "zinc") if it.service_group_id else "zinc",
@@ -18914,14 +19389,99 @@ class AddToWorksheetAnalysis(BaseModel):
     method: Optional[str] = None
 
 
+def _item_scope_filter(department_id: int | None, service_group_id: int | None):
+    """Locate a worksheet item by bench scope. Department wins when present;
+    else the legacy group; both None → the legacy NULL-scope rows (a whole-
+    sample claim). NOTE: the group→department collapse is many-to-one
+    (Microbiology+Endotoxin→Microbiology), so a department match can hit two
+    historical rows — never scalar_one_or_none(). In the department world those
+    two rows are the SAME lane, i.e. duplicates: staging callers merge across
+    all of them (_items_in_scope), and the open-worksheet collision guard picks
+    the lowest id with a worksheet.item_scope_ambiguous warning
+    (_first_item_in_scope).
+
+    The both-None branch is deliberately NARROWER than the legacy
+    `service_group_id IS NULL` filter it replaces: a row carrying a department
+    but no group is that department's claim, not a whole-sample one.
+    """
+    if department_id is not None:
+        return WorksheetItem.department_id == department_id
+    if service_group_id is not None:
+        return WorksheetItem.service_group_id == service_group_id
+    return and_(
+        WorksheetItem.department_id.is_(None),
+        WorksheetItem.service_group_id.is_(None),
+    )
+
+
+def _items_in_scope(db, *, sample_uid: str, department_id: int | None,
+                    service_group_id: int | None, status: str) -> "list[WorksheetItem]":
+    """EVERY item for this vial in the given bench scope, lowest id first.
+
+    Two rows in one (vial, department) scope are duplicates of a single lane,
+    not rivals — staging callers merge across the whole list so no sibling is
+    left behind when the lowest-id row is consumed."""
+    return list(db.execute(
+        select(WorksheetItem)
+        .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
+        .where(
+            WorksheetItem.sample_uid == sample_uid,
+            _item_scope_filter(department_id, service_group_id),
+            Worksheet.status == status,
+        )
+        .order_by(WorksheetItem.id)
+    ).scalars().all())
+
+
+def _first_item_in_scope(db, *, sample_uid: str, department_id: int | None,
+                         service_group_id: int | None, status: str) -> "WorksheetItem | None":
+    """The lowest-id item in scope, for the callers that must pick exactly one
+    (the open-worksheet collision guard, where any match blocks the add)."""
+    rows = _items_in_scope(
+        db, sample_uid=sample_uid, department_id=department_id,
+        service_group_id=service_group_id, status=status,
+    )
+    if len(rows) > 1:
+        logger.warning(
+            "worksheet.item_scope_ambiguous sample_uid=%s department_id=%s "
+            "service_group_id=%s status=%s n=%d — many-to-one group→department "
+            "collapse matched multiple historical rows; using lowest id",
+            sample_uid, department_id, service_group_id, status, len(rows),
+        )
+    return rows[0] if rows else None
+
+
+def _resolve_item_scope(db, department_id: int | None, service_group_id: int | None) -> int | None:
+    """Reconcile the two scope keys on the wire. Department wins; a group whose
+    bridge disagrees is a caller bug (400); a group-only payload DERIVES the
+    department so new rows always store both keys. An id that resolves to NO
+    ServiceGroup row is a stale-client bug (400), not a dangling id to keep —
+    the inbox now emits department ids, so a caller still sending a group id
+    that doesn't exist is likely sending a department id in the wrong field."""
+    if service_group_id is None:
+        return department_id
+    group = db.get(ServiceGroup, service_group_id)
+    if group is None:
+        raise HTTPException(
+            400,
+            f"unknown service_group_id {service_group_id} — inbox now emits "
+            "department ids; send department_id (stale client?)",
+        )
+    group_dept = group.department_id
+    if department_id is not None and group_dept is not None and group_dept != department_id:
+        raise HTTPException(400, "department_id and service_group_id disagree")
+    return department_id if department_id is not None else group_dept
+
+
 class AddToWorksheetRequest(BaseModel):
     sample_uid: str
     sample_id: str
     service_group_id: int | None = None
+    department_id: int | None = None
     date_received: Optional[str] = None
     analyses: Optional[list[AddToWorksheetAnalysis]] = None
 
-    @validator("service_group_id", pre=True, always=True)
+    @validator("service_group_id", "department_id", pre=True, always=True)
     def zero_to_none(cls, v):
         return None if v == 0 else v
 
@@ -18940,18 +19500,13 @@ async def add_group_to_worksheet(
     if not ws:
         raise HTTPException(404, "Worksheet not found")
 
-    # Check if this sample+group is already in ANY open worksheet (collision guard)
+    # Check if this sample+scope is already in ANY open worksheet (collision guard)
     gid = data.service_group_id
-    gid_filter = WorksheetItem.service_group_id.is_(None) if gid is None else (WorksheetItem.service_group_id == gid)
-    existing_anywhere = db.execute(
-        select(WorksheetItem)
-        .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
-        .where(
-            WorksheetItem.sample_uid == data.sample_uid,
-            gid_filter,
-            Worksheet.status == "open",
-        )
-    ).scalar_one_or_none()
+    dept_id = _resolve_item_scope(db, data.department_id, gid)
+    existing_anywhere = _first_item_in_scope(
+        db, sample_uid=data.sample_uid, department_id=dept_id,
+        service_group_id=gid, status="open",
+    )
     if existing_anywhere:
         owner_ws = db.execute(
             select(Worksheet.title).where(Worksheet.id == existing_anywhere.worksheet_id)
@@ -18963,16 +19518,14 @@ async def add_group_to_worksheet(
             detail=f"Sample {data.sample_id} is already in worksheet \"{owner_ws or 'unknown'}\"",
         )
 
-    # Pick up any staging pre-assignments for this sample+group
-    staging_item = db.execute(
-        select(WorksheetItem)
-        .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
-        .where(
-            WorksheetItem.sample_uid == data.sample_uid,
-            gid_filter,
-            Worksheet.status == "staging",
-        )
-    ).scalar_one_or_none()
+    # Pick up any staging pre-assignments for this sample+scope. Every matching
+    # row is one lane's pre-assignment, so ALL of them are consumed below;
+    # the lowest id donates (deterministic, and identical to the single-row case).
+    staging_items = _items_in_scope(
+        db, sample_uid=data.sample_uid, department_id=dept_id,
+        service_group_id=gid, status="staging",
+    )
+    staging_item = staging_items[0] if staging_items else None
 
     # Look up actual priority from sample_priorities
     sample_priority = db.execute(
@@ -18989,7 +19542,8 @@ async def add_group_to_worksheet(
         worksheet_id=worksheet_id,
         sample_uid=data.sample_uid,
         sample_id=data.sample_id,
-        service_group_id=data.service_group_id,
+        service_group_id=gid,
+        department_id=dept_id,
         assigned_analyst_id=analyst_id,
         instrument_uid=staging_item.instrument_uid if staging_item else None,
         priority=priority,
@@ -19007,7 +19561,8 @@ async def add_group_to_worksheet(
         stamp_for_item(
             db,
             sample_uid=data.sample_uid,
-            service_group_id=data.service_group_id,
+            service_group_id=gid,
+            department_id=dept_id,
             analyst_user_id=analyst_id,
             acting_user_id=getattr(_current_user, "id", None),
             worksheet_id=worksheet_id,
@@ -19018,9 +19573,10 @@ async def add_group_to_worksheet(
             "analyst stamp failed during add-group-to-worksheet", exc_info=True
         )
 
-    # Remove staging item if picked up
-    if staging_item:
-        db.delete(staging_item)
+    # Remove EVERY staging row picked up — leaving a sibling behind would strand
+    # an invisible pre-assignment no later add can reach.
+    for _staged in staging_items:
+        db.delete(_staged)
 
     db.commit()
 
@@ -19038,18 +19594,13 @@ async def create_worksheet_from_drop(
     current_user=Depends(get_current_user),
 ):
     """Create a new worksheet from a drag-and-drop action."""
-    # Collision guard: check if sample+group is already in any open worksheet
+    # Collision guard: check if sample+scope is already in any open worksheet
     gid = data.service_group_id
-    gid_filter = WorksheetItem.service_group_id.is_(None) if gid is None else (WorksheetItem.service_group_id == gid)
-    existing_anywhere = db.execute(
-        select(WorksheetItem)
-        .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
-        .where(
-            WorksheetItem.sample_uid == data.sample_uid,
-            gid_filter,
-            Worksheet.status == "open",
-        )
-    ).scalar_one_or_none()
+    dept_id = _resolve_item_scope(db, data.department_id, gid)
+    existing_anywhere = _first_item_in_scope(
+        db, sample_uid=data.sample_uid, department_id=dept_id,
+        service_group_id=gid, status="open",
+    )
     if existing_anywhere:
         owner_ws = db.execute(
             select(Worksheet.title).where(Worksheet.id == existing_anywhere.worksheet_id)
@@ -19076,24 +19627,20 @@ async def create_worksheet_from_drop(
     ).scalar_one_or_none()
     priority = sample_priority.priority if sample_priority else "normal"
 
-    # Pick up staging pre-assignments
-    gid = data.service_group_id
-    gid_filter = WorksheetItem.service_group_id.is_(None) if gid is None else (WorksheetItem.service_group_id == gid)
-    staging_item = db.execute(
-        select(WorksheetItem)
-        .join(Worksheet, WorksheetItem.worksheet_id == Worksheet.id)
-        .where(
-            WorksheetItem.sample_uid == data.sample_uid,
-            gid_filter,
-            Worksheet.status == "staging",
-        )
-    ).scalar_one_or_none()
+    # Pick up staging pre-assignments — all rows in scope are consumed, lowest
+    # id donates. Mirrors add_group_to_worksheet.
+    staging_items = _items_in_scope(
+        db, sample_uid=data.sample_uid, department_id=dept_id,
+        service_group_id=gid, status="staging",
+    )
+    staging_item = staging_items[0] if staging_items else None
 
     item = WorksheetItem(
         worksheet_id=ws.id,
         sample_uid=data.sample_uid,
         sample_id=data.sample_id,
         service_group_id=gid,
+        department_id=dept_id,
         assigned_analyst_id=staging_item.assigned_analyst_id if staging_item else None,
         instrument_uid=staging_item.instrument_uid if staging_item else None,
         priority=priority,
@@ -19111,6 +19658,7 @@ async def create_worksheet_from_drop(
             db,
             sample_uid=data.sample_uid,
             service_group_id=gid,
+            department_id=dept_id,
             analyst_user_id=item.assigned_analyst_id,
             acting_user_id=getattr(current_user, "id", None),
             worksheet_id=ws.id,
@@ -19121,8 +19669,8 @@ async def create_worksheet_from_drop(
             "analyst stamp failed during create-worksheet-from-drop", exc_info=True
         )
 
-    if staging_item:
-        db.delete(staging_item)
+    for _staged in staging_items:
+        db.delete(_staged)
 
     db.commit()
 
@@ -19159,6 +19707,7 @@ async def delete_worksheet(
             clear_for_item(
                 db, sample_uid=ws_item.sample_uid,
                 service_group_id=ws_item.service_group_id,
+                department_id=ws_item.department_id,
                 acting_user_id=acting_id, worksheet_id=worksheet_id,
                 worksheet_title=ws.title,
             )
@@ -19176,53 +19725,6 @@ async def delete_worksheet(
     db.delete(ws)
     db.commit()
     return {"status": "deleted"}
-
-
-@app.delete("/worksheets/{worksheet_id}/items/{sample_uid}/{service_group_id}")
-async def remove_worksheet_item(
-    worksheet_id: int,
-    sample_uid: str,
-    service_group_id: int,
-    db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
-):
-    """Remove a single service group item from a worksheet. Analysis returns to inbox."""
-    gid = None if service_group_id == 0 else service_group_id
-    gid_filter = WorksheetItem.service_group_id.is_(None) if gid is None else (WorksheetItem.service_group_id == gid)
-    item = db.execute(
-        select(WorksheetItem).where(
-            WorksheetItem.worksheet_id == worksheet_id,
-            WorksheetItem.sample_uid == sample_uid,
-            gid_filter,
-        )
-    ).scalar_one_or_none()
-    if not item:
-        raise HTTPException(404, "Item not found")
-
-    # Analyst-from-worksheet: clear vial-tier stamps; analysis returns to inbox.
-    # Best-effort: stamping failures must not break item removal.
-    from lims_analyses.worksheet_analyst import clear_for_item
-    import logging as _logging
-    ws_title = db.execute(
-        select(Worksheet.title).where(Worksheet.id == worksheet_id)
-    ).scalar_one_or_none()
-    try:
-        clear_for_item(
-            db,
-            sample_uid=sample_uid,
-            service_group_id=gid,
-            acting_user_id=getattr(_current_user, "id", None),
-            worksheet_id=worksheet_id,
-            worksheet_title=ws_title,
-        )
-    except Exception:
-        _logging.getLogger(__name__).warning(
-            "analyst stamp clear failed during remove-worksheet-item", exc_info=True
-        )
-
-    db.delete(item)
-    db.commit()
-    return {"status": "removed"}
 
 
 @app.delete("/worksheets/{worksheet_id}/items/{item_id}")
@@ -19261,6 +19763,7 @@ async def remove_worksheet_item_by_id(
             db,
             sample_uid=item.sample_uid,
             service_group_id=item.service_group_id,
+            department_id=item.department_id,
             acting_user_id=getattr(_current_user, "id", None),
             worksheet_id=worksheet_id,
             worksheet_title=ws_title,
@@ -19296,66 +19799,6 @@ async def complete_worksheet(
     ws.completed_at = datetime.utcnow()
     db.commit()
     return {"status": "completed", "completed_by": current_user.email, "completed_at": ws.completed_at.isoformat()}
-
-
-@app.post("/worksheets/{worksheet_id}/items/{sample_uid}/{service_group_id}/reassign")
-async def reassign_worksheet_item(
-    worksheet_id: int,
-    sample_uid: str,
-    service_group_id: int,
-    data: ReassignRequest,
-    db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
-):
-    """Move a worksheet item to a different (open) worksheet."""
-    gid = None if service_group_id == 0 else service_group_id
-    gid_filter = WorksheetItem.service_group_id.is_(None) if gid is None else (WorksheetItem.service_group_id == gid)
-    item = db.execute(
-        select(WorksheetItem).where(
-            WorksheetItem.worksheet_id == worksheet_id,
-            WorksheetItem.sample_uid == sample_uid,
-            gid_filter,
-        )
-    ).scalar_one_or_none()
-    if not item:
-        raise HTTPException(404, "Item not found")
-    target = db.execute(
-        select(Worksheet).where(Worksheet.id == data.target_worksheet_id, Worksheet.status == "open")
-    ).scalar_one_or_none()
-    if not target:
-        raise HTTPException(404, "Target worksheet not found or not open")
-    # Analyst-from-worksheet: reassign = remove from source + add to target.
-    # Best-effort: stamping failures must not break the reassign. The
-    # item.worksheet_id move stays OUTSIDE the try so the reassign always
-    # happens; only the stamp side-effects are guarded.
-    from lims_analyses.worksheet_analyst import clear_for_item, stamp_for_item
-    import logging as _logging
-    acting_id = getattr(_current_user, "id", None)
-    src_ws_title = db.execute(
-        select(Worksheet.title).where(Worksheet.id == worksheet_id)
-    ).scalar_one_or_none()
-    item.worksheet_id = data.target_worksheet_id
-    # Target's worksheet-level analyst wins; else keep the item's own.
-    if target.assigned_analyst_id:
-        item.assigned_analyst_id = target.assigned_analyst_id
-    try:
-        clear_for_item(
-            db, sample_uid=sample_uid, service_group_id=gid,
-            acting_user_id=acting_id, worksheet_id=worksheet_id,
-            worksheet_title=src_ws_title,
-        )
-        stamp_for_item(
-            db, sample_uid=sample_uid, service_group_id=gid,
-            analyst_user_id=target.assigned_analyst_id or item.assigned_analyst_id,
-            acting_user_id=acting_id,
-            worksheet_id=target.id, worksheet_title=target.title,
-        )
-    except Exception:
-        _logging.getLogger(__name__).warning(
-            "analyst stamp failed during reassign-worksheet-item", exc_info=True
-        )
-    db.commit()
-    return {"status": "reassigned", "target_worksheet_id": data.target_worksheet_id}
 
 
 @app.post("/worksheets/{worksheet_id}/items/{item_id}/reassign")
@@ -19395,17 +19838,18 @@ async def reassign_worksheet_item_by_id(
     ).scalar_one_or_none()
     sample_uid = item.sample_uid
     gid = item.service_group_id
+    dept_id = item.department_id
     item.worksheet_id = data.target_worksheet_id
     if target.assigned_analyst_id:
         item.assigned_analyst_id = target.assigned_analyst_id
     try:
         clear_for_item(
-            db, sample_uid=sample_uid, service_group_id=gid,
+            db, sample_uid=sample_uid, service_group_id=gid, department_id=dept_id,
             acting_user_id=acting_id, worksheet_id=worksheet_id,
             worksheet_title=src_ws_title,
         )
         stamp_for_item(
-            db, sample_uid=sample_uid, service_group_id=gid,
+            db, sample_uid=sample_uid, service_group_id=gid, department_id=dept_id,
             analyst_user_id=target.assigned_analyst_id or item.assigned_analyst_id,
             acting_user_id=acting_id,
             worksheet_id=target.id, worksheet_title=target.title,
@@ -19728,10 +20172,11 @@ def _build_analysis_debug_rows(db: Session, row: LimsSample, sample_id: str) -> 
     ).scalars().all()
 
     def _is_live_canonical(r) -> bool:
-        # Mirrors the DB's own `uq_lims_analyses_parent_service_root` partial
-        # unique index definition (database.py) exactly: at most one
-        # canonical row per (parent, keyword) may have retest_of_id IS NULL
-        # AND review_state NOT IN ('retracted', 'rejected') at a time.
+        # Liveness mirrors the parent-tier root indexes (database.py): at most
+        # one canonical row per (parent, keyword) — and, since S3, per
+        # (parent, analysis_service_id) — may be live at a time. This panel
+        # keys by KEYWORD on purpose: it diffs Mk1 rows against a SENAITE
+        # payload that only speaks keyword (senaite_map above).
         return r.retest_of_id is None and r.review_state not in ("retracted", "rejected")
 
     # Newest-wins per keyword, same "prefer live, else fallback to newest"
@@ -20157,6 +20602,38 @@ def get_sample_registry_parity(
             "verdict": summary["real"] == 0, "error": None}
 
 
+@app.get("/debug/catalog-departments")
+def get_catalog_departments_debug(
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin drift diagnostic (S6a): department-assignment totality across
+    the live catalog — the ACTIVE-scoped invariant the fail-closed HPLC-
+    mirror allow-list depends on. Pure DB read, zero SENAITE I/O, zero
+    writes. Plain `def` for consistency with the debug-registry siblings
+    above (nothing blocking here, but the panel's routes share one posture).
+    """
+    from catalog.departments import department_totality_report
+    return department_totality_report(db)
+
+
+@app.post("/catalog/reconcile-per-substance")
+def reconcile_per_substance_route(
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin on-demand heal (S6b): re-run the per-substance ID_/PUR_/QTY_
+    derivation and return a report. Historically this only ran inside
+    `_run_migrations()` at boot, so healing a drifted catalog (P-1500)
+    required restarting the backend container — this endpoint does the
+    same work without one. Idempotent; safe to call repeatedly.
+    """
+    from catalog.per_substance_reconciler import reconcile_per_substance_services
+    report = reconcile_per_substance_services(db)
+    db.commit()
+    return report
+
+
 @app.get("/registry/sample/{sample_id}/details", response_model=RegistrySampleReadResult)
 async def get_sample_read_from_registry(
     sample_id: str,
@@ -20255,6 +20732,118 @@ def download_registry_parent_attachment(
         media_type=att.content_type or "application/octet-stream",
         headers={"Content-Disposition": f'inline; filename="{att.filename}"'},
     )
+
+
+@app.post("/lims-samples/{sample_id}/reprovision-snapshot")
+def reprovision_catalog_snapshot(
+    sample_id: str,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """S4 snapshot rider, Task 7: the ONLY other writer of LimsSample.
+    catalog_snapshot besides the once-only registration stamp
+    (_native_placeholders_at_registration_bg). Handler ruling: applying a
+    catalog fix to an in-flight order is a deliberate, AUDITED reprovision
+    action, never an implicit side effect — so this route both overwrites
+    the frozen snapshot and appends one catalog_change_log row for it.
+
+    `require_admin` (fix round 1, not the original plan text's
+    `get_current_user`): overwriting a frozen provisioning contract is an
+    ops-grade action — fail-closed wins here even though the plan wrote
+    "any authenticated user". `require_admin` itself depends on
+    `get_current_user` and returns that same user object on success, so
+    actor attribution below (`getattr(current_user, "id", None)`) is
+    unchanged.
+
+    Scope boundary (fix round 1, ruled): this route rewrites ONLY
+    `catalog_snapshot`. It does NOT touch vials/analyses already assigned
+    at check-in — a sample that's already past check-in gets an updated
+    snapshot but no re-seed of existing custody/analyses rows. Healing
+    already-seeded rows against a reprovisioned snapshot is deliberately
+    out of scope for this slice; the snapshot only governs FUTURE seeding
+    (task 6's snapshot-sourced resolve/seed path).
+
+    Recomputes fresh against the LIVE catalog via compute_catalog_snapshot,
+    fed by a FRESH fetch_sample_services read — never threads the sample's
+    existing snapshot back into compute_catalog_snapshot, which would
+    re-freeze stale data instead of updating it. entity_type='sample_snapshot'
+    keeps this ledger distinct from the per-catalog-row entity types (service/
+    profile/vial_role/...) the rest of change_log.py's callers use.
+
+    action='create' (log_create, before=None) when the stored snapshot was
+    NULL; action='update' (apply_and_log, which performs the setattr AND the
+    before/after diff in one call) otherwise — apply_and_log only writes a
+    row when the value actually changed, which in practice is always true
+    here since compute_catalog_snapshot stamps a fresh resolved_at on every
+    call.
+
+    Plain `def`, not `async def`: fetch_sample_services (sub_samples/
+    service.py) is a blocking `requests` call — FastAPI runs sync `def`
+    routes in the threadpool so it can't stall the event loop, same
+    reasoning as the sibling /debug/sample-registry/{sample_id}/refresh
+    route above. IS fetch failure -> 502 with NO writes (raised before
+    either the snapshot column or the change-log row is touched).
+    """
+    from catalog.change_log import apply_and_log, log_create
+    from catalog.snapshot import compute_catalog_snapshot
+    from sub_samples.service import fetch_sample_services
+
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        raise HTTPException(status_code=404, detail=f"Sample {sample_id} not found")
+
+    try:
+        raw = fetch_sample_services(sample_id)
+    except Exception as e:  # noqa: BLE001 — surfaced as 502, no writes made yet
+        logger.warning(
+            "catalog_snapshot.reprovision_fetch_failed sample_id=%s err=%s",
+            sample_id, e,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to fetch live services for {sample_id}",
+        ) from e
+    if raw is None:
+        # fetch_sample_services' OWN 404 (no order_submissions row for this
+        # sample_id) — distinct from a network/5xx failure but must be
+        # refused the same way: reprovisioning to an empty services dict
+        # would overwrite a good frozen snapshot with an empty one and audit
+        # it as a deliberate reprovision. The registration bg task treats
+        # this the same falsy-raw signal as a skip (`if not raw: return`);
+        # this route can't skip silently (it's a deliberate user action), so
+        # it refuses loudly instead.
+        raise HTTPException(
+            status_code=502,
+            detail=f"No live order services found for sample {sample_id}",
+        )
+
+    new_snapshot = compute_catalog_snapshot(
+        db, raw.get("services") or {}, raw.get("package"),
+    )
+
+    user_id = getattr(current_user, "id", None)
+    was_null = parent.catalog_snapshot is None
+    if was_null:
+        parent.catalog_snapshot = new_snapshot
+        log_create(
+            db, parent, ["catalog_snapshot"],
+            entity_type="sample_snapshot", entity_pk=parent.id, user_id=user_id,
+        )
+    else:
+        apply_and_log(
+            db, parent, {"catalog_snapshot": new_snapshot},
+            entity_type="sample_snapshot", entity_pk=parent.id, user_id=user_id,
+        )
+    db.commit()
+    db.refresh(parent)
+
+    return {
+        "sample_id": parent.sample_id,
+        "action": "create" if was_null else "update",
+        "catalog_snapshot": parent.catalog_snapshot,
+    }
 
 
 @app.get("/registry/samples", response_model=SenaiteSamplesResponse)

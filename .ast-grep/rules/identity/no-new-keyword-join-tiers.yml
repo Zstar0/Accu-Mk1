@@ -1,0 +1,37 @@
+id: no-new-keyword-join-tiers
+message: |
+  No NEW keyword-equality join tier in vial-assignment.ts. Native (mk1) rows
+  join on analysis_service_id — keyword is display-only on them and drifts.
+
+  BAD:  matchToVialMatches(kw => kw === pa.someOtherKeyword)
+  GOOD: matchByServiceId(pa.analysis_service_id)
+
+  The join ladder is closed at four tiers (see buildVialAssignmentMap):
+    0 service id · 1 exact keyword · 2 identity bridge · 3 analyte bridge
+severity: error
+language: TypeScript
+files:
+  - 'src/lib/vial-assignment.ts'
+rule:
+  any:
+    # kw === pa.keyword — the shape tier 1 uses today
+    - pattern: $A === $B.keyword
+    # a.keyword === <anything> — subsumes a.keyword === b.keyword
+    - pattern: $A.keyword === $B
+note: |
+  Keyword equality is identity ONLY for senaite-origin rows. On mk1 rows the
+  service FK is the identity and the stored keyword is a compatibility alias
+  that a catalog re-label leaves stale (S3) — a new keyword tier would
+  silently mis-join drifted rows.
+
+  Tiers 2-3 are TRANSLATIONS (generic parent keyword → per-substance vial
+  keyword), not identity, and match on isIdentityAnalysis / title prefixes
+  rather than keyword equality — so they never trip this rule.
+
+  That leaves tier 1 as the ONLY sanctioned equality site; it carries an
+  inline `// ast-grep-ignore: no-new-keyword-join-tiers` on the line above it
+  (the directive line takes the rule id alone — trailing prose makes it parse
+  as an unknown rule and the suppression silently goes unused). A second
+  sanctioned site is a spec change, not an ignore comment.
+
+  See: docs/superpowers/specs (S3 native identity convergence).

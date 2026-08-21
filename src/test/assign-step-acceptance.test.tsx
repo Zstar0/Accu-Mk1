@@ -24,6 +24,11 @@ vi.mock('@/lib/api', async importOriginal => {
     patchVialAssignment: vi.fn(),
     updateSenaiteSampleFields: vi.fn(),
     putVarianceOverride: vi.fn(),
+    // S1 roles-as-data: AssignStep now calls useVialRoles(); without this the
+    // real fetcher would fire a real network call. Resolves empty so
+    // roleShortLabel's uppercased-code fallback still applies to 'zz_acc' —
+    // the assertion below is unchanged.
+    getVialRoles: vi.fn(),
   }
 })
 
@@ -31,11 +36,12 @@ vi.mock('sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }))
 
-import { getVialPlan, patchVialAssignment, putVarianceOverride } from '@/lib/api'
+import { getVialPlan, getVialRoles, patchVialAssignment, putVarianceOverride } from '@/lib/api'
 
 // Mirrors the backend acceptance test's exact shapes: department "ZZ
-// Bench", role code "zz_acc" (never in ROLE_SHORT_DEFAULTS, so its chip
-// falls back to the uppercased code), profile "ZZ Acceptance" as host.
+// Bench", role code "zz_acc" (never seeded in the vial_roles catalog here,
+// so its chip falls back to the uppercased code via roleShortLabel),
+// profile "ZZ Acceptance" as host.
 const ZZ_BENCH_PLAN: VialPlanResponse = {
   demand: { hplc: 0, endo: 0, ster: 0, zz_acc: 1 },
   variance: { hplc: 0, endo: 0, ster: 0 },
@@ -66,6 +72,7 @@ beforeEach(() => {
     assignment_role: null,
   })
   vi.mocked(putVarianceOverride).mockResolvedValue({ variance: {} })
+  vi.mocked(getVialRoles).mockResolvedValue([])
 })
 
 function renderStep() {
@@ -90,8 +97,8 @@ describe('AssignStep — manager authors, lab follows (fixture-level acceptance)
     expect(screen.getByText('ZZACC-0001-S01')).toBeInTheDocument()
     expect(screen.getByText('1 / 1')).toBeInTheDocument()
 
-    // Its chip badge falls back to the uppercased role code (roleShort's
-    // documented fallback for any code outside ROLE_SHORT_DEFAULTS) — proof
+    // Its chip badge falls back to the uppercased role code (roleShortLabel's
+    // documented fallback for any code the catalog hasn't seeded) — proof
     // this is the generic path, not a hardcoded literal for 'zz_acc'.
     expect(screen.getByText('ZZ_ACC')).toBeInTheDocument()
 
