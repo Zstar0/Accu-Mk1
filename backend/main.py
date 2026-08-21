@@ -2524,6 +2524,19 @@ class DepartmentResponse(BaseModel):
 
 # ─── Vial Role schemas ───
 
+# S1: closed color-name vocabulary — must stay in sync with the FE's
+# ROLE_COLOR_* class maps (src/lib/role-display.ts). Engineer-owned on
+# purpose: each name has static Tailwind classes behind it.
+ALLOWED_ROLE_COLORS = {"green", "orange", "purple", "sky", "slate", "amber",
+                       "blue", "emerald", "red", "violet", "zinc", "rose"}
+
+
+def _validate_role_color(v):
+    if v is not None and v not in ALLOWED_ROLE_COLORS:
+        raise ValueError(f"unknown color {v!r}; allowed: {sorted(ALLOWED_ROLE_COLORS)}")
+    return v
+
+
 class VialRoleCreate(BaseModel):
     code: str
     label: str
@@ -2531,6 +2544,13 @@ class VialRoleCreate(BaseModel):
     boxable: bool = False
     variance_eligible: bool = False
     sort_order: int = 0
+    color: Optional[str] = None
+    short_label: Optional[str] = None
+    badge_glyph: Optional[str] = None
+
+    @validator("color")
+    def color_must_be_known(cls, v):
+        return _validate_role_color(v)
 
 
 class VialRoleUpdate(BaseModel):
@@ -2540,6 +2560,13 @@ class VialRoleUpdate(BaseModel):
     boxable: Optional[bool] = None
     variance_eligible: Optional[bool] = None
     sort_order: Optional[int] = None
+    color: Optional[str] = None
+    short_label: Optional[str] = None
+    badge_glyph: Optional[str] = None
+
+    @validator("color")
+    def color_must_be_known(cls, v):
+        return _validate_role_color(v)
 
 
 class VialRoleResponse(BaseModel):
@@ -2552,6 +2579,9 @@ class VialRoleResponse(BaseModel):
     sort_order: int
     frozen: bool
     is_system: bool
+    color: Optional[str] = None
+    short_label: Optional[str] = None
+    badge_glyph: Optional[str] = None
 
     class Config:
         from_attributes = True

@@ -24,6 +24,7 @@ vi.mock('sonner', () => ({
 import {
   getVialRoles,
   createVialRole,
+  updateVialRole,
   deleteVialRole,
   getDepartments,
 } from '@/lib/api'
@@ -67,6 +68,9 @@ const TOX_ROLE: VialRoleRow = {
   sort_order: 1,
   frozen: false,
   is_system: false,
+  color: 'blue',
+  short_label: 'TOX',
+  badge_glyph: 'T',
 }
 
 describe('VialRolesPage', () => {
@@ -84,6 +88,7 @@ describe('VialRolesPage', () => {
       frozen: false,
       is_system: false,
     })
+    vi.mocked(updateVialRole).mockReset().mockResolvedValue(TOX_ROLE)
     vi.mocked(deleteVialRole).mockReset().mockResolvedValue(undefined)
     vi.mocked(toast.error).mockClear()
     vi.mocked(toast.success).mockClear()
@@ -125,5 +130,76 @@ describe('VialRolesPage', () => {
     await screen.findByText('HPLC')
     expect(screen.getByRole('button', { name: 'Delete hplc' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Delete tox' })).not.toBeDisabled()
+  })
+
+  it('edit panel populates the form from the stored display faces (openEdit round-trip)', async () => {
+    const user = userEvent.setup()
+    render(<VialRolesPage />, { wrapper })
+
+    await screen.findByText('HPLC')
+    await user.click(screen.getByText('Toxicology'))
+
+    await screen.findByDisplayValue('TOX')
+    expect(screen.getByDisplayValue('T')).toBeInTheDocument()
+    // TOX_ROLE.color is 'blue' — the Blue swatch must come in pre-selected,
+    // not "Auto" (would also produce a passing color:null PATCH test if
+    // openEdit silently dropped the field).
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+    await waitFor(() => {
+      expect(updateVialRole).toHaveBeenCalledWith(
+        2,
+        expect.objectContaining({ color: 'blue', short_label: 'TOX', badge_glyph: 'T' })
+      )
+    })
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+
+  it('edit panel PATCHes color/short_label/badge_glyph for the edited role', async () => {
+    const user = userEvent.setup()
+    render(<VialRolesPage />, { wrapper })
+
+    await screen.findByText('HPLC')
+    await user.click(screen.getByText('Toxicology'))
+
+    const shortLabelInput = await screen.findByDisplayValue('TOX')
+    await user.clear(shortLabelInput)
+    await user.type(shortLabelInput, 'TX')
+
+    const glyphInput = screen.getByDisplayValue('T')
+    await user.clear(glyphInput)
+    await user.type(glyphInput, 'X')
+
+    await user.click(screen.getByRole('button', { name: 'Amber' }))
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+    await waitFor(() => {
+      expect(updateVialRole).toHaveBeenCalledWith(
+        2,
+        expect.objectContaining({ color: 'amber', short_label: 'TX', badge_glyph: 'X' })
+      )
+    })
+    expect(toast.error).not.toHaveBeenCalled()
+    expect(toast.success).toHaveBeenCalled()
+  })
+
+  it('the "Auto (department)" swatch sends color: null', async () => {
+    const user = userEvent.setup()
+    render(<VialRolesPage />, { wrapper })
+
+    await screen.findByText('HPLC')
+    await user.click(screen.getByText('Toxicology'))
+
+    await screen.findByDisplayValue('TOX')
+    await user.click(screen.getByRole('button', { name: 'Auto (department)' }))
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+    await waitFor(() => {
+      expect(updateVialRole).toHaveBeenCalledWith(
+        2,
+        expect.objectContaining({ color: null })
+      )
+    })
+    expect(toast.error).not.toHaveBeenCalled()
   })
 })
