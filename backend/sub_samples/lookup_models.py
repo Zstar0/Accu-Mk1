@@ -18,6 +18,10 @@ class SenaiteAnalyte(BaseModel):
     slot_number: int  # 1-4, corresponding to Analyte1..Analyte4 in SENAITE
     matched_peptide_id: Optional[int] = None
     matched_peptide_name: Optional[str] = None
+    # Abbreviation of the matched peptide. HPLC results key analytes by
+    # abbreviation, so slot->analysis matching must compare against this,
+    # not the (possibly divergent) peptide name.
+    matched_peptide_abbreviation: Optional[str] = None
     declared_quantity: Optional[float] = None  # per-analyte declared qty (mg)
 
 

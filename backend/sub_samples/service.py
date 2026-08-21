@@ -1269,22 +1269,6 @@ def _apply_variance_override(sample_id: str, result: Optional[dict]) -> Optional
     return result
 
 
-# Bucket (== vial assignment_role) -> WP service key carrying variance counts.
-# Retained for two reasons:
-#   1. A test asserts equality with lims_analyses.service._ROLE_VARIANCE_KEYS
-#      (the variance_verify gate) — this constant is that gate's reference.
-#   2. Canonical reference of the bucket→WP-key mapping for documentation.
-# NOTE: derive_variance_demand no longer iterates this constant. It now resolves
-# the hplc bucket inline in a BW-aware manner (reads hplcpurity_identity OR
-# bac_water_panel; see derive_variance_demand docstring). Coarse keys only,
-# never per-analyte (variance addon spec, "The scoping rule").
-VARIANCE_BUCKET_KEYS: dict[str, str] = {
-    "hplc": "hplcpurity_identity",
-    "endo": "endotoxin",
-    "ster": "sterility_pcr",
-}
-
-
 def derive_variance_demand(services: dict) -> dict:
     """Per-bucket variance target (PAID REPLICATES) from a WP services payload.
 
@@ -1323,6 +1307,10 @@ def derive_base_demand(services: dict, db=None, snapshot: Optional[dict] = None)
 
     db=None -> pure legacy map (unchanged behavior, used by legacy callers
     and as the shadow reference). With a db, the catalog is authoritative;
+    on divergence the catalog value prevails and the divergence is logged —
+    the legacy map is a shadow reference, removed one release after the S9
+    flip (2026-08-14).
+
     on any divergence in a LEGACY bucket the legacy value wins and an error
     is logged (fail-open to known-good, never to under-provisioning).
 
@@ -1344,19 +1332,40 @@ def derive_base_demand(services: dict, db=None, snapshot: Optional[dict] = None)
     legacy = {
         "hplc": 1 if hplc else 0,
         "endo": 1 if endo else 0,
-        "ster": 2 if ster else 0,
+        # Ruling 2026-08-05: PCR and USP<71> are separately sold products, one
+        # vial each. Was 2 back when a single "Sterility" add-on covered both
+        # tests from one pair of vials. Matches
+        # analysis_profiles.sterility_pcr.vials_required, which this map used to
+        # override.
+        "ster": 1 if ster else 0,
     }
     if db is None:
         return legacy
     from sub_samples.catalog_demand import derive_base_demand_catalog
     catalog = derive_base_demand_catalog(db, services, snapshot=snapshot)
+    # S9 ruling 2026-08-14: the catalog is authoritative; the legacy ternary
+    # above is a shadow reference only. On divergence the catalog value
+    # prevails and the divergence is logged (ERROR: ops must see it — the
+    # boot-time verify_demand_catalog keeps misconfigured states loud).
+    # MK1_DEMAND_LEGACY_WINS=1 restores the old clamp as a deploy rollback
+    # path; both the switch and the shadow compare are slated for removal
+    # one release after the flip.
+    legacy_wins = os.environ.get("MK1_DEMAND_LEGACY_WINS") == "1"
     for bucket, legacy_n in legacy.items():
         if catalog.get(bucket, 0) != legacy_n:
-            log.error(
-                "demand_divergence bucket=%s legacy=%s catalog=%s services=%s",
-                bucket, legacy_n, catalog.get(bucket, 0), sorted(services or {}),
-            )
-            catalog[bucket] = legacy_n
+            if legacy_wins:
+                log.error(
+                    "demand_divergence bucket=%s legacy_shadow=%s catalog=%s services=%s"
+                    " (legacy clamp active — MK1_DEMAND_LEGACY_WINS)",
+                    bucket, legacy_n, catalog.get(bucket, 0), sorted(services or {}),
+                )
+                catalog[bucket] = legacy_n
+            else:
+                log.error(
+                    "demand_divergence bucket=%s legacy_shadow=%s catalog=%s services=%s"
+                    " (catalog prevails)",
+                    bucket, legacy_n, catalog.get(bucket, 0), sorted(services or {}),
+                )
     return catalog
 
 
@@ -1364,8 +1373,9 @@ def derive_demand(services: dict, db=None, snapshot: Optional[dict] = None) -> d
     """Translate WP services dict to CORE vial demand per bucket.
 
     HPLC is satisfied by either `hplcpurity_identity` or `bac_water_panel` —
-    both result in chromatography vials. Sterility is the only bucket that
-    needs more than one vial (2 per the lab's protocol).
+    both result in chromatography vials. No legacy bucket needs more than
+    one vial (ruling 2026-08-05: PCR and USP<71> are separately sold
+    products, one vial each).
 
     Explicit-bucket model (2026-06-10-variance-bucket-assignment-design.md §2):
     variance is a SEPARATE bucket with its own target (derive_variance_demand),
@@ -1441,6 +1451,12 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
         }
 
     services = services_resp.get("services") or {}
+    # Sections/display parity with set_assignment_role's union hook (spec
+    # 2026-08-20-rider-vial-visibility): a lab-added profile living only
+    # as a live 'ordered' placeholder must render its chip. Display-only —
+    # demand/auto-assign inputs deliberately stay on the raw order dict.
+    from lims_analyses.manage_native import placeholder_profile_keys
+    services_for_sections = {**(services or {}), **placeholder_profile_keys(db, parent)}
     # S4 snapshot rider (task 6, fix round 1 — per-profile hybrid merge): a
     # non-NULL catalog_snapshot freezes what THIS sample's demand/fulfillment
     # resolves against, PER PROFILE — a later catalog edit to a profile
@@ -1479,7 +1495,7 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
             "is_unreachable": False,
             "vials": locked_vials,
             "container_mode": parent.container_mode,
-            "sections": _build_vial_plan_sections(db, demand, locked_vials, services, snapshot=snapshot),
+            "sections": _build_vial_plan_sections(db, demand, locked_vials, services_for_sections, snapshot=snapshot),
         }
 
     from catalog.roles import real_bucket_codes
@@ -1530,7 +1546,7 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
         "is_unreachable": False,
         "vials": assigned,
         "container_mode": parent.container_mode,
-        "sections": _build_vial_plan_sections(db, demand, assigned, services, snapshot=snapshot),
+        "sections": _build_vial_plan_sections(db, demand, assigned, services_for_sections, snapshot=snapshot),
     }
 
 
@@ -1592,6 +1608,41 @@ def _build_vial_plan_sections(db: Session, demand: dict, vials: list[dict],
             db.query(AnalysisProfile).filter(AnalysisProfile.id.in_(all_ids)).all()
         }
 
+    # Rider landing (spec 2026-08-20-rider-vial-visibility): which of THIS
+    # plan's vials hold a live rider edge, per profile — one query, keyed by
+    # profile id. Display metadata only; failures here must never 500 the
+    # vial plan, so the shape stays a plain default-empty lookup.
+    # Variance replicates are excluded even when they hold a rider edge
+    # (write_custody_edges writes rider edges per-vial, kind-blind) — the
+    # seeder never puts rider work on them, and the chip must point at where
+    # the rider's analysis actually runs (Handler UAT find, PB-0158
+    # "→ S01, S06"). NULL kind is a real core-shaped state (role-only PATCH)
+    # and stays included.
+    rider_vials_by_pid: dict = {}
+    vial_sample_ids = [v["sample_id"] for v in vials if not v.get("is_parent")]
+    if all_ids and vial_sample_ids:
+        from sqlalchemy import or_
+        from models import VialProfileAssignment
+        edge_rows = db.execute(
+            select(VialProfileAssignment.analysis_profile_id,
+                   LimsSubSample.sample_id)
+            .join(LimsSubSample,
+                  LimsSubSample.id == VialProfileAssignment.lims_sub_sample_pk)
+            .where(
+                VialProfileAssignment.relation == "rider",
+                VialProfileAssignment.superseded_at.is_(None),
+                VialProfileAssignment.analysis_profile_id.in_(all_ids),
+                LimsSubSample.sample_id.in_(vial_sample_ids),
+                or_(
+                    LimsSubSample.assignment_kind.is_(None),
+                    LimsSubSample.assignment_kind != "variance",
+                ),
+            )
+            .order_by(LimsSubSample.vial_sequence)
+        ).all()
+        for pid, sid in edge_rows:
+            rider_vials_by_pid.setdefault(pid, []).append(sid)
+
     sections_by_dept: dict = {}
     for code in candidates:
         row = registry.get(code)
@@ -1618,7 +1669,11 @@ def _build_vial_plan_sections(db: Session, demand: dict, vials: list[dict],
             for pid in rf.rider_profile_ids:
                 p = profile_by_id.get(pid)
                 if p is not None:
-                    profiles.append({"id": p.id, "key": p.key, "name": p.name, "relation": "rider"})
+                    profiles.append({
+                        "id": p.id, "key": p.key, "name": p.name,
+                        "relation": "rider",
+                        "host_vials": rider_vials_by_pid.get(pid, []),
+                    })
 
         section = sections_by_dept.setdefault(dept.id, {
             "department_id": dept.id,
@@ -1784,6 +1839,56 @@ def _drop_stale_role_rows(db: Session, *, sub: LimsSubSample, old_role: Optional
     return n
 
 
+def _drop_stale_rider_rows(db: Session, *, sub: LimsSubSample,
+                           prev_rider_pids: set) -> int:
+    """Rider companion to _drop_stale_role_rows (spec
+    2026-08-20-rider-vial-visibility): that cleanup is DEPARTMENT-keyed, so a
+    rider row whose service shares the new role's department survives a flip
+    even though its rider edge is gone. Drop this vial's pristine rows whose
+    service belongs to a profile that just LOST its rider edge and holds no
+    current edge of any relation. Same pristine predicate as
+    _drop_stale_role_rows — worked rows are never touched."""
+    if not prev_rider_pids:
+        return 0
+    from sub_samples.custody import current_custody
+
+    current_pids = {e.analysis_profile_id for e in current_custody(db, sub.id)}
+    stale_pids = prev_rider_pids - current_pids
+    if not stale_pids:
+        return 0
+    from models import AnalysisProfile, LimsAnalysis, LimsAnalysisTransition
+
+    svc_ids: set = set()
+    for pid in stale_pids:
+        prof = db.get(AnalysisProfile, pid)
+        if prof is not None:
+            svc_ids.update(s.id for s in prof.analysis_services)
+        else:
+            log.info("sub_samples.rider_cleanup_unknown_profile sub=%s profile_id=%s",
+                     sub.sample_id, pid)
+    if not svc_ids:
+        return 0
+    stale = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sub_sample_pk == sub.id,
+            LimsAnalysis.analysis_service_id.in_(svc_ids),
+            LimsAnalysis.review_state == "unassigned",
+            LimsAnalysis.result_value.is_(None),
+            LimsAnalysis.retest_of_id.is_(None),
+        )
+    ).scalars().all()
+    n = 0
+    for row in stale:
+        db.execute(delete(LimsAnalysisTransition).where(
+            LimsAnalysisTransition.analysis_id == row.id))
+        db.delete(row)
+        n += 1
+    if n:
+        db.flush()
+        log.info("sub_samples.rider_cleanup sub=%s dropped=%s", sub.sample_id, n)
+    return n
+
+
 def set_customer_remarks(db: Session, sample_id: str, remarks: str,
                          include: bool = True,
                          user_id: Optional[int] = None) -> dict:
@@ -1931,7 +2036,23 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
                 wp_services if wp_services is not None
                 else _fetch_wp_services_for_parent(parent_sid) or {}
             )
-        from sub_samples.custody import write_custody_edges
+            # Manage-analyses slice (ruling A): a profile the lab added on the
+            # parent (live 'ordered' placeholders) is not in the WP order, so
+            # union its key in — resolve_catalog_fulfillment then hosts it and
+            # the seeder seeds it. Adds nothing for a normal order (those keys
+            # are already present); reads only, never writes. Placeholder
+            # keys are merged in LAST, so on a same-key collision a live
+            # 'ordered' placeholder (True) wins over an incoming WP False —
+            # the placeholder is the parent's current truth of what's on the
+            # sample; removing it goes through Manage Analyses, not the order.
+            from lims_analyses.manage_native import placeholder_profile_keys
+            services_map = {**services_map, **placeholder_profile_keys(db, parent_row)}
+        from sub_samples.custody import current_custody, write_custody_edges
+        prev_rider_pids = {
+            e.analysis_profile_id
+            for e in current_custody(db, sub.id)
+            if e.relation == "rider"
+        }
         # S4 snapshot rider (task 6): thread the parent's frozen catalog
         # resolution (NULL for pre-slice-4 rows) so custody edges resolve
         # against what was purchased at registration, not the live catalog.
@@ -1951,6 +2072,7 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
         # analyses. Runs in THIS transaction (before the commit=False seed and
         # the single db.commit() below), so flip + cleanup + seed are atomic.
         _drop_stale_role_rows(db, sub=sub, old_role=old_role, new_role=role, registry=registry)
+        _drop_stale_rider_rows(db, sub=sub, prev_rider_pids=prev_rider_pids)
         # Phase 2 (mk1-native-analyses): if this assignment transitioned the
         # vial into a real (non-XTRA) role, seed its lims_analyses rows.
         # Idempotent — re-running on an already-seeded vial is a no-op.

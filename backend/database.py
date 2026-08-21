@@ -167,6 +167,15 @@ def init_db():
             seed_service_specs(_db)
     except Exception as e:  # never block startup
         log.warning("catalog_service_spec_seed_skipped err=%s", e)
+    # S9: demand-catalog integrity — with the legacy-wins override retired,
+    # a misconfigured profile under-provisions with no request-time error.
+    # ERROR-per-violation inside; never blocks startup.
+    try:
+        from catalog.demand_verify import verify_demand_catalog
+        with SessionLocal() as _s:
+            verify_demand_catalog(_s)
+    except Exception as e:  # never block startup
+        log.warning("demand_catalog_verify_skipped err=%s", e)
 
 
 def _run_migrations():
@@ -1613,6 +1622,83 @@ def _run_migrations():
         # Amendment audit (spec 2026-08-07): before/after capture. Nullable,
         # no default, no backfill — NULL = pre-slice row, by contract.
         "ALTER TABLE lims_analysis_transitions ADD COLUMN IF NOT EXISTS details JSONB",
+        # S1 roles-as-data (2026-08-11): display faces on vial_roles, seeded
+        # to match the pre-catalog hardcoded rendering exactly. Triple-NULL
+        # guard (fix round) = idempotent, never clobbers admin edits: an
+        # admin who chose Auto (color=NULL) but set short_label/badge_glyph
+        # must not have those two re-stamped on the next boot, so all three
+        # faces must be NULL before this fires. Residual (accepted,
+        # Handler-surfaced): a legacy role reset fully to Auto (all three
+        # NULL) still reverts to the legacy display on the next restart.
+        "ALTER TABLE vial_roles ADD COLUMN IF NOT EXISTS color VARCHAR(50)",
+        "ALTER TABLE vial_roles ADD COLUMN IF NOT EXISTS short_label VARCHAR(16)",
+        "ALTER TABLE vial_roles ADD COLUMN IF NOT EXISTS badge_glyph VARCHAR(2)",
+        "UPDATE vial_roles SET color='green', short_label='HPLC', badge_glyph='H' WHERE code='hplc' AND color IS NULL AND short_label IS NULL AND badge_glyph IS NULL",
+        "UPDATE vial_roles SET color='orange', short_label='ENDO', badge_glyph='E' WHERE code='endo' AND color IS NULL AND short_label IS NULL AND badge_glyph IS NULL",
+        "UPDATE vial_roles SET color='purple', short_label='PCR', badge_glyph='P' WHERE code='ster' AND color IS NULL AND short_label IS NULL AND badge_glyph IS NULL",
+        "UPDATE vial_roles SET color='sky', short_label='XTRA', badge_glyph='X' WHERE code='xtra' AND color IS NULL AND short_label IS NULL AND badge_glyph IS NULL",
+        "UPDATE vial_roles SET color='slate', short_label='HM', badge_glyph='M' WHERE code='hm' AND color IS NULL AND short_label IS NULL AND badge_glyph IS NULL",
+        # S4 catalog change log (2026-08-11): append-only ISO 8.3/7.5.1
+        # document control for the catalog. details uses the amendment-audit
+        # vocabulary {"changed": {field: {before, after}}}.
+        """CREATE TABLE IF NOT EXISTS catalog_change_log (
+        id SERIAL PRIMARY KEY,
+        entity_type VARCHAR(40) NOT NULL,
+        entity_pk INTEGER,
+        action VARCHAR(20) NOT NULL,
+        details JSONB,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        occurred_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )""",
+        "CREATE INDEX IF NOT EXISTS ix_catalog_change_log_entity ON catalog_change_log (entity_type, entity_pk)",
+        # S4 snapshot rider (2026-08-11): frozen catalog resolution stamped
+        # once by registration, so check-in seeds what the customer bought
+        # even after a later catalog edit (backend/catalog/snapshot.py).
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS catalog_snapshot JSONB",
+        # S8 adoption guard (2026-08-11): collision quarantine markers.
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS quarantined BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS quarantine_reason TEXT",
+        # S2 (worksheets off groups): department becomes the item-tier routing
+        # key. Nullable + SET NULL — additive alongside the frozen legacy
+        # service_group_id. Backfill via the group bridge only (analyses_json
+        # display fallback is NOT used for backfill — write-path purity; NULL
+        # rows read through the serializer's fallback chain instead).
+        """
+        ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS department_id
+            INTEGER REFERENCES departments(id) ON DELETE SET NULL
+        """,
+        """
+        UPDATE worksheet_items wi
+           SET department_id = sg.department_id
+          FROM service_groups sg
+         WHERE wi.service_group_id = sg.id
+           AND wi.department_id IS NULL
+           AND sg.department_id IS NOT NULL
+        """,
+        # S3 (native identity convergence): service-id-keyed twins of the two
+        # keyword root indexes. Mirrors each source index's predicate EXACTLY
+        # (asymmetry recorded, not fixed: vial root has no provenance term;
+        # shadow uses retested=FALSE — see the S3 sub-spec §1.4). Bare
+        # IF NOT EXISTS, no DROP pair (last-boot-wins hazard). Keyword
+        # indexes deliberately coexist (retirement RULED deferred past mirror
+        # decommission). Origin-agnostic on structural grounds: the keyword
+        # index already forces at-most-one row per (host, keyword), so the
+        # only violation shape is same-service/different-keyword drift.
+        # scripts/s3_identity_precheck.py is the REQUIRED pre-deploy gate —
+        # a failing CREATE here is swallowed as migration_skipped.
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_sub_service_id_root
+            ON lims_analyses (lims_sub_sample_pk, analysis_service_id)
+            WHERE retest_of_id IS NULL AND lims_sub_sample_pk IS NOT NULL
+              AND review_state NOT IN ('retracted', 'rejected')
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_parent_service_id_root
+            ON lims_analyses (lims_sample_pk, analysis_service_id)
+            WHERE retest_of_id IS NULL AND lims_sample_pk IS NOT NULL
+              AND review_state NOT IN ('retracted', 'rejected')
+              AND provenance = 'canonical'
+        """,
         # --- spec-ownership slice 2: peptide tier ---
         "ALTER TABLE analysis_service_specs ADD COLUMN IF NOT EXISTS peptide_id "
         "INTEGER REFERENCES peptides(id)",
@@ -1646,53 +1732,59 @@ def _run_migrations():
         "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_method_text TEXT",
         "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_prep_text TEXT",
         "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_footnotes JSONB",
-        # S3 (native identity convergence): service-id-keyed twins of the two
-        # keyword root indexes. Mirrors each source index's predicate EXACTLY
-        # (asymmetry recorded, not fixed: vial root has no provenance term;
-        # shadow uses retested=FALSE — see the S3 sub-spec §1.4). Bare
-        # IF NOT EXISTS, no DROP pair (last-boot-wins hazard). Keyword
-        # indexes deliberately coexist (retirement RULED deferred past mirror
-        # decommission). Origin-agnostic on structural grounds: the keyword
-        # index already forces at-most-one row per (host, keyword), so the
-        # only violation shape is same-service/different-keyword drift.
-        # scripts/s3_identity_precheck.py is the REQUIRED pre-deploy gate —
-        # a failing CREATE here is swallowed as migration_skipped.
+        # --- Methods foundation (slice 1): generic method catalog ---
+        "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS code VARCHAR(50)",
+        "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS technique VARCHAR(100)",
+        "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL",
+        "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS reference VARCHAR(500)",
+        "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS procedure_summary TEXT",
+        "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS supersedes_id INTEGER REFERENCES hplc_methods(id) ON DELETE SET NULL",
+        "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS origin VARCHAR(20) NOT NULL DEFAULT 'mk1'",
+        # Provenance backfill: only clone-time rows carry senaite_id; new rows
+        # never do (R0), so this stays a no-op forever after first boot.
+        "UPDATE hplc_methods SET origin = 'senaite' WHERE senaite_id IS NOT NULL AND origin = 'mk1'",
+        # Technique backfill: the table only ever held HPLC methods pre-slice.
+        # Date-gated so a future non-HPLC row created without technique is
+        # never silently relabeled on a later boot.
+        "UPDATE hplc_methods SET technique = 'HPLC' WHERE technique IS NULL AND created_at < TIMESTAMP '2026-08-21 00:00:00'",
+        # code uniqueness (among rows that have one)
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_hplc_methods_code ON hplc_methods (code) WHERE code IS NOT NULL",
         """
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_sub_service_id_root
-            ON lims_analyses (lims_sub_sample_pk, analysis_service_id)
-            WHERE retest_of_id IS NULL AND lims_sub_sample_pk IS NOT NULL
-              AND review_state NOT IN ('retracted', 'rejected')
+        CREATE TABLE IF NOT EXISTS method_services (
+            id SERIAL PRIMARY KEY,
+            method_id INTEGER NOT NULL REFERENCES hplc_methods(id) ON DELETE CASCADE,
+            analysis_service_id INTEGER NOT NULL REFERENCES analysis_services(id) ON DELETE CASCADE,
+            is_default BOOLEAN NOT NULL DEFAULT FALSE,
+            CONSTRAINT uq_method_service UNIQUE (method_id, analysis_service_id)
+        )
         """,
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_parent_service_id_root
-            ON lims_analyses (lims_sample_pk, analysis_service_id)
-            WHERE retest_of_id IS NULL AND lims_sample_pk IS NOT NULL
-              AND review_state NOT IN ('retracted', 'rejected')
-              AND provenance = 'canonical'
-        """,
-        # S2 (worksheets off groups): department becomes the item-tier routing
-        # key. Nullable + SET NULL — additive alongside the frozen legacy
-        # service_group_id. Backfill via the group bridge only (analyses_json
-        # display fallback is NOT used for backfill — write-path purity; NULL
-        # rows read through the serializer's fallback chain instead).
-        """
-        ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS department_id
-            INTEGER REFERENCES departments(id) ON DELETE SET NULL
-        """,
-        """
-        UPDATE worksheet_items wi
-           SET department_id = sg.department_id
-          FROM service_groups sg
-         WHERE wi.service_group_id = sg.id
-           AND wi.department_id IS NULL
-           AND sg.department_id IS NOT NULL
-        """,
-        # S8 adoption guard (2026-08-11): collision quarantine markers.
-        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS quarantined BOOLEAN NOT NULL DEFAULT FALSE",
-        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS quarantine_reason TEXT",
-        # S4 catalog change log (2026-08-11): append-only ISO 8.3/7.5.1
-        # document control for the catalog. details uses the amendment-audit
-        # vocabulary {"changed": {field: {before, after}}}.
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_method_service_default ON method_services (analysis_service_id) WHERE is_default",
+        # Instruments: local creation + picker scoping
+        "ALTER TABLE instruments ADD COLUMN IF NOT EXISTS department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL",
+        "ALTER TABLE instruments ADD COLUMN IF NOT EXISTS origin VARCHAR(20) NOT NULL DEFAULT 'mk1'",
+        "UPDATE instruments SET origin = 'senaite' WHERE senaite_id IS NOT NULL AND origin = 'mk1'",
+        # --- Bench stamping (slice 2): local-instrument FK leg on worksheet items ---
+        # instrument_uid (above, on worksheet_items) stays the frozen SENAITE-uid
+        # leg for the HPLC lane (R0); this is the new local-FK leg — both may coexist.
+        "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS instrument_id INTEGER REFERENCES instruments(id) ON DELETE SET NULL",
+        # --- Methods controlled documents (slice 3): lifecycle ---
+        "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS status VARCHAR(10) NOT NULL DEFAULT 'active'",
+        "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS activated_at TIMESTAMP",
+        "ALTER TABLE hplc_methods ADD COLUMN IF NOT EXISTS retired_at TIMESTAMP",
+        # Lockstep backfill (idempotent: lifecycle verbs are the only writers after this)
+        "UPDATE hplc_methods SET status = 'retired' WHERE active = FALSE AND status = 'active'",
+        # (name) unique constraint -> (name, revision); revisions share the name
+        "ALTER TABLE hplc_methods DROP CONSTRAINT IF EXISTS hplc_methods_name_key",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_hplc_methods_name_revision ON hplc_methods (name, revision)",
+        # code: slice-1 index -> revision-aware pair
+        "DROP INDEX IF EXISTS uq_hplc_methods_code",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_hplc_methods_code_revision ON hplc_methods (code, revision) WHERE code IS NOT NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_hplc_methods_code_active ON hplc_methods (code) WHERE status = 'active' AND code IS NOT NULL",
+        # S4 catalog change log (ported from feat/s4-catalog-change-log @ f430a966,
+        # unmerged as of this branch's cut — see task-2/3 report for provenance):
+        # append-only ISO 8.3/7.5.1 document control for the catalog. details uses
+        # the amendment-audit vocabulary {"changed": {field: {before, after}}}.
         """CREATE TABLE IF NOT EXISTS catalog_change_log (
         id SERIAL PRIMARY KEY,
         entity_type VARCHAR(40) NOT NULL,
@@ -1703,26 +1795,22 @@ def _run_migrations():
         occurred_at TIMESTAMP NOT NULL DEFAULT NOW()
     )""",
         "CREATE INDEX IF NOT EXISTS ix_catalog_change_log_entity ON catalog_change_log (entity_type, entity_pk)",
-        # S4 snapshot rider (2026-08-11): frozen catalog resolution stamped
-        # once by registration, so check-in seeds what the customer bought
-        # even after a later catalog edit (backend/catalog/snapshot.py).
-        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS catalog_snapshot JSONB",
-        # S1 roles-as-data (2026-08-11): display faces on vial_roles, seeded
-        # to match the pre-catalog hardcoded rendering exactly. Triple-NULL
-        # guard (fix round) = idempotent, never clobbers admin edits: an
-        # admin who chose Auto (color=NULL) but set short_label/badge_glyph
-        # must not have those two re-stamped on the next boot, so all three
-        # faces must be NULL before this fires. Residual (accepted,
-        # Handler-surfaced): a legacy role reset fully to Auto (all three
-        # NULL) still reverts to the legacy display on the next restart.
-        "ALTER TABLE vial_roles ADD COLUMN IF NOT EXISTS color VARCHAR(50)",
-        "ALTER TABLE vial_roles ADD COLUMN IF NOT EXISTS short_label VARCHAR(16)",
-        "ALTER TABLE vial_roles ADD COLUMN IF NOT EXISTS badge_glyph VARCHAR(2)",
-        "UPDATE vial_roles SET color='green', short_label='HPLC', badge_glyph='H' WHERE code='hplc' AND color IS NULL AND short_label IS NULL AND badge_glyph IS NULL",
-        "UPDATE vial_roles SET color='orange', short_label='ENDO', badge_glyph='E' WHERE code='endo' AND color IS NULL AND short_label IS NULL AND badge_glyph IS NULL",
-        "UPDATE vial_roles SET color='purple', short_label='PCR', badge_glyph='P' WHERE code='ster' AND color IS NULL AND short_label IS NULL AND badge_glyph IS NULL",
-        "UPDATE vial_roles SET color='sky', short_label='XTRA', badge_glyph='X' WHERE code='xtra' AND color IS NULL AND short_label IS NULL AND badge_glyph IS NULL",
-        "UPDATE vial_roles SET color='slate', short_label='HM', badge_glyph='M' WHERE code='hm' AND color IS NULL AND short_label IS NULL AND badge_glyph IS NULL",
+        # Methods controlled documents (slice 3, Task 5): attachments.
+        # storage='s3' only (R0) — via photo_storage (filesystem-backed in
+        # dev). Deletion is gated to draft-status methods at the route layer;
+        # ON DELETE CASCADE here just follows the method row itself away.
+        """CREATE TABLE IF NOT EXISTS method_attachments (
+        id                  SERIAL PRIMARY KEY,
+        method_id           INTEGER NOT NULL REFERENCES hplc_methods(id) ON DELETE CASCADE,
+        filename            VARCHAR(255) NOT NULL,
+        content_type        VARCHAR(100),
+        size_bytes          INTEGER NOT NULL DEFAULT 0,
+        storage             VARCHAR(20) NOT NULL DEFAULT 's3',
+        storage_key         VARCHAR(500),
+        uploaded_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at          TIMESTAMP NOT NULL DEFAULT NOW()
+    )""",
+        "CREATE INDEX IF NOT EXISTS ix_method_attachments_method ON method_attachments (method_id, created_at)",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

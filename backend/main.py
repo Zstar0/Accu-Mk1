@@ -40,7 +40,7 @@ from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
 from sla_engine import BusinessSchedule, compute_business_minutes, sla_status_dict
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment, MethodAttachment, method_services
 from catalog.change_log import apply_and_log, log_create, log_delete, log_members
 from auth import (
     get_current_user, require_admin, create_access_token,
@@ -1554,6 +1554,18 @@ async def get_sample_activity(
                     f"{d.get('keyword', '?')} retested (parent) — "
                     f"{n} source{'s' if n != 1 else ''}"
                 )
+            elif se.event == "native_profile_added":
+                hosts = d.get("hosts") or []
+                n = sum(int(h.get("vial_rows_created") or 0) for h in hosts)
+                where = ", ".join(h.get("vial_id", "?") for h in hosts) or "no host vial"
+                label = (f"{d.get('profile_name', d.get('profile_key', '?'))} added (native) — "
+                         f"{n} analys{'is' if n == 1 else 'es'} on {where}")
+            elif se.event == "native_analysis_removed":
+                label = (f"{d.get('keyword', '?')} removed (native) — "
+                         f"{d.get('vial_rows_deleted', 0)} deleted, {d.get('vial_rows_rejected', 0)} rejected")
+            elif se.event == "native_resync":
+                label = (f"Re-synced from order — {d.get('placeholders_created', 0)} placeholders, "
+                         f"{d.get('edges_created', 0)} edges, {d.get('vial_rows_created', 0)} vial analyses")
             else:
                 label = se.event
 
@@ -2388,11 +2400,38 @@ class InstrumentResponse(BaseModel):
     brand: Optional[str] = None
     model: Optional[str] = None
     active: bool
+    department_id: Optional[int] = None
+    origin: str = "mk1"
     created_at: datetime
     updated_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class InstrumentCreate(BaseModel):
+    """Create instrument (R0: never carries SENAITE identity)."""
+    name: str
+    instrument_type: Optional[str] = None
+    brand: Optional[str] = None
+    model: Optional[str] = None
+    department_id: Optional[int] = None
+
+    class Config:
+        extra = "ignore"  # Silently ignore senaite_uid, senaite_id
+
+
+class InstrumentUpdate(BaseModel):
+    """Update instrument (all fields optional)."""
+    name: Optional[str] = None
+    instrument_type: Optional[str] = None
+    brand: Optional[str] = None
+    model: Optional[str] = None
+    department_id: Optional[int] = None
+    active: Optional[bool] = None
+
+    class Config:
+        extra = "ignore"
 
 
 # ─── Analysis Service schemas ───
@@ -2418,6 +2457,7 @@ class AnalysisServiceResponse(BaseModel):
     origin: str = "senaite"
     local_overrides: Optional[list] = None
     department_id: Optional[int] = None
+    default_method_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -2753,18 +2793,42 @@ _RIDE_HOST_FORBIDDEN = {"endo", "ster", "xtra"}
 # addition here.
 COA_ARCHETYPES = {"limit_table"}
 
-# Spec-3 shadow-compare guard rails, enforced at the profile POST/PATCH edge
-# (not a DB constraint, mirroring COA_ARCHETYPES above):
-#   - The three legacy fulfillment_role values are demand-map keys derive_
-#     base_demand's shadow-compare owns; a NEW profile claiming one would get
-#     silently zero-clamped whenever its key is absent from an order's legacy
-#     flags (derive_base_demand only ever checks the five keys below). Only
-#     the profiles that ARE those legacy keys may hold a legacy role.
-#   - 'xtra' is the reserved no-op bucket (never a real fulfillment target);
-#     no profile may claim it.
-_LEGACY_PROFILE_KEYS = {
-    "hplcpurity_identity", "bac_water_panel", "endotoxin", "sterility_pcr", "variance",
-}
+# S9 Task 2: the POST/PATCH route guard that reserved hplc/endo/ster for the
+# five legacy-key profiles retired WITH Task 1's flip (its only justification
+# was derive_base_demand's shadow-compare zero-clamping a new profile whenever
+# its key was absent from an order's legacy flags — the catalog now prevails
+# on divergence, so that clamp no longer happens). Any profile may now claim
+# hplc/endo/ster.
+#   - 'xtra' remains the reserved no-op bucket (never a real fulfillment
+#     target); no profile may claim it — enforced at the POST/PATCH edge.
+#   - _RESERVED_LEGACY_ROLES survives for the two guards that were ALWAYS
+#     rider-semantics, never shadow-compare: a legacy-bucket anchor may never
+#     also carry a ride list (PATCH .../{id} ride-list closure) or itself
+#     ride another role (PUT .../ride-hosts) — resolve_catalog_fulfillment
+#     treats "has a ride row" as "is a rider", a structural invariant
+#     independent of the shadow-compare.
+# Methods controlled documents (slice 3, R10): once a method leaves 'draft'
+# (or is referenced by any lims_analyses row), these fields are content-locked
+# — PUT touching any of them 409s naming the offenders. notes, department_id,
+# and instrument_ids stay editable always (org routing / bench wiring, not
+# method content). Corrections go through new-revision instead.
+METHOD_LOCKED_FIELDS = ("name", "code", "technique", "reference", "procedure_summary",
+                        "size_peptide", "starting_organic_pct", "temperature_mct_c",
+                        "dissolution")
+
+# catalog/change_log.py log_create field list for method create/new-revision —
+# the identity + lifecycle columns worth an audit snapshot at mint time.
+METHOD_LOG_FIELDS = ("name", "code", "technique", "reference", "department_id",
+                     "status", "revision", "origin")
+
+# catalog/change_log.py log_create/log_delete field list for method attachments
+# (Task 5) — the row's identity + size, snapshotted at upload/delete time.
+METHOD_ATTACHMENT_LOG_FIELDS = ("filename", "content_type", "size_bytes")
+
+# catalog/change_log.py log_create/apply_and_log field list for instrument CRUD
+# (Task 6) — the identity + lifecycle columns worth an audit snapshot.
+INSTRUMENT_LOG_FIELDS = ("name", "instrument_type", "brand", "model", "department_id",
+                         "active", "origin")
 _RESERVED_LEGACY_ROLES = {"hplc", "endo", "ster"}
 
 
@@ -2903,10 +2967,19 @@ class SlaStatusResponse(BaseModel):
 # ─── HPLC Method schemas ───
 
 class MethodCreate(BaseModel):
-    """Schema for creating an HPLC method."""
+    """Schema for creating an HPLC method.
+
+    R0: no `senaite_id` — new rows are mk1-originated only (model default
+    `origin='mk1'`); extra keys (e.g. a stray senaite_id) are dropped by
+    pydantic's default extra='ignore'.
+    """
     name: str
-    senaite_id: Optional[str] = None
     instrument_ids: list[int] = []
+    code: Optional[str] = None
+    technique: Optional[str] = None
+    department_id: Optional[int] = None
+    reference: Optional[str] = None
+    procedure_summary: Optional[str] = None
     size_peptide: Optional[str] = None
     starting_organic_pct: Optional[float] = None
     temperature_mct_c: Optional[float] = None
@@ -2915,10 +2988,14 @@ class MethodCreate(BaseModel):
 
 
 class MethodUpdate(BaseModel):
-    """Schema for updating an HPLC method."""
+    """Schema for updating an HPLC method. No senaite_id/origin/supersedes_id (R0)."""
     name: Optional[str] = None
-    senaite_id: Optional[str] = None
     instrument_ids: Optional[list[int]] = None
+    code: Optional[str] = None
+    technique: Optional[str] = None
+    department_id: Optional[int] = None
+    reference: Optional[str] = None
+    procedure_summary: Optional[str] = None
     size_peptide: Optional[str] = None
     starting_organic_pct: Optional[float] = None
     temperature_mct_c: Optional[float] = None
@@ -2949,6 +3026,18 @@ class MethodBrief(BaseModel):
         from_attributes = True
 
 
+class MethodServiceLinkIn(BaseModel):
+    analysis_service_id: int
+    is_default: bool = False
+
+
+class MethodServiceOut(BaseModel):
+    analysis_service_id: int
+    keyword: Optional[str] = None
+    title: str
+    is_default: bool
+
+
 class MethodResponse(BaseModel):
     """Full HPLC method response with common peptides."""
     id: int
@@ -2956,15 +3045,27 @@ class MethodResponse(BaseModel):
     senaite_id: Optional[str] = None
     instrument_ids: list[int] = []
     instruments: list[InstrumentBrief] = []
+    code: Optional[str] = None
+    technique: Optional[str] = None
+    department_id: Optional[int] = None
+    reference: Optional[str] = None
+    procedure_summary: Optional[str] = None
+    supersedes_id: Optional[int] = None
+    origin: str = "mk1"
     size_peptide: Optional[str] = None
     starting_organic_pct: Optional[float] = None
     temperature_mct_c: Optional[float] = None
     dissolution: Optional[str] = None
     notes: Optional[str] = None
     active: bool
+    status: str = "active"
+    revision: int = 1
+    activated_at: Optional[datetime] = None
+    retired_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
     common_peptides: list[PeptideBrief] = []
+    services: list[MethodServiceOut] = []
 
     class Config:
         from_attributes = True
@@ -3262,12 +3363,13 @@ def _build_component_briefs(db: Session, blend_id: int) -> list[ComponentBrief]:
     ]
 
 
-def _method_to_response(method: HplcMethod) -> MethodResponse:
-    """Convert HplcMethod model to response with common peptides and instruments."""
+def _method_to_response(db: Session, method: HplcMethod) -> MethodResponse:
+    """Convert HplcMethod model to response with common peptides, instruments, and services."""
     resp = MethodResponse.model_validate(method)
     resp.instrument_ids = [i.id for i in method.instruments]
     resp.instruments = [_instrument_to_brief(i) for i in method.instruments]
     resp.common_peptides = [PeptideBrief.model_validate(p) for p in method.peptides]
+    resp.services = _method_service_rows(db, method.id)
     return resp
 
 
@@ -3352,6 +3454,7 @@ async def sync_instruments(db: Session = Depends(get_db), _current_user=Depends(
             instrument_type=inst_type,
             brand=brand,
             model=model,
+            origin="senaite",
         )
         db.add(instrument)
         created += 1
@@ -3359,6 +3462,61 @@ async def sync_instruments(db: Session = Depends(get_db), _current_user=Depends(
     db.commit()
     total = db.execute(select(func.count()).select_from(Instrument)).scalar()
     return {"created": created, "updated": updated, "total": total}
+
+
+# ─── Instrument Endpoints (Local CRUD) ───
+
+
+@app.post("/instruments", response_model=InstrumentResponse, status_code=201)
+async def create_instrument(data: InstrumentCreate, db: Session = Depends(get_db),
+                            current_user=Depends(get_current_user)):
+    """Local instrument registration (R0: never carries SENAITE identity)."""
+    if db.execute(select(Instrument).where(Instrument.name == data.name)).scalar_one_or_none():
+        raise HTTPException(400, f"Instrument named '{data.name}' already exists")
+    if data.department_id is not None:
+        from models import Department
+        if not db.get(Department, data.department_id):
+            raise HTTPException(400, f"Department {data.department_id} not found")
+    inst = Instrument(**data.model_dump())
+    db.add(inst)
+    db.flush()
+
+    from catalog.change_log import log_create
+    log_create(db, inst, INSTRUMENT_LOG_FIELDS, entity_type="instrument", entity_pk=inst.id,
+              user_id=getattr(current_user, "id", None))
+
+    db.commit()
+    db.refresh(inst)
+    return InstrumentResponse.model_validate(inst)
+
+
+@app.patch("/instruments/{instrument_id}", response_model=InstrumentResponse)
+async def update_instrument(instrument_id: int, data: InstrumentUpdate,
+                            db: Session = Depends(get_db),
+                            current_user=Depends(get_current_user)):
+    """Update an instrument."""
+    inst = db.get(Instrument, instrument_id)
+    if not inst:
+        raise HTTPException(404, f"Instrument {instrument_id} not found")
+    fields = data.model_dump(exclude_unset=True)
+    # R1: Reject explicit nulls on NOT-NULL columns
+    for field in ("name", "active"):
+        if field in fields and fields[field] is None:
+            raise HTTPException(400, f"{field} cannot be null")
+    if "name" in fields and fields["name"] != inst.name:
+        if db.execute(select(Instrument).where(Instrument.name == fields["name"],
+                                               Instrument.id != instrument_id)).scalar_one_or_none():
+            raise HTTPException(400, f"Instrument named '{fields['name']}' already exists")
+    if fields.get("department_id") is not None:
+        from models import Department
+        if not db.get(Department, fields["department_id"]):
+            raise HTTPException(400, f"Department {fields['department_id']} not found")
+    from catalog.change_log import apply_and_log
+    apply_and_log(db, inst, fields, entity_type="instrument", entity_pk=inst.id,
+                  user_id=getattr(current_user, "id", None))
+    db.commit()
+    db.refresh(inst)
+    return InstrumentResponse.model_validate(inst)
 
 
 # ─── Analysis Service Endpoints ───
@@ -3378,13 +3536,19 @@ def _extract_peptide_name(title: str) -> Optional[str]:
 async def get_analysis_services(
     search: Optional[str] = None,
     category: Optional[str] = None,
+    origin: Optional[str] = None,
+    active: Optional[bool] = None,
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
-    """List all analysis services. Optional search by title, keyword, or category. Optional exact category filter."""
+    """List all analysis services. Optional search by title, keyword, or category. Optional exact category / origin / active filters."""
     query = select(AnalysisService).order_by(AnalysisService.title)
     if category:
         query = query.where(AnalysisService.category == category)
+    if origin:
+        query = query.where(AnalysisService.origin == origin)
+    if active is not None:
+        query = query.where(AnalysisService.active.is_(active))
     if search:
         q = f"%{search}%"
         query = query.where(
@@ -3394,7 +3558,17 @@ async def get_analysis_services(
             | AnalysisService.peptide_name.ilike(q)
         )
     services = db.execute(query).scalars().all()
-    return [AnalysisServiceResponse.model_validate(s) for s in services]
+    default_map = dict(db.execute(
+        select(method_services.c.analysis_service_id, method_services.c.method_id)
+        .join(HplcMethod, HplcMethod.id == method_services.c.method_id)
+        .where(method_services.c.is_default.is_(True), HplcMethod.active.is_(True))
+    ).all())
+    results = []
+    for s in services:
+        resp = AnalysisServiceResponse.model_validate(s)
+        resp.default_method_id = default_map.get(s.id)
+        results.append(resp)
+    return results
 
 
 # Fields snapshotted on create/delete change-log rows — the full editable
@@ -4127,34 +4301,63 @@ async def get_methods(db: Session = Depends(get_db), _current_user=Depends(get_c
         .options(joinedload(HplcMethod.instruments), joinedload(HplcMethod.peptides))
         .order_by(HplcMethod.name)
     ).scalars().unique().all()
-    return [_method_to_response(m) for m in methods]
+    return [_method_to_response(db, m) for m in methods]
 
 
 @app.post("/hplc/methods", response_model=MethodResponse, status_code=201)
-async def create_method(data: MethodCreate, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
-    """Create a new HPLC method."""
+async def create_method(data: MethodCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """Create a new HPLC method.
+
+    Methods controlled documents (slice 3, R9/R12): new rows always mint as
+    a draft — status='draft', active=False in lockstep — invisible to the
+    bench (pickers, default_method_id) until activated via the lifecycle verb.
+    """
+    if data.code is not None:
+        # R-P1-2: normalize "" -> None at the route edge. The DB partial unique
+        # index is `WHERE code IS NOT NULL`; Postgres treats '' as a distinct
+        # value, so a second '' code would 500 at the index instead of 400 here.
+        data.code = data.code.strip() or None
+
     existing = db.execute(select(HplcMethod).where(HplcMethod.name == data.name)).scalar_one_or_none()
     if existing:
         raise HTTPException(400, f"Method with name '{data.name}' already exists")
 
-    if data.senaite_id:
-        dup = db.execute(select(HplcMethod).where(HplcMethod.senaite_id == data.senaite_id)).scalar_one_or_none()
-        if dup:
-            raise HTTPException(400, f"Method with Senaite ID '{data.senaite_id}' already exists")
+    if data.code:
+        dup_code = db.execute(select(HplcMethod).where(HplcMethod.code == data.code)).scalar_one_or_none()
+        if dup_code:
+            raise HTTPException(400, f"Method code '{data.code}' already exists on '{dup_code.name}'")
+    if data.department_id is not None:
+        from models import Department
+        if not db.get(Department, data.department_id):
+            raise HTTPException(400, f"Department {data.department_id} not found")
 
-    method = HplcMethod(**data.model_dump(exclude={"instrument_ids"}))
+    method = HplcMethod(**data.model_dump(exclude={"instrument_ids"}), status="draft", active=False)
     if data.instrument_ids:
         instruments = db.execute(select(Instrument).where(Instrument.id.in_(data.instrument_ids))).scalars().all()
         method.instruments = list(instruments)
     db.add(method)
+    db.flush()
+
+    from catalog.change_log import log_create
+    log_create(db, method, METHOD_LOG_FIELDS, entity_type="method", entity_pk=method.id,
+              user_id=getattr(current_user, "id", None))
+
     db.commit()
     db.refresh(method)
-    return _method_to_response(method)
+    return _method_to_response(db, method)
 
 
 @app.put("/hplc/methods/{method_id}", response_model=MethodResponse)
-async def update_method(method_id: int, data: MethodUpdate, db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
-    """Update an HPLC method."""
+async def update_method(method_id: int, data: MethodUpdate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """Update an HPLC method.
+
+    Methods controlled documents (slice 3, R9/R10): `active` is not settable
+    here — it's managed in lockstep with `status` by the lifecycle verbs
+    (activate / retire) only. Once a method leaves 'draft' (or is referenced
+    by any analysis), its content fields (METHOD_LOCKED_FIELDS) are locked —
+    409 naming the offenders; notes/department_id/instrument_ids stay
+    editable always. Every applied field is audited via apply_and_log.
+    """
     method = db.execute(
         select(HplcMethod).options(joinedload(HplcMethod.instruments))
         .where(HplcMethod.id == method_id)
@@ -4162,17 +4365,65 @@ async def update_method(method_id: int, data: MethodUpdate, db: Session = Depend
     if not method:
         raise HTTPException(404, f"Method {method_id} not found")
 
-    update_data = data.model_dump(exclude_unset=True)
-    instrument_ids = update_data.pop("instrument_ids", None)
-    for field, value in update_data.items():
-        setattr(method, field, value)
+    if data.code is not None:
+        # R-P1-2: same edge-normalization as create_method.
+        data.code = data.code.strip() or None
+
+    if data.code:
+        dup_code = db.execute(
+            select(HplcMethod).where(HplcMethod.code == data.code, HplcMethod.id != method_id)
+        ).scalar_one_or_none()
+        if dup_code:
+            raise HTTPException(400, f"Method code '{data.code}' already exists on '{dup_code.name}'")
+    if data.name:
+        # Task 1 review finding #2: (name, revision) is the real uniqueness
+        # constraint now (uq_hplc_methods_name_revision) — a rename onto an
+        # existing (name, revision) pair must 400 here, not IntegrityError-500
+        # at the DB. Only draft rows can reach this in practice (name is a
+        # locked field once issued — see the lock check below), but the guard
+        # itself is unconditional so a bad rename never depends on lock state.
+        dup_name = db.execute(
+            select(HplcMethod).where(HplcMethod.name == data.name,
+                                     HplcMethod.revision == method.revision,
+                                     HplcMethod.id != method_id)
+        ).scalar_one_or_none()
+        if dup_name:
+            raise HTTPException(
+                400, f"Method with name '{data.name}' at revision {method.revision} already exists")
+    if data.department_id is not None:
+        from models import Department
+        if not db.get(Department, data.department_id):
+            raise HTTPException(400, f"Department {data.department_id} not found")
+
+    fields = data.model_dump(exclude_unset=True)
+    if "active" in fields:
+        raise HTTPException(400, "active is managed by the lifecycle verbs "
+                                 "(activate / retire) — not settable directly")
+
+    from models import LimsAnalysis
+    referenced = db.execute(select(func.count()).select_from(LimsAnalysis)
+                            .where(LimsAnalysis.method_id == method_id)).scalar()
+    locked = method.status != "draft" or bool(referenced)
+    if locked:
+        offending = sorted(set(fields) & set(METHOD_LOCKED_FIELDS))
+        if offending:
+            raise HTTPException(
+                409, f"method '{method.name}' rev {method.revision} is issued — "
+                     f"locked fields: {', '.join(offending)}; create a new revision instead")
+
+    instrument_ids = fields.pop("instrument_ids", None)
+
+    from catalog.change_log import apply_and_log
+    apply_and_log(db, method, fields, entity_type="method", entity_pk=method.id,
+                  user_id=getattr(current_user, "id", None))
+
     if instrument_ids is not None:
         instruments = db.execute(select(Instrument).where(Instrument.id.in_(instrument_ids))).scalars().all() if instrument_ids else []
         method.instruments = list(instruments)
 
     db.commit()
     db.refresh(method)
-    return _method_to_response(method)
+    return _method_to_response(db, method)
 
 
 @app.delete("/hplc/methods/{method_id}")
@@ -4182,9 +4433,430 @@ async def delete_method(method_id: int, db: Session = Depends(get_db), _current_
     if not method:
         raise HTTPException(404, f"Method {method_id} not found")
 
+    from models import LimsAnalysis
+    ref = db.execute(select(func.count()).select_from(LimsAnalysis)
+                     .where(LimsAnalysis.method_id == method_id)).scalar()
+    if ref:
+        raise HTTPException(
+            409, f"Method '{method.name}' is referenced by {ref} analyses and is part "
+                 f"of their traceability record — deactivate it instead of deleting")
+
     db.delete(method)
     db.commit()
     return {"message": f"Method '{method.name}' deleted"}
+
+
+def _method_service_rows(db: Session, method_id: int) -> list[MethodServiceOut]:
+    rows = db.execute(
+        select(method_services.c.analysis_service_id, method_services.c.is_default,
+               AnalysisService.keyword, AnalysisService.title)
+        .join(AnalysisService, AnalysisService.id == method_services.c.analysis_service_id)
+        .where(method_services.c.method_id == method_id)
+        .order_by(AnalysisService.keyword)
+    ).all()
+    return [MethodServiceOut(analysis_service_id=r[0], is_default=r[1], keyword=r[2], title=r[3])
+            for r in rows]
+
+
+@app.get("/hplc/methods/{method_id}/services", response_model=list[MethodServiceOut])
+async def get_method_services(method_id: int, db: Session = Depends(get_db),
+                              _current_user=Depends(get_current_user)):
+    if not db.get(HplcMethod, method_id):
+        raise HTTPException(404, f"Method {method_id} not found")
+    return _method_service_rows(db, method_id)
+
+
+@app.put("/hplc/methods/{method_id}/services", response_model=list[MethodServiceOut])
+async def put_method_services(method_id: int, links: list[MethodServiceLinkIn],
+                              db: Session = Depends(get_db),
+                              _current_user=Depends(get_current_user)):
+    """Replace-set semantics (profile-members precedent). One default per
+    service across ALL methods — 400 names the conflicting method; the
+    partial unique index is the backstop."""
+    method = db.get(HplcMethod, method_id)
+    if not method:
+        raise HTTPException(404, f"Method {method_id} not found")
+    seen: set[int] = set()
+    for ln in links:
+        if ln.analysis_service_id in seen:
+            raise HTTPException(400, f"service {ln.analysis_service_id} listed twice")
+        seen.add(ln.analysis_service_id)
+        if not db.get(AnalysisService, ln.analysis_service_id):
+            raise HTTPException(400, f"analysis service {ln.analysis_service_id} not found")
+        if ln.is_default:
+            conflict = db.execute(
+                select(HplcMethod.name)
+                .join(method_services, method_services.c.method_id == HplcMethod.id)
+                .where(method_services.c.analysis_service_id == ln.analysis_service_id,
+                       method_services.c.is_default.is_(True),
+                       method_services.c.method_id != method_id)
+            ).scalar_one_or_none()
+            if conflict:
+                raise HTTPException(
+                    400, f"service {ln.analysis_service_id} already has default method "
+                         f"'{conflict}' — clear that default first")
+    try:
+        db.execute(method_services.delete().where(method_services.c.method_id == method_id))
+        for ln in links:
+            db.execute(method_services.insert().values(
+                method_id=method_id, analysis_service_id=ln.analysis_service_id,
+                is_default=ln.is_default))
+        db.commit()
+    except IntegrityError:
+        # The app-level 400 check above is TOCTOU-racy against a concurrent PUT
+        # on another method claiming the same default; the partial unique index
+        # (uq_method_service_default) is the real backstop (create_service_spec/
+        # patch_service_spec precedent, ~3636/~3691). The delete + insert loop +
+        # commit all live inside this try so a mid-batch IntegrityError actually
+        # rolls back the whole replace-set instead of leaving a partial delete
+        # committed underneath an inert except clause.
+        db.rollback()
+        raise HTTPException(
+            409, "default conflict — another method claimed a default for one of these services concurrently")
+    return _method_service_rows(db, method_id)
+
+
+# ─── Methods controlled documents (slice 3): lifecycle verbs ───
+#
+# R4/R10: revision = new row, issued content never changes in place. Corrections
+# flow through new-revision (mint a draft clone) -> edit the draft -> activate
+# (atomically retires the predecessor and hands over its method_services
+# defaults). Both verbs audit via catalog/change_log.py, same as update_method.
+
+
+@app.post("/hplc/methods/{method_id}/new-revision", response_model=MethodResponse, status_code=201)
+async def new_method_revision(method_id: int, db: Session = Depends(get_db),
+                              current_user=Depends(get_current_user)):
+    """Clone `method_id` into a new draft revision. Allowed from active/retired
+    (400 from draft — a draft is already editable in place). Clones all
+    content fields + department_id + notes, method_services links (is_default
+    reset to False — defaults only move at activation, R11), and instrument
+    links. Never copies senaite_id (R0; also globally unique)."""
+    src = db.get(HplcMethod, method_id)
+    if not src:
+        raise HTTPException(404, f"Method {method_id} not found")
+    if src.status == "draft":
+        raise HTTPException(400, "already a draft — edit it directly")
+
+    max_rev = db.execute(select(func.max(HplcMethod.revision))
+                         .where(HplcMethod.name == src.name)).scalar() or src.revision
+    clone = HplcMethod(
+        name=src.name, code=src.code, technique=src.technique,
+        department_id=src.department_id, reference=src.reference,
+        procedure_summary=src.procedure_summary, size_peptide=src.size_peptide,
+        starting_organic_pct=src.starting_organic_pct,
+        temperature_mct_c=src.temperature_mct_c, dissolution=src.dissolution,
+        notes=src.notes, origin="mk1", status="draft", active=False,
+        revision=max_rev + 1, supersedes_id=src.id,
+        # senaite_id deliberately NOT copied (R0; also unique)
+    )
+    clone.instruments = list(src.instruments)
+    db.add(clone)
+    db.flush()
+
+    for link in db.execute(select(method_services).where(
+            method_services.c.method_id == src.id)).all():
+        db.execute(method_services.insert().values(
+            method_id=clone.id, analysis_service_id=link.analysis_service_id,
+            is_default=False))
+
+    from catalog.change_log import log_create
+    log_create(db, clone, METHOD_LOG_FIELDS, entity_type="method",
+              entity_pk=clone.id, user_id=getattr(current_user, "id", None))
+
+    db.commit()
+    db.refresh(clone)
+    return _method_to_response(db, clone)
+
+
+@app.post("/hplc/methods/{method_id}/activate", response_model=MethodResponse)
+async def activate_method(method_id: int, db: Session = Depends(get_db),
+                          current_user=Depends(get_current_user)):
+    """Activate a draft. Draft-only (400 otherwise). One transaction: for
+    every service the supersedes_id source holds a default on — regardless of
+    the source's current status (R11 amendment) — flip the source link's
+    is_default off and this revision's link for the same service on (insert
+    the link if the clone lost it). Also moves the source's peptide_methods
+    links onto this revision (R-P3-6 — see below). Then retire any other
+    same-identity row still marked active (R-P3-2 — see below). Self goes
+    active. All retired rows and self are audited via apply_and_log."""
+    m = db.get(HplcMethod, method_id)
+    if not m:
+        raise HTTPException(404, f"Method {method_id} not found")
+    if m.status != "draft":
+        raise HTTPException(400, f"only drafts activate (this row is {m.status})")
+
+    from catalog.change_log import apply_and_log
+
+    src = db.get(HplcMethod, m.supersedes_id) if m.supersedes_id else None
+    if src is not None:
+        defaults = db.execute(select(method_services.c.analysis_service_id).where(
+            method_services.c.method_id == src.id,
+            method_services.c.is_default.is_(True))).scalars().all()
+        for service_id in defaults:
+            # Flag-off-then-on inside one transaction: the partial unique index
+            # (uq_method_service_default) forbids two defaults for the same
+            # service existing at once, so the source's flag must clear before
+            # this revision's flag sets.
+            db.execute(method_services.update()
+                       .where(method_services.c.method_id == src.id,
+                              method_services.c.analysis_service_id == service_id)
+                       .values(is_default=False))
+            updated = db.execute(method_services.update()
+                                 .where(method_services.c.method_id == m.id,
+                                        method_services.c.analysis_service_id == service_id)
+                                 .values(is_default=True))
+            if updated.rowcount == 0:
+                db.execute(method_services.insert().values(
+                    method_id=m.id, analysis_service_id=service_id, is_default=True))
+
+        # R-P3-6: peptide_methods links (the peptide<->method m2m the HPLC
+        # prep wizard + worksheet method-derivation resolve through) are
+        # deliberately NOT cloned at new-revision time (see
+        # new_method_revision) — otherwise stale drafts would keep piling up
+        # links no one asked them to hold. They ride the activation instead,
+        # harvested from `src` only, symmetric with the defaults handover
+        # above. (R-P3-2's sibling retire step below does NOT harvest links —
+        # only the direct supersedes source's rows move.) Check-before-insert
+        # against uq_peptide_method: the draft may already be manually linked
+        # to one of src's peptides, and re-inserting would trip the unique
+        # constraint. No apply_and_log here — same as the defaults handover,
+        # this junction-table move isn't itself an audited field change.
+        src_peptide_ids = db.execute(select(peptide_methods.c.peptide_id).where(
+            peptide_methods.c.method_id == src.id)).scalars().all()
+        for peptide_id in src_peptide_ids:
+            exists = db.execute(select(peptide_methods.c.id).where(
+                peptide_methods.c.method_id == m.id,
+                peptide_methods.c.peptide_id == peptide_id)).scalar_one_or_none()
+            if exists is None:
+                db.execute(peptide_methods.insert().values(
+                    peptide_id=peptide_id, method_id=m.id))
+            db.execute(peptide_methods.delete().where(
+                peptide_methods.c.method_id == src.id,
+                peptide_methods.c.peptide_id == peptide_id))
+
+    # R-P3-2: two drafts independently new-revision'd off the same source can
+    # both be activated. Scoping the predecessor-retire to `src` alone (the
+    # original behavior) misses this — src is only the DIRECT supersedes
+    # source, and by the time the second draft activates src may already be
+    # retired (by the first activation) while a DIFFERENT same-code row is
+    # now active, so committing self would still trip
+    # uq_hplc_methods_code_active. Generalize: retire ANY other row sharing
+    # this method's identity that is still active — keyed by code (the DB
+    # constraint's own key) when code is set, else by name. This subsumes
+    # the old src-only retire, so that branch is folded in here. Defaults
+    # still harvest from `src` only, per R11 — untouched above.
+    if m.code is not None:
+        stale_active = db.execute(select(HplcMethod).where(
+            HplcMethod.code == m.code, HplcMethod.status == "active",
+            HplcMethod.id != m.id)).scalars().all()
+    else:
+        # Fix round 1: scope the name-keyed fallback to other codeless rows
+        # only (code IS NULL) — mirrors the DB partial index's own split
+        # (uq_hplc_methods_code_active is WHERE code IS NOT NULL). Without
+        # this, an unrelated active method that DOES carry a code (protected
+        # by that index, not by name) could get name-matched and silently
+        # retired: update_method's rename guard only checks the (name,
+        # revision) pair, so a fresh codeless draft can be renamed onto an
+        # existing coded active method's name when they sit at different
+        # revisions. Costs nothing for genuine codeless series — new-revision
+        # clones always carry code=None forward alongside name.
+        stale_active = db.execute(select(HplcMethod).where(
+            HplcMethod.name == m.name, HplcMethod.status == "active",
+            HplcMethod.code.is_(None), HplcMethod.id != m.id)).scalars().all()
+    for row in stale_active:
+        apply_and_log(db, row, {"status": "retired", "active": False,
+                                "retired_at": datetime.utcnow()},
+                      entity_type="method", entity_pk=row.id,
+                      user_id=getattr(current_user, "id", None))
+
+    apply_and_log(db, m, {"status": "active", "active": True,
+                          "activated_at": datetime.utcnow()},
+                  entity_type="method", entity_pk=m.id,
+                  user_id=getattr(current_user, "id", None))
+
+    db.commit()
+    db.refresh(m)
+    return _method_to_response(db, m)
+
+
+@app.post("/hplc/methods/{method_id}/retire", response_model=MethodResponse)
+async def retire_method(method_id: int, db: Session = Depends(get_db),
+                        current_user=Depends(get_current_user)):
+    """Retire an active method. Active-only (400 otherwise). Defaults are
+    left in place on the junction — the slice-1 fail-open rule
+    (default_method_id requires HplcMethod.active) makes them inert once
+    this row goes inactive; a later activation harvests them from this row
+    regardless (Task 3's superseded-row read, R11)."""
+    m = db.get(HplcMethod, method_id)
+    if not m:
+        raise HTTPException(404, f"Method {method_id} not found")
+    if m.status != "active":
+        raise HTTPException(400, f"only active methods retire (this row is {m.status})")
+
+    from catalog.change_log import apply_and_log
+
+    apply_and_log(db, m, {"status": "retired", "active": False,
+                          "retired_at": datetime.utcnow()},
+                  entity_type="method", entity_pk=m.id,
+                  user_id=getattr(current_user, "id", None))
+
+    db.commit()
+    db.refresh(m)
+    return _method_to_response(db, m)
+
+
+class MethodAttachmentResponse(BaseModel):
+    """Controlled-document attachment on a method (slice 3, Task 5)."""
+    id: int
+    filename: str
+    content_type: Optional[str] = None
+    size_bytes: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ─── Methods controlled documents (slice 3): attachments ───
+#
+# storage='s3' only (R0) — get_storage() resolves to the filesystem backend
+# in dev/tests (MK1_PHOTO_S3_BUCKET unset) and S3 in prod; the route layer
+# never branches on which. Uploads are allowed at ANY lifecycle status
+# (amendments land on issued methods too, R10); delete is gated to draft
+# only — once a method is active/retired its attachments are part of the
+# frozen controlled record. new-revision does not clone attachments (Task
+# 3's clone code has no attachment awareness).
+
+
+@app.post("/hplc/methods/{method_id}/attachments",
+         response_model=MethodAttachmentResponse, status_code=201)
+async def upload_method_attachment(method_id: int, file: UploadFile,
+                                   db: Session = Depends(get_db),
+                                   current_user=Depends(get_current_user)):
+    """Attach a controlled-document file to a method. filename truncated to
+    255 (column width — same guard as LimsParentAttachment's capture
+    path)."""
+    method = db.get(HplcMethod, method_id)
+    if not method:
+        raise HTTPException(404, f"Method {method_id} not found")
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(400, "empty file")
+    filename = (file.filename or "attachment")[:255]
+
+    from sub_samples.photo_storage import get_storage
+    key = get_storage().save_photo(f"method-{method_id}", file_bytes, filename)
+
+    att = MethodAttachment(
+        method_id=method_id, filename=filename,
+        content_type=file.content_type, size_bytes=len(file_bytes),
+        storage="s3", storage_key=key,
+        uploaded_by_user_id=getattr(current_user, "id", None),
+    )
+    db.add(att)
+    db.flush()
+
+    from catalog.change_log import log_create
+    log_create(db, att, METHOD_ATTACHMENT_LOG_FIELDS, entity_type="method_attachment",
+              entity_pk=att.id, user_id=getattr(current_user, "id", None))
+
+    db.commit()
+    db.refresh(att)
+    return att
+
+
+@app.get("/hplc/methods/{method_id}/attachments",
+        response_model=list[MethodAttachmentResponse])
+async def get_method_attachments(method_id: int, db: Session = Depends(get_db),
+                                 _current_user=Depends(get_current_user)):
+    if not db.get(HplcMethod, method_id):
+        raise HTTPException(404, f"Method {method_id} not found")
+    rows = db.execute(
+        select(MethodAttachment).where(MethodAttachment.method_id == method_id)
+        .order_by(MethodAttachment.created_at)
+    ).scalars().all()
+    return rows
+
+
+@app.get("/hplc/methods/{method_id}/attachments/{attachment_id}/download")
+def download_method_attachment(method_id: int, attachment_id: int,
+                               db: Session = Depends(get_db),
+                               _current_user=Depends(get_current_user)):
+    """Serve attachment bytes. BINDING CONSTRAINT: Content-Type and
+    Content-Disposition come from the DB row — never the storage-key
+    extension (mirrors download_registry_parent_attachment above). Plain
+    `def` — sync DB + sync storage fetch belong on the threadpool, same
+    posture as that sibling route."""
+    from sub_samples.photo_storage import PhotoNotFoundError, get_storage
+
+    att = db.execute(
+        select(MethodAttachment).where(
+            MethodAttachment.id == attachment_id,
+            MethodAttachment.method_id == method_id,
+        )
+    ).scalar_one_or_none()
+    if att is None:
+        raise HTTPException(404, f"No attachment {attachment_id} on method {method_id}")
+    if not att.storage_key:
+        logger.warning("method_attachment.download_missing_key id=%s method=%s",
+                       att.id, method_id)
+        raise HTTPException(404, "Attachment has no storage key")
+    try:
+        data = get_storage().fetch_photo(att.storage_key)
+    except PhotoNotFoundError:
+        logger.warning("method_attachment.download_object_missing id=%s key=%s",
+                       att.id, att.storage_key)
+        raise HTTPException(404, "Attachment object missing from storage")
+    return Response(
+        content=data,
+        media_type=att.content_type or "application/octet-stream",
+        headers={"Content-Disposition": f'inline; filename="{att.filename}"'},
+    )
+
+
+@app.delete("/hplc/methods/{method_id}/attachments/{attachment_id}")
+async def delete_method_attachment(method_id: int, attachment_id: int,
+                                   db: Session = Depends(get_db),
+                                   current_user=Depends(get_current_user)):
+    """Delete an attachment. Draft-only (409 otherwise) — once a method
+    leaves draft its attachments are part of the controlled record (R10
+    sibling rule; mirrors the content-lock on the method's own fields).
+    The storage object is deleted best-effort AFTER the row delete commits
+    — a failure there just leaves an orphaned object, logged, rather than
+    blocking (or worse, partially completing) the audited row delete."""
+    method = db.get(HplcMethod, method_id)
+    if not method:
+        raise HTTPException(404, f"Method {method_id} not found")
+    att = db.execute(
+        select(MethodAttachment).where(
+            MethodAttachment.id == attachment_id,
+            MethodAttachment.method_id == method_id,
+        )
+    ).scalar_one_or_none()
+    if att is None:
+        raise HTTPException(404, f"No attachment {attachment_id} on method {method_id}")
+    if method.status != "draft":
+        raise HTTPException(
+            409, "attachments on an issued method are part of the controlled record")
+
+    from catalog.change_log import log_delete
+    log_delete(db, att, METHOD_ATTACHMENT_LOG_FIELDS, entity_type="method_attachment",
+              entity_pk=att.id, user_id=getattr(current_user, "id", None))
+    storage_key = att.storage_key
+    db.delete(att)
+    db.commit()
+
+    if storage_key:
+        from sub_samples.photo_storage import get_storage
+        try:
+            get_storage().delete_photo(storage_key)
+        except Exception as e:  # noqa: BLE001 — best-effort cleanup, row is already gone
+            logger.warning("method_attachment.delete_object_failed id=%s key=%s err=%s",
+                           attachment_id, storage_key, e)
+
+    return {"message": "attachment deleted"}
 
 
 # ─── Peptide Endpoints ───
@@ -9760,11 +10432,12 @@ async def add_sample_analysis(
 
     if sub is not None:
         # Native branch
-        senaite_service_uid = body.get("service_uid")
+        senaite_service_uid = body.get("service_uid") or None
+        keyword = body.get("keyword") or None
         # S3: the service id is the drift-proof identifier. The body is an
         # untyped dict, so coerce here rather than letting a string reach a
-        # SQLAlchemy comparison. Both identifiers are forwarded when both are
-        # present — the service owns the resolution order, not the route.
+        # SQLAlchemy comparison. All identifiers present are forwarded —
+        # the service owns the resolution order, not the route.
         _svc_id = body.get("analysis_service_id")
         if _svc_id is not None:
             try:
@@ -9775,14 +10448,49 @@ async def add_sample_analysis(
                     detail="analysis_service_id must be an integer",
                 )
         try:
-            add_analysis_to_native_vial(
+            row = add_analysis_to_native_vial(
                 db,
                 sub_sample_pk=sub.id,
                 senaite_service_uid=senaite_service_uid,
-                keyword=None,
+                keyword=keyword,
                 analysis_service_id=_svc_id,
                 user_id=_current_user.id,
             )
+            # Manage-analyses slice: the parent tells the truth before promote —
+            # a native vial add also ensures the parent placeholder (no-op when
+            # a live ordered/canonical row exists). This is best-effort: the
+            # vial add above is the primary action and has already committed,
+            # so a failure here must never fail the request. Two known ways
+            # it can fail: (1) ProfileNotNativeError — pre-existing native-vial
+            # adds aren't scoped to mk1-origin services (senaite-origin is a
+            # normal path via senaite_uid/keyword); (2) IntegrityError — a
+            # concurrent duplicate-placeholder race against the partial unique
+            # index uq_lims_analyses_parent_service_ordered (raw-SQL migration,
+            # database.py, real Postgres only — not present against in-memory
+            # SQLite in tests). Both are caught explicitly (no bare except) and
+            # logged, never silent, never surfaced as a false 409.
+            from lims_analyses.manage_native import ProfileNotNativeError, ensure_parent_placeholder
+            from models import AnalysisService as _Svc
+            parent_row = db.get(LimsSample, sub.parent_sample_pk)
+            svc_row = db.get(_Svc, row.analysis_service_id)
+            if parent_row is not None and svc_row is not None:
+                try:
+                    ensure_parent_placeholder(db, parent=parent_row, service=svc_row,
+                                              user_id=getattr(_current_user, "id", None),
+                                              reason="manage_analyses:vial_add")
+                    db.commit()
+                except ProfileNotNativeError as e:
+                    db.rollback()
+                    logger.warning(
+                        "manage_native.vial_add_placeholder_skipped sample=%s keyword=%s reason=%s",
+                        sample_id, svc_row.keyword, e,
+                    )
+                except SQLIntegrityError as e:
+                    db.rollback()
+                    logger.warning(
+                        "manage_native.vial_add_placeholder_skipped sample=%s keyword=%s reason=%s",
+                        sample_id, svc_row.keyword, e,
+                    )
         except _NotFoundError as e:
             raise HTTPException(status_code=404, detail=str(e))
         except _BadRequestError as e:
@@ -13514,11 +14222,22 @@ async def lookup_senaite_sample(
                     analyte_declared_qty = float(raw_analyte_qty)
                 except (ValueError, TypeError):
                     analyte_declared_qty = None
+            # HPLC results key analytes by ABBREVIATION while the fuzzy match
+            # returns the peptide NAME — when they diverge (e.g. Thymosin
+            # Beta-4 vs TB500 (Thymosin Beta 4)) slot->analysis matching in
+            # the results view fails silently. Ship the abbreviation too.
+            matched_abbrev = None
+            if match:
+                matched_abbrev = next(
+                    (p.abbreviation for p in all_peptides if p.id == match[0]),
+                    None,
+                )
             analytes.append(SenaiteAnalyte(
                 raw_name=raw_name,
                 slot_number=slot,
                 matched_peptide_id=match[0] if match else None,
                 matched_peptide_name=match[1] if match else None,
+                matched_peptide_abbreviation=matched_abbrev,
                 declared_quantity=analyte_declared_qty,
             ))
 
@@ -15189,8 +15908,9 @@ def _native_placeholders_at_registration_bg(sample_id: str) -> None:
     customer bought (task 6), not whatever the catalog looks like later.
 
     Same hardening rationale as its sibling — own session, never raises. A
-    catalog miss or IS outage must not fail the registration; check-in
-    re-seeds via the same function later.
+    catalog miss or IS outage must not fail the registration; there is no
+    automatic re-seed after registration; the admin "Re-sync from order"
+    action (lims_analyses.manage_native.resync_parent_from_order) is the heal.
     """
     db = None
     try:
@@ -16447,6 +17167,9 @@ PROFILE_LOG_FIELDS = (
 VIAL_ROLE_LOG_FIELDS = (
     "code", "label", "department_id", "boxable", "variance_eligible",
     "sort_order", "frozen", "is_system",
+    # S1 display faces: admin-editable catalog data, so an edit must be
+    # change-logged like any other field on this row.
+    "color", "short_label", "badge_glyph",
 )
 
 
@@ -16530,23 +17253,18 @@ async def create_analysis_profile(
                  "(assignment_role is VARCHAR(8))")
     if data.fulfillment_role == "xtra":
         raise HTTPException(400, "role 'xtra' is the reserved unassigned bucket")
-    if data.fulfillment_dim == "role" and data.fulfillment_role in _RESERVED_LEGACY_ROLES \
-            and data.key not in _LEGACY_PROFILE_KEYS:
-        raise HTTPException(
-            400,
-            f"role '{data.fulfillment_role}' is reserved for the legacy demand map "
-            "while the shadow-compare is active; new families use catalog-only roles",
-        )
     # Task 11: reject an unknown sla_tier_id with a clean 400 rather than
     # letting the FK constraint 500 at commit time.
     if data.sla_tier_id is not None and not db.get(SlaTier, data.sla_tier_id):
         raise HTTPException(400, f"SLA tier {data.sla_tier_id} not found")
     # Auto-mint (Task 3): a 'role' fulfillment naming a code not yet in the
-    # vial_roles catalog mints one here, AFTER every guard above — those
-    # guards already 400 on 'xtra' and on a legacy code for a new key, so
-    # mint can never create a legacy or xtra row (the zero-clamp rider stays
-    # intact). role_department_id is optional and NULL is legal here — unlike
-    # a manual /vial-roles POST (which requires a department for anything but
+    # vial_roles catalog mints one here, AFTER every guard above. Mint's own
+    # reach is unaffected by S9 Task 2: hplc/endo/ster are always-seeded
+    # system rows (seed_vial_roles, every boot), so mint never fires for
+    # them, before or after this guard retired — what changed is that a
+    # new-key profile may now be *assigned* one of those roles at all.
+    # role_department_id is optional and NULL is legal here — unlike a
+    # manual /vial-roles POST (which requires a department for anything but
     # 'xtra'), a minted row may start department-less and get backfilled by
     # the members PUT below once its member set agrees on one.
     if data.fulfillment_dim == "role" and data.fulfillment_role:
@@ -16637,25 +17355,19 @@ async def update_analysis_profile(
     effective_dim = fields.get("fulfillment_dim") or p.fulfillment_dim
     if effective_role == "xtra":
         raise HTTPException(400, "role 'xtra' is the reserved unassigned bucket")
-    if effective_dim == "role" and effective_role in _RESERVED_LEGACY_ROLES \
-            and p.key not in _LEGACY_PROFILE_KEYS:
-        raise HTTPException(
-            400,
-            f"role '{effective_role}' is reserved for the legacy demand map "
-            "while the shadow-compare is active; new families use catalog-only roles",
-        )
-    # Ride-list / legacy-role closure (Task 4): the guard above only blocks a
-    # NON-legacy key from CLAIMING a legacy role — it deliberately allows the
-    # five _LEGACY_PROFILE_KEYS profiles to hold their own legacy role. That
-    # whitelist is also a door: one of those five could move its role AWAY
-    # from legacy (e.g. endotoxin: 'endo' -> 'zzhold', legal — 'zzhold' isn't
-    # reserved), pick up a ride list via PUT .../ride-hosts (also legal, its
-    # role isn't legacy anymore), then move back to 'endo' — landing in
-    # exactly the state set_analysis_profile_ride_hosts exists to prevent
-    # (a legacy-bucket anchor that's also a rider), without ever touching
-    # the ride-hosts endpoint's own guard. Closed here: re-entering a legacy
-    # role while a ride list still exists 400s; clear the ride list first
-    # (PUT ride-hosts []).
+    # Ride-list / legacy-role closure (Task 4; S9 Task 2 note: the shadow-
+    # compare guard that used to sit directly above this retired — ANY
+    # profile may now claim a legacy role, not just the five original
+    # legacy-key profiles). This closure is independent of that retirement:
+    # a profile could set its role AWAY from legacy (e.g. endotoxin:
+    # 'endo' -> 'zzhold', legal — 'zzhold' isn't reserved), pick up a ride
+    # list via PUT .../ride-hosts (also legal, its role isn't legacy
+    # anymore), then move back to 'endo' — landing in exactly the state
+    # set_analysis_profile_ride_hosts exists to prevent (a legacy-bucket
+    # anchor that's also a rider), without ever touching the ride-hosts
+    # endpoint's own guard. Closed here: re-entering a legacy role while a
+    # ride list still exists 400s; clear the ride list first (PUT
+    # ride-hosts []).
     if effective_dim == "role" and effective_role in _RESERVED_LEGACY_ROLES:
         from models import profile_ride_hosts
         has_rides = db.execute(
@@ -16672,9 +17384,13 @@ async def update_analysis_profile(
             )
     # Auto-mint (Task 3): mirrors the POST mint block, using the same
     # effective_* values the guards above just validated — a role change to
-    # an unknown code mints here, AFTER every guard, so mint can never create
-    # a legacy or xtra row. Self-limiting: once a code is minted (or already
-    # existed), every later PATCH sees it in the registry and no-ops here.
+    # an unknown code mints here, AFTER every guard. Mint's own reach is
+    # unaffected by S9 Task 2: hplc/endo/ster are always-seeded system rows
+    # (seed_vial_roles, every boot), so mint never fires for them, before or
+    # after this guard retired — what changed is that a profile may now be
+    # *assigned* one of those roles at all (subject to the ride-list closure
+    # above). Self-limiting: once a code is minted (or already existed),
+    # every later PATCH sees it in the registry and no-ops here.
     if effective_dim == "role" and effective_role:
         from catalog.roles import role_registry
         reg = role_registry(db)
@@ -19318,6 +20034,51 @@ def list_worksheets(
             ).scalars().all()
             box_label_map = {b.id: box_label_code(b) for b in box_rows}
 
+        # Resolve per-item stamped method/instrument names (bench-stamping
+        # slice 2, task 5): the DISTINCT non-null stamped values across a
+        # vial's lims_analyses rows -- one distinct name -> that name; >1
+        # distinct -> the literal "mixed"; none -> None. Same eager-map
+        # idiom as sub_sample_pk_map above -- one grouped query per
+        # worksheet, never per-item queries in the loop.
+        # Dead rows (rejected/retracted) are excluded (controller ruling
+        # R-P2-2): the writer's state guard (STAMPABLE_STATES) means a dead
+        # row's stamp can never be cleared, so an unfiltered read would let a
+        # post-retest vial read "mixed" forever even though only the live
+        # row's stamp still matters.
+        from models import LimsAnalysis
+        vial_pks = {pk for pk in sub_sample_pk_map.values() if pk}
+        stamped_method_map: dict[int, str | None] = {}
+        stamped_instrument_map: dict[int, str | None] = {}
+        if vial_pks:
+            stamp_rows = db.execute(
+                select(LimsAnalysis.lims_sub_sample_pk, HplcMethod.name, Instrument.name)
+                .outerjoin(HplcMethod, HplcMethod.id == LimsAnalysis.method_id)
+                .outerjoin(Instrument, Instrument.id == LimsAnalysis.instrument_id)
+                .where(LimsAnalysis.lims_sub_sample_pk.in_(vial_pks))
+                .where(LimsAnalysis.review_state.notin_(("rejected", "retracted")))
+            ).all()
+            method_names_by_pk: dict[int, set[str]] = {}
+            instrument_names_by_pk: dict[int, set[str]] = {}
+            for pk, m_name, i_name in stamp_rows:
+                if m_name:
+                    method_names_by_pk.setdefault(pk, set()).add(m_name)
+                if i_name:
+                    instrument_names_by_pk.setdefault(pk, set()).add(i_name)
+
+            def _resolve_stamped(names: set[str] | None) -> str | None:
+                if not names:
+                    return None
+                if len(names) > 1:
+                    return "mixed"
+                return next(iter(names))
+
+            stamped_method_map = {
+                pk: _resolve_stamped(names) for pk, names in method_names_by_pk.items()
+            }
+            stamped_instrument_map = {
+                pk: _resolve_stamped(names) for pk, names in instrument_names_by_pk.items()
+            }
+
         def _resolve_method(it_instrument_uid: str | None, it_service_group_id: int | None) -> str | None:
             """Resolve HPLC method name from instrument + peptide (via service group)."""
             if not it_instrument_uid or not it_service_group_id:
@@ -19368,11 +20129,14 @@ def list_worksheets(
                     "added_at": (it.added_at.isoformat() + "Z") if it.added_at else None,
                     "date_received": (it.date_received.isoformat() + "Z") if it.date_received else None,
                     "instrument_uid": it.instrument_uid,
+                    "instrument_id": it.instrument_id,
                     "assigned_analyst_id": it.assigned_analyst_id,
                     "assigned_analyst_email": item_analyst_email_map.get(it.assigned_analyst_id) if it.assigned_analyst_id else None,
                     "notes": it.notes,
                     "peptide_id": group_peptide_map.get(it.service_group_id) if it.service_group_id else None,
                     "method_name": _resolve_method(it.instrument_uid, it.service_group_id),
+                    "stamped_method_name": stamped_method_map.get(sub_sample_pk_map.get(it.sample_id)),
+                    "stamped_instrument_name": stamped_instrument_map.get(sub_sample_pk_map.get(it.sample_id)),
                     "lims_sub_sample_pk": sub_sample_pk_map.get(it.sample_id),
                     # 'core' | 'variance' | None — None for parent-sample ids
                     # (no lims_sub_samples row), same join as lims_sub_sample_pk
@@ -19922,6 +20686,7 @@ async def reassign_worksheet_item_by_id(
 
 class WorksheetItemUpdate(BaseModel):
     instrument_uid: Optional[str] = None
+    instrument_id: Optional[int] = None
     prep_status: Optional[str] = None
 
 
@@ -19983,6 +20748,20 @@ async def update_worksheet_item(
                                     a["method"] = resolved_method
                             item.analyses_json = json.dumps(analyses)
 
+    if "instrument_id" in data.model_fields_set:
+        # Distinguish "field sent" (incl. explicit null, which clears the FK)
+        # from "field omitted" (no-op) — instrument_id has no falsy-but-valid
+        # sentinel the way instrument_uid's "" does, so None must mean clear.
+        if data.instrument_id:
+            inst_row = db.execute(
+                select(Instrument).where(Instrument.id == data.instrument_id)
+            ).scalar_one_or_none()
+            if not inst_row:
+                raise HTTPException(400, "Instrument not found")
+            item.instrument_id = data.instrument_id
+        else:
+            item.instrument_id = None
+
     if data.prep_status is not None:
         allowed = {"ready", "in_progress", "complete"}
         if data.prep_status in allowed:
@@ -19990,6 +20769,68 @@ async def update_worksheet_item(
 
     db.commit()
     return {"status": "updated", "item_id": item_id, "resolved_method": resolved_method}
+
+
+class WorksheetApplyMethodInstrument(BaseModel):
+    method_id: int
+    instrument_id: int
+    item_ids: Optional[list[int]] = None
+
+
+@app.post("/worksheets/{worksheet_id}/apply-method-instrument")
+async def apply_worksheet_method_instrument(
+    worksheet_id: int,
+    data: WorksheetApplyMethodInstrument,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Bulk-stamp method/instrument across a worksheet's covered, bench-editable
+    analyses (R6/R7/R8, slice 2 bench-stamping). Coverage-scoped: only rows whose
+    service the method covers are touched; only STAMPABLE_STATES rows are
+    stamped; everything else comes back in skipped_state/skipped_uncovered
+    rather than being silently dropped."""
+    ws = db.execute(
+        select(Worksheet).where(Worksheet.id == worksheet_id)
+    ).scalar_one_or_none()
+    if not ws:
+        raise HTTPException(404, "Worksheet not found")
+
+    method = db.execute(
+        select(HplcMethod).where(HplcMethod.id == data.method_id)
+    ).scalar_one_or_none()
+    if not method or not method.active:
+        raise HTTPException(400, "Method not found or inactive")
+
+    inst = db.execute(
+        select(Instrument).where(Instrument.id == data.instrument_id)
+    ).scalar_one_or_none()
+    if not inst or not inst.active:
+        raise HTTPException(400, "Instrument not found or inactive")
+
+    linked = db.execute(
+        select(instrument_methods.c.id).where(
+            instrument_methods.c.instrument_id == data.instrument_id,
+            instrument_methods.c.method_id == data.method_id,
+        )
+    ).scalar_one_or_none()
+    if not linked:
+        raise HTTPException(
+            400,
+            f"Instrument '{inst.name}' is not linked to method '{method.name}'",
+        )
+
+    from lims_analyses.worksheet_stamping import apply_method_instrument_to_worksheet
+
+    result = apply_method_instrument_to_worksheet(
+        db,
+        worksheet=ws,
+        method_id=data.method_id,
+        instrument_id=data.instrument_id,
+        item_ids=data.item_ids,
+        user_id=getattr(current_user, "id", None),
+    )
+    db.commit()
+    return result
 
 
 class ReorderRequest(BaseModel):

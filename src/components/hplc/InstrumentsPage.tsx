@@ -3,18 +3,24 @@ import {
   Loader2,
   AlertCircle,
   Search,
-  RefreshCw,
   Wrench,
   ChevronRight,
   X,
+  Plus,
+  Save,
+  Pencil,
 } from 'lucide-react'
 import {
   Card,
   CardContent,
+  CardHeader,
+  CardTitle,
 } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Table,
   TableBody,
@@ -23,13 +29,15 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { toast } from 'sonner'
 import {
   getInstruments,
-  syncInstruments,
   getMethods,
+  createInstrument,
+  updateInstrument,
+  getDepartments,
   type Instrument,
   type HplcMethod,
+  type Department,
 } from '@/lib/api'
 
 export function InstrumentsPage() {
@@ -39,7 +47,7 @@ export function InstrumentsPage() {
   const [error, setError] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [searchInput, setSearchInput] = useState('')
-  const [syncing, setSyncing] = useState(false)
+  const [showAddForm, setShowAddForm] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -61,22 +69,6 @@ export function InstrumentsPage() {
   useEffect(() => {
     load()
   }, [load])
-
-  const handleSync = async () => {
-    setSyncing(true)
-    setError(null)
-    try {
-      const res = await syncInstruments()
-      toast.success(`Instruments synced — ${res.created} new, ${res.total} total`)
-      await load()
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Sync failed'
-      setError(msg)
-      toast.error(msg)
-    } finally {
-      setSyncing(false)
-    }
-  }
 
   const selectedInstrument = instruments.find(i => i.id === selectedId) ?? null
 
@@ -104,22 +96,16 @@ export function InstrumentsPage() {
           <div>
             <h1 className="text-xl font-semibold">Instruments</h1>
             <p className="text-sm text-muted-foreground">
-              Lab instruments synced from Senaite LIMS
+              Lab instruments — register and manage locally
             </p>
           </div>
         </div>
-        <Button
-          variant="outline"
-          onClick={handleSync}
-          disabled={syncing}
-        >
-          {syncing ? (
-            <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-          ) : (
-            <RefreshCw className="mr-1 h-4 w-4" />
-          )}
-          {syncing ? 'Syncing...' : 'Sync from Senaite'}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button onClick={() => setShowAddForm(true)} disabled={showAddForm}>
+            <Plus className="mr-1 h-4 w-4" />
+            Add Instrument
+          </Button>
+        </div>
       </div>
 
       {/* Error */}
@@ -130,6 +116,17 @@ export function InstrumentsPage() {
             <span className="text-sm text-destructive">{error}</span>
           </CardContent>
         </Card>
+      )}
+
+      {/* Add form */}
+      {showAddForm && (
+        <AddInstrumentForm
+          onSaved={() => {
+            setShowAddForm(false)
+            load()
+          }}
+          onCancel={() => setShowAddForm(false)}
+        />
       )}
 
       {/* Search */}
@@ -168,7 +165,7 @@ export function InstrumentsPage() {
               <TableRow>
                 <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
                   {instruments.length === 0
-                    ? 'No instruments yet. Click "Sync from Senaite" to pull instruments.'
+                    ? 'No instruments yet. Click “Add Instrument” to register one.'
                     : 'No instruments match your search.'}
                 </TableCell>
               </TableRow>
@@ -236,8 +233,10 @@ export function InstrumentsPage() {
             {/* Content */}
             <div className="flex-1 overflow-y-auto px-6 py-4">
               <InstrumentPanel
+                key={selectedInstrument.id}
                 instrument={selectedInstrument}
                 methods={methods.filter(m => m.instrument_ids.includes(selectedInstrument.id))}
+                onUpdated={load}
               />
             </div>
           </div>
@@ -264,31 +263,199 @@ export function InstrumentsPage() {
 function InstrumentPanel({
   instrument,
   methods,
+  onUpdated,
 }: {
   instrument: Instrument
   methods: HplcMethod[]
+  onUpdated: () => void
 }) {
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [departments, setDepartments] = useState<Department[]>([])
+
+  useEffect(() => {
+    getDepartments().then(setDepartments).catch(console.error)
+  }, [])
+
+  // Editable fields
+  const [name, setName] = useState(instrument.name)
+  const [instrumentType, setInstrumentType] = useState(instrument.instrument_type ?? '')
+  const [brand, setBrand] = useState(instrument.brand ?? '')
+  const [model, setModel] = useState(instrument.model ?? '')
+  const [departmentId, setDepartmentId] = useState<number | null>(instrument.department_id ?? null)
+  const [active, setActive] = useState(instrument.active)
+
+  const resetForm = () => {
+    setName(instrument.name)
+    setInstrumentType(instrument.instrument_type ?? '')
+    setBrand(instrument.brand ?? '')
+    setModel(instrument.model ?? '')
+    setDepartmentId(instrument.department_id ?? null)
+    setActive(instrument.active)
+    setError(null)
+  }
+
+  const handleSave = async () => {
+    if (!name.trim()) {
+      setError('Name is required')
+      return
+    }
+    setSaving(true)
+    setError(null)
+    try {
+      await updateInstrument(instrument.id, {
+        name: name.trim(),
+        instrument_type: instrumentType.trim() || null,
+        brand: brand.trim() || null,
+        model: model.trim() || null,
+        department_id: departmentId,
+        active,
+      })
+      setEditing(false)
+      onUpdated()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleCancel = () => {
+    resetForm()
+    setEditing(false)
+  }
+
   return (
     <div className="space-y-6">
-      {/* Detail grid */}
-      <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
-          <DetailRow label="Name" value={instrument.name} />
-          <DetailRow label="Senaite ID" value={instrument.senaite_id} />
-          <DetailRow label="Type" value={instrument.instrument_type} />
-          <DetailRow label="Brand" value={instrument.brand} />
-          <DetailRow label="Model" value={instrument.model} />
-          <DetailRow
-            label="Status"
-            value={instrument.active ? 'Active' : 'Inactive'}
-          />
+      {/* Header with edit/save controls */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-lg font-semibold">{instrument.name}</h3>
+          {instrument.senaite_id && (
+            <p className="text-sm text-muted-foreground">{instrument.senaite_id}</p>
+          )}
         </div>
-        {instrument.senaite_uid && (
-          <div className="text-xs text-muted-foreground">
-            Senaite UID: <span className="font-mono">{instrument.senaite_uid}</span>
+        {editing ? (
+          <div className="flex gap-2">
+            <Button size="sm" variant="ghost" onClick={handleCancel} disabled={saving}>
+              <X className="mr-1 h-3.5 w-3.5" />
+              Cancel
+            </Button>
+            <Button size="sm" onClick={handleSave} disabled={saving}>
+              {saving ? (
+                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Save className="mr-1 h-3.5 w-3.5" />
+              )}
+              Save
+            </Button>
           </div>
+        ) : (
+          <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+            <Pencil className="mr-1 h-3.5 w-3.5" />
+            Edit
+          </Button>
         )}
       </div>
+
+      {error && (
+        <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </div>
+      )}
+
+      {/* Detail grid */}
+      {editing ? (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="inst-edit-name">Name</Label>
+            <Input
+              id="inst-edit-name"
+              value={name}
+              onChange={e => setName(e.target.value)}
+              placeholder="Agilent 1260 Infinity"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="inst-edit-type">Type</Label>
+              <Input
+                id="inst-edit-type"
+                value={instrumentType}
+                onChange={e => setInstrumentType(e.target.value)}
+                placeholder="HPLC"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="inst-edit-department">Department</Label>
+              <select
+                id="inst-edit-department"
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                value={departmentId ?? ''}
+                onChange={e => setDepartmentId(e.target.value ? parseInt(e.target.value, 10) : null)}
+              >
+                <option value="">None</option>
+                {departments.map(dept => (
+                  <option key={dept.id} value={dept.id}>{dept.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="inst-edit-brand">Brand</Label>
+              <Input
+                id="inst-edit-brand"
+                value={brand}
+                onChange={e => setBrand(e.target.value)}
+                placeholder="Agilent"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="inst-edit-model">Model</Label>
+              <Input
+                id="inst-edit-model"
+                value={model}
+                onChange={e => setModel(e.target.value)}
+                placeholder="1260 Infinity"
+              />
+            </div>
+          </div>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <Checkbox
+              checked={active}
+              onCheckedChange={checked => setActive(checked === true)}
+            />
+            Active
+          </label>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
+            <DetailRow label="Type" value={instrument.instrument_type} />
+            <DetailRow label="Brand" value={instrument.brand} />
+            <DetailRow label="Model" value={instrument.model} />
+            <DetailRow
+              label="Department"
+              value={departments.find(d => d.id === instrument.department_id)?.name ?? null}
+            />
+            <DetailRow
+              label="Status"
+              value={instrument.active ? 'Active' : 'Inactive'}
+            />
+            <DetailRow
+              label="Origin"
+              value={instrument.origin === 'senaite' ? 'SENAITE (legacy)' : 'Mk1'}
+            />
+          </div>
+          {instrument.senaite_uid && (
+            <div className="text-xs text-muted-foreground">
+              Senaite UID: <span className="font-mono">{instrument.senaite_uid}</span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Linked methods */}
       <div className="border-t pt-4">
@@ -345,5 +512,124 @@ function DetailRow({
       <dt className="font-medium text-muted-foreground">{label}</dt>
       <dd className="mt-0.5">{value ?? <span className="text-muted-foreground">—</span>}</dd>
     </div>
+  )
+}
+
+// ─── Inline Add Instrument Form ───
+
+function AddInstrumentForm({
+  onSaved,
+  onCancel,
+}: {
+  onSaved: () => void
+  onCancel: () => void
+}) {
+  const [name, setName] = useState('')
+  const [instrumentType, setInstrumentType] = useState('')
+  const [brand, setBrand] = useState('')
+  const [model, setModel] = useState('')
+  const [departmentId, setDepartmentId] = useState<number | null>(null)
+  const [departments, setDepartments] = useState<Department[]>([])
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    getDepartments().then(setDepartments).catch(console.error)
+  }, [])
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!name.trim()) return
+    setSaving(true)
+    setError(null)
+    try {
+      await createInstrument({
+        name: name.trim(),
+        instrument_type: instrumentType.trim() || null,
+        brand: brand.trim() || null,
+        model: model.trim() || null,
+        department_id: departmentId,
+      })
+      onSaved()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create instrument')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">New Instrument</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="space-y-2">
+              <Label htmlFor="new-instrument-name">Name *</Label>
+              <Input
+                id="new-instrument-name"
+                value={name}
+                onChange={e => setName(e.target.value)}
+                placeholder="Agilent 1260 Infinity"
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="new-instrument-type">Type</Label>
+              <Input
+                id="new-instrument-type"
+                value={instrumentType}
+                onChange={e => setInstrumentType(e.target.value)}
+                placeholder="HPLC"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="new-instrument-brand">Brand</Label>
+              <Input
+                id="new-instrument-brand"
+                value={brand}
+                onChange={e => setBrand(e.target.value)}
+                placeholder="Agilent"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="new-instrument-model">Model</Label>
+              <Input
+                id="new-instrument-model"
+                value={model}
+                onChange={e => setModel(e.target.value)}
+                placeholder="1260 Infinity"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="new-instrument-department">Department</Label>
+              <select
+                id="new-instrument-department"
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                value={departmentId ?? ''}
+                onChange={e => setDepartmentId(e.target.value ? parseInt(e.target.value, 10) : null)}
+              >
+                <option value="">None</option>
+                {departments.map(dept => (
+                  <option key={dept.id} value={dept.id}>{dept.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          <div className="flex gap-2">
+            <Button type="submit" disabled={saving || !name.trim()}>
+              {saving && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
+              Create
+            </Button>
+            <Button type="button" variant="ghost" onClick={onCancel}>
+              Cancel
+            </Button>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
   )
 }

@@ -361,8 +361,6 @@ def test_backfill_preserves_native_mi_on_update(
     """Re-running the backfill over a shadow row that has natively-set M/I
     (the Layer-4 reconcile-rider scenario) must leave those values untouched
     while still updating result/state."""
-    from lims_analyses import service as la_service
-
     svc_a, _svc_b = two_analysis_services
     parent = LimsSample(sample_id="TEST-PM9-NATIVE-MI", sample_type="x",
                         status="received", external_lims_uid="SENAITE-UID-2")
@@ -376,10 +374,16 @@ def test_backfill_preserves_native_mi_on_update(
     row = db.query(LimsAnalysis).filter_by(
         lims_sample_pk=parent.id, analysis_service_id=svc_a.id, provenance="shadow"
     ).one()
-    la_service.set_method_instrument(
-        db, analysis_id=row.id,
-        method_id=None, instrument_id=seeded_instrument.id, user_id=None,
-    )
+    # Seed the shadow row's "natively-set M/I" directly on the ORM object
+    # (Task 2, 2026-08-19 bench-stamping: set_method_instrument now guards
+    # review_state to STAMPABLE_STATES (R7) and a shadow row's sentinel
+    # 'senaite_mirror' state is deliberately excluded. This test's subject
+    # is the backfill core's M/I-blindness, not set_method_instrument
+    # itself, so a direct field write is the correct arrange step — same
+    # idiom as test_amendment_audit.py's test_reset_captures_cleared_fields).
+    row.method_id = None
+    row.instrument_id = seeded_instrument.id
+    db.commit()
 
     # Resume gotcha (same as test_backfill_idempotent_rerun_updates_not_duplicates):
     # the first _run() already advanced the checkpoint past parent.id, so the

@@ -94,3 +94,40 @@ def test_unregistered_package_still_renders_fail_open(seeded):
     out = build_ordered_products({}, "mystery_bundle", db=seeded)
     keys = [p["key"] for p in out]
     assert "mystery_bundle" in keys
+
+
+# ─── rider-aware ride_host_roles (spec 2026-08-20-rider-vial-visibility) ─────
+
+def test_rider_profile_ride_host_roles_populated(db_session):
+    """A db-seeded RIDER profile (fulfills on a HOST role's vial, not its own)
+    carries its priority-ordered ride list on the resolved ProductDef, so the
+    sample-page banner can check ride hosts instead of the rider's own role."""
+    from models import AnalysisProfile, profile_ride_hosts
+    from sub_samples.product_registry import build_ordered_products
+
+    rider = AnalysisProfile(key="fentanyl", name="Fentanyl", is_addon=True,
+                            vials_required=0, fulfillment_role="fentanyl",
+                            fulfillment_dim="role", active=True)
+    db_session.add(rider)
+    db_session.flush()
+    db_session.execute(profile_ride_hosts.insert().values(
+        analysis_profile_id=rider.id, host_role_code="hplc", priority=0))
+    db_session.commit()
+
+    out = build_ordered_products({"fentanyl": True}, None, db=db_session)
+    v = [p for p in out if p["key"] == "fentanyl"][0]
+    assert v["ride_host_roles"] == ["hplc"]
+
+
+def test_legacy_key_has_empty_ride_host_roles(seeded):
+    """A legacy PRODUCT_REGISTRY key (no ride list row) resolves with an
+    empty ride_host_roles, both via the db-backed lookup and the static
+    fallback — no false rider-fulfillment for products that self-mint."""
+    from sub_samples.product_registry import build_ordered_products
+    out_db = build_ordered_products({"hplcpurity_identity": True}, None, db=seeded)
+    v_db = [p for p in out_db if p["key"] == "hplcpurity_identity"][0]
+    assert v_db["ride_host_roles"] == []
+
+    out_legacy = build_ordered_products({"hplcpurity_identity": True}, None)
+    v_legacy = [p for p in out_legacy if p["key"] == "hplcpurity_identity"][0]
+    assert v_legacy["ride_host_roles"] == []

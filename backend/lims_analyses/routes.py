@@ -12,25 +12,31 @@ from datetime import date
 from typing import List, Literal, Union
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from auth import get_current_user
+from auth import get_current_user, require_admin
 from database import get_db
-from lims_analyses import senaite_writeback, service
+from lims_analyses import manage_native, senaite_writeback, service
 from lims_analyses.senaite_writeback import SenaiteWritebackError, list_parent_line_states
 from lims_analyses.schemas import (
+    AddNativeProfileRequest,
+    AddNativeProfileResponse,
     AnalysisResponse,
     AnalysisWithTransitions,
     CreateAnalysisRequest,
     HostKind,
     NativeParentAnalysisRow,
+    NativeProfileOut,
     ParentPromotionInfo,
     ParentRetestRequest,
     ParentRetestResponse,
     PromoteRequest,
     PromoteResponse,
     PromotionRow,
+    RemoveNativeAnalysisResponse,
+    ResyncFromOrderResponse,
     SenaiteShapeAnalysisResponse,
     SetMethodInstrumentRequest,
     SetReportableRequest,
@@ -39,6 +45,7 @@ from lims_analyses.schemas import (
     TransitionInfo,
     TransitionRequest,
 )
+from models import AnalysisProfile, LimsSample
 from lims_analyses.state_machine import (
     InvalidTransitionError,
     TierMismatchError,
@@ -70,6 +77,14 @@ def _handle_service_error(e: Exception) -> HTTPException:
                 "message": str(e),
             },
         )
+    if isinstance(e, service.StateLockedError):
+        return HTTPException(
+            status_code=409,
+            detail={
+                "code": "state_locked",
+                "review_state": e.review_state,
+            },
+        )
     if isinstance(e, InvalidTransitionError):
         return HTTPException(
             status_code=409,
@@ -92,6 +107,14 @@ def _handle_service_error(e: Exception) -> HTTPException:
         )
     if isinstance(e, (UnknownStateError, UnknownKindError, UnknownTierError)):
         return HTTPException(status_code=400, detail=str(e))
+    if isinstance(e, SenaiteWritebackError):
+        # Parent-tier verify tee (read-flip seam fix, 2026-08-20): same 502
+        # semantics as the promote route's write-back failure — the upstream
+        # system refused, nothing was committed.
+        return HTTPException(
+            status_code=502,
+            detail=f"SENAITE write-back failed — transition aborted: {e}",
+        )
     if isinstance(e, IntegrityError):
         # The most common case is the partial unique index on
         # (lims_sample_pk, keyword) WHERE retest_of_id IS NULL — i.e. a
@@ -287,6 +310,89 @@ def parent_retest(
         raise _handle_service_error(e)
 
 
+# ── Native Manage Analyses (spec 2026-08-18) ─────────────────────────────────
+
+def _load_parent_or_404(db: Session, sample_id: str) -> LimsSample:
+    parent = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)).scalar_one_or_none()
+    if parent is None:
+        raise HTTPException(status_code=404, detail=f"sample {sample_id!r} not found")
+    return parent
+
+
+def _manage_native_error(e: Exception) -> HTTPException:
+    code = getattr(e, "code", None)
+    if isinstance(e, manage_native.ProfileAlreadyOnSampleError) or isinstance(e, manage_native.PromotedResultExistsError):
+        return HTTPException(status_code=409, detail={"code": code, "message": str(e)})
+    if isinstance(e, (manage_native.ProfileNotNativeError, manage_native.ProfileInactiveError,
+                      manage_native.ProfileHasNoMembersError)):
+        return HTTPException(status_code=422, detail={"code": code, "message": str(e)})
+    if isinstance(e, manage_native.RemovalNeedsConfirm):
+        return HTTPException(status_code=412, detail={"code": "confirm_required", "impact": e.impact})
+    if isinstance(e, manage_native.OrderServicesUnavailable):
+        return HTTPException(status_code=502, detail={"code": "order_services_unavailable", "message": str(e)})
+    return _handle_service_error(e)
+
+
+@router.get("/parent/{sample_id}/native-profiles", response_model=List[NativeProfileOut])
+def native_profiles(sample_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """Picker for the Manage Analyses overlay: active all-mk1 profiles, whether
+    the sample already carries them, and which existing vials would host them."""
+    parent = _load_parent_or_404(db, sample_id)
+    return manage_native.native_profiles_for_parent(db, parent=parent)
+
+
+@router.post("/parent/{sample_id}/profiles", response_model=AddNativeProfileResponse,
+             status_code=status.HTTP_201_CREATED)
+def add_native_profile(sample_id: str, req: AddNativeProfileRequest,
+                       db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """Ruling A/P: put a native profile on the sample — parent placeholders +
+    host custody edge + vial rows on every matching-role vial."""
+    parent = _load_parent_or_404(db, sample_id)
+    profile = db.get(AnalysisProfile, req.profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail=f"analysis profile id={req.profile_id} not found")
+    try:
+        result = manage_native.add_profile_to_parent(
+            db, parent=parent, profile=profile, user_id=getattr(current_user, "id", None))
+        db.commit()
+        return result
+    except Exception as e:
+        db.rollback()
+        raise _manage_native_error(e)
+
+
+@router.delete("/parent/{sample_id}/native-analyses/{analysis_id}", response_model=RemoveNativeAnalysisResponse)
+def remove_native_analysis(sample_id: str, analysis_id: int, confirm: bool = Query(False),
+                           db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """Ruling P/R1: remove one native parent placeholder; cascades to the vial
+    rows (delete pristine / reject worked with ?confirm=true) and soft-rejects
+    the placeholder. 409 when a promoted result exists; 412 when confirmation
+    is required (body carries the impact for RemovalConfirmModal)."""
+    parent = _load_parent_or_404(db, sample_id)
+    try:
+        return manage_native.remove_parent_native_analysis(
+            db, parent=parent, analysis_id=analysis_id, confirm=confirm,
+            user_id=getattr(current_user, "id", None))
+    except Exception as e:
+        db.rollback()
+        raise _manage_native_error(e)
+
+
+@router.post("/parent/{sample_id}/resync-from-order", response_model=ResyncFromOrderResponse)
+def resync_from_order(sample_id: str, db: Session = Depends(get_db), current_user=Depends(require_admin)):
+    """Ruling 2: admin-only additive heal from the WP order (placeholders,
+    host edges, vial rows). 502 with zero writes when the IS is unavailable."""
+    parent = _load_parent_or_404(db, sample_id)
+    try:
+        result = manage_native.resync_parent_from_order(
+            db, parent=parent, user_id=getattr(current_user, "id", None))
+        db.commit()
+        return result
+    except Exception as e:
+        db.rollback()
+        raise _manage_native_error(e)
+
+
 @router.post("/{analysis_id}/source-retest", response_model=SourceRetestResponse)
 def source_retest(
     analysis_id: int,
@@ -351,6 +457,8 @@ def transition(
             result_value=req.result_value,
             reason=req.reason,
             user_id=getattr(current_user, "id", None),
+            method_id=req.method_id,
+            instrument_id=req.instrument_id,
         )
         # side-by-side engine: schedules workflow.engine.run_cascades_bg post-response
         _schedule_sbs_cascade(background_tasks, db, row, current_user)

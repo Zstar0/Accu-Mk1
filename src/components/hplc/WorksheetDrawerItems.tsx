@@ -65,7 +65,7 @@ interface WorksheetDrawerItemsProps {
   onReassign: (itemId: number, targetWorksheetId: number) => void
   onStartPrep: (item: { sampleId: string; departmentId: number | null; serviceGroupId: number | null; groupName: string; peptideId: number | null; instrumentUid: string | null; limsSubSamplePk: number | null }) => void
   instruments: Instrument[]
-  onUpdateItem: (itemId: number, data: { instrument_uid?: string; prep_status?: string }) => void
+  onUpdateItem: (itemId: number, data: { instrument_uid?: string; prep_status?: string; instrument_id?: number | null }) => void
   onReorder: (itemIds: number[]) => void
 }
 
@@ -204,7 +204,7 @@ interface SortableItemRowProps {
   onRemove: (itemId: number) => void
   onReassign: (itemId: number, targetWorksheetId: number) => void
   onStartPrep: (item: { sampleId: string; departmentId: number | null; serviceGroupId: number | null; groupName: string; peptideId: number | null; instrumentUid: string | null; limsSubSamplePk: number | null }) => void
-  onUpdateItem: (itemId: number, data: { instrument_uid?: string; prep_status?: string }) => void
+  onUpdateItem: (itemId: number, data: { instrument_uid?: string; prep_status?: string; instrument_id?: number | null }) => void
 }
 
 function SortableItemRow({
@@ -247,6 +247,10 @@ function SortableItemRow({
   )
   const isHplcItem = item.analyses.some(a => a.keyword != null && /PURITY|IDENTITY/i.test(a.keyword))
     || /hplc|core/i.test(item.group_name)
+  // Native (non-HPLC) items are keyed by the local instruments table (id),
+  // not a SENAITE instrument UID — they have a lims_sub_sample_pk and no
+  // peptide_id (peptide_id is the HPLC-lane marker).
+  const isNativeItem = item.lims_sub_sample_pk != null && item.peptide_id == null
   const colorKey = (item.group_color as ServiceGroupColor) in SERVICE_GROUP_COLORS
     ? (item.group_color as ServiceGroupColor)
     : 'zinc'
@@ -319,19 +323,44 @@ function SortableItemRow({
         )}
       </div>
 
-      {/* Method — only shown when instrument is set (computed from instrument+peptide) */}
+      {/* Method — prefers the run-context stamp over the HPLC-derived name */}
       <div className="w-[110px] shrink-0">
         <span className="text-xs text-muted-foreground font-mono truncate block">
-          {item.method_name ?? '—'}
+          {item.stamped_method_name ?? item.method_name ?? '—'}
         </span>
       </div>
 
-      {/* Instrument */}
+      {/* Instrument — stamped name wins in the read-only display. Editable
+          select is keyed by senaite_uid for HPLC items (peptide_id set) but
+          switches to the local instruments table (keyed by id) for native
+          items, which have no SENAITE instrument UID to key off of. */}
       <div className="w-[120px] shrink-0">
         {isCompleted ? (
           <span className="text-[10px] text-muted-foreground font-mono truncate block">
-            {instruments.find(i => i.senaite_uid === item.instrument_uid)?.name ?? item.instrument_uid ?? '—'}
+            {item.stamped_instrument_name
+              ?? instruments.find(i => i.senaite_uid === item.instrument_uid)?.name
+              ?? item.instrument_uid
+              ?? '—'}
           </span>
+        ) : isNativeItem ? (
+          <Select
+            value={item.instrument_id != null ? String(item.instrument_id) : ''}
+            onValueChange={value => onUpdateItem(item.id, { instrument_id: Number(value) })}
+          >
+            <SelectTrigger
+              size="sm"
+              className="h-6 text-[10px] border-transparent bg-transparent shadow-none hover:border-border"
+            >
+              <SelectValue placeholder="Instrument…" />
+            </SelectTrigger>
+            <SelectContent>
+              {instruments.map(inst => (
+                <SelectItem key={inst.id} value={String(inst.id)}>
+                  {inst.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         ) : (
           <Select
             value={item.instrument_uid ?? ''}

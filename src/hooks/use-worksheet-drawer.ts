@@ -8,6 +8,7 @@ import {
   addGroupToWorksheet,
   reorderWorksheetItems,
   updateWorksheetItem,
+  applyWorksheetMethodInstrument,
 } from '@/lib/api'
 import type { WorksheetListItem, AddToWorksheetPayload } from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
@@ -103,10 +104,23 @@ export function useWorksheetDrawer() {
     }: {
       worksheetId: number
       itemId: number
-      data: { instrument_uid?: string }
+      data: { instrument_uid?: string; prep_status?: string; instrument_id?: number | null }
     }) => updateWorksheetItem(worksheetId, itemId, data),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['worksheets-list'] }),
     onError: (err) => toast.error(err instanceof Error ? err.message : 'Update item failed'),
+  })
+
+  const applyMethodInstrumentMutation = useMutation({
+    mutationFn: ({
+      worksheetId,
+      data,
+    }: {
+      worksheetId: number
+      data: { method_id: number; instrument_id: number; item_ids?: number[] }
+    }) => applyWorksheetMethodInstrument(worksheetId, data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['worksheets-list'] }),
+    onError: (err) =>
+      toast.error(err instanceof Error ? err.message : 'Apply method/instrument failed'),
   })
 
   const reorderMutation = useMutation({
@@ -149,6 +163,7 @@ export function useWorksheetDrawer() {
     completeMutation,
     reassignMutation,
     updateItemMutation,
+    applyMethodInstrumentMutation,
     reorderMutation,
     addItemMutation,
   }

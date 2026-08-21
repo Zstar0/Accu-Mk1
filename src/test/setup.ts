@@ -11,6 +11,24 @@ if (!Element.prototype.scrollIntoView) {
   })
 }
 
+// jsdom doesn't implement ResizeObserver, but Radix's Checkbox mounts a
+// hidden bubble input sized via useSize whenever it renders inside a <form>
+// (e.g. the AddMethodForm covered-services picker). Stub it so those mount.
+if (!('ResizeObserver' in globalThis)) {
+  class ResizeObserverStub {
+    observe = vi.fn()
+    unobserve = vi.fn()
+    disconnect = vi.fn()
+  }
+  // configurable so suites that install their own stub (e.g.
+  // promoted-source-retest) can still redefine it.
+  Object.defineProperty(globalThis, 'ResizeObserver', {
+    writable: true,
+    configurable: true,
+    value: ResizeObserverStub,
+  })
+}
+
 // Mock matchMedia for tests
 Object.defineProperty(window, 'matchMedia', {
   writable: true,

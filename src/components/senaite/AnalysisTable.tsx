@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, Fragment, type ReactNode } from 'react'
-import { Activity, ArrowDownUp, ArrowUpDown, Check, ChevronDown, ChevronRight, Database, HelpCircle, Layers, Lock, MoreHorizontal, Pencil, X } from 'lucide-react'
+import { Activity, ArrowDownUp, ArrowUpDown, Check, ChevronDown, ChevronRight, Database, HelpCircle, Layers, Lock, MoreHorizontal, Pencil, Wrench, X } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
@@ -31,7 +31,8 @@ import {
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import type { SenaiteAnalysis, InboxPriority, ParentPromotionInfo } from '@/lib/api'
-import { setAnalysisMethodInstrument, promoteAnalyses } from '@/lib/api'
+import { setAnalysisMethodInstrument, promoteAnalyses, getMethods } from '@/lib/api'
+import { SetMethodInstrumentDialog } from '@/components/senaite/SetMethodInstrumentDialog'
 import type { VialAssignment } from '@/lib/vial-assignment'
 import { ROLE_COLOR_TEXT, roleColorForCode } from '@/lib/role-display'
 import { useVialRoles, type VialRoleRow } from '@/services/vial-roles'
@@ -164,6 +165,30 @@ export function isResultEditable(a: { uid?: string | null; review_state: string 
     : EDITABLE_STATES.has(a.review_state)
 }
 
+// Task 7 (methods bench-stamping): client-side mirror of the backend's
+// STAMPABLE_STATES (backend/lims_analyses/service.py) — the exact set of
+// review_states where PATCH .../method-instrument succeeds instead of
+// 409ing with state_locked. Deliberately narrower than MK1_EDITABLE_STATES
+// above (which also allows a null review_state for result-cell editing;
+// the backend guard does not) — gates the SetMethodInstrumentDialog's
+// Wrench row action.
+const STAMPABLE_STATES = new Set<string | null>(['unassigned', 'assigned', 'to_be_verified'])
+
+/** True when a native (mk1:) row is in a state where the method/instrument
+ *  PATCH endpoint will accept a stamp instead of 409ing. */
+function canSetMethodInstrument(a: { uid?: string | null; review_state: string | null }): boolean {
+  return !!a.uid && a.uid.startsWith('mk1:') && STAMPABLE_STATES.has(a.review_state)
+}
+
+/** Parses an mk1 int-as-string method/instrument uid, guarding against a
+ *  non-numeric value (defeats the dialog's default-preselection fallback
+ *  rather than shipping a NaN through to the PATCH body). */
+function toIntOrNull(raw: string | null | undefined): number | null {
+  if (!raw) return null
+  const n = parseInt(raw, 10)
+  return Number.isFinite(n) ? n : null
+}
+
 /** Maps review_state to valid transition action names. */
 const ALLOWED_TRANSITIONS: Record<string, readonly string[]> = {
   unassigned: ['submit', 'reject'],
@@ -177,6 +202,15 @@ const ALLOWED_TRANSITIONS: Record<string, readonly string[]> = {
   // server-side (cascade_parent_retest_to_sources) — that path is unaffected;
   // only the user-facing row/bulk option is removed.
   promoted: [],
+  // Native parent second sign-off surfaced by the read-flip main table
+  // (registry source, seam fix 2026-08-20): the canonical parent row
+  // awaiting Verify. Verify routes through the generic mk1 transition
+  // endpoint (the same call the Accu-Mk1 card's parent-native policy
+  // makes); the backend tees SENAITE-origin services' sign-off to the AR
+  // line, fail-closed. Retest is deliberately absent here — the generic
+  // endpoint tier-blocks parent retest; that verb lives on the card, which
+  // owns the destructive confirm + cascade.
+  parent_to_verify: ['verify'],
   // Retest-aware promote: a verified row can be retested (vial tier in Mk1;
   // SENAITE allows it on parent lines too).
   verified: ['retest'],
@@ -1385,6 +1419,52 @@ function AnalysisRow({
   const vialOverlay = vialAssign?.matches[0]?.mk1Analysis ?? null
   const vialOverlayEditable = vialAssign?.editable ?? false
   const [promoteOpen, setPromoteOpen] = useState(false)
+  // Task 7 (methods bench-stamping): the Wrench row action's dialog.
+  // serviceId is resolved on open — preferring the row's own
+  // analysis_service_id FK (fix round 1, R-P2-3) when the backend supplied
+  // it; only falling back to a keyword scan of active methods'
+  // services[].keyword when it's absent (see openMethodDialog below).
+  // Excluded
+  // for verbPolicy 'parent-native' — that policy's whole point is
+  // display-only rows outside its own verify/retest verbs (mirrors how
+  // canPromote/canVarVerify above are excluded), even though a parent-tier
+  // row can sit in a state STAMPABLE_STATES would otherwise allow.
+  const showSetMethodInstrument =
+    verbPolicy !== 'parent-native' && canSetMethodInstrument(analysis)
+  const [methodDialogOpen, setMethodDialogOpen] = useState(false)
+  const [methodDialogServiceId, setMethodDialogServiceId] = useState<number | null>(null)
+  async function openMethodDialog() {
+    // Fix round 1 (R-P2-3, controller ruling): prefer the row's own FK when
+    // the backend supplied it — no fetch needed, and no ambiguity. Only
+    // fall back to the keyword scan when analysis_service_id is absent
+    // (older cached rows, or a non-mk1 origin somehow reaching here), and
+    // scope that scan to ACTIVE methods only — keywords are not unique
+    // across service origins (the migration pattern produces exactly that
+    // collision), so scanning inactive/superseded methods too widens the
+    // chance of resolving the wrong service.
+    if (analysis.analysis_service_id != null) {
+      setMethodDialogServiceId(analysis.analysis_service_id)
+      setMethodDialogOpen(true)
+      return
+    }
+    let serviceId: number | null = null
+    try {
+      const methods = await getMethods()
+      for (const m of methods) {
+        if (!m.active) continue
+        const link = m.services.find(s => s.keyword === analysis.keyword)
+        if (link) {
+          serviceId = link.analysis_service_id
+          break
+        }
+      }
+    } catch {
+      // Leave serviceId null — the dialog renders its own
+      // "no active methods cover this service" empty state.
+    }
+    setMethodDialogServiceId(serviceId)
+    setMethodDialogOpen(true)
+  }
   const queryClient = useQueryClient()
   const isPending = !!analysis.uid && transition.pendingUids.has(analysis.uid)
   // Highlight the title text when this analysis is one of the "primary"
@@ -1584,7 +1664,7 @@ function AnalysisRow({
         {formatDate(analysis.captured)}
       </td>
       <td className="py-2 px-3 text-right">
-        {analysis.uid && (allowedTransitions.length > 0 || canPromote || canVarVerify) && (
+        {analysis.uid && (allowedTransitions.length > 0 || canPromote || canVarVerify || showSetMethodInstrument) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
@@ -1615,6 +1695,12 @@ function AnalysisRow({
                   }}
                 >
                   Verify (Variance)
+                </DropdownMenuItem>
+              )}
+              {showSetMethodInstrument && (
+                <DropdownMenuItem onClick={() => void openMethodDialog()}>
+                  <Wrench aria-hidden="true" />
+                  Set method / instrument
                 </DropdownMenuItem>
               )}
               {allowedTransitions.map(t => (
@@ -1654,6 +1740,23 @@ function AnalysisRow({
               // AND fire the parent's onPromoted (SampleDetails uses
               // useState/useEffect, not react-query, so this is needed
               // to drive a re-fetch of the senaite_shape rows).
+              queryClient.invalidateQueries()
+              onPromoted?.()
+            }}
+          />
+        )}
+        {showSetMethodInstrument && analysis.uid && (
+          <SetMethodInstrumentDialog
+            analysisId={Number(analysis.uid.slice('mk1:'.length))}
+            serviceId={methodDialogServiceId ?? 0}
+            currentMethodId={toIntOrNull(analysis.method_uid)}
+            currentInstrumentId={toIntOrNull(analysis.instrument_uid)}
+            open={methodDialogOpen}
+            onOpenChange={setMethodDialogOpen}
+            onSaved={() => {
+              // Same reload contract as Promote above — invalidate for
+              // react-query callers, fire onPromoted (== the table's
+              // onTransitionComplete) for useState/useEffect callers.
               queryClient.invalidateQueries()
               onPromoted?.()
             }}

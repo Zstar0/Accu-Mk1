@@ -51,6 +51,14 @@ class ConflictError(Exception):
     diagnose ahead of the flush and explain in the caller-facing message."""
 
 
+class StateLockedError(Exception):
+    """Method/instrument restamp attempted on a reported or dead row (R7)."""
+
+    def __init__(self, review_state: str):
+        super().__init__(f"row is {review_state}; method/instrument locked")
+        self.review_state = review_state
+
+
 # ─── Parent keyword translation ──────────────────────────────────────────────
 
 
@@ -236,6 +244,72 @@ def create_analysis(
     return row
 
 
+def record_placeholder_created(
+    db: Session,
+    row: LimsAnalysis,
+    *,
+    reason: str,
+    user_id: Optional[int],
+) -> LimsAnalysisTransition:
+    """Audit row for a lab-minted parent placeholder (manage-analyses slice).
+
+    Registration-time placeholders carry no transition (they are 'ordered' and
+    nothing more); a lab-driven mint records *why it exists* on an 'auto'
+    transition (from NULL → unassigned) whose `reason` names the action.
+    Lives here — not in parent_placeholders.py — so the amendment-audit AST
+    guard sees the construction and enforces details=. Flushes, never commits.
+    """
+    tr = LimsAnalysisTransition(
+        analysis_id=row.id,
+        from_state=None,
+        to_state="unassigned",
+        transition_kind="auto",
+        user_id=user_id,
+        reason=reason,
+        details={"changed": {}},
+    )
+    db.add(tr)
+    db.flush()
+    return tr
+
+
+def soft_reject_parent_placeholder(
+    db: Session,
+    row: LimsAnalysis,
+    *,
+    reason: str,
+    user_id: Optional[int],
+) -> LimsAnalysis:
+    """Ruling R1 (manage-analyses slice): a parent PLACEHOLDER (provenance
+    'ordered', never worked) is removed by marking it 'rejected' — the row and
+    its transitions survive as the trail, and the partial unique index
+    (…_parent_service_ordered excludes rejected/retracted) frees the slot for
+    a re-add. Written directly rather than through apply_transition: the
+    generic tier gate forbids parent-tier 'reject' on purpose (workflow rows),
+    and that gate is untouched — this is a placeholder-only primitive.
+    Raises BadRequestError on anything that is not a live placeholder.
+    Flushes, never commits.
+    """
+    if row.provenance != "ordered" or row.lims_sub_sample_pk is not None:
+        raise BadRequestError(f"analysis id={row.id} is not a parent placeholder")
+    if row.review_state in ("rejected", "retracted"):
+        raise BadRequestError(f"analysis id={row.id} is already {row.review_state}")
+    from_state = row.review_state
+    row.review_state = "rejected"
+    row.updated_at = datetime.utcnow()
+    db.add(LimsAnalysisTransition(
+        analysis_id=row.id,
+        from_state=from_state,
+        to_state="rejected",
+        transition_kind="reject",
+        user_id=user_id,
+        reason=reason,
+        details={"changed": {}},
+    ))
+    db.flush()
+    return row
+
+
 # ─── Amendment audit (spec 2026-08-07) ───────────────────────────────────────
 # Fields whose changes are captured as before/after into
 # lims_analysis_transitions.details. Values must stay JSON-serializable
@@ -265,6 +339,32 @@ def _deltas(before: dict, row) -> dict:
 # ─── Transitions ─────────────────────────────────────────────────────────────
 
 
+def _tee_parent_verify_to_senaite(db: Session, row: LimsAnalysis) -> None:
+    """Origin-gated SENAITE tee for a parent-tier verify (see the call site in
+    apply_transition's verify guard). SENAITE-origin service → verify the AR
+    line via senaite_writeback.writeback_parent_verify (raises
+    SenaiteWritebackError on failure — the caller's transaction aborts).
+    mk1-origin service, or a row with no resolvable service (promote always
+    stamps the FK, so this is a legacy-data guard, not a live path) → no-op.
+    """
+    from models import AnalysisService, LimsSample
+
+    svc = (
+        db.get(AnalysisService, row.analysis_service_id)
+        if row.analysis_service_id is not None else None
+    )
+    if svc is None or (svc.origin or "") == "mk1":
+        return
+    parent = db.get(LimsSample, row.lims_sample_pk)
+    if parent is None:
+        raise BadRequestError(
+            f"parent lims_samples row missing for analysis {row.id}"
+        )
+    from lims_analyses import senaite_writeback
+
+    senaite_writeback.writeback_parent_verify(parent.sample_id, row.keyword)
+
+
 def apply_transition(
     db: Session,
     *,
@@ -287,15 +387,34 @@ def apply_transition(
 
     method_id: optional method stamp, applied after the snapshot; None is a no-op.
     instrument_id: optional instrument stamp, applied after the snapshot; None is a no-op.
+    If either is provided with kind != 'submit', raises BadRequestError up
+    front (Task 3, 2026-08-19 bench-stamping slice) — see the guard right
+    after the row load.
     """
     row = get_analysis(db, analysis_id)
+
+    # Task 3 (2026-08-19 bench-stamping slice): the public transition route
+    # (TransitionRequest) exposes method_id/instrument_id only for
+    # kind='submit' — explicit 400 on any other kind rather than silently
+    # ignoring the fields ("explicit beats silent", per the slice design).
+    # Placed before any state/tier validation so a stray stamp field on an
+    # otherwise-illegal transition still reports the stamp misuse, not a
+    # tier/state error. submit's only legal predecessor states (unassigned,
+    # assigned) already fall inside STAMPABLE_STATES (state_machine.py), so
+    # no separate R7 guard call is needed on this path — it can't trip here.
+    if (method_id is not None or instrument_id is not None) and kind != "submit":
+        raise BadRequestError(
+            "method_id/instrument_id only apply to kind='submit'"
+        )
+
     from_state = row.review_state
     before = _snapshot(row)
 
     # Amendment audit (Handler ruling 2026-08-10): callers that used to stamp
-    # method/instrument directly on the row pre-call (prep_bridge) pass them
-    # here instead — applied AFTER the snapshot so the change lands in
-    # details["changed"] on this transition's audit row.
+    # method/instrument directly on the row pre-call (prep_bridge), and now
+    # also the submit-transition route (Task 3 above), pass them here instead
+    # — applied AFTER the snapshot so the change lands in details["changed"]
+    # on this transition's audit row.
     if method_id is not None:
         row.method_id = method_id
     if instrument_id is not None:
@@ -402,6 +521,18 @@ def apply_transition(
     elif kind == "verify":
         if not row.result_value:
             raise BadRequestError("verify requires a result_value on the row")
+        # Parent-tier verify tee (read-flip seam fix, 2026-08-20): a canonical
+        # parent row whose service is SENAITE-origin must flip its SENAITE AR
+        # line in the same act — otherwise SENAITE strands at to_be_verified
+        # while Mk1 reads verified, a divergence the COA gate trips over
+        # later. Fail-closed like promote's write-back: a SENAITE error
+        # aborts the whole transition (nothing is committed yet — the only
+        # prior mutations in this call are submit-only stamp fields, which
+        # can't co-occur with kind='verify'). mk1-origin services have no
+        # SENAITE line — nothing to sync. The tier guard is structural
+        # (next_state above tier-blocks vial-tier verify) but kept explicit.
+        if row_tier == TIER_PARENT:
+            _tee_parent_verify_to_senaite(db, row)
     elif kind == "variance_verify":
         if not row.result_value:
             raise BadRequestError("variance_verify requires a result_value on the row")
@@ -479,79 +610,6 @@ def apply_transition(
     return row
 
 
-# ─── Variance entitlement gate (Variance Addon Phase 1) ─────────────────────
-
-# Vial assignment_role → the WP service key whose variance entitlement covers
-# rows on that vial. Coarse service keys only — never per-analyte (spec
-# 2026-06-10-variance-testing-addon-design.md, "The scoping rule").
-_ROLE_VARIANCE_KEYS: Dict[str, str] = {
-    "hplc": "hplcpurity_identity",
-    "endo": "endotoxin",
-    "ster": "sterility_pcr",
-}
-
-
-def ensure_variance_entitlement(
-    db: Session,
-    *,
-    analysis_id: int,
-    fetch_services=None,
-) -> None:
-    """Display-only helper — no longer a transition gate (2026-06-10 variance-bucket-assignment).
-
-    Raise BadRequestError unless the parent's WP order purchased variance
-    for the service that covers this row's host vial role. FAIL CLOSED: an
-    unreachable services payload rejects the transition (retry later) — it
-    never silently allows.
-
-    fetch_services is injectable for tests; defaults to the same WP/IS lookup
-    the vial plan uses. NO production callers remain — the AssignStep
-    paid-count display uses sub_samples.service.normalize_variance_entitlement,
-    and the transition route is governed by the assignment_kind gate. Retained
-    only as reference for a possible future commercial re-gate.
-    """
-    from models import LimsSample, LimsSubSample
-
-    row = get_analysis(db, analysis_id)
-    if row.lims_sub_sample_pk is None:
-        raise BadRequestError("variance_verify is only valid on sub-sample analyses")
-    vial = db.get(LimsSubSample, row.lims_sub_sample_pk)
-    if vial is None:
-        raise NotFoundError(f"sub-sample id={row.lims_sub_sample_pk} not found")
-    parent = db.get(LimsSample, vial.parent_sample_pk)
-    if parent is None:
-        raise NotFoundError(f"parent sample pk={vial.parent_sample_pk} not found")
-
-    # CAVEAT (2026-06-17): NOT BW-aware. _ROLE_VARIANCE_KEYS maps hplc ->
-    # "hplcpurity_identity" only, but a Bacteriostatic Water order carries its
-    # variance count under "bac_water_panel". This fn has no production callers
-    # today; if it's ever re-activated as a gate, mirror the BW-aware OR logic in
-    # sub_samples.service.derive_variance_demand (max of both keys) or BW variance
-    # will be wrongly blocked.
-    key = _ROLE_VARIANCE_KEYS.get(vial.assignment_role or "")
-    if key is None:
-        raise BadRequestError(
-            f"vial {vial.sample_id} role {vial.assignment_role!r} has "
-            f"no variance service mapping"
-        )
-
-    if fetch_services is None:
-        from sub_samples.service import _fetch_wp_services_for_parent
-        fetch_services = _fetch_wp_services_for_parent
-    services = fetch_services(parent.sample_id)
-    if services is None:
-        raise BadRequestError(
-            "variance entitlement could not be verified (order services "
-            "unreachable) — try again"
-        )
-    variance = services.get("variance") or {}
-    n = variance.get(key)
-    if not isinstance(n, int) or n < 2:
-        raise BadRequestError(
-            f"variance was not purchased for {key} on {parent.sample_id}"
-        )
-
-
 def set_reportable(
     db: Session,
     *,
@@ -598,24 +656,39 @@ def set_reportable(
     return row
 
 
-def set_method_instrument(
+# Rows in these review_states are still bench-editable — method/instrument
+# may be freely (re)stamped. Every other state (verified, published,
+# promoted, variance_verified, parent_to_verify, senaite_mirror, rejected,
+# retracted, ...) is reported-or-dead: restamping there is an amendment-class
+# action, not a bench convenience (R7, 2026-08-19 bench-stamping design §4.5).
+STAMPABLE_STATES = ("unassigned", "assigned", "to_be_verified")
+
+
+def stamp_method_instrument(
     db: Session,
+    row: LimsAnalysis,
     *,
-    analysis_id: int,
     method_id: Optional[int],
     instrument_id: Optional[int],
     user_id: Optional[int] = None,
-) -> LimsAnalysis:
-    """Phase 3.6: update method_id + instrument_id on a lims_analyses row.
+) -> bool:
+    """No-commit core of set_method_instrument. Guards state (R7), applies
+    the pair, writes the audit transition. Returns False on no-op. Callers
+    commit.
 
-    Either may be None (clear). No-op + early-return if both match the
-    current row state. Writes an 'auto' audit transition with a
-    machine-parseable reason — same pattern as set_reportable.
+    The state guard is checked unconditionally — even a would-be no-op
+    (e.g. method_id=None/instrument_id=None on a row that already carries
+    None/None) raises StateLockedError on a locked row. A reported/dead row
+    is locked against this call entirely; "nothing would change anyway" is
+    not an exemption a caller can rely on.
+
+    Raises StateLockedError if row.review_state is outside STAMPABLE_STATES.
     """
-    row = get_analysis(db, analysis_id)
+    if row.review_state not in STAMPABLE_STATES:
+        raise StateLockedError(row.review_state)
 
     if row.method_id == method_id and row.instrument_id == instrument_id:
-        return row
+        return False
 
     before = _snapshot(row)
     row.method_id = method_id
@@ -631,8 +704,34 @@ def set_method_instrument(
         reason=f"method_id={method_id},instrument_id={instrument_id}",
         details=_deltas(before, row),
     ))
-    db.commit()
-    db.refresh(row)
+    return True
+
+
+def set_method_instrument(
+    db: Session,
+    *,
+    analysis_id: int,
+    method_id: Optional[int],
+    instrument_id: Optional[int],
+    user_id: Optional[int] = None,
+) -> LimsAnalysis:
+    """Phase 3.6: update method_id + instrument_id on a lims_analyses row.
+
+    Either may be None (clear). No-op + early-return if both match the
+    current row state. Writes an 'auto' audit transition with a
+    machine-parseable reason — same pattern as set_reportable.
+
+    Thin wrapper: load row → stamp_method_instrument (no-commit core,
+    R7 state guard) → commit. Raises StateLockedError (mapped to 409 by the
+    route layer) if the row is outside STAMPABLE_STATES and the pair would
+    actually change.
+    """
+    row = get_analysis(db, analysis_id)
+    if stamp_method_instrument(
+        db, row, method_id=method_id, instrument_id=instrument_id, user_id=user_id,
+    ):
+        db.commit()
+        db.refresh(row)
     return row
 
 
@@ -2459,6 +2558,7 @@ def peptide_has_full_service_set(db: Session, *, peptide_id: int) -> bool:
 
 def force_retract_analysis(
     db: Session, *, analysis_id: int, user_id: Optional[int],
+    reason: Optional[str] = None,
 ) -> None:
     """Strong-confirm retract of a worked/promoted/verified vial row, for the
     wrong-variant Replace: the whole analyte is invalid, so its results are
@@ -2472,6 +2572,16 @@ def force_retract_analysis(
                           (promoted -> rejected).
       - verified (vial)-> retract (verified -> retracted).
       - else (worked)  -> reject.
+
+    `reason` is keyword-only and defaults to None, in which case every
+    internal apply_transition call keeps its current, call-site-specific
+    string (byte-identical default behavior for the wrong-variant Replace
+    callers). When given, that string is used for every transition this call
+    applies (canonical retract(s), and the source's own retract/reject) —
+    used by manage_native's remove path to stamp "manage_analyses:remove"
+    instead of the wrong-variant Replace wording. Goes through
+    apply_transition throughout, so it never constructs a
+    LimsAnalysisTransition directly.
 
     Idempotent on the canonical row (skipped if already terminal). Raises only
     on published; transition errors propagate to the caller's per-row guard.
@@ -2496,14 +2606,14 @@ def force_retract_analysis(
                 if canonical.review_state in ("verified", "parent_to_verify"):
                     apply_transition(
                         db, analysis_id=canonical.id, kind="retract",
-                        reason="wrong-variant Replace: canonical result invalidated",
+                        reason=reason or "wrong-variant Replace: canonical result invalidated",
                         user_id=user_id,
                     )
             db.delete(link)
         db.flush()
         apply_transition(
             db, analysis_id=analysis_id, kind="reject",
-            reason="wrong-variant Replace: promoted source abandoned",
+            reason=reason or "wrong-variant Replace: promoted source abandoned",
             user_id=user_id,
         )
         return
@@ -2511,7 +2621,7 @@ def force_retract_analysis(
     kind = "retract" if row.review_state == "verified" else "reject"
     apply_transition(
         db, analysis_id=analysis_id, kind=kind,
-        reason="wrong-variant Replace: result discarded", user_id=user_id,
+        reason=reason or "wrong-variant Replace: result discarded", user_id=user_id,
     )
 
 
@@ -3050,6 +3160,7 @@ def _serialize_senaite_shape_rows(
             # S3: the row's own FK, not svc.id — svc is None when the FK
             # doesn't resolve, and the identity key must ship regardless.
             analysis_service_id=r.analysis_service_id,
+            provenance=r.provenance,
         ))
     return out
 

@@ -240,3 +240,94 @@ describe('AnalysisTable render — parent-native verb policy', () => {
     expect(spy).not.toHaveBeenCalled()
   })
 })
+
+// Task 7 (methods bench-stamping): the Wrench "Set method / instrument" row
+// action must render ONLY for mk1:-origin rows in a STAMPABLE_STATES review
+// state, under the default verb policy. parent-native is exercised
+// separately since it's expected to be display-only even for a row state
+// STAMPABLE_STATES would otherwise allow (see the 'parent-native: %s row is
+// display-only' pin above, which already covers 'to_be_verified').
+describe('AnalysisTable render — Set method / instrument gating', () => {
+  function renderDefaultTable(analyses: SenaiteAnalysis[]) {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    return render(
+      <QueryClientProvider client={qc}>
+        <AnalysisTable analyses={analyses} analyteNameMap={new Map()} />
+      </QueryClientProvider>
+    )
+  }
+
+  it('default policy: mk1 to_be_verified row offers it', async () => {
+    renderDefaultTable([row({ uid: 'mk1:20', review_state: 'to_be_verified' })])
+    await userEvent.click(screen.getByRole('button', { name: 'Analysis actions' }))
+    expect(
+      await screen.findByRole('menuitem', { name: /set method \/ instrument/i })
+    ).toBeInTheDocument()
+  })
+
+  it('default policy: non-mk1 (SENAITE) row in the same state does not offer it', async () => {
+    renderDefaultTable([row({ uid: 'senaite-uid-1', review_state: 'to_be_verified' })])
+    await userEvent.click(screen.getByRole('button', { name: 'Analysis actions' }))
+    // Other to_be_verified verbs (Retest/Verify/...) still render, proving
+    // the menu opened and this omission is real, not an empty menu.
+    expect(await screen.findByRole('menuitem', { name: 'Retest' })).toBeInTheDocument()
+    expect(
+      screen.queryByRole('menuitem', { name: /set method \/ instrument/i })
+    ).not.toBeInTheDocument()
+  })
+
+  it('default policy: mk1 verified row (outside STAMPABLE_STATES) does not offer it', async () => {
+    renderDefaultTable([row({ uid: 'mk1:21', review_state: 'verified' })])
+    await userEvent.click(screen.getByRole('button', { name: 'Analysis actions' }))
+    expect(await screen.findByRole('menuitem', { name: 'Retest' })).toBeInTheDocument()
+    expect(
+      screen.queryByRole('menuitem', { name: /set method \/ instrument/i })
+    ).not.toBeInTheDocument()
+  })
+
+  it('parent-native policy: mk1 to_be_verified row stays display-only (no action trigger at all)', () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <AnalysisTable
+          analyses={[row({ uid: 'mk1:22', review_state: 'to_be_verified' })]}
+          analyteNameMap={new Map()}
+          verbPolicy="parent-native"
+          resultsReadOnly
+          onParentRetest={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+    // Same idiom as the "display-only" pin above — parent-native suppresses
+    // the whole trigger when it has nothing to offer, and Set method/
+    // instrument must not be the thing that keeps it alive here.
+    expect(screen.queryByRole('button', { name: 'Analysis actions' })).not.toBeInTheDocument()
+  })
+})
+
+describe('default policy — parent_to_verify (read-flip main table seam)', () => {
+  // The registry-sourced main table surfaces canonical parent rows in
+  // 'parent_to_verify' (seam between #96's card-scoped verbs and the
+  // read-flip). The default policy offers exactly Verify — retest stays
+  // card-only: the generic endpoint tier-blocks parent retest and the
+  // Accu-Mk1 card owns that destructive confirm + cascade.
+  it('row offers exactly verify', () => {
+    expect(visibleRowTransitions(row({ review_state: 'parent_to_verify' }))).toEqual(['verify'])
+  })
+  it('bulk: all-parent_to_verify selection offers verify', () => {
+    expect(
+      deriveBulkActions([
+        row({ review_state: 'parent_to_verify' }),
+        row({ uid: 'mk1:8', review_state: 'parent_to_verify' }),
+      ])
+    ).toEqual({ actions: ['verify'], showPromote: false, showVarianceVerify: false })
+  })
+  it('bulk: mixed parent_to_verify + verified offers nothing (empty intersection)', () => {
+    expect(
+      deriveBulkActions([
+        row({ review_state: 'parent_to_verify' }),
+        row({ uid: 'mk1:8', review_state: 'verified' }),
+      ]).actions
+    ).toEqual([])
+  })
+})

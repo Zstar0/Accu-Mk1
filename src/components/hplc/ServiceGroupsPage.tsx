@@ -543,7 +543,7 @@ export default function ServiceGroupsPage() {
                         {filteredServices.length === 0 ? (
                           <p className="py-4 text-center text-sm text-muted-foreground">
                             {allServices.length === 0
-                              ? 'No analysis services found. Sync from SENAITE first.'
+                              ? 'No analysis services found. Create them on the Analysis Services page first.'
                               : 'No services match your filter.'}
                           </p>
                         ) : (

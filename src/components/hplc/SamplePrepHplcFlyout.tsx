@@ -1678,7 +1678,11 @@ export function SamplePrepHplcFlyout({ open, onClose, prep, match, readOnly = fa
         {/* Blend summary — shown when multiple analyte results exist */}
         {analyteResults.size > 1 && (() => {
           const allResults = [...analyteResults.values()]
-          const totalQty = allResults.reduce((sum, r) => sum + (r.quantity_mg ?? 0), 0)
+          // Round each analyte to the 2dp written to the AR, THEN sum (lab
+          // ruling 2026-08-20) — keeps this panel equal to the AR total.
+          const totalQty = allResults.reduce(
+            (sum, r) => sum + Math.round(((r.quantity_mg ?? 0)) * 100) / 100, 0
+          )
           const weightedPuritySum = allResults.reduce(
             (sum, r) => sum + (r.quantity_mg ?? 0) * (r.purity_percent ?? 0), 0
           )
