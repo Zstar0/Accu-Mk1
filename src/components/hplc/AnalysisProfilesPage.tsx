@@ -48,9 +48,12 @@ import {
   getAnalysisServices,
   getRideHosts,
   putRideHosts,
+  getMethods,
   type AnalysisProfile,
   type AnalysisServiceRecord,
+  type HplcMethod,
 } from '@/lib/api'
+import NewTestOnboardingGuide from '@/components/hplc/NewTestOnboardingGuide'
 import { useAnalysisProfiles, analysisProfilesQueryKeys } from '@/services/analysis-profiles'
 import { useVialRoles, vialRolesQueryKeys } from '@/services/vial-roles'
 import { useDepartments } from '@/services/departments'
@@ -138,6 +141,10 @@ export default function AnalysisProfilesPage() {
   // Membership editor state — an ORDERED list of service ids. Order becomes
   // sort_order on save: the row order in the profile's future COA section.
   const [allServices, setAllServices] = useState<AnalysisServiceRecord[]>([])
+  // Task 8: methods catalog, loaded alongside member services so "Suggest
+  // from methods" can resolve member default_method_ids to method rows
+  // without a dedicated endpoint. Best-effort — see openEdit's .catch below.
+  const [allMethods, setAllMethods] = useState<HplcMethod[]>([])
   const [selectedOrder, setSelectedOrder] = useState<number[]>([])
   const [loadingMembers, setLoadingMembers] = useState(false)
   const [savingMembers, setSavingMembers] = useState(false)
@@ -182,12 +189,36 @@ export default function AnalysisProfilesPage() {
     : undefined
   const suggestedRoleCode = suggestRoleCode(form.key || form.name, existingRoleCodes)
 
+  // Task 8: "Suggest from methods" — member service ids (selectedOrder) →
+  // their distinct default_method_id set → the resolved method rows → one
+  // formatted line per method, joined '; '. Pure client-side derivation, no
+  // new endpoint; recomputed each render off state already loaded for the
+  // membership editor above. Walked in selectedOrder (not allServices' own
+  // order) so the suggested line follows the same row order that becomes
+  // sort_order on save — the printed COA section order.
+  const memberDefaultMethodIds = [
+    ...new Set(
+      selectedOrder
+        .map(id => allServices.find(s => s.id === id)?.default_method_id)
+        .filter((id): id is number => id != null)
+    ),
+  ]
+  const suggestedMethods = memberDefaultMethodIds
+    .map(id => allMethods.find(m => m.id === id))
+    .filter((m): m is HplcMethod => m != null)
+  const suggestedMethodText = suggestedMethods.length
+    ? suggestedMethods
+        .map(m => `${m.code ?? m.name}${m.technique ? ` — ${m.technique}` : ''}${m.reference ? ` per ${m.reference}` : ''}`)
+        .join('; ')
+    : null
+
   // ── Panel helpers ──
 
   const openCreate = () => {
     setEditingProfile(null)
     setForm(DEFAULT_FORM)
     setAllServices([])
+    setAllMethods([])
     setSelectedOrder([])
     setMemberSearch('')
     setPanelOpen(true)
@@ -230,14 +261,19 @@ export default function AnalysisProfilesPage() {
     setLoadingMembers(true)
     setLoadingRideHosts(true)
     try {
-      const [services, memberIds, hosts] = await Promise.all([
+      // getMethods is best-effort here (.catch → []): it only feeds the
+      // "Suggest from methods" button, and must never turn a methods-catalog
+      // hiccup into a full membership-load failure for this panel.
+      const [services, memberIds, hosts, methods] = await Promise.all([
         getAnalysisServices(),
         getAnalysisProfileMembers(profile.id),
         getRideHosts(profile.id),
+        getMethods().catch(() => []),
       ])
       setAllServices(services)
       setSelectedOrder(memberIds)
       setRideHosts(hosts)
+      setAllMethods(methods)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to load membership data')
     } finally {
@@ -251,8 +287,17 @@ export default function AnalysisProfilesPage() {
     setEditingProfile(null)
     setForm(DEFAULT_FORM)
     setAllServices([])
+    setAllMethods([])
     setSelectedOrder([])
     setRideHosts([])
+  }
+
+  // Fills the coa_method_text field from suggestedMethodText — never
+  // auto-applied, only on click, and always replaces whatever is there
+  // (the authored-override contract from Task 6 is otherwise unchanged).
+  const applySuggestedMethodText = () => {
+    if (!suggestedMethodText) return
+    setForm(f => ({ ...f, coa_method_text: suggestedMethodText }))
   }
 
   // ── CRUD ──
@@ -523,10 +568,13 @@ export default function AnalysisProfilesPage() {
             </p>
           </div>
         </div>
-        <Button onClick={openCreate}>
-          <Plus className="mr-1 h-4 w-4" />
-          Add Profile
-        </Button>
+        <div className="flex items-center gap-2">
+          <NewTestOnboardingGuide />
+          <Button onClick={openCreate}>
+            <Plus className="mr-1 h-4 w-4" />
+            Add Profile
+          </Button>
+        </div>
       </div>
 
       {/* Error */}
@@ -1067,25 +1115,41 @@ export default function AnalysisProfilesPage() {
                   </div>
 
                   <div className="space-y-1.5">
-                    <div className="flex items-center gap-1.5">
-                      <label htmlFor="coa-method-text" className="text-sm font-medium">
-                        Method
-                      </label>
-                      <TooltipProvider delayDuration={200}>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Info className="h-3.5 w-3.5 text-muted-foreground cursor-default" />
-                          </TooltipTrigger>
-                          <TooltipContent side="right" className="max-w-xs">
-                            <div className="flex flex-col gap-1 p-1 text-xs font-mono">
-                              <div className="font-semibold border-b border-primary-foreground/20 pb-1">
-                                Certificate reporting
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <label htmlFor="coa-method-text" className="text-sm font-medium">
+                          Method
+                        </label>
+                        <TooltipProvider delayDuration={200}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Info className="h-3.5 w-3.5 text-muted-foreground cursor-default" />
+                            </TooltipTrigger>
+                            <TooltipContent side="right" className="max-w-xs">
+                              <div className="flex flex-col gap-1 p-1 text-xs font-mono">
+                                <div className="font-semibold border-b border-primary-foreground/20 pb-1">
+                                  Certificate reporting
+                                </div>
+                                <div>Test method printed on the certificate for this section.</div>
                               </div>
-                              <div>Test method printed on the certificate for this section.</div>
-                            </div>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        disabled={!suggestedMethodText}
+                        title={
+                          suggestedMethodText
+                            ? undefined
+                            : 'No member service resolves to a default method — assign default methods to member services first'
+                        }
+                        onClick={applySuggestedMethodText}
+                      >
+                        Suggest from methods
+                      </Button>
                     </div>
                     <Textarea
                       id="coa-method-text"
@@ -1398,7 +1462,7 @@ export default function AnalysisProfilesPage() {
                           {filteredAvailable.length === 0 ? (
                             <p className="py-4 text-center text-sm text-muted-foreground">
                               {allServices.length === 0
-                                ? 'No analysis services found. Sync from SENAITE first.'
+                                ? 'No analysis services found. Create them on the Analysis Services page first.'
                                 : 'No more services match your filter.'}
                             </p>
                           ) : (

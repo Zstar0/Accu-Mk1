@@ -13,6 +13,10 @@ vi.mock('@/lib/api', async importOriginal => {
     getAnalysisProfiles: vi.fn(),
     getAnalysisProfileMembers: vi.fn(),
     getAnalysisServices: vi.fn(),
+    // Task 8: the panel now also loads the methods catalog on open (feeds
+    // "Suggest from methods") — mock it so the panel doesn't fall through to
+    // the real implementation's fetch() during these unrelated tests.
+    getMethods: vi.fn(),
     createAnalysisProfile: vi.fn(),
     updateAnalysisProfile: vi.fn(),
     deleteAnalysisProfile: vi.fn(),
@@ -33,6 +37,7 @@ import {
   getAnalysisProfiles,
   getAnalysisProfileMembers,
   getAnalysisServices,
+  getMethods,
   updateAnalysisProfile,
   createAnalysisProfile,
   getRideHosts,
@@ -88,6 +93,7 @@ describe('AnalysisProfilesPage — COA display fields', () => {
     vi.mocked(getAnalysisProfiles).mockReset().mockResolvedValue([PROFILE])
     vi.mocked(getAnalysisProfileMembers).mockReset().mockResolvedValue([])
     vi.mocked(getAnalysisServices).mockReset().mockResolvedValue([])
+    vi.mocked(getMethods).mockReset().mockResolvedValue([])
     vi.mocked(createAnalysisProfile)
       .mockReset()
       .mockResolvedValue({ ...PROFILE, id: 99 })

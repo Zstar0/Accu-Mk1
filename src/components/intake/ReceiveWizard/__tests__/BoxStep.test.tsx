@@ -33,7 +33,7 @@ vi.mock('@/components/samples/usePrintLabel', () => ({
 
 import {
   listOrderBoxes, createBox, assignVialsToBox, unassignVialsFromBox, deleteBox, listSubSamples,
-  printBox, getVialRoles, type LimsBox, type SubSample, type VialRoleRow,
+  printBox, getVialRoles, getDepartments, type LimsBox, type SubSample, type VialRoleRow,
 } from '@/lib/api'
 
 vi.mock('@/lib/api', () => ({
@@ -45,6 +45,7 @@ vi.mock('@/lib/api', () => ({
   printBox: vi.fn(),
   listSubSamples: vi.fn(),
   getVialRoles: vi.fn(),
+  getDepartments: vi.fn(),
 }))
 
 import { BoxStep, boxKeyboardCoordinates, roleLabel } from '@/components/intake/ReceiveWizard/BoxStep'
@@ -57,6 +58,7 @@ const mockDeleteBox = vi.mocked(deleteBox)
 const mockListSubSamples = vi.mocked(listSubSamples)
 const mockPrintBox = vi.mocked(printBox)
 const mockGetVialRoles = vi.mocked(getVialRoles)
+const mockGetDepartments = vi.mocked(getDepartments)
 
 // The catalog-driven default: the same four boxable roles + order BoxStep
 // hardcoded before this task (hm stays boxable=false — spec-3 Handler
@@ -105,6 +107,7 @@ function setupBackend(vials: Vial[]) {
   let nextNumber = 1
 
   mockGetVialRoles.mockResolvedValue(DEFAULT_VIAL_ROLES)
+  mockGetDepartments.mockResolvedValue([])
   mockListSubSamples.mockResolvedValue({
     parent: { sub_sample_count: vials.length },
     sub_samples: vials,
@@ -304,18 +307,18 @@ describe('BoxStep — capacity-driven boxing', () => {
 
   describe('roleLabel — known roles + fallback for the next one', () => {
     it('labels the four boxable roles as before', () => {
-      expect(roleLabel('hplc')).toBe('HPLC')
-      expect(roleLabel('endo')).toBe('Endotoxin')
-      expect(roleLabel('ster')).toBe('Sterility')
-      expect(roleLabel('xtra')).toBe('Extras')
+      expect(roleLabel('hplc', DEFAULT_VIAL_ROLES)).toBe('HPLC')
+      expect(roleLabel('endo', DEFAULT_VIAL_ROLES)).toBe('Endotoxin')
+      expect(roleLabel('ster', DEFAULT_VIAL_ROLES)).toBe('Sterility')
+      expect(roleLabel('xtra', DEFAULT_VIAL_ROLES)).toBe('Extras')
     })
 
     it('labels hm as Heavy Metals, ahead of it becoming boxable', () => {
-      expect(roleLabel('hm')).toBe('Heavy Metals')
+      expect(roleLabel('hm', DEFAULT_VIAL_ROLES)).toBe('Heavy Metals')
     })
 
     it('falls back to the uppercased key for an unrecognized role', () => {
-      expect(roleLabel('future_role')).toBe('FUTURE_ROLE')
+      expect(roleLabel('future_role', DEFAULT_VIAL_ROLES)).toBe('FUTURE_ROLE')
     })
   })
 

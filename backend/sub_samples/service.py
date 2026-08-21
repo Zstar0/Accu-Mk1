@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import requests
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, List
 from sqlalchemy import select, func, delete, case
@@ -158,6 +159,93 @@ def _create_sample_row(db: Session, parent_sample_id: str, meta: dict) -> LimsSa
     return row
 
 
+QUARANTINE_SEP = "~Q~"
+
+
+@dataclass
+class _SystemActor:
+    """Minimal actor for automated flag creation from adoption guards —
+    flags permissions only need a non-None user (flags/permissions.py);
+    id 0 = system. Mirrors flags/watches._ActorRef."""
+    id: int = 0
+    role: Optional[str] = None
+
+
+def _flag_identity_collision(db: Session, sample: LimsSample,
+                             quarantine_id: Optional[str]) -> None:
+    """Identity_collision flag on the ORIGINAL sample. Dedupe shape depends
+    on the call: a refusal (quarantine_id=None) dedupes on ANY open
+    identity_collision flag for this sample -- one open flag already covers
+    the collision, there's no pointer to add. A quarantine event
+    (quarantine_id set) dedupes on the EXACT computed title instead, which
+    is deterministic per quarantine row (sample_id + uid fragment) -- this
+    keeps quarantine-signal replays idempotent (same title -> no dup)
+    WITHOUT letting an already-open pointer-less refusal flag suppress the
+    pointered flag a human needs to find the parked row.
+
+    NOTE flags.service.create_flag COMMITS the session — call only after all
+    row work is flushed, and never let flag machinery break the caller."""
+    try:
+        from flags import service as flags_service
+        from flags.models import FlagFlag
+        parked = (f"; incoming data parked on {quarantine_id}"
+                  if quarantine_id else "; refresh refused")
+        title = (f"Identity collision on {sample.sample_id}: incoming "
+                 f"SENAITE uid disagrees with stored uid{parked}")
+        dupe_query = select(FlagFlag).where(
+            FlagFlag.entity_type == "sample",
+            FlagFlag.entity_id == str(sample.id),
+            FlagFlag.type == "identity_collision",
+            FlagFlag.status == "open",
+        )
+        if quarantine_id:
+            dupe_query = dupe_query.where(FlagFlag.title == title)
+        existing_flag = db.execute(dupe_query).scalars().first()
+        if existing_flag is not None:
+            return
+        flags_service.create_flag(
+            db, user=_SystemActor(), entity_type="sample",
+            entity_id=str(sample.id), type="identity_collision",
+            title=title,
+            event_details={"automated": True,
+                           "quarantine_sample_id": quarantine_id},
+        )
+    except Exception as e:
+        log.error("sub_samples.identity_collision_flag_failed sample_id=%s err=%s",
+                  sample.sample_id, e)
+
+
+def _quarantine_collision(db: Session, existing: LimsSample,
+                          senaite_uid: str, meta: dict) -> LimsSample:
+    """S8 counter-regression guard: the signal's sample_id matches an existing
+    row whose stored uid disagrees with the incoming senaite_uid. The adopt is
+    REFUSED — the existing row keeps its identity, vials, and data; the
+    incoming order is parked, losslessly, on a NEW quarantined row under a
+    mangled sample_id. Deterministic id (sample_id + uid fragment) makes IS
+    signal replays idempotent. No native_id is minted for quarantine rows.
+    Interim scaffolding — retires when Mk1 mints its own sample ids."""
+    quarantine_id = f"{existing.sample_id}{QUARANTINE_SEP}{senaite_uid[:12]}"
+    row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == quarantine_id)
+    ).scalar_one_or_none()
+    if row is None:
+        row = _create_sample_row(db, quarantine_id, meta)
+        row.quarantined = True
+        row.quarantine_reason = (
+            f"identity collision: signal for {existing.sample_id} carried uid "
+            f"{senaite_uid}; stored uid {existing.external_lims_uid}"
+        )
+        db.flush()
+    log.error(
+        "sub_samples.identity_collision sample_id=%s stored_uid=%s "
+        "incoming_uid=%s quarantine_row=%s",
+        existing.sample_id, existing.external_lims_uid, senaite_uid,
+        quarantine_id,
+    )
+    _flag_identity_collision(db, existing, quarantine_id)
+    return row
+
+
 def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
                               senaite_uid: Optional[str], meta: dict) -> LimsSample:
     """Create/refresh a registry row from the IS creation signal
@@ -181,10 +269,20 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
     IS-side Idempotency-Key becomes meaningful only when a later slice stores
     it. An echoed-id retry without a senaite_uid preserves the row's native
     identity (external_lims_system stays "mk1"); if a later signal DOES carry
-    a senaite_uid, the attach wins."""
+    a senaite_uid, the attach wins only when the stored uid is NULL or
+    agrees; a disagreeing uid is an identity collision — the adopt is
+    refused and the incoming order parks on a quarantine row (S8 guard)."""
     meta = dict(meta)
     meta.setdefault("review_state", "sample_due")
-    if senaite_uid and not meta.get("uid"):
+    # Normalize unconditionally: the trusted senaite_uid PARAM must always
+    # win over whatever meta["uid"] the payload happens to carry. A
+    # self-inconsistent payload (senaite_uid agreeing with the stored uid,
+    # but meta["uid"] carrying something else) would otherwise pass the
+    # mismatch guard below on the param, then _populate_basic_info would
+    # silently write the payload's disagreeing meta["uid"] -- a rebind the
+    # guard just approved differently. Also keeps a quarantine row's stored
+    # uid consistent with the uid fragment baked into its mangled id.
+    if senaite_uid:
         meta["uid"] = senaite_uid
 
     existing = None
@@ -194,6 +292,9 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
         ).scalar_one_or_none()
 
     if existing:
+        if (senaite_uid and existing.external_lims_uid
+                and existing.external_lims_uid != senaite_uid):
+            return _quarantine_collision(db, existing, senaite_uid, meta)
         prior_status = existing.status
         prior_uid = existing.external_lims_uid
         prior_system = existing.external_lims_system
@@ -371,10 +472,44 @@ def _refresh_parent_from_senaite(db: Session, parent: LimsSample) -> None:
     log so drift caught here (not via an explicit mk1/senaite hook) still
     shows up in history. The recorder's 60-min explained-window means this
     is a no-op when a mk1/senaite row already accounts for the transition.
-    Logging-only failure: never let the log write break the refresh."""
+    Logging-only failure: never let the log write break the refresh.
+
+    S8 guard: a fetch whose uid disagrees with the stored uid refuses the
+    whole refresh (fail closed) and raises an identity_collision flag. A
+    fetch missing `uid` entirely never NULLs a stored uid either — that
+    would silently prime the NULL-adopt rule to rebind the row to ANY
+    future uid on the next refresh."""
     old_status = parent.status
     meta = senaite.fetch_parent_metadata(parent.sample_id)
+    incoming_uid = meta.get("uid")
+    if (parent.external_lims_uid and incoming_uid
+            and parent.external_lims_uid != incoming_uid):
+        # S8 fail-closed: the id string now resolves to a DIFFERENT SENAITE
+        # object (external counter regression). Refusing the refresh keeps
+        # this row's data frozen instead of silently rebinding it; the flag
+        # routes a human to resolve. NOTE: this also fail-closes the
+        # parent_uid_stale heal path (_create_sub_sample_legacy) — a dead
+        # stored uid now needs manual resolution, by design.
+        log.error(
+            "sub_samples.identity_collision_refresh sample_id=%s "
+            "stored_uid=%s incoming_uid=%s; refresh refused",
+            parent.sample_id, parent.external_lims_uid, incoming_uid,
+        )
+        _flag_identity_collision(db, parent, quarantine_id=None)
+        return
+    prior_uid = parent.external_lims_uid
+    prior_system = parent.external_lims_system
     _populate_basic_info(parent, meta)
+    if not incoming_uid and prior_uid:
+        # Malformed/partial fetch response: restore identity instead of
+        # letting _populate_basic_info NULL it (same prior-identity-restore
+        # idiom as upsert_sample_from_signal's uid-less-replay guard).
+        parent.external_lims_uid = prior_uid
+        parent.external_lims_system = prior_system
+        log.warning(
+            "sub_samples.refresh_uid_missing sample_id=%s; stored uid preserved",
+            parent.sample_id,
+        )
     db.flush()
     if parent.status != old_status:
         from workflow.sample_log import record_sample_transition
@@ -1134,22 +1269,6 @@ def _apply_variance_override(sample_id: str, result: Optional[dict]) -> Optional
     return result
 
 
-# Bucket (== vial assignment_role) -> WP service key carrying variance counts.
-# Retained for two reasons:
-#   1. A test asserts equality with lims_analyses.service._ROLE_VARIANCE_KEYS
-#      (the variance_verify gate) — this constant is that gate's reference.
-#   2. Canonical reference of the bucket→WP-key mapping for documentation.
-# NOTE: derive_variance_demand no longer iterates this constant. It now resolves
-# the hplc bucket inline in a BW-aware manner (reads hplcpurity_identity OR
-# bac_water_panel; see derive_variance_demand docstring). Coarse keys only,
-# never per-analyte (variance addon spec, "The scoping rule").
-VARIANCE_BUCKET_KEYS: dict[str, str] = {
-    "hplc": "hplcpurity_identity",
-    "endo": "endotoxin",
-    "ster": "sterility_pcr",
-}
-
-
 def derive_variance_demand(services: dict) -> dict:
     """Per-bucket variance target (PAID REPLICATES) from a WP services payload.
 
@@ -1183,13 +1302,29 @@ def variance_lock_required(services: Optional[dict], variance_locked_at) -> bool
     return purchased and variance_locked_at is None
 
 
-def derive_base_demand(services: dict, db=None) -> dict:
+def derive_base_demand(services: dict, db=None, snapshot: Optional[dict] = None) -> dict:
     """Pre-variance vial demand per bucket (the lab-protocol baseline).
 
     db=None -> pure legacy map (unchanged behavior, used by legacy callers
     and as the shadow reference). With a db, the catalog is authoritative;
+    on divergence the catalog value prevails and the divergence is logged —
+    the legacy map is a shadow reference, removed one release after the S9
+    flip (2026-08-14).
+
     on any divergence in a LEGACY bucket the legacy value wins and an error
     is logged (fail-open to known-good, never to under-provisioning).
+
+    snapshot (task 6, fix round 1 — per-profile hybrid merge): threaded
+    straight through to derive_base_demand_catalog / resolve_catalog_
+    fulfillment when db is given. `legacy` above is always computed from
+    the LIVE `services` dict (hplc/endo/ster have no frozen representation
+    of their own — a fixed boolean-per-key read); `catalog` merges the
+    frozen snapshot with a live resolution of any services key the
+    snapshot didn't cover (a post-order add-on), so a legacy-bucket
+    purchase made after registration now agrees with `legacy` here too —
+    demand_divergence still exists as a safety net for a genuine mismatch,
+    not as the expected steady-state noise it would otherwise be for every
+    post-registration legacy-bucket purchase.
     """
     hplc = bool(services.get("hplcpurity_identity") or services.get("bac_water_panel"))
     endo = bool(services.get("endotoxin"))
@@ -1197,35 +1332,59 @@ def derive_base_demand(services: dict, db=None) -> dict:
     legacy = {
         "hplc": 1 if hplc else 0,
         "endo": 1 if endo else 0,
-        "ster": 2 if ster else 0,
+        # Ruling 2026-08-05: PCR and USP<71> are separately sold products, one
+        # vial each. Was 2 back when a single "Sterility" add-on covered both
+        # tests from one pair of vials. Matches
+        # analysis_profiles.sterility_pcr.vials_required, which this map used to
+        # override.
+        "ster": 1 if ster else 0,
     }
     if db is None:
         return legacy
     from sub_samples.catalog_demand import derive_base_demand_catalog
-    catalog = derive_base_demand_catalog(db, services)
+    catalog = derive_base_demand_catalog(db, services, snapshot=snapshot)
+    # S9 ruling 2026-08-14: the catalog is authoritative; the legacy ternary
+    # above is a shadow reference only. On divergence the catalog value
+    # prevails and the divergence is logged (ERROR: ops must see it — the
+    # boot-time verify_demand_catalog keeps misconfigured states loud).
+    # MK1_DEMAND_LEGACY_WINS=1 restores the old clamp as a deploy rollback
+    # path; both the switch and the shadow compare are slated for removal
+    # one release after the flip.
+    legacy_wins = os.environ.get("MK1_DEMAND_LEGACY_WINS") == "1"
     for bucket, legacy_n in legacy.items():
         if catalog.get(bucket, 0) != legacy_n:
-            log.error(
-                "demand_divergence bucket=%s legacy=%s catalog=%s services=%s",
-                bucket, legacy_n, catalog.get(bucket, 0), sorted(services or {}),
-            )
-            catalog[bucket] = legacy_n
+            if legacy_wins:
+                log.error(
+                    "demand_divergence bucket=%s legacy_shadow=%s catalog=%s services=%s"
+                    " (legacy clamp active — MK1_DEMAND_LEGACY_WINS)",
+                    bucket, legacy_n, catalog.get(bucket, 0), sorted(services or {}),
+                )
+                catalog[bucket] = legacy_n
+            else:
+                log.error(
+                    "demand_divergence bucket=%s legacy_shadow=%s catalog=%s services=%s"
+                    " (catalog prevails)",
+                    bucket, legacy_n, catalog.get(bucket, 0), sorted(services or {}),
+                )
     return catalog
 
 
-def derive_demand(services: dict, db=None) -> dict:
+def derive_demand(services: dict, db=None, snapshot: Optional[dict] = None) -> dict:
     """Translate WP services dict to CORE vial demand per bucket.
 
     HPLC is satisfied by either `hplcpurity_identity` or `bac_water_panel` —
-    both result in chromatography vials. Sterility is the only bucket that
-    needs more than one vial (2 per the lab's protocol).
+    both result in chromatography vials. No legacy bucket needs more than
+    one vial (ruling 2026-08-05: PCR and USP<71> are separately sold
+    products, one vial each).
 
     Explicit-bucket model (2026-06-10-variance-bucket-assignment-design.md §2):
     variance is a SEPARATE bucket with its own target (derive_variance_demand),
     not an inflation of core demand — the old max(base, n) math is retired.
     Core demand therefore equals the base lab-protocol demand.
+
+    snapshot (task 6): threaded straight through to derive_base_demand.
     """
-    return derive_base_demand(services, db=db)
+    return derive_base_demand(services, db=db, snapshot=snapshot)
 
 
 def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
@@ -1292,9 +1451,26 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
         }
 
     services = services_resp.get("services") or {}
-    demand = derive_demand(services, db=db)  # core demand == base (inflation retired)
+    # Sections/display parity with set_assignment_role's union hook (spec
+    # 2026-08-20-rider-vial-visibility): a lab-added profile living only
+    # as a live 'ordered' placeholder must render its chip. Display-only —
+    # demand/auto-assign inputs deliberately stay on the raw order dict.
+    from lims_analyses.manage_native import placeholder_profile_keys
+    services_for_sections = {**(services or {}), **placeholder_profile_keys(db, parent)}
+    # S4 snapshot rider (task 6, fix round 1 — per-profile hybrid merge): a
+    # non-NULL catalog_snapshot freezes what THIS sample's demand/fulfillment
+    # resolves against, PER PROFILE — a later catalog edit to a profile
+    # already covered by the snapshot can never retroactively reprovision an
+    # already-registered sample. A `services` key the snapshot never saw
+    # (a post-order add-on) still resolves live and merges in on top,
+    # exactly as if it had shipped with the original order. NULL (pre-slice-4
+    # rows, or a sample whose registration signal never reached the bg
+    # stamp) falls through to the live catalog entirely, unchanged from
+    # before this task.
+    snapshot = parent.catalog_snapshot
+    demand = derive_demand(services, db=db, snapshot=snapshot)  # core demand == base (inflation retired)
     variance = derive_variance_demand(services)
-    base_demand = derive_base_demand(services, db=db)
+    base_demand = derive_base_demand(services, db=db, snapshot=snapshot)
 
     # Variance lock guard: a locked set blocks re-assignment of its members
     # (spec §5), so a locked parent must NOT have vials auto-assigned under it.
@@ -1319,7 +1495,7 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
             "is_unreachable": False,
             "vials": locked_vials,
             "container_mode": parent.container_mode,
-            "sections": _build_vial_plan_sections(db, demand, locked_vials, services),
+            "sections": _build_vial_plan_sections(db, demand, locked_vials, services_for_sections, snapshot=snapshot),
         }
 
     from catalog.roles import real_bucket_codes
@@ -1370,19 +1546,23 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
         "is_unreachable": False,
         "vials": assigned,
         "container_mode": parent.container_mode,
-        "sections": _build_vial_plan_sections(db, demand, assigned, services),
+        "sections": _build_vial_plan_sections(db, demand, assigned, services_for_sections, snapshot=snapshot),
     }
 
 
 def _build_vial_plan_sections(db: Session, demand: dict, vials: list[dict],
-                              services: dict) -> list[dict]:
+                              services: dict, snapshot: Optional[dict] = None) -> list[dict]:
     """Department-grouped role/profile metadata (spec 4, Task 8) — the data
     contract Task 9's dynamic assignment page renders from.
 
     Built fresh on every call from role_registry + demand + `vials` (the SAME
     list the caller is about to return as the response's own `vials` — never
     a separate DB re-read, so sections and vials can never disagree) +
-    catalog fulfillment (host/rider profile ids resolved from `services`).
+    catalog fulfillment (host/rider profile ids resolved from `services`,
+    or from `snapshot` when non-NULL — task 6 — so a locked-in demand number
+    and its displayed host/rider profile list can never disagree either).
+    The key/name lookup below (profile_by_id) stays a live read regardless —
+    it's a display string, not what-the-customer-bought.
 
     Inclusion: a role code enters sections iff it has demand > 0 OR a
     non-parent vial currently carries it. Parent-carried roles don't count on
@@ -1404,7 +1584,7 @@ def _build_vial_plan_sections(db: Session, demand: dict, vials: list[dict],
     from sub_samples.catalog_demand import resolve_catalog_fulfillment
 
     registry = role_registry(db)
-    fulfillment = resolve_catalog_fulfillment(db, services)
+    fulfillment = resolve_catalog_fulfillment(db, services, snapshot=snapshot)
 
     carried = {
         v["assignment_role"] for v in vials
@@ -1427,6 +1607,41 @@ def _build_vial_plan_sections(db: Session, demand: dict, vials: list[dict],
             p.id: p for p in
             db.query(AnalysisProfile).filter(AnalysisProfile.id.in_(all_ids)).all()
         }
+
+    # Rider landing (spec 2026-08-20-rider-vial-visibility): which of THIS
+    # plan's vials hold a live rider edge, per profile — one query, keyed by
+    # profile id. Display metadata only; failures here must never 500 the
+    # vial plan, so the shape stays a plain default-empty lookup.
+    # Variance replicates are excluded even when they hold a rider edge
+    # (write_custody_edges writes rider edges per-vial, kind-blind) — the
+    # seeder never puts rider work on them, and the chip must point at where
+    # the rider's analysis actually runs (Handler UAT find, PB-0158
+    # "→ S01, S06"). NULL kind is a real core-shaped state (role-only PATCH)
+    # and stays included.
+    rider_vials_by_pid: dict = {}
+    vial_sample_ids = [v["sample_id"] for v in vials if not v.get("is_parent")]
+    if all_ids and vial_sample_ids:
+        from sqlalchemy import or_
+        from models import VialProfileAssignment
+        edge_rows = db.execute(
+            select(VialProfileAssignment.analysis_profile_id,
+                   LimsSubSample.sample_id)
+            .join(LimsSubSample,
+                  LimsSubSample.id == VialProfileAssignment.lims_sub_sample_pk)
+            .where(
+                VialProfileAssignment.relation == "rider",
+                VialProfileAssignment.superseded_at.is_(None),
+                VialProfileAssignment.analysis_profile_id.in_(all_ids),
+                LimsSubSample.sample_id.in_(vial_sample_ids),
+                or_(
+                    LimsSubSample.assignment_kind.is_(None),
+                    LimsSubSample.assignment_kind != "variance",
+                ),
+            )
+            .order_by(LimsSubSample.vial_sequence)
+        ).all()
+        for pid, sid in edge_rows:
+            rider_vials_by_pid.setdefault(pid, []).append(sid)
 
     sections_by_dept: dict = {}
     for code in candidates:
@@ -1454,7 +1669,11 @@ def _build_vial_plan_sections(db: Session, demand: dict, vials: list[dict],
             for pid in rf.rider_profile_ids:
                 p = profile_by_id.get(pid)
                 if p is not None:
-                    profiles.append({"id": p.id, "key": p.key, "name": p.name, "relation": "rider"})
+                    profiles.append({
+                        "id": p.id, "key": p.key, "name": p.name,
+                        "relation": "rider",
+                        "host_vials": rider_vials_by_pid.get(pid, []),
+                    })
 
         section = sections_by_dept.setdefault(dept.id, {
             "department_id": dept.id,
@@ -1620,6 +1839,56 @@ def _drop_stale_role_rows(db: Session, *, sub: LimsSubSample, old_role: Optional
     return n
 
 
+def _drop_stale_rider_rows(db: Session, *, sub: LimsSubSample,
+                           prev_rider_pids: set) -> int:
+    """Rider companion to _drop_stale_role_rows (spec
+    2026-08-20-rider-vial-visibility): that cleanup is DEPARTMENT-keyed, so a
+    rider row whose service shares the new role's department survives a flip
+    even though its rider edge is gone. Drop this vial's pristine rows whose
+    service belongs to a profile that just LOST its rider edge and holds no
+    current edge of any relation. Same pristine predicate as
+    _drop_stale_role_rows — worked rows are never touched."""
+    if not prev_rider_pids:
+        return 0
+    from sub_samples.custody import current_custody
+
+    current_pids = {e.analysis_profile_id for e in current_custody(db, sub.id)}
+    stale_pids = prev_rider_pids - current_pids
+    if not stale_pids:
+        return 0
+    from models import AnalysisProfile, LimsAnalysis, LimsAnalysisTransition
+
+    svc_ids: set = set()
+    for pid in stale_pids:
+        prof = db.get(AnalysisProfile, pid)
+        if prof is not None:
+            svc_ids.update(s.id for s in prof.analysis_services)
+        else:
+            log.info("sub_samples.rider_cleanup_unknown_profile sub=%s profile_id=%s",
+                     sub.sample_id, pid)
+    if not svc_ids:
+        return 0
+    stale = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sub_sample_pk == sub.id,
+            LimsAnalysis.analysis_service_id.in_(svc_ids),
+            LimsAnalysis.review_state == "unassigned",
+            LimsAnalysis.result_value.is_(None),
+            LimsAnalysis.retest_of_id.is_(None),
+        )
+    ).scalars().all()
+    n = 0
+    for row in stale:
+        db.execute(delete(LimsAnalysisTransition).where(
+            LimsAnalysisTransition.analysis_id == row.id))
+        db.delete(row)
+        n += 1
+    if n:
+        db.flush()
+        log.info("sub_samples.rider_cleanup sub=%s dropped=%s", sub.sample_id, n)
+    return n
+
+
 def set_customer_remarks(db: Session, sample_id: str, remarks: str,
                          include: bool = True,
                          user_id: Optional[int] = None) -> dict:
@@ -1767,8 +2036,31 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
                 wp_services if wp_services is not None
                 else _fetch_wp_services_for_parent(parent_sid) or {}
             )
-        from sub_samples.custody import write_custody_edges
-        write_custody_edges(db, sub=sub, role=role, wp_services=services_map, user_id=user_id)
+            # Manage-analyses slice (ruling A): a profile the lab added on the
+            # parent (live 'ordered' placeholders) is not in the WP order, so
+            # union its key in — resolve_catalog_fulfillment then hosts it and
+            # the seeder seeds it. Adds nothing for a normal order (those keys
+            # are already present); reads only, never writes. Placeholder
+            # keys are merged in LAST, so on a same-key collision a live
+            # 'ordered' placeholder (True) wins over an incoming WP False —
+            # the placeholder is the parent's current truth of what's on the
+            # sample; removing it goes through Manage Analyses, not the order.
+            from lims_analyses.manage_native import placeholder_profile_keys
+            services_map = {**services_map, **placeholder_profile_keys(db, parent_row)}
+        from sub_samples.custody import current_custody, write_custody_edges
+        prev_rider_pids = {
+            e.analysis_profile_id
+            for e in current_custody(db, sub.id)
+            if e.relation == "rider"
+        }
+        # S4 snapshot rider (task 6): thread the parent's frozen catalog
+        # resolution (NULL for pre-slice-4 rows) so custody edges resolve
+        # against what was purchased at registration, not the live catalog.
+        snapshot = parent_row.catalog_snapshot if parent_row is not None else None
+        write_custody_edges(
+            db, sub=sub, role=role, wp_services=services_map, user_id=user_id,
+            snapshot=snapshot,
+        )
         # flush (not commit): makes the fresh custody rows visible to
         # in-transaction queries (Task 6's seeder) under production
         # SessionLocal's autoflush=False. Still one transaction, one commit
@@ -1780,6 +2072,7 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
         # analyses. Runs in THIS transaction (before the commit=False seed and
         # the single db.commit() below), so flip + cleanup + seed are atomic.
         _drop_stale_role_rows(db, sub=sub, old_role=old_role, new_role=role, registry=registry)
+        _drop_stale_rider_rows(db, sub=sub, prev_rider_pids=prev_rider_pids)
         # Phase 2 (mk1-native-analyses): if this assignment transitioned the
         # vial into a real (non-XTRA) role, seed its lims_analyses rows.
         # Idempotent — re-running on an already-seeded vial is a no-op.

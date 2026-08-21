@@ -370,3 +370,49 @@ def test_vial_tier_senaite_shape_unchanged_by_extraction(db_session):
     assert r.method_uid == str(method.id)
     assert r.analyst == "tech@lab.test"
     assert r.promoted_to_parent_id is None
+    # Task 7 fix round 1 (R-P2-3): analysis_service_id straight off the row,
+    # so the FE can key its method-catalog lookup by id instead of a
+    # keyword scan (keywords aren't unique across service origins).
+    assert r.analysis_service_id == svc.id
+
+
+def test_serialized_row_carries_its_own_analysis_service_id(db_session):
+    """R-P2-3: two rows with services that share a keyword must each report
+    THEIR OWN analysis_service_id, not fall back to a keyword-matched (and
+    possibly wrong) one -- the FE bug this backs is a keyword-only scan
+    resolving the wrong service when keywords collide across origins."""
+    from lims_analyses.service import list_analyses_in_senaite_shape
+
+    parent = _mk_parent(db_session, "TEST-L4-DUALSVC-PARENT")
+    sub = LimsSubSample(
+        sample_id="TEST-L4-DUALSVC-PARENT-S01",
+        parent_sample_pk=parent.id,
+        vial_sequence=1,
+        external_lims_uid="TEST-L4-DUALSVC-UID-S01",
+    )
+    db_session.add(sub)
+    db_session.flush()
+
+    # Same keyword, two distinct service rows -- the exact collision shape
+    # the migration pattern produces (native + legacy service sharing a
+    # keyword during a phase-out window).
+    svc_a = _mk_service(db_session, "DUAL-KW", "Dual A")
+    svc_b = _mk_service(db_session, "DUAL-KW", "Dual B")
+
+    row_a = LimsAnalysis(
+        lims_sub_sample_pk=sub.id, analysis_service_id=svc_a.id,
+        keyword=svc_a.keyword, title=svc_a.title, review_state="unassigned",
+    )
+    row_b = LimsAnalysis(
+        lims_sub_sample_pk=sub.id, analysis_service_id=svc_b.id,
+        keyword=svc_b.keyword, title=svc_b.title, review_state="unassigned",
+    )
+    db_session.add_all([row_a, row_b])
+    db_session.flush()
+
+    rows = list_analyses_in_senaite_shape(db_session, host_kind="sub_sample", host_pk=sub.id)
+    by_uid = {r.uid: r for r in rows}
+
+    assert by_uid[f"mk1:{row_a.id}"].analysis_service_id == svc_a.id
+    assert by_uid[f"mk1:{row_b.id}"].analysis_service_id == svc_b.id
+    assert by_uid[f"mk1:{row_a.id}"].analysis_service_id != svc_b.id

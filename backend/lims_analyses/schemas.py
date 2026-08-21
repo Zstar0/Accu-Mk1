@@ -88,6 +88,9 @@ class TransitionRequest(BaseModel):
     kind: TransitionKind
     result_value: Optional[str] = None
     reason: Optional[str] = None
+    # slice 2: optional stamping at submit; ignored-forbidden on other kinds
+    method_id: Optional[int] = None
+    instrument_id: Optional[int] = None
 
 
 class SetReportableRequest(BaseModel):
@@ -247,6 +250,16 @@ class SenaiteShapeAnalysisResponse(BaseModel):
     # _serialize_senaite_shape_rows. None only when the service FK is
     # somehow unresolvable (should not happen in practice).
     service_origin: Optional[str] = None
+    # S3 Task 7: the row's OWN analysis_service_id — the native identity key
+    # the FE joins parent rows to vial rows on; also consumed by the method
+    # override dialog (R-P2-3: id-keyed service resolution beats keyword
+    # scans, which collide across origins). Read off the row, never off the
+    # resolved service. Keyword stays alongside as display/compat alias.
+    analysis_service_id: Optional[int] = None
+    # Manage-analyses slice: 'ordered' (registration/lab placeholder) vs
+    # 'canonical' (promoted result) vs 'shadow'. The overlay's native block
+    # enables remove only on 'ordered' rows. None for legacy callers.
+    provenance: Optional[str] = None
 
 
 # ─── Phase 4a: promote_to_parent response shapes ─────────────────────────────
@@ -276,6 +289,10 @@ class PromoteResponse(BaseModel):
 
 class ParentRetestRequest(BaseModel):
     keyword: str
+    # S3: the native identity key. When present it alone identifies the parent
+    # row (keyword is ignored for the match); keyword stays the compatibility
+    # alias and remains the only thing today's FE sends.
+    analysis_service_id: Optional[int] = None
     reason: Optional[str] = None
 
 
@@ -295,3 +312,55 @@ class SourceRetestResponse(BaseModel):
     new_row_id: int
     parent_unverified: bool
     parent_review_state: Optional[str] = None
+
+
+# ── Native Manage Analyses (manage_native.py) ─────────────────────────────────
+
+class NativeProfileMemberOut(BaseModel):
+    service_id: int
+    keyword: str
+    title: str
+
+
+class NativeProfileOut(BaseModel):
+    id: int
+    key: str
+    name: str
+    fulfillment_role: Optional[str] = None
+    members: List[NativeProfileMemberOut]
+    on_sample: Literal["none", "partial", "full"]
+    host_vials: List[str]
+
+
+class AddNativeProfileRequest(BaseModel):
+    profile_id: int
+
+
+class NativeProfileHostOut(BaseModel):
+    vial_id: str
+    edge_created: bool
+    vial_rows_created: int
+
+
+class AddNativeProfileResponse(BaseModel):
+    profile_key: str
+    profile_name: str
+    placeholders_created: int
+    placeholders_existing: int
+    hosts: List[NativeProfileHostOut]
+    no_host_vial: bool
+
+
+class RemoveNativeAnalysisResponse(BaseModel):
+    analysis_id: int
+    keyword: str
+    analysis_service_id: int
+    vial_rows_deleted: int
+    vial_rows_rejected: int
+    edges_superseded: int
+
+
+class ResyncFromOrderResponse(BaseModel):
+    placeholders_created: int
+    edges_created: int
+    vial_rows_created: int

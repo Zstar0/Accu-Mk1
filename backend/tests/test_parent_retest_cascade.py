@@ -16,6 +16,18 @@ Tests (≥5):
 from __future__ import annotations
 
 import pytest
+
+@pytest.fixture(autouse=True)
+def _stub_parent_verify_tee(monkeypatch):
+    """apply_transition's parent-tier verify now tees SENAITE-origin
+    sign-offs to SENAITE (seam fix 2026-08-20). These tests exercise
+    Mk1-side mechanics only; the tee's own coverage lives in
+    test_parent_verify_tee.py / test_senaite_writeback.py."""
+    monkeypatch.setattr(
+        "lims_analyses.senaite_writeback.writeback_parent_verify",
+        lambda *args, **kwargs: "verified",
+    )
+
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 

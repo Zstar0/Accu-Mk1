@@ -125,6 +125,7 @@ import {
   listNativeParentAnalysesShaped,
   parentRetestAnalysis,
   vialSourceRetest,
+  listNativeAnalysisServices,
   type VialRoleRow,
   type Department,
   type SenaiteAnalysis,
@@ -135,6 +136,8 @@ import {
   resolvePromotedSourceDialogParentState,
   runPromotedSourceRetest,
 } from '@/lib/native-parent-analyses'
+import { NativeManageAnalysesBlock } from '@/components/senaite/NativeManageAnalysesBlock'
+import { pickerSourceFor } from '@/lib/manage-analyses-picker'
 import {
   ParentRetestConfirmDialog,
   type ParentRetestConfirmState,
@@ -188,11 +191,13 @@ import {
   PARENT_OVERLAY_QUERY_KEY,
   invalidateParentVialOverlay,
 } from '@/lib/vial-assignment'
+import type { VialAssignment } from '@/lib/vial-assignment'
 import { vialLabel, vialPosition, vialTotal } from '@/lib/vial-label'
 import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { useVialRoles } from '@/services/vial-roles'
 import { useDepartments } from '@/services/departments'
+import { ROLE_COLOR_TEXT, roleColorForCode } from '@/lib/role-display'
 import { SamplePrepHplcFlyout } from '@/components/hplc/SamplePrepHplcFlyout'
 import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
 import { SampleRegistryDebug } from '@/components/senaite/SampleRegistryDebug'
@@ -235,6 +240,25 @@ import {
 // they must stay identical or the post-edit refetch silently no-ops. Sourced
 // from lib/vial-assignment so the role-change invalidate helper can't drift.
 const VIAL_OVERLAY_QUERY_KEY = PARENT_OVERLAY_QUERY_KEY
+
+// Final-review ruling (2026-08-20, rider-vial-visibility): the native card's
+// vialAssignmentByKeyword map feeds the shared AnalysisTable, which also uses
+// a single-match (`editable: true`) entry to overlay that vial's Method/
+// Instrument/Analyst onto the row. Spec S4 scoped the native card to chips
+// only — the M/I/A overlay was never ruled on for native rows. Force
+// `editable: false` on every entry before handing the map to the native
+// card so the chips still render (they read `matches`, not `editable`) but
+// the overlay never engages. The SENAITE map (vialAssignmentByKeyword) is
+// untouched — this only applies to the native card's map.
+function chipsOnlyVialAssignmentMap(
+  map: Map<string, VialAssignment>,
+): Map<string, VialAssignment> {
+  const out = new Map<string, VialAssignment>()
+  for (const [keyword, assignment] of map) {
+    out.set(keyword, { ...assignment, editable: false })
+  }
+  return out
+}
 
 // --- COA Console ---
 
@@ -3369,12 +3393,14 @@ export function NativeParentAnalysesCard({
   isParentPage,
   lookup,
   promotionsByKeyword,
+  vialAssignmentByKeyword,
   onParentDataStale,
 }: {
   sampleId: string | null | undefined
   isParentPage: boolean
   lookup: SenaiteLookupResult | null
   promotionsByKeyword: Map<string, ParentPromotionInfo>
+  vialAssignmentByKeyword?: Map<string, VialAssignment>
   onParentDataStale?: () => void
 }) {
   const queryClient = useQueryClient()
@@ -3473,6 +3499,7 @@ export function NativeParentAnalysesCard({
         analyses={analyses}
         analyteNameMap={EMPTY_ANALYTE_NAME_MAP}
         promotionsByKeyword={promotionsByKeyword}
+        vialAssignmentByKeyword={vialAssignmentByKeyword}
         headerContent={header}
         hideProgress
         resultsReadOnly
@@ -3817,23 +3844,38 @@ export function SampleDetails() {
 
   // Parent-page only (memo would not help: useQueries' outer array churns each
   // render). The join is a cheap pure function.
+  const overlayVialInputs = overlayVials.map((v, i) => ({
+    sampleId: v.sample_id,
+    label: vialLabel(v.vial_sequence, subData?.parent.container_mode ?? false),
+    analyses: overlayAnalysesQueries[i]?.data ?? [],
+    assignmentRole: v.assignment_role, // vial bench role
+    assignmentKind: v.assignment_kind, // explicit variance bucket — drives overlay treatment
+    varianceLocked: lockedVialIds.has(v.sample_id), // in the LOCKED variance set → Lock icon
+  }))
   const vialAssignmentByKeyword =
     parentSampleId !== null || !data?.analyses
       ? undefined
       : buildVialAssignmentMap(
           data.analyses,
-          overlayVials.map((v, i) => ({
-            sampleId: v.sample_id,
-            label: vialLabel(
-              v.vial_sequence,
-              subData?.parent.container_mode ?? false
-            ),
-            analyses: overlayAnalysesQueries[i]?.data ?? [],
-            assignmentRole: v.assignment_role, // vial bench role
-            assignmentKind: v.assignment_kind, // explicit variance bucket — drives overlay treatment
-            varianceLocked: lockedVialIds.has(v.sample_id), // in the LOCKED variance set → Lock icon
-          })),
+          overlayVialInputs,
           analyteNameMap // analyte bridge: ANALYTE-{n}-PUR/QTY ↔ PUR_/QTY_<X>
+        )
+
+  // Native card chips (spec 2026-08-20-rider-vial-visibility): the SENAITE
+  // map above is keyed by SENAITE parent keywords, which never contain
+  // native rows — build the native card its own map from ITS rows. Tier 0
+  // (analysis_service_id) joins exactly; no analyte bridge needed.
+  const { data: nativeShapedRows } = useQuery({
+    queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY, sampleId, 'senaite_shape'],
+    queryFn: () => listNativeParentAnalysesShaped(sampleId!),
+    enabled: parentSampleId === null && !!sampleId,
+    staleTime: 30_000,
+  })
+  const nativeVialAssignmentByKeyword =
+    parentSampleId !== null || !nativeShapedRows?.length
+      ? undefined
+      : chipsOnlyVialAssignmentMap(
+          buildVialAssignmentMap(nativeShapedRows, overlayVialInputs)
         )
 
   const { data: parentSummary } = useQuery({
@@ -4096,7 +4138,10 @@ export function SampleDetails() {
     if (availableServices.length === 0) {
       setServicesLoading(true)
       try {
-        const services = await listAnalysisServices()
+        const services =
+          pickerSourceFor(parentSampleId ?? null, data?.sample_uid) === 'native'
+            ? await listNativeAnalysisServices()
+            : await listAnalysisServices()
         setAvailableServices(services)
       } catch {
         toast.error('Failed to load analysis services')
@@ -4106,11 +4151,16 @@ export function SampleDetails() {
     }
   }
 
-  const handleAddAnalysis = async (service: AnalysisService) => {
+  const handleAddAnalysis = async (service: AnalysisService & { id?: number }) => {
     if (!data?.sample_id) return
-    setAddingService(service.uid)
+    setAddingService(service.uid || service.keyword)
     try {
-      await addAnalysisToSample(data.sample_id, service.uid)
+      const native = pickerSourceFor(parentSampleId ?? null, data.sample_uid) === 'native'
+      await addAnalysisToSample(
+        data.sample_id,
+        service.uid,
+        native ? { keyword: service.keyword, analysis_service_id: service.id } : undefined,
+      )
       toast.success(`Added ${service.title}`)
       refreshSample(data.sample_id)
     } catch (e) {
@@ -4229,11 +4279,19 @@ export function SampleDetails() {
           description: e instanceof Error ? e.message : String(e),
         })
       )
-    // Overlay + promotion badges + native card only exist on parent pages; skip on sub-samples.
+    // Cache marks run on EVERY page (fix 2026-08-20, F5-to-update UAT
+    // report): the parent's overlay + native-card queries only RENDER on
+    // parent pages, but their react-query cache outlives the page — a
+    // vial-side promote must mark them stale or the parent serves a
+    // fresh-looking stale card for staleTime (30s) after click-through.
+    // Invalidation refetches ACTIVE queries only; on a vial page these are
+    // inactive, so this is a cheap stale mark, no extra requests.
+    invalidateParentVialOverlay(queryClient)
+    void queryClient.invalidateQueries({ queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY] })
+    // Promotion badges are page-local state keyed to the CURRENT page's id
+    // and re-fetched on every navigation — parent pages only.
     if (parentSampleId === null) {
-      invalidateParentVialOverlay(queryClient)
       refreshPromotions(id)
-      void queryClient.invalidateQueries({ queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY] })
     }
   }
 
@@ -5305,15 +5363,7 @@ export function SampleDetails() {
                         Assigned to
                       </span>
                       <span
-                        className={`text-sm font-semibold ${
-                          {
-                            // Matches PRIMARY_TITLE_COLOR role tints in AnalysisTable
-                            hplc: 'text-sky-700 dark:text-sky-300',
-                            endo: 'text-emerald-700 dark:text-emerald-300',
-                            ster: 'text-violet-700 dark:text-violet-300',
-                            xtra: 'text-zinc-700 dark:text-zinc-300',
-                          }[currentAssignment ?? ''] ?? 'text-foreground'
-                        }`}
+                        className={`text-sm font-semibold ${ROLE_COLOR_TEXT[roleColorForCode(currentAssignment, vialRolesQ.data, departmentsQ.data)]}`}
                       >
                         {assignmentLabel}
                       </span>
@@ -6436,6 +6486,11 @@ export function SampleDetails() {
                       stays — clear it on the vial itself if it really needs to
                       go.
                     </li>
+                    <li>
+                      Native profiles added below are also placed on the
+                      matching vial(s); if none exists yet, the analysis seeds
+                      when a vial gets that role.
+                    </li>
                   </ul>
                 </div>
               </div>
@@ -6526,6 +6581,17 @@ export function SampleDetails() {
               </div>
             </div>
 
+            {/* Native (Accu-Mk1) — parent pages only: native parent rows with
+                  remove, native PROFILE picker, admin Re-sync (spec 2026-08-18) */}
+            {parentSampleId === null && data?.sample_id && (
+              <NativeManageAnalysesBlock
+                sampleId={data.sample_id}
+                isAdmin={isAdmin}
+                search={serviceSearch}
+                onChanged={() => refreshSample(data.sample_id)}
+              />
+            )}
+
             {/* Add new analysis */}
             <div>
               <p className="text-xs text-muted-foreground mb-2">Add analysis</p>
@@ -6573,7 +6639,7 @@ export function SampleDetails() {
                     )
                     .map(s => (
                       <div
-                        key={s.uid}
+                        key={s.uid || s.keyword}
                         className="flex items-center justify-between py-1 px-2 rounded hover:bg-muted/60"
                       >
                         <div className="min-w-0">
@@ -6588,10 +6654,10 @@ export function SampleDetails() {
                           variant="ghost"
                           size="sm"
                           className="h-6 w-6 p-0 shrink-0"
-                          disabled={addingService === s.uid}
+                          disabled={addingService === (s.uid || s.keyword)}
                           onClick={() => handleAddAnalysis(s)}
                         >
-                          {addingService === s.uid ? (
+                          {addingService === (s.uid || s.keyword) ? (
                             <Loader2 size={12} className="animate-spin" />
                           ) : (
                             <Plus size={12} />
@@ -6726,6 +6792,7 @@ export function SampleDetails() {
           isParentPage={parentSampleId === null}
           lookup={data}
           promotionsByKeyword={promotionsByKeyword}
+          vialAssignmentByKeyword={nativeVialAssignmentByKeyword}
           onParentDataStale={() => refreshSample(data.sample_id)}
         />
       )}

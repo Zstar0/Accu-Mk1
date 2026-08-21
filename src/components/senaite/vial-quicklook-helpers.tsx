@@ -6,7 +6,7 @@
 import { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { fetchSubSamplePhotoUrl } from '@/lib/api'
-import { ROLE_BADGE_CLASS } from '@/lib/assignment-colors'
+import { RoleBadge } from '@/components/shared/RoleBadge'
 import type { SenaiteAnalysis } from '@/lib/api'
 
 /**
@@ -100,30 +100,18 @@ export function VialPhotoThumb({
 }
 
 // --- Role header badge ---
-// Mirrors the palette in VialDetailsTab.tsx / VialsList.tsx / SenaiteDashboard.tsx /
-// InboxVialCard.tsx. Moved here from SampleDetails.tsx (was the fifth inline copy);
-// dedup of the remaining copies is a tracked fast-follow, not in scope here.
-export const ROLE_HEADER_BADGES: Record<string, { label: string; cls: string }> = {
-  hplc: { label: 'HPLC',   cls: ROLE_BADGE_CLASS.hplc },
-  endo: { label: 'ENDO',   cls: ROLE_BADGE_CLASS.endo },
-  ster: { label: 'PCR',    cls: ROLE_BADGE_CLASS.ster },
-  xtra: { label: 'XTRA',   cls: ROLE_BADGE_CLASS.xtra },
-  hm:   { label: 'HM',     cls: ROLE_BADGE_CLASS.hm },
-}
-
+// S1 roles-as-data: renders from the catalog via the shared RoleBadge.
+// Public name kept so call sites (SampleDetails.tsx, VialsQuickLookDialog)
+// are untouched. This surface's unknown-code behavior is render-NOTHING —
+// preserved via hideUnassigned.
 export function RoleHeaderBadge({ role }: { role: string }) {
-  const b = ROLE_HEADER_BADGES[role]
-  if (!b) return null
   return (
-    <span
-      className={cn(
-        'inline-block text-[10px] leading-none px-1.5 py-0.5 rounded border uppercase tracking-wide font-medium',
-        b.cls,
-      )}
-      title={`Vial assignment: ${b.label}`}
-    >
-      {b.label}
-    </span>
+    <RoleBadge
+      role={role}
+      hideUnassigned
+      makeTitle={l => `Vial assignment: ${l}`}
+      className="inline-block"
+    />
   )
 }
 

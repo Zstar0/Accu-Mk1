@@ -107,33 +107,87 @@ function liveByKeyword(analyses: SenaiteAnalysis[]): Map<string, SenaiteAnalysis
   return out
 }
 
+/** Same live-row rules as liveByKeyword, indexed by the NATIVE identity key.
+ *  Rows without an analysis_service_id (SENAITE-sourced) are absent — they
+ *  are reachable only through the keyword tiers. */
+function liveByServiceId(analyses: SenaiteAnalysis[]): Map<number, SenaiteAnalysis> {
+  const out = new Map<number, SenaiteAnalysis>()
+  for (const a of analyses) {
+    const serviceId = a.analysis_service_id
+    if (serviceId == null) continue
+    if (DEAD_STATES.has(a.review_state ?? '')) continue
+    const existing = out.get(serviceId)
+    if (!existing) { out.set(serviceId, a); continue }
+    // Prefer the non-retested (current) row.
+    if (existing.retested && !a.retested) out.set(serviceId, a)
+  }
+  return out
+}
+
 /** Generic per-analyte keyword as carried on the parent blend AR. The vial
  *  mirror TRANSLATES these to per-substance services (PUR_<X>/QTY_<X>) — see
  *  backend/lims_analyses/seeder.py `_PARENT_ANALYTE`. Kept in sync by hand. */
 const PARENT_ANALYTE = /^ANALYTE-([1-4])-(PUR|QTY)$/
 
-/** Build parentKeyword → VialAssignment. Exact keyword match first; identity
- *  type-bridge (ID_* ↔ HPLC-ID) only in single-peptide families; analyte
- *  bridge (ANALYTE-{n}-PUR/QTY ↔ PUR_/QTY_<X>) when the slot→peptide map is
- *  provided — anchored on the seeder's "{Peptide} - Purity|Quantity" title
- *  contract, since the FE has no peptide_id to join on. */
+/** Build parentKeyword → VialAssignment.
+ *
+ *  The join ladder, first tier that produces ≥1 match wins:
+ *    0. service id     — analysis_service_id equality. The NATIVE identity:
+ *                        on mk1 rows keyword is a display-only alias that a
+ *                        catalog re-label leaves stale, so parent and vial
+ *                        rows for one service can carry different keywords.
+ *    1. exact keyword  — identity for SENAITE rows, which ship no service id.
+ *    2. identity bridge — ID_* ↔ HPLC-ID, single-peptide families only.
+ *    3. analyte bridge  — ANALYTE-{n}-PUR/QTY ↔ PUR_/QTY_<X> via the
+ *                        slot→peptide map, anchored on the seeder's
+ *                        "{Peptide} - Purity|Quantity" title contract (the FE
+ *                        has no peptide_id to join on).
+ *
+ *  Tiers 2-3 are TRANSLATIONS between two different services' keywords, not
+ *  identity claims — service-id equality can't express them, so they stay.
+ *  Adding a fifth keyword-equality tier is guarded by the ast-grep rule
+ *  no-new-keyword-join-tiers.
+ *
+ *  The result map stays keyed by the PARENT row's keyword regardless of which
+ *  tier matched — its consumers key by keyword. */
 export function buildVialAssignmentMap(
   parentAnalyses: SenaiteAnalysis[],
   vials: VialInput[],
   analyteNames?: Map<number, string>,
 ): Map<string, VialAssignment> {
-  // Per-vial live keyword index.
-  const vialLive = vials.map(v => ({ v, live: liveByKeyword(v.analyses) }))
+  // Per-vial live indexes: one per identity key the ladder joins on.
+  const vialLive = vials.map(v => ({
+    v,
+    live: liveByKeyword(v.analyses),
+    liveById: liveByServiceId(v.analyses),
+  }))
+
+  const toVialMatch = (v: VialInput, a: SenaiteAnalysis): VialMatch => ({
+    vialSampleId: v.sampleId, vialLabel: v.label, mk1Analysis: a,
+    assignmentRole: v.assignmentRole, assignmentKind: v.assignmentKind,
+    varianceLocked: v.varianceLocked,
+  })
 
   const matchToVialMatches = (predicate: (kw: string, a: SenaiteAnalysis) => boolean): VialMatch[] => {
     const out: VialMatch[] = []
     for (const { v, live } of vialLive) {
       for (const [kw, a] of live) {
         if (predicate(kw, a)) {
-          out.push({ vialSampleId: v.sampleId, vialLabel: v.label, mk1Analysis: a, assignmentRole: v.assignmentRole, assignmentKind: v.assignmentKind, varianceLocked: v.varianceLocked })
+          out.push(toVialMatch(v, a))
           break // one analysis per vial per parent row
         }
       }
+    }
+    return out
+  }
+
+  /** Tier 0. The per-vial index is already one row per service, so this is
+   *  the same "one analysis per vial per parent row" rule by construction. */
+  const matchByServiceId = (serviceId: number): VialMatch[] => {
+    const out: VialMatch[] = []
+    for (const { v, liveById } of vialLive) {
+      const a = liveById.get(serviceId)
+      if (a) out.push(toVialMatch(v, a))
     }
     return out
   }
@@ -145,8 +199,13 @@ export function buildVialAssignmentMap(
   const result = new Map<string, VialAssignment>()
   for (const pa of parentAnalyses) {
     if (!pa.keyword) continue
-    // 1) exact keyword.
-    let matches = matchToVialMatches(kw => kw === pa.keyword)
+    // 0) service id — native identity, when both sides are mk1 rows.
+    let matches: VialMatch[] = pa.analysis_service_id != null
+      ? matchByServiceId(pa.analysis_service_id)
+      : []
+    // 1) exact keyword — the sanctioned keyword-equality tier (SENAITE rows).
+    // ast-grep-ignore: no-new-keyword-join-tiers
+    if (matches.length === 0) matches = matchToVialMatches(kw => kw === pa.keyword)
     // 2) identity bridge (only if no exact match and single-peptide family).
     if (matches.length === 0 && identityBridgeAllowed && isIdentityAnalysis(pa)) {
       matches = matchToVialMatches((_kw, a) => isIdentityAnalysis(a))

@@ -159,8 +159,13 @@ def test_create_gate_container_mode_still_state_gated(db):
 
 def test_refresh_writes_full_set_not_subset(db):
     """Rev-1 gap: refresh only wrote 5 fields, letting client_sample_id,
-    peptide_name, client_id and the dates go stale forever."""
-    db.add(LimsSample(sample_id="P-0134", external_lims_uid="OLD_UID",
+    peptide_name, client_id and the dates go stale forever.
+
+    external_lims_uid starts NULL (not a stale-but-matching prior uid): the
+    S8 fail-closed guard refuses the refresh outright on a uid mismatch, so
+    this must exercise the NULL-adopt path to still prove the full-field
+    write."""
+    db.add(LimsSample(sample_id="P-0134", external_lims_uid=None,
                       client_sample_id="STALE-CSID", peptide_name="Old Peptide",
                       client_id="old-client"))
     db.commit()

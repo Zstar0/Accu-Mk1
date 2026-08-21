@@ -3,9 +3,7 @@ import {
   Loader2,
   AlertCircle,
   Search,
-  Plus,
   Pencil,
-  Trash2,
   Layers,
   X,
   Check,
@@ -33,9 +31,7 @@ import {
 } from '@/lib/service-group-colors'
 import {
   getServiceGroups,
-  createServiceGroup,
   updateServiceGroup,
-  deleteServiceGroup,
   getServiceGroupMembers,
   setServiceGroupMembers,
   getAnalysisServices,
@@ -45,10 +41,17 @@ import {
   type SlaTier,
 } from '@/lib/api'
 
+// Service groups are frozen legacy rows as of S2 — departments own worksheet
+// and inbox routing now. The backend 410s creation, 400s a rename (FE keyword
+// maps and the COA gate's group half key on the names), and 409s a delete that
+// any worksheet item / SLA tier / member row still references. This page keeps
+// only what still works: membership (PUT /members stays open until the gate
+// union has bedded in) and the group-keyed SLA tier, which departments don't
+// take over until S7.
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface FormState {
-  name: string
   description: string
   color: ServiceGroupColor
   sort_order: string
@@ -57,7 +60,6 @@ interface FormState {
 }
 
 const DEFAULT_FORM: FormState = {
-  name: '',
   description: '',
   color: 'blue',
   sort_order: '0',
@@ -110,19 +112,9 @@ export default function ServiceGroupsPage() {
 
   // ── Panel helpers ──
 
-  const openCreate = () => {
-    setEditingGroup(null)
-    setForm(DEFAULT_FORM)
-    setAllServices([])
-    setSelectedIds(new Set())
-    setMemberSearch('')
-    setPanelOpen(true)
-  }
-
   const openEdit = async (group: ServiceGroup) => {
     setEditingGroup(group)
     setForm({
-      name: group.name,
       description: group.description ?? '',
       color: (group.color as ServiceGroupColor) ?? 'blue',
       sort_order: String(group.sort_order),
@@ -159,45 +151,26 @@ export default function ServiceGroupsPage() {
   // ── CRUD ──
 
   const handleSave = async () => {
-    if (!form.name.trim()) {
-      toast.error('Name is required')
-      return
-    }
+    if (!editingGroup) return
     setSaving(true)
     try {
-      const payload = {
-        name: form.name.trim(),
+      // `name` is deliberately absent: the backend 400s a rename, and
+      // ServiceGroupUpdate is exclude_unset, so omitting it makes the freeze
+      // structural rather than "we happened to send the same string back".
+      await updateServiceGroup(editingGroup.id, {
         description: form.description.trim() || null,
         color: form.color,
         sort_order: parseInt(form.sort_order, 10) || 0,
         is_default: form.is_default,
         sla_tier_id: form.sla_tier_id ? Number(form.sla_tier_id) : null,
-      }
-      if (editingGroup) {
-        await updateServiceGroup(editingGroup.id, payload)
-        toast.success(`"${payload.name}" updated`)
-      } else {
-        await createServiceGroup(payload)
-        toast.success(`"${payload.name}" created`)
-      }
+      })
+      toast.success(`"${editingGroup.name}" updated`)
       await loadGroups()
       closePanel()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Save failed')
     } finally {
       setSaving(false)
-    }
-  }
-
-  const handleDelete = async (group: ServiceGroup) => {
-    if (!window.confirm(`Delete "${group.name}"? This cannot be undone.`)) return
-    try {
-      await deleteServiceGroup(group.id)
-      toast.success(`"${group.name}" deleted`)
-      await loadGroups()
-      if (editingGroup?.id === group.id) closePanel()
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Delete failed')
     }
   }
 
@@ -271,11 +244,17 @@ export default function ServiceGroupsPage() {
             </p>
           </div>
         </div>
-        <Button onClick={openCreate}>
-          <Plus className="mr-1 h-4 w-4" />
-          Add Service Group
-        </Button>
       </div>
+
+      {/* Legacy banner — groups no longer route anything (S2) */}
+      <Card className="border-amber-500/40 bg-amber-500/5">
+        <CardContent className="flex items-center gap-2 py-3">
+          <AlertCircle className="h-4 w-4 shrink-0 text-amber-600" />
+          <span className="text-sm">
+            Legacy — departments own routing now. Groups remain for historical rows and SLA tiers.
+          </span>
+        </CardContent>
+      </Card>
 
       {/* Error */}
       {error && (
@@ -322,7 +301,7 @@ export default function ServiceGroupsPage() {
               <TableRow>
                 <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
                   {groups.length === 0
-                    ? 'No service groups yet. Click "Add Service Group" to create one.'
+                    ? 'No service groups. New routing is defined by departments.'
                     : 'No groups match your search.'}
                 </TableCell>
               </TableRow>
@@ -367,17 +346,10 @@ export default function ServiceGroupsPage() {
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7"
+                        aria-label={`Edit ${group.name}`}
                         onClick={e => { e.stopPropagation(); openEdit(group) }}
                       >
                         <Pencil className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-destructive hover:text-destructive"
-                        onClick={e => { e.stopPropagation(); handleDelete(group) }}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     </div>
                   </TableCell>
@@ -405,7 +377,7 @@ export default function ServiceGroupsPage() {
               <div className="flex items-center gap-2">
                 <Layers className="h-5 w-5 text-primary" />
                 <span className="text-lg font-semibold">
-                  {editingGroup ? `Edit: ${editingGroup.name}` : 'New Service Group'}
+                  {editingGroup ? `Edit: ${editingGroup.name}` : 'Service Group'}
                 </span>
               </div>
               <Button variant="ghost" size="icon" onClick={closePanel}>
@@ -418,14 +390,16 @@ export default function ServiceGroupsPage() {
 
               {/* Group fields */}
               <div className="space-y-4">
-                {/* Name */}
+                {/* Name — frozen: FE keyword maps and the COA gate's group
+                    half key on these strings, so the backend refuses renames */}
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Name <span className="text-destructive">*</span></label>
-                  <Input
-                    placeholder="e.g. Core HPLC"
-                    value={form.name}
-                    onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                  />
+                  <label className="text-sm font-medium">Name</label>
+                  <p className="rounded-md border bg-muted/40 px-3 py-2 text-sm">
+                    {editingGroup?.name ?? '—'}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Frozen — group names are referenced by historical rows.
+                  </p>
                 </div>
 
                 {/* Description */}
@@ -515,9 +489,9 @@ export default function ServiceGroupsPage() {
 
               {/* Save group button */}
               <div className="flex justify-end">
-                <Button onClick={handleSave} disabled={saving}>
+                <Button onClick={handleSave} disabled={saving || !editingGroup}>
                   {saving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
-                  {editingGroup ? 'Save Changes' : 'Create Group'}
+                  Save Changes
                 </Button>
               </div>
 
@@ -569,7 +543,7 @@ export default function ServiceGroupsPage() {
                         {filteredServices.length === 0 ? (
                           <p className="py-4 text-center text-sm text-muted-foreground">
                             {allServices.length === 0
-                              ? 'No analysis services found. Sync from SENAITE first.'
+                              ? 'No analysis services found. Create them on the Analysis Services page first.'
                               : 'No services match your filter.'}
                           </p>
                         ) : (

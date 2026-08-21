@@ -242,7 +242,7 @@ def test_vial_plan_returns_full_layout():
     sub3.assignment_role = None
 
     with patch("sub_samples.routes.service.compute_vial_plan", return_value={
-        "demand": {"hplc": 1, "endo": 1, "ster": 2},
+        "demand": {"hplc": 1, "endo": 1, "ster": 1},
         "wp_order_number": "3229",
         "vials": [
             {"sample_id": "BW-0006",     "is_parent": True,  "vial_sequence": 0, "assignment_role": "hplc"},
@@ -255,7 +255,7 @@ def test_vial_plan_returns_full_layout():
         resp = client.get("/api/sub-samples/BW-0006/vial-plan")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["demand"] == {"hplc": 1, "endo": 1, "ster": 2}
+    assert body["demand"] == {"hplc": 1, "endo": 1, "ster": 1}
     assert body["wp_order_number"] == "3229"
     assert len(body["vials"]) == 4
     assert body["vials"][0]["is_parent"] is True
