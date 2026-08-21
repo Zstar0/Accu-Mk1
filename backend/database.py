@@ -1605,6 +1605,30 @@ def _run_migrations():
         # Amendment audit (spec 2026-08-07): before/after capture. Nullable,
         # no default, no backfill — NULL = pre-slice row, by contract.
         "ALTER TABLE lims_analysis_transitions ADD COLUMN IF NOT EXISTS details JSONB",
+        # S3 (native identity convergence): service-id-keyed twins of the two
+        # keyword root indexes. Mirrors each source index's predicate EXACTLY
+        # (asymmetry recorded, not fixed: vial root has no provenance term;
+        # shadow uses retested=FALSE — see the S3 sub-spec §1.4). Bare
+        # IF NOT EXISTS, no DROP pair (last-boot-wins hazard). Keyword
+        # indexes deliberately coexist (retirement RULED deferred past mirror
+        # decommission). Origin-agnostic on structural grounds: the keyword
+        # index already forces at-most-one row per (host, keyword), so the
+        # only violation shape is same-service/different-keyword drift.
+        # scripts/s3_identity_precheck.py is the REQUIRED pre-deploy gate —
+        # a failing CREATE here is swallowed as migration_skipped.
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_sub_service_id_root
+            ON lims_analyses (lims_sub_sample_pk, analysis_service_id)
+            WHERE retest_of_id IS NULL AND lims_sub_sample_pk IS NOT NULL
+              AND review_state NOT IN ('retracted', 'rejected')
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_parent_service_id_root
+            ON lims_analyses (lims_sample_pk, analysis_service_id)
+            WHERE retest_of_id IS NULL AND lims_sample_pk IS NOT NULL
+              AND review_state NOT IN ('retracted', 'rejected')
+              AND provenance = 'canonical'
+        """,
         # S2 (worksheets off groups): department becomes the item-tier routing
         # key. Nullable + SET NULL — additive alongside the frozen legacy
         # service_group_id. Backfill via the group bridge only (analyses_json
@@ -1671,3 +1695,33 @@ def _run_migrations():
             except Exception as e:
                 conn.rollback()
                 log.warning("migration_skipped sql=%r err=%s", sql[:80], e)
+
+
+IDENTITY_INDEXES = (
+    "uq_lims_analyses_sub_service_id_root",
+    "uq_lims_analyses_parent_service_id_root",
+)
+
+
+def verify_identity_indexes(engine_) -> list[str]:
+    """Post-boot check: the S3 identity indexes actually exist. run_migrations
+    swallows CREATE failures into a migration_skipped warning operators are
+    trained to ignore — this is the loud counterpart. Returns missing names.
+    Today NO index existence is verified anywhere; these two get it because a
+    silently-absent unique index means every converged reader is trusting an
+    invariant nothing enforces."""
+    from sqlalchemy import text as _text
+    with engine_.connect() as conn:
+        present = {
+            r[0] for r in conn.execute(_text(
+                "SELECT indexname FROM pg_indexes WHERE tablename = 'lims_analyses'"
+            )).all()
+        }
+    missing = [n for n in IDENTITY_INDEXES if n not in present]
+    for name in missing:
+        log.error(
+            "identity_index_missing index=%s — the S3 CREATE was likely swallowed "
+            "as migration_skipped; run scripts/s3_identity_precheck.py and repair "
+            "violating rows before relying on service-id uniqueness", name,
+        )
+    return missing

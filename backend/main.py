@@ -345,6 +345,8 @@ def seed_default_settings(db: Session):
 async def lifespan(app: FastAPI):
     """Initialize database on startup and seed defaults."""
     init_db()
+    from database import engine as _db_engine, verify_identity_indexes
+    verify_identity_indexes(_db_engine)
     from flags import seams as _flag_seams
     _flag_seams.register_mk1_entities()
     # Flag attachments reuse the S3 blob store used by vial photos when
@@ -9502,12 +9504,26 @@ async def add_sample_analysis(
     if sub is not None:
         # Native branch
         senaite_service_uid = body.get("service_uid")
+        # S3: the service id is the drift-proof identifier. The body is an
+        # untyped dict, so coerce here rather than letting a string reach a
+        # SQLAlchemy comparison. Both identifiers are forwarded when both are
+        # present — the service owns the resolution order, not the route.
+        _svc_id = body.get("analysis_service_id")
+        if _svc_id is not None:
+            try:
+                _svc_id = int(_svc_id)
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=400,
+                    detail="analysis_service_id must be an integer",
+                )
         try:
             add_analysis_to_native_vial(
                 db,
                 sub_sample_pk=sub.id,
                 senaite_service_uid=senaite_service_uid,
                 keyword=None,
+                analysis_service_id=_svc_id,
                 user_id=_current_user.id,
             )
         except _NotFoundError as e:
@@ -9603,6 +9619,7 @@ async def remove_sample_analysis(
     sample_id: str,
     keyword: str,
     confirm_retract: bool = False,
+    analysis_service_id: Optional[int] = None,
     _current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -9616,7 +9633,10 @@ async def remove_sample_analysis(
 
     Native branch: if sample_id maps to a lims_sub_samples row whose
     external_lims_uid starts with 'mk1://', the analysis is hard-deleted
-    (if pristine) via delete_pristine_analysis.
+    (if pristine) via delete_pristine_analysis. The optional
+    ?analysis_service_id= (S3) identifies the row by its service FK instead of
+    the path keyword, which is what reaches a row whose stored keyword has
+    drifted; the keyword stays in the path because it is the route's shape.
 
     Non-native fallthrough: proxied to the Integration Service unchanged.
     """
@@ -9660,12 +9680,16 @@ async def remove_sample_analysis(
     ).scalar_one_or_none()
 
     if sub is not None:
-        # Native branch
+        # Native branch. Exactly one identifier reaches the service: when the
+        # caller supplied a service id it decides, and the path keyword — which
+        # is only ever the FE's echo of a possibly-drifted stored string — is
+        # dropped rather than sent alongside it.
         try:
             delete_pristine_analysis(
                 db,
                 sub_sample_pk=sub.id,
-                keyword=keyword,
+                keyword=None if analysis_service_id is not None else keyword,
+                analysis_service_id=analysis_service_id,
                 user_id=_current_user.id,
             )
         except _NotFoundError as e:
@@ -15643,11 +15667,21 @@ async def transition_analysis(
                     if _parent_sample_id and keyword:
                         _user_id = getattr(current_user, "id", None)
                         if req.transition == "retest":
+                            # S3: this keyword arrives off the SENAITE wire, a
+                            # FOREIGN namespace. allow_native_rescue=False
+                            # confines the lookup to the exact stored keyword
+                            # (the grandfathered pre-S3 behavior) so a SENAITE
+                            # keyword can never resolve into a native line that
+                            # merely shares the string — mk1/senaite keyword
+                            # collisions are not prevented by any index, and
+                            # this call swallows exceptions, so a mis-routed
+                            # retest here would retract vial results silently.
                             _row_ids = cascade_parent_retest_to_sources(
                                 db,
                                 parent_sample_id=_parent_sample_id,
                                 keyword=keyword,
                                 user_id=_user_id,
+                                allow_native_rescue=False,
                             )
                             _verb = "created vial retest rows"
                         else:
@@ -19918,10 +19952,11 @@ def _build_analysis_debug_rows(db: Session, row: LimsSample, sample_id: str) -> 
     ).scalars().all()
 
     def _is_live_canonical(r) -> bool:
-        # Mirrors the DB's own `uq_lims_analyses_parent_service_root` partial
-        # unique index definition (database.py) exactly: at most one
-        # canonical row per (parent, keyword) may have retest_of_id IS NULL
-        # AND review_state NOT IN ('retracted', 'rejected') at a time.
+        # Liveness mirrors the parent-tier root indexes (database.py): at most
+        # one canonical row per (parent, keyword) — and, since S3, per
+        # (parent, analysis_service_id) — may be live at a time. This panel
+        # keys by KEYWORD on purpose: it diffs Mk1 rows against a SENAITE
+        # payload that only speaks keyword (senaite_map above).
         return r.retest_of_id is None and r.review_state not in ("retracted", "rejected")
 
     # Newest-wins per keyword, same "prefer live, else fallback to newest"

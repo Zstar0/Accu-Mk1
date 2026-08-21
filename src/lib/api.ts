@@ -3665,6 +3665,9 @@ export interface SenaiteAnalysis {
    *  backing this line ('mk1' | 'senaite'). Type-only here — not yet read
    *  by any FE display logic. */
   service_origin?: string | null
+  /** S3: native identity key; keyword is display-only on mk1 rows. Absent on
+   *  SENAITE-sourced rows, which keep keyword as their identity. */
+  analysis_service_id?: number | null
 }
 
 export interface SenaiteAttachment {
