@@ -22,7 +22,8 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from coa.spec_rules import SpecRuleError, evaluate, normalize_matrix, resolve_spec
+from coa.spec_rules import (SpecRuleError, evaluate, normalize_matrix,
+                            resolve_spec, sample_peptide_id)
 from sub_samples.service import fetch_sample_services
 
 log = logging.getLogger(__name__)
@@ -160,6 +161,10 @@ def build_native_sections(db: Session, parent) -> dict:
 
     profiles = _ordered_native_profiles(db, raw.get("services") or {}, raw.get("package"))
     matrix = normalize_matrix(parent.sample_type_title)
+    # R6: the identity anchor is the peptide_id FK, resolved once per parent
+    # (not per row) — a blend or a non-peptide family returns None (R5), and
+    # resolve_spec then coarsens straight to the matrix/wildcard tier.
+    peptide_id = sample_peptide_id(db, parent.id)
 
     sections = []
     for prof in profiles:
@@ -190,16 +195,18 @@ def build_native_sections(db: Session, parent) -> dict:
                     "native_section_blank_unit sample=%s profile=%s keyword=%s",
                     sample_id, prof.key, svc.keyword,
                 )
-            spec = resolve_spec(db, svc.id, matrix)
+            spec = resolve_spec(db, svc.id, matrix, peptide_id=peptide_id)
             if spec is None:
                 # Rule 5 (relocated from COABuilder): a result must not print
-                # without a verdict. Names the service AND matrix so the lab
-                # knows exactly which analysis_service_specs row to file.
+                # without a verdict. Names the service AND every tier
+                # consulted (peptide/matrix/wildcard) so the lab knows
+                # exactly which analysis_service_specs row to file.
                 raise NativeSectionsError(
                     f"native sections: profile '{prof.key}' member service "
-                    f"'{svc.keyword}' (id={svc.id}) has no active spec for "
-                    f"matrix {matrix!r} on {sample_id} — file one in "
-                    f"analysis_service_specs"
+                    f"'{svc.keyword}' (id={svc.id}) has no active spec "
+                    f"(tiers consulted: peptide={peptide_id!r}, "
+                    f"matrix={matrix!r}, wildcard) on {sample_id} — file one "
+                    f"in analysis_service_specs"
                 )
             try:
                 conforms = evaluate(spec, row.result_value)

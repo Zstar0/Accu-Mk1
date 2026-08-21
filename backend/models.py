@@ -228,12 +228,17 @@ class AnalysisService(Base):
 
 
 class AnalysisServiceSpec(Base):
-    """Lab-owned pass/fail rule for a native COA row (spec-ownership slice 1).
+    """Lab-owned pass/fail rule for a native COA row (spec-ownership slice 1,
+    peptide tier added in slice 2).
 
-    One active spec per (service, matrix); matrix NULL = applies to every
-    matrix — NULL-first is the practical default. The identity join is the
-    FK, never the keyword. Rows are deactivated, never deleted; every write
-    goes through catalog/service_spec_audit.record_spec_change.
+    Three tiers per service, in resolution precedence: a peptide-bound row
+    (peptide_id set, matrix NULL — the identity anchor is the peptide FK,
+    never the keyword), a named-matrix row (matrix set, peptide_id NULL),
+    and the wildcard row (both NULL — applies to every matrix/peptide).
+    matrix and peptide_id are mutually exclusive (ck_analysis_service_specs_tier).
+    The identity join is always the FK, never the keyword. Rows are
+    deactivated, never deleted; every write goes through
+    catalog/service_spec_audit.record_spec_change.
     """
     __tablename__ = "analysis_service_specs"
     __table_args__ = (
@@ -244,8 +249,14 @@ class AnalysisServiceSpec(Base):
             "AND min_value IS NULL AND max_value IS NULL)",
             name="ck_analysis_service_specs_rule_shape",
         ),
-        # Postgres treats NULLs as distinct in unique indexes, so the
-        # NULL-matrix default row needs its own partial index.
+        CheckConstraint(
+            "NOT (matrix IS NOT NULL AND peptide_id IS NOT NULL)",
+            name="ck_analysis_service_specs_tier",
+        ),
+        # Postgres treats NULLs as distinct in unique indexes, so each tier
+        # (named matrix / peptide-bound / both-NULL wildcard) needs its own
+        # partial index — see uq_analysis_service_specs_peptide and _wildcard
+        # below for the other two.
         Index(
             "uq_analysis_service_specs_matrix",
             "analysis_service_id", "matrix",
@@ -254,11 +265,18 @@ class AnalysisServiceSpec(Base):
             sqlite_where=text("active AND matrix IS NOT NULL"),
         ),
         Index(
-            "uq_analysis_service_specs_null_matrix",
+            "uq_analysis_service_specs_peptide",
+            "analysis_service_id", "peptide_id",
+            unique=True,
+            postgresql_where=text("active AND peptide_id IS NOT NULL"),
+            sqlite_where=text("active AND peptide_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_analysis_service_specs_wildcard",
             "analysis_service_id",
             unique=True,
-            postgresql_where=text("active AND matrix IS NULL"),
-            sqlite_where=text("active AND matrix IS NULL"),
+            postgresql_where=text("active AND matrix IS NULL AND peptide_id IS NULL"),
+            sqlite_where=text("active AND matrix IS NULL AND peptide_id IS NULL"),
         ),
     )
 
@@ -267,6 +285,9 @@ class AnalysisServiceSpec(Base):
         ForeignKey("analysis_services.id", ondelete="CASCADE"), nullable=False
     )
     matrix: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    peptide_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("peptides.id"), nullable=True
+    )
     rule_kind: Mapped[str] = mapped_column(String(16), nullable=False)  # range | equals
     min_value: Mapped[Optional[Decimal]] = mapped_column(Numeric, nullable=True)
     max_value: Mapped[Optional[Decimal]] = mapped_column(Numeric, nullable=True)

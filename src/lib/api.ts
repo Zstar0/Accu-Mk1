@@ -2444,6 +2444,33 @@ export interface AnalysisServiceUpdatePayload {
   active?: boolean
 }
 
+export interface AnalysisServiceSpecRecord {
+  id: number
+  analysis_service_id: number
+  matrix: string | null
+  peptide_id: number | null
+  peptide_code: string | null
+  rule_kind: 'range' | 'equals'
+  min_value: string | null
+  max_value: string | null
+  equals_value: string | null
+  unit: string | null
+  display_override: string | null
+  active: boolean
+  updated_at: string | null
+}
+
+export interface ServiceSpecPayload {
+  matrix?: string | null
+  peptide_id?: number | null
+  rule_kind: 'range' | 'equals'
+  min_value?: string | null
+  max_value?: string | null
+  equals_value?: string | null
+  unit?: string | null
+  display_override?: string | null
+}
+
 /**
  * Fetch the local AccuMark `analysis_services` table (id + keyword + metadata).
  *
@@ -2556,6 +2583,43 @@ export async function syncAnalysisServices(): Promise<{ created: number; total: 
     const err = await response.json().catch(() => null)
     throw new Error(err?.detail || `Sync analysis services failed: ${response.status}`)
   }
+  return response.json()
+}
+
+/** List all specs for a given analysis service. */
+export async function listServiceSpecs(serviceId: number): Promise<AnalysisServiceSpecRecord[]> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-services/${serviceId}/specs`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`List service specs failed: ${response.status}`)
+  return response.json()
+}
+
+/** Create a new spec for a given analysis service. */
+export async function createServiceSpec(
+  serviceId: number,
+  data: ServiceSpecPayload
+): Promise<AnalysisServiceSpecRecord> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-services/${serviceId}/specs`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to create service spec'))
+  return response.json()
+}
+
+/** Update a service spec. */
+export async function patchServiceSpec(
+  specId: number,
+  data: Partial<ServiceSpecPayload> & { active?: boolean }
+): Promise<AnalysisServiceSpecRecord> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-service-specs/${specId}`, {
+    method: 'PATCH',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to update service spec'))
   return response.json()
 }
 

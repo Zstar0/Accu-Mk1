@@ -12,6 +12,7 @@ import subprocess
 import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, date, time, timezone
+from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Literal, Optional, Union
@@ -32,14 +33,14 @@ APP_VERSION = _read_app_version()
 
 from fastapi import BackgroundTasks, FastAPI, Body, Depends, Form, HTTPException, Header, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, ConfigDict, Field, validator
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select, desc, delete, update, func, extract, and_
 from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
 from sla_engine import BusinessSchedule, compute_business_minutes, sla_status_dict
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment
 from catalog.change_log import apply_and_log, log_create, log_delete, log_members
 from auth import (
     get_current_user, require_admin, create_access_token,
@@ -3566,6 +3567,225 @@ async def update_analysis_service_variance_capable(
     db.commit()
     db.refresh(service)
     return AnalysisServiceResponse.model_validate(service)
+
+
+# ─── Analysis Service Specs (spec-ownership slice 2) ───
+#
+# Lab-owned pass/fail rules for a native COA row. Every write goes through
+# catalog/service_spec_audit.record_spec_change — there is a documented
+# exemption from catalog_change_log for this table (see that module's
+# docstring). Rows are deactivated, never deleted: no DELETE route here.
+
+_SPEC_MATRICES = ("Peptide", "Bacteriostatic Water")  # normalize_matrix output vocabulary; extend deliberately, never free-text
+
+
+class ServiceSpecResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    analysis_service_id: int
+    matrix: Optional[str] = None
+    peptide_id: Optional[int] = None
+    peptide_code: Optional[str] = None
+    rule_kind: str
+    min_value: Optional[str] = None
+    max_value: Optional[str] = None
+    equals_value: Optional[str] = None
+    unit: Optional[str] = None
+    display_override: Optional[str] = None
+    active: bool
+    updated_at: Optional[datetime] = None
+
+
+class ServiceSpecCreate(BaseModel):
+    matrix: Optional[str] = None
+    peptide_id: Optional[int] = None
+    rule_kind: Literal["range", "equals"]
+    min_value: Optional[str] = None
+    max_value: Optional[str] = None
+    equals_value: Optional[str] = None
+    unit: Optional[str] = None
+    display_override: Optional[str] = None
+
+
+class ServiceSpecPatch(BaseModel):
+    rule_kind: Optional[Literal["range", "equals"]] = None
+    min_value: Optional[str] = None
+    max_value: Optional[str] = None
+    equals_value: Optional[str] = None
+    unit: Optional[str] = None
+    display_override: Optional[str] = None
+    active: Optional[bool] = None
+
+
+def _validate_spec_shape(*, rule_kind, min_value, max_value, equals_value,
+                         matrix, peptide_id, db):
+    if matrix is not None and peptide_id is not None:
+        raise HTTPException(422, "a spec row is peptide-tier OR matrix-tier, not both")
+    if matrix is not None and matrix not in _SPEC_MATRICES:
+        raise HTTPException(422, f"matrix must be one of {_SPEC_MATRICES}")
+    if peptide_id is not None and db.get(Peptide, peptide_id) is None:
+        raise HTTPException(422, f"peptide {peptide_id} does not exist")
+    if rule_kind == "range":
+        if equals_value is not None or (min_value is None and max_value is None):
+            raise HTTPException(422, "range rule needs min and/or max, and no equals_value")
+    else:  # equals
+        if equals_value is None or min_value is not None or max_value is not None:
+            raise HTTPException(422, "equals rule needs equals_value only")
+
+
+def _parse_decimal(value: Optional[str], field: str) -> Optional[Decimal]:
+    """Malformed numeric strings (e.g. "abc", "n/a") must 422 by name, not
+    fall through to an unhandled decimal.InvalidOperation -> 500.
+
+    "nan"/"inf"/"-inf" parse to a valid, non-finite Decimal without raising
+    InvalidOperation, so they need an explicit reject too: a NaN max_value
+    makes every comparison against it False, and this codebase deliberately
+    fails closed on non-finite RESULTS — bounds must match that or a NaN
+    bound would silently PASS every certificate."""
+    if value is None:
+        return None
+    try:
+        parsed = Decimal(value)
+    except InvalidOperation:
+        raise HTTPException(422, f"{field} must be a decimal number")
+    if not parsed.is_finite():
+        raise HTTPException(422, f"{field} must be a finite decimal number")
+    return parsed
+
+
+def _dec_to_str(value: Optional[Decimal]) -> Optional[str]:
+    """SQLite's NUMERIC column has no native decimal support, so DBAPI hands
+    back a float that SQLAlchemy converts to Decimal at a padded default
+    scale (e.g. Decimal('0.5000000000')); Postgres returns the exact stored
+    Decimal with no padding, so normalizing is a no-op there. `format(...,
+    'f')` (rather than plain str()) keeps trailing-zero integers like 100
+    out of scientific notation, which bare .normalize() would produce."""
+    if value is None:
+        return None
+    return format(value.normalize(), "f")
+
+
+def _spec_response(db, spec) -> ServiceSpecResponse:
+    code = None
+    if spec.peptide_id is not None:
+        pep = db.get(Peptide, spec.peptide_id)
+        code = pep.abbreviation if pep else None
+    return ServiceSpecResponse(
+        id=spec.id, analysis_service_id=spec.analysis_service_id,
+        matrix=spec.matrix, peptide_id=spec.peptide_id, peptide_code=code,
+        rule_kind=spec.rule_kind,
+        min_value=_dec_to_str(spec.min_value),
+        max_value=_dec_to_str(spec.max_value),
+        equals_value=spec.equals_value, unit=spec.unit,
+        display_override=spec.display_override, active=spec.active,
+        updated_at=spec.updated_at,
+    )
+
+
+@app.get("/analysis-services/{service_id}/specs",
+         response_model=list[ServiceSpecResponse])
+def list_service_specs(service_id: int, db: Session = Depends(get_db),
+                       _current_user=Depends(get_current_user)):
+    if db.get(AnalysisService, service_id) is None:
+        raise HTTPException(404, "analysis service not found")
+    rows = db.execute(
+        select(AnalysisServiceSpec)
+        .where(AnalysisServiceSpec.analysis_service_id == service_id,
+               AnalysisServiceSpec.active.is_(True))
+        .order_by(AnalysisServiceSpec.peptide_id.is_(None),
+                  AnalysisServiceSpec.matrix.is_(None),
+                  AnalysisServiceSpec.id)
+    ).scalars().all()
+    return [_spec_response(db, s) for s in rows]
+
+
+@app.post("/analysis-services/{service_id}/specs",
+          response_model=ServiceSpecResponse, status_code=201)
+def create_service_spec(service_id: int, req: ServiceSpecCreate,
+                        db: Session = Depends(get_db),
+                        current_user=Depends(get_current_user)):
+    from catalog.service_spec_audit import record_spec_change
+
+    if db.get(AnalysisService, service_id) is None:
+        raise HTTPException(404, "analysis service not found")
+    _validate_spec_shape(rule_kind=req.rule_kind, min_value=req.min_value,
+                         max_value=req.max_value, equals_value=req.equals_value,
+                         matrix=req.matrix, peptide_id=req.peptide_id, db=db)
+    spec = AnalysisServiceSpec(
+        analysis_service_id=service_id, matrix=req.matrix,
+        peptide_id=req.peptide_id, rule_kind=req.rule_kind,
+        min_value=_parse_decimal(req.min_value, "min_value"),
+        max_value=_parse_decimal(req.max_value, "max_value"),
+        equals_value=req.equals_value, unit=req.unit,
+        display_override=req.display_override,
+        updated_by_id=current_user.id,
+    )
+    db.add(spec)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "an active spec already exists for this tier — deactivate it first")
+    record_spec_change(db, spec, before=None, actor_user_id=current_user.id)
+    db.commit(); db.refresh(spec)
+    return _spec_response(db, spec)
+
+
+@app.patch("/analysis-service-specs/{spec_id}", response_model=ServiceSpecResponse)
+def patch_service_spec(spec_id: int, req: ServiceSpecPatch,
+                       db: Session = Depends(get_db),
+                       current_user=Depends(get_current_user)):
+    from catalog.service_spec_audit import record_spec_change, snapshot_spec
+
+    spec = db.get(AnalysisServiceSpec, spec_id)
+    if spec is None:
+        raise HTTPException(404, "spec not found")
+    before = snapshot_spec(spec)
+    fields = req.model_dump(exclude_unset=True)
+    # exclude_unset lets a field be OMITTED (leave as-is) vs sent explicitly
+    # -- but rule_kind and active are NOT NULL columns, so an explicit JSON
+    # null must 422 by name here, not slide into _validate_spec_shape's
+    # equals arm (rule_kind=None) or skip validation outright (active=None)
+    # and die at db.flush() as an IntegrityError the 409 handler below would
+    # misdiagnose as a uniqueness conflict. min_value/max_value/equals_value/
+    # unit/display_override stay genuinely nullable -- not touched here.
+    for _control_field in ("rule_kind", "active"):
+        if _control_field in fields and fields[_control_field] is None:
+            raise HTTPException(422, f"{_control_field} cannot be null")
+    merged = {
+        "rule_kind": fields.get("rule_kind", spec.rule_kind),
+        "min_value": fields.get("min_value",
+                                str(spec.min_value) if spec.min_value is not None else None),
+        "max_value": fields.get("max_value",
+                                str(spec.max_value) if spec.max_value is not None else None),
+        "equals_value": fields.get("equals_value", spec.equals_value),
+    }
+    _validate_spec_shape(matrix=spec.matrix, peptide_id=spec.peptide_id, db=db, **merged)
+    # Parse every convertible field into a plain local dict BEFORE any
+    # setattr — a 422 partway through (e.g. min_value parses, max_value
+    # doesn't) must never leave the spec partially mutated on the session.
+    # This is a dict comprehension over `fields`, not the ORM object, so a
+    # mid-comprehension _parse_decimal raise discards the whole dict and
+    # the mutation loop below never runs.
+    converted = {
+        k: (_parse_decimal(v, k) if k in ("min_value", "max_value") and v is not None else v)
+        for k, v in fields.items()
+    }
+    for k, v in converted.items():
+        setattr(spec, k, v)
+    spec.updated_by_id = current_user.id
+    try:
+        db.flush()
+    except IntegrityError:
+        # Only reachable via active False -> True: deactivating a row frees
+        # its (service, tier) slot, another row can claim it, and PATCH is
+        # the sole route that can flip a row back to active — colliding
+        # with whatever now occupies that slot.
+        db.rollback()
+        raise HTTPException(409, "an active spec already exists for this tier — deactivate it first")
+    record_spec_change(db, spec, before=before, actor_user_id=current_user.id)
+    db.commit(); db.refresh(spec)
+    return _spec_response(db, spec)
 
 
 KEYWORD_RE = re.compile(r"^[A-Z][A-Z0-9_-]*$")

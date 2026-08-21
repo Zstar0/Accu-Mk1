@@ -466,3 +466,126 @@ def test_null_sample_type_title_uses_null_matrix_spec(db_session, monkeypatch):
     _order_lookup(monkeypatch)
     doc = build_native_sections(db_session, parent)
     assert doc["sections"][0]["rows"][0]["conforms"] is True
+
+
+# ── Spec-ownership slice 2: peptide-first precedence + identity anchor ──────
+
+def _mk_peptide(db, abbreviation, name=None):
+    from models import Peptide
+    pep = Peptide(name=name or abbreviation, abbreviation=abbreviation)
+    db.add(pep); db.flush()
+    return pep
+
+
+def test_peptide_tier_spec_beats_matrix_and_wildcard(db_session, monkeypatch):
+    """The parent's identity anchor (R6, sample_peptide_id — the single
+    peptide-linked family service) resolves the peptide-tier spec ahead of
+    both the matrix and wildcard rows filed on the same service."""
+    from decimal import Decimal
+    from models import AnalysisServiceSpec
+    peptide = _mk_peptide(db_session, "BPC157")
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    svcs[0].peptide_id = peptide.id
+    db_session.flush()
+    db_session.add(AnalysisServiceSpec(   # wildcard: 100
+        analysis_service_id=svcs[0].id, matrix=None, rule_kind="range",
+        max_value=Decimal("100"), unit="ppm"))
+    db_session.add(AnalysisServiceSpec(   # matrix: 1
+        analysis_service_id=svcs[0].id, matrix="Peptide", rule_kind="range",
+        max_value=Decimal("1"), unit="ppm"))
+    db_session.add(AnalysisServiceSpec(   # peptide: 0.05
+        analysis_service_id=svcs[0].id, peptide_id=peptide.id, matrix=None,
+        rule_kind="range", max_value=Decimal("0.05"), unit="ppm"))
+    db_session.flush()
+    parent = _mk_parent_with_rows(db_session, svcs, result="0.12")
+    parent.sample_type_title = "Peptide"
+    db_session.flush()
+    _order_lookup(monkeypatch)
+    doc = build_native_sections(db_session, parent)
+    row = doc["sections"][0]["rows"][0]
+    assert row["specification"]["max"] == 0.05
+    assert row["conforms"] is False          # 0.12 > the peptide-tier 0.05
+
+
+def test_blend_family_skips_peptide_tier(db_session, monkeypatch):
+    """R5: two distinct peptide anchors on the family (a blend) makes
+    sample_peptide_id return None — resolution must coarsen straight to the
+    matrix tier, never touching the peptide-tier row filed on the service."""
+    from decimal import Decimal
+    from models import AnalysisServiceSpec
+    pep_a = _mk_peptide(db_session, "BPC157")
+    pep_b = _mk_peptide(db_session, "TB500")
+    prof, svcs = _mk_native_profile(
+        db_session, key="heavy_metals",
+        services=[("HM-PB", "mk1"), ("HM-AS", "mk1")], specs=False,
+    )
+    svcs[0].peptide_id = pep_a.id
+    svcs[1].peptide_id = pep_b.id
+    db_session.flush()
+    db_session.add(AnalysisServiceSpec(   # peptide tier — must NOT be reached
+        analysis_service_id=svcs[0].id, peptide_id=pep_a.id, matrix=None,
+        rule_kind="range", max_value=Decimal("0.01"), unit="ppm"))
+    db_session.add(AnalysisServiceSpec(
+        analysis_service_id=svcs[0].id, matrix="Peptide", rule_kind="range",
+        max_value=Decimal("1"), unit="ppm"))
+    db_session.add(AnalysisServiceSpec(
+        analysis_service_id=svcs[1].id, matrix="Peptide", rule_kind="range",
+        max_value=Decimal("1"), unit="ppm"))
+    db_session.flush()
+    parent = _mk_parent_with_rows(db_session, svcs, result="0.12")
+    parent.sample_type_title = "Peptide Blend"
+    db_session.flush()
+    _order_lookup(monkeypatch)
+    doc = build_native_sections(db_session, parent)
+    row = next(r for r in doc["sections"][0]["rows"] if r["keyword"] == "HM-PB")
+    assert row["specification"]["max"] == 1.0     # matrix, not the 0.01 peptide row
+    assert row["conforms"] is True
+
+    # Control: collapse the family to a SINGLE anchor (both services now
+    # point at pep_a) — sample_peptide_id must flip to pep_a.id and the
+    # peptide-tier row (0.01) must now be the one that resolves. Proves the
+    # skip above is actually caused by the two-anchor discriminator, not
+    # some other reason the peptide tier never fires.
+    svcs[1].peptide_id = pep_a.id
+    db_session.flush()
+    doc = build_native_sections(db_session, parent)
+    row = next(r for r in doc["sections"][0]["rows"] if r["keyword"] == "HM-PB")
+    assert row["specification"]["max"] == 0.01
+    assert row["conforms"] is False               # 0.12 > 0.01
+
+
+def test_unresolvable_peptide_coarsens_to_matrix_never_aborts(db_session, monkeypatch):
+    """R4: a real peptide anchor with no spec filed AT that peptide_id must
+    fall through to the matrix tier, never abort COA generation."""
+    from decimal import Decimal
+    from models import AnalysisServiceSpec
+    peptide = _mk_peptide(db_session, "BPC157")
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    svcs[0].peptide_id = peptide.id
+    db_session.flush()
+    db_session.add(AnalysisServiceSpec(   # only a matrix row — no peptide row
+        analysis_service_id=svcs[0].id, matrix="Peptide", rule_kind="range",
+        max_value=Decimal("1"), unit="ppm"))
+    db_session.flush()
+    parent = _mk_parent_with_rows(db_session, svcs, result="0.12")
+    parent.sample_type_title = "Peptide"
+    db_session.flush()
+    _order_lookup(monkeypatch)
+    doc = build_native_sections(db_session, parent)   # must not raise
+    row = doc["sections"][0]["rows"][0]
+    assert row["specification"]["max"] == 1.0
+    assert row["conforms"] is True
+
+
+def test_rule5_abort_message_names_tiers_consulted(db_session, monkeypatch):
+    """The extended rule-5 abort message names every tier consulted so the
+    lab knows exactly which analysis_service_specs row is missing."""
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    parent = _mk_parent_with_rows(db_session, svcs)
+    _order_lookup(monkeypatch)
+    with pytest.raises(NativeSectionsError,
+                       match=r"tiers consulted: peptide=None, matrix=None, wildcard"):
+        build_native_sections(db_session, parent)
