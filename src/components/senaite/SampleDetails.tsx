@@ -4245,11 +4245,19 @@ export function SampleDetails() {
           description: e instanceof Error ? e.message : String(e),
         })
       )
-    // Overlay + promotion badges + native card only exist on parent pages; skip on sub-samples.
+    // Cache marks run on EVERY page (fix 2026-08-20, F5-to-update UAT
+    // report): the parent's overlay + native-card queries only RENDER on
+    // parent pages, but their react-query cache outlives the page — a
+    // vial-side promote must mark them stale or the parent serves a
+    // fresh-looking stale card for staleTime (30s) after click-through.
+    // Invalidation refetches ACTIVE queries only; on a vial page these are
+    // inactive, so this is a cheap stale mark, no extra requests.
+    invalidateParentVialOverlay(queryClient)
+    void queryClient.invalidateQueries({ queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY] })
+    // Promotion badges are page-local state keyed to the CURRENT page's id
+    // and re-fetched on every navigation — parent pages only.
     if (parentSampleId === null) {
-      invalidateParentVialOverlay(queryClient)
       refreshPromotions(id)
-      void queryClient.invalidateQueries({ queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY] })
     }
   }
 

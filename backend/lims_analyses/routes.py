@@ -99,6 +99,14 @@ def _handle_service_error(e: Exception) -> HTTPException:
         )
     if isinstance(e, (UnknownStateError, UnknownKindError, UnknownTierError)):
         return HTTPException(status_code=400, detail=str(e))
+    if isinstance(e, SenaiteWritebackError):
+        # Parent-tier verify tee (read-flip seam fix, 2026-08-20): same 502
+        # semantics as the promote route's write-back failure — the upstream
+        # system refused, nothing was committed.
+        return HTTPException(
+            status_code=502,
+            detail=f"SENAITE write-back failed — transition aborted: {e}",
+        )
     if isinstance(e, IntegrityError):
         # The most common case is the partial unique index on
         # (lims_sample_pk, keyword) WHERE retest_of_id IS NULL — i.e. a

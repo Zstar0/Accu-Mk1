@@ -334,3 +334,74 @@ def test_list_parent_line_states_empty_items_returns_empty_dict():
         states = list_parent_line_states("P-0144")
 
     assert states == {}
+
+
+# ---------------------------------------------------------------------------
+# writeback_parent_verify — the parent-tier verify tee (read-flip seam fix,
+# 2026-08-20: the mk1-mode main table's Verify must flip the SENAITE line).
+# ---------------------------------------------------------------------------
+
+from lims_analyses.senaite_writeback import writeback_parent_verify
+
+
+def test_writeback_parent_verify_transitions_active_line():
+    items = [_analysis_item("uid-v1", "HPLC-PUR", "to_be_verified")]
+    verified_resp = _ok_resp([{"uid": "uid-v1", "review_state": "verified"}])
+    with patch("lims_analyses.senaite_writeback._get", return_value=_ok_resp(items)), \
+         patch("lims_analyses.senaite_writeback._post_json", return_value=verified_resp) as mock_post:
+        result = writeback_parent_verify("P-0158", "HPLC-PUR")
+
+    assert result == "verified"
+    assert mock_post.call_count == 1
+    assert mock_post.call_args.kwargs["json"] == {"transition": "verify"}
+
+
+def test_writeback_parent_verify_already_verified_is_success_without_calls():
+    """The lab may have signed off in SENAITE first (the pre-fix workaround) —
+    the native verify must converge, not 502."""
+    items = [_analysis_item("uid-v2", "HPLC-PUR", "verified")]
+    with patch("lims_analyses.senaite_writeback._get", return_value=_ok_resp(items)), \
+         patch("lims_analyses.senaite_writeback._post_json") as mock_post:
+        result = writeback_parent_verify("P-0158", "HPLC-PUR")
+
+    assert result == "verified"
+    mock_post.assert_not_called()
+
+
+def test_writeback_parent_verify_raises_when_keyword_absent():
+    items = [_analysis_item("uid-x", "OTHER", "to_be_verified")]
+    with patch("lims_analyses.senaite_writeback._get", return_value=_ok_resp(items)):
+        with pytest.raises(SenaiteWritebackError):
+            writeback_parent_verify("P-0158", "HPLC-PUR")
+
+
+def test_writeback_parent_verify_raises_on_silent_rejection():
+    items = [_analysis_item("uid-v3", "HPLC-PUR", "to_be_verified")]
+    still_resp = _ok_resp([{"uid": "uid-v3", "review_state": "to_be_verified"}])
+    with patch("lims_analyses.senaite_writeback._get", return_value=_ok_resp(items)), \
+         patch("lims_analyses.senaite_writeback._post_json", return_value=still_resp):
+        with pytest.raises(SenaiteWritebackError):
+            writeback_parent_verify("P-0158", "HPLC-PUR")
+
+
+def test_writeback_parent_verify_raises_when_only_retracted_lines():
+    items = [_analysis_item("uid-r", "HPLC-PUR", "retracted")]
+    with patch("lims_analyses.senaite_writeback._get", return_value=_ok_resp(items)):
+        with pytest.raises(SenaiteWritebackError):
+            writeback_parent_verify("P-0158", "HPLC-PUR")
+
+
+def test_writeback_parent_verify_prefers_active_line_over_verified():
+    """Retest-in-SENAITE shape: a verified old line plus an active retest copy —
+    the tee must verify the ACTIVE line, never no-op on the stale verified one."""
+    items = [
+        _analysis_item("uid-old", "HPLC-PUR", "verified"),
+        _analysis_item("uid-new", "HPLC-PUR", "to_be_verified"),
+    ]
+    verified_resp = _ok_resp([{"uid": "uid-new", "review_state": "verified"}])
+    with patch("lims_analyses.senaite_writeback._get", return_value=_ok_resp(items)), \
+         patch("lims_analyses.senaite_writeback._post_json", return_value=verified_resp) as mock_post:
+        result = writeback_parent_verify("P-0158", "HPLC-PUR")
+
+    assert result == "verified"
+    assert "uid-new" in mock_post.call_args.args[0]

@@ -39,6 +39,12 @@ def _stub_senaite_writeback(monkeypatch):
 
     monkeypatch.setattr(_routes.senaite_writeback, "writeback_promotion",
                         lambda *args, **kwargs: "stub-senaite-uid")
+    # Parent-tier verify tee (seam fix 2026-08-20): apply_transition now tees
+    # SENAITE-origin parent sign-offs to SENAITE. Same stub rationale as
+    # promote above; the tee's own coverage lives in
+    # test_parent_verify_tee.py / test_senaite_writeback.py.
+    monkeypatch.setattr(_routes.senaite_writeback, "writeback_parent_verify",
+                        lambda *args, **kwargs: "verified")
 
 
 @pytest.fixture
