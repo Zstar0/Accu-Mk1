@@ -17,6 +17,7 @@ rule 5 — no resolvable active spec — aborts here at the producer.
 from __future__ import annotations
 
 import logging
+import math
 from typing import Optional
 
 from sqlalchemy import select
@@ -134,7 +135,28 @@ def _spec_wire_dict(spec) -> dict:
         "max": float(spec.max_value) if spec.max_value is not None else None,
         "unit": spec.unit,
         "display": spec.display_override,
+        # Range-only: equals rows never censor, so publishing a stray loq
+        # filed on one (tolerated at write time) would contradict the wire's
+        # own convention and light the consumer's LOQ column regardless.
+        "loq": (float(spec.loq)
+                if spec.rule_kind == "range" and spec.loq is not None else None),
     }
+
+
+def _result_display(spec, result) -> Optional[str]:
+    """Mk1's applied lab-reporting convention for the PRINTED result — the
+    verdict never reads it. Only convention today: LOQ censoring on range
+    rows. Runs after evaluate(), which guarantees a finite numeric for
+    range rows; the guards here are belt-and-braces, not policy."""
+    if spec.rule_kind != "range" or spec.loq is None:
+        return None
+    try:
+        value = float(str(result or "").strip())
+    except ValueError:
+        return None
+    if not math.isfinite(value):
+        return None
+    return "< LOQ" if value < float(spec.loq) else None
 
 
 def build_native_sections(db: Session, parent) -> dict:
@@ -223,6 +245,7 @@ def build_native_sections(db: Session, parent) -> dict:
                 "method": _method_label(db, row.method_id),
                 "specification": _spec_wire_dict(spec),
                 "conforms": conforms,
+                "result_display": _result_display(spec, row.result_value),
             })
         if not rows:
             # Rule 3 (section half): unreachable while members are required
@@ -235,6 +258,16 @@ def build_native_sections(db: Session, parent) -> dict:
             "title": prof.coa_section_title or prof.name,
             "archetype": prof.coa_archetype,
             "sort_order": prof.coa_sort_order,
+            "basis_note": prof.coa_basis_note,
+            "method_text": prof.coa_method_text,
+            "prep_text": prof.coa_prep_text,
+            # Fail-open to [] on a malformed container is deliberate: the
+            # certificate must not 500 on a bad footnote row (module's
+            # NativeSectionsError-only failure surface). The validated
+            # routes enforce list shape on every authored write — a non-list
+            # here means seed/migration/direct SQL, not user input.
+            "footnotes": (list(prof.coa_footnotes)
+                          if isinstance(prof.coa_footnotes, list) else []),
             "rows": rows,
         })
 

@@ -296,6 +296,9 @@ class AnalysisServiceSpec(Base):
     unit: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     # NULL = COABuilder formats the display string from the bounds.
     display_override: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Limit of quantitation in the spec row's own unit (display + censoring
+    # only — evaluate() never reads it; the verdict is always the raw number).
+    loq: Mapped[Optional[Decimal]] = mapped_column(Numeric, nullable=True)
     active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )
@@ -515,6 +518,16 @@ class AnalysisProfile(Base):
     coa_archetype: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     coa_sort_order: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
+    )
+    # COA display chrome (spec 2026-08-16): section-scoped, archetype-
+    # independent, all inert until the renderer slice consumes them.
+    coa_basis_note: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    coa_method_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    coa_prep_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Ordered [{"label": str, "text": str}] — list shape so families differ
+    # in footnote count without schema change.
+    coa_footnotes: Mapped[Optional[list]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True
     )
     # ── Profile-level SLA tier (Task 11) ─────────────────────────────────────
     # Beats the member services' group tier, loses to a priority override.

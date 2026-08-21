@@ -1546,6 +1546,7 @@ def _run_migrations():
             equals_value TEXT,
             unit VARCHAR(50),
             display_override TEXT,
+            loq NUMERIC,
             active BOOLEAN NOT NULL DEFAULT TRUE,
             created_at TIMESTAMP DEFAULT now(),
             updated_at TIMESTAMP DEFAULT now(),
@@ -1639,6 +1640,12 @@ def _run_migrations():
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_wildcard "
         "ON analysis_service_specs (analysis_service_id) "
         "WHERE active AND matrix IS NULL AND peptide_id IS NULL",
+        # --- COA display fields (spec 2026-08-16): all nullable, no backfill ---
+        "ALTER TABLE analysis_service_specs ADD COLUMN IF NOT EXISTS loq NUMERIC",
+        "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_basis_note VARCHAR(200)",
+        "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_method_text TEXT",
+        "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_prep_text TEXT",
+        "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_footnotes JSONB",
         # S3 (native identity convergence): service-id-keyed twins of the two
         # keyword root indexes. Mirrors each source index's predicate EXACTLY
         # (asymmetry recorded, not fixed: vial root has no provenance term;

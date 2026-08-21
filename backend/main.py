@@ -15,7 +15,7 @@ from datetime import datetime, date, time, timezone
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 from pathlib import Path
-from typing import Literal, Optional, Union
+from typing import Any, Literal, Optional, Union
 from uuid import UUID
 
 # App version: prefer APP_VERSION env var (set by Docker build-arg),
@@ -2652,6 +2652,15 @@ class AnalysisProfileCreate(BaseModel):
     # instead of being silently dropped as an unknown field — arming is
     # PATCH-only. See create_analysis_profile's docstring for why.
     coa_archetype: Optional[str] = None
+    # Task 3: free-text COA display fields (Task 1 columns) — inert like
+    # coa_section_title above until coa_archetype is armed, so settable here.
+    coa_basis_note: Optional[str] = None
+    coa_method_text: Optional[str] = None
+    coa_prep_text: Optional[str] = None
+    # [{label, text}, ...] or None — shape enforced by _validate_coa_footnotes,
+    # not Pydantic, so a bad shape 400s with a field-pointing message instead
+    # of pydantic's generic validation-error payload.
+    coa_footnotes: Optional[Any] = None
     # Not a persisted profile column — consumed only by the auto-mint path
     # (POST/PATCH /analysis-profiles) to seed a newly-minted vial_roles row's
     # department. Stripped from model_dump() before constructing AnalysisProfile.
@@ -2674,6 +2683,13 @@ class AnalysisProfileUpdate(BaseModel):
     coa_section_title: Optional[str] = None
     coa_archetype: Optional[str] = None
     coa_sort_order: Optional[int] = None
+    # Task 3: see AnalysisProfileCreate — same fields, same inertness while
+    # coa_archetype is NULL. Explicit null clears via the usual exclude_unset
+    # semantics (no special-casing needed for these four).
+    coa_basis_note: Optional[str] = None
+    coa_method_text: Optional[str] = None
+    coa_prep_text: Optional[str] = None
+    coa_footnotes: Optional[Any] = None
     # Task 11: beats the member services' group tier, loses to a priority
     # override. Explicit null clears it (inherit group SLA again) — see
     # exclude_unset handling in update_analysis_profile.
@@ -2696,6 +2712,11 @@ class AnalysisProfileResponse(BaseModel):
     coa_section_title: Optional[str] = None
     coa_archetype: Optional[str] = None
     coa_sort_order: int = 0
+    # Task 3: see AnalysisProfileCreate for why these are settable pre-arming.
+    coa_basis_note: Optional[str] = None
+    coa_method_text: Optional[str] = None
+    coa_prep_text: Optional[str] = None
+    coa_footnotes: Optional[Any] = None
     sla_tier_id: Optional[int] = None
     member_ids: list[int] = []
     # Task 11: byte-identical to member_ids (same analysis_services relationship,
@@ -3592,6 +3613,7 @@ class ServiceSpecResponse(BaseModel):
     equals_value: Optional[str] = None
     unit: Optional[str] = None
     display_override: Optional[str] = None
+    loq: Optional[str] = None
     active: bool
     updated_at: Optional[datetime] = None
 
@@ -3605,6 +3627,7 @@ class ServiceSpecCreate(BaseModel):
     equals_value: Optional[str] = None
     unit: Optional[str] = None
     display_override: Optional[str] = None
+    loq: Optional[str] = None
 
 
 class ServiceSpecPatch(BaseModel):
@@ -3614,6 +3637,7 @@ class ServiceSpecPatch(BaseModel):
     equals_value: Optional[str] = None
     unit: Optional[str] = None
     display_override: Optional[str] = None
+    loq: Optional[str] = None
     active: Optional[bool] = None
 
 
@@ -3653,6 +3677,15 @@ def _parse_decimal(value: Optional[str], field: str) -> Optional[Decimal]:
     return parsed
 
 
+def _parse_loq(value: Optional[str]) -> Optional[Decimal]:
+    """LOQ shares _parse_decimal's finite gate and additionally must be
+    non-negative — a negative floor would censor every result."""
+    parsed = _parse_decimal(value, "loq")
+    if parsed is not None and parsed < 0:
+        raise HTTPException(422, "loq must be non-negative")
+    return parsed
+
+
 def _dec_to_str(value: Optional[Decimal]) -> Optional[str]:
     """SQLite's NUMERIC column has no native decimal support, so DBAPI hands
     back a float that SQLAlchemy converts to Decimal at a padded default
@@ -3677,7 +3710,8 @@ def _spec_response(db, spec) -> ServiceSpecResponse:
         min_value=_dec_to_str(spec.min_value),
         max_value=_dec_to_str(spec.max_value),
         equals_value=spec.equals_value, unit=spec.unit,
-        display_override=spec.display_override, active=spec.active,
+        display_override=spec.display_override, loq=_dec_to_str(spec.loq),
+        active=spec.active,
         updated_at=spec.updated_at,
     )
 
@@ -3718,6 +3752,7 @@ def create_service_spec(service_id: int, req: ServiceSpecCreate,
         max_value=_parse_decimal(req.max_value, "max_value"),
         equals_value=req.equals_value, unit=req.unit,
         display_override=req.display_override,
+        loq=_parse_loq(req.loq),
         updated_by_id=current_user.id,
     )
     db.add(spec)
@@ -3768,7 +3803,9 @@ def patch_service_spec(spec_id: int, req: ServiceSpecPatch,
     # mid-comprehension _parse_decimal raise discards the whole dict and
     # the mutation loop below never runs.
     converted = {
-        k: (_parse_decimal(v, k) if k in ("min_value", "max_value") and v is not None else v)
+        k: (_parse_decimal(v, k) if k in ("min_value", "max_value") and v is not None
+            else _parse_loq(v) if k == "loq" and v is not None
+            else v)
         for k, v in fields.items()
     }
     for k, v in converted.items():
@@ -16421,10 +16458,28 @@ def _profile_to_response(p) -> AnalysisProfileResponse:
         fulfillment_role=p.fulfillment_role, fulfillment_dim=p.fulfillment_dim,
         sort_order=p.sort_order, active=p.active,
         coa_section_title=p.coa_section_title, coa_archetype=p.coa_archetype,
-        coa_sort_order=p.coa_sort_order, sla_tier_id=p.sla_tier_id,
+        coa_sort_order=p.coa_sort_order,
+        coa_basis_note=p.coa_basis_note, coa_method_text=p.coa_method_text,
+        coa_prep_text=p.coa_prep_text, coa_footnotes=p.coa_footnotes,
+        sla_tier_id=p.sla_tier_id,
         member_ids=member_ids, member_service_ids=member_ids,
         created_at=p.created_at, updated_at=p.updated_at,
     )
+
+
+def _validate_coa_footnotes(value) -> None:
+    """[{label, text}] and nothing else — the renderer trusts this shape."""
+    if value is None:
+        return
+    if not isinstance(value, list):
+        raise HTTPException(400, "coa_footnotes must be a list of {label, text} objects")
+    for i, note in enumerate(value):
+        if (not isinstance(note, dict) or set(note.keys()) != {"label", "text"}
+                or not isinstance(note.get("label"), str)
+                or not isinstance(note.get("text"), str)
+                or not note["label"].strip() or not note["text"].strip()):
+            raise HTTPException(
+                400, f"coa_footnotes[{i}] must be {{label, text}} with non-empty strings")
 
 
 @app.get("/analysis-profiles", response_model=list[AnalysisProfileResponse])
@@ -16460,6 +16515,7 @@ async def create_analysis_profile(
             "unreported and is armed with a later PATCH (arming is "
             "retroactive across in-flight samples)",
         )
+    _validate_coa_footnotes(data.coa_footnotes)
     existing = db.execute(
         select(AnalysisProfile).where(AnalysisProfile.key == data.key)
     ).scalar_one_or_none()
@@ -16552,6 +16608,8 @@ async def update_analysis_profile(
             f"unknown coa_archetype {fields['coa_archetype']!r}; "
             f"allowed: {sorted(COA_ARCHETYPES)} or null (not reported)",
         )
+    if "coa_footnotes" in fields:
+        _validate_coa_footnotes(fields["coa_footnotes"])
     # Task 11: reject an unknown sla_tier_id with a 400. An explicit null
     # (present in `fields` thanks to exclude_unset) is legal — it clears the
     # profile's own tier and falls back to inheriting the group's tier.

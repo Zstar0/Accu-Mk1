@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 # `pytest tests/test_analysis_service_spec_model.py` invocation hits
 # "no such table: analysis_services", since the helpers below otherwise do
 # their first `from models import ...` only after create_all() has already run.
-from models import AnalysisService, AnalysisServiceSpec, Peptide
+from models import AnalysisProfile, AnalysisService, AnalysisServiceSpec, Peptide
 from catalog.service_spec_audit import snapshot_spec
 
 
@@ -144,3 +144,37 @@ def test_snapshot_spec_carries_peptide_id(db_session, svc, peptide):
                                rule_kind="range", max_value=Decimal("1"))
     db_session.add(spec); db_session.flush()
     assert snapshot_spec(spec)["peptide_id"] == peptide.id
+
+
+# ── COA display fields (spec 2026-08-16): loq + profile chrome ─────────────
+
+def test_spec_loq_round_trip(db_session, svc):
+    spec = AnalysisServiceSpec(analysis_service_id=svc.id,
+                               rule_kind="range", max_value=Decimal("100"),
+                               unit="µg/g", loq=Decimal("0.5"))
+    db_session.add(spec); db_session.commit(); db_session.refresh(spec)
+    assert spec.loq == Decimal("0.5")
+
+
+def test_spec_loq_nullable(db_session, svc):
+    spec = AnalysisServiceSpec(analysis_service_id=svc.id,
+                               rule_kind="range", max_value=Decimal("100"))
+    db_session.add(spec); db_session.commit()
+    assert spec.loq is None
+
+
+def test_profile_coa_display_columns_round_trip(db_session):
+    prof = AnalysisProfile(key="hm_t1", name="HM", is_addon=True,
+                           coa_basis_note="USP <232> Parenteral PDE | MDD 50 mg/day",
+                           coa_method_text="MP-AES following hot block acid digestion",
+                           coa_prep_text="100 mg / 10 mL digest",
+                           coa_footnotes=[{"label": "Reporting.", "text": "µg/g = ppm."}])
+    db_session.add(prof); db_session.commit(); db_session.refresh(prof)
+    assert prof.coa_footnotes[0]["label"] == "Reporting."
+
+
+def test_profile_coa_display_columns_default_null(db_session):
+    prof = AnalysisProfile(key="hm_t2", name="HM2", is_addon=True)
+    db_session.add(prof); db_session.commit()
+    assert (prof.coa_basis_note, prof.coa_method_text,
+            prof.coa_prep_text, prof.coa_footnotes) == (None, None, None, None)

@@ -21,6 +21,7 @@ def snapshot_spec(spec) -> dict:
         "max_value": str(spec.max_value) if spec.max_value is not None else None,
         "equals_value": spec.equals_value,
         "unit": spec.unit,
+        "loq": str(spec.loq) if spec.loq is not None else None,
         "display_override": spec.display_override,
         "active": spec.active,
     }

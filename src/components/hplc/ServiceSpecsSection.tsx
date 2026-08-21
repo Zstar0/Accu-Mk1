@@ -45,15 +45,19 @@ const SPEC_MATRICES = ['Peptide', 'Bacteriostatic Water'] as const
 
 type Tier = 'all' | 'matrix' | 'peptide'
 
-/** Readable rule text: "≤ 0.5 µg/g", "1 – 5 µg/g", "≥ 0.5 µg/g", "= Not Detected". */
+/** Readable rule text: "≤ 0.5 µg/g", "1 – 5 µg/g", "≥ 0.5 µg/g", "= Not Detected".
+ *  A range rule with an LOQ filed appends " · LOQ {loq}" — equals-kind specs
+ *  are never censored (backend never reads loq off them), so the equals
+ *  branch stays untouched. */
 function ruleLabel(spec: AnalysisServiceSpecRecord): string {
   if (spec.rule_kind === 'equals') return `= ${spec.equals_value ?? '—'}`
   const unit = spec.unit ? ` ${spec.unit}` : ''
-  const { min_value, max_value } = spec
+  const { min_value, max_value, loq } = spec
+  const loqSuffix = loq != null ? ` · LOQ ${loq}` : ''
   if (min_value != null && max_value != null)
-    return `${min_value} – ${max_value}${unit}`
-  if (min_value != null) return `≥ ${min_value}${unit}`
-  if (max_value != null) return `≤ ${max_value}${unit}`
+    return `${min_value} – ${max_value}${unit}${loqSuffix}`
+  if (min_value != null) return `≥ ${min_value}${unit}${loqSuffix}`
+  if (max_value != null) return `≤ ${max_value}${unit}${loqSuffix}`
   return '—'
 }
 
@@ -71,6 +75,7 @@ interface AddFormState {
   equalsValue: string
   unit: string
   displayOverride: string
+  loq: string
 }
 
 const EMPTY_FORM: AddFormState = {
@@ -84,6 +89,7 @@ const EMPTY_FORM: AddFormState = {
   equalsValue: '',
   unit: '',
   displayOverride: '',
+  loq: '',
 }
 
 /** Mirrors backend `_validate_spec_shape` (main.py:3443) — structural only,
@@ -106,21 +112,38 @@ function buildPayload(f: AddFormState): ServiceSpecPayload {
     equals_value: f.ruleKind === 'equals' ? f.equalsValue.trim() : null,
     unit: f.unit.trim() || null,
     display_override: f.displayOverride.trim() || null,
+    loq: f.ruleKind === 'range' ? f.loq.trim() || null : null,
   }
 }
 
 function Field({
   label,
+  tooltip,
   className,
   children,
 }: {
   label: string
+  tooltip?: ReactNode
   className?: string
   children: ReactNode
 }) {
   return (
     <div className={`space-y-1 ${className ?? ''}`}>
-      <label className="text-xs font-medium">{label}</label>
+      <div className="flex items-center gap-1">
+        <label className="text-xs font-medium">{label}</label>
+        {tooltip && (
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Info className="h-3 w-3 text-muted-foreground cursor-default" />
+              </TooltipTrigger>
+              <TooltipContent side="right" className="max-w-xs text-xs">
+                {tooltip}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )}
+      </div>
       {children}
     </div>
   )
@@ -131,17 +154,22 @@ function InputField({
   value,
   onChange,
   className = 'w-24',
+  placeholder,
+  tooltip,
 }: {
   label: string
   value: string
   onChange: (v: string) => void
   className?: string
+  placeholder?: string
+  tooltip?: ReactNode
 }) {
   return (
-    <Field label={label} className={className}>
+    <Field label={label} tooltip={tooltip} className={className}>
       <Input
         aria-label={label}
         className="h-8 text-sm"
+        placeholder={placeholder}
         value={value}
         onChange={e => onChange(e.target.value)}
       />
@@ -373,6 +401,15 @@ export function ServiceSpecsSection({
                 label="Max"
                 value={form.maxValue}
                 onChange={v => setForm(f => ({ ...f, maxValue: v }))}
+              />
+              <InputField
+                label="LOQ"
+                value={form.loq}
+                onChange={v => setForm(f => ({ ...f, loq: v }))}
+                placeholder="e.g. 0.5"
+                tooltip={
+                  'Limit of quantitation in the spec\'s unit. Results below it print as "< LOQ" on the COA; the pass/fail verdict still uses the raw number.'
+                }
               />
             </>
           ) : (

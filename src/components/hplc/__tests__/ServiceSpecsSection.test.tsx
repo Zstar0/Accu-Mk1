@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { render, screen, waitFor, within, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ServiceSpecsSection } from '@/components/hplc/ServiceSpecsSection'
 import type { AnalysisServiceSpecRecord } from '@/lib/api'
@@ -23,6 +23,7 @@ const { specs } = vi.hoisted(() => {
       equals_value: null,
       unit: 'µg/g',
       display_override: null,
+      loq: null,
       active: true,
       updated_at: '2026-08-14T00:00:00Z',
     },
@@ -38,6 +39,7 @@ const { specs } = vi.hoisted(() => {
       equals_value: 'Not Detected',
       unit: null,
       display_override: 'ND',
+      loq: null,
       active: true,
       updated_at: '2026-08-14T00:00:00Z',
     },
@@ -87,5 +89,89 @@ describe('ServiceSpecsSection', () => {
 
     await user.type(screen.getByLabelText('Min'), '1')
     await waitFor(() => expect(addButton).not.toBeDisabled())
+  })
+
+  // ── LOQ (COA display fields, 2026-08-16 spec, task 5) ──
+
+  it('includes loq in the POST payload for a range spec when LOQ is filled', async () => {
+    const { createServiceSpec } = await import('@/lib/api')
+    const user = userEvent.setup()
+    render(<ServiceSpecsSection serviceId={42} peptides={[]} />)
+    await screen.findByText('Specs (2)')
+
+    await user.type(screen.getByLabelText('Max'), '100')
+    await user.type(screen.getByLabelText('LOQ'), '0.5')
+    await user.click(screen.getByRole('button', { name: /add spec/i }))
+
+    await waitFor(() => {
+      expect(createServiceSpec).toHaveBeenCalledWith(
+        42,
+        expect.objectContaining({ max_value: '100', loq: '0.5' })
+      )
+    })
+  })
+
+  it('sends loq: null for a range spec when LOQ is left blank', async () => {
+    const { createServiceSpec } = await import('@/lib/api')
+    const user = userEvent.setup()
+    render(<ServiceSpecsSection serviceId={42} peptides={[]} />)
+    await screen.findByText('Specs (2)')
+
+    await user.type(screen.getByLabelText('Max'), '100')
+    await user.click(screen.getByRole('button', { name: /add spec/i }))
+
+    await waitFor(() => {
+      expect(createServiceSpec).toHaveBeenCalledWith(
+        42,
+        expect.objectContaining({ loq: null })
+      )
+    })
+  })
+
+  it('sends loq: null for an equals-kind spec, even carrying a stale LOQ value typed before switching Rule', async () => {
+    const { createServiceSpec } = await import('@/lib/api')
+    const user = userEvent.setup()
+    render(<ServiceSpecsSection serviceId={42} peptides={[]} />)
+    await screen.findByText('Specs (2)')
+
+    // Fill LOQ while still on the range shape so form.loq carries a
+    // non-empty value into the Rule switch below — otherwise this test
+    // can't distinguish the ruleKind gate from an always-empty string.
+    await user.type(screen.getByLabelText('Max'), '100')
+    await user.type(screen.getByLabelText('LOQ'), '0.5')
+
+    // Radix Select doesn't fire change from userEvent's full pointer-event
+    // sequence under jsdom (hasPointerCapture isn't implemented there) —
+    // fireEvent.click sidesteps it, same workaround as
+    // analysis-profiles-fulfillment.test.tsx:290-294.
+    fireEvent.click(screen.getByRole('combobox', { name: 'Rule' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Equals' }))
+
+    // Unmounting the LOQ input does not clear form.loq (state lives in the
+    // parent useState) — the payload gate, not a cleared field, is what
+    // must null it out below.
+    expect(screen.queryByLabelText('LOQ')).not.toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('Equals'), 'Not Detected')
+    await user.click(screen.getByRole('button', { name: /add spec/i }))
+
+    await waitFor(() => {
+      expect(createServiceSpec).toHaveBeenCalledWith(
+        42,
+        expect.objectContaining({ rule_kind: 'equals', loq: null })
+      )
+    })
+  })
+
+  it('shows LOQ in the read-only spec row summary when set', async () => {
+    const { listServiceSpecs } = await import('@/lib/api')
+    const rangeSpec = specs.find(s => s.id === 1)
+    if (!rangeSpec) throw new Error('expected the range spec fixture')
+    vi.mocked(listServiceSpecs).mockResolvedValueOnce([
+      { ...rangeSpec, id: 3, loq: '0.1' },
+    ])
+    render(<ServiceSpecsSection serviceId={42} peptides={[]} />)
+
+    expect(await screen.findByText('≤ 0.5 µg/g · LOQ 0.1')).toBeInTheDocument()
   })
 })

@@ -2456,6 +2456,7 @@ export interface AnalysisServiceSpecRecord {
   equals_value: string | null
   unit: string | null
   display_override: string | null
+  loq: string | null
   active: boolean
   updated_at: string | null
 }
@@ -2469,6 +2470,7 @@ export interface ServiceSpecPayload {
   equals_value?: string | null
   unit?: string | null
   display_override?: string | null
+  loq?: string | null
 }
 
 /**
@@ -4607,6 +4609,13 @@ export interface AnalysisProfile {
   coa_section_title: string | null
   coa_archetype: string | null
   coa_sort_order: number
+  // Task 3/6: certificate display copy — inert until coa_archetype is armed,
+  // same as coa_section_title/coa_sort_order above. coa_footnotes rows are
+  // both-required on the backend (400s on a row missing label or text).
+  coa_basis_note: string | null
+  coa_method_text: string | null
+  coa_prep_text: string | null
+  coa_footnotes: { label: string; text: string }[] | null
   member_ids: number[]
   // Task 11 (profile SLA tier): byte-identical to `member_ids` — the same
   // analysis_services relationship, added under the name the SLA resolver
@@ -4661,6 +4670,11 @@ export async function createAnalysisProfile(data: {
   // samples and stays a separate PATCH.
   coa_section_title?: string | null
   coa_sort_order?: number
+  // Same "inert until armed" contract as coa_section_title above.
+  coa_basis_note?: string | null
+  coa_method_text?: string | null
+  coa_prep_text?: string | null
+  coa_footnotes?: { label: string; text: string }[] | null
   // Auto-mint (Task 3): department for a newly-minted vial_roles row. Not a
   // persisted AnalysisProfile field — the backend consumes it once, at mint
   // time, and never echoes it back on AnalysisProfileResponse.
