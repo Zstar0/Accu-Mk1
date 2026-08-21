@@ -27,7 +27,9 @@ abort rather than seed a partial/empty analyte set. endo/ster/xtra vials are
 unaffected — they keep the fixed single-keyword ROLE_TO_KEYWORDS whitelist.
 
 Idempotent: calling twice with the same args is a no-op the second time
-(deduped by the partial unique index on (lims_sub_sample_pk, keyword)).
+(deduped against both vial-tier root indexes — (lims_sub_sample_pk, keyword)
+and (lims_sub_sample_pk, analysis_service_id) — see seed_analyses_for_vial's
+two-set skip).
 """
 
 from __future__ import annotations
@@ -316,6 +318,7 @@ def mirror_parent_hplc_analyses(
     sub_sample: LimsSubSample,
     parent_sample_id: str,
     existing_kw: set,
+    existing_service_ids: set,
     created_by_user_id: Optional[int],
     commit: bool = True,
 ) -> List[LimsAnalysis]:
@@ -351,9 +354,15 @@ def mirror_parent_hplc_analyses(
     Fail-hard: a SENAITE read error propagates (the caller aborts rather than
     seed a partial analyte set).
 
-    `existing_kw` is the caller-built set of already-seeded keywords for this
-    vial; matching rows are skipped (idempotency, also backed by the partial
-    unique index on (lims_sub_sample_pk, keyword)).
+    `existing_kw` / `existing_service_ids` are the caller-built sets of
+    already-seeded identities for this vial (see seed_analyses_for_vial); a
+    candidate matching EITHER is skipped, mirroring the two live root indexes
+    on (lims_sub_sample_pk, keyword) and (lims_sub_sample_pk,
+    analysis_service_id). The id leg is what skips a native service whose
+    stored keyword has drifted from its catalog keyword — the translation
+    below resolves candidates through the CATALOG (PUR_<X>/QTY_<X> by
+    peptide_id), so it hands back exactly the catalog keyword a drifted row no
+    longer carries.
     """
     # Late import + module-attribute reference so monkeypatching
     # sub_samples.senaite.fetch_parent_analysis_keywords takes effect in tests.
@@ -438,7 +447,7 @@ def mirror_parent_hplc_analyses(
                 continue
         if svc.department_id != analytical_dept_id:   # fail-closed: Analytical only
             continue
-        if svc.keyword in existing_kw:
+        if svc.id in existing_service_ids or svc.keyword in existing_kw:
             continue
         row = la_service.create_analysis(
             db,
@@ -452,6 +461,7 @@ def mirror_parent_hplc_analyses(
         )
         inserted.append(row)
         existing_kw.add(svc.keyword)
+        existing_service_ids.add(svc.id)
         log.info(
             "seeder.mirror.seeded sub=%s analysis_id=%s keyword=%s",
             sub_sample.sample_id, row.id, svc.keyword,
@@ -465,17 +475,23 @@ def _seed_rows_from_services(
     sub_sample: LimsSubSample,
     services: List[AnalysisService],
     existing_kw: set,
+    existing_service_ids: set,
     created_by_user_id: Optional[int],
     commit: bool,
     log_event: str,
 ) -> List[LimsAnalysis]:
-    """Create a lims_analyses row for every service not already in
-    `existing_kw` (idempotency). Shared row-construction block for both the
-    legacy keyword-whitelist branch and the catalog-membership branch — same
-    fields, same skip semantics, same commit handling."""
+    """Create a lims_analyses row for every service not already seeded on this
+    vial (idempotency). Shared row-construction block for both the legacy
+    keyword-whitelist branch and the catalog-membership branch — same fields,
+    same skip semantics, same commit handling.
+
+    Already-seeded is the UNION of the two live root indexes: a candidate is
+    skipped if its service id OR its keyword is already taken by an active
+    root row (see seed_analyses_for_vial, which builds both sets). Keying on
+    the id is what catches a native service whose stored keyword drifted."""
     inserted: List[LimsAnalysis] = []
     for svc in services:
-        if svc.keyword in existing_kw:
+        if svc.id in existing_service_ids or svc.keyword in existing_kw:
             continue
         row = la_service.create_analysis(
             db,
@@ -489,6 +505,7 @@ def _seed_rows_from_services(
         )
         inserted.append(row)
         existing_kw.add(svc.keyword)
+        existing_service_ids.add(svc.id)
         log.info(
             "seeder.%s sub=%s analysis_id=%s keyword=%s",
             log_event, sub_sample.sample_id, row.id, svc.keyword,
@@ -536,18 +553,35 @@ def seed_analyses_for_vial(
         )
         return []
 
-    # Already-seeded keywords for this vial — skip them. Dead rows
+    # Already-seeded identities for this vial — skip them. Dead rows
     # (rejected/retracted) do NOT block: a service rejected on the parent and
     # later re-added must resurrect as a fresh active row next to the dead
-    # one. Mirrors the uq_lims_analyses_sub_service_root partial-index
-    # predicate, which enforces uniqueness only across active root rows.
+    # one. Mirrors the vial-tier root indexes, which enforce uniqueness only
+    # across active root rows.
+    #
+    # TWO sets because BOTH root indexes are live with identical predicates:
+    # uq_lims_analyses_sub_service_root on (vial, keyword) and
+    # uq_lims_analyses_sub_service_id_root on (vial, analysis_service_id).
+    # A candidate is already-seeded if it collides on EITHER key — this set
+    # answers "would this insert collide", which is not the same question as
+    # Task 3's identity resolution (origin-scoped, because there the keyword
+    # is a senaite row's grandfathered identity contract). The service-id
+    # index is deliberately origin-agnostic, so the id set is not scoped to
+    # mk1 rows either. Keying on the id is what catches a native row whose
+    # stored keyword has DRIFTED from its catalog keyword: keyword-only, it
+    # looked unseeded and re-seeded into an IntegrityError.
+    #
+    # One query, two projections — no join to analysis_services, so a legacy
+    # row with a NULL service FK still contributes its keyword (an inner join
+    # would have dropped it out of existing_kw and re-seeded it).
     existing = db.execute(
-        select(LimsAnalysis.keyword).where(
+        select(LimsAnalysis.keyword, LimsAnalysis.analysis_service_id).where(
             LimsAnalysis.lims_sub_sample_pk == sub_sample.id,
             LimsAnalysis.review_state.notin_(["rejected", "retracted"]),
         )
-    ).scalars().all()
-    existing_kw = set(existing)
+    ).all()
+    existing_kw = {kw for kw, _sid in existing}
+    existing_service_ids = {sid for _kw, sid in existing if sid is not None}
 
     # ── HPLC: mirror the parent's Analytics analyte set ──────────────────────
     if role == "hplc":
@@ -560,6 +594,7 @@ def seed_analyses_for_vial(
             sub_sample=sub_sample,
             parent_sample_id=parent_sample_id,
             existing_kw=existing_kw,
+            existing_service_ids=existing_service_ids,
             created_by_user_id=created_by_user_id,
             commit=commit,
         )
@@ -592,6 +627,7 @@ def seed_analyses_for_vial(
             sub_sample=sub_sample,
             services=services,
             existing_kw=existing_kw,
+            existing_service_ids=existing_service_ids,
             created_by_user_id=created_by_user_id,
             commit=commit,
             log_event="catalog_seeded",
@@ -611,6 +647,7 @@ def seed_analyses_for_vial(
         sub_sample=sub_sample,
         services=services,
         existing_kw=existing_kw,
+        existing_service_ids=existing_service_ids,
         created_by_user_id=created_by_user_id,
         commit=commit,
         log_event="seeded",

@@ -3668,6 +3668,9 @@ export interface SenaiteAnalysis {
   service_origin?: string | null
   // senaite-shape rows from Mk1: 'ordered' | 'canonical' | 'shadow'
   provenance?: string | null
+  /** S3: native identity key; keyword is display-only on mk1 rows. Absent on
+   *  SENAITE-sourced rows, which keep keyword as their identity. */
+  analysis_service_id?: number | null
 }
 
 export interface SenaiteAttachment {
