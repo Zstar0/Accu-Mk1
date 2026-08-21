@@ -422,3 +422,47 @@ def test_sections_rider_profile_no_edge_yields_empty_host_vials(db, monkeypatch)
     spot = next(r for r in section["roles"] if r["code"] == "zzehost")
     rider_entry = next(p for p in spot["profiles"] if p["relation"] == "rider")
     assert rider_entry["host_vials"] == []
+
+
+def test_sections_rider_host_vials_exclude_variance_vials(db, monkeypatch):
+    """Display parity with seeding (Handler UAT find, PB-0158): rider work
+    never SEEDS on variance replicates, so the rider chip must not point at
+    them even though write_custody_edges writes rider edges per-vial,
+    kind-blind — "→ S01, S06" on a variance family overstates where the
+    rider's analysis actually runs."""
+    from sub_samples.service import _build_vial_plan_sections
+    dept = Department(name="ZZ Var Dept")
+    db.add(dept)
+    db.flush()
+    db.add(VialRole(code="zzvhost", label="zzvhost", department_id=dept.id,
+                    boxable=False, variance_eligible=True, sort_order=902,
+                    frozen=False, is_system=False))
+    db.flush()
+    host_svc = _svc(db, "ZZV-HOST")
+    rider_svc = _svc(db, "ZZV-RIDER")
+    _profile(db, "zzv_host", "zzvhost", [host_svc], vials=1)
+    rider = _profile(db, "zzv_rider", "zzvrider", [rider_svc], rides=["zzvhost"])
+    parent, core_vial = _vial(db, "ZZV-0001", role="zzvhost", kind="core")
+    var_vial = LimsSubSample(
+        sample_id="ZZV-0001-S02", vial_sequence=2, parent_sample_pk=parent.id,
+        assignment_role="zzvhost", assignment_kind="variance",
+        external_lims_uid="ZZV-0001-S02-uid")
+    db.add(var_vial)
+    db.commit()
+    _rider_edge(db, core_vial, rider)
+    _rider_edge(db, var_vial, rider)
+
+    sections = _build_vial_plan_sections(
+        db,
+        {"zzvhost": 1},
+        [{"sample_id": core_vial.sample_id, "is_parent": False, "vial_sequence": 1,
+          "assignment_role": "zzvhost", "assignment_kind": "core"},
+         {"sample_id": var_vial.sample_id, "is_parent": False, "vial_sequence": 2,
+          "assignment_role": "zzvhost", "assignment_kind": "variance"}],
+        {"zzv_host": True, "zzv_rider": True},
+    )
+
+    section = next(s for s in sections if s["department_name"] == "ZZ Var Dept")
+    spot = next(r for r in section["roles"] if r["code"] == "zzvhost")
+    rider_entry = next(p for p in spot["profiles"] if p["relation"] == "rider")
+    assert rider_entry["host_vials"] == [core_vial.sample_id]

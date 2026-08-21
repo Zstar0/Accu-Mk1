@@ -1445,9 +1445,16 @@ def _build_vial_plan_sections(db: Session, demand: dict, vials: list[dict],
     # plan's vials hold a live rider edge, per profile — one query, keyed by
     # profile id. Display metadata only; failures here must never 500 the
     # vial plan, so the shape stays a plain default-empty lookup.
+    # Variance replicates are excluded even when they hold a rider edge
+    # (write_custody_edges writes rider edges per-vial, kind-blind) — the
+    # seeder never puts rider work on them, and the chip must point at where
+    # the rider's analysis actually runs (Handler UAT find, PB-0158
+    # "→ S01, S06"). NULL kind is a real core-shaped state (role-only PATCH)
+    # and stays included.
     rider_vials_by_pid: dict = {}
     vial_sample_ids = [v["sample_id"] for v in vials if not v.get("is_parent")]
     if all_ids and vial_sample_ids:
+        from sqlalchemy import or_
         from models import VialProfileAssignment
         edge_rows = db.execute(
             select(VialProfileAssignment.analysis_profile_id,
@@ -1459,6 +1466,10 @@ def _build_vial_plan_sections(db: Session, demand: dict, vials: list[dict],
                 VialProfileAssignment.superseded_at.is_(None),
                 VialProfileAssignment.analysis_profile_id.in_(all_ids),
                 LimsSubSample.sample_id.in_(vial_sample_ids),
+                or_(
+                    LimsSubSample.assignment_kind.is_(None),
+                    LimsSubSample.assignment_kind != "variance",
+                ),
             )
             .order_by(LimsSubSample.vial_sequence)
         ).all()

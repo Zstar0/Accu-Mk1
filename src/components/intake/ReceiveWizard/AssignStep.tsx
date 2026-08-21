@@ -8,7 +8,7 @@ import {
   useDraggable,
   type DragEndEvent,
 } from '@dnd-kit/core'
-import { HelpCircle, Loader2, MessageSquare, RotateCcw } from 'lucide-react'
+import { CornerDownRight, HelpCircle, Loader2, MessageSquare, RotateCcw } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   ApiCodeError,
@@ -596,23 +596,29 @@ function Bucket({
  *  attach their result to the host's vial instead of minting their own
  *  (resolve_catalog_fulfillment). Rendered as a SIBLING beneath the spot's
  *  Bucket/SubDropZone rather than as a prop threaded into either of those
- *  kept-verbatim components — keeps both untouched. Reuses the
- *  VarianceDropZone header visual (text-[10px] uppercase muted) with a
- *  `· rider` marker; NOT a drop target — riders never mint their own role. */
+ *  kept-verbatim components — keeps both untouched. Prominent accent pill
+ *  (Handler 2026-08-20 — the earlier muted 10px text was easy to miss),
+ *  same pill anatomy as the variance "paid" badge; NOT a drop target —
+ *  riders never mint their own role. */
 function RiderChips({ profiles }: { profiles: VialPlanRoleProfile[] }) {
   const riders = profiles.filter(p => p.relation === 'rider')
   if (riders.length === 0) return null
   return (
-    <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] uppercase tracking-wide text-muted-foreground mt-1 pl-3">
+    <div className="mt-1.5 flex flex-wrap gap-1.5 pl-3">
       {riders.map(r => {
         const landing = (r.host_vials ?? [])
           .map(v => v.split('-').pop())
           .filter(Boolean)
           .join(', ')
         return (
-          <span key={r.id} title={(r.host_vials ?? []).join(', ') || undefined}>
+          <span
+            key={r.id}
+            title={(r.host_vials ?? []).join(', ') || undefined}
+            className="inline-flex items-center gap-1 rounded-md border border-primary/45 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary"
+          >
+            <CornerDownRight className="h-3 w-3" aria-hidden="true" />
             {r.name}
-            <span className="ml-1 normal-case">
+            <span className="font-normal opacity-80">
               · rider{landing ? ` → ${landing}` : ''}
             </span>
           </span>
