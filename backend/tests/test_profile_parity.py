@@ -54,16 +54,30 @@ def test_seed_preserves_is_addon_for_primaries(seeded):
         assert p.is_addon is False
 
 
+# Spec-3 (catalog_demand / profile_seed backfill) sets fulfillment_role="hplc"
+# on these two HPLC-family primaries so derive_base_demand_catalog can
+# attribute their vial demand; PRODUCT_REGISTRY's frozen ProductDef keeps
+# fulfillment_role=None (it never gets that backfill). This is the one known,
+# intentional divergence between the legacy and catalog product lookups —
+# every other field for every other key must still match exactly.
+_SPEC3_ROLE_BACKFILL = {"hplcpurity_identity": "hplc", "bac_water_panel": "hplc"}
+
+
 @pytest.mark.parametrize("package", PACKAGES)
 def test_parity_across_every_service_combination(seeded, package):
-    """Legacy path vs profiles path must be byte-identical."""
+    """Legacy path vs profiles path must be byte-identical, except the known
+    spec-3 fulfillment_role backfill on the two HPLC-family primaries."""
     from sub_samples.product_registry import build_ordered_products
     for r in range(len(SERVICE_KEYS) + 1):
         for combo in itertools.combinations(SERVICE_KEYS, r):
             services = {k: True for k in combo}
             legacy = build_ordered_products(services, package)
             catalog = build_ordered_products(services, package, db=seeded)
-            assert catalog == legacy, f"drift for {combo} / package={package}"
+            expected = [
+                {**p, "fulfillment_role": _SPEC3_ROLE_BACKFILL.get(p["key"], p["fulfillment_role"])}
+                for p in legacy
+            ]
+            assert catalog == expected, f"drift for {combo} / package={package}"
 
 
 def test_unregistered_service_key_still_renders_fail_open(seeded):

@@ -50,12 +50,15 @@ def test_hplc_role_is_singleton():
 
 
 def test_valid_inbox_roles_exactly_hplc_and_micro():
-    assert VALID_INBOX_ROLES == {"hplc", "microbiology"}
+    # spec-3 Task 3: hm (Heavy Metals) joined as its own catalog-only lane.
+    # Name kept as-is (git-blame trail) even though the set has grown.
+    assert VALID_INBOX_ROLES == {"hplc", "microbiology", "hm"}
 
 
 def test_role_to_department_name_present():
     assert ROLE_TO_DEPARTMENT_NAME["hplc"] == "Analytical"
     assert ROLE_TO_DEPARTMENT_NAME["microbiology"] == "Microbiology"
+    assert ROLE_TO_DEPARTMENT_NAME["hm"] == "Heavy Metals"
 
 
 # ── Route validation ─────────────────────────────────────────────────────────

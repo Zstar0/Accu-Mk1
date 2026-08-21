@@ -184,3 +184,190 @@ def test_put_members_writes_sort_order_from_list_position(two_services):
 def test_get_members_404_for_unknown_profile():
     resp = client.get("/analysis-profiles/999999999/members")
     assert resp.status_code == 404
+
+
+def test_post_rejects_bad_fulfillment_dim():
+    resp = client.post("/analysis-profiles", json={
+        "key": "bad_dim_test", "name": "Bad Dim Test", "is_addon": True,
+        "fulfillment_dim": "banana",
+    })
+    assert resp.status_code == 400
+    assert "fulfillment_dim" in resp.json()["detail"]
+
+
+def test_post_rejects_bad_fulfillment_role():
+    resp = client.post("/analysis-profiles", json={
+        "key": "bad_role_test", "name": "Bad Role Test", "is_addon": True,
+        "fulfillment_role": "ALLCAPS-TOO-LONG", "fulfillment_dim": "role",
+    })
+    assert resp.status_code == 400
+    assert "fulfillment_role" in resp.json()["detail"]
+
+
+def test_post_accepts_valid_role_and_dim():
+    resp = client.post("/analysis-profiles", json={
+        "key": "good_role_test", "name": "Good Role Test", "is_addon": True,
+        "fulfillment_role": "hm", "fulfillment_dim": "role",
+    })
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["fulfillment_role"] == "hm"
+
+
+def test_patch_rejects_bad_fulfillment_dim():
+    create = client.post("/analysis-profiles", json={
+        "key": "patch_dim_test", "name": "Patch Dim Test", "is_addon": True,
+    })
+    assert create.status_code == 201, create.text
+    profile_id = create.json()["id"]
+    resp = client.patch(f"/analysis-profiles/{profile_id}", json={"fulfillment_dim": "banana"})
+    assert resp.status_code == 400
+    assert "fulfillment_dim" in resp.json()["detail"]
+
+
+def test_patch_rejects_bad_fulfillment_role():
+    create = client.post("/analysis-profiles", json={
+        "key": "patch_role_test", "name": "Patch Role Test", "is_addon": True,
+    })
+    assert create.status_code == 201, create.text
+    profile_id = create.json()["id"]
+    resp = client.patch(f"/analysis-profiles/{profile_id}", json={
+        "fulfillment_role": "ALLCAPS-TOO-LONG", "fulfillment_dim": "role",
+    })
+    assert resp.status_code == 400
+    assert "fulfillment_role" in resp.json()["detail"]
+
+
+def test_patch_accepts_valid_role():
+    create = client.post("/analysis-profiles", json={
+        "key": "patch_role_ok_test", "name": "Patch Role Ok Test", "is_addon": True,
+    })
+    assert create.status_code == 201, create.text
+    profile_id = create.json()["id"]
+    resp = client.patch(f"/analysis-profiles/{profile_id}", json={
+        "fulfillment_role": "hm", "fulfillment_dim": "role",
+    })
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["fulfillment_role"] == "hm"
+
+
+def test_patch_role_only_validates_against_existing_dim_when_omitted():
+    """A PATCH that sets only fulfillment_role (omitting fulfillment_dim) must
+    still validate against the profile's EXISTING dim (default 'role' here),
+    not skip validation because fulfillment_dim wasn't in this payload."""
+    create = client.post("/analysis-profiles", json={
+        "key": "patch_effective_dim_test", "name": "Patch Effective Dim Test",
+        "is_addon": True,
+    })
+    assert create.status_code == 201, create.text
+    assert create.json()["fulfillment_dim"] == "role"  # confirm default
+    profile_id = create.json()["id"]
+    resp = client.patch(f"/analysis-profiles/{profile_id}", json={
+        "fulfillment_role": "ALLCAPS",
+    })
+    assert resp.status_code == 400
+    assert "fulfillment_role" in resp.json()["detail"]
+
+
+def test_post_rejects_legacy_role_for_new_key():
+    """Finding 2: a NEW profile (key not one of the five legacy keys) may not
+    claim a legacy fulfillment_role. While the demand shadow-compare lives,
+    derive_base_demand only ever checks the five legacy keys for a legacy
+    bucket — a new profile parked on 'hplc'/'endo'/'ster' would get silently
+    zero-clamped on every order that doesn't also carry its own legacy key."""
+    resp = client.post("/analysis-profiles", json={
+        "key": "new_role_reservation_test", "name": "New Role Reservation Test",
+        "is_addon": True, "fulfillment_role": "hplc", "fulfillment_dim": "role",
+    })
+    assert resp.status_code == 400
+    assert "reserved for the legacy demand map" in resp.json()["detail"]
+
+
+def test_post_rejects_xtra_role():
+    resp = client.post("/analysis-profiles", json={
+        "key": "xtra_role_test", "name": "Xtra Role Test", "is_addon": True,
+        "fulfillment_role": "xtra", "fulfillment_dim": "role",
+    })
+    assert resp.status_code == 400
+    assert "reserved unassigned bucket" in resp.json()["detail"]
+
+
+def test_post_accepts_non_legacy_role_for_new_key():
+    """Sanity companion to the two rejection tests above: a catalog-only role
+    (not one of hplc/endo/ster/xtra) on a new key is unaffected."""
+    resp = client.post("/analysis-profiles", json={
+        "key": "catalog_only_role_test", "name": "Catalog Only Role Test",
+        "is_addon": True, "fulfillment_role": "hm", "fulfillment_dim": "role",
+    })
+    assert resp.status_code == 201, resp.text
+
+
+def test_patch_rejects_legacy_role_for_new_key():
+    create = client.post("/analysis-profiles", json={
+        "key": "patch_role_reservation_test", "name": "Patch Role Reservation Test",
+        "is_addon": True,
+    })
+    assert create.status_code == 201, create.text
+    profile_id = create.json()["id"]
+    resp = client.patch(f"/analysis-profiles/{profile_id}", json={
+        "fulfillment_role": "endo", "fulfillment_dim": "role",
+    })
+    assert resp.status_code == 400
+    assert "reserved for the legacy demand map" in resp.json()["detail"]
+
+
+def test_patch_rejects_xtra_role_even_on_legacy_key():
+    """The five real legacy-key profiles are exempt from the role-reservation
+    check (they're the allowlist), but 'xtra' is reserved for everyone —
+    even them. Uses the real 'endotoxin' seed row rather than a fixture
+    profile, since the allowlist is genuinely key-based."""
+    from database import SessionLocal
+    from models import AnalysisProfile
+    db = SessionLocal()
+    try:
+        endotoxin = db.query(AnalysisProfile).filter_by(key="endotoxin").one()
+        profile_id, original_role = endotoxin.id, endotoxin.fulfillment_role
+    finally:
+        db.close()
+    resp = client.patch(f"/analysis-profiles/{profile_id}", json={"fulfillment_role": "xtra"})
+    assert resp.status_code == 400
+    assert "reserved unassigned bucket" in resp.json()["detail"]
+    db2 = SessionLocal()
+    try:
+        after = db2.query(AnalysisProfile).filter_by(key="endotoxin").one()
+        assert after.fulfillment_role == original_role  # rejected PATCH must not mutate
+    finally:
+        db2.close()
+
+
+def test_patch_accepts_legacy_key_keeping_its_own_role():
+    """The allowlist is key-based, not role-based: the five legacy-key
+    profiles may keep (or re-set) their own legacy role. No existing profile
+    violates the new rule."""
+    from database import SessionLocal
+    from models import AnalysisProfile
+    db = SessionLocal()
+    try:
+        endotoxin = db.query(AnalysisProfile).filter_by(key="endotoxin").one()
+        profile_id = endotoxin.id
+    finally:
+        db.close()
+    resp = client.patch(f"/analysis-profiles/{profile_id}", json={
+        "fulfillment_role": "endo", "fulfillment_dim": "role",
+    })
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["fulfillment_role"] == "endo"
+
+
+def test_patch_explicit_null_fulfillment_dim_rejected_not_500():
+    """fulfillment_dim is NOT NULL on the model/response (unlike coa_archetype,
+    which is legitimately nullable). An explicit JSON null is indistinguishable
+    from a bad string at the DB layer — both must 400, never reach setattr +
+    commit and trip the NOT NULL constraint as an unhandled 500."""
+    create = client.post("/analysis-profiles", json={
+        "key": "patch_null_dim_test", "name": "Patch Null Dim Test", "is_addon": True,
+    })
+    assert create.status_code == 201, create.text
+    profile_id = create.json()["id"]
+    resp = client.patch(f"/analysis-profiles/{profile_id}", json={"fulfillment_dim": None})
+    assert resp.status_code == 400, resp.text
+    assert "fulfillment_dim" in resp.json()["detail"]

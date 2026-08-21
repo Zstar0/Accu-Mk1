@@ -165,12 +165,13 @@ const TEST_CLIENT_ID = 'forrest@valenceanalytical.com'
 // Role-pill style + short letter for each assignment_role. Used for
 // the parent's badge on the list page and per-sub-sample badges in the
 // expanded row.
-type RoleKey = 'hplc' | 'endo' | 'ster' | 'xtra' | 'unassigned'
+type RoleKey = 'hplc' | 'endo' | 'ster' | 'xtra' | 'hm' | 'unassigned'
 const ROLE_BADGES: { key: RoleKey; label: string; cls: string }[] = [
   { key: 'hplc', label: 'H', cls: ROLE_BADGE_CLASS.hplc },
   { key: 'endo', label: 'E', cls: ROLE_BADGE_CLASS.endo },
   { key: 'ster', label: 'P', cls: ROLE_BADGE_CLASS.ster },
   { key: 'xtra', label: 'X', cls: ROLE_BADGE_CLASS.xtra },
+  { key: 'hm', label: 'HM', cls: ROLE_BADGE_CLASS.hm },
   { key: 'unassigned', label: '?', cls: ROLE_BADGE_CLASS.unassigned },
 ]
 

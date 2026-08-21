@@ -102,3 +102,21 @@ def test_requires_auth():
     r = _client(authed=False).post("/orders/box-label-summaries",
                                    json={"order_numbers": ["WP-1"]})
     assert r.status_code == 401
+
+
+def test_hm_bucket_propagates_through_batch():
+    """Finding 1: get_order_box_label_summaries must not drop the hm bucket.
+    derive_base_demand is mocked here (matching this file's existing idiom)
+    to hand back an hm-aware demand dict, proving the counts accumulation
+    itself is demand-shape-driven rather than hardcoded to hplc/endo/ster."""
+    rows = {"WP-1": _row("1", ["P-1"])}
+    services = {"P-1": {"services": {"heavy_metals": True}}}
+    with patch.object(main, "_fetch_order_submission_rows_batch", return_value=rows), \
+         patch.object(main.sub_service, "fetch_sample_services",
+                      side_effect=lambda sid: services[sid]), \
+         patch.object(main, "derive_base_demand",
+                      return_value={"hplc": 0, "endo": 0, "ster": 0, "hm": 1}):
+        r = _client().post("/orders/box-label-summaries",
+                           json={"order_numbers": ["WP-1"]})
+    assert r.status_code == 200
+    assert r.json()["summaries"]["WP-1"]["counts"] == {"hplc": 0, "endo": 0, "ster": 0, "hm": 1}

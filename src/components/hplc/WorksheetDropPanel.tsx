@@ -55,11 +55,12 @@ export interface WorksheetSummary {
 }
 
 // Role pill palette — mirrors InboxVialCard.ROLE_BADGES (copy #5; dedup is a
-// tracked fast-follow). Endotoxin / Sterility / HPLC tints.
+// tracked fast-follow). Endotoxin / Sterility / HPLC / Heavy Metals tints.
 const ROLE_PILL: Record<InboxRoleTag, { label: string; cls: string }> = {
   endo: { label: 'ENDO', cls: ROLE_BADGE_CLASS.endo },
   ster: { label: 'PCR', cls: ROLE_BADGE_CLASS.ster },
   hplc: { label: 'HPLC', cls: ROLE_BADGE_CLASS.hplc },
+  hm: { label: 'HM', cls: ROLE_BADGE_CLASS.hm },
 }
 
 function ItemRolePills({ item }: { item: WorksheetSummaryItem }) {

@@ -12,7 +12,6 @@ from datetime import date
 from typing import List, Literal, Union
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -25,6 +24,7 @@ from lims_analyses.schemas import (
     AnalysisWithTransitions,
     CreateAnalysisRequest,
     HostKind,
+    NativeParentAnalysisRow,
     ParentPromotionInfo,
     PromoteRequest,
     PromoteResponse,
@@ -213,6 +213,25 @@ def list_promotions(
     parent LimsSample. Returns [] when the sample is unknown."""
     try:
         return service.list_promotions_for_parent(db, parent_sample_id)
+    except Exception as e:
+        raise _handle_service_error(e)
+
+
+@router.get("/parent/{sample_id}/native-analyses", response_model=List[NativeParentAnalysisRow])
+def list_native_parent_analyses(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Read-only "Accu-Mk1 Analyses" card (Task 5b): current, origin='mk1'
+    parent-tier rows for a parent LimsSample. The main Analyses table on the
+    parent page stays SENAITE-sourced by design (SampleDetails.tsx) — this is
+    the separate reader that surfaces native results (e.g. Heavy Metals) that
+    table structurally can't show. 404 when the sample is unknown to Mk1
+    (service.NotFoundError, translated by _handle_service_error).
+    """
+    try:
+        return service.list_native_parent_analyses(db, sample_id)
     except Exception as e:
         raise _handle_service_error(e)
 

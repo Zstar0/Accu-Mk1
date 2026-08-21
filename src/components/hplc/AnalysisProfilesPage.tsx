@@ -64,6 +64,8 @@ interface FormState {
   coa_section_title: string
   coa_archetype: string | null
   coa_sort_order: string
+  fulfillment_role: string
+  fulfillment_dim: 'role' | 'kind'
 }
 
 const DEFAULT_FORM: FormState = {
@@ -77,7 +79,17 @@ const DEFAULT_FORM: FormState = {
   coa_section_title: '',
   coa_archetype: null,
   coa_sort_order: '0',
+  fulfillment_role: '',
+  fulfillment_dim: 'role',
 }
+
+// Mirrors the backend's assignment_role format check (main.py, both POST and
+// PATCH) — a client-side echo, not the authority. The backend still 400s on
+// anything this misses; this is UX so admins don't discover the constraint
+// via a raw error toast.
+const FULFILLMENT_ROLE_PATTERN = /^[a-z][a-z0-9_]{0,7}$/
+const FULFILLMENT_ROLE_ERROR =
+  'Must be lowercase, start with a letter, letters/digits/underscore only, ≤ 8 chars'
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
@@ -108,6 +120,13 @@ export default function AnalysisProfilesPage() {
     ? (queryError instanceof Error ? queryError.message : 'Failed to load analysis profiles')
     : null
 
+  // Empty role is valid (rides an existing vial); the format constraint only
+  // binds when the effective dim is 'role' — mirrors the backend's gating.
+  const fulfillmentRoleInvalid =
+    form.fulfillment_dim === 'role' &&
+    form.fulfillment_role !== '' &&
+    !FULFILLMENT_ROLE_PATTERN.test(form.fulfillment_role)
+
   // ── Panel helpers ──
 
   const openCreate = () => {
@@ -132,6 +151,8 @@ export default function AnalysisProfilesPage() {
       coa_section_title: profile.coa_section_title ?? '',
       coa_archetype: profile.coa_archetype,
       coa_sort_order: String(profile.coa_sort_order),
+      fulfillment_role: profile.fulfillment_role ?? '',
+      fulfillment_dim: profile.fulfillment_dim,
     })
     setMemberSearch('')
     setPanelOpen(true)
@@ -178,6 +199,10 @@ export default function AnalysisProfilesPage() {
       toast.error('Choose whether this is a primary test or an add-on')
       return
     }
+    if (fulfillmentRoleInvalid) {
+      toast.error(FULFILLMENT_ROLE_ERROR)
+      return
+    }
     setSaving(true)
     try {
       if (editingProfile) {
@@ -191,6 +216,8 @@ export default function AnalysisProfilesPage() {
           coa_section_title: form.coa_section_title.trim() || null,
           coa_archetype: form.coa_archetype,
           coa_sort_order: parseInt(form.coa_sort_order, 10) || 0,
+          fulfillment_role: form.fulfillment_role.trim() || null,
+          fulfillment_dim: form.fulfillment_dim,
         })
         toast.success(`"${form.name.trim()}" updated`)
       } else {
@@ -201,6 +228,8 @@ export default function AnalysisProfilesPage() {
           is_addon: form.is_addon,
           vials_required: parseInt(form.vials_required, 10) || 0,
           sort_order: parseInt(form.sort_order, 10) || 0,
+          fulfillment_role: form.fulfillment_role.trim() || null,
+          fulfillment_dim: form.fulfillment_dim,
         })
         toast.success(`"${form.name.trim()}" created`)
       }
@@ -550,6 +579,74 @@ export default function AnalysisProfilesPage() {
                   </div>
                 </div>
 
+                {/* Fulfillment — which vial this profile's results land on.
+                    Shown on create AND edit (unlike active/COA below): a new
+                    family needs this from day one to be UI-manageable
+                    end-to-end, not just via a follow-up edit. */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <label className="text-sm font-medium">Fulfillment</label>
+                    <TooltipProvider delayDuration={200}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="h-3.5 w-3.5 text-muted-foreground cursor-default" />
+                        </TooltipTrigger>
+                        <TooltipContent side="right" className="max-w-xs">
+                          <div className="flex flex-col gap-1 p-1 text-xs font-mono">
+                            <div className="font-semibold border-b border-primary-foreground/20 pb-1">
+                              Vial fulfillment
+                            </div>
+                            <div>
+                              <span className="font-semibold">Role</span> matches by vial role code (e.g. <span className="font-mono">hm</span>).
+                            </div>
+                            <div>
+                              <span className="font-semibold">Kind</span> matches by assignment kind instead.
+                            </div>
+                            <div className="pt-1 opacity-80">
+                              Empty role rides an existing vial rather than claiming its own.
+                            </div>
+                          </div>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
+                  <div className="flex gap-4">
+                    <div className="space-y-1.5">
+                      <Select
+                        value={form.fulfillment_dim}
+                        onValueChange={v =>
+                          setForm(f => ({ ...f, fulfillment_dim: v as 'role' | 'kind' }))
+                        }
+                      >
+                        <SelectTrigger className="w-28">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="role">Role</SelectItem>
+                          <SelectItem value="kind">Kind</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Input
+                        placeholder="e.g. hm"
+                        value={form.fulfillment_role}
+                        maxLength={8}
+                        aria-invalid={fulfillmentRoleInvalid}
+                        onChange={e =>
+                          setForm(f => ({ ...f, fulfillment_role: e.target.value.toLowerCase() }))
+                        }
+                        className="font-mono max-w-[160px]"
+                      />
+                    </div>
+                  </div>
+                  <p className={fulfillmentRoleInvalid ? 'text-xs text-destructive' : 'text-xs text-muted-foreground'}>
+                    {fulfillmentRoleInvalid
+                      ? FULFILLMENT_ROLE_ERROR
+                      : 'vial role code, ≤ 8 chars, e.g. hm — leave empty for profiles that ride an existing vial'}
+                  </p>
+                </div>
+
                 {/* Active toggle — edit only. createAnalysisProfile's client
                     signature has no `active` field (the backend always
                     creates active=True), so showing this on create would let
@@ -567,7 +664,7 @@ export default function AnalysisProfilesPage() {
                     <label htmlFor="is-active" className="text-sm font-medium leading-none">
                       Active
                       <span className="block text-xs font-normal text-muted-foreground">
-                        Inactive profiles are hidden from new orders
+                        Inactive marks the profile retired — fulfilment of already-sold orders continues. Removing it from sale is the WordPress Test-Services entry.
                       </span>
                     </label>
                   </div>

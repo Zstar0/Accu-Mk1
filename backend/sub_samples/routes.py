@@ -410,7 +410,7 @@ def get_vial_plan(
 @router.get("/{parent_sample_id}/vial-demand")
 def get_vial_demand(
     parent_sample_id: str,
-    _db: Session = Depends(get_db),
+    db: Session = Depends(get_db),
     _user=Depends(get_current_user),
 ):
     """Return just the vial demand for a sample's WP order — no DB side effects.
@@ -433,9 +433,9 @@ def get_vial_demand(
         }
     services = services_resp.get("services") or {}
     return {
-        "demand": service.derive_demand(services),
+        "demand": service.derive_demand(services, db=db),
         "variance": service.derive_variance_demand(services),
-        "base_demand": service.derive_base_demand(services),
+        "base_demand": service.derive_base_demand(services, db=db),
         "wp_order_number": services_resp.get("wp_order_number"),
         "is_unreachable": False,
     }

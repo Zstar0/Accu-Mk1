@@ -34,8 +34,13 @@ log = logging.getLogger(__name__)
 # the HPLC mirror's fail-closed allow-list (lims_analyses/seeder.py).
 ANALYTICAL_DEPARTMENT = "Analytical"
 MICROBIOLOGY_DEPARTMENT = "Microbiology"
+# hm (Heavy Metals) is the first CATALOG-ONLY role: its own department/lane
+# rather than folding into Analytical or Microbiology, so role-flip cleanup
+# (sub_samples/service.py _ROLE_DEPARTMENT_NAMES) can clear hm's analyses
+# without ambiguity against either existing bench (spec-3 Task 3).
+HEAVY_METALS_DEPARTMENT = "Heavy Metals"
 
-DEPARTMENT_NAMES = [ANALYTICAL_DEPARTMENT, MICROBIOLOGY_DEPARTMENT]
+DEPARTMENT_NAMES = [ANALYTICAL_DEPARTMENT, MICROBIOLOGY_DEPARTMENT, HEAVY_METALS_DEPARTMENT]
 
 # Group name -> department name. Endotoxin nests under Microbiology (the
 # assignment UI already shows Endo + Sterility inside the Microbiology block).

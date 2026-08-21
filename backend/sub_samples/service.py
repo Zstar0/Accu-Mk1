@@ -29,7 +29,9 @@ log = logging.getLogger(__name__)
 
 
 # Sub-sample assignment role -> the DEPARTMENT name(s) whose analyses belong to
-# that role. endo/ster are both Microbiology; hplc is Analytical; xtra has none.
+# that role. endo/ster are both Microbiology; hplc is Analytical; hm is its own
+# Heavy Metals department (catalog-only role — kept off Analytical/Microbiology
+# so its cleanup can't collide with either bench); xtra has none.
 # Keyed on Department (the single structural routing key) so a new Microbiology
 # group's services are cleared correctly without name-pinning the group.
 _ROLE_DEPARTMENT_NAMES: dict[str, set[str]] = {
@@ -37,7 +39,19 @@ _ROLE_DEPARTMENT_NAMES: dict[str, set[str]] = {
     "endo": {"Microbiology"},
     "ster": {"Microbiology"},
     "xtra": set(),
+    "hm": {"Heavy Metals"},
 }
+
+# Roles that must NEVER be variance-eligible, overriding the normal
+# position-based rule in set_assignment_role (vial_sequence==1 or
+# assignment_kind=="variance"). hm is here because heavy_metals is
+# vials_required=1 — an hm vial structurally cannot have a same-role
+# replicate to compare against, so "first vial is the baseline" is
+# meaningless for it (fix round, spec-3 Task 3, site 7). Keep this set
+# narrowly scoped: adding a role here changes production variance behavior
+# for that role everywhere, not just hm.
+_VARIANCE_INELIGIBLE_ROLES: set[str] = {"hm"}
+_VARIANCE_INELIGIBLE_REASON = "auto: hm is single-vial (vials_required=1); never variance-eligible"
 
 
 # SENAITE review states meaning "family not physically checked in yet".
@@ -1186,19 +1200,37 @@ def variance_lock_required(services: Optional[dict], variance_locked_at) -> bool
     return purchased and variance_locked_at is None
 
 
-def derive_base_demand(services: dict) -> dict:
-    """Pre-variance vial demand per bucket (the lab-protocol baseline)."""
+def derive_base_demand(services: dict, db=None) -> dict:
+    """Pre-variance vial demand per bucket (the lab-protocol baseline).
+
+    db=None -> pure legacy map (unchanged behavior, used by legacy callers
+    and as the shadow reference). With a db, the catalog is authoritative;
+    on any divergence in a LEGACY bucket the legacy value wins and an error
+    is logged (fail-open to known-good, never to under-provisioning).
+    """
     hplc = bool(services.get("hplcpurity_identity") or services.get("bac_water_panel"))
     endo = bool(services.get("endotoxin"))
     ster = bool(services.get("sterility_pcr"))
-    return {
+    legacy = {
         "hplc": 1 if hplc else 0,
         "endo": 1 if endo else 0,
         "ster": 2 if ster else 0,
     }
+    if db is None:
+        return legacy
+    from sub_samples.catalog_demand import derive_base_demand_catalog
+    catalog = derive_base_demand_catalog(db, services)
+    for bucket, legacy_n in legacy.items():
+        if catalog.get(bucket, 0) != legacy_n:
+            log.error(
+                "demand_divergence bucket=%s legacy=%s catalog=%s services=%s",
+                bucket, legacy_n, catalog.get(bucket, 0), sorted(services or {}),
+            )
+            catalog[bucket] = legacy_n
+    return catalog
 
 
-def derive_demand(services: dict) -> dict:
+def derive_demand(services: dict, db=None) -> dict:
     """Translate WP services dict to CORE vial demand per bucket.
 
     HPLC is satisfied by either `hplcpurity_identity` or `bac_water_panel` —
@@ -1210,11 +1242,11 @@ def derive_demand(services: dict) -> dict:
     not an inflation of core demand — the old max(base, n) math is retired.
     Core demand therefore equals the base lab-protocol demand.
     """
-    return derive_base_demand(services)
+    return derive_base_demand(services, db=db)
 
 
-_BUCKET_PRIORITY = ("hplc", "endo", "ster")
-_REAL_BUCKETS = {"hplc", "endo", "ster"}
+_BUCKET_PRIORITY = ("hplc", "endo", "ster", "hm")
+_REAL_BUCKETS = {"hplc", "endo", "ster", "hm"}
 
 
 def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
@@ -1276,9 +1308,9 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
         }
 
     services = services_resp.get("services") or {}
-    demand = derive_demand(services)  # core demand == base (inflation retired)
+    demand = derive_demand(services, db=db)  # core demand == base (inflation retired)
     variance = derive_variance_demand(services)
-    base_demand = derive_base_demand(services)
+    base_demand = derive_base_demand(services, db=db)
 
     # Variance lock guard: a locked set blocks re-assignment of its members
     # (spec §5), so a locked parent must NOT have vials auto-assigned under it.
@@ -1418,7 +1450,7 @@ def auto_assign(vials: list[dict], demand: dict,
     return out
 
 
-_VALID_ROLES = {"hplc", "endo", "ster", "xtra"}
+_VALID_ROLES = {"hplc", "endo", "ster", "xtra", "hm"}
 
 
 def _drop_stale_role_rows(db: Session, *, sub: LimsSubSample, old_role: Optional[str], new_role: Optional[str]) -> int:
@@ -1558,7 +1590,20 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
         # Variance-set membership follows assignment: the first vial (baseline)
         # is always in; any variance replicate is in; everything else is out.
         # Manual overrides via set_variance_membership still apply afterward.
-        sub.in_variance_set = (sub.vial_sequence == 1) or (sub.assignment_kind == "variance")
+        # hm is scoped OUT of that position-based rule (fix round, spec-3 Task
+        # 3): heavy_metals is vials_required=1, so an hm vial can never have a
+        # same-role replicate to compare against — landing on vial_sequence==1
+        # (an hm-only order's first and only vial) must not make it eligible.
+        # Every other role's position-based expression is unchanged.
+        if role in _VARIANCE_INELIGIBLE_ROLES:
+            sub.in_variance_set = False
+            sub.variance_exclusion_reason = _VARIANCE_INELIGIBLE_REASON
+        else:
+            sub.in_variance_set = (sub.vial_sequence == 1) or (sub.assignment_kind == "variance")
+            if sub.in_variance_set and old_role in _VARIANCE_INELIGIBLE_ROLES:
+                # Role flipped away from hm into a naturally-eligible slot —
+                # clear the stale hm-specific reason so it doesn't linger.
+                sub.variance_exclusion_reason = None
         db.add(LimsSubSampleEvent(
             sub_sample_pk=sub.id,
             event="role_assigned",

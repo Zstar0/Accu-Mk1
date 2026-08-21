@@ -4530,7 +4530,7 @@ export interface AnalysisProfile {
   is_addon: boolean
   vials_required: number
   fulfillment_role: string | null
-  fulfillment_dim: string
+  fulfillment_dim: 'role' | 'kind'
   sort_order: number
   active: boolean
   coa_section_title: string | null
@@ -4571,6 +4571,8 @@ export async function createAnalysisProfile(data: {
   description?: string | null
   vials_required?: number
   sort_order?: number
+  fulfillment_role?: string | null
+  fulfillment_dim?: 'role' | 'kind'
 }): Promise<AnalysisProfile> {
   const response = await fetch(`${API_BASE_URL()}/analysis-profiles`, {
     method: 'POST',
@@ -5706,6 +5708,41 @@ export async function listParentPromotions(
 }
 
 /**
+ * Task 5b: read-only "Accu-Mk1 Analyses" card source — current, origin='mk1'
+ * parent-tier rows for a parent sample. The main Analyses table on the
+ * parent page stays SENAITE-sourced by design (SampleDetails.tsx); this is
+ * the separate reader for native results (e.g. Heavy Metals) that table
+ * structurally can't show.
+ */
+export interface NativeParentAnalysisRow {
+  keyword: string
+  title: string
+  result_value: string | null
+  result_unit: string | null
+  review_state: string
+  updated_at: string
+}
+
+/**
+ * GET /api/lims-analyses/parent/{sample_id}/native-analyses
+ * A sample unknown to Mk1 404s server-side; treated the same as "no native
+ * rows" here since the card renders nothing either way.
+ */
+export async function getNativeParentAnalyses(
+  sampleId: string
+): Promise<NativeParentAnalysisRow[]> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/lims-analyses/parent/${encodeURIComponent(sampleId)}/native-analyses`,
+    { headers: getBearerHeaders() }
+  )
+  if (response.status === 404) return []
+  if (!response.ok) {
+    throw new Error(`getNativeParentAnalyses failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+/**
  * Fetch SENAITE analysis states for all lines on a parent AR, keyed by keyword.
  * Returns {"states": {"STER-PCR": "verified", ...}}.
  * The backend is best-effort: any SENAITE error returns {"states": {}}.
@@ -5858,9 +5895,16 @@ export async function deleteSubSample(sampleId: string): Promise<void> {
 }
 
 export interface VialDemandResponse {
-  demand: { hplc: number; endo: number; ster: number }
-  variance: { hplc: number; endo: number; ster: number }
-  base_demand: { hplc: number; endo: number; ster: number }
+  // Shape-driven like OrderBoxLabelSummary.counts: demand/base_demand come
+  // from the backend's derive_base_demand, which carries hplc/endo/ster plus
+  // any catalog-only role (e.g. 'hm') the order actually demanded. `variance`
+  // is widened to match for consistency, but is legacy-only by backend
+  // contract (derive_variance_demand only ever emits hplc/endo/ster — a
+  // catalog-only role like hm is never variance-eligible, Task 3) — it just
+  // never happens to carry extra keys in practice.
+  demand: Record<string, number>
+  variance: Record<string, number>
+  base_demand: Record<string, number>
   wp_order_number: string | null
   is_unreachable: boolean
 }
@@ -5884,7 +5928,11 @@ export async function getVialDemand(parentSampleId: string): Promise<VialDemandR
 export interface OrderBoxLabelSummary {
   order_number: string
   order_date: string | null
-  counts: { hplc: number; endo: number; ster: number }
+  // Demand-shape-driven, mirroring the backend (main.py get_order_box_label_
+  // summary/summaries): always carries hplc/endo/ster, plus any catalog-only
+  // role (e.g. 'hm') the order actually demanded. Never hardcode a bucket
+  // key against this — sum/iterate it instead (see OrderExpectedVials.tsx).
+  counts: Record<string, number>
 }
 
 export async function getOrderBoxLabelSummary(

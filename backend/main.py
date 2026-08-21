@@ -2510,6 +2510,20 @@ class AnalysisProfileMembersRequest(BaseModel):
 # addition here.
 COA_ARCHETYPES = {"limit_table"}
 
+# Spec-3 shadow-compare guard rails, enforced at the profile POST/PATCH edge
+# (not a DB constraint, mirroring COA_ARCHETYPES above):
+#   - The three legacy fulfillment_role values are demand-map keys derive_
+#     base_demand's shadow-compare owns; a NEW profile claiming one would get
+#     silently zero-clamped whenever its key is absent from an order's legacy
+#     flags (derive_base_demand only ever checks the five keys below). Only
+#     the profiles that ARE those legacy keys may hold a legacy role.
+#   - 'xtra' is the reserved no-op bucket (never a real fulfillment target);
+#     no profile may claim it.
+_LEGACY_PROFILE_KEYS = {
+    "hplcpurity_identity", "bac_water_panel", "endotoxin", "sterility_pcr", "variance",
+}
+_RESERVED_LEGACY_ROLES = {"hplc", "endo", "ster"}
+
 
 # ─── SLA tier schemas (sub-project A, revised to tiers) ───
 
@@ -3313,6 +3327,14 @@ def validate_new_keyword(db, keyword: str, *, exclude_id: int | None = None) -> 
             "keyword must start with a letter and contain only A-Z, 0-9, '-' and '_' "
             "(uppercase)",
         )
+    # PUR_/QTY_ are the per-substance rescue namespaces the HPLC mirror mints
+    # (seeder.py generic-analyte translation). A native service claiming one
+    # would route promotes through a live SENAITE slot read (spec-2 deferred
+    # minor). Reserved outright for new mk1 keywords.
+    if keyword.startswith(("PUR_", "QTY_")):
+        raise HTTPException(
+            400, f"keyword prefix '{keyword.split('_', 1)[0]}_' is reserved "
+                 "for per-substance HPLC services")
     q = select(AnalysisService).where(AnalysisService.keyword == keyword)
     if exclude_id is not None:
         q = q.where(AnalysisService.id != exclude_id)
@@ -8955,11 +8977,19 @@ def _fetch_order_submission_row(order_number: str) -> Optional[dict]:
 
 
 @app.get("/orders/{order_number}/box-label-summary", response_model=BoxLabelSummary)
-def get_order_box_label_summary(order_number: str, _current_user=Depends(get_current_user)):
+def get_order_box_label_summary(
+    order_number: str,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
     row = _fetch_order_submission_row(order_number)
     if row is None:
         raise HTTPException(status_code=404, detail=f"Order {order_number} not found")
-    counts = {"hplc": 0, "endo": 0, "ster": 0}
+    # Demand-shape-driven: accumulate whatever buckets derive_base_demand
+    # returns (hplc/endo/ster always, plus any catalog-only role like hm)
+    # rather than a hardcoded 3-bucket list, so a new fulfillment_role needs
+    # no change here.
+    counts: dict = {}
     fetch_error = False
     for entry in (row["sample_results"] or {}).values():
         sid = entry.get("senaite_id") if isinstance(entry, dict) else None
@@ -8978,10 +9008,9 @@ def get_order_box_label_summary(order_number: str, _current_user=Depends(get_cur
         # IS returns {"services": {...flags...}, ...}; derive_* wants the inner
         # flags dict (mirrors sub_samples.service.build_vial_plan).
         services = services_resp.get("services") or {}
-        d = derive_base_demand(services)
-        counts["hplc"] += d["hplc"]
-        counts["endo"] += d["endo"]
-        counts["ster"] += d["ster"]
+        d = derive_base_demand(services, db=db)
+        for bucket, n in d.items():
+            counts[bucket] = counts.get(bucket, 0) + n
     if fetch_error:
         # Don't return a silently-undercounted total (which the FE would print as
         # a misleading/blank box label); let the wizard's soft-fail engage.
@@ -9048,6 +9077,7 @@ class BoxLabelSummariesResponse(BaseModel):
 @app.post("/orders/box-label-summaries", response_model=BoxLabelSummariesResponse)
 def get_order_box_label_summaries(
     body: BoxLabelSummariesRequest,
+    db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
     """Batched box-label summaries: ONE request per receive-by-order PAGE.
@@ -9108,16 +9138,17 @@ def get_order_box_label_summaries(
         if any(s in failed_sids for s in sids):
             errors.append(num)
             continue
-        counts = {"hplc": 0, "endo": 0, "ster": 0}
+        # Same demand-shape-driven accumulation as the single-order endpoint
+        # above (do not hardcode the bucket set here either).
+        counts: dict = {}
         for sid in sids:
             resp = services_by_sid.get(sid)
             if not resp:
                 continue  # legit 404 / unmapped sample → contributes 0
             services = resp.get("services") or {}
-            d = derive_base_demand(services)
-            counts["hplc"] += d["hplc"]
-            counts["endo"] += d["endo"]
-            counts["ster"] += d["ster"]
+            d = derive_base_demand(services, db=db)
+            for bucket, n in d.items():
+                counts[bucket] = counts.get(bucket, 0) + n
         created = row.get("created_at")
         summaries[num] = BoxLabelSummary(
             order_number=row["order_number"],
@@ -15732,6 +15763,22 @@ async def create_analysis_profile(
     ).scalar_one_or_none()
     if existing:
         raise HTTPException(400, f"profile key '{data.key}' already exists")
+    if data.fulfillment_dim not in ("role", "kind"):
+        raise HTTPException(400, "fulfillment_dim must be 'role' or 'kind'")
+    if data.fulfillment_role is not None and data.fulfillment_dim == "role" \
+            and not re.fullmatch(r"[a-z][a-z0-9_]{0,7}", data.fulfillment_role):
+        raise HTTPException(
+            400, "fulfillment_role must be lowercase, <= 8 chars "
+                 "(assignment_role is VARCHAR(8))")
+    if data.fulfillment_role == "xtra":
+        raise HTTPException(400, "role 'xtra' is the reserved unassigned bucket")
+    if data.fulfillment_dim == "role" and data.fulfillment_role in _RESERVED_LEGACY_ROLES \
+            and data.key not in _LEGACY_PROFILE_KEYS:
+        raise HTTPException(
+            400,
+            f"role '{data.fulfillment_role}' is reserved for the legacy demand map "
+            "while the shadow-compare is active; new families use catalog-only roles",
+        )
     p = AnalysisProfile(**data.model_dump(), updated_by_id=getattr(current_user, "id", None))
     db.add(p)
     db.commit()
@@ -15757,6 +15804,34 @@ async def update_analysis_profile(
             400,
             f"unknown coa_archetype {fields['coa_archetype']!r}; "
             f"allowed: {sorted(COA_ARCHETYPES)} or null (not reported)",
+        )
+    if "fulfillment_dim" in fields and fields["fulfillment_dim"] not in ("role", "kind"):
+        # fields (exclude_unset) distinguishes an explicit JSON null from
+        # omission — data.fulfillment_dim is None either way, but only an
+        # explicit null (or a bad string) may reach here. fulfillment_dim is
+        # NOT NULL on the model/response (unlike coa_archetype, which is
+        # legitimately nullable), so an explicit null must 400 here rather
+        # than reach setattr + commit and trip the DB constraint as a 500.
+        raise HTTPException(400, "fulfillment_dim must be 'role' or 'kind'")
+    if data.fulfillment_role is not None:
+        effective_dim = fields.get("fulfillment_dim") or p.fulfillment_dim
+        if effective_dim == "role" and not re.fullmatch(r"[a-z][a-z0-9_]{0,7}", data.fulfillment_role):
+            raise HTTPException(
+                400, "fulfillment_role must be lowercase, <= 8 chars "
+                     "(assignment_role is VARCHAR(8))")
+    # Effective values (payload-or-existing, exclude_unset-aware so an
+    # untouched field falls back to the persisted row, mirroring the
+    # effective_dim idiom just above) — key is immutable, never in `fields`.
+    effective_role = fields["fulfillment_role"] if "fulfillment_role" in fields else p.fulfillment_role
+    effective_dim = fields.get("fulfillment_dim") or p.fulfillment_dim
+    if effective_role == "xtra":
+        raise HTTPException(400, "role 'xtra' is the reserved unassigned bucket")
+    if effective_dim == "role" and effective_role in _RESERVED_LEGACY_ROLES \
+            and p.key not in _LEGACY_PROFILE_KEYS:
+        raise HTTPException(
+            400,
+            f"role '{effective_role}' is reserved for the legacy demand map "
+            "while the shadow-compare is active; new families use catalog-only roles",
         )
     for field, value in fields.items():
         setattr(p, field, value)
@@ -16258,10 +16333,16 @@ class InboxResponse(BaseModel):
 
 
 # Role -> DEPARTMENT name. Department drives the lane: a new Microbiology-department
-# group lands in the micro lane automatically, with no name-pinning.
+# group lands in the micro lane automatically, with no name-pinning. hm (Heavy
+# Metals) is catalog-only and gets its own lane rather than folding into an
+# existing bench (spec-3 Task 3) — its services carry no service group, so
+# _inbox_allowed_group_ids resolves an empty set for it; the native-vial inbox
+# path (Phase 3.5, main.py _fetch_mk1_inbox_analyses_for_sub_sample) filters
+# hm vials by assignment_role via ROLE_TO_VIAL_ROLES instead, not by group id.
 ROLE_TO_DEPARTMENT_NAME: dict[str, str] = {
     "hplc": "Analytical",
     "microbiology": "Microbiology",
+    "hm": "Heavy Metals",
 }
 VALID_INBOX_ROLES = set(ROLE_TO_DEPARTMENT_NAME.keys())
 
@@ -16282,10 +16363,12 @@ def _inbox_allowed_group_ids(db, role: Optional[str]) -> Optional[set[int]]:
     }
 
 # Role-set membership for the assignment_role column. Microbiology covers
-# both 'ster' and 'endo' (collapsed into one filter chip per spec Q1).
+# both 'ster' and 'endo' (collapsed into one filter chip per spec Q1). hm maps
+# 1:1 to its own lane (no collapsing — it's the only role in its department).
 ROLE_TO_VIAL_ROLES: dict[str, set[str]] = {
     "hplc": {"hplc"},
     "microbiology": {"ster", "endo"},
+    "hm": {"hm"},
 }
 
 
@@ -16609,8 +16692,10 @@ async def get_worksheets_inbox(
     # Resolve allowed vial assignment_role values. NULL roles always excluded (auto-
     # assign on /vial-plan is the cure for those). XTRA gated by show_xtra.
     if role is None:
-        # No bench filter: all known roles. XTRA still gated by the toggle.
-        allowed_vial_roles: set[str] = {"hplc", "ster", "endo"}
+        # No bench filter: all known roles (union of every ROLE_TO_VIAL_ROLES
+        # value — hm included, else hm vials vanish from the unfiltered view
+        # used by AddSamplesModal). XTRA still gated by the toggle.
+        allowed_vial_roles: set[str] = {"hplc", "ster", "endo", "hm"}
         if show_xtra:
             allowed_vial_roles.add("xtra")
     else:
@@ -17642,6 +17727,52 @@ def list_worksheets(
                 group_peptide_map[gid] = first_peptide_id
                 group_analyses_map[gid] = analyses
 
+        # Fallback department resolution for group-less items (fix round,
+        # spec-3 Task 3, Finding 3): catalog-only roles like hm carry no
+        # service_group at all, so group_department_name_map above has
+        # nothing to key on and every hm worksheet item serialized with
+        # department_name=None — making the FE hm badge (itemBench /
+        # itemRoleBadges) structurally unreachable even though it's wired
+        # correctly. Resolve via the item's own cached analyses (analyses_json,
+        # written at add-to-worksheet time) — its first analysis's keyword ->
+        # AnalysisService.department_id -> Department.name, batched across
+        # every item that needs it in one query. Only fires where the
+        # group-based lookup above yields None (no group, or a group with no
+        # department); grouped items resolve exactly as before.
+        item_department_fallback_map: dict[int, str | None] = {}
+        _needs_department_fallback = [
+            it for it in items
+            if not (it.service_group_id and group_department_name_map.get(it.service_group_id))
+        ]
+        if _needs_department_fallback:
+            item_first_keyword: dict[int, str | None] = {}
+            fallback_keywords: set[str] = set()
+            for it in _needs_department_fallback:
+                kw = None
+                if it.analyses_json:
+                    try:
+                        parsed = json.loads(it.analyses_json)
+                    except (ValueError, TypeError):
+                        parsed = None
+                    if parsed and isinstance(parsed, list) and isinstance(parsed[0], dict):
+                        kw = parsed[0].get("keyword")
+                item_first_keyword[it.id] = kw
+                if kw:
+                    fallback_keywords.add(kw)
+            if fallback_keywords:
+                from models import Department
+                kw_rows = db.execute(
+                    select(AnalysisService.keyword, Department.name)
+                    .outerjoin(Department, Department.id == AnalysisService.department_id)
+                    .where(AnalysisService.keyword.in_(fallback_keywords))
+                ).all()
+                keyword_department_name_map = {r[0]: r[1] for r in kw_rows}
+                item_department_fallback_map = {
+                    it_id: keyword_department_name_map.get(kw)
+                    for it_id, kw in item_first_keyword.items()
+                    if kw
+                }
+
         # Resolve assigned analyst email
         analyst_email = None
         if ws.assigned_analyst_id:
@@ -17735,7 +17866,10 @@ def list_worksheets(
                     "sample_id": it.sample_id,
                     "sample_uid": it.sample_uid,
                     "service_group_id": it.service_group_id,
-                    "department_name": group_department_name_map.get(it.service_group_id) if it.service_group_id else None,
+                    "department_name": (
+                        (group_department_name_map.get(it.service_group_id) if it.service_group_id else None)
+                        or item_department_fallback_map.get(it.id)
+                    ),
                     "group_name": group_name_map.get(it.service_group_id, "—") if it.service_group_id else "—",
                     "group_color": group_color_map.get(it.service_group_id, "zinc") if it.service_group_id else "zinc",
                     "priority": it.priority,

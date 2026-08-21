@@ -46,7 +46,7 @@ vi.mock('@/lib/api', () => ({
   listSubSamples: vi.fn(),
 }))
 
-import { BoxStep, boxKeyboardCoordinates } from '@/components/intake/ReceiveWizard/BoxStep'
+import { BoxStep, boxKeyboardCoordinates, roleLabel } from '@/components/intake/ReceiveWizard/BoxStep'
 
 const mockListOrderBoxes = vi.mocked(listOrderBoxes)
 const mockCreateBox = vi.mocked(createBox)
@@ -278,6 +278,23 @@ describe('BoxStep — capacity-driven boxing', () => {
 
     expect(mockAssignVialsToBox).toHaveBeenCalledWith(7, ['P-101'])
     expect(mockUnassignVialsFromBox).not.toHaveBeenCalled()
+  })
+
+  describe('roleLabel — known roles + fallback for the next one', () => {
+    it('labels the four boxable roles as before', () => {
+      expect(roleLabel('hplc')).toBe('HPLC')
+      expect(roleLabel('endo')).toBe('Endotoxin')
+      expect(roleLabel('ster')).toBe('Sterility')
+      expect(roleLabel('xtra')).toBe('Extras')
+    })
+
+    it('labels hm as Heavy Metals, ahead of it becoming boxable', () => {
+      expect(roleLabel('hm')).toBe('Heavy Metals')
+    })
+
+    it('falls back to the uppercased key for an unrecognized role', () => {
+      expect(roleLabel('future_role')).toBe('FUTURE_ROLE')
+    })
   })
 
   describe('boxKeyboardCoordinates — arrows jump the lifted chip between drop targets', () => {
