@@ -2753,18 +2753,20 @@ _RIDE_HOST_FORBIDDEN = {"endo", "ster", "xtra"}
 # addition here.
 COA_ARCHETYPES = {"limit_table"}
 
-# Spec-3 shadow-compare guard rails, enforced at the profile POST/PATCH edge
-# (not a DB constraint, mirroring COA_ARCHETYPES above):
-#   - The three legacy fulfillment_role values are demand-map keys derive_
-#     base_demand's shadow-compare owns; a NEW profile claiming one would get
-#     silently zero-clamped whenever its key is absent from an order's legacy
-#     flags (derive_base_demand only ever checks the five keys below). Only
-#     the profiles that ARE those legacy keys may hold a legacy role.
-#   - 'xtra' is the reserved no-op bucket (never a real fulfillment target);
-#     no profile may claim it.
-_LEGACY_PROFILE_KEYS = {
-    "hplcpurity_identity", "bac_water_panel", "endotoxin", "sterility_pcr", "variance",
-}
+# S9 Task 2: the POST/PATCH route guard that reserved hplc/endo/ster for the
+# five legacy-key profiles retired WITH Task 1's flip (its only justification
+# was derive_base_demand's shadow-compare zero-clamping a new profile whenever
+# its key was absent from an order's legacy flags — the catalog now prevails
+# on divergence, so that clamp no longer happens). Any profile may now claim
+# hplc/endo/ster.
+#   - 'xtra' remains the reserved no-op bucket (never a real fulfillment
+#     target); no profile may claim it — enforced at the POST/PATCH edge.
+#   - _RESERVED_LEGACY_ROLES survives for the two guards that were ALWAYS
+#     rider-semantics, never shadow-compare: a legacy-bucket anchor may never
+#     also carry a ride list (PATCH .../{id} ride-list closure) or itself
+#     ride another role (PUT .../ride-hosts) — resolve_catalog_fulfillment
+#     treats "has a ride row" as "is a rider", a structural invariant
+#     independent of the shadow-compare.
 _RESERVED_LEGACY_ROLES = {"hplc", "endo", "ster"}
 
 
@@ -16530,23 +16532,18 @@ async def create_analysis_profile(
                  "(assignment_role is VARCHAR(8))")
     if data.fulfillment_role == "xtra":
         raise HTTPException(400, "role 'xtra' is the reserved unassigned bucket")
-    if data.fulfillment_dim == "role" and data.fulfillment_role in _RESERVED_LEGACY_ROLES \
-            and data.key not in _LEGACY_PROFILE_KEYS:
-        raise HTTPException(
-            400,
-            f"role '{data.fulfillment_role}' is reserved for the legacy demand map "
-            "while the shadow-compare is active; new families use catalog-only roles",
-        )
     # Task 11: reject an unknown sla_tier_id with a clean 400 rather than
     # letting the FK constraint 500 at commit time.
     if data.sla_tier_id is not None and not db.get(SlaTier, data.sla_tier_id):
         raise HTTPException(400, f"SLA tier {data.sla_tier_id} not found")
     # Auto-mint (Task 3): a 'role' fulfillment naming a code not yet in the
-    # vial_roles catalog mints one here, AFTER every guard above — those
-    # guards already 400 on 'xtra' and on a legacy code for a new key, so
-    # mint can never create a legacy or xtra row (the zero-clamp rider stays
-    # intact). role_department_id is optional and NULL is legal here — unlike
-    # a manual /vial-roles POST (which requires a department for anything but
+    # vial_roles catalog mints one here, AFTER every guard above. Mint's own
+    # reach is unaffected by S9 Task 2: hplc/endo/ster are always-seeded
+    # system rows (seed_vial_roles, every boot), so mint never fires for
+    # them, before or after this guard retired — what changed is that a
+    # new-key profile may now be *assigned* one of those roles at all.
+    # role_department_id is optional and NULL is legal here — unlike a
+    # manual /vial-roles POST (which requires a department for anything but
     # 'xtra'), a minted row may start department-less and get backfilled by
     # the members PUT below once its member set agrees on one.
     if data.fulfillment_dim == "role" and data.fulfillment_role:
@@ -16637,25 +16634,19 @@ async def update_analysis_profile(
     effective_dim = fields.get("fulfillment_dim") or p.fulfillment_dim
     if effective_role == "xtra":
         raise HTTPException(400, "role 'xtra' is the reserved unassigned bucket")
-    if effective_dim == "role" and effective_role in _RESERVED_LEGACY_ROLES \
-            and p.key not in _LEGACY_PROFILE_KEYS:
-        raise HTTPException(
-            400,
-            f"role '{effective_role}' is reserved for the legacy demand map "
-            "while the shadow-compare is active; new families use catalog-only roles",
-        )
-    # Ride-list / legacy-role closure (Task 4): the guard above only blocks a
-    # NON-legacy key from CLAIMING a legacy role — it deliberately allows the
-    # five _LEGACY_PROFILE_KEYS profiles to hold their own legacy role. That
-    # whitelist is also a door: one of those five could move its role AWAY
-    # from legacy (e.g. endotoxin: 'endo' -> 'zzhold', legal — 'zzhold' isn't
-    # reserved), pick up a ride list via PUT .../ride-hosts (also legal, its
-    # role isn't legacy anymore), then move back to 'endo' — landing in
-    # exactly the state set_analysis_profile_ride_hosts exists to prevent
-    # (a legacy-bucket anchor that's also a rider), without ever touching
-    # the ride-hosts endpoint's own guard. Closed here: re-entering a legacy
-    # role while a ride list still exists 400s; clear the ride list first
-    # (PUT ride-hosts []).
+    # Ride-list / legacy-role closure (Task 4; S9 Task 2 note: the shadow-
+    # compare guard that used to sit directly above this retired — ANY
+    # profile may now claim a legacy role, not just the five original
+    # legacy-key profiles). This closure is independent of that retirement:
+    # a profile could set its role AWAY from legacy (e.g. endotoxin:
+    # 'endo' -> 'zzhold', legal — 'zzhold' isn't reserved), pick up a ride
+    # list via PUT .../ride-hosts (also legal, its role isn't legacy
+    # anymore), then move back to 'endo' — landing in exactly the state
+    # set_analysis_profile_ride_hosts exists to prevent (a legacy-bucket
+    # anchor that's also a rider), without ever touching the ride-hosts
+    # endpoint's own guard. Closed here: re-entering a legacy role while a
+    # ride list still exists 400s; clear the ride list first (PUT
+    # ride-hosts []).
     if effective_dim == "role" and effective_role in _RESERVED_LEGACY_ROLES:
         from models import profile_ride_hosts
         has_rides = db.execute(
@@ -16672,9 +16663,13 @@ async def update_analysis_profile(
             )
     # Auto-mint (Task 3): mirrors the POST mint block, using the same
     # effective_* values the guards above just validated — a role change to
-    # an unknown code mints here, AFTER every guard, so mint can never create
-    # a legacy or xtra row. Self-limiting: once a code is minted (or already
-    # existed), every later PATCH sees it in the registry and no-ops here.
+    # an unknown code mints here, AFTER every guard. Mint's own reach is
+    # unaffected by S9 Task 2: hplc/endo/ster are always-seeded system rows
+    # (seed_vial_roles, every boot), so mint never fires for them, before or
+    # after this guard retired — what changed is that a profile may now be
+    # *assigned* one of those roles at all (subject to the ride-list closure
+    # above). Self-limiting: once a code is minted (or already existed),
+    # every later PATCH sees it in the registry and no-ops here.
     if effective_dim == "role" and effective_role:
         from catalog.roles import role_registry
         reg = role_registry(db)

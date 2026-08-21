@@ -1269,22 +1269,6 @@ def _apply_variance_override(sample_id: str, result: Optional[dict]) -> Optional
     return result
 
 
-# Bucket (== vial assignment_role) -> WP service key carrying variance counts.
-# Retained for two reasons:
-#   1. A test asserts equality with lims_analyses.service._ROLE_VARIANCE_KEYS
-#      (the variance_verify gate) — this constant is that gate's reference.
-#   2. Canonical reference of the bucket→WP-key mapping for documentation.
-# NOTE: derive_variance_demand no longer iterates this constant. It now resolves
-# the hplc bucket inline in a BW-aware manner (reads hplcpurity_identity OR
-# bac_water_panel; see derive_variance_demand docstring). Coarse keys only,
-# never per-analyte (variance addon spec, "The scoping rule").
-VARIANCE_BUCKET_KEYS: dict[str, str] = {
-    "hplc": "hplcpurity_identity",
-    "endo": "endotoxin",
-    "ster": "sterility_pcr",
-}
-
-
 def derive_variance_demand(services: dict) -> dict:
     """Per-bucket variance target (PAID REPLICATES) from a WP services payload.
 
@@ -1323,6 +1307,10 @@ def derive_base_demand(services: dict, db=None, snapshot: Optional[dict] = None)
 
     db=None -> pure legacy map (unchanged behavior, used by legacy callers
     and as the shadow reference). With a db, the catalog is authoritative;
+    on divergence the catalog value prevails and the divergence is logged —
+    the legacy map is a shadow reference, removed one release after the S9
+    flip (2026-08-14).
+
     on any divergence in a LEGACY bucket the legacy value wins and an error
     is logged (fail-open to known-good, never to under-provisioning).
 
@@ -1344,19 +1332,40 @@ def derive_base_demand(services: dict, db=None, snapshot: Optional[dict] = None)
     legacy = {
         "hplc": 1 if hplc else 0,
         "endo": 1 if endo else 0,
-        "ster": 2 if ster else 0,
+        # Ruling 2026-08-05: PCR and USP<71> are separately sold products, one
+        # vial each. Was 2 back when a single "Sterility" add-on covered both
+        # tests from one pair of vials. Matches
+        # analysis_profiles.sterility_pcr.vials_required, which this map used to
+        # override.
+        "ster": 1 if ster else 0,
     }
     if db is None:
         return legacy
     from sub_samples.catalog_demand import derive_base_demand_catalog
     catalog = derive_base_demand_catalog(db, services, snapshot=snapshot)
+    # S9 ruling 2026-08-14: the catalog is authoritative; the legacy ternary
+    # above is a shadow reference only. On divergence the catalog value
+    # prevails and the divergence is logged (ERROR: ops must see it — the
+    # boot-time verify_demand_catalog keeps misconfigured states loud).
+    # MK1_DEMAND_LEGACY_WINS=1 restores the old clamp as a deploy rollback
+    # path; both the switch and the shadow compare are slated for removal
+    # one release after the flip.
+    legacy_wins = os.environ.get("MK1_DEMAND_LEGACY_WINS") == "1"
     for bucket, legacy_n in legacy.items():
         if catalog.get(bucket, 0) != legacy_n:
-            log.error(
-                "demand_divergence bucket=%s legacy=%s catalog=%s services=%s",
-                bucket, legacy_n, catalog.get(bucket, 0), sorted(services or {}),
-            )
-            catalog[bucket] = legacy_n
+            if legacy_wins:
+                log.error(
+                    "demand_divergence bucket=%s legacy_shadow=%s catalog=%s services=%s"
+                    " (legacy clamp active — MK1_DEMAND_LEGACY_WINS)",
+                    bucket, legacy_n, catalog.get(bucket, 0), sorted(services or {}),
+                )
+                catalog[bucket] = legacy_n
+            else:
+                log.error(
+                    "demand_divergence bucket=%s legacy_shadow=%s catalog=%s services=%s"
+                    " (catalog prevails)",
+                    bucket, legacy_n, catalog.get(bucket, 0), sorted(services or {}),
+                )
     return catalog
 
 
@@ -1364,8 +1373,9 @@ def derive_demand(services: dict, db=None, snapshot: Optional[dict] = None) -> d
     """Translate WP services dict to CORE vial demand per bucket.
 
     HPLC is satisfied by either `hplcpurity_identity` or `bac_water_panel` —
-    both result in chromatography vials. Sterility is the only bucket that
-    needs more than one vial (2 per the lab's protocol).
+    both result in chromatography vials. No legacy bucket needs more than
+    one vial (ruling 2026-08-05: PCR and USP<71> are separately sold
+    products, one vial each).
 
     Explicit-bucket model (2026-06-10-variance-bucket-assignment-design.md §2):
     variance is a SEPARATE bucket with its own target (derive_variance_demand),

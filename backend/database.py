@@ -167,6 +167,15 @@ def init_db():
             seed_service_specs(_db)
     except Exception as e:  # never block startup
         log.warning("catalog_service_spec_seed_skipped err=%s", e)
+    # S9: demand-catalog integrity — with the legacy-wins override retired,
+    # a misconfigured profile under-provisions with no request-time error.
+    # ERROR-per-violation inside; never blocks startup.
+    try:
+        from catalog.demand_verify import verify_demand_catalog
+        with SessionLocal() as _s:
+            verify_demand_catalog(_s)
+    except Exception as e:  # never block startup
+        log.warning("demand_catalog_verify_skipped err=%s", e)
 
 
 def _run_migrations():
