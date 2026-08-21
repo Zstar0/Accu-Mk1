@@ -28,10 +28,12 @@ CACHE_FRESHNESS = timedelta(minutes=5)
 log = logging.getLogger(__name__)
 
 
-# Sub-sample assignment role -> the service group name(s) whose analyses belong
-# to that role. endo/ster are both Microbiology; hplc is Analytics; xtra has none.
-_ROLE_GROUP_NAMES: dict[str, set[str]] = {
-    "hplc": {"Analytics"},
+# Sub-sample assignment role -> the DEPARTMENT name(s) whose analyses belong to
+# that role. endo/ster are both Microbiology; hplc is Analytical; xtra has none.
+# Keyed on Department (the single structural routing key) so a new Microbiology
+# group's services are cleared correctly without name-pinning the group.
+_ROLE_DEPARTMENT_NAMES: dict[str, set[str]] = {
+    "hplc": {"Analytical"},
     "endo": {"Microbiology"},
     "ster": {"Microbiology"},
     "xtra": set(),
@@ -1427,17 +1429,20 @@ def _drop_stale_role_rows(db: Session, *, sub: LimsSubSample, old_role: Optional
     Returns the count deleted."""
     if not old_role:
         return 0
-    old_groups = _ROLE_GROUP_NAMES.get(old_role, set())
-    new_groups = _ROLE_GROUP_NAMES.get(new_role or "", set())
-    clear_groups = old_groups - new_groups
-    if not clear_groups:
+    old_depts = _ROLE_DEPARTMENT_NAMES.get(old_role, set())
+    new_depts = _ROLE_DEPARTMENT_NAMES.get(new_role or "", set())
+    clear_depts = old_depts - new_depts
+    if not clear_depts:
         return 0
-    from models import LimsAnalysis, LimsAnalysisTransition, AnalysisService, ServiceGroup, service_group_members
-    # candidate analysis_service ids in the groups we're clearing
+    from models import AnalysisService, Department, LimsAnalysis, LimsAnalysisTransition
+    dept_ids = db.execute(
+        select(Department.id).where(Department.name.in_(clear_depts))
+    ).scalars().all()
+    if not dept_ids:
+        return 0
+    # candidate analysis_service ids whose HOME DEPARTMENT we're clearing
     svc_ids = db.execute(
-        select(service_group_members.c.analysis_service_id)
-        .join(ServiceGroup, ServiceGroup.id == service_group_members.c.service_group_id)
-        .where(ServiceGroup.name.in_(clear_groups))
+        select(AnalysisService.id).where(AnalysisService.department_id.in_(dept_ids))
     ).scalars().all()
     if not svc_ids:
         return 0
@@ -1456,6 +1461,7 @@ def _drop_stale_role_rows(db: Session, *, sub: LimsSubSample, old_role: Optional
         db.delete(row)
         n += 1
     if n:
+        db.flush()
         log.info("sub_samples.role_change_cleanup sub=%s old=%s new=%s dropped=%s",
                  sub.sample_id, old_role, new_role, n)
     return n

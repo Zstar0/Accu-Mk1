@@ -811,7 +811,11 @@ def delete_sub_sample_attachment(
 # ── Variance set endpoints (worksheet-variance design 2026-06-02) ────────────
 
 @router.get("/{sample_id}/ordered-products", response_model=OrderedProductsResponse)
-def get_ordered_products(sample_id: str, _user=Depends(get_current_user)):
+def get_ordered_products(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
     """Customer-ordered products for the sample-page PRODUCTS section.
     Source: IS order data (no SENAITE). 404 = no linked order; 502 = IS unreachable."""
     try:
@@ -824,7 +828,7 @@ def get_ordered_products(sample_id: str, _user=Depends(get_current_user)):
         )
     if raw is None:
         raise HTTPException(status_code=404, detail=f"no order linked to {sample_id}")
-    products = build_ordered_products(raw.get("services") or {}, raw.get("package"))
+    products = build_ordered_products(raw.get("services") or {}, raw.get("package"), db=db)
     return OrderedProductsResponse(
         sample_id=sample_id,
         wp_order_number=raw.get("wp_order_number"),

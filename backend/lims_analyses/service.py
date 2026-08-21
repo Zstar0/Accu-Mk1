@@ -573,7 +573,10 @@ def promote_to_parent(
     parent). All sources must:
       - exist
       - be in 'to_be_verified' state
-      - share the same keyword (matching the `keyword` arg)
+      - share the same identity — keyword (matching the `keyword` arg) for
+        origin='senaite' sources, or analysis_service_id (matching the first
+        source's service) for origin='mk1' sources, which have no SENAITE
+        keyword contract to hold identity steady (native COA sections, spec 2)
       - hang off the same parent_sample_pk
 
     contribution_kind rules:
@@ -648,10 +651,24 @@ def promote_to_parent(
     if missing:
         raise NotFoundError(f"source analyses not found: {missing}")
 
+    # Native (origin='mk1') services have no SENAITE keyword contract to hold
+    # identity steady — theirs is the catalog service FK instead. Detected off
+    # the FIRST source; every source is then required to share that same
+    # service id rather than a keyword string that can drift independently of
+    # the FK (see test_native_source_validation_is_id_based).
+    first_source_svc = db.get(AnalysisService, source_rows[source_ids[0]].analysis_service_id)
+    is_native = first_source_svc is not None and first_source_svc.origin == "mk1"
+
     parent_sample_pk: Optional[int] = None
     for sid in source_ids:
         row = source_rows[sid]
-        if row.keyword != keyword:
+        if is_native:
+            if row.analysis_service_id != first_source_svc.id:
+                raise BadRequestError(
+                    f"source {sid} has analysis_service_id={row.analysis_service_id}, "
+                    f"expected {first_source_svc.id} (native promote is service-keyed)"
+                )
+        elif row.keyword != keyword:
             raise BadRequestError(
                 f"source {sid} has keyword={row.keyword!r}, "
                 f"expected {keyword!r}"
@@ -696,6 +713,13 @@ def promote_to_parent(
     eff_parent_keyword = parent_keyword or keyword
     eff_service_id = parent_analysis_service_id or first_source.analysis_service_id
     eff_title = parent_title or first_source.title
+    if is_native and parent_keyword is None:
+        # Native identity comes from the catalog service, not the request
+        # string or the (possibly drifted) source row label.
+        eff_parent_keyword = first_source_svc.keyword
+        eff_title = first_source_svc.title
+        if result_unit is None:
+            result_unit = first_source_svc.unit
 
     # The unit belongs to the TARGET service, not to the source vial. On a
     # translated promote the caller sends the SOURCE row's DISPLAY unit, which
@@ -730,10 +754,17 @@ def promote_to_parent(
     # this same transaction to vacate the partial unique index before the new
     # parent row is inserted. Non-retest sources leave the existing 409 guard.
     if all(source_rows[sid].retest_of_id is not None for sid in source_ids):
+        # Native services key identity on the service FK (see is_native above);
+        # a keyword-string match would miss a drifted label on the old row.
+        _ident_clause = (
+            LimsAnalysis.analysis_service_id == eff_service_id
+            if is_native
+            else LimsAnalysis.keyword == eff_parent_keyword
+        )
         old_parent = db.execute(
             select(LimsAnalysis).where(
                 LimsAnalysis.lims_sample_pk == parent_sample_pk,
-                LimsAnalysis.keyword == eff_parent_keyword,
+                _ident_clause,
                 LimsAnalysis.retest_of_id.is_(None),
                 # Only VERIFIED parents are superseded. A published parent is
                 # a citable COA source — superseding it silently could invalidate

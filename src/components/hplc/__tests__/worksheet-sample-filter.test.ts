@@ -23,6 +23,7 @@ function ws(sampleIds: string[], id = 1, title = 'WS-1'): WorksheetListItem {
       sample_id: sid,
       sample_uid: `uid-${i}`,
       service_group_id: null,
+      department_name: null,
       group_name: '',
       group_color: '',
       priority: 'normal',

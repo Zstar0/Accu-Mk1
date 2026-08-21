@@ -34,6 +34,7 @@ export interface WorksheetSummaryItem {
   sample_id: string
   sample_uid: string
   service_group_id: number | null
+  department_name?: string | null
   group_name: string
   priority: string
   added_at: string | null
@@ -62,7 +63,7 @@ const ROLE_PILL: Record<InboxRoleTag, { label: string; cls: string }> = {
 }
 
 function ItemRolePills({ item }: { item: WorksheetSummaryItem }) {
-  const roles = itemRoleBadges({ service_group_id: item.service_group_id, analyses: item.analyses })
+  const roles = itemRoleBadges({ department_name: item.department_name, analyses: item.analyses })
   if (roles.length === 0) return null
   return (
     <span className="flex items-center gap-1 shrink-0">

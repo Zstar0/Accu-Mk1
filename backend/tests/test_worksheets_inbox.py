@@ -15,7 +15,7 @@ Verifies:
 import pytest
 from fastapi.testclient import TestClient
 
-from main import app, ROLE_TO_VIAL_ROLES, VALID_INBOX_ROLES, ROLE_TO_GROUP_NAMES
+from main import app, ROLE_TO_VIAL_ROLES, VALID_INBOX_ROLES, ROLE_TO_DEPARTMENT_NAME
 from database import SessionLocal
 from models import LimsSample, LimsSubSample
 
@@ -53,9 +53,9 @@ def test_valid_inbox_roles_exactly_hplc_and_micro():
     assert VALID_INBOX_ROLES == {"hplc", "microbiology"}
 
 
-def test_role_to_group_names_present():
-    assert "Analytics" in ROLE_TO_GROUP_NAMES["hplc"]
-    assert "Microbiology" in ROLE_TO_GROUP_NAMES["microbiology"]
+def test_role_to_department_name_present():
+    assert ROLE_TO_DEPARTMENT_NAME["hplc"] == "Analytical"
+    assert ROLE_TO_DEPARTMENT_NAME["microbiology"] == "Microbiology"
 
 
 # ── Route validation ─────────────────────────────────────────────────────────

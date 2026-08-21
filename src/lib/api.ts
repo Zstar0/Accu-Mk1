@@ -2406,8 +2406,42 @@ export interface AnalysisServiceRecord {
   result_type?: string | null
   result_options?: { value: string; label: string }[] | null
   variance_capable?: boolean
+  origin: 'senaite' | 'mk1'
+  local_overrides: string[] | null
+  department_id: number | null
   created_at: string
   updated_at: string
+}
+
+/**
+ * Field shapes mirror `backend/main.py`'s `AnalysisServiceCreate` /
+ * `AnalysisServiceUpdate` schemas exactly (Task 5). Deliberately NOT
+ * `Partial<AnalysisServiceRecord>` — that would silently permit callers to
+ * pass read-only/derived fields (`origin`, `senaite_id`, `methods`,
+ * `peptide_name`, timestamps) that the PATCH schema doesn't accept and the
+ * backend would ignore or reject.
+ */
+export interface AnalysisServiceCreatePayload {
+  title: string
+  keyword: string
+  category?: string | null
+  unit?: string | null
+  department_id?: number | null
+  result_type?: string | null
+  result_options?: { value: string; label: string }[] | null
+  variance_capable?: boolean
+}
+
+export interface AnalysisServiceUpdatePayload {
+  title?: string
+  keyword?: string
+  category?: string | null
+  unit?: string | null
+  department_id?: number | null
+  result_type?: string | null
+  result_options?: { value: string; label: string }[] | null
+  variance_capable?: boolean
+  active?: boolean
 }
 
 /**
@@ -2430,6 +2464,47 @@ export async function getAnalysisServices(opts?: { search?: string; category?: s
   return response.json()
 }
 
+/** Create an Mk1-native analysis service. Never creates anything in SENAITE. */
+export async function createAnalysisService(
+  data: AnalysisServiceCreatePayload
+): Promise<AnalysisServiceRecord> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-services`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to create analysis service'))
+  return response.json()
+}
+
+/**
+ * Full-object edit. On a SENAITE-origin row, any sync-owned field
+ * (title/keyword/category/unit) whose value actually changes here is
+ * recorded server-side in `local_overrides`; resubmitting the current value
+ * is a no-op and does not lock it.
+ */
+export async function updateAnalysisService(
+  id: number,
+  data: AnalysisServiceUpdatePayload
+): Promise<AnalysisServiceRecord> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-services/${id}`, {
+    method: 'PATCH',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to update analysis service'))
+  return response.json()
+}
+
+/** Mk1-native services only — refused (409) if referenced by existing analyses. */
+export async function deleteAnalysisService(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-services/${id}`, {
+    method: 'DELETE',
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to delete analysis service'))
+}
+
 export async function updateAnalysisServicePeptide(
   serviceId: number,
   peptideId: number | null
@@ -2439,7 +2514,7 @@ export async function updateAnalysisServicePeptide(
     headers: getBearerHeaders('application/json'),
     body: JSON.stringify({ peptide_id: peptideId }),
   })
-  if (!response.ok) throw new Error(`Update peptide link failed: ${response.status}`)
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to update peptide link'))
   return response.json()
 }
 
@@ -4293,6 +4368,16 @@ export async function downloadSharePointFiles(
 
 // ─── Service Groups ───────────────────────────────────────────────────────────
 
+export interface Department {
+  id: number
+  name: string
+  sort_order: number
+  color: string
+  is_system: boolean
+  created_at: string
+  updated_at: string
+}
+
 export interface ServiceGroup {
   id: number
   name: string
@@ -4301,6 +4386,7 @@ export interface ServiceGroup {
   sort_order: number
   is_default: boolean
   sla_tier_id: number | null
+  department_id: number | null
   member_count: number
   member_ids: number[]
   created_at: string
@@ -4385,6 +4471,145 @@ export async function setServiceGroupMembers(
     body: JSON.stringify({ analysis_service_ids: analysisServiceIds }),
   })
   if (!response.ok) throw new Error(`Failed to update service group members: ${response.status}`)
+  return response.json()
+}
+
+// ─── Departments ────────────────────────────────────────────────────────────
+
+export interface DepartmentCreate {
+  name: string
+  sort_order?: number
+  color?: string
+}
+
+export async function getDepartments(): Promise<Department[]> {
+  const response = await fetch(`${API_BASE_URL()}/departments`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to load departments: ${response.status}`)
+  return response.json()
+}
+
+export async function createDepartment(data: DepartmentCreate): Promise<Department> {
+  const response = await fetch(`${API_BASE_URL()}/departments`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to create department'))
+  return response.json()
+}
+
+export async function updateDepartment(
+  id: number, data: Partial<DepartmentCreate>
+): Promise<Department> {
+  const response = await fetch(`${API_BASE_URL()}/departments/${id}`, {
+    method: 'PATCH',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to update department'))
+  return response.json()
+}
+
+export async function deleteDepartment(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE_URL()}/departments/${id}`, {
+    method: 'DELETE',
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to delete department'))
+}
+
+// ─── Analysis Profiles ──────────────────────────────────────────────────────
+
+export interface AnalysisProfile {
+  id: number
+  key: string
+  name: string
+  description: string | null
+  is_addon: boolean
+  vials_required: number
+  fulfillment_role: string | null
+  fulfillment_dim: string
+  sort_order: number
+  active: boolean
+  coa_section_title: string | null
+  coa_archetype: string | null
+  coa_sort_order: number
+  member_ids: number[]
+  created_at: string
+  updated_at: string
+}
+
+export async function getAnalysisProfiles(): Promise<AnalysisProfile[]> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-profiles`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to load analysis profiles: ${response.status}`)
+  return response.json()
+}
+
+/**
+ * Current membership, in sort_order (the profile's future COA row order).
+ * The list response also carries `member_ids` in this same order, but that
+ * value can be up to `staleTime` (5min) old via `useAnalysisProfiles()` — the
+ * membership editor is a read-modify-write over the PUT below, so it fetches
+ * fresh here rather than risk silently reverting a concurrent edit.
+ */
+export async function getAnalysisProfileMembers(id: number): Promise<number[]> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-profiles/${id}/members`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Failed to load profile members: ${response.status}`)
+  return response.json()
+}
+
+export async function createAnalysisProfile(data: {
+  key: string
+  name: string
+  is_addon: boolean
+  description?: string | null
+  vials_required?: number
+  sort_order?: number
+}): Promise<AnalysisProfile> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-profiles`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to create profile'))
+  return response.json()
+}
+
+export async function updateAnalysisProfile(
+  id: number, data: Partial<AnalysisProfile>
+): Promise<AnalysisProfile> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-profiles/${id}`, {
+    method: 'PATCH',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to update profile'))
+  return response.json()
+}
+
+export async function deleteAnalysisProfile(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-profiles/${id}`, {
+    method: 'DELETE',
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to delete profile'))
+}
+
+export async function setAnalysisProfileMembers(
+  id: number, analysisServiceIds: number[]
+): Promise<{ count: number }> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-profiles/${id}/members`, {
+    method: 'PUT',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({ analysis_service_ids: analysisServiceIds }),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to set members'))
   return response.json()
 }
 
@@ -4813,6 +5038,7 @@ export interface WorksheetListItem {
     sample_id: string
     sample_uid: string
     service_group_id: number | null
+    department_name: string | null
     group_name: string
     group_color: string
     priority: string

@@ -25,6 +25,7 @@ from database import Base
 from lims_analyses.service import cascade_parent_add_to_vials
 from models import (
     AnalysisService,
+    Department,
     LimsAnalysis,
     LimsSample,
     LimsSubSample,
@@ -55,11 +56,21 @@ def db_mem():
 def seed(db_mem):
     """Parent + catalog (HPLC-PUR, PEPT-Total, HPLC-ID, ENDO-LAL with
     Microbiology group membership) + two hplc vials pre-seeded with the
-    original two keywords. Returns (db, parent, sub1, sub5)."""
-    svc_pur = AnalysisService(title="Peptide Purity (HPLC)", keyword="HPLC-PUR")
-    svc_tot = AnalysisService(title="Peptide Total Quantity", keyword="PEPT-Total")
-    svc_id = AnalysisService(title="Peptide Identity (HPLC)", keyword="HPLC-ID")
-    svc_endo = AnalysisService(title="Endotoxin", keyword="ENDO-LAL")
+    original two keywords. Returns (db, parent, sub1, sub5).
+
+    department_id is set directly (not just group membership) because the
+    HPLC mirror (Task 2) is a fail-closed Department allow-list, not a
+    group-name deny-list: mirror_parent_hplc_analyses only seeds a keyword
+    whose service.department_id is the Analytical department."""
+    analytical = Department(name="Analytical")
+    micro_dept = Department(name="Microbiology")
+    db_mem.add_all([analytical, micro_dept])
+    db_mem.flush()
+
+    svc_pur = AnalysisService(title="Peptide Purity (HPLC)", keyword="HPLC-PUR", department_id=analytical.id)
+    svc_tot = AnalysisService(title="Peptide Total Quantity", keyword="PEPT-Total", department_id=analytical.id)
+    svc_id = AnalysisService(title="Peptide Identity (HPLC)", keyword="HPLC-ID", department_id=analytical.id)
+    svc_endo = AnalysisService(title="Endotoxin", keyword="ENDO-LAL", department_id=micro_dept.id)
     db_mem.add_all([svc_pur, svc_tot, svc_id, svc_endo])
     db_mem.flush()
 

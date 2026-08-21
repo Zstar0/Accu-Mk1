@@ -2339,9 +2339,39 @@ class AnalysisServiceResponse(BaseModel):
     result_type: Optional[str] = None
     result_options: Optional[list] = None
     variance_capable: bool
+    origin: str = "senaite"
+    local_overrides: Optional[list] = None
+    department_id: Optional[int] = None
 
     class Config:
         from_attributes = True
+
+
+# peptide_id deliberately excluded from both schemas below: it's only
+# settable via PUT /analysis-services/{id}/peptide, the sole handler that
+# also derives peptide_name. Adding it here would let a caller set peptide_id
+# without peptide_name, desyncing COA/HPLC identity matching.
+class AnalysisServiceCreate(BaseModel):
+    title: str
+    keyword: str
+    category: Optional[str] = None
+    unit: Optional[str] = None
+    department_id: Optional[int] = None
+    result_type: Optional[str] = None
+    result_options: Optional[list] = None
+    variance_capable: bool = False
+
+
+class AnalysisServiceUpdate(BaseModel):
+    title: Optional[str] = None
+    keyword: Optional[str] = None
+    category: Optional[str] = None
+    unit: Optional[str] = None
+    department_id: Optional[int] = None
+    result_type: Optional[str] = None
+    result_options: Optional[list] = None
+    variance_capable: Optional[bool] = None
+    active: Optional[bool] = None
 
 
 # ─── Service Group schemas ───
@@ -2354,6 +2384,7 @@ class ServiceGroupCreate(BaseModel):
     sort_order: int = 0
     is_default: bool = False
     sla_tier_id: Optional[int] = None
+    department_id: Optional[int] = None
 
 
 class ServiceGroupUpdate(BaseModel):
@@ -2364,6 +2395,7 @@ class ServiceGroupUpdate(BaseModel):
     sort_order: Optional[int] = None
     is_default: Optional[bool] = None
     sla_tier_id: Optional[int] = None
+    department_id: Optional[int] = None
 
 
 class ServiceGroupResponse(BaseModel):
@@ -2375,6 +2407,7 @@ class ServiceGroupResponse(BaseModel):
     sort_order: int
     is_default: bool = False
     sla_tier_id: Optional[int] = None
+    department_id: Optional[int] = None
     member_count: int = 0
     member_ids: list[int] = []
     created_at: datetime
@@ -2387,6 +2420,95 @@ class ServiceGroupResponse(BaseModel):
 class ServiceGroupMembersRequest(BaseModel):
     """Schema for setting service group membership."""
     analysis_service_ids: list[int]
+
+
+# ─── Department schemas ───
+
+class DepartmentCreate(BaseModel):
+    name: str
+    sort_order: int = 0
+    color: str = "blue"
+    is_system: bool = False
+
+
+class DepartmentUpdate(BaseModel):
+    name: Optional[str] = None
+    sort_order: Optional[int] = None
+    color: Optional[str] = None
+
+
+class DepartmentResponse(BaseModel):
+    id: int
+    name: str
+    sort_order: int
+    color: str
+    is_system: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ─── Analysis Profile schemas ───
+
+class AnalysisProfileCreate(BaseModel):
+    key: str
+    name: str
+    description: Optional[str] = None
+    is_addon: bool
+    vials_required: int = 0
+    fulfillment_role: Optional[str] = None
+    fulfillment_dim: str = "role"
+    sort_order: int = 0
+    active: bool = True
+
+
+class AnalysisProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    is_addon: Optional[bool] = None
+    vials_required: Optional[int] = None
+    fulfillment_role: Optional[str] = None
+    fulfillment_dim: Optional[str] = None
+    sort_order: Optional[int] = None
+    active: Optional[bool] = None
+    coa_section_title: Optional[str] = None
+    coa_archetype: Optional[str] = None
+    coa_sort_order: Optional[int] = None
+
+
+class AnalysisProfileResponse(BaseModel):
+    id: int
+    key: str
+    name: str
+    description: Optional[str] = None
+    is_addon: bool
+    vials_required: int
+    fulfillment_role: Optional[str] = None
+    fulfillment_dim: str
+    sort_order: int
+    active: bool
+    coa_section_title: Optional[str] = None
+    coa_archetype: Optional[str] = None
+    coa_sort_order: int = 0
+    member_ids: list[int] = []
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AnalysisProfileMembersRequest(BaseModel):
+    analysis_service_ids: list[int]
+
+
+# Only legal non-NULL coa_archetype today. NULL = profile is not reported on
+# the certificate (a legitimate internal-only test); validated at the route
+# edge rather than a DB CHECK constraint so a second archetype is a one-line
+# addition here.
+COA_ARCHETYPES = {"limit_table"}
 
 
 # ─── SLA tier schemas (sub-project A, revised to tiers) ───
@@ -3018,6 +3140,76 @@ async def get_analysis_services(
     return [AnalysisServiceResponse.model_validate(s) for s in services]
 
 
+@app.post("/analysis-services", response_model=AnalysisServiceResponse, status_code=201)
+async def create_analysis_service(
+    data: AnalysisServiceCreate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Create an Mk1-native analysis service. NEVER creates anything in SENAITE."""
+    validate_new_keyword(db, data.keyword)
+    svc = AnalysisService(**data.model_dump(), origin="mk1")
+    db.add(svc)
+    db.commit()
+    db.refresh(svc)
+    return AnalysisServiceResponse.model_validate(svc)
+
+
+@app.patch("/analysis-services/{service_id}", response_model=AnalysisServiceResponse)
+async def update_analysis_service(
+    service_id: int,
+    data: AnalysisServiceUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Full-field edit. On a SENAITE-origin row, every sync-owned field touched
+    here is recorded in local_overrides so the next sync leaves it alone."""
+    svc = db.get(AnalysisService, service_id)
+    if svc is None:
+        raise HTTPException(404, "analysis service not found")
+
+    fields = data.model_dump(exclude_unset=True)
+
+    if "keyword" in fields and fields["keyword"] != svc.keyword:
+        assert_keyword_editable(db, svc)
+        validate_new_keyword(db, fields["keyword"], exclude_id=svc.id)
+
+    # Only a genuine value change locks a sync-owned field into local_overrides.
+    # Resubmitting the current value (e.g. a full-object-save from a UI edit
+    # flyout that touches nothing) must be a no-op, not a permanent ownership
+    # transfer away from the SENAITE sync.
+    overrides = set(svc.local_overrides or [])
+    for field, value in fields.items():
+        if svc.origin == "senaite" and field in SYNC_OWNED_FIELDS and value != getattr(svc, field):
+            overrides.add(field)
+        setattr(svc, field, value)
+    if svc.origin == "senaite":
+        svc.local_overrides = sorted(overrides)
+
+    db.commit()
+    db.refresh(svc)
+    return AnalysisServiceResponse.model_validate(svc)
+
+
+@app.delete("/analysis-services/{service_id}", status_code=204)
+async def delete_analysis_service(
+    service_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Delete an Mk1-native service. Refused if any analysis references it —
+    deactivate instead. SENAITE-origin rows are never deletable here."""
+    svc = db.get(AnalysisService, service_id)
+    if svc is None:
+        raise HTTPException(404, "analysis service not found")
+    if svc.origin != "mk1":
+        raise HTTPException(400, "only Mk1-native services can be deleted; deactivate instead")
+    if _is_service_referenced(db, svc.id):
+        raise HTTPException(409, "service is referenced by existing analyses; deactivate instead")
+    db.delete(svc)
+    db.commit()
+
+
 class AnalysisServicePeptideUpdate(BaseModel):
     peptide_id: Optional[int] = None  # null to clear the link
 
@@ -3104,6 +3296,62 @@ async def update_analysis_service_variance_capable(
     return AnalysisServiceResponse.model_validate(service)
 
 
+KEYWORD_RE = re.compile(r"^[A-Z][A-Z0-9_-]*$")
+
+
+def validate_new_keyword(db, keyword: str, *, exclude_id: int | None = None) -> None:
+    """Validate a keyword for an Mk1-native service.
+
+    Keyword is the cross-repo join key — COABuilder indexes every result by it
+    and the baked spec limits are keyed on it. It must be well-formed and unique
+    across BOTH origins: a native service claiming a SENAITE keyword would be
+    rendered twice on a certificate.
+    """
+    if not keyword or not KEYWORD_RE.match(keyword):
+        raise HTTPException(
+            400,
+            "keyword must start with a letter and contain only A-Z, 0-9, '-' and '_' "
+            "(uppercase)",
+        )
+    q = select(AnalysisService).where(AnalysisService.keyword == keyword)
+    if exclude_id is not None:
+        q = q.where(AnalysisService.id != exclude_id)
+    if db.execute(q).scalars().first() is not None:
+        raise HTTPException(400, f"keyword '{keyword}' is already in use")
+
+
+def _is_service_referenced(db, service_id: int) -> bool:
+    """True if any lims_analyses row references this analysis service."""
+    from models import LimsAnalysis
+    return db.execute(
+        select(LimsAnalysis.id).where(LimsAnalysis.analysis_service_id == service_id).limit(1)
+    ).scalars().first() is not None
+
+
+def assert_keyword_editable(db, svc) -> None:
+    """A keyword becomes immutable once any lims_analyses row references the
+    service — renaming it would orphan results from their spec limits.
+
+    A SENAITE-origin row's keyword is refused outright, referenced or not:
+    it is SENAITE's assignment and the join key COABuilder reads off it.
+    Without this, an unreferenced SENAITE-origin service could be renamed
+    from Mk1 with no lims_analyses row to trip the guard above, permanently
+    desyncing that keyword from the SENAITE sync.
+    """
+    if svc.origin == "senaite":
+        raise HTTPException(
+            400,
+            f"keyword '{svc.keyword}' is owned by SENAITE and cannot be changed "
+            "from Accu-Mk1; edit it in SENAITE instead",
+        )
+    if _is_service_referenced(db, svc.id):
+        raise HTTPException(
+            409,
+            f"keyword '{svc.keyword}' is referenced by existing analyses and cannot "
+            "be changed",
+        )
+
+
 def _parse_service_result_options(raw) -> list[dict]:
     """SENAITE ResultOptions [{ResultValue, ResultText}] -> [{value, label}]."""
     out: list[dict] = []
@@ -3119,7 +3367,20 @@ def _parse_service_result_options(raw) -> list[dict]:
 
 def _apply_service_result_type(svc, item: dict) -> None:
     """Seed svc.result_type / result_options from a SENAITE service item, but
-    ONLY when svc.result_type is NULL (local-wins). No-op otherwise."""
+    ONLY when svc.result_type is NULL (local-wins). No-op otherwise.
+
+    Mk1-origin rows are skipped entirely (mirrors _apply_sync_fields), via an
+    `svc.origin == "mk1"` check — deliberately not `!= "senaite"`. The
+    brand-new-row call site in sync_analysis_services constructs
+    `AnalysisService(...)` with no `origin` kwarg, so svc.origin is Python
+    `None` there: `mapped_column(default="senaite")` is an insert-time
+    default applied at flush, not at construction. `None == "mk1"` is False,
+    so today's bail is correct for that row. Tightening the check to
+    `if svc.origin != "senaite": return` would also match that same
+    pre-flush `None` and silently stop seeding result_type on brand-new
+    SENAITE rows — do not make that change."""
+    if svc.origin == "mk1":
+        return
     if svc.result_type is not None:
         return
     rtype = item.get("ResultType") or item.get("getResultType")
@@ -3129,6 +3390,51 @@ def _apply_service_result_type(svc, item: dict) -> None:
     svc.result_options = _parse_service_result_options(
         item.get("ResultOptions") or item.get("getResultOptions") or []
     ) or None
+
+
+# Fields the SENAITE sync owns on a 'senaite'-origin service. Any of these named
+# in a row's local_overrides is Mk1-owned from then on and the sync skips it.
+SYNC_OWNED_FIELDS = frozenset({"title", "keyword", "category", "unit", "methods"})
+
+
+def _find_adoptable_orphan(db, *, keyword: str, current_ids: set):
+    """A SENAITE-origin row whose senaite_id is absent from this pull — SENAITE
+    deleted and recreated the service under a new id. Adopting preserves its
+    lims_analyses references.
+
+    Mk1-origin rows are NEVER candidates: adoption would hand SENAITE ownership
+    of a service Accu-Mk1 created.
+    """
+    if not keyword or not current_ids:
+        return None
+    return db.execute(
+        select(AnalysisService)
+        .where(
+            AnalysisService.keyword == keyword,
+            AnalysisService.origin == "senaite",
+            AnalysisService.senaite_id.isnot(None),
+            AnalysisService.senaite_id.not_in(current_ids),
+        )
+        .order_by(AnalysisService.id)
+    ).scalars().first()
+
+
+def _apply_sync_fields(svc, values: dict) -> None:
+    """Apply SENAITE-sourced field values, honoring ownership.
+
+    Mk1-origin rows are skipped entirely. On SENAITE-origin rows, any field
+    listed in local_overrides is skipped. A None/empty incoming value never
+    clears an existing one.
+    """
+    if svc.origin == "mk1":
+        return
+    overrides = set(svc.local_overrides or [])
+    for field, value in values.items():
+        if field not in SYNC_OWNED_FIELDS or field in overrides:
+            continue
+        if value in (None, "", []):
+            continue
+        setattr(svc, field, value)
 
 
 @app.post("/analysis-services/sync")
@@ -3207,11 +3513,12 @@ async def sync_analysis_services(db: Session = Depends(get_db), _current_user=De
         ).scalar_one_or_none()
 
         if existing:
-            # Back-fill category if it was missing
-            if not existing.category and category:
-                existing.category = category
-                updated += 1
-            _apply_service_result_type(existing, item)  # local-wins seed
+            # Back-fill category only when it is missing — matches the
+            # pre-existing behavior. local_overrides still applies, so an
+            # operator edit is honored either way.
+            if not existing.category:
+                _apply_sync_fields(existing, {"category": category})
+            _apply_service_result_type(existing, item)
             continue
 
         # SENAITE can delete+recreate a service under a new id/UID (same keyword).
@@ -3219,27 +3526,16 @@ async def sync_analysis_services(db: Session = Depends(get_db), _current_user=De
         # row (the TB500 promote-502 incident). Adopt an orphaned row — same
         # keyword, stale senaite_id absent from this pull — preserving its id and
         # all lims_analyses / peptide_analytes references. .first() tolerates any
-        # pre-existing duplicates.
+        # pre-existing duplicates. Mk1-origin rows are excluded from this match
+        # (see _find_adoptable_orphan) so SENAITE can never adopt a native service.
         kw = item.get("getKeyword") or item.get("Keyword")
-        orphan = None
-        if kw and current_ids:
-            orphan = db.execute(
-                select(AnalysisService)
-                .where(
-                    AnalysisService.keyword == kw,
-                    AnalysisService.senaite_id.isnot(None),
-                    AnalysisService.senaite_id.not_in(current_ids),
-                )
-                .order_by(AnalysisService.id)
-            ).scalars().first()
+        orphan = _find_adoptable_orphan(db, keyword=kw, current_ids=current_ids)
         if orphan is not None:
             orphan.senaite_id = senaite_id
             orphan.senaite_uid = item.get("uid")
-            orphan.title = title
-            if category:
-                orphan.category = category
-            if methods_list:
-                orphan.methods = methods_list
+            _apply_sync_fields(orphan, {
+                "title": title, "category": category, "methods": methods_list,
+            })
             _apply_service_result_type(orphan, item)
             updated += 1
             continue
@@ -9806,6 +10102,19 @@ async def _maybe_emit_regular_coa_child(db, sample_id, parent_row, primary_data)
     body["include_lab_remarks"] = include_remarks
     if include_remarks and (parent_row.customer_remarks or "").strip():
         body["lab_remarks"] = parent_row.customer_remarks.strip()
+
+    # Native sections (spec 2) — this child IS a full certificate of the
+    # parent (the Core COA for a variance lot), so it needs the identical
+    # fail-closed attach as the primary. Unlike the best-effort httpx call
+    # below, a failure here aborts the CHILD emission rather than shipping a
+    # section-less certificate.
+    from coa.native_sections import NativeSectionsError, build_native_sections
+    try:
+        body["native_sections"] = build_native_sections(db, parent_row)
+    except NativeSectionsError as e:
+        _logger.error("regular COA child aborted for %s: %s", sample_id, e.detail)
+        return
+
     try:
         async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=120.0) as client:
             resp = await client.post(f"{COA_BUILDER_URL}/process/{sample_id}", json=body)
@@ -10001,6 +10310,19 @@ async def generate_sample_coa(
             # helper so regen-primary sends the identical series (parity).
             from coa.variance_series import process_variance_fields
             alias_body.update(process_variance_fields(db, _parent_row))
+
+            # Native sections (spec 2) — FAIL-CLOSED, unlike the best-effort
+            # variance overlay above. If the document cannot be assembled the
+            # certificate must not be generated at all.
+            from coa.native_sections import NativeSectionsError, build_native_sections
+            try:
+                _native_doc = build_native_sections(db, _parent_row)
+            except NativeSectionsError as e:
+                return SampleCOAActionResponse(
+                    success=False,
+                    message=f"COA aborted — {e.detail}",
+                )
+            alias_body["native_sections"] = _native_doc
 
     try:
         async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=120.0) as client:
@@ -10557,6 +10879,19 @@ async def regen_primary_coa(
     if _regen_parent is not None:
         from coa.variance_series import process_variance_fields
         alias_body.update(process_variance_fields(db, _regen_parent))
+
+        # Native sections (spec 2) — FAIL-CLOSED, unlike the best-effort
+        # variance overlay above. If the document cannot be assembled the
+        # certificate must not be regenerated at all.
+        from coa.native_sections import NativeSectionsError, build_native_sections
+        try:
+            _native_doc = build_native_sections(db, _regen_parent)
+        except NativeSectionsError as e:
+            return SampleCOAActionResponse(
+                success=False,
+                message=f"COA regen aborted — {e.detail}",
+            )
+        alias_body["native_sections"] = _native_doc
 
     # 1. Regenerate only the primary COA via COA Builder
     try:
@@ -15122,6 +15457,7 @@ async def get_service_groups(
             sort_order=group.sort_order,
             is_default=group.is_default,
             sla_tier_id=group.sla_tier_id,
+            department_id=group.department_id,
             member_count=len(group.analysis_services),
             member_ids=[s.id for s in group.analysis_services],
             created_at=group.created_at,
@@ -15161,6 +15497,7 @@ async def create_service_group(
         sort_order=group.sort_order,
         is_default=group.is_default,
         sla_tier_id=group.sla_tier_id,
+        department_id=group.department_id,
         member_count=0,
         created_at=group.created_at,
         updated_at=group.updated_at,
@@ -15201,6 +15538,7 @@ async def update_service_group(
         sort_order=group.sort_order,
         is_default=group.is_default,
         sla_tier_id=group.sla_tier_id,
+        department_id=group.department_id,
         member_count=len(group.analysis_services),
         member_ids=[s.id for s in group.analysis_services],
         created_at=group.created_at,
@@ -15270,6 +15608,232 @@ async def set_service_group_members(
     group.analysis_services = list(services)
     db.commit()
     return {"count": len(services)}
+
+
+# ─── Departments ───────────────────────────────────────────────────────────────
+
+@app.get("/departments", response_model=list[DepartmentResponse])
+async def get_departments(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
+    """All departments ordered by sort_order, then name."""
+    from models import Department
+    return db.execute(
+        select(Department).order_by(Department.sort_order, Department.name)
+    ).scalars().all()
+
+
+@app.post("/departments", response_model=DepartmentResponse, status_code=201)
+async def create_department(
+    data: DepartmentCreate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    from models import Department
+    existing = db.execute(
+        select(Department).where(Department.name == data.name)
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(400, f"Department '{data.name}' already exists")
+    dept = Department(**data.model_dump())
+    db.add(dept)
+    db.commit()
+    db.refresh(dept)
+    return dept
+
+
+@app.patch("/departments/{department_id}", response_model=DepartmentResponse)
+async def update_department(
+    department_id: int,
+    data: DepartmentUpdate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    from models import Department
+    dept = db.get(Department, department_id)
+    if dept is None:
+        raise HTTPException(404, "department not found")
+    update_data = data.model_dump(exclude_unset=True)
+    if "name" in update_data and update_data["name"] != dept.name:
+        existing = db.execute(
+            select(Department).where(
+                Department.name == update_data["name"], Department.id != department_id
+            )
+        ).scalar_one_or_none()
+        if existing:
+            raise HTTPException(400, f"Department '{update_data['name']}' already exists")
+    for field, value in update_data.items():
+        setattr(dept, field, value)
+    db.commit()
+    db.refresh(dept)
+    return dept
+
+
+@app.delete("/departments/{department_id}", status_code=204)
+async def delete_department(
+    department_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)
+):
+    """Refused while any service or group still points at it — reassign first.
+    A silently orphaned service would be excluded from HPLC mirroring."""
+    from models import Department
+    dept = db.get(Department, department_id)
+    if dept is None:
+        raise HTTPException(404, "department not found")
+    if dept.is_system:
+        raise HTTPException(400, "system departments cannot be deleted")
+    in_use = db.execute(
+        select(AnalysisService.id).where(AnalysisService.department_id == department_id).limit(1)
+    ).scalars().first() or db.execute(
+        select(ServiceGroup.id).where(ServiceGroup.department_id == department_id).limit(1)
+    ).scalars().first()
+    if in_use is not None:
+        raise HTTPException(409, "department still has services or groups; reassign them first")
+    db.delete(dept)
+    db.commit()
+
+
+# ─── Analysis Profiles ─────────────────────────────────────────────────────────
+# The sellable test: parent of one or more Analysis Services, and the future
+# carrier of COA section identity. Deliberately distinct from ServiceGroup
+# (bench work) — see models.AnalysisProfile docstring.
+
+def _profile_to_response(p) -> AnalysisProfileResponse:
+    return AnalysisProfileResponse(
+        id=p.id, key=p.key, name=p.name, description=p.description,
+        is_addon=p.is_addon, vials_required=p.vials_required,
+        fulfillment_role=p.fulfillment_role, fulfillment_dim=p.fulfillment_dim,
+        sort_order=p.sort_order, active=p.active,
+        coa_section_title=p.coa_section_title, coa_archetype=p.coa_archetype,
+        coa_sort_order=p.coa_sort_order,
+        member_ids=[s.id for s in p.analysis_services],
+        created_at=p.created_at, updated_at=p.updated_at,
+    )
+
+
+@app.get("/analysis-profiles", response_model=list[AnalysisProfileResponse])
+async def get_analysis_profiles(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
+    from models import AnalysisProfile
+    rows = db.execute(
+        select(AnalysisProfile).order_by(AnalysisProfile.sort_order, AnalysisProfile.name)
+    ).scalars().all()
+    return [_profile_to_response(p) for p in rows]
+
+
+@app.post("/analysis-profiles", response_model=AnalysisProfileResponse, status_code=201)
+async def create_analysis_profile(
+    data: AnalysisProfileCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """AnalysisProfileCreate deliberately has no coa_* fields: a new profile
+    always starts unreported (coa_archetype NULL) and the lab opts it into a
+    COA section via a later edit (PATCH), never at creation time."""
+    from models import AnalysisProfile
+    existing = db.execute(
+        select(AnalysisProfile).where(AnalysisProfile.key == data.key)
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(400, f"profile key '{data.key}' already exists")
+    p = AnalysisProfile(**data.model_dump(), updated_by_id=getattr(current_user, "id", None))
+    db.add(p)
+    db.commit()
+    db.refresh(p)
+    return _profile_to_response(p)
+
+
+@app.patch("/analysis-profiles/{profile_id}", response_model=AnalysisProfileResponse)
+async def update_analysis_profile(
+    profile_id: int,
+    data: AnalysisProfileUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    from models import AnalysisProfile
+    p = db.get(AnalysisProfile, profile_id)
+    if p is None:
+        raise HTTPException(404, "analysis profile not found")
+    fields = data.model_dump(exclude_unset=True)
+    if "coa_archetype" in fields and fields["coa_archetype"] is not None \
+            and fields["coa_archetype"] not in COA_ARCHETYPES:
+        raise HTTPException(
+            400,
+            f"unknown coa_archetype {fields['coa_archetype']!r}; "
+            f"allowed: {sorted(COA_ARCHETYPES)} or null (not reported)",
+        )
+    for field, value in fields.items():
+        setattr(p, field, value)
+    p.updated_by_id = getattr(current_user, "id", None)
+    db.commit()
+    db.refresh(p)
+    return _profile_to_response(p)
+
+
+@app.delete("/analysis-profiles/{profile_id}", status_code=204)
+async def delete_analysis_profile(
+    profile_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)
+):
+    from models import AnalysisProfile
+    p = db.get(AnalysisProfile, profile_id)
+    if p is None:
+        raise HTTPException(404, "analysis profile not found")
+    db.delete(p)
+    db.commit()
+
+
+@app.get("/analysis-profiles/{profile_id}/members", response_model=list[int])
+async def get_analysis_profile_members(
+    profile_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Return the list of analysis_service IDs currently in the profile, in
+    sort_order (the profile's future COA section row order)."""
+    from models import AnalysisProfile, analysis_profile_members
+    p = db.get(AnalysisProfile, profile_id)
+    if p is None:
+        raise HTTPException(404, "analysis profile not found")
+    rows = db.execute(
+        select(analysis_profile_members.c.analysis_service_id)
+        .where(analysis_profile_members.c.analysis_profile_id == profile_id)
+        .order_by(analysis_profile_members.c.sort_order)
+    ).all()
+    return [row.analysis_service_id for row in rows]
+
+
+@app.put("/analysis-profiles/{profile_id}/members")
+async def set_analysis_profile_members(
+    profile_id: int,
+    data: AnalysisProfileMembersRequest,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Replace membership. Position in the list becomes sort_order — the row
+    order within the profile's COA section.
+
+    Mirrors set_service_group_members: filters the caller's ids down to ones
+    that actually exist before writing, and reports the ACTUAL count, not the
+    requested one — a bogus id must not dangle a row (SQLite, no FK
+    enforcement) or 500 (Postgres, FK enforced)."""
+    from models import AnalysisProfile, AnalysisService, analysis_profile_members
+    p = db.get(AnalysisProfile, profile_id)
+    if p is None:
+        raise HTTPException(404, "analysis profile not found")
+
+    valid_ids = set(db.execute(
+        select(AnalysisService.id).where(AnalysisService.id.in_(data.analysis_service_ids))
+    ).scalars().all())
+    # Preserve the caller's requested order (it becomes sort_order below);
+    # only drop ids that don't exist.
+    ordered_ids = [sid for sid in data.analysis_service_ids if sid in valid_ids]
+
+    db.execute(
+        analysis_profile_members.delete().where(
+            analysis_profile_members.c.analysis_profile_id == profile_id
+        )
+    )
+    for i, svc_id in enumerate(ordered_ids):
+        db.execute(analysis_profile_members.insert().values(
+            analysis_profile_id=profile_id, analysis_service_id=svc_id, sort_order=i))
+    db.commit()
+    return {"count": len(ordered_ids)}
 
 
 # ─── SLA tiers (sub-project A, revised to tiers) ──────────────────────────────
@@ -15693,13 +16257,29 @@ class InboxResponse(BaseModel):
     filter_role: Optional[str] = None  # echo of the query param so the frontend can confirm
 
 
-# Role → service_group_name set. Hardcoded — the lab has had Analytics +
-# Microbiology for years and a 2-entry mapping doesn't deserve a table.
-ROLE_TO_GROUP_NAMES: dict[str, set[str]] = {
-    "hplc": {"Analytics"},
-    "microbiology": {"Microbiology"},
+# Role -> DEPARTMENT name. Department drives the lane: a new Microbiology-department
+# group lands in the micro lane automatically, with no name-pinning.
+ROLE_TO_DEPARTMENT_NAME: dict[str, str] = {
+    "hplc": "Analytical",
+    "microbiology": "Microbiology",
 }
-VALID_INBOX_ROLES = set(ROLE_TO_GROUP_NAMES.keys())
+VALID_INBOX_ROLES = set(ROLE_TO_DEPARTMENT_NAME.keys())
+
+
+def _inbox_allowed_group_ids(db, role: Optional[str]) -> Optional[set[int]]:
+    """Resolve a worksheet-inbox role to the set of service-group ids in that
+    role's DEPARTMENT. None role -> None (no filter; pass all groups)."""
+    if role is None:
+        return None
+    from models import Department
+    dept_name = ROLE_TO_DEPARTMENT_NAME[role]
+    return {
+        r[0] for r in db.execute(
+            select(ServiceGroup.id)
+            .join(Department, Department.id == ServiceGroup.department_id)
+            .where(Department.name == dept_name)
+        ).all()
+    }
 
 # Role-set membership for the assignment_role column. Microbiology covers
 # both 'ster' and 'endo' (collapsed into one filter chip per spec Q1).
@@ -16024,14 +16604,7 @@ async def get_worksheets_inbox(
         raise HTTPException(status_code=503, detail="SENAITE not configured")
 
     # Resolve role → allowed service_group IDs. None means "no filter; pass all groups".
-    allowed_group_ids: Optional[set[int]] = None
-    if role is not None:
-        group_names = ROLE_TO_GROUP_NAMES[role]
-        allowed_group_ids = {
-            r[0] for r in db.execute(
-                select(ServiceGroup.id).where(ServiceGroup.name.in_(group_names))
-            ).all()
-        }
+    allowed_group_ids: Optional[set[int]] = _inbox_allowed_group_ids(db, role)
 
     # Resolve allowed vial assignment_role values. NULL roles always excluded (auto-
     # assign on /vial-plan is the cure for those). XTRA gated by show_xtra.
@@ -17032,12 +17605,17 @@ def list_worksheets(
         group_ids = {it.service_group_id for it in items if it.service_group_id}
         group_name_map: dict[int, str] = {}
         group_peptide_map: dict[int, int | None] = {}
+        group_department_name_map: dict[int, str | None] = {}
         if group_ids:
+            from models import Department
             groups = db.execute(
-                select(ServiceGroup.id, ServiceGroup.name, ServiceGroup.color).where(ServiceGroup.id.in_(group_ids))
+                select(ServiceGroup.id, ServiceGroup.name, ServiceGroup.color, Department.name)
+                .outerjoin(Department, Department.id == ServiceGroup.department_id)
+                .where(ServiceGroup.id.in_(group_ids))
             ).all()
-            group_name_map = {g.id: g.name for g in groups}
-            group_color_map: dict[int, str] = {g.id: g.color for g in groups}
+            group_name_map = {g[0]: g[1] for g in groups}
+            group_color_map: dict[int, str] = {g[0]: g[2] for g in groups}
+            group_department_name_map = {g[0]: g[3] for g in groups}
             # Resolve peptide_id and analyses per group
             group_analyses_map: dict[int, list[dict]] = {}
             for gid in group_ids:
@@ -17157,6 +17735,7 @@ def list_worksheets(
                     "sample_id": it.sample_id,
                     "sample_uid": it.sample_uid,
                     "service_group_id": it.service_group_id,
+                    "department_name": group_department_name_map.get(it.service_group_id) if it.service_group_id else None,
                     "group_name": group_name_map.get(it.service_group_id, "—") if it.service_group_id else "—",
                     "group_color": group_color_map.get(it.service_group_id, "zinc") if it.service_group_id else "zinc",
                     "priority": it.priority,
@@ -17882,6 +18461,38 @@ def get_sample_variance_payload(
         "variance_replicates": build_variance_replicates(db, parent) or {},
         "variance_analytes": build_variance_analyte_series(db, parent) or {},
     }
+
+
+# ── Native COA sections (spec 2 — integration-service bridge) ────────
+# Called server-to-server by integration-service on the additional-COA path
+# (Task 9), and in-process by generate_sample_coa / _maybe_emit_regular_coa_child
+# below. FAIL-CLOSED, unlike /variance-payload above: any assembly failure is a
+# 502 and the caller must NOT generate a certificate — a native section is a
+# paid, reportable test result, not a best-effort overlay.
+
+@app.get("/samples/{sample_id}/coa-sections")
+def get_sample_coa_sections(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_internal_service_token),
+):
+    """Native COA sections document for S2S consumers (spec 2).
+
+    404 = sample unknown to Mk1 (pre-Mk1 legacy sample; nothing native can
+    exist). 200 with empty ordered_profiles/sections = valid "nothing native
+    ordered". 502 = assembly failed; caller must abort certificate generation.
+    """
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        raise HTTPException(status_code=404, detail=f"sample {sample_id} not found")
+
+    from coa.native_sections import NativeSectionsError, build_native_sections
+    try:
+        return build_native_sections(db, parent)
+    except NativeSectionsError as e:
+        raise HTTPException(status_code=502, detail=e.detail)
 
 
 # ── Registry creation signal (integration-service bridge) ────────────

@@ -129,6 +129,19 @@ def init_db():
             _wf_db.commit()
     except Exception as e:  # never block startup
         log.warning("workflow_seed_skipped err=%s", e)
+    # Catalog foundation: seed departments and backfill department_id.
+    try:
+        from catalog.departments import backfill_departments
+        with SessionLocal() as _s:
+            backfill_departments(_s)
+    except Exception as e:  # never block startup
+        log.warning("catalog_department_backfill_skipped err=%s", e)
+    try:
+        from catalog.profile_seed import seed_profiles_from_registry
+        with SessionLocal() as _s:
+            seed_profiles_from_registry(_s)
+    except Exception as e:  # never block startup
+        log.warning("catalog_profile_seed_skipped err=%s", e)
 
 
 def _run_migrations():
@@ -1383,6 +1396,58 @@ def _run_migrations():
         "ALTER TABLE lims_parent_attachments ADD CONSTRAINT "
         "lims_parent_attachments_kind_check CHECK (kind IN "
         "('vial_image','packaging_image','receive_image','chromatogram','manual'))",
+        # --- Catalog foundation: departments + department_id ---
+        """
+        CREATE TABLE IF NOT EXISTS departments (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(200) NOT NULL UNIQUE,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            color VARCHAR(50) NOT NULL DEFAULT 'blue',
+            is_system BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT now(),
+            updated_at TIMESTAMP DEFAULT now()
+        )
+        """,
+        "ALTER TABLE service_groups ADD COLUMN IF NOT EXISTS department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL",
+        "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL",
+        # Service origin + local overrides: marks a service as SENAITE-born
+        # (synced, default) or Mk1-born (native, never written to by the sync).
+        "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS origin VARCHAR(20) NOT NULL DEFAULT 'senaite'",
+        "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS local_overrides JSON",
+        # Mk1-native keyword uniqueness. Partial: only covers origin='mk1' rows —
+        # SENAITE-origin keyword collisions are prevented at the app layer by
+        # validate_new_keyword (see backend/main.py), which checks BOTH origins.
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_services_mk1_keyword ON analysis_services (keyword) WHERE origin = 'mk1'",
+        # --- Catalog foundation: Analysis Profile (the sellable test) ---
+        """
+        CREATE TABLE IF NOT EXISTS analysis_profiles (
+            id SERIAL PRIMARY KEY,
+            key VARCHAR(100) NOT NULL UNIQUE,
+            name VARCHAR(200) NOT NULL,
+            description TEXT,
+            is_addon BOOLEAN NOT NULL,
+            vials_required INTEGER NOT NULL DEFAULT 0,
+            fulfillment_role VARCHAR(50),
+            fulfillment_dim VARCHAR(20) NOT NULL DEFAULT 'role',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            active BOOLEAN NOT NULL DEFAULT TRUE,
+            updated_by_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            created_at TIMESTAMP DEFAULT now(),
+            updated_at TIMESTAMP DEFAULT now()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS analysis_profile_members (
+            analysis_profile_id INTEGER NOT NULL REFERENCES analysis_profiles(id) ON DELETE CASCADE,
+            analysis_service_id INTEGER NOT NULL REFERENCES analysis_services(id) ON DELETE CASCADE,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            CONSTRAINT uq_analysis_profile_member UNIQUE (analysis_profile_id, analysis_service_id)
+        )
+        """,
+        # --- Native COA sections (spec 2): profile -> certificate wiring ---
+        "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_section_title VARCHAR(200)",
+        "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_archetype VARCHAR(50)",
+        "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_sort_order INTEGER NOT NULL DEFAULT 0",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

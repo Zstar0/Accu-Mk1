@@ -47,7 +47,26 @@ def _derive_label(key: str) -> str:
     return key.replace("_", " ").title()
 
 
-def build_ordered_products(services: dict, package: str | None) -> list[dict]:
+def lookup_product_def(key: str, db=None) -> ProductDef | None:
+    """Resolve a service key to its ProductDef.
+
+    With a session, the analysis_profiles table is authoritative and
+    PRODUCT_REGISTRY is the fallback for any key not yet seeded. Without one,
+    behavior is exactly as before — which is what makes the parity test a
+    same-input comparison.
+    """
+    if db is not None:
+        from models import AnalysisProfile
+        row = db.query(AnalysisProfile).filter_by(key=key).one_or_none()
+        if row is not None:
+            return ProductDef(
+                row.key, row.name, row.is_addon,
+                row.fulfillment_role, row.fulfillment_dim,
+            )
+    return PRODUCT_REGISTRY.get(key)
+
+
+def build_ordered_products(services: dict, package: str | None, db=None) -> list[dict]:
     # Lazy import: service.py imports nothing from here, but keep the edge one-way.
     from sub_samples.service import normalize_variance_entitlement
 
@@ -57,7 +76,7 @@ def build_ordered_products(services: dict, package: str | None) -> list[dict]:
 
     # 1) Base package chip first.
     if package:
-        pdef = _PACKAGE_PRODUCTS.get(package)
+        pdef = lookup_product_def(package, db) or _PACKAGE_PRODUCTS.get(package)
         if pdef is None:
             log.warning("unregistered_product_key key=%s kind=package", package)
             pdef = ProductDef(package, _derive_label(package), False, None, "role")
@@ -83,7 +102,7 @@ def build_ordered_products(services: dict, package: str | None) -> list[dict]:
             continue
         if key == "hplcpurity_identity" and has_package:
             continue  # implied by the package — avoid a redundant chip
-        pdef = PRODUCT_REGISTRY.get(key)
+        pdef = lookup_product_def(key, db)
         if pdef is None:
             log.warning("unregistered_product_key key=%s", key)
             pdef = ProductDef(key, _derive_label(key), True, None, "role")

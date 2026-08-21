@@ -177,6 +177,17 @@ class AnalysisService(Base):
     variance_capable: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False, server_default="false"
     )
+    department_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("departments.id", ondelete="SET NULL"), nullable=True
+    )
+    # 'senaite' = born in SENAITE and synced in; 'mk1' = created in Accu-Mk1 and
+    # never written to or overwritten by SENAITE.
+    origin: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="senaite", server_default="senaite"
+    )
+    # Field names Mk1 owns for THIS row; the SENAITE sync skips them. Generalizes
+    # the pre-existing local-wins rule for result_type.
+    local_overrides: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 
     # Relationships
     peptide: Mapped[Optional["Peptide"]] = relationship("Peptide", foreign_keys=[peptide_id])
@@ -201,6 +212,9 @@ class ServiceGroup(Base):
     sla_tier_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("sla_tiers.id", ondelete="SET NULL"), nullable=True
     )
+    department_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("departments.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -222,6 +236,99 @@ service_group_members = Table(
     Column("analysis_service_id", Integer, ForeignKey("analysis_services.id", ondelete="CASCADE"), nullable=False),
     UniqueConstraint("service_group_id", "analysis_service_id", name="uq_service_group_member"),
 )
+
+
+class Department(Base):
+    """Top-level lab department (e.g. Analytical, Microbiology).
+
+    A service's single structural home; drives the HPLC-mirror allow-list, the
+    worksheet/inbox lane, and the assignment-page block. Catalog config table.
+    """
+    __tablename__ = "departments"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    color: Mapped[str] = mapped_column(String(50), nullable=False, default="blue")
+    is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<Department(id={self.id}, name='{self.name}')>"
+
+
+analysis_profile_members = Table(
+    "analysis_profile_members",
+    Base.metadata,
+    Column("analysis_profile_id", Integer,
+           ForeignKey("analysis_profiles.id", ondelete="CASCADE"), nullable=False),
+    Column("analysis_service_id", Integer,
+           ForeignKey("analysis_services.id", ondelete="CASCADE"), nullable=False),
+    Column("sort_order", Integer, nullable=False, default=0),
+    UniqueConstraint("analysis_profile_id", "analysis_service_id",
+                     name="uq_analysis_profile_member"),
+)
+
+
+class AnalysisProfile(Base):
+    """A sellable test — the parent of one or more Analysis Services.
+
+    This is the unit of SALE and of REPORTING (COA section), distinct from a
+    ServiceGroup, which is the unit of BENCH WORK. A profile may span
+    departments (a Bacteriostatic Water panel spans Analytical and
+    Microbiology); a service group may not. There is deliberately NO
+    department_id here — each member service declares its own.
+    """
+    __tablename__ = "analysis_profiles"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # The order key WordPress sends. Immutable once an order references it.
+    key: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # No default on purpose: two seeded profiles are primaries, and a default
+    # would silently demote a mis-seeded primary to an add-on.
+    is_addon: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    # Base dedicated aliquots. 0 = rides an existing vial. Variance composes on
+    # top of this — never fold variance into the base.
+    vials_required: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    fulfillment_role: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    fulfillment_dim: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="role", server_default="role"
+    )
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # ── COA section wiring (spec 2) ──────────────────────────────────────────
+    # NULL coa_archetype = profile is NOT reported on the certificate (a
+    # legitimate internal-only test). The only legal non-NULL value today is
+    # 'limit_table'; validation lives in the route so the constant stays in
+    # one place (COA_ARCHETYPES in main.py).
+    coa_section_title: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    coa_archetype: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    coa_sort_order: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    updated_by_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    # order_by is load-bearing: sort_order on the junction row IS the row
+    # order within the profile's future COA section (see analysis_profile_members).
+    # Without it, member order is undefined DB order, not the order PUT set.
+    analysis_services: Mapped[list["AnalysisService"]] = relationship(
+        "AnalysisService", secondary=analysis_profile_members, lazy="selectin",
+        order_by=analysis_profile_members.c.sort_order,
+    )
+
+    def __repr__(self) -> str:
+        return f"<AnalysisProfile(id={self.id}, key='{self.key}')>"
 
 
 # M2M junction: instrument <-> method (methods can be shared across instruments of the same model)
