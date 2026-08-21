@@ -40,6 +40,7 @@ from sqlalchemy.exc import IntegrityError
 from database import get_db, init_db
 from sla_engine import BusinessSchedule, compute_business_minutes, sla_status_dict
 from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment
+from catalog.change_log import apply_and_log, log_create, log_delete, log_members
 from auth import (
     get_current_user, require_admin, create_access_token,
     verify_password, get_password_hash, seed_admin_user,
@@ -3257,16 +3258,30 @@ async def get_analysis_services(
     return [AnalysisServiceResponse.model_validate(s) for s in services]
 
 
+# Fields snapshotted on create/delete change-log rows — the full editable
+# catalog surface of a service plus origin (always deliberately set on
+# create, never blank).
+SERVICE_LOG_FIELDS = (
+    "title", "keyword", "category", "unit", "department_id",
+    "result_type", "result_options", "variance_capable", "origin", "active",
+)
+
+
 @app.post("/analysis-services", response_model=AnalysisServiceResponse, status_code=201)
 async def create_analysis_service(
     data: AnalysisServiceCreate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Create an Mk1-native analysis service. NEVER creates anything in SENAITE."""
     validate_new_keyword(db, data.keyword)
     svc = AnalysisService(**data.model_dump(), origin="mk1")
     db.add(svc)
+    db.flush()
+    log_create(
+        db, svc, SERVICE_LOG_FIELDS,
+        entity_type="service", entity_pk=svc.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(svc)
     return AnalysisServiceResponse.model_validate(svc)
@@ -3277,7 +3292,7 @@ async def update_analysis_service(
     service_id: int,
     data: AnalysisServiceUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Full-field edit. On a SENAITE-origin row, every sync-owned field touched
     here is recorded in local_overrides so the next sync leaves it alone."""
@@ -3294,14 +3309,22 @@ async def update_analysis_service(
     # Only a genuine value change locks a sync-owned field into local_overrides.
     # Resubmitting the current value (e.g. a full-object-save from a UI edit
     # flyout that touches nothing) must be a no-op, not a permanent ownership
-    # transfer away from the SENAITE sync.
-    overrides = set(svc.local_overrides or [])
-    for field, value in fields.items():
-        if svc.origin == "senaite" and field in SYNC_OWNED_FIELDS and value != getattr(svc, field):
-            overrides.add(field)
-        setattr(svc, field, value)
+    # transfer away from the SENAITE sync. Computed here (against svc's
+    # pre-mutation state) and folded into apply_fields so apply_and_log does
+    # the actual setattr + before/after logging for every field, local_overrides
+    # included — it shows up in the log row's changed dict iff it itself changed.
+    apply_fields = dict(fields)
     if svc.origin == "senaite":
-        svc.local_overrides = sorted(overrides)
+        overrides = set(svc.local_overrides or [])
+        for field, value in fields.items():
+            if field in SYNC_OWNED_FIELDS and value != getattr(svc, field):
+                overrides.add(field)
+        apply_fields["local_overrides"] = sorted(overrides)
+
+    apply_and_log(
+        db, svc, apply_fields,
+        entity_type="service", entity_pk=svc.id, user_id=getattr(current_user, "id", None),
+    )
 
     db.commit()
     db.refresh(svc)
@@ -3312,7 +3335,7 @@ async def update_analysis_service(
 async def delete_analysis_service(
     service_id: int,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Delete an Mk1-native service. Refused if any analysis references it —
     deactivate instead. SENAITE-origin rows are never deletable here."""
@@ -3323,6 +3346,10 @@ async def delete_analysis_service(
         raise HTTPException(400, "only Mk1-native services can be deleted; deactivate instead")
     if _is_service_referenced(db, svc.id):
         raise HTTPException(409, "service is referenced by existing analyses; deactivate instead")
+    log_delete(
+        db, svc, SERVICE_LOG_FIELDS,
+        entity_type="service", entity_pk=svc.id, user_id=getattr(current_user, "id", None),
+    )
     db.delete(svc)
     db.commit()
 
@@ -3336,7 +3363,7 @@ async def update_analysis_service_peptide(
     service_id: int,
     data: AnalysisServicePeptideUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Link or unlink a peptide to an analysis service."""
     service = db.execute(
@@ -3351,11 +3378,14 @@ async def update_analysis_service_peptide(
         ).scalar_one_or_none()
         if not peptide:
             raise HTTPException(404, f"Peptide {data.peptide_id} not found")
-        service.peptide_id = peptide.id
-        service.peptide_name = peptide.name
+        new_peptide_id, new_peptide_name = peptide.id, peptide.name
     else:
-        service.peptide_id = None
-        service.peptide_name = None
+        new_peptide_id, new_peptide_name = None, None
+
+    apply_and_log(
+        db, service, {"peptide_id": new_peptide_id, "peptide_name": new_peptide_name},
+        entity_type="service", entity_pk=service.id, user_id=getattr(current_user, "id", None),
+    )
 
     db.commit()
     db.refresh(service)
@@ -3372,7 +3402,7 @@ async def update_analysis_service_result_type(
     service_id: int,
     data: AnalysisServiceResultTypeUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Set a service's result type + options (local-authoritative once set)."""
     service = db.execute(
@@ -3380,10 +3410,15 @@ async def update_analysis_service_result_type(
     ).scalar_one_or_none()
     if not service:
         raise HTTPException(404, f"Analysis service {service_id} not found")
+    fields = {}
     if "result_type" in data.model_fields_set:
-        service.result_type = data.result_type
+        fields["result_type"] = data.result_type
     if "result_options" in data.model_fields_set:
-        service.result_options = data.result_options
+        fields["result_options"] = data.result_options
+    apply_and_log(
+        db, service, fields,
+        entity_type="service", entity_pk=service.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(service)
     return AnalysisServiceResponse.model_validate(service)
@@ -3398,7 +3433,7 @@ async def update_analysis_service_variance_capable(
     service_id: int,
     data: AnalysisServiceVarianceCapableUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Lab-managed toggle: mark an analyte as a variance figure. Mk1-owned —
     never touched by the SENAITE sync."""
@@ -3407,7 +3442,10 @@ async def update_analysis_service_variance_capable(
     ).scalar_one_or_none()
     if not service:
         raise HTTPException(404, f"Analysis service {service_id} not found")
-    service.variance_capable = data.variance_capable
+    apply_and_log(
+        db, service, {"variance_capable": data.variance_capable},
+        entity_type="service", entity_pk=service.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(service)
     return AnalysisServiceResponse.model_validate(service)
@@ -14776,7 +14814,9 @@ def _shadow_analyses_at_registration_bg(sample_id: str) -> None:
 
 def _native_placeholders_at_registration_bg(sample_id: str) -> None:
     """Native sibling of _shadow_analyses_at_registration_bg: mint pending
-    parent-tier rows for every ORDERED native analysis service.
+    parent-tier rows for every ORDERED native analysis service, then stamp
+    the S4 snapshot rider (catalog_snapshot) so check-in seeds what the
+    customer bought (task 6), not whatever the catalog looks like later.
 
     Same hardening rationale as its sibling — own session, never raises. A
     catalog miss or IS outage must not fail the registration; there is no
@@ -14789,6 +14829,7 @@ def _native_placeholders_at_registration_bg(sample_id: str) -> None:
         from lims_analyses.parent_placeholders import seed_parent_placeholders
         from sub_samples.service import fetch_sample_services
         from models import LimsSample
+        from catalog.snapshot import compute_catalog_snapshot
 
         raw = fetch_sample_services(sample_id)
         if not raw:
@@ -14801,6 +14842,28 @@ def _native_placeholders_at_registration_bg(sample_id: str) -> None:
             db, parent=parent,
             services=raw.get("services") or {}, package=raw.get("package"),
         )
+        # Once-only: a replayed registration signal (IS retry, duplicate
+        # webhook) must NOT restamp — the whole point is freezing what was
+        # resolved the FIRST time. System write (s2s has no user); no
+        # change-log row for the stamp itself (that ledger is task 7's
+        # audited reprovision, a deliberate human/API action).
+        #
+        # Isolated in its own try/except: a snapshot-compute failure (bad
+        # catalog row, unexpected shape) must NOT roll back the placeholder
+        # seed that already succeeded above — that seed is the load-bearing
+        # bench-visibility guarantee this sibling exists for. catalog_snapshot
+        # stays NULL on failure, so the once-only guard retries on the next
+        # registration signal / replay instead of stamping half-built data.
+        if parent.catalog_snapshot is None:
+            try:
+                parent.catalog_snapshot = compute_catalog_snapshot(
+                    db, raw.get("services") or {}, raw.get("package"),
+                )
+            except Exception as snapshot_err:  # noqa: BLE001
+                logger.warning(
+                    "catalog_snapshot.stamp_failed sample_id=%s err=%s",
+                    sample_id, snapshot_err,
+                )
         db.commit()
         logger.info(
             "registry.native_placeholder_seed sample_id=%s created=%s existing=%s skipped=%s",
@@ -15684,6 +15747,15 @@ async def stream_scale_weight(
 
 # ─── Service Groups ───────────────────────────────────────────────────────────
 
+# Fields snapshotted on create/delete change-log rows — the group's own
+# catalog surface. Membership (service_group_members) is logged separately
+# via log_members in set_service_group_members below.
+SERVICE_GROUP_LOG_FIELDS = (
+    "name", "description", "color", "sort_order", "is_default",
+    "sla_tier_id", "department_id",
+)
+
+
 @app.get("/service-groups", response_model=list[ServiceGroupResponse])
 async def get_service_groups(
     db: Session = Depends(get_db),
@@ -15720,7 +15792,7 @@ async def get_service_groups(
 async def create_service_group(
     data: ServiceGroupCreate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Create a new service group."""
     existing = db.execute(
@@ -15734,8 +15806,18 @@ async def create_service_group(
         db.execute(
             select(ServiceGroup).where(ServiceGroup.is_default == True)  # noqa: E712
         )
+        # Bulk demotion of every OTHER default group — not logged (mirrors
+        # the sla_tier _demote_other_default_tiers ruling: converting a
+        # bulk UPDATE into a per-row loop for logging purposes would be a
+        # behavior change outside this task's scope; the winner's own
+        # create row below is what's logged).
         db.query(ServiceGroup).filter(ServiceGroup.is_default == True).update({"is_default": False})  # noqa: E712
     db.add(group)
+    db.flush()
+    log_create(
+        db, group, SERVICE_GROUP_LOG_FIELDS,
+        entity_type="service_group", entity_pk=group.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(group)
     return ServiceGroupResponse(
@@ -15758,7 +15840,7 @@ async def update_service_group(
     group_id: int,
     data: ServiceGroupUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Update an existing service group."""
     group = db.execute(
@@ -15771,11 +15853,15 @@ async def update_service_group(
 
     update_data = data.model_dump(exclude_unset=True)
     if update_data.get("is_default"):
+        # Bulk demotion of every OTHER default group — not logged, same
+        # ruling as create_service_group's mint-time demotion above.
         db.query(ServiceGroup).filter(
             ServiceGroup.is_default == True, ServiceGroup.id != group_id  # noqa: E712
         ).update({"is_default": False})
-    for field, value in update_data.items():
-        setattr(group, field, value)
+    apply_and_log(
+        db, group, update_data,
+        entity_type="service_group", entity_pk=group.id, user_id=getattr(current_user, "id", None),
+    )
 
     db.commit()
     db.refresh(group)
@@ -15799,7 +15885,7 @@ async def update_service_group(
 async def delete_service_group(
     group_id: int,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Delete a service group. Membership rows cascade-delete."""
     group = db.execute(
@@ -15808,6 +15894,10 @@ async def delete_service_group(
     if not group:
         raise HTTPException(404, f"Service group {group_id} not found")
 
+    log_delete(
+        db, group, SERVICE_GROUP_LOG_FIELDS,
+        entity_type="service_group", entity_pk=group.id, user_id=getattr(current_user, "id", None),
+    )
     db.delete(group)
     db.commit()
     return {"message": f"Service group '{group.name}' deleted"}
@@ -15839,7 +15929,7 @@ async def set_service_group_members(
     group_id: int,
     req: ServiceGroupMembersRequest,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Replace the full membership set for a service group."""
     group = db.execute(
@@ -15854,12 +15944,27 @@ async def set_service_group_members(
         select(AnalysisService).where(AnalysisService.id.in_(req.analysis_service_ids))
     ).scalars().all()
 
+    # Captured BEFORE reassignment below — the log's before/after pair. This
+    # route replaces membership via ORM relationship assignment (not a raw
+    # junction-table delete+insert like set_analysis_profile_members), so
+    # the before snapshot has to come from the relationship itself.
+    before_ids = [s.id for s in group.analysis_services]
     group.analysis_services = list(services)
+    after_ids = [s.id for s in services]
+    log_members(
+        db, entity_type="service_group_members", entity_pk=group_id,
+        user_id=getattr(current_user, "id", None),
+        field="member_ids", before_ids=before_ids, after_ids=after_ids,
+    )
     db.commit()
     return {"count": len(services)}
 
 
 # ─── Departments ───────────────────────────────────────────────────────────────
+
+# Fields snapshotted on create/delete change-log rows.
+DEPARTMENT_LOG_FIELDS = ("name", "sort_order", "color", "is_system")
+
 
 @app.get("/departments", response_model=list[DepartmentResponse])
 async def get_departments(db: Session = Depends(get_db), _current_user=Depends(get_current_user)):
@@ -15874,7 +15979,7 @@ async def get_departments(db: Session = Depends(get_db), _current_user=Depends(g
 async def create_department(
     data: DepartmentCreate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     from models import Department
     existing = db.execute(
@@ -15884,6 +15989,11 @@ async def create_department(
         raise HTTPException(400, f"Department '{data.name}' already exists")
     dept = Department(**data.model_dump())
     db.add(dept)
+    db.flush()
+    log_create(
+        db, dept, DEPARTMENT_LOG_FIELDS,
+        entity_type="department", entity_pk=dept.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(dept)
     return dept
@@ -15894,7 +16004,7 @@ async def update_department(
     department_id: int,
     data: DepartmentUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """name is immutable on is_system rows (fix round, spec 4 Task 7): the
     worksheet-inbox legacy lane keys (catalog.roles._LEGACY_LANE_KEYS) are
@@ -15918,8 +16028,10 @@ async def update_department(
         ).scalar_one_or_none()
         if existing:
             raise HTTPException(400, f"Department '{update_data['name']}' already exists")
-    for field, value in update_data.items():
-        setattr(dept, field, value)
+    apply_and_log(
+        db, dept, update_data,
+        entity_type="department", entity_pk=dept.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(dept)
     return dept
@@ -15927,7 +16039,7 @@ async def update_department(
 
 @app.delete("/departments/{department_id}", status_code=204)
 async def delete_department(
-    department_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)
+    department_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)
 ):
     """Refused while any service, group, or bench station still points at
     it — reassign first. A silently orphaned service would be excluded from
@@ -15950,6 +16062,10 @@ async def delete_department(
     ).scalars().first()
     if in_use is not None:
         raise HTTPException(409, "department still has services, groups, or bench stations; reassign them first")
+    log_delete(
+        db, dept, DEPARTMENT_LOG_FIELDS,
+        entity_type="department", entity_pk=dept.id, user_id=getattr(current_user, "id", None),
+    )
     db.delete(dept)
     db.commit()
 
@@ -15958,6 +16074,24 @@ async def delete_department(
 # The sellable test: parent of one or more Analysis Services, and the future
 # carrier of COA section identity. Deliberately distinct from ServiceGroup
 # (bench work) — see models.AnalysisProfile docstring.
+
+# Fields snapshotted on create/delete change-log rows — mirrors
+# SERVICE_LOG_FIELDS above. Excludes updated_by_id/created_at/updated_at:
+# bookkeeping, not catalog data.
+PROFILE_LOG_FIELDS = (
+    "key", "name", "description", "is_addon", "vials_required",
+    "fulfillment_role", "fulfillment_dim", "sort_order", "active",
+    "coa_section_title", "coa_archetype", "coa_sort_order", "sla_tier_id",
+)
+
+# Shared with the two profile-route mint side doors below (POST/PATCH) and
+# the members-PUT department backfill — one field list for every vial_role
+# change-log write in this file.
+VIAL_ROLE_LOG_FIELDS = (
+    "code", "label", "department_id", "boxable", "variance_eligible",
+    "sort_order", "frozen", "is_system",
+)
+
 
 def _profile_to_response(p) -> AnalysisProfileResponse:
     member_ids = [s.id for s in p.analysis_services]
@@ -16039,12 +16173,19 @@ async def create_analysis_profile(
         reg = role_registry(db)
         if data.fulfillment_role not in reg:
             max_sort = db.query(func.coalesce(func.max(VialRole.sort_order), 0)).scalar()
-            db.add(VialRole(
+            role = VialRole(
                 code=data.fulfillment_role, label=data.name,
                 department_id=data.role_department_id,
                 boxable=bool(data.role_boxable), variance_eligible=False,
                 sort_order=max_sort + 1, frozen=False, is_system=False,
-            ))
+            )
+            db.add(role)
+            db.flush()
+            log_create(
+                db, role, VIAL_ROLE_LOG_FIELDS,
+                entity_type="vial_role", entity_pk=role.id,
+                user_id=getattr(current_user, "id", None),
+            )
             logger.info("vial_role_minted code=%s for_profile=%s", data.fulfillment_role, data.key)
     # role_* are auto-mint-only, never AnalysisProfile columns. coa_archetype
     # IS a real column and is deliberately NOT excluded — the guard above has
@@ -16055,6 +16196,11 @@ async def create_analysis_profile(
         updated_by_id=getattr(current_user, "id", None),
     )
     db.add(p)
+    db.flush()
+    log_create(
+        db, p, PROFILE_LOG_FIELDS,
+        entity_type="profile", entity_pk=p.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(p)
     return _profile_to_response(p)
@@ -16150,15 +16296,24 @@ async def update_analysis_profile(
         if effective_role not in reg:
             max_sort = db.query(func.coalesce(func.max(VialRole.sort_order), 0)).scalar()
             effective_name = fields["name"] if "name" in fields else p.name
-            db.add(VialRole(
+            role = VialRole(
                 code=effective_role, label=effective_name,
                 department_id=data.role_department_id,
                 boxable=False, variance_eligible=False,
                 sort_order=max_sort + 1, frozen=False, is_system=False,
-            ))
+            )
+            db.add(role)
+            db.flush()
+            log_create(
+                db, role, VIAL_ROLE_LOG_FIELDS,
+                entity_type="vial_role", entity_pk=role.id,
+                user_id=getattr(current_user, "id", None),
+            )
             logger.info("vial_role_minted code=%s for_profile=%s", effective_role, p.key)
-    for field, value in fields.items():
-        setattr(p, field, value)
+    apply_and_log(
+        db, p, fields,
+        entity_type="profile", entity_pk=p.id, user_id=getattr(current_user, "id", None),
+    )
     p.updated_by_id = getattr(current_user, "id", None)
     db.commit()
     db.refresh(p)
@@ -16167,7 +16322,7 @@ async def update_analysis_profile(
 
 @app.delete("/analysis-profiles/{profile_id}", status_code=204)
 async def delete_analysis_profile(
-    profile_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)
+    profile_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)
 ):
     from models import AnalysisProfile, VialProfileAssignment
     p = db.get(AnalysisProfile, profile_id)
@@ -16192,6 +16347,10 @@ async def delete_analysis_profile(
             f"profile '{p.key}' has vial custody history (current or superseded) "
             "and cannot be deleted — deactivate it instead (active=false)",
         )
+    log_delete(
+        db, p, PROFILE_LOG_FIELDS,
+        entity_type="profile", entity_pk=p.id, user_id=getattr(current_user, "id", None),
+    )
     db.delete(p)
     db.commit()
 
@@ -16221,7 +16380,7 @@ async def set_analysis_profile_members(
     profile_id: int,
     data: AnalysisProfileMembersRequest,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Replace membership. Position in the list becomes sort_order — the row
     order within the profile's COA section.
@@ -16242,6 +16401,13 @@ async def set_analysis_profile_members(
     # only drop ids that don't exist.
     ordered_ids = [sid for sid in data.analysis_service_ids if sid in valid_ids]
 
+    # Captured BEFORE the delete-all below — the log's before/after pair.
+    before_ids = [row.analysis_service_id for row in db.execute(
+        select(analysis_profile_members.c.analysis_service_id)
+        .where(analysis_profile_members.c.analysis_profile_id == profile_id)
+        .order_by(analysis_profile_members.c.sort_order)
+    ).all()]
+
     db.execute(
         analysis_profile_members.delete().where(
             analysis_profile_members.c.analysis_profile_id == profile_id
@@ -16250,6 +16416,11 @@ async def set_analysis_profile_members(
     for i, svc_id in enumerate(ordered_ids):
         db.execute(analysis_profile_members.insert().values(
             analysis_profile_id=profile_id, analysis_service_id=svc_id, sort_order=i))
+    log_members(
+        db, entity_type="profile_members", entity_pk=profile_id,
+        user_id=getattr(current_user, "id", None),
+        field="member_ids", before_ids=before_ids, after_ids=ordered_ids,
+    )
     db.commit()
 
     # Member-department backfill (Task 3): a role minted without a department
@@ -16272,7 +16443,11 @@ async def set_analysis_profile_members(
             # member has the same department."
             dept_ids.discard(None)
             if len(dept_ids) == 1:
-                role.department_id = dept_ids.pop()
+                apply_and_log(
+                    db, role, {"department_id": dept_ids.pop()},
+                    entity_type="vial_role", entity_pk=role.id,
+                    user_id=getattr(current_user, "id", None),
+                )
                 db.commit()
                 logger.info(
                     "vial_role_department_backfilled code=%s department_id=%s for_profile=%s",
@@ -16306,7 +16481,7 @@ async def set_analysis_profile_ride_hosts(
     profile_id: int,
     data: RideHostsRequest,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Replace-all, mirroring set_analysis_profile_members: list position
     becomes priority. A ride host names a role this profile's result may
@@ -16360,6 +16535,13 @@ async def set_analysis_profile_ride_hosts(
         if code == p.fulfillment_role:
             raise HTTPException(400, "a profile may not ride its own role")
 
+    # Captured BEFORE the delete-all below — the log's before/after pair.
+    before_codes = [row.host_role_code for row in db.execute(
+        select(profile_ride_hosts.c.host_role_code)
+        .where(profile_ride_hosts.c.analysis_profile_id == profile_id)
+        .order_by(profile_ride_hosts.c.priority)
+    ).all()]
+
     db.execute(
         profile_ride_hosts.delete().where(
             profile_ride_hosts.c.analysis_profile_id == profile_id
@@ -16368,6 +16550,11 @@ async def set_analysis_profile_ride_hosts(
     for i, code in enumerate(data.host_role_codes):
         db.execute(profile_ride_hosts.insert().values(
             analysis_profile_id=profile_id, host_role_code=code, priority=i))
+    log_members(
+        db, entity_type="ride_hosts", entity_pk=profile_id,
+        user_id=getattr(current_user, "id", None),
+        field="host_role_codes", before_ids=before_codes, after_ids=data.host_role_codes,
+    )
     db.commit()
     return {"count": len(data.host_role_codes)}
 
@@ -16440,7 +16627,7 @@ def get_vial_roles(db: Session = Depends(get_db), _current_user=Depends(get_curr
 def create_vial_role(
     data: VialRoleCreate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     from models import VialRole
     if not re.fullmatch(r"[a-z][a-z0-9_]{0,7}", data.code):
@@ -16455,6 +16642,11 @@ def create_vial_role(
         raise HTTPException(400, f"role code '{data.code}' already exists")
     r = VialRole(**data.model_dump())
     db.add(r)
+    db.flush()
+    log_create(
+        db, r, VIAL_ROLE_LOG_FIELDS,
+        entity_type="vial_role", entity_pk=r.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(r)
     return r
@@ -16465,7 +16657,7 @@ def update_vial_role(
     role_id: int,
     data: VialRoleUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     from models import VialRole
     r = db.get(VialRole, role_id)
@@ -16488,8 +16680,10 @@ def update_vial_role(
         effective_code = fields.get("code", r.code)
         if fields["department_id"] is None and effective_code != "xtra":
             raise HTTPException(400, "only xtra may have no department")
-    for field, value in fields.items():
-        setattr(r, field, value)
+    apply_and_log(
+        db, r, fields,
+        entity_type="vial_role", entity_pk=r.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(r)
     return r
@@ -16497,7 +16691,7 @@ def update_vial_role(
 
 @app.delete("/vial-roles/{role_id}", status_code=204)
 def delete_vial_role(
-    role_id: int, db: Session = Depends(get_db), _current_user=Depends(get_current_user)
+    role_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)
 ):
     """is_system → 400 outright. Otherwise refused (409, naming the reference)
     if a profile still fulfills via this role, any vial (parent sample or
@@ -16529,6 +16723,10 @@ def delete_vial_role(
     if box_ref is not None:
         raise HTTPException(
             409, f"role '{r.code}' is still referenced by a box; reassign it first")
+    log_delete(
+        db, r, VIAL_ROLE_LOG_FIELDS,
+        entity_type="vial_role", entity_pk=r.id, user_id=getattr(current_user, "id", None),
+    )
     db.delete(r)
     db.commit()
 
@@ -16539,6 +16737,10 @@ def delete_vial_role(
 # never gates result entry (Handler ruling Q2, deviation 7). Ships EMPTY
 # (G-STATION pending, no seed). No DELETE route — deactivate via active=false
 # (same idiom as /vial-roles' department FK and /departments itself).
+
+# Fields snapshotted on create change-log rows (no delete route to snapshot).
+BENCH_STATION_LOG_FIELDS = ("name", "department_id", "active", "sort_order")
+
 
 @app.get("/bench-stations", response_model=list[BenchStationResponse])
 def get_bench_stations(
@@ -16554,7 +16756,7 @@ def get_bench_stations(
 def create_bench_station(
     data: BenchStationCreate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     from models import BenchStation, Department
     dept = db.get(Department, data.department_id)
@@ -16567,6 +16769,11 @@ def create_bench_station(
         raise HTTPException(400, f"bench station '{data.name}' already exists")
     s = BenchStation(**data.model_dump())
     db.add(s)
+    db.flush()
+    log_create(
+        db, s, BENCH_STATION_LOG_FIELDS,
+        entity_type="bench_station", entity_pk=s.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(s)
     return s
@@ -16577,7 +16784,7 @@ def update_bench_station(
     station_id: int,
     data: BenchStationUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     from models import BenchStation, Department
     s = db.get(BenchStation, station_id)
@@ -16596,8 +16803,10 @@ def update_bench_station(
         ).scalar_one_or_none()
         if dup:
             raise HTTPException(400, f"bench station '{fields['name']}' already exists")
-    for field, value in fields.items():
-        setattr(s, field, value)
+    apply_and_log(
+        db, s, fields,
+        entity_type="bench_station", entity_pk=s.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(s)
     return s
@@ -16708,10 +16917,24 @@ def create_bench_scan(
 
 # ─── SLA tiers (sub-project A, revised to tiers) ──────────────────────────────
 
+SLA_TIER_LOG_FIELDS = (
+    "name", "target_minutes", "business_hours_only", "is_default",
+    "amber_threshold_percent",
+)
+SLA_PRIORITY_TIER_LOG_FIELDS = ("priority", "sla_tier_id", "service_group_id")
+
 
 def _demote_other_default_tiers(db: Session, keep_id: Optional[int] = None) -> None:
     """Clear is_default on every tier except keep_id, flushing before the caller
-    inserts/updates the promoted row (the partial unique index is immediate)."""
+    inserts/updates the promoted row (the partial unique index is immediate).
+
+    NOT routed through change_log: a bulk .update() demoting N other tiers
+    at once, not a single deliberate edit to one row. Logging it would mean
+    either N synthetic rows attributed to a request that never named those
+    tiers, or converting this to a per-row loop — a behavior change outside
+    this task's scope. Net effect: promoting a tier to default is logged as
+    an is_default=True update on the winner; the implicit demotion of the
+    previous default is NOT separately logged."""
     q = db.query(SlaTier).filter(SlaTier.is_default == True)  # noqa: E712
     if keep_id is not None:
         q = q.filter(SlaTier.id != keep_id)
@@ -16735,13 +16958,18 @@ async def list_sla_tiers(
 async def create_sla_tier(
     data: SlaTierCreate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Create a tier. Setting is_default demotes any existing default."""
     tier = SlaTier(**data.model_dump())
     if tier.is_default:
         _demote_other_default_tiers(db)
     db.add(tier)
+    db.flush()
+    log_create(
+        db, tier, SLA_TIER_LOG_FIELDS,
+        entity_type="sla_tier", entity_pk=tier.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(tier)
     return tier
@@ -16752,7 +16980,7 @@ async def update_sla_tier(
     tier_id: int,
     data: SlaTierUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Update a tier. Promoting demotes the rest; demoting the only default is
     rejected (it's the 24h backstop for unmatched samples)."""
@@ -16768,8 +16996,10 @@ async def update_sla_tier(
                 409,
                 "Cannot unset the only default SLA tier; set another as default instead",
             )
-    for field, value in update_data.items():
-        setattr(tier, field, value)
+    apply_and_log(
+        db, tier, update_data,
+        entity_type="sla_tier", entity_pk=tier.id, user_id=getattr(current_user, "id", None),
+    )
     db.commit()
     db.refresh(tier)
     return tier
@@ -16779,7 +17009,7 @@ async def update_sla_tier(
 async def delete_sla_tier(
     tier_id: int,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Delete a tier. The default cannot be deleted. Groups referencing it have
     sla_tier_id set NULL (FK); priority overrides referencing it cascade-delete."""
@@ -16788,6 +17018,10 @@ async def delete_sla_tier(
         raise HTTPException(404, f"SLA tier {tier_id} not found")
     if tier.is_default:
         raise HTTPException(409, "Cannot delete the default SLA tier; promote another first")
+    log_delete(
+        db, tier, SLA_TIER_LOG_FIELDS,
+        entity_type="sla_tier", entity_pk=tier.id, user_id=getattr(current_user, "id", None),
+    )
     db.delete(tier)
     db.commit()
     return {"message": f"SLA tier {tier_id} deleted"}
@@ -16807,7 +17041,7 @@ async def set_sla_priority_tier(
     priority: SlaPriority,
     data: SlaPriorityTierSet,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Upsert a priority -> tier override.
 
@@ -16833,7 +17067,11 @@ async def set_sla_priority_tier(
         q = q.where(SlaPriorityTier.service_group_id == data.service_group_id)
     row = db.execute(q).scalar_one_or_none()
     if row:
-        row.sla_tier_id = data.sla_tier_id
+        apply_and_log(
+            db, row, {"sla_tier_id": data.sla_tier_id},
+            entity_type="sla_priority_tier", entity_pk=row.id,
+            user_id=getattr(current_user, "id", None),
+        )
     else:
         row = SlaPriorityTier(
             priority=priority,
@@ -16841,6 +17079,12 @@ async def set_sla_priority_tier(
             service_group_id=data.service_group_id,
         )
         db.add(row)
+        db.flush()
+        log_create(
+            db, row, SLA_PRIORITY_TIER_LOG_FIELDS,
+            entity_type="sla_priority_tier", entity_pk=row.id,
+            user_id=getattr(current_user, "id", None),
+        )
     db.commit()
     db.refresh(row)
     return row
@@ -16851,7 +17095,7 @@ async def delete_sla_priority_tier(
     priority: SlaPriority,
     service_group_id: int | None = None,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """Remove a priority override.
 
@@ -16867,6 +17111,11 @@ async def delete_sla_priority_tier(
     if not row:
         scope = "global" if service_group_id is None else f"group_id={service_group_id}"
         raise HTTPException(404, f"No override for priority '{priority}' ({scope})")
+    log_delete(
+        db, row, SLA_PRIORITY_TIER_LOG_FIELDS,
+        entity_type="sla_priority_tier", entity_pk=row.id,
+        user_id=getattr(current_user, "id", None),
+    )
     db.delete(row)
     db.commit()
     scope = "global" if service_group_id is None else f"group_id={service_group_id}"
@@ -20120,6 +20369,118 @@ def download_registry_parent_attachment(
         media_type=att.content_type or "application/octet-stream",
         headers={"Content-Disposition": f'inline; filename="{att.filename}"'},
     )
+
+
+@app.post("/lims-samples/{sample_id}/reprovision-snapshot")
+def reprovision_catalog_snapshot(
+    sample_id: str,
+    current_user=Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """S4 snapshot rider, Task 7: the ONLY other writer of LimsSample.
+    catalog_snapshot besides the once-only registration stamp
+    (_native_placeholders_at_registration_bg). Handler ruling: applying a
+    catalog fix to an in-flight order is a deliberate, AUDITED reprovision
+    action, never an implicit side effect — so this route both overwrites
+    the frozen snapshot and appends one catalog_change_log row for it.
+
+    `require_admin` (fix round 1, not the original plan text's
+    `get_current_user`): overwriting a frozen provisioning contract is an
+    ops-grade action — fail-closed wins here even though the plan wrote
+    "any authenticated user". `require_admin` itself depends on
+    `get_current_user` and returns that same user object on success, so
+    actor attribution below (`getattr(current_user, "id", None)`) is
+    unchanged.
+
+    Scope boundary (fix round 1, ruled): this route rewrites ONLY
+    `catalog_snapshot`. It does NOT touch vials/analyses already assigned
+    at check-in — a sample that's already past check-in gets an updated
+    snapshot but no re-seed of existing custody/analyses rows. Healing
+    already-seeded rows against a reprovisioned snapshot is deliberately
+    out of scope for this slice; the snapshot only governs FUTURE seeding
+    (task 6's snapshot-sourced resolve/seed path).
+
+    Recomputes fresh against the LIVE catalog via compute_catalog_snapshot,
+    fed by a FRESH fetch_sample_services read — never threads the sample's
+    existing snapshot back into compute_catalog_snapshot, which would
+    re-freeze stale data instead of updating it. entity_type='sample_snapshot'
+    keeps this ledger distinct from the per-catalog-row entity types (service/
+    profile/vial_role/...) the rest of change_log.py's callers use.
+
+    action='create' (log_create, before=None) when the stored snapshot was
+    NULL; action='update' (apply_and_log, which performs the setattr AND the
+    before/after diff in one call) otherwise — apply_and_log only writes a
+    row when the value actually changed, which in practice is always true
+    here since compute_catalog_snapshot stamps a fresh resolved_at on every
+    call.
+
+    Plain `def`, not `async def`: fetch_sample_services (sub_samples/
+    service.py) is a blocking `requests` call — FastAPI runs sync `def`
+    routes in the threadpool so it can't stall the event loop, same
+    reasoning as the sibling /debug/sample-registry/{sample_id}/refresh
+    route above. IS fetch failure -> 502 with NO writes (raised before
+    either the snapshot column or the change-log row is touched).
+    """
+    from catalog.change_log import apply_and_log, log_create
+    from catalog.snapshot import compute_catalog_snapshot
+    from sub_samples.service import fetch_sample_services
+
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        raise HTTPException(status_code=404, detail=f"Sample {sample_id} not found")
+
+    try:
+        raw = fetch_sample_services(sample_id)
+    except Exception as e:  # noqa: BLE001 — surfaced as 502, no writes made yet
+        logger.warning(
+            "catalog_snapshot.reprovision_fetch_failed sample_id=%s err=%s",
+            sample_id, e,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to fetch live services for {sample_id}",
+        ) from e
+    if raw is None:
+        # fetch_sample_services' OWN 404 (no order_submissions row for this
+        # sample_id) — distinct from a network/5xx failure but must be
+        # refused the same way: reprovisioning to an empty services dict
+        # would overwrite a good frozen snapshot with an empty one and audit
+        # it as a deliberate reprovision. The registration bg task treats
+        # this the same falsy-raw signal as a skip (`if not raw: return`);
+        # this route can't skip silently (it's a deliberate user action), so
+        # it refuses loudly instead.
+        raise HTTPException(
+            status_code=502,
+            detail=f"No live order services found for sample {sample_id}",
+        )
+
+    new_snapshot = compute_catalog_snapshot(
+        db, raw.get("services") or {}, raw.get("package"),
+    )
+
+    user_id = getattr(current_user, "id", None)
+    was_null = parent.catalog_snapshot is None
+    if was_null:
+        parent.catalog_snapshot = new_snapshot
+        log_create(
+            db, parent, ["catalog_snapshot"],
+            entity_type="sample_snapshot", entity_pk=parent.id, user_id=user_id,
+        )
+    else:
+        apply_and_log(
+            db, parent, {"catalog_snapshot": new_snapshot},
+            entity_type="sample_snapshot", entity_pk=parent.id, user_id=user_id,
+        )
+    db.commit()
+    db.refresh(parent)
+
+    return {
+        "sample_id": parent.sample_id,
+        "action": "create" if was_null else "update",
+        "catalog_snapshot": parent.catalog_snapshot,
+    }
 
 
 @app.get("/registry/samples", response_model=SenaiteSamplesResponse)

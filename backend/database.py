@@ -1659,6 +1659,23 @@ def _run_migrations():
               AND review_state NOT IN ('retracted', 'rejected')
               AND provenance = 'canonical'
         """,
+        # S4 catalog change log (2026-08-11): append-only ISO 8.3/7.5.1
+        # document control for the catalog. details uses the amendment-audit
+        # vocabulary {"changed": {field: {before, after}}}.
+        """CREATE TABLE IF NOT EXISTS catalog_change_log (
+        id SERIAL PRIMARY KEY,
+        entity_type VARCHAR(40) NOT NULL,
+        entity_pk INTEGER,
+        action VARCHAR(20) NOT NULL,
+        details JSONB,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        occurred_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )""",
+        "CREATE INDEX IF NOT EXISTS ix_catalog_change_log_entity ON catalog_change_log (entity_type, entity_pk)",
+        # S4 snapshot rider (2026-08-11): frozen catalog resolution stamped
+        # once by registration, so check-in seeds what the customer bought
+        # even after a later catalog edit (backend/catalog/snapshot.py).
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS catalog_snapshot JSONB",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

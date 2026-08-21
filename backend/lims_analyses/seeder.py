@@ -90,19 +90,25 @@ ROLE_TO_KEYWORDS: Dict[str, List[str]] = {
 
 
 def _members_through_origin_gate(
-    profiles_with_labels: List[tuple],
+    profiles_with_members: List[tuple],
 ) -> List[AnalysisService]:
     """Shared per-profile fail-closed origin gate + cross-profile dedup.
-    `profiles_with_labels` is an ordered list of (profile, log_label) pairs
-    — log_label is the profile's key in both callers (the wp_services dict
-    key on the predicate path, `prof.key` on the edge path), used only for
-    the warning line. A profile with zero members or any non-mk1-origin
-    member is skipped in full (mirrors spec-2's all-native section rule);
-    its native siblings do NOT partially seed."""
+    `profiles_with_members` is an ordered list of (profile, log_label,
+    members) triples — log_label is the profile's key in both callers (the
+    wp_services dict key on the predicate path, `prof.key` on the edge
+    path), used only for the warning line; `members` is the ordered service
+    list to gate/seed for that profile — live `prof.analysis_services` from
+    both callers, or (task 6) a snapshot-sourced list from the edge path
+    when the profile is in the vial's frozen snapshot. A profile with zero
+    members or any non-mk1-origin member is skipped in full (mirrors
+    spec-2's all-native section rule); its native siblings do NOT partially
+    seed. Origin is read live off whichever member rows were chosen (frozen
+    or live) — origin means "can Mk1 own this today," not "what was true at
+    registration" — so a service that moved off mk1-origin after
+    registration still fails closed here even on the snapshot-sourced path."""
     out: List[AnalysisService] = []
     seen: Set[int] = set()
-    for prof, label in profiles_with_labels:
-        members = prof.analysis_services
+    for prof, label, members in profiles_with_members:
         if not members or any(s.origin != "mk1" for s in members):
             log.warning("catalog_seed_skipped_non_native profile=%s", label)
             continue
@@ -113,14 +119,31 @@ def _members_through_origin_gate(
     return out
 
 
-def _members_from_edges(db: Session, edges: list) -> List[AnalysisService]:
+def _members_from_edges(
+    db: Session, edges: list, snapshot: Optional[dict] = None,
+) -> List[AnalysisService]:
     """Union of member services of the profiles named by `edges` — host
     edges first, then rider edges, each profile's members in profile-member
     sort_order (AnalysisProfile.analysis_services is already ordered by the
     junction row's sort_order). Profile ids are deduped up front (defensive:
     current edges shouldn't ever name the same profile twice, but a profile
-    appearing as both host and rider must not double-seed its members)."""
-    from models import AnalysisProfile
+    appearing as both host and rider must not double-seed its members).
+
+    snapshot (S4 rider, task 6): the vial's PARENT catalog_snapshot. When an
+    edge's profile_id has an entry in `snapshot["profiles"]`, member service
+    ids come from that entry's FROZEN service_ids (resolved to AnalysisService
+    rows by id, in the frozen order) instead of the live
+    prof.analysis_services read — so a live membership edit after
+    registration can't change what an already-registered vial seeds. Falls
+    back to the live read — logging catalog_snapshot.fallback_live — for any
+    profile NOT present in the snapshot (e.g. a profile whose custody edge
+    exists but was never part of the frozen registration resolution) and
+    when `snapshot` itself is NULL (unchanged pre-task-6 behavior, no new
+    logging). A frozen service_id that no longer resolves to a live
+    AnalysisService row (deleted since registration) is dropped from that
+    profile's member list and logged as catalog_snapshot.service_id_missing
+    rather than silently shortening it unremarked."""
+    from models import AnalysisProfile, AnalysisService
 
     host_ids: List[int] = []
     rider_ids: List[int] = []
@@ -132,12 +155,38 @@ def _members_from_edges(db: Session, edges: list) -> List[AnalysisService]:
         bucket = host_ids if e.relation == "host" else rider_ids
         bucket.append(e.analysis_profile_id)
 
+    snapshot_by_pid = {}
+    if snapshot:
+        snapshot_by_pid = {p["profile_id"]: p for p in (snapshot.get("profiles") or [])}
+
     labeled: List[tuple] = []
     for pid in host_ids + rider_ids:
         prof = db.get(AnalysisProfile, pid)
         if prof is None:
             continue
-        labeled.append((prof, prof.key))
+        entry = snapshot_by_pid.get(pid)
+        if entry is not None:
+            svc_ids = entry.get("service_ids") or []
+            svc_by_id = {}
+            if svc_ids:
+                svc_by_id = {
+                    s.id: s for s in
+                    db.query(AnalysisService).filter(AnalysisService.id.in_(svc_ids)).all()
+                }
+            members = [svc_by_id[i] for i in svc_ids if i in svc_by_id]
+            if len(members) != len(svc_ids):
+                log.warning(
+                    "catalog_snapshot.service_id_missing profile=%s expected=%s resolved=%s",
+                    prof.key, svc_ids, [s.id for s in members],
+                )
+        else:
+            if snapshot is not None:
+                log.warning(
+                    "catalog_snapshot.fallback_live reason=profile_not_in_snapshot profile_id=%s",
+                    pid,
+                )
+            members = prof.analysis_services
+        labeled.append((prof, prof.key, members))
     return _members_through_origin_gate(labeled)
 
 
@@ -205,7 +254,13 @@ def _catalog_members_for_role(
     legitimate for callers like role_implies_seeding) or has zero current
     custody edges — the latter also logs catalog_seed_no_custody_fallback,
     since a real vial with no edges yet is a genuine gap worth knowing
-    about."""
+    about. This fallback branch always reads live prof.analysis_services —
+    it has no edges to look a frozen snapshot entry up against.
+
+    snapshot (S4 rider, task 6): on the edge-driven branch, read from
+    `sub_sample.parent_sample.catalog_snapshot` (not a parameter here — see
+    _members_from_edges for the per-profile frozen-vs-live split) and
+    threaded straight through."""
     from models import AnalysisProfile
 
     if sub_sample is not None:
@@ -213,7 +268,8 @@ def _catalog_members_for_role(
 
         edges = current_custody(db, sub_sample.id)
         if edges:
-            return _members_from_edges(db, edges)
+            snapshot = sub_sample.parent_sample.catalog_snapshot
+            return _members_from_edges(db, edges, snapshot=snapshot)
         log.warning(
             "catalog_seed_no_custody_fallback role=%s sub=%s",
             role, sub_sample.sample_id,
@@ -225,7 +281,7 @@ def _catalog_members_for_role(
         prof = db.query(AnalysisProfile).filter_by(key=key).one_or_none()
         if prof is None or prof.fulfillment_dim != "role" or prof.fulfillment_role != role:
             continue
-        labeled.append((prof, key))
+        labeled.append((prof, key, prof.analysis_services))
     return _members_through_origin_gate(labeled)
 
 
