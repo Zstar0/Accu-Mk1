@@ -21,6 +21,7 @@ def seed_profiles_from_registry(db: Session) -> None:
 
     existing = {k for (k,) in db.query(AnalysisProfile.key).all()}
     created = 0
+    created_keys: set[str] = set()
     for i, (key, pdef) in enumerate(PRODUCT_REGISTRY.items()):
         if key in existing:
             continue
@@ -34,6 +35,7 @@ def seed_profiles_from_registry(db: Session) -> None:
             sort_order=i,
         ))
         created += 1
+        created_keys.add(key)
 
     # Flush so the backfill queries below see rows just added above in the
     # same transaction. Without this, a session built with autoflush=False
@@ -53,6 +55,14 @@ def seed_profiles_from_registry(db: Session) -> None:
         "sterility_pcr": (1, "ster"),
     }
     for key, (vials, role) in _DEMAND_DEFAULTS.items():
+        # Only rows THIS run just created get the demand backfill. A
+        # pre-existing row at vials_required=0 is an admin's decision to
+        # disable provisioning and must survive a restart (audit 2026-08-21:
+        # 0 is a meaningful admin value, not a re-seed sentinel). A wired
+        # profile left at 0 by older seed code surfaces loudly via the S9
+        # demand checks instead of being silently reverted here.
+        if key not in created_keys:
+            continue
         row = db.query(AnalysisProfile).filter_by(key=key).one_or_none()
         if row is not None and row.vials_required == 0:
             row.vials_required = vials

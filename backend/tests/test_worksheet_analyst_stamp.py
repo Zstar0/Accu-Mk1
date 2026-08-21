@@ -3,12 +3,14 @@ from sqlalchemy import insert, select
 
 from models import (
     AnalysisService,
+    Department,
     LimsAnalysis,
     LimsSample,
     LimsSubSample,
     LimsSubSampleEvent,
     ServiceGroup,
     User,
+    VialRole,
     service_group_members,
 )
 from lims_analyses.worksheet_analyst import (
@@ -45,8 +47,10 @@ def _mk_group(db, name):
     return g
 
 
-def _mk_service(db, keyword, title, group=None):
+def _mk_service(db, keyword, title, group=None, department=None):
     svc = AnalysisService(keyword=keyword, title=title)
+    if department is not None:
+        svc.department_id = department.id
     db.add(svc)
     db.flush()
     if group is not None:
@@ -54,6 +58,20 @@ def _mk_service(db, keyword, title, group=None):
             analysis_service_id=svc.id, service_group_id=group.id,
         ))
     return svc
+
+
+def _mk_department(db, name):
+    d = Department(name=name)
+    db.add(d)
+    db.flush()
+    return d
+
+
+def _mk_vial_role(db, code, department):
+    r = VialRole(code=code, label=code, department_id=department.id if department else None)
+    db.add(r)
+    db.flush()
+    return r
 
 
 def _mk_analysis(db, sub, svc, state="unassigned"):
@@ -349,3 +367,211 @@ def test_senaite_shape_analyst_uses_display_name(db_session):
     assert by_kw["K1"].analyst == "Ada Lovelace"
     assert by_kw["K2"].analyst == "Grace"
     assert by_kw["K3"].analyst == "nameless@lab.test"
+
+
+# ── department precedence + vial-role fallback (S2 Task 4) ─────────────────
+
+
+def test_stamp_department_scoped(db_session):
+    """Department-keyed twin of the group-scoped stamp case: only analyses whose
+    service belongs to the department get the analyst."""
+    parent = _mk_parent(db_session)
+    sub = _mk_sub(db_session, parent)
+    analytical = _mk_department(db_session, "Analytical")
+    micro = _mk_department(db_session, "Microbiology")
+    svc_hplc = _mk_service(db_session, "HPLC-PUR", "Peptide Purity (HPLC)", department=analytical)
+    svc_ster = _mk_service(db_session, "STER-PCR", "Rapid Sterility (PCR)", department=micro)
+    a_hplc = _mk_analysis(db_session, sub, svc_hplc)
+    a_ster = _mk_analysis(db_session, sub, svc_ster)
+    tech = _mk_user(db_session, "tech@lab.test")
+
+    n = stamp_for_item(
+        db_session,
+        sample_uid="mk1://sub-1",
+        service_group_id=None,
+        department_id=analytical.id,
+        analyst_user_id=tech.id,
+        acting_user_id=None,
+        worksheet_id=1,
+    )
+
+    assert n == 1
+    db_session.refresh(a_hplc); db_session.refresh(a_ster)
+    assert a_hplc.analyst_user_id == tech.id
+    assert a_ster.analyst_user_id is None
+
+
+def test_stamp_department_wins_over_group(db_session):
+    """Both provided → department filter is used (group join not consulted)."""
+    parent = _mk_parent(db_session)
+    sub = _mk_sub(db_session, parent)
+    analytical = _mk_department(db_session, "Analytical")
+    micro = _mk_department(db_session, "Microbiology")
+    analytics_group = _mk_group(db_session, "Analytics")
+    # In the passed GROUP but department is Microbiology — the group join
+    # would stamp this row; the department filter must NOT.
+    svc_in_group_wrong_dept = _mk_service(
+        db_session, "HPLC-PUR", "Peptide Purity (HPLC)", group=analytics_group, department=micro,
+    )
+    # In the passed DEPARTMENT but not in any group — the department filter
+    # must stamp this row even though the group join wouldn't find it.
+    svc_in_dept_no_group = _mk_service(
+        db_session, "ID_GHKCU", "GHK-Cu Identity (HPLC)", department=analytical,
+    )
+    a_group = _mk_analysis(db_session, sub, svc_in_group_wrong_dept)
+    a_dept = _mk_analysis(db_session, sub, svc_in_dept_no_group)
+    tech = _mk_user(db_session, "tech@lab.test")
+
+    n = stamp_for_item(
+        db_session,
+        sample_uid="mk1://sub-1",
+        service_group_id=analytics_group.id,
+        department_id=analytical.id,
+        analyst_user_id=tech.id,
+        acting_user_id=None,
+        worksheet_id=1,
+    )
+
+    assert n == 1
+    db_session.refresh(a_group); db_session.refresh(a_dept)
+    assert a_group.analyst_user_id is None
+    assert a_dept.analyst_user_id == tech.id
+
+
+def test_stamp_none_none_still_wildcard(db_session):
+    """department_id=None + service_group_id=None stamps ALL live analyses
+    (historical group-less items keep their wildcard behavior)."""
+    parent = _mk_parent(db_session)
+    sub = _mk_sub(db_session, parent)
+    a1 = _mk_analysis(db_session, sub, _mk_service(db_session, "K1", "T1"))
+    a2 = _mk_analysis(db_session, sub, _mk_service(db_session, "K2", "T2"))
+    tech = _mk_user(db_session, "tech@lab.test")
+
+    n = stamp_for_item(
+        db_session,
+        sample_uid="mk1://sub-1",
+        service_group_id=None,
+        department_id=None,
+        analyst_user_id=tech.id,
+        acting_user_id=None,
+        worksheet_id=1,
+    )
+
+    assert n == 2
+    db_session.refresh(a1); db_session.refresh(a2)
+    assert a1.analyst_user_id == tech.id and a2.analyst_user_id == tech.id
+
+
+def test_stamp_department_role_fallback_usp71(db_session):
+    """The incident regression: a 'ster' vial whose STERILITY_USP71 service has
+    department_id=NULL (department join yields zero rows). Because the vial's
+    assignment_role 'ster' maps to the Microbiology department, stamping with
+    the Microbiology department stamps ALL live analyses instead of no-oping."""
+    parent = _mk_parent(db_session)
+    sub = _mk_sub(db_session, parent, role="ster")
+    micro = _mk_department(db_session, "Microbiology")
+    _mk_vial_role(db_session, "ster", micro)
+    svc = _mk_service(db_session, "STERILITY_USP71", "Sterility (USP71)")  # no department, no group
+    a = _mk_analysis(db_session, sub, svc)
+    tech = _mk_user(db_session, "tech@lab.test")
+
+    n = stamp_for_item(
+        db_session,
+        sample_uid="mk1://sub-1",
+        service_group_id=None,
+        department_id=micro.id,
+        analyst_user_id=tech.id,
+        acting_user_id=None,
+        worksheet_id=1,
+    )
+
+    assert n == 1
+    db_session.refresh(a)
+    assert a.analyst_user_id == tech.id
+
+
+def test_stamp_department_no_fallback_when_role_mismatch(db_session):
+    """Same zero-row department join, but the vial's role maps to a DIFFERENT
+    department → no stamp (fallback must not fire cross-department)."""
+    parent = _mk_parent(db_session)
+    sub = _mk_sub(db_session, parent, role="ster")
+    analytical = _mk_department(db_session, "Analytical")
+    micro = _mk_department(db_session, "Microbiology")
+    _mk_vial_role(db_session, "ster", analytical)  # role maps to Analytical, not Microbiology
+    svc = _mk_service(db_session, "STERILITY_USP71", "Sterility (USP71)")
+    a = _mk_analysis(db_session, sub, svc)
+    tech = _mk_user(db_session, "tech@lab.test")
+
+    n = stamp_for_item(
+        db_session,
+        sample_uid="mk1://sub-1",
+        service_group_id=None,
+        department_id=micro.id,
+        analyst_user_id=tech.id,
+        acting_user_id=None,
+        worksheet_id=1,
+    )
+
+    assert n == 0
+    db_session.refresh(a)
+    assert a.analyst_user_id is None
+
+
+def test_clear_department_role_fallback(db_session):
+    """The clear-side mirror of the fallback regression: a vial stamped via the
+    role fallback must be clearable via the same fallback, or removal from a
+    worksheet leaves an orphaned analyst stamp forever."""
+    parent = _mk_parent(db_session)
+    sub = _mk_sub(db_session, parent, role="ster")
+    micro = _mk_department(db_session, "Microbiology")
+    _mk_vial_role(db_session, "ster", micro)
+    svc = _mk_service(db_session, "STERILITY_USP71", "Sterility (USP71)")
+    a = _mk_analysis(db_session, sub, svc)
+    tech = _mk_user(db_session, "tech@lab.test")
+    a.analyst_user_id = tech.id
+    db_session.flush()
+
+    n = clear_for_item(
+        db_session,
+        sample_uid="mk1://sub-1",
+        service_group_id=None,
+        department_id=micro.id,
+        acting_user_id=tech.id,
+        worksheet_id=3,
+    )
+
+    assert n == 1
+    db_session.refresh(a)
+    assert a.analyst_user_id is None
+
+
+def test_restamp_uses_item_department_id(db_session):
+    """restamp_for_worksheet reads item.department_id (Task 1's column) and
+    passes it through to _resolve — the department path is reachable from the
+    worksheet-level entry point, not just stamp_for_item directly."""
+    from models import Worksheet, WorksheetItem
+
+    parent = _mk_parent(db_session)
+    sub = _mk_sub(db_session, parent)
+    analytical = _mk_department(db_session, "Analytical")
+    micro = _mk_department(db_session, "Microbiology")
+    svc_hplc = _mk_service(db_session, "HPLC-PUR", "Peptide Purity (HPLC)", department=analytical)
+    svc_ster = _mk_service(db_session, "STER-PCR", "Rapid Sterility (PCR)", department=micro)
+    a_hplc = _mk_analysis(db_session, sub, svc_hplc)
+    a_ster = _mk_analysis(db_session, sub, svc_ster)
+    new = _mk_user(db_session, "new@lab.test")
+
+    ws = Worksheet(title="Bench", assigned_analyst_id=new.id)
+    db_session.add(ws); db_session.flush()
+    db_session.add(WorksheetItem(
+        worksheet_id=ws.id, sample_uid="mk1://sub-1", sample_id=sub.sample_id,
+        service_group_id=None, department_id=analytical.id,
+    ))
+    db_session.flush()
+
+    n = restamp_for_worksheet(db_session, worksheet=ws, acting_user_id=new.id)
+
+    assert n == 1
+    db_session.refresh(a_hplc); db_session.refresh(a_ster)
+    assert a_hplc.analyst_user_id == new.id
+    assert a_ster.analyst_user_id is None

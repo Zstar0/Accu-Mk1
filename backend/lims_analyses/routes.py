@@ -268,7 +268,11 @@ def parent_retest(
     promoted source vial rows and un-promotes the verified parent row via
     cascade_parent_retest_to_sources. 409 invalid_transition unless the
     active parent row is 'verified' or 'parent_to_verify' (awaiting
-    sign-off) — published parents are protected."""
+    sign-off) — published parents are protected.
+
+    analysis_service_id (S3, optional) identifies the parent row by its native
+    identity key; without it the keyword resolves the row as before (exact
+    stored keyword, then an mk1-catalog rescue on a miss)."""
     try:
         new_ids, state = service.parent_retest(
             db,
@@ -276,6 +280,7 @@ def parent_retest(
             keyword=req.keyword,
             user_id=getattr(current_user, "id", None),
             reason=req.reason,
+            analysis_service_id=req.analysis_service_id,
         )
         return ParentRetestResponse(new_row_ids=new_ids, parent_review_state=state)
     except Exception as e:

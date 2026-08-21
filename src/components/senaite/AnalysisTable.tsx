@@ -33,7 +33,9 @@ import { toast } from 'sonner'
 import type { SenaiteAnalysis, InboxPriority, ParentPromotionInfo } from '@/lib/api'
 import { setAnalysisMethodInstrument, promoteAnalyses } from '@/lib/api'
 import type { VialAssignment } from '@/lib/vial-assignment'
-import { ROLE_TEXT_CLASS, roleTextClass } from '@/lib/assignment-colors'
+import { ROLE_COLOR_TEXT, roleColorForCode } from '@/lib/role-display'
+import { useVialRoles, type VialRoleRow } from '@/services/vial-roles'
+import { useDepartments, type Department } from '@/services/departments'
 import { PromotedFromBadge } from '@/components/senaite/PromotedFromBadge'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 import { AnalysisSlaCell } from '@/components/senaite/AnalysisSlaCell'
@@ -109,13 +111,14 @@ export const STATUS_LABELS: Record<string, string> = {
  * Title-text color when an analysis matches the viewing sample's vial-assignment
  * role (i.e. is in the primaryAnalysisUids set). Same palette family as the
  * role badges elsewhere in the app — keeps the visual language consistent.
+ * S1 roles-as-data: resolved from the vial_roles catalog, not a hardcoded map.
  */
-const PRIMARY_TITLE_COLOR: Record<string, string> = {
-  hplc: ROLE_TEXT_CLASS.hplc,
-  endo: ROLE_TEXT_CLASS.endo,
-  ster: ROLE_TEXT_CLASS.ster,
-  xtra: ROLE_TEXT_CLASS.xtra,
-  hm: ROLE_TEXT_CLASS.hm,
+function primaryTitleColorClass(
+  role: string,
+  roles: VialRoleRow[] | undefined,
+  departments: Department[] | undefined
+): string {
+  return ROLE_COLOR_TEXT[roleColorForCode(role, roles, departments)]
 }
 
 /** Row-level tint: colored left border + subtle background, inspired by SENAITE. */
@@ -1278,6 +1281,8 @@ export function BulkPromoteDialog({
 function AnalysisRow({
   analysis,
   analyteNameMap,
+  vialRoles,
+  departments,
   editing,
   transition,
   selectedUids,
@@ -1307,6 +1312,10 @@ function AnalysisRow({
 }: {
   analysis: SenaiteAnalysis
   analyteNameMap: Map<number, string>
+  /** S1 roles-as-data: threaded from AnalysisTable's single useVialRoles()/
+   *  useDepartments() call — role-colored title text + vial-chip text below. */
+  vialRoles?: VialRoleRow[]
+  departments?: Department[]
   editing: UseAnalysisEditingReturn
   transition: UseAnalysisTransitionReturn
   selectedUids: Set<string>
@@ -1384,7 +1393,7 @@ function AnalysisRow({
   const isPrimary =
     !!analysis.uid && !!primaryAnalysisUids?.has(analysis.uid)
   const primaryTitleClass = isPrimary && primaryRole
-    ? (PRIMARY_TITLE_COLOR[primaryRole] ?? '')
+    ? primaryTitleColorClass(primaryRole, vialRoles, departments)
     : ''
 
   return (
@@ -1435,7 +1444,7 @@ function AnalysisRow({
                 key={m.vialSampleId}
                 type="button"
                 onClick={e => { e.stopPropagation(); useUIStore.getState().navigateToSample(m.vialSampleId) }}
-                className={`inline-flex items-center gap-0.5 text-[10px] underline underline-offset-2 shrink-0 hover:opacity-80 ${roleTextClass(m.assignmentRole)}`}
+                className={`inline-flex items-center gap-0.5 text-[10px] underline underline-offset-2 shrink-0 hover:opacity-80 ${ROLE_COLOR_TEXT[roleColorForCode(m.assignmentRole, vialRoles, departments)]}`}
                 title={
                   vialLocked
                     ? `Variance replicate, locked into the set — ${m.vialSampleId}`
@@ -1887,6 +1896,10 @@ export function AnalysisTable({
   const editing = useAnalysisEditing({ analyses, onResultSaved })
   const transition = useAnalysisTransition({ onTransitionComplete })
   const bulk = useBulkAnalysisTransition({ onTransitionComplete })
+  // S1 roles-as-data: the one useVialRoles()/useDepartments() call for this
+  // table, threaded into each AnalysisRow for its role-colored title/vial-chip text.
+  const vialRoles = useVialRoles().data
+  const departments = useDepartments().data
 
 
   const INVALID_STATES = new Set(['rejected', 'retracted'])
@@ -2161,6 +2174,8 @@ export function AnalysisTable({
                     <AnalysisRow
                       analysis={group.current}
                       analyteNameMap={analyteNameMap}
+                      vialRoles={vialRoles}
+                      departments={departments}
                       editing={editing}
                       transition={transition}
                       selectedUids={bulk.selectedUids}

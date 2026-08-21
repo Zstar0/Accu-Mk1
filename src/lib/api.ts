@@ -2444,6 +2444,35 @@ export interface AnalysisServiceUpdatePayload {
   active?: boolean
 }
 
+export interface AnalysisServiceSpecRecord {
+  id: number
+  analysis_service_id: number
+  matrix: string | null
+  peptide_id: number | null
+  peptide_code: string | null
+  rule_kind: 'range' | 'equals'
+  min_value: string | null
+  max_value: string | null
+  equals_value: string | null
+  unit: string | null
+  display_override: string | null
+  loq: string | null
+  active: boolean
+  updated_at: string | null
+}
+
+export interface ServiceSpecPayload {
+  matrix?: string | null
+  peptide_id?: number | null
+  rule_kind: 'range' | 'equals'
+  min_value?: string | null
+  max_value?: string | null
+  equals_value?: string | null
+  unit?: string | null
+  display_override?: string | null
+  loq?: string | null
+}
+
 /**
  * Fetch the local AccuMark `analysis_services` table (id + keyword + metadata).
  *
@@ -2556,6 +2585,43 @@ export async function syncAnalysisServices(): Promise<{ created: number; total: 
     const err = await response.json().catch(() => null)
     throw new Error(err?.detail || `Sync analysis services failed: ${response.status}`)
   }
+  return response.json()
+}
+
+/** List all specs for a given analysis service. */
+export async function listServiceSpecs(serviceId: number): Promise<AnalysisServiceSpecRecord[]> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-services/${serviceId}/specs`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`List service specs failed: ${response.status}`)
+  return response.json()
+}
+
+/** Create a new spec for a given analysis service. */
+export async function createServiceSpec(
+  serviceId: number,
+  data: ServiceSpecPayload
+): Promise<AnalysisServiceSpecRecord> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-services/${serviceId}/specs`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to create service spec'))
+  return response.json()
+}
+
+/** Update a service spec. */
+export async function patchServiceSpec(
+  specId: number,
+  data: Partial<ServiceSpecPayload> & { active?: boolean }
+): Promise<AnalysisServiceSpecRecord> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-service-specs/${specId}`, {
+    method: 'PATCH',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to update service spec'))
   return response.json()
 }
 
@@ -3665,6 +3731,9 @@ export interface SenaiteAnalysis {
    *  backing this line ('mk1' | 'senaite'). Type-only here — not yet read
    *  by any FE display logic. */
   service_origin?: string | null
+  /** S3: native identity key; keyword is display-only on mk1 rows. Absent on
+   *  SENAITE-sourced rows, which keep keyword as their identity. */
+  analysis_service_id?: number | null
 }
 
 export interface SenaiteAttachment {
@@ -4540,6 +4609,13 @@ export interface AnalysisProfile {
   coa_section_title: string | null
   coa_archetype: string | null
   coa_sort_order: number
+  // Task 3/6: certificate display copy — inert until coa_archetype is armed,
+  // same as coa_section_title/coa_sort_order above. coa_footnotes rows are
+  // both-required on the backend (400s on a row missing label or text).
+  coa_basis_note: string | null
+  coa_method_text: string | null
+  coa_prep_text: string | null
+  coa_footnotes: { label: string; text: string }[] | null
   member_ids: number[]
   // Task 11 (profile SLA tier): byte-identical to `member_ids` — the same
   // analysis_services relationship, added under the name the SLA resolver
@@ -4594,6 +4670,11 @@ export async function createAnalysisProfile(data: {
   // samples and stays a separate PATCH.
   coa_section_title?: string | null
   coa_sort_order?: number
+  // Same "inert until armed" contract as coa_section_title above.
+  coa_basis_note?: string | null
+  coa_method_text?: string | null
+  coa_prep_text?: string | null
+  coa_footnotes?: { label: string; text: string }[] | null
   // Auto-mint (Task 3): department for a newly-minted vial_roles row. Not a
   // persisted AnalysisProfile field — the backend consumes it once, at mint
   // time, and never echoes it back on AnalysisProfileResponse.
@@ -4687,6 +4768,9 @@ export interface VialRoleRow {
   sort_order: number
   frozen: boolean
   is_system: boolean
+  color?: string | null
+  short_label?: string | null
+  badge_glyph?: string | null
 }
 
 export interface VialRoleCreate {
@@ -4696,6 +4780,9 @@ export interface VialRoleCreate {
   boxable?: boolean
   variance_eligible?: boolean
   sort_order?: number
+  color?: string | null
+  short_label?: string | null
+  badge_glyph?: string | null
 }
 
 export async function getVialRoles(): Promise<VialRoleRow[]> {
@@ -5005,6 +5092,11 @@ export interface InboxAnalysisItem {
   peptide_name: string | null
   method: string | null
   review_state: string | null
+  /** S2: `group_id` / `group_name` / `group_color` carry DEPARTMENT identity,
+   *  not service-group identity — both the SENAITE-derived and the native
+   *  inbox emitters speak departments now. The wire names are unchanged for
+   *  rollback safety, so a value read from here must be sent back as
+   *  `department_id`, never as `service_group_id`. */
   group_id: number
   group_name: string
   group_color: string
@@ -5141,6 +5233,9 @@ export async function getWorksheetUsers(): Promise<WorksheetUser[]> {
 export async function bulkUpdateInbox(data: {
   sample_uids: string[]
   priority?: InboxPriority
+  /** Scope key (S2); required alongside `analyst_id` / `instrument_uid`.
+   *  Takes precedence over `service_group_id` server-side. */
+  department_id?: number
   service_group_id?: number
   analyst_id?: number
   instrument_uid?: string
@@ -5186,6 +5281,9 @@ export interface WorksheetListItem {
     sample_id: string
     sample_uid: string
     service_group_id: number | null
+    /** Owning department (S2). Null only for pre-S2 rows, which fall back to
+     *  the legacy `service_group_id` scope for keys and de-duping. */
+    department_id: number | null
     department_name: string | null
     group_name: string
     group_color: string
@@ -5259,9 +5357,24 @@ export async function updateWorksheet(
   if (!response.ok) throw new Error(`Update worksheet failed: ${response.status}`)
 }
 
+/** Body shared by both add paths (`/add-group` and `/create-from-drop`).
+ *
+ *  `department_id` is the scope key now and takes precedence server-side;
+ *  `service_group_id` stays declared-but-unsent so a rollback needs no type
+ *  change. Nothing sourced from the inbox may travel as `service_group_id` —
+ *  the inbox's `group_id` is a DEPARTMENT id (see InboxAnalysisItem). */
+export interface AddToWorksheetPayload {
+  sample_uid: string
+  sample_id: string
+  department_id?: number
+  service_group_id?: number
+  date_received?: string | null
+  analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[]
+}
+
 export async function addGroupToWorksheet(
   worksheetId: number,
-  data: { sample_uid: string; sample_id: string; service_group_id: number; date_received?: string | null; analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[] }
+  data: AddToWorksheetPayload
 ): Promise<{ status: string; item_id: number }> {
   const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}/add-group`, {
     method: 'POST',
@@ -5334,7 +5447,7 @@ export async function reorderWorksheetItems(
 }
 
 export async function createWorksheetFromDrop(
-  data: { sample_uid: string; sample_id: string; service_group_id: number; date_received?: string | null; analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[] }
+  data: AddToWorksheetPayload
 ): Promise<WorksheetCreateResponse> {
   const response = await fetch(`${API_BASE_URL()}/worksheets/create-from-drop`, {
     method: 'POST',

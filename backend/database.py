@@ -121,6 +121,19 @@ def init_db():
     # Run column migrations before create_all so ORM mappings match the DB schema
     _run_migrations()
     Base.metadata.create_all(bind=engine)
+    # S6b: per-substance PUR_/QTY_ derivation — moved out of _run_migrations
+    # into an on-demand reconciler (same statements, now with a report).
+    # MUST run before backfill_departments so freshly minted rows get their
+    # department on the same boot (the LIKE-rescue is prod's only tagger).
+    try:
+        from catalog.per_substance_reconciler import reconcile_per_substance_services
+        with SessionLocal() as _ps:
+            report = reconcile_per_substance_services(_ps)
+            _ps.commit()
+            if report["pur_minted"] or report["qty_minted"]:
+                log.info("per_substance_reconciled %s", report)
+    except Exception as e:  # never block startup
+        log.warning("per_substance_reconcile_skipped err=%s", e)
     _seed_federal_holidays_window()
     try:
         from workflow.seeds import seed_workflow_catalog
@@ -396,10 +409,14 @@ def _run_migrations():
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS customer_remarks_include BOOLEAN NOT NULL DEFAULT TRUE",
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS customer_remarks_delivered_at TIMESTAMP",
         # Backfill — non-HPLC sub-samples are not variance candidates by default.
-        # Idempotent: re-running matches no rows once already flipped.
+        # Idempotent: re-running matches no rows once already flipped. The
+        # COALESCE preserves an operator-written exclusion reason (audit
+        # 2026-08-21): the POLICY flip re-applies every boot by design, but
+        # boot must never destroy a human's note about why.
         """UPDATE lims_sub_samples
               SET in_variance_set = FALSE,
-                  variance_exclusion_reason = 'auto: assignment_role != hplc'
+                  variance_exclusion_reason = COALESCE(variance_exclusion_reason,
+                      'auto: assignment_role != hplc')
             WHERE assignment_role IN ('endo', 'ster', 'xtra')
               AND in_variance_set = TRUE""",
         # hm-specific backfill (fix round, spec-3 Task 3): split out from the
@@ -413,7 +430,8 @@ def _run_migrations():
         # before that constant existed, or between deploy and next request.
         """UPDATE lims_sub_samples
               SET in_variance_set = FALSE,
-                  variance_exclusion_reason = 'auto: hm is single-vial (vials_required=1); never variance-eligible'
+                  variance_exclusion_reason = COALESCE(variance_exclusion_reason,
+                      'auto: hm is single-vial (vials_required=1); never variance-eligible')
             WHERE assignment_role = 'hm'
               AND in_variance_set = TRUE""",
         # ── SLA tiers (revises the former sla_targets model) ──
@@ -762,60 +780,12 @@ def _run_migrations():
         WHERE g.name = 'Microbiology'
         ON CONFLICT (service_group_id, analysis_service_id) DO NOTHING
         """,
-        # Auto-link identity services (ID_<X>) to their peptide by exact name
-        # match so identity conformance resolves (variance overlay + COA). The
-        # link is otherwise a manual step (PUT /analysis-services/{id}/peptide);
-        # synced ID_ services arrive with peptide_name set but peptide_id NULL,
-        # which reads every identity result as non-conforming. Runs BEFORE the
-        # PUR_/QTY_ derivation below so those pick up the fresh links. Idempotent
-        # — only fills NULLs where an exact (case/whitespace-folded) name matches.
-        """
-        UPDATE analysis_services svc SET peptide_id = p.id
-        FROM peptides p
-        WHERE left(svc.keyword, 3) = 'ID_' AND svc.peptide_id IS NULL
-          AND svc.peptide_name IS NOT NULL AND svc.peptide_name <> ''
-          AND lower(trim(p.name)) = lower(trim(svc.peptide_name))
-        """,
-        # Per-substance purity/quantity services. Derived from the per-peptide
-        # identity services (ID_<X>) so the keyword suffix + peptide_id are
-        # authoritative (the suffix is NOT derivable from the peptide name, e.g.
-        # ID_TB500BETA4). The HPLC vial analyte mirror seeds these so a blend
-        # vial's purity/quantity rows name the real substance instead of the
-        # generic "Analyte N". Idempotent via NOT EXISTS (analysis_services.keyword
-        # is not unique). No-op for the pre-existing PUR_BPC157/QTY_BPC157 and on
-        # fresh installs with no identity services.
-        """
-        INSERT INTO analysis_services (title, keyword, category, unit, peptide_id, active, created_at, updated_at)
-        SELECT p.name || ' - Purity', 'PUR_' || substring(idsvc.keyword from 4), 'HPLC', '%',
-               idsvc.peptide_id, TRUE, NOW(), NOW()
-        FROM analysis_services idsvc
-        JOIN peptides p ON p.id = idsvc.peptide_id
-        WHERE left(idsvc.keyword, 3) = 'ID_' AND idsvc.peptide_id IS NOT NULL
-          AND NOT EXISTS (
-            SELECT 1 FROM analysis_services x
-            WHERE x.keyword = 'PUR_' || substring(idsvc.keyword from 4))
-        """,
-        """
-        INSERT INTO analysis_services (title, keyword, category, unit, peptide_id, active, created_at, updated_at)
-        SELECT p.name || ' - Quantity', 'QTY_' || substring(idsvc.keyword from 4), 'HPLC', 'mg',
-               idsvc.peptide_id, TRUE, NOW(), NOW()
-        FROM analysis_services idsvc
-        JOIN peptides p ON p.id = idsvc.peptide_id
-        WHERE left(idsvc.keyword, 3) = 'ID_' AND idsvc.peptide_id IS NOT NULL
-          AND NOT EXISTS (
-            SELECT 1 FROM analysis_services x
-            WHERE x.keyword = 'QTY_' || substring(idsvc.keyword from 4))
-        """,
-        # Group all per-substance purity/quantity services into Analytics
-        # (consistent with the ID_<X> identity services). Idempotent.
-        """
-        INSERT INTO service_group_members (service_group_id, analysis_service_id)
-        SELECT g.id, s.id
-        FROM service_groups g
-        JOIN analysis_services s ON left(s.keyword, 4) IN ('PUR_', 'QTY_')
-        WHERE g.name = 'Analytics'
-        ON CONFLICT (service_group_id, analysis_service_id) DO NOTHING
-        """,
+        # S6b: the ID_ peptide-link, PUR_/QTY_ mint, and Analytics
+        # group-membership statements that used to live here now live in
+        # catalog/per_substance_reconciler.py — called from init_db() right
+        # after create_all (same idempotent statements, now with a report
+        # and an on-demand admin endpoint instead of requiring a restart
+        # to re-run). See that module's docstring for the P-1500 context.
         # Variance addon Phase 1: 'variance_verified' sub-sample state +
         # 'variance_verify' audit kind. Drop+recreate both CHECKs (idempotent).
         "ALTER TABLE lims_analyses DROP CONSTRAINT IF EXISTS lims_analyses_review_state_check",
@@ -949,7 +919,7 @@ def _run_migrations():
             updated_at   TIMESTAMP NOT NULL DEFAULT NOW()
         )
         """,
-        # Seed the 5 built-ins idempotently (mirrors flags/catalog.py FLAG_TYPES
+        # Seed the built-ins idempotently (mirrors flags/catalog.py FLAG_TYPES
         # + FLAG_TYPE_ORDER). entity_types='[]' = global. is_builtin=true blocks
         # hard-delete (deactivate only). Existing flags reference these slugs.
         """
@@ -987,6 +957,12 @@ def _run_migrations():
         INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
         SELECT 'feature_request', 'Feature Request', '#ec4899', 'issue', FALSE, TRUE, 6, '[]'::jsonb, TRUE
         WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='feature_request')
+        """,
+        # S8 adoption guard: external-counter identity collisions (2026-08-11).
+        """
+        INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
+        SELECT 'identity_collision', 'Identity Collision', '#e5484d', 'issue', TRUE, TRUE, 7, '[]'::jsonb, TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='identity_collision')
         """,
         # Extend the NAMED status CHECK to admit 'blocked' (Plan 5). A dedicated
         # DROP+ADD statement — NOT an edit to the IF-NOT-EXISTS flag_flags create
@@ -1514,7 +1490,10 @@ def _run_migrations():
         frozen BOOLEAN NOT NULL DEFAULT FALSE,
         is_system BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        color VARCHAR(50),
+        short_label VARCHAR(16),
+        badge_glyph VARCHAR(2)
     )""",
         # --- Catalog-driven bench (spec 4): ride lists ---
         # host_role_code deliberately NOT an FK to vial_roles (route-edge
@@ -1569,12 +1548,14 @@ def _run_migrations():
             id SERIAL PRIMARY KEY,
             analysis_service_id INTEGER NOT NULL REFERENCES analysis_services(id) ON DELETE CASCADE,
             matrix VARCHAR(100),
+            peptide_id INTEGER REFERENCES peptides(id),
             rule_kind VARCHAR(16) NOT NULL,
             min_value NUMERIC,
             max_value NUMERIC,
             equals_value TEXT,
             unit VARCHAR(50),
             display_override TEXT,
+            loq NUMERIC,
             active BOOLEAN NOT NULL DEFAULT TRUE,
             created_at TIMESTAMP DEFAULT now(),
             updated_at TIMESTAMP DEFAULT now(),
@@ -1584,15 +1565,21 @@ def _run_migrations():
                  AND (min_value IS NOT NULL OR max_value IS NOT NULL)) OR
                 (rule_kind = 'equals' AND equals_value IS NOT NULL
                  AND min_value IS NULL AND max_value IS NULL)
+            ),
+            CONSTRAINT ck_analysis_service_specs_tier CHECK (
+                NOT (matrix IS NOT NULL AND peptide_id IS NOT NULL)
             )
         )
         """,
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_matrix "
         "ON analysis_service_specs (analysis_service_id, matrix) "
         "WHERE active AND matrix IS NOT NULL",
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_null_matrix "
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_peptide "
+        "ON analysis_service_specs (analysis_service_id, peptide_id) "
+        "WHERE active AND peptide_id IS NOT NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_wildcard "
         "ON analysis_service_specs (analysis_service_id) "
-        "WHERE active AND matrix IS NULL",
+        "WHERE active AND matrix IS NULL AND peptide_id IS NULL",
         # --- Task 7: activity events, parent-hosted (native parent verification) ---
         # Already-migrated DBs need explicit ALTERs; the CREATE TABLE above
         # only covers fresh installs. All three are idempotent — safe to
@@ -1635,6 +1622,116 @@ def _run_migrations():
         # Amendment audit (spec 2026-08-07): before/after capture. Nullable,
         # no default, no backfill — NULL = pre-slice row, by contract.
         "ALTER TABLE lims_analysis_transitions ADD COLUMN IF NOT EXISTS details JSONB",
+        # --- spec-ownership slice 2: peptide tier ---
+        "ALTER TABLE analysis_service_specs ADD COLUMN IF NOT EXISTS peptide_id "
+        "INTEGER REFERENCES peptides(id)",
+        # Named CHECK, added only if absent (union-preserve idiom, ck_lims_sub_sample_events_one_host precedent)
+        """DO $$ BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'ck_analysis_service_specs_tier'
+                  AND conrelid = 'analysis_service_specs'::regclass
+            ) THEN
+                ALTER TABLE analysis_service_specs
+                    ADD CONSTRAINT ck_analysis_service_specs_tier
+                        CHECK (NOT (matrix IS NOT NULL AND peptide_id IS NOT NULL));
+            END IF;
+        END $$""",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_peptide "
+        "ON analysis_service_specs (analysis_service_id, peptide_id) "
+        "WHERE active AND peptide_id IS NOT NULL",
+        # The old null_matrix slot must not collide peptide rows with the
+        # wildcard: retire it and re-key the wildcard on BOTH columns NULL.
+        # DROP IF EXISTS is idempotent; an older image booting later
+        # recreates the old index (its list still carries the CREATE) —
+        # accepted LAST-BOOT-WINS class, documented here.
+        "DROP INDEX IF EXISTS uq_analysis_service_specs_null_matrix",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_service_specs_wildcard "
+        "ON analysis_service_specs (analysis_service_id) "
+        "WHERE active AND matrix IS NULL AND peptide_id IS NULL",
+        # --- COA display fields (spec 2026-08-16): all nullable, no backfill ---
+        "ALTER TABLE analysis_service_specs ADD COLUMN IF NOT EXISTS loq NUMERIC",
+        "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_basis_note VARCHAR(200)",
+        "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_method_text TEXT",
+        "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_prep_text TEXT",
+        "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_footnotes JSONB",
+        # S3 (native identity convergence): service-id-keyed twins of the two
+        # keyword root indexes. Mirrors each source index's predicate EXACTLY
+        # (asymmetry recorded, not fixed: vial root has no provenance term;
+        # shadow uses retested=FALSE — see the S3 sub-spec §1.4). Bare
+        # IF NOT EXISTS, no DROP pair (last-boot-wins hazard). Keyword
+        # indexes deliberately coexist (retirement RULED deferred past mirror
+        # decommission). Origin-agnostic on structural grounds: the keyword
+        # index already forces at-most-one row per (host, keyword), so the
+        # only violation shape is same-service/different-keyword drift.
+        # scripts/s3_identity_precheck.py is the REQUIRED pre-deploy gate —
+        # a failing CREATE here is swallowed as migration_skipped.
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_sub_service_id_root
+            ON lims_analyses (lims_sub_sample_pk, analysis_service_id)
+            WHERE retest_of_id IS NULL AND lims_sub_sample_pk IS NOT NULL
+              AND review_state NOT IN ('retracted', 'rejected')
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_parent_service_id_root
+            ON lims_analyses (lims_sample_pk, analysis_service_id)
+            WHERE retest_of_id IS NULL AND lims_sample_pk IS NOT NULL
+              AND review_state NOT IN ('retracted', 'rejected')
+              AND provenance = 'canonical'
+        """,
+        # S2 (worksheets off groups): department becomes the item-tier routing
+        # key. Nullable + SET NULL — additive alongside the frozen legacy
+        # service_group_id. Backfill via the group bridge only (analyses_json
+        # display fallback is NOT used for backfill — write-path purity; NULL
+        # rows read through the serializer's fallback chain instead).
+        """
+        ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS department_id
+            INTEGER REFERENCES departments(id) ON DELETE SET NULL
+        """,
+        """
+        UPDATE worksheet_items wi
+           SET department_id = sg.department_id
+          FROM service_groups sg
+         WHERE wi.service_group_id = sg.id
+           AND wi.department_id IS NULL
+           AND sg.department_id IS NOT NULL
+        """,
+        # S8 adoption guard (2026-08-11): collision quarantine markers.
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS quarantined BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS quarantine_reason TEXT",
+        # S4 catalog change log (2026-08-11): append-only ISO 8.3/7.5.1
+        # document control for the catalog. details uses the amendment-audit
+        # vocabulary {"changed": {field: {before, after}}}.
+        """CREATE TABLE IF NOT EXISTS catalog_change_log (
+        id SERIAL PRIMARY KEY,
+        entity_type VARCHAR(40) NOT NULL,
+        entity_pk INTEGER,
+        action VARCHAR(20) NOT NULL,
+        details JSONB,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        occurred_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )""",
+        "CREATE INDEX IF NOT EXISTS ix_catalog_change_log_entity ON catalog_change_log (entity_type, entity_pk)",
+        # S4 snapshot rider (2026-08-11): frozen catalog resolution stamped
+        # once by registration, so check-in seeds what the customer bought
+        # even after a later catalog edit (backend/catalog/snapshot.py).
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS catalog_snapshot JSONB",
+        # S1 roles-as-data (2026-08-11): display faces on vial_roles, seeded
+        # to match the pre-catalog hardcoded rendering exactly. Triple-NULL
+        # guard (fix round) = idempotent, never clobbers admin edits: an
+        # admin who chose Auto (color=NULL) but set short_label/badge_glyph
+        # must not have those two re-stamped on the next boot, so all three
+        # faces must be NULL before this fires. Residual (accepted,
+        # Handler-surfaced): a legacy role reset fully to Auto (all three
+        # NULL) still reverts to the legacy display on the next restart.
+        "ALTER TABLE vial_roles ADD COLUMN IF NOT EXISTS color VARCHAR(50)",
+        "ALTER TABLE vial_roles ADD COLUMN IF NOT EXISTS short_label VARCHAR(16)",
+        "ALTER TABLE vial_roles ADD COLUMN IF NOT EXISTS badge_glyph VARCHAR(2)",
+        "UPDATE vial_roles SET color='green', short_label='HPLC', badge_glyph='H' WHERE code='hplc' AND color IS NULL AND short_label IS NULL AND badge_glyph IS NULL",
+        "UPDATE vial_roles SET color='orange', short_label='ENDO', badge_glyph='E' WHERE code='endo' AND color IS NULL AND short_label IS NULL AND badge_glyph IS NULL",
+        "UPDATE vial_roles SET color='purple', short_label='PCR', badge_glyph='P' WHERE code='ster' AND color IS NULL AND short_label IS NULL AND badge_glyph IS NULL",
+        "UPDATE vial_roles SET color='sky', short_label='XTRA', badge_glyph='X' WHERE code='xtra' AND color IS NULL AND short_label IS NULL AND badge_glyph IS NULL",
+        "UPDATE vial_roles SET color='slate', short_label='HM', badge_glyph='M' WHERE code='hm' AND color IS NULL AND short_label IS NULL AND badge_glyph IS NULL",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
@@ -1648,3 +1745,33 @@ def _run_migrations():
             except Exception as e:
                 conn.rollback()
                 log.warning("migration_skipped sql=%r err=%s", sql[:80], e)
+
+
+IDENTITY_INDEXES = (
+    "uq_lims_analyses_sub_service_id_root",
+    "uq_lims_analyses_parent_service_id_root",
+)
+
+
+def verify_identity_indexes(engine_) -> list[str]:
+    """Post-boot check: the S3 identity indexes actually exist. run_migrations
+    swallows CREATE failures into a migration_skipped warning operators are
+    trained to ignore — this is the loud counterpart. Returns missing names.
+    Today NO index existence is verified anywhere; these two get it because a
+    silently-absent unique index means every converged reader is trusting an
+    invariant nothing enforces."""
+    from sqlalchemy import text as _text
+    with engine_.connect() as conn:
+        present = {
+            r[0] for r in conn.execute(_text(
+                "SELECT indexname FROM pg_indexes WHERE tablename = 'lims_analyses'"
+            )).all()
+        }
+    missing = [n for n in IDENTITY_INDEXES if n not in present]
+    for name in missing:
+        log.error(
+            "identity_index_missing index=%s — the S3 CREATE was likely swallowed "
+            "as migration_skipped; run scripts/s3_identity_precheck.py and repair "
+            "violating rows before relying on service-id uniqueness", name,
+        )
+    return missing

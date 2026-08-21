@@ -1459,6 +1459,99 @@ def list_analysis_change_events_for_parent(
 # ─── Phase 4c: parent-retest cascade ────────────────────────────────────────
 
 
+def _find_active_parent_row(
+    db: Session,
+    *,
+    parent_sample_pk: int,
+    keyword: str,
+    analysis_service_id: Optional[int] = None,
+    allow_native_rescue: bool = True,
+) -> Optional[LimsAnalysis]:
+    """Resolve the one active canonical parent-tier row a retest lineage hangs
+    off. Shared by cascade_parent_retest_to_sources and parent_retest so the
+    two can never drift apart — their predicates were already identical.
+
+    Identity resolution (S3), in order:
+
+      1. explicit `analysis_service_id` — the caller already holds the native
+         identity key, so match on the service FK alone with no keyword term.
+      2. exact stored keyword — byte-identical to the pre-S3 lookup.
+      3. mk1 catalog rescue — ONLY when (2) misses: resolve `keyword` against
+         the catalog scoped to origin='mk1' (unique per
+         uq_analysis_services_mk1_keyword) and retry by service FK. This is
+         what reaches a native row whose stored keyword drifted away from its
+         catalog keyword.
+
+    Deliberately NOT promote's `_ident_clause` ternary (:850-857). Promote
+    holds the source ROW and reads its service FK before querying; these two
+    callers hold only a keyword off a keyword-boundary wire, so a ternary
+    would have to resolve keyword→service up front — which mis-routes when a
+    drifted row squats on ANOTHER service's catalog keyword. Both root indexes
+    permit row X (service 42, stored 'PUR_OLD', catalog 'PUR_NEW') and row Y
+    (service 99, stored 'PUR_NEW') to be live on the same parent at once, and
+    a caller sending 'PUR_NEW' means Y — that is the string Y answers to, and
+    what the FE echoes (it sends row.keyword; see _serialize_senaite_shape_rows).
+    Exact-first keeps that caller on Y and reaches X only when nothing answers
+    to the string at all.
+
+    senaite-origin services get no rescue leg: their keyword IS their identity
+    contract, grandfathered.
+
+    `allow_native_rescue=False` disables leg 3 entirely, for callers whose
+    keyword arrives off a FOREIGN namespace — main.py's SENAITE-transition
+    webhook. Scoping leg 3 to origin='mk1' is not sufficient protection there:
+    uq_analysis_services_mk1_keyword is PARTIAL on origin='mk1', so it does not
+    stop an mk1 service and a senaite service from sharing a keyword string
+    (validate_new_keyword covers Mk1-side creation, not SENAITE sync). Without
+    this opt-out a SENAITE retest for keyword K, finding no live canonical row
+    for K, would rescue into an unrelated NATIVE line that merely shares the
+    string and retract its vial results — and that caller swallows exceptions,
+    so it would fail silently. For the SENAITE wire, legs 1-2 alone ARE the
+    grandfathered pre-S3 behavior.
+
+    provenance == 'canonical' is REQUIRED here, not defense-in-depth: unlike
+    the other readers in this module, review_state.not_in(("retracted",
+    "rejected")) does NOT exclude the shadow sentinel state ('senaite_mirror'),
+    so a shadow row for this (parent, keyword) would match. Without the
+    provenance term, `.first()` (no ORDER BY) could nondeterministically return
+    the shadow row instead of the real canonical parent row when both exist.
+    That shadow row never has a LimsAnalysisPromotion link, so the caller would
+    find no sources and silently no-op instead of retesting the vials the
+    canonical row actually promoted — a real (not cosmetic) correctness gap.
+    """
+    from models import AnalysisService
+
+    base = (
+        LimsAnalysis.lims_sample_pk == parent_sample_pk,
+        LimsAnalysis.lims_sub_sample_pk.is_(None),
+        LimsAnalysis.retest_of_id.is_(None),
+        LimsAnalysis.review_state.not_in(("retracted", "rejected")),
+        LimsAnalysis.provenance == "canonical",
+    )
+
+    def _first(ident):
+        return db.execute(
+            select(LimsAnalysis).where(*base, ident)
+        ).scalars().first()
+
+    if analysis_service_id is not None:
+        return _first(LimsAnalysis.analysis_service_id == analysis_service_id)
+
+    row = _first(LimsAnalysis.keyword == keyword)
+    if row is not None or not allow_native_rescue:
+        return row
+
+    native_svc = db.execute(
+        select(AnalysisService).where(
+            AnalysisService.keyword == keyword,
+            AnalysisService.origin == "mk1",
+        ).order_by(AnalysisService.id)
+    ).scalars().first()
+    if native_svc is None:
+        return None
+    return _first(LimsAnalysis.analysis_service_id == native_svc.id)
+
+
 def cascade_parent_retest_to_sources(
     db: Session,
     *,
@@ -1466,6 +1559,8 @@ def cascade_parent_retest_to_sources(
     keyword: str,
     user_id: Optional[int],
     source_reason: str = "cascaded from parent SENAITE retest",
+    analysis_service_id: Optional[int] = None,
+    allow_native_rescue: bool = True,
 ) -> list[int]:
     """When a PARENT-tier analysis is retested (via SENAITE), cascade the retest
     down to each source vial-tier analysis that was promoted into that parent.
@@ -1473,7 +1568,7 @@ def cascade_parent_retest_to_sources(
     Resolution chain:
       parent_sample_id → LimsSample → active parent-tier LimsAnalysis
         (lims_sub_sample_pk IS NULL, retest_of_id IS NULL, not retracted/rejected)
-        with matching keyword
+        identified per _find_active_parent_row
       → LimsAnalysisPromotion.source_analysis_id rows
       → source LimsAnalysis rows that are eligible for retest
         (state in to_be_verified/verified/promoted AND not already retested)
@@ -1495,30 +1590,17 @@ def cascade_parent_retest_to_sources(
     if parent_sample is None:
         return []
 
-    # 2. Find the active parent-tier analysis for this keyword
-    #    (lims_sub_sample_pk IS NULL, retest_of_id IS NULL, state not terminal-bad)
-    #
-    # SENAITE phase-out fail-closed (REQUIRED, not defense-in-depth): unlike
-    # the other readers in this module, `review_state.not_in(("retracted",
-    # "rejected"))` does NOT exclude the shadow sentinel state
-    # ('senaite_mirror') — a shadow row for this (parent, keyword) would match
-    # this filter. Without provenance=='canonical', `.scalars().first()` (no
-    # ORDER BY) could nondeterministically return the shadow row instead of
-    # the real canonical parent row when both exist for the same keyword. That
-    # shadow row never has a LimsAnalysisPromotion link, so step 3 below would
-    # find `promo_rows == []` and this cascade would silently no-op instead of
-    # retesting the vial sources the canonical row actually promoted — a real
-    # (not cosmetic) correctness gap.
-    parent_analysis = db.execute(
-        select(LimsAnalysis).where(
-            LimsAnalysis.lims_sample_pk == parent_sample.id,
-            LimsAnalysis.lims_sub_sample_pk.is_(None),
-            LimsAnalysis.keyword == keyword,
-            LimsAnalysis.retest_of_id.is_(None),
-            LimsAnalysis.review_state.not_in(("retracted", "rejected")),
-            LimsAnalysis.provenance == "canonical",
-        )
-    ).scalars().first()
+    # 2. Find the active parent-tier analysis. Identity resolution (service id
+    #    → exact keyword → mk1 catalog rescue), the reason the shape differs
+    #    from promote's ternary, and why the SENAITE wire passes
+    #    allow_native_rescue=False all live in _find_active_parent_row.
+    parent_analysis = _find_active_parent_row(
+        db,
+        parent_sample_pk=parent_sample.id,
+        keyword=keyword,
+        analysis_service_id=analysis_service_id,
+        allow_native_rescue=allow_native_rescue,
+    )
     if parent_analysis is None:
         return []
 
@@ -1597,6 +1679,7 @@ def parent_retest(
     keyword: str,
     user_id: Optional[int],
     reason: Optional[str] = None,
+    analysis_service_id: Optional[int] = None,
 ) -> tuple[list[int], Optional[str]]:
     """Native origination of a parent-tier retest: validate, then run the
     existing cascade (retest promoted sources + un-promote the verified or
@@ -1624,19 +1707,25 @@ def parent_retest(
     ).scalar_one_or_none()
     if parent is None:
         raise NotFoundError(f"sample {sample_id!r} not known to Mk1")
-    active = db.execute(
-        select(LimsAnalysis).where(
-            LimsAnalysis.lims_sample_pk == parent.id,
-            LimsAnalysis.lims_sub_sample_pk.is_(None),
-            LimsAnalysis.keyword == keyword,
-            LimsAnalysis.retest_of_id.is_(None),
-            LimsAnalysis.review_state.not_in(("retracted", "rejected")),
-            LimsAnalysis.provenance == "canonical",
-        )
-    ).scalars().first()
+    # Identity resolution (service id → exact keyword → mk1 catalog rescue) and
+    # why the shape differs from promote's ternary: see _find_active_parent_row.
+    active = _find_active_parent_row(
+        db,
+        parent_sample_pk=parent.id,
+        keyword=keyword,
+        analysis_service_id=analysis_service_id,
+    )
     if active is None:
+        # Name the identity that was actually used, not always the keyword —
+        # a service-id caller passes keyword only as the legacy alias, so
+        # echoing it would point the operator at the wrong thing.
+        _asked = (
+            f"analysis_service_id={analysis_service_id}"
+            if analysis_service_id is not None
+            else f"keyword {keyword!r}"
+        )
         raise NotFoundError(
-            f"no active native parent row for keyword {keyword!r} on {sample_id!r}"
+            f"no active native parent row for {_asked} on {sample_id!r}"
         )
     if active.review_state not in ("verified", "parent_to_verify"):
         raise InvalidTransitionError(
@@ -1648,12 +1737,19 @@ def parent_retest(
                 "(published parents go through invalidate→retest)"
             ),
         )
+    # Thread the resolved row's own service FK down rather than letting the
+    # cascade re-derive identity from the keyword: whatever leg found `active`
+    # above, the cascade must act on the row this function just guarded — the
+    # pre-S3 shape re-resolved and could in principle land elsewhere. Safe for
+    # senaite rows too: uq_lims_analyses_parent_service_id_root (Task 2) is
+    # origin-agnostic, so at most one live canonical row per (parent, service).
     new_ids = cascade_parent_retest_to_sources(
         db,
         parent_sample_id=sample_id,
         keyword=keyword,
         user_id=user_id,
         source_reason=reason or "retested from parent (native)",
+        analysis_service_id=active.analysis_service_id,
     )
     db.refresh(active)
 
@@ -1671,15 +1767,23 @@ def parent_retest(
 
     from models import AnalysisService
     svc = db.get(AnalysisService, active.analysis_service_id)
+    # Record the RESOLVED row's identity, not the caller's input string: since
+    # S3 the two can differ (service-id caller, or the catalog-rescue leg), and
+    # an audit row whose keyword doesn't name the row that was retested is
+    # worse than no keyword at all. Identical for every pre-S3 caller.
+    _details = {
+        "keyword": active.keyword,
+        "analysis_service_id": active.analysis_service_id,
+        "source_row_ids": source_row_ids,
+        "unpromoted": active.review_state == "retracted",
+        "service_origin": svc.origin if svc else None,
+    }
+    if keyword != active.keyword:
+        _details["requested_keyword"] = keyword
     db.add(LimsSubSampleEvent(
         lims_sample_pk=active.lims_sample_pk,
         event="parent_analysis_retested",
-        details={
-            "keyword": keyword,
-            "source_row_ids": source_row_ids,
-            "unpromoted": active.review_state == "retracted",
-            "service_origin": svc.origin if svc else None,
-        },
+        details=_details,
         user_id=user_id,
     ))
     db.commit()
@@ -2545,23 +2649,35 @@ def add_analysis_to_native_vial(
     senaite_service_uid: Optional[str],
     keyword: Optional[str],
     user_id: Optional[int],
+    analysis_service_id: Optional[int] = None,
 ) -> "LimsAnalysis":
     """Add an analysis to a native (mk1://) sub-sample.
 
     Resolution order:
-      1. If senaite_service_uid is given → match analysis_services.senaite_uid.
-      2. Else if keyword is given → match analysis_services.keyword.
-      3. Else → BadRequestError (no identifier).
+      1. If analysis_service_id is given → match analysis_services.id.
+      2. Else if senaite_service_uid is given → match analysis_services.senaite_uid.
+      3. Else if keyword is given → match analysis_services.keyword.
+      4. Else → BadRequestError (no identifier).
+
+    The service id is checked first because it is the only identifier that
+    cannot drift; the other two stay as compatibility aliases for the callers
+    (and the FE wire) that still send them.
 
     Raises:
       - BadRequestError when no identifier is supplied.
       - NotFoundError when the AnalysisService cannot be resolved.
-      - BadRequestError (409-style) when an active non-retest row for that
-        keyword already exists on the vial (idempotent guard).
+      - BadRequestError (409-style) when the vial already carries an active
+        non-retest row for that service (idempotent guard).
     """
     from models import AnalysisService
 
-    if senaite_service_uid is not None:
+    if analysis_service_id is not None:
+        svc = db.get(AnalysisService, analysis_service_id)
+        if svc is None:
+            raise NotFoundError(
+                f"AnalysisService with id={analysis_service_id!r} not found"
+            )
+    elif senaite_service_uid is not None:
         svc = db.execute(
             select(AnalysisService).where(AnalysisService.senaite_uid == senaite_service_uid)
         ).scalars().first()
@@ -2579,22 +2695,35 @@ def add_analysis_to_native_vial(
             )
     else:
         raise BadRequestError(
-            "add_analysis_to_native_vial requires either senaite_service_uid or keyword"
+            "add_analysis_to_native_vial requires analysis_service_id, "
+            "senaite_service_uid or keyword"
         )
 
-    # Duplicate guard: active (non-retest) row with same keyword on this vial
+    # Duplicate guard (S3): native services guard by the service FK — the
+    # pre-S3 keyword guard resolved a service then compared strings, the exact
+    # drift class this slice retires (a vial already carrying the service under
+    # a drifted stored keyword read as "not present" and a second row was
+    # minted). senaite services keep the keyword as their identity contract.
+    # scalar_one_or_none stays: uq_lims_analyses_sub_service_id_root enforces
+    # singularity for the FK leg, and the keyword leg is unchanged.
+    _ident = (
+        LimsAnalysis.analysis_service_id == svc.id
+        if svc.origin == "mk1"
+        else LimsAnalysis.keyword == svc.keyword
+    )
     existing = db.execute(
         select(LimsAnalysis).where(
             LimsAnalysis.lims_sub_sample_pk == sub_sample_pk,
-            LimsAnalysis.keyword == svc.keyword,
+            _ident,
             LimsAnalysis.retest_of_id.is_(None),
             LimsAnalysis.review_state.notin_(["retracted", "rejected"]),
         )
     ).scalar_one_or_none()
     if existing is not None:
         raise BadRequestError(
-            f"vial already has an active analysis with keyword={svc.keyword!r} "
-            f"(id={existing.id}); remove or retract it first"
+            f"vial already has an active analysis for service "
+            f"{svc.keyword!r} (id={existing.id}, keyword={existing.keyword!r}); "
+            f"remove or retract it first"
         )
 
     return create_analysis(
@@ -2613,32 +2742,54 @@ def delete_pristine_analysis(
     db: Session,
     *,
     sub_sample_pk: int,
-    keyword: str,
+    keyword: Optional[str] = None,
     user_id: Optional[int],
+    analysis_service_id: Optional[int] = None,
 ) -> None:
     """Hard-delete a pristine (mistake-correction) analysis from a native vial.
 
     "Pristine" means: review_state == 'unassigned' AND result_value IS NULL
     AND not retested AND no promotion link. Any other state raises BadRequestError.
 
+    The row is identified by EXACTLY ONE of analysis_service_id (S3: reaches a
+    row whose stored keyword has drifted from its catalog's) or keyword (the
+    pre-S3 wire, kept as a compatibility alias). Both together is a
+    BadRequestError rather than a precedence rule: the two can name different
+    rows, and silently preferring one would delete a row the caller didn't ask
+    for — on a surface whose whole job is a hard delete.
+
     Raises:
-      - NotFoundError when no active row with that keyword exists on the vial.
+      - BadRequestError when the identifiers are not exactly one.
+      - NotFoundError when no active row with that identity exists on the vial.
       - BadRequestError when the row has activity (result, non-unassigned state,
         retested flag, or promotion link) — instruct caller to retract instead.
     """
     from models import LimsAnalysisPromotion
 
+    if (analysis_service_id is None) == (keyword is None):
+        raise BadRequestError(
+            "delete_pristine_analysis requires exactly one of "
+            "analysis_service_id or keyword"
+        )
+
+    if analysis_service_id is not None:
+        _ident = LimsAnalysis.analysis_service_id == analysis_service_id
+        _named = f"analysis_service_id={analysis_service_id!r}"
+    else:
+        _ident = LimsAnalysis.keyword == keyword
+        _named = f"keyword={keyword!r}"
+
     row = db.execute(
         select(LimsAnalysis).where(
             LimsAnalysis.lims_sub_sample_pk == sub_sample_pk,
-            LimsAnalysis.keyword == keyword,
+            _ident,
             LimsAnalysis.retest_of_id.is_(None),
             LimsAnalysis.review_state.notin_(["retracted", "rejected"]),
         )
     ).scalar_one_or_none()
     if row is None:
         raise NotFoundError(
-            f"no active lims_analysis with keyword={keyword!r} on sub_sample_pk={sub_sample_pk}"
+            f"no active lims_analysis with {_named} on sub_sample_pk={sub_sample_pk}"
         )
 
     # Pristine guards
@@ -2666,11 +2817,13 @@ def delete_pristine_analysis(
         )
 
     # Write event before hard-delete: the analysis row is gone after commit,
-    # but the event preserves the fact that it existed and was removed.
+    # but the event preserves the fact that it existed and was removed. The
+    # keyword recorded is the ROW's, not the caller's input — on the service-id
+    # path there is no caller keyword, and a drifted one would name nothing.
     db.add(LimsSubSampleEvent(
         sub_sample_pk=sub_sample_pk,
         event="analysis_removed",
-        details={"keyword": keyword},
+        details={"keyword": row.keyword},
         user_id=user_id,
     ))
     # Hard-delete: transition rows first (FK), then the row itself.
@@ -2821,6 +2974,9 @@ def _serialize_senaite_shape_rows(
             service_group_name=None,
             promoted_to_parent_id=promo_by_source.get(r.id),
             service_origin=svc.origin if svc else None,
+            # S3: the row's own FK, not svc.id — svc is None when the FK
+            # doesn't resolve, and the identity key must ship regardless.
+            analysis_service_id=r.analysis_service_id,
         ))
     return out
 

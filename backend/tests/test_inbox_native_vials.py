@@ -16,6 +16,7 @@ from database import Base
 from main import INBOX_SUB_SAMPLE_COLUMNS, _build_native_vial_inbox_items
 from models import (
     AnalysisService,
+    Department,
     LimsAnalysis,
     LimsSample,
     LimsSubSample,
@@ -48,10 +49,17 @@ def db():
 @pytest.fixture
 def family(db):
     """Container parent + 3 native vials (2 hplc, 1 endo), each with one
-    live analysis. Returns (parent, [sub1, sub2, sub3])."""
-    grp = ServiceGroup(name="Analytics", color="sky")
+    live analysis. Returns (parent, [sub1, sub2, sub3]).
+
+    The service carries BOTH a department (what the inbox scopes by since S2
+    Task 7) and its legacy group membership, with ids from disjoint ranges so a
+    department-keyed lookup can't pass by matching a group id."""
+    dept = Department(id=101, name="Analytical", color="blue")
+    db.add(dept)
+    grp = ServiceGroup(id=201, name="Analytics", color="sky", department_id=dept.id)
     db.add(grp)
-    svc = AnalysisService(title="Peptide Purity (HPLC)", keyword="HPLC-PUR")
+    svc = AnalysisService(title="Peptide Purity (HPLC)", keyword="HPLC-PUR",
+                          department_id=dept.id)
     db.add(svc)
     db.flush()
     db.execute(service_group_members.insert().values(
@@ -152,13 +160,26 @@ def test_role_filter_micro(db, family):
     assert [i.sample_id for i in items] == ["P-0300-S03"]
 
 
-def test_claimed_vial_group_drops_analysis_and_row(db, family):
-    """A vial whose only analysis-group is already on an open worksheet
-    disappears (mirrors the SENAITE loop's assigned_pairs filter)."""
+def test_claimed_vial_department_drops_analysis_and_row(db, family):
+    """A vial whose only analysis-department is already on an open worksheet
+    disappears (mirrors the SENAITE loop's assigned_pairs filter).
+
+    Claimed by DEPARTMENT since S2 Task 7 — the caller builds assigned_pairs
+    that way, and these rows now carry department identity to match."""
+    _parent, subs = family
+    dept_id = db.execute(select(Department.id)).scalar_one()
+    items = _call(db, subs, assigned_pairs={("mk1://nat-001", dept_id)})
+    assert [i.sample_id for i in items] == ["P-0300-S02"]
+
+
+def test_claimed_vial_by_legacy_group_id_no_longer_drops_it(db, family):
+    """The other half of the re-key: a stale group-keyed pair must NOT hide the
+    vial. Pinned so a future partial revert of either side shows up here rather
+    than as vials silently vanishing."""
     _parent, subs = family
     grp_id = db.execute(select(ServiceGroup.id)).scalar_one()
     items = _call(db, subs, assigned_pairs={("mk1://nat-001", grp_id)})
-    assert [i.sample_id for i in items] == ["P-0300-S02"]
+    assert [i.sample_id for i in items] == ["P-0300-S01", "P-0300-S02"]
 
 
 def test_fully_claimed_uid_skipped(db, family):
