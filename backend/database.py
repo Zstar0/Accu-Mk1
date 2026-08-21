@@ -375,10 +375,14 @@ def _run_migrations():
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS customer_remarks_include BOOLEAN NOT NULL DEFAULT TRUE",
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS customer_remarks_delivered_at TIMESTAMP",
         # Backfill — non-HPLC sub-samples are not variance candidates by default.
-        # Idempotent: re-running matches no rows once already flipped.
+        # Idempotent: re-running matches no rows once already flipped. The
+        # COALESCE preserves an operator-written exclusion reason (audit
+        # 2026-08-21): the POLICY flip re-applies every boot by design, but
+        # boot must never destroy a human's note about why.
         """UPDATE lims_sub_samples
               SET in_variance_set = FALSE,
-                  variance_exclusion_reason = 'auto: assignment_role != hplc'
+                  variance_exclusion_reason = COALESCE(variance_exclusion_reason,
+                      'auto: assignment_role != hplc')
             WHERE assignment_role IN ('endo', 'ster', 'xtra')
               AND in_variance_set = TRUE""",
         # hm-specific backfill (fix round, spec-3 Task 3): split out from the
@@ -392,7 +396,8 @@ def _run_migrations():
         # before that constant existed, or between deploy and next request.
         """UPDATE lims_sub_samples
               SET in_variance_set = FALSE,
-                  variance_exclusion_reason = 'auto: hm is single-vial (vials_required=1); never variance-eligible'
+                  variance_exclusion_reason = COALESCE(variance_exclusion_reason,
+                      'auto: hm is single-vial (vials_required=1); never variance-eligible')
             WHERE assignment_role = 'hm'
               AND in_variance_set = TRUE""",
         # ── SLA tiers (revises the former sla_targets model) ──
