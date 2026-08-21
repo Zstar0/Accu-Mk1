@@ -837,11 +837,28 @@ def test_delete_vial_role_writes_delete_log_row(route_client):
 
 
 def test_create_service_group_writes_create_log_row(route_client):
+    """S2×S4 supersession (arc-integration ruling 2026-08-14): S2 retires
+    POST /service-groups to HTTP 410 ("service groups are legacy;
+    departments own routing now"). A route that no longer creates anything
+    has nothing to change-log, so S4's instrumentation claim only holds
+    while the route is live. Tolerant on both trees: standalone S4 asserts
+    the 201 + log row; with S2 merged it asserts the 410 and that NO
+    change-log row was written. NEVER restore the create body to satisfy
+    the 201 leg.
+    """
     resp = route_client.post("/service-groups", json={"name": "WC Group 1"})
+    db = route_client._test_session
+
+    if resp.status_code == 410:
+        # S2 merged: the retired route must neither create nor log.
+        assert "legacy" in resp.json()["detail"]
+        rows = db.query(CatalogChangeLog).filter_by(entity_type="service_group").all()
+        assert rows == []
+        return
+
     assert resp.status_code == 201, resp.text
     group_id = resp.json()["id"]
 
-    db = route_client._test_session
     rows = db.query(CatalogChangeLog).filter_by(entity_type="service_group", entity_pk=group_id).all()
     assert len(rows) == 1
     assert rows[0].action == "create"

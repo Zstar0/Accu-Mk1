@@ -102,6 +102,20 @@ def _is_log_call(node: ast.Call) -> bool:
     return False
 
 
+def _is_retired_410(fn_node: ast.AST) -> bool:
+    """S2×S4 supersession (arc-integration ruling 2026-08-14): a route S2
+    retired to HTTP 410 ("service groups are legacy") mutates nothing, so
+    it owes no change-log call. Detected structurally — any 410 status
+    constant inside the function body (`raise HTTPException(410, ...)`).
+    On a tree without S2 the constant is absent and the route is checked
+    in full, so this exemption never weakens the guard where the route is
+    still live.
+    """
+    return any(
+        isinstance(n, ast.Constant) and n.value == 410 for n in ast.walk(fn_node)
+    )
+
+
 def test_every_wired_route_calls_a_change_log_writer():
     tree = ast.parse(MAIN_PY.read_text(encoding="utf-8"), filename=str(MAIN_PY))
 
@@ -122,6 +136,9 @@ def test_every_wired_route_calls_a_change_log_writer():
     unlogged = []
     for name in WIRED_FUNCTIONS:
         for fn_node in functions_by_name[name]:
+            if _is_retired_410(fn_node):
+                # S2-retired route: nothing left to change-log.
+                continue
             has_log_call = any(
                 isinstance(n, ast.Call) and _is_log_call(n) for n in ast.walk(fn_node)
             )
