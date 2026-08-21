@@ -73,7 +73,10 @@ describe('familyDragItems', () => {
       {
         sampleUid: 'u9',
         sampleId: 'P-09-S01',
-        groupId: 1,
+        // The inbox's `group_id` carries department identity as of S2 — the
+        // payload names it for what it is, and consumers send it as
+        // `department_id`.
+        departmentId: 1,
         groupName: 'Analytics',
         dateReceived: '2026-06-10T12:00:00+00:00',
         analyses: [

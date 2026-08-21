@@ -220,3 +220,54 @@ def test_patch_updates_flags_but_never_code_on_frozen(client, db_session):
 
     blocked = client.patch(f"/vial-roles/{role_id}", json={"code": "newcd"})
     assert blocked.status_code == 400
+
+
+def test_post_accepts_display_face_fields(client, db_session):
+    dep = client.post("/departments", json={"name": "Display Dept"}).json()
+    r = client.post("/vial-roles", json={
+        "code": "disp", "label": "Display Role", "department_id": dep["id"],
+        "color": "emerald", "short_label": "DISP", "badge_glyph": "D",
+    })
+    assert r.status_code == 201
+    body = r.json()
+    assert body["color"] == "emerald"
+    assert body["short_label"] == "DISP"
+    assert body["badge_glyph"] == "D"
+
+
+def test_post_omitted_display_faces_default_null(client, db_session):
+    dep = client.post("/departments", json={"name": "Null Display Dept"}).json()
+    r = client.post("/vial-roles", json={
+        "code": "ndisp", "label": "No Display", "department_id": dep["id"],
+    })
+    assert r.status_code == 201
+    body = r.json()
+    assert body["color"] is None and body["short_label"] is None and body["badge_glyph"] is None
+
+
+def test_post_rejects_unknown_color(client, db_session):
+    dep = client.post("/departments", json={"name": "Bad Color Dept"}).json()
+    r = client.post("/vial-roles", json={
+        "code": "bcol", "label": "Bad Color", "department_id": dep["id"], "color": "magenta",
+    })
+    assert r.status_code == 422
+
+
+def test_patch_updates_color(client, db_session):
+    dep = client.post("/departments", json={"name": "Patch Color Dept"}).json()
+    role = client.post("/vial-roles", json={
+        "code": "pcol", "label": "Patch Color", "department_id": dep["id"],
+    }).json()
+    assert role["color"] is None
+    r = client.patch(f"/vial-roles/{role['id']}", json={"color": "violet"})
+    assert r.status_code == 200
+    assert r.json()["color"] == "violet"
+
+
+def test_patch_rejects_unknown_color(client, db_session):
+    dep = client.post("/departments", json={"name": "Patch Bad Color Dept"}).json()
+    role = client.post("/vial-roles", json={
+        "code": "pbcl", "label": "Patch Bad Color", "department_id": dep["id"],
+    }).json()
+    r = client.patch(f"/vial-roles/{role['id']}", json={"color": "magenta"})
+    assert r.status_code == 422

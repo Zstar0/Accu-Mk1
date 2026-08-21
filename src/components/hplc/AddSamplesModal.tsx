@@ -14,21 +14,23 @@ import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
 import { SERVICE_GROUP_COLORS } from '@/lib/service-group-colors'
 import { getInboxSamples } from '@/lib/api'
 import { useEffectiveReadSource } from '@/lib/read-source'
-import type { WorksheetListItem, InboxPriority } from '@/lib/api'
+import { itemScopeKey } from '@/lib/worksheet-scope-key'
+import type { WorksheetListItem, InboxPriority, AddToWorksheetPayload } from '@/lib/api'
 
 interface AddSamplesModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   worksheetId: number
   existingItems: WorksheetListItem['items']
-  onAdd: (data: { sample_uid: string; sample_id: string; service_group_id: number; analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[] }) => void
+  onAdd: (data: AddToWorksheetPayload) => void
 }
 
 interface FlatInboxItem {
   sample_uid: string
   sample_id: string
   priority: InboxPriority
-  service_group_id: number
+  /** From the inbox's `group_id`, which is a DEPARTMENT id (S2). */
+  department_id: number
   group_name: string
   group_color: string
   analyses: { title: string; keyword: string | null; peptide_name: string | null; method: string | null }[]
@@ -53,32 +55,33 @@ export function AddSamplesModal({
     enabled: open,
   })
 
-  // Regroup the vial-flat shape into per-(vial, service_group) rows so the
+  // Regroup the vial-flat shape into per-(vial, department) rows so the
   // modal keeps its today-shape rendering. The new inbox returns one item per
   // vial with a flat analyses[]; each analysis carries its group_id/name/color
-  // inline. A vial whose analyses span multiple groups produces one modal row
-  // per group (today only the rare HPLC-subgroup case; practically one).
+  // inline — and as of S2 those carry DEPARTMENT identity. A vial whose
+  // analyses span multiple departments produces one modal row per department
+  // (today only the rare HPLC-subgroup case; practically one).
   const flatItems: FlatInboxItem[] = []
   for (const vial of inboxData?.items ?? []) {
-    const byGroup = new Map<number, { name: string; color: string; analyses: typeof vial.analyses }>()
+    const byDepartment = new Map<number, { name: string; color: string; analyses: typeof vial.analyses }>()
     for (const a of vial.analyses) {
-      const slot = byGroup.get(a.group_id)
+      const slot = byDepartment.get(a.group_id)
       if (slot) {
         slot.analyses.push(a)
       } else {
-        byGroup.set(a.group_id, {
+        byDepartment.set(a.group_id, {
           name: a.group_name,
           color: a.group_color,
           analyses: [a],
         })
       }
     }
-    for (const [groupId, slot] of byGroup) {
+    for (const [departmentId, slot] of byDepartment) {
       flatItems.push({
         sample_uid: vial.uid,
         sample_id: vial.sample_id,
         priority: vial.priority,
-        service_group_id: groupId,
+        department_id: departmentId,
         group_name: slot.name,
         group_color: slot.color,
         analyses: slot.analyses.map(a => ({
@@ -91,10 +94,15 @@ export function AddSamplesModal({
     }
   }
 
-  // Filter out items already in this worksheet
-  const existingSet = new Set(existingItems.map(i => `${i.sample_uid}-${i.service_group_id}`))
+  // Filter out items already in this worksheet. Keys are department-shaped on
+  // both sides; a pre-S2 worksheet row (no department_id) keys legacy and so
+  // can't match — the two id spaces are unrelated, so such a row shows up as
+  // available and the backend's own duplicate guard catches a re-add.
+  const existingSet = new Set(
+    existingItems.map(i => itemScopeKey(i.sample_uid, i.department_id, i.service_group_id))
+  )
   const availableItems = flatItems.filter(
-    item => !existingSet.has(`${item.sample_uid}-${item.service_group_id}`)
+    item => !existingSet.has(itemScopeKey(item.sample_uid, item.department_id, null))
   )
 
   return (
@@ -113,7 +121,7 @@ export function AddSamplesModal({
             <div className="space-y-1 py-1">
               {availableItems.map(item => (
                 <AddSampleCard
-                  key={`${item.sample_uid}-${item.service_group_id}`}
+                  key={itemScopeKey(item.sample_uid, item.department_id, null)}
                   item={item}
                   onAdd={onAdd}
                 />
@@ -128,7 +136,7 @@ export function AddSamplesModal({
 
 interface AddSampleCardProps {
   item: FlatInboxItem
-  onAdd: (data: { sample_uid: string; sample_id: string; service_group_id: number; analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[] }) => void
+  onAdd: (data: AddToWorksheetPayload) => void
 }
 
 function AddSampleCard({ item, onAdd }: AddSampleCardProps) {
@@ -140,7 +148,7 @@ function AddSampleCard({ item, onAdd }: AddSampleCardProps) {
     onAdd({
       sample_uid: item.sample_uid,
       sample_id: item.sample_id,
-      service_group_id: item.service_group_id,
+      department_id: item.department_id,
       analyses: item.analyses,
     })
     setAdded(true)

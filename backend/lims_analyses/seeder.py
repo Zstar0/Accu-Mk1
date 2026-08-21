@@ -368,6 +368,28 @@ def _micro_group_keywords(db: Session) -> Set[str]:
     return {k for k in rows if k}
 
 
+def coa_exempt_keywords(db: Session) -> Set[str]:
+    """Keywords exempt from COA-generation blocking (S2 port, RULED 2026-08-12).
+
+    Department half: Microbiology (micro finishes after the analytical COA and
+    re-generates) plus Heavy Metals (RULED: HM does not block until its
+    turnaround reality is known — this REVERSES the pre-S2 behavior where HM
+    blocked by omission). Group half: the legacy _micro_group_keywords set —
+    kept as a transition union so the gate's fail posture cannot invert if
+    either source is empty (prod may lack the Endotoxin group; department
+    backfill may lag). Delete the group half at SENAITE decommission.
+    """
+    from catalog.departments import HEAVY_METALS_DEPARTMENT, MICROBIOLOGY_DEPARTMENT
+    from models import Department
+
+    dept_rows = db.execute(
+        select(AnalysisService.keyword)
+        .join(Department, Department.id == AnalysisService.department_id)
+        .where(Department.name.in_((MICROBIOLOGY_DEPARTMENT, HEAVY_METALS_DEPARTMENT)))
+    ).scalars().all()
+    return {k for k in dept_rows if k} | _micro_group_keywords(db)
+
+
 def mirror_parent_hplc_analyses(
     db: Session,
     *,

@@ -331,6 +331,32 @@ def _deltas(before: dict, row) -> dict:
 # ─── Transitions ─────────────────────────────────────────────────────────────
 
 
+def _tee_parent_verify_to_senaite(db: Session, row: LimsAnalysis) -> None:
+    """Origin-gated SENAITE tee for a parent-tier verify (see the call site in
+    apply_transition's verify guard). SENAITE-origin service → verify the AR
+    line via senaite_writeback.writeback_parent_verify (raises
+    SenaiteWritebackError on failure — the caller's transaction aborts).
+    mk1-origin service, or a row with no resolvable service (promote always
+    stamps the FK, so this is a legacy-data guard, not a live path) → no-op.
+    """
+    from models import AnalysisService, LimsSample
+
+    svc = (
+        db.get(AnalysisService, row.analysis_service_id)
+        if row.analysis_service_id is not None else None
+    )
+    if svc is None or (svc.origin or "") == "mk1":
+        return
+    parent = db.get(LimsSample, row.lims_sample_pk)
+    if parent is None:
+        raise BadRequestError(
+            f"parent lims_samples row missing for analysis {row.id}"
+        )
+    from lims_analyses import senaite_writeback
+
+    senaite_writeback.writeback_parent_verify(parent.sample_id, row.keyword)
+
+
 def apply_transition(
     db: Session,
     *,
@@ -468,6 +494,18 @@ def apply_transition(
     elif kind == "verify":
         if not row.result_value:
             raise BadRequestError("verify requires a result_value on the row")
+        # Parent-tier verify tee (read-flip seam fix, 2026-08-20): a canonical
+        # parent row whose service is SENAITE-origin must flip its SENAITE AR
+        # line in the same act — otherwise SENAITE strands at to_be_verified
+        # while Mk1 reads verified, a divergence the COA gate trips over
+        # later. Fail-closed like promote's write-back: a SENAITE error
+        # aborts the whole transition (nothing is committed yet — the only
+        # prior mutations in this call are submit-only stamp fields, which
+        # can't co-occur with kind='verify'). mk1-origin services have no
+        # SENAITE line — nothing to sync. The tier guard is structural
+        # (next_state above tier-blocks vial-tier verify) but kept explicit.
+        if row_tier == TIER_PARENT:
+            _tee_parent_verify_to_senaite(db, row)
     elif kind == "variance_verify":
         if not row.result_value:
             raise BadRequestError("variance_verify requires a result_value on the row")

@@ -228,12 +228,17 @@ class AnalysisService(Base):
 
 
 class AnalysisServiceSpec(Base):
-    """Lab-owned pass/fail rule for a native COA row (spec-ownership slice 1).
+    """Lab-owned pass/fail rule for a native COA row (spec-ownership slice 1,
+    peptide tier added in slice 2).
 
-    One active spec per (service, matrix); matrix NULL = applies to every
-    matrix — NULL-first is the practical default. The identity join is the
-    FK, never the keyword. Rows are deactivated, never deleted; every write
-    goes through catalog/service_spec_audit.record_spec_change.
+    Three tiers per service, in resolution precedence: a peptide-bound row
+    (peptide_id set, matrix NULL — the identity anchor is the peptide FK,
+    never the keyword), a named-matrix row (matrix set, peptide_id NULL),
+    and the wildcard row (both NULL — applies to every matrix/peptide).
+    matrix and peptide_id are mutually exclusive (ck_analysis_service_specs_tier).
+    The identity join is always the FK, never the keyword. Rows are
+    deactivated, never deleted; every write goes through
+    catalog/service_spec_audit.record_spec_change.
     """
     __tablename__ = "analysis_service_specs"
     __table_args__ = (
@@ -244,8 +249,14 @@ class AnalysisServiceSpec(Base):
             "AND min_value IS NULL AND max_value IS NULL)",
             name="ck_analysis_service_specs_rule_shape",
         ),
-        # Postgres treats NULLs as distinct in unique indexes, so the
-        # NULL-matrix default row needs its own partial index.
+        CheckConstraint(
+            "NOT (matrix IS NOT NULL AND peptide_id IS NOT NULL)",
+            name="ck_analysis_service_specs_tier",
+        ),
+        # Postgres treats NULLs as distinct in unique indexes, so each tier
+        # (named matrix / peptide-bound / both-NULL wildcard) needs its own
+        # partial index — see uq_analysis_service_specs_peptide and _wildcard
+        # below for the other two.
         Index(
             "uq_analysis_service_specs_matrix",
             "analysis_service_id", "matrix",
@@ -254,11 +265,18 @@ class AnalysisServiceSpec(Base):
             sqlite_where=text("active AND matrix IS NOT NULL"),
         ),
         Index(
-            "uq_analysis_service_specs_null_matrix",
+            "uq_analysis_service_specs_peptide",
+            "analysis_service_id", "peptide_id",
+            unique=True,
+            postgresql_where=text("active AND peptide_id IS NOT NULL"),
+            sqlite_where=text("active AND peptide_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_analysis_service_specs_wildcard",
             "analysis_service_id",
             unique=True,
-            postgresql_where=text("active AND matrix IS NULL"),
-            sqlite_where=text("active AND matrix IS NULL"),
+            postgresql_where=text("active AND matrix IS NULL AND peptide_id IS NULL"),
+            sqlite_where=text("active AND matrix IS NULL AND peptide_id IS NULL"),
         ),
     )
 
@@ -267,6 +285,9 @@ class AnalysisServiceSpec(Base):
         ForeignKey("analysis_services.id", ondelete="CASCADE"), nullable=False
     )
     matrix: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    peptide_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("peptides.id"), nullable=True
+    )
     rule_kind: Mapped[str] = mapped_column(String(16), nullable=False)  # range | equals
     min_value: Mapped[Optional[Decimal]] = mapped_column(Numeric, nullable=True)
     max_value: Mapped[Optional[Decimal]] = mapped_column(Numeric, nullable=True)
@@ -275,6 +296,9 @@ class AnalysisServiceSpec(Base):
     unit: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     # NULL = COABuilder formats the display string from the bounds.
     display_override: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Limit of quantitation in the spec row's own unit (display + censoring
+    # only — evaluate() never reads it; the verdict is always the raw number).
+    loq: Mapped[Optional[Decimal]] = mapped_column(Numeric, nullable=True)
     active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )
@@ -412,6 +436,13 @@ class VialRole(Base):
     is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    # S1 roles-as-data: display faces (NULL = fall back — color: the role's
+    # department color, then neutral; short_label: code.upper(); badge_glyph:
+    # first char of the short form). Color names come from the FE's closed
+    # class map (role-display.ts) — never free-form CSS.
+    color: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    short_label: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    badge_glyph: Mapped[Optional[str]] = mapped_column(String(2), nullable=True)
 
     department = relationship("Department", lazy="selectin")
 
@@ -487,6 +518,16 @@ class AnalysisProfile(Base):
     coa_archetype: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     coa_sort_order: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
+    )
+    # COA display chrome (spec 2026-08-16): section-scoped, archetype-
+    # independent, all inert until the renderer slice consumes them.
+    coa_basis_note: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    coa_method_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    coa_prep_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Ordered [{"label": str, "text": str}] — list shape so families differ
+    # in footnote count without schema change.
+    coa_footnotes: Mapped[Optional[list]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True
     )
     # ── Profile-level SLA tier (Task 11) ─────────────────────────────────────
     # Beats the member services' group tier, loses to a priority override.
@@ -634,6 +675,13 @@ class PeptideAnalyte(Base):
     Junction row connecting a Peptide Standard to one AnalysisService.
     Each peptide has up to 4 analyte slots (slot 1-4).
     sample_id is the Senaite sample ID for the standard reference vial.
+
+    4-slot ceiling (product decision, S6c 2026-08-11): the entire pipeline is
+    shaped around SENAITE's Analyte1..Analyte4 fields (parent meta, seeder
+    slot maps, conformance, alias slots) — widening requires a program, not a
+    CHECK edit. NOTE ck_peptide_analyte_slot_range exists only where
+    create_all built this table after 2026-03-05 (v0.19.0, commit bc88c366);
+    older DBs rely on this API-edge validation (the only gate before the DB).
     """
     __tablename__ = "peptide_analytes"
 
@@ -932,6 +980,9 @@ class WorksheetItem(Base):
     sample_id: Mapped[str] = mapped_column(String(100), nullable=False)
     analysis_uid: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     service_group_id: Mapped[Optional[int]] = mapped_column(ForeignKey("service_groups.id", ondelete="SET NULL"), nullable=True)
+    department_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("departments.id", ondelete="SET NULL"), nullable=True
+    )
     priority: Mapped[str] = mapped_column(String(20), default="normal", nullable=False)
     assigned_analyst_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     instrument_uid: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
@@ -1100,6 +1151,16 @@ class LimsSample(Base):
     # Authority note: lims_workflow_shadow_evaluations is the authoritative
     # history; this column is its O(1) materialization.
     native_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # S8 adoption guard: collision quarantine. TRUE = row minted to park an
+    # incoming order whose sample_id collided with an existing row under a
+    # different SENAITE uid (external counter regression). The mangled
+    # sample_id keeps it out of every exact-match adoption path; resolution
+    # is a manual action. Interim scaffolding — retires when Mk1 mints its
+    # own sample ids post-phase-out.
+    quarantined: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    quarantine_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # S4 snapshot rider (2026-08-11): frozen catalog resolution stamped ONCE
     # by the registration bg task (backend/catalog/snapshot.py), NULL for
     # every pre-slice row and for a sample whose registration signal never

@@ -11,7 +11,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from coa.spec_rules import SpecRuleError, evaluate, normalize_matrix, resolve_spec
+from coa.spec_rules import (SpecRuleError, evaluate, normalize_matrix,
+                            resolve_spec, sample_peptide_id)
 from models import AnalysisService, AnalysisServiceSpec  # register tables on Base before conftest's create_all
 
 
@@ -32,6 +33,60 @@ def _mk_spec(db, svc, **over):
     db.add(spec)
     db.flush()
     return spec
+
+
+def _mk_peptide(db, abbreviation, name=None):
+    from models import Peptide
+    pep = Peptide(name=name or abbreviation, abbreviation=abbreviation)
+    db.add(pep)
+    db.flush()
+    return pep
+
+
+def _mk_identity_service(db, peptide_id, keyword):
+    from models import AnalysisService
+    svc = AnalysisService(title=keyword, keyword=keyword, origin="mk1",
+                          peptide_id=peptide_id)
+    db.add(svc)
+    db.flush()
+    return svc
+
+
+def _mk_family(db, sample_id, *, parent_analyses=(), sub_analyses=()):
+    """Parent LimsSample with LimsAnalysis rows for parent_analyses (hosted
+    directly on the parent) and sub_analyses (hosted on a single sub-sample
+    vial under the parent) — the two homes sample_peptide_id's join must
+    cover. Each entry is a service, or a (service, review_state) pair when a
+    test needs a specific state (e.g. 'retracted')."""
+    from models import LimsAnalysis, LimsSample, LimsSubSample
+
+    def _svc_state(entry):
+        return entry if isinstance(entry, tuple) else (entry, "unassigned")
+
+    parent = LimsSample(sample_id=sample_id)
+    db.add(parent)
+    db.flush()
+    for entry in parent_analyses:
+        svc, state = _svc_state(entry)
+        db.add(LimsAnalysis(
+            lims_sample_pk=parent.id, analysis_service_id=svc.id,
+            keyword=svc.keyword, title=svc.title, review_state=state,
+        ))
+    if sub_analyses:
+        sub = LimsSubSample(
+            parent_sample_pk=parent.id, external_lims_uid=f"{sample_id}-EXT",
+            sample_id=f"{sample_id}-S01", vial_sequence=1,
+        )
+        db.add(sub)
+        db.flush()
+        for entry in sub_analyses:
+            svc, state = _svc_state(entry)
+            db.add(LimsAnalysis(
+                lims_sub_sample_pk=sub.id, analysis_service_id=svc.id,
+                keyword=svc.keyword, title=svc.title, review_state=state,
+            ))
+    db.flush()
+    return parent
 
 
 def _rule_ns(rule):
@@ -97,6 +152,94 @@ def test_inactive_rows_never_resolve(db_session):
 def test_no_rows_resolves_none(db_session):
     svc = _mk_service(db_session)
     assert resolve_spec(db_session, svc.id, "Peptide") is None
+
+
+# ── resolve_spec: peptide tier (spec-ownership slice 2) ─────────────────────
+
+def test_resolve_prefers_peptide_over_matrix_over_wildcard(db_session):
+    svc = _mk_service(db_session)
+    peptide = _mk_peptide(db_session, "BPC157")
+    wild = _mk_spec(db_session, svc, matrix=None, max_value=Decimal("1"))
+    mat = _mk_spec(db_session, svc, matrix="Peptide", max_value=Decimal("2"))
+    pep = _mk_spec(db_session, svc, matrix=None, peptide_id=peptide.id,
+                   max_value=Decimal("3"))
+    assert resolve_spec(db_session, svc.id, "Peptide", peptide_id=peptide.id).id == pep.id
+    assert resolve_spec(db_session, svc.id, "Peptide", peptide_id=None).id == mat.id
+    assert resolve_spec(db_session, svc.id, None, peptide_id=None).id == wild.id
+
+
+def test_resolve_peptide_tier_falls_through_when_absent(db_session):
+    """R4: a peptide anchor with no filed peptide-tier spec coarsens to the
+    matrix tier — it must never abort or silently pick the wildcard."""
+    svc = _mk_service(db_session)
+    peptide = _mk_peptide(db_session, "BPC157")
+    mat = _mk_spec(db_session, svc, matrix="Peptide", max_value=Decimal("2"))
+    assert resolve_spec(db_session, svc.id, "Peptide", peptide_id=peptide.id).id == mat.id
+
+
+def test_resolve_peptide_id_none_is_backward_compatible_default(db_session):
+    """Every pre-slice-2 caller passes no peptide_id kwarg at all — confirm
+    the default keeps them on the old two-tier behavior."""
+    svc = _mk_service(db_session)
+    mat = _mk_spec(db_session, svc, matrix="Peptide", max_value=Decimal("2"))
+    assert resolve_spec(db_session, svc.id, "Peptide").id == mat.id
+
+
+def test_wildcard_arm_excludes_peptide_rows(db_session):
+    """CRITICAL regression: the wildcard (both-NULL) arm must also require
+    peptide_id IS NULL — otherwise a peptide-bound row could masquerade as
+    the default when no true wildcard row exists."""
+    svc = _mk_service(db_session)
+    peptide = _mk_peptide(db_session, "BPC157")
+    _mk_spec(db_session, svc, matrix=None, peptide_id=peptide.id,
+            max_value=Decimal("3"))
+    assert resolve_spec(db_session, svc.id, None, peptide_id=None) is None
+
+
+# ── sample_peptide_id: identity anchor (R6) ──────────────────────────────────
+
+def test_sample_peptide_id_unique_anchor(db_session):
+    peptide = _mk_peptide(db_session, "BPC157")
+    identity_svc = _mk_identity_service(db_session, peptide.id, "BPC157-PURITY")
+    other_svc = _mk_service(db_session, keyword="HM-PB")   # peptide_id=None
+    parent = _mk_family(
+        db_session, "P-ANCHOR-1",
+        parent_analyses=[identity_svc],
+        sub_analyses=[other_svc],
+    )
+    assert sample_peptide_id(db_session, parent.id) == peptide.id
+
+
+def test_sample_peptide_id_blend_or_none_returns_none(db_session):
+    pep_a = _mk_peptide(db_session, "BPC157")
+    pep_b = _mk_peptide(db_session, "TB500")
+    svc_a = _mk_identity_service(db_session, pep_a.id, "BPC157-PURITY")
+    svc_b = _mk_identity_service(db_session, pep_b.id, "TB500-PURITY")
+    two_peptide_parent = _mk_family(db_session, "P-BLEND-1",
+                                    parent_analyses=[svc_a, svc_b])
+
+    other_svc = _mk_service(db_session, keyword="HM-PB")
+    no_identity_parent = _mk_family(db_session, "P-NOID-1",
+                                    parent_analyses=[other_svc])
+
+    assert sample_peptide_id(db_session, two_peptide_parent.id) is None
+    assert sample_peptide_id(db_session, no_identity_parent.id) is None
+
+
+def test_sample_peptide_id_ignores_retracted_wrong_identity_row(db_session):
+    """Real incident class: a sample relabeled from one peptide to another
+    leaves the OLD, wrong-identity analysis behind as retracted. That
+    retracted row must not count as a second anchor and demote the sample
+    to blend-treatment — the live row (peptide A) is the only anchor."""
+    pep_a = _mk_peptide(db_session, "BPC157")
+    pep_b = _mk_peptide(db_session, "TB500")
+    svc_a = _mk_identity_service(db_session, pep_a.id, "BPC157-PURITY")
+    svc_b = _mk_identity_service(db_session, pep_b.id, "TB500-PURITY")
+    parent = _mk_family(
+        db_session, "P-RETRACTED-1",
+        parent_analyses=[svc_a, (svc_b, "retracted")],
+    )
+    assert sample_peptide_id(db_session, parent.id) == pep_a.id
 
 
 # ── Cross-repo parity table — DO NOT EDIT without editing the twin ──────────
