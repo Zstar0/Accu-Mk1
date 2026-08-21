@@ -6,6 +6,7 @@ import { LabelTemplate } from './LabelTemplate'
 import { getVialPlan, type VialPlanItem } from '@/lib/api'
 import { OrderLabelTemplate } from './OrderLabelTemplate'
 import { vialPosition } from '@/lib/vial-label'
+import { useVialRoles } from '@/services/vial-roles'
 import './PrintStep.css'
 
 interface PrintLabel {
@@ -43,6 +44,10 @@ export function PrintStep({ parentSampleId, vials, orderNumber, orderDate }: Pro
   // order label without any code change here.
   const [orderCounts, setOrderCounts] = useState<Record<string, number> | null>(null)
   const [printMode, setPrintMode] = useState<'vials' | 'order'>('vials')
+  // S1 roles-as-data: the one useVialRoles() call for this tree — LabelTemplate
+  // is a print template and must not grow a query hook of its own, so its
+  // catalog data is threaded through from here.
+  const vialRolesQ = useVialRoles()
 
   // Pull vial-plan to enrich each label with assignment_role + vial position.
   // Soft fail: if plan isn't available, labels print without role/position.
@@ -169,7 +174,13 @@ export function PrintStep({ parentSampleId, vials, orderNumber, orderDate }: Pro
           <Button
             type="button"
             onClick={() => window.print()}
-            disabled={selectedCount === 0}
+            // vialRolesQ.isLoading: a physical label must never print the
+            // uppercased-code fallback (e.g. "STER" instead of "PCR") because
+            // the catalog hadn't resolved yet — same principle as BoxStep's
+            // whole-render vialRolesQ.isLoading gate, scoped here to just the
+            // print action since the rest of this screen (checkboxes, counts)
+            // doesn't depend on role labels.
+            disabled={selectedCount === 0 || vialRolesQ.isLoading}
             className="gap-2"
           >
             <Printer className="w-4 h-4" aria-hidden="true" />
@@ -210,6 +221,7 @@ export function PrintStep({ parentSampleId, vials, orderNumber, orderDate }: Pro
                     vialTotal={vialTotal}
                     role={role}
                     receivedAt={v.received_at ?? null}
+                    roles={vialRolesQ.data}
                   />
                 </div>
               )

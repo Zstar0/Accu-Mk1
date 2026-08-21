@@ -9,6 +9,7 @@ import {
   Tag,
   X,
   Info,
+  Check,
 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -33,6 +34,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { toast } from 'sonner'
+import { cn } from '@/lib/utils'
 import {
   createVialRole,
   updateVialRole,
@@ -42,6 +44,11 @@ import {
 import { useVialRoles, vialRolesQueryKeys } from '@/services/vial-roles'
 import { useDepartments } from '@/services/departments'
 import { useQueryClient } from '@tanstack/react-query'
+import {
+  ROLE_COLOR_NAMES,
+  ROLE_COLOR_BADGE,
+  type RoleColorName,
+} from '@/lib/role-display'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -52,6 +59,9 @@ interface FormState {
   boxable: boolean
   variance_eligible: boolean
   sort_order: string
+  color: RoleColorName | null
+  short_label: string
+  badge_glyph: string
 }
 
 const DEFAULT_FORM: FormState = {
@@ -61,7 +71,18 @@ const DEFAULT_FORM: FormState = {
   boxable: false,
   variance_eligible: false,
   sort_order: '0',
+  color: null,
+  short_label: '',
+  badge_glyph: '',
 }
+
+// A role's stored color may be null (Auto) or, in principle, a value that
+// predates a vocabulary change — narrow rather than trust the DB blindly so
+// an off-vocabulary value falls back to "Auto" instead of crashing the picker.
+const asRoleColorName = (v: string | null | undefined): RoleColorName | null =>
+  (ROLE_COLOR_NAMES as readonly string[]).includes(v ?? '') ? (v as RoleColorName) : null
+
+const roleColorLabel = (name: RoleColorName) => name.charAt(0).toUpperCase() + name.slice(1)
 
 // Mirrors the backend's code format check (main.py, both POST and PATCH on
 // /vial-roles) — a client-side echo, not the authority. The backend still
@@ -117,6 +138,9 @@ export default function VialRolesPage() {
       boxable: role.boxable,
       variance_eligible: role.variance_eligible,
       sort_order: String(role.sort_order),
+      color: asRoleColorName(role.color),
+      short_label: role.short_label ?? '',
+      badge_glyph: role.badge_glyph ?? '',
     })
     setPanelOpen(true)
   }
@@ -159,6 +183,9 @@ export default function VialRolesPage() {
           boxable: form.boxable,
           variance_eligible: form.variance_eligible,
           sort_order: parseInt(form.sort_order, 10) || 0,
+          color: form.color,
+          short_label: form.short_label.trim() || null,
+          badge_glyph: form.badge_glyph.trim() || null,
         })
         toast.success(`"${form.label.trim()}" updated`)
       } else {
@@ -169,6 +196,9 @@ export default function VialRolesPage() {
           boxable: form.boxable,
           variance_eligible: form.variance_eligible,
           sort_order: parseInt(form.sort_order, 10) || 0,
+          color: form.color,
+          short_label: form.short_label.trim() || null,
+          badge_glyph: form.badge_glyph.trim() || null,
         })
         toast.success(`"${form.label.trim()}" created`)
       }
@@ -529,6 +559,130 @@ export default function VialRolesPage() {
                       </Tooltip>
                     </TooltipProvider>
                   </div>
+                </div>
+
+                {/* Display color */}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-1.5">
+                    <label className="text-sm font-medium">Display Color</label>
+                    <TooltipProvider delayDuration={200}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="h-3.5 w-3.5 text-muted-foreground cursor-default" />
+                        </TooltipTrigger>
+                        <TooltipContent side="right" className="max-w-xs">
+                          <div className="flex flex-col gap-1 p-1 text-xs font-mono">
+                            <div className="font-semibold border-b border-primary-foreground/20 pb-1">
+                              Display Color
+                            </div>
+                            <div>Tints this role&apos;s badge everywhere it renders (worksheets, boxing, inbox).</div>
+                            <div className="pt-1 opacity-80">
+                              Auto inherits the role&apos;s department color instead of a fixed one — the department&apos;s
+                              recolor cascades to every role left on Auto.
+                            </div>
+                          </div>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
+                  <div className="grid grid-cols-4 gap-2">
+                    <button
+                      type="button"
+                      title="Inherit the role's department color"
+                      onClick={() => setForm(f => ({ ...f, color: null }))}
+                      className={cn(
+                        'flex items-center gap-1.5 rounded-md border border-dashed px-3 py-2 text-xs font-medium text-muted-foreground transition-all',
+                        form.color === null
+                          ? 'ring-2 ring-primary ring-offset-1 border-primary'
+                          : 'opacity-70 hover:opacity-100'
+                      )}
+                    >
+                      {form.color === null && <Check className="h-3 w-3 shrink-0" />}
+                      Auto (department)
+                    </button>
+                    {ROLE_COLOR_NAMES.map(name => (
+                      <button
+                        key={name}
+                        type="button"
+                        title={`${roleColorLabel(name)} badge`}
+                        onClick={() => setForm(f => ({ ...f, color: name }))}
+                        className={cn(
+                          'flex items-center gap-1.5 rounded-md border px-3 py-2 text-xs font-medium transition-all',
+                          ROLE_COLOR_BADGE[name],
+                          form.color === name
+                            ? 'ring-2 ring-primary ring-offset-1'
+                            : 'opacity-70 hover:opacity-100'
+                        )}
+                      >
+                        {form.color === name && <Check className="h-3 w-3 shrink-0" />}
+                        {roleColorLabel(name)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Short label */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <label className="text-sm font-medium">Short Label</label>
+                    <TooltipProvider delayDuration={200}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="h-3.5 w-3.5 text-muted-foreground cursor-default" />
+                        </TooltipTrigger>
+                        <TooltipContent side="right" className="max-w-xs">
+                          <div className="flex flex-col gap-1 p-1 text-xs font-mono">
+                            <div className="font-semibold border-b border-primary-foreground/20 pb-1">
+                              Short Label
+                            </div>
+                            <div>The compact form shown on badge chips where the full label won&apos;t fit.</div>
+                            <div className="pt-1 opacity-80">
+                              Blank falls back to the uppercased code.
+                            </div>
+                          </div>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
+                  <Input
+                    placeholder={form.code.trim().toUpperCase() || 'CODE'}
+                    value={form.short_label}
+                    maxLength={16}
+                    onChange={e => setForm(f => ({ ...f, short_label: e.target.value }))}
+                    className="max-w-[200px]"
+                  />
+                </div>
+
+                {/* Badge glyph */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <label className="text-sm font-medium">Badge Glyph</label>
+                    <TooltipProvider delayDuration={200}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="h-3.5 w-3.5 text-muted-foreground cursor-default" />
+                        </TooltipTrigger>
+                        <TooltipContent side="right" className="max-w-xs">
+                          <div className="flex flex-col gap-1 p-1 text-xs font-mono">
+                            <div className="font-semibold border-b border-primary-foreground/20 pb-1">
+                              Badge Glyph
+                            </div>
+                            <div>The single character shown on space-constrained glyph badges (dashboard, adjacent chips).</div>
+                            <div className="pt-1 opacity-80">
+                              Blank falls back to the first character of the short label. Only the first character is ever used.
+                            </div>
+                          </div>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
+                  <Input
+                    placeholder={(form.short_label.trim() || form.code.trim()).charAt(0).toUpperCase() || '—'}
+                    value={form.badge_glyph}
+                    maxLength={2}
+                    onChange={e => setForm(f => ({ ...f, badge_glyph: e.target.value }))}
+                    className="max-w-[100px]"
+                  />
                 </div>
               </div>
 

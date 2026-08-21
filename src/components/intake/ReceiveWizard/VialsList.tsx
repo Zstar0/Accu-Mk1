@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { fetchSubSamplePhotoUrl, type SubSample } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { vialLabel } from '@/lib/vial-label'
-import { ROLE_BADGE_CLASS } from '@/lib/assignment-colors'
+import { RoleBadge } from '@/components/shared/RoleBadge'
 
 interface Props {
   vials: { sub: SubSample; isThisSession: boolean }[]
@@ -17,33 +17,6 @@ interface Props {
   onSelect: (sampleId: string | null) => void
   /** Container family: S01 IS Vial 1 (no parent entry, label = vial_sequence). */
   containerMode: boolean
-}
-
-// Role badge palette — uses the same tint family as SenaiteDashboard.tsx
-// (sky/emerald/violet/zinc/amber) but with full labels instead of letters
-// since the wizard's right column has the space for it.
-const ROLE_BADGES: Record<string, { label: string; cls: string }> = {
-  hplc:       { label: 'HPLC',       cls: ROLE_BADGE_CLASS.hplc },
-  endo:       { label: 'ENDO',       cls: ROLE_BADGE_CLASS.endo },
-  ster:       { label: 'PCR',        cls: ROLE_BADGE_CLASS.ster },
-  xtra:       { label: 'XTRA',       cls: ROLE_BADGE_CLASS.xtra },
-  hm:         { label: 'HM',         cls: ROLE_BADGE_CLASS.hm },
-  unassigned: { label: 'Unassigned', cls: ROLE_BADGE_CLASS.unassigned },
-}
-
-function RoleBadge({ role }: { role: string | null | undefined }) {
-  const b = ROLE_BADGES[role ?? 'unassigned'] ?? ROLE_BADGES.unassigned!
-  return (
-    <span
-      className={cn(
-        'inline-block mt-1 text-[10px] leading-none px-1.5 py-0.5 rounded border uppercase tracking-wide font-medium',
-        b.cls
-      )}
-      title={`Assigned to ${b.label}`}
-    >
-      {b.label}
-    </span>
-  )
 }
 
 function VialThumb({
@@ -135,7 +108,12 @@ export function VialsList({
                   {parentVial.receivedThisSession ? 'received' : 'previously received'}
                 </span>
               </div>
-              <RoleBadge role={parentVial.assignmentRole} />
+              <RoleBadge
+                role={parentVial.assignmentRole}
+                unassignedLabel="Unassigned"
+                makeTitle={l => `Assigned to ${l}`}
+                className="inline-block mt-1"
+              />
             </div>
           </li>
         )}
@@ -171,7 +149,12 @@ export function VialsList({
                   <div className="text-xs text-muted-foreground">
                     {vialLabel(v.sub.vial_sequence, containerMode)}
                   </div>
-                  <RoleBadge role={v.sub.assignment_role} />
+                  <RoleBadge
+                    role={v.sub.assignment_role}
+                    unassignedLabel="Unassigned"
+                    makeTitle={l => `Assigned to ${l}`}
+                    className="inline-block mt-1"
+                  />
                 </div>
               </button>
             </li>

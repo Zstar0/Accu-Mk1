@@ -271,6 +271,7 @@ def test_micro_and_untagged_services_never_reach_an_hplc_vial(db_session, monkey
         sub_sample=vial,
         parent_sample_id="P-0001",
         existing_kw=set(),
+        existing_service_ids=set(),
         created_by_user_id=None,
         commit=False,
     )
@@ -298,6 +299,7 @@ def test_mirror_aborts_when_the_analytical_department_is_missing(db_session, mon
         sub_sample=vial,
         parent_sample_id="P-0001",
         existing_kw=set(),
+        existing_service_ids=set(),
         created_by_user_id=None,
         commit=False,
     )
@@ -340,6 +342,7 @@ def test_mirror_returns_empty_when_analytical_department_has_no_tagged_services(
         sub_sample=vial,
         parent_sample_id="P-0001",
         existing_kw=set(),
+        existing_service_ids=set(),
         created_by_user_id=None,
         commit=False,
     )

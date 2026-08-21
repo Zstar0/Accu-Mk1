@@ -127,3 +127,70 @@ def test_suggest_role_code_sanitizes_truncates_uniquifies():
     assert suggest_role_code("heavy_metals", {"heavy_me"}) == "heavy_m2"
     assert suggest_role_code("PCR-Panel 2!", set()) == "pcr_pane"
     assert suggest_role_code("x", set()) == "x"
+
+
+def test_vial_role_display_faces_nullable(db_session):
+    role = VialRole(code="zztest", label="ZZ Test")
+    db_session.add(role)
+    db_session.commit()
+    assert role.color is None and role.short_label is None and role.badge_glyph is None
+
+
+def test_seed_stamps_legacy_display_faces(db_session):
+    seed_vial_roles(db_session)
+    reg = role_registry(db_session)
+    assert (reg["hplc"].color, reg["hplc"].short_label, reg["hplc"].badge_glyph) == ("green", "HPLC", "H")
+    assert (reg["endo"].color, reg["endo"].short_label, reg["endo"].badge_glyph) == ("orange", "ENDO", "E")
+    assert (reg["ster"].color, reg["ster"].short_label, reg["ster"].badge_glyph) == ("purple", "PCR", "P")
+    assert (reg["hm"].color, reg["hm"].short_label, reg["hm"].badge_glyph) == ("slate", "HM", "M")
+    assert (reg["xtra"].color, reg["xtra"].short_label, reg["xtra"].badge_glyph) == ("sky", "XTRA", "X")
+
+
+def test_seed_never_clobbers_admin_color(db_session):
+    seed_vial_roles(db_session)
+    ster = db_session.query(VialRole).filter_by(code="ster").one()
+    ster.color = "rose"
+    db_session.commit()
+    db_session.expire_all()  # force the post-reseed query to hit the DB, not the identity map
+    seed_vial_roles(db_session)
+    assert db_session.query(VialRole).filter_by(code="ster").one().color == "rose"
+
+
+def test_seed_color_is_sentinel_for_whole_display_face_triple(db_session):
+    # Setting color alone marks the triple as admin-owned: short_label and
+    # badge_glyph stop healing too, even though they're still NULL. This is
+    # deliberate (see the seed's inline comment) — lock it down so a future
+    # edit to per-field guards is a conscious decision, not a silent drift.
+    seed_vial_roles(db_session)
+    ster = db_session.query(VialRole).filter_by(code="ster").one()
+    ster.color = "rose"
+    ster.short_label = None
+    ster.badge_glyph = None
+    db_session.commit()
+    db_session.expire_all()
+    seed_vial_roles(db_session)
+    healed_ster = db_session.query(VialRole).filter_by(code="ster").one()
+    assert healed_ster.color == "rose"
+    assert healed_ster.short_label is None
+    assert healed_ster.badge_glyph is None
+
+
+def test_seed_never_clobbers_short_label_when_color_is_null(db_session):
+    # Fix round regression: an admin choosing Auto (color=NULL) but setting
+    # short_label/badge_glyph explicitly must survive a re-seed untouched.
+    # The old `if row.color is None` guard fired on exactly this state and
+    # re-stamped short_label/badge_glyph back to the legacy values — the
+    # triple-NULL guard (color AND short_label AND badge_glyph all NULL)
+    # only heals a row nobody has touched at all.
+    seed_vial_roles(db_session)
+    endo = db_session.query(VialRole).filter_by(code="endo").one()
+    endo.color = None
+    endo.short_label = "MYLABEL"
+    endo.badge_glyph = "Z"
+    db_session.commit()
+    db_session.expire_all()
+    seed_vial_roles(db_session)
+    healed_endo = db_session.query(VialRole).filter_by(code="endo").one()
+    assert healed_endo.color is None
+    assert healed_endo.short_label == "MYLABEL"
+    assert healed_endo.badge_glyph == "Z"

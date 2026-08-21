@@ -1,8 +1,13 @@
 """The per-substance PUR_/QTY_ services exist for every identity peptide,
 share the identity service's peptide_id, and are in the Analytics group.
-Runs against the live accumark_mk1 catalog."""
+Runs against the live accumark_mk1 catalog.
+
+S6b: the derivation these tests exercise moved out of _run_migrations()
+into catalog.per_substance_reconciler.reconcile_per_substance_services —
+same statements, same assertions here, new call site."""
 from sqlalchemy import select, text
-from database import SessionLocal, _run_migrations
+from database import SessionLocal
+from catalog.per_substance_reconciler import reconcile_per_substance_services
 
 
 def _missing(db):
@@ -21,8 +26,9 @@ def _missing(db):
 
 
 def test_migration_creates_per_substance_services_for_all_identity_peptides():
-    _run_migrations()
     db = SessionLocal()
+    reconcile_per_substance_services(db)
+    db.commit()
     try:
         assert _missing(db) == []
         rows = db.execute(text(
@@ -49,8 +55,9 @@ def test_migration_creates_per_substance_services_for_all_identity_peptides():
 
 
 def test_migration_is_idempotent_no_duplicate_for_existing():
-    _run_migrations()
     db = SessionLocal()
+    reconcile_per_substance_services(db)
+    db.commit()
     try:
         n = db.execute(text(
             "SELECT count(*) FROM analysis_services WHERE keyword = 'PUR_BPC157'"

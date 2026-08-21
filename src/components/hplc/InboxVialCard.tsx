@@ -13,7 +13,7 @@ import { PriorityBadge } from '@/components/hplc/PriorityBadge'
 import { AgingTimer } from '@/components/hplc/AgingTimer'
 import { cn } from '@/lib/utils'
 import { vialLabel } from '@/lib/vial-label'
-import { ROLE_BADGE_CLASS } from '@/lib/assignment-colors'
+import { RoleBadge } from '@/components/shared/RoleBadge'
 import {
   SERVICE_GROUP_COLORS,
   type ServiceGroupColor,
@@ -27,36 +27,13 @@ import type {
 export interface DragData {
   sampleUid: string
   sampleId: string
-  groupId: number
+  /** DEPARTMENT id, read off the inbox's `group_id` wire field (S2). Consumers
+   *  send it as `department_id` — never as `service_group_id`. */
+  departmentId: number
+  /** Department display name (the inbox's `group_name`); label only. */
   groupName: string
   dateReceived: string | null
   analyses: { title: string; keyword: string | null; peptide_name: string | null; method: string | null }[]
-}
-
-// Labels live here; colours come from the official scheme in
-// @/lib/assignment-colors (single source of truth).
-const ROLE_BADGES: Record<string, { label: string; cls: string }> = {
-  hplc:       { label: 'HPLC',       cls: ROLE_BADGE_CLASS.hplc },
-  endo:       { label: 'ENDO',       cls: ROLE_BADGE_CLASS.endo },
-  ster:       { label: 'PCR',        cls: ROLE_BADGE_CLASS.ster },
-  xtra:       { label: 'XTRA',       cls: ROLE_BADGE_CLASS.xtra },
-  hm:         { label: 'HM',         cls: ROLE_BADGE_CLASS.hm },
-  unassigned: { label: '—',          cls: ROLE_BADGE_CLASS.unassigned },
-}
-
-function RoleBadge({ role }: { role: string | null | undefined }) {
-  const b = ROLE_BADGES[role ?? 'unassigned'] ?? ROLE_BADGES.unassigned!
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide',
-        b.cls,
-      )}
-      title={`Role: ${b.label}`}
-    >
-      {b.label}
-    </span>
-  )
 }
 
 /**
@@ -110,22 +87,26 @@ export function InboxVialCard({
   parentHasVarianceSubs,
   onPriorityChange,
 }: InboxVialCardProps) {
-  // Drag uses the first analysis's group_id. Today every vial's analyses[]
-  // collapses to a single group after the server-side role filter (Analytics
-  // for HPLC, Microbiology for ster/endo), so this is always unambiguous.
-  // A future HPLC sub-group split could revisit this for multi-group drops.
+  // Drag uses the first analysis's department (the `group_id` wire field
+  // carries department identity as of S2). Today every vial's analyses[]
+  // collapses to a single department after the server-side role filter
+  // (Analytical for HPLC, Microbiology for ster/endo), so this is always
+  // unambiguous. A future HPLC sub-department split could revisit this.
   const firstGroup = vial.analyses[0]
-  const groupId = firstGroup?.group_id ?? 0
+  const departmentId = firstGroup?.group_id ?? 0
   const groupName = firstGroup?.group_name ?? ''
   const groupColor = firstGroup?.group_color ?? 'zinc'
-  const dragId = `${vial.uid}::${groupId}`
+  // Card key — the un-prefixed `::` shape is shared byte-for-byte with the
+  // inbox page's pending-drop bookkeeping. Do NOT adopt the `d`-prefixed
+  // storage-key shape here; both ends would have to move together.
+  const dragId = `${vial.uid}::${departmentId}`
 
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: dragId,
     data: {
       sampleUid: vial.uid,
       sampleId: vial.sample_id,
-      groupId,
+      departmentId,
       groupName,
       dateReceived: vial.date_received,
       analyses: vial.analyses.map(a => ({
@@ -213,7 +194,12 @@ export function InboxVialCard({
             </button>
           </span>
 
-          <RoleBadge role={vial.assignment_role} />
+          <RoleBadge
+            role={vial.assignment_role}
+            unassignedLabel="—"
+            makeTitle={l => `Role: ${l}`}
+            className="rounded-md"
+          />
 
           {/* Variance replicate marker — sky + Layers mirrors SenaiteDashboard's
               subIsVarianceMember treatment (variance = sky/Layers everywhere) */}
