@@ -13,7 +13,7 @@ import { PriorityBadge } from '@/components/hplc/PriorityBadge'
 import { AgingTimer } from '@/components/hplc/AgingTimer'
 import { cn } from '@/lib/utils'
 import { vialLabel } from '@/lib/vial-label'
-import { ROLE_BADGE_CLASS } from '@/lib/assignment-colors'
+import { RoleBadge } from '@/components/shared/RoleBadge'
 import {
   SERVICE_GROUP_COLORS,
   type ServiceGroupColor,
@@ -31,32 +31,6 @@ export interface DragData {
   groupName: string
   dateReceived: string | null
   analyses: { title: string; keyword: string | null; peptide_name: string | null; method: string | null }[]
-}
-
-// Labels live here; colours come from the official scheme in
-// @/lib/assignment-colors (single source of truth).
-const ROLE_BADGES: Record<string, { label: string; cls: string }> = {
-  hplc:       { label: 'HPLC',       cls: ROLE_BADGE_CLASS.hplc },
-  endo:       { label: 'ENDO',       cls: ROLE_BADGE_CLASS.endo },
-  ster:       { label: 'PCR',        cls: ROLE_BADGE_CLASS.ster },
-  xtra:       { label: 'XTRA',       cls: ROLE_BADGE_CLASS.xtra },
-  hm:         { label: 'HM',         cls: ROLE_BADGE_CLASS.hm },
-  unassigned: { label: '—',          cls: ROLE_BADGE_CLASS.unassigned },
-}
-
-function RoleBadge({ role }: { role: string | null | undefined }) {
-  const b = ROLE_BADGES[role ?? 'unassigned'] ?? ROLE_BADGES.unassigned!
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide',
-        b.cls,
-      )}
-      title={`Role: ${b.label}`}
-    >
-      {b.label}
-    </span>
-  )
 }
 
 /**
@@ -213,7 +187,12 @@ export function InboxVialCard({
             </button>
           </span>
 
-          <RoleBadge role={vial.assignment_role} />
+          <RoleBadge
+            role={vial.assignment_role}
+            unassignedLabel="—"
+            makeTitle={l => `Role: ${l}`}
+            className="rounded-md"
+          />
 
           {/* Variance replicate marker — sky + Layers mirrors SenaiteDashboard's
               subIsVarianceMember treatment (variance = sky/Layers everywhere) */}

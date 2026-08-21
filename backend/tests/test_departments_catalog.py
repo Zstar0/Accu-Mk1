@@ -267,3 +267,146 @@ def test_backfill_does_not_log_error_on_a_genuinely_empty_catalog(db_session, ca
         "catalog.backfill.analytical_department_empty" in r.message
         for r in caplog.records
     )
+
+
+# ── S6a: department totality (sync-time bridge + active-scoped invariant) ───
+#
+# `department_id` is load-bearing for the fail-closed HPLC-mirror allow-list
+# but nullable, and a service the SENAITE sync just created gets no
+# department until the next boot's backfill_departments run. The invariant
+# this slice polices is "zero ACTIVE services with NULL department" —
+# ACTIVE-scoped, because only active services drive HPLC-vial mirroring; an
+# inactive/retired row sitting NULL is not, by itself, a live problem.
+
+
+def test_department_totality_report_scopes_null_by_active(db_session):
+    """An active NULL-department service is counted (and listed) as a live
+    gap; an inactive NULL-department service is only visible in the
+    all-rows total, never in the active-scoped fields or the listed rows."""
+    from catalog.departments import department_totality_report
+    from models import AnalysisService
+
+    active_null = AnalysisService(
+        title="Active No Dept", keyword="ACTIVE-NODEPT", active=True)
+    inactive_null = AnalysisService(
+        title="Inactive No Dept", keyword="INACTIVE-NODEPT", active=False)
+    db_session.add_all([active_null, inactive_null])
+    db_session.commit()
+
+    report = department_totality_report(db_session)
+
+    assert report["summary"]["active_total"] == 1
+    assert report["summary"]["active_null_department"] == 1
+    assert report["summary"]["total_null_department"] == 2
+    listed_ids = {row["id"] for row in report["null_active_rows"]}
+    assert active_null.id in listed_ids
+    assert inactive_null.id not in listed_ids
+
+
+def test_department_totality_report_zero_active_null_after_backfill(db_session):
+    """THE invariant test: after backfill_departments runs over a fixture
+    mirroring the known families — grouped services (Analytics/Microbiology
+    membership) and ungrouped-rescue shapes (PUR_X-style keyword) — the
+    active-scoped NULL count must be zero."""
+    from catalog.departments import backfill_departments, department_totality_report
+    _seed_groups_and_services(db_session)  # grouped pur/ster + ungrouped-rescue analyte
+
+    backfill_departments(db_session)
+    report = department_totality_report(db_session)
+
+    assert report["summary"]["active_null_department"] == 0
+
+
+class _Resp:
+    def __init__(self, payload):
+        self._p = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._p
+
+
+def test_sync_created_row_gets_a_department(db_session, monkeypatch):
+    """A service SENAITE-sync just created must not linger department-less
+    until the next boot — the sync route runs the idempotent
+    backfill_departments bridge in-request. PUR_Y is an ungrouped-rescue-
+    shaped keyword (no group membership at all), the same shape production's
+    real HPLC analyte services carry."""
+    import asyncio
+    import main
+    from models import AnalysisService
+
+    def fake_get(url, **kw):
+        if kw.get("params", {}).get("portal_type") == "AnalysisService":
+            return _Resp({"items": [{
+                "id": "analysisservice-99", "uid": "U99", "title": "Purity Y",
+                "getKeyword": "PUR_Y",
+            }]})
+        return _Resp({"items": []})  # AnalysisCategory pull
+
+    monkeypatch.setattr("httpx.get", fake_get)
+    monkeypatch.setattr(main, "SENAITE_URL", "http://senaite.test")
+
+    asyncio.run(main.sync_analysis_services(db=db_session, _current_user=None))
+
+    svc = db_session.query(AnalysisService).filter_by(
+        senaite_id="analysisservice-99").one()
+    assert svc.department_id is not None
+
+
+def test_sync_rolls_back_session_when_backfill_raises(db_session, monkeypatch):
+    """Fix round: the except block around backfill_departments must roll
+    back the session before returning, not just log — otherwise on Postgres
+    a failure partway through backfill leaves this session's transaction
+    ABORTED, and the very next statement (the total-count query, run outside
+    the try/except on the same session) raises InFailedSqlTransaction /
+    PendingRollbackError — the sync fails after all, defeating "never fails
+    the sync".
+
+    SQLite does not reproduce Postgres's transaction-abort semantics
+    (empirically verified: re-running a valid query on the same session
+    after an un-rolled-back failed statement succeeds silently on SQLite),
+    so this can't be pinned by reproducing the abort and asserting recovery.
+    Instead it pins the CODE PROPERTY directly via a rollback() spy, and
+    separately confirms the route still completes normally (the except
+    swallows the error and execution reaches the return statement) —
+    together those are the two things "never fails the sync" requires,
+    backend-agnostically."""
+    import asyncio
+    import main
+    from models import AnalysisService
+
+    def fake_get(url, **kw):
+        if kw.get("params", {}).get("portal_type") == "AnalysisService":
+            return _Resp({"items": [{
+                "id": "analysisservice-100", "uid": "U100", "title": "Purity Z",
+                "getKeyword": "PUR_Z",
+            }]})
+        return _Resp({"items": []})  # AnalysisCategory pull
+
+    monkeypatch.setattr("httpx.get", fake_get)
+    monkeypatch.setattr(main, "SENAITE_URL", "http://senaite.test")
+
+    def _boom(db):
+        raise RuntimeError("simulated backfill failure")
+    monkeypatch.setattr("catalog.departments.backfill_departments", _boom)
+
+    rollback_calls = []
+    orig_rollback = db_session.rollback
+
+    def _spy_rollback():
+        rollback_calls.append(True)
+        return orig_rollback()
+    monkeypatch.setattr(db_session, "rollback", _spy_rollback)
+
+    result = asyncio.run(main.sync_analysis_services(db=db_session, _current_user=None))
+
+    assert rollback_calls, "db.rollback() must be called when backfill_departments raises"
+    # The route still completed normally: created the row, computed the
+    # total, and returned — the exception never propagated past the except.
+    assert result["created"] == 1
+    svc = db_session.query(AnalysisService).filter_by(
+        senaite_id="analysisservice-100").one()
+    assert svc.department_id is None  # backfill never ran to completion

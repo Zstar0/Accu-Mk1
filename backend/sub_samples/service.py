@@ -1318,13 +1318,25 @@ def variance_lock_required(services: Optional[dict], variance_locked_at) -> bool
     return purchased and variance_locked_at is None
 
 
-def derive_base_demand(services: dict, db=None) -> dict:
+def derive_base_demand(services: dict, db=None, snapshot: Optional[dict] = None) -> dict:
     """Pre-variance vial demand per bucket (the lab-protocol baseline).
 
     db=None -> pure legacy map (unchanged behavior, used by legacy callers
     and as the shadow reference). With a db, the catalog is authoritative;
     on any divergence in a LEGACY bucket the legacy value wins and an error
     is logged (fail-open to known-good, never to under-provisioning).
+
+    snapshot (task 6, fix round 1 — per-profile hybrid merge): threaded
+    straight through to derive_base_demand_catalog / resolve_catalog_
+    fulfillment when db is given. `legacy` above is always computed from
+    the LIVE `services` dict (hplc/endo/ster have no frozen representation
+    of their own — a fixed boolean-per-key read); `catalog` merges the
+    frozen snapshot with a live resolution of any services key the
+    snapshot didn't cover (a post-order add-on), so a legacy-bucket
+    purchase made after registration now agrees with `legacy` here too —
+    demand_divergence still exists as a safety net for a genuine mismatch,
+    not as the expected steady-state noise it would otherwise be for every
+    post-registration legacy-bucket purchase.
     """
     hplc = bool(services.get("hplcpurity_identity") or services.get("bac_water_panel"))
     endo = bool(services.get("endotoxin"))
@@ -1337,7 +1349,7 @@ def derive_base_demand(services: dict, db=None) -> dict:
     if db is None:
         return legacy
     from sub_samples.catalog_demand import derive_base_demand_catalog
-    catalog = derive_base_demand_catalog(db, services)
+    catalog = derive_base_demand_catalog(db, services, snapshot=snapshot)
     for bucket, legacy_n in legacy.items():
         if catalog.get(bucket, 0) != legacy_n:
             log.error(
@@ -1348,7 +1360,7 @@ def derive_base_demand(services: dict, db=None) -> dict:
     return catalog
 
 
-def derive_demand(services: dict, db=None) -> dict:
+def derive_demand(services: dict, db=None, snapshot: Optional[dict] = None) -> dict:
     """Translate WP services dict to CORE vial demand per bucket.
 
     HPLC is satisfied by either `hplcpurity_identity` or `bac_water_panel` —
@@ -1359,8 +1371,10 @@ def derive_demand(services: dict, db=None) -> dict:
     variance is a SEPARATE bucket with its own target (derive_variance_demand),
     not an inflation of core demand — the old max(base, n) math is retired.
     Core demand therefore equals the base lab-protocol demand.
+
+    snapshot (task 6): threaded straight through to derive_base_demand.
     """
-    return derive_base_demand(services, db=db)
+    return derive_base_demand(services, db=db, snapshot=snapshot)
 
 
 def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
@@ -1427,9 +1441,20 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
         }
 
     services = services_resp.get("services") or {}
-    demand = derive_demand(services, db=db)  # core demand == base (inflation retired)
+    # S4 snapshot rider (task 6, fix round 1 — per-profile hybrid merge): a
+    # non-NULL catalog_snapshot freezes what THIS sample's demand/fulfillment
+    # resolves against, PER PROFILE — a later catalog edit to a profile
+    # already covered by the snapshot can never retroactively reprovision an
+    # already-registered sample. A `services` key the snapshot never saw
+    # (a post-order add-on) still resolves live and merges in on top,
+    # exactly as if it had shipped with the original order. NULL (pre-slice-4
+    # rows, or a sample whose registration signal never reached the bg
+    # stamp) falls through to the live catalog entirely, unchanged from
+    # before this task.
+    snapshot = parent.catalog_snapshot
+    demand = derive_demand(services, db=db, snapshot=snapshot)  # core demand == base (inflation retired)
     variance = derive_variance_demand(services)
-    base_demand = derive_base_demand(services, db=db)
+    base_demand = derive_base_demand(services, db=db, snapshot=snapshot)
 
     # Variance lock guard: a locked set blocks re-assignment of its members
     # (spec §5), so a locked parent must NOT have vials auto-assigned under it.
@@ -1454,7 +1479,7 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
             "is_unreachable": False,
             "vials": locked_vials,
             "container_mode": parent.container_mode,
-            "sections": _build_vial_plan_sections(db, demand, locked_vials, services),
+            "sections": _build_vial_plan_sections(db, demand, locked_vials, services, snapshot=snapshot),
         }
 
     from catalog.roles import real_bucket_codes
@@ -1505,19 +1530,23 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
         "is_unreachable": False,
         "vials": assigned,
         "container_mode": parent.container_mode,
-        "sections": _build_vial_plan_sections(db, demand, assigned, services),
+        "sections": _build_vial_plan_sections(db, demand, assigned, services, snapshot=snapshot),
     }
 
 
 def _build_vial_plan_sections(db: Session, demand: dict, vials: list[dict],
-                              services: dict) -> list[dict]:
+                              services: dict, snapshot: Optional[dict] = None) -> list[dict]:
     """Department-grouped role/profile metadata (spec 4, Task 8) — the data
     contract Task 9's dynamic assignment page renders from.
 
     Built fresh on every call from role_registry + demand + `vials` (the SAME
     list the caller is about to return as the response's own `vials` — never
     a separate DB re-read, so sections and vials can never disagree) +
-    catalog fulfillment (host/rider profile ids resolved from `services`).
+    catalog fulfillment (host/rider profile ids resolved from `services`,
+    or from `snapshot` when non-NULL — task 6 — so a locked-in demand number
+    and its displayed host/rider profile list can never disagree either).
+    The key/name lookup below (profile_by_id) stays a live read regardless —
+    it's a display string, not what-the-customer-bought.
 
     Inclusion: a role code enters sections iff it has demand > 0 OR a
     non-parent vial currently carries it. Parent-carried roles don't count on
@@ -1539,7 +1568,7 @@ def _build_vial_plan_sections(db: Session, demand: dict, vials: list[dict],
     from sub_samples.catalog_demand import resolve_catalog_fulfillment
 
     registry = role_registry(db)
-    fulfillment = resolve_catalog_fulfillment(db, services)
+    fulfillment = resolve_catalog_fulfillment(db, services, snapshot=snapshot)
 
     carried = {
         v["assignment_role"] for v in vials
@@ -1903,7 +1932,14 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
                 else _fetch_wp_services_for_parent(parent_sid) or {}
             )
         from sub_samples.custody import write_custody_edges
-        write_custody_edges(db, sub=sub, role=role, wp_services=services_map, user_id=user_id)
+        # S4 snapshot rider (task 6): thread the parent's frozen catalog
+        # resolution (NULL for pre-slice-4 rows) so custody edges resolve
+        # against what was purchased at registration, not the live catalog.
+        snapshot = parent_row.catalog_snapshot if parent_row is not None else None
+        write_custody_edges(
+            db, sub=sub, role=role, wp_services=services_map, user_id=user_id,
+            snapshot=snapshot,
+        )
         # flush (not commit): makes the fresh custody rows visible to
         # in-transaction queries (Task 6's seeder) under production
         # SessionLocal's autoflush=False. Still one transaction, one commit

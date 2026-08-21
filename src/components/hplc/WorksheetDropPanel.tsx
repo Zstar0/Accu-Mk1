@@ -26,8 +26,8 @@ import { PriorityBadge } from '@/components/hplc/PriorityBadge'
 import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
 import { useSlaForSubjects, type SlaSubject } from '@/services/sla-subjects'
 import type { WorksheetUser, InboxPriority } from '@/lib/api'
-import { itemRoleBadges, type InboxRoleTag } from '@/lib/inbox-filters'
-import { ROLE_BADGE_CLASS } from '@/lib/assignment-colors'
+import { itemRoleBadges } from '@/lib/inbox-filters'
+import { RoleBadge } from '@/components/shared/RoleBadge'
 
 export interface WorksheetSummaryItem {
   id: number
@@ -54,27 +54,18 @@ export interface WorksheetSummary {
   items: WorksheetSummaryItem[]
 }
 
-// Role pill palette — mirrors InboxVialCard.ROLE_BADGES (copy #5; dedup is a
-// tracked fast-follow). Endotoxin / Sterility / HPLC / Heavy Metals tints.
-const ROLE_PILL: Record<InboxRoleTag, { label: string; cls: string }> = {
-  endo: { label: 'ENDO', cls: ROLE_BADGE_CLASS.endo },
-  ster: { label: 'PCR', cls: ROLE_BADGE_CLASS.ster },
-  hplc: { label: 'HPLC', cls: ROLE_BADGE_CLASS.hplc },
-  hm: { label: 'HM', cls: ROLE_BADGE_CLASS.hm },
-}
-
 function ItemRolePills({ item }: { item: WorksheetSummaryItem }) {
   const roles = itemRoleBadges({ department_name: item.department_name, analyses: item.analyses })
   if (roles.length === 0) return null
   return (
     <span className="flex items-center gap-1 shrink-0">
       {roles.map(r => (
-        <span
+        <RoleBadge
           key={r}
-          className={`inline-flex items-center rounded border px-1 py-0 text-[9px] font-medium uppercase tracking-wide ${ROLE_PILL[r].cls}`}
-        >
-          {ROLE_PILL[r].label}
-        </span>
+          role={r}
+          className="px-1 py-0 text-[9px]"
+          makeTitle={l => `Role: ${l}`}
+        />
       ))}
     </span>
   )
