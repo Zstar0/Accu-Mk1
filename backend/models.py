@@ -54,6 +54,36 @@ class AuditLog(Base):
         return f"<AuditLog(id={self.id}, operation='{self.operation}', entity_type='{self.entity_type}')>"
 
 
+class CatalogChangeLog(Base):
+    """Append-only change log for catalog mutations (S4, ISO 8.3/7.5.1 document
+    control). details uses the amendment-audit vocabulary (LimsAnalysisTransition
+    precedent, :1773 above):
+        {"changed": {"<field>": {"before": <raw>, "after": <raw>}}}
+    Written only via catalog/change_log.py — never db.add() this directly from
+    a route. See that module's docstring for the exempt write paths.
+    """
+
+    __tablename__ = "catalog_change_log"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    entity_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    entity_pk: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    action: Mapped[str] = mapped_column(String(20), nullable=False)
+    details: Mapped[Optional[dict]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True
+    )
+    user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    def __repr__(self) -> str:
+        return (
+            f"<CatalogChangeLog(entity_type='{self.entity_type}', "
+            f"entity_pk={self.entity_pk}, action='{self.action}')>"
+        )
+
+
 class Job(Base):
     """
     Represents a batch import job.
@@ -1077,6 +1107,17 @@ class LimsSample(Base):
     # Authority note: lims_workflow_shadow_evaluations is the authoritative
     # history; this column is its O(1) materialization.
     native_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # S4 snapshot rider (2026-08-11): frozen catalog resolution stamped ONCE
+    # by the registration bg task (backend/catalog/snapshot.py), NULL for
+    # every pre-slice row and for a sample whose registration signal never
+    # reached the bg task. Shape: {"resolved_at": iso-utc, "profiles": [...]}
+    # — see compute_catalog_snapshot's docstring for the per-profile fields.
+    # Task 6 reads this first (snapshot-sourced resolve_catalog_fulfillment /
+    # seeder member resolution) with NULL/missing-profile live-catalog
+    # fallback; Task 7 adds the only OTHER writer (audited reprovision).
+    catalog_snapshot: Mapped[Optional[dict]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
