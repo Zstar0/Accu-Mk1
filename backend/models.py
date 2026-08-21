@@ -167,6 +167,11 @@ class Instrument(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # Slice 1: scoping for pickers; 'senaite' only on sync-created rows (R0).
+    department_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("departments.id", ondelete="SET NULL"), nullable=True)
+    origin: Mapped[str] = mapped_column(String(20), nullable=False, default="mk1",
+                                        server_default="mk1")
 
     # Relationships
     methods: Mapped[list["HplcMethod"]] = relationship("HplcMethod", secondary="instrument_methods", back_populates="instruments")
@@ -578,16 +583,48 @@ peptide_methods = Table(
 )
 
 
+# M2M junction: method <-> analysis service (slice 1, methods foundation).
+# is_default: at most one default per service, enforced by a partial unique
+# index (Postgres AND SQLite both support partial indexes — declared below
+# so the app-level 400 in the routes has a real DB backstop in tests too).
+method_services = Table(
+    "method_services",
+    Base.metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("method_id", Integer, ForeignKey("hplc_methods.id", ondelete="CASCADE"), nullable=False),
+    Column("analysis_service_id", Integer, ForeignKey("analysis_services.id", ondelete="CASCADE"), nullable=False),
+    Column("is_default", Boolean, nullable=False, default=False, server_default=text("false")),
+    UniqueConstraint("method_id", "analysis_service_id", name="uq_method_service"),
+    Index("uq_method_service_default", "analysis_service_id", unique=True,
+          postgresql_where=text("is_default"), sqlite_where=text("is_default")),
+)
+
+
 class HplcMethod(Base):
     """
-    HPLC analytical method definition.
-    Stores instrument settings and run parameters that apply to groups of peptides.
-    Methods are sourced from Senaite but metadata is stored locally.
+    Analytical method definition for any technique (HPLC, ICP-MS, KF, PCR, etc.).
+    The HPLC-specific run parameters below (size_peptide, starting_organic_pct,
+    temperature_mct_c, dissolution) only apply when technique == 'HPLC'.
+    Legacy rows may carry clone-time senaite_id provenance; every new row is
+    Mk1-native (R0) — see the origin column below.
     """
     __tablename__ = "hplc_methods"
+    __table_args__ = (
+        # Methods controlled documents (slice 3): revisions of the same name
+        # coexist, so name is no longer unique on its own — (name, revision) is.
+        UniqueConstraint("name", "revision", name="uq_hplc_methods_name_revision"),
+        # At most one 'active' row per code, across all revisions.
+        Index("uq_hplc_methods_code_active", "code", unique=True,
+              postgresql_where=text("status = 'active' AND code IS NOT NULL"),
+              sqlite_where=text("status = 'active' AND code IS NOT NULL")),
+        # A given (code, revision) pair is unique (among rows that have a code).
+        Index("uq_hplc_methods_code_revision", "code", "revision", unique=True,
+              postgresql_where=text("code IS NOT NULL"),
+              sqlite_where=text("code IS NOT NULL")),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
     senaite_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, unique=True)
     size_peptide: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # "Extremely Polar", "3-9 (Very Polar)", etc.
     starting_organic_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # Starting organic amount %
@@ -597,13 +634,67 @@ class HplcMethod(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # Slice 1 (methods foundation): generic catalog identity. NULL technique
+    # is legal; the HPLC columns above are only meaningful for technique='HPLC'.
+    code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    technique: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    department_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("departments.id", ondelete="SET NULL"), nullable=True)
+    reference: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    procedure_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    supersedes_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("hplc_methods.id", ondelete="SET NULL"), nullable=True)
+    # 'senaite' only on legacy clone-time rows; every new row is 'mk1' (R0).
+    origin: Mapped[str] = mapped_column(String(20), nullable=False, default="mk1",
+                                        server_default="mk1")
+
+    # Methods controlled documents (slice 3): lifecycle. Lockstep invariant
+    # produced here for all later tasks: active is True <=> status == 'active'
+    # — only the lifecycle verbs (Task 3-4) and the backfill write either field.
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="active",
+                                        server_default="active")
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1,
+                                          server_default="1")
+    activated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    retired_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     # Relationships
     instruments: Mapped[list["Instrument"]] = relationship("Instrument", secondary=instrument_methods, back_populates="methods")
     peptides: Mapped[list["Peptide"]] = relationship("Peptide", secondary=peptide_methods, back_populates="methods")
+    # No ORM relationship to AnalysisService via method_services (R-P1-3): it
+    # would collide in name with MethodResponse.services (main.py) — junction
+    # rows carrying is_default, not plain AnalysisService rows. Query
+    # method_services directly (see main.py's _method_service_rows) instead.
 
     def __repr__(self) -> str:
         return f"<HplcMethod(id={self.id}, name='{self.name}')>"
+
+
+class MethodAttachment(Base):
+    """Controlled-document file on a method revision (slice 3). storage='s3'
+    only (R0) — via photo_storage, which is filesystem-backed in dev/tests.
+    Uploads are legal at any method lifecycle status (amendments land on
+    issued methods too); deletion is gated to status='draft' at the route
+    layer (main.py) — once a method is active/retired its attachments are
+    part of the frozen controlled record. New-revision does NOT clone these
+    rows (Task 3's clone code has no attachment awareness) — each revision
+    accrues its own document set from scratch."""
+    __tablename__ = "method_attachments"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    method_id: Mapped[int] = mapped_column(
+        ForeignKey("hplc_methods.id", ondelete="CASCADE"), nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    storage: Mapped[str] = mapped_column(String(20), nullable=False, default="s3")
+    storage_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    uploaded_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return (f"<MethodAttachment(id={self.id}, method_id={self.method_id}, "
+                f"filename='{self.filename}')>")
 
 
 # M2M junction: blend peptide <-> component peptides
@@ -986,6 +1077,10 @@ class WorksheetItem(Base):
     priority: Mapped[str] = mapped_column(String(20), default="normal", nullable=False)
     assigned_analyst_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     instrument_uid: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # Slice 2 (bench stamping): local-instrument leg. instrument_uid above is
+    # the frozen SENAITE-uid leg for the HPLC lane (R0) — both may coexist.
+    instrument_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("instruments.id", ondelete="SET NULL"), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     analyses_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON array of {title, keyword, peptide_name, method}
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

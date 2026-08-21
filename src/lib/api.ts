@@ -2105,6 +2105,8 @@ export interface Instrument {
   brand: string | null
   model: string | null
   active: boolean
+  department_id: number | null
+  origin: string
   created_at: string
   updated_at: string
 }
@@ -2113,6 +2115,14 @@ export interface InstrumentBrief {
   id: number
   name: string
   model: string | null
+}
+
+export interface InstrumentInput {
+  name: string
+  instrument_type?: string | null
+  brand?: string | null
+  model?: string | null
+  department_id?: number | null
 }
 
 // ─── HPLC Method types ───
@@ -2131,6 +2141,13 @@ export interface MethodBrief {
   instruments: InstrumentBrief[]
 }
 
+export interface MethodServiceLink {
+  analysis_service_id: number
+  keyword: string | null
+  title: string
+  is_default: boolean
+}
+
 export interface HplcMethod {
   id: number
   name: string
@@ -2142,21 +2159,45 @@ export interface HplcMethod {
   temperature_mct_c: number | null
   dissolution: string | null
   notes: string | null
+  code: string | null
+  technique: string | null
+  department_id: number | null
+  reference: string | null
+  procedure_summary: string | null
+  supersedes_id: number | null
+  origin: string
   active: boolean
+  status: 'draft' | 'active' | 'retired'
+  revision: number
+  activated_at: string | null
+  retired_at: string | null
   created_at: string
   updated_at: string
   common_peptides: PeptideBrief[]
+  services: MethodServiceLink[]
+}
+
+export interface MethodAttachment {
+  id: number
+  filename: string
+  content_type: string | null
+  size_bytes: number
+  created_at: string
 }
 
 export interface HplcMethodInput {
   name: string
-  senaite_id?: string | null
   instrument_ids?: number[]
   size_peptide?: string | null
   starting_organic_pct?: number | null
   temperature_mct_c?: number | null
   dissolution?: string | null
   notes?: string | null
+  code?: string | null
+  technique?: string | null
+  department_id?: number | null
+  reference?: string | null
+  procedure_summary?: string | null
 }
 
 // ─── Peptide types ───
@@ -2390,6 +2431,37 @@ export async function syncInstruments(): Promise<{ created: number; total: numbe
   return response.json()
 }
 
+export async function createInstrument(
+  data: InstrumentInput
+): Promise<Instrument> {
+  const response = await fetch(`${API_BASE_URL()}/instruments`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Create instrument failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function updateInstrument(
+  id: number,
+  data: Partial<InstrumentInput & { active: boolean }>
+): Promise<Instrument> {
+  const response = await fetch(`${API_BASE_URL()}/instruments/${id}`, {
+    method: 'PATCH',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Update instrument failed: ${response.status}`)
+  }
+  return response.json()
+}
+
 // ─── Analysis Services ───
 
 export interface AnalysisServiceRecord {
@@ -2410,6 +2482,7 @@ export interface AnalysisServiceRecord {
   origin: 'senaite' | 'mk1'
   local_overrides: string[] | null
   department_id: number | null
+  default_method_id: number | null
   created_at: string
   updated_at: string
 }
@@ -2670,6 +2743,163 @@ export async function deleteMethod(methodId: number): Promise<void> {
     headers: getBearerHeaders(),
   })
   if (!response.ok) throw new Error(`Delete method failed: ${response.status}`)
+}
+
+export async function getMethodServices(
+  methodId: number
+): Promise<MethodServiceLink[]> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/methods/${methodId}/services`,
+    {
+      headers: getBearerHeaders(),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(
+      err?.detail || `Get method services failed: ${response.status}`
+    )
+  }
+  return response.json()
+}
+
+export async function putMethodServices(
+  methodId: number,
+  links: { analysis_service_id: number; is_default: boolean }[]
+): Promise<MethodServiceLink[]> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/methods/${methodId}/services`,
+    {
+      method: 'PUT',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(links),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(
+      err?.detail || `Update method services failed: ${response.status}`
+    )
+  }
+  return response.json()
+}
+
+// ─── HPLC Method lifecycle (controlled documents) ───
+
+export async function newMethodRevision(methodId: number): Promise<HplcMethod> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/methods/${methodId}/new-revision`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `New revision failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function activateMethod(methodId: number): Promise<HplcMethod> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/methods/${methodId}/activate`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Activate failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function retireMethod(methodId: number): Promise<HplcMethod> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/methods/${methodId}/retire`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Retire failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+// ─── HPLC Method attachments (controlled documents) ───
+
+export async function getMethodAttachments(
+  methodId: number
+): Promise<MethodAttachment[]> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/methods/${methodId}/attachments`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(
+      err?.detail || `Get method attachments failed: ${response.status}`
+    )
+  }
+  return response.json()
+}
+
+export async function uploadMethodAttachment(
+  methodId: number,
+  file: File
+): Promise<MethodAttachment> {
+  const form = new FormData()
+  form.append('file', file, file.name)
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/methods/${methodId}/attachments`,
+    { method: 'POST', headers: getBearerHeaders(), body: form }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Upload attachment failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function deleteMethodAttachment(
+  methodId: number,
+  attachmentId: number
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/methods/${methodId}/attachments/${attachmentId}`,
+    { method: 'DELETE', headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Delete attachment failed: ${response.status}`)
+  }
+}
+
+// R-P3-4: the download route is Bearer-gated like every other method-
+// attachment endpoint, so a plain `<a href>` 401s and a token-in-query
+// fallback is rejected (leaks into logs/history). Mirrors
+// fetchFlagAttachmentUrl/fetchPackagingPhotoUrl's authed-blob-fetch
+// pattern, but triggers an actual file save (via a throwaway anchor's
+// `download` attribute) instead of returning a renderable object URL —
+// there's nothing to cache or re-render here, so the URL is revoked
+// immediately after the click instead of being kept around.
+export async function downloadMethodAttachment(
+  methodId: number,
+  attachmentId: number,
+  filename: string
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/methods/${methodId}/attachments/${attachmentId}/download`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    throw new Error(`Download attachment failed: ${response.status}`)
+  }
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
 }
 
 // ─── Calibration CRUD ───
@@ -3676,6 +3906,9 @@ export interface SenaiteAnalyte {
   slot_number: number // 1-4, corresponding to Analyte1..Analyte4 in SENAITE
   matched_peptide_id: number | null
   matched_peptide_name: string | null
+  /** Abbreviation of the matched peptide — HPLC results key analytes by
+   *  abbreviation, so slot matching must prefer this over the name. */
+  matched_peptide_abbreviation?: string | null
   declared_quantity: number | null // per-analyte declared qty (mg)
 }
 
@@ -3732,11 +3965,13 @@ export interface SenaiteAnalysis {
    *  backing this line ('mk1' | 'senaite'). Type-only here — not yet read
    *  by any FE display logic. */
   service_origin?: string | null
+  /** S3: native identity key; keyword is display-only on mk1 rows. Absent on
+   *  SENAITE-sourced rows, which keep keyword as their identity. Also consumed
+   *  by SetMethodInstrumentDialog (R-P2-3): id-keyed service resolution beats
+   *  keyword scans, which collide across origins. */
+  analysis_service_id?: number | null
   // senaite-shape rows from Mk1: 'ordered' | 'canonical' | 'shadow'
   provenance?: string | null
-  /** S3: native identity key; keyword is display-only on mk1 rows. Absent on
-   *  SENAITE-sourced rows, which keep keyword as their identity. */
-  analysis_service_id?: number | null
 }
 
 export interface SenaiteAttachment {
@@ -4127,6 +4362,38 @@ export async function setAnalysisMethodInstrument(
   if (!response.ok) {
     const err = await response.json().catch(() => null)
     throw new Error(err?.detail || `Set method/instrument failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+// Task 7 (methods bench-stamping): the native per-row override dialog
+// (SetMethodInstrumentDialog) PATCHes lims-analyses directly by numeric id,
+// distinct from setAnalysisMethodInstrument above (uid + string-uid based,
+// pre-existing SENAITE-vintage inline edit cell — EditableSelectCell in
+// AnalysisTable — which already routes mk1: uids through the same
+// endpoint). Named separately (stamp vs set, mirroring the backend's own
+// stamp_method_instrument/set_method_instrument split) to avoid colliding
+// with that existing export's (uid, methodUid, instrumentUid) signature.
+export async function stampAnalysisMethodInstrument(
+  analysisId: number,
+  body: { method_id: number | null; instrument_id: number | null }
+): Promise<unknown> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/lims-analyses/${analysisId}/method-instrument`,
+    {
+      method: 'PATCH',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(body),
+    }
+  )
+  if (!response.ok) {
+    const parsed = await response.json().catch(() => null)
+    const detail = parsed?.detail
+    const msg =
+      typeof detail === 'string'
+        ? detail
+        : `Set method/instrument failed: ${response.status}`
+    throw Object.assign(new Error(msg), { detail })
   }
   return response.json()
 }
@@ -5294,11 +5561,14 @@ export interface WorksheetListItem {
     added_at: string | null
     date_received: string | null
     instrument_uid: string | null
+    instrument_id: number | null
     assigned_analyst_id: number | null
     assigned_analyst_email: string | null
     notes: string | null
     peptide_id: number | null
     method_name: string | null
+    stamped_method_name: string | null
+    stamped_instrument_name: string | null
     lims_sub_sample_pk: number | null
     /** 'core' | 'variance' | null — null for parent-sample items. */
     assignment_kind?: 'core' | 'variance' | null
@@ -5425,7 +5695,7 @@ export async function reassignWorksheetItem(
 export async function updateWorksheetItem(
   worksheetId: number,
   itemId: number,
-  data: { instrument_uid?: string; prep_status?: string }
+  data: { instrument_uid?: string; prep_status?: string; instrument_id?: number | null }
 ): Promise<{ status: string; item_id: number }> {
   const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}/items/${itemId}`, {
     method: 'PATCH',
@@ -5433,6 +5703,27 @@ export async function updateWorksheetItem(
     body: JSON.stringify(data),
   })
   if (!response.ok) throw new Error(`Update item failed: ${response.status}`)
+  return response.json()
+}
+
+export async function applyWorksheetMethodInstrument(
+  worksheetId: number,
+  body: { method_id: number; instrument_id: number; item_ids?: number[] }
+): Promise<{
+  stamped: number
+  items_updated: number
+  skipped_state: { analysis_id: number; review_state: string }[]
+  skipped_uncovered: { analysis_id: number; keyword: string }[]
+}> {
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/apply-method-instrument`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(body),
+    }
+  )
+  if (!response.ok) throw new Error(`Apply method/instrument failed: ${response.status}`)
   return response.json()
 }
 

@@ -88,6 +88,9 @@ class TransitionRequest(BaseModel):
     kind: TransitionKind
     result_value: Optional[str] = None
     reason: Optional[str] = None
+    # slice 2: optional stamping at submit; ignored-forbidden on other kinds
+    method_id: Optional[int] = None
+    instrument_id: Optional[int] = None
 
 
 class SetReportableRequest(BaseModel):
@@ -247,16 +250,16 @@ class SenaiteShapeAnalysisResponse(BaseModel):
     # _serialize_senaite_shape_rows. None only when the service FK is
     # somehow unresolvable (should not happen in practice).
     service_origin: Optional[str] = None
+    # S3 Task 7: the row's OWN analysis_service_id — the native identity key
+    # the FE joins parent rows to vial rows on; also consumed by the method
+    # override dialog (R-P2-3: id-keyed service resolution beats keyword
+    # scans, which collide across origins). Read off the row, never off the
+    # resolved service. Keyword stays alongside as display/compat alias.
+    analysis_service_id: Optional[int] = None
     # Manage-analyses slice: 'ordered' (registration/lab placeholder) vs
     # 'canonical' (promoted result) vs 'shadow'. The overlay's native block
     # enables remove only on 'ordered' rows. None for legacy callers.
     provenance: Optional[str] = None
-    # S3 Task 7: the row's OWN analysis_service_id — the native identity key
-    # the FE joins parent rows to vial rows on. Read off the row, never off
-    # the resolved service (which service_origin above goes None on when the
-    # FK doesn't resolve — the identity key still ships in that case).
-    # Keyword stays alongside it as the display / compatibility alias.
-    analysis_service_id: Optional[int] = None
 
 
 # ─── Phase 4a: promote_to_parent response shapes ─────────────────────────────

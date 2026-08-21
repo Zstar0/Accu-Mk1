@@ -3,7 +3,6 @@ import {
   Loader2,
   AlertCircle,
   Search,
-  RefreshCw,
   FlaskConical,
   ChevronRight,
   Plus,
@@ -45,7 +44,6 @@ import {
   getAnalysisServices,
   getDepartments,
   getPeptides,
-  syncAnalysisServices,
   updateAnalysisServicePeptide,
   type AnalysisServiceRecord,
   type AnalysisServiceCreatePayload,
@@ -60,6 +58,7 @@ import {
 } from '@/services/analysis-services'
 import { ResultOptionsEditor, type ResultOption } from './ResultOptionsEditor'
 import { ServiceSpecsSection } from './ServiceSpecsSection'
+import { AnalysisServicesGuide } from './AnalysisServicesGuide'
 
 export function AnalysisServicesPage() {
   const [services, setServices] = useState<AnalysisServiceRecord[]>([])
@@ -70,7 +69,6 @@ export function AnalysisServicesPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [creating, setCreating] = useState(false)
   const [searchInput, setSearchInput] = useState('')
-  const [syncing, setSyncing] = useState(false)
 
   const deleteMutation = useDeleteAnalysisService()
 
@@ -96,22 +94,6 @@ export function AnalysisServicesPage() {
   useEffect(() => {
     load()
   }, [load])
-
-  const handleSync = async () => {
-    setSyncing(true)
-    setError(null)
-    try {
-      const res = await syncAnalysisServices()
-      toast.success(`Analysis services synced — ${res.created} new, ${res.total} total`)
-      await load()
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Sync failed'
-      setError(msg)
-      toast.error(msg)
-    } finally {
-      setSyncing(false)
-    }
-  }
 
   const openCreate = () => {
     setSelectedId(null)
@@ -167,26 +149,15 @@ export function AnalysisServicesPage() {
           <div>
             <h1 className="text-xl font-semibold">Analysis Services</h1>
             <p className="text-sm text-muted-foreground">
-              Lab tests synced from Senaite LIMS, plus Mk1-native services
+              The lab&apos;s test catalog — Mk1-native, plus legacy SENAITE rows
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <AnalysisServicesGuide />
           <Button onClick={openCreate}>
             <Plus className="mr-1 h-4 w-4" />
             New Service
-          </Button>
-          <Button
-            variant="outline"
-            onClick={handleSync}
-            disabled={syncing}
-          >
-            {syncing ? (
-              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="mr-1 h-4 w-4" />
-            )}
-            {syncing ? 'Syncing...' : 'Sync from Senaite'}
           </Button>
         </div>
       </div>
@@ -238,7 +209,7 @@ export function AnalysisServicesPage() {
               <TableRow>
                 <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">
                   {services.length === 0
-                    ? 'No analysis services yet. Click "Sync from Senaite" or "New Service".'
+                    ? 'No analysis services yet. Click "New Service" to create one.'
                     : 'No services match your search.'}
                 </TableCell>
               </TableRow>

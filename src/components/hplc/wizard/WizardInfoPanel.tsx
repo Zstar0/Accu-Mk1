@@ -330,7 +330,8 @@ function MethodsSection({
           if (filtered.length > 0) matched = filtered
         }
 
-        setMethods(matched)
+        // Filter to active methods only (drafts and retired methods are excluded)
+        setMethods(matched.filter(m => m.active))
       })
       .catch(console.error)
       .finally(() => {

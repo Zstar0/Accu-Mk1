@@ -51,6 +51,14 @@ class ConflictError(Exception):
     diagnose ahead of the flush and explain in the caller-facing message."""
 
 
+class StateLockedError(Exception):
+    """Method/instrument restamp attempted on a reported or dead row (R7)."""
+
+    def __init__(self, review_state: str):
+        super().__init__(f"row is {review_state}; method/instrument locked")
+        self.review_state = review_state
+
+
 # ─── Parent keyword translation ──────────────────────────────────────────────
 
 
@@ -379,15 +387,34 @@ def apply_transition(
 
     method_id: optional method stamp, applied after the snapshot; None is a no-op.
     instrument_id: optional instrument stamp, applied after the snapshot; None is a no-op.
+    If either is provided with kind != 'submit', raises BadRequestError up
+    front (Task 3, 2026-08-19 bench-stamping slice) — see the guard right
+    after the row load.
     """
     row = get_analysis(db, analysis_id)
+
+    # Task 3 (2026-08-19 bench-stamping slice): the public transition route
+    # (TransitionRequest) exposes method_id/instrument_id only for
+    # kind='submit' — explicit 400 on any other kind rather than silently
+    # ignoring the fields ("explicit beats silent", per the slice design).
+    # Placed before any state/tier validation so a stray stamp field on an
+    # otherwise-illegal transition still reports the stamp misuse, not a
+    # tier/state error. submit's only legal predecessor states (unassigned,
+    # assigned) already fall inside STAMPABLE_STATES (state_machine.py), so
+    # no separate R7 guard call is needed on this path — it can't trip here.
+    if (method_id is not None or instrument_id is not None) and kind != "submit":
+        raise BadRequestError(
+            "method_id/instrument_id only apply to kind='submit'"
+        )
+
     from_state = row.review_state
     before = _snapshot(row)
 
     # Amendment audit (Handler ruling 2026-08-10): callers that used to stamp
-    # method/instrument directly on the row pre-call (prep_bridge) pass them
-    # here instead — applied AFTER the snapshot so the change lands in
-    # details["changed"] on this transition's audit row.
+    # method/instrument directly on the row pre-call (prep_bridge), and now
+    # also the submit-transition route (Task 3 above), pass them here instead
+    # — applied AFTER the snapshot so the change lands in details["changed"]
+    # on this transition's audit row.
     if method_id is not None:
         row.method_id = method_id
     if instrument_id is not None:
@@ -629,24 +656,39 @@ def set_reportable(
     return row
 
 
-def set_method_instrument(
+# Rows in these review_states are still bench-editable — method/instrument
+# may be freely (re)stamped. Every other state (verified, published,
+# promoted, variance_verified, parent_to_verify, senaite_mirror, rejected,
+# retracted, ...) is reported-or-dead: restamping there is an amendment-class
+# action, not a bench convenience (R7, 2026-08-19 bench-stamping design §4.5).
+STAMPABLE_STATES = ("unassigned", "assigned", "to_be_verified")
+
+
+def stamp_method_instrument(
     db: Session,
+    row: LimsAnalysis,
     *,
-    analysis_id: int,
     method_id: Optional[int],
     instrument_id: Optional[int],
     user_id: Optional[int] = None,
-) -> LimsAnalysis:
-    """Phase 3.6: update method_id + instrument_id on a lims_analyses row.
+) -> bool:
+    """No-commit core of set_method_instrument. Guards state (R7), applies
+    the pair, writes the audit transition. Returns False on no-op. Callers
+    commit.
 
-    Either may be None (clear). No-op + early-return if both match the
-    current row state. Writes an 'auto' audit transition with a
-    machine-parseable reason — same pattern as set_reportable.
+    The state guard is checked unconditionally — even a would-be no-op
+    (e.g. method_id=None/instrument_id=None on a row that already carries
+    None/None) raises StateLockedError on a locked row. A reported/dead row
+    is locked against this call entirely; "nothing would change anyway" is
+    not an exemption a caller can rely on.
+
+    Raises StateLockedError if row.review_state is outside STAMPABLE_STATES.
     """
-    row = get_analysis(db, analysis_id)
+    if row.review_state not in STAMPABLE_STATES:
+        raise StateLockedError(row.review_state)
 
     if row.method_id == method_id and row.instrument_id == instrument_id:
-        return row
+        return False
 
     before = _snapshot(row)
     row.method_id = method_id
@@ -662,8 +704,34 @@ def set_method_instrument(
         reason=f"method_id={method_id},instrument_id={instrument_id}",
         details=_deltas(before, row),
     ))
-    db.commit()
-    db.refresh(row)
+    return True
+
+
+def set_method_instrument(
+    db: Session,
+    *,
+    analysis_id: int,
+    method_id: Optional[int],
+    instrument_id: Optional[int],
+    user_id: Optional[int] = None,
+) -> LimsAnalysis:
+    """Phase 3.6: update method_id + instrument_id on a lims_analyses row.
+
+    Either may be None (clear). No-op + early-return if both match the
+    current row state. Writes an 'auto' audit transition with a
+    machine-parseable reason — same pattern as set_reportable.
+
+    Thin wrapper: load row → stamp_method_instrument (no-commit core,
+    R7 state guard) → commit. Raises StateLockedError (mapped to 409 by the
+    route layer) if the row is outside STAMPABLE_STATES and the pair would
+    actually change.
+    """
+    row = get_analysis(db, analysis_id)
+    if stamp_method_instrument(
+        db, row, method_id=method_id, instrument_id=instrument_id, user_id=user_id,
+    ):
+        db.commit()
+        db.refresh(row)
     return row
 
 
