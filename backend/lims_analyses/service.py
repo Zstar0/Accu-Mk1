@@ -236,6 +236,72 @@ def create_analysis(
     return row
 
 
+def record_placeholder_created(
+    db: Session,
+    row: LimsAnalysis,
+    *,
+    reason: str,
+    user_id: Optional[int],
+) -> LimsAnalysisTransition:
+    """Audit row for a lab-minted parent placeholder (manage-analyses slice).
+
+    Registration-time placeholders carry no transition (they are 'ordered' and
+    nothing more); a lab-driven mint records *why it exists* on an 'auto'
+    transition (from NULL → unassigned) whose `reason` names the action.
+    Lives here — not in parent_placeholders.py — so the amendment-audit AST
+    guard sees the construction and enforces details=. Flushes, never commits.
+    """
+    tr = LimsAnalysisTransition(
+        analysis_id=row.id,
+        from_state=None,
+        to_state="unassigned",
+        transition_kind="auto",
+        user_id=user_id,
+        reason=reason,
+        details={"changed": {}},
+    )
+    db.add(tr)
+    db.flush()
+    return tr
+
+
+def soft_reject_parent_placeholder(
+    db: Session,
+    row: LimsAnalysis,
+    *,
+    reason: str,
+    user_id: Optional[int],
+) -> LimsAnalysis:
+    """Ruling R1 (manage-analyses slice): a parent PLACEHOLDER (provenance
+    'ordered', never worked) is removed by marking it 'rejected' — the row and
+    its transitions survive as the trail, and the partial unique index
+    (…_parent_service_ordered excludes rejected/retracted) frees the slot for
+    a re-add. Written directly rather than through apply_transition: the
+    generic tier gate forbids parent-tier 'reject' on purpose (workflow rows),
+    and that gate is untouched — this is a placeholder-only primitive.
+    Raises BadRequestError on anything that is not a live placeholder.
+    Flushes, never commits.
+    """
+    if row.provenance != "ordered" or row.lims_sub_sample_pk is not None:
+        raise BadRequestError(f"analysis id={row.id} is not a parent placeholder")
+    if row.review_state in ("rejected", "retracted"):
+        raise BadRequestError(f"analysis id={row.id} is already {row.review_state}")
+    from_state = row.review_state
+    row.review_state = "rejected"
+    row.updated_at = datetime.utcnow()
+    db.add(LimsAnalysisTransition(
+        analysis_id=row.id,
+        from_state=from_state,
+        to_state="rejected",
+        transition_kind="reject",
+        user_id=user_id,
+        reason=reason,
+        details={"changed": {}},
+    ))
+    db.flush()
+    return row
+
+
 # ─── Amendment audit (spec 2026-08-07) ───────────────────────────────────────
 # Fields whose changes are captured as before/after into
 # lims_analysis_transitions.details. Values must stay JSON-serializable
@@ -2386,6 +2452,7 @@ def peptide_has_full_service_set(db: Session, *, peptide_id: int) -> bool:
 
 def force_retract_analysis(
     db: Session, *, analysis_id: int, user_id: Optional[int],
+    reason: Optional[str] = None,
 ) -> None:
     """Strong-confirm retract of a worked/promoted/verified vial row, for the
     wrong-variant Replace: the whole analyte is invalid, so its results are
@@ -2399,6 +2466,16 @@ def force_retract_analysis(
                           (promoted -> rejected).
       - verified (vial)-> retract (verified -> retracted).
       - else (worked)  -> reject.
+
+    `reason` is keyword-only and defaults to None, in which case every
+    internal apply_transition call keeps its current, call-site-specific
+    string (byte-identical default behavior for the wrong-variant Replace
+    callers). When given, that string is used for every transition this call
+    applies (canonical retract(s), and the source's own retract/reject) —
+    used by manage_native's remove path to stamp "manage_analyses:remove"
+    instead of the wrong-variant Replace wording. Goes through
+    apply_transition throughout, so it never constructs a
+    LimsAnalysisTransition directly.
 
     Idempotent on the canonical row (skipped if already terminal). Raises only
     on published; transition errors propagate to the caller's per-row guard.
@@ -2423,14 +2500,14 @@ def force_retract_analysis(
                 if canonical.review_state in ("verified", "parent_to_verify"):
                     apply_transition(
                         db, analysis_id=canonical.id, kind="retract",
-                        reason="wrong-variant Replace: canonical result invalidated",
+                        reason=reason or "wrong-variant Replace: canonical result invalidated",
                         user_id=user_id,
                     )
             db.delete(link)
         db.flush()
         apply_transition(
             db, analysis_id=analysis_id, kind="reject",
-            reason="wrong-variant Replace: promoted source abandoned",
+            reason=reason or "wrong-variant Replace: promoted source abandoned",
             user_id=user_id,
         )
         return
@@ -2438,7 +2515,7 @@ def force_retract_analysis(
     kind = "retract" if row.review_state == "verified" else "reject"
     apply_transition(
         db, analysis_id=analysis_id, kind=kind,
-        reason="wrong-variant Replace: result discarded", user_id=user_id,
+        reason=reason or "wrong-variant Replace: result discarded", user_id=user_id,
     )
 
 
@@ -2977,6 +3054,7 @@ def _serialize_senaite_shape_rows(
             # S3: the row's own FK, not svc.id — svc is None when the FK
             # doesn't resolve, and the identity key must ship regardless.
             analysis_service_id=r.analysis_service_id,
+            provenance=r.provenance,
         ))
     return out
 

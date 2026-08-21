@@ -247,6 +247,10 @@ class SenaiteShapeAnalysisResponse(BaseModel):
     # _serialize_senaite_shape_rows. None only when the service FK is
     # somehow unresolvable (should not happen in practice).
     service_origin: Optional[str] = None
+    # Manage-analyses slice: 'ordered' (registration/lab placeholder) vs
+    # 'canonical' (promoted result) vs 'shadow'. The overlay's native block
+    # enables remove only on 'ordered' rows. None for legacy callers.
+    provenance: Optional[str] = None
     # S3 Task 7: the row's OWN analysis_service_id — the native identity key
     # the FE joins parent rows to vial rows on. Read off the row, never off
     # the resolved service (which service_origin above goes None on when the
@@ -305,3 +309,55 @@ class SourceRetestResponse(BaseModel):
     new_row_id: int
     parent_unverified: bool
     parent_review_state: Optional[str] = None
+
+
+# ── Native Manage Analyses (manage_native.py) ─────────────────────────────────
+
+class NativeProfileMemberOut(BaseModel):
+    service_id: int
+    keyword: str
+    title: str
+
+
+class NativeProfileOut(BaseModel):
+    id: int
+    key: str
+    name: str
+    fulfillment_role: Optional[str] = None
+    members: List[NativeProfileMemberOut]
+    on_sample: Literal["none", "partial", "full"]
+    host_vials: List[str]
+
+
+class AddNativeProfileRequest(BaseModel):
+    profile_id: int
+
+
+class NativeProfileHostOut(BaseModel):
+    vial_id: str
+    edge_created: bool
+    vial_rows_created: int
+
+
+class AddNativeProfileResponse(BaseModel):
+    profile_key: str
+    profile_name: str
+    placeholders_created: int
+    placeholders_existing: int
+    hosts: List[NativeProfileHostOut]
+    no_host_vial: bool
+
+
+class RemoveNativeAnalysisResponse(BaseModel):
+    analysis_id: int
+    keyword: str
+    analysis_service_id: int
+    vial_rows_deleted: int
+    vial_rows_rejected: int
+    edges_superseded: int
+
+
+class ResyncFromOrderResponse(BaseModel):
+    placeholders_created: int
+    edges_created: int
+    vial_rows_created: int

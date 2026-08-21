@@ -1941,6 +1941,17 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
                 wp_services if wp_services is not None
                 else _fetch_wp_services_for_parent(parent_sid) or {}
             )
+            # Manage-analyses slice (ruling A): a profile the lab added on the
+            # parent (live 'ordered' placeholders) is not in the WP order, so
+            # union its key in — resolve_catalog_fulfillment then hosts it and
+            # the seeder seeds it. Adds nothing for a normal order (those keys
+            # are already present); reads only, never writes. Placeholder
+            # keys are merged in LAST, so on a same-key collision a live
+            # 'ordered' placeholder (True) wins over an incoming WP False —
+            # the placeholder is the parent's current truth of what's on the
+            # sample; removing it goes through Manage Analyses, not the order.
+            from lims_analyses.manage_native import placeholder_profile_keys
+            services_map = {**services_map, **placeholder_profile_keys(db, parent_row)}
         from sub_samples.custody import write_custody_edges
         # S4 snapshot rider (task 6): thread the parent's frozen catalog
         # resolution (NULL for pre-slice-4 rows) so custody edges resolve
