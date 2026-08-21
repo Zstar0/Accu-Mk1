@@ -2366,6 +2366,9 @@ class AnalysisProfileUpdate(BaseModel):
     fulfillment_dim: Optional[str] = None
     sort_order: Optional[int] = None
     active: Optional[bool] = None
+    coa_section_title: Optional[str] = None
+    coa_archetype: Optional[str] = None
+    coa_sort_order: Optional[int] = None
 
 
 class AnalysisProfileResponse(BaseModel):
@@ -2379,6 +2382,9 @@ class AnalysisProfileResponse(BaseModel):
     fulfillment_dim: str
     sort_order: int
     active: bool
+    coa_section_title: Optional[str] = None
+    coa_archetype: Optional[str] = None
+    coa_sort_order: int = 0
     member_ids: list[int] = []
     created_at: datetime
     updated_at: datetime
@@ -2389,6 +2395,13 @@ class AnalysisProfileResponse(BaseModel):
 
 class AnalysisProfileMembersRequest(BaseModel):
     analysis_service_ids: list[int]
+
+
+# Only legal non-NULL coa_archetype today. NULL = profile is not reported on
+# the certificate (a legitimate internal-only test); validated at the route
+# edge rather than a DB CHECK constraint so a second archetype is a one-line
+# addition here.
+COA_ARCHETYPES = {"limit_table"}
 
 
 # ─── SLA tier schemas (sub-project A, revised to tiers) ───
@@ -9982,6 +9995,19 @@ async def _maybe_emit_regular_coa_child(db, sample_id, parent_row, primary_data)
     body["include_lab_remarks"] = include_remarks
     if include_remarks and (parent_row.customer_remarks or "").strip():
         body["lab_remarks"] = parent_row.customer_remarks.strip()
+
+    # Native sections (spec 2) — this child IS a full certificate of the
+    # parent (the Core COA for a variance lot), so it needs the identical
+    # fail-closed attach as the primary. Unlike the best-effort httpx call
+    # below, a failure here aborts the CHILD emission rather than shipping a
+    # section-less certificate.
+    from coa.native_sections import NativeSectionsError, build_native_sections
+    try:
+        body["native_sections"] = build_native_sections(db, parent_row)
+    except NativeSectionsError as e:
+        _logger.error("regular COA child aborted for %s: %s", sample_id, e.detail)
+        return
+
     try:
         async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=120.0) as client:
             resp = await client.post(f"{COA_BUILDER_URL}/process/{sample_id}", json=body)
@@ -10177,6 +10203,19 @@ async def generate_sample_coa(
             # helper so regen-primary sends the identical series (parity).
             from coa.variance_series import process_variance_fields
             alias_body.update(process_variance_fields(db, _parent_row))
+
+            # Native sections (spec 2) — FAIL-CLOSED, unlike the best-effort
+            # variance overlay above. If the document cannot be assembled the
+            # certificate must not be generated at all.
+            from coa.native_sections import NativeSectionsError, build_native_sections
+            try:
+                _native_doc = build_native_sections(db, _parent_row)
+            except NativeSectionsError as e:
+                return SampleCOAActionResponse(
+                    success=False,
+                    message=f"COA aborted — {e.detail}",
+                )
+            alias_body["native_sections"] = _native_doc
 
     try:
         async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=120.0) as client:
@@ -10733,6 +10772,19 @@ async def regen_primary_coa(
     if _regen_parent is not None:
         from coa.variance_series import process_variance_fields
         alias_body.update(process_variance_fields(db, _regen_parent))
+
+        # Native sections (spec 2) — FAIL-CLOSED, unlike the best-effort
+        # variance overlay above. If the document cannot be assembled the
+        # certificate must not be regenerated at all.
+        from coa.native_sections import NativeSectionsError, build_native_sections
+        try:
+            _native_doc = build_native_sections(db, _regen_parent)
+        except NativeSectionsError as e:
+            return SampleCOAActionResponse(
+                success=False,
+                message=f"COA regen aborted — {e.detail}",
+            )
+        alias_body["native_sections"] = _native_doc
 
     # 1. Regenerate only the primary COA via COA Builder
     try:
@@ -15542,6 +15594,8 @@ def _profile_to_response(p) -> AnalysisProfileResponse:
         is_addon=p.is_addon, vials_required=p.vials_required,
         fulfillment_role=p.fulfillment_role, fulfillment_dim=p.fulfillment_dim,
         sort_order=p.sort_order, active=p.active,
+        coa_section_title=p.coa_section_title, coa_archetype=p.coa_archetype,
+        coa_sort_order=p.coa_sort_order,
         member_ids=[s.id for s in p.analysis_services],
         created_at=p.created_at, updated_at=p.updated_at,
     )
@@ -15562,6 +15616,9 @@ async def create_analysis_profile(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
+    """AnalysisProfileCreate deliberately has no coa_* fields: a new profile
+    always starts unreported (coa_archetype NULL) and the lab opts it into a
+    COA section via a later edit (PATCH), never at creation time."""
     from models import AnalysisProfile
     existing = db.execute(
         select(AnalysisProfile).where(AnalysisProfile.key == data.key)
@@ -15586,7 +15643,15 @@ async def update_analysis_profile(
     p = db.get(AnalysisProfile, profile_id)
     if p is None:
         raise HTTPException(404, "analysis profile not found")
-    for field, value in data.model_dump(exclude_unset=True).items():
+    fields = data.model_dump(exclude_unset=True)
+    if "coa_archetype" in fields and fields["coa_archetype"] is not None \
+            and fields["coa_archetype"] not in COA_ARCHETYPES:
+        raise HTTPException(
+            400,
+            f"unknown coa_archetype {fields['coa_archetype']!r}; "
+            f"allowed: {sorted(COA_ARCHETYPES)} or null (not reported)",
+        )
+    for field, value in fields.items():
         setattr(p, field, value)
     p.updated_by_id = getattr(current_user, "id", None)
     db.commit()
@@ -18289,6 +18354,38 @@ def get_sample_variance_payload(
         "variance_replicates": build_variance_replicates(db, parent) or {},
         "variance_analytes": build_variance_analyte_series(db, parent) or {},
     }
+
+
+# ── Native COA sections (spec 2 — integration-service bridge) ────────
+# Called server-to-server by integration-service on the additional-COA path
+# (Task 9), and in-process by generate_sample_coa / _maybe_emit_regular_coa_child
+# below. FAIL-CLOSED, unlike /variance-payload above: any assembly failure is a
+# 502 and the caller must NOT generate a certificate — a native section is a
+# paid, reportable test result, not a best-effort overlay.
+
+@app.get("/samples/{sample_id}/coa-sections")
+def get_sample_coa_sections(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_internal_service_token),
+):
+    """Native COA sections document for S2S consumers (spec 2).
+
+    404 = sample unknown to Mk1 (pre-Mk1 legacy sample; nothing native can
+    exist). 200 with empty ordered_profiles/sections = valid "nothing native
+    ordered". 502 = assembly failed; caller must abort certificate generation.
+    """
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        raise HTTPException(status_code=404, detail=f"sample {sample_id} not found")
+
+    from coa.native_sections import NativeSectionsError, build_native_sections
+    try:
+        return build_native_sections(db, parent)
+    except NativeSectionsError as e:
+        raise HTTPException(status_code=502, detail=e.detail)
 
 
 # ── Registry creation signal (integration-service bridge) ────────────

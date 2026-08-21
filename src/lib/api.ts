@@ -4533,6 +4533,9 @@ export interface AnalysisProfile {
   fulfillment_dim: string
   sort_order: number
   active: boolean
+  coa_section_title: string | null
+  coa_archetype: string | null
+  coa_sort_order: number
   member_ids: number[]
   created_at: string
   updated_at: string
