@@ -28,6 +28,7 @@ import {
 } from '@/lib/api'
 import { NATIVE_PARENT_ANALYSES_QUERY_KEY } from '@/lib/native-parent-analyses'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
+import type { VialAssignment } from '@/lib/vial-assignment'
 
 // AnalysisTable uses IntersectionObserver for its sticky-toolbar effect; jsdom doesn't have it.
 // Must be a real class (not arrow function) since AnalysisTable does `new IntersectionObserver(...)`.
@@ -145,6 +146,7 @@ function renderCard(
     qc?: QueryClient
     sampleId?: string
     isParentPage?: boolean
+    vialAssignmentByKeyword?: Map<string, VialAssignment>
   } = {}
 ) {
   vi.mocked(listNativeParentAnalysesShaped).mockResolvedValue(rows)
@@ -156,6 +158,7 @@ function renderCard(
         isParentPage={opts.isParentPage ?? true}
         lookup={fakeLookup({ date_received: '2026-08-01' })}
         promotionsByKeyword={promos}
+        vialAssignmentByKeyword={opts.vialAssignmentByKeyword}
         onParentDataStale={opts.staleSpy}
       />
     </QueryClientProvider>
@@ -186,6 +189,86 @@ describe('NativeParentAnalysesCard', () => {
     expect(screen.getByText('Method')).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: /All/ })).toBeInTheDocument()
     expect(container.querySelector('.divide-y')).not.toBeInTheDocument()
+  })
+
+  it('renders a clickable assigned-vial chip for a native row', async () => {
+    // Task 6 (spec 2026-08-20-rider-vial-visibility): the card already
+    // forwards vialAssignmentByKeyword straight through to the shared
+    // AnalysisTable (SampleDetails.tsx ~:3483) — this pins that card-level
+    // contract for a NATIVE keyword. The real gap this task closes is one
+    // level up, in SampleDetails' map construction (not exercised by this
+    // component-level test — see task-6-brief.md Step 3).
+    const vialMap = new Map<string, VialAssignment>([
+      ['FENTANYL', {
+        editable: true,
+        matches: [{
+          vialSampleId: 'P-0158-S01',
+          vialLabel: 'Vial 1',
+          mk1Analysis: shapedRow({
+            uid: 'mk1:1', keyword: 'FENTANYL', title: 'Fentanyl', review_state: 'unassigned',
+          }),
+          assignmentRole: 'hplc',
+          assignmentKind: 'core',
+        }],
+      }],
+    ])
+    renderCard(
+      [shapedRow({ uid: 'mk1:9', keyword: 'FENTANYL', title: 'Fentanyl' })],
+      new Map(),
+      { vialAssignmentByKeyword: vialMap }
+    )
+
+    expect(await screen.findByRole('button', { name: /Vial 1 — P-0158-S01/ })).toBeInTheDocument()
+  })
+
+  it('chip-only map entry (editable: false) shows the chip but never the vial Method/Instrument/Analyst', async () => {
+    // Final-review ruling (2026-08-20, rider-vial-visibility Fix 1): the
+    // native map is neutralized to `editable: false` before it reaches this
+    // card (SampleDetails' chipsOnlyVialAssignmentMap) — S4 scoped the
+    // native card to chips only, never the shared table's M/I/A overlay.
+    // This pins the card-level contract: with editable false, the chip
+    // still renders off `matches`, but EditableSelectCell's currentValue
+    // and the analyst cell both fall back to the row's own values instead
+    // of the matched vial's — distinctive vial-side values must never leak
+    // into the row's Method/Instrument/Analyst cells.
+    const vialMap = new Map<string, VialAssignment>([
+      ['FENTANYL', {
+        editable: false,
+        matches: [{
+          vialSampleId: 'P-0158-S01',
+          vialLabel: 'Vial 1',
+          mk1Analysis: shapedRow({
+            uid: 'mk1:1', keyword: 'FENTANYL', title: 'Fentanyl',
+            method: 'VialMethod', method_uid: 'vm-uid',
+            instrument: 'VialInstrument', instrument_uid: 'vi-uid',
+            analyst: 'VialAnalyst', review_state: 'unassigned',
+          }),
+          assignmentRole: 'hplc',
+          assignmentKind: 'core',
+        }],
+      }],
+    ])
+    renderCard(
+      [shapedRow({
+        uid: 'mk1:9', keyword: 'FENTANYL', title: 'Fentanyl',
+        method: 'RowMethod', method_uid: 'rm-uid',
+        instrument: 'RowInstrument', instrument_uid: 'ri-uid',
+        analyst: 'RowAnalyst',
+      })],
+      new Map(),
+      { vialAssignmentByKeyword: vialMap }
+    )
+
+    // (a) the chip renders.
+    expect(await screen.findByRole('button', { name: /Vial 1 — P-0158-S01/ })).toBeInTheDocument()
+    // (b) the row shows its OWN Method/Instrument/Analyst values...
+    expect(screen.getByText('RowMethod')).toBeInTheDocument()
+    expect(screen.getByText('RowInstrument')).toBeInTheDocument()
+    expect(screen.getByText('RowAnalyst')).toBeInTheDocument()
+    // ...never the matched vial's distinctive values.
+    expect(screen.queryByText('VialMethod')).not.toBeInTheDocument()
+    expect(screen.queryByText('VialInstrument')).not.toBeInTheDocument()
+    expect(screen.queryByText('VialAnalyst')).not.toBeInTheDocument()
   })
 
   it('renders nothing while empty', async () => {

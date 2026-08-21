@@ -5852,6 +5852,8 @@ export interface VialPlanRoleProfile {
   key: string
   name: string
   relation: 'host' | 'rider'
+  /** rider entries only: vial sample_ids holding a live rider edge (vial_sequence order) */
+  host_vials?: string[]
 }
 
 /** One assignable role within a vial-plan section — the bench "spot" Task 9's
@@ -7018,6 +7020,9 @@ export interface OrderedProduct {
   is_addon: boolean
   fulfillment_role: string | null
   fulfillment_dim: 'role' | 'kind'
+  // Rider profiles (spec 2026-08-20-rider-vial-visibility) fulfill on a HOST
+  // role's vial rather than their own; empty/absent for non-rider products.
+  ride_host_roles?: string[]
 }
 
 export interface OrderedProductsResponse {

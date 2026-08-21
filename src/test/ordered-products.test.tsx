@@ -88,3 +88,44 @@ it('no alert when a variance vial exists', async () => {
   await screen.findByText('Variance HPLC')
   expect(screen.queryByText(/no vial assigned/i)).toBeNull()
 })
+
+// ─── rider-aware fulfillment (ride_host_roles, spec 2026-08-20-rider-vial-visibility) ──
+
+const riderProduct = {
+  key: 'fentanyl', label: 'Fentanyl', is_addon: true,
+  fulfillment_role: 'fentanyl', fulfillment_dim: 'role' as const, ride_host_roles: ['hplc'],
+}
+
+it('no alert when a rider product has a matching ride-host vial', async () => {
+  vi.spyOn(api, 'getOrderedProducts').mockResolvedValue({
+    sample_id: 'P-1', wp_order_number: 'WP-1',
+    products: [riderProduct],
+  })
+  const vials = { parent: null, sub_samples: [
+    { assignment_role: 'hplc', assignment_kind: 'core' },
+  ] } as unknown as api.SubSampleListResponse
+  wrap(<OrderedProducts sampleId="P-1" subData={vials} />)
+  await screen.findByText('Fentanyl')
+  expect(screen.queryByText(/no vial assigned/i)).toBeNull()
+})
+
+it('alerts when the only ride-host vial is a variance replicate', async () => {
+  vi.spyOn(api, 'getOrderedProducts').mockResolvedValue({
+    sample_id: 'P-1', wp_order_number: 'WP-1',
+    products: [riderProduct],
+  })
+  const vials = { parent: null, sub_samples: [
+    { assignment_role: 'hplc', assignment_kind: 'variance' },
+  ] } as unknown as api.SubSampleListResponse
+  wrap(<OrderedProducts sampleId="P-1" subData={vials} />)
+  expect(await screen.findByText(/Fentanyl purchased .* no vial assigned/i)).toBeInTheDocument()
+})
+
+it('alerts when a rider product has no ride-host vial at all', async () => {
+  vi.spyOn(api, 'getOrderedProducts').mockResolvedValue({
+    sample_id: 'P-1', wp_order_number: 'WP-1',
+    products: [riderProduct],
+  })
+  wrap(<OrderedProducts sampleId="P-1" subData={noVials} />)
+  expect(await screen.findByText(/Fentanyl purchased .* no vial assigned/i)).toBeInTheDocument()
+})

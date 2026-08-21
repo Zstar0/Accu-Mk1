@@ -241,6 +241,25 @@ import {
 // from lib/vial-assignment so the role-change invalidate helper can't drift.
 const VIAL_OVERLAY_QUERY_KEY = PARENT_OVERLAY_QUERY_KEY
 
+// Final-review ruling (2026-08-20, rider-vial-visibility): the native card's
+// vialAssignmentByKeyword map feeds the shared AnalysisTable, which also uses
+// a single-match (`editable: true`) entry to overlay that vial's Method/
+// Instrument/Analyst onto the row. Spec S4 scoped the native card to chips
+// only — the M/I/A overlay was never ruled on for native rows. Force
+// `editable: false` on every entry before handing the map to the native
+// card so the chips still render (they read `matches`, not `editable`) but
+// the overlay never engages. The SENAITE map (vialAssignmentByKeyword) is
+// untouched — this only applies to the native card's map.
+function chipsOnlyVialAssignmentMap(
+  map: Map<string, VialAssignment>,
+): Map<string, VialAssignment> {
+  const out = new Map<string, VialAssignment>()
+  for (const [keyword, assignment] of map) {
+    out.set(keyword, { ...assignment, editable: false })
+  }
+  return out
+}
+
 // --- COA Console ---
 
 type StepStatus = 'waiting' | 'running' | 'ok' | 'error'
@@ -3825,23 +3844,38 @@ export function SampleDetails() {
 
   // Parent-page only (memo would not help: useQueries' outer array churns each
   // render). The join is a cheap pure function.
+  const overlayVialInputs = overlayVials.map((v, i) => ({
+    sampleId: v.sample_id,
+    label: vialLabel(v.vial_sequence, subData?.parent.container_mode ?? false),
+    analyses: overlayAnalysesQueries[i]?.data ?? [],
+    assignmentRole: v.assignment_role, // vial bench role
+    assignmentKind: v.assignment_kind, // explicit variance bucket — drives overlay treatment
+    varianceLocked: lockedVialIds.has(v.sample_id), // in the LOCKED variance set → Lock icon
+  }))
   const vialAssignmentByKeyword =
     parentSampleId !== null || !data?.analyses
       ? undefined
       : buildVialAssignmentMap(
           data.analyses,
-          overlayVials.map((v, i) => ({
-            sampleId: v.sample_id,
-            label: vialLabel(
-              v.vial_sequence,
-              subData?.parent.container_mode ?? false
-            ),
-            analyses: overlayAnalysesQueries[i]?.data ?? [],
-            assignmentRole: v.assignment_role, // vial bench role
-            assignmentKind: v.assignment_kind, // explicit variance bucket — drives overlay treatment
-            varianceLocked: lockedVialIds.has(v.sample_id), // in the LOCKED variance set → Lock icon
-          })),
+          overlayVialInputs,
           analyteNameMap // analyte bridge: ANALYTE-{n}-PUR/QTY ↔ PUR_/QTY_<X>
+        )
+
+  // Native card chips (spec 2026-08-20-rider-vial-visibility): the SENAITE
+  // map above is keyed by SENAITE parent keywords, which never contain
+  // native rows — build the native card its own map from ITS rows. Tier 0
+  // (analysis_service_id) joins exactly; no analyte bridge needed.
+  const { data: nativeShapedRows } = useQuery({
+    queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY, sampleId, 'senaite_shape'],
+    queryFn: () => listNativeParentAnalysesShaped(sampleId!),
+    enabled: parentSampleId === null && !!sampleId,
+    staleTime: 30_000,
+  })
+  const nativeVialAssignmentByKeyword =
+    parentSampleId !== null || !nativeShapedRows?.length
+      ? undefined
+      : chipsOnlyVialAssignmentMap(
+          buildVialAssignmentMap(nativeShapedRows, overlayVialInputs)
         )
 
   const { data: parentSummary } = useQuery({
@@ -6758,7 +6792,7 @@ export function SampleDetails() {
           isParentPage={parentSampleId === null}
           lookup={data}
           promotionsByKeyword={promotionsByKeyword}
-          vialAssignmentByKeyword={vialAssignmentByKeyword}
+          vialAssignmentByKeyword={nativeVialAssignmentByKeyword}
           onParentDataStale={() => refreshSample(data.sample_id)}
         />
       )}

@@ -1451,6 +1451,12 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
         }
 
     services = services_resp.get("services") or {}
+    # Sections/display parity with set_assignment_role's union hook (spec
+    # 2026-08-20-rider-vial-visibility): a lab-added profile living only
+    # as a live 'ordered' placeholder must render its chip. Display-only —
+    # demand/auto-assign inputs deliberately stay on the raw order dict.
+    from lims_analyses.manage_native import placeholder_profile_keys
+    services_for_sections = {**(services or {}), **placeholder_profile_keys(db, parent)}
     # S4 snapshot rider (task 6, fix round 1 — per-profile hybrid merge): a
     # non-NULL catalog_snapshot freezes what THIS sample's demand/fulfillment
     # resolves against, PER PROFILE — a later catalog edit to a profile
@@ -1489,7 +1495,7 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
             "is_unreachable": False,
             "vials": locked_vials,
             "container_mode": parent.container_mode,
-            "sections": _build_vial_plan_sections(db, demand, locked_vials, services, snapshot=snapshot),
+            "sections": _build_vial_plan_sections(db, demand, locked_vials, services_for_sections, snapshot=snapshot),
         }
 
     from catalog.roles import real_bucket_codes
@@ -1540,7 +1546,7 @@ def compute_vial_plan(db: Session, parent_sample_id: str) -> dict:
         "is_unreachable": False,
         "vials": assigned,
         "container_mode": parent.container_mode,
-        "sections": _build_vial_plan_sections(db, demand, assigned, services, snapshot=snapshot),
+        "sections": _build_vial_plan_sections(db, demand, assigned, services_for_sections, snapshot=snapshot),
     }
 
 
@@ -1602,6 +1608,41 @@ def _build_vial_plan_sections(db: Session, demand: dict, vials: list[dict],
             db.query(AnalysisProfile).filter(AnalysisProfile.id.in_(all_ids)).all()
         }
 
+    # Rider landing (spec 2026-08-20-rider-vial-visibility): which of THIS
+    # plan's vials hold a live rider edge, per profile — one query, keyed by
+    # profile id. Display metadata only; failures here must never 500 the
+    # vial plan, so the shape stays a plain default-empty lookup.
+    # Variance replicates are excluded even when they hold a rider edge
+    # (write_custody_edges writes rider edges per-vial, kind-blind) — the
+    # seeder never puts rider work on them, and the chip must point at where
+    # the rider's analysis actually runs (Handler UAT find, PB-0158
+    # "→ S01, S06"). NULL kind is a real core-shaped state (role-only PATCH)
+    # and stays included.
+    rider_vials_by_pid: dict = {}
+    vial_sample_ids = [v["sample_id"] for v in vials if not v.get("is_parent")]
+    if all_ids and vial_sample_ids:
+        from sqlalchemy import or_
+        from models import VialProfileAssignment
+        edge_rows = db.execute(
+            select(VialProfileAssignment.analysis_profile_id,
+                   LimsSubSample.sample_id)
+            .join(LimsSubSample,
+                  LimsSubSample.id == VialProfileAssignment.lims_sub_sample_pk)
+            .where(
+                VialProfileAssignment.relation == "rider",
+                VialProfileAssignment.superseded_at.is_(None),
+                VialProfileAssignment.analysis_profile_id.in_(all_ids),
+                LimsSubSample.sample_id.in_(vial_sample_ids),
+                or_(
+                    LimsSubSample.assignment_kind.is_(None),
+                    LimsSubSample.assignment_kind != "variance",
+                ),
+            )
+            .order_by(LimsSubSample.vial_sequence)
+        ).all()
+        for pid, sid in edge_rows:
+            rider_vials_by_pid.setdefault(pid, []).append(sid)
+
     sections_by_dept: dict = {}
     for code in candidates:
         row = registry.get(code)
@@ -1628,7 +1669,11 @@ def _build_vial_plan_sections(db: Session, demand: dict, vials: list[dict],
             for pid in rf.rider_profile_ids:
                 p = profile_by_id.get(pid)
                 if p is not None:
-                    profiles.append({"id": p.id, "key": p.key, "name": p.name, "relation": "rider"})
+                    profiles.append({
+                        "id": p.id, "key": p.key, "name": p.name,
+                        "relation": "rider",
+                        "host_vials": rider_vials_by_pid.get(pid, []),
+                    })
 
         section = sections_by_dept.setdefault(dept.id, {
             "department_id": dept.id,
@@ -1794,6 +1839,56 @@ def _drop_stale_role_rows(db: Session, *, sub: LimsSubSample, old_role: Optional
     return n
 
 
+def _drop_stale_rider_rows(db: Session, *, sub: LimsSubSample,
+                           prev_rider_pids: set) -> int:
+    """Rider companion to _drop_stale_role_rows (spec
+    2026-08-20-rider-vial-visibility): that cleanup is DEPARTMENT-keyed, so a
+    rider row whose service shares the new role's department survives a flip
+    even though its rider edge is gone. Drop this vial's pristine rows whose
+    service belongs to a profile that just LOST its rider edge and holds no
+    current edge of any relation. Same pristine predicate as
+    _drop_stale_role_rows — worked rows are never touched."""
+    if not prev_rider_pids:
+        return 0
+    from sub_samples.custody import current_custody
+
+    current_pids = {e.analysis_profile_id for e in current_custody(db, sub.id)}
+    stale_pids = prev_rider_pids - current_pids
+    if not stale_pids:
+        return 0
+    from models import AnalysisProfile, LimsAnalysis, LimsAnalysisTransition
+
+    svc_ids: set = set()
+    for pid in stale_pids:
+        prof = db.get(AnalysisProfile, pid)
+        if prof is not None:
+            svc_ids.update(s.id for s in prof.analysis_services)
+        else:
+            log.info("sub_samples.rider_cleanup_unknown_profile sub=%s profile_id=%s",
+                     sub.sample_id, pid)
+    if not svc_ids:
+        return 0
+    stale = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sub_sample_pk == sub.id,
+            LimsAnalysis.analysis_service_id.in_(svc_ids),
+            LimsAnalysis.review_state == "unassigned",
+            LimsAnalysis.result_value.is_(None),
+            LimsAnalysis.retest_of_id.is_(None),
+        )
+    ).scalars().all()
+    n = 0
+    for row in stale:
+        db.execute(delete(LimsAnalysisTransition).where(
+            LimsAnalysisTransition.analysis_id == row.id))
+        db.delete(row)
+        n += 1
+    if n:
+        db.flush()
+        log.info("sub_samples.rider_cleanup sub=%s dropped=%s", sub.sample_id, n)
+    return n
+
+
 def set_customer_remarks(db: Session, sample_id: str, remarks: str,
                          include: bool = True,
                          user_id: Optional[int] = None) -> dict:
@@ -1952,7 +2047,12 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
             # sample; removing it goes through Manage Analyses, not the order.
             from lims_analyses.manage_native import placeholder_profile_keys
             services_map = {**services_map, **placeholder_profile_keys(db, parent_row)}
-        from sub_samples.custody import write_custody_edges
+        from sub_samples.custody import current_custody, write_custody_edges
+        prev_rider_pids = {
+            e.analysis_profile_id
+            for e in current_custody(db, sub.id)
+            if e.relation == "rider"
+        }
         # S4 snapshot rider (task 6): thread the parent's frozen catalog
         # resolution (NULL for pre-slice-4 rows) so custody edges resolve
         # against what was purchased at registration, not the live catalog.
@@ -1972,6 +2072,7 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
         # analyses. Runs in THIS transaction (before the commit=False seed and
         # the single db.commit() below), so flip + cleanup + seed are atomic.
         _drop_stale_role_rows(db, sub=sub, old_role=old_role, new_role=role, registry=registry)
+        _drop_stale_rider_rows(db, sub=sub, prev_rider_pids=prev_rider_pids)
         # Phase 2 (mk1-native-analyses): if this assignment transitioned the
         # vial into a real (non-XTRA) role, seed its lims_analyses rows.
         # Idempotent — re-running on an already-seeded vial is a no-op.
