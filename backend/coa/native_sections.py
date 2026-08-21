@@ -9,6 +9,10 @@ FAIL-CLOSED: every abort raises NativeSectionsError with a rule-specific
 message. A heavy-metals result is a paid, reportable test — if the document
 cannot be assembled completely and correctly, the certificate must not be
 generated at all. (Contrast with the variance overlay, which is best-effort.)
+
+Slice 1 of spec ownership (2026-08-03): Mk1 resolves the analysis_service_specs
+rule per member row, fills specification (structured dict) + conforms, and
+rule 5 — no resolvable active spec — aborts here at the producer.
 """
 from __future__ import annotations
 
@@ -18,6 +22,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from coa.spec_rules import SpecRuleError, evaluate, normalize_matrix, resolve_spec
 from sub_samples.service import fetch_sample_services
 
 log = logging.getLogger(__name__)
@@ -29,7 +34,7 @@ ELIGIBLE_STATES = ("verified", "published")
 
 
 class NativeSectionsError(Exception):
-    """Any condition that must abort COA generation (fail-closed rules 1-4)."""
+    """Any condition that must abort COA generation (fail-closed rules 1-5)."""
 
     def __init__(self, detail: str):
         super().__init__(detail)
@@ -103,6 +108,20 @@ def _method_label(db: Session, method_id: Optional[int]) -> str:
     return (m.name or "") if m is not None else ""
 
 
+def _spec_wire_dict(spec) -> dict:
+    """The structured `specification` wire field. Floats (not Decimal) so the
+    JSON is stable; display stays None unless the lab filed an override —
+    COABuilder owns the formatting."""
+    return {
+        "rule_kind": spec.rule_kind,
+        "equals": spec.equals_value,
+        "min": float(spec.min_value) if spec.min_value is not None else None,
+        "max": float(spec.max_value) if spec.max_value is not None else None,
+        "unit": spec.unit,
+        "display": spec.display_override,
+    }
+
+
 def build_native_sections(db: Session, parent) -> dict:
     """Assemble the native-sections wire document for a parent LimsSample.
 
@@ -126,6 +145,7 @@ def build_native_sections(db: Session, parent) -> dict:
         return {"sample_id": sample_id, "ordered_profiles": [], "sections": []}
 
     profiles = _ordered_native_profiles(db, raw.get("services") or {}, raw.get("package"))
+    matrix = normalize_matrix(parent.sample_type_title)
 
     sections = []
     for prof in profiles:
@@ -156,14 +176,32 @@ def build_native_sections(db: Session, parent) -> dict:
                     "native_section_blank_unit sample=%s profile=%s keyword=%s",
                     sample_id, prof.key, svc.keyword,
                 )
+            spec = resolve_spec(db, svc.id, matrix)
+            if spec is None:
+                # Rule 5 (relocated from COABuilder): a result must not print
+                # without a verdict. Names the service AND matrix so the lab
+                # knows exactly which analysis_service_specs row to file.
+                raise NativeSectionsError(
+                    f"native sections: profile '{prof.key}' member service "
+                    f"'{svc.keyword}' (id={svc.id}) has no active spec for "
+                    f"matrix {matrix!r} on {sample_id} — file one in "
+                    f"analysis_service_specs"
+                )
+            try:
+                conforms = evaluate(spec, row.result_value)
+            except SpecRuleError as e:
+                raise NativeSectionsError(
+                    f"native sections: profile '{prof.key}' row "
+                    f"'{svc.keyword}' on {sample_id}: {e.detail}"
+                ) from e
             rows.append({
                 "keyword": svc.keyword,
                 "name": svc.title,
                 "result": row.result_value,
                 "unit": unit,
                 "method": _method_label(db, row.method_id),
-                "specification": None,   # COABuilder fills from baked specs
-                "conforms": None,        # COABuilder fills from baked specs
+                "specification": _spec_wire_dict(spec),
+                "conforms": conforms,
             })
         if not rows:
             # Rule 3 (section half): unreachable while members are required

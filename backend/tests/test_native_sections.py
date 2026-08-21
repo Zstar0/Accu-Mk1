@@ -9,9 +9,14 @@ from coa.native_sections import NativeSectionsError, build_native_sections
 
 
 def _mk_native_profile(db, *, key, services, archetype="limit_table",
-                       title=None, sort=10):
-    """Profile with the given member services (list of (keyword, origin))."""
-    from models import AnalysisProfile, AnalysisService, analysis_profile_members
+                       title=None, sort=10, specs=True):
+    """Profile with the given member services (list of (keyword, origin)).
+    specs=True files a loose NULL-matrix range spec (max 100 ppm) per mk1
+    member so rule 5 resolves; specs=False leaves services spec-less for
+    the rule-5 abort tests."""
+    from decimal import Decimal
+    from models import (AnalysisProfile, AnalysisService, AnalysisServiceSpec,
+                        analysis_profile_members)
     prof = AnalysisProfile(
         key=key, name=key.replace("_", " ").title(), is_addon=True,
         coa_archetype=archetype, coa_section_title=title, coa_sort_order=sort,
@@ -24,6 +29,11 @@ def _mk_native_profile(db, *, key, services, archetype="limit_table",
         db.execute(analysis_profile_members.insert().values(
             analysis_profile_id=prof.id, analysis_service_id=svc.id, sort_order=i,
         ))
+        if specs and origin == "mk1":
+            db.add(AnalysisServiceSpec(
+                analysis_service_id=svc.id, matrix=None, rule_kind="range",
+                max_value=Decimal("100"), unit="ppm",
+            ))
         svcs.append(svc)
     db.flush()
     return prof, svcs
@@ -65,7 +75,10 @@ def test_happy_path_document_shape(db_session, monkeypatch):
     assert [r["keyword"] for r in section["rows"]] == ["HM-PB", "HM-AS"]  # member order
     row = section["rows"][0]
     assert row["result"] == "0.12" and row["unit"] == "ppm"
-    assert row["specification"] is None and row["conforms"] is None
+    assert row["specification"] == {"rule_kind": "range", "equals": None,
+                                    "min": None, "max": 100.0, "unit": "ppm",
+                                    "display": None}
+    assert row["conforms"] is True
 
 
 def test_duplicate_order_key_emits_one_section(db_session, monkeypatch):
@@ -256,7 +269,9 @@ def test_blank_unit_logs_warning_and_still_builds(db_session, monkeypatch, caplo
     ENDO-LAL blank-unit failure class — but pH's unit is legitimately blank
     per the spec's family table, so this must NOT abort. It logs a warning
     and the document still builds."""
-    from models import AnalysisProfile, AnalysisService, LimsAnalysis, LimsSample, analysis_profile_members
+    from decimal import Decimal
+    from models import (AnalysisProfile, AnalysisService, AnalysisServiceSpec,
+                        LimsAnalysis, LimsSample, analysis_profile_members)
     prof = AnalysisProfile(
         key="ph_panel", name="Ph Panel", is_addon=True,
         coa_archetype="limit_table", coa_section_title="pH", coa_sort_order=10,
@@ -266,6 +281,12 @@ def test_blank_unit_logs_warning_and_still_builds(db_session, monkeypatch, caplo
     db_session.add(svc); db_session.flush()
     db_session.execute(analysis_profile_members.insert().values(
         analysis_profile_id=prof.id, analysis_service_id=svc.id, sort_order=0,
+    ))
+    # Rule 5 needs a resolvable spec (not this test's concern — pH's
+    # legitimately-blank unit is); a real-world pH range keeps it inert.
+    db_session.add(AnalysisServiceSpec(
+        analysis_service_id=svc.id, matrix=None, rule_kind="range",
+        min_value=Decimal("0"), max_value=Decimal("14"),
     ))
     parent = LimsSample(sample_id="P-7004")
     db_session.add(parent); db_session.flush()
@@ -286,3 +307,132 @@ def test_blank_unit_logs_warning_and_still_builds(db_session, monkeypatch, caplo
         "native_section_blank_unit" in r.getMessage() and "keyword=PH" in r.getMessage()
         for r in caplog.records
     )
+
+
+# ── Spec-ownership slice 1: Mk1 fills the wire + rule 5 ─────────────────────
+
+def _order_lookup(monkeypatch, key="heavy_metals"):
+    monkeypatch.setattr(
+        "coa.native_sections.fetch_sample_services",
+        lambda sample_id: {"services": {key: True}, "package": None},
+    )
+
+
+def test_out_of_range_result_conforms_false_but_builds(db_session, monkeypatch):
+    """Non-conforming is a VERDICT, not an abort — the certificate prints
+    Does Not Conform; only an unappliable rule aborts."""
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")])
+    parent = _mk_parent_with_rows(db_session, svcs, result="999")
+    _order_lookup(monkeypatch)
+    doc = build_native_sections(db_session, parent)
+    row = doc["sections"][0]["rows"][0]
+    assert row["conforms"] is False
+    assert row["specification"]["max"] == 100.0
+
+
+def test_equals_spec_fills_and_verdicts(db_session, monkeypatch):
+    from models import AnalysisServiceSpec
+    prof, svcs = _mk_native_profile(db_session, key="sterility_usp71",
+                                    services=[("STERILITY_USP71", "mk1")],
+                                    specs=False)
+    db_session.add(AnalysisServiceSpec(
+        analysis_service_id=svcs[0].id, matrix=None, rule_kind="equals",
+        equals_value="Not Detected"))
+    db_session.flush()
+    parent = _mk_parent_with_rows(db_session, svcs, result="Not Detected")
+    _order_lookup(monkeypatch, key="sterility_usp71")
+    doc = build_native_sections(db_session, parent)
+    row = doc["sections"][0]["rows"][0]
+    assert row["conforms"] is True
+    assert row["specification"] == {"rule_kind": "equals",
+                                    "equals": "Not Detected", "min": None,
+                                    "max": None, "unit": None, "display": None}
+
+
+def test_rule5_no_spec_aborts_naming_service_and_matrix(db_session, monkeypatch):
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    parent = _mk_parent_with_rows(db_session, svcs)
+    _order_lookup(monkeypatch)
+    with pytest.raises(NativeSectionsError, match="HM-PB.*no active spec"):
+        build_native_sections(db_session, parent)
+
+
+def test_rule5_inactive_spec_aborts(db_session, monkeypatch):
+    from models import AnalysisServiceSpec
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    from decimal import Decimal
+    db_session.add(AnalysisServiceSpec(
+        analysis_service_id=svcs[0].id, matrix=None, rule_kind="range",
+        max_value=Decimal("0.5"), active=False))
+    db_session.flush()
+    parent = _mk_parent_with_rows(db_session, svcs)
+    _order_lookup(monkeypatch)
+    with pytest.raises(NativeSectionsError, match="no active spec"):
+        build_native_sections(db_session, parent)
+
+
+def test_unappliable_rule_aborts(db_session, monkeypatch):
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")])
+    parent = _mk_parent_with_rows(db_session, svcs, result="N/A")
+    _order_lookup(monkeypatch)
+    with pytest.raises(NativeSectionsError, match="not numeric"):
+        build_native_sections(db_session, parent)
+
+
+def test_nan_result_aborts_fail_closed(db_session, monkeypatch):
+    # The old COABuilder engine false-passed NaN; the producer now refuses.
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")])
+    parent = _mk_parent_with_rows(db_session, svcs, result="nan")
+    _order_lookup(monkeypatch)
+    with pytest.raises(NativeSectionsError, match="non-finite"):
+        build_native_sections(db_session, parent)
+
+
+def test_matrix_specific_spec_beats_null(db_session, monkeypatch):
+    from decimal import Decimal
+    from models import AnalysisServiceSpec
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")])  # NULL @ 100
+    db_session.add(AnalysisServiceSpec(
+        analysis_service_id=svcs[0].id, matrix="Bacteriostatic Water",
+        rule_kind="range", max_value=Decimal("0.05"), unit="ppm"))
+    db_session.flush()
+    parent = _mk_parent_with_rows(db_session, svcs, result="0.12")
+    parent.sample_type_title = "Bacteriostatic Water"
+    db_session.flush()
+    _order_lookup(monkeypatch)
+    doc = build_native_sections(db_session, parent)
+    row = doc["sections"][0]["rows"][0]
+    assert row["conforms"] is False          # judged by the BW row (0.05)
+    assert row["specification"]["max"] == 0.05
+
+
+def test_blend_matrix_resolves_peptide_spec(db_session, monkeypatch):
+    from decimal import Decimal
+    from models import AnalysisServiceSpec
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")], specs=False)
+    db_session.add(AnalysisServiceSpec(
+        analysis_service_id=svcs[0].id, matrix="Peptide", rule_kind="range",
+        max_value=Decimal("0.5"), unit="ppm"))
+    db_session.flush()
+    parent = _mk_parent_with_rows(db_session, svcs, result="0.12")
+    parent.sample_type_title = "Peptide Blend"
+    db_session.flush()
+    _order_lookup(monkeypatch)
+    doc = build_native_sections(db_session, parent)
+    assert doc["sections"][0]["rows"][0]["conforms"] is True
+
+
+def test_null_sample_type_title_uses_null_matrix_spec(db_session, monkeypatch):
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")])
+    parent = _mk_parent_with_rows(db_session, svcs)   # sample_type_title None
+    _order_lookup(monkeypatch)
+    doc = build_native_sections(db_session, parent)
+    assert doc["sections"][0]["rows"][0]["conforms"] is True
