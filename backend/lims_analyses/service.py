@@ -934,6 +934,45 @@ def list_native_parent_analyses(db: Session, sample_id: str) -> list:
     return [NativeParentAnalysisRow.model_validate(a) for a in deduped]
 
 
+def list_native_parent_analyses_senaite_shape(
+    db: Session, sample_id: str
+) -> List["SenaiteShapeAnalysisResponse"]:
+    """Native (origin='mk1') parent-tier rows projected to the FE's
+    SenaiteAnalysis shape for the shared AnalysisTable (native parent
+    analyses card).
+
+    Row set intentionally differs from list_native_parent_analyses (the
+    6-field card read): ALL review states and the full lineage (retracted
+    old roots, retest rows) are included with no latest-per-service dedup —
+    the table groups by title and renders history rows itself, taking the
+    LAST row as current (hence ORDER BY keyword, id). Shadow rows and
+    senaite-origin services stay excluded: this is the native section, not
+    a mirror of the SENAITE AR (that surface is
+    list_parent_analyses_senaite_shape).
+    """
+    from models import AnalysisService, LimsSample
+
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        raise NotFoundError(f"sample {sample_id!r} not known to Mk1")
+    rows = list(
+        db.execute(
+            select(LimsAnalysis)
+            .join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
+            .where(
+                LimsAnalysis.lims_sample_pk == parent.id,
+                LimsAnalysis.lims_sub_sample_pk.is_(None),
+                LimsAnalysis.provenance == "canonical",
+                AnalysisService.origin == "mk1",
+            )
+            .order_by(LimsAnalysis.keyword, LimsAnalysis.id)
+        ).scalars().all()
+    )
+    return _serialize_senaite_shape_rows(db, rows)
+
+
 # ─── Phase 4b: parent promotions read ───────────────────────────────────────
 
 
@@ -1240,6 +1279,7 @@ def cascade_parent_retest_to_sources(
     parent_sample_id: str,
     keyword: str,
     user_id: Optional[int],
+    source_reason: str = "cascaded from parent SENAITE retest",
 ) -> list[int]:
     """When a PARENT-tier analysis is retested (via SENAITE), cascade the retest
     down to each source vial-tier analysis that was promoted into that parent.
@@ -1322,7 +1362,7 @@ def cascade_parent_retest_to_sources(
                 db,
                 analysis_id=src.id,
                 kind="retest",
-                reason="cascaded from parent SENAITE retest",
+                reason=source_reason,
                 user_id=user_id,
             )
             new_row_ids.append(new_row.id)
@@ -1358,6 +1398,66 @@ def cascade_parent_retest_to_sources(
         db.commit()
 
     return new_row_ids
+
+
+def parent_retest(
+    db: Session,
+    *,
+    sample_id: str,
+    keyword: str,
+    user_id: Optional[int],
+    reason: Optional[str] = None,
+) -> tuple[list[int], Optional[str]]:
+    """Native origination of a parent-tier retest: validate, then run the
+    existing cascade (retest promoted sources + un-promote the verified
+    parent). The generic transitions endpoint tier-blocks 'retest' at
+    TIER_PARENT on purpose — this is the dedicated, fail-closed path.
+
+    Fail-closed guard: the active canonical parent row for the keyword must
+    be 'verified'. Without it, a direct API caller could retract vial
+    results under a PUBLISHED parent (the cascade retests sources
+    regardless of parent state; only its un-promote step checks verified).
+    """
+    from models import LimsSample
+
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        raise NotFoundError(f"sample {sample_id!r} not known to Mk1")
+    active = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+            LimsAnalysis.keyword == keyword,
+            LimsAnalysis.retest_of_id.is_(None),
+            LimsAnalysis.review_state.not_in(("retracted", "rejected")),
+            LimsAnalysis.provenance == "canonical",
+        )
+    ).scalars().first()
+    if active is None:
+        raise NotFoundError(
+            f"no active native parent row for keyword {keyword!r} on {sample_id!r}"
+        )
+    if active.review_state != "verified":
+        raise InvalidTransitionError(
+            active.review_state,
+            "retest",
+            message=(
+                "parent retest requires the parent row to be 'verified'; "
+                f"row is {active.review_state!r} (published parents go "
+                "through invalidate→retest)"
+            ),
+        )
+    new_ids = cascade_parent_retest_to_sources(
+        db,
+        parent_sample_id=sample_id,
+        keyword=keyword,
+        user_id=user_id,
+        source_reason=reason or "retested from parent (native)",
+    )
+    db.refresh(active)
+    return new_ids, active.review_state
 
 
 # ─── Parent-reject cascade ───────────────────────────────────────────────────

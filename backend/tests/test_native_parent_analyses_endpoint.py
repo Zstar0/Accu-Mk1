@@ -177,3 +177,178 @@ def test_sub_sample_rows_are_excluded(client, db_session):
     r = client.get(f"/api/lims-analyses/parent/{parent.sample_id}/native-analyses")
     assert r.status_code == 200
     assert r.json() == []
+
+
+# ─── Task 2: ?as=senaite_shape projection ────────────────────────────────────
+
+
+def test_senaite_shape_returns_full_table_fields(client, db_session):
+    """?as=senaite_shape projects rows through the shared serializer."""
+    from lims_analyses.schemas import SenaiteShapeAnalysisResponse
+    from models import LimsAnalysis, LimsSample
+
+    parent = LimsSample(sample_id="P-9101")
+    db_session.add(parent)
+    db_session.flush()
+
+    svc = _mk_service(db_session, keyword="HM-CD", origin="mk1")
+    db_session.add(LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=svc.id,
+        keyword=svc.keyword, title=svc.title,
+        result_value="0.05", result_unit="ppm", review_state="verified",
+    ))
+    db_session.commit()
+
+    r = client.get(f"/api/lims-analyses/parent/{parent.sample_id}/native-analyses?as=senaite_shape")
+    assert r.status_code == 200, r.text
+    rows = r.json()
+    assert rows
+    row = rows[0]
+    for field in (
+        "uid", "keyword", "title", "result", "result_options", "unit",
+        "method", "method_uid", "instrument", "instrument_uid", "analyst",
+        "review_state", "captured", "retested", "promoted_to_parent_id",
+    ):
+        assert field in row, f"missing {field}"
+    assert row["uid"].startswith("mk1:")
+    # Full key-set pin: verifies empirically (not just spot-checked fields)
+    # that the row is the real SenaiteShapeAnalysisResponse shape, not a
+    # coincidental partial match — protects the AnalysisTable dropdown
+    # fields (method_options, instrument_options, result_type, etc.) that
+    # later tasks depend on.
+    assert set(row.keys()) == set(SenaiteShapeAnalysisResponse.model_fields)
+
+
+def test_senaite_shape_includes_lineage_current_last(client, db_session):
+    """A retracted old root and the active root for the same keyword are BOTH
+    returned, active last (groupAnalysesByTitle takes the last row as current)."""
+    from models import LimsAnalysis, LimsSample
+
+    KW = "HM-CR"
+    parent = LimsSample(sample_id="P-9102")
+    db_session.add(parent)
+    db_session.flush()
+
+    svc = _mk_service(db_session, keyword=KW, origin="mk1")
+
+    # Old root, retracted (lower id — inserted first).
+    old_root = LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=svc.id,
+        keyword=svc.keyword, title=svc.title,
+        result_value="0.20", result_unit="ppm", review_state="retracted",
+    )
+    db_session.add(old_root)
+    db_session.flush()
+
+    # New active root, verified (higher id — inserted second).
+    new_root = LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=svc.id,
+        keyword=svc.keyword, title=svc.title,
+        result_value="0.18", result_unit="ppm", review_state="verified",
+    )
+    db_session.add(new_root)
+    db_session.commit()
+
+    r = client.get(f"/api/lims-analyses/parent/{parent.sample_id}/native-analyses?as=senaite_shape")
+    assert r.status_code == 200, r.text
+    resp = r.json()
+    rows = [row for row in resp if row["keyword"] == KW]
+    assert [row["review_state"] for row in rows] == ["retracted", "verified"]
+
+
+def test_senaite_shape_excludes_shadow_and_senaite_origin_and_subsample_rows(client, db_session):
+    """Shadow provenance, senaite-origin services, and vial-hosted rows never appear."""
+    from models import LimsAnalysis, LimsSample, LimsSubSample
+
+    SHADOW_KW = "HM-HG"
+    SENAITE_ORIGIN_KW = "STER-PCR"
+    VIAL_HOSTED_KW = "HM-AS"
+    CURRENT_KW = "HM-PB"
+
+    parent = LimsSample(sample_id="P-9103")
+    db_session.add(parent)
+    db_session.flush()
+    sub = LimsSubSample(
+        sample_id="P-9103-S01", external_lims_uid="uid-9103-s01",
+        parent_sample_pk=parent.id, vial_sequence=1,
+    )
+    db_session.add(sub)
+    db_session.flush()
+
+    shadow_svc = _mk_service(db_session, keyword=SHADOW_KW, origin="mk1")
+    senaite_svc = _mk_service(db_session, keyword=SENAITE_ORIGIN_KW, origin="senaite")
+    vial_svc = _mk_service(db_session, keyword=VIAL_HOSTED_KW, origin="mk1")
+    current_svc = _mk_service(db_session, keyword=CURRENT_KW, origin="mk1")
+
+    # Shadow provenance parent-hosted row — must NOT come back.
+    db_session.add(LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=shadow_svc.id,
+        keyword=shadow_svc.keyword, title=shadow_svc.title,
+        result_value="Detected", result_unit=None, review_state="senaite_mirror",
+        provenance="shadow",
+    ))
+
+    # SENAITE-origin service, canonical parent-hosted row — must NOT come
+    # back (origin != 'mk1').
+    db_session.add(LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=senaite_svc.id,
+        keyword=senaite_svc.keyword, title=senaite_svc.title,
+        result_value="Negative", result_unit=None, review_state="verified",
+    ))
+
+    # Vial-hosted (sub-sample) row with an mk1-origin service — must NOT
+    # come back (this endpoint is parent-tier only).
+    db_session.add(LimsAnalysis(
+        lims_sub_sample_pk=sub.id, analysis_service_id=vial_svc.id,
+        keyword=vial_svc.keyword, title=vial_svc.title,
+        result_value="0.30", result_unit="ppm", review_state="verified",
+    ))
+
+    # Current native parent row — the positive control, must come back.
+    db_session.add(LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=current_svc.id,
+        keyword=current_svc.keyword, title=current_svc.title,
+        result_value="0.12", result_unit="ppm", review_state="verified",
+    ))
+    db_session.commit()
+
+    r = client.get(f"/api/lims-analyses/parent/{parent.sample_id}/native-analyses?as=senaite_shape")
+    assert r.status_code == 200, r.text
+    resp = r.json()
+    # Discriminates against the default (6-field) shape: every row must
+    # actually be the senaite_shape projection, not the default rows this
+    # exclusion set would also happen to pass against if ?as= were ignored.
+    assert all(row["uid"].startswith("mk1:") for row in resp)
+    keywords = {row["keyword"] for row in resp}
+    assert SHADOW_KW not in keywords
+    assert SENAITE_ORIGIN_KW not in keywords
+    assert VIAL_HOSTED_KW not in keywords
+    assert CURRENT_KW in keywords
+
+
+def test_default_shape_unchanged(client, db_session):
+    """Back-compat pin: without ?as= the response is still the 6-field rows."""
+    from models import LimsAnalysis, LimsSample
+
+    parent = LimsSample(sample_id="P-9104")
+    db_session.add(parent)
+    db_session.flush()
+
+    svc = _mk_service(db_session, keyword="HM-PB", origin="mk1")
+    db_session.add(LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=svc.id,
+        keyword=svc.keyword, title=svc.title,
+        result_value="0.12", result_unit="ppm", review_state="verified",
+    ))
+    db_session.commit()
+
+    r = client.get(f"/api/lims-analyses/parent/{parent.sample_id}/native-analyses")
+    assert r.status_code == 200, r.text
+    assert set(r.json()[0].keys()) == {
+        "keyword", "title", "result_value", "result_unit", "review_state", "updated_at",
+    }
+
+
+def test_senaite_shape_unknown_sample_404(client):
+    r = client.get("/api/lims-analyses/parent/NOPE-404/native-analyses?as=senaite_shape")
+    assert r.status_code == 404

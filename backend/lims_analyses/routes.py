@@ -26,6 +26,8 @@ from lims_analyses.schemas import (
     HostKind,
     NativeParentAnalysisRow,
     ParentPromotionInfo,
+    ParentRetestRequest,
+    ParentRetestResponse,
     PromoteRequest,
     PromoteResponse,
     PromotionRow,
@@ -217,9 +219,13 @@ def list_promotions(
         raise _handle_service_error(e)
 
 
-@router.get("/parent/{sample_id}/native-analyses", response_model=List[NativeParentAnalysisRow])
+@router.get(
+    "/parent/{sample_id}/native-analyses",
+    response_model=Union[List[NativeParentAnalysisRow], List[SenaiteShapeAnalysisResponse]],
+)
 def list_native_parent_analyses(
     sample_id: str,
+    as_: Literal["default", "senaite_shape"] = Query("default", alias="as"),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -229,9 +235,38 @@ def list_native_parent_analyses(
     the separate reader that surfaces native results (e.g. Heavy Metals) that
     table structurally can't show. 404 when the sample is unknown to Mk1
     (service.NotFoundError, translated by _handle_service_error).
+
+    ?as=senaite_shape projects the rows through the shared senaite-shape
+    serializer for the AnalysisTable-backed card — full lineage, all states.
     """
     try:
+        if as_ == "senaite_shape":
+            return service.list_native_parent_analyses_senaite_shape(db, sample_id)
         return service.list_native_parent_analyses(db, sample_id)
+    except Exception as e:
+        raise _handle_service_error(e)
+
+
+@router.post("/parent/{sample_id}/retest", response_model=ParentRetestResponse)
+def parent_retest(
+    sample_id: str,
+    req: ParentRetestRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Native parent-tier retest (AnalysisTable card verb): retests the
+    promoted source vial rows and un-promotes the verified parent row via
+    cascade_parent_retest_to_sources. 409 invalid_transition unless the
+    active parent row is 'verified' — published parents are protected."""
+    try:
+        new_ids, state = service.parent_retest(
+            db,
+            sample_id=sample_id,
+            keyword=req.keyword,
+            user_id=getattr(current_user, "id", None),
+            reason=req.reason,
+        )
+        return ParentRetestResponse(new_row_ids=new_ids, parent_review_state=state)
     except Exception as e:
         raise _handle_service_error(e)
 

@@ -261,3 +261,16 @@ class PromoteResponse(BaseModel):
     """Returns the new parent-tier row and the promotion link rows."""
     parent: AnalysisResponse
     promotions: List[PromotionRow]
+
+
+# ─── Task 3: dedicated native parent-retest route ─────────────────────────────
+
+
+class ParentRetestRequest(BaseModel):
+    keyword: str
+    reason: Optional[str] = None
+
+
+class ParentRetestResponse(BaseModel):
+    new_row_ids: list[int]
+    parent_review_state: Optional[str] = None

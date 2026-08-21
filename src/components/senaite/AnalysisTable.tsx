@@ -289,8 +289,42 @@ export function visibleRowTransitions(
   )
 }
 
+export type AnalysisVerbPolicy = 'default' | 'parent-native'
+
+/** Policy-aware row verbs. 'parent-native' (the native parent analyses card)
+ *  offers exactly one verb — retest on a 'verified' row — and routes it via
+ *  onParentRetest (the generic transition endpoint tier-blocks parent
+ *  retest; the card calls the dedicated parent-retest route and owns the
+ *  destructive confirm). Everything else is display-only. */
+export function visibleRowTransitionsForPolicy(
+  a: SenaiteAnalysis,
+  policy: AnalysisVerbPolicy,
+  parentLineStates?: Record<string, string>,
+): string[] {
+  if (policy === 'parent-native') {
+    return a.uid && a.review_state === 'verified' ? ['retest'] : []
+  }
+  return visibleRowTransitions(a, parentLineStates)
+}
+
 const BULK_TRANSITIONS = ['submit', 'retest', 'verify', 'retract', 'reject'] as const
 export type BulkTransition = (typeof BULK_TRANSITIONS)[number]
+
+/** Policy-aware bulk actions. 'parent-native' reduces the toolbar to bulk
+ *  retest over an all-verified selection; promote/variance never show. */
+export function deriveBulkActionsForPolicy(
+  selected: SenaiteAnalysis[],
+  policy: AnalysisVerbPolicy,
+  parentLineStates?: Record<string, string>,
+  vialKind?: string | null,
+): { actions: BulkTransition[]; showPromote: boolean; showVarianceVerify: boolean } {
+  if (policy === 'parent-native') {
+    const allVerified =
+      selected.length > 0 && selected.every(a => a.review_state === 'verified')
+    return { actions: allVerified ? ['retest'] : [], showPromote: false, showVarianceVerify: false }
+  }
+  return deriveBulkActions(selected, parentLineStates, vialKind)
+}
 
 /** Bulk toolbar actions: intersection of allowed transitions, except verify is
  *  suppressed when ANY selected row is promotable OR already promoted; Promote
@@ -1203,6 +1237,8 @@ function AnalysisRow({
   parentLineStates,
   vialKind,
   resultsReadOnly = false,
+  verbPolicy = 'default',
+  onParentRetest,
 }: {
   analysis: SenaiteAnalysis
   analyteNameMap: Map<number, string>
@@ -1232,6 +1268,10 @@ function AnalysisRow({
   vialKind?: string | null
   /** Suppress the result editor — render the static value only. */
   resultsReadOnly?: boolean
+  /** Verb policy — see AnalysisTableProps.verbPolicy. */
+  verbPolicy?: AnalysisVerbPolicy
+  /** parent-native only: row retest requested — open the card's confirm. */
+  onParentRetest?: (analysis: SenaiteAnalysis) => void
 }) {
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
@@ -1242,9 +1282,9 @@ function AnalysisRow({
   // Phase 4b promote affordance — see isPromotable; verify is hidden on
   // promotable rows via visibleRowTransitions.
   const locked = isLockedByParent(analysis, parentLineStates)
-  const allowedTransitions = visibleRowTransitions(analysis, parentLineStates)
-  const canPromote = isPromotable(analysis, vialKind) && !locked
-  const canVarVerify = canVarianceVerify(analysis, vialKind)
+  const allowedTransitions = visibleRowTransitionsForPolicy(analysis, verbPolicy, parentLineStates)
+  const canPromote = verbPolicy !== 'parent-native' && isPromotable(analysis, vialKind) && !locked
+  const canVarVerify = verbPolicy !== 'parent-native' && canVarianceVerify(analysis, vialKind)
   const isPromoted = analysis.promoted_to_parent_id != null
   const vialAssign = analysis.keyword ? vialAssignmentByKeyword?.get(analysis.keyword) : undefined
   const vialOverlay = vialAssign?.matches[0]?.mk1Analysis ?? null
@@ -1353,6 +1393,7 @@ function AnalysisRow({
         field="method"
         mk1Override={vialOverlay}
         mk1OverrideEditable={vialOverlayEditable}
+        readOnly={verbPolicy === 'parent-native'}
         onSaved={(newUid, newTitle) => {
           if (vialOverlay) onVialMethodInstrumentSaved?.()
           else if (analysis.uid) onMethodInstrumentSaved?.(analysis.uid, 'method', newUid, newTitle)
@@ -1363,6 +1404,7 @@ function AnalysisRow({
         field="instrument"
         mk1Override={vialOverlay}
         mk1OverrideEditable={vialOverlayEditable}
+        readOnly={verbPolicy === 'parent-native'}
         onSaved={(newUid, newTitle) => {
           if (vialOverlay) onVialMethodInstrumentSaved?.()
           else if (analysis.uid) onMethodInstrumentSaved?.(analysis.uid, 'instrument', newUid, newTitle)
@@ -1466,7 +1508,9 @@ function AnalysisRow({
                   variant={DESTRUCTIVE_TRANSITIONS.has(t) ? 'destructive' : 'default'}
                   onClick={() => {
                     if (!analysis.uid) return
-                    if (DESTRUCTIVE_TRANSITIONS.has(t)) {
+                    if (verbPolicy === 'parent-native') {
+                      onParentRetest?.(analysis)
+                    } else if (DESTRUCTIVE_TRANSITIONS.has(t)) {
                       transition.requestConfirm(analysis.uid, t, analysis.title)
                     } else {
                       void transition.executeTransition(analysis.uid, t)
@@ -1659,6 +1703,15 @@ interface AnalysisTableProps {
    * false → unchanged for sub-sample pages and the Vials Quick Look.
    */
   resultsReadOnly?: boolean
+  /** Verb policy. Omit ('default') = existing behavior byte-identical.
+   *  'parent-native' = the native parent analyses card: retest-only on
+   *  verified rows via onParentRetest/onParentBulkRetest; method/instrument
+   *  editing suppressed; promote/variance side channels suppressed. */
+  verbPolicy?: AnalysisVerbPolicy
+  /** parent-native only: row retest requested — open the card's confirm. */
+  onParentRetest?: (analysis: SenaiteAnalysis) => void
+  /** parent-native only: bulk retest over the selected current rows. */
+  onParentBulkRetest?: (analyses: SenaiteAnalysis[]) => void
 }
 
 export function AnalysisTable({
@@ -1682,6 +1735,9 @@ export function AnalysisTable({
   hideProgress = false,
   vialKind,
   resultsReadOnly = false,
+  verbPolicy = 'default',
+  onParentRetest,
+  onParentBulkRetest,
 }: AnalysisTableProps) {
   const [analysisFilter, setAnalysisFilter] = useState<'all' | 'verified' | 'pending' | 'invalid'>('all')
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null)
@@ -1767,7 +1823,7 @@ export function AnalysisTable({
     .filter(g => g.current.uid && bulk.selectedUids.has(g.current.uid))
     .map(g => g.current)
   const { actions: bulkAvailableActions, showPromote: bulkShowPromote, showVarianceVerify: bulkShowVarianceVerify } =
-    deriveBulkActions(selectedAnalyses, parentLineStates, vialKind)
+    deriveBulkActionsForPolicy(selectedAnalyses, verbPolicy, parentLineStates, vialKind)
 
   // Disable toolbar when any per-row transition is in-flight
   const toolbarDisabled = transition.pendingUids.size > 0
@@ -1913,6 +1969,10 @@ export function AnalysisTable({
                     variant={DESTRUCTIVE_TRANSITIONS.has(t) ? 'destructive' : 'default'}
                     disabled={toolbarDisabled}
                     onClick={() => {
+                      if (verbPolicy === 'parent-native') {
+                        onParentBulkRetest?.(selectedAnalyses)
+                        return
+                      }
                       if (DESTRUCTIVE_TRANSITIONS.has(t)) {
                         setBulkPendingConfirm({ transition: t, count: bulk.selectedUids.size })
                       } else {
@@ -2008,6 +2068,8 @@ export function AnalysisTable({
                       parentLineStates={parentLineStates}
                       vialKind={vialKind}
                       resultsReadOnly={resultsReadOnly}
+                      verbPolicy={verbPolicy}
+                      onParentRetest={onParentRetest}
                     />
                     {isExpanded && group.history.map(h => (
                       <HistoryRow
