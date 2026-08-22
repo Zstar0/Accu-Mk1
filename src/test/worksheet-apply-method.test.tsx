@@ -109,6 +109,7 @@ const METHOD_ICP: HplcMethod = {
 const ITEM_BASE = {
   sample_uid: 'uid-base',
   service_group_id: 1,
+  department_id: null,
   department_name: null,
   group_name: 'ICP-MS',
   group_color: 'zinc',
