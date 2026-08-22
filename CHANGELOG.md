@@ -1,5 +1,39 @@
 # Changelog
 
+## v1.8.0 — 2026-08-21
+
+The catalog arc (PRs #87–#119): the analysis catalog becomes the source of
+truth for departments, profiles, vial demand, COA sections, and specs.
+
+### Added
+
+- **Analysis catalog foundation** — departments, analysis profiles, vial
+  roles, profile members, admin CRUD UI (#88); catalog change-log +
+  snapshot reprovision (S4); department totality (S6).
+- **Native COA sections** — parent-tier results render as catalog-driven
+  sections on PDF and digital COAs (#89), with display fields: LOQ,
+  basis/method/prep chrome, footnotes, `< LOQ` display censoring
+  (#105/#106).
+- **Catalog-driven order routing, demand seeding and bench** (#90/#91);
+  service-id identity for native rows (S3); sample-collision quarantine
+  (S8); catalog as the single vial-demand source — cart, checkout, vial
+  plan, box labels (S9, #109).
+- **Parent analyses table + verification flow** — promote mints
+  `parent_to_verify`; verify in Mk1 tees the SENAITE write-back
+  (#95/#96/#97).
+- **Amendment audit (ISO 7.5.2)** — before/after capture on every analysis
+  transition site, including reason-only reportable edits (#98).
+- **Native spec ownership + specs editor** — peptide > matrix > wildcard
+  tiers, audited writes (#93/#105).
+- **Native Manage Analyses, rider vial visibility, methods & instruments,
+  Analysis Profiles help guide** (#108/#110–#115).
+- **IS catalog registry S2S feed** (#94).
+
+### Fixed
+
+- HPLC blend QTY round-then-sum + slot match by abbreviation (#116).
+- Flags flyout UAT fixes (#117); rider-aware manage-analyses restore (#118).
+
 ## v1.7.5 — 2026-08-18
 
 ### Fixed
