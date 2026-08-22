@@ -163,6 +163,40 @@ describe('ServiceSpecsSection', () => {
     })
   })
 
+  it('informational rule sends all-null bounds and enables Add Spec with no fields filled', async () => {
+    const { createServiceSpec } = await import('@/lib/api')
+    const user = userEvent.setup()
+    render(<ServiceSpecsSection serviceId={42} peptides={[]} />)
+    await screen.findByText('Specs (2)')
+
+    // Type bounds first so the payload gate (not empty strings) is what
+    // nulls them after the Rule switch — same discipline as the equals test.
+    await user.type(screen.getByLabelText('Max'), '100')
+    await user.type(screen.getByLabelText('LOQ'), '0.5')
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Rule' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Report as measured' }))
+
+    // Bounds inputs unmount; the helper note explains the no-verdict shape.
+    expect(screen.queryByLabelText('Max')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('LOQ')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /add spec/i }))
+
+    await waitFor(() => {
+      expect(createServiceSpec).toHaveBeenCalledWith(
+        42,
+        expect.objectContaining({
+          rule_kind: 'informational',
+          min_value: null,
+          max_value: null,
+          equals_value: null,
+          loq: null,
+        })
+      )
+    })
+  })
+
   it('shows LOQ in the read-only spec row summary when set', async () => {
     const { listServiceSpecs } = await import('@/lib/api')
     const rangeSpec = specs.find(s => s.id === 1)

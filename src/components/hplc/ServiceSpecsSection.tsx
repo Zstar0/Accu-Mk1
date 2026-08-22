@@ -50,6 +50,10 @@ type Tier = 'all' | 'matrix' | 'peptide'
  *  are never censored (backend never reads loq off them), so the equals
  *  branch stays untouched. */
 function ruleLabel(spec: AnalysisServiceSpecRecord): string {
+  // Report-only rows carry no bounds by construction — the admin list says
+  // "As measured"; the COA's spec cell renders display_override or empty (R1).
+  if (spec.rule_kind === 'informational')
+    return spec.display_override ? `As measured · ${spec.display_override}` : 'As measured'
   if (spec.rule_kind === 'equals') return `= ${spec.equals_value ?? '—'}`
   const unit = spec.unit ? ` ${spec.unit}` : ''
   const { min_value, max_value, loq } = spec
@@ -69,7 +73,7 @@ interface AddFormState {
   matrix: string
   peptideId: number | null
   peptideQuery: string
-  ruleKind: 'range' | 'equals'
+  ruleKind: 'range' | 'equals' | 'informational'
   minValue: string
   maxValue: string
   equalsValue: string
@@ -97,6 +101,7 @@ const EMPTY_FORM: AddFormState = {
 function isFormValid(f: AddFormState): boolean {
   if (f.tier === 'matrix' && !f.matrix) return false
   if (f.tier === 'peptide' && f.peptideId == null) return false
+  if (f.ruleKind === 'informational') return true // no bounds by design
   if (f.ruleKind === 'range')
     return f.minValue.trim() !== '' || f.maxValue.trim() !== ''
   return f.equalsValue.trim() !== ''
@@ -110,6 +115,8 @@ function buildPayload(f: AddFormState): ServiceSpecPayload {
     min_value: f.ruleKind === 'range' ? f.minValue.trim() || null : null,
     max_value: f.ruleKind === 'range' ? f.maxValue.trim() || null : null,
     equals_value: f.ruleKind === 'equals' ? f.equalsValue.trim() : null,
+    // informational sends no bounds/equals/loq — the backend 422s them
+    // loudly (R3), so the payload never even offers the temptation.
     unit: f.unit.trim() || null,
     display_override: f.displayOverride.trim() || null,
     loq: f.ruleKind === 'range' ? f.loq.trim() || null : null,
@@ -378,7 +385,10 @@ export function ServiceSpecsSection({
             <Select
               value={form.ruleKind}
               onValueChange={v =>
-                setForm(f => ({ ...f, ruleKind: v as 'range' | 'equals' }))
+                setForm(f => ({
+                  ...f,
+                  ruleKind: v as 'range' | 'equals' | 'informational',
+                }))
               }
             >
               <SelectTrigger aria-label="Rule" className="h-8 w-full text-sm">
@@ -387,10 +397,18 @@ export function ServiceSpecsSection({
               <SelectContent>
                 <SelectItem value="range">Range</SelectItem>
                 <SelectItem value="equals">Equals</SelectItem>
+                <SelectItem value="informational">Report as measured</SelectItem>
               </SelectContent>
             </Select>
           </Field>
-          {form.ruleKind === 'range' ? (
+          {form.ruleKind === 'informational' ? (
+            <Field label="" className="flex-1 min-w-40">
+              <p className="text-xs text-muted-foreground pt-1.5">
+                No verdict — the measured value prints as-is with a neutral
+                status. Use Display override below for optional spec-cell text.
+              </p>
+            </Field>
+          ) : form.ruleKind === 'range' ? (
             <>
               <InputField
                 label="Min"

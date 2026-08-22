@@ -307,3 +307,50 @@ def test_loq_in_audit_snapshot(client, db_session, svc):
     log = db_session.execute(select(AuditLog).where(
         AuditLog.operation == "analysis_service_spec_changed")).scalars().all()[-1]
     assert log.details["after"]["loq"] == "0.5"
+
+
+# ── report-only specs ("as measured", 2026-08-22) ────────────────────────────
+
+def test_create_informational_spec(client, svc):
+    r = client.post(f"/analysis-services/{svc.id}/specs",
+                    json={"rule_kind": "informational", "unit": "% w/w"})
+    assert r.status_code == 201
+    body = r.json()
+    assert body["rule_kind"] == "informational"
+    assert body["min_value"] is None and body["max_value"] is None
+    assert body["equals_value"] is None and body["loq"] is None
+
+
+@pytest.mark.parametrize("extra", [
+    {"min_value": "1"},
+    {"max_value": "5"},
+    {"equals_value": "x"},
+    {"loq": "0.5"},
+])
+def test_create_informational_rejects_bounds_loudly(client, svc, extra):
+    # R3: bounds/expected/LOQ on an informational row 422 by name — never
+    # silently nulled (a value the lab typed and lost is the confusion this
+    # arm exists to prevent).
+    r = client.post(f"/analysis-services/{svc.id}/specs",
+                    json={"rule_kind": "informational", **extra})
+    assert r.status_code == 422
+
+
+def test_patch_to_informational_requires_explicit_bound_clearing(client, svc):
+    # Flipping kind must NOT silently drop the old bounds: the merged shape
+    # still carries them, so the flip alone 422s; nulling them in the same
+    # PATCH succeeds.
+    spec_id = client.post(
+        f"/analysis-services/{svc.id}/specs",
+        json={"rule_kind": "range", "max_value": "0.5", "loq": "0.1"},
+    ).json()["id"]
+    assert client.patch(f"/analysis-service-specs/{spec_id}",
+                        json={"rule_kind": "informational"}).status_code == 422
+    r = client.patch(
+        f"/analysis-service-specs/{spec_id}",
+        json={"rule_kind": "informational", "max_value": None, "loq": None},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["rule_kind"] == "informational"
+    assert body["max_value"] is None and body["loq"] is None

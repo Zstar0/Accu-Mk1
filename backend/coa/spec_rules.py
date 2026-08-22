@@ -120,11 +120,19 @@ def sample_peptide_id(db: Session, parent_pk: int) -> Optional[int]:
     return ids[0] if len(ids) == 1 else None
 
 
-def evaluate(spec, result: str) -> bool:
+def evaluate(spec, result: str) -> Optional[bool]:
     """Verdict of a result string against a spec (any object with rule_kind,
     equals_value, min_value, max_value). Pure. Raises SpecRuleError whenever
     the rule cannot actually be applied — a verdict is only ever emitted from
-    a rule that ran; anything else fails closed. Bounds are INCLUSIVE."""
+    a rule that ran; anything else fails closed. Bounds are INCLUSIVE.
+
+    rule_kind='informational' returns None — "report as measured", no
+    verdict by design (report-only spec, 2026-08-22). This is NOT the
+    fail-closed None-shaped anything: the row still required a real,
+    deliberately-filed spec row to get here (rule 5 untouched), and no
+    numeric parsing applies — the measured value prints verbatim."""
+    if spec.rule_kind == "informational":
+        return None
     text = str(result or "").strip()
     if spec.rule_kind == "equals":
         expected = str(spec.equals_value or "").strip()
