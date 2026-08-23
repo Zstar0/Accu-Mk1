@@ -97,8 +97,11 @@ rule 5 (a spec exists, deliberately) but declares "no verdict — print the meas
 
 ## 9. Handler veto window
 
-- **R1** — informational spec cell renders EMPTY by default (`display_override` available for
-  text like "Report only"). Alternative: a default literal "As measured".
+- **R1** — ~~informational spec cell renders EMPTY by default~~ **SUPERSEDED 2026-08-23 (Handler,
+  UAT on P-0157): BOTH the Specification cell and the Verdict cell print "Measured"** — matching
+  the legacy Quantity row, which carries MEASURED in both places. `display_override` still wins
+  the spec cell. (Two-step ruling: verdict first — an empty cell reads as an omission — then the
+  spec cell for the same reason.)
 - **R2** — informational participates in tiers normally (peptide-tier verdict can override a
   wildcard informational, and vice versa). Alternative: forbid mixing kinds across tiers.
 - **R3** — editor REJECTS bounds/LOQ on informational rows (loud), never silently nulls.
