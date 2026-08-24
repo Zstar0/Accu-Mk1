@@ -268,12 +268,15 @@ def bridge_blend_aggregates(
 
     written: list[int] = []
     # Total quantity → PEPT-Total
+    # Processor on aggregate rows = the acting user: an aggregate is computed
+    # from multiple component writes (possibly different analyses/processors),
+    # so there is no single source HPLCAnalysis to carry attribution from.
     if pept_total is not None and pept_total.review_state == "unassigned":
         val = _fmt_num(total_qty)
         if val is not None:
             apply_transition(db, analysis_id=pept_total.id, kind="submit", result_value=val,
                              reason="auto: blend total quantity (Σ component quantity)",
-                             user_id=user_id)
+                             user_id=user_id, processed_by_user_id=user_id)
             written.append(pept_total.id)
     # Mass-weighted blend purity → BLEND-PUR (needs Σqty > 0 to weight)
     if blend_pur.review_state == "unassigned" and total_qty > 0:
@@ -281,7 +284,7 @@ def bridge_blend_aggregates(
         if val is not None:
             apply_transition(db, analysis_id=blend_pur.id, kind="submit", result_value=val,
                              reason="auto: blend purity (mass-weighted component mean)",
-                             user_id=user_id)
+                             user_id=user_id, processed_by_user_id=user_id)
             written.append(blend_pur.id)
     return written
 
@@ -462,6 +465,11 @@ def bridge_prep_result_to_vial(
             reason=f"auto: HPLC sample-prep result (analysis #{analysis.id})",
             user_id=user_id,
             instrument_id=analysis.instrument_id,
+            # Processor = who ran the Process HPLC (recorded on the analysis
+            # at wizard save), NOT the acting user — a later Re-run Auto-fill
+            # clicked by someone else must not steal attribution. Fallback to
+            # the acting user only for legacy analyses without the field.
+            processed_by_user_id=analysis.processed_by_user_id or user_id,
         )
         submitted.append(row.id)
 
@@ -495,6 +503,7 @@ def bridge_prep_result_to_vial(
                 reason=f"auto: HPLC sample-prep total quantity (analysis #{analysis.id})",
                 user_id=user_id,
                 instrument_id=analysis.instrument_id,
+                processed_by_user_id=analysis.processed_by_user_id or user_id,
             )
             submitted.append(total_row.id)
 

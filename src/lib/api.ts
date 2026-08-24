@@ -3948,6 +3948,9 @@ export interface SenaiteAnalysis {
   instrument_uid: string | null
   instrument_options: { uid: string; title: string }[]
   analyst: string | null
+  /** Who ran the Process HPLC behind this result (prep-bridge stamp);
+   * `analyst` is the prepper (worksheet assignment). */
+  processed_by?: string | null
   due_date: string | null
   review_state: string | null
   sort_key: number | null

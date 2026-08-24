@@ -29,7 +29,8 @@ def _vial(db):
     return v
 
 
-def _hplc(db, pep, *, purity=None, conforms=None, qty=None, instrument_id=None):
+def _hplc(db, pep, *, purity=None, conforms=None, qty=None, instrument_id=None,
+          processed_by=None):
     a = HPLCAnalysis(
         sample_id_label="P-0142-S01",
         peptide_id=pep.id,
@@ -37,7 +38,7 @@ def _hplc(db, pep, *, purity=None, conforms=None, qty=None, instrument_id=None):
         dil_vial_empty=1.0, dil_vial_with_diluent=2.0,
         dil_vial_with_diluent_and_sample=3.0,
         purity_percent=purity, identity_conforms=conforms, quantity_mg=qty,
-        instrument_id=instrument_id,
+        instrument_id=instrument_id, processed_by_user_id=processed_by,
     )
     db.add(a)
     db.flush()
@@ -605,3 +606,62 @@ def test_single_vial_pept_total_alongside_qty_row(db_session):
     assert set(ids) == {qty.id, pt.id}
     db.refresh(qty); db.refresh(pt)
     assert qty.result_value == "12.34" and pt.result_value == "12.34"
+
+
+# --- Processor attribution (Handler ruling 2026-08-24: analyst_user_id is the
+# PREPPER, stamped by worksheet assignment; who ran Process HPLC is tracked
+# separately, carried from HPLCAnalysis.processed_by_user_id) ---
+
+def test_processed_by_carried_from_analysis(db_session):
+    db = db_session
+    pep = _peptide(db)
+    vial = _vial(db)
+    pur = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                          analysis_service_id=73, keyword="HPLC-PUR", title="Peptide Purity (HPLC)")
+    pt = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                         analysis_service_id=205, keyword="PEPT-Total", title="Peptide Total Quantity")
+    a = _hplc(db, pep, purity=98.5, qty=18.8, processed_by=7)
+
+    # acting user 1 (e.g. someone else clicking Re-run Auto-fill) must NOT
+    # steal attribution from the recorded processor
+    bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
+
+    db.refresh(pur); db.refresh(pt)
+    assert pur.processed_by_user_id == 7
+    assert pt.processed_by_user_id == 7
+    assert pur.analyst_user_id is None  # prepper field untouched
+
+
+def test_processed_by_falls_back_to_acting_user(db_session):
+    db = db_session
+    pep = _peptide(db)
+    vial = _vial(db)
+    pur = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                          analysis_service_id=73, keyword="HPLC-PUR", title="Peptide Purity (HPLC)")
+    a = _hplc(db, pep, purity=98.5)  # legacy analysis without processed_by
+
+    bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=3)
+
+    db.refresh(pur)
+    assert pur.processed_by_user_id == 3
+
+
+def test_blend_aggregates_stamp_acting_user(db_session):
+    from lims_analyses.prep_bridge import bridge_blend_aggregates
+    db = db_session
+    vial = _vial(db)
+    for sid, kw, title in ((200, "PUR_BPC157", "P1"), (201, "QTY_BPC157", "Q1"),
+                           (202, "PUR_GHKCU", "P2"), (203, "QTY_GHKCU", "Q2")):
+        r = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                            analysis_service_id=sid, keyword=kw, title=title)
+        _fill(db, r, "1")
+    bp = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                         analysis_service_id=204, keyword="BLEND-PUR", title="Blend Purity")
+    pt = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                         analysis_service_id=205, keyword="PEPT-Total", title="Peptide Total Quantity")
+
+    bridge_blend_aggregates(db, lims_sub_sample_pk=vial.id, user_id=5)
+
+    db.refresh(bp); db.refresh(pt)
+    assert bp.processed_by_user_id == 5
+    assert pt.processed_by_user_id == 5
