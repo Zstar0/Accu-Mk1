@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.8.2 — 2026-08-24
+
+### Added
+
+- **Parity harness: three arc-era rules + retest-aware pairing** (#123) —
+  `date_dual_stamp_skew` (dual-stamped receive/sampled instants ≤60s),
+  `native_family_mk1_only` (born-native lines gated on the payload's new
+  `service_origin` field), `senaite_retest_superseded_line` with
+  most-current-first analyses pairing (equal-rank duplicate live lines stay
+  real). Restores the parity gate as a credible read-flip signal after the
+  catalog arc. Runtime surface: one additive optional field on
+  `SenaiteAnalysis`.
+
 ## v1.8.1 — 2026-08-23
 
 ### Fixed
