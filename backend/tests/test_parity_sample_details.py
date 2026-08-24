@@ -1004,3 +1004,142 @@ def test_parent_to_verify_against_other_senaite_states_stays_real():
         d = _rs("parent_to_verify", sen_state, sample_published=False)
         assert d.classification == "differing", sen_state
         assert d.rule_id is None, sen_state
+
+
+# ── date_dual_stamp_skew ────────────────────────────────────────────────────
+#
+# Since the catalog arc, receive originates in Mk1: Mk1 stamps its own
+# utcnow() and the SENAITE tee stamps its own clock seconds later — the SAME
+# event, two near-identical instants (observed 3-7s on every post-arc
+# receive). Path-gated to date_received/date_sampled; minutes apart is a
+# genuinely different time and stays REAL.
+
+
+def test_date_received_seconds_skew_is_known_expected():
+    d = diff_scalar_field("date_received",
+                          "2026-08-22T06:14:36.099115",
+                          "2026-08-22T06:14:32+00:00")
+    assert d.classification == "known_expected"
+    assert d.rule_id == "date_dual_stamp_skew"
+
+
+def test_date_sampled_seconds_skew_is_known_expected():
+    d = diff_scalar_field("date_sampled",
+                          "2026-08-17T18:42:55",
+                          "2026-08-17T18:42:00+00:00")
+    assert d.classification == "known_expected"
+    assert d.rule_id == "date_dual_stamp_skew"
+
+
+def test_date_received_same_instant_still_datetime_serialization():
+    """Exact same instant keeps the pre-existing serialization rule — the
+    skew rule only ever names TRUE skew (the _diff_leaf ordering pins this)."""
+    d = diff_scalar_field("date_received",
+                          "2026-07-01T00:00:00",
+                          "2026-07-01T00:00:00+00:00")
+    assert d.classification == "known_expected"
+    assert d.rule_id == "datetime_serialization"
+
+
+def test_date_received_minutes_apart_stays_a_real_diff():
+    """Beyond the 60s bound the two stamps are NOT one event — a re-receive
+    or a wrong stamp must stay visible."""
+    d = diff_scalar_field("date_received",
+                          "2026-08-22T06:24:36",
+                          "2026-08-22T06:14:32+00:00")
+    assert d.classification == "differing"
+    assert d.rule_id is None
+
+
+def test_other_datetime_fields_do_not_get_the_skew_rule():
+    """Path-gated: a seconds-skew on a field that is NOT dual-stamped (e.g.
+    a scalar not in the rule map) stays REAL."""
+    d = diff_scalar_field("client_lot",
+                          "2026-08-22T06:14:36",
+                          "2026-08-22T06:14:32+00:00")
+    assert d.classification == "differing"
+    assert d.rule_id is None
+
+
+# ── native_family_mk1_only ──────────────────────────────────────────────────
+
+
+def test_native_family_mk1_only_line_is_known_expected():
+    """A born-native line (service_origin='mk1', e.g. FENTANYL) can never
+    have a SENAITE counterpart — new-service-alongside doctrine."""
+    diffs = diff_analyses(
+        [_an(keyword="FENTANYL", service_origin="mk1")], [],
+    )
+    d = next(x for x in diffs if x.path == "analyses[FENTANYL]")
+    assert d.classification == "known_expected"
+    assert d.rule_id == "native_family_mk1_only"
+
+
+def test_senaite_origin_mk1_only_line_stays_a_real_diff():
+    """An mk1-only line for a SENAITE-origin service means the SENAITE line
+    is genuinely missing — exactly what the harness exists to catch."""
+    for origin in ("senaite", None):
+        diffs = diff_analyses(
+            [_an(keyword="HPLC-PUR", service_origin=origin)], [],
+        )
+        d = next(x for x in diffs if x.path == "analyses[HPLC-PUR]")
+        assert d.classification == "analyses_mk1_only", origin
+        assert d.is_real, origin
+
+
+# ── retest-aware pairing + senaite_retest_superseded_line ───────────────────
+#
+# PB-0407 (2026-08-23 prod parity): SENAITE listed a superseded
+# to_be_verified line (7.44) BEFORE the current published line (16.78);
+# first-come pairing matched mk1's single current row against the stale one,
+# minting a phantom result diff and a phantom analyses_senaite_only for the
+# real current line.
+
+
+def test_retest_pairing_prefers_current_senaite_line():
+    mk1 = [_an(keyword="PEPT-Total", result="16.78", review_state="verified")]
+    senaite = [
+        _an(uid="sen-old", keyword="PEPT-Total", result="7.44",
+            review_state="to_be_verified"),
+        _an(uid="sen-cur", keyword="PEPT-Total", result="16.78",
+            review_state="published"),
+    ]
+    diffs = diff_analyses(mk1, senaite, sample_published=True)
+
+    result = next(d for d in diffs if d.path == "analyses[PEPT-Total].result")
+    assert result.classification == "equal"
+
+    state = next(d for d in diffs if d.path == "analyses[PEPT-Total].review_state")
+    assert state.rule_id == "canonical_verified_vs_senaite_published"
+
+    leftover = next(d for d in diffs if d.path == "analyses[PEPT-Total]")
+    assert leftover.classification == "known_expected"
+    assert leftover.rule_id == "senaite_retest_superseded_line"
+    assert leftover.senaite_value["uid"] == "sen-old"
+
+
+def test_duplicate_live_senaite_lines_stay_a_real_diff():
+    """Two ACTIVE same-keyword lines rank EQUAL (the P-0216 duplicate-live-
+    rows class, both published) — the strictly-staler gate keeps the
+    duplicate visible instead of sweeping it as a superseded retest."""
+    mk1 = [_an(keyword="PEPT-Total", result="58.86", review_state="verified")]
+    senaite = [
+        _an(uid="sen-dup-1", keyword="PEPT-Total", result="58.86",
+            review_state="published"),
+        _an(uid="sen-dup-2", keyword="PEPT-Total", result="23.32",
+            review_state="published"),
+    ]
+    diffs = diff_analyses(mk1, senaite, sample_published=True)
+    leftover = next(d for d in diffs if d.path == "analyses[PEPT-Total]")
+    assert leftover.classification == "analyses_senaite_only"
+    assert leftover.is_real
+
+
+def test_senaite_only_without_any_pair_stays_a_real_diff():
+    """A senaite-only keyword that never paired at all is a genuinely
+    missing mk1 line — untouched by the superseded rule."""
+    diffs = diff_analyses([], [_an(keyword="ONLY_SENAITE",
+                                   review_state="to_be_verified")])
+    d = next(x for x in diffs if x.path == "analyses[ONLY_SENAITE]")
+    assert d.classification == "analyses_senaite_only"
+    assert d.is_real

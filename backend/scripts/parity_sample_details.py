@@ -168,6 +168,34 @@ analyst_attribution) -- each justified where it's defined below:
                                   line uid, so it rides the same rule rather
                                   than going unclassified on every single run.
 
+  date_dual_stamp_skew         -- date_received/date_sampled instants a few
+                                  seconds apart (<=60s): since the catalog
+                                  arc, Mk1 stamps receive natively and the
+                                  SENAITE tee stamps its own clock seconds
+                                  later -- two stamps of the SAME event.
+                                  Path-gated to the two dual-stamped fields;
+                                  minutes-apart stays REAL. Added 2026-08-24
+                                  (post-arc prod parity: 13/15 published
+                                  samples carried one).
+  native_family_mk1_only       -- an mk1-only analysis line whose
+                                  service_origin is 'mk1' (born-native
+                                  family) can never have a SENAITE line, by
+                                  the new-service-alongside doctrine. Gated
+                                  on the payload's service_origin field,
+                                  never a keyword allowlist; an mk1-only
+                                  line for a SENAITE-origin service stays
+                                  REAL. Added 2026-08-24 (FENTANYL on
+                                  P-2351).
+  senaite_retest_superseded_line -- a senaite-only leftover whose keyword
+                                  paired AND which ranks strictly staler
+                                  than the paired line (retest superseded
+                                  original). Structural: the native builder
+                                  serves one current line per keyword.
+                                  EQUAL-rank duplicates (two live published
+                                  lines, the P-0216 class) stay REAL. Added
+                                  2026-08-24 with the retest-aware pairing
+                                  fix (PB-0407 mispairing).
+
 Fault isolation: in HTTP / in-process mode, one sample's failed fetch logs a
 warning, lands in the report's `fetch_errors` list, and the run CONTINUES to
 a partial report -- never a lost run.
@@ -271,6 +299,28 @@ def classify_raw(mk1v: Any, senaitev: Any) -> str:
     return "differing"
 
 
+# date_dual_stamp_skew: since the catalog arc, receive originates in Mk1 —
+# Mk1 stamps its own utcnow() and the SENAITE tee stamps its own seconds
+# later, so the SAME event carries two near-identical instants (observed
+# 3-7s apart on every post-arc receive, 2026-08-23 prod parity). Bounded at
+# 60s: wide enough to never flake on tee latency, narrow enough that a
+# genuinely different receive time (minutes/hours — a re-receive, a wrong
+# stamp) stays a REAL diff. Path-gated to the two dual-stamped event fields;
+# an exact same-instant pair still classifies as datetime_serialization
+# (checked first in _diff_leaf), so this rule only ever names true skew.
+_DUAL_STAMP_SKEW_MAX_SECONDS = 60
+
+
+def _date_dual_stamp_skew_rule(mk1v: Any, sv: Any) -> Optional[str]:
+    mk1_instant = _as_utc_instant(mk1v)
+    sen_instant = _as_utc_instant(sv)
+    if mk1_instant is None or sen_instant is None:
+        return None
+    if abs((mk1_instant - sen_instant).total_seconds()) <= _DUAL_STAMP_SKEW_MAX_SECONDS:
+        return "date_dual_stamp_skew"
+    return None
+
+
 # path -> (mk1v, senaitev) -> rule_id | None. Only consulted when the raw
 # classification is NOT already "equal".
 _TOP_LEVEL_RULES: dict[str, Callable[[Any, Any], Optional[str]]] = {
@@ -278,6 +328,8 @@ _TOP_LEVEL_RULES: dict[str, Callable[[Any, Any], Optional[str]]] = {
     "senaite_url": lambda mk1v, sv: "senaite_url_unavailable" if _is_blank(mk1v) else None,
     "profiles": lambda mk1v, sv: "profiles_empty_native" if _is_blank(mk1v) else None,
     "cached_at": lambda mk1v, sv: "cached_at_timestamps",
+    "date_received": _date_dual_stamp_skew_rule,
+    "date_sampled": _date_dual_stamp_skew_rule,
     # contact_fullname_senaite_doubling: SENAITE stores the Contacts IS creates
     # with Firstname == Lastname == the COA company name, so its Fullname
     # getter returns "X X" while mk1 holds the clean single value from the IS
@@ -625,16 +677,66 @@ def _canonical_publish_rule(sample_published: bool) -> Callable[[Any, Any], Opti
     return rule
 
 
+# Pairing must be retest-aware: SENAITE lists every line it ever minted for
+# a keyword (a retest leaves the superseded original in place), while the
+# native builder serves ONE current line per keyword (current-row idiom).
+# Plain first-come pairing then matches mk1's current row against whichever
+# line SENAITE happened to list first -- live case PB-0407 (2026-08-23 prod
+# parity): senaite [to_be_verified 7.44 (superseded), published 16.78
+# (current)] against mk1's single 16.78 produced a phantom result diff AND a
+# phantom analyses_senaite_only for the actual current line. Sort both sides
+# most-current-first before the multiset pairing so current pairs with
+# current; python's sort is stable, so equal-rank lines keep their side's
+# original order and same-rank duplicates still pair first-come.
+_REVIEW_STATE_PAIR_RANK = {
+    "published": 0, "verified": 1, "to_be_verified": 2,
+    "retracted": 9, "rejected": 9, "cancelled": 9, "invalid": 9,
+}
+_PAIR_RANK_DEFAULT = 5
+
+
+def _analysis_pair_rank(a: dict) -> int:
+    state = (a.get("review_state") or "").strip().casefold()
+    return _REVIEW_STATE_PAIR_RANK.get(state, _PAIR_RANK_DEFAULT)
+
+
 def diff_analyses(mk1_list: list[dict], senaite_list: list[dict], *,
                   sample_published: bool = False) -> list[FieldDiff]:
-    """Match lines by keyword (order-insensitive). Lines present on only one
-    side are REAL diffs classified `analyses_mk1_only` / `analyses_senaite_
-    only` (not the generic mk1_only/senaite_only -- brief-mandated naming so
-    the human summary reads unambiguously)."""
+    """Match lines by keyword (order-insensitive, most-current-first -- see
+    _analysis_pair_rank). Lines present on only one side are REAL diffs
+    classified `analyses_mk1_only` / `analyses_senaite_only` (not the generic
+    mk1_only/senaite_only -- brief-mandated naming so the human summary reads
+    unambiguously), except two structural cases:
+
+    native_family_mk1_only -- an mk1-only line whose service_origin is 'mk1'
+    (born-native family: FENTANYL, USP<71>, ...) can NEVER have a SENAITE
+    line, by the new-service-alongside doctrine. Gated on the payload's own
+    service_origin field (populated by _serialize_senaite_shape_rows), never
+    on a keyword allowlist -- new native services stay covered without
+    harness edits, and an mk1-only line for a SENAITE-origin service (a
+    genuinely missing SENAITE line) stays a REAL diff.
+
+    senaite_retest_superseded_line -- a senaite-only leftover whose keyword
+    DID pair, and which ranks STRICTLY staler than the line that paired
+    (e.g. to_be_verified while its sibling is published). The native builder
+    surfaces one current line per keyword by design, so SENAITE's superseded
+    originals are structurally unrepresentable in mk1 mode. The strictly-
+    staler gate is load-bearing: two ACTIVE same-keyword lines (the P-0216
+    duplicate-live-rows class, both 'published' -- transfer probe 2026-08-01)
+    rank EQUAL, so the duplicate stays a REAL diff instead of being swept."""
+    mk1_sorted = sorted(mk1_list or [], key=_analysis_pair_rank)
+    senaite_sorted = sorted(senaite_list or [], key=_analysis_pair_rank)
     pairs, mk1_only, senaite_only = _pair_lists(
-        mk1_list or [], senaite_list or [],
+        mk1_sorted, senaite_sorted,
         key_fn=lambda a: (a.get("keyword") or "").strip().casefold(),
     )
+    # keyword -> best (lowest) rank among the SENAITE lines that paired,
+    # for the strictly-staler gate on senaite-only leftovers.
+    paired_rank_by_kw: dict[str, int] = {}
+    for _mk1_item, sen_item in pairs:
+        kw = (sen_item.get("keyword") or "").strip().casefold()
+        rank = _analysis_pair_rank(sen_item)
+        paired_rank_by_kw[kw] = min(rank, paired_rank_by_kw.get(kw, rank))
     publish_rule = _canonical_publish_rule(sample_published)
     out: list[FieldDiff] = []
     for mk1_item, sen_item in pairs:
@@ -672,9 +774,21 @@ def diff_analyses(mk1_list: list[dict], senaite_list: list[dict], *,
                 rule_fn = None
             out.append(_diff_leaf(f"analyses[{label}].{sub}", mk1_item.get(sub), sen_item.get(sub), rule_fn))
     for item in mk1_only:
-        out.append(FieldDiff(f"analyses[{item.get('keyword')}]", "analyses_mk1_only", None, item, None))
+        if (item.get("service_origin") or "").strip().casefold() == "mk1":
+            out.append(FieldDiff(f"analyses[{item.get('keyword')}]",
+                                 "known_expected", "native_family_mk1_only",
+                                 item, None))
+        else:
+            out.append(FieldDiff(f"analyses[{item.get('keyword')}]", "analyses_mk1_only", None, item, None))
     for item in senaite_only:
-        out.append(FieldDiff(f"analyses[{item.get('keyword')}]", "analyses_senaite_only", None, None, item))
+        kw = (item.get("keyword") or "").strip().casefold()
+        paired_rank = paired_rank_by_kw.get(kw)
+        if paired_rank is not None and _analysis_pair_rank(item) > paired_rank:
+            out.append(FieldDiff(f"analyses[{item.get('keyword')}]",
+                                 "known_expected", "senaite_retest_superseded_line",
+                                 None, item))
+        else:
+            out.append(FieldDiff(f"analyses[{item.get('keyword')}]", "analyses_senaite_only", None, None, item))
     return out
 
 
