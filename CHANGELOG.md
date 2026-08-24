@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.8.6 — 2026-08-24
+
+### Added
+
+- **Inbox sub-chips carry faceted vial counts** — each chip shows how many
+  vials clicking it yields (the All chip shows the lane total), computed
+  under the currently-active text filters; sibling of the worksheet
+  sidebar's item-count badge.
+
 ## v1.8.5 — 2026-08-24
 
 ### Changed
