@@ -465,6 +465,39 @@ def bridge_prep_result_to_vial(
         )
         submitted.append(row.id)
 
+    # Single-peptide vials carry their quantity as the generic PEPT-Total row —
+    # there is no QTY_<X> row on them (coa/variance_series.py's unit resolution
+    # and conformance's single-quantity fallback both encode this shape), and
+    # _category deliberately doesn't classify PEPT-TOTAL, so the loop above can
+    # never reach it. Blends' PEPT-Total is the Σ-component aggregate owned by
+    # bridge_blend_aggregates. Gate on the vial's FULL row set (not the
+    # unassigned-filtered `rows`): a blend whose BLEND-PUR already advanced
+    # must still read as a blend here.
+    all_kws = [
+        (k or "").upper()
+        for (k,) in db.execute(
+            select(LimsAnalysis.keyword).where(
+                LimsAnalysis.lims_sub_sample_pk == lims_sub_sample_pk)
+        ).all()
+    ]
+    is_blend = "BLEND-PUR" in all_kws
+    component_qty_keys = {_component_key(k, "QTY") for k in all_kws} - {None}
+    if not is_blend and len(component_qty_keys) <= 1:
+        total_row = next(
+            (r for r in rows if (r.keyword or "").upper() == "PEPT-TOTAL"), None)
+        total_value = _fmt_num(analysis.quantity_mg)
+        if total_row is not None and total_value is not None:
+            apply_transition(
+                db,
+                analysis_id=total_row.id,
+                kind="submit",
+                result_value=total_value,
+                reason=f"auto: HPLC sample-prep total quantity (analysis #{analysis.id})",
+                user_id=user_id,
+                instrument_id=analysis.instrument_id,
+            )
+            submitted.append(total_row.id)
+
     if not submitted:
         logger.warning(
             "prep_bridge: no unambiguous HPLC lims_analyses rows matched for vial=%s (analysis #%s)",
