@@ -459,3 +459,38 @@ def test_delete_profile_without_custody_edge_returns_204(client, db_session):
 
     gone = db_session.get(AnalysisProfile, lone.id)
     assert gone is None
+
+
+def test_inbox_role_tags_include_current_rider_roles_only(db_session):
+    """Sub-chips slice (2026-08-24): an inbox vial's role_tags = its own
+    assignment_role plus the fulfillment_role of every profile holding a
+    CURRENT custody edge — superseded edges contribute nothing. This is what
+    makes rider work (fentanyl riding an hplc host) reachable under its own
+    lane sub-chip."""
+    from datetime import datetime
+    from main import _inbox_role_tags
+    from models import VialProfileAssignment
+
+    fent = _mk(db_session, "zz_fent_tags", "fentanyl", vials=0)
+    stale = _mk(db_session, "zz_stale_tags", "hm", vials=1)
+
+    parent = LimsSample(sample_id="P-8801")
+    db_session.add(parent)
+    db_session.flush()
+    sub = LimsSubSample(sample_id="P-8801-S01", parent_sample_pk=parent.id,
+                        external_lims_uid="uid-8801-s01", vial_sequence=1,
+                        assignment_role="hplc")
+    db_session.add(sub)
+    db_session.flush()
+    db_session.add(VialProfileAssignment(
+        lims_sub_sample_pk=sub.id, analysis_profile_id=fent.id,
+        relation="rider"))
+    db_session.add(VialProfileAssignment(
+        lims_sub_sample_pk=sub.id, analysis_profile_id=stale.id,
+        relation="rider", superseded_at=datetime.utcnow()))
+    db_session.commit()
+
+    assert _inbox_role_tags(db_session, sub.id, "hplc") == ["fentanyl", "hplc"]
+    # parents / edge-less legacy vials degrade to the bare role
+    assert _inbox_role_tags(db_session, None, "hplc") == ["hplc"]
+    assert _inbox_role_tags(db_session, None, None) == []

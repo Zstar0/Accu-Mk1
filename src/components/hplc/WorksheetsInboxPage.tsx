@@ -16,7 +16,6 @@ import { InboxFamilyGroup } from '@/components/hplc/InboxFamilyGroup'
 import { groupInboxFamilies, varianceParentIds, type FamilyDragData } from '@/lib/inbox-families'
 import { WorksheetDropPanel } from '@/components/hplc/WorksheetDropPanel'
 import {
-  vialHasMicroCategory,
   vialMatchesSampleId,
   vialMatchesAnalyte,
 } from '@/lib/inbox-filters'
@@ -38,15 +37,15 @@ import {
 } from '@/lib/api'
 import { useInboxLanes } from '@/services/inbox-lanes'
 
-// Microbiology sub-bench chips — the two customer addon products, plus All.
-// Values are the `microCategory` filter values consumed by vialHasMicroCategory
-// ('' = no filter). Sterility maps to the STER-* category; non-addon micro
-// vials (Moisture/KF, etc.) remain reachable only under "All".
-const MICRO_SUBCHIPS = [
-  { value: '', label: 'All' },
-  { value: 'endo', label: 'Endotoxin' },
-  { value: 'ster', label: 'Sterility' },
-] as const
+// Lane sub-chips are catalog-driven (sub-chips slice, 2026-08-24): any lane
+// whose department owns MORE THAN ONE vial role renders one chip per role
+// (plus All), labeled/colored from the role catalog and filtering by the
+// vial's role_tags — the vial's own role plus rider profiles' roles from
+// custody edges, so rider work (fentanyl riding an hplc host) is reachable
+// under its own chip. Replaces the hardcoded MICRO_SUBCHIPS constant and its
+// keyword-category filter (the S1 hardcoded-role-map class): endo/ster under
+// Microbiology now derive from the catalog, and a new role created in the
+// admin UI gets its sub-chip with no code change.
 
 // localStorage keys for filter persistence (per the spec UI section)
 const STORAGE_ROLE_KEY = 'accu_mk1_worksheet_inbox_role'
@@ -142,7 +141,7 @@ export default function WorksheetsInboxPage() {
   // both benches; analyte is HPLC-only; micro-category is Micro-only.
   const [sampleIdFilter, setSampleIdFilter] = useState('')
   const [analyteFilter, setAnalyteFilter] = useState('')
-  const [microCategory, setMicroCategory] = useState('') // '' = all categories
+  const [subRole, setSubRole] = useState('') // '' = all roles in the lane
 
   // Persist filter selections so the tech's last filter sticks across sessions.
   // Persists the VALIDATED role (not the raw stored value) so a stale key
@@ -157,15 +156,29 @@ export default function WorksheetsInboxPage() {
     window.localStorage.setItem(STORAGE_HIDE_TEST_KEY, String(hideTestOrders))
   }, [hideTestOrders])
 
-  // Clear the micro sub-bench selection when leaving Microbiology so switching
-  // benches never leaves a stale active sub-chip (the old dropdown silently
-  // held a latent value; chips show state, so the reset must be explicit).
-  // Keyed to the literal 'microbiology' lane key — that legacy alias is
-  // always claimed by the Microbiology department (catalog.roles._LEGACY_
-  // LANE_KEYS), so this sub-filter stays reachable regardless of what other
-  // catalog lanes exist; it's orthogonal to the chip row above.
+  // Sub-chips for the ACTIVE lane, one per role the lane's department owns —
+  // rendered only when there is more than one (a single-role lane needs no
+  // sub-filter). Ordered and labeled from the role catalog (S1 display
+  // faces); a lane role code the roles query hasn't resolved yet still gets
+  // a chip with the bare code as its label (fail-open display, never a
+  // dropped filter).
+  const laneSubChips = useMemo(() => {
+    const codes = currentLane?.role_codes ?? []
+    if (codes.length < 2) return []
+    const byCode = new Map((vialRolesQ.data ?? []).map(r => [r.code, r]))
+    return [...codes]
+      .sort((a, b) => {
+        const ra = byCode.get(a)
+        const rb = byCode.get(b)
+        return (ra?.sort_order ?? 999) - (rb?.sort_order ?? 999) || a.localeCompare(b)
+      })
+      .map(code => ({ value: code, label: byCode.get(code)?.label ?? code }))
+  }, [currentLane, vialRolesQ.data])
+
+  // Clear the sub-chip selection when switching lanes so a new lane never
+  // starts with a stale (possibly foreign) active role filter.
   useEffect(() => {
-    if (role !== 'microbiology') setMicroCategory('')
+    setSubRole('')
   }, [role])
 
   // Two-tier read-source: global default (admin setting) + per-user session
@@ -231,7 +244,10 @@ export default function WorksheetsInboxPage() {
     .filter(v => !pendingDropKeys.has(`${v.uid}::${v.analyses[0]?.group_id ?? 0}`))
     .filter(v => !sampleIdFilter.trim() || vialMatchesSampleId(v, sampleIdFilter))
     .filter(v => role !== 'hplc' || !analyteFilter.trim() || vialMatchesAnalyte(v, analyteFilter))
-    .filter(v => role !== 'microbiology' || !microCategory || vialHasMicroCategory(v, microCategory))
+    // Sub-chip role filter: a vial matches if the selected role's WORK is on
+    // it — role_tags carries the vial's own role plus rider profiles' roles
+    // from custody edges; pre-1.8.5 payloads degrade to the bare role.
+    .filter(v => !subRole || (v.role_tags ?? (v.assignment_role ? [v.assignment_role] : [])).includes(subRole))
 
   // Family-grouped rendering: groupInboxFamilies owns ALL ordering (family
   // rank = most urgent vial; vials by sequence). A family never splits
@@ -258,7 +274,7 @@ export default function WorksheetsInboxPage() {
   const filtersActive =
     sampleIdFilter.trim().length > 0 ||
     (role === 'hplc' && analyteFilter.trim().length > 0) ||
-    (role === 'microbiology' && microCategory.length > 0)
+    subRole.length > 0
   const displayCount = filtersActive ? visibleVials.length : total
 
   function handlePriorityChange(sampleUid: string, priority: InboxPriority) {
@@ -268,7 +284,7 @@ export default function WorksheetsInboxPage() {
   function clearFilters() {
     setSampleIdFilter('')
     setAnalyteFilter('')
-    setMicroCategory('')
+    setSubRole('')
   }
 
   function handleDragStart(event: DragStartEvent) {
@@ -526,23 +542,24 @@ export default function WorksheetsInboxPage() {
               ))}
             </div>
 
-            {/* Microbiology sub-bench chips — Endotoxin / Sterility addons.
-                Nested under the Microbiology chip; reuse the microCategory
-                client-side filter (vialHasMicroCategory). */}
-            {role === 'microbiology' && (
+            {/* Lane sub-chips — one per role the active lane's department
+                owns (catalog-driven; renders only for multi-role lanes).
+                Filter by role_tags so rider work (e.g. fentanyl riding an
+                hplc host vial) is reachable under its own chip. */}
+            {laneSubChips.length > 0 && (
               <div className="mb-6 flex items-center gap-1.5 pl-4">
                 <span className="text-muted-foreground/40 select-none" aria-hidden="true">&#8627;</span>
-                {MICRO_SUBCHIPS.map(c => (
+                {[{ value: '', label: 'All' }, ...laneSubChips].map(c => (
                   <button
                     key={c.value || 'all'}
                     type="button"
-                    onClick={() => setMicroCategory(c.value)}
+                    onClick={() => setSubRole(c.value)}
                     className={cn(
                       'inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors',
-                      microCategory === c.value
-                        // Active sub-chip carries its assignment-role colour:
-                        // Endotoxin → orange, Sterility(PCR) → purple; the "All"
-                        // chip has no role, so it falls back to neutral violet.
+                      subRole === c.value
+                        // Active sub-chip carries its role's catalog colour;
+                        // the "All" chip has no role, so laneBadgeClass falls
+                        // back to neutral violet.
                         ? laneBadgeClass(c.value)
                         : 'bg-transparent text-muted-foreground border-border hover:bg-muted/40',
                     )}

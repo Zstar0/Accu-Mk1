@@ -5396,6 +5396,12 @@ export interface InboxVialItem {
   priority: InboxPriority
   assignment_summary: string
   analyses: InboxAnalysisItem[]
+  /** Every role whose work is on this vial: the vial's own assignment_role
+   *  plus rider profiles' roles from current custody edges (e.g. fentanyl
+   *  riding an hplc host). Lane sub-chips filter on this. Optional for
+   *  back-compat with a pre-1.8.5 backend; consumers fall back to
+   *  [assignment_role]. */
+  role_tags?: string[]
 }
 
 export interface InboxResponse {

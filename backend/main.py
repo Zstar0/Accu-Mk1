@@ -18469,6 +18469,37 @@ class InboxVialItem(BaseModel):
     priority: str = "normal"
     analyses: list[InboxAnalysisItem] = []
     assignment_summary: str = ""  # e.g., "1/1 assigned" — vial-level
+    # Every role whose WORK is on this vial: the vial's own assignment_role
+    # plus the fulfillment_role of every profile holding a CURRENT custody
+    # edge (host or rider) — sub-chips filter on this, not on assignment_role
+    # alone, because a rider profile's work (e.g. fentanyl riding an hplc
+    # host vial) lives on a vial whose own role says nothing about it.
+    # Legacy vials with no custody edges degrade to [assignment_role].
+    role_tags: list[str] = []
+
+
+def _inbox_role_tags(db, sub_pk: Optional[int],
+                     assignment_role: Optional[str]) -> list[str]:
+    """Sorted role tags for an inbox vial card (see InboxVialItem.role_tags).
+
+    One indexed query per vial against current custody edges — same
+    per-vial-query shape as _fetch_mk1_inbox_analyses_for_sub_sample in the
+    same loops. Parents and edge-less legacy vials degrade to the bare
+    assignment_role. Only dim='role' profiles contribute (a dim-less or
+    future non-role profile has no lane presence to tag)."""
+    tags = {assignment_role} if assignment_role else set()
+    if sub_pk:
+        from models import AnalysisProfile, VialProfileAssignment
+        rows = db.execute(
+            select(AnalysisProfile.fulfillment_role)
+            .join(VialProfileAssignment,
+                  VialProfileAssignment.analysis_profile_id == AnalysisProfile.id)
+            .where(VialProfileAssignment.lims_sub_sample_pk == sub_pk,
+                   VialProfileAssignment.superseded_at.is_(None),
+                   AnalysisProfile.fulfillment_dim == "role")
+        ).scalars().all()
+        tags.update(r for r in rows if r)
+    return sorted(tags)
 
 
 class InboxResponse(BaseModel):
@@ -18762,6 +18793,7 @@ def _build_native_vial_inbox_items(
             priority=prio or "normal",
             assignment_summary=summary,
             analyses=analyses,
+            role_tags=_inbox_role_tags(db, sub.id, role),
         ))
     if priorities_dirty:
         db.commit()
@@ -19465,6 +19497,13 @@ async def get_worksheets_inbox(
                 priority=priority_map.get(uid, "normal"),
                 assignment_summary=summary,
                 analyses=flat_analyses,
+                role_tags=_inbox_role_tags(
+                    db,
+                    (vial_meta.get("sub_sample_pk")
+                     if vial_meta is not None and not vial_meta.get("is_parent")
+                     else None),
+                    vial_role,
+                ),
             )
         )
 
