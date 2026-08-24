@@ -154,26 +154,33 @@ def writeback_parent_verify(parent_sample_id: str, keyword: str) -> str:
     divergence the COA gate trips over later.
 
     Line preference mirrors find_parent_analysis_line, EXCEPT an
-    already-verified line is SUCCESS instead of an error: the lab may have
-    signed off in SENAITE first (the pre-fix workaround), and the native
-    verify must converge, not 502. Returns the resulting review_state
-    ('verified'). Raises SenaiteWritebackError when there is no line to
-    verify (no match / all retracted-rejected) or SENAITE silently rejects
-    the transition (see _transition's post-state check).
+    already-verified OR already-published line is SUCCESS instead of an
+    error: the lab may have signed off in SENAITE first (the pre-fix
+    workaround), and the sample may even have been published since (the
+    stuck-canonical shape: promote minted parent_to_verify, nobody verified
+    natively, the sample published anyway) — the native verify must
+    converge, not 502. verify is not a legal SENAITE edge from published,
+    so attempting it would only trip the silent-rejection check. Returns
+    the resulting review_state ('verified', or 'published' for the
+    converged-past case). Raises SenaiteWritebackError when there is no
+    line to verify (no match / all retracted-rejected) or SENAITE silently
+    rejects the transition (see _transition's post-state check).
     """
     matched = _matched_parent_lines(parent_sample_id, keyword)
     for line in matched:
-        if line["review_state"] not in ("retracted", "rejected", "verified"):
+        if line["review_state"] not in ("retracted", "rejected", "verified",
+                                        "published"):
             # A line not yet at to_be_verified (e.g. unassigned — promote's
             # submit never ran) fails _transition's post-state check → the
             # caller aborts rather than minting a half-verified pair.
             return _transition(line["uid"], "verify")
-    if any(line["review_state"] == "verified" for line in matched):
-        log.info(
-            "writeback_parent_verify.already_verified parent=%s keyword=%s",
-            parent_sample_id, keyword,
-        )
-        return "verified"
+    for line in matched:
+        if line["review_state"] in ("verified", "published"):
+            log.info(
+                "writeback_parent_verify.already_verified parent=%s keyword=%s state=%s",
+                parent_sample_id, keyword, line["review_state"],
+            )
+            return line["review_state"]
     if matched:
         raise SenaiteWritebackError(
             f"all {len(matched)} SENAITE lines for keyword={keyword} on "
