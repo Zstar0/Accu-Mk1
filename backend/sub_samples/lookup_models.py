@@ -65,6 +65,13 @@ class SenaiteAnalysis(BaseModel):
     # per-vial "primary analysis" highlight on the sample detail page.
     service_group_id: Optional[int] = None
     service_group_name: Optional[str] = None
+    # Mk1-local enrichment: AnalysisService.origin for the row's service —
+    # 'mk1' for born-native families that never have a SENAITE line. Already
+    # populated by _serialize_senaite_shape_rows (S3); declared here so the
+    # registry-details re-type keeps it instead of dropping it. Always None
+    # on the SENAITE read path. The parity harness gates its
+    # native_family_mk1_only rule on this field.
+    service_origin: Optional[str] = None
 
 
 class SenaiteAttachment(BaseModel):
