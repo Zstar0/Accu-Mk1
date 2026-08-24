@@ -1811,11 +1811,30 @@ def _drop_stale_role_rows(db: Session, *, sub: LimsSubSample, old_role: Optional
     clear_dept_ids = old_dept_ids - new_dept_ids
     if not clear_dept_ids:
         return 0
-    from models import AnalysisService, LimsAnalysis, LimsAnalysisTransition
+    from models import AnalysisService, AnalysisProfile, LimsAnalysis, LimsAnalysisTransition
     # candidate analysis_service ids whose HOME DEPARTMENT we're clearing
-    svc_ids = db.execute(
+    svc_ids = set(db.execute(
         select(AnalysisService.id).where(AnalysisService.department_id.in_(clear_dept_ids))
-    ).scalars().all()
+    ).scalars().all())
+    if not svc_ids:
+        return 0
+    # Custody-protection guard (cleanup re-key, 2026-08-24): a profile that
+    # HOLDS a current custody edge on this vial — host or rider, written
+    # moments ago by write_custody_edges in this same transaction — is live
+    # work; its member services are never cleared here, whatever their
+    # department. This is what makes Department a pure org label: two
+    # profiles sharing one department (the heavy-metals-under-Analytical
+    # end-state) no longer collide in cleanup, because custody says whose
+    # rows are current and _drop_stale_custody_rows below clears by custody
+    # LOSS. Legacy vials with no edges have an empty protected set and keep
+    # the exact pre-rekey department behavior.
+    from sub_samples.custody import current_custody
+    protected_svc_ids: set = set()
+    for edge in current_custody(db, sub.id):
+        prof = db.get(AnalysisProfile, edge.analysis_profile_id)
+        if prof is not None:
+            protected_svc_ids.update(s.id for s in prof.analysis_services)
+    svc_ids -= protected_svc_ids
     if not svc_ids:
         return 0
     stale = db.execute(
@@ -1839,21 +1858,26 @@ def _drop_stale_role_rows(db: Session, *, sub: LimsSubSample, old_role: Optional
     return n
 
 
-def _drop_stale_rider_rows(db: Session, *, sub: LimsSubSample,
-                           prev_rider_pids: set) -> int:
-    """Rider companion to _drop_stale_role_rows (spec
-    2026-08-20-rider-vial-visibility): that cleanup is DEPARTMENT-keyed, so a
-    rider row whose service shares the new role's department survives a flip
-    even though its rider edge is gone. Drop this vial's pristine rows whose
-    service belongs to a profile that just LOST its rider edge and holds no
-    current edge of any relation. Same pristine predicate as
+def _drop_stale_custody_rows(db: Session, *, sub: LimsSubSample,
+                             prev_pids: set) -> int:
+    """Custody-loss companion to _drop_stale_role_rows (cleanup re-key,
+    2026-08-24 — generalizes the rider-only cleanup from the
+    2026-08-20-rider-vial-visibility spec to ALL custody relations): the
+    department-keyed cleanup cannot see a flip WITHIN one department, so a
+    row whose service shares the new role's department survives a flip even
+    though its profile's custody edge — host or rider — is gone. Drop this
+    vial's pristine rows whose service belongs to a profile that just LOST
+    custody and holds no current edge of any relation. Custody loss, not
+    department membership, is the authoritative "this work left the vial"
+    signal — the piece that lets two profiles share one department (e.g.
+    heavy metals under Analytical). Same pristine predicate as
     _drop_stale_role_rows — worked rows are never touched."""
-    if not prev_rider_pids:
+    if not prev_pids:
         return 0
     from sub_samples.custody import current_custody
 
     current_pids = {e.analysis_profile_id for e in current_custody(db, sub.id)}
-    stale_pids = prev_rider_pids - current_pids
+    stale_pids = prev_pids - current_pids
     if not stale_pids:
         return 0
     from models import AnalysisProfile, LimsAnalysis, LimsAnalysisTransition
@@ -1864,7 +1888,7 @@ def _drop_stale_rider_rows(db: Session, *, sub: LimsSubSample,
         if prof is not None:
             svc_ids.update(s.id for s in prof.analysis_services)
         else:
-            log.info("sub_samples.rider_cleanup_unknown_profile sub=%s profile_id=%s",
+            log.info("sub_samples.custody_cleanup_unknown_profile sub=%s profile_id=%s",
                      sub.sample_id, pid)
     if not svc_ids:
         return 0
@@ -1885,7 +1909,7 @@ def _drop_stale_rider_rows(db: Session, *, sub: LimsSubSample,
         n += 1
     if n:
         db.flush()
-        log.info("sub_samples.rider_cleanup sub=%s dropped=%s", sub.sample_id, n)
+        log.info("sub_samples.custody_cleanup sub=%s dropped=%s", sub.sample_id, n)
     return n
 
 
@@ -2048,10 +2072,13 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
             from lims_analyses.manage_native import placeholder_profile_keys
             services_map = {**services_map, **placeholder_profile_keys(db, parent_row)}
         from sub_samples.custody import current_custody, write_custody_edges
-        prev_rider_pids = {
+        # Cleanup re-key (2026-08-24): capture ALL relations' profile ids, not
+        # just riders — a HOST profile losing custody (a role flip within one
+        # department) is now cleared by custody loss too, which the
+        # department-diff cleanup below is structurally blind to.
+        prev_custody_pids = {
             e.analysis_profile_id
             for e in current_custody(db, sub.id)
-            if e.relation == "rider"
         }
         # S4 snapshot rider (task 6): thread the parent's frozen catalog
         # resolution (NULL for pre-slice-4 rows) so custody edges resolve
@@ -2072,7 +2099,7 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
         # analyses. Runs in THIS transaction (before the commit=False seed and
         # the single db.commit() below), so flip + cleanup + seed are atomic.
         _drop_stale_role_rows(db, sub=sub, old_role=old_role, new_role=role, registry=registry)
-        _drop_stale_rider_rows(db, sub=sub, prev_rider_pids=prev_rider_pids)
+        _drop_stale_custody_rows(db, sub=sub, prev_pids=prev_custody_pids)
         # Phase 2 (mk1-native-analyses): if this assignment transitioned the
         # vial into a real (non-XTRA) role, seed its lims_analyses rows.
         # Idempotent — re-running on an already-seeded vial is a no-op.
