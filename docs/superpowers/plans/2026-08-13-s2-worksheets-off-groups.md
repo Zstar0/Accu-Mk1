@@ -797,7 +797,7 @@ choice, keep it readable).
 ### Task 11: Full-suite failure-set gate
 
 - [ ] **Step 1:** `cd C:\tmp\Accu-Mk1-s2-worksheets\backend` then run the FULL suite once (NOT concurrently with any other worktree's suite): `python -m pytest tests/ -q 2>&1 | tail -40`.
-- [ ] **Step 2:** Extract the sorted FAILED-test-id set and diff against the baseline set (`C:\Users\forre\AppData\Local\Temp\claude\C--Users-forre-OneDrive-Documents-GitHub-Accumark-Workspace\5469cda1-d3cd-413c-9736-0d8229e79f9e\scratchpad\baseline-failed-set.txt`). Investigate every NEW failure: isolated re-run first; if it persists, differential-run in an untouched worktree at `b30d9fc0` before treating it as an S2 regression.
+- [ ] **Step 2:** Extract the sorted FAILED-test-id set and diff against the baseline set (`C:/Users/forre/AppData/Local/Temp/claude/C--Users-forre-OneDrive-Documents-GitHub-Accumark-Workspace/5469cda1-d3cd-413c-9736-0d8229e79f9e/scratchpad/baseline-failed-set.txt`). Investigate every NEW failure: isolated re-run first; if it persists, differential-run in an untouched worktree at `b30d9fc0` before treating it as an S2 regression.
 - [ ] **Step 3:** `npm run check:all` in the worktree root; compare against the S1 session's precedent (FE baseline should be clean).
 - [ ] **Step 4:** Fix regressions; commit as `fix(s2): …`.
 
