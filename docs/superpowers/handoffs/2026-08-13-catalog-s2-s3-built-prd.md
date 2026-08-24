@@ -34,7 +34,7 @@ Key artifacts:
 - SDD ledgers (every ruling, deferred minor, adjudication, UAT note — the richest record):
   `C:\tmp\Accu-Mk1-s2-worksheets\.superpowers\sdd\2026-08-13-s2-worksheets-off-groups\progress.md` and
   `C:\tmp\Accu-Mk1-s3-identity\.superpowers\sdd\2026-08-13-s3-identity-convergence\progress.md`
-- Session scratchpad (baseline-failed-set.txt + recovered dossiers): `C:\Users\forre\AppData\Local\Temp\claude\C--Users-forre-OneDrive-Documents-GitHub-Accumark-Workspace\5469cda1-d3cd-413c-9736-0d8229e79f9e\scratchpad\` (session-scoped — may not survive; the committed specs + ledgers carry the load-bearing content)
+- Session scratchpad (baseline-failed-set.txt + recovered dossiers): `C:/Users/forre/AppData/Local/Temp/claude/C--Users-forre-OneDrive-Documents-GitHub-Accumark-Workspace/5469cda1-d3cd-413c-9736-0d8229e79f9e/scratchpad/` (session-scoped — may not survive; the committed specs + ledgers carry the load-bearing content)
 
 ## What's on the branches
 

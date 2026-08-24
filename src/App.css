@@ -2,6 +2,12 @@
 @import 'tw-animate-css';
 @import './theme-variables.css';
 
+/* Tailwind v4 scans every non-ignored file for candidate classes — docs/*.md
+   with Windows paths like `...Workspace\5469cd...` parse as CSS escapes past
+   U+10FFFF and crash vite build (web survives only because .dockerignore
+   excludes docs/; desktop CI checkouts don't). Keep docs out of the scan. */
+@source not "../docs";
+
 @custom-variant dark (&:is(.dark *));
 
 /* Fix autofill text color in dark mode — outside @layer for higher specificity */

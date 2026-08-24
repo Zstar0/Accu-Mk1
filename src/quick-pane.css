@@ -1,6 +1,10 @@
 @import 'tailwindcss';
 @import './theme-variables.css';
 
+/* Second Tailwind root — needs the same docs exclusion as App.css or its
+   scan re-poisons the build (the 1.8.1 tag CI failure fired from here). */
+@source not "../docs";
+
 @custom-variant dark (&:is(.dark *));
 
 /* Quick pane needs transparent background for rounded corners to show */
