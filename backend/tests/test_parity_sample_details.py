@@ -846,6 +846,32 @@ def test_contact_near_miss_doubling_stays_a_real_diff():
     assert d.classification == "differing"
 
 
+def test_contact_doubled_billing_suffix_variant_is_known_expected():
+    """UMS Rx cohort (Handler-explained 2026-08-24): SENAITE's contact was
+    created from the BILLING company name ('UMS Rx LLC', self-doubled by the
+    IS-artifact) while mk1 carries the COA-profile name ('UMS Rx') — same
+    customer, suffix variant."""
+    d = diff_scalar_field("contact", "UMS Rx", "UMS Rx LLC UMS Rx LLC")
+    assert d.classification == "known_expected"
+    assert d.rule_id == "contact_senaite_doubled_billing_variant"
+
+
+def test_contact_doubled_but_different_name_stays_a_real_diff():
+    """A self-doubled SENAITE contact whose base does NOT extend mk1's name
+    is a genuinely different contact — the doubling alone must not suppress."""
+    d = diff_scalar_field("contact", "UMS Rx", "Acme Labs LLC Acme Labs LLC")
+    assert d.classification == "differing"
+    assert d.rule_id is None
+
+
+def test_contact_suffix_without_word_boundary_stays_a_real_diff():
+    """'UMS Rxx' does not extend 'UMS Rx' at a word boundary — near-name
+    collisions stay real."""
+    d = diff_scalar_field("contact", "UMS Rx", "UMS Rxx LLC UMS Rxx LLC")
+    assert d.classification == "differing"
+    assert d.rule_id is None
+
+
 # ── attachment_type_native_only ─────────────────────────────────────────────
 
 

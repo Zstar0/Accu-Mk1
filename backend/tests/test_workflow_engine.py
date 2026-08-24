@@ -431,22 +431,47 @@ def test_boot_migration_statements_have_no_bindparams(
 
 def test_sbs_boot_statements_execute_against_live_db(
         captured_migration_statements, db):
-    """Beyond zero-bindparams: actually EXECUTES the three sbs boot
-    statements (auto_fire, coa_published, submit-gate) against the live
-    dev DB, inside a transaction rolled back at the end — proves they bind
-    AND parse AND run. A naive bindparam count alone would not have caught
-    a statement that parses fine but fails on some other runtime error."""
-    markers = ("auto_fire = TRUE", "coa_published", "all_analyses_in_state")
+    """Beyond zero-bindparams: actually EXECUTES the workflow-catalog boot
+    statements (auto_fire, coa_published, submit-gate, publish-gate widen,
+    waiting→published edge insert) against the live dev DB, inside a
+    transaction rolled back at the end — proves they bind AND parse AND run.
+    A naive bindparam count alone would not have caught a statement that
+    parses fine but fails on some other runtime error.
+
+    Also asserts the 2026-08-24 statements' EFFECTS inside the rolled-back
+    transaction: on a dev DB shaped like prod (old 'verified' publish gate,
+    no waiting_for_addon_results out-edge), the migrations must leave both
+    publish edges gated 'verified,published' and the waiting edge present —
+    the existing-DB half of the fresh-vs-existing split (the seed carries
+    the same content for fresh DBs; see test_workflow_schema_seeds)."""
+    markers = ("auto_fire = TRUE", "coa_published", "all_analyses_in_state",
+               "verified,published")
     sbs_stmts = [c for c in captured_migration_statements
                 if any(m in str(c) for m in markers)]
-    assert len(sbs_stmts) == 3, (
-        f"expected exactly 3 sbs boot statements, found {len(sbs_stmts)}: "
-        f"{[str(s)[:80] for s in sbs_stmts]}"
+    assert len(sbs_stmts) == 5, (
+        f"expected exactly 5 workflow-catalog boot statements, found "
+        f"{len(sbs_stmts)}: {[str(s)[:80] for s in sbs_stmts]}"
     )
+    from sqlalchemy import text as _text
     conn = db.connection()
     nested = conn.begin_nested()
     try:
         for stmt in sbs_stmts:
             conn.execute(stmt)   # must not raise
+        gates = conn.execute(_text(
+            "SELECT t.requirements::text FROM lims_workflow_transitions t "
+            "WHERE t.entity_scope='sample' AND t.verb='publish' AND t.is_builtin"
+        )).scalars().all()
+        assert len(gates) == 2, gates
+        for g in gates:
+            assert '"verified,published"' in g, g
+            assert '"value": "verified"' not in g, g
+        waiting_edges = conn.execute(_text(
+            "SELECT count(*) FROM lims_workflow_transitions t "
+            "JOIN lims_workflow_states fs ON t.from_state_id = fs.id "
+            "WHERE t.entity_scope='sample' AND t.verb='publish' "
+            "AND fs.slug='waiting_for_addon_results'"
+        )).scalar()
+        assert waiting_edges == 1
     finally:
         nested.rollback()

@@ -1329,6 +1329,46 @@ def _run_migrations():
         "\"note\":\"all analyses submitted\"}]'::jsonb "
         "WHERE entity_scope='sample' AND verb='submit' AND is_builtin "
         "AND requirements::text NOT LIKE '%all_analyses_in_state%'",
+        # Publish gate widened to verified-OR-published (burn-in finding
+        # 2026-08-23, mk1_refused bucket): the A6 publish hook flips
+        # shadow-mirrored analyses to 'published' before the sample-publish
+        # evaluation runs, so shadow-only keywords legitimately read
+        # 'published' at evaluation time and the strict 'verified' list
+        # refused 7 real publishes. Fresh DBs get the widened value from the
+        # seed; this UPDATE covers existing DBs. jsonb::text renders keys as
+        # '"value": "verified"' (colon+space — no text() bindparam risk; see
+        # test_boot_migration_statements_have_no_bindparams). The LIKE guard
+        # cannot match an already-widened '\"verified,published\"' value
+        # (comma breaks the closing-quote match) so this is idempotent.
+        "UPDATE lims_workflow_transitions SET requirements = "
+        "replace(requirements::text, '\"value\": \"verified\"', "
+        "'\"value\": \"verified,published\"')::jsonb "
+        "WHERE entity_scope='sample' AND verb='publish' AND is_builtin "
+        "AND requirements::text LIKE '%\"value\": \"verified\"%'",
+        # waiting_for_addon_results → published publish edge (burn-in finding
+        # 2026-08-23, stuck_behind bucket): the state was seeded with NO
+        # out-edges, so every real publish from it logged no_edge and
+        # stranded native_status. Fresh DBs get the edge from the seed (the
+        # states don't exist yet when this runs first-boot, so the SELECT
+        # yields zero rows — same fresh-vs-existing split as the two UPDATEs
+        # above); existing DBs insert it here, guarded by the same
+        # (entity_scope, from_state_id, verb) uniqueness the seed checks.
+        "INSERT INTO lims_workflow_transitions "
+        "(entity_scope, from_state_id, to_state_id, verb, requirements, "
+        "description, is_builtin) "
+        "SELECT 'sample', fs.id, ts.id, 'publish', "
+        "'[{\"kind\":\"all_analyses_in_state\","
+        "\"value\":\"verified,published\","
+        "\"note\":\"COA publish once add-on results complete\"},"
+        "{\"kind\":\"coa_published\","
+        "\"note\":\"attested by the publish touchpoint\"}]'::jsonb, "
+        "'COA publish once add-on results complete.', TRUE "
+        "FROM lims_workflow_states fs, lims_workflow_states ts "
+        "WHERE fs.entity_scope='sample' AND fs.slug='waiting_for_addon_results' "
+        "AND ts.entity_scope='sample' AND ts.slug='published' "
+        "AND NOT EXISTS (SELECT 1 FROM lims_workflow_transitions t "
+        "WHERE t.entity_scope='sample' AND t.from_state_id=fs.id "
+        "AND t.verb='publish')",
         # --- Packaging fan-out + QR phone capture ---
         # lims_capture_tokens must exist before the FK-ALTER below runs (same
         # pattern as lims_boxes/sla_tiers above): migrations run BEFORE
