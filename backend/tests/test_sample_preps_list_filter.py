@@ -6,13 +6,18 @@ newest-100 window silently vanished from the list (38 hidden in prod at
 diagnosis: 23 awaiting_hplc + 15 on_hold). Search bypassed the window via
 ILIKE, which is why searched items were findable but absent from the list.
 
+The include-side twin (2026-08-24): Analysis History wants ONLY completed
+statuses, so it needs the inverse filter server-side for the same reason —
+statuses=[...] restricts the window to matching rows BEFORE the LIMIT.
+
 Tests:
   1. mk1_db.list_sample_preps(exclude_statuses=[...]) adds a NOT-ANY status
      condition with the list as a bind param.
-  2. Without exclude_statuses the SQL is unchanged (no status condition).
-  3. GET /sample-preps?exclude_statuses=a,b,c parses the comma list and
-     forwards it to mk1_db.list_sample_preps.
-  4. GET /sample-preps without the param forwards exclude_statuses=None
+  2. mk1_db.list_sample_preps(statuses=[...]) adds an include-ANY condition.
+  3. Without either param the SQL is unchanged (no status condition).
+  4. GET /sample-preps?exclude_statuses=a,b,c / ?statuses=a,b,c parse the
+     comma lists and forward them to mk1_db.list_sample_preps.
+  5. GET /sample-preps without the params forwards None for both
      (existing callers unaffected).
 """
 from __future__ import annotations
@@ -77,6 +82,16 @@ def test_exclude_statuses_adds_not_any_condition(sql_log):
     assert excluded in params
 
 
+def test_statuses_adds_include_any_condition(sql_log):
+    included = ["hplc_complete", "completed", "curve_created"]
+    mk1_db.list_sample_preps(statuses=included)
+    assert len(sql_log) == 1
+    query, params = sql_log[0]
+    assert "status = ANY(%s)" in query
+    assert "NOT (status = ANY(%s))" not in query
+    assert included in params
+
+
 def test_no_exclude_statuses_leaves_sql_unchanged(sql_log):
     mk1_db.list_sample_preps()
     query, params = sql_log[0]
@@ -113,6 +128,25 @@ def test_endpoint_forwards_exclude_statuses(client):
         limit=500,
         offset=0,
         exclude_statuses=["hplc_complete", "completed", "curve_created"],
+        statuses=None,
+    )
+
+
+def test_endpoint_forwards_statuses(client):
+    with patch("mk1_db.ensure_sample_preps_table"), patch(
+        "mk1_db.list_sample_preps", return_value=[]
+    ) as listed:
+        resp = client.get(
+            "/sample-preps?statuses=hplc_complete,completed,curve_created&offset=100"
+        )
+    assert resp.status_code == 200
+    listed.assert_called_once_with(
+        search=None,
+        is_standard=None,
+        limit=100,
+        offset=100,
+        exclude_statuses=None,
+        statuses=["hplc_complete", "completed", "curve_created"],
     )
 
 
@@ -123,5 +157,10 @@ def test_endpoint_default_has_no_exclusions(client):
         resp = client.get("/sample-preps")
     assert resp.status_code == 200
     listed.assert_called_once_with(
-        search=None, is_standard=None, limit=100, offset=0, exclude_statuses=None
+        search=None,
+        is_standard=None,
+        limit=100,
+        offset=0,
+        exclude_statuses=None,
+        statuses=None,
     )

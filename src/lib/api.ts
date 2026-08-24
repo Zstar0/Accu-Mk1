@@ -3704,6 +3704,9 @@ export async function listSamplePreps(params?: {
   // status filtering — client-side filtering after LIMIT hid older active
   // preps from the Sample Preps page.
   exclude_statuses?: string[]
+  // Include-side twin: restrict to these statuses before the LIMIT window
+  // (Analysis History pages through completed preps only).
+  statuses?: string[]
 }): Promise<SamplePrep[]> {
   const qs = new URLSearchParams()
   if (params?.search) qs.set('search', params.search)
@@ -3712,6 +3715,7 @@ export async function listSamplePreps(params?: {
   if (params?.offset != null) qs.set('offset', String(params.offset))
   if (params?.exclude_statuses?.length)
     qs.set('exclude_statuses', params.exclude_statuses.join(','))
+  if (params?.statuses?.length) qs.set('statuses', params.statuses.join(','))
   const response = await fetch(
     `${API_BASE_URL()}/sample-preps${qs.toString() ? '?' + qs : ''}`,
     { headers: getBearerHeaders() }

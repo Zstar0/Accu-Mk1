@@ -8,6 +8,7 @@ import {
   CardContent,
 } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   listSamplePreps,
@@ -43,10 +44,13 @@ export function AnalysisHistory() {
 // ── Completed Sample Preps ──────────────────────────────────────────────────
 
 const DONE_STATUSES = ['hplc_complete', 'completed', 'curve_created']
+const PAGE_SIZE = 100
 
 function CompletedSamplePreps({ filter }: { filter: 'production' | 'standard' }) {
   const [preps, setPreps] = useState<SamplePrep[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [flyoutPrep, setFlyoutPrep] = useState<SamplePrep | null>(null)
   const [flyoutMatch, setFlyoutMatch] = useState<HplcScanMatch | null>(null)
@@ -55,12 +59,21 @@ function CompletedSamplePreps({ filter }: { filter: 'production' | 'standard' })
   useEffect(() => {
     let cancelled = false
     Promise.all([
-      listSamplePreps({ limit: 100, is_standard: filter === 'standard' }),
+      // Done-statuses filter runs SERVER-side so the LIMIT window pages
+      // through completed preps — client-side filtering after LIMIT capped
+      // history at the done rows among the newest 100 preps of any status.
+      listSamplePreps({
+        limit: PAGE_SIZE,
+        offset: 0,
+        is_standard: filter === 'standard',
+        statuses: DONE_STATUSES,
+      }),
       getChromatogramStatus(),
     ])
       .then(([data, chromStatus]) => {
         if (!cancelled) {
-          setPreps(data.filter(p => DONE_STATUSES.includes(p.status)))
+          setPreps(data)
+          setHasMore(data.length === PAGE_SIZE)
           setChromPrepIds(new Set(chromStatus.prep_ids_with_chromatogram))
         }
       })
@@ -72,6 +85,24 @@ function CompletedSamplePreps({ filter }: { filter: 'production' | 'standard' })
       })
     return () => { cancelled = true }
   }, [filter])
+
+  function loadMore() {
+    setLoadingMore(true)
+    listSamplePreps({
+      limit: PAGE_SIZE,
+      offset: preps.length,
+      is_standard: filter === 'standard',
+      statuses: DONE_STATUSES,
+    })
+      .then(data => {
+        setPreps(prev => [...prev, ...data])
+        setHasMore(data.length === PAGE_SIZE)
+      })
+      .catch(err => {
+        setError(err instanceof Error ? err.message : 'Failed to load')
+      })
+      .finally(() => setLoadingMore(false))
+  }
 
   function openPrep(prep: SamplePrep) {
     const match: HplcScanMatch = {
@@ -169,6 +200,14 @@ function CompletedSamplePreps({ filter }: { filter: 'production' | 'standard' })
             </tbody>
           </table>
         </div>
+        {hasMore && (
+          <div className="flex justify-center pt-3">
+            <Button variant="outline" size="sm" onClick={loadMore} disabled={loadingMore}>
+              {loadingMore && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+              Load more
+            </Button>
+          </div>
+        )}
       </CardContent>
     </Card>
 
