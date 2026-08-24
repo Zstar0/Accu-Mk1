@@ -368,6 +368,39 @@ def test_writeback_parent_verify_already_verified_is_success_without_calls():
     mock_post.assert_not_called()
 
 
+def test_writeback_parent_verify_published_line_is_success_without_calls():
+    """The stuck-canonical shape (prod P-2350/P-2351, found 2026-08-23):
+    promote minted parent_to_verify, nobody verified natively, and the sample
+    published anyway — SENAITE's line sits at 'published', PAST verified.
+    verify is not a legal SENAITE edge from published, so attempting the
+    transition would only trip the silent-rejection check → the tee must
+    treat published as converged, exactly like verified."""
+    items = [_analysis_item("uid-p1", "HPLC-PUR", "published")]
+    with patch("lims_analyses.senaite_writeback._get", return_value=_ok_resp(items)), \
+         patch("lims_analyses.senaite_writeback._post_json") as mock_post:
+        result = writeback_parent_verify("P-2350", "HPLC-PUR")
+
+    assert result == "published"
+    mock_post.assert_not_called()
+
+
+def test_writeback_parent_verify_prefers_active_line_over_published():
+    """Retest-after-publish shape: a published old line plus an active retest
+    copy — the tee must verify the ACTIVE line, never converge on the stale
+    published one (mirror of the verified-line preference test)."""
+    items = [
+        _analysis_item("uid-oldp", "HPLC-PUR", "published"),
+        _analysis_item("uid-newa", "HPLC-PUR", "to_be_verified"),
+    ]
+    verified_resp = _ok_resp([{"uid": "uid-newa", "review_state": "verified"}])
+    with patch("lims_analyses.senaite_writeback._get", return_value=_ok_resp(items)), \
+         patch("lims_analyses.senaite_writeback._post_json", return_value=verified_resp) as mock_post:
+        result = writeback_parent_verify("P-0158", "HPLC-PUR")
+
+    assert result == "verified"
+    assert "uid-newa" in mock_post.call_args.args[0]
+
+
 def test_writeback_parent_verify_raises_when_keyword_absent():
     items = [_analysis_item("uid-x", "OTHER", "to_be_verified")]
     with patch("lims_analyses.senaite_writeback._get", return_value=_ok_resp(items)):
