@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.8.3 — 2026-08-24
+
+### Fixed
+
+- **Workflow catalog: publish edges no longer strand or refuse real
+  publishes** (burn-in census findings). The publish gate accepts
+  analyses at `verified` OR `published` (the publish hook flips
+  shadow-mirrored lines to `published` before the sample evaluation runs —
+  7 real publishes were refused on that ordering), and
+  `waiting_for_addon_results` gains its missing `publish` edge (the state
+  had NO out-edges; 7 real publishes stranded `native_status`). Seeded for
+  fresh DBs + guarded boot migrations for existing DBs, with live-DB
+  effect assertions in the migration test.
+- **Parity harness: `contact_senaite_doubled_billing_variant`** — SENAITE
+  contact created from the billing company name vs Mk1's COA-profile name
+  (UMS Rx cohort); fires only on an exactly self-doubled SENAITE value
+  whose base extends the Mk1 name at a word boundary.
+
 ## v1.8.2 — 2026-08-24
 
 ### Added
