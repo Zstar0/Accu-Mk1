@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.8.4 — 2026-08-24
+
+### Changed
+
+- **Role-flip cleanup re-keyed to custody edges — Department becomes a pure
+  org label.** Custody LOSS (host or rider) now clears a lost profile's
+  pristine seeded rows even within one department, and a profile HOLDING a
+  current custody edge is never cleared by the department diff. The
+  department-diff predicate stays for legacy no-edge vials (behavior
+  unchanged there). This removes the structural reason the Heavy Metals
+  department had to exist separately: after this release, moving the
+  heavy-metals services + hm role under Analytical is a plain admin-UI
+  edit (the vial-roles seed never clobbers admin department edits, and
+  inbox lanes derive from role-owning departments automatically).
+
 ## v1.8.3 — 2026-08-24
 
 ### Fixed
