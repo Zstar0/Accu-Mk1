@@ -2483,8 +2483,24 @@ export interface AnalysisServiceRecord {
   local_overrides: string[] | null
   department_id: number | null
   default_method_id: number | null
+  /** Count of method_services links (curated coverage). NOT `methods.length` —
+   * that JSON column is SENAITE clone-time provenance, always empty on
+   * Mk1-native services. */
+  linked_method_count?: number
   created_at: string
   updated_at: string
+}
+
+/** A method_services link seen from the service side — reverse of the
+ * method panel's Covered Services list. */
+export interface ServiceMethodLink {
+  method_id: number
+  name: string
+  code: string | null
+  technique: string | null
+  revision: number
+  status: string
+  is_default: boolean
 }
 
 /**
@@ -2659,6 +2675,16 @@ export async function syncAnalysisServices(): Promise<{ created: number; total: 
     const err = await response.json().catch(() => null)
     throw new Error(err?.detail || `Sync analysis services failed: ${response.status}`)
   }
+  return response.json()
+}
+
+/** Methods covering a service, from the method_services link table (default
+ * first). The legacy SENAITE `methods` JSON on the service row is not read. */
+export async function getServiceMethods(serviceId: number): Promise<ServiceMethodLink[]> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-services/${serviceId}/methods`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Get service methods failed: ${response.status}`)
   return response.json()
 }
 
