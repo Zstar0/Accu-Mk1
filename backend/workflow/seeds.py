@@ -41,10 +41,23 @@ SEED_TRANSITIONS = [
     ("sample", "to_be_verified", "verified", "verify", True,
      [{"kind": "all_analyses_in_state", "value": "verified", "note": None}],
      "Lab verification of all results."),
+    # publish gates on verified-OR-published (not verified alone): the A6
+    # publish hook flips shadow-mirrored analyses to 'published' before the
+    # sample-publish evaluation runs, so shadow-only keywords legitimately
+    # read 'published' at evaluation time — prod burn-in 2026-08-23 caught 7
+    # real publishes refused on exactly this ordering (mk1_refused bucket).
     ("sample", "verified", "published", "publish", False,
-     [{"kind": "all_analyses_in_state", "value": "verified", "note": "COA generated and published via Mk1"},
+     [{"kind": "all_analyses_in_state", "value": "verified,published", "note": "COA generated and published via Mk1"},
       {"kind": "coa_published", "value": None, "note": "attested by the publish touchpoint"}],
      "COA publish."),
+    # waiting_for_addon_results was seeded as a state with NO out-edges, so
+    # every real publish from it logged no_edge and stranded native_status
+    # (7 samples in the 2026-08-23 burn-in census). Publishing once add-on
+    # results complete is a legal lab flow; same gates as verified→published.
+    ("sample", "waiting_for_addon_results", "published", "publish", False,
+     [{"kind": "all_analyses_in_state", "value": "verified,published", "note": "COA publish once add-on results complete"},
+      {"kind": "coa_published", "value": None, "note": "attested by the publish touchpoint"}],
+     "COA publish once add-on results complete."),
     ("sample", "sample_received", "dispatched", "dispatch", False, [], "Physical dispatch."),
     ("sample", "sample_due", "cancelled", "cancel", False, [], "Cancel before receipt."),
     ("sample", "sample_received", "cancelled", "cancel", False, [], "Cancel after receipt."),

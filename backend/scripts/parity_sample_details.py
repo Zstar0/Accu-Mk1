@@ -196,6 +196,16 @@ analyst_attribution) -- each justified where it's defined below:
                                   2026-08-24 with the retest-aware pairing
                                   fix (PB-0407 mispairing).
 
+  contact_senaite_doubled_billing_variant -- SENAITE's contact is exactly
+                                  self-doubled ('X X', the IS-created
+                                  artifact) and the doubled base extends
+                                  mk1's value at a word boundary: billing
+                                  company vs COA-profile name for the same
+                                  customer ('UMS Rx' vs 'UMS Rx LLC',
+                                  Handler-explained 2026-08-24). A doubled
+                                  base that does not extend mk1's name
+                                  stays REAL. Added 2026-08-24.
+
 Fault isolation: in HTTP / in-process mode, one sample's failed fetch logs a
 warning, lands in the report's `fetch_errors` list, and the run CONTINUES to
 a partial report -- never a lost run.
@@ -330,21 +340,56 @@ _TOP_LEVEL_RULES: dict[str, Callable[[Any, Any], Optional[str]]] = {
     "cached_at": lambda mk1v, sv: "cached_at_timestamps",
     "date_received": _date_dual_stamp_skew_rule,
     "date_sampled": _date_dual_stamp_skew_rule,
-    # contact_fullname_senaite_doubling: SENAITE stores the Contacts IS creates
-    # with Firstname == Lastname == the COA company name, so its Fullname
-    # getter returns "X X" while mk1 holds the clean single value from the IS
-    # creation signal (and collapses it on refresh -- see
-    # sub_samples.service._collapse_self_doubled). mk1 is AUTHORITATIVE here;
-    # the two sides can never agree. Gated on an EXACT doubling of the mk1
-    # value, never on "contact differs" -- a genuinely wrong contact must stay
-    # a REAL diff.
-    "contact": lambda mk1v, sv: (
-        "contact_fullname_senaite_doubling"
-        if isinstance(mk1v, str) and isinstance(sv, str)
-        and mk1v.strip() and sv.strip() == f"{mk1v.strip()} {mk1v.strip()}"
-        else None
-    ),
+    "contact": lambda mk1v, sv: _contact_rule(mk1v, sv),
 }
+
+
+def _self_doubled_base(sv: Any) -> Optional[str]:
+    """'X X' -> X (an EXACT self-doubling -- the IS-created-contact artifact
+    where Firstname == Lastname), else None. Midpoint split: s == base+' '+base
+    forces equal halves, so anything else (trailing word differs, odd shapes)
+    returns None and stays a REAL diff."""
+    if not isinstance(sv, str):
+        return None
+    s = sv.strip()
+    if len(s) < 3 or len(s) % 2 == 0:  # 'X X' is always odd-length
+        return None
+    half = (len(s) - 1) // 2
+    if s[half] != " ":
+        return None
+    base = s[:half]
+    return base if base and s[half + 1:] == base else None
+
+
+def _contact_rule(mk1v: Any, sv: Any) -> Optional[str]:
+    """contact_fullname_senaite_doubling: SENAITE stores the Contacts IS
+    creates with Firstname == Lastname == the COA company name, so its
+    Fullname getter returns "X X" while mk1 holds the clean single value from
+    the IS creation signal (and collapses it on refresh -- see
+    sub_samples.service._collapse_self_doubled). mk1 is AUTHORITATIVE here;
+    the two sides can never agree. Gated on an EXACT doubling of the mk1
+    value, never on "contact differs" -- a genuinely wrong contact must stay
+    a REAL diff.
+
+    contact_senaite_doubled_billing_variant (Handler-explained 2026-08-24,
+    UMS Rx cohort): the SENAITE contact was created from the BILLING company
+    name while mk1 carries the COA-profile name -- same customer, suffix
+    variant ('UMS Rx' vs 'UMS Rx LLC LLC-doubled'). Fires ONLY when the
+    SENAITE value is exactly self-doubled (proving it's the IS-created
+    artifact, not curated data) AND the doubled base extends the mk1 value
+    at a word boundary (mk1 + ' ...suffix'). A doubled base that does not
+    extend mk1's name -- a genuinely different contact -- stays REAL."""
+    if not (isinstance(mk1v, str) and mk1v.strip()):
+        return None
+    base = _self_doubled_base(sv)
+    if base is None:
+        return None
+    mk1_clean = mk1v.strip()
+    if base == mk1_clean:
+        return "contact_fullname_senaite_doubling"
+    if base.startswith(mk1_clean + " "):
+        return "contact_senaite_doubled_billing_variant"
+    return None
 
 _COA_RULES: dict[str, Callable[[Any, Any], Optional[str]]] = {
     "chromatograph_background_url": lambda mk1v, sv: (
