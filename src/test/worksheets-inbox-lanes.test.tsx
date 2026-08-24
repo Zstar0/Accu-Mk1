@@ -183,16 +183,16 @@ describe('WorksheetsInboxPage — catalog-driven lane sub-chips (2026-08-24 slic
   it('multi-role lane renders one sub-chip per role from role_codes, labeled from the catalog', async () => {
     renderPage()
     fireEvent.click(await screen.findByRole('button', { name: 'Microbiology' }))
-    expect(await screen.findByRole('button', { name: 'All' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Endotoxin' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Sterility' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /^All/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Endotoxin/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Sterility/ })).toBeInTheDocument()
   })
 
   it('single-role lane renders NO sub-chip row', async () => {
     renderPage()
     // default lane is Analytical (role_codes: ['hplc'] in this fixture)
     await screen.findByRole('button', { name: 'Analytical' })
-    expect(screen.queryByRole('button', { name: 'All' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^All/ })).not.toBeInTheDocument()
   })
 
   it('sub-chip filters by role_tags — rider work (fentanyl on an hplc host vial) is reachable under its own chip', async () => {
@@ -208,9 +208,13 @@ describe('WorksheetsInboxPage — catalog-driven lane sub-chips (2026-08-24 slic
       filter_role: 'hplc',
     })
     renderPage()
-    fireEvent.click(await screen.findByRole('button', { name: 'Fentanyl Screening' }))
+    // Faceted count badges ride the chip's accessible name: 2 vials total,
+    // 1 carrying fentanyl work (the worksheet-sidebar count sibling).
+    expect(await screen.findByRole('button', { name: 'All 2' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Fentanyl Screening 1' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /^Fentanyl Screening/ }))
     expect(await screen.findByText('1 vial')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'All' }))
+    fireEvent.click(screen.getByRole('button', { name: /^All/ }))
     expect(await screen.findByText('2 vials')).toBeInTheDocument()
   })
 
@@ -227,7 +231,7 @@ describe('WorksheetsInboxPage — catalog-driven lane sub-chips (2026-08-24 slic
       filter_role: 'hplc',
     })
     renderPage()
-    fireEvent.click(await screen.findByRole('button', { name: 'Fentanyl Screening' }))
+    fireEvent.click(await screen.findByRole('button', { name: /^Fentanyl Screening/ }))
     expect(await screen.findByText('1 vial')).toBeInTheDocument()
   })
 
@@ -239,7 +243,7 @@ describe('WorksheetsInboxPage — catalog-driven lane sub-chips (2026-08-24 slic
     })
     renderPage()
     fireEvent.click(await screen.findByRole('button', { name: 'Microbiology' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Endotoxin' }))
+    fireEvent.click(await screen.findByRole('button', { name: /^Endotoxin/ }))
     expect(await screen.findByText('1 vial')).toBeInTheDocument()
     // leave and return — the filter must not survive the lane switch
     fireEvent.click(screen.getByRole('button', { name: 'Analytical' }))
