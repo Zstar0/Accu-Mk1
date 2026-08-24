@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.8.1 — 2026-08-23
+
+### Fixed
+
+- **Parent-verify tee: a published SENAITE line now converges instead of
+  502.** The tee treated only `verified` as already-converged; a line at
+  `published` (promote minted `parent_to_verify`, nobody verified natively,
+  the sample published anyway — prod P-2350/P-2351) fell through to a
+  verify attempt that SENAITE silently rejects, so the route 502'd and the
+  canonical row could never be signed off. `published` now converges
+  exactly like `verified`; active retest lines still take precedence.
+
 ## v1.8.0 — 2026-08-21
 
 The catalog arc (PRs #87–#119): the analysis catalog becomes the source of
