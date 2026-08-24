@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.8.5 — 2026-08-24
+
+### Changed
+
+- **Worksheet-inbox lane sub-chips are catalog-driven.** Any lane whose
+  department owns more than one vial role renders one sub-chip per role
+  (labeled from the role catalog), replacing the hardcoded
+  Endotoxin/Sterility chips and their keyword-category filter. Chips filter
+  by the new per-vial `role_tags` — the vial's own role plus rider
+  profiles' roles from current custody edges — so rider work (e.g.
+  fentanyl riding an hplc host vial) is reachable under its own chip, and
+  a new role created in the admin UI gets its sub-chip with no code
+  change (heavy metals and fentanyl are the first customers).
+
 ## v1.8.4 — 2026-08-24
 
 ### Changed
