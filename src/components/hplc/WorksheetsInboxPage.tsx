@@ -28,6 +28,7 @@ import {
   getInboxSamples,
   fetchSampleAggregates,
   listWorksheets,
+  type InboxVialItem,
   addGroupToWorksheet,
   createWorksheetFromDrop,
   updateWorksheet,
@@ -237,17 +238,32 @@ export default function WorksheetsInboxPage() {
 
   const vials = inboxData?.items ?? []
   const total = inboxData?.total ?? 0
-  const visibleVials = vials
+  // role_tags carries the vial's own role plus rider profiles' roles from
+  // custody edges; pre-1.8.5 payloads degrade to the bare role.
+  const vialRoleTags = (v: InboxVialItem): string[] =>
+    v.role_tags ?? (v.assignment_role ? [v.assignment_role] : [])
+  // Everything EXCEPT the sub-chip filter — the sub-chip counts are faceted
+  // over this list, so each chip's number is exactly what clicking it yields
+  // under the currently-active text filters.
+  const baseVisibleVials = vials
     // `${uid}::${departmentId}` — must stay byte-identical to InboxVialCard's
     // dragId and to the cardKey built from DragData below, or an optimistically
     // dropped card never hides (or never comes back on failure).
     .filter(v => !pendingDropKeys.has(`${v.uid}::${v.analyses[0]?.group_id ?? 0}`))
     .filter(v => !sampleIdFilter.trim() || vialMatchesSampleId(v, sampleIdFilter))
     .filter(v => role !== 'hplc' || !analyteFilter.trim() || vialMatchesAnalyte(v, analyteFilter))
-    // Sub-chip role filter: a vial matches if the selected role's WORK is on
-    // it — role_tags carries the vial's own role plus rider profiles' roles
-    // from custody edges; pre-1.8.5 payloads degrade to the bare role.
-    .filter(v => !subRole || (v.role_tags ?? (v.assignment_role ? [v.assignment_role] : [])).includes(subRole))
+  // Sub-chip role filter: a vial matches if the selected role's WORK is on it.
+  const visibleVials = subRole
+    ? baseVisibleVials.filter(v => vialRoleTags(v).includes(subRole))
+    : baseVisibleVials
+  // code -> vial count for the sub-chip badges ('' = the All chip).
+  const subChipCounts = new Map<string, number>([
+    ['', baseVisibleVials.length],
+    ...laneSubChips.map(c => [
+      c.value,
+      baseVisibleVials.filter(v => vialRoleTags(v).includes(c.value)).length,
+    ] as [string, number]),
+  ])
 
   // Family-grouped rendering: groupInboxFamilies owns ALL ordering (family
   // rank = most urgent vial; vials by sequence). A family never splits
@@ -555,7 +571,7 @@ export default function WorksheetsInboxPage() {
                     type="button"
                     onClick={() => setSubRole(c.value)}
                     className={cn(
-                      'inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors',
+                      'inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors',
                       subRole === c.value
                         // Active sub-chip carries its role's catalog colour;
                         // the "All" chip has no role, so laneBadgeClass falls
@@ -565,6 +581,11 @@ export default function WorksheetsInboxPage() {
                     )}
                   >
                     {c.label}
+                    {/* Faceted count: what clicking this chip yields under the
+                        active text filters (worksheet-sidebar badge sibling). */}
+                    <span className="tabular-nums text-[10px] opacity-60">
+                      {subChipCounts.get(c.value) ?? 0}
+                    </span>
                   </button>
                 ))}
               </div>
