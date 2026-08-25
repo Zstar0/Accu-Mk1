@@ -41,6 +41,12 @@ class SubSampleResponse(BaseModel):
     # photo). Populated by the LIST endpoint via a batched user lookup;
     # single-item responses leave it None.
     received_by: Optional[str] = None
+    # Material vial (analytical_vials pooling, 2026-08-24): this vial ships
+    # material for the named sibling anchor vial and carries no analyses of
+    # its own. Derived by the LIST endpoint (never stored): the vial's role
+    # profile caps analytical vials, this vial has zero live analyses, and
+    # the named sibling holds the anchor slot. None everywhere else.
+    material_for: Optional[str] = None
 
     class Config:
         from_attributes = True

@@ -1490,6 +1490,7 @@ def _run_migrations():
             description TEXT,
             is_addon BOOLEAN NOT NULL,
             vials_required INTEGER NOT NULL DEFAULT 0,
+            analytical_vials INTEGER,
             fulfillment_role VARCHAR(50),
             fulfillment_dim VARCHAR(20) NOT NULL DEFAULT 'role',
             sort_order INTEGER NOT NULL DEFAULT 0,
@@ -1851,6 +1852,9 @@ def _run_migrations():
         created_at          TIMESTAMP NOT NULL DEFAULT NOW()
     )""",
         "CREATE INDEX IF NOT EXISTS ix_method_attachments_method ON method_attachments (method_id, created_at)",
+        # analytical_vials (2026-08-24, heavy-metals pooling): of a profile's
+        # vials_required vials, how many carry analyses. NULL = all.
+        "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS analytical_vials INTEGER",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

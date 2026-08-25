@@ -45,6 +45,60 @@ from sub_samples.product_registry import build_ordered_products
 router = APIRouter(prefix="/api/sub-samples", tags=["sub-samples"])
 
 
+def _annotate_material_vials(db, *, items, subs) -> None:
+    """Stamp material_for on custody-only vials (analytical_vials pooling).
+
+    A vial is a material vial when its role's profile caps analytical vials
+    (live catalog read — display only; the SEEDING decision froze at
+    registration), the vial itself carries zero live analyses, and a
+    same-role sibling holds the anchor slot. Batched: one grouped
+    live-analyses count + one profile read per involved role.
+    """
+    from lims_analyses.seeder import ROLE_TO_KEYWORDS
+    from models import AnalysisProfile, LimsAnalysis
+    from sqlalchemy import func
+
+    catalog_roles = {
+        s.assignment_role for s in subs
+        if s.assignment_role and s.assignment_role not in ROLE_TO_KEYWORDS
+        and s.assignment_role != "hplc"
+    }
+    if not catalog_roles:
+        return
+    capped_roles = {
+        p.fulfillment_role
+        for p in db.execute(
+            select(AnalysisProfile).where(
+                AnalysisProfile.fulfillment_role.in_(catalog_roles),
+                AnalysisProfile.fulfillment_dim == "role",
+                AnalysisProfile.active.is_(True),
+                AnalysisProfile.analytical_vials.is_not(None),
+            )
+        ).scalars()
+    }
+    if not capped_roles:
+        return
+    live_counts = dict(db.execute(
+        select(LimsAnalysis.lims_sub_sample_pk, func.count())
+        .where(
+            LimsAnalysis.lims_sub_sample_pk.in_([s.id for s in subs]),
+            LimsAnalysis.review_state.notin_(["rejected", "retracted"]),
+        )
+        .group_by(LimsAnalysis.lims_sub_sample_pk)
+    ).all())
+    for item, s in zip(items, subs):
+        if s.assignment_role not in capped_roles or live_counts.get(s.id, 0):
+            continue
+        anchor = next(
+            (a for a in subs
+             if a.id != s.id and a.assignment_role == s.assignment_role
+             and live_counts.get(a.id, 0)),
+            None,
+        )
+        if anchor is not None:
+            item.material_for = anchor.sample_id
+
+
 def _serialize(sub) -> SubSampleResponse:
     """Convert LimsSubSample ORM model to response schema."""
     return SubSampleResponse(
@@ -313,6 +367,9 @@ def list_sub_samples(
         for item, s in zip(items, subs):
             if isinstance(getattr(s, "received_by_user_id", None), int):
                 item.received_by = name_by_id.get(s.received_by_user_id)
+    # Material-vial annotation (analytical_vials pooling): derived per list
+    # call, never stored — see _annotate_material_vials.
+    _annotate_material_vials(db, items=items, subs=subs)
     return SubSampleListResponse(
         parent=ParentSampleSummary(
             sample_id=parent.sample_id,

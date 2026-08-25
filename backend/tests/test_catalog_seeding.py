@@ -478,3 +478,114 @@ def test_foreign_host_no_longer_blocks_native_rider_gate(db_session, caplog):
     assert "catalog_seed_skipped_non_native" in caplog.text
     rows = db_session.query(LimsAnalysis).filter_by(lims_sub_sample_pk=sub.id).all()
     assert [r.keyword for r in rows] == ["ZZ5-RIDER-OK"]
+
+
+# --- analytical_vials: ship N vials, report on M (heavy-metals pooling,
+# Handler ruling 2026-08-24: 2 vials of cake pooled into ONE digest — the
+# companion vial is custody-only, no AR rows, so no dangling to_be_verified
+# residue like P-0159-S03) ---
+
+def _sibling_vial(db, first, *, seq=1, role="hm"):
+    from models import LimsSubSample
+    v = LimsSubSample(
+        sample_id=f"ZZTEST-HM-S{seq + 1:02d}",
+        vial_sequence=seq,
+        parent_sample_pk=first.parent_sample_pk,
+        external_lims_uid=f"zz-vuid-hm-{seq}",
+        assignment_role=role,
+    )
+    db.add(v); db.flush()
+    return v
+
+
+def test_analytical_vials_companion_seeds_nothing(db_session):
+    from lims_analyses.seeder import seed_analyses_for_vial
+    from models import LimsAnalysis
+    p, _svcs = _mk_catalog(db_session)
+    p.analytical_vials = 1
+    db_session.flush()
+    anchor = _mk_parent_and_vial(db_session, role="hm")
+    seed_analyses_for_vial(db_session, sub_sample=anchor, role="hm",
+                           wp_services={"heavy_metals": True}, commit=True)
+    companion = _sibling_vial(db_session, anchor)
+
+    created = seed_analyses_for_vial(db_session, sub_sample=companion, role="hm",
+                                     wp_services={"heavy_metals": True}, commit=True)
+
+    assert created == []
+    rows = db_session.query(LimsAnalysis).filter_by(
+        lims_sub_sample_pk=companion.id).all()
+    assert rows == []
+    # the anchor's rows are untouched
+    assert db_session.query(LimsAnalysis).filter_by(
+        lims_sub_sample_pk=anchor.id).count() == 4
+
+
+def test_analytical_vials_unset_seeds_every_vial(db_session):
+    from lims_analyses.seeder import seed_analyses_for_vial
+    from models import LimsAnalysis
+    _mk_catalog(db_session)  # analytical_vials stays NULL = all analytical
+    v1 = _mk_parent_and_vial(db_session, role="hm")
+    seed_analyses_for_vial(db_session, sub_sample=v1, role="hm",
+                           wp_services={"heavy_metals": True}, commit=True)
+    v2 = _sibling_vial(db_session, v1)
+
+    created = seed_analyses_for_vial(db_session, sub_sample=v2, role="hm",
+                                     wp_services={"heavy_metals": True}, commit=True)
+
+    assert len(created) == 4
+    assert db_session.query(LimsAnalysis).filter_by(
+        lims_sub_sample_pk=v2.id).count() == 4
+
+
+def test_analytical_vials_snapshot_wins_over_live(db_session):
+    """The registration-frozen value gates seeding even when the live catalog
+    row disagrees (S4 freeze ruling: catalog edits never retroactively change
+    an already-registered sample's provisioning)."""
+    from lims_analyses.seeder import seed_analyses_for_vial
+    from models import LimsSample
+    p, _svcs = _mk_catalog(db_session)  # live analytical_vials = NULL
+    anchor = _mk_parent_and_vial(db_session, role="hm")
+    parent = db_session.get(LimsSample, anchor.parent_sample_pk)
+    parent.catalog_snapshot = {
+        "resolved_at": "2026-08-24T00:00:00",
+        "profiles": [{
+            "key": "heavy_metals", "profile_id": p.id,
+            "fulfillment_role": "hm", "role_sort_order": None,
+            "vials_required": 2, "service_ids": [],
+            "ride_host_roles": [], "analytical_vials": 1,
+        }],
+    }
+    db_session.flush()
+    seed_analyses_for_vial(db_session, sub_sample=anchor, role="hm",
+                           wp_services={"heavy_metals": True}, commit=True)
+    companion = _sibling_vial(db_session, anchor)
+
+    created = seed_analyses_for_vial(db_session, sub_sample=companion, role="hm",
+                                     wp_services={"heavy_metals": True}, commit=True)
+
+    assert created == []
+
+
+def test_analytical_vials_dead_sibling_rows_do_not_anchor(db_session):
+    """A sibling whose rows are all rejected/retracted no longer holds the
+    anchor slot — the next vial of the role seeds (mirrors the seeder's
+    dead-rows-don't-block idiom)."""
+    from lims_analyses.seeder import seed_analyses_for_vial
+    from models import LimsAnalysis
+    p, _svcs = _mk_catalog(db_session)
+    p.analytical_vials = 1
+    db_session.flush()
+    v1 = _mk_parent_and_vial(db_session, role="hm")
+    seed_analyses_for_vial(db_session, sub_sample=v1, role="hm",
+                           wp_services={"heavy_metals": True}, commit=True)
+    for r in db_session.query(LimsAnalysis).filter_by(
+            lims_sub_sample_pk=v1.id).all():
+        r.review_state = "rejected"
+    db_session.flush()
+    v2 = _sibling_vial(db_session, v1)
+
+    created = seed_analyses_for_vial(db_session, sub_sample=v2, role="hm",
+                                     wp_services={"heavy_metals": True}, commit=True)
+
+    assert len(created) == 4

@@ -2675,6 +2675,8 @@ class AnalysisProfileCreate(BaseModel):
     description: Optional[str] = None
     is_addon: bool
     vials_required: int = 0
+    # Of vials_required, how many carry analyses. None = all (default).
+    analytical_vials: Optional[int] = None
     fulfillment_role: Optional[str] = None
     fulfillment_dim: str = "role"
     sort_order: int = 0
@@ -2716,6 +2718,7 @@ class AnalysisProfileUpdate(BaseModel):
     description: Optional[str] = None
     is_addon: Optional[bool] = None
     vials_required: Optional[int] = None
+    analytical_vials: Optional[int] = None
     fulfillment_role: Optional[str] = None
     fulfillment_dim: Optional[str] = None
     sort_order: Optional[int] = None
@@ -2745,6 +2748,7 @@ class AnalysisProfileResponse(BaseModel):
     description: Optional[str] = None
     is_addon: bool
     vials_required: int
+    analytical_vials: Optional[int] = None
     fulfillment_role: Optional[str] = None
     fulfillment_dim: str
     sort_order: int
@@ -17157,6 +17161,7 @@ async def delete_department(
 # bookkeeping, not catalog data.
 PROFILE_LOG_FIELDS = (
     "key", "name", "description", "is_addon", "vials_required",
+    "analytical_vials",
     "fulfillment_role", "fulfillment_dim", "sort_order", "active",
     "coa_section_title", "coa_archetype", "coa_sort_order", "sla_tier_id",
 )
@@ -17178,6 +17183,7 @@ def _profile_to_response(p) -> AnalysisProfileResponse:
     return AnalysisProfileResponse(
         id=p.id, key=p.key, name=p.name, description=p.description,
         is_addon=p.is_addon, vials_required=p.vials_required,
+        analytical_vials=p.analytical_vials,
         fulfillment_role=p.fulfillment_role, fulfillment_dim=p.fulfillment_dim,
         sort_order=p.sort_order, active=p.active,
         coa_section_title=p.coa_section_title, coa_archetype=p.coa_archetype,

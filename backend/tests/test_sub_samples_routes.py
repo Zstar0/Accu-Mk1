@@ -710,3 +710,84 @@ def test_bulk_create_201_passes_decoded_photo_bytes_to_filename_helper():
     assert body["requested"] == 2
     assert body["failed"] == 0
     assert len(body["created"]) == 2
+
+
+def test_material_vial_annotation_on_list():
+    """analytical_vials pooling: the list endpoint stamps material_for on a
+    custody-only vial (capped role, zero live analyses) naming its sibling
+    anchor. Live-DB rows (the annotation's profile/analyses reads are real
+    queries); TEST-prefixed + cleaned up."""
+    from datetime import datetime as _dt
+    from sqlalchemy import delete
+    from database import SessionLocal
+    from lims_analyses.service import create_analysis
+    from models import (
+        AnalysisProfile, AnalysisService, LimsAnalysis, LimsSample,
+        LimsSubSample,
+    )
+
+    db = SessionLocal()
+    try:
+        # Cleanup-first (self-restoring even after a prior crashed run).
+        for pk_q in [
+            delete(LimsAnalysis).where(LimsAnalysis.lims_sub_sample_pk.in_(
+                select(LimsSubSample.id).where(
+                    LimsSubSample.sample_id.like("TEST-MATV%")))),
+            delete(LimsSubSample).where(
+                LimsSubSample.sample_id.like("TEST-MATV%")),
+            delete(LimsSample).where(LimsSample.sample_id.like("TEST-MATV%")),
+            delete(AnalysisProfile).where(
+                AnalysisProfile.key == "zz_matvial_test"),
+            delete(AnalysisService).where(
+                AnalysisService.keyword == "ZZMAT-X"),
+        ]:
+            db.execute(pk_q)
+        db.commit()
+
+        svc = AnalysisService(title="ZZ Mat X", keyword="ZZMAT-X", origin="mk1")
+        db.add(svc)
+        db.flush()
+        prof = AnalysisProfile(
+            key="zz_matvial_test", name="ZZ MatVial Test", is_addon=True,
+            vials_required=2, analytical_vials=1,
+            fulfillment_role="zzmat", fulfillment_dim="role", active=True)
+        parent = LimsSample(sample_id="TEST-MATV", external_lims_uid="uid-matv")
+        db.add_all([prof, parent])
+        db.flush()
+        v1 = LimsSubSample(
+            sample_id="TEST-MATV-S01", vial_sequence=1,
+            parent_sample_pk=parent.id, external_lims_uid="mk1://matv1",
+            assignment_role="zzmat", received_at=_dt.utcnow())
+        v2 = LimsSubSample(
+            sample_id="TEST-MATV-S02", vial_sequence=2,
+            parent_sample_pk=parent.id, external_lims_uid="mk1://matv2",
+            assignment_role="zzmat", received_at=_dt.utcnow())
+        db.add_all([v1, v2])
+        db.flush()
+        create_analysis(db, host_kind="sub_sample", host_pk=v1.id,
+                        analysis_service_id=svc.id, keyword="ZZMAT-X",
+                        title="ZZ Mat X")
+        db.commit()
+
+        resp = client.get("/api/sub-samples?parent_sample_id=TEST-MATV")
+        assert resp.status_code == 200
+        by_id = {s["sample_id"]: s for s in resp.json()["sub_samples"]}
+        assert by_id["TEST-MATV-S01"]["material_for"] is None
+        assert by_id["TEST-MATV-S02"]["material_for"] == "TEST-MATV-S01"
+    finally:
+        db.rollback()
+        for pk_q in [
+            delete(LimsAnalysis).where(LimsAnalysis.lims_sub_sample_pk.in_(
+                select(LimsSubSample.id).where(
+                    LimsSubSample.sample_id.like("TEST-MATV%")))),
+            delete(LimsSubSample).where(
+                LimsSubSample.sample_id.like("TEST-MATV%")),
+            delete(LimsSample).where(LimsSample.sample_id.like("TEST-MATV%")),
+            delete(AnalysisProfile).where(
+                AnalysisProfile.key == "zz_matvial_test"),
+            delete(AnalysisService).where(
+                AnalysisService.keyword == "ZZMAT-X"),
+        ]:
+            db.execute(pk_q)
+        db.commit()
+        db.close()

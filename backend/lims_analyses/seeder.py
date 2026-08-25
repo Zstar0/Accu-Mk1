@@ -44,8 +44,10 @@ from sqlalchemy.orm import Session
 from catalog.departments import ANALYTICAL_DEPARTMENT, department_id_by_name
 from lims_analyses import service as la_service
 from models import (
+    AnalysisProfile,
     AnalysisService,
     LimsAnalysis,
+    LimsSample,
     LimsSubSample,
     ServiceGroup,
     service_group_members,
@@ -591,6 +593,53 @@ def _seed_rows_from_services(
     return inserted
 
 
+def _analytical_vials_for_role(
+    db: Session, *, sub_sample: LimsSubSample, role: str
+) -> Optional[int]:
+    """The analytical-vials cap for `role`, or None (= every vial analytical).
+
+    Snapshot-first (S4 freeze ruling): the parent's registration-frozen
+    profile entry wins when it carries the key — a later catalog edit must
+    never change an already-registered sample's anchor/material split. Old
+    snapshots (frozen before the field existed) lack the key entirely and
+    fall through to the live profile, same as a NULL snapshot.
+    """
+    parent = db.get(LimsSample, sub_sample.parent_sample_pk)
+    snap = getattr(parent, "catalog_snapshot", None) if parent is not None else None
+    for entry in (snap or {}).get("profiles") or []:
+        if entry.get("fulfillment_role") == role and "analytical_vials" in entry:
+            return entry.get("analytical_vials")
+    prof = db.execute(
+        select(AnalysisProfile).where(
+            AnalysisProfile.fulfillment_role == role,
+            AnalysisProfile.fulfillment_dim == "role",
+            AnalysisProfile.active.is_(True),
+        )
+    ).scalars().first()
+    return prof.analytical_vials if prof is not None else None
+
+
+def _sibling_anchor_count(
+    db: Session, *, sub_sample: LimsSubSample, role: str
+) -> int:
+    """How many OTHER same-parent vials with this role already carry live
+    analyses (rejected/retracted rows don't hold an anchor slot — mirrors
+    the seeder's dead-rows-don't-block idiom)."""
+    from sqlalchemy import func
+
+    return db.execute(
+        select(func.count(func.distinct(LimsAnalysis.lims_sub_sample_pk)))
+        .select_from(LimsAnalysis)
+        .join(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
+        .where(
+            LimsSubSample.parent_sample_pk == sub_sample.parent_sample_pk,
+            LimsSubSample.assignment_role == role,
+            LimsSubSample.id != sub_sample.id,
+            LimsAnalysis.review_state.notin_(["rejected", "retracted"]),
+        )
+    ).scalar() or 0
+
+
 def seed_analyses_for_vial(
     db: Session,
     *,
@@ -693,6 +742,22 @@ def seed_analyses_for_vial(
     # endo/ster stay on the keyword whitelist below — never re-route legacy
     # roles onto the catalog path.
     if role not in ROLE_TO_KEYWORDS:
+        # Anchor rule (analytical_vials, 2026-08-24): a profile may demand N
+        # vials of material but report on only M of them (heavy metals: 2
+        # vials of cake pooled into ONE digest). Once M same-role siblings
+        # already carry live analyses, this vial is a custody-only "material"
+        # vial — seed nothing. Assignment order decides which vials anchor
+        # (first assigned, first anchored); dead rows don't hold the slot.
+        cap = _analytical_vials_for_role(db, sub_sample=sub_sample, role=role)
+        if cap is not None:
+            anchored = _sibling_anchor_count(db, sub_sample=sub_sample, role=role)
+            if anchored >= cap:
+                log.info(
+                    "seeder.material_vial sub=%s role=%s anchored=%d cap=%d "
+                    "— custody-only vial, nothing seeded",
+                    sub_sample.sample_id, role, anchored, cap,
+                )
+                return []
         services = _catalog_members_for_role(db, role, wp_services, sub_sample=sub_sample)
         if not services:
             log.warning(
