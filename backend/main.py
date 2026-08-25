@@ -14076,6 +14076,31 @@ def _fuzzy_match_peptide(stripped_name: str, peptides: list) -> Optional[tuple]:
     return None
 
 
+def _enrich_analytes_with_peptide_match(db: Session, analytes: list) -> None:
+    """Fill matched_peptide_* on analytes that carry no match, in place.
+
+    The registry stores no peptide match and its adapter deliberately does
+    not re-derive one (sub_samples/registry_details.py — decoupling note),
+    while the senaite lookup path matches at read time. Without this parity
+    step the mk1 read mode silently drops every matched_peptide_* consumer:
+    the COA Alias picker keys on matched_peptide_name and HPLC
+    slot->analysis matching keys on matched_peptide_abbreviation.
+    """
+    pending = [a for a in analytes if a.matched_peptide_name is None]
+    if not pending:
+        return
+    all_peptides = db.query(Peptide).all()
+    for analyte in pending:
+        match = _fuzzy_match_peptide(
+            _strip_method_suffix(analyte.raw_name), all_peptides)
+        if not match:
+            continue
+        analyte.matched_peptide_id = match[0]
+        analyte.matched_peptide_name = match[1]
+        analyte.matched_peptide_abbreviation = next(
+            (p.abbreviation for p in all_peptides if p.id == match[0]), None)
+
+
 async def _resolve_instrument_from_senaite(sample_id: str) -> Optional[str]:
     """
     Look up the instrument model for a sample via SENAITE.
@@ -21725,7 +21750,12 @@ async def get_sample_read_from_registry(
     from fastapi.concurrency import run_in_threadpool
     from sub_samples.registry_details import build_native_details
 
-    return await run_in_threadpool(build_native_details, db, sample_id)
+    def _build_and_enrich():
+        result = build_native_details(db, sample_id)
+        _enrich_analytes_with_peptide_match(db, result.analytes)
+        return result
+
+    return await run_in_threadpool(_build_and_enrich)
 
 
 @app.get("/registry/sample/{sample_id}/attachments/{attachment_id}/download")

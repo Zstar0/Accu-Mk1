@@ -272,3 +272,48 @@ def test_authenticated_non_admin_can_read(client):
         r = client.get("/registry/sample/P-1/details")
     assert r.status_code == 200
     assert r.json()["client"] == "RegistryCo"
+
+
+def _seed_peptide(client, name, abbreviation):
+    from models import Peptide
+    db = client._Session()
+    db.add(Peptide(name=name, abbreviation=abbreviation))
+    db.commit()
+    db.close()
+
+
+def test_mk1_route_fuzzy_matches_analytes_to_peptides(client):
+    # The registry stores no peptide match (registry_details.py deliberately
+    # returns matched_* = None to stay decoupled from main's matcher), but
+    # the senaite read path fuzzy-matches at lookup time — so mk1 mode lost
+    # the COA Alias picker (keys on matched_peptide_name) and HPLC
+    # slot->analysis matching (keys on matched_peptide_abbreviation). The
+    # route must re-derive the match, read-mode parity with the senaite path.
+    # Seeded "BPC 157" (space form) vs catalog "BPC-157" proves the REAL
+    # fuzzy matcher runs (normalized match), not a raw string compare.
+    _seed_peptide(client, name="BPC-157", abbreviation="BPC157")
+    _seed(client, analytes=json.dumps([
+        {"name": "BPC 157", "declared_quantity": "10"},
+    ]))
+    with _mock_lookup_raises():
+        r = client.get("/registry/sample/P-1/details")
+    assert r.status_code == 200
+    analyte = r.json()["analytes"][0]
+    assert analyte["matched_peptide_name"] == "BPC-157"
+    assert analyte["matched_peptide_id"] is not None
+    assert analyte["matched_peptide_abbreviation"] == "BPC157"
+    assert analyte["declared_quantity"] == 10.0  # adapter fields untouched
+
+
+def test_mk1_route_unmatched_analyte_keeps_none_match(client):
+    # No catalog row resembles the stored name -> matched_* stay None
+    # (same contract as the senaite path when _fuzzy_match_peptide misses).
+    _seed_peptide(client, name="Semaglutide", abbreviation="SEMA")
+    _seed(client, analytes=json.dumps([{"name": "Mystery Compound"}]))
+    with _mock_lookup_raises():
+        r = client.get("/registry/sample/P-1/details")
+    assert r.status_code == 200
+    analyte = r.json()["analytes"][0]
+    assert analyte["matched_peptide_name"] is None
+    assert analyte["matched_peptide_id"] is None
+    assert analyte["matched_peptide_abbreviation"] is None
