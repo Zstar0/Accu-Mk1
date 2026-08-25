@@ -4905,6 +4905,10 @@ export interface AnalysisProfile {
   description: string | null
   is_addon: boolean
   vials_required: number
+  /** Of vials_required, how many carry analyses. null = all (the historical
+   * behavior). Heavy metals: ship 2, pool into 1 digest → 2 / 1.
+   * Optional for back-compat with fixtures/older responses. */
+  analytical_vials?: number | null
   fulfillment_role: string | null
   fulfillment_dim: 'role' | 'kind'
   sort_order: number
@@ -4961,6 +4965,7 @@ export async function createAnalysisProfile(data: {
   is_addon: boolean
   description?: string | null
   vials_required?: number
+  analytical_vials?: number | null
   sort_order?: number
   fulfillment_role?: string | null
   fulfillment_dim?: 'role' | 'kind'
@@ -6131,6 +6136,10 @@ export interface SubSample {
   // Human box label ("BOX-<order#>-<box_number>", e.g. "BOX-3267-1"). Only the
   // list endpoint populates it; null/absent when unboxed.
   box_label?: string | null
+  /** Material vial (analytical_vials pooling): this vial ships material for
+   *  the named sibling anchor and carries no analyses of its own. Only the
+   *  list endpoint populates it. */
+  material_for?: string | null
 }
 
 export interface ParentSampleSummary {

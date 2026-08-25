@@ -69,6 +69,7 @@ interface FormState {
   description: string
   is_addon: boolean | null
   vials_required: string
+  analytical_vials: string
   sort_order: string
   active: boolean
   coa_section_title: string
@@ -98,6 +99,7 @@ const DEFAULT_FORM: FormState = {
   description: '',
   is_addon: null,
   vials_required: '0',
+  analytical_vials: '',
   sort_order: '0',
   active: true,
   coa_section_title: '',
@@ -232,6 +234,7 @@ export default function AnalysisProfilesPage() {
       description: profile.description ?? '',
       is_addon: profile.is_addon,
       vials_required: String(profile.vials_required),
+      analytical_vials: profile.analytical_vials != null ? String(profile.analytical_vials) : '',
       sort_order: String(profile.sort_order),
       active: profile.active,
       coa_section_title: profile.coa_section_title ?? '',
@@ -347,6 +350,7 @@ export default function AnalysisProfilesPage() {
           description: form.description.trim() || null,
           is_addon: form.is_addon,
           vials_required: parseInt(form.vials_required, 10) || 0,
+          analytical_vials: form.analytical_vials.trim() === '' ? null : (parseInt(form.analytical_vials, 10) || null),
           sort_order: parseInt(form.sort_order, 10) || 0,
           active: form.active,
           coa_section_title: form.coa_section_title.trim() || null,
@@ -369,6 +373,7 @@ export default function AnalysisProfilesPage() {
           description: form.description.trim() || null,
           is_addon: form.is_addon,
           vials_required: parseInt(form.vials_required, 10) || 0,
+          analytical_vials: form.analytical_vials.trim() === '' ? null : (parseInt(form.analytical_vials, 10) || null),
           sort_order: parseInt(form.sort_order, 10) || 0,
           fulfillment_role: roleForPayload,
           fulfillment_dim: form.fulfillment_dim,
@@ -804,6 +809,22 @@ export default function AnalysisProfilesPage() {
                       onChange={e => setForm(f => ({ ...f, vials_required: e.target.value }))}
                       className="max-w-[120px]"
                     />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">Analytical Vials</label>
+                    <Input
+                      type="number"
+                      min={1}
+                      placeholder="all"
+                      value={form.analytical_vials}
+                      onChange={e => setForm(f => ({ ...f, analytical_vials: e.target.value }))}
+                      className="max-w-[120px]"
+                    />
+                    <p className="text-[11px] text-muted-foreground max-w-[160px]">
+                      Of the required vials, how many carry analyses. Blank =
+                      all. Heavy metals: ship 2, pool into 1 digest → set 1;
+                      the rest become material vials (custody only).
+                    </p>
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium">Sort Order</label>

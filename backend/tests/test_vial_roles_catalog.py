@@ -12,7 +12,9 @@ def test_seed_creates_five_legacy_roles_with_parity_flags(db_session):
     assert set(reg) >= {"hplc", "endo", "ster", "xtra", "hm"}
     # parity with live code, NOT the spec parenthetical (deviation 3)
     assert reg["hplc"].boxable and reg["endo"].boxable and reg["ster"].boxable and reg["xtra"].boxable
-    assert not reg["hm"].boxable  # deviation 4: dark until Handler flips post-rehearsal
+    # deviation 4 CLOSED 2026-08-24: Handler ruled hm boxable with the
+    # analytical-vials feature — both HM vials must route to the HM box.
+    assert reg["hm"].boxable
     for code in ("hplc", "endo", "ster", "xtra"):
         assert reg[code].variance_eligible
     assert not reg["hm"].variance_eligible

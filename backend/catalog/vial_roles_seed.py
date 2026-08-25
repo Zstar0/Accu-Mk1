@@ -14,13 +14,16 @@ log = logging.getLogger("accumark.catalog")
 # (code, label, department name or None, boxable, variance_eligible, sort_order,
 #  color, short_label, badge_glyph)
 # Flags are PARITY-EXACT with the live constants (BOXABLE_ROLES, _VARIANCE_INELIGIBLE_ROLES)
-# — see plan deviation 3. hm stays boxable=False (deviation 4: Handler flips post-rehearsal).
+# — see plan deviation 3. hm boxable=True since 2026-08-24 (Handler ruling with
+# the analytical-vials feature: HM's 2 physical vials must route to the HM box
+# and bench even though only the anchor vial carries analyses). Live DBs flip
+# via the roles admin/UPDATE — this seed only covers fresh environments.
 # Display faces (S1) are PARITY-EXACT with the pre-catalog hardcoded FE maps.
 _LEGACY_ROLES = [
     ("hplc", "HPLC", ANALYTICAL_DEPARTMENT, True, True, 0, "green", "HPLC", "H"),
     ("endo", "Endotoxin", MICROBIOLOGY_DEPARTMENT, True, True, 1, "orange", "ENDO", "E"),
     ("ster", "Sterility", MICROBIOLOGY_DEPARTMENT, True, True, 2, "purple", "PCR", "P"),
-    ("hm", "Heavy Metals", HEAVY_METALS_DEPARTMENT, False, False, 3, "slate", "HM", "M"),
+    ("hm", "Heavy Metals", HEAVY_METALS_DEPARTMENT, True, False, 3, "slate", "HM", "M"),
     ("xtra", "Extras", None, True, True, 9, "sky", "XTRA", "X"),
 ]
 

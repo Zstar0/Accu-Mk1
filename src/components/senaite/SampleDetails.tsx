@@ -2396,6 +2396,14 @@ function SelectVialImageDialog({
                       Variance
                     </span>
                   )}
+                  {v.material_for && (
+                    <span
+                      className="inline-block text-[10px] leading-none px-1.5 py-0.5 rounded border uppercase tracking-wide font-medium bg-sky-500/15 text-sky-700 border-sky-500/40 dark:text-sky-300"
+                      title={`Custody-only vial — its material is pooled into ${v.material_for}'s analyses (analytical-vials cap on the role's profile)`}
+                    >
+                      Material for {v.material_for}
+                    </span>
+                  )}
                   {attachingId === v.sample_id && (
                     <Spinner className="size-3" />
                   )}

@@ -63,9 +63,25 @@ def test_freezes_service_ids_and_vials_required(db_session):
         "fulfillment_role": "hm",
         "role_sort_order": None,  # no VialRole row seeded for 'hm' in this test
         "vials_required": 2,
+        "analytical_vials": None,
         "service_ids": [svc1.id, svc2.id],
         "ride_host_roles": [],
     }]
+
+
+def test_freezes_analytical_vials(db_session):
+    """The ship-N/report-M split freezes with the other per-profile vial
+    facts, so a later catalog edit can't retroactively change an
+    already-registered sample's anchor/material split."""
+    svc = _mk_service(db_session, keyword="HM-PB", title="Lead")
+    prof = _mk_profile(db_session, key="heavy_metals", name="Heavy Metals",
+                       vials=2, role="hm", members=[svc])
+    prof.analytical_vials = 1
+    db_session.flush()
+
+    snap = compute_catalog_snapshot(db_session, {"heavy_metals": True}, None)
+
+    assert snap["profiles"][0]["analytical_vials"] == 1
 
 
 def test_excludes_unordered_and_unknown_keys(db_session):
@@ -216,6 +232,7 @@ def test_registration_bg_task_stamps_catalog_snapshot(bg_env):
         "fulfillment_role": "hm",
         "role_sort_order": None,  # no VialRole row seeded for 'hm' in bg_env
         "vials_required": 2,
+        "analytical_vials": None,
         "service_ids": [svc_id],
         "ride_host_roles": [],
     }]

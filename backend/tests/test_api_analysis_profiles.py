@@ -484,3 +484,32 @@ def test_member_service_ids_present_and_correct(two_services):
     row = next(r for r in list_resp.json() if r["id"] == profile_id)
     assert row["member_service_ids"] == [svc_b, svc_a]
     assert row["member_service_ids"] == row["member_ids"]
+
+
+def test_analytical_vials_roundtrip():
+    """Ship-N/report-M split (heavy-metals pooling): settable at create,
+    PATCHable, explicit null clears back to all-analytical."""
+    create = client.post("/analysis-profiles", json={
+        "key": "analytical_vials_test", "name": "Analytical Vials Test",
+        "is_addon": True, "vials_required": 2, "analytical_vials": 1,
+    })
+    assert create.status_code == 201, create.text
+    assert create.json()["analytical_vials"] == 1
+    pid = create.json()["id"]
+
+    resp = client.patch(f"/analysis-profiles/{pid}", json={"analytical_vials": 2})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["analytical_vials"] == 2
+
+    resp = client.patch(f"/analysis-profiles/{pid}", json={"analytical_vials": None})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["analytical_vials"] is None
+
+
+def test_analytical_vials_defaults_null():
+    create = client.post("/analysis-profiles", json={
+        "key": "analytical_vials_default_test",
+        "name": "Analytical Vials Default Test", "is_addon": True,
+    })
+    assert create.status_code == 201, create.text
+    assert create.json()["analytical_vials"] is None

@@ -508,6 +508,11 @@ class AnalysisProfile(Base):
     # Base dedicated aliquots. 0 = rides an existing vial. Variance composes on
     # top of this — never fold variance into the base.
     vials_required: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Of the vials_required vials this profile demands, how many carry
+    # analyses. NULL = all of them (every profile's historical behavior).
+    # Heavy metals: ship 2 vials of cake, pool into ONE digest -> 2 / 1;
+    # the non-anchor vials are custody-only "material" vials (no AR rows).
+    analytical_vials: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     fulfillment_role: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     fulfillment_dim: Mapped[str] = mapped_column(
         String(20), nullable=False, default="role", server_default="role"

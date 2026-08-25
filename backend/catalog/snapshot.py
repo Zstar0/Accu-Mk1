@@ -118,6 +118,10 @@ def compute_catalog_snapshot(db, services: dict, package) -> dict:
                 if prof.fulfillment_role else None
             ),
             "vials_required": prof.vials_required,
+            # Of vials_required, how many carry analyses (NULL = all) — the
+            # seeder's anchor rule reads the FROZEN value first, so a later
+            # catalog edit can't change an already-registered sample's split.
+            "analytical_vials": prof.analytical_vials,
             "service_ids": [svc.id for svc in prof.analysis_services],
             "ride_host_roles": list(ride_rows),
         })
