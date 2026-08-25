@@ -2458,6 +2458,9 @@ class AnalysisServiceResponse(BaseModel):
     local_overrides: Optional[list] = None
     department_id: Optional[int] = None
     default_method_id: Optional[int] = None
+    # Count of method_services links — NOT len(methods): that JSON column is
+    # SENAITE clone-time provenance, empty forever on native services (R0).
+    linked_method_count: int = 0
 
     class Config:
         from_attributes = True
@@ -3038,6 +3041,18 @@ class MethodServiceOut(BaseModel):
     is_default: bool
 
 
+class ServiceMethodOut(BaseModel):
+    """Reverse of MethodServiceOut: a method_services link seen from the
+    service side. Non-active statuses are included (the panel badges them)."""
+    method_id: int
+    name: str
+    code: Optional[str] = None
+    technique: Optional[str] = None
+    revision: int
+    status: str
+    is_default: bool
+
+
 class MethodResponse(BaseModel):
     """Full HPLC method response with common peptides."""
     id: int
@@ -3563,10 +3578,15 @@ async def get_analysis_services(
         .join(HplcMethod, HplcMethod.id == method_services.c.method_id)
         .where(method_services.c.is_default.is_(True), HplcMethod.active.is_(True))
     ).all())
+    count_map = dict(db.execute(
+        select(method_services.c.analysis_service_id, func.count())
+        .group_by(method_services.c.analysis_service_id)
+    ).all())
     results = []
     for s in services:
         resp = AnalysisServiceResponse.model_validate(s)
         resp.default_method_id = default_map.get(s.id)
+        resp.linked_method_count = count_map.get(s.id, 0)
         results.append(resp)
     return results
 
@@ -3888,6 +3908,28 @@ def _spec_response(db, spec) -> ServiceSpecResponse:
         active=spec.active,
         updated_at=spec.updated_at,
     )
+
+
+@app.get("/analysis-services/{service_id}/methods",
+         response_model=list[ServiceMethodOut])
+async def get_service_methods(service_id: int, db: Session = Depends(get_db),
+                              _current_user=Depends(get_current_user)):
+    """Methods covering this service, from method_services (reverse of
+    GET /hplc/methods/{id}/services). The legacy `methods` JSON column on the
+    service row is SENAITE clone-time provenance and is NOT consulted."""
+    if db.get(AnalysisService, service_id) is None:
+        raise HTTPException(404, "analysis service not found")
+    rows = db.execute(
+        select(method_services.c.method_id, HplcMethod.name, HplcMethod.code,
+               HplcMethod.technique, HplcMethod.revision, HplcMethod.status,
+               method_services.c.is_default)
+        .join(HplcMethod, HplcMethod.id == method_services.c.method_id)
+        .where(method_services.c.analysis_service_id == service_id)
+        .order_by(method_services.c.is_default.desc(), HplcMethod.name)
+    ).all()
+    return [ServiceMethodOut(method_id=r[0], name=r[1], code=r[2], technique=r[3],
+                             revision=r[4], status=r[5], is_default=r[6])
+            for r in rows]
 
 
 @app.get("/analysis-services/{service_id}/specs",

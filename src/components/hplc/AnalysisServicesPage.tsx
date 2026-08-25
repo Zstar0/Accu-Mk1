@@ -44,12 +44,14 @@ import {
   getAnalysisServices,
   getDepartments,
   getPeptides,
+  getServiceMethods,
   updateAnalysisServicePeptide,
   type AnalysisServiceRecord,
   type AnalysisServiceCreatePayload,
   type AnalysisServiceUpdatePayload,
   type Department,
   type PeptideRecord,
+  type ServiceMethodLink,
 } from '@/lib/api'
 import {
   useCreateAnalysisService,
@@ -234,7 +236,7 @@ export function AnalysisServicesPage() {
                   <TableCell>{svc.category ?? '—'}</TableCell>
                   <TableCell>{svc.unit ?? '—'}</TableCell>
                   <TableCell>
-                    <Badge variant="secondary">{svc.methods?.length ?? 0}</Badge>
+                    <Badge variant="secondary">{svc.linked_method_count ?? 0}</Badge>
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
@@ -401,6 +403,79 @@ function toFormState(service: AnalysisServiceRecord | null): ServiceFormState {
  */
 function isKeywordReferencedError(e: unknown): e is Error {
   return e instanceof Error && e.message.includes('referenced by existing analyses')
+}
+
+/** Methods covering this service, read from the method_services link table
+ * (what the method panel's Covered Services picker writes). Replaces the old
+ * render of `service.methods` — SENAITE clone-time JSON that is empty forever
+ * on Mk1-native services, which made every linked method show as "0". */
+function ServiceMethodsSection({ serviceId }: { serviceId: number }) {
+  const [links, setLinks] = useState<ServiceMethodLink[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setLinks(null)
+    setError(null)
+    try {
+      setLinks(await getServiceMethods(serviceId))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }, [serviceId])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  return (
+    <div className="border-t pt-4">
+      <h4 className="mb-3 text-sm font-semibold text-muted-foreground">
+        Methods{links ? ` (${links.length})` : ''}
+      </h4>
+      {error ? (
+        <div className="flex items-center gap-2 text-sm text-red-400">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span>Couldn&apos;t load methods.</span>
+          <Button variant="ghost" size="sm" onClick={() => void load()}>
+            Retry
+          </Button>
+        </div>
+      ) : links === null ? (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+        </div>
+      ) : links.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          No methods cover this service yet. Link it from a method&apos;s
+          Covered Services on the Methods page.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {links.map(m => (
+            <div
+              key={m.method_id}
+              className="flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm"
+            >
+              <span className="flex items-center gap-2 min-w-0">
+                <span className="font-medium truncate">{m.name}</span>
+                {m.is_default && (
+                  <Badge variant="secondary" className="text-[10px] shrink-0">Default</Badge>
+                )}
+                {m.status !== 'active' && (
+                  <Badge variant="outline" className="text-[10px] shrink-0 capitalize">
+                    {m.status}
+                  </Badge>
+                )}
+              </span>
+              <span className="text-xs text-muted-foreground font-mono shrink-0">
+                {[m.code, `Rev ${m.revision}`, m.technique].filter(Boolean).join(' · ')}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function ServicePanel({
@@ -890,28 +965,7 @@ function ServicePanel({
         <>
           <ServiceSpecsSection serviceId={service.id} peptides={peptides} />
 
-          <div className="border-t pt-4">
-            <h4 className="mb-3 text-sm font-semibold text-muted-foreground">
-              Methods ({service!.methods?.length ?? 0})
-            </h4>
-            {!service!.methods || service!.methods.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No methods linked to this service.
-              </p>
-            ) : (
-              <div className="space-y-2">
-                {service!.methods.map((m, i) => (
-                  <div
-                    key={m.uid || i}
-                    className="flex items-center justify-between rounded-md border px-3 py-2 text-sm"
-                  >
-                    <span className="font-medium">{m.title}</span>
-                    <span className="text-xs text-muted-foreground font-mono">{m.uid.slice(0, 8)}...</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <ServiceMethodsSection serviceId={service.id} />
 
           <div className="border-t pt-4 text-xs text-muted-foreground space-y-1">
             {service!.senaite_uid && (
