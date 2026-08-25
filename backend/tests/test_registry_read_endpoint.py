@@ -272,3 +272,28 @@ def test_authenticated_non_admin_can_read(client):
         r = client.get("/registry/sample/P-1/details")
     assert r.status_code == 200
     assert r.json()["client"] == "RegistryCo"
+
+
+def test_analyses_carry_profile_sections_through_the_re_type(client):
+    # The registry details route re-types listing rows through
+    # sub_samples.lookup_models.SenaiteAnalysis, which DROPS any field it
+    # does not declare (pydantic extra='ignore' — the service_origin field
+    # documents this exact trap). The profile-section annotation must
+    # survive that boundary or the mk1 main table renders flat (Handler
+    # UAT, P-0160).
+    from models import AnalysisProfile
+    db = client._Session()
+    db.add(AnalysisProfile(key="endotoxin", name="Endotoxin",
+                           is_addon=False, sort_order=0))
+    db.commit()
+    db.close()
+    _seed(client)
+    _seed_analysis(client, keyword="ENDO-LAL", title="Endotoxin (LAL)")
+    with _mock_lookup_raises():
+        r = client.get("/registry/sample/P-1/details")
+    assert r.status_code == 200
+    row = r.json()["analyses"][0]
+    assert row["profile_section_key"] == "endotoxin"
+    assert row["profile_section_label"] == "Endotoxin"
+    assert row["profile_section_sort"] == 1
+    assert row["provenance"] == "canonical"

@@ -72,6 +72,16 @@ class SenaiteAnalysis(BaseModel):
     # on the SENAITE read path. The parity harness gates its
     # native_family_mk1_only rule on this field.
     service_origin: Optional[str] = None
+    # Mk1-local: row provenance ('ordered' placeholder | 'canonical' |
+    # 'shadow') and the profile-section annotation
+    # (_annotate_profile_sections) — declared here for the same reason as
+    # service_origin: the registry-details re-type drops undeclared fields,
+    # and the mk1 main table's section headers read these. Always None on
+    # the SENAITE read path.
+    provenance: Optional[str] = None
+    profile_section_key: Optional[str] = None
+    profile_section_label: Optional[str] = None
+    profile_section_sort: Optional[int] = None
 
 
 class SenaiteAttachment(BaseModel):
