@@ -15393,22 +15393,22 @@ async def receive_senaite_sample(
     req: SenaiteReceiveSampleRequest,
     current_user=Depends(get_current_user),
 ):
-    """Check-in / receive a sample in SENAITE.
+    """Check in / receive a sample — NATIVE-FIRST (receive-page SENAITE flip).
 
-    Performs up to three actions in sequence:
-      1. Upload sample image attachment (if image provided).
-      2. Add remarks to the sample (if remarks provided).
-      3. Transition the sample to 'received' state.
+    Phase 1 (authoritative, one transaction via _receive_native_phase): photo
+    into the Mk1 store + lims_parent_attachments, remarks into
+    lims_sample_remarks, native status transition + date_received. Success is
+    decided HERE — SENAITE being down can no longer block a check-in.
+
+    Phase 2 (best-effort tee, _receive_senaite_tee): mirrors the photo and the
+    receive workflow into SENAITE for senaite-born parents, so both sides stay
+    in step until decommission. A tee failure returns success=True with a
+    warning — the sample simply shows in the shadow report's mk1_ahead bucket
+    until the tee lands (or SENAITE dies). Native-born parents (mk1:// uid)
+    and SENAITE_URL=None skip the tee entirely.
     """
-    if SENAITE_URL is None:
-        return SenaiteReceiveSampleResponse(
-            success=False, message="SENAITE not configured"
-        )
-
     import base64
-    import re
 
-    # Decode image if provided
     image_bytes = None
     if req.image_base64:
         image_data = req.image_base64
@@ -15421,61 +15421,221 @@ async def receive_senaite_sample(
                 success=False, message=f"Invalid base64 image data: {e}"
             )
 
-    steps_done = []
+    from fastapi.concurrency import run_in_threadpool
 
+    native = await run_in_threadpool(
+        _receive_native_phase,
+        sample_id=req.sample_id,
+        image_bytes=image_bytes,
+        remarks=req.remarks,
+        user_id=getattr(current_user, "id", None),
+    )
+    if not native["ok"]:
+        return SenaiteReceiveSampleResponse(
+            success=False, message=native["message"],
+            senaite_response={"steps_done": []},
+        )
+
+    steps_done = list(native["steps"])
+
+    if native["senaite_born"] and SENAITE_URL is not None:
+        tee_steps, tee_warning = await _receive_senaite_tee(
+            sample_uid=req.sample_uid, sample_id=req.sample_id,
+            image_bytes=image_bytes, current_user=current_user,
+        )
+        steps_done.extend(tee_steps)
+        if tee_warning:
+            steps_done.append(f"senaite_tee_failed: {tee_warning}")
+            return SenaiteReceiveSampleResponse(
+                success=True,
+                message=(
+                    f"Sample {req.sample_id} received (Mk1). SENAITE sync "
+                    f"failed — the sample will show as ahead in the shadow "
+                    f"report until synced: {tee_warning}"
+                ),
+                senaite_response={"steps_done": steps_done},
+            )
+    else:
+        steps_done.append("senaite_tee_skipped")
+
+    if native["already"]:
+        message = (
+            f"Sample {req.sample_id} is already '{native['status']}' — "
+            f"image/remarks captured; no state change needed"
+        )
+    else:
+        message = f"Sample {req.sample_id} received successfully"
+    return SenaiteReceiveSampleResponse(
+        success=True, message=message,
+        senaite_response={"steps_done": steps_done},
+    )
+
+
+def _receive_native_phase(
+    *,
+    sample_id: str,
+    image_bytes: Optional[bytes],
+    remarks: Optional[str],
+    user_id: Optional[int],
+) -> dict:
+    """All native check-in writes in ONE transaction. Runs in a threadpool
+    (blocking storage/DB IO); own short-lived session.
+
+    Photo capture is a HARD step here — the wizard requires a photo, and a
+    silently lost native copy would defeat the native-first design (contrast
+    _capture_parent_attachment_bg, which stays best-effort for the SENAITE-
+    anchored call sites). Any failure rolls the whole phase back: no
+    half-received sample.
+
+    Expected failures return {"ok": False, "message": ...} rather than
+    raising, matching the endpoint's success=False response idiom.
+    """
+    from database import SessionLocal
+    from sub_samples.photo_storage import get_storage
+    from workflow.sample_log import heal_sample_status, record_sample_transition
+
+    # Mirrors the wizard's PRE_RECEIVED_STATES (useReceiveWizard.ts) — states
+    # from which a receive transition is legal. Anything else is "already".
+    pre_received = {None, "", "sample_due", "sample_registered", "to_be_sampled"}
+
+    db = None
     try:
-        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
+        db = SessionLocal()
+        sid = sample_id.strip().upper()
+        row = db.execute(
+            select(LimsSample).where(LimsSample.sample_id == sid)
+        ).scalar_one_or_none()
+        if row is None:
+            return {
+                "ok": False,
+                "message": (
+                    f"No registry row for {sample_id} — cannot check in "
+                    f"(the wizard's ensure step should have created it)"
+                ),
+            }
+
+        steps: list[str] = []
+
+        if image_bytes:
+            filename = f"{row.sample_id}-sample-image.png"[:255]
+            key = get_storage().save_photo(row.sample_id, image_bytes, filename)
+            db.add(LimsParentAttachment(
+                lims_sample_pk=row.id,
+                kind="receive_image",
+                source_sub_sample_pk=None,
+                filename=filename,
+                content_type="image/png",
+                storage="s3",
+                storage_key=key,
+                render_in_report=True,
+                attachment_type="Sample Image",
+                created_by_user_id=user_id,
+            ))
+            steps.append("image_captured_native")
+
+        if remarks and remarks.strip():
+            db.add(LimsSampleRemark(
+                lims_sample_pk=row.id,
+                content=remarks.strip(),
+                author_user_id=user_id,
+            ))
+            steps.append("remarks_added")
+
+        already = row.status not in pre_received
+        if not already:
+            record_sample_transition(
+                db, sample_id=row.sample_id, to_status="sample_received",
+                source="mk1", verb="receive",
+                from_status=row.status or "sample_due",
+                actor_user_id=user_id,
+            )
+            heal_sample_status(db, row.sample_id, "sample_received")
+            if row.date_received is None:
+                row.date_received = datetime.utcnow()
+            steps.append("received_native")
+
+        db.commit()
+        # Native-born = mk1 system or an mk1:// uid. A senaite-system row with
+        # no stored uid still tees fine — the tee resolves the AR from the
+        # request's sample_uid, not this column.
+        uid = row.external_lims_uid or ""
+        senaite_born = (
+            (row.external_lims_system or "senaite") == "senaite"
+            and not uid.startswith("mk1://")
+        )
+        return {
+            "ok": True, "already": already, "status": row.status,
+            "steps": steps, "senaite_born": senaite_born,
+        }
+    except Exception as e:  # noqa: BLE001 — storage/DB failure = atomic abort
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        logger.warning("receive_native.failed sample_id=%s err=%s", sample_id, e)
+        return {"ok": False, "message": f"Native check-in failed: {e}"}
+    finally:
+        if db is not None:
+            db.close()
+
+
+async def _receive_senaite_tee(
+    *,
+    sample_uid: str,
+    sample_id: str,
+    image_bytes: Optional[bytes],
+    current_user,
+) -> tuple[list[str], Optional[str]]:
+    """Best-effort SENAITE mirror of an already-committed native check-in:
+    photo attachment + the 'receive' workflow action (only when SENAITE still
+    shows sample_due — its own state guard, independent of the native one).
+
+    Returns (steps, warning). warning is None on full success; any failure —
+    connection, HTTP status, missing AR — comes back as a warning string and
+    NEVER raises. The caller reports it; nothing native is rolled back.
+    """
+    import re
+
+    steps: list[str] = []
+    try:
+        async with httpx.AsyncClient(
+            verify=HTTPX_SSL_CONTEXT,
             timeout=httpx.Timeout(30.0, connect=5.0),
             auth=_get_senaite_auth(current_user),
             follow_redirects=True,
         ) as client:
-            # Fetch sample via JSON API to get physical path
             api_url = f"{SENAITE_URL}/senaite/@@API/senaite/v1/AnalysisRequest"
             sample_resp = await client.get(
-                api_url, params={"UID": req.sample_uid, "limit": 1}
+                api_url, params={"UID": sample_uid, "limit": 1}
             )
             sample_resp.raise_for_status()
             sample_data = sample_resp.json()
-
             if sample_data.get("count", 0) == 0:
-                return SenaiteReceiveSampleResponse(
-                    success=False,
-                    message=f"Sample {req.sample_id} not found in SENAITE",
-                    senaite_response=sample_data,
-                )
+                return steps, f"sample {sample_id} not found in SENAITE"
 
             sample_item = sample_data["items"][0]
             current_state = sample_item.get("review_state", "")
             sample_path = sample_item.get("path", "")
             if not sample_path:
-                return SenaiteReceiveSampleResponse(
-                    success=False,
-                    message="Could not determine sample path in SENAITE",
-                )
+                return steps, "could not determine sample path in SENAITE"
             sample_url = f"{SENAITE_URL}{sample_path}"
 
-            # GET sample page for CSRF token (needed for attachment + workflow)
+            # CSRF token for attachment + workflow POSTs.
             page_resp = await client.get(sample_url)
             page_html = page_resp.text
-
             auth_match = re.search(
                 r'name="_authenticator"\s+value="([^"]+)"', page_html
             )
             authenticator = auth_match.group(1) if auth_match else ""
 
-            # --- Step 1: Upload image attachment (optional) ---
             if image_bytes:
                 type_match = re.search(
                     r'<option\s+value="([^"]+)"[^>]*>\s*Sample Image\s*</option>',
                     page_html,
                 )
-                attachment_type_uid = (
-                    type_match.group(1) if type_match else ""
-                )
-
-                filename = f"{req.sample_id}-sample-image.png"
-                content_type = "image/png"
-                form_url = f"{sample_url}/@@attachments_view/add"
+                attachment_type_uid = type_match.group(1) if type_match else ""
+                filename = f"{sample_id}-sample-image.png"
                 form_data = {
                     "submitted": "1",
                     "_authenticator": authenticator,
@@ -15487,129 +15647,52 @@ async def receive_senaite_sample(
                     "addARAttachment": "Add Attachment",
                 }
                 files = {
-                    "AttachmentFile_file": (
-                        filename,
-                        image_bytes,
-                        content_type,
-                    ),
+                    "AttachmentFile_file": (filename, image_bytes, "image/png"),
                 }
                 headers = {
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                     "Referer": sample_url,
                 }
                 att_resp = await client.post(
-                    form_url,
-                    data=form_data,
-                    files=files,
-                    headers=headers,
+                    f"{sample_url}/@@attachments_view/add",
+                    data=form_data, files=files, headers=headers,
                 )
                 if att_resp.status_code in (200, 301, 302):
-                    steps_done.append("image_uploaded")
-                    # Native record + frozen S3 snapshot (read-flip spec §7)
-                    # — best-effort AFTER SENAITE success; never fails the
-                    # receive. Same filename/content_type as the SENAITE
-                    # copy above so the native record and SENAITE agree.
-                    # (Steps 2/3 below also import run_in_threadpool,
-                    # unconditionally, ahead of their own use sites — a
-                    # second local import of the same name here is harmless.)
-                    from fastapi.concurrency import run_in_threadpool
-                    await run_in_threadpool(
-                        _capture_parent_attachment_bg,
-                        sample_uid=req.sample_uid, file_bytes=image_bytes,
-                        filename=filename, content_type=content_type,
-                        kind="receive_image", source_sample_id=None,
-                        user_id=getattr(current_user, "id", None),
-                        attachment_type="Sample Image",
-                    )
+                    steps.append("senaite_image_uploaded")
                 else:
-                    return SenaiteReceiveSampleResponse(
-                        success=False,
-                        message=f"Image upload failed: SENAITE returned {att_resp.status_code}",
-                        senaite_response={"steps_done": steps_done},
+                    return steps, (
+                        f"image upload failed: SENAITE returned "
+                        f"{att_resp.status_code}"
                     )
 
-            # Steps 2 and 3 below both dispatch a native DB write via
-            # run_in_threadpool; imported once here (unconditionally, ahead
-            # of both use sites) rather than once per conditional branch —
-            # step 2 only runs when remarks are present, so a step-2-local
-            # import would NameError on a no-remarks receive that still
-            # reaches step 3's transition-log write.
-            from fastapi.concurrency import run_in_threadpool
-
-            # --- Step 2: Add remarks (optional) — NATIVE ---
-            # lims_sample_remarks is the system of record (read-flip spec §6);
-            # the SENAITE Remarks write was deleted 2026-07-14 (nothing read
-            # it). Hard step preserved: failure fails the receive, same as
-            # the SENAITE write did.
-            if req.remarks and req.remarks.strip():
-                def _insert_remark() -> bool:
-                    from database import SessionLocal
-                    rdb = SessionLocal()
-                    try:
-                        row = rdb.execute(
-                            select(LimsSample).where(
-                                LimsSample.sample_id
-                                == req.sample_id.strip().upper())
-                        ).scalar_one_or_none()
-                        if row is None:
-                            return False
-                        rdb.add(LimsSampleRemark(
-                            lims_sample_pk=row.id,
-                            content=req.remarks.strip(),
-                            author_user_id=getattr(current_user, "id", None),
-                        ))
-                        rdb.commit()
-                        return True
-                    finally:
-                        rdb.close()
-
-                if await run_in_threadpool(_insert_remark):
-                    steps_done.append("remarks_added")
-                else:
-                    return SenaiteReceiveSampleResponse(
-                        success=False,
-                        message=(f"Remarks save failed: no registry row for "
-                                 f"{req.sample_id}"),
-                        senaite_response={"steps_done": steps_done},
-                    )
-
-            # --- Step 3: Transition to 'received' ---
-            # Only attempt if sample is still in 'sample_due' state.
-            # Samples already received or further along don't need this.
             if current_state == "sample_due":
-                # Always re-fetch CSRF right before workflow transition
-                # (prior steps may have rotated the token)
+                # Re-fetch CSRF right before the workflow POST (prior steps
+                # may have rotated the token).
                 page_resp2 = await client.get(sample_url)
                 auth_match2 = re.search(
-                    r'name="_authenticator"\s+value="([^"]+)"',
-                    page_resp2.text,
+                    r'name="_authenticator"\s+value="([^"]+)"', page_resp2.text
                 )
                 authenticator = (
                     auth_match2.group(1) if auth_match2 else authenticator
                 )
-
-                wf_url = f"{sample_url}/workflow_action"
-                wf_data = {
-                    "workflow_action": "receive",
-                    "_authenticator": authenticator,
-                }
-                headers = {
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Referer": sample_url,
-                }
                 wf_resp = await client.post(
-                    wf_url, data=wf_data, headers=headers
+                    f"{sample_url}/workflow_action",
+                    data={
+                        "workflow_action": "receive",
+                        "_authenticator": authenticator,
+                    },
+                    headers={
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "Referer": sample_url,
+                    },
                 )
                 if wf_resp.status_code not in (200, 301, 302):
-                    return SenaiteReceiveSampleResponse(
-                        success=False,
-                        message=f"Workflow transition failed: SENAITE returned {wf_resp.status_code}",
-                        senaite_response={"steps_done": steps_done},
+                    return steps, (
+                        f"workflow transition failed: SENAITE returned "
+                        f"{wf_resp.status_code}"
                     )
-
-                # Verify the transition actually took effect
                 verify_resp = await client.get(
-                    api_url, params={"UID": req.sample_uid, "limit": 1}
+                    api_url, params={"UID": sample_uid, "limit": 1}
                 )
                 verify_data = verify_resp.json()
                 new_state = (
@@ -15618,53 +15701,18 @@ async def receive_senaite_sample(
                     else ""
                 )
                 if new_state == "sample_received":
-                    steps_done.append("received")
-                    # Task 3: native sample-transition log (own session,
-                    # never-fail — see _record_sample_transition_bg).
-                    await run_in_threadpool(
-                        _record_sample_transition_bg,
-                        sample_id=req.sample_id, verb="receive", to_status="sample_received",
-                        from_status="sample_due", source="mk1",
-                        actor_user_id=getattr(current_user, "id", None),
-                    )
+                    steps.append("senaite_received")
                 else:
-                    return SenaiteReceiveSampleResponse(
-                        success=False,
-                        message=f"Workflow transition did not take effect (state is still '{new_state}')",
-                        senaite_response={"steps_done": steps_done},
+                    return steps, (
+                        f"workflow transition did not take effect "
+                        f"(state is still '{new_state}')"
                     )
             else:
-                steps_done.append(f"already_{current_state}")
-                return SenaiteReceiveSampleResponse(
-                    success=True,
-                    message=f"Sample {req.sample_id} is already '{current_state}' — image/remarks added but no state change needed",
-                    senaite_response={"steps_done": steps_done},
-                )
+                steps.append(f"senaite_already_{current_state}")
 
-        return SenaiteReceiveSampleResponse(
-            success=True,
-            message=f"Sample {req.sample_id} received successfully",
-            senaite_response={"steps_done": steps_done},
-        )
-
-    except httpx.TimeoutException:
-        return SenaiteReceiveSampleResponse(
-            success=False,
-            message="SENAITE request timed out",
-            senaite_response={"steps_done": steps_done},
-        )
-    except httpx.HTTPStatusError as e:
-        return SenaiteReceiveSampleResponse(
-            success=False,
-            message=f"SENAITE returned {e.response.status_code}",
-            senaite_response={"steps_done": steps_done},
-        )
-    except Exception as e:
-        return SenaiteReceiveSampleResponse(
-            success=False,
-            message=f"Receive error: {e}",
-            senaite_response={"steps_done": steps_done},
-        )
+        return steps, None
+    except Exception as e:  # noqa: BLE001 — tee is best-effort by design
+        return steps, f"{type(e).__name__}: {e}"
 
 
 # --- SENAITE field update endpoint ---

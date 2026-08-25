@@ -294,7 +294,10 @@ def test_receive_image_captures_native_row(db, seed_sample, fake_storage):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["success"] is True
-    assert "image_uploaded" in body["senaite_response"]["steps_done"]
+    # Native-first: the native capture is its own (hard) step; the SENAITE
+    # upload is the tee's step.
+    assert "image_captured_native" in body["senaite_response"]["steps_done"]
+    assert "senaite_image_uploaded" in body["senaite_response"]["steps_done"]
 
     expected_filename = f"{seed_sample.sample_id}-sample-image.png"
     expected_bytes = base64.b64decode(_TEST_IMAGE_B64)
@@ -348,7 +351,12 @@ def test_receive_without_image_no_row(db, seed_sample, fake_storage):
     assert rows == []
 
 
-def test_receive_capture_failure_never_breaks_receive(db, seed_sample, caplog):
+def test_receive_capture_failure_fails_checkin(db, seed_sample, caplog):
+    """INVERTED by the native-first flip: the native photo capture used to be
+    best-effort after SENAITE succeeded; it is now the authoritative record
+    and a hard step — a storage failure fails the whole check-in atomically
+    (the wizard requires a photo; silently losing it would defeat the
+    native-first design)."""
     prev = get_storage()
     fake = _FakePhotoStorage(raise_on_save=True)
     set_storage_for_tests(fake)
@@ -372,13 +380,11 @@ def test_receive_capture_failure_never_breaks_receive(db, seed_sample, caplog):
 
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["success"] is True
-    assert "image_uploaded" in body["senaite_response"]["steps_done"]
-    assert "received" in body["senaite_response"]["steps_done"]
+    assert body["success"] is False
 
     rows = db.query(LimsParentAttachment).filter_by(
         lims_sample_pk=seed_sample.id
     ).all()
     assert rows == []
-    assert any("parent_attachment.capture_failed" in rec.message
+    assert any("receive_native.failed" in rec.message
                 for rec in caplog.records)
