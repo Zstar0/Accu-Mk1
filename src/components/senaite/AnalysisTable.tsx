@@ -2067,6 +2067,39 @@ export function AnalysisTable({
     ? sortGroups(rawGroups, sortConfig, analyteNameMap, analysisSlaMap, isAnalysisSlaPublished)
     : rawGroups
 
+  // Profile sections (mk1 rows only — backend-resolved profile_section_*
+  // on the shaped row; senaite-mode rows never carry them, so this table
+  // stays flat there by construction). An explicit column sort flattens
+  // too: interleaving a user-chosen sort across section boundaries would
+  // misrepresent the order. Sectionless rows lead, with NO header — the
+  // backend deliberately leaves unmatched rows unlabeled (never mislabel).
+  interface ProfileSection {
+    key: string | null
+    label: string | null
+    groups: AnalysisGroup[]
+  }
+  const sectioned: ProfileSection[] = (() => {
+    if (sortConfig || !groups.some(g => g.current.profile_section_key)) {
+      return [{ key: null, label: null, groups }]
+    }
+    const byKey = new Map<string | null, ProfileSection & { sort: number }>()
+    for (const g of groups) {
+      const key = g.current.profile_section_key ?? null
+      let section = byKey.get(key)
+      if (!section) {
+        section = {
+          key,
+          label: key === null ? null : (g.current.profile_section_label ?? null),
+          groups: [],
+          sort: key === null ? -1 : (g.current.profile_section_sort ?? Number.MAX_SAFE_INTEGER),
+        }
+        byKey.set(key, section)
+      }
+      section.groups.push(g)
+    }
+    return Array.from(byKey.values()).sort((a, b) => a.sort - b.sort)
+  })()
+
   // Header checkbox state — current (COA) rows only
   const selectableUids = groups
     .map(g => g.current.uid)
@@ -2296,7 +2329,19 @@ export function AnalysisTable({
           </thead>
           <tbody>
             {groups.length > 0 ? (
-              groups.map(group => {
+              sectioned.map(section => (
+                <Fragment key={section.key ?? '__no_section'}>
+                  {section.label != null && (
+                    <tr>
+                      <td
+                        colSpan={11}
+                        className="pt-3 pb-1.5 px-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider border-b border-border/50"
+                      >
+                        {section.label}
+                      </td>
+                    </tr>
+                  )}
+                  {section.groups.map(group => {
                 const groupKey = group.current.uid ?? group.current.title
                 const isExpanded = expandedGroups.has(groupKey)
                 return (
@@ -2346,7 +2391,9 @@ export function AnalysisTable({
                     ))}
                   </Fragment>
                 )
-              })
+              })}
+                </Fragment>
+              ))
             ) : (
               <tr>
                 <td

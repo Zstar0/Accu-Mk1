@@ -431,3 +431,40 @@ describe('NativeParentAnalysesCard', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY] })
   })
 })
+
+describe('profile sections', () => {
+  // Section identity is backend-resolved (profile_section_* on the shaped
+  // row — snapshot membership first, legacy keyword classifier second);
+  // the table's job is purely visual: a header row per section, sections
+  // in profile_section_sort order, sectionless rows first with NO header.
+  it('renders section headers in sort order, sectionless rows headerless', async () => {
+    renderCard([
+      shapedRow({
+        uid: 'mk1:20', keyword: 'KF', title: 'Karl Fischer',
+        // no profile_section_* — must render without inventing a header
+      }),
+      shapedRow({
+        uid: 'mk1:21', keyword: 'ENDO-LAL', title: 'Endotoxin (LAL)',
+        profile_section_key: 'endotoxin', profile_section_label: 'Endotoxin',
+        profile_section_sort: 1,
+      }),
+      shapedRow({
+        uid: 'mk1:22', keyword: 'HPLC-PUR', title: 'Peptide Purity (HPLC)',
+        profile_section_key: 'core', profile_section_label: 'Core HPLC',
+        profile_section_sort: 0,
+      }),
+    ])
+    const table = await screen.findByRole('table')
+    const core = within(table).getByText('Core HPLC')
+    const endo = within(table).getByText('Endotoxin')
+    // Core HPLC section leads Endotoxin (sort 0 < 1)
+    expect(
+      core.compareDocumentPosition(endo) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    // The sectionless row renders, above the first header
+    const kf = within(table).getByText('Karl Fischer')
+    expect(
+      kf.compareDocumentPosition(core) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+  })
+})

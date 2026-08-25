@@ -1223,6 +1223,85 @@ def _overlay_live_vial_state(db: Session, parent_pk: int, shaped: list) -> None:
             shaped_row.review_state = live_state_by_service[shaped_row.analysis_service_id]
 
 
+# Legacy family classifier (profile sections rule 2): SENAITE-era keywords
+# mapped to their catalog profile KEYS. Grounded in the seeder's pinned
+# legacy map (ROLE_TO_KEYWORDS: endo→ENDO-LAL, ster→STER-PCR; PCR-BACTERIA/
+# PCR-FUNGI are the pre-split sterility pair) and the HPLC mirror carve-out
+# keyword shapes (HPLC-PUR / PEPT-Total / ID_* / PUR_* / QTY_* / BLEND-*).
+# Membership rows on these profiles stay EMPTY by ruling — they are
+# load-bearing for the placeholder minter, snapshot, seeder, and COA
+# sections; this display-side classifier is how legacy rows get sections
+# without touching them. Bac Water deliberately has no rule: BW samples
+# carry ENDO/STER analysis lines, there are no bac-water keywords.
+_LEGACY_SECTION_RULES: tuple = (
+    ("core", "Core HPLC", 0,
+     ("ID_", "PUR_", "QTY_", "BLEND", "HPLC", "PEPT")),
+    ("endotoxin", "Endotoxin", 1, ("ENDO",)),
+    ("sterility_pcr", "Sterility", 2, ("STER", "PCR-")),
+)
+
+
+def _annotate_profile_sections(db: Session, parent, shaped: list) -> None:
+    """Fill profile_section_* on shaped rows, in place (mk1 main table).
+
+    Rule 1 — the sample's FROZEN catalog_snapshot: a row whose
+    analysis_service_id appears in a snapshot profile's frozen service_ids
+    gets that profile's section, in snapshot order (sort 10+idx). Frozen
+    membership means a later catalog edit can never reshuffle an
+    already-registered sample's sections — same posture as the seeder.
+
+    Rule 2 — legacy keyword classifier (_LEGACY_SECTION_RULES) for rows the
+    snapshot doesn't claim: the SENAITE-era families resolve to their
+    catalog profile keys with fixed leading sorts (Core HPLC first).
+
+    Rule 3 — no match: all three fields stay None; the FE renders those
+    rows ungrouped with no header (never mislabels).
+
+    Labels resolve live from analysis_profiles.name by key (one bulk
+    query) so an admin rename flows through; the legacy fallback label is
+    used only when the profile row is missing entirely.
+    """
+    from models import AnalysisProfile
+
+    snap_profiles = ((getattr(parent, "catalog_snapshot", None) or {})
+                     .get("profiles") or [])
+    section_by_service: dict[int, tuple] = {}   # service_id -> (key, sort)
+    for idx, entry in enumerate(snap_profiles):
+        key = entry.get("key")
+        if not key:
+            continue
+        for sid in (entry.get("service_ids") or []):
+            section_by_service.setdefault(sid, (key, 10 + idx))
+
+    def _classify(row) -> tuple:
+        sid = row.analysis_service_id
+        if sid is not None and sid in section_by_service:
+            return section_by_service[sid]
+        kw = (row.keyword or "").upper()
+        if kw:
+            for key, _label, sort, prefixes in _LEGACY_SECTION_RULES:
+                if any(kw.startswith(p) or (len(p) > 3 and p in kw)
+                       for p in prefixes):
+                    return (key, sort)
+        return (None, None)
+
+    resolved = [_classify(r) for r in shaped]
+    needed_keys = {key for key, _ in resolved if key}
+    if not needed_keys:
+        return
+    names_by_key = {
+        p.key: p.name for p in db.query(AnalysisProfile)
+        .filter(AnalysisProfile.key.in_(needed_keys)).all()
+    }
+    legacy_labels = {key: label for key, label, _s, _p in _LEGACY_SECTION_RULES}
+    for row, (key, sort) in zip(shaped, resolved):
+        if key is None:
+            continue
+        row.profile_section_key = key
+        row.profile_section_label = names_by_key.get(key) or legacy_labels.get(key) or key
+        row.profile_section_sort = sort
+
+
 def list_native_parent_analyses_senaite_shape(
     db: Session, sample_id: str
 ) -> List["SenaiteShapeAnalysisResponse"]:
@@ -1547,6 +1626,7 @@ def list_parent_analyses_senaite_shape(
 
     shaped = _serialize_senaite_shape_rows(db, rows)
     _overlay_live_vial_state(db, parent.id, shaped)
+    _annotate_profile_sections(db, parent, shaped)
     return shaped
 
 

@@ -4005,6 +4005,13 @@ export interface SenaiteAnalysis {
   analysis_service_id?: number | null
   // senaite-shape rows from Mk1: 'ordered' | 'canonical' | 'shadow'
   provenance?: string | null
+  /** Profile sections (mk1 main-table grouping), backend-resolved:
+   *  snapshot profile membership first, legacy keyword classifier second,
+   *  None = render ungrouped with no header. Label resolves live from
+   *  analysis_profiles.name; sort orders the sections. */
+  profile_section_key?: string | null
+  profile_section_label?: string | null
+  profile_section_sort?: number | null
 }
 
 export interface SenaiteAttachment {
