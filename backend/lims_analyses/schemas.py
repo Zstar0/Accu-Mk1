@@ -168,6 +168,7 @@ class AnalysisResponse(BaseModel):
     method_id: Optional[int]
     instrument_id: Optional[int]
     analyst_user_id: Optional[int]
+    processed_by_user_id: Optional[int] = None
     captured_at: Optional[datetime]
     submitted_at: Optional[datetime]
     verified_at: Optional[datetime]
@@ -230,6 +231,9 @@ class SenaiteShapeAnalysisResponse(BaseModel):
     instrument_uid: Optional[str]
     instrument_options: List[SenaiteShapeInstrumentOption] = Field(default_factory=list)
     analyst: Optional[str]
+    # Who ran the Process HPLC behind this result (prep-bridge stamp);
+    # analyst above is the PREPPER (worksheet assignment).
+    processed_by: Optional[str] = None
     due_date: Optional[str] = None        # not tracked in lims_analyses yet
     review_state: Optional[str]
     sort_key: Optional[int] = None

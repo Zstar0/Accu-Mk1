@@ -1872,6 +1872,13 @@ class LimsAnalysis(Base):
     analyst_user_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("users.id"), nullable=True
     )
+    # Who ran the Process HPLC that produced this row's result — carried from
+    # HPLCAnalysis.processed_by_user_id by the prep bridge (Handler ruling
+    # 2026-08-24). Distinct from analyst_user_id, which is the PREPPER
+    # (stamped by worksheet assignment, never touched by the bridge).
+    processed_by_user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
 
     captured_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

@@ -268,12 +268,15 @@ def bridge_blend_aggregates(
 
     written: list[int] = []
     # Total quantity → PEPT-Total
+    # Processor on aggregate rows = the acting user: an aggregate is computed
+    # from multiple component writes (possibly different analyses/processors),
+    # so there is no single source HPLCAnalysis to carry attribution from.
     if pept_total is not None and pept_total.review_state == "unassigned":
         val = _fmt_num(total_qty)
         if val is not None:
             apply_transition(db, analysis_id=pept_total.id, kind="submit", result_value=val,
                              reason="auto: blend total quantity (Σ component quantity)",
-                             user_id=user_id)
+                             user_id=user_id, processed_by_user_id=user_id)
             written.append(pept_total.id)
     # Mass-weighted blend purity → BLEND-PUR (needs Σqty > 0 to weight)
     if blend_pur.review_state == "unassigned" and total_qty > 0:
@@ -281,7 +284,7 @@ def bridge_blend_aggregates(
         if val is not None:
             apply_transition(db, analysis_id=blend_pur.id, kind="submit", result_value=val,
                              reason="auto: blend purity (mass-weighted component mean)",
-                             user_id=user_id)
+                             user_id=user_id, processed_by_user_id=user_id)
             written.append(blend_pur.id)
     return written
 
@@ -462,8 +465,47 @@ def bridge_prep_result_to_vial(
             reason=f"auto: HPLC sample-prep result (analysis #{analysis.id})",
             user_id=user_id,
             instrument_id=analysis.instrument_id,
+            # Processor = who ran the Process HPLC (recorded on the analysis
+            # at wizard save), NOT the acting user — a later Re-run Auto-fill
+            # clicked by someone else must not steal attribution. Fallback to
+            # the acting user only for legacy analyses without the field.
+            processed_by_user_id=analysis.processed_by_user_id or user_id,
         )
         submitted.append(row.id)
+
+    # Single-peptide vials carry their quantity as the generic PEPT-Total row —
+    # there is no QTY_<X> row on them (coa/variance_series.py's unit resolution
+    # and conformance's single-quantity fallback both encode this shape), and
+    # _category deliberately doesn't classify PEPT-TOTAL, so the loop above can
+    # never reach it. Blends' PEPT-Total is the Σ-component aggregate owned by
+    # bridge_blend_aggregates. Gate on the vial's FULL row set (not the
+    # unassigned-filtered `rows`): a blend whose BLEND-PUR already advanced
+    # must still read as a blend here.
+    all_kws = [
+        (k or "").upper()
+        for (k,) in db.execute(
+            select(LimsAnalysis.keyword).where(
+                LimsAnalysis.lims_sub_sample_pk == lims_sub_sample_pk)
+        ).all()
+    ]
+    is_blend = "BLEND-PUR" in all_kws
+    component_qty_keys = {_component_key(k, "QTY") for k in all_kws} - {None}
+    if not is_blend and len(component_qty_keys) <= 1:
+        total_row = next(
+            (r for r in rows if (r.keyword or "").upper() == "PEPT-TOTAL"), None)
+        total_value = _fmt_num(analysis.quantity_mg)
+        if total_row is not None and total_value is not None:
+            apply_transition(
+                db,
+                analysis_id=total_row.id,
+                kind="submit",
+                result_value=total_value,
+                reason=f"auto: HPLC sample-prep total quantity (analysis #{analysis.id})",
+                user_id=user_id,
+                instrument_id=analysis.instrument_id,
+                processed_by_user_id=analysis.processed_by_user_id or user_id,
+            )
+            submitted.append(total_row.id)
 
     if not submitted:
         logger.warning(

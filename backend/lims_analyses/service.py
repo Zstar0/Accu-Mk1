@@ -317,7 +317,8 @@ def soft_reject_parent_placeholder(
 # derivable from the transition rows themselves.
 TRACKED_FIELDS = (
     "result_value", "result_unit", "method_id", "instrument_id",
-    "reportable", "reportable_reason", "analyst_user_id", "retested",
+    "reportable", "reportable_reason", "analyst_user_id", "processed_by_user_id",
+    "retested",
 )
 
 
@@ -375,6 +376,7 @@ def apply_transition(
     user_id: Optional[int] = None,
     method_id: Optional[int] = None,
     instrument_id: Optional[int] = None,
+    processed_by_user_id: Optional[int] = None,
 ) -> LimsAnalysis:
     """
     Validate (from_state, kind) via the state machine, apply the
@@ -387,7 +389,10 @@ def apply_transition(
 
     method_id: optional method stamp, applied after the snapshot; None is a no-op.
     instrument_id: optional instrument stamp, applied after the snapshot; None is a no-op.
-    If either is provided with kind != 'submit', raises BadRequestError up
+    processed_by_user_id: optional processor stamp (who ran the Process HPLC
+    behind this result — NOT the acting user); same submit-only + after-snapshot
+    rules as the method/instrument stamps.
+    If any is provided with kind != 'submit', raises BadRequestError up
     front (Task 3, 2026-08-19 bench-stamping slice) — see the guard right
     after the row load.
     """
@@ -402,9 +407,10 @@ def apply_transition(
     # tier/state error. submit's only legal predecessor states (unassigned,
     # assigned) already fall inside STAMPABLE_STATES (state_machine.py), so
     # no separate R7 guard call is needed on this path — it can't trip here.
-    if (method_id is not None or instrument_id is not None) and kind != "submit":
+    if (method_id is not None or instrument_id is not None
+            or processed_by_user_id is not None) and kind != "submit":
         raise BadRequestError(
-            "method_id/instrument_id only apply to kind='submit'"
+            "method_id/instrument_id/processed_by_user_id only apply to kind='submit'"
         )
 
     from_state = row.review_state
@@ -419,6 +425,8 @@ def apply_transition(
         row.method_id = method_id
     if instrument_id is not None:
         row.instrument_id = instrument_id
+    if processed_by_user_id is not None:
+        row.processed_by_user_id = processed_by_user_id
 
     if is_terminal(from_state):
         # State machine will also reject this, but we surface a clearer
@@ -3097,7 +3105,10 @@ def _serialize_senaite_shape_rows(
     # src/lib/user-display.ts; helper in backend/users_display.py. Batched
     # (single IN-query) — never per-row, mirroring the lightbox created_by
     # batched-names idiom.
-    analyst_ids = {r.analyst_user_id for r in rows if r.analyst_user_id}
+    analyst_ids = (
+        {r.analyst_user_id for r in rows if r.analyst_user_id}
+        | {r.processed_by_user_id for r in rows if r.processed_by_user_id}
+    )
     analyst_name_by_id = {}
     if analyst_ids:
         analyst_name_by_id = {
@@ -3149,6 +3160,7 @@ def _serialize_senaite_shape_rows(
             instrument_uid=str(r.instrument_id) if r.instrument_id else None,
             instrument_options=instrument_options,
             analyst=analyst_name_by_id.get(r.analyst_user_id),
+            processed_by=analyst_name_by_id.get(r.processed_by_user_id),
             review_state=row_review_state,
             sort_key=None,
             captured=r.captured_at.isoformat() if r.captured_at else None,

@@ -1585,7 +1585,12 @@ function AnalysisRow({
           else if (analysis.uid) onMethodInstrumentSaved?.(analysis.uid, 'instrument', newUid, newTitle)
         }}
       />
-      <td className="py-2.5 px-3 text-xs text-muted-foreground">{((vialOverlayEditable ? vialOverlay?.analyst : null) ?? analysis.analyst) || '\u2014'}</td>
+      <td className="py-2.5 px-3 text-xs text-muted-foreground">
+        <AnalystNames
+          prepper={((vialOverlayEditable ? vialOverlay?.analyst : null) ?? analysis.analyst) || null}
+          processedBy={analysis.processed_by ?? null}
+        />
+      </td>
       <td className="py-2.5 px-3">
         <div className="flex items-center gap-1.5 flex-wrap">
           {analysis.review_state && (
@@ -1768,6 +1773,28 @@ function AnalysisRow({
 }
 
 // --- Sorting ---
+
+/** Analyst cell: the visible name is the PREPPER (worksheet assignment).
+ * When the prep bridge has stamped who ran the Process HPLC, a dotted
+ * underline + tooltip surfaces both roles without widening the table. */
+function AnalystNames({ prepper, processedBy }: { prepper: string | null; processedBy: string | null }) {
+  if (!processedBy) return <>{prepper || '—'}</>
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-2">
+          {prepper || '—'}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="text-left">
+        <div className="flex flex-col gap-0.5 text-xs">
+          <div>Prepped by: {prepper || '—'}</div>
+          <div>Processed by: {processedBy}</div>
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  )
+}
 
 type SortColumn = 'title' | 'result' | 'review_state' | 'analyst' | 'method' | 'instrument' | 'captured' | 'sla'
 type SortDir = 'asc' | 'desc'
