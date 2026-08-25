@@ -6818,8 +6818,10 @@ export function SampleDetails() {
           the parent has no origin='mk1' results. ONLY in senaite read mode:
           there the main table is SENAITE-sourced and native rows have no AR
           line to appear in, so this card is what surfaces them. In mk1 read
-          mode the main table already lists every canonical row natively —
-          rendering the card too duplicated them (Handler UAT, P-0161). */}
+          mode the main table IS the native surface — it lists canonical
+          rows AND the pre-promotion 'ordered' placeholders server-side
+          (list_parent_analyses_senaite_shape), so the card would only
+          duplicate it (Handler UAT, P-0161 dupes / P-0160 placeholders). */}
       {parentSampleId === null && data.sample_id && effectiveReadSource !== 'mk1' && (
         <NativeParentAnalysesCard
           sampleId={data.sample_id}

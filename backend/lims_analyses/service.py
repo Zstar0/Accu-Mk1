@@ -1169,6 +1169,143 @@ def list_native_parent_analyses(db: Session, sample_id: str) -> list:
     return [NativeParentAnalysisRow.model_validate(a) for a in deduped]
 
 
+def _overlay_live_vial_state(db: Session, parent_pk: int, shaped: list) -> None:
+    """Live vial-state overlay for 'ordered' placeholder rows, in place.
+
+    A surviving placeholder's own review_state is the static mint-time
+    'unassigned', but once the catalog seeder has put the work on a vial the
+    bench state lives THERE — report the furthest-along LIVE vial state for
+    the service instead. Most-advanced (not newest) wins: with multiple
+    seeded sibling vials (P-0160 class) the idle later-seeded vial must not
+    mask the anchor's progress. Dead rows (retested / retracted / rejected)
+    are not live work — a placeholder backed only by those keeps
+    'unassigned' (outstanding again). Mutates the serialized pydantic rows,
+    never ORM rows — read paths must not flush state changes.
+
+    Shared by the AR-shaped parent listing (the mk1 main table) and the
+    native card feed (senaite mode) so a placeholder's badge can never
+    disagree between the two surfaces.
+    """
+    from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
+    from models import LimsSubSample
+
+    ordered_service_ids = {
+        r.analysis_service_id for r in shaped
+        if r.provenance == PROVENANCE_ORDERED and r.analysis_service_id is not None
+    }
+    if not ordered_service_ids:
+        return
+
+    vial_rows = db.execute(
+        select(LimsAnalysis)
+        .join(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
+        .where(
+            LimsSubSample.parent_sample_pk == parent_pk,
+            LimsAnalysis.analysis_service_id.in_(ordered_service_ids),
+            LimsAnalysis.retested.is_(False),
+            LimsAnalysis.review_state.notin_(("retracted", "rejected")),
+        )
+    ).scalars().all()
+    _PROGRESS_RANK = {
+        "unassigned": 0, "assigned": 1, "to_be_verified": 2, "verified": 3,
+    }
+    live_state_by_service: dict[int, str] = {}
+    for vr in vial_rows:
+        rank = _PROGRESS_RANK.get(vr.review_state, -1)
+        best = _PROGRESS_RANK.get(
+            live_state_by_service.get(vr.analysis_service_id, ""), -1
+        )
+        if rank > best:
+            live_state_by_service[vr.analysis_service_id] = vr.review_state
+    for shaped_row in shaped:
+        if (shaped_row.provenance == PROVENANCE_ORDERED
+                and shaped_row.analysis_service_id in live_state_by_service):
+            shaped_row.review_state = live_state_by_service[shaped_row.analysis_service_id]
+
+
+# Legacy family classifier (profile sections rule 2): SENAITE-era keywords
+# mapped to their catalog profile KEYS. Grounded in the seeder's pinned
+# legacy map (ROLE_TO_KEYWORDS: endo→ENDO-LAL, ster→STER-PCR; PCR-BACTERIA/
+# PCR-FUNGI are the pre-split sterility pair) and the HPLC mirror carve-out
+# keyword shapes (HPLC-PUR / PEPT-Total / ID_* / PUR_* / QTY_* / BLEND-*).
+# Membership rows on these profiles stay EMPTY by ruling — they are
+# load-bearing for the placeholder minter, snapshot, seeder, and COA
+# sections; this display-side classifier is how legacy rows get sections
+# without touching them. The Bac Water panel has its own SENAITE-era
+# services (BW-0156 finding: Benzyl_Alcohol_Assay / FILL-NET-CONTENT /
+# PH-DETERM); ENDO/STER lines on a BW sample still classify to their own
+# families first — rule order is not load-bearing for them (disjoint
+# patterns) but keeps intent readable.
+_LEGACY_SECTION_RULES: tuple = (
+    ("core", "Core HPLC", 0,
+     ("ID_", "PUR_", "QTY_", "BLEND", "HPLC", "PEPT")),
+    ("endotoxin", "Endotoxin", 1, ("ENDO",)),
+    ("sterility_pcr", "Sterility", 2, ("STER", "PCR-")),
+    ("bac_water_panel", "Bac Water", 3, ("BENZYL", "FILL-", "PH-")),
+)
+
+
+def _annotate_profile_sections(db: Session, parent, shaped: list) -> None:
+    """Fill profile_section_* on shaped rows, in place (mk1 main table).
+
+    Rule 1 — the sample's FROZEN catalog_snapshot: a row whose
+    analysis_service_id appears in a snapshot profile's frozen service_ids
+    gets that profile's section, in snapshot order (sort 10+idx). Frozen
+    membership means a later catalog edit can never reshuffle an
+    already-registered sample's sections — same posture as the seeder.
+
+    Rule 2 — legacy keyword classifier (_LEGACY_SECTION_RULES) for rows the
+    snapshot doesn't claim: the SENAITE-era families resolve to their
+    catalog profile keys with fixed leading sorts (Core HPLC first).
+
+    Rule 3 — no match: all three fields stay None; the FE renders those
+    rows ungrouped with no header (never mislabels).
+
+    Labels resolve live from analysis_profiles.name by key (one bulk
+    query) so an admin rename flows through; the legacy fallback label is
+    used only when the profile row is missing entirely.
+    """
+    from models import AnalysisProfile
+
+    snap_profiles = ((getattr(parent, "catalog_snapshot", None) or {})
+                     .get("profiles") or [])
+    section_by_service: dict[int, tuple] = {}   # service_id -> (key, sort)
+    for idx, entry in enumerate(snap_profiles):
+        key = entry.get("key")
+        if not key:
+            continue
+        for sid in (entry.get("service_ids") or []):
+            section_by_service.setdefault(sid, (key, 10 + idx))
+
+    def _classify(row) -> tuple:
+        sid = row.analysis_service_id
+        if sid is not None and sid in section_by_service:
+            return section_by_service[sid]
+        kw = (row.keyword or "").upper()
+        if kw:
+            for key, _label, sort, prefixes in _LEGACY_SECTION_RULES:
+                if any(kw.startswith(p) or (len(p) > 3 and p in kw)
+                       for p in prefixes):
+                    return (key, sort)
+        return (None, None)
+
+    resolved = [_classify(r) for r in shaped]
+    needed_keys = {key for key, _ in resolved if key}
+    if not needed_keys:
+        return
+    names_by_key = {
+        p.key: p.name for p in db.query(AnalysisProfile)
+        .filter(AnalysisProfile.key.in_(needed_keys)).all()
+    }
+    legacy_labels = {key: label for key, label, _s, _p in _LEGACY_SECTION_RULES}
+    for row, (key, sort) in zip(shaped, resolved):
+        if key is None:
+            continue
+        row.profile_section_key = key
+        row.profile_section_label = names_by_key.get(key) or legacy_labels.get(key) or key
+        row.profile_section_sort = sort
+
+
 def list_native_parent_analyses_senaite_shape(
     db: Session, sample_id: str
 ) -> List["SenaiteShapeAnalysisResponse"]:
@@ -1242,7 +1379,9 @@ def list_native_parent_analyses_senaite_shape(
         if r.provenance == "canonical" or r.analysis_service_id not in services_with_live_canonical
     ]
 
-    return _serialize_senaite_shape_rows(db, rows)
+    shaped = _serialize_senaite_shape_rows(db, rows)
+    _overlay_live_vial_state(db, parent.id, shaped)
+    return shaped
 
 
 # ─── Phase 4b: parent promotions read ───────────────────────────────────────
@@ -1415,6 +1554,8 @@ def list_parent_analyses_senaite_shape(
     if parent is None:
         return []
 
+    from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
+
     rows = list(db.execute(
         select(LimsAnalysis).where(
             LimsAnalysis.lims_sample_pk == parent.id,
@@ -1426,6 +1567,11 @@ def list_parent_analyses_senaite_shape(
                     LimsAnalysis.review_state != "retracted",
                 ),
                 LimsAnalysis.provenance == "shadow",
+                # Pre-promotion native demand (parent_placeholders.py): the
+                # mk1 main table is where a paid-for native test must be
+                # visible before any promotion exists — the separate
+                # transitional card no longer renders in mk1 read mode.
+                LimsAnalysis.provenance == PROVENANCE_ORDERED,
             ),
         ).order_by(LimsAnalysis.keyword, LimsAnalysis.id)
     ).scalars().all())
@@ -1436,14 +1582,33 @@ def list_parent_analyses_senaite_shape(
     # In-memory filter on the already-fetched rows (no per-row queries);
     # tier_of is pure. Shadow rows bypass: parent-tier by construction,
     # and their sentinel review_state would misclassify under tier_of.
+    # Ordered placeholders bypass for the same reason: their permanent
+    # 'unassigned' would misclassify as TIER_VIAL, but they are demand
+    # markers, not variance mid-run rows — the guard's target class is
+    # provenance='canonical' only.
     rows = [
         r for r in rows
-        if r.provenance == "shadow"
+        if r.provenance in ("shadow", PROVENANCE_ORDERED)
         or tier_of(
             lims_sample_pk=r.lims_sample_pk,
             lims_sub_sample_pk=r.lims_sub_sample_pk,
             review_state=r.review_state,
         ) == TIER_PARENT
+    ]
+
+    # Canonical-wins placeholder suppression (mirrors the native card feed):
+    # a service with a LIVE canonical row has been delivered — its
+    # placeholder drops. Keyed by service id (placeholders always share the
+    # service row they were minted from). Retracted canonicals are already
+    # excluded from `rows` by the query, so a thrown-away result correctly
+    # leaves the placeholder visible: the test is outstanding again.
+    delivered_service_ids = {
+        r.analysis_service_id for r in rows if r.provenance == "canonical"
+    }
+    rows = [
+        r for r in rows
+        if r.provenance != PROVENANCE_ORDERED
+        or r.analysis_service_id not in delivered_service_ids
     ]
 
     # Cross-provenance keyword collapse (UAT catch, P-0143 promote flow):
@@ -1463,7 +1628,10 @@ def list_parent_analyses_senaite_shape(
         if r.provenance == "canonical" or r.keyword not in canonical_keywords
     ]
 
-    return _serialize_senaite_shape_rows(db, rows)
+    shaped = _serialize_senaite_shape_rows(db, rows)
+    _overlay_live_vial_state(db, parent.id, shaped)
+    _annotate_profile_sections(db, parent, shaped)
+    return shaped
 
 
 def list_variance_verifications_for_parent(

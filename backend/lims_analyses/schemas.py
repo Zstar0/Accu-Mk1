@@ -264,6 +264,18 @@ class SenaiteShapeAnalysisResponse(BaseModel):
     # 'canonical' (promoted result) vs 'shadow'. The overlay's native block
     # enables remove only on 'ordered' rows. None for legacy callers.
     provenance: Optional[str] = None
+    # Profile sections (mk1 main-table grouping): resolved by
+    # _annotate_profile_sections — (1) the sample's FROZEN catalog_snapshot
+    # (service_id membership, snapshot order), (2) legacy keyword classifier
+    # for the SENAITE-era families mapped to their catalog profile keys
+    # (memberships stay empty — they are load-bearing elsewhere), (3) no
+    # match → all three None (FE renders the row ungrouped, no header).
+    # Labels resolve live from analysis_profiles.name so admin renames flow
+    # through; sort orders sections (legacy families lead, snapshot
+    # profiles follow in snapshot order).
+    profile_section_key: Optional[str] = None
+    profile_section_label: Optional[str] = None
+    profile_section_sort: Optional[int] = None
 
 
 # ─── Phase 4a: promote_to_parent response shapes ─────────────────────────────

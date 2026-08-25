@@ -416,3 +416,181 @@ def test_serialized_row_carries_its_own_analysis_service_id(db_session):
     assert by_uid[f"mk1:{row_a.id}"].analysis_service_id == svc_a.id
     assert by_uid[f"mk1:{row_b.id}"].analysis_service_id == svc_b.id
     assert by_uid[f"mk1:{row_a.id}"].analysis_service_id != svc_b.id
+
+
+# ── mk1 read mode absorbs pre-promotion placeholders (rework of the card) ──
+# The AR-shaped parent listing is the mk1 main table; 'ordered' placeholders
+# (registration-time demand, lims_analyses/parent_placeholders.py) belong IN
+# it so pre-promotion native work (heavy metals awaiting the bench) is
+# visible without a second card, and rows change STATE in place on
+# promotion instead of changing address.
+
+
+def test_ordered_placeholder_appears_in_parent_listing(db_session):
+    from lims_analyses.service import list_parent_analyses_senaite_shape
+
+    parent = _mk_parent(db_session)
+    svc = _mk_service(db_session, "LEAD-PPM", "Lead")
+    _mk_parent_analysis(db_session, parent, svc,
+                        provenance="ordered", review_state="unassigned")
+    rows = list_parent_analyses_senaite_shape(db_session, parent.sample_id)
+    assert [(r.keyword, r.provenance, r.review_state) for r in rows] == [
+        ("LEAD-PPM", "ordered", "unassigned")
+    ]
+
+
+def test_live_canonical_suppresses_its_placeholder(db_session):
+    from lims_analyses.service import list_parent_analyses_senaite_shape
+
+    parent = _mk_parent(db_session)
+    svc = _mk_service(db_session, "LEAD-PPM", "Lead")
+    _mk_parent_analysis(db_session, parent, svc,
+                        provenance="ordered", review_state="unassigned")
+    _mk_parent_analysis(db_session, parent, svc,
+                        provenance="canonical", review_state="verified")
+    rows = list_parent_analyses_senaite_shape(db_session, parent.sample_id)
+    assert [(r.provenance, r.review_state) for r in rows] == [
+        ("canonical", "verified")
+    ]
+
+
+def test_retracted_canonical_does_not_suppress_placeholder(db_session):
+    """A retracted canonical row is excluded from this listing outright
+    (existing contract) AND must not discharge the placeholder — the result
+    was thrown away, so the paid-for test is outstanding again."""
+    from lims_analyses.service import list_parent_analyses_senaite_shape
+
+    parent = _mk_parent(db_session)
+    svc = _mk_service(db_session, "LEAD-PPM", "Lead")
+    _mk_parent_analysis(db_session, parent, svc,
+                        provenance="ordered", review_state="unassigned")
+    _mk_parent_analysis(db_session, parent, svc,
+                        provenance="canonical", review_state="retracted")
+    rows = list_parent_analyses_senaite_shape(db_session, parent.sample_id)
+    assert [(r.provenance, r.review_state) for r in rows] == [
+        ("ordered", "unassigned")
+    ]
+
+
+def test_placeholder_reports_live_vial_state_in_parent_listing(db_session):
+    from lims_analyses.service import list_parent_analyses_senaite_shape
+
+    parent = _mk_parent(db_session)
+    svc = _mk_service(db_session, "LEAD-PPM", "Lead")
+    _mk_parent_analysis(db_session, parent, svc,
+                        provenance="ordered", review_state="unassigned")
+    vial = LimsSubSample(
+        parent_sample_pk=parent.id, external_lims_uid="V-1",
+        sample_id=f"{parent.sample_id}-S02", vial_sequence=2,
+    )
+    db_session.add(vial)
+    db_session.flush()
+    db_session.add(LimsAnalysis(
+        lims_sample_pk=None, lims_sub_sample_pk=vial.id,
+        analysis_service_id=svc.id, keyword=svc.keyword, title=svc.title,
+        provenance="canonical", review_state="assigned", retested=False,
+    ))
+    db_session.flush()
+    rows = list_parent_analyses_senaite_shape(db_session, parent.sample_id)
+    assert [(r.provenance, r.review_state) for r in rows] == [
+        ("ordered", "assigned")
+    ]
+
+
+# ── profile sections (mk1 main table grouping) ─────────────────────────────
+# Resolution ladder (Handler ruling, 2026-08-25): (1) the sample's FROZEN
+# catalog_snapshot — service_id membership in a snapshot profile wins, in
+# snapshot order; (2) legacy keyword classifier for the SENAITE-era families
+# (ENDO-LAL / STER-PCR / HPLC core) mapped to their catalog profile KEYS —
+# labels resolve live from analysis_profiles.name, memberships stay EMPTY
+# (they are load-bearing for the seeder/minter/COA and were ruled
+# untouchable); (3) no match → all three fields None (FE renders ungrouped,
+# no header — never mislabels).
+
+
+def _mk_profile_row(db, key, name, sort_order=0):
+    from models import AnalysisProfile
+    p = AnalysisProfile(key=key, name=name, is_addon=False, sort_order=sort_order)
+    db.add(p)
+    db.flush()
+    return p
+
+
+def test_snapshot_profile_sections_annotate_rows(db_session):
+    from lims_analyses.service import list_parent_analyses_senaite_shape
+
+    hm = _mk_profile_row(db_session, "heavy_metals", "Heavy Metals")
+    svc = _mk_service(db_session, "LEAD-PPM", "Lead")
+    parent = _mk_parent(db_session)
+    parent.catalog_snapshot = {
+        "profiles": [{
+            "key": "heavy_metals", "profile_id": hm.id,
+            "service_ids": [svc.id],
+        }],
+    }
+    db_session.flush()
+    _mk_parent_analysis(db_session, parent, svc,
+                        provenance="ordered", review_state="unassigned")
+    rows = list_parent_analyses_senaite_shape(db_session, parent.sample_id)
+    assert rows[0].profile_section_key == "heavy_metals"
+    assert rows[0].profile_section_label == "Heavy Metals"
+    assert rows[0].profile_section_sort >= 10
+
+
+def test_legacy_keyword_fallback_sections(db_session):
+    from lims_analyses.service import list_parent_analyses_senaite_shape
+
+    _mk_profile_row(db_session, "core", "Core HPLC")
+    _mk_profile_row(db_session, "endotoxin", "Endotoxin")
+    _mk_profile_row(db_session, "sterility_pcr", "Sterility")
+    parent = _mk_parent(db_session)
+    for kw, title in (("ENDO-LAL", "Endotoxin (LAL)"),
+                      ("STER-PCR", "Sterility (PCR)"),
+                      ("HPLC-PUR", "Peptide Purity (HPLC)")):
+        _mk_parent_analysis(db_session, parent, _mk_service(db_session, kw, title))
+    rows = list_parent_analyses_senaite_shape(db_session, parent.sample_id)
+    by_kw = {r.keyword: r for r in rows}
+    assert by_kw["HPLC-PUR"].profile_section_key == "core"
+    assert by_kw["HPLC-PUR"].profile_section_label == "Core HPLC"
+    assert by_kw["ENDO-LAL"].profile_section_key == "endotoxin"
+    assert by_kw["STER-PCR"].profile_section_key == "sterility_pcr"
+    # Core Panel leads, then Endotoxin, then Sterility
+    assert (by_kw["HPLC-PUR"].profile_section_sort
+            < by_kw["ENDO-LAL"].profile_section_sort
+            < by_kw["STER-PCR"].profile_section_sort)
+
+
+def test_unmatched_rows_carry_no_section(db_session):
+    from lims_analyses.service import list_parent_analyses_senaite_shape
+
+    parent = _mk_parent(db_session)
+    _mk_parent_analysis(db_session, parent,
+                        _mk_service(db_session, "KF", "Karl Fischer"))
+    rows = list_parent_analyses_senaite_shape(db_session, parent.sample_id)
+    assert rows[0].profile_section_key is None
+    assert rows[0].profile_section_label is None
+    assert rows[0].profile_section_sort is None
+
+
+def test_bac_water_panel_keyword_fallback_section(db_session):
+    """BW-0156 finding: the Bac Water panel HAS its own SENAITE-era services
+    (Benzyl_Alcohol_Assay / FILL-NET-CONTENT / PH-DETERM) — they rendered
+    ungrouped under rule 3. Classify them to the existing bac_water_panel
+    profile, after Sterility in section order."""
+    from lims_analyses.service import list_parent_analyses_senaite_shape
+
+    _mk_profile_row(db_session, "bac_water_panel", "Bac Water")
+    _mk_profile_row(db_session, "sterility_pcr", "Sterility")
+    parent = _mk_parent(db_session)
+    for kw, title in (("Benzyl_Alcohol_Assay", "Benzyl Alcohol Assay (HPLC)"),
+                      ("FILL-NET-CONTENT", "Fill volume / Net content"),
+                      ("PH-DETERM", "pH Determination"),
+                      ("STER-PCR", "Sterility (PCR)")):
+        _mk_parent_analysis(db_session, parent, _mk_service(db_session, kw, title))
+    rows = list_parent_analyses_senaite_shape(db_session, parent.sample_id)
+    by_kw = {r.keyword: r for r in rows}
+    for kw in ("Benzyl_Alcohol_Assay", "FILL-NET-CONTENT", "PH-DETERM"):
+        assert by_kw[kw].profile_section_key == "bac_water_panel", kw
+        assert by_kw[kw].profile_section_label == "Bac Water", kw
+    assert (by_kw["Benzyl_Alcohol_Assay"].profile_section_sort
+            > by_kw["STER-PCR"].profile_section_sort)
