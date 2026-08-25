@@ -1,5 +1,51 @@
 # Changelog
 
+## v1.9.0 — 2026-08-25
+
+### Added
+
+- **Report-only ("informational") spec rules** — a new spec rule kind that
+  reports the measured value with no pass/fail verdict; the COA renders it
+  as Measured, neutral, and it can never downgrade a conformance verdict.
+  Pairs with COA Builder 2.32.0, which must be deployed before or with
+  this release.
+- **`analytical_vials` — ship N vials, report on M** (heavy-metals
+  pooling) — a profile-level cap on how many of its required vials carry
+  analyses. Once the cap's worth of same-role sibling vials hold live
+  analyses, further vials seed nothing and become custody-only material
+  vials (derived "Material for Sxx" badge on the sub-samples list).
+  Custody, boxing, and vial counts are unchanged. The cap is
+  snapshot-frozen at registration — set it before ordering opens. The
+  `hm` role is now boxable.
+- **Processor attribution** — `lims_analyses.processed_by_user_id`
+  records who ran the Process HPLC that produced the row's result,
+  carried by the prep bridge from the HPLC analysis. `analyst_user_id`
+  stays the prepper (worksheet assignment); the Analyst cell shows a
+  Prepped-by / Processed-by tooltip.
+
+### Changed
+
+- **Receive page works without SENAITE.** The inbox reads the native
+  registry (`sample_due`, analytes included) instead of hydrating ARs
+  from SENAITE, and check-in is native-first: one native transaction
+  (photo capture now hard and atomic, remarks, status + received date)
+  decides success, then SENAITE is mirrored best-effort — a SENAITE
+  failure is success-with-a-warning and the sample lands in the
+  `mk1_ahead` shadow lane. Native status now gates "already received".
+- **Analysis History** filters done statuses server-side and paginates
+  with Load more — records beyond the old 100-row window are reachable.
+
+### Fixed
+
+- **Service Methods panel** reads real `method_services` links (with a
+  linked-method count on the list) instead of the dead SENAITE `methods`
+  JSON, which always showed 0 for native services.
+- **PEPT-Total auto-fill on single-peptide vials** — the prep bridge had
+  no writer for singles (the blend aggregate writer is BLEND-PUR-gated).
+- **Duplicate "Accu-Mk1 Analyses" card** on sample details is hidden in
+  mk1 read mode, where the main table already shows every canonical
+  analysis natively.
+
 ## v1.8.6 — 2026-08-24
 
 ### Added
