@@ -6785,8 +6785,12 @@ export function SampleDetails() {
 
       {/* Native (Accu-Mk1) parent analyses — separate read-only card, not a
           merge into the SENAITE-sourced table above. Renders nothing when
-          the parent has no origin='mk1' results. */}
-      {parentSampleId === null && data.sample_id && (
+          the parent has no origin='mk1' results. ONLY in senaite read mode:
+          there the main table is SENAITE-sourced and native rows have no AR
+          line to appear in, so this card is what surfaces them. In mk1 read
+          mode the main table already lists every canonical row natively —
+          rendering the card too duplicated them (Handler UAT, P-0161). */}
+      {parentSampleId === null && data.sample_id && effectiveReadSource !== 'mk1' && (
         <NativeParentAnalysesCard
           sampleId={data.sample_id}
           isParentPage={parentSampleId === null}
