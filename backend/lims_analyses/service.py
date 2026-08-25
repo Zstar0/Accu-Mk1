@@ -1231,13 +1231,17 @@ def _overlay_live_vial_state(db: Session, parent_pk: int, shaped: list) -> None:
 # Membership rows on these profiles stay EMPTY by ruling — they are
 # load-bearing for the placeholder minter, snapshot, seeder, and COA
 # sections; this display-side classifier is how legacy rows get sections
-# without touching them. Bac Water deliberately has no rule: BW samples
-# carry ENDO/STER analysis lines, there are no bac-water keywords.
+# without touching them. The Bac Water panel has its own SENAITE-era
+# services (BW-0156 finding: Benzyl_Alcohol_Assay / FILL-NET-CONTENT /
+# PH-DETERM); ENDO/STER lines on a BW sample still classify to their own
+# families first — rule order is not load-bearing for them (disjoint
+# patterns) but keeps intent readable.
 _LEGACY_SECTION_RULES: tuple = (
     ("core", "Core HPLC", 0,
      ("ID_", "PUR_", "QTY_", "BLEND", "HPLC", "PEPT")),
     ("endotoxin", "Endotoxin", 1, ("ENDO",)),
     ("sterility_pcr", "Sterility", 2, ("STER", "PCR-")),
+    ("bac_water_panel", "Bac Water", 3, ("BENZYL", "FILL-", "PH-")),
 )
 
 

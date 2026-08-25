@@ -570,3 +570,27 @@ def test_unmatched_rows_carry_no_section(db_session):
     assert rows[0].profile_section_key is None
     assert rows[0].profile_section_label is None
     assert rows[0].profile_section_sort is None
+
+
+def test_bac_water_panel_keyword_fallback_section(db_session):
+    """BW-0156 finding: the Bac Water panel HAS its own SENAITE-era services
+    (Benzyl_Alcohol_Assay / FILL-NET-CONTENT / PH-DETERM) — they rendered
+    ungrouped under rule 3. Classify them to the existing bac_water_panel
+    profile, after Sterility in section order."""
+    from lims_analyses.service import list_parent_analyses_senaite_shape
+
+    _mk_profile_row(db_session, "bac_water_panel", "Bac Water")
+    _mk_profile_row(db_session, "sterility_pcr", "Sterility")
+    parent = _mk_parent(db_session)
+    for kw, title in (("Benzyl_Alcohol_Assay", "Benzyl Alcohol Assay (HPLC)"),
+                      ("FILL-NET-CONTENT", "Fill volume / Net content"),
+                      ("PH-DETERM", "pH Determination"),
+                      ("STER-PCR", "Sterility (PCR)")):
+        _mk_parent_analysis(db_session, parent, _mk_service(db_session, kw, title))
+    rows = list_parent_analyses_senaite_shape(db_session, parent.sample_id)
+    by_kw = {r.keyword: r for r in rows}
+    for kw in ("Benzyl_Alcohol_Assay", "FILL-NET-CONTENT", "PH-DETERM"):
+        assert by_kw[kw].profile_section_key == "bac_water_panel", kw
+        assert by_kw[kw].profile_section_label == "Bac Water", kw
+    assert (by_kw["Benzyl_Alcohol_Assay"].profile_section_sort
+            > by_kw["STER-PCR"].profile_section_sort)
