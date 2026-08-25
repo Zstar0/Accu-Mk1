@@ -147,6 +147,7 @@ function renderCard(
     sampleId?: string
     isParentPage?: boolean
     vialAssignmentByKeyword?: Map<string, VialAssignment>
+    placeholdersOnly?: boolean
   } = {}
 ) {
   vi.mocked(listNativeParentAnalysesShaped).mockResolvedValue(rows)
@@ -160,6 +161,7 @@ function renderCard(
         promotionsByKeyword={promos}
         vialAssignmentByKeyword={opts.vialAssignmentByKeyword}
         onParentDataStale={opts.staleSpy}
+        placeholdersOnly={opts.placeholdersOnly}
       />
     </QueryClientProvider>
   )
@@ -429,5 +431,40 @@ describe('NativeParentAnalysesCard', () => {
     await waitFor(() => expect(transitionAnalysis).toHaveBeenCalledWith('mk1:6', 'verify'))
     await waitFor(() => expect(staleSpy).toHaveBeenCalled())
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY] })
+  })
+})
+
+describe('mk1 read mode (placeholdersOnly)', () => {
+  // In mk1 read mode the main analyses table owns the canonical rows
+  // (PR #135's dupe class), so the card renders ONLY the 'ordered'
+  // placeholders — the pre-promotion native work the main table
+  // structurally excludes.
+  it('filters to ordered placeholders, dropping canonical rows', async () => {
+    renderCard(
+      [
+        shapedRow({ provenance: 'canonical' }),
+        shapedRow({
+          uid: 'mk1:9', keyword: 'LEAD-PPM', title: 'Lead',
+          result: null, review_state: 'unassigned', provenance: 'ordered',
+        }),
+      ],
+      new Map(),
+      { placeholdersOnly: true }
+    )
+    const table = await screen.findByRole('table')
+    expect(within(table).getByText('Lead')).toBeInTheDocument()
+    expect(within(table).queryByText('Heavy Metals')).not.toBeInTheDocument()
+  })
+
+  it('renders nothing when every native row is canonical', async () => {
+    renderCard([shapedRow({ provenance: 'canonical' })], new Map(), {
+      placeholdersOnly: true,
+    })
+    // findByRole waits — if the table EVER paints, this resolves and the
+    // rejects assertion fails. Deterministic, unlike a paint-race queryBy.
+    await expect(
+      screen.findByRole('table', {}, { timeout: 500 })
+    ).rejects.toThrow()
+    expect(screen.queryByText('Accu-Mk1 Analyses')).not.toBeInTheDocument()
   })
 })

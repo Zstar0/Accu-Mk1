@@ -602,3 +602,86 @@ def test_no_reason_writes_no_transition(db, parent_sample, usp71_profile):
     assert db.query(LimsAnalysisTransition).filter(
         LimsAnalysisTransition.analysis_id.in_(stats["created_ids"])
     ).count() == 0
+
+
+# ── mk1 read mode: provenance discriminator + live vial-state overlay ──────
+# The FE card filters to provenance='ordered' in mk1 read mode (the main
+# table owns canonical rows there — PR #135's dupe class), so the shaped
+# rows must say which side they are; and a placeholder's static
+# 'unassigned' should report the live bench state once vial work exists.
+
+
+def _mk_vial(db, parent, seq):
+    vial = LimsSubSample(
+        parent_sample_pk=parent.id,
+        external_lims_uid=f"VIAL-UID-{parent.id}-{seq}",
+        sample_id=f"{parent.sample_id}-S{seq:02d}",
+        vial_sequence=seq,
+    )
+    db.add(vial)
+    db.commit()
+    db.refresh(vial)
+    return vial
+
+
+def _mk_vial_row(db, vial, svc, review_state, retested=False):
+    row = LimsAnalysis(
+        lims_sample_pk=None,
+        lims_sub_sample_pk=vial.id,
+        analysis_service_id=svc.id,
+        keyword=svc.keyword,
+        title=svc.title,
+        provenance="canonical",
+        review_state=review_state,
+        retested=retested,
+    )
+    db.add(row)
+    db.commit()
+    return row
+
+
+def test_shaped_rows_carry_provenance(db, parent_sample, usp71_profile):
+    seed_parent_placeholders(db, parent=parent_sample, services={"sterility_usp71": True})
+    svc = usp71_profile.analysis_services[0]
+    db.add(LimsAnalysis(
+        lims_sample_pk=parent_sample.id, lims_sub_sample_pk=None,
+        analysis_service_id=svc.id, keyword=svc.keyword, title=svc.title,
+        provenance="canonical", review_state="retracted",
+    ))
+    db.commit()
+    rows = list_native_parent_analyses_senaite_shape(db, parent_sample.sample_id)
+    # retracted canonical + surviving placeholder (existing lineage contract)
+    assert sorted(r.provenance for r in rows) == ["canonical", "ordered"]
+
+
+def test_placeholder_reports_most_advanced_live_vial_state(db, parent_sample, usp71_profile):
+    """P-0160 shape: the anchor vial is mid-run while a sibling vial idles.
+    The placeholder must report the furthest-along live state, not the
+    newest row's (the idle sibling was seeded later and would win a
+    newest-id rule)."""
+    seed_parent_placeholders(db, parent=parent_sample, services={"sterility_usp71": True})
+    svc = usp71_profile.analysis_services[0]
+    anchor = _mk_vial(db, parent_sample, 2)
+    idle = _mk_vial(db, parent_sample, 3)
+    _mk_vial_row(db, anchor, svc, "to_be_verified")
+    _mk_vial_row(db, idle, svc, "unassigned")  # newer id, less advanced
+    db.commit()
+    rows = list_native_parent_analyses_senaite_shape(db, parent_sample.sample_id)
+    assert len(rows) == 1
+    assert rows[0].provenance == "ordered"
+    assert rows[0].review_state == "to_be_verified"
+
+
+def test_placeholder_state_ignores_dead_vial_rows(db, parent_sample, usp71_profile):
+    """Retested/rejected/retracted vial rows are not live work — a
+    placeholder backed only by dead rows keeps its own 'unassigned' (the
+    test is outstanding again)."""
+    seed_parent_placeholders(db, parent=parent_sample, services={"sterility_usp71": True})
+    svc = usp71_profile.analysis_services[0]
+    vial = _mk_vial(db, parent_sample, 2)
+    _mk_vial_row(db, vial, svc, "rejected")
+    _mk_vial_row(db, vial, svc, "to_be_verified", retested=True)
+    db.commit()
+    rows = list_native_parent_analyses_senaite_shape(db, parent_sample.sample_id)
+    assert len(rows) == 1
+    assert rows[0].review_state == "unassigned"

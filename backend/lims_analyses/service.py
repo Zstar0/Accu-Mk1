@@ -1242,7 +1242,51 @@ def list_native_parent_analyses_senaite_shape(
         if r.provenance == "canonical" or r.analysis_service_id not in services_with_live_canonical
     ]
 
-    return _serialize_senaite_shape_rows(db, rows)
+    shaped = _serialize_senaite_shape_rows(db, rows)
+
+    # Live vial-state overlay: a surviving placeholder's own review_state is
+    # the static mint-time 'unassigned', but once the catalog seeder has put
+    # the work on a vial the bench state lives THERE — report the
+    # furthest-along LIVE vial state for the service instead. Most-advanced
+    # (not newest) wins: with multiple seeded sibling vials (P-0160 class)
+    # the idle later-seeded vial must not mask the anchor's progress. Dead
+    # rows (retested / retracted / rejected) are not live work — a
+    # placeholder backed only by those keeps 'unassigned' (outstanding
+    # again). Overlay mutates the serialized pydantic rows, never the ORM
+    # rows — this is a read path and must not flush state changes.
+    ordered_service_ids = {
+        r.analysis_service_id for r in rows if r.provenance == PROVENANCE_ORDERED
+    }
+    if ordered_service_ids:
+        from models import LimsSubSample
+
+        vial_rows = db.execute(
+            select(LimsAnalysis)
+            .join(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
+            .where(
+                LimsSubSample.parent_sample_pk == parent.id,
+                LimsAnalysis.analysis_service_id.in_(ordered_service_ids),
+                LimsAnalysis.retested.is_(False),
+                LimsAnalysis.review_state.notin_(("retracted", "rejected")),
+            )
+        ).scalars().all()
+        _PROGRESS_RANK = {
+            "unassigned": 0, "assigned": 1, "to_be_verified": 2, "verified": 3,
+        }
+        live_state_by_service: dict[int, str] = {}
+        for vr in vial_rows:
+            rank = _PROGRESS_RANK.get(vr.review_state, -1)
+            best = _PROGRESS_RANK.get(
+                live_state_by_service.get(vr.analysis_service_id, ""), -1
+            )
+            if rank > best:
+                live_state_by_service[vr.analysis_service_id] = vr.review_state
+        for shaped_row in shaped:
+            if (shaped_row.provenance == PROVENANCE_ORDERED
+                    and shaped_row.analysis_service_id in live_state_by_service):
+                shaped_row.review_state = live_state_by_service[shaped_row.analysis_service_id]
+
+    return shaped
 
 
 # ─── Phase 4b: parent promotions read ───────────────────────────────────────
