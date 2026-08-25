@@ -355,3 +355,99 @@ def test_replace_presubsample_no_parent_row_is_noop(db_mem):
     assert summary["vials"] == {
         "deleted": [], "retracted": [], "blocked": [], "reseeded": [],
     }
+
+
+# ── step-5 SENAITE identity swap (verified add) ─────────────────────────────
+#
+# _swap_parent_identity_service must never trust the IS add's 2xx alone:
+# SENAITE's update-Analyses call silently ignores an unknown service uid and
+# returns 200 (PB-0410 / PB-0441, 2026-08-25 — stale senaite_uid on a
+# duplicate service row). "added" may only be set after the keyword is seen
+# on the AR by re-read; anything else lands in "add_failed".
+
+import asyncio
+import logging
+from types import SimpleNamespace
+
+
+class _FakeResp:
+    def __init__(self, status_code=200, payload=None):
+        self.status_code = status_code
+        self._payload = payload if payload is not None else []
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+    def json(self):
+        return self._payload
+
+
+class _FakeISClient:
+    """Duck-typed httpx.AsyncClient covering the three IS calls of step 5."""
+
+    def __init__(self, *, delete_resp=None, post_resp=None, get_resp=None):
+        self.calls = []
+        self._delete = delete_resp or _FakeResp()
+        self._post = post_resp or _FakeResp()
+        self._get = get_resp or _FakeResp()
+
+    async def delete(self, url, **kw):
+        self.calls.append(("delete", url))
+        return self._delete
+
+    async def post(self, url, **kw):
+        self.calls.append(("post", url))
+        return self._post
+
+    async def get(self, url, **kw):
+        self.calls.append(("get", url))
+        return self._get
+
+
+_LOG = logging.getLogger("test_swap_identity")
+
+
+def _run_swap(client, new_svc, old_kw="ID_OLD"):
+    import main
+
+    return asyncio.run(
+        main._swap_parent_identity_service(client, "P-1", old_kw, new_svc, _LOG)
+    )
+
+
+def test_swap_identity_add_verified_on_ar():
+    svc = SimpleNamespace(keyword="ID_NEW", senaite_uid="uid-new")
+    client = _FakeISClient(get_resp=_FakeResp(payload=[{"keyword": "ID_NEW"}]))
+    identity = _run_swap(client, svc)
+    assert identity["removed"] == "ID_OLD"
+    assert identity["added"] == "ID_NEW"
+    assert "add_failed" not in identity
+    assert [c[0] for c in client.calls] == ["delete", "post", "get"]
+
+
+def test_swap_identity_silent_noop_add_is_not_trusted():
+    # The PB-0410 shape: IS 2xx's the add but the AR never gains the analysis.
+    svc = SimpleNamespace(keyword="ID_NEW", senaite_uid="uid-stale")
+    client = _FakeISClient(get_resp=_FakeResp(payload=[{"keyword": "ID_BPC157"}]))
+    identity = _run_swap(client, svc)
+    assert identity["added"] is None
+    assert identity["add_failed"] == "ID_NEW"
+
+
+def test_swap_identity_add_http_error_lands_in_add_failed():
+    svc = SimpleNamespace(keyword="ID_NEW", senaite_uid="uid-new")
+    client = _FakeISClient(post_resp=_FakeResp(status_code=422))
+    identity = _run_swap(client, svc)
+    assert identity["removed"] == "ID_OLD"
+    assert identity["added"] is None
+    assert identity["add_failed"] == "ID_NEW"
+
+
+def test_swap_identity_missing_uid_skips_post_and_reports():
+    svc = SimpleNamespace(keyword="ID_NEW", senaite_uid=None)
+    client = _FakeISClient()
+    identity = _run_swap(client, svc)
+    assert identity["added"] is None
+    assert identity["add_failed"] == "ID_NEW"
+    assert all(c[0] == "delete" for c in client.calls)
