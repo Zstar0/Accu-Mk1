@@ -1169,6 +1169,60 @@ def list_native_parent_analyses(db: Session, sample_id: str) -> list:
     return [NativeParentAnalysisRow.model_validate(a) for a in deduped]
 
 
+def _overlay_live_vial_state(db: Session, parent_pk: int, shaped: list) -> None:
+    """Live vial-state overlay for 'ordered' placeholder rows, in place.
+
+    A surviving placeholder's own review_state is the static mint-time
+    'unassigned', but once the catalog seeder has put the work on a vial the
+    bench state lives THERE — report the furthest-along LIVE vial state for
+    the service instead. Most-advanced (not newest) wins: with multiple
+    seeded sibling vials (P-0160 class) the idle later-seeded vial must not
+    mask the anchor's progress. Dead rows (retested / retracted / rejected)
+    are not live work — a placeholder backed only by those keeps
+    'unassigned' (outstanding again). Mutates the serialized pydantic rows,
+    never ORM rows — read paths must not flush state changes.
+
+    Shared by the AR-shaped parent listing (the mk1 main table) and the
+    native card feed (senaite mode) so a placeholder's badge can never
+    disagree between the two surfaces.
+    """
+    from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
+    from models import LimsSubSample
+
+    ordered_service_ids = {
+        r.analysis_service_id for r in shaped
+        if r.provenance == PROVENANCE_ORDERED and r.analysis_service_id is not None
+    }
+    if not ordered_service_ids:
+        return
+
+    vial_rows = db.execute(
+        select(LimsAnalysis)
+        .join(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
+        .where(
+            LimsSubSample.parent_sample_pk == parent_pk,
+            LimsAnalysis.analysis_service_id.in_(ordered_service_ids),
+            LimsAnalysis.retested.is_(False),
+            LimsAnalysis.review_state.notin_(("retracted", "rejected")),
+        )
+    ).scalars().all()
+    _PROGRESS_RANK = {
+        "unassigned": 0, "assigned": 1, "to_be_verified": 2, "verified": 3,
+    }
+    live_state_by_service: dict[int, str] = {}
+    for vr in vial_rows:
+        rank = _PROGRESS_RANK.get(vr.review_state, -1)
+        best = _PROGRESS_RANK.get(
+            live_state_by_service.get(vr.analysis_service_id, ""), -1
+        )
+        if rank > best:
+            live_state_by_service[vr.analysis_service_id] = vr.review_state
+    for shaped_row in shaped:
+        if (shaped_row.provenance == PROVENANCE_ORDERED
+                and shaped_row.analysis_service_id in live_state_by_service):
+            shaped_row.review_state = live_state_by_service[shaped_row.analysis_service_id]
+
+
 def list_native_parent_analyses_senaite_shape(
     db: Session, sample_id: str
 ) -> List["SenaiteShapeAnalysisResponse"]:
@@ -1243,49 +1297,7 @@ def list_native_parent_analyses_senaite_shape(
     ]
 
     shaped = _serialize_senaite_shape_rows(db, rows)
-
-    # Live vial-state overlay: a surviving placeholder's own review_state is
-    # the static mint-time 'unassigned', but once the catalog seeder has put
-    # the work on a vial the bench state lives THERE — report the
-    # furthest-along LIVE vial state for the service instead. Most-advanced
-    # (not newest) wins: with multiple seeded sibling vials (P-0160 class)
-    # the idle later-seeded vial must not mask the anchor's progress. Dead
-    # rows (retested / retracted / rejected) are not live work — a
-    # placeholder backed only by those keeps 'unassigned' (outstanding
-    # again). Overlay mutates the serialized pydantic rows, never the ORM
-    # rows — this is a read path and must not flush state changes.
-    ordered_service_ids = {
-        r.analysis_service_id for r in rows if r.provenance == PROVENANCE_ORDERED
-    }
-    if ordered_service_ids:
-        from models import LimsSubSample
-
-        vial_rows = db.execute(
-            select(LimsAnalysis)
-            .join(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
-            .where(
-                LimsSubSample.parent_sample_pk == parent.id,
-                LimsAnalysis.analysis_service_id.in_(ordered_service_ids),
-                LimsAnalysis.retested.is_(False),
-                LimsAnalysis.review_state.notin_(("retracted", "rejected")),
-            )
-        ).scalars().all()
-        _PROGRESS_RANK = {
-            "unassigned": 0, "assigned": 1, "to_be_verified": 2, "verified": 3,
-        }
-        live_state_by_service: dict[int, str] = {}
-        for vr in vial_rows:
-            rank = _PROGRESS_RANK.get(vr.review_state, -1)
-            best = _PROGRESS_RANK.get(
-                live_state_by_service.get(vr.analysis_service_id, ""), -1
-            )
-            if rank > best:
-                live_state_by_service[vr.analysis_service_id] = vr.review_state
-        for shaped_row in shaped:
-            if (shaped_row.provenance == PROVENANCE_ORDERED
-                    and shaped_row.analysis_service_id in live_state_by_service):
-                shaped_row.review_state = live_state_by_service[shaped_row.analysis_service_id]
-
+    _overlay_live_vial_state(db, parent.id, shaped)
     return shaped
 
 
@@ -1459,6 +1471,8 @@ def list_parent_analyses_senaite_shape(
     if parent is None:
         return []
 
+    from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
+
     rows = list(db.execute(
         select(LimsAnalysis).where(
             LimsAnalysis.lims_sample_pk == parent.id,
@@ -1470,6 +1484,11 @@ def list_parent_analyses_senaite_shape(
                     LimsAnalysis.review_state != "retracted",
                 ),
                 LimsAnalysis.provenance == "shadow",
+                # Pre-promotion native demand (parent_placeholders.py): the
+                # mk1 main table is where a paid-for native test must be
+                # visible before any promotion exists — the separate
+                # transitional card no longer renders in mk1 read mode.
+                LimsAnalysis.provenance == PROVENANCE_ORDERED,
             ),
         ).order_by(LimsAnalysis.keyword, LimsAnalysis.id)
     ).scalars().all())
@@ -1480,14 +1499,33 @@ def list_parent_analyses_senaite_shape(
     # In-memory filter on the already-fetched rows (no per-row queries);
     # tier_of is pure. Shadow rows bypass: parent-tier by construction,
     # and their sentinel review_state would misclassify under tier_of.
+    # Ordered placeholders bypass for the same reason: their permanent
+    # 'unassigned' would misclassify as TIER_VIAL, but they are demand
+    # markers, not variance mid-run rows — the guard's target class is
+    # provenance='canonical' only.
     rows = [
         r for r in rows
-        if r.provenance == "shadow"
+        if r.provenance in ("shadow", PROVENANCE_ORDERED)
         or tier_of(
             lims_sample_pk=r.lims_sample_pk,
             lims_sub_sample_pk=r.lims_sub_sample_pk,
             review_state=r.review_state,
         ) == TIER_PARENT
+    ]
+
+    # Canonical-wins placeholder suppression (mirrors the native card feed):
+    # a service with a LIVE canonical row has been delivered — its
+    # placeholder drops. Keyed by service id (placeholders always share the
+    # service row they were minted from). Retracted canonicals are already
+    # excluded from `rows` by the query, so a thrown-away result correctly
+    # leaves the placeholder visible: the test is outstanding again.
+    delivered_service_ids = {
+        r.analysis_service_id for r in rows if r.provenance == "canonical"
+    }
+    rows = [
+        r for r in rows
+        if r.provenance != PROVENANCE_ORDERED
+        or r.analysis_service_id not in delivered_service_ids
     ]
 
     # Cross-provenance keyword collapse (UAT catch, P-0143 promote flow):
@@ -1507,7 +1545,9 @@ def list_parent_analyses_senaite_shape(
         if r.provenance == "canonical" or r.keyword not in canonical_keywords
     ]
 
-    return _serialize_senaite_shape_rows(db, rows)
+    shaped = _serialize_senaite_shape_rows(db, rows)
+    _overlay_live_vial_state(db, parent.id, shaped)
+    return shaped
 
 
 def list_variance_verifications_for_parent(

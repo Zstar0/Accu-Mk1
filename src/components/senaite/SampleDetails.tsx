@@ -3403,7 +3403,6 @@ export function NativeParentAnalysesCard({
   promotionsByKeyword,
   vialAssignmentByKeyword,
   onParentDataStale,
-  placeholdersOnly = false,
 }: {
   sampleId: string | null | undefined
   isParentPage: boolean
@@ -3411,12 +3410,6 @@ export function NativeParentAnalysesCard({
   promotionsByKeyword: Map<string, ParentPromotionInfo>
   vialAssignmentByKeyword?: Map<string, VialAssignment>
   onParentDataStale?: () => void
-  /** mk1 read mode: the main analyses table owns the canonical rows there,
-   * so the card shows ONLY the 'ordered' placeholders — pre-promotion
-   * native work the main table structurally excludes. Overlap is
-   * impossible by construction: a promoted service has a live canonical
-   * row, which suppresses its placeholder server-side. */
-  placeholdersOnly?: boolean
 }) {
   const queryClient = useQueryClient()
   const { data: rows } = useQuery({
@@ -3425,10 +3418,7 @@ export function NativeParentAnalysesCard({
     enabled: isParentPage && !!sampleId,
     staleTime: 30_000,
   })
-  const allRows = rows ?? []
-  const analyses = placeholdersOnly
-    ? allRows.filter(a => a.provenance === 'ordered')
-    : allRows
+  const analyses = rows ?? []
   // Same code path the Vials Quick Look uses: SLA needs a lookup whose
   // analyses are THESE rows (the page's map is keyed off the SENAITE rows,
   // which never contain native keywords) and a non-null date_received.
@@ -6803,19 +6793,17 @@ export function SampleDetails() {
 
       {/* Native (Accu-Mk1) parent analyses — separate read-only card, not a
           merge into the SENAITE-sourced table above. Renders nothing when
-          it has no rows to show. In senaite read mode it carries the full
-          native feed (the main table is SENAITE-sourced; native rows have
-          no AR line to appear in). In mk1 read mode the main table already
-          lists every canonical row natively — rendering those here too
-          duplicated them (Handler UAT, P-0161) — so the card narrows to
-          the 'ordered' placeholders: pre-promotion native work (e.g.
-          heavy metals awaiting the bench) that the main table's parity
-          guard structurally excludes (Handler report, P-0160). */}
-      {parentSampleId === null && data.sample_id && (
+          the parent has no origin='mk1' results. ONLY in senaite read mode:
+          there the main table is SENAITE-sourced and native rows have no AR
+          line to appear in, so this card is what surfaces them. In mk1 read
+          mode the main table IS the native surface — it lists canonical
+          rows AND the pre-promotion 'ordered' placeholders server-side
+          (list_parent_analyses_senaite_shape), so the card would only
+          duplicate it (Handler UAT, P-0161 dupes / P-0160 placeholders). */}
+      {parentSampleId === null && data.sample_id && effectiveReadSource !== 'mk1' && (
         <NativeParentAnalysesCard
           sampleId={data.sample_id}
           isParentPage={parentSampleId === null}
-          placeholdersOnly={effectiveReadSource === 'mk1'}
           lookup={data}
           promotionsByKeyword={promotionsByKeyword}
           vialAssignmentByKeyword={nativeVialAssignmentByKeyword}

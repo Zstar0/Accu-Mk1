@@ -416,3 +416,82 @@ def test_serialized_row_carries_its_own_analysis_service_id(db_session):
     assert by_uid[f"mk1:{row_a.id}"].analysis_service_id == svc_a.id
     assert by_uid[f"mk1:{row_b.id}"].analysis_service_id == svc_b.id
     assert by_uid[f"mk1:{row_a.id}"].analysis_service_id != svc_b.id
+
+
+# ── mk1 read mode absorbs pre-promotion placeholders (rework of the card) ──
+# The AR-shaped parent listing is the mk1 main table; 'ordered' placeholders
+# (registration-time demand, lims_analyses/parent_placeholders.py) belong IN
+# it so pre-promotion native work (heavy metals awaiting the bench) is
+# visible without a second card, and rows change STATE in place on
+# promotion instead of changing address.
+
+
+def test_ordered_placeholder_appears_in_parent_listing(db_session):
+    from lims_analyses.service import list_parent_analyses_senaite_shape
+
+    parent = _mk_parent(db_session)
+    svc = _mk_service(db_session, "LEAD-PPM", "Lead")
+    _mk_parent_analysis(db_session, parent, svc,
+                        provenance="ordered", review_state="unassigned")
+    rows = list_parent_analyses_senaite_shape(db_session, parent.sample_id)
+    assert [(r.keyword, r.provenance, r.review_state) for r in rows] == [
+        ("LEAD-PPM", "ordered", "unassigned")
+    ]
+
+
+def test_live_canonical_suppresses_its_placeholder(db_session):
+    from lims_analyses.service import list_parent_analyses_senaite_shape
+
+    parent = _mk_parent(db_session)
+    svc = _mk_service(db_session, "LEAD-PPM", "Lead")
+    _mk_parent_analysis(db_session, parent, svc,
+                        provenance="ordered", review_state="unassigned")
+    _mk_parent_analysis(db_session, parent, svc,
+                        provenance="canonical", review_state="verified")
+    rows = list_parent_analyses_senaite_shape(db_session, parent.sample_id)
+    assert [(r.provenance, r.review_state) for r in rows] == [
+        ("canonical", "verified")
+    ]
+
+
+def test_retracted_canonical_does_not_suppress_placeholder(db_session):
+    """A retracted canonical row is excluded from this listing outright
+    (existing contract) AND must not discharge the placeholder — the result
+    was thrown away, so the paid-for test is outstanding again."""
+    from lims_analyses.service import list_parent_analyses_senaite_shape
+
+    parent = _mk_parent(db_session)
+    svc = _mk_service(db_session, "LEAD-PPM", "Lead")
+    _mk_parent_analysis(db_session, parent, svc,
+                        provenance="ordered", review_state="unassigned")
+    _mk_parent_analysis(db_session, parent, svc,
+                        provenance="canonical", review_state="retracted")
+    rows = list_parent_analyses_senaite_shape(db_session, parent.sample_id)
+    assert [(r.provenance, r.review_state) for r in rows] == [
+        ("ordered", "unassigned")
+    ]
+
+
+def test_placeholder_reports_live_vial_state_in_parent_listing(db_session):
+    from lims_analyses.service import list_parent_analyses_senaite_shape
+
+    parent = _mk_parent(db_session)
+    svc = _mk_service(db_session, "LEAD-PPM", "Lead")
+    _mk_parent_analysis(db_session, parent, svc,
+                        provenance="ordered", review_state="unassigned")
+    vial = LimsSubSample(
+        parent_sample_pk=parent.id, external_lims_uid="V-1",
+        sample_id=f"{parent.sample_id}-S02", vial_sequence=2,
+    )
+    db_session.add(vial)
+    db_session.flush()
+    db_session.add(LimsAnalysis(
+        lims_sample_pk=None, lims_sub_sample_pk=vial.id,
+        analysis_service_id=svc.id, keyword=svc.keyword, title=svc.title,
+        provenance="canonical", review_state="assigned", retested=False,
+    ))
+    db_session.flush()
+    rows = list_parent_analyses_senaite_shape(db_session, parent.sample_id)
+    assert [(r.provenance, r.review_state) for r in rows] == [
+        ("ordered", "assigned")
+    ]
