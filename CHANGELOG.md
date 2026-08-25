@@ -1,5 +1,36 @@
 # Changelog
 
+## v1.9.1 — 2026-08-25
+
+### Added
+
+- **Profile sections on the mk1 analyses table** — rows group under their
+  analysis profile with section headers. Resolution: the sample's frozen
+  catalog snapshot first (service-id membership, snapshot order), then a
+  display-side keyword classifier for the SENAITE-era families (Core
+  HPLC / Endotoxin / Sterility / Bac Water — the legacy profiles'
+  membership rows stay empty; they are load-bearing elsewhere), else the
+  row renders ungrouped with no header. Labels resolve live from the
+  profile catalog; an explicit column sort flattens the sections.
+- **Pre-promotion native work is visible on the parent** — the mk1-mode
+  main analyses table absorbs the registration-time 'ordered'
+  placeholders (heavy metals awaiting the bench, etc.), each reporting
+  the furthest-along live vial state; on promotion the row is replaced
+  in place by the canonical result. The transitional "Accu-Mk1 Analyses"
+  card is senaite-read-mode-only again.
+- **Total Declared Qty is editable** on the sample-details Analytes card
+  (dual-writes SENAITE + registry; the row renders even when empty so a
+  missing total can be set).
+
+### Fixed
+
+- **COA Alias picker survives mk1 read mode** — the registry read path
+  now re-derives the analyte↔peptide fuzzy match (and the matched
+  abbreviation HPLC slot-matching keys on); this was the last blocker
+  for flipping the Sample details data source to Accu-Mk1.
+- **Replace-analyte verifies SENAITE's identity add** by re-reading the
+  AR instead of trusting the silent 200.
+
 ## v1.9.0 — 2026-08-25
 
 ### Added
