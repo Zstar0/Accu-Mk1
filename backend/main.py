@@ -13610,18 +13610,26 @@ async def list_sample_preps_endpoint(
     limit: int = 100,
     offset: int = 0,
     exclude_statuses: Optional[str] = None,
+    statuses: Optional[str] = None,
     _current_user=Depends(get_current_user),
 ):
     """List sample preps from the integration DB (newest first).
 
     exclude_statuses: comma-separated status list to filter out server-side,
     so the LIMIT window applies AFTER status filtering (not before, which
-    hid older active preps from the Sample Preps page)."""
+    hid older active preps from the Sample Preps page).
+    statuses: comma-separated include list — the inverse filter, so Analysis
+    History can page through ONLY completed preps."""
     from mk1_db import ensure_sample_preps_table, list_sample_preps
 
     excluded = (
         [s for s in (part.strip() for part in exclude_statuses.split(",")) if s]
         if exclude_statuses
+        else None
+    )
+    included = (
+        [s for s in (part.strip() for part in statuses.split(",")) if s]
+        if statuses
         else None
     )
     try:
@@ -13632,6 +13640,7 @@ async def list_sample_preps_endpoint(
             limit=limit,
             offset=offset,
             exclude_statuses=excluded,
+            statuses=included,
         )
         for row in rows:
             for k in ("created_at", "updated_at"):
