@@ -6089,23 +6089,45 @@ export function SampleDetails() {
                     No analytes defined
                   </p>
                 )}
-                {data.declared_weight_mg != null && (
-                  <div className="mt-3 pt-3 border-t border-border">
-                    <DataRow
-                      label="Total Declared Qty"
-                      value={
+                <div className="mt-3 pt-3 border-t border-border">
+                  {/* Always rendered (no null gate) so a missing total can be
+                      set — the pre-edit DataRow hid the row entirely when
+                      declared_weight_mg was null. Total stays independent of
+                      the per-analyte quantities (no auto-sum either way). */}
+                  <EditableDataRow
+                    label="Total Declared Qty"
+                    value={data.declared_weight_mg}
+                    senaiteField="DeclaredTotalQuantity"
+                    sampleUid={data.sample_uid ?? ''}
+                    type="number"
+                    mono
+                    suffix="mg"
+                    formatDisplay={v =>
+                      v != null && v !== '' ? (
                         <span className="font-mono text-amber-600 dark:text-amber-400 font-semibold">
-                          {data.declared_weight_mg} mg
+                          {v} mg
                         </span>
-                      }
-                      emphasis
-                      sourceGlyph={fieldGlyph(
-                        'declared_weight_mg',
-                        'Total Declared Qty'
-                      )}
-                    />
-                  </div>
-                )}
+                      ) : (
+                        '—'
+                      )
+                    }
+                    onSaved={v =>
+                      setData(prev =>
+                        prev
+                          ? {
+                              ...prev,
+                              declared_weight_mg:
+                                v != null && v !== '' ? Number(v) : null,
+                            }
+                          : prev
+                      )
+                    }
+                    sourceGlyph={fieldGlyph(
+                      'declared_weight_mg',
+                      'Total Declared Qty'
+                    )}
+                  />
+                </div>
               </SectionHeader>
             </Card>
           </div>
