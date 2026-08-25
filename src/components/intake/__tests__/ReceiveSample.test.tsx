@@ -29,8 +29,9 @@ vi.mock('@/lib/api', async importOriginal => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
-    getSenaiteStatus: vi.fn().mockResolvedValue({ enabled: true }),
-    getSenaiteSamples: vi.fn().mockResolvedValue({
+    // Native inbox (receive-page SENAITE flip): the due list reads the
+    // registry, not SENAITE — no status gate to mock anymore.
+    getRegistrySamples: vi.fn().mockResolvedValue({
       items: [
         {
           uid: 'u1',

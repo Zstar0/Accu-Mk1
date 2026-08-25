@@ -426,7 +426,13 @@ def _mock_receive_flow(*, initial_state="sample_due", final_state="sample_receiv
     return p
 
 
-def test_receive_hook_writes_transition(db, seed_sample):
+def test_receive_writes_transition_native_first(db, seed_sample):
+    """Native-first (receive flip): the transition is written from the NATIVE
+    phase — before, and independent of, the SENAITE tee. seed_sample's
+    'verified' status would read as already-received now that the native
+    status gates the transition, so start it at sample_due."""
+    seed_sample.status = "sample_due"
+    db.commit()
     proxy = _mock_receive_flow()
     try:
         with patch.object(main, "SENAITE_URL", "http://senaite.test"):
@@ -450,9 +456,12 @@ def test_receive_hook_writes_transition(db, seed_sample):
     assert row.actor_user_id == 1
 
 
-def test_receive_hook_skipped_when_transition_not_verified(db, seed_sample):
-    """The post-transition verify re-read does NOT show sample_received ->
-    the endpoint reports failure and the transition-log hook must not fire."""
+def test_senaite_verify_failure_warns_native_transition_stands(db, seed_sample):
+    """INVERTED by the native-first flip: a SENAITE tee that doesn't take
+    effect used to fail the receive and suppress the transition; now the
+    native transition is authoritative and the tee failure is a warning."""
+    seed_sample.status = "sample_due"
+    db.commit()
     proxy = _mock_receive_flow(final_state="sample_due")
     try:
         with patch.object(main, "SENAITE_URL", "http://senaite.test"):
@@ -464,16 +473,24 @@ def test_receive_hook_skipped_when_transition_not_verified(db, seed_sample):
         proxy.stop()
 
     assert r.status_code == 200
-    assert r.json()["success"] is False
+    body = r.json()
+    assert body["success"] is True
+    assert any(s.startswith("senaite_tee_failed")
+               for s in body["senaite_response"]["steps_done"])
 
     row = db.query(LimsSampleTransition).filter_by(
         lims_sample_pk=seed_sample.id
     ).one_or_none()
-    assert row is None
+    assert row is not None and row.to_status == "sample_received"
 
 
-def test_receive_hook_never_fails_on_recorder_exception(db, seed_sample, caplog):
+def test_recorder_exception_fails_checkin(db, seed_sample, caplog):
+    """INVERTED by the native-first flip: the recorder used to be a
+    best-effort background hook; now the native transition IS the check-in,
+    so a recorder failure fails the whole thing atomically."""
     import logging
+    seed_sample.status = "sample_due"
+    db.commit()
     proxy = _mock_receive_flow()
     try:
         with patch.object(main, "SENAITE_URL", "http://senaite.test"), \
@@ -489,14 +506,16 @@ def test_receive_hook_never_fails_on_recorder_exception(db, seed_sample, caplog)
 
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["success"] is True
-    assert "received" in body["senaite_response"]["steps_done"]
-    assert any("workflow.sample_log_failed" in rec.message for rec in caplog.records)
+    assert body["success"] is False
+    assert any("receive_native.failed" in rec.message for rec in caplog.records)
 
+    db.expire_all()
     row = db.query(LimsSampleTransition).filter_by(
         lims_sample_pk=seed_sample.id
     ).one_or_none()
     assert row is None
+    assert db.query(LimsSample).filter_by(
+        sample_id=seed_sample.sample_id).one().status == "sample_due"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -570,11 +589,12 @@ def test_reconcile_log_failure_does_not_break_refresh(db, seed_sample, caplog):
     assert row is None
 
 
-def test_receive_hook_heals_registry_status(db, seed_sample):
-    """RC1 (2026-07-14 inbox-desync fix): the receive hook must ALSO heal
-    lims_samples.status — the transition log alone leaves the registry stale
-    AND suppresses the event-sync heal via the dup guard. seed_sample starts
-    at 'verified' so the write is observable."""
+def test_receive_heals_registry_status_from_sample_due(db, seed_sample):
+    """RC1 lineage (2026-07-14 inbox-desync fix), re-pinned for native-first:
+    receiving still heals lims_samples.status to sample_received — from the
+    native phase now, not a post-SENAITE hook."""
+    seed_sample.status = "sample_due"
+    db.commit()
     proxy = _mock_receive_flow()
     try:
         with patch.object(main, "SENAITE_URL", "http://senaite.test"):
@@ -590,6 +610,32 @@ def test_receive_hook_heals_registry_status(db, seed_sample):
     db.expire_all()
     row = db.query(LimsSample).filter_by(sample_id=seed_sample.sample_id).one()
     assert row.status == "sample_received"
+
+
+def test_already_past_received_native_status_wins(db, seed_sample):
+    """Native-first inversion of the old force-heal: a native status beyond
+    received ('verified' here) is authoritative — the receive reports
+    'already', never downgrades the registry, and writes no transition."""
+    assert seed_sample.status == "verified"
+    proxy = _mock_receive_flow(initial_state="sample_received")
+    try:
+        with patch.object(main, "SENAITE_URL", "http://senaite.test"):
+            r = _client_as_user().post(
+                "/wizard/senaite/receive-sample",
+                json={"sample_uid": "UID-RECV-ALREADY", "sample_id": seed_sample.sample_id},
+            )
+    finally:
+        proxy.stop()
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["success"] is True
+    assert "already" in body["message"].lower()
+    db.expire_all()
+    row = db.query(LimsSample).filter_by(sample_id=seed_sample.sample_id).one()
+    assert row.status == "verified"
+    assert db.query(LimsSampleTransition).filter_by(
+        lims_sample_pk=seed_sample.id).one_or_none() is None
 
 
 # ═══════ receive stamps date_received natively (read-flip UAT catch) ═══════

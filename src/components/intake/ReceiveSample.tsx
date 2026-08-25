@@ -32,8 +32,7 @@ import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
 import type { ParentInfo } from '@/components/intake/ReceiveWizard/useReceiveWizard'
 import {
   getExplorerOrders,
-  getSenaiteSamples,
-  getSenaiteStatus,
+  getRegistrySamples,
   getSetting,
   listSubSamples,
   type SenaiteSample,
@@ -356,15 +355,15 @@ export function ReceiveSample() {
     setDueSamplesLoading(true)
     setDueSamplesError(null)
     try {
-      const status = await getSenaiteStatus()
-      setDueSamplesConnected(status.enabled)
-      if (status.enabled) {
-        // 200 (not the default 50) so a large order's samples aren't silently
-        // truncated out of the By-Order list — matches ActiveBoxesPage's page
-        // size for its order-session lookups.
-        const result = await getSenaiteSamples('sample_due', 200, 0)
-        setDueSamples(result.items)
-      }
+      // Native inbox (receive-page SENAITE flip): the due list reads the
+      // lims_samples registry — same SenaiteSample shape, no SENAITE
+      // round-trip and no connectivity gate. 200 (not the default 50) so a
+      // large order's samples aren't silently truncated out of the By-Order
+      // list — matches ActiveBoxesPage's page size for its order-session
+      // lookups.
+      const result = await getRegistrySamples('sample_due', 200, 0)
+      setDueSamples(result.items)
+      setDueSamplesConnected(true)
     } catch (e) {
       setDueSamplesConnected(false)
       setDueSamplesError(
