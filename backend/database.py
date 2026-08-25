@@ -1606,7 +1606,9 @@ def _run_migrations():
                 (rule_kind = 'range' AND equals_value IS NULL
                  AND (min_value IS NOT NULL OR max_value IS NOT NULL)) OR
                 (rule_kind = 'equals' AND equals_value IS NOT NULL
-                 AND min_value IS NULL AND max_value IS NULL)
+                 AND min_value IS NULL AND max_value IS NULL) OR
+                (rule_kind = 'informational' AND equals_value IS NULL
+                 AND min_value IS NULL AND max_value IS NULL AND loq IS NULL)
             ),
             CONSTRAINT ck_analysis_service_specs_tier CHECK (
                 NOT (matrix IS NOT NULL AND peptide_id IS NOT NULL)
@@ -1770,6 +1772,36 @@ def _run_migrations():
         "WHERE active AND matrix IS NULL AND peptide_id IS NULL",
         # --- COA display fields (spec 2026-08-16): all nullable, no backfill ---
         "ALTER TABLE analysis_service_specs ADD COLUMN IF NOT EXISTS loq NUMERIC",
+        # Report-only specs (2026-08-22): widen the rule-shape CHECK with the
+        # 'informational' arm ("report as measured", no verdict). WIDEN-ONLY
+        # guarded form of the union-preserve idiom (LAST-BOOT-WINS class, see
+        # :1399-1413): the DROP/re-ADD pair runs ONLY while the live
+        # definition lacks 'informational', so it fires exactly once per
+        # database, and an older image booting afterwards (no such entry in
+        # its list) can never re-narrow the constraint. No existing row can
+        # violate the widened shape, so the re-add cannot join the
+        # review_state skip-forever class. Placed AFTER the loq ALTER above
+        # on purpose — the new arm references the loq column.
+        """DO $$ BEGIN
+            IF EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'ck_analysis_service_specs_rule_shape'
+                  AND conrelid = 'analysis_service_specs'::regclass
+                  AND pg_get_constraintdef(oid) NOT LIKE '%informational%'
+            ) THEN
+                ALTER TABLE analysis_service_specs
+                    DROP CONSTRAINT ck_analysis_service_specs_rule_shape;
+                ALTER TABLE analysis_service_specs
+                    ADD CONSTRAINT ck_analysis_service_specs_rule_shape CHECK (
+                        (rule_kind = 'range' AND equals_value IS NULL
+                         AND (min_value IS NOT NULL OR max_value IS NOT NULL)) OR
+                        (rule_kind = 'equals' AND equals_value IS NOT NULL
+                         AND min_value IS NULL AND max_value IS NULL) OR
+                        (rule_kind = 'informational' AND equals_value IS NULL
+                         AND min_value IS NULL AND max_value IS NULL AND loq IS NULL)
+                    );
+            END IF;
+        END $$""",
         "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_basis_note VARCHAR(200)",
         "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_method_text TEXT",
         "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS coa_prep_text TEXT",

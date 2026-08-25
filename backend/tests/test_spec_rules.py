@@ -300,3 +300,29 @@ def test_blank_equals_value_aborts():
     with pytest.raises(SpecRuleError):
         evaluate(SimpleNamespace(rule_kind="equals", equals_value="   ",
                                  min_value=None, max_value=None), "anything")
+
+
+# ── report-only specs ("as measured", 2026-08-22) ────────────────────────────
+# NOT added to PARITY_CASES: informational rows never reach the old engine —
+# a wire dict spec bypasses COABuilder's _verdict entirely, so there is no
+# old-engine column to assert. New-engine-only by construction.
+
+def test_informational_returns_none_never_aborts():
+    spec = SimpleNamespace(rule_kind="informational", equals_value=None,
+                           min_value=None, max_value=None)
+    assert evaluate(spec, "12.3") is None
+    assert evaluate(spec, "trace") is None   # non-numeric: no parse, no abort
+    assert evaluate(spec, "") is None
+
+
+def test_informational_resolves_by_tier_like_any_row(db_session):
+    svc = _mk_service(db_session, keyword="MOISTURE-KF")
+    pep = _mk_peptide(db_session, "BPC157")
+    _mk_spec(db_session, svc, rule_kind="informational", max_value=None)  # wildcard
+    _mk_spec(db_session, svc, rule_kind="range", max_value=Decimal("5"),
+             peptide_id=pep.id)
+    # Peptide anchor present: the peptide-tier RANGE row wins (a verdict can
+    # override a wildcard informational per R2)...
+    assert resolve_spec(db_session, svc.id, "Peptide", peptide_id=pep.id).rule_kind == "range"
+    # ...and without an anchor the wildcard informational is the answer.
+    assert resolve_spec(db_session, svc.id, "Peptide").rule_kind == "informational"

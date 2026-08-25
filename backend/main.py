@@ -3819,7 +3819,7 @@ class ServiceSpecResponse(BaseModel):
 class ServiceSpecCreate(BaseModel):
     matrix: Optional[str] = None
     peptide_id: Optional[int] = None
-    rule_kind: Literal["range", "equals"]
+    rule_kind: Literal["range", "equals", "informational"]
     min_value: Optional[str] = None
     max_value: Optional[str] = None
     equals_value: Optional[str] = None
@@ -3829,7 +3829,7 @@ class ServiceSpecCreate(BaseModel):
 
 
 class ServiceSpecPatch(BaseModel):
-    rule_kind: Optional[Literal["range", "equals"]] = None
+    rule_kind: Optional[Literal["range", "equals", "informational"]] = None
     min_value: Optional[str] = None
     max_value: Optional[str] = None
     equals_value: Optional[str] = None
@@ -3840,7 +3840,7 @@ class ServiceSpecPatch(BaseModel):
 
 
 def _validate_spec_shape(*, rule_kind, min_value, max_value, equals_value,
-                         matrix, peptide_id, db):
+                         matrix, peptide_id, db, loq=None):
     if matrix is not None and peptide_id is not None:
         raise HTTPException(422, "a spec row is peptide-tier OR matrix-tier, not both")
     if matrix is not None and matrix not in _SPEC_MATRICES:
@@ -3850,6 +3850,18 @@ def _validate_spec_shape(*, rule_kind, min_value, max_value, equals_value,
     if rule_kind == "range":
         if equals_value is not None or (min_value is None and max_value is None):
             raise HTTPException(422, "range rule needs min and/or max, and no equals_value")
+    elif rule_kind == "informational":
+        # Report-only spec (2026-08-22, R3): bounds/expected/LOQ are REJECTED
+        # loudly, never silently nulled — a value the lab typed and lost is
+        # exactly the confusion this arm exists to prevent. LOQ is checked
+        # here (and only here) because range rows legitimately carry one and
+        # equals rows tolerate a stray one at write time (wire never
+        # publishes it for them).
+        if (equals_value is not None or min_value is not None
+                or max_value is not None or loq is not None):
+            raise HTTPException(
+                422, "informational rule reports as measured — it takes no "
+                     "min/max, equals_value, or loq")
     else:  # equals
         if equals_value is None or min_value is not None or max_value is not None:
             raise HTTPException(422, "equals rule needs equals_value only")
@@ -3964,7 +3976,8 @@ def create_service_spec(service_id: int, req: ServiceSpecCreate,
         raise HTTPException(404, "analysis service not found")
     _validate_spec_shape(rule_kind=req.rule_kind, min_value=req.min_value,
                          max_value=req.max_value, equals_value=req.equals_value,
-                         matrix=req.matrix, peptide_id=req.peptide_id, db=db)
+                         matrix=req.matrix, peptide_id=req.peptide_id, db=db,
+                         loq=req.loq)
     spec = AnalysisServiceSpec(
         analysis_service_id=service_id, matrix=req.matrix,
         peptide_id=req.peptide_id, rule_kind=req.rule_kind,
@@ -4014,6 +4027,8 @@ def patch_service_spec(spec_id: int, req: ServiceSpecPatch,
         "max_value": fields.get("max_value",
                                 str(spec.max_value) if spec.max_value is not None else None),
         "equals_value": fields.get("equals_value", spec.equals_value),
+        "loq": fields.get("loq",
+                          str(spec.loq) if spec.loq is not None else None),
     }
     _validate_spec_shape(matrix=spec.matrix, peptide_id=spec.peptide_id, db=db, **merged)
     # Parse every convertible field into a plain local dict BEFORE any
