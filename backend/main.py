@@ -10790,6 +10790,64 @@ class ReplaceAnalyteBody(BaseModel):
     force: bool = False
 
 
+async def _swap_parent_identity_service(client, sample_id, old_id_kw, new_id_svc, logger):
+    """Step 5 of Replace: swap the parent AR identity service via the IS proxy.
+
+    Best-effort per-op (a SENAITE failure must never strand the Mk1 re-mirror),
+    but the ADD is verified by re-reading the AR's analyses: the IS add is a
+    SENAITE update-Analyses call, which silently ignores an unknown service uid
+    and returns 2xx (PB-0410 / PB-0441, 2026-08-25 — stale senaite_uid on a
+    duplicate service row). identity["added"] is set only when the keyword is
+    actually present on the AR afterwards; a swallowed or failed add lands in
+    identity["add_failed"] so the caller/FE can surface it instead of the
+    shadow mirror recording an analysis SENAITE never gained.
+    """
+    identity = {"removed": None, "added": None}
+    headers = {"X-API-Key": INTEGRATION_SERVICE_API_KEY}
+    if old_id_kw:
+        try:
+            r = await client.delete(
+                f"{INTEGRATION_SERVICE_URL}/explorer/samples/{sample_id}/analyses/{old_id_kw}",
+                headers=headers,
+            )
+            r.raise_for_status()
+            identity["removed"] = old_id_kw
+        except Exception as _e:
+            logger.warning("replace_analyte: remove %s failed: %s", old_id_kw, _e)
+    if new_id_svc.senaite_uid:
+        try:
+            r = await client.post(
+                f"{INTEGRATION_SERVICE_URL}/explorer/samples/{sample_id}/analyses",
+                json={"service_uid": new_id_svc.senaite_uid},
+                headers=headers,
+            )
+            r.raise_for_status()
+            verify = await client.get(
+                f"{INTEGRATION_SERVICE_URL}/explorer/samples/{sample_id}/analyses",
+                headers=headers,
+            )
+            verify.raise_for_status()
+            if any(a.get("keyword") == new_id_svc.keyword for a in verify.json()):
+                identity["added"] = new_id_svc.keyword
+            else:
+                identity["add_failed"] = new_id_svc.keyword
+                logger.warning(
+                    "replace_analyte: add %s returned 2xx but the analysis is NOT "
+                    "on %s — stale senaite_uid on the service row?",
+                    new_id_svc.keyword, sample_id,
+                )
+        except Exception as _e:
+            identity["add_failed"] = new_id_svc.keyword
+            logger.warning("replace_analyte: add %s failed: %s", new_id_svc.keyword, _e)
+    else:
+        identity["add_failed"] = new_id_svc.keyword
+        logger.warning(
+            "replace_analyte: %s has no senaite_uid — SENAITE add skipped",
+            new_id_svc.keyword,
+        )
+    return identity
+
+
 @app.post("/explorer/samples/{sample_id}/analytes/{slot}/replace")
 async def replace_analyte(
     sample_id: str,
@@ -10807,8 +10865,9 @@ async def replace_analyte(
       3. write Analyte{slot}Peptide = new identity title (SENAITE AR)
       4. reset the slot's COA display alias
       5. swap the parent AR identity service (remove ID_old, add ID_new) via
-         the Integration-Service proxy — best-effort, no Mk1 cascade (the
-         orchestrator is the sole authority on vial rows)
+         the Integration-Service proxy — best-effort but the add is VERIFIED
+         by re-reading the AR (SENAITE 2xx's an unknown uid without applying);
+         no Mk1 cascade (the orchestrator is the sole authority on vial rows)
       6. re-mirror the slot across vials (replace_analyte_slot)
     """
     from sqlalchemy import select as _select
@@ -10837,11 +10896,18 @@ async def replace_analyte(
             "in Analysis Services first.",
         )
 
+    # senaite_uid-bearing rows first, newest id as the tiebreak: a duplicate
+    # service row with a stale/NULL uid (the March SENAITE service-recreation
+    # class, PB-0410) must never win the pick over its live twin.
     new_id_svc = db.execute(
         _select(AnalysisService).where(
             AnalysisService.peptide_id == body.new_peptide_id,
             AnalysisService.keyword.like("ID%"),
-        ).order_by(AnalysisService.keyword)
+        ).order_by(
+            AnalysisService.keyword,
+            AnalysisService.senaite_uid.is_(None),
+            AnalysisService.id.desc(),
+        )
     ).scalars().first()
     old_id_kw = db.execute(
         _select(AnalysisService.keyword).where(
@@ -10936,29 +11002,11 @@ async def replace_analyte(
                             sample_id, slot, _alias_err)
 
     # ── 5. swap the parent AR identity service (direct IS proxy) ──────────────
-    identity = {"removed": None, "added": None}
+    # Verified add — see _swap_parent_identity_service (2xx alone is not proof).
     async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=30.0) as client:
-        if old_id_kw:
-            try:
-                r = await client.delete(
-                    f"{INTEGRATION_SERVICE_URL}/explorer/samples/{sample_id}/analyses/{old_id_kw}",
-                    headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY},
-                )
-                r.raise_for_status()
-                identity["removed"] = old_id_kw
-            except Exception as _e:
-                _rep_logger.warning("replace_analyte: remove %s failed: %s", old_id_kw, _e)
-        if new_id_svc.senaite_uid:
-            try:
-                r = await client.post(
-                    f"{INTEGRATION_SERVICE_URL}/explorer/samples/{sample_id}/analyses",
-                    json={"service_uid": new_id_svc.senaite_uid},
-                    headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY},
-                )
-                r.raise_for_status()
-                identity["added"] = new_id_svc.keyword
-            except Exception as _e:
-                _rep_logger.warning("replace_analyte: add %s failed: %s", new_id_svc.keyword, _e)
+        identity = await _swap_parent_identity_service(
+            client, sample_id, old_id_kw, new_id_svc, _rep_logger,
+        )
 
     # ── 5b. parent analysis shadow mirror (best-effort) ───────────────────────
     # Mirror the OLD identity keyword as rejected and the NEW as unassigned —

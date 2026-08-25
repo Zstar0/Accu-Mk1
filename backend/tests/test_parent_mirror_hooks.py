@@ -853,7 +853,14 @@ def test_replace_analyte_mirrors_old_rejected_new_unassigned(
         )
     ).scalars().first()
 
-    proxy = _mock_is_proxy(post_json={"success": True}, delete_json={"success": True})
+    # get_json feeds step 5's add verification: the endpoint re-reads the AR's
+    # analyses and only mirrors the NEW identity when the keyword is actually
+    # present (a SENAITE silent-200 no-op add must not be mirrored).
+    proxy = _mock_is_proxy(
+        post_json={"success": True},
+        delete_json={"success": True},
+        get_json=[{"keyword": new_id_svc.keyword}],
+    )
     try:
         with patch.object(main, "SENAITE_URL", "http://senaite.test"), \
              patch.object(
