@@ -2483,8 +2483,24 @@ export interface AnalysisServiceRecord {
   local_overrides: string[] | null
   department_id: number | null
   default_method_id: number | null
+  /** Count of method_services links (curated coverage). NOT `methods.length` —
+   * that JSON column is SENAITE clone-time provenance, always empty on
+   * Mk1-native services. */
+  linked_method_count?: number
   created_at: string
   updated_at: string
+}
+
+/** A method_services link seen from the service side — reverse of the
+ * method panel's Covered Services list. */
+export interface ServiceMethodLink {
+  method_id: number
+  name: string
+  code: string | null
+  technique: string | null
+  revision: number
+  status: string
+  is_default: boolean
 }
 
 /**
@@ -2659,6 +2675,16 @@ export async function syncAnalysisServices(): Promise<{ created: number; total: 
     const err = await response.json().catch(() => null)
     throw new Error(err?.detail || `Sync analysis services failed: ${response.status}`)
   }
+  return response.json()
+}
+
+/** Methods covering a service, from the method_services link table (default
+ * first). The legacy SENAITE `methods` JSON on the service row is not read. */
+export async function getServiceMethods(serviceId: number): Promise<ServiceMethodLink[]> {
+  const response = await fetch(`${API_BASE_URL()}/analysis-services/${serviceId}/methods`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Get service methods failed: ${response.status}`)
   return response.json()
 }
 
@@ -3704,6 +3730,9 @@ export async function listSamplePreps(params?: {
   // status filtering — client-side filtering after LIMIT hid older active
   // preps from the Sample Preps page.
   exclude_statuses?: string[]
+  // Include-side twin: restrict to these statuses before the LIMIT window
+  // (Analysis History pages through completed preps only).
+  statuses?: string[]
 }): Promise<SamplePrep[]> {
   const qs = new URLSearchParams()
   if (params?.search) qs.set('search', params.search)
@@ -3712,6 +3741,7 @@ export async function listSamplePreps(params?: {
   if (params?.offset != null) qs.set('offset', String(params.offset))
   if (params?.exclude_statuses?.length)
     qs.set('exclude_statuses', params.exclude_statuses.join(','))
+  if (params?.statuses?.length) qs.set('statuses', params.statuses.join(','))
   const response = await fetch(
     `${API_BASE_URL()}/sample-preps${qs.toString() ? '?' + qs : ''}`,
     { headers: getBearerHeaders() }
@@ -3948,6 +3978,9 @@ export interface SenaiteAnalysis {
   instrument_uid: string | null
   instrument_options: { uid: string; title: string }[]
   analyst: string | null
+  /** Who ran the Process HPLC behind this result (prep-bridge stamp);
+   * `analyst` is the prepper (worksheet assignment). */
+  processed_by?: string | null
   due_date: string | null
   review_state: string | null
   sort_key: number | null

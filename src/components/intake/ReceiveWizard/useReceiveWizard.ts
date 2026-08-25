@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import {
   listSubSamples,
   ensureParentSampleRow,
@@ -152,15 +153,23 @@ export function useReceiveWizard(parent: ParentInfo) {
           // Check-In" step; this first physical vial still becomes S01 via
           // the normal sub-sample path below.
         } else {
-          await receiveSenaiteSample(
+          const res = await receiveSenaiteSample(
             parent.uid,
             parent.sample_id,
             photoBase64,
             remarks ?? null,
           )
-          // The parent photo lives on the SENAITE AR, whose attachment listing
-          // has a read-after-write window — seed the cache with the captured
-          // bytes so Vial 1's thumbnail shows immediately instead of racing the
+          // Native-first receive: success is decided by the native writes.
+          // A false here is a real failure (no registry row / storage);
+          // surface it like any other save error.
+          if (!res.success) throw new Error(res.message)
+          // A succeeded check-in whose SENAITE tee failed is fine to keep —
+          // warn so the tech knows SENAITE lags until synced.
+          if (res.message.toLowerCase().includes('senaite sync failed')) {
+            toast.warning(res.message)
+          }
+          // Seed the photo cache with the captured bytes so Vial 1's
+          // thumbnail shows immediately instead of racing the
           // photo-endpoint round-trip.
           seedSubSamplePhoto(parent.sample_id, photoBytes)
           setParentReceivedThisSession(true)
@@ -169,7 +178,10 @@ export function useReceiveWizard(parent: ParentInfo) {
         }
       }
 
-      // Subsequent vials → sub-samples. SENAITE assigns the next -SNN id.
+      // Subsequent vials → sub-samples. Mk1-native create (Model-D,
+      // SUBSAMPLE_NATIVE_CREATE default-on): the -SNN id is allocated
+      // locally; no SENAITE AR is minted. (Legacy pre-cutover vials keep
+      // their SENAITE round-trips via per-row provenance, not this path.)
       const sub = await createSubSample({
         parentSampleId: parent.sample_id,
         photoBase64,

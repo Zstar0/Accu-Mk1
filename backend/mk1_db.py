@@ -414,6 +414,7 @@ def list_sample_preps(
     limit: int = 100,
     offset: int = 0,
     exclude_statuses: Optional[list[str]] = None,
+    statuses: Optional[list[str]] = None,
 ) -> list[dict]:
     """
     List sample preps from accumark_mk1, ordered newest-first.
@@ -422,6 +423,9 @@ def list_sample_preps(
     Optional exclude_statuses drops rows in those statuses SERVER-side —
     filtering client-side after a LIMIT window silently hides older active
     preps (the 2026-07-14 missing-list-items bug).
+    Optional statuses is the include-side twin: restrict to those statuses
+    before the LIMIT window, so Analysis History can page through completed
+    preps instead of seeing only the done rows among the newest 100.
     """
     query = """
         SELECT *
@@ -441,6 +445,9 @@ def list_sample_preps(
     if exclude_statuses:
         conditions.append("NOT (status = ANY(%s))")
         params.append(exclude_statuses)
+    if statuses:
+        conditions.append("status = ANY(%s)")
+        params.append(statuses)
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
     query += " ORDER BY created_at DESC LIMIT %s OFFSET %s"

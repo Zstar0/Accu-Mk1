@@ -606,6 +606,7 @@ def _run_migrations():
             method_id             INTEGER REFERENCES hplc_methods(id) ON DELETE SET NULL,
             instrument_id         INTEGER REFERENCES instruments(id) ON DELETE SET NULL,
             analyst_user_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            processed_by_user_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
 
             captured_at           TIMESTAMP,
             submitted_at          TIMESTAMP,
@@ -1852,6 +1853,10 @@ def _run_migrations():
         created_at          TIMESTAMP NOT NULL DEFAULT NOW()
     )""",
         "CREATE INDEX IF NOT EXISTS ix_method_attachments_method ON method_attachments (method_id, created_at)",
+        # Processor attribution (2026-08-24): who ran the Process HPLC that
+        # produced this row's result, carried from HPLCAnalysis by the prep
+        # bridge. analyst_user_id stays the prepper (worksheet assignment).
+        "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS processed_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL",
         # analytical_vials (2026-08-24, heavy-metals pooling): of a profile's
         # vials_required vials, how many carry analyses. NULL = all.
         "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS analytical_vials INTEGER",
