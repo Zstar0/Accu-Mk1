@@ -33,6 +33,12 @@ def _shaped_rows(db, sample_id):
 
 def build_legacy_rows(db, parent) -> list[dict]:
     shaped = _shaped_rows(db, parent.sample_id)
+    # Check for unresolvable service_origin (None) — indicates a broken service FK
+    for r in shaped:
+        if r.service_origin is None:
+            raise NativeSectionsError(
+                f"legacy rows: analysis {r.uid} on {parent.sample_id} has "
+                f"unresolvable service origin — aborting")
     legacy = [r for r in shaped if r.service_origin == "senaite"]
     if not legacy:
         raise NativeSectionsError(

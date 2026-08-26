@@ -70,3 +70,24 @@ def test_row_without_keyword_aborts(monkeypatch):
     monkeypatch.setattr(lr, "_shaped_rows", lambda db, sid: [_shaped(keyword=None)])
     with pytest.raises(NativeSectionsError):
         build_legacy_rows(None, _PARENT)
+
+
+def test_empty_string_keyword_aborts(monkeypatch):
+    monkeypatch.setattr(lr, "_shaped_rows", lambda db, sid: [_shaped(keyword="")])
+    with pytest.raises(NativeSectionsError):
+        build_legacy_rows(None, _PARENT)
+
+
+def test_whitespace_only_keyword_aborts(monkeypatch):
+    monkeypatch.setattr(lr, "_shaped_rows", lambda db, sid: [_shaped(keyword="   ")])
+    with pytest.raises(NativeSectionsError):
+        build_legacy_rows(None, _PARENT)
+
+
+def test_unresolvable_service_origin_aborts(monkeypatch):
+    monkeypatch.setattr(lr, "_shaped_rows", lambda db, sid: [
+        _shaped(),
+        _shaped(uid="mk1:300", keyword="HEAVY-METALS", service_origin=None),
+    ])
+    with pytest.raises(NativeSectionsError):
+        build_legacy_rows(None, _PARENT)
