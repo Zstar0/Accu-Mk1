@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 import coa.legacy_rows as lr
-from coa.legacy_rows import FIELD_CONTRACT, build_legacy_rows
+from coa.legacy_rows import FIELD_CONTRACT, SKIP_STATES, build_legacy_rows
 from coa.native_sections import NativeSectionsError
 
 
@@ -91,3 +91,37 @@ def test_unresolvable_service_origin_aborts(monkeypatch):
     ])
     with pytest.raises(NativeSectionsError):
         build_legacy_rows(None, _PARENT)
+
+
+def test_skip_states_pinned():
+    assert SKIP_STATES == frozenset({"retracted", "rejected", "cancelled"})
+
+
+@pytest.mark.parametrize("skip_state", sorted(SKIP_STATES))
+def test_skip_state_row_excluded_from_output(monkeypatch, skip_state):
+    monkeypatch.setattr(lr, "_shaped_rows", lambda db, sid: [
+        _shaped(),
+        _shaped(uid="mk1:200", keyword="ENDO-LAL", review_state=skip_state),
+    ])
+    rows = build_legacy_rows(None, _PARENT)
+    assert [r["Keyword"] for r in rows] == ["HPLC-PUR"]
+
+
+def test_all_skip_state_rows_aborts_as_zero_rows(monkeypatch):
+    monkeypatch.setattr(lr, "_shaped_rows", lambda db, sid: [
+        _shaped(review_state="retracted"),
+        _shaped(uid="mk1:200", keyword="ENDO-LAL", review_state="rejected"),
+        _shaped(uid="mk1:300", keyword="STER-PCR", review_state="cancelled"),
+    ])
+    with pytest.raises(NativeSectionsError):
+        build_legacy_rows(None, _PARENT)
+
+
+def test_review_state_none_aborts_naming_uid_and_sample_id(monkeypatch):
+    monkeypatch.setattr(lr, "_shaped_rows", lambda db, sid: [
+        _shaped(uid="mk1:144", review_state=None),
+    ])
+    with pytest.raises(NativeSectionsError) as excinfo:
+        build_legacy_rows(None, _PARENT)
+    assert "mk1:144" in str(excinfo.value)
+    assert "P-0161" in str(excinfo.value)
