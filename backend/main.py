@@ -11524,9 +11524,10 @@ async def _maybe_emit_regular_coa_child(db, sample_id, parent_row, primary_data)
     # fail-closed attach as the primary. Unlike the best-effort httpx call
     # below, a failure here aborts the CHILD emission rather than shipping a
     # section-less certificate.
-    from coa.native_sections import NativeSectionsError, build_native_sections
+    from coa.native_sections import NativeSectionsError
+    from coa.wire_document import build_coa_wire_document
     try:
-        body["native_sections"] = build_native_sections(db, parent_row)
+        body["native_sections"] = build_coa_wire_document(db, parent_row)
     except NativeSectionsError as e:
         _logger.error("regular COA child aborted for %s: %s", sample_id, e.detail)
         return
@@ -11731,9 +11732,10 @@ async def generate_sample_coa(
             # Native sections (spec 2) — FAIL-CLOSED, unlike the best-effort
             # variance overlay above. If the document cannot be assembled the
             # certificate must not be generated at all.
-            from coa.native_sections import NativeSectionsError, build_native_sections
+            from coa.native_sections import NativeSectionsError
+            from coa.wire_document import build_coa_wire_document
             try:
-                _native_doc = build_native_sections(db, _parent_row)
+                _native_doc = build_coa_wire_document(db, _parent_row)
             except NativeSectionsError as e:
                 return SampleCOAActionResponse(
                     success=False,
@@ -11759,6 +11761,12 @@ async def generate_sample_coa(
         return SampleCOAActionResponse(success=False, message=f"COA Builder error: {detail}")
     except Exception as e:
         return SampleCOAActionResponse(success=False, message=f"COA generation failed: {e}")
+
+    # Drift detector (seam 4): loud warning if the mk1 toggle was ignored
+    # downstream (old COABuilder, or the block dropped en route).
+    if not is_sub:
+        from coa.wire_document import warn_if_source_ignored
+        warn_if_source_ignored(alias_body.get("native_sections"), data, sample_id)
 
     verification_code: str | None = data.get("verification_code")
     generation_number: int | None = data.get("generation_number")
@@ -11950,6 +11958,16 @@ async def generate_vial_coas(
         if include_remarks and not lab_remarks:
             lab_remarks = (parent.customer_remarks or "").strip()
 
+    # Seam 4: vial COAs follow the coa_generation toggle for their BASE row
+    # sourcing, via a legacy-only document (vial certs never render native
+    # sections). Fail-closed: an assembly error aborts the whole run.
+    from coa.native_sections import NativeSectionsError
+    from coa.wire_document import build_vial_wire_document, warn_if_source_ignored
+    try:
+        _vial_doc = build_vial_wire_document(db, parent)
+    except NativeSectionsError as e:
+        return _resp(False, f"COA aborted — {e.detail}")
+
     generated: list[dict] = []
     skipped: list[int] = []
     errors: list[dict] = []
@@ -11966,10 +11984,13 @@ async def generate_vial_coas(
             }
             if include_remarks and lab_remarks:
                 vbody["lab_remarks"] = lab_remarks
+            if _vial_doc is not None:
+                vbody["native_sections"] = _vial_doc
             try:
                 resp = await client.post(f"{COA_BUILDER_URL}/process/{sample_id}", json=vbody)
                 resp.raise_for_status()
                 data = resp.json()
+                warn_if_source_ignored(_vial_doc, data, sample_id)
                 generated.append({
                     "vial_sequence": vial_seq,
                     "verification_code": data.get("verification_code"),
@@ -12300,9 +12321,10 @@ async def regen_primary_coa(
         # Native sections (spec 2) — FAIL-CLOSED, unlike the best-effort
         # variance overlay above. If the document cannot be assembled the
         # certificate must not be regenerated at all.
-        from coa.native_sections import NativeSectionsError, build_native_sections
+        from coa.native_sections import NativeSectionsError
+        from coa.wire_document import build_coa_wire_document
         try:
-            _native_doc = build_native_sections(db, _regen_parent)
+            _native_doc = build_coa_wire_document(db, _regen_parent)
         except NativeSectionsError as e:
             return SampleCOAActionResponse(
                 success=False,
@@ -12333,6 +12355,11 @@ async def regen_primary_coa(
         return SampleCOAActionResponse(success=False, message=f"COA Builder error: {detail}")
     except Exception as e:
         return SampleCOAActionResponse(success=False, message=f"COA regeneration failed: {e}")
+
+    # Drift detector (seam 4): loud warning if the mk1 toggle was ignored
+    # downstream (old COABuilder, or the block dropped en route).
+    from coa.wire_document import warn_if_source_ignored
+    warn_if_source_ignored(alias_body.get("native_sections"), data, sample_id)
 
     verification_code: str | None = data.get("verification_code")
     pdf_base64: str | None = data.get("pdf_base64")
@@ -21156,9 +21183,10 @@ def get_sample_coa_sections(
     if parent is None:
         raise HTTPException(status_code=404, detail=f"sample {sample_id} not found")
 
-    from coa.native_sections import NativeSectionsError, build_native_sections
+    from coa.native_sections import NativeSectionsError
+    from coa.wire_document import build_coa_wire_document
     try:
-        return build_native_sections(db, parent)
+        return build_coa_wire_document(db, parent)
     except NativeSectionsError as e:
         raise HTTPException(status_code=502, detail=e.detail)
 

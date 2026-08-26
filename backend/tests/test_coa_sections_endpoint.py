@@ -21,9 +21,21 @@ created in a different thread").
 
 Endpoint import is local (matches the ambient main.py convention: every
 neighboring S2S handler — get_sample_variance_payload, etc. — imports its
-builder module inside the function body, not at module top). Patch target is
-therefore coa.native_sections.build_native_sections, not main.build_native_sections
-(patch where the name is looked up).
+builder module inside the function body, not at module top).
+
+Seam 4 (Task 7): every COA call site now routes through
+coa.wire_document.build_coa_wire_document/build_vial_wire_document instead of
+calling coa.native_sections.build_native_sections directly. wire_document
+imports build_native_sections via `from coa.native_sections import
+build_native_sections` — a bare-name binding captured once, at whichever
+moment coa.wire_document is first imported in the process. Patching
+coa.native_sections.build_native_sections after that point (via
+unittest.mock's dotted-string target or monkeypatch) sets an attribute on the
+*source* module and never reaches wire_document's own already-bound name —
+the classic "patch where it's used, not where it's defined" trap. So every
+test below that needs to intercept the native-sections builder patches
+coa.wire_document.build_native_sections instead (patch where the name is
+looked up, which is now wire_document, not main).
 """
 import asyncio
 import logging
@@ -92,7 +104,7 @@ def test_coa_sections_endpoint_returns_document(client, db_session):
     db_session.add(LimsSample(sample_id="P-8001"))
     db_session.commit()
     with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}), \
-         patch("coa.native_sections.build_native_sections",
+         patch("coa.wire_document.build_native_sections",
                return_value={"sample_id": "P-8001", "ordered_profiles": [], "sections": []}):
         r = client.get("/samples/P-8001/coa-sections", headers=SVC_TOKEN_HEADER)
     assert r.status_code == 200
@@ -104,7 +116,7 @@ def test_coa_sections_endpoint_502_on_builder_failure(client, db_session):
     db_session.add(LimsSample(sample_id="P-8002"))
     db_session.commit()
     with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}), \
-         patch("coa.native_sections.build_native_sections",
+         patch("coa.wire_document.build_native_sections",
                side_effect=NativeSectionsError("order lookup failed")):
         r = client.get("/samples/P-8002/coa-sections", headers=SVC_TOKEN_HEADER)
     assert r.status_code == 502
@@ -164,7 +176,7 @@ def test_regular_child_aborts_before_post_on_native_sections_failure(db_session,
     captured = {}
     _patch_coabuilder(monkeypatch, captured)
     parent = _variance_parent("P-X")
-    with patch("coa.native_sections.build_native_sections",
+    with patch("coa.wire_document.build_native_sections",
                side_effect=NativeSectionsError("boom-detail")):
         with caplog.at_level(logging.ERROR):
             asyncio.run(main._maybe_emit_regular_coa_child(
@@ -189,7 +201,7 @@ def test_regular_child_attaches_native_sections_before_post(db_session, monkeypa
         "ordered_profiles": ["HM"],
         "sections": [{"profile_key": "HM", "title": "Heavy Metals", "rows": []}],
     }
-    with patch("coa.native_sections.build_native_sections", return_value=doc):
+    with patch("coa.wire_document.build_native_sections", return_value=doc):
         asyncio.run(main._maybe_emit_regular_coa_child(
             db_session, "P-Y", parent, {"generation_id": "GEN-2"}
         ))
@@ -251,7 +263,7 @@ def test_regen_primary_coa_aborts_before_post_on_native_sections_failure(db_sess
     monkeypatch.setattr(main, "COA_BUILDER_URL", "http://coabuilder.test")
     monkeypatch.setattr(main.httpx, "AsyncClient", lambda *a, **k: _FakeRegenClient(captured, {}))
 
-    with patch("coa.native_sections.build_native_sections",
+    with patch("coa.wire_document.build_native_sections",
                side_effect=NativeSectionsError("regen-boom")):
         result = asyncio.run(main.regen_primary_coa(
             sample_id="P-REGEN-1", db=db_session, current_user=None,
@@ -281,7 +293,7 @@ def test_regen_primary_coa_attaches_native_sections_before_post(db_session, monk
         "ordered_profiles": ["HM"],
         "sections": [{"profile_key": "HM", "title": "Heavy Metals", "rows": []}],
     }
-    with patch("coa.native_sections.build_native_sections", return_value=doc):
+    with patch("coa.wire_document.build_native_sections", return_value=doc):
         result = asyncio.run(main.regen_primary_coa(
             sample_id="P-REGEN-2", db=db_session, current_user=None,
         ))
@@ -294,3 +306,55 @@ def test_regen_primary_coa_attaches_native_sections_before_post(db_session, monk
     # contract, not a symptom of the attach breaking something upstream.
     assert result.success is False
     assert result.message == "Primary regenerated but no verification code returned"
+
+
+# ── S2S endpoint routes through build_coa_wire_document (Task 7) ──────
+# The document endpoint is IS's additional-COA path — it must inherit the
+# coa_generation toggle exactly like the four in-process call sites above, or
+# IS-driven additionals silently stay on SENAITE-sourced rows forever.
+
+
+def test_s2s_coa_sections_carries_legacy_rows_in_mk1_mode(client, db_session, monkeypatch):
+    """The S2S document endpoint (IS additional-COA path) must route through
+    build_coa_wire_document so IS-driven additionals inherit the toggle."""
+    from models import LimsSample
+    db_session.add(LimsSample(sample_id="P-9001"))
+    db_session.commit()
+
+    import coa.wire_document as wd
+    monkeypatch.setattr(
+        wd, "build_native_sections",
+        lambda db, p: {"sample_id": "P-9001", "ordered_profiles": [], "sections": []},
+    )
+    monkeypatch.setattr(wd, "coa_generation_source", lambda db: "mk1")
+    monkeypatch.setattr(
+        wd, "build_legacy_rows",
+        lambda db, p: [{"uid": "mk1:1", "Keyword": "HPLC-PUR", "Title": "t",
+                        "ServiceTitle": "t", "Result": "12", "Unit": "%",
+                        "review_state": "published", "ResultCaptureDate": None}],
+    )
+    with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}):
+        resp = client.get("/samples/P-9001/coa-sections", headers=SVC_TOKEN_HEADER)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["legacy_rows"]["source"] == "mk1"
+    assert body["legacy_rows"]["rows"][0]["Keyword"] == "HPLC-PUR"
+
+
+def test_s2s_coa_sections_unchanged_in_senaite_mode(client, db_session, monkeypatch):
+    """Fail-safe default (senaite mode): the document is untouched — no
+    legacy_rows block, matching every pre-seam-4 caller's expectations."""
+    from models import LimsSample
+    db_session.add(LimsSample(sample_id="P-9002"))
+    db_session.commit()
+
+    import coa.wire_document as wd
+    monkeypatch.setattr(
+        wd, "build_native_sections",
+        lambda db, p: {"sample_id": "P-9002", "ordered_profiles": [], "sections": []},
+    )
+    monkeypatch.setattr(wd, "coa_generation_source", lambda db: "senaite")
+    with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}):
+        resp = client.get("/samples/P-9002/coa-sections", headers=SVC_TOKEN_HEADER)
+    assert resp.status_code == 200
+    assert "legacy_rows" not in resp.json()
