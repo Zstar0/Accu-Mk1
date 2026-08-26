@@ -184,7 +184,12 @@ import { ReplaceAnalyteDialog } from '@/components/senaite/ReplaceAnalyteDialog'
 import { isHplcAnalyteService } from '@/lib/hplc-analyte-services'
 import { needsMk1AnalysesSwap } from '@/lib/mk1-analyses-swap'
 import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
-import { useEffectiveReadSource, detailsFieldSource, useCoaGenerationSource, coaSourceLabel } from '@/lib/read-source'
+import {
+  useEffectiveReadSource,
+  detailsFieldSource,
+  useCoaGenerationSource,
+  coaSourceLabel,
+} from '@/lib/read-source'
 import { FieldSourceGlyph } from '@/components/senaite/FieldSourceGlyph'
 import {
   buildVialAssignmentMap,
