@@ -74,7 +74,24 @@ rendering **byte-identical**.
   (`NativeSectionsError`) — until pure-native samples exist, an empty list can
   only mean a broken mirror, and an empty results table on a certificate is the
   exact silent failure this program exists to prevent. Revisit when a-la-carte
-  ships.
+  ships. A row whose `service_origin` is unresolvable (`None` — service FK
+  broken) also aborts rather than being silently dropped: a one-row-short
+  certificate is the same failure class as an empty one. (Amended 2026-08-26
+  after task review — the original `== 'senaite'` filter silently excluded
+  `None`.)
+- **Skip states are part of the wire contract** (amended 2026-08-26 after the
+  final whole-branch review): the producer excludes rows whose emitted
+  `review_state` is in `{"retracted", "rejected", "cancelled"}` BEFORE the
+  zero-row check — mirroring the SENAITE path's `_SKIP_STATES` in
+  `_collect_analyses_details`, which the wire path bypasses. Without this, a
+  removed legacy analysis (A7 cascade marks its shadow `rejected` forever) or
+  a mid-correction retracted line would reappear on an mk1-mode certificate.
+  A row whose `review_state` is `None` aborts producer-side
+  (`NativeSectionsError`, same treatment as a missing keyword) — the
+  consumer requires a string and the producer must fail with its own clear
+  message, not a downstream 422. Belt-and-braces: COABuilder's
+  `extract_legacy_rows` REJECTS skip-state rows (422) — a skip-state row
+  arriving means a producer bug, and fail-closed beats silently rendering it.
 - The parity twin discipline from spec-ownership slice 1 applies: the field
   contract is pinned by twin tests in both repos
   (Mk1 `backend/tests/test_legacy_rows_contract.py` ↔ coab
