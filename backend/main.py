@@ -11531,6 +11531,12 @@ async def _maybe_emit_regular_coa_child(db, sample_id, parent_row, primary_data)
     except NativeSectionsError as e:
         _logger.error("regular COA child aborted for %s: %s", sample_id, e.detail)
         return
+    except Exception as e:  # noqa: BLE001 — best-effort contract: never fail the primary
+        _logger.error(
+            "regular COA child aborted for %s: wire-document assembly failed: %s",
+            sample_id, e,
+        )
+        return
 
     try:
         async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=120.0) as client:
