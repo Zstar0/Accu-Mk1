@@ -1,9 +1,9 @@
-import { beforeEach, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { createElement } from 'react'
-import { useEffectiveReadSource } from '@/lib/read-source'
+import { useEffectiveReadSource, parseCoaGenerationSource, coaSourceLabel, parseGlobalReadSource } from '@/lib/read-source'
 import * as api from '@/lib/api'
 import { vi } from 'vitest'
 
@@ -25,4 +25,31 @@ it('resolves global default then override', async () => {
   // per-page override wins
   act(() => result.current.setOverride('senaite'))
   expect(result.current.effective).toBe('senaite')
+})
+
+describe('parseCoaGenerationSource', () => {
+  it('defaults to senaite for absent/malformed raw', () => {
+    expect(parseCoaGenerationSource(undefined)).toBe('senaite')
+    expect(parseCoaGenerationSource(null)).toBe('senaite')
+    expect(parseCoaGenerationSource('not json')).toBe('senaite')
+    expect(parseCoaGenerationSource('[]')).toBe('senaite')
+  })
+
+  it('reads coa_generation from the shared map', () => {
+    expect(parseCoaGenerationSource(JSON.stringify({ coa_generation: 'mk1' }))).toBe('mk1')
+    expect(parseCoaGenerationSource(JSON.stringify({ sample_details: 'mk1' }))).toBe('senaite')
+    expect(parseCoaGenerationSource(JSON.stringify({ coa_generation: 'bogus' }))).toBe('senaite')
+  })
+
+  it('is NOT a page key — parseGlobalReadSource must ignore it', () => {
+    const map = parseGlobalReadSource(JSON.stringify({ coa_generation: 'mk1' }))
+    expect(map).toEqual({})
+  })
+})
+
+describe('coaSourceLabel', () => {
+  it('labels both sources', () => {
+    expect(coaSourceLabel('senaite')).toBe('SENAITE')
+    expect(coaSourceLabel('mk1')).toBe('Accu-Mk1')
+  })
 })
