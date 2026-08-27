@@ -20110,265 +20110,262 @@ async def create_worksheet(
     }
 
 
-@app.get("/worksheets")
-def list_worksheets(
-    status: Optional[str] = None,
-    db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
-):
-    """List worksheets with summary. Excludes staging worksheets.
+def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
+    """Serialize worksheets + items into the GET /worksheets wire shape.
 
-    Deliberately sync (`def`, not `async def`): the body is ~2.5s of pure
-    synchronous DB work with zero awaits, and the page fires it twice — as
-    `async def` it ran ON the event loop and froze every other request
-    behind it (a 32ms flag GET measured 5.3s during two in-flight calls,
-    prod probe 2026-07-07). Sync endpoints run in the threadpool. Keep it
-    `def` unless the body becomes genuinely async end-to-end.
+    Shared by list_worksheets and get_worksheet_by_id. Every lookup here is
+    ONE batched query across ALL the passed worksheets — never per worksheet
+    or per item. The previous per-worksheet version ran ~10 queries per
+    worksheet plus one method lookup per item; with the full history served
+    on every call (1,166 worksheets / 4,156 items in prod, 2026-08-27) that
+    was ~7,000+ round-trips to the managed Postgres and 16.9s per request
+    (was 2.5s on 2026-07-07 — grows linearly with completed worksheets).
+    Output shape is unchanged (pinned by test_worksheets_list_sync.py).
     """
-    query = (
-        select(Worksheet)
-        .where(Worksheet.status != "staging")
-        .order_by(Worksheet.created_at.desc())
-    )
-    if status:
-        query = query.where(Worksheet.status == status)
-
-    worksheets = db.execute(query).scalars().all()
+    from models import Department, LimsAnalysis
 
     # department_name state 1 (Task 8): WorksheetItem.department_id, when set,
     # is the primary signal — resolved via one id->name map for the whole
-    # request (Department is a small, request-static catalog table, so this
-    # is not re-queried per worksheet or per item).
-    from models import Department
+    # request (Department is a small, request-static catalog table).
     department_id_name_map: dict[int, str] = {
         d.id: d.name for d in db.execute(select(Department)).scalars()
     }
 
+    ws_ids = [ws.id for ws in worksheets]
+    items_by_ws: dict[int, list] = {wid: [] for wid in ws_ids}
+    all_items: list = []
+    if ws_ids:
+        all_items = db.execute(
+            select(WorksheetItem)
+            .where(WorksheetItem.worksheet_id.in_(ws_ids))
+            .order_by(WorksheetItem.worksheet_id, WorksheetItem.sort_order, WorksheetItem.id)
+        ).scalars().all()
+        for it in all_items:
+            items_by_ws.setdefault(it.worksheet_id, []).append(it)
+
+    # Resolve service group names, colors, departments, peptide ids and
+    # analyses for display — one groups query + one members query for the
+    # union of every item's group (prod only has a handful of groups).
+    group_ids = {it.service_group_id for it in all_items if it.service_group_id}
+    group_name_map: dict[int, str] = {}
+    group_color_map: dict[int, str] = {}
+    group_department_name_map: dict[int, str | None] = {}
+    group_peptide_map: dict[int, int | None] = {}
+    group_analyses_map: dict[int, list[dict]] = {}
+    if group_ids:
+        groups = db.execute(
+            select(ServiceGroup.id, ServiceGroup.name, ServiceGroup.color, Department.name)
+            .outerjoin(Department, Department.id == ServiceGroup.department_id)
+            .where(ServiceGroup.id.in_(group_ids))
+        ).all()
+        group_name_map = {g[0]: g[1] for g in groups}
+        group_color_map = {g[0]: g[2] for g in groups}
+        group_department_name_map = {g[0]: g[3] for g in groups}
+        svc_rows = db.execute(
+            select(service_group_members.c.service_group_id, AnalysisService)
+            .join(AnalysisService, service_group_members.c.analysis_service_id == AnalysisService.id)
+            .where(service_group_members.c.service_group_id.in_(group_ids))
+            .order_by(service_group_members.c.service_group_id, AnalysisService.id)
+        ).all()
+        for gid in group_ids:
+            group_peptide_map[gid] = None
+            group_analyses_map[gid] = []
+        for gid, s in svc_rows:
+            if s.peptide_id and not group_peptide_map[gid]:
+                group_peptide_map[gid] = s.peptide_id
+            # Extract method name from methods JSON if available
+            method_name = None
+            if s.methods and isinstance(s.methods, list) and len(s.methods) > 0:
+                method_name = s.methods[0].get("title") if isinstance(s.methods[0], dict) else None
+            group_analyses_map[gid].append({
+                "title": s.title,
+                "keyword": s.keyword,
+                "peptide_name": s.peptide_name,
+                "method": method_name,
+            })
+
+    # Fallback department resolution for group-less items (fix round,
+    # spec-3 Task 3, Finding 3): catalog-only roles like hm carry no
+    # service_group at all, so the group bridge above has nothing to key on.
+    # Resolve via the item's own cached analyses (analyses_json, written at
+    # add-to-worksheet time) — first analysis keyword -> AnalysisService
+    # department -> Department.name, batched across every item that needs it
+    # in one query. Only fires where the group-based lookup yields None.
+    item_department_fallback_map: dict[int, str | None] = {}
+    _needs_department_fallback = [
+        it for it in all_items
+        if not (it.department_id and department_id_name_map.get(it.department_id))
+        and not (it.service_group_id and group_department_name_map.get(it.service_group_id))
+    ]
+    if _needs_department_fallback:
+        item_first_keyword: dict[int, str | None] = {}
+        fallback_keywords: set[str] = set()
+        for it in _needs_department_fallback:
+            kw = None
+            if it.analyses_json:
+                try:
+                    parsed = json.loads(it.analyses_json)
+                except (ValueError, TypeError):
+                    parsed = None
+                if parsed and isinstance(parsed, list) and isinstance(parsed[0], dict):
+                    kw = parsed[0].get("keyword")
+            item_first_keyword[it.id] = kw
+            if kw:
+                fallback_keywords.add(kw)
+        if fallback_keywords:
+            kw_rows = db.execute(
+                select(AnalysisService.keyword, Department.name)
+                .outerjoin(Department, Department.id == AnalysisService.department_id)
+                .where(AnalysisService.keyword.in_(fallback_keywords))
+            ).all()
+            keyword_department_name_map = {r[0]: r[1] for r in kw_rows}
+            item_department_fallback_map = {
+                it_id: keyword_department_name_map.get(kw)
+                for it_id, kw in item_first_keyword.items()
+                if kw
+            }
+
+    # Resolve analyst emails — worksheet-level and item-level ids in ONE
+    # User query.
+    analyst_ids = (
+        {ws.assigned_analyst_id for ws in worksheets if ws.assigned_analyst_id}
+        | {it.assigned_analyst_id for it in all_items if it.assigned_analyst_id}
+    )
+    user_email_map: dict[int, str] = {}
+    if analyst_ids:
+        user_email_map = {
+            u.id: u.email
+            for u in db.execute(select(User.id, User.email).where(User.id.in_(analyst_ids))).all()
+        }
+
+    # Pre-resolve instrument senaite_uid → instrument.id for method lookup
+    instrument_uids = {it.instrument_uid for it in all_items if it.instrument_uid}
+    inst_uid_to_id: dict[str, int] = {}
+    if instrument_uids:
+        inst_rows = db.execute(
+            select(Instrument.senaite_uid, Instrument.id).where(Instrument.senaite_uid.in_(instrument_uids))
+        ).all()
+        inst_uid_to_id = {r.senaite_uid: r.id for r in inst_rows if r.senaite_uid}
+
+    # Resolve each item's sub-sample (vial) pk so a worksheet "Start Prep"
+    # can tag the wizard session as vial-scoped. Join on sample_id
+    # (P-XXXX-SNN) — naturally null for parent-sample ids (P-XXXX), which
+    # have no lims_sub_samples row.
+    item_sample_ids = {it.sample_id for it in all_items if it.sample_id}
+    sub_sample_pk_map: dict[str, int] = {}
+    sub_kind_map: dict[str, Optional[str]] = {}
+    sub_box_id_map: dict[str, Optional[int]] = {}
+    if item_sample_ids:
+        sub_rows = db.execute(
+            select(
+                LimsSubSample.sample_id,
+                LimsSubSample.id,
+                LimsSubSample.assignment_kind,  # variance badge passthrough
+                LimsSubSample.box_id,  # current physical box, if any
+            ).where(
+                LimsSubSample.sample_id.in_(item_sample_ids)
+            )
+        ).all()
+        sub_sample_pk_map = {r.sample_id: r.id for r in sub_rows}
+        sub_kind_map = {r.sample_id: r.assignment_kind for r in sub_rows}
+        sub_box_id_map = {r.sample_id: r.box_id for r in sub_rows}
+
+    # Resolve current box labels for boxed vials so techs know which
+    # physical box to grab. None for parent-sample items / unboxed vials.
+    box_label_map: dict[int, str] = {}
+    boxed_ids = {b for b in sub_box_id_map.values() if b}
+    if boxed_ids:
+        box_rows = db.execute(
+            select(LimsBox).where(LimsBox.id.in_(boxed_ids))
+        ).scalars().all()
+        box_label_map = {b.id: box_label_code(b) for b in box_rows}
+
+    # Resolve per-item stamped method/instrument names (bench-stamping
+    # slice 2, task 5): the DISTINCT non-null stamped values across a
+    # vial's lims_analyses rows -- one distinct name -> that name; >1
+    # distinct -> the literal "mixed"; none -> None. Dead rows
+    # (rejected/retracted) are excluded (controller ruling R-P2-2): the
+    # writer's state guard (STAMPABLE_STATES) means a dead row's stamp can
+    # never be cleared, so an unfiltered read would let a post-retest vial
+    # read "mixed" forever even though only the live row's stamp matters.
+    vial_pks = {pk for pk in sub_sample_pk_map.values() if pk}
+    stamped_method_map: dict[int, str | None] = {}
+    stamped_instrument_map: dict[int, str | None] = {}
+    if vial_pks:
+        stamp_rows = db.execute(
+            select(LimsAnalysis.lims_sub_sample_pk, HplcMethod.name, Instrument.name)
+            .outerjoin(HplcMethod, HplcMethod.id == LimsAnalysis.method_id)
+            .outerjoin(Instrument, Instrument.id == LimsAnalysis.instrument_id)
+            .where(LimsAnalysis.lims_sub_sample_pk.in_(vial_pks))
+            .where(LimsAnalysis.review_state.notin_(("rejected", "retracted")))
+        ).all()
+        method_names_by_pk: dict[int, set[str]] = {}
+        instrument_names_by_pk: dict[int, set[str]] = {}
+        for pk, m_name, i_name in stamp_rows:
+            if m_name:
+                method_names_by_pk.setdefault(pk, set()).add(m_name)
+            if i_name:
+                instrument_names_by_pk.setdefault(pk, set()).add(i_name)
+
+        def _resolve_stamped(names: "set[str] | None") -> "str | None":
+            if not names:
+                return None
+            if len(names) > 1:
+                return "mixed"
+            return next(iter(names))
+
+        stamped_method_map = {
+            pk: _resolve_stamped(names) for pk, names in method_names_by_pk.items()
+        }
+        stamped_instrument_map = {
+            pk: _resolve_stamped(names) for pk, names in instrument_names_by_pk.items()
+        }
+
+    # Resolve HPLC method names from instrument + peptide (via service
+    # group): batch the DISTINCT (peptide_id, instrument_id) pairs the items
+    # actually need in one query — the old code ran this query once PER ITEM.
+    # First-by-HplcMethod.id per pair (the old per-item LIMIT 1 had no ORDER
+    # BY, so ambiguous pairs were engine-ordered; this pins them).
+    method_pairs: set[tuple[int, int]] = set()
+    for it in all_items:
+        if it.instrument_uid and it.service_group_id:
+            _inst_id = inst_uid_to_id.get(it.instrument_uid)
+            _pep_id = group_peptide_map.get(it.service_group_id)
+            if _inst_id and _pep_id:
+                method_pairs.add((_pep_id, _inst_id))
+    method_by_pair: dict[tuple[int, int], str] = {}
+    if method_pairs:
+        pair_rows = db.execute(
+            select(peptide_methods.c.peptide_id, instrument_methods.c.instrument_id, HplcMethod.name)
+            .select_from(HplcMethod)
+            .join(peptide_methods, peptide_methods.c.method_id == HplcMethod.id)
+            .join(instrument_methods, instrument_methods.c.method_id == HplcMethod.id)
+            .where(peptide_methods.c.peptide_id.in_({p for p, _ in method_pairs}))
+            .where(instrument_methods.c.instrument_id.in_({i for _, i in method_pairs}))
+            .order_by(HplcMethod.id)
+        ).all()
+        for _pep, _inst, _name in pair_rows:
+            method_by_pair.setdefault((_pep, _inst), _name)
+
+    def _resolve_method(it_instrument_uid: "str | None", it_service_group_id: "int | None") -> "str | None":
+        if not it_instrument_uid or not it_service_group_id:
+            return None
+        inst_id = inst_uid_to_id.get(it_instrument_uid)
+        peptide_id = group_peptide_map.get(it_service_group_id)
+        if not inst_id or not peptide_id:
+            return None
+        return method_by_pair.get((peptide_id, inst_id))
+
     result = []
     for ws in worksheets:
-        items = db.execute(
-            select(WorksheetItem)
-            .where(WorksheetItem.worksheet_id == ws.id)
-            .order_by(WorksheetItem.sort_order, WorksheetItem.id)
-        ).scalars().all()
-
-        # Resolve service group names and peptide IDs for display
-        group_ids = {it.service_group_id for it in items if it.service_group_id}
-        group_name_map: dict[int, str] = {}
-        group_peptide_map: dict[int, int | None] = {}
-        group_department_name_map: dict[int, str | None] = {}
-        if group_ids:
-            from models import Department
-            groups = db.execute(
-                select(ServiceGroup.id, ServiceGroup.name, ServiceGroup.color, Department.name)
-                .outerjoin(Department, Department.id == ServiceGroup.department_id)
-                .where(ServiceGroup.id.in_(group_ids))
-            ).all()
-            group_name_map = {g[0]: g[1] for g in groups}
-            group_color_map: dict[int, str] = {g[0]: g[2] for g in groups}
-            group_department_name_map = {g[0]: g[3] for g in groups}
-            # Resolve peptide_id and analyses per group
-            group_analyses_map: dict[int, list[dict]] = {}
-            for gid in group_ids:
-                svcs = db.execute(
-                    select(AnalysisService)
-                    .join(service_group_members, service_group_members.c.analysis_service_id == AnalysisService.id)
-                    .where(service_group_members.c.service_group_id == gid)
-                ).scalars().all()
-                analyses = []
-                first_peptide_id = None
-                for s in svcs:
-                    if s.peptide_id and not first_peptide_id:
-                        first_peptide_id = s.peptide_id
-                    # Extract method name from methods JSON if available
-                    method_name = None
-                    if s.methods and isinstance(s.methods, list) and len(s.methods) > 0:
-                        method_name = s.methods[0].get("title") if isinstance(s.methods[0], dict) else None
-                    analyses.append({
-                        "title": s.title,
-                        "keyword": s.keyword,
-                        "peptide_name": s.peptide_name,
-                        "method": method_name,
-                    })
-                group_peptide_map[gid] = first_peptide_id
-                group_analyses_map[gid] = analyses
-
-        # Fallback department resolution for group-less items (fix round,
-        # spec-3 Task 3, Finding 3): catalog-only roles like hm carry no
-        # service_group at all, so group_department_name_map above has
-        # nothing to key on and every hm worksheet item serialized with
-        # department_name=None — making the FE hm badge (itemBench /
-        # itemRoleBadges) structurally unreachable even though it's wired
-        # correctly. Resolve via the item's own cached analyses (analyses_json,
-        # written at add-to-worksheet time) — its first analysis's keyword ->
-        # AnalysisService.department_id -> Department.name, batched across
-        # every item that needs it in one query. Only fires where the
-        # group-based lookup above yields None (no group, or a group with no
-        # department); grouped items resolve exactly as before.
-        item_department_fallback_map: dict[int, str | None] = {}
-        _needs_department_fallback = [
-            it for it in items
-            if not (it.department_id and department_id_name_map.get(it.department_id))
-            and not (it.service_group_id and group_department_name_map.get(it.service_group_id))
-        ]
-        if _needs_department_fallback:
-            item_first_keyword: dict[int, str | None] = {}
-            fallback_keywords: set[str] = set()
-            for it in _needs_department_fallback:
-                kw = None
-                if it.analyses_json:
-                    try:
-                        parsed = json.loads(it.analyses_json)
-                    except (ValueError, TypeError):
-                        parsed = None
-                    if parsed and isinstance(parsed, list) and isinstance(parsed[0], dict):
-                        kw = parsed[0].get("keyword")
-                item_first_keyword[it.id] = kw
-                if kw:
-                    fallback_keywords.add(kw)
-            if fallback_keywords:
-                from models import Department
-                kw_rows = db.execute(
-                    select(AnalysisService.keyword, Department.name)
-                    .outerjoin(Department, Department.id == AnalysisService.department_id)
-                    .where(AnalysisService.keyword.in_(fallback_keywords))
-                ).all()
-                keyword_department_name_map = {r[0]: r[1] for r in kw_rows}
-                item_department_fallback_map = {
-                    it_id: keyword_department_name_map.get(kw)
-                    for it_id, kw in item_first_keyword.items()
-                    if kw
-                }
-
-        # Resolve assigned analyst email
-        analyst_email = None
-        if ws.assigned_analyst_id:
-            analyst_user = db.execute(
-                select(User.email).where(User.id == ws.assigned_analyst_id)
-            ).scalar_one_or_none()
-            analyst_email = analyst_user
-
-        # Pre-resolve instrument senaite_uid → instrument.id for method lookup
-        instrument_uids = {it.instrument_uid for it in items if it.instrument_uid}
-        inst_uid_to_id: dict[str, int] = {}
-        if instrument_uids:
-            inst_rows = db.execute(
-                select(Instrument.senaite_uid, Instrument.id).where(Instrument.senaite_uid.in_(instrument_uids))
-            ).all()
-            inst_uid_to_id = {r.senaite_uid: r.id for r in inst_rows if r.senaite_uid}
-
-        # Resolve per-item analyst emails
-        item_analyst_ids = {it.assigned_analyst_id for it in items if it.assigned_analyst_id}
-        item_analyst_email_map: dict[int, str] = {}
-        if item_analyst_ids:
-            item_analyst_users = db.execute(
-                select(User.id, User.email).where(User.id.in_(item_analyst_ids))
-            ).all()
-            item_analyst_email_map = {u.id: u.email for u in item_analyst_users}
-
-        # Resolve each item's sub-sample (vial) pk so a worksheet "Start Prep"
-        # can tag the wizard session as vial-scoped. Join on sample_id
-        # (P-XXXX-SNN) — naturally null for parent-sample ids (P-XXXX), which
-        # have no lims_sub_samples row. Additive; parents stay unaffected.
-        item_sample_ids = {it.sample_id for it in items if it.sample_id}
-        sub_sample_pk_map: dict[str, int] = {}
-        sub_kind_map: dict[str, Optional[str]] = {}
-        sub_box_id_map: dict[str, Optional[int]] = {}
-        if item_sample_ids:
-            sub_rows = db.execute(
-                select(
-                    LimsSubSample.sample_id,
-                    LimsSubSample.id,
-                    LimsSubSample.assignment_kind,  # variance badge passthrough
-                    LimsSubSample.box_id,  # current physical box, if any
-                ).where(
-                    LimsSubSample.sample_id.in_(item_sample_ids)
-                )
-            ).all()
-            sub_sample_pk_map = {r.sample_id: r.id for r in sub_rows}
-            sub_kind_map = {r.sample_id: r.assignment_kind for r in sub_rows}
-            sub_box_id_map = {r.sample_id: r.box_id for r in sub_rows}
-
-        # Resolve current box labels for boxed vials so techs know which
-        # physical box to grab. None for parent-sample items / unboxed vials.
-        box_label_map: dict[int, str] = {}
-        boxed_ids = {b for b in sub_box_id_map.values() if b}
-        if boxed_ids:
-            box_rows = db.execute(
-                select(LimsBox).where(LimsBox.id.in_(boxed_ids))
-            ).scalars().all()
-            box_label_map = {b.id: box_label_code(b) for b in box_rows}
-
-        # Resolve per-item stamped method/instrument names (bench-stamping
-        # slice 2, task 5): the DISTINCT non-null stamped values across a
-        # vial's lims_analyses rows -- one distinct name -> that name; >1
-        # distinct -> the literal "mixed"; none -> None. Same eager-map
-        # idiom as sub_sample_pk_map above -- one grouped query per
-        # worksheet, never per-item queries in the loop.
-        # Dead rows (rejected/retracted) are excluded (controller ruling
-        # R-P2-2): the writer's state guard (STAMPABLE_STATES) means a dead
-        # row's stamp can never be cleared, so an unfiltered read would let a
-        # post-retest vial read "mixed" forever even though only the live
-        # row's stamp still matters.
-        from models import LimsAnalysis
-        vial_pks = {pk for pk in sub_sample_pk_map.values() if pk}
-        stamped_method_map: dict[int, str | None] = {}
-        stamped_instrument_map: dict[int, str | None] = {}
-        if vial_pks:
-            stamp_rows = db.execute(
-                select(LimsAnalysis.lims_sub_sample_pk, HplcMethod.name, Instrument.name)
-                .outerjoin(HplcMethod, HplcMethod.id == LimsAnalysis.method_id)
-                .outerjoin(Instrument, Instrument.id == LimsAnalysis.instrument_id)
-                .where(LimsAnalysis.lims_sub_sample_pk.in_(vial_pks))
-                .where(LimsAnalysis.review_state.notin_(("rejected", "retracted")))
-            ).all()
-            method_names_by_pk: dict[int, set[str]] = {}
-            instrument_names_by_pk: dict[int, set[str]] = {}
-            for pk, m_name, i_name in stamp_rows:
-                if m_name:
-                    method_names_by_pk.setdefault(pk, set()).add(m_name)
-                if i_name:
-                    instrument_names_by_pk.setdefault(pk, set()).add(i_name)
-
-            def _resolve_stamped(names: set[str] | None) -> str | None:
-                if not names:
-                    return None
-                if len(names) > 1:
-                    return "mixed"
-                return next(iter(names))
-
-            stamped_method_map = {
-                pk: _resolve_stamped(names) for pk, names in method_names_by_pk.items()
-            }
-            stamped_instrument_map = {
-                pk: _resolve_stamped(names) for pk, names in instrument_names_by_pk.items()
-            }
-
-        def _resolve_method(it_instrument_uid: str | None, it_service_group_id: int | None) -> str | None:
-            """Resolve HPLC method name from instrument + peptide (via service group)."""
-            if not it_instrument_uid or not it_service_group_id:
-                return None
-            inst_id = inst_uid_to_id.get(it_instrument_uid)
-            peptide_id = group_peptide_map.get(it_service_group_id)
-            if not inst_id or not peptide_id:
-                return None
-            method = db.execute(
-                select(HplcMethod.name)
-                .join(peptide_methods, peptide_methods.c.method_id == HplcMethod.id)
-                .join(instrument_methods, instrument_methods.c.method_id == HplcMethod.id)
-                .where(peptide_methods.c.peptide_id == peptide_id)
-                .where(instrument_methods.c.instrument_id == inst_id)
-                .limit(1)
-            ).scalar_one_or_none()
-            return method
-
+        items = items_by_ws.get(ws.id, [])
         result.append({
             "id": ws.id,
             "title": ws.title,
             "status": ws.status,
             "notes": ws.notes,
             "assigned_analyst": ws.assigned_analyst_id,
-            "assigned_analyst_email": analyst_email,
+            "assigned_analyst_email": user_email_map.get(ws.assigned_analyst_id) if ws.assigned_analyst_id else None,
             "item_count": len(items),
             "created_at": (ws.created_at.isoformat() + "Z") if ws.created_at else None,
             "completed_at": (ws.completed_at.isoformat() + "Z") if ws.completed_at else None,
@@ -20396,7 +20393,7 @@ def list_worksheets(
                     "instrument_uid": it.instrument_uid,
                     "instrument_id": it.instrument_id,
                     "assigned_analyst_id": it.assigned_analyst_id,
-                    "assigned_analyst_email": item_analyst_email_map.get(it.assigned_analyst_id) if it.assigned_analyst_id else None,
+                    "assigned_analyst_email": user_email_map.get(it.assigned_analyst_id) if it.assigned_analyst_id else None,
                     "notes": it.notes,
                     "peptide_id": group_peptide_map.get(it.service_group_id) if it.service_group_id else None,
                     "method_name": _resolve_method(it.instrument_uid, it.service_group_id),
@@ -20415,6 +20412,59 @@ def list_worksheets(
             ],
         })
     return result
+
+
+@app.get("/worksheets")
+def list_worksheets(
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """List worksheets with summary. Excludes staging worksheets.
+
+    Deliberately sync (`def`, not `async def`): the body is pure
+    synchronous DB work with zero awaits, and the page fires it twice — as
+    `async def` it ran ON the event loop and froze every other request
+    behind it (a 32ms flag GET measured 5.3s during two in-flight calls,
+    prod probe 2026-07-07). Sync endpoints run in the threadpool. Keep it
+    `def` unless the body becomes genuinely async end-to-end.
+
+    All lookups are batched across worksheets in _serialize_worksheets —
+    the per-worksheet N+1 version hit 16.9s on prod (2026-08-27) and made
+    every worksheet status change appear to take a minute in the UI.
+    """
+    query = (
+        select(Worksheet)
+        .where(Worksheet.status != "staging")
+        .order_by(Worksheet.created_at.desc())
+    )
+    if status:
+        query = query.where(Worksheet.status == status)
+
+    worksheets = db.execute(query).scalars().all()
+    return _serialize_worksheets(db, worksheets)
+
+
+@app.get("/worksheets/{worksheet_id}")
+def get_worksheet_by_id(
+    worksheet_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """One worksheet in the exact list_worksheets item shape.
+
+    Lets the FE drawer resolve a non-open worksheet (completed-tab click,
+    flag deep-link) without fetching the full history — the drawer's list
+    query is open-only. Staging worksheets 404 to match the list's
+    exclusion. Registered AFTER the literal /worksheets/inbox and
+    /worksheets/users GETs, so those keep winning route matching.
+    """
+    ws = db.execute(
+        select(Worksheet).where(Worksheet.id == worksheet_id)
+    ).scalar_one_or_none()
+    if not ws or ws.status == "staging":
+        raise HTTPException(404, "Worksheet not found")
+    return _serialize_worksheets(db, [ws])[0]
 
 
 class WorksheetUpdate(BaseModel):
