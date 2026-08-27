@@ -188,7 +188,7 @@ import {
   useEffectiveReadSource,
   detailsFieldSource,
   useCoaGenerationSource,
-  coaSourceLabel,
+  coaSourceBadgeLabel,
 } from '@/lib/read-source'
 import { FieldSourceGlyph } from '@/components/senaite/FieldSourceGlyph'
 import {
@@ -5305,7 +5305,7 @@ export function SampleDetails() {
                         >
                           Generate Accumark COA
                           <span className="ml-auto text-[10px] font-mono text-muted-foreground">
-                            {coaSourceLabel(coaGenSource)}
+                            {coaSourceBadgeLabel(coaGenSource, isParent)}
                           </span>
                         </DropdownMenuItem>
                         <DropdownMenuItem
@@ -5322,7 +5322,7 @@ export function SampleDetails() {
                         >
                           Generate Per-Vial COAs
                           <span className="ml-auto text-[10px] font-mono text-muted-foreground">
-                            {coaSourceLabel(coaGenSource)}
+                            {coaSourceBadgeLabel(coaGenSource, isParent)}
                           </span>
                         </DropdownMenuItem>
                         {isParent && (

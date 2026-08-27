@@ -121,6 +121,15 @@ export function coaSourceLabel(source: ReadSource): string {
   return source === 'mk1' ? 'Accu-Mk1' : 'SENAITE'
 }
 
+/** Badge label for the COA Actions menu. Sub-sample (-SXX) COA generation is
+ *  a pre-existing independent path the backend keeps SENAITE-sourced
+ *  regardless of the toggle (the is_sub gate ahead of wire-document assembly
+ *  in backend/main.py) — so on sub-sample pages the badge says SENAITE, not
+ *  what the toggle promises for parents. */
+export function coaSourceBadgeLabel(source: ReadSource, isParent: boolean): string {
+  return coaSourceLabel(isParent ? source : 'senaite')
+}
+
 export function useCoaGenerationSource(): ReadSource {
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: getSettings })
   const raw = settings?.find((s) => s.key === READ_SOURCE_SETTING_KEY)?.value

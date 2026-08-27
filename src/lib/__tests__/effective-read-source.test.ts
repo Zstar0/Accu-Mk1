@@ -3,7 +3,7 @@ import { renderHook, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { createElement } from 'react'
-import { useEffectiveReadSource, parseCoaGenerationSource, coaSourceLabel, parseGlobalReadSource } from '@/lib/read-source'
+import { useEffectiveReadSource, parseCoaGenerationSource, coaSourceLabel, coaSourceBadgeLabel, parseGlobalReadSource } from '@/lib/read-source'
 import * as api from '@/lib/api'
 import { vi } from 'vitest'
 
@@ -51,5 +51,19 @@ describe('coaSourceLabel', () => {
   it('labels both sources', () => {
     expect(coaSourceLabel('senaite')).toBe('SENAITE')
     expect(coaSourceLabel('mk1')).toBe('Accu-Mk1')
+  })
+})
+
+describe('coaSourceBadgeLabel', () => {
+  it('shows the toggle label on parent pages', () => {
+    expect(coaSourceBadgeLabel('mk1', true)).toBe('Accu-Mk1')
+    expect(coaSourceBadgeLabel('senaite', true)).toBe('SENAITE')
+  })
+
+  it('always shows SENAITE on sub-sample pages — that path ignores the toggle', () => {
+    // Backend gates the wire document to parents (main.py is_sub); the badge
+    // must say what the backend will actually do, not what the toggle says.
+    expect(coaSourceBadgeLabel('mk1', false)).toBe('SENAITE')
+    expect(coaSourceBadgeLabel('senaite', false)).toBe('SENAITE')
   })
 })
