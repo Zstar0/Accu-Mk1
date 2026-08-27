@@ -228,7 +228,10 @@ export default function WorksheetsInboxPage() {
   })
 
   const { data: worksheets = [], isLoading: worksheetsLoading } = useQuery({
-    queryKey: ['worksheets-list'],
+    // Key aligned with the drawer/SampleDetails/list-page 'open' consumers
+    // (2026-08-27) — the bare ['worksheets-list'] key was a separate cache
+    // entry holding the same open-only data, defeating TanStack dedup.
+    queryKey: ['worksheets-list', 'open'],
     queryFn: () => listWorksheets('open'),
     refetchInterval: 30_000,
   })

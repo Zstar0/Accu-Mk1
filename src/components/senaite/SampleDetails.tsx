@@ -3717,12 +3717,16 @@ export function SampleDetails() {
 
   const analysisSla = useAnalysisSlaMap(data)
 
-  // Worksheet membership for the header link. Reuses the worksheets list
-  // (react-query-cached); finds the worksheet whose items include this sample.
+  // Worksheet membership for the header link. Reuses the OPEN worksheets
+  // list (react-query-cached, same key as the drawer/inbox/list-page
+  // consumers); finds the worksheet whose items include this sample.
   // Matches the sample's own id, so it works on parent + sub-sample pages.
+  // Open-only on purpose (2026-08-27): the unfiltered fetch served the full
+  // history (16.9s/4.2MB on prod) — and a bench chip pointing at a
+  // long-completed worksheet was noise anyway.
   const { data: allWorksheets = [] } = useQuery({
-    queryKey: ['worksheets-list', undefined],
-    queryFn: () => listWorksheets(),
+    queryKey: ['worksheets-list', 'open'],
+    queryFn: () => listWorksheets('open'),
     staleTime: 30_000,
   })
   const worksheetForSample = findWorksheetForSample(

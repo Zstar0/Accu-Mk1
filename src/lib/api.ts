@@ -5647,6 +5647,14 @@ export async function listWorksheets(status?: string): Promise<WorksheetListItem
   return response.json()
 }
 
+export async function getWorksheet(worksheetId: number): Promise<WorksheetListItem> {
+  const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Get worksheet failed: ${response.status}`)
+  return response.json()
+}
+
 export async function removeWorksheetItem(
   worksheetId: number,
   itemId: number
