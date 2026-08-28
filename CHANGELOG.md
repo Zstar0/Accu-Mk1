@@ -1,6 +1,30 @@
 # Changelog
 
-## v1.11.9 — 2026-08-28
+## v1.11.10 — 2026-08-28
+
+### Fixed
+
+- **Receive Sample page loads the ENTIRE due list** — the page fetched one
+  fixed page of 200 registry samples (raised once from 50), so every due
+  sample past the newest 200 was silently invisible: order 6344's three
+  samples sat at position ~235 of 326 and the lab couldn't receive them.
+  `loadDueSamples` now walks pages until `total` is reached (empty-page
+  break + id dedupe guard against the list shifting mid-walk), and the
+  By-Order ExplorerOrder join pages past the integration service's
+  200-per-request cap the same way.
+
+### Added
+
+- **Four independent search boxes on Receive Sample** — Order # (partial),
+  Client / email, Analyte, and Lot #, AND-combined, filtering both the
+  By-Order and By-Sample views entirely client-side over the full due list.
+- **Sortable By-Order columns** — Order #, Client / Email, and Created
+  headers now click-sort (asc/desc), matching the By-Sample table.
+- **Expandable By-Order rows** — a chevron on each order row unfolds its
+  samples with Sample ID, analytes, customer lot, and declared quantity.
+  Declared qty rides a new `analyte_details` field on `/registry/samples`
+  (name + declared_quantity pairs; the names-only `analytes` list is
+  unchanged for existing consumers).
 
 ### Added
 

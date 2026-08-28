@@ -35,6 +35,7 @@ import {
   getRegistrySamples,
   getSetting,
   listSubSamples,
+  type ExplorerOrder,
   type SenaiteSample,
 } from '@/lib/api'
 import {
@@ -56,9 +57,10 @@ type SortColumn =
   | 'date_sampled'
   | 'review_state'
   | 'vial_count'
+type OrderSortColumn = 'order' | 'client' | 'created' | 'samples'
 type SortDir = 'asc' | 'desc'
 
-function SortableHead({
+function SortableHead<C extends string>({
   column,
   label,
   activeColumn,
@@ -66,11 +68,11 @@ function SortableHead({
   onSort,
   className,
 }: {
-  column: SortColumn
+  column: C
   label: string
-  activeColumn: SortColumn | null
+  activeColumn: C | null
   direction: SortDir
-  onSort: (col: SortColumn) => void
+  onSort: (col: C) => void
   className?: string
 }) {
   const isActive = activeColumn === column
@@ -198,9 +200,19 @@ export function ReceiveSample() {
   const [dueSamplesError, setDueSamplesError] = useState<string | null>(null)
   const [sortColumn, setSortColumn] = useState<SortColumn | null>(null)
   const [sortDir, setSortDir] = useState<SortDir>('asc')
+  const [orderSortColumn, setOrderSortColumn] =
+    useState<OrderSortColumn | null>(null)
+  const [orderSortDir, setOrderSortDir] = useState<SortDir>('asc')
   const [showTestSamples, setShowTestSamples] = useState(false)
   const [receiveMode, setReceiveMode] = useState<'order' | 'sample'>('order')
-  const [orderSearch, setOrderSearch] = useState('')
+  // Four independent search axes, AND-combined, case-insensitive substring.
+  // All filtering is client-side: loadDueSamples holds the ENTIRE due list.
+  const [searchOrder, setSearchOrder] = useState('')
+  const [searchEmail, setSearchEmail] = useState('')
+  const [searchAnalyte, setSearchAnalyte] = useState('')
+  const [searchLot, setSearchLot] = useState('')
+  // Expanded By-Order rows (orderKey, or '__none__' for the no-order bucket).
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
   const [selectedOrders, setSelectedOrders] = useState<OrderGroup[] | null>(
     null
   )
@@ -235,6 +247,24 @@ export function ReceiveSample() {
     }
   }
 
+  function handleOrderSort(col: OrderSortColumn) {
+    if (orderSortColumn === col) {
+      setOrderSortDir(prev => (prev === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setOrderSortColumn(col)
+      setOrderSortDir('asc')
+    }
+  }
+
+  const toggleExpanded = useCallback((key: string) => {
+    setExpandedKeys(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
+
   const filteredSamples = showTestSamples
     ? dueSamples
     : dueSamples.filter(
@@ -265,10 +295,22 @@ export function ReceiveSample() {
   const orderGroups = groupSamplesByOrder(filteredSamples)
 
   // Join the due-sample order groups to their ExplorerOrder for the By-Order
-  // table (email, Created, customer deep-link).
+  // table (email, Created, customer deep-link). Paged: the IS caps limit at
+  // 200 per request, and a single page stopped covering the due backlog once
+  // order volume passed it (order 6344 invisible, 2026-08-28) — walk pages
+  // until a short one, bounded so a server bug can't loop us forever.
   const { data: explorerOrders } = useQuery({
     queryKey: ['explorer', 'orders', 'receive'],
-    queryFn: () => getExplorerOrders(undefined, 200, 0),
+    queryFn: async () => {
+      const PAGE = 200
+      const all: ExplorerOrder[] = []
+      for (let i = 0; i < 25; i++) {
+        const page = await getExplorerOrders(undefined, PAGE, all.length)
+        all.push(...page)
+        if (page.length < PAGE) break
+      }
+      return all
+    },
     enabled: dueSamplesConnected,
     staleTime: 30_000,
   })
@@ -294,17 +336,89 @@ export function ReceiveSample() {
     staleTime: 60_000,
   })
 
-  const orderQuery = orderSearch.trim().toLowerCase()
-  const visibleOrders = orderQuery
-    ? enriched.filter(
-        g =>
-          g.orderLabel.toLowerCase().includes(orderQuery) ||
-          (g.clientId ?? '').toLowerCase().includes(orderQuery) ||
-          (g.order ? (getOrderEmail(g.order) ?? '') : '')
-            .toLowerCase()
-            .includes(orderQuery),
-      )
+  const qOrder = searchOrder.trim().toLowerCase()
+  const qEmail = searchEmail.trim().toLowerCase()
+  const qAnalyte = searchAnalyte.trim().toLowerCase()
+  const qLot = searchLot.trim().toLowerCase()
+  const hasSearch = Boolean(qOrder || qEmail || qAnalyte || qLot)
+
+  const searchedOrders = hasSearch
+    ? enriched.filter(g => {
+        if (qOrder && !g.orderLabel.toLowerCase().includes(qOrder)) {
+          return false
+        }
+        if (qEmail) {
+          const email = (
+            g.order ? (getOrderEmail(g.order) ?? '') : ''
+          ).toLowerCase()
+          const client = (g.clientId ?? '').toLowerCase()
+          if (!email.includes(qEmail) && !client.includes(qEmail)) return false
+        }
+        if (
+          qAnalyte &&
+          !g.samples.some(s =>
+            (s.analytes ?? []).some(a => a.toLowerCase().includes(qAnalyte))
+          )
+        ) {
+          return false
+        }
+        if (
+          qLot &&
+          !g.samples.some(s =>
+            (s.client_lot ?? '').toLowerCase().includes(qLot)
+          )
+        ) {
+          return false
+        }
+        return true
+      })
     : enriched
+
+  const visibleOrders = orderSortColumn
+    ? [...searchedOrders].sort((a, b) => {
+        let cmp = 0
+        if (orderSortColumn === 'samples') {
+          cmp = a.samples.length - b.samples.length
+        } else {
+          const val = (g: EnrichedOrderGroup): string => {
+            if (orderSortColumn === 'order') return g.orderLabel
+            if (orderSortColumn === 'created') return g.order?.created_at ?? ''
+            return (
+              g.clientId ??
+              (g.order ? (getOrderEmail(g.order) ?? '') : '') ??
+              ''
+            )
+          }
+          cmp = val(a).localeCompare(val(b), undefined, { numeric: true })
+        }
+        return orderSortDir === 'asc' ? cmp : -cmp
+      })
+    : searchedOrders
+
+  // By-sample view: the same four axes applied at the sample level.
+  const visibleSamples = hasSearch
+    ? sortedSamples.filter(s => {
+        if (
+          qOrder &&
+          !(s.client_order_number ?? '').toLowerCase().includes(qOrder)
+        ) {
+          return false
+        }
+        if (qEmail && !(s.client_id ?? '').toLowerCase().includes(qEmail)) {
+          return false
+        }
+        if (
+          qAnalyte &&
+          !(s.analytes ?? []).some(a => a.toLowerCase().includes(qAnalyte))
+        ) {
+          return false
+        }
+        if (qLot && !(s.client_lot ?? '').toLowerCase().includes(qLot)) {
+          return false
+        }
+        return true
+      })
+    : sortedSamples
 
   const toggleKey = useCallback((orderKey: string) => {
     setSelectedKeys(prev => {
@@ -357,12 +471,28 @@ export function ReceiveSample() {
     try {
       // Native inbox (receive-page SENAITE flip): the due list reads the
       // lims_samples registry — same SenaiteSample shape, no SENAITE
-      // round-trip and no connectivity gate. 200 (not the default 50) so a
-      // large order's samples aren't silently truncated out of the By-Order
-      // list — matches ActiveBoxesPage's page size for its order-session
-      // lookups.
-      const result = await getRegistrySamples('sample_due', 200, 0)
-      setDueSamples(result.items)
+      // round-trip and no connectivity gate. PAGED to the full due list: a
+      // single fixed-size fetch silently hid every due sample past its cap
+      // once the backlog outgrew it (bumped 50→200 once, then order 6344's
+      // samples sat invisible at position ~235 of 326, 2026-08-28). The
+      // empty-page break covers totals shrinking mid-walk (samples received
+      // concurrently); the id-keyed dedupe covers rows sliding between pages.
+      const PAGE = 200
+      const first = await getRegistrySamples('sample_due', PAGE, 0)
+      const all = [...first.items]
+      while (all.length < first.total) {
+        const page = await getRegistrySamples('sample_due', PAGE, all.length)
+        if (page.items.length === 0) break
+        all.push(...page.items)
+      }
+      const seen = new Set<string>()
+      setDueSamples(
+        all.filter(s => {
+          if (seen.has(s.id)) return false
+          seen.add(s.id)
+          return true
+        })
+      )
       setDueSamplesConnected(true)
     } catch (e) {
       setDueSamplesConnected(false)
@@ -452,6 +582,41 @@ export function ReceiveSample() {
               </div>
             </div>
 
+            <div className="flex flex-wrap gap-2">
+              <Input
+                type="search"
+                value={searchOrder}
+                onChange={e => setSearchOrder(e.target.value)}
+                placeholder="Order #"
+                aria-label="Search by order number"
+                className="w-32"
+              />
+              <Input
+                type="search"
+                value={searchEmail}
+                onChange={e => setSearchEmail(e.target.value)}
+                placeholder="Client / email"
+                aria-label="Search by client or email"
+                className="w-52"
+              />
+              <Input
+                type="search"
+                value={searchAnalyte}
+                onChange={e => setSearchAnalyte(e.target.value)}
+                placeholder="Analyte"
+                aria-label="Search by analyte"
+                className="w-44"
+              />
+              <Input
+                type="search"
+                value={searchLot}
+                onChange={e => setSearchLot(e.target.value)}
+                placeholder="Lot #"
+                aria-label="Search by lot number"
+                className="w-40"
+              />
+            </div>
+
             {dueSamplesLoading ? (
               <div className="flex items-center justify-center py-12">
                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -475,14 +640,6 @@ export function ReceiveSample() {
               </div>
             ) : receiveMode === 'order' ? (
               <div className="flex flex-col gap-3">
-                <Input
-                  type="search"
-                  value={orderSearch}
-                  onChange={e => setOrderSearch(e.target.value)}
-                  placeholder="Search Order # or Client…"
-                  aria-label="Search orders by number or client"
-                  className="max-w-sm"
-                />
                 {multiOrderEnabled && selectedKeys.size >= 1 && (
                   <div className="sticky top-0 z-10 flex items-center gap-3 rounded-md border bg-background/95 px-3 py-2 text-sm shadow-sm backdrop-blur">
                     <span className="font-medium">
@@ -508,10 +665,31 @@ export function ReceiveSample() {
                   <Table>
                     <TableHeader>
                       <TableRow>
+                        <TableHead className="w-8" />
                         <TableHead className="w-10" />
-                        <TableHead className="w-36">Order #</TableHead>
-                        <TableHead>Client / Email</TableHead>
-                        <TableHead className="w-36">Created</TableHead>
+                        <SortableHead
+                          column="order"
+                          label="Order #"
+                          activeColumn={orderSortColumn}
+                          direction={orderSortDir}
+                          onSort={handleOrderSort}
+                          className="w-36"
+                        />
+                        <SortableHead
+                          column="client"
+                          label="Client / Email"
+                          activeColumn={orderSortColumn}
+                          direction={orderSortDir}
+                          onSort={handleOrderSort}
+                        />
+                        <SortableHead
+                          column="created"
+                          label="Created"
+                          activeColumn={orderSortColumn}
+                          direction={orderSortDir}
+                          onSort={handleOrderSort}
+                          className="w-36"
+                        />
                         <TableHead className="w-24" />
                       </TableRow>
                     </TableHeader>
@@ -531,6 +709,10 @@ export function ReceiveSample() {
                             group.orderKey != null &&
                             selectedKeys.has(group.orderKey)
                           }
+                          expanded={expandedKeys.has(
+                            group.orderKey ?? '__none__'
+                          )}
+                          onToggleExpand={toggleExpanded}
                           onToggle={toggleKey}
                           onProcess={handleProcessOrder}
                         />
@@ -538,10 +720,10 @@ export function ReceiveSample() {
                       {visibleOrders.length === 0 && (
                         <TableRow>
                           <TableCell
-                            colSpan={5}
+                            colSpan={6}
                             className="py-8 text-center text-sm text-muted-foreground"
                           >
-                            No orders match “{orderSearch}”
+                            No orders match the current search
                           </TableCell>
                         </TableRow>
                       )}
@@ -619,7 +801,17 @@ export function ReceiveSample() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {sortedSamples.map(s => (
+                    {visibleSamples.length === 0 && (
+                      <TableRow>
+                        <TableCell
+                          colSpan={8}
+                          className="py-8 text-center text-sm text-muted-foreground"
+                        >
+                          No samples match the current search
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    {visibleSamples.map(s => (
                       <TableRow
                         key={s.uid}
                         className="cursor-pointer hover:bg-muted/30"

@@ -1,3 +1,4 @@
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -20,6 +21,10 @@ interface OrderListRowProps {
   // Gates the per-row checkbox. Defaults true so standalone usage is unchanged;
   // ReceiveSample passes the multi-order check-in flag to hide it when off.
   selectable?: boolean
+  // Expanded state lives in the parent (keyed '__none__' for the no-order
+  // bucket) so it survives re-sorts and filtering.
+  expanded?: boolean
+  onToggleExpand?: (key: string) => void
   onToggle: (orderKey: string) => void
   onProcess: (group: EnrichedOrderGroup) => void
   // From the parent's ONE batched box-label-summaries query — never fetched
@@ -64,6 +69,8 @@ export function OrderListRow({
   group,
   selected,
   selectable = true,
+  expanded = false,
+  onToggleExpand,
   onToggle,
   onProcess,
   expectedVialsSummary,
@@ -74,6 +81,7 @@ export function OrderListRow({
   const email = order ? getOrderEmail(order) : null
   const customerId = order?.customer_id ?? null
   const linkEmail = email != null && customerId != null
+  const expandKey = group.orderKey ?? '__none__'
 
   const worst = worstSampleState(group)
 
@@ -86,6 +94,7 @@ export function OrderListRow({
   )
 
   return (
+    <>
     <tr
       data-testid="order-list-row"
       className={cn(
@@ -95,6 +104,23 @@ export function OrderListRow({
           : 'border-l-transparent'
       )}
     >
+      <td className="py-3 px-2 align-middle">
+        {onToggleExpand ? (
+          <button
+            type="button"
+            aria-label={`${expanded ? 'Collapse' : 'Expand'} ${group.orderLabel}`}
+            aria-expanded={expanded}
+            onClick={() => onToggleExpand(expandKey)}
+            className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            {expanded ? (
+              <ChevronDown className="h-4 w-4" />
+            ) : (
+              <ChevronRight className="h-4 w-4" />
+            )}
+          </button>
+        ) : null}
+      </td>
       <td className="py-3 px-3 align-middle">
         {canSelect ? (
           <Checkbox
@@ -163,5 +189,66 @@ export function OrderListRow({
         </Button>
       </td>
     </tr>
+    {expanded && (
+      <tr data-testid="order-detail-row" className="bg-muted/20">
+        <td colSpan={6} className="px-4 pb-3 pt-1">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-xs text-muted-foreground">
+                <th className="py-1 pr-4 text-left font-medium w-28">
+                  Sample ID
+                </th>
+                <th className="py-1 pr-4 text-left font-medium">Analytes</th>
+                <th className="py-1 pr-4 text-left font-medium w-44">Lot</th>
+                <th className="py-1 text-left font-medium w-32">
+                  Declared Qty
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {group.samples.map(s => {
+                const details =
+                  s.analyte_details && s.analyte_details.length > 0
+                    ? s.analyte_details
+                    : (s.analytes ?? []).map(name => ({
+                        name,
+                        declared_quantity: null as string | null,
+                      }))
+                return (
+                  <tr key={s.uid} className="border-t border-border/50">
+                    <td className="py-1.5 pr-4 font-mono align-top">{s.id}</td>
+                    <td className="py-1.5 pr-4 align-top">
+                      <span className="flex flex-wrap gap-1">
+                        {details.length > 0
+                          ? details.map(d => (
+                              <span
+                                key={d.name}
+                                className="inline-flex items-center rounded-full border px-2 py-0.5 text-xs"
+                              >
+                                {d.name}
+                              </span>
+                            ))
+                          : '—'}
+                      </span>
+                    </td>
+                    <td className="py-1.5 pr-4 font-mono text-xs align-top">
+                      {s.client_lot ?? '—'}
+                    </td>
+                    <td className="py-1.5 text-xs align-top">
+                      {details.some(d => d.declared_quantity)
+                        ? details
+                            .map(d => d.declared_quantity ?? '—')
+                            .join(', ')
+                        : '—'}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </td>
+      </tr>
+    )}
+    </>
   )
 }
