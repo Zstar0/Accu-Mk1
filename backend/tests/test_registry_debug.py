@@ -77,6 +77,24 @@ def test_coa_meta_map_drift():
     assert _status_of(res, "coa_meta") == "drift"
 
 
+def test_backfilled_watermark_is_not_permanent_drift():
+    """I3 (final review): ChromatographBackgroundUrl is a sticky coa_meta
+    field (sub_samples/service.py:_COA_META_STICKY_FIELDS) -- SENAITE never
+    supplies it, so a real backfilled value must survive the diff, not read
+    as permanent drift just because `meta` (the SENAITE-shaped payload)
+    carries nothing for that key. Before the fix, `derived` started from a
+    blank LimsSample() with no existing coa_meta to preserve, so the merge
+    always nulled the sticky field regardless of what the row actually
+    stored."""
+    row = _row_from(_meta())
+    stored = json.loads(row.coa_meta)
+    assert stored["ChromatographBackgroundUrl"] is None  # SENAITE supplied nothing
+    stored["ChromatographBackgroundUrl"] = "https://cdn.example.com/watermark.png"
+    row.coa_meta = json.dumps(stored)
+    res = diff_registry_vs_senaite(row, _meta())  # meta still omits the key
+    assert _status_of(res, "coa_meta") == "agree"
+
+
 def test_date_formatting_is_not_drift():
     """Offset string vs stored naive-UTC must compare equal, not drift."""
     row = _row_from(_meta())

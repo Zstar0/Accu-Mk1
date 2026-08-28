@@ -56,7 +56,15 @@ def _classify(stored: Any, want: Any) -> str:
 
 
 def diff_registry_vs_senaite(row: LimsSample, meta: dict) -> dict:
-    derived = LimsSample()
+    # (final review I3): seed `derived` from the STORED row's coa_meta, not
+    # a blank None. _populate_basic_info's coa_meta write routes through
+    # _merge_coa_meta(row.coa_meta, meta), whose sticky-field rule preserves
+    # a backfilled value (e.g. ChromatographBackgroundUrl) when the SENAITE
+    # payload supplies nothing for it. A blank `derived` has no existing
+    # value to preserve, so the merge always nulls the sticky field and the
+    # "senaite" side permanently disagrees with a correctly-backfilled
+    # registry row -- a false, permanent coa_meta "drift" that never clears.
+    derived = LimsSample(coa_meta=row.coa_meta)
     _populate_basic_info(derived, meta)  # reuse the exact mapping
 
     fields = []

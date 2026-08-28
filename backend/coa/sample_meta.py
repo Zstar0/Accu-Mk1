@@ -3,8 +3,11 @@
 Envelope scalars carry the AR-blob key SPELLINGS coab's engines read, so the
 consumer synthesizes its sample_json without touching the engines. Attachment
 descriptors carry explicit roles + absolute S2S download URLs — coab never
-walks a SENAITE attachment list. Fail-closed (R1): empty matrix or missing
-MK1_PUBLIC_BASE_URL aborts assembly; storage!='s3' rows are invisible.
+walks a SENAITE attachment list. Fail-closed (R1): empty matrix, missing
+MK1_PUBLIC_BASE_URL, or no eligible native sample-image row (Ruling R-13)
+aborts assembly; a missing chromatogram is NOT fatal here (micro-only
+samples legitimately lack one — see build_sample_meta's docstring);
+storage!='s3' rows are invisible.
 
 Twin contract: SAMPLE_META_SCALARS + ATTACHMENT_ROLES are byte-identical in
 coabuilder src/coabuilder_core/sample_meta.py and pinned by
@@ -70,6 +73,27 @@ def _newest(db, parent_pk: int, *, chromatogram: bool):
 
 
 def build_sample_meta(db, parent) -> dict:
+    """Assemble the sample_meta wire block (spec §2). Fail-closed (R1): no
+    SENAITE fallback -- a missing MK1_PUBLIC_BASE_URL, an empty
+    sample_type_title, or no eligible native sample-image row all abort
+    with NativeSectionsError (Ruling R-13 for the image case). A missing
+    chromatogram is NOT fatal here -- micro-only samples legitimately have
+    none; the generate-flow attachments gate is what enforces the
+    per-sample chromatogram requirement.
+
+    MK1_PUBLIC_BASE_URL mints the absolute S2S attachment URLs coab
+    downloads. PREFERRED value: an origin coab reaches DIRECTLY --
+    same-docker-network container origin, e.g. http://accu-mk1-backend:8012.
+    If routed through the public nginx instead, the base MUST include the
+    /api prefix (e.g. https://accumk1.valenceanalytical.com/api) --
+    nginx.conf's `location /api/` rewrite strips /api before proxying to
+    the backend, so a bare host base falls through to the SPA route
+    (`location /`) and returns 200 + index.html for /s2s/... paths. coab's
+    download guard currently trusts status 200 + a non-empty body, so a
+    bare base SILENTLY corrupts every attachment (an HTML page saved as
+    the "image"/"CSV") with no error anywhere. Do NOT reuse MK1_PUBLIC_URL
+    or ACCUMK1_BASE_URL verbatim here -- both resolve to the SPA host
+    without /api and land in this exact trap."""
     base = (os.environ.get(BASE_URL_ENV) or "").rstrip("/")
     if not base:
         raise NativeSectionsError(
@@ -79,6 +103,11 @@ def build_sample_meta(db, parent) -> dict:
         raise NativeSectionsError(
             f"sample_meta: {parent.sample_id} has no sample_type_title — the "
             f"matrix selects the rendering engine; aborting")
+    image_row = _newest(db, parent.id, chromatogram=False)
+    if image_row is None:
+        raise NativeSectionsError(
+            f"sample_meta: {parent.sample_id} has no native sample image — "
+            f"upload one or run the image backfill")
 
     from sub_samples.registry_details import _resolve_wp_url
     cm = _coa_meta(parent)
@@ -92,17 +121,26 @@ def build_sample_meta(db, parent) -> dict:
         "DeclaredTotalQuantity": parent.declared_total_quantity or "",
         "ClientLot": lot,
         "BatchID": lot,
-        "CoaCompanyName": cm.get("CoaCompanyName", ""),
-        "CoaEmail": cm.get("CoaEmail", ""),
-        "CoaWebsite": cm.get("CoaWebsite", ""),
-        "CoaAddress": cm.get("CoaAddress", ""),
+        # (final review C1): lims_samples.coa_meta always carries ALL
+        # _COA_META_FIELDS keys once a row has been through
+        # sub_samples.service._merge_coa_meta (`{k: meta.get(k) for k in
+        # _COA_META_FIELDS}`) -- a SENAITE payload that supplied nothing for
+        # a Coa* field leaves the key PRESENT holding None, not absent.
+        # `dict.get(k, "")` only substitutes the default for a MISSING key,
+        # so it returned the stored None unchanged and rode the wire as JSON
+        # null -- coab's non-nullable-scalar validator then 422s. `or ""`
+        # coerces both "missing" and "present-but-None" to the empty string.
+        "CoaCompanyName": cm.get("CoaCompanyName") or "",
+        "CoaEmail": cm.get("CoaEmail") or "",
+        "CoaWebsite": cm.get("CoaWebsite") or "",
+        "CoaAddress": cm.get("CoaAddress") or "",
         "CompanyLogoUrl": _resolve_wp_url(parent.company_logo_url) or "",
         "ChromatographBackgroundUrl": _resolve_wp_url(cm.get("ChromatographBackgroundUrl")) or None,
     }
     meta.update(_analyte_slots(parent))
 
     attachments = []
-    for role, row in (("sample_image", _newest(db, parent.id, chromatogram=False)),
+    for role, row in (("sample_image", image_row),
                       ("chromatogram_csv", _newest(db, parent.id, chromatogram=True))):
         if row is not None:
             attachments.append({

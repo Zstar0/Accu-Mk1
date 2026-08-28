@@ -4,6 +4,7 @@ Protocol from native rows. Parity pins: retest_of_uid synthesized as mk1:{id};
 reportable surfaced; review_state=None aborts; resolver drops superseded
 originals exactly as with the HTTP reader."""
 import asyncio
+import json
 import pytest
 from unittest.mock import Mock, patch
 
@@ -186,3 +187,90 @@ async def test_mk1_resolver_failure_derives_chromatogram_natively_no_senaite_cal
     # ran and produced a real answer, not a silently-False fallback.
     assert "chromatogram" in attach_blocker["missing"]
     assert "sample_image" in attach_blocker["missing"]
+
+
+# ── final review Finding I1 regression pin: _build_coa_analyte_name_resolver
+# (called on the unresolved-block error path) must derive parent
+# analyte-slot names NATIVELY in mk1 mode and must NEVER call
+# sub_samples.senaite.fetch_parent_analyte_slots — a synchronous, blocking
+# SENAITE AR search that fires even with SENAITE_URL unset (same shape as
+# the Task 5 review Finding 1 fix above: sub_samples/senaite.py resolves
+# its own SENAITE_BASE_URL independently of this module's SENAITE_URL gate).
+
+
+@pytest.mark.asyncio
+async def test_mk1_resolver_unresolved_derives_analyte_name_natively_no_senaite_call(
+    db_session, monkeypatch,
+):
+    from fastapi import HTTPException
+    from models import LimsSample
+    from types import SimpleNamespace
+    from coa.schemas import ResolverResult, SourceDecision
+
+    sample_id = "P-9600"
+    parent = LimsSample(
+        sample_id=sample_id,
+        # Stored native names can legitimately carry the SENAITE
+        # service-title suffix (registry_inbox._analyte_slot_fields'
+        # docstring; sub_samples.service._parse_analyte_slots writes
+        # SENAITE's Analyte{i}Peptide value through unstripped) — use that
+        # shape here so the test actually exercises the mk1 branch's strip,
+        # not just a fixture that happens to already be bare.
+        analytes=json.dumps([{"name": "BPC-157 - Identity (HPLC)",
+                              "declared_quantity": "10.0"}]),
+    )
+    db_session.add(parent)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "coa.source_setting.coa_generation_source", lambda db: "mk1")
+
+    # Canned resolver result carrying one blocking (non-micro) decision on a
+    # generic per-analyte keyword — sidesteps needing to fabricate a real
+    # >1-candidate needs_decision scenario; what's under test is the name
+    # resolver called on this path, not the resolver's own blocking rules
+    # (covered elsewhere).
+    canned_result = ResolverResult(
+        parent_sample_id=sample_id,
+        decisions=[SourceDecision(
+            analyte_keyword="ANALYTE-1-PUR",
+            mode="auto",
+            chosen=None,
+            candidates=[],
+            blocked="missing",
+            blocked_detail="no reportable result for ANALYTE-1-PUR",
+        )],
+    )
+
+    async def _fake_resolve(*a, **kw):
+        return canned_result
+    monkeypatch.setattr("coa.source_resolver.resolve_sources", _fake_resolve)
+
+    # THE PIN: must never be called in mk1 mode.
+    forbidden = Mock(side_effect=AssertionError(
+        "fetch_parent_analyte_slots (SENAITE HTTP) must not be called in "
+        "mk1 mode"))
+    monkeypatch.setattr(
+        "sub_samples.senaite.fetch_parent_analyte_slots", forbidden)
+
+    monkeypatch.setattr(
+        "sub_samples.service.fetch_sample_services",
+        Mock(side_effect=RuntimeError("no IS in this test")))
+
+    monkeypatch.setattr(main, "COA_BUILDER_URL", "http://coabuilder.test")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await main.generate_sample_coa(
+            sample_id=sample_id, db=db_session,
+            current_user=SimpleNamespace(id=1),
+        )
+
+    forbidden.assert_not_called()
+
+    blockers = exc_info.value.detail["blockers"]
+    unresolved_blocker = next(b for b in blockers if b["code"] == "unresolved_sources")
+    # Proves the native derivation actually ran and resolved a real name
+    # (from lims_samples.analytes slot 1) rather than falling through to a
+    # silently-empty slot_names map — "Analyte 1 (Purity)" is the generic
+    # fallback build_name_resolver uses when slot_names has nothing.
+    assert unresolved_blocker["unresolved"][0]["analyte_name"] == "BPC-157 (Purity)"

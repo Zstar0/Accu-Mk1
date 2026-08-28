@@ -11324,16 +11324,29 @@ def _load_sample_aliases(db: Session, sample_id: str) -> dict[int, str]:
     return {r.slot: r.alias for r in rows}
 
 
-def _build_coa_analyte_name_resolver(db: Session, sample_id: str, *, alias_map: dict[int, str]):
+def _build_coa_analyte_name_resolver(
+    db: Session, sample_id: str, *, alias_map: dict[int, str],
+    coa_src: str = "senaite",
+):
     """Build a keyword→display-name function for the COA block message.
 
     Gathers three name sources (no failure is fatal — each degrades):
       - Mk1 catalog titles (AnalysisService.keyword → title)
-      - parent analyte-slot peptide names from SENAITE (best-effort)
+      - parent analyte-slot peptide names — NATIVE (lims_samples.analytes,
+        zero SENAITE HTTP) when coa_src == "mk1"; SENAITE (best-effort)
+        otherwise
       - per-sample customer aliases (passed in)
 
     Only invoked on the unresolved-block error path, so the one SENAITE
-    slot read here is off the happy path.
+    slot read here (senaite mode only) is off the happy path.
+
+    COA read-independence (final review Finding I1, R1 fix): mirrors the
+    Task 5 review Finding 1 pattern — sub_samples.senaite resolves its own
+    SENAITE_BASE_URL independently of this module's SENAITE_URL gate, so a
+    plain "call it and swallow the exception" try/except does NOT keep mk1
+    mode off the SENAITE wire; the synchronous, blocking HTTP call still
+    fires (and can still hang the event loop) before it fails. mk1 mode
+    must never reach fetch_parent_analyte_slots at all.
     """
     from coa.block_summary import build_name_resolver
     from models import AnalysisService
@@ -11345,14 +11358,38 @@ def _build_coa_analyte_name_resolver(db: Session, sample_id: str, *, alias_map: 
     }
 
     slot_names: dict[int, str] = {}
-    try:
-        from sub_samples import senaite as senaite_mod
-        for slot, label in senaite_mod.fetch_parent_analyte_slots(sample_id).items():
-            # Strip the "- Identity (HPLC)" service suffix → bare peptide name.
-            stripped = re.sub(r"\s*-\s*[^-]+\([^)]+\)\s*$", "", str(label)).strip()
-            slot_names[slot] = stripped or str(label)
-    except Exception:
-        pass
+    if coa_src == "mk1":
+        try:
+            from sub_samples.registry_inbox import _analyte_slot_fields
+            parent = db.execute(
+                select(LimsSample).where(LimsSample.sample_id == sample_id)
+            ).scalar_one_or_none()
+            if parent is not None:
+                for key, name in _analyte_slot_fields(parent.analytes).items():
+                    # "Analyte{n}Peptide" -> n. The stored name can carry
+                    # the SAME "- Identity (HPLC)" service-title suffix
+                    # SENAITE holds — registry_inbox._analyte_slot_fields'
+                    # own docstring says so, and sub_samples.service.
+                    # _parse_analyte_slots writes SENAITE's Analyte{i}Peptide
+                    # value through _extract_label unchanged when it's
+                    # already a string (not stripped there either). Apply
+                    # the identical suffix-strip the senaite branch below
+                    # uses — it's a no-op on an already-bare name, so this
+                    # is correct regardless of which shape a given row holds.
+                    slot = int(key[len("Analyte"):-len("Peptide")])
+                    stripped = re.sub(r"\s*-\s*[^-]+\([^)]+\)\s*$", "", str(name)).strip()
+                    slot_names[slot] = stripped or str(name)
+        except Exception:
+            pass
+    else:
+        try:
+            from sub_samples import senaite as senaite_mod
+            for slot, label in senaite_mod.fetch_parent_analyte_slots(sample_id).items():
+                # Strip the "- Identity (HPLC)" service suffix → bare peptide name.
+                stripped = re.sub(r"\s*-\s*[^-]+\([^)]+\)\s*$", "", str(label)).strip()
+                slot_names[slot] = stripped or str(label)
+        except Exception:
+            pass
 
     return build_name_resolver(
         catalog_titles=catalog_titles, slot_names=slot_names, aliases=alias_map,
@@ -11713,7 +11750,10 @@ async def generate_sample_coa(
 
                 micro_kw = coa_exempt_keywords(db)
                 if has_blocking_unresolved(resolver_result, micro_keywords=micro_kw):
-                    name_for = _build_coa_analyte_name_resolver(db, sample_id, alias_map=_load_sample_aliases(db, sample_id))
+                    name_for = _build_coa_analyte_name_resolver(
+                        db, sample_id, alias_map=_load_sample_aliases(db, sample_id),
+                        coa_src=_coa_src,
+                    )
                     _unresolved = summarize_unresolved(
                         resolver_result, micro_keywords=micro_kw, name_for=name_for,
                     )
