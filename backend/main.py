@@ -21373,6 +21373,64 @@ def get_sample_coa_sections(
         raise HTTPException(status_code=502, detail=e.detail)
 
 
+# ── S2S attachment bytes (read-independence spec §4) ──────────────────
+# Serves the bytes behind the URLs backend/coa/sample_meta.py mints for
+# sample_meta.attachments[*].url — COABuilder downloads each one with the
+# service-token header instead of walking SENAITE's AR attachments.
+# Byte-loading and header logic are cloned from the user-JWT download route
+# (download_registry_parent_attachment, /registry/sample/{sample_id}/
+# attachments/{attachment_id}/download, above): Content-Type and filename
+# come from the DB row, NEVER the storage-key extension (chromatogram
+# snapshots key as '.bin' while the row says text/csv). NO SENAITE branch
+# (R1) — storage='s3' is the only servable state; anything else 404s plainly,
+# with no proxy hint, because the producer never mints this URL for a
+# SENAITE-stored row.
+
+@app.get("/s2s/samples/{sample_id}/attachments/{attachment_id}")
+def s2s_get_sample_attachment(
+    sample_id: str,
+    attachment_id: int,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_internal_service_token),
+):
+    """Attachment bytes for S2S consumers (read-independence spec §4,
+    Task 3). Additive sibling of download_registry_parent_attachment —
+    same DB-row-authoritative headers, service-token gated instead of
+    user-JWT gated, no SENAITE-proxy branch."""
+    from sub_samples.photo_storage import PhotoNotFoundError, get_storage
+
+    att = db.execute(
+        select(LimsParentAttachment)
+        .join(LimsSample, LimsParentAttachment.lims_sample_pk == LimsSample.id)
+        .where(
+            LimsParentAttachment.id == attachment_id,
+            LimsSample.sample_id == sample_id.strip().upper(),
+        )
+    ).scalar_one_or_none()
+    if att is None:
+        raise HTTPException(
+            404, f"No attachment {attachment_id} on sample {sample_id}")
+    if att.storage != "s3":
+        raise HTTPException(404, "Attachment is not available via this route")
+    if not att.storage_key:
+        logger.warning(
+            "s2s_attachment.download_missing_key id=%s sample=%s",
+            att.id, sample_id)
+        raise HTTPException(404, "Attachment has no storage key")
+    try:
+        data = get_storage().fetch_photo(att.storage_key)
+    except PhotoNotFoundError:
+        logger.warning(
+            "s2s_attachment.download_object_missing id=%s key=%s",
+            att.id, att.storage_key)
+        raise HTTPException(404, "Attachment object missing from storage")
+    return Response(
+        content=data,
+        media_type=att.content_type or "application/octet-stream",
+        headers={"Content-Disposition": f'inline; filename="{att.filename}"'},
+    )
+
+
 @app.get("/s2s/catalog/service-keys")
 def s2s_catalog_service_keys(
     db: Session = Depends(get_db),
