@@ -212,7 +212,7 @@ import {
   OrderedProducts,
   useOrderedProducts,
 } from '@/components/senaite/OrderedProducts'
-import { ProductChip } from '@/components/senaite/ProductChip'
+import { ProductChip, useProductColorClasses } from '@/components/senaite/ProductChip'
 import {
   computeProductCompletion,
   type ProductCompletionContext,
@@ -3717,6 +3717,10 @@ export function SampleDetails() {
 
   const analysisSla = useAnalysisSlaMap(data)
 
+  // Product chips (header bar) colored by their fulfillment role — same
+  // catalog source as the boxing lanes (Handler request, 2026-08-28).
+  const productColorFor = useProductColorClasses()
+
   // Worksheet membership for the header link. Reuses the OPEN worksheets
   // list (react-query-cached, same key as the drawer/inbox/list-page
   // consumers); finds the worksheet whose items include this sample.
@@ -5161,6 +5165,7 @@ export function SampleDetails() {
                     key={p.key}
                     compact
                     product={p}
+                    colorClasses={productColorFor(p)}
                     completion={computeProductCompletion(
                       p,
                       productCompletionCtx

@@ -9352,13 +9352,29 @@ async def get_explorer_orders(
       to the IS for customer-scoped requests.
     """
     # Phase 29: customer-scoped listing must round-trip to Integration Service.
-    if customer_id is not None:
+    # v1.11.3: so must any request carrying a search axis — the IS endpoint
+    # accepts the axes WITHOUT customer_id ("null param returns all orders"),
+    # and it owns the hardened jsonpath/ILIKE SQL (T-30-01). The direct
+    # fetch_orders branch below ignores the axes entirely, which made the
+    # Order Status page's server-side search (v1.11.2 FE) a silent no-op —
+    # an old order id (prod report: 5739) still matched nothing.
+    axes_active = any(
+        v is not None and v.strip() != ""
+        for v in (search_order_number, search_sample_id, search_analyte, search_lot)
+    )
+    if customer_id is not None or axes_active:
         import httpx as _httpx
         params: dict[str, str] = {
-            "customer_id": str(customer_id),
             "limit": str(limit),
             "offset": str(offset),
         }
+        if customer_id is not None:
+            params["customer_id"] = str(customer_id)
+        elif sort is None:
+            # Unscoped axis search: match the browse view's newest-first
+            # ordering (the IS default 'open_first' is the customer page's
+            # convention, not this one's).
+            params["sort"] = "date_desc"
         # Forward UX-revision search axes + sort only when set so the IS sees
         # the same absent-vs-empty semantics it would from a direct caller.
         # Empty string ('') IS forwarded as-is (back-compat with debounce-flush).
@@ -15796,15 +15812,26 @@ def _receive_native_phase(
 
         already = row.status not in pre_received
         if not already:
+            from_status = row.status or "sample_due"
             record_sample_transition(
                 db, sample_id=row.sample_id, to_status="sample_received",
                 source="mk1", verb="receive",
-                from_status=row.status or "sample_due",
+                from_status=from_status,
                 actor_user_id=user_id,
             )
             heal_sample_status(db, row.sample_id, "sample_received")
             if row.date_received is None:
                 row.date_received = datetime.utcnow()
+            # Engine touchpoint (PB-0486 finding, 2026-08-28): this phase
+            # recorded the receive but never drove the side-by-side engine,
+            # so every receive-page check-in stranded native_status at its
+            # pre-receive state. Same shared path as the bg chokepoint;
+            # never-raise inside, so an engine error cannot fail check-in.
+            from workflow.engine import drive_sample_touchpoint
+            drive_sample_touchpoint(
+                db, row.sample_id, "receive",
+                from_status=from_status, actor_user_id=user_id,
+            )
             steps.append("received_native")
 
         db.commit()
@@ -16416,49 +16443,22 @@ def _record_sample_transition_bg(**kwargs) -> None:
                 _row.date_received = datetime.utcnow()
                 wrote_received = True
         # Side-by-side engine touchpoint (2026-07-26 spec §5): the SAME verb
-        # this hook just logged drives Mk1's own trajectory. Separately
-        # guarded — an engine error must not cost us the log write above.
+        # this hook just logged drives Mk1's own trajectory. The arm-on-
+        # first-touch, row-lock, and never-raise semantics live in the
+        # shared helper (workflow.engine.drive_sample_touchpoint) so the
+        # receive page's native phase drives the identical path (PB-0486
+        # finding, 2026-08-28).
         wrote_engine = False
-        try:
-            from workflow.engine import (arm_native_status, evaluate_cascades,
-                                         execute_verb, shadow_enabled)
-            if shadow_enabled():
-                # Row lock (finding #2, 2026-07-27): this bg session can
-                # interleave with run_cascades_bg's own bg session on the
-                # same sample. Background context only — no user-facing
-                # latency impact.
-                _s = db.execute(select(LimsSample).where(
-                    LimsSample.sample_id == kwargs["sample_id"]
-                ).with_for_update()).scalar_one_or_none()
-                _verb = kwargs.get("verb")
-                if _s is not None and _verb in ("receive", "publish"):
-                    if _s.native_status is None:
-                        # Arm on first touch (2026-07-27, P-0140 coverage-
-                        # decay finding): a sample minted after the catalog
-                        # seed run never gets a native_status otherwise, so
-                        # the engine skips it silently forever. Adopt
-                        # `from_status` — the PRE-transition state both
-                        # call sites always pass — NOT `_s.status`: by the
-                        # time this hook runs, heal has already advanced
-                        # `_s.status` to the POST-transition state, and
-                        # arming from status would make the verb about to
-                        # run below a no_edge. The `_s.status` fallback is
-                        # defensive only.
-                        arm_native_status(
-                            db, _s, kwargs.get("from_status") or _s.status,
-                            trigger=_verb,
-                            actor_user_id=kwargs.get("actor_user_id"))
-                    execute_verb(
-                        db, _s, _verb, trigger=_verb,
-                        actor_user_id=kwargs.get("actor_user_id"),
-                        attested={"coa_published": True}
-                        if _verb == "publish" else None,
-                    )
-                    evaluate_cascades(db, _s, trigger=_verb,
-                                      actor_user_id=kwargs.get("actor_user_id"))
-                    wrote_engine = True
-        except Exception:
-            logger.exception("sbs touchpoint failed (never-raise)")
+        _verb = kwargs.get("verb")
+        if _verb in ("receive", "publish"):
+            from workflow.engine import drive_sample_touchpoint
+            wrote_engine = drive_sample_touchpoint(
+                db, kwargs["sample_id"], _verb,
+                from_status=kwargs.get("from_status"),
+                actor_user_id=kwargs.get("actor_user_id"),
+                attested={"coa_published": True}
+                if _verb == "publish" else None,
+            )
         if wrote_log or wrote_status or wrote_received or wrote_engine:
             db.commit()
     except Exception as log_err:  # noqa: BLE001

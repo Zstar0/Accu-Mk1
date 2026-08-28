@@ -1,5 +1,9 @@
 import { useState, useEffect, useMemo } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  keepPreviousData,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import {
   Activity,
   AlertTriangle,
@@ -15,6 +19,7 @@ import {
   ListTree,
   ChevronDown,
   ChevronRight,
+  FlaskConical,
 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
@@ -25,6 +30,7 @@ import {
   type ExplorerOrder,
   type SenaiteLookupResult,
   type SenaiteAnalysis,
+  type OrderedProduct,
 } from '@/lib/api'
 import {
   getActiveEnvironmentName,
@@ -36,6 +42,14 @@ import { useUIStore } from '@/store/ui-store'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import {
   Card,
@@ -54,12 +68,25 @@ import {
   TEST_EMAILS,
   type AnalysisStateCounts,
 } from '@/components/explorer/helpers'
-import { toggleFilterKey, isOrderAtRisk, orderMatchesLot } from '@/components/explorer/order-filters'
+import {
+  toggleFilterKey,
+  isOrderAtRisk,
+  orderMatchesLot,
+} from '@/components/explorer/order-filters'
 import { OrderRow } from '@/components/explorer/OrderRow'
 import { FlagIndicator } from '@/components/flags/FlagIndicator'
 import { SampleSlaIndicator } from '@/components/explorer/SampleSlaIndicator'
-import { useOrderSlaStatuses, type SampleSlaSnapshot } from '@/services/order-sla'
+import {
+  useOrderSlaStatuses,
+  type SampleSlaSnapshot,
+} from '@/services/order-sla'
 import { useSenaiteLookupMap } from '@/services/senaite-lookup-map'
+import { useAnalysisProfiles } from '@/services/analysis-profiles'
+import { buildProductsBySampleId } from '@/lib/product-chips'
+import {
+  ProductChip,
+  useProductColorClasses,
+} from '@/components/senaite/ProductChip'
 import { useEffectiveReadSource } from '@/lib/read-source'
 
 // Re-export TEST_EMAILS so the existing import surface
@@ -80,18 +107,41 @@ function formatRelativeTime(isoStr: string): string {
 
 // --- Kanban types & components ---
 
-type KanbanCol = { key: string; label: string; countKey: keyof AnalysisStateCounts }
+type KanbanCol = {
+  key: string
+  label: string
+  countKey: keyof AnalysisStateCounts
+}
 
 const KANBAN_COLUMNS: KanbanCol[] = [
   { key: 'sample_due', label: 'Sample Due', countKey: 'sample_due' },
   { key: 'received', label: 'Received', countKey: 'received' },
   { key: 'assigned', label: 'Assigned', countKey: 'assigned' },
   { key: 'to_verify', label: 'To Verify', countKey: 'to_verify' },
-  { key: 'waiting_for_addon', label: 'Waiting Addon', countKey: 'waiting_for_addon' },
-  { key: 'ready_for_review', label: 'Ready for Review', countKey: 'ready_for_review' },
+  {
+    key: 'waiting_for_addon',
+    label: 'Waiting Addon',
+    countKey: 'waiting_for_addon',
+  },
+  {
+    key: 'ready_for_review',
+    label: 'Ready for Review',
+    countKey: 'ready_for_review',
+  },
   { key: 'verified', label: 'Verified', countKey: 'verified' },
   { key: 'published', label: 'Published', countKey: 'published' },
 ]
+
+// Hidden-by-default kanban columns (Handler request, 2026-08-27): Sample Due
+// and Published are the bookkeeping ends of the pipeline — the lab rarely
+// needs them rendering. Re-enabled per user via the Columns dropdown in the
+// kanban toolbar (or the flat view's column-header chevrons); the choice
+// persists in the saved filters.
+export const DEFAULT_COLLAPSED_KANBAN_COLS = ['sample_due', 'published']
+
+// Stable empty result for the Products-toggle-off state — keeps memo/prop
+// identity constant so rows don't re-render when the feature is off.
+const EMPTY_PRODUCTS_MAP = new Map<string, OrderedProduct[]>()
 
 interface KanbanSampleItem {
   sampleId: string
@@ -104,8 +154,8 @@ interface KanbanSampleItem {
   lookup: SenaiteLookupResult | undefined
   isLoading: boolean
   isError: boolean
-  analysisServices?: string[]  // names of analyses matching this column's state
-  lot?: string  // payload lot_code, positionally aligned (display fallback for client_lot)
+  analysisServices?: string[] // names of analyses matching this column's state
+  lot?: string // payload lot_code, positionally aligned (display fallback for client_lot)
 }
 
 // Tailwind classes for count pill background per column
@@ -132,19 +182,33 @@ export const COL_ANALYSIS_STATES: Record<string, string[]> = {
   published: ['published'],
 }
 
-const COMPLETED_ANALYSIS_STATES = new Set(['verified', 'published', 'rejected', 'cancelled', 'invalid', 'retracted'])
+const COMPLETED_ANALYSIS_STATES = new Set([
+  'verified',
+  'published',
+  'rejected',
+  'cancelled',
+  'invalid',
+  'retracted',
+])
 
-function buildAnalyteNameMap(lookup: SenaiteLookupResult | undefined): Map<number, string> {
+function buildAnalyteNameMap(
+  lookup: SenaiteLookupResult | undefined
+): Map<number, string> {
   const map = new Map<number, string>()
   if (!lookup?.analytes) return map
   for (const analyte of lookup.analytes) {
-    const displayName = analyte.matched_peptide_name ?? analyte.raw_name.replace(/\s*-\s*[^-]+\([^)]+\)\s*$/, '')
+    const displayName =
+      analyte.matched_peptide_name ??
+      analyte.raw_name.replace(/\s*-\s*[^-]+\([^)]+\)\s*$/, '')
     map.set(analyte.slot_number, displayName)
   }
   return map
 }
 
-function formatAnalysisTitle(title: string, nameMap: Map<number, string>): string {
+function formatAnalysisTitle(
+  title: string,
+  nameMap: Map<number, string>
+): string {
   const match = title.match(/^Analyte\s+(\d)\s*(.*)/i)
   if (match?.[1]) {
     const slot = parseInt(match[1], 10)
@@ -155,14 +219,20 @@ function formatAnalysisTitle(title: string, nameMap: Map<number, string>): strin
   return title
 }
 
-export function getAnalysisServicesForCol(analyses: SenaiteAnalysis[], colKey: string, lookup?: SenaiteLookupResult): string[] {
+export function getAnalysisServicesForCol(
+  analyses: SenaiteAnalysis[],
+  colKey: string,
+  lookup?: SenaiteLookupResult
+): string[] {
   const nameMap = buildAnalyteNameMap(lookup)
   const format = (a: SenaiteAnalysis) => formatAnalysisTitle(a.title, nameMap)
 
   // For waiting_for_addon and ready_for_review: show analyses that are NOT completed (the outstanding ones)
   if (colKey === 'waiting_for_addon' || colKey === 'ready_for_review') {
     return analyses
-      .filter(a => !COMPLETED_ANALYSIS_STATES.has(a.review_state?.toLowerCase() ?? ''))
+      .filter(
+        a => !COMPLETED_ANALYSIS_STATES.has(a.review_state?.toLowerCase() ?? '')
+      )
       .map(format)
   }
   const states = COL_ANALYSIS_STATES[colKey]
@@ -190,7 +260,7 @@ function sampleStateLabel(state: string | null): string {
     rejected: 'Rejected',
     cancelled: 'Cancelled',
   }
-  return map[s] ?? (state ?? 'Unknown')
+  return map[s] ?? state ?? 'Unknown'
 }
 
 function KanbanSampleCard({
@@ -199,6 +269,8 @@ function KanbanSampleCard({
   showAnalysisServices,
   lotHighlight,
   sampleSlaStatusesMap,
+  products,
+  productColorFor,
 }: {
   item: KanbanSampleItem
   showOrder: boolean
@@ -210,9 +282,17 @@ function KanbanSampleCard({
   // service group). Until the indicator itself renders stacked rows, we pick
   // the first element so behavior stays single-tier-visible.
   sampleSlaStatusesMap?: Map<string, SampleSlaSnapshot[]>
+  /** Ordered-product chips (v1.11.8, Products toggle) — xs size, colored by
+   *  fulfillment role from the same catalog source as the boxing lanes. */
+  products?: OrderedProduct[]
+  /** Role-catalog color resolver, passed from the page (keeps this card
+   *  hook-free for closed-factory test harnesses). */
+  productColorFor?: (p: OrderedProduct) => string
 }) {
   const navigateToSample = useUIStore(state => state.navigateToSample)
-  const navigateToOrderExplorer = useUIStore(state => state.navigateToOrderExplorer)
+  const navigateToOrderExplorer = useUIStore(
+    state => state.navigateToOrderExplorer
+  )
 
   if (item.isLoading) {
     return (
@@ -223,7 +303,8 @@ function KanbanSampleCard({
     )
   }
 
-  const pillClass = COL_PILL_CLASS[item.colKey] ?? 'bg-muted/60 text-muted-foreground'
+  const pillClass =
+    COL_PILL_CLASS[item.colKey] ?? 'bg-muted/60 text-muted-foreground'
   const countLabel = COL_COUNT_LABEL[item.colKey] ?? ''
 
   // Unique analysts assigned to analyses in this column
@@ -231,11 +312,21 @@ function KanbanSampleCard({
     if (!item.lookup) return []
     const colStates = COL_ANALYSIS_STATES[item.colKey]
     const relevant = colStates
-      ? item.lookup.analyses.filter(a => colStates.includes(a.review_state?.toLowerCase() ?? ''))
-      : item.colKey === 'waiting_for_addon' || item.colKey === 'ready_for_review'
-      ? item.lookup.analyses.filter(a => !COMPLETED_ANALYSIS_STATES.has(a.review_state?.toLowerCase() ?? ''))
-      : []
-    const names = new Set(relevant.map(a => a.analyst).filter((n): n is string => !!n))
+      ? item.lookup.analyses.filter(a =>
+          colStates.includes(a.review_state?.toLowerCase() ?? '')
+        )
+      : item.colKey === 'waiting_for_addon' ||
+          item.colKey === 'ready_for_review'
+        ? item.lookup.analyses.filter(
+            a =>
+              !COMPLETED_ANALYSIS_STATES.has(
+                a.review_state?.toLowerCase() ?? ''
+              )
+          )
+        : []
+    const names = new Set(
+      relevant.map(a => a.analyst).filter((n): n is string => !!n)
+    )
     return Array.from(names)
   })()
 
@@ -255,11 +346,18 @@ function KanbanSampleCard({
           </button>
           <FlagIndicator scope={{ kind: 'sample', sampleId: item.sampleId }} />
           {item.email && (
-            <span className="text-[10px] text-muted-foreground/60 leading-none truncate">{item.email}</span>
+            <span className="text-[10px] text-muted-foreground/60 leading-none truncate">
+              {item.email}
+            </span>
           )}
         </div>
         {/* Count pill: "17 to verify" — makes the number self-explanatory */}
-        <span className={cn('inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums leading-none shrink-0', pillClass)}>
+        <span
+          className={cn(
+            'inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums leading-none shrink-0',
+            pillClass
+          )}
+        >
           {item.count}
           <span className="font-normal opacity-80">{countLabel}</span>
         </span>
@@ -281,6 +379,19 @@ function KanbanSampleCard({
           </span>
         </div>
       )}
+      {/* Ordered-product chips (Products toggle) — xs, role-catalog colors */}
+      {products && products.length > 0 && (
+        <div className="flex flex-wrap gap-1 mt-1">
+          {products.map(p => (
+            <ProductChip
+              key={p.key}
+              xs
+              product={p}
+              colorClasses={productColorFor?.(p)}
+            />
+          ))}
+        </div>
+      )}
       {/* Row 2: secondary metadata — clearly separated from analysis state */}
       {(showOrder || item.lookup) && (
         <div className="flex items-center justify-between gap-1 mt-0.5">
@@ -296,37 +407,55 @@ function KanbanSampleCard({
             )}
             {item.lookup && (
               <>
-                {showOrder && <span className="text-muted-foreground/30 text-[10px]">·</span>}
+                {showOrder && (
+                  <span className="text-muted-foreground/30 text-[10px]">
+                    ·
+                  </span>
+                )}
                 <span className="text-[10px] text-muted-foreground/50 leading-none">
                   Sample: {sampleStateLabel(item.lookup.review_state)}
                 </span>
               </>
             )}
           </div>
-          {!(item.lookup?.date_received && item.lookup.review_state !== 'published') && (
-            <span className={cn(
-              'text-[10px] font-mono leading-none tabular-nums',
-              item.completedAt ? 'text-green-600/70' : 'text-amber-500/70'
-            )}>
+          {!(
+            item.lookup?.date_received &&
+            item.lookup.review_state !== 'published'
+          ) && (
+            <span
+              className={cn(
+                'text-[10px] font-mono leading-none tabular-nums',
+                item.completedAt ? 'text-green-600/70' : 'text-amber-500/70'
+              )}
+            >
               {formatProcessingTime(item.createdAt, item.completedAt)}
             </span>
           )}
         </div>
       )}
-      {item.lookup?.date_received && item.lookup.review_state !== 'published' && (
-        <div className="mt-0.5">
-          <SampleSlaIndicator snapshots={sampleSlaStatusesMap?.get(item.sampleId)} />
-        </div>
-      )}
-      {showAnalysisServices && item.colKey !== 'published' && item.analysisServices && item.analysisServices.length > 0 && (
-        <div className="mt-1 pt-1 border-t border-border/30">
-          {item.analysisServices.map((name, i) => (
-            <div key={i} className="text-[10px] text-muted-foreground/70 leading-relaxed truncate">
-              {name}
-            </div>
-          ))}
-        </div>
-      )}
+      {item.lookup?.date_received &&
+        item.lookup.review_state !== 'published' && (
+          <div className="mt-0.5">
+            <SampleSlaIndicator
+              snapshots={sampleSlaStatusesMap?.get(item.sampleId)}
+            />
+          </div>
+        )}
+      {showAnalysisServices &&
+        item.colKey !== 'published' &&
+        item.analysisServices &&
+        item.analysisServices.length > 0 && (
+          <div className="mt-1 pt-1 border-t border-border/30">
+            {item.analysisServices.map((name, i) => (
+              <div
+                key={i}
+                className="text-[10px] text-muted-foreground/70 leading-relaxed truncate"
+              >
+                {name}
+              </div>
+            ))}
+          </div>
+        )}
     </div>
   )
 }
@@ -340,10 +469,16 @@ function KanbanView({
   lotHighlight,
   sampleSlaStatusesMap,
   collapsedCols,
+  searchActive,
+  productsBySampleId,
+  productColorFor,
   onToggleCollapse,
 }: {
   orders: ExplorerOrder[]
-  sampleLookupMap: Map<string, { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }>
+  sampleLookupMap: Map<
+    string,
+    { data?: SenaiteLookupResult; isLoading: boolean; isError: boolean }
+  >
   groupByOrder: boolean
   activeStates: string[]
   showAnalysisServices: boolean
@@ -352,12 +487,19 @@ function KanbanView({
   lotHighlight?: string
   sampleSlaStatusesMap?: Map<string, SampleSlaSnapshot[]>
   collapsedCols: string[]
+  /** True while a server-side search axis is active — hidden columns are
+   *  overridden so the searched order's cards are visible wherever they sit. */
+  searchActive?: boolean
+  /** senaite_id -> ordered products; empty map when the toggle is off. */
+  productsBySampleId?: Map<string, OrderedProduct[]>
+  productColorFor?: (p: OrderedProduct) => string
   onToggleCollapse: (key: string) => void
 }) {
   // Determine which columns to show — all if no filter, else just the active one
-  const visibleCols = activeStates.length > 0
-    ? KANBAN_COLUMNS.filter(c => activeStates.includes(c.key))
-    : KANBAN_COLUMNS
+  const visibleCols =
+    activeStates.length > 0
+      ? KANBAN_COLUMNS.filter(c => activeStates.includes(c.key))
+      : KANBAN_COLUMNS
 
   // Build all kanban items: one item per (sample, col) where count > 0
   const allItems = useMemo(() => {
@@ -366,7 +508,10 @@ function KanbanView({
       if (!order.sample_results) continue
       const email = getOrderEmail(order)
       const kanbanPayloadSamples = (
-        order.payload as { samples?: { lot_code?: string }[] } | null | undefined
+        order.payload as
+          | { samples?: { lot_code?: string }[] }
+          | null
+          | undefined
       )?.samples
       for (const [slotKey, entry] of Object.entries(order.sample_results)) {
         if (!entry.senaite_id || entry.status === 'failed') continue
@@ -396,7 +541,10 @@ function KanbanView({
           continue
         }
         if (!lq?.data) continue
-        const counts = groupAnalysisStates(lq.data.analyses, lq.data.review_state)
+        const counts = groupAnalysisStates(
+          lq.data.analyses,
+          lq.data.review_state
+        )
         for (const col of visibleCols) {
           const count = counts[col.countKey]
           if (count > 0) {
@@ -411,7 +559,11 @@ function KanbanView({
               lookup: lq.data,
               isLoading: false,
               isError: false,
-              analysisServices: getAnalysisServicesForCol(lq.data.analyses, col.key, lq.data),
+              analysisServices: getAnalysisServicesForCol(
+                lq.data.analyses,
+                col.key,
+                lq.data
+              ),
               lot,
             })
           }
@@ -421,6 +573,20 @@ function KanbanView({
     return items
   }, [orders, sampleLookupMap, visibleCols])
 
+  // An explicit analysis-state filter means "show me exactly these columns" —
+  // it overrides hidden/collapsed state, or filtering to Published while
+  // Published is hidden-by-default would render an empty board. An active
+  // server-side search overrides too (v1.11.6): a searched-for complete
+  // order's cards live in the hidden Published column, so without this the
+  // search "finds" the order but renders an empty-looking swimlane (prod
+  // report: order 6088).
+  const effectiveCollapsed =
+    activeStates.length > 0 || searchActive ? [] : collapsedCols
+  // Grouped swimlanes have no per-column header to expand from, so hidden
+  // columns are dropped from the lane grid entirely — the Columns dropdown
+  // in the toolbar is their way back in.
+  const laneCols = visibleCols.filter(c => !effectiveCollapsed.includes(c.key))
+
   if (!groupByOrder) {
     // Flat Kanban — just columns of sample cards
     return (
@@ -428,19 +594,25 @@ function KanbanView({
         className="grid gap-3 min-w-0"
         style={{
           gridTemplateColumns: visibleCols
-            .map(c => (collapsedCols.includes(c.key) ? 'minmax(40px, auto)' : 'minmax(180px, 1fr)'))
+            .map(c =>
+              effectiveCollapsed.includes(c.key)
+                ? 'minmax(40px, auto)'
+                : 'minmax(180px, 1fr)'
+            )
             .join(' '),
         }}
       >
         {visibleCols.map(col => {
           const colItems = allItems.filter(i => i.colKey === col.key)
-          const collapsed = collapsedCols.includes(col.key)
+          const collapsed = effectiveCollapsed.includes(col.key)
           return (
             <div key={col.key} className="flex flex-col gap-2 min-w-0">
               <button
                 type="button"
                 onClick={() => onToggleCollapse(col.key)}
-                title={collapsed ? `Expand ${col.label}` : `Collapse ${col.label}`}
+                title={
+                  collapsed ? `Expand ${col.label}` : `Collapse ${col.label}`
+                }
                 className="flex w-full items-center justify-between gap-1 px-1 pb-1 border-b border-border/50 hover:text-foreground transition-colors"
               >
                 <span className="flex items-center gap-1 min-w-0">
@@ -462,7 +634,9 @@ function KanbanView({
               {!collapsed && (
                 <div className="flex flex-col gap-1">
                   {colItems.length === 0 && (
-                    <div className="text-xs text-muted-foreground/50 text-center py-4">Empty</div>
+                    <div className="text-xs text-muted-foreground/50 text-center py-4">
+                      Empty
+                    </div>
                   )}
                   {colItems.map(item => (
                     <KanbanSampleCard
@@ -472,6 +646,8 @@ function KanbanView({
                       showAnalysisServices={showAnalysisServices}
                       lotHighlight={lotHighlight}
                       sampleSlaStatusesMap={sampleSlaStatusesMap}
+                      products={productsBySampleId?.get(item.sampleId)}
+                      productColorFor={productColorFor}
                     />
                   ))}
                 </div>
@@ -492,7 +668,10 @@ function KanbanView({
         const email = getOrderEmail(order)
 
         return (
-          <div key={order.id} className="rounded-lg border border-border/50 overflow-hidden">
+          <div
+            key={order.id}
+            className="rounded-lg border border-border/50 overflow-hidden"
+          >
             {/* Swimlane header */}
             <div className="flex items-center gap-3 px-3 py-2 bg-muted/30 border-b border-border/50">
               <a
@@ -512,23 +691,33 @@ function KanbanView({
                 }}
                 variant="pill"
               />
-              {email && <span className="text-xs text-muted-foreground">{email}</span>}
+              {email && (
+                <span className="text-xs text-muted-foreground">{email}</span>
+              )}
               <span className="text-xs text-muted-foreground ml-auto">
-                {order.samples_delivered}/{order.samples_expected} samples · {formatProcessingTime(order.created_at, order.completed_at)}
+                {order.samples_delivered}/{order.samples_expected} samples ·{' '}
+                {formatProcessingTime(order.created_at, order.completed_at)}
               </span>
             </div>
 
             {/* Columns grid */}
             <div
               className="grid gap-0 divide-x divide-border/30"
-              style={{ gridTemplateColumns: `repeat(${visibleCols.length}, 1fr)` }}
+              style={{
+                gridTemplateColumns: `repeat(${laneCols.length}, 1fr)`,
+              }}
             >
-              {visibleCols.map(col => {
+              {laneCols.map(col => {
                 const colItems = orderItems.filter(i => i.colKey === col.key)
                 return (
-                  <div key={col.key} className="p-1.5 flex flex-col gap-1 min-w-[150px]">
+                  <div
+                    key={col.key}
+                    className="p-1.5 flex flex-col gap-1 min-w-[150px]"
+                  >
                     {colItems.length === 0 ? (
-                      <div className="text-xs text-muted-foreground/30 text-center py-2">—</div>
+                      <div className="text-xs text-muted-foreground/30 text-center py-2">
+                        —
+                      </div>
                     ) : (
                       colItems.map(item => (
                         <KanbanSampleCard
@@ -538,6 +727,8 @@ function KanbanView({
                           showAnalysisServices={showAnalysisServices}
                           lotHighlight={lotHighlight}
                           sampleSlaStatusesMap={sampleSlaStatusesMap}
+                          products={productsBySampleId?.get(item.sampleId)}
+                          productColorFor={productColorFor}
                         />
                       ))
                     )}
@@ -555,14 +746,49 @@ function KanbanView({
 // --- Sample state filter config ---
 
 const ANALYSIS_STATE_BUTTONS = [
-  { key: 'sample_due', label: 'Sample Due', tooltip: 'Sample expected but not yet received in the lab (being mailed in)' },
-  { key: 'received', label: 'Received', tooltip: 'Sample physically received in the lab and ready for analysis' },
-  { key: 'assigned', label: 'Assigned', tooltip: 'Analyses assigned to a lab tech via a SENAITE worksheet' },
-  { key: 'to_verify', label: 'To Verify', tooltip: 'Tech has submitted results, waiting for supervisor verification' },
-  { key: 'waiting_for_addon', label: 'Waiting Addon', tooltip: 'Initial analyses verified, waiting for outsourced/addon test results to come back' },
-  { key: 'ready_for_review', label: 'Ready for Review', tooltip: 'Addon results are back and entered, sample ready for final review before verification' },
-  { key: 'verified', label: 'Verified', tooltip: 'All results reviewed and approved by a supervisor' },
-  { key: 'published', label: 'Published', tooltip: 'Results finalized and published, COA available' },
+  {
+    key: 'sample_due',
+    label: 'Sample Due',
+    tooltip:
+      'Sample expected but not yet received in the lab (being mailed in)',
+  },
+  {
+    key: 'received',
+    label: 'Received',
+    tooltip: 'Sample physically received in the lab and ready for analysis',
+  },
+  {
+    key: 'assigned',
+    label: 'Assigned',
+    tooltip: 'Analyses assigned to a lab tech via a SENAITE worksheet',
+  },
+  {
+    key: 'to_verify',
+    label: 'To Verify',
+    tooltip: 'Tech has submitted results, waiting for supervisor verification',
+  },
+  {
+    key: 'waiting_for_addon',
+    label: 'Waiting Addon',
+    tooltip:
+      'Initial analyses verified, waiting for outsourced/addon test results to come back',
+  },
+  {
+    key: 'ready_for_review',
+    label: 'Ready for Review',
+    tooltip:
+      'Addon results are back and entered, sample ready for final review before verification',
+  },
+  {
+    key: 'verified',
+    label: 'Verified',
+    tooltip: 'All results reviewed and approved by a supervisor',
+  },
+  {
+    key: 'published',
+    label: 'Published',
+    tooltip: 'Results finalized and published, COA available',
+  },
 ] as const
 
 // --- localStorage filter state ---
@@ -578,7 +804,13 @@ interface OrderFilters {
   lotFilter: string
   hideTestOrders: boolean
   slaAtRisk: boolean
+  /** Show ordered-product chips on sample cards (table + kanban). */
+  showProducts: boolean
   collapsedKanbanCols: string[]
+  /** One-time migration marker: stored filters from before the
+   *  hidden-by-default columns existed get DEFAULT_COLLAPSED_KANBAN_COLS
+   *  unioned in exactly once — after that the user's own toggles win. */
+  kanbanColDefaultsV2?: boolean
   viewMode: 'table' | 'kanban'
   groupByOrder: boolean
   showAnalysisServices: boolean
@@ -586,7 +818,7 @@ interface OrderFilters {
   kanbanSortDir: 'asc' | 'desc'
 }
 
-function loadOrderFilters(): OrderFilters {
+export function loadOrderFilters(): OrderFilters {
   try {
     const raw = localStorage.getItem(FILTERS_LS_KEY)
     if (raw) {
@@ -594,9 +826,21 @@ function loadOrderFilters(): OrderFilters {
       return {
         ...parsed,
         activeStates: (parsed.activeStates ?? []).filter(s => s !== 'pending'),
-        collapsedKanbanCols: parsed.collapsedKanbanCols ?? [],
+        // One-time default-hidden migration: existing saved filters predate
+        // the hidden-by-default columns, so union the defaults in once.
+        // An un-hide after that persists WITH the marker and sticks.
+        collapsedKanbanCols: parsed.kanbanColDefaultsV2
+          ? (parsed.collapsedKanbanCols ?? [])
+          : Array.from(
+              new Set([
+                ...(parsed.collapsedKanbanCols ?? []),
+                ...DEFAULT_COLLAPSED_KANBAN_COLS,
+              ])
+            ),
+        kanbanColDefaultsV2: true,
         analyteFilter: parsed.analyteFilter ?? '',
         lotFilter: parsed.lotFilter ?? '',
+        showProducts: parsed.showProducts ?? false,
       }
     }
   } catch {
@@ -611,7 +855,9 @@ function loadOrderFilters(): OrderFilters {
     lotFilter: '',
     hideTestOrders: true,
     slaAtRisk: false,
-    collapsedKanbanCols: [],
+    showProducts: false,
+    collapsedKanbanCols: [...DEFAULT_COLLAPSED_KANBAN_COLS],
+    kanbanColDefaultsV2: true,
     viewMode: 'table',
     groupByOrder: true,
     showAnalysisServices: false,
@@ -633,7 +879,8 @@ function saveOrderFilters(f: OrderFilters) {
 export function OrderStatusPage() {
   const [showAll, setShowAll] = useState(false)
   const [envName, setEnvName] = useState(() => getActiveEnvironmentName())
-  const [orderFilters, setOrderFilters] = useState<OrderFilters>(loadOrderFilters)
+  const [orderFilters, setOrderFilters] =
+    useState<OrderFilters>(loadOrderFilters)
 
   const updateFilters = (partial: Partial<OrderFilters>) => {
     setOrderFilters(prev => {
@@ -651,7 +898,10 @@ export function OrderStatusPage() {
 
   const toggleCollapsedCol = (key: string) => {
     updateFilters({
-      collapsedKanbanCols: toggleFilterKey(orderFilters.collapsedKanbanCols, key),
+      collapsedKanbanCols: toggleFilterKey(
+        orderFilters.collapsedKanbanCols,
+        key
+      ),
     })
   }
   const wordpressHost = getWordpressUrl()
@@ -671,22 +921,78 @@ export function OrderStatusPage() {
     staleTime: 0,
   })
 
-  // Fetch orders (all, then filter client-side)
+  // Server-side search axes (v1.11.2): the base fetch is only the newest 200
+  // orders, so a purely client-side Order ID filter could never find an older
+  // order (prod report: 5739). Debounce the four IS-searchable text filters
+  // into committed state; when any axis has >=2 chars the orders query
+  // re-runs WITH the axes, so the 200-limit applies to MATCHES instead of
+  // recency. Email stays client-side (the IS has no email axis).
+  const [committedAxes, setCommittedAxes] = useState({
+    order_number: '',
+    sample_id: '',
+    analyte: '',
+    lot: '',
+  })
+  useEffect(() => {
+    const t = setTimeout(
+      () =>
+        setCommittedAxes({
+          order_number: orderFilters.orderIdFilter.trim(),
+          sample_id: orderFilters.sampleIdFilter.trim(),
+          analyte: orderFilters.analyteFilter.trim(),
+          lot: orderFilters.lotFilter.trim(),
+        }),
+      300
+    )
+    return () => clearTimeout(t)
+  }, [
+    orderFilters.orderIdFilter,
+    orderFilters.sampleIdFilter,
+    orderFilters.analyteFilter,
+    orderFilters.lotFilter,
+  ])
+  // Mirrors the api client's per-axis 2-char gate so the query key only
+  // changes when the request actually would.
+  const serverSearchActive = Object.values(committedAxes).some(
+    v => v.length >= 2
+  )
+
+  // Fetch orders (newest 200, or axis-matched when searching), then filter client-side
   const {
     data: allOrders,
     isLoading: ordersLoading,
     error: ordersError,
   } = useQuery({
-    queryKey: ['explorer', 'orders', '', 'all', 0, envName],
-    queryFn: () => getExplorerOrders(undefined, 200, 0),
+    queryKey: [
+      'explorer',
+      'orders',
+      '',
+      'all',
+      0,
+      committedAxes.order_number,
+      committedAxes.sample_id,
+      committedAxes.analyte,
+      committedAxes.lot,
+      envName,
+    ],
+    queryFn: () =>
+      getExplorerOrders(undefined, 200, 0, undefined, committedAxes),
     enabled: status?.connected === true,
     staleTime: 30_000,
+    placeholderData: keepPreviousData,
   })
 
   // Filter to open orders or show all, and optionally hide test orders + text filters
   const orders = useMemo(() => {
     if (!allOrders) return []
-    let filtered = showAll ? allOrders : allOrders.filter(o => o.wp_order_status !== 'complete')
+    // A server-side search means "find this order, wherever it is" — old
+    // orders are usually complete, so the open-only default would hide the
+    // very match the user asked for. Search bypasses it; the toggle still
+    // governs the unsearched browse view.
+    let filtered =
+      showAll || serverSearchActive
+        ? allOrders
+        : allOrders.filter(o => o.wp_order_status !== 'complete')
     if (orderFilters.hideTestOrders) {
       filtered = filtered.filter(o => {
         const email = getOrderEmail(o)?.toLowerCase()
@@ -696,21 +1002,27 @@ export function OrderStatusPage() {
     const { orderIdFilter, emailFilter, sampleIdFilter } = orderFilters
     if (orderIdFilter.trim()) {
       const q = orderIdFilter.trim().toLowerCase()
-      filtered = filtered.filter(o => String(o.order_id).toLowerCase().includes(q))
+      filtered = filtered.filter(o =>
+        String(o.order_id).toLowerCase().includes(q)
+      )
     }
     if (emailFilter.trim()) {
       const q = emailFilter.trim().toLowerCase()
-      filtered = filtered.filter(o => (getOrderEmail(o)?.toLowerCase() ?? '').includes(q))
+      filtered = filtered.filter(o =>
+        (getOrderEmail(o)?.toLowerCase() ?? '').includes(q)
+      )
     }
     if (sampleIdFilter.trim()) {
       const q = sampleIdFilter.trim().toLowerCase()
       filtered = filtered.filter(o => {
         if (!o.sample_results) return false
-        return Object.values(o.sample_results).some(v => v.senaite_id?.toLowerCase().includes(q))
+        return Object.values(o.sample_results).some(v =>
+          v.senaite_id?.toLowerCase().includes(q)
+        )
       })
     }
     return filtered
-  }, [allOrders, showAll, orderFilters])
+  }, [allOrders, showAll, serverSearchActive, orderFilters])
 
   // Per-sample SENAITE lookup map (shared hook — see useSenaiteLookupMap).
   // `sampleLookupMap` is consumed below by the analysis-state filter
@@ -719,9 +1031,26 @@ export function OrderStatusPage() {
   // 'sample_details' two-tier read-source setting — same mechanism as
   // SampleDetails.tsx; defaults to 'senaite' (no behavior change until the
   // Handler flips it).
-  const { effective: sampleDetailsSource } = useEffectiveReadSource('sample_details')
-  const { sampleLookupMap, isFetching: sampleLookupFetching, lastCachedAt } =
-    useSenaiteLookupMap(orders, sampleDetailsSource)
+  // Ordered-product chips (v1.11.8): payload-derived, zero extra fetches —
+  // the profiles catalog supplies label/addon/role (role drives the
+  // boxing-lane color). Map only built while the toggle is on.
+  const profilesQuery = useAnalysisProfiles()
+  const productColorFor = useProductColorClasses()
+  const productsBySampleId = useMemo(
+    () =>
+      orderFilters.showProducts
+        ? buildProductsBySampleId(allOrders ?? [], profilesQuery.data ?? [])
+        : EMPTY_PRODUCTS_MAP,
+    [orderFilters.showProducts, allOrders, profilesQuery.data]
+  )
+
+  const { effective: sampleDetailsSource } =
+    useEffectiveReadSource('sample_details')
+  const {
+    sampleLookupMap,
+    isFetching: sampleLookupFetching,
+    lastCachedAt,
+  } = useSenaiteLookupMap(orders, sampleDetailsSource)
 
   // Hide orders where no samples match the active analysis state filter
   const filteredOrders = useMemo(() => {
@@ -729,8 +1058,14 @@ export function OrderStatusPage() {
     if (orderFilters.activeStates.length > 0) {
       result = result.filter(o => {
         if (!o.sample_results) return false
-        return Object.values(o.sample_results).some(v =>
-          v.senaite_id && sampleMatchesAnalysisFilter(v.senaite_id, orderFilters.activeStates, sampleLookupMap)
+        return Object.values(o.sample_results).some(
+          v =>
+            v.senaite_id &&
+            sampleMatchesAnalysisFilter(
+              v.senaite_id,
+              orderFilters.activeStates,
+              sampleLookupMap
+            )
         )
       })
     }
@@ -747,7 +1082,9 @@ export function OrderStatusPage() {
           if (!lookup) return false
           const nameMap = buildAnalyteNameMap(lookup)
           return lookup.analyses.some(a =>
-            formatAnalysisTitle(a.title, nameMap).toLowerCase().includes(analyteQ)
+            formatAnalysisTitle(a.title, nameMap)
+              .toLowerCase()
+              .includes(analyteQ)
           )
         })
       })
@@ -764,10 +1101,16 @@ export function OrderStatusPage() {
       const dir = orderFilters.kanbanSortDir === 'asc' ? 1 : -1
       result = [...result].sort((a, b) => {
         if (orderFilters.kanbanSort === 'order_id') {
-          return dir * a.order_id.localeCompare(b.order_id, undefined, { numeric: true })
+          return (
+            dir *
+            a.order_id.localeCompare(b.order_id, undefined, { numeric: true })
+          )
         }
         // processing_time: sort by created_at (oldest = longest outstanding)
-        return dir * (new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+        return (
+          dir *
+          (new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+        )
       })
     }
     return result
@@ -811,7 +1154,10 @@ export function OrderStatusPage() {
       for (const entry of Object.values(order.sample_results)) {
         const lookup = sampleLookupMap.get(entry.senaite_id)
         if (lookup?.data) {
-          const counts = groupAnalysisStates(lookup.data.analyses, lookup.data.review_state)
+          const counts = groupAnalysisStates(
+            lookup.data.analyses,
+            lookup.data.review_state
+          )
           if (counts.to_verify > 0) {
             count++
             break
@@ -830,8 +1176,13 @@ export function OrderStatusPage() {
       for (const entry of Object.values(order.sample_results)) {
         const lookup = sampleLookupMap.get(entry.senaite_id)
         if (!lookup?.data) continue
-        const counts = groupAnalysisStates(lookup.data.analyses, lookup.data.review_state)
-        for (const key of Object.keys(counts) as (keyof AnalysisStateCounts)[]) {
+        const counts = groupAnalysisStates(
+          lookup.data.analyses,
+          lookup.data.review_state
+        )
+        for (const key of Object.keys(
+          counts
+        ) as (keyof AnalysisStateCounts)[]) {
           if (counts[key] > 0) totals[key] = (totals[key] ?? 0) + 1
         }
       }
@@ -885,7 +1236,10 @@ export function OrderStatusPage() {
           </Badge>
 
           {lastUpdated && (
-            <span className="flex items-center gap-1 text-xs text-muted-foreground" title={new Date(lastUpdated).toLocaleString()}>
+            <span
+              className="flex items-center gap-1 text-xs text-muted-foreground"
+              title={new Date(lastUpdated).toLocaleString()}
+            >
               <Clock className="h-3 w-3" />
               Updated {formatRelativeTime(lastUpdated)}
             </span>
@@ -971,7 +1325,9 @@ export function OrderStatusPage() {
             <Button
               variant={orderFilters.slaAtRisk ? 'default' : 'outline'}
               size="sm"
-              onClick={() => updateFilters({ slaAtRisk: !orderFilters.slaAtRisk })}
+              onClick={() =>
+                updateFilters({ slaAtRisk: !orderFilters.slaAtRisk })
+              }
               title="Show only orders approaching or past their SLA target"
               className={cn(
                 orderFilters.slaAtRisk &&
@@ -989,7 +1345,9 @@ export function OrderStatusPage() {
             <label className="flex items-center gap-2 text-sm text-muted-foreground whitespace-nowrap cursor-pointer ml-1">
               <Checkbox
                 checked={orderFilters.hideTestOrders}
-                onCheckedChange={checked => updateFilters({ hideTestOrders: checked === true })}
+                onCheckedChange={checked =>
+                  updateFilters({ hideTestOrders: checked === true })
+                }
               />
               Hide test orders
             </label>
@@ -1001,7 +1359,11 @@ export function OrderStatusPage() {
                   <button
                     type="button"
                     title="Group by order"
-                    onClick={() => updateFilters({ groupByOrder: !orderFilters.groupByOrder })}
+                    onClick={() =>
+                      updateFilters({
+                        groupByOrder: !orderFilters.groupByOrder,
+                      })
+                    }
                     className={cn(
                       'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium border transition-colors',
                       orderFilters.groupByOrder
@@ -1015,7 +1377,12 @@ export function OrderStatusPage() {
                   <button
                     type="button"
                     title="Show analysis services in each card"
-                    onClick={() => updateFilters({ showAnalysisServices: !orderFilters.showAnalysisServices })}
+                    onClick={() =>
+                      updateFilters({
+                        showAnalysisServices:
+                          !orderFilters.showAnalysisServices,
+                      })
+                    }
                     className={cn(
                       'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium border transition-colors',
                       orderFilters.showAnalysisServices
@@ -1026,13 +1393,65 @@ export function OrderStatusPage() {
                     <ListTree className="h-3.5 w-3.5" />
                     Services
                   </button>
+                  {/* Column visibility — Sample Due + Published are hidden by
+                      default (DEFAULT_COLLAPSED_KANBAN_COLS); this dropdown is
+                      the way back in for both kanban layouts. An active
+                      analysis-state filter overrides hidden state entirely
+                      (see effectiveCollapsed in KanbanView). */}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        title="Choose which kanban columns are shown"
+                        className={cn(
+                          'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium border transition-colors',
+                          orderFilters.collapsedKanbanCols.length > 0
+                            ? 'bg-transparent text-muted-foreground border-border hover:border-foreground/40 hover:text-foreground'
+                            : 'bg-foreground text-background border-foreground'
+                        )}
+                      >
+                        <Columns3 className="h-3.5 w-3.5" />
+                        Columns
+                        {orderFilters.collapsedKanbanCols.length > 0 && (
+                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-mono leading-none">
+                            {KANBAN_COLUMNS.length -
+                              orderFilters.collapsedKanbanCols.length}
+                            /{KANBAN_COLUMNS.length}
+                          </span>
+                        )}
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-48">
+                      <DropdownMenuLabel className="text-xs">
+                        Kanban columns
+                      </DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      {KANBAN_COLUMNS.map(col => (
+                        <DropdownMenuCheckboxItem
+                          key={col.key}
+                          className="text-xs"
+                          checked={
+                            !orderFilters.collapsedKanbanCols.includes(col.key)
+                          }
+                          // Keep the menu open so several columns can be
+                          // toggled in one visit.
+                          onSelect={e => e.preventDefault()}
+                          onCheckedChange={() => toggleCollapsedCol(col.key)}
+                        >
+                          {col.label}
+                        </DropdownMenuCheckboxItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                   {/* Sort controls */}
-                  {(
+                  {
                     <div className="flex items-center gap-0.5 border border-border rounded-md overflow-hidden">
-                      {([
-                        { key: 'order_id', label: 'Order ID' },
-                        { key: 'processing_time', label: 'Since order' },
-                      ] as const).map(opt => {
+                      {(
+                        [
+                          { key: 'order_id', label: 'Order ID' },
+                          { key: 'processing_time', label: 'Since order' },
+                        ] as const
+                      ).map(opt => {
                         const isActive = orderFilters.kanbanSort === opt.key
                         return (
                           <button
@@ -1040,11 +1459,19 @@ export function OrderStatusPage() {
                             type="button"
                             onClick={() => {
                               if (isActive) {
-                                updateFilters({ kanbanSortDir: orderFilters.kanbanSortDir === 'asc' ? 'desc' : 'asc' })
+                                updateFilters({
+                                  kanbanSortDir:
+                                    orderFilters.kanbanSortDir === 'asc'
+                                      ? 'desc'
+                                      : 'asc',
+                                })
                               } else {
                                 updateFilters({
                                   kanbanSort: opt.key,
-                                  kanbanSortDir: opt.key === 'processing_time' ? 'desc' : 'asc',
+                                  kanbanSortDir:
+                                    opt.key === 'processing_time'
+                                      ? 'desc'
+                                      : 'asc',
                                 })
                               }
                             }}
@@ -1063,9 +1490,25 @@ export function OrderStatusPage() {
                         )
                       })}
                     </div>
-                  )}
+                  }
                 </>
               )}
+              <button
+                type="button"
+                title="Show ordered products on each sample card"
+                onClick={() =>
+                  updateFilters({ showProducts: !orderFilters.showProducts })
+                }
+                className={cn(
+                  'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium border transition-colors',
+                  orderFilters.showProducts
+                    ? 'bg-foreground text-background border-foreground'
+                    : 'bg-transparent text-muted-foreground border-border hover:border-foreground/40 hover:text-foreground'
+                )}
+              >
+                <FlaskConical className="h-3.5 w-3.5" />
+                Products
+              </button>
               <button
                 type="button"
                 title="Table view"
@@ -1083,7 +1526,9 @@ export function OrderStatusPage() {
               <button
                 type="button"
                 title="Kanban view"
-                onClick={() => updateFilters({ viewMode: 'kanban', activeStates: [] })}
+                onClick={() =>
+                  updateFilters({ viewMode: 'kanban', activeStates: [] })
+                }
                 className={cn(
                   'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium border transition-colors',
                   orderFilters.viewMode === 'kanban'
@@ -1106,50 +1551,54 @@ export function OrderStatusPage() {
           </div>
 
           {/* Row 2: Sample state toggles — hidden in Kanban (columns already show all states) */}
-          {orderFilters.viewMode === 'table' && <div className="flex flex-wrap items-center gap-1.5">
-            {/* Active = no state filters (show all) */}
-            <button
-              type="button"
-              title="Show all non-complete orders regardless of state"
-              onClick={() => updateFilters({ activeStates: [] })}
-              className={cn(
-                'rounded-md px-3 py-1 text-xs font-medium border transition-colors',
-                orderFilters.activeStates.length === 0
-                  ? 'bg-foreground text-background border-foreground'
-                  : 'bg-transparent text-muted-foreground border-border hover:border-foreground/40 hover:text-foreground'
-              )}
-            >
-              Active
-            </button>
-            {ANALYSIS_STATE_BUTTONS.map(btn => {
-              const active = orderFilters.activeStates.includes(btn.key)
-              const count = filterCounts[btn.key] ?? 0
-              return (
-                <button
-                  key={btn.key}
-                  type="button"
-                  title={btn.tooltip}
-                  onClick={() => toggleState(btn.key)}
-                  className={cn(
-                    'rounded-md px-3 py-1 text-xs font-medium border transition-colors inline-flex items-center gap-1.5',
-                    active
-                      ? 'bg-foreground text-background border-foreground'
-                      : 'bg-transparent text-muted-foreground border-border hover:border-foreground/40 hover:text-foreground'
-                  )}
-                >
-                  {btn.label}
-                  {count > 0 && (
-                    <span className={cn(
-                      'rounded-full px-1.5 py-0.5 text-[10px] font-mono leading-none',
-                      active ? 'bg-background/20' : 'bg-muted'
-                    )}>
-                      {count}
-                    </span>
-                  )}
-                </button>
-              )
-            })}
-          </div>}
+          {orderFilters.viewMode === 'table' && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {/* Active = no state filters (show all) */}
+              <button
+                type="button"
+                title="Show all non-complete orders regardless of state"
+                onClick={() => updateFilters({ activeStates: [] })}
+                className={cn(
+                  'rounded-md px-3 py-1 text-xs font-medium border transition-colors',
+                  orderFilters.activeStates.length === 0
+                    ? 'bg-foreground text-background border-foreground'
+                    : 'bg-transparent text-muted-foreground border-border hover:border-foreground/40 hover:text-foreground'
+                )}
+              >
+                Active
+              </button>
+              {ANALYSIS_STATE_BUTTONS.map(btn => {
+                const active = orderFilters.activeStates.includes(btn.key)
+                const count = filterCounts[btn.key] ?? 0
+                return (
+                  <button
+                    key={btn.key}
+                    type="button"
+                    title={btn.tooltip}
+                    onClick={() => toggleState(btn.key)}
+                    className={cn(
+                      'rounded-md px-3 py-1 text-xs font-medium border transition-colors inline-flex items-center gap-1.5',
+                      active
+                        ? 'bg-foreground text-background border-foreground'
+                        : 'bg-transparent text-muted-foreground border-border hover:border-foreground/40 hover:text-foreground'
+                    )}
+                  >
+                    {btn.label}
+                    {count > 0 && (
+                      <span
+                        className={cn(
+                          'rounded-full px-1.5 py-0.5 text-[10px] font-mono leading-none',
+                          active ? 'bg-background/20' : 'bg-muted'
+                        )}
+                      >
+                        {count}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          )}
 
           {/* Row 3: Text filters */}
           <div className="flex flex-wrap items-center gap-2">
@@ -1183,10 +1632,22 @@ export function OrderStatusPage() {
               onChange={e => updateFilters({ lotFilter: e.target.value })}
               className="h-7 w-32 text-xs"
             />
-            {(orderFilters.orderIdFilter || orderFilters.emailFilter || orderFilters.sampleIdFilter || orderFilters.analyteFilter || orderFilters.lotFilter) && (
+            {(orderFilters.orderIdFilter ||
+              orderFilters.emailFilter ||
+              orderFilters.sampleIdFilter ||
+              orderFilters.analyteFilter ||
+              orderFilters.lotFilter) && (
               <button
                 type="button"
-                onClick={() => updateFilters({ orderIdFilter: '', emailFilter: '', sampleIdFilter: '', analyteFilter: '', lotFilter: '' })}
+                onClick={() =>
+                  updateFilters({
+                    orderIdFilter: '',
+                    emailFilter: '',
+                    sampleIdFilter: '',
+                    analyteFilter: '',
+                    lotFilter: '',
+                  })
+                }
                 className="text-xs text-muted-foreground hover:text-foreground underline"
               >
                 Clear
@@ -1203,7 +1664,9 @@ export function OrderStatusPage() {
             <div className="flex items-center justify-between">
               <div>
                 <CardTitle className="text-lg">
-                  {orderFilters.viewMode === 'kanban' ? 'Kanban Board' : 'Status Matrix'}
+                  {orderFilters.viewMode === 'kanban'
+                    ? 'Kanban Board'
+                    : 'Status Matrix'}
                 </CardTitle>
                 <CardDescription>
                   {ordersLoading
@@ -1232,57 +1695,86 @@ export function OrderStatusPage() {
               <div className="text-muted-foreground py-8 text-center">
                 {orderFilters.slaAtRisk
                   ? 'No at-risk orders in current filter'
-                  : showAll ? 'No orders found' : 'No open orders'}
+                  : showAll
+                    ? 'No orders found'
+                    : 'No open orders'}
               </div>
             )}
 
-            {displayedOrders.length > 0 && orderFilters.viewMode === 'table' && (
-              <div className="overflow-auto max-h-[850px]">
-                <table className="w-full text-sm">
-                  <thead className="sticky top-0 z-10 bg-card border-b">
-                    <tr className="text-left text-muted-foreground">
-                      <th className="py-2 px-3 font-medium whitespace-nowrap">Order ID</th>
-                      <th className="py-2 px-3 font-medium whitespace-nowrap">Email</th>
-                      <th className="py-2 px-3 font-medium whitespace-nowrap">Progress</th>
-                      <th className="py-2 px-3 font-medium whitespace-nowrap">Created</th>
-                      <th className="py-2 px-3 font-medium whitespace-nowrap">Timing</th>
-                      <th className="py-2 px-3 font-medium whitespace-nowrap">SLA</th>
-                      <th className="py-2 px-3 font-medium">Sample Details</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border/50">
-                    {displayedOrders.map(order => (
-                      <OrderRow
-                        key={order.id}
-                        order={order}
-                        wordpressHost={wordpressHost}
-                        sampleLookupMap={sampleLookupMap}
-                        activeAnalysisStates={orderFilters.activeStates}
-                        highlightLot={orderFilters.lotFilter.trim() || undefined}
-                        slaVerdict={orderSla.verdictByOrderId.get(order.order_id)}
-                        sampleSlaStatusesMap={orderSla.sampleStatusesBySampleId}
-                      />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            {displayedOrders.length > 0 &&
+              orderFilters.viewMode === 'table' && (
+                <div className="overflow-auto max-h-[850px]">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 z-10 bg-card border-b">
+                      <tr className="text-left text-muted-foreground">
+                        <th className="py-2 px-3 font-medium whitespace-nowrap">
+                          Order ID
+                        </th>
+                        <th className="py-2 px-3 font-medium whitespace-nowrap">
+                          Email
+                        </th>
+                        <th className="py-2 px-3 font-medium whitespace-nowrap">
+                          Progress
+                        </th>
+                        <th className="py-2 px-3 font-medium whitespace-nowrap">
+                          Created
+                        </th>
+                        <th className="py-2 px-3 font-medium whitespace-nowrap">
+                          Timing
+                        </th>
+                        <th className="py-2 px-3 font-medium whitespace-nowrap">
+                          SLA
+                        </th>
+                        <th className="py-2 px-3 font-medium">
+                          Sample Details
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/50">
+                      {displayedOrders.map(order => (
+                        <OrderRow
+                          key={order.id}
+                          order={order}
+                          wordpressHost={wordpressHost}
+                          sampleLookupMap={sampleLookupMap}
+                          productsBySampleId={productsBySampleId}
+                          productColorFor={productColorFor}
+                          activeAnalysisStates={orderFilters.activeStates}
+                          highlightLot={
+                            orderFilters.lotFilter.trim() || undefined
+                          }
+                          slaVerdict={orderSla.verdictByOrderId.get(
+                            order.order_id
+                          )}
+                          sampleSlaStatusesMap={
+                            orderSla.sampleStatusesBySampleId
+                          }
+                        />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
 
-            {displayedOrders.length > 0 && orderFilters.viewMode === 'kanban' && (
-              <div className="overflow-auto max-h-[850px]">
-                <KanbanView
-                  orders={displayedOrders}
-                  sampleLookupMap={sampleLookupMap}
-                  groupByOrder={orderFilters.groupByOrder}
-                  activeStates={orderFilters.activeStates}
-                  showAnalysisServices={orderFilters.showAnalysisServices}
-                  lotHighlight={orderFilters.lotFilter.trim() || undefined}
-                  sampleSlaStatusesMap={orderSla.sampleStatusesBySampleId}
-                  collapsedCols={orderFilters.collapsedKanbanCols}
-                  onToggleCollapse={toggleCollapsedCol}
-                />
-              </div>
-            )}
+            {displayedOrders.length > 0 &&
+              orderFilters.viewMode === 'kanban' && (
+                <div className="overflow-auto max-h-[850px]">
+                  <KanbanView
+                    orders={displayedOrders}
+                    sampleLookupMap={sampleLookupMap}
+                    groupByOrder={orderFilters.groupByOrder}
+                    activeStates={orderFilters.activeStates}
+                    showAnalysisServices={orderFilters.showAnalysisServices}
+                    lotHighlight={orderFilters.lotFilter.trim() || undefined}
+                    sampleSlaStatusesMap={orderSla.sampleStatusesBySampleId}
+                    collapsedCols={orderFilters.collapsedKanbanCols}
+                    searchActive={serverSearchActive}
+                    productsBySampleId={productsBySampleId}
+                    productColorFor={productColorFor}
+                    onToggleCollapse={toggleCollapsedCol}
+                  />
+                </div>
+              )}
           </CardContent>
         </Card>
       )}

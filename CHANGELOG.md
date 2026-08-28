@@ -1,5 +1,94 @@
 # Changelog
 
+## v1.11.8 — 2026-08-28
+
+### Added
+
+- **Product chips wear their bench colors** — the ordered-product chips
+  on the Sample Details / sub-sample header bar and Order Details card
+  are colored by each product's fulfillment role via the vial-role
+  catalog, matching the boxing lanes and role badges exactly. Role-less
+  products keep the previous violet.
+- **Products toggle on Order Status** — a new toolbar button shows each
+  sample's ordered products as extra-small chips on the cards, in both
+  table and kanban views. Payload-derived (zero extra requests), labels
+  and colors from the profiles catalog, per-user persistence.
+
+## v1.11.7 — 2026-08-28
+
+### Fixed
+
+- **Searching shows the found order's cards even in hidden columns** — a
+  server-side search now overrides the hidden-by-default kanban columns,
+  the same way an analysis-state filter does. Without this, searching a
+  completed order (whose cards sit in the hidden Published column) found
+  the order but rendered an empty-looking swimlane (prod report: 6088).
+
+## v1.11.6 — 2026-08-28
+
+### Fixed
+
+- **Receive-page check-in drives the sample engine touchpoint** (PR #149) —
+  `_receive_native_phase` recorded the receive transition but never drove
+  the side-by-side engine, stranding `native_status` at its pre-receive
+  state for every receive-page check-in. The chokepoint's engine block is
+  now the shared `workflow.engine.drive_sample_touchpoint`, called from
+  both the bg transition chokepoint and the receive phase.
+
+## v1.11.5 — 2026-08-27
+
+### Changed
+
+- **Order Status board populates in seconds** — mk1-source per-sample
+  lookups no longer ride the serialized SENAITE queue (that queue exists
+  only to protect single-threaded Zope). Registry lookups now run 12
+  concurrent through their own limiter, taking the default board (~370
+  samples at ~70ms each) from ~60s of one-at-a-time fetching to a few
+  seconds. SENAITE-source lookups keep both the serial queue and the
+  3-way limiter, byte-identically. The registry route was verified
+  threadpooled (run_in_threadpool) before widening the lane.
+
+## v1.11.4 — 2026-08-27
+
+### Changed
+
+- **Kanban hides Sample Due + Published by default** — the bookkeeping
+  ends of the pipeline no longer render unless asked for. A new Columns
+  dropdown in the kanban toolbar toggles any column (choice persists per
+  user); the flat view's column-header chevrons still work, and the
+  grouped swimlane view now honors hidden columns too (it previously
+  ignored collapse state entirely). An active analysis-state filter
+  overrides hidden columns, so filtering to Published always shows it.
+  Existing users' saved filters get the new defaults exactly once; any
+  column they re-enable afterwards stays enabled.
+
+## v1.11.3 — 2026-08-27
+
+### Fixed
+
+- **Order Status search axes actually reach the database** — v1.11.2's
+  server-side search was a silent no-op: the backend forwarded the four
+  axes to the Integration Service only on the customer-scoped branch,
+  while the unscoped branch (the Order Status page) called the direct
+  fetch that ignores them. Any request carrying a non-empty axis now
+  routes through the IS (customer_id omitted — its endpoint treats null
+  as all orders), with newest-first ordering to match the browse view.
+
+## v1.11.2 — 2026-08-27
+
+### Fixed
+
+- **Order Status search finds orders older than the newest 200** — the
+  Order ID / Sample ID / Analyte / Lot filters now run the IS's
+  server-side search axes (debounced, per-axis 2-char gate, same wire
+  contract as the customer-scoped list), so the 200-row limit applies to
+  MATCHES instead of recency. Previously filtering was purely client-side
+  over the newest-200 window, so an older order id (e.g. 5739) matched
+  nothing. While a server search is active the open-only default is
+  bypassed — old orders are usually complete, and hiding the very match
+  the user asked for was the other half of the "order doesn't come up"
+  report. Email filtering stays client-side (no IS axis for it).
+
 ## v1.11.1 — 2026-08-27
 
 ### Added

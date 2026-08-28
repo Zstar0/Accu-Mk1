@@ -2,8 +2,9 @@ import { AlertTriangle, RefreshCw } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { useUIStore } from '@/store/ui-store'
+import { ProductChip } from '@/components/senaite/ProductChip'
 import { FlagIndicator } from '@/components/flags/FlagIndicator'
-import type { SenaiteLookupResult } from '@/lib/api'
+import type { SenaiteLookupResult, OrderedProduct } from '@/lib/api'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 import {
   AnalysisCounts,
@@ -23,6 +24,8 @@ export function SampleCard({
   lot,
   highlightLot,
   slaSnapshots,
+  products,
+  productColorFor,
 }: {
   sampleId: string
   lookup: SenaiteLookupResult | undefined
@@ -60,8 +63,33 @@ export function SampleCard({
   // returns undefined for published or unresolved samples; when the prop is
   // omitted (or empty array) the indicator simply doesn't render.
   slaSnapshots?: SampleSlaSnapshot[]
+  // Ordered-product chips (v1.11.8) — payload-sourced like analyte/lot, so
+  // they render on all three branches. Colored by fulfillment role, same
+  // catalog source as the boxing lanes. Omitted/empty -> no row.
+  products?: OrderedProduct[]
+  /** Role-catalog color resolver from useProductColorClasses(), passed down
+   *  from the page so this card stays hook-free (its test harness mocks
+   *  @/lib/api with a closed factory). Absent -> chips keep the violet
+   *  fallback. */
+  productColorFor?: (p: OrderedProduct) => string
 }) {
   const navigateToSample = useUIStore(state => state.navigateToSample)
+  const productsEl =
+    products && products.length > 0 ? (
+      <div
+        data-testid={`sample-card-products-${sampleId}`}
+        className="flex flex-wrap gap-1 mb-1"
+      >
+        {products.map(p => (
+          <ProductChip
+            key={p.key}
+            xs
+            product={p}
+            colorClasses={productColorFor?.(p)}
+          />
+        ))}
+      </div>
+    ) : null
   const hasAnalyte = typeof analyte === 'string' && analyte.length > 0
   const analyteEl = hasAnalyte ? (
     <div
@@ -100,6 +128,7 @@ export function SampleCard({
           <span className="font-mono">{sampleId}</span>
         </div>
         {analyteEl}
+        {productsEl}
         {lotRow(payloadLot)}
       </div>
     )
@@ -116,6 +145,7 @@ export function SampleCard({
       >
         <span className="text-xs font-mono text-destructive">{sampleId}</span>
         {analyteEl}
+        {productsEl}
         {lotRow(payloadLot)}
         <div className="text-xs text-muted-foreground">Failed to load</div>
       </div>
@@ -157,6 +187,7 @@ export function SampleCard({
         </span>
       </div>
       {analyteEl}
+      {productsEl}
       {lotRow(clientLot ?? payloadLot)}
       <div className="flex items-center gap-2">
         <AnalysisCounts counts={counts} needsAttention={needsAttention} />
