@@ -108,6 +108,20 @@ SHRINKING: dict[tuple[str, str, str], tuple[int, str]] = {
         "Same Task-4 ruled union skip, shared row-construction path. Retires "
         "with the same keyword root index drop (database.py:696).",
     ),
+    # PR #139's silent-no-op guard (PB-0410), left unclassified at merge —
+    # this entry was the guard's only red on master from 08-25 to 08-27.
+    ("main.py", "_swap_parent_identity_service", "new_id_svc"): (
+        1,
+        "Replace step-5 verify: after the IS-proxied SENAITE add (keyed by "
+        "service_uid), the AR re-read is matched by KEYWORD to detect the "
+        "silent-200 no-op. Keyword is what the explorer analyses payload "
+        "reliably carries across the boundary today — but the add itself "
+        "already keys on new_id_svc.senaite_uid, so this is debt, not a "
+        "ruling. Retires when the verify matches the added senaite_uid "
+        "against the re-read rows instead: strictly stronger, since a "
+        "same-keyword duplicate service (the PB-0410 root cause) satisfies "
+        "the keyword check while the intended uid may still be missing.",
+    ),
 }
 
 
