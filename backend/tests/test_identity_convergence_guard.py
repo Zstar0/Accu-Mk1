@@ -77,7 +77,11 @@ SHRINKING: dict[tuple[str, str, str], tuple[int, str]] = {
         "for the caller-facing report. NOTE: neither change is owned by a slice "
         "today. Real conditions, unscheduled work.",
     ),
-    ("main.py", "list_worksheets", "AnalysisService"): (
+    # Re-keyed 2026-08-27: the site moved verbatim from list_worksheets into
+    # _serialize_worksheets when the endpoint's per-worksheet N+1 was batched
+    # (worksheet status changes took ~1min in the UI). Same debt, same
+    # retirement condition.
+    ("main.py", "_serialize_worksheets", "AnalysisService"): (
         1,
         "Department fallback for worksheet items whose analyses_json first entry "
         "carries only a keyword. Retires when worksheet items resolve their "

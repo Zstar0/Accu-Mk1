@@ -12,6 +12,7 @@ import { useWorksheetDrawer } from '@/hooks/use-worksheet-drawer'
 
 vi.mock('@/lib/api', () => ({
   listWorksheets: vi.fn(async () => []),
+  getWorksheet: vi.fn(async () => null),
   updateWorksheet: vi.fn(),
   removeWorksheetItem: vi.fn(),
   completeWorksheet: vi.fn(),
@@ -19,19 +20,22 @@ vi.mock('@/lib/api', () => ({
   addGroupToWorksheet: vi.fn(),
   reorderWorksheetItems: vi.fn(),
   updateWorksheetItem: vi.fn(),
+  applyWorksheetMethodInstrument: vi.fn(),
 }))
 
 // Behavioral contract: the app-scope drawer hook (MainWindow badge) and the
-// SampleDetails worksheet-chip query must share ONE cache entry. /worksheets
-// is ~2.5s of server DB work returning 1.3MB — under two different keys a
-// cold sample-details load fetched it twice (2026-07-07 prod trace).
+// SampleDetails worksheet-chip query must share ONE cache entry. Under two
+// different keys a cold sample-details load fetched /worksheets twice
+// (2026-07-07 prod trace). Since 2026-08-27 the shared entry is the OPEN
+// filter — the unfiltered fetch served the full worksheet history
+// (16.9s/4.2MB on prod) and is reserved for the list page's on-demand tabs.
 
 describe('worksheets list fetch dedup', () => {
   beforeEach(() => {
     vi.mocked(listWorksheets).mockClear()
   })
 
-  it('drawer hook and the sample-details query share one fetch', async () => {
+  it('drawer hook and the sample-details query share one open-filter fetch', async () => {
     const qc = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     })
@@ -43,8 +47,8 @@ describe('worksheets list fetch dedup', () => {
         const drawer = useWorksheetDrawer()
         // Mirrors SampleDetails.tsx's worksheet-chip query key/fn literally.
         const chip = useQuery({
-          queryKey: ['worksheets-list', undefined],
-          queryFn: () => listWorksheets(),
+          queryKey: ['worksheets-list', 'open'],
+          queryFn: () => listWorksheets('open'),
           staleTime: 30_000,
         })
         return { drawer, chip }
@@ -57,6 +61,9 @@ describe('worksheets list fetch dedup', () => {
       expect(result.current.chip.isLoading).toBe(false)
     })
     expect(listWorksheets).toHaveBeenCalledTimes(1)
+    // The shared fetch must be the OPEN filter — an unfiltered call here
+    // means a consumer regressed to serving the full worksheet history.
+    expect(listWorksheets).toHaveBeenCalledWith('open')
 
     qc.clear()
   })

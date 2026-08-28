@@ -1,7 +1,15 @@
 import { useState, useMemo } from 'react'
 import { useUIStore } from '@/store/ui-store'
 import { useDroppable } from '@dnd-kit/core'
-import { Plus, FileSpreadsheet, Pencil, Check, X, Trash2, Layers } from 'lucide-react'
+import {
+  Plus,
+  FileSpreadsheet,
+  Pencil,
+  Check,
+  X,
+  Trash2,
+  Layers,
+} from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import {
@@ -43,7 +51,14 @@ export interface WorksheetSummaryItem {
   date_received: string | null
   /** 'core' | 'variance' | null — null for parent-sample items. */
   assignment_kind?: 'core' | 'variance' | null
-  analyses?: { keyword?: string | null; title?: string | null; peptide_name?: string | null }[]
+  /** The vial's catalog role ('hplc' | 'hm' | ...); null for parent-sample
+   *  items. Role pills prefer this over the department bench. */
+  assignment_role?: string | null
+  analyses?: {
+    keyword?: string | null
+    title?: string | null
+    peptide_name?: string | null
+  }[]
 }
 
 export interface WorksheetSummary {
@@ -57,7 +72,11 @@ export interface WorksheetSummary {
 }
 
 function ItemRolePills({ item }: { item: WorksheetSummaryItem }) {
-  const roles = itemRoleBadges({ department_name: item.department_name, analyses: item.analyses })
+  const roles = itemRoleBadges({
+    department_name: item.department_name,
+    analyses: item.analyses,
+    assignment_role: item.assignment_role,
+  })
   if (roles.length === 0) return null
   return (
     <span className="flex items-center gap-1 shrink-0">
@@ -85,8 +104,12 @@ function NewWorksheetDropZone() {
           : 'border-muted-foreground/20 hover:border-muted-foreground/40'
       }`}
     >
-      <Plus className={`mx-auto h-5 w-5 mb-1.5 transition-colors ${isOver ? 'text-primary' : 'text-muted-foreground/40'}`} />
-      <p className={`text-xs font-medium transition-colors ${isOver ? 'text-primary' : 'text-muted-foreground'}`}>
+      <Plus
+        className={`mx-auto h-5 w-5 mb-1.5 transition-colors ${isOver ? 'text-primary' : 'text-muted-foreground/40'}`}
+      />
+      <p
+        className={`text-xs font-medium transition-colors ${isOver ? 'text-primary' : 'text-muted-foreground'}`}
+      >
         {isOver ? 'Drop to create worksheet' : 'New Worksheet'}
       </p>
       <p className="text-[10px] text-muted-foreground/60 mt-0.5">
@@ -111,24 +134,30 @@ function WorksheetDropZone({
   onDelete: (id: number) => void
   onRemoveItem: (worksheetId: number, itemId: number) => void
 }) {
-  const { isOver, setNodeRef } = useDroppable({ id: `worksheet-${worksheet.id}` })
+  const { isOver, setNodeRef } = useDroppable({
+    id: `worksheet-${worksheet.id}`,
+  })
   const [editing, setEditing] = useState(false)
   const [editTitle, setEditTitle] = useState(worksheet.title)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
-  const dropSubjects: SlaSubject[] = useMemo(() =>
-    worksheet.items.map(item => ({
-      key: String(item.id),
-      priority: (item.priority as InboxPriority) || 'normal',
-      // SLA tiers are still keyed on service groups — departments take that
-      // over in S7, so this stays the group id on purpose.
-      groupId: item.service_group_id,
-      receivedAt: item.date_received ?? item.added_at,
-    })),
+  const dropSubjects: SlaSubject[] = useMemo(
+    () =>
+      worksheet.items.map(item => ({
+        key: String(item.id),
+        priority: (item.priority as InboxPriority) || 'normal',
+        // SLA tiers are still keyed on service groups — departments take that
+        // over in S7, so this stays the group id on purpose.
+        groupId: item.service_group_id,
+        receivedAt: item.date_received ?? item.added_at,
+      })),
     [worksheet.items]
   )
-  const { byKey: dropSlaByKey, isLoading: dropSlaLoading, isError: dropSlaError } =
-    useSlaForSubjects(dropSubjects)
+  const {
+    byKey: dropSlaByKey,
+    isLoading: dropSlaLoading,
+    isError: dropSlaError,
+  } = useSlaForSubjects(dropSubjects)
 
   function handleSaveTitle() {
     const trimmed = editTitle.trim()
@@ -155,23 +184,37 @@ function WorksheetDropZone({
             <Input
               value={editTitle}
               onChange={e => setEditTitle(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') handleSaveTitle(); if (e.key === 'Escape') setEditing(false) }}
+              onKeyDown={e => {
+                if (e.key === 'Enter') handleSaveTitle()
+                if (e.key === 'Escape') setEditing(false)
+              }}
               className="h-5 text-xs px-1 py-0"
               autoFocus
             />
-            <button onClick={handleSaveTitle} className="text-primary hover:text-primary/80">
+            <button
+              onClick={handleSaveTitle}
+              className="text-primary hover:text-primary/80"
+            >
               <Check className="h-3 w-3" />
             </button>
-            <button onClick={() => setEditing(false)} className="text-muted-foreground hover:text-foreground">
+            <button
+              onClick={() => setEditing(false)}
+              className="text-muted-foreground hover:text-foreground"
+            >
               <X className="h-3 w-3" />
             </button>
           </div>
         ) : (
           <>
-            <span className="text-xs font-medium truncate flex-1">{worksheet.title}</span>
+            <span className="text-xs font-medium truncate flex-1">
+              {worksheet.title}
+            </span>
             <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
               <button
-                onClick={() => { setEditTitle(worksheet.title); setEditing(true) }}
+                onClick={() => {
+                  setEditTitle(worksheet.title)
+                  setEditing(true)
+                }}
                 className="text-muted-foreground/40 hover:text-muted-foreground"
               >
                 <Pencil className="h-3 w-3" />
@@ -183,7 +226,10 @@ function WorksheetDropZone({
                 <Trash2 className="h-3 w-3" />
               </button>
             </div>
-            <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4 shrink-0">
+            <Badge
+              variant="secondary"
+              className="text-[10px] px-1.5 py-0 h-4 shrink-0"
+            >
               {worksheet.item_count}
             </Badge>
           </>
@@ -193,7 +239,11 @@ function WorksheetDropZone({
       {/* Tech assignment */}
       <div className="mb-2">
         <Select
-          value={worksheet.assigned_analyst != null ? String(worksheet.assigned_analyst) : ''}
+          value={
+            worksheet.assigned_analyst != null
+              ? String(worksheet.assigned_analyst)
+              : ''
+          }
           onValueChange={value => onAssignTech(worksheet.id, Number(value))}
         >
           <SelectTrigger
@@ -204,7 +254,9 @@ function WorksheetDropZone({
           </SelectTrigger>
           <SelectContent>
             {users.map(user => (
-              <SelectItem key={user.id} value={String(user.id)}>{user.email}</SelectItem>
+              <SelectItem key={user.id} value={String(user.id)}>
+                {user.email}
+              </SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -214,7 +266,10 @@ function WorksheetDropZone({
       {worksheet.items.length > 0 && (
         <div className="space-y-1">
           {worksheet.items.map((item, i) => (
-            <div key={i} className="group/item flex items-center gap-1.5 text-[10px]">
+            <div
+              key={i}
+              className="group/item flex items-center gap-1.5 text-[10px]"
+            >
               <button
                 onClick={() => onRemoveItem(worksheet.id, item.id)}
                 className="opacity-0 group-hover/item:opacity-100 text-muted-foreground/40 hover:text-destructive transition-opacity shrink-0"
@@ -224,7 +279,9 @@ function WorksheetDropZone({
               </button>
               <button
                 className="font-mono text-muted-foreground hover:underline hover:text-primary transition-colors"
-                onClick={() => useUIStore.getState().navigateToSample(item.sample_id)}
+                onClick={() =>
+                  useUIStore.getState().navigateToSample(item.sample_id)
+                }
               >
                 {item.sample_id}
               </button>
@@ -237,7 +294,9 @@ function WorksheetDropZone({
                 />
               )}
               <span className="text-muted-foreground/50">·</span>
-              <span className="truncate min-w-0 text-muted-foreground">{item.group_name}</span>
+              <span className="truncate min-w-0 text-muted-foreground">
+                {item.group_name}
+              </span>
               <ItemRolePills item={item} />
               <div className="flex-1" />
               <PriorityBadge priority={item.priority as InboxPriority} />
@@ -253,7 +312,9 @@ function WorksheetDropZone({
       )}
 
       {worksheet.items.length === 0 && (
-        <p className="text-[10px] text-muted-foreground/50 italic">Empty — drop items here</p>
+        <p className="text-[10px] text-muted-foreground/50 italic">
+          Empty — drop items here
+        </p>
       )}
 
       <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
@@ -261,8 +322,10 @@ function WorksheetDropZone({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete worksheet?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will delete <span className="font-medium">{worksheet.title}</span> and
-              return its {worksheet.item_count} item{worksheet.item_count !== 1 ? 's' : ''} to the inbox.
+              This will delete{' '}
+              <span className="font-medium">{worksheet.title}</span> and return
+              its {worksheet.item_count} item
+              {worksheet.item_count !== 1 ? 's' : ''} to the inbox.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -290,7 +353,15 @@ interface WorksheetDropPanelProps {
   onRemoveItem: (worksheetId: number, itemId: number) => void
 }
 
-export function WorksheetDropPanel({ worksheets, users, loading, onRename, onAssignTech, onDelete, onRemoveItem }: WorksheetDropPanelProps) {
+export function WorksheetDropPanel({
+  worksheets,
+  users,
+  loading,
+  onRename,
+  onAssignTech,
+  onDelete,
+  onRemoveItem,
+}: WorksheetDropPanelProps) {
   const openWorksheets = worksheets.filter(w => w.status === 'open')
 
   return (
@@ -323,7 +394,10 @@ export function WorksheetDropPanel({ worksheets, users, loading, onRename, onAss
           {loading ? (
             <div className="space-y-2">
               {[1, 2, 3].map(i => (
-                <div key={i} className="h-16 rounded-lg bg-muted/30 animate-pulse" />
+                <div
+                  key={i}
+                  className="h-16 rounded-lg bg-muted/30 animate-pulse"
+                />
               ))}
             </div>
           ) : (

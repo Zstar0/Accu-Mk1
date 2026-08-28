@@ -5623,6 +5623,9 @@ export interface WorksheetListItem {
     lims_sub_sample_pk: number | null
     /** 'core' | 'variance' | null — null for parent-sample items. */
     assignment_kind?: 'core' | 'variance' | null
+    /** The vial's catalog role ('hplc' | 'hm' | ...); null for parent-sample
+     *  items. Role pills prefer this over the department bench. */
+    assignment_role?: string | null
     /** Current physical box; null for parent-sample items / unboxed vials. */
     box_id: number | null
     box_label: string | null
@@ -5644,6 +5647,14 @@ export async function listWorksheets(status?: string): Promise<WorksheetListItem
     headers: getBearerHeaders(),
   })
   if (!response.ok) throw new Error(`List worksheets failed: ${response.status}`)
+  return response.json()
+}
+
+export async function getWorksheet(worksheetId: number): Promise<WorksheetListItem> {
+  const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Get worksheet failed: ${response.status}`)
   return response.json()
 }
 

@@ -271,3 +271,171 @@ def test_worksheet_item_department_name_state4_unresolvable_renders_legacy(clien
     item = next(w for w in r.json() if w["title"] == "WS Unresolvable")["items"][0]
     assert item["department_id"] is None
     assert item["department_name"] == "Legacy"
+
+
+# ── 2026-08-27 batching fix: GET /worksheets was ~10 queries per worksheet
+# plus one method lookup per item (16.9s / 4.2MB on prod with 1,166
+# worksheets — worksheet status changes appeared to take a minute in the UI
+# because every mutation refetches this endpoint). _serialize_worksheets now
+# batches every lookup across ALL worksheets. These tests pin (a) the query
+# count is CONSTANT in worksheet count, (b) the by-id route serves the exact
+# list shape for the drawer's non-open fallback. ─────────────────────────────
+
+def _fresh_client_with_counter():
+    """Own engine + counter (the shared fixtures don't expose the engine)."""
+    from sqlalchemy import event
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    counter = {"n": 0}
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def _count(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            counter["n"] += 1
+
+    app.dependency_overrides[get_db] = lambda: session
+    app.dependency_overrides[get_current_user] = lambda: MagicMock(id=1, role="admin")
+    return TestClient(app), session, counter
+
+
+def _seed_rich_worksheet(db, n, analyst_id=None):
+    """One worksheet + grouped item + group-less item, distinct per n."""
+    import json as _json
+    from models import Department, ServiceGroup, AnalysisService, WorksheetItem, service_group_members
+
+    dept = Department(name=f"Dept {n}")
+    db.add(dept); db.flush()
+    grp = ServiceGroup(name=f"Group {n}", department_id=dept.id)
+    db.add(grp); db.flush()
+    svc = AnalysisService(title=f"Svc {n}", keyword=f"KW-{n}", department_id=dept.id)
+    db.add(svc); db.flush()
+    db.execute(service_group_members.insert().values(
+        service_group_id=grp.id, analysis_service_id=svc.id))
+    ws = Worksheet(title=f"WS {n}", status="open", assigned_analyst_id=analyst_id)
+    db.add(ws); db.flush()
+    db.add(WorksheetItem(
+        worksheet_id=ws.id, sample_uid=f"UID-{n}-A", sample_id=f"P-90{n}0",
+        service_group_id=grp.id, assigned_analyst_id=analyst_id,
+    ))
+    db.add(WorksheetItem(
+        worksheet_id=ws.id, sample_uid=f"UID-{n}-B", sample_id=f"P-90{n}1",
+        service_group_id=None,
+        analyses_json=_json.dumps([{"title": f"Svc {n}", "keyword": f"KW-{n}",
+                                    "peptide_name": None, "method": None}]),
+    ))
+    db.commit()
+    return ws
+
+
+def test_list_worksheets_query_count_constant_in_worksheet_count():
+    """The load-bearing anti-N+1 pin: serving 6 worksheets must issue exactly
+    as many SELECTs as serving 1. Every lookup is batched across worksheets;
+    a reintroduced per-worksheet (or per-item) query fails this immediately."""
+    client, db, counter = _fresh_client_with_counter()
+    try:
+        _seed_rich_worksheet(db, 1)
+        counter["n"] = 0
+        assert client.get("/worksheets").status_code == 200
+        queries_for_one = counter["n"]
+
+        for n in range(2, 7):
+            _seed_rich_worksheet(db, n)
+        counter["n"] = 0
+        r = client.get("/worksheets")
+        assert r.status_code == 200
+        assert len(r.json()) == 6
+        assert counter["n"] == queries_for_one, (
+            f"query count grew with worksheet count: {queries_for_one} for 1 "
+            f"worksheet vs {counter['n']} for 6 — a per-worksheet/per-item "
+            "query crept back into _serialize_worksheets"
+        )
+    finally:
+        db.close()
+        app.dependency_overrides.clear()
+
+
+def test_get_worksheet_by_id_is_not_a_coroutine_function():
+    """Same event-loop rule as list_worksheets: pure sync DB body, keep `def`."""
+    assert not asyncio.iscoroutinefunction(main.get_worksheet_by_id)
+
+
+def test_get_worksheet_by_id_matches_list_shape(client, db):
+    """The by-id route must serve the EXACT dict the list serves for that
+    worksheet — the FE drawer swaps between them interchangeably (open list
+    first, by-id fallback for completed/deep-linked worksheets)."""
+    from models import User
+
+    user = User(email="tech@accumark.test", hashed_password="x")
+    db.add(user); db.flush()
+    ws = _seed_rich_worksheet(db, 1, analyst_id=user.id)
+
+    list_entry = next(w for w in client.get("/worksheets").json() if w["id"] == ws.id)
+    single = client.get(f"/worksheets/{ws.id}")
+    assert single.status_code == 200
+    assert single.json() == list_entry
+    # spot-check the enrichment actually resolved (not all-None parity)
+    assert list_entry["assigned_analyst_email"] == "tech@accumark.test"
+    assert list_entry["items"][0]["group_name"] == "Group 1"
+    assert list_entry["items"][0]["department_name"] == "Dept 1"
+
+
+def test_get_worksheet_by_id_404s_on_missing_and_staging(client, db):
+    staging = Worksheet(title="WS Staging", status="staging")
+    db.add(staging); db.commit()
+
+    assert client.get("/worksheets/999999").status_code == 404
+    # staging is invisible in the list; by-id must match that exclusion
+    assert client.get(f"/worksheets/{staging.id}").status_code == 404
+
+
+# ── 2026-08-27 role passthrough: a dropped hm vial's worksheet item rendered
+# an hplc chip — under the hm-under-Analytical catalog state (hm role +
+# services carry department_id=Analytical in prod), department_name cannot
+# distinguish hm work from hplc. Items now additively carry the vial's own
+# assignment_role (joined off lims_sub_samples, like lims_sub_sample_pk);
+# the FE badge prefers it. ───────────────────────────────────────────────────
+
+def test_worksheet_item_carries_vial_assignment_role(client, db):
+    """Vial-scoped item -> its lims_sub_samples.assignment_role; parent-sample
+    item (no sub row) -> None. Pinned against the prod PB-0463-S04 case:
+    an hm vial whose item department is Analytical must still say role hm."""
+    import json as _json
+    from models import Department, LimsSample, LimsSubSample, WorksheetItem
+
+    analytical = Department(name="Analytical")
+    db.add(analytical); db.flush()
+    parent = LimsSample(sample_id="PB-0463", status="received")
+    db.add(parent); db.flush()
+    db.add(LimsSubSample(
+        sample_id="PB-0463-S04", external_lims_uid="mk1://PB-0463-S04",
+        parent_sample_pk=parent.id, vial_sequence=4,
+        assignment_role="hm",
+    ))
+    ws = Worksheet(title="WS HM Role", status="open")
+    db.add(ws); db.flush()
+    db.add(WorksheetItem(
+        worksheet_id=ws.id, sample_uid="mk1://PB-0463-S04",
+        sample_id="PB-0463-S04",
+        department_id=analytical.id,  # the hm-under-Analytical state
+        analyses_json=_json.dumps([
+            {"title": "Lead", "keyword": "LEAD-PPM", "peptide_name": None, "method": None},
+        ]),
+    ))
+    db.add(WorksheetItem(
+        worksheet_id=ws.id, sample_uid="PARENT-UID",
+        sample_id="PB-0463",  # parent-sample claim, no lims_sub_samples row
+        department_id=analytical.id,
+    ))
+    db.commit()
+
+    ws_out = next(w for w in client.get("/worksheets").json() if w["title"] == "WS HM Role")
+    by_sample = {it["sample_id"]: it for it in ws_out["items"]}
+    assert by_sample["PB-0463-S04"]["assignment_role"] == "hm"
+    assert by_sample["PB-0463-S04"]["department_name"] == "Analytical"  # unchanged
+    assert by_sample["PB-0463"]["assignment_role"] is None
