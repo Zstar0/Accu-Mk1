@@ -21514,9 +21514,12 @@ def s2s_update_lims_sample_shipping(
         if row.status not in _PRE_RECEIVED_STATES:
             locked.append(sid)
             continue
-        row.shipping_carrier = (req.shipping_carrier or None)
-        row.tracking_number = (req.tracking_number or None)
-        row.tracking_url = (req.tracking_url or None)
+        # Admin-configured carrier/URL values have no length guard upstream;
+        # slice defensively before assignment so an over-length value can't
+        # 500 on Postgres's VARCHAR limit (SQLite in tests won't catch it).
+        row.shipping_carrier = req.shipping_carrier[:100] if req.shipping_carrier else None
+        row.tracking_number = req.tracking_number[:120] if req.tracking_number else None
+        row.tracking_url = req.tracking_url[:500] if req.tracking_url else None
         updated.append(sid)
     db.commit()
     return RegistryShippingUpdateResponse(updated=updated, locked=locked, missing=missing)

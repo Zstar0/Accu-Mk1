@@ -99,3 +99,29 @@ def test_idempotent_resave_same_values(client, db_session):
         r2 = client.post(URL, json=one, headers=HDR)
     assert r1.status_code == r2.status_code == 200
     assert r2.json()["updated"] == ["P-9200"]
+
+
+def test_oversize_values_are_truncated_to_column_lengths(client, db_session):
+    """No server-side length guard would 500 on Postgres for admin-configured
+    values exceeding shipping_carrier VARCHAR(100) / tracking_url VARCHAR(500)
+    (SQLite in these tests can't catch that) — the endpoint must slice
+    defensively before assignment rather than rely on the DB to enforce it."""
+    db_session.add(LimsSample(sample_id="P-9200", status="sample_due"))
+    db_session.commit()
+    oversize = {
+        "samples": ["P-9200"],
+        "shipping_carrier": "C" * 150,
+        "tracking_number": "T" * 140,
+        "tracking_url": "https://example.com/" + ("u" * 500),
+    }
+    with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}):
+        r = client.post(URL, json=oversize, headers=HDR)
+    assert r.status_code == 200
+    assert r.json()["updated"] == ["P-9200"]
+    fresh = db_session.query(LimsSample).filter_by(sample_id="P-9200").one()
+    assert fresh.shipping_carrier == "C" * 100
+    assert len(fresh.shipping_carrier) == 100
+    assert fresh.tracking_number == "T" * 120
+    assert len(fresh.tracking_number) == 120
+    assert fresh.tracking_url == oversize["tracking_url"][:500]
+    assert len(fresh.tracking_url) == 500
