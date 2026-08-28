@@ -10,6 +10,7 @@ import {
 import type { EnrichedOrderGroup } from '@/lib/inbox-orders'
 import { customerDetailHash } from '@/lib/inbox-orders'
 import { OrderExpectedVials } from '@/components/intake/OrderExpectedVials'
+import { TrackingLink } from '@/components/intake/TrackingLink'
 import type { OrderBoxLabelSummary } from '@/lib/api'
 
 interface OrderListRowProps {
@@ -38,6 +39,15 @@ function normalizeState(reviewState: string | null): string {
   if (s === 'sample_received' || s === 'received') return 'received'
   if (s === 'to_be_verified') return 'to_verify'
   return s
+}
+
+// Surfaces the order's tracking number, if any sample in the group has one.
+// Orders are shipped as one parcel, so the first non-null value stands in for
+// the whole order rather than listing per-sample.
+function firstTrackedSample(
+  group: EnrichedOrderGroup
+): EnrichedOrderGroup['samples'][number] | null {
+  return group.samples.find(s => Boolean(s.tracking_number)) ?? null
 }
 
 function worstSampleState(group: EnrichedOrderGroup): string | null {
@@ -76,6 +86,7 @@ export function OrderListRow({
   const linkEmail = email != null && customerId != null
 
   const worst = worstSampleState(group)
+  const trackedSample = firstTrackedSample(group)
 
   const sampleTypes = Array.from(
     new Set(
@@ -117,6 +128,16 @@ export function OrderListRow({
               summary={expectedVialsSummary}
               loading={expectedVialsLoading}
             />
+            {trackedSample ? (
+              <>
+                {' '}
+                <span aria-hidden="true">·</span>{' '}
+                <TrackingLink
+                  trackingNumber={trackedSample.tracking_number}
+                  trackingUrl={trackedSample.tracking_url}
+                />
+              </>
+            ) : null}
           </span>
         </div>
       </td>
