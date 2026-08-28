@@ -11655,13 +11655,27 @@ async def generate_sample_coa(
         _missing_attach = None
         _variance_required = False
 
-        if SENAITE_URL:
+        # COA read-independence (Task 5): the pre-flight block below (resolver
+        # + attachments gate) must run in mk1 mode regardless of whether
+        # SENAITE_URL happens to be configured — mk1 mode reads
+        # ShadowAnalysesReader (native rows, zero SENAITE HTTP) and the
+        # attachments gate's mk1 branch (Task 4) reads native rows too, so
+        # neither needs SENAITE_URL. senaite mode is unchanged: it still
+        # requires SENAITE_URL, same as before this task.
+        from coa.source_setting import coa_generation_source
+        _coa_src = coa_generation_source(db)
+        if _coa_src == "mk1" or SENAITE_URL:
             try:
-                reader = SenaiteAnalysesHttpReader(
-                    base_url=SENAITE_URL,
-                    auth=_get_senaite_auth(current_user),
-                )
-                resolver_result = await resolve_sources(sample_id, db, reader)
+                if _coa_src == "mk1":
+                    from coa.shadow_reader import ShadowAnalysesReader
+                    reader = ShadowAnalysesReader(db)
+                    resolver_result = await resolve_sources(sample_id, db, reader)
+                elif SENAITE_URL:
+                    reader = SenaiteAnalysesHttpReader(
+                        base_url=SENAITE_URL,
+                        auth=_get_senaite_auth(current_user),
+                    )
+                    resolver_result = await resolve_sources(sample_id, db, reader)
             except Exception as e:
                 # Resolver failure is non-fatal in Phase 1; log and fall through.
                 _logger.warning("COA resolver pre-flight failed for %s: %s", sample_id, e)

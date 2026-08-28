@@ -100,9 +100,13 @@ def _gather_candidates_for(
                 value=an.get("result"),
                 unit=an.get("unit"),
                 state=an.get("review_state", ""),
-                # Default TRUE; _apply_reportable stamps the real value from
-                # the Mk1 sidecar for any candidate that has a row.
-                reportable=True,
+                # Default TRUE unless the reader payload already carries an
+                # explicit reportable flag (shadow reader, mk1 mode);
+                # _apply_reportable still stamps the real value afterward
+                # from the Mk1 sidecar for any candidate that has a row
+                # (HTTP-reader dicts never carry the key, so this is a
+                # no-op widening for the SENAITE path).
+                reportable=an.get("reportable", True),
                 in_variance_set=in_variance_set,
                 is_parent_ar=is_parent_ar,
             )
