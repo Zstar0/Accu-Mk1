@@ -1,5 +1,44 @@
 # Changelog
 
+## v1.11.0 — 2026-08-27
+
+Worksheets performance + inbox SLA column (PRs #141, #142, #143).
+
+### Added
+
+- **GET /worksheets/{worksheet_id}** — one worksheet in the exact list
+  shape (staging 404s), so the drawer can resolve a completed or
+  deep-linked worksheet without fetching the full history.
+- **SLA column on the inbox page** — every vial card shows the Order
+  Status page's SLA indicator (dot + over-by/left, colored by tier
+  progress) with the full breakdown tooltip (received / tier + resolution
+  reason / target / elapsed / remaining). One batched /sla/status per
+  inbox payload; multi-department vials show the worst snapshot.
+- **Profile-SLA precedence in the shared subject resolver** — the
+  worksheet list, drawer, drop panel, and inbox SLA columns now honor
+  Task 11 profile tiers (priority > profile > group > default, in
+  lockstep with the Order Status resolvers). Fixes usp71 items reading
+  the 24h default tier (and showing breached) instead of the Sterility
+  USP 71 profile's 14-business-day tier. Tooltips now carry the
+  resolution-source line ("Profile SLA — {name}").
+
+### Fixed
+
+- **Worksheet status changes no longer take a minute** — GET /worksheets
+  batched from ~10 queries per worksheet (+1 per item) to a constant
+  query count (16.9s → sub-second on prod's 1,166 worksheets); the
+  drawer, sample-details chip, and inbox page fetch the open filter
+  (0.8s) instead of the full history; the prep-status select updates
+  optimistically with rollback on error.
+- **Dropped heavy-metals items badge as HM, not HPLC** — worksheet items
+  carry the vial's own assignment_role and the role pill prefers it over
+  the department bench (hm-under-Analytical made department alone
+  indistinguishable from hplc work).
+- **Identity-convergence guard re-armed** — PR #139's Replace-verify
+  keyword comparison classified in the guard ledger (SHRINKING; retires
+  on a senaite_uid-match verify), so the guard can catch the next
+  unclassified keyword-identity site again.
+
 ## v1.10.0 — 2026-08-27
 
 Seam 4 slice 1 (PR #140). Pairs with COA Builder v2.33.0; deploy COA
