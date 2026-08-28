@@ -4132,6 +4132,12 @@ function createConcurrencyLimiter(maxConcurrent: number) {
 
 const senaiteLimiter = createConcurrencyLimiter(3)
 
+// Registry (mk1-source) lookups are ~70ms threadpooled Mk1 reads with no
+// Zope to protect — they get a wider lane than SENAITE's 3. 12 concurrent
+// drains a 372-sample Order Status board in ~2-3s while leaving most of the
+// backend's 40-thread pool free for everyone else (v1.11.5).
+const registryLimiter = createConcurrencyLimiter(12)
+
 export async function clearSenaiteLookupCache(): Promise<void> {
   const response = await fetch(
     `${API_BASE_URL()}/wizard/senaite/lookup-cache`,
@@ -4150,7 +4156,8 @@ export async function lookupSenaiteSample(
   const url = source === 'mk1'
     ? `${API_BASE_URL()}/registry/sample/${encodeURIComponent(sampleId)}/details`
     : `${API_BASE_URL()}/wizard/senaite/lookup?id=${encodeURIComponent(sampleId)}&no_cache=${noCache}`
-  return senaiteLimiter(async () => {
+  const limiter = source === 'mk1' ? registryLimiter : senaiteLimiter
+  return limiter(async () => {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 15_000)
     try {
