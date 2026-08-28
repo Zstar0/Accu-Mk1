@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.11.6 — 2026-08-28
+
+### Fixed
+
+- **Receive-page check-in drives the sample engine touchpoint** (PR #149) —
+  `_receive_native_phase` recorded the receive transition but never drove
+  the side-by-side engine, stranding `native_status` at its pre-receive
+  state for every receive-page check-in. The chokepoint's engine block is
+  now the shared `workflow.engine.drive_sample_touchpoint`, called from
+  both the bg transition chokepoint and the receive phase.
+
 ## v1.11.5 — 2026-08-27
 
 ### Changed
