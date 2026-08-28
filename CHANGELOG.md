@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.11.2 — 2026-08-27
+
+### Fixed
+
+- **Order Status search finds orders older than the newest 200** — the
+  Order ID / Sample ID / Analyte / Lot filters now run the IS's
+  server-side search axes (debounced, per-axis 2-char gate, same wire
+  contract as the customer-scoped list), so the 200-row limit applies to
+  MATCHES instead of recency. Previously filtering was purely client-side
+  over the newest-200 window, so an older order id (e.g. 5739) matched
+  nothing. While a server search is active the open-only default is
+  bypassed — old orders are usually complete, and hiding the very match
+  the user asked for was the other half of the "order doesn't come up"
+  report. Email filtering stays client-side (no IS axis for it).
+
 ## v1.11.1 — 2026-08-27
 
 ### Added
