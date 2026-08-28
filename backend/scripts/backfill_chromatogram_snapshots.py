@@ -51,14 +51,29 @@ script's run.
 Per-row commits: each gap parent gets backfilled in its own short-lived
 session/commit, so one parent's failure never rolls back another's write.
 
+RECLASSIFY pass (UAT F-1, Ruling R-16), runs BEFORE the rebuild pass above:
+historical chromatogram CSVs repatriated by the earlier §4 attachment sweep
+landed in `lims_parent_attachments` as `kind='manual'` rows (filename
+`chromatogram_*.csv`, content_type text/csv) — invisible to the kind-strict
+native gate/producer, which select chromatograms by `kind='chromatogram'`
+only. This pass finds `kind='manual' AND storage='s3'` rows matching
+`filename LIKE 'chromatogram_%.csv'` OR (`content_type='text/csv'` AND
+`attachment_type='HPLC Graph'`) and retags them `kind='chromatogram'`,
+`attachment_type='HPLC Graph'`. Idempotent (a retagged row no longer
+matches `kind='manual'`); dry-run counts only, APPLY retags with per-row
+commits. Because it runs first, the rebuild pass's `already_covered` check
+naturally skips parents satisfied by reclassification alone.
+
 Stats line printed as JSON on completion (retain it as the run record):
 
     {"analyses_with_data": N, "unresolved_parent": N,
      "parents_with_chromatogram_data": N, "already_covered": N,
-     "backfilled": N, "race_skipped": N, "errors": N, "mode": "APPLY"|"DRY-RUN"}
+     "backfilled": N, "race_skipped": N, "errors": N, "reclassified": N,
+     "mode": "APPLY"|"DRY-RUN"}
 
-Exit code contract: 0 = clean run, no per-parent errors. 1 = run completed
-but one or more parents errored (see "errors" in the stats line).
+Exit code contract: 0 = clean run, no errors. 1 = run completed but one or
+more parents (rebuild pass) or rows (reclassify pass) errored (see
+"errors" in the stats line).
 """
 import argparse
 import json
@@ -71,7 +86,7 @@ from typing import Optional
 # /app makes this a no-op).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
 from database import SessionLocal
 from hplc_csv import build_chromatogram_csv
@@ -141,12 +156,104 @@ def _load_resolution_maps(db, candidates: list):
     return vial_pk_by_prep_id, parent_pk_by_vial_pk, parent_pk_by_sample_id
 
 
+def reclassify_manual_chromatogram_rows(db_factory, *, apply: bool):
+    """RECLASSIFY pass — UAT F-1 / Ruling R-16.
+
+    Historical chromatogram CSVs repatriated by the earlier §4 attachment
+    sweep landed in `lims_parent_attachments` as `kind='manual'` rows
+    (filename `chromatogram_*.csv`, content_type text/csv) — invisible to
+    the kind-strict native gate (`_parent_attachment_kinds_native`) and
+    producer (`build_sample_meta`), which per ruling select chromatograms
+    by `kind='chromatogram'` only.
+
+    Finds `kind='manual' AND storage='s3'` rows where `filename LIKE
+    'chromatogram_%.csv'` OR (`content_type='text/csv'` AND
+    `attachment_type='HPLC Graph'`), and retags them `kind='chromatogram'`,
+    `attachment_type='HPLC Graph'`.
+
+    Runs BEFORE the rebuild pass so the rebuild pass's `already_covered`
+    check naturally skips parents satisfied by reclassification: the
+    matched rows' parent pks are returned too (not just the count), so a
+    dry-run — which never writes — can still fold them into the rebuild
+    pass's already_covered/backfilled accounting and keep the module's
+    "dry-run reports exactly what an apply run would do" promise true.
+
+    Idempotent: a retagged row's kind is now 'chromatogram', so it no
+    longer matches the `kind='manual'` filter on any later run.
+
+    Dry-run (apply=False) only counts matching rows — no writes. APPLY
+    retags with per-row commits (mirrors the rebuild pass's per-parent
+    commit isolation: one row's failure never blocks another's) and folds
+    any per-row failure into the returned error count so the script's
+    "exit 1 if any parent/row errored" contract holds for this pass too.
+
+    Returns (reclassified_count, error_count, affected_parent_pks: set[int]).
+    reclassified_count is rows matched in dry-run, rows actually retagged
+    in apply (a row that raced to kind != 'manual' between the scan and the
+    per-row write is not counted). affected_parent_pks is always the full
+    matched set (dry-run: what WOULD be retagged; apply: what WAS retagged
+    plus any that errored, since the rebuild pass should not re-attempt a
+    parent this pass already claimed).
+    """
+    db = db_factory()
+    try:
+        rows = db.execute(
+            select(LimsParentAttachment.id, LimsParentAttachment.lims_sample_pk)
+            .where(
+                LimsParentAttachment.kind == "manual",
+                LimsParentAttachment.storage == "s3",
+                or_(
+                    LimsParentAttachment.filename.like("chromatogram_%.csv"),
+                    and_(
+                        LimsParentAttachment.content_type == "text/csv",
+                        LimsParentAttachment.attachment_type == "HPLC Graph",
+                    ),
+                ),
+            )
+        ).all()
+    finally:
+        db.close()
+
+    if not rows:
+        return 0, 0, set()
+
+    affected_pks = {r.lims_sample_pk for r in rows}
+
+    if not apply:
+        return len(rows), 0, affected_pks
+
+    count = 0
+    errors = 0
+    for row_id, _parent_pk in rows:
+        db = db_factory()
+        try:
+            row = db.get(LimsParentAttachment, row_id)
+            if row is None or row.kind != "manual":
+                continue
+            row.kind = "chromatogram"
+            row.attachment_type = "HPLC Graph"
+            db.commit()
+            count += 1
+        except Exception as e:
+            errors += 1
+            log.warning("reclassify error attachment_id=%s err=%s",
+                        row_id, e, exc_info=True)
+        finally:
+            db.close()
+    return count, errors, affected_pks
+
+
 def backfill(db_factory, *, apply: bool, limit=None) -> dict:
     stats = {
         "analyses_with_data": 0, "unresolved_parent": 0,
         "parents_with_chromatogram_data": 0, "already_covered": 0,
-        "backfilled": 0, "race_skipped": 0, "errors": 0,
+        "backfilled": 0, "race_skipped": 0, "errors": 0, "reclassified": 0,
     }
+
+    reclassified, reclassify_errors, reclassified_parent_pks = \
+        reclassify_manual_chromatogram_rows(db_factory, apply=apply)
+    stats["reclassified"] = reclassified
+    stats["errors"] += reclassify_errors
 
     db = db_factory()
     try:
@@ -190,6 +297,13 @@ def backfill(db_factory, *, apply: bool, limit=None) -> dict:
                    LimsParentAttachment.storage == "s3",
                    LimsParentAttachment.lims_sample_pk.in_(parent_pks))
         ).scalars().all())
+        # Fold in parents the reclassify pass matched, scoped to this run's
+        # candidate set. In APPLY this is already reflected by the query
+        # above (the retag committed first); in DRY-RUN nothing was written,
+        # so without this a parent satisfied purely by reclassification
+        # would misreport as a rebuild-pass gap — breaking the "dry-run
+        # reports exactly what an apply run would do" contract.
+        covered_pks |= (reclassified_parent_pks & set(parent_pks))
         stats["already_covered"] = len(covered_pks)
 
         gap_pks = sorted(pk for pk in parent_pks if pk not in covered_pks)
@@ -254,10 +368,13 @@ def main(argv=None) -> int:
         description="Backfill lims_parent_attachments chromatogram rows from "
                     "HPLCAnalysis.chromatogram_data (pure Mk1 data — no SENAITE "
                     "call). Dry-run unless APPLY=1.",
-        epilog="Exit codes: 0 = clean, 1 = completed with per-parent errors "
-               "(see stats line).")
+        epilog="Exit codes: 0 = clean, 1 = completed with per-parent or "
+               "per-row errors (see stats line).")
     ap.add_argument("--limit", type=int, default=None,
-                    help="stop after N gap parents (smoke runs)")
+                    help="stop the REBUILD pass after N gap parents (smoke "
+                         "runs); the reclassify pass is unbounded — it "
+                         "always retags every matching manual row, since "
+                         "the retag itself is the intended end state")
     args = ap.parse_args(argv)
 
     apply = os.environ.get("APPLY") == "1"

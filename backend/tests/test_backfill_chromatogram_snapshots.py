@@ -15,6 +15,17 @@ from scripts.backfill_chromatogram_snapshots import (
 )
 
 
+def _manual_attachment(db, parent, *, filename, content_type=None,
+                        attachment_type=None, storage="s3"):
+    row = LimsParentAttachment(
+        lims_sample_pk=parent.id, kind="manual", filename=filename,
+        content_type=content_type, storage=storage, storage_key="k0",
+        render_in_report=False, attachment_type=attachment_type,
+    )
+    db.add(row); db.flush()
+    return row
+
+
 # --- resolve_parent_pk_for_analysis (pure, fakes only) -----------------------
 
 def _analysis(prep_id=None, label=None):
@@ -339,7 +350,10 @@ def test_race_skipped_when_row_landed_concurrently(db_factory):
     def racing_factory():
         s = real_factory()
         call_count["n"] += 1
-        if call_count["n"] == 2:   # the write-loop's per-parent session
+        # call 1 = the reclassify pass's read session (no manual rows here,
+        # so no apply calls); call 2 = the main cohort/already_covered read
+        # session; call 3 = the write-loop's per-parent session.
+        if call_count["n"] == 3:   # the write-loop's per-parent session
             live_push = LimsParentAttachment(
                 lims_sample_pk=parent_id, kind="chromatogram", filename="live.csv",
                 content_type="text/csv", storage="s3", storage_key="k-live",
@@ -358,6 +372,216 @@ def test_race_skipped_when_row_landed_concurrently(db_factory):
     assert fake_storage.calls == []
     db = real_factory()
     assert db.query(LimsParentAttachment).count() == 1   # only the live push
+    db.close()
+
+
+# --- reclassify pass: manual-kind historical chromatogram CSVs (UAT F-1, R-16) --
+
+def test_reclassify_retags_manual_chromatogram_csv_apply_only_dry_run_counts(db_factory):
+    """(a) A manual chromatogram_*.csv row gets retagged in APPLY; dry-run
+    only counts it (does not write)."""
+    db = db_factory()
+    parent = _parent(db, "P-0001")
+    _manual_attachment(db, parent, filename="chromatogram_P-0001.csv",
+                        content_type="text/csv")
+    db.commit(); db.close()
+
+    ctx, fake_storage = _patched()
+    with ctx[0], ctx[1]:
+        dry_stats = backfill(db_factory, apply=False, limit=None)
+    assert dry_stats["reclassified"] == 1
+    db = db_factory()
+    row = db.query(LimsParentAttachment).one()
+    assert row.kind == "manual"   # dry-run: untouched
+    db.close()
+
+    ctx, fake_storage = _patched()
+    with ctx[0], ctx[1]:
+        apply_stats = backfill(db_factory, apply=True, limit=None)
+    assert apply_stats["reclassified"] == 1
+    db = db_factory()
+    row = db.query(LimsParentAttachment).one()
+    assert row.kind == "chromatogram"
+    assert row.attachment_type == "HPLC Graph"
+    db.close()
+
+
+def test_reclassify_matches_via_content_type_and_attachment_type(db_factory):
+    """The second disjunct: content_type='text/csv' AND
+    attachment_type='HPLC Graph' also qualifies, even without the
+    chromatogram_*.csv filename shape."""
+    db = db_factory()
+    parent = _parent(db, "P-0001")
+    _manual_attachment(db, parent, filename="hplc_export.csv",
+                        content_type="text/csv", attachment_type="HPLC Graph")
+    db.commit(); db.close()
+
+    ctx, fake_storage = _patched()
+    with ctx[0], ctx[1]:
+        stats = backfill(db_factory, apply=True, limit=None)
+    assert stats["reclassified"] == 1
+    db = db_factory()
+    row = db.query(LimsParentAttachment).one()
+    assert row.kind == "chromatogram"
+    db.close()
+
+
+def test_reclassify_ignores_non_matching_manual_row(db_factory):
+    """(b) A manual row that doesn't match either disjunct (e.g. a PDF) is
+    left untouched."""
+    db = db_factory()
+    parent = _parent(db, "P-0001")
+    _manual_attachment(db, parent, filename="report.pdf",
+                        content_type="application/pdf")
+    db.commit(); db.close()
+
+    ctx, fake_storage = _patched()
+    with ctx[0], ctx[1]:
+        stats = backfill(db_factory, apply=True, limit=None)
+    assert stats["reclassified"] == 0
+    db = db_factory()
+    row = db.query(LimsParentAttachment).one()
+    assert row.kind == "manual"
+    db.close()
+
+
+def test_reclassify_idempotent_on_rerun(db_factory):
+    """(c) Re-running APPLY after a successful reclassify counts 0 — the
+    retagged row no longer matches kind='manual'."""
+    db = db_factory()
+    parent = _parent(db, "P-0001")
+    _manual_attachment(db, parent, filename="chromatogram_P-0001.csv",
+                        content_type="text/csv")
+    db.commit(); db.close()
+
+    ctx, fake_storage = _patched()
+    with ctx[0], ctx[1]:
+        first = backfill(db_factory, apply=True, limit=None)
+    assert first["reclassified"] == 1
+
+    ctx, fake_storage = _patched()
+    with ctx[0], ctx[1]:
+        second = backfill(db_factory, apply=True, limit=None)
+    assert second["reclassified"] == 0
+
+
+def test_reclassify_runs_before_rebuild_so_already_covered_absorbs_it(db_factory):
+    """Reclassification happens before the rebuild pass: a parent whose only
+    chromatogram coverage comes from a reclassified manual row must show up
+    as already_covered, not backfilled again."""
+    db = db_factory()
+    parent = _parent(db, "P-0001")
+    _manual_attachment(db, parent, filename="chromatogram_P-0001.csv",
+                        content_type="text/csv")
+    _analysis_row(db, label="P-0001")
+    db.commit(); db.close()
+
+    ctx, fake_storage = _patched()
+    with ctx[0], ctx[1]:
+        stats = backfill(db_factory, apply=True, limit=None)
+
+    assert stats["reclassified"] == 1
+    assert stats["already_covered"] == 1
+    assert stats["backfilled"] == 0
+    assert fake_storage.calls == []
+    db = db_factory()
+    assert db.query(LimsParentAttachment).count() == 1   # unchanged, just retagged
+    db.close()
+
+
+def test_reclassify_dry_run_already_covered_matches_apply_semantics(db_factory):
+    """Dry-run must report exactly what an apply run would do: a parent
+    satisfied purely by reclassification shows as already_covered — not a
+    rebuild-pass gap — in DRY-RUN too, even though nothing was written."""
+    db = db_factory()
+    parent = _parent(db, "P-0001")
+    _manual_attachment(db, parent, filename="chromatogram_P-0001.csv",
+                        content_type="text/csv")
+    _analysis_row(db, label="P-0001")
+    db.commit(); db.close()
+
+    ctx, fake_storage = _patched()
+    with ctx[0], ctx[1]:
+        stats = backfill(db_factory, apply=False, limit=None)
+
+    assert stats["reclassified"] == 1
+    assert stats["already_covered"] == 1
+    assert stats["backfilled"] == 0
+    assert fake_storage.calls == []
+    db = db_factory()
+    row = db.query(LimsParentAttachment).one()
+    assert row.kind == "manual"   # dry-run never writes
+    db.close()
+
+
+def test_reclassify_row_error_counts_as_error_and_does_not_block_others(db_factory):
+    """A per-row retag failure folds into stats["errors"] (the script's
+    exit-code contract: 1 = run completed but something errored) and does
+    not stop the other matching row from being retagged."""
+    db = db_factory()
+    p1 = _parent(db, "P-0001")
+    p2 = _parent(db, "P-0002")
+    _manual_attachment(db, p1, filename="chromatogram_P-0001.csv",
+                        content_type="text/csv")
+    _manual_attachment(db, p2, filename="chromatogram_P-0002.csv",
+                        content_type="text/csv")
+    db.commit(); db.close()
+
+    real_factory = db_factory
+    call_count = {"n": 0}
+
+    class _BoomOnCommitSession:
+        """Wraps a real session; the reclassify write loop only calls
+        get/commit/close on it, so duck-typing those three is enough."""
+        def __init__(self, inner):
+            self._inner = inner
+
+        def get(self, *a, **kw):
+            return self._inner.get(*a, **kw)
+
+        def commit(self):
+            raise RuntimeError("boom")
+
+        def close(self):
+            self._inner.close()
+
+    def boom_factory():
+        call_count["n"] += 1
+        s = real_factory()
+        # call 1 = reclassify's read session; calls 2 and 3 = the two
+        # matched rows' per-row write sessions — make the first one boom.
+        if call_count["n"] == 2:
+            return _BoomOnCommitSession(s)
+        return s
+
+    ctx, fake_storage = _patched()
+    with ctx[0], ctx[1]:
+        stats = backfill(boom_factory, apply=True, limit=None)
+
+    assert stats["errors"] == 1
+    assert stats["reclassified"] == 1   # the other row still succeeded
+    db = real_factory()
+    kinds = sorted(r.kind for r in db.query(LimsParentAttachment).all())
+    assert kinds == ["chromatogram", "manual"]   # one retagged, one not
+    db.close()
+
+
+def test_reclassify_storage_not_s3_untouched(db_factory):
+    """Only storage='s3' manual rows qualify — a senaite-stored manual row
+    is left alone even if the filename matches."""
+    db = db_factory()
+    parent = _parent(db, "P-0001")
+    _manual_attachment(db, parent, filename="chromatogram_P-0001.csv",
+                        content_type="text/csv", storage="senaite")
+    db.commit(); db.close()
+
+    ctx, fake_storage = _patched()
+    with ctx[0], ctx[1]:
+        stats = backfill(db_factory, apply=True, limit=None)
+    assert stats["reclassified"] == 0
+    db = db_factory()
+    row = db.query(LimsParentAttachment).one()
+    assert row.kind == "manual"
     db.close()
 
 
