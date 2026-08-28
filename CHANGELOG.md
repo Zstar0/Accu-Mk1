@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.10.0 — 2026-08-27
+
+Seam 4 slice 1 (PR #140). Pairs with COA Builder v2.33.0; deploy COA
+Builder first.
+
+### Added
+
+- **COA legacy-family rows sourced from Mk1** — when the Data Source map's
+  `coa_generation` key says `mk1` (default `senaite`), the COA wire
+  document carries a `legacy_rows` block (core HPLC / ENDO / STER-PCR /
+  bac-water rows from `list_parent_analyses_senaite_shape`) and COABuilder
+  renders from it instead of fetching SENAITE analyses. Skip states
+  (retracted / rejected / cancelled) never ride the wire — twin-pinned
+  with the COABuilder consumer. Fail-closed on empty row sets and
+  unresolvable service origins; drift warning logs when the toggle says
+  mk1 but the deployed COABuilder ignored the block.
+
+### Fixed
+
+- **COA source badge on sub-sample pages** — the Actions-menu badge now
+  shows SENAITE on `-SXX` pages (that generation path deliberately stays
+  SENAITE-sourced regardless of the toggle) instead of overstating the
+  toggle label.
+
 ## v1.9.1 — 2026-08-25
 
 ### Added
