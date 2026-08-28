@@ -11660,6 +11660,28 @@ async def generate_sample_coa(
         # requires SENAITE_URL, same as before this task.
         from coa.source_setting import coa_generation_source
         _coa_src = coa_generation_source(db)
+
+        # COA read-independence (Task 10): mk1 mode's existence authority
+        # for a parent sample is lims_samples — no row here means Mk1 has
+        # never seen this sample, full stop. Checked FIRST, ahead of the
+        # resolver/attachment pre-flight below: those gates fail-closed on
+        # empty native data (no rows -> "missing sample image" 422), which
+        # would otherwise mask a genuinely unknown sample_id behind a
+        # misleading attachments blocker instead of a clear not-found
+        # error. Abort before the COABuilder POST with Mk1-named wording,
+        # never SENAITE. senaite mode is unchanged: it has no existence
+        # authority in lims_samples, so no gate is added on that branch —
+        # it keeps falling through exactly as before this task.
+        if _coa_src == "mk1":
+            _exists_pk = db.execute(
+                select(LimsSample.id).where(LimsSample.sample_id == sample_id)
+            ).scalar_one_or_none()
+            if _exists_pk is None:
+                return SampleCOAActionResponse(
+                    success=False,
+                    message=f"sample {sample_id} not found in Accu-Mk1",
+                )
+
         if _coa_src == "mk1" or SENAITE_URL:
             try:
                 if _coa_src == "mk1":
