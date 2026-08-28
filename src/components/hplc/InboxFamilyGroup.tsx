@@ -11,6 +11,7 @@ import {
 } from '@/lib/inbox-families'
 import { cn } from '@/lib/utils'
 import type { InboxPriority } from '@/lib/api'
+import type { SlaSubjectSnapshot } from '@/services/sla-subjects'
 
 interface InboxFamilyGroupProps {
   family: VialFamily
@@ -18,13 +19,24 @@ interface InboxFamilyGroupProps {
    *  header sample id with a Layers icon so the whole job reads as variance. */
   hasVarianceSubs?: boolean
   onPriorityChange: (sampleUid: string, priority: InboxPriority) => void
+  /** SLA column passthrough — forwarded verbatim to each vial card. */
+  slaByKey?: Map<string, SlaSubjectSnapshot>
+  slaLoading?: boolean
+  slaError?: boolean
 }
 
 /** Bordered section wrapping all of one sample's vial cards, with a header
  *  drag handle that assigns the WHOLE family at once (one worksheet item
  *  per vial). Rendered only for vial-only families (no parent row) with
  *  2+ visible vials — legacy parent-led families keep the flat card list. */
-export function InboxFamilyGroup({ family, hasVarianceSubs, onPriorityChange }: InboxFamilyGroupProps) {
+export function InboxFamilyGroup({
+  family,
+  hasVarianceSubs,
+  onPriorityChange,
+  slaByKey,
+  slaLoading,
+  slaError,
+}: InboxFamilyGroupProps) {
   const dragData: FamilyDragData = {
     family: true,
     parentSampleId: family.parentSampleId,
@@ -42,7 +54,7 @@ export function InboxFamilyGroup({ family, hasVarianceSubs, onPriorityChange }: 
     <div
       className={cn(
         'rounded-lg border border-dashed border-border/80 bg-muted/20',
-        isDragging && 'opacity-50',
+        isDragging && 'opacity-50'
       )}
     >
       <div className="flex items-center gap-2 px-3 py-2 border-b border-dashed border-border/60">
@@ -67,7 +79,9 @@ export function InboxFamilyGroup({ family, hasVarianceSubs, onPriorityChange }: 
           <button
             type="button"
             className="font-mono text-sm font-semibold hover:underline hover:text-primary transition-colors"
-            onClick={() => useUIStore.getState().navigateToSample(family.parentSampleId)}
+            onClick={() =>
+              useUIStore.getState().navigateToSample(family.parentSampleId)
+            }
           >
             {family.parentSampleId}
           </button>
@@ -76,10 +90,14 @@ export function InboxFamilyGroup({ family, hasVarianceSubs, onPriorityChange }: 
           {family.vials.length} vials
         </span>
         {title && (
-          <span className="text-xs text-muted-foreground truncate max-w-48">{title}</span>
+          <span className="text-xs text-muted-foreground truncate max-w-48">
+            {title}
+          </span>
         )}
         {client && (
-          <span className="text-xs text-muted-foreground/70 truncate max-w-40">{client}</span>
+          <span className="text-xs text-muted-foreground/70 truncate max-w-40">
+            {client}
+          </span>
         )}
         <div className="flex-1" />
         <AgingTimer dateReceived={familyDateReceived(family.vials)} />
@@ -91,6 +109,9 @@ export function InboxFamilyGroup({ family, hasVarianceSubs, onPriorityChange }: 
             vial={v}
             groupedWithPrevious={false}
             onPriorityChange={onPriorityChange}
+            slaByKey={slaByKey}
+            slaLoading={slaLoading}
+            slaError={slaError}
           />
         ))}
       </div>

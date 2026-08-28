@@ -1,5 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { DndContext, DragOverlay, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
+import {
+  DndContext,
+  DragOverlay,
+  type DragEndEvent,
+  type DragStartEvent,
+} from '@dnd-kit/core'
 import { useEffect, useMemo, useState } from 'react'
 import { HelpCircle, Inbox, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -13,16 +18,14 @@ import { useEffectiveReadSource } from '@/lib/read-source'
 import { toast } from 'sonner'
 import { InboxVialCard, type DragData } from '@/components/hplc/InboxVialCard'
 import { InboxFamilyGroup } from '@/components/hplc/InboxFamilyGroup'
-import { groupInboxFamilies, varianceParentIds, type FamilyDragData } from '@/lib/inbox-families'
+import {
+  groupInboxFamilies,
+  varianceParentIds,
+  type FamilyDragData,
+} from '@/lib/inbox-families'
 import { WorksheetDropPanel } from '@/components/hplc/WorksheetDropPanel'
-import {
-  vialMatchesSampleId,
-  vialMatchesAnalyte,
-} from '@/lib/inbox-filters'
-import {
-  useInboxSamples,
-  usePriorityMutation,
-} from '@/hooks/use-inbox-samples'
+import { vialMatchesSampleId, vialMatchesAnalyte } from '@/lib/inbox-filters'
+import { useInboxSamples, usePriorityMutation } from '@/hooks/use-inbox-samples'
 import {
   getWorksheetUsers,
   getInboxSamples,
@@ -37,6 +40,9 @@ import {
   type InboxPriority,
 } from '@/lib/api'
 import { useInboxLanes } from '@/services/inbox-lanes'
+import { useServiceGroups } from '@/services/service-groups'
+import { useSlaForSubjects } from '@/services/sla-subjects'
+import { buildInboxSlaSubjects, departmentToGroupId } from '@/lib/inbox-sla'
 
 // Lane sub-chips are catalog-driven (sub-chips slice, 2026-08-24): any lane
 // whose department owns MORE THAN ONE vial role renders one chip per role
@@ -57,7 +63,9 @@ const STORAGE_HIDE_TEST_KEY = 'accu_mk1_worksheet_inbox_hide_test_orders'
  *  driven now, so validity can only be checked once GET /worksheets/inbox/
  *  lanes has resolved; see the `role` derivation in WorksheetsInboxPage). */
 function loadStoredRole(): string | null {
-  return typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_ROLE_KEY) : null
+  return typeof window !== 'undefined'
+    ? window.localStorage.getItem(STORAGE_ROLE_KEY)
+    : null
 }
 
 function loadStoredShowXtra(): boolean {
@@ -105,7 +113,9 @@ function CardSkeleton() {
 
 export default function WorksheetsInboxPage() {
   const queryClient = useQueryClient()
-  const [hideTestOrders, setHideTestOrders] = useState<boolean>(loadStoredHideTestOrders)
+  const [hideTestOrders, setHideTestOrders] = useState<boolean>(
+    loadStoredHideTestOrders
+  )
   const [hidePrepped, setHidePrepped] = useState(true)
   const [showXtra, setShowXtra] = useState<boolean>(loadStoredShowXtra)
   const [isRefreshing, setIsRefreshing] = useState(false)
@@ -124,7 +134,9 @@ export default function WorksheetsInboxPage() {
   // 'All' sub-chip's empty value) keep the neutral-violet fallback below.
   const laneBadgeClass = (key: string): string =>
     vialRolesQ.data?.some(r => r.code === key)
-      ? ROLE_COLOR_BADGE[roleColorForCode(key, vialRolesQ.data, departmentsQ.data)]
+      ? ROLE_COLOR_BADGE[
+          roleColorForCode(key, vialRolesQ.data, departmentsQ.data)
+        ]
       : 'bg-violet-500/15 text-violet-700 border-violet-500/40 dark:text-violet-300'
 
   // Raw stored preference; validated below against the fetched lane set —
@@ -134,7 +146,9 @@ export default function WorksheetsInboxPage() {
   const [storedRole, setStoredRole] = useState<string | null>(loadStoredRole)
   const [firstLane] = lanes
   const role: string | null = firstLane
-    ? (lanes.some(l => l.key === storedRole) ? storedRole : firstLane.key)
+    ? lanes.some(l => l.key === storedRole)
+      ? storedRole
+      : firstLane.key
     : null
   const currentLane = lanes.find(l => l.key === role)
 
@@ -171,7 +185,10 @@ export default function WorksheetsInboxPage() {
       .sort((a, b) => {
         const ra = byCode.get(a)
         const rb = byCode.get(b)
-        return (ra?.sort_order ?? 999) - (rb?.sort_order ?? 999) || a.localeCompare(b)
+        return (
+          (ra?.sort_order ?? 999) - (rb?.sort_order ?? 999) ||
+          a.localeCompare(b)
+        )
       })
       .map(code => ({ value: code, label: byCode.get(code)?.label ?? code }))
   }, [currentLane, vialRolesQ.data])
@@ -194,7 +211,11 @@ export default function WorksheetsInboxPage() {
     error,
     refetch,
   } = useInboxSamples({
-    hideTestOrders, hidePrepped, role, showXtra, source: readSource,
+    hideTestOrders,
+    hidePrepped,
+    role,
+    showXtra,
+    source: readSource,
     // Gate on a VALIDATED role, not merely non-null: firing the inbox fetch
     // before the stored key is checked against the live lane set would 400
     // on a stale/deleted-department key.
@@ -220,7 +241,6 @@ export default function WorksheetsInboxPage() {
 
   const priorityMutation = usePriorityMutation()
 
-
   const { data: users = [] } = useQuery({
     queryKey: ['worksheet-users'],
     queryFn: getWorksheetUsers,
@@ -236,10 +256,31 @@ export default function WorksheetsInboxPage() {
     refetchInterval: 30_000,
   })
 
-  const [activeDrag, setActiveDrag] = useState<DragData | FamilyDragData | null>(null)
+  const [activeDrag, setActiveDrag] = useState<
+    DragData | FamilyDragData | null
+  >(null)
   const [pendingDropKeys, setPendingDropKeys] = useState<Set<string>>(new Set())
 
   const vials = inboxData?.items ?? []
+
+  // SLA column (2026-08-27): same indicator + breakdown tooltip as the Order
+  // Status page, resolved through the shared subject hook. Subjects are built
+  // over the FULL vial list (not the filtered view) so lane/filter switches
+  // never refetch /sla/status. See inbox-sla.ts for the dept->group bridge.
+  const { data: serviceGroups = [] } = useServiceGroups()
+  const deptToGroup = useMemo(
+    () => departmentToGroupId(serviceGroups),
+    [serviceGroups]
+  )
+  const slaSubjects = useMemo(
+    () => buildInboxSlaSubjects(inboxData?.items ?? [], deptToGroup),
+    [inboxData, deptToGroup]
+  )
+  const {
+    byKey: slaByKey,
+    isLoading: slaLoading,
+    isError: slaError,
+  } = useSlaForSubjects(slaSubjects)
   const total = inboxData?.total ?? 0
   // role_tags carries the vial's own role plus rider profiles' roles from
   // custody edges; pre-1.8.5 payloads degrade to the bare role.
@@ -252,9 +293,18 @@ export default function WorksheetsInboxPage() {
     // `${uid}::${departmentId}` — must stay byte-identical to InboxVialCard's
     // dragId and to the cardKey built from DragData below, or an optimistically
     // dropped card never hides (or never comes back on failure).
-    .filter(v => !pendingDropKeys.has(`${v.uid}::${v.analyses[0]?.group_id ?? 0}`))
-    .filter(v => !sampleIdFilter.trim() || vialMatchesSampleId(v, sampleIdFilter))
-    .filter(v => role !== 'hplc' || !analyteFilter.trim() || vialMatchesAnalyte(v, analyteFilter))
+    .filter(
+      v => !pendingDropKeys.has(`${v.uid}::${v.analyses[0]?.group_id ?? 0}`)
+    )
+    .filter(
+      v => !sampleIdFilter.trim() || vialMatchesSampleId(v, sampleIdFilter)
+    )
+    .filter(
+      v =>
+        role !== 'hplc' ||
+        !analyteFilter.trim() ||
+        vialMatchesAnalyte(v, analyteFilter)
+    )
   // Sub-chip role filter: a vial matches if the selected role's WORK is on it.
   const visibleVials = subRole
     ? baseVisibleVials.filter(v => vialRoleTags(v).includes(subRole))
@@ -262,10 +312,14 @@ export default function WorksheetsInboxPage() {
   // code -> vial count for the sub-chip badges ('' = the All chip).
   const subChipCounts = new Map<string, number>([
     ['', baseVisibleVials.length],
-    ...laneSubChips.map(c => [
-      c.value,
-      baseVisibleVials.filter(v => vialRoleTags(v).includes(c.value)).length,
-    ] as [string, number]),
+    ...laneSubChips.map(
+      c =>
+        [
+          c.value,
+          baseVisibleVials.filter(v => vialRoleTags(v).includes(c.value))
+            .length,
+        ] as [string, number]
+    ),
   ])
 
   // Family-grouped rendering: groupInboxFamilies owns ALL ordering (family
@@ -281,13 +335,14 @@ export default function WorksheetsInboxPage() {
     .join(',')
   const { data: aggregatesData } = useQuery({
     queryKey: ['inbox-aggregates', parentIdsKey],
-    queryFn: () => fetchSampleAggregates(parentIdsKey ? parentIdsKey.split(',') : []),
+    queryFn: () =>
+      fetchSampleAggregates(parentIdsKey ? parentIdsKey.split(',') : []),
     enabled: parentIdsKey.length > 0,
     staleTime: 30_000,
   })
   const varianceParents = useMemo(
     () => varianceParentIds(aggregatesData?.aggregates ?? {}),
-    [aggregatesData],
+    [aggregatesData]
   )
 
   const filtersActive =
@@ -363,14 +418,20 @@ export default function WorksheetsInboxPage() {
         next.delete(cardKey)
         return next
       })
-      toast.error(err instanceof Error ? err.message : 'Failed to assign to worksheet')
+      toast.error(
+        err instanceof Error ? err.message : 'Failed to assign to worksheet'
+      )
     }
   }
 
   async function handleFamilyDrop(dropId: string, fam: FamilyDragData) {
     const keys = fam.items.map(i => `${i.sampleUid}::${i.departmentId}`)
     setPendingDropKeys(prev => new Set([...prev, ...keys]))
-    const failed: { sampleUid: string; sampleId: string; departmentId: number }[] = []
+    const failed: {
+      sampleUid: string
+      sampleId: string
+      departmentId: number
+    }[] = []
     let added = 0
     try {
       let worksheetId: number
@@ -413,16 +474,22 @@ export default function WorksheetsInboxPage() {
         toast.success(
           createdTitle
             ? `Created "${createdTitle}" with ${added} vial${added === 1 ? '' : 's'}`
-            : `Added ${added} vial${added === 1 ? '' : 's'} to worksheet`,
+            : `Added ${added} vial${added === 1 ? '' : 's'} to worksheet`
         )
       }
       if (failed.length > 0) {
-        toast.error(`${failed.length} vial(s) not added: ${failed.map(f => f.sampleId).join(', ')}`)
+        toast.error(
+          `${failed.length} vial(s) not added: ${failed.map(f => f.sampleId).join(', ')}`
+        )
       }
     } catch (err) {
       // Worksheet creation itself failed — restore every card
       failed.push(...fam.items)
-      toast.error(err instanceof Error ? err.message : 'Failed to assign family to worksheet')
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : 'Failed to assign family to worksheet'
+      )
     } finally {
       setPendingDropKeys(prev => {
         const next = new Set(prev)
@@ -442,9 +509,16 @@ export default function WorksheetsInboxPage() {
       <div className="h-[calc(100vh-4rem)] overflow-hidden p-6">
         <div className="flex flex-col items-center justify-center gap-4 rounded-md border border-destructive/30 bg-destructive/5 py-12">
           <p className="text-sm text-destructive font-medium">
-            {lanesQ.error instanceof Error ? lanesQ.error.message : 'Failed to load inbox lanes'}
+            {lanesQ.error instanceof Error
+              ? lanesQ.error.message
+              : 'Failed to load inbox lanes'}
           </p>
-          <Button variant="outline" size="sm" onClick={() => lanesQ.refetch()} className="gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => lanesQ.refetch()}
+            className="gap-2"
+          >
             <RefreshCw className="size-4" />
             Retry
           </Button>
@@ -465,296 +539,356 @@ export default function WorksheetsInboxPage() {
 
   return (
     <div className="h-[calc(100vh-4rem)] overflow-hidden">
-    <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-      <div className="flex h-full overflow-hidden">
-        {/* Left — inbox cards (scrollable) */}
-        <div className="flex-1 overflow-y-auto">
-          <div className="p-6">
-            {/* Header */}
-            <div className="flex items-start justify-between gap-4 mb-4">
-              <div>
-                <div className="flex items-center gap-3">
-                  <h1 className="text-2xl font-semibold tracking-tight">Inbox</h1>
-                  {!isLoading && !isError && (
-                    <span className="inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 text-sm font-medium text-muted-foreground">
-                      {displayCount} vial{displayCount === 1 ? '' : 's'}
-                    </span>
-                  )}
+      <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+        <div className="flex h-full overflow-hidden">
+          {/* Left — inbox cards (scrollable) */}
+          <div className="flex-1 overflow-y-auto">
+            <div className="p-6">
+              {/* Header */}
+              <div className="flex items-start justify-between gap-4 mb-4">
+                <div>
+                  <div className="flex items-center gap-3">
+                    <h1 className="text-2xl font-semibold tracking-tight">
+                      Inbox
+                    </h1>
+                    {!isLoading && !isError && (
+                      <span className="inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 text-sm font-medium text-muted-foreground">
+                        {displayCount} vial{displayCount === 1 ? '' : 's'}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Drag vials to worksheets on the right
+                  </p>
                 </div>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Drag vials to worksheets on the right
-                </p>
-              </div>
-              <div className="flex items-center gap-3">
-                <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <Checkbox
-                    checked={hideTestOrders}
-                    onCheckedChange={v => setHideTestOrders(v === true)}
-                  />
-                  <span className="text-sm text-muted-foreground">Hide test orders</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <Checkbox
-                    checked={hidePrepped}
-                    onCheckedChange={v => setHidePrepped(v === true)}
-                  />
-                  <span className="text-sm text-muted-foreground">Hide prepped</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <Checkbox
-                    checked={showXtra}
-                    onCheckedChange={v => setShowXtra(v === true)}
-                  />
-                  <span className="text-sm text-muted-foreground">Show XTRA</span>
-                </label>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleForceRefresh}
-                  disabled={isRefreshing}
-                  className="gap-1.5 text-muted-foreground"
-                  title="Force refresh from SENAITE (cached for 30 minutes)"
-                >
-                  <RefreshCw className={`size-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
-                  <span className="text-xs">Refresh</span>
-                </Button>
-                {/* Worksheets SOP — served from public/guides/ via Vite. Path
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <Checkbox
+                      checked={hideTestOrders}
+                      onCheckedChange={v => setHideTestOrders(v === true)}
+                    />
+                    <span className="text-sm text-muted-foreground">
+                      Hide test orders
+                    </span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <Checkbox
+                      checked={hidePrepped}
+                      onCheckedChange={v => setHidePrepped(v === true)}
+                    />
+                    <span className="text-sm text-muted-foreground">
+                      Hide prepped
+                    </span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <Checkbox
+                      checked={showXtra}
+                      onCheckedChange={v => setShowXtra(v === true)}
+                    />
+                    <span className="text-sm text-muted-foreground">
+                      Show XTRA
+                    </span>
+                  </label>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleForceRefresh}
+                    disabled={isRefreshing}
+                    className="gap-1.5 text-muted-foreground"
+                    title="Force refresh from SENAITE (cached for 30 minutes)"
+                  >
+                    <RefreshCw
+                      className={`size-3.5 ${isRefreshing ? 'animate-spin' : ''}`}
+                    />
+                    <span className="text-xs">Refresh</span>
+                  </Button>
+                  {/* Worksheets SOP — served from public/guides/ via Vite. Path
                     matches the file the build script mirrors there. */}
-                <a
-                  href="/guides/lab-tech-worksheets-variance.html"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0"
-                  title="Open the lab-tech worksheets &amp; variance SOP in a new tab"
-                >
-                  <HelpCircle className="size-3.5" aria-hidden="true" />
-                  Worksheets SOP
-                </a>
+                  <a
+                    href="/guides/lab-tech-worksheets-variance.html"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0"
+                    title="Open the lab-tech worksheets &amp; variance SOP in a new tab"
+                  >
+                    <HelpCircle className="size-3.5" aria-hidden="true" />
+                    Worksheets SOP
+                  </a>
+                </div>
               </div>
-            </div>
 
-            {/* Bench filter chips — one per catalog-driven lane (spec 4, Task
+              {/* Bench filter chips — one per catalog-driven lane (spec 4, Task
                 10). Label is the lane's department name (e.g. 'Analytical'
                 for the legacy 'hplc' lane, not the 'HPLC' bench nickname) —
                 a deliberate display delta, same convention as the Task 9
                 AssignStep section headers; UAT punch item. */}
-            <div className={cn('flex items-center gap-2', role === 'microbiology' ? 'mb-3' : 'mb-6')}>
-              {lanes.map(lane => (
-                <button
-                  key={lane.key}
-                  type="button"
-                  onClick={() => setStoredRole(lane.key)}
-                  className={cn(
-                    'inline-flex items-center rounded-full border px-3 py-1 text-sm font-medium transition-colors',
-                    role === lane.key
-                      // Roles whose code exactly matches a badge palette
-                      // entry (hplc, hm) get it; every other lane (including
-                      // 'microbiology', which spans two role codes) falls
-                      // back to the same neutral-violet active look
-                      // Microbiology has always used.
-                      ? laneBadgeClass(lane.key)
-                      : 'bg-transparent text-muted-foreground border-border hover:bg-muted/40',
-                  )}
-                >
-                  {lane.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Lane sub-chips — one per role the active lane's department
-                owns (catalog-driven; renders only for multi-role lanes).
-                Filter by role_tags so rider work (e.g. fentanyl riding an
-                hplc host vial) is reachable under its own chip. */}
-            {laneSubChips.length > 0 && (
-              <div className="mb-6 flex items-center gap-1.5 pl-4">
-                <span className="text-muted-foreground/40 select-none" aria-hidden="true">&#8627;</span>
-                {[{ value: '', label: 'All' }, ...laneSubChips].map(c => (
+              <div
+                className={cn(
+                  'flex items-center gap-2',
+                  role === 'microbiology' ? 'mb-3' : 'mb-6'
+                )}
+              >
+                {lanes.map(lane => (
                   <button
-                    key={c.value || 'all'}
+                    key={lane.key}
                     type="button"
-                    onClick={() => setSubRole(c.value)}
+                    onClick={() => setStoredRole(lane.key)}
                     className={cn(
-                      'inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors',
-                      subRole === c.value
-                        // Active sub-chip carries its role's catalog colour;
-                        // the "All" chip has no role, so laneBadgeClass falls
-                        // back to neutral violet.
-                        ? laneBadgeClass(c.value)
-                        : 'bg-transparent text-muted-foreground border-border hover:bg-muted/40',
+                      'inline-flex items-center rounded-full border px-3 py-1 text-sm font-medium transition-colors',
+                      role === lane.key
+                        ? // Roles whose code exactly matches a badge palette
+                          // entry (hplc, hm) get it; every other lane (including
+                          // 'microbiology', which spans two role codes) falls
+                          // back to the same neutral-violet active look
+                          // Microbiology has always used.
+                          laneBadgeClass(lane.key)
+                        : 'bg-transparent text-muted-foreground border-border hover:bg-muted/40'
                     )}
                   >
-                    {c.label}
-                    {/* Faceted count: what clicking this chip yields under the
-                        active text filters (worksheet-sidebar badge sibling). */}
-                    <span className="tabular-nums text-[10px] opacity-60">
-                      {subChipCounts.get(c.value) ?? 0}
-                    </span>
+                    {lane.label}
                   </button>
                 ))}
               </div>
-            )}
 
-            {/* Client-side filters */}
-            <div className="mb-6 flex flex-wrap items-center gap-2">
-              <Input
-                placeholder="Sample ID"
-                value={sampleIdFilter}
-                onChange={e => setSampleIdFilter(e.target.value)}
-                className="h-8 w-40 text-sm"
-              />
-              {role === 'hplc' && (
+              {/* Lane sub-chips — one per role the active lane's department
+                owns (catalog-driven; renders only for multi-role lanes).
+                Filter by role_tags so rider work (e.g. fentanyl riding an
+                hplc host vial) is reachable under its own chip. */}
+              {laneSubChips.length > 0 && (
+                <div className="mb-6 flex items-center gap-1.5 pl-4">
+                  <span
+                    className="text-muted-foreground/40 select-none"
+                    aria-hidden="true"
+                  >
+                    &#8627;
+                  </span>
+                  {[{ value: '', label: 'All' }, ...laneSubChips].map(c => (
+                    <button
+                      key={c.value || 'all'}
+                      type="button"
+                      onClick={() => setSubRole(c.value)}
+                      className={cn(
+                        'inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors',
+                        subRole === c.value
+                          ? // Active sub-chip carries its role's catalog colour;
+                            // the "All" chip has no role, so laneBadgeClass falls
+                            // back to neutral violet.
+                            laneBadgeClass(c.value)
+                          : 'bg-transparent text-muted-foreground border-border hover:bg-muted/40'
+                      )}
+                    >
+                      {c.label}
+                      {/* Faceted count: what clicking this chip yields under the
+                        active text filters (worksheet-sidebar badge sibling). */}
+                      <span className="tabular-nums text-[10px] opacity-60">
+                        {subChipCounts.get(c.value) ?? 0}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Client-side filters */}
+              <div className="mb-6 flex flex-wrap items-center gap-2">
                 <Input
-                  placeholder="Analyte"
-                  value={analyteFilter}
-                  onChange={e => setAnalyteFilter(e.target.value)}
-                  className="h-8 w-44 text-sm"
+                  placeholder="Sample ID"
+                  value={sampleIdFilter}
+                  onChange={e => setSampleIdFilter(e.target.value)}
+                  className="h-8 w-40 text-sm"
                 />
-              )}
-              {filtersActive && (
-                <button
-                  type="button"
-                  onClick={clearFilters}
-                  className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
-                >
-                  Clear
-                </button>
-              )}
-            </div>
-
-            {/* Loading state */}
-            {isLoading && <CardSkeleton />}
-
-            {/* Error state */}
-            {isError && (
-              <div className="flex flex-col items-center justify-center gap-4 rounded-md border border-destructive/30 bg-destructive/5 py-12">
-                <p className="text-sm text-destructive font-medium">
-                  {error instanceof Error ? error.message : 'Failed to load received samples'}
-                </p>
-                <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-2">
-                  <RefreshCw className="size-4" />
-                  Retry
-                </Button>
+                {role === 'hplc' && (
+                  <Input
+                    placeholder="Analyte"
+                    value={analyteFilter}
+                    onChange={e => setAnalyteFilter(e.target.value)}
+                    className="h-8 w-44 text-sm"
+                  />
+                )}
+                {filtersActive && (
+                  <button
+                    type="button"
+                    onClick={clearFilters}
+                    className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+                  >
+                    Clear
+                  </button>
+                )}
               </div>
-            )}
 
-            {/* Empty state — copy is lane-LABEL driven (spec 4, Task 10), not
+              {/* Loading state */}
+              {isLoading && <CardSkeleton />}
+
+              {/* Error state */}
+              {isError && (
+                <div className="flex flex-col items-center justify-center gap-4 rounded-md border border-destructive/30 bg-destructive/5 py-12">
+                  <p className="text-sm text-destructive font-medium">
+                    {error instanceof Error
+                      ? error.message
+                      : 'Failed to load received samples'}
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => refetch()}
+                    className="gap-2"
+                  >
+                    <RefreshCw className="size-4" />
+                    Retry
+                  </Button>
+                </div>
+              )}
+
+              {/* Empty state — copy is lane-LABEL driven (spec 4, Task 10), not
                 a hardcoded HPLC/Microbiology pair. */}
-            {!isLoading && !isError && visibleVials.length === 0 && (
-              <div className="flex flex-col items-center justify-center gap-3 rounded-md border py-16 text-center">
-                <Inbox className="size-12 text-muted-foreground/50" />
-                <p className="text-sm font-medium text-muted-foreground">
-                  No {currentLane?.label ?? role} vials waiting
-                </p>
-                <p className="text-xs text-muted-foreground/60">
-                  {(() => {
-                    const otherLabels = lanes.filter(l => l.key !== role).map(l => l.label)
-                    return otherLabels.length > 0
-                      ? `Switch to ${otherLabels.join(' or ')} to see those vials.`
-                      : ''
-                  })()}
-                </p>
-              </div>
-            )}
+              {!isLoading && !isError && visibleVials.length === 0 && (
+                <div className="flex flex-col items-center justify-center gap-3 rounded-md border py-16 text-center">
+                  <Inbox className="size-12 text-muted-foreground/50" />
+                  <p className="text-sm font-medium text-muted-foreground">
+                    No {currentLane?.label ?? role} vials waiting
+                  </p>
+                  <p className="text-xs text-muted-foreground/60">
+                    {(() => {
+                      const otherLabels = lanes
+                        .filter(l => l.key !== role)
+                        .map(l => l.label)
+                      return otherLabels.length > 0
+                        ? `Switch to ${otherLabels.join(' or ')} to see those vials.`
+                        : ''
+                    })()}
+                  </p>
+                </div>
+              )}
 
-            {/* Cards — family-grouped. Vial-only families (container mode,
+              {/* Cards — family-grouped. Vial-only families (container mode,
                 no parent row) of 2+ get a draggable group section; legacy
                 parent-led families keep the flat indent treatment. */}
-            {!isLoading && !isError && visibleVials.length > 0 && (
-              <div className="space-y-2">
-                {families.map(fam => {
-                  const hasParentRow = fam.vials.some(v => v.is_parent)
-                  if (fam.vials.length >= 2 && !hasParentRow) {
-                    return (
-                      <InboxFamilyGroup
-                        key={fam.parentSampleId}
-                        family={fam}
-                        hasVarianceSubs={varianceParents.has(fam.parentSampleId)}
-                        onPriorityChange={handlePriorityChange}
-                      />
+              {!isLoading && !isError && visibleVials.length > 0 && (
+                <div className="space-y-2">
+                  {families.map(fam => {
+                    const hasParentRow = fam.vials.some(v => v.is_parent)
+                    if (fam.vials.length >= 2 && !hasParentRow) {
+                      return (
+                        <InboxFamilyGroup
+                          key={fam.parentSampleId}
+                          family={fam}
+                          hasVarianceSubs={varianceParents.has(
+                            fam.parentSampleId
+                          )}
+                          onPriorityChange={handlePriorityChange}
+                          slaByKey={slaByKey}
+                          slaLoading={slaLoading}
+                          slaError={slaError}
+                        />
+                      )
+                    }
+                    const familyHasVariance = varianceParents.has(
+                      fam.parentSampleId
                     )
-                  }
-                  const familyHasVariance = varianceParents.has(fam.parentSampleId)
-                  return fam.vials.map((vial, idx) => (
-                    <InboxVialCard
-                      key={vial.uid}
-                      vial={vial}
-                      groupedWithPrevious={idx > 0}
-                      parentHasVarianceSubs={familyHasVariance}
-                      onPriorityChange={handlePriorityChange}
-                    />
-                  ))
-                })}
+                    return fam.vials.map((vial, idx) => (
+                      <InboxVialCard
+                        key={vial.uid}
+                        vial={vial}
+                        groupedWithPrevious={idx > 0}
+                        parentHasVarianceSubs={familyHasVariance}
+                        onPriorityChange={handlePriorityChange}
+                        slaByKey={slaByKey}
+                        slaLoading={slaLoading}
+                        slaError={slaError}
+                      />
+                    ))
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Right — worksheet drop panel (scrollable) */}
+          <div className="w-96 shrink-0 h-full overflow-y-auto">
+            <WorksheetDropPanel
+              worksheets={worksheets}
+              users={users}
+              loading={worksheetsLoading}
+              onRename={async (id, title) => {
+                try {
+                  await updateWorksheet(id, { title })
+                  queryClient.invalidateQueries({
+                    queryKey: ['worksheets-list'],
+                  })
+                } catch (err) {
+                  toast.error(
+                    err instanceof Error ? err.message : 'Rename failed'
+                  )
+                }
+              }}
+              onAssignTech={async (id, analystId) => {
+                try {
+                  await updateWorksheet(id, { assigned_analyst: analystId })
+                  toast.success('Tech assigned to worksheet')
+                  queryClient.invalidateQueries({
+                    queryKey: ['worksheets-list'],
+                  })
+                } catch (err) {
+                  toast.error(
+                    err instanceof Error ? err.message : 'Assignment failed'
+                  )
+                }
+              }}
+              onDelete={async id => {
+                try {
+                  await deleteWorksheet(id)
+                  toast.success('Worksheet deleted — items returned to inbox')
+                  setPendingDropKeys(new Set())
+                  queryClient.invalidateQueries({
+                    queryKey: ['worksheets-list'],
+                  })
+                  queryClient.invalidateQueries({ queryKey: ['inbox-samples'] })
+                } catch (err) {
+                  toast.error(
+                    err instanceof Error ? err.message : 'Delete failed'
+                  )
+                }
+              }}
+              onRemoveItem={async (worksheetId, itemId) => {
+                try {
+                  await removeWorksheetItem(worksheetId, itemId)
+                  toast.success('Item returned to inbox')
+                  setPendingDropKeys(new Set())
+                  queryClient.invalidateQueries({
+                    queryKey: ['worksheets-list'],
+                  })
+                  queryClient.invalidateQueries({ queryKey: ['inbox-samples'] })
+                } catch (err) {
+                  toast.error(
+                    err instanceof Error ? err.message : 'Remove failed'
+                  )
+                }
+              }}
+            />
+          </div>
+        </div>
+
+        {/* Drag overlay — shows a ghost card while dragging */}
+        <DragOverlay dropAnimation={null}>
+          {activeDrag &&
+            ('family' in activeDrag ? (
+              <div className="rounded-lg border bg-card shadow-xl px-3 py-2 opacity-90 w-56 pointer-events-none">
+                <span className="font-mono text-xs font-semibold">
+                  {activeDrag.parentSampleId}
+                </span>
+                <span className="mx-1.5 text-muted-foreground/50">·</span>
+                <span className="text-xs">{activeDrag.items.length} vials</span>
               </div>
-            )}
-          </div>
-        </div>
-
-        {/* Right — worksheet drop panel (scrollable) */}
-        <div className="w-96 shrink-0 h-full overflow-y-auto">
-          <WorksheetDropPanel
-            worksheets={worksheets}
-            users={users}
-            loading={worksheetsLoading}
-            onRename={async (id, title) => {
-              try {
-                await updateWorksheet(id, { title })
-                queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })
-              } catch (err) {
-                toast.error(err instanceof Error ? err.message : 'Rename failed')
-              }
-            }}
-            onAssignTech={async (id, analystId) => {
-              try {
-                await updateWorksheet(id, { assigned_analyst: analystId })
-                toast.success('Tech assigned to worksheet')
-                queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })
-              } catch (err) {
-                toast.error(err instanceof Error ? err.message : 'Assignment failed')
-              }
-            }}
-            onDelete={async (id) => {
-              try {
-                await deleteWorksheet(id)
-                toast.success('Worksheet deleted — items returned to inbox')
-                setPendingDropKeys(new Set())
-                queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })
-                queryClient.invalidateQueries({ queryKey: ['inbox-samples'] })
-              } catch (err) {
-                toast.error(err instanceof Error ? err.message : 'Delete failed')
-              }
-            }}
-            onRemoveItem={async (worksheetId, itemId) => {
-              try {
-                await removeWorksheetItem(worksheetId, itemId)
-                toast.success('Item returned to inbox')
-                setPendingDropKeys(new Set())
-                queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })
-                queryClient.invalidateQueries({ queryKey: ['inbox-samples'] })
-              } catch (err) {
-                toast.error(err instanceof Error ? err.message : 'Remove failed')
-              }
-            }}
-          />
-        </div>
-      </div>
-
-      {/* Drag overlay — shows a ghost card while dragging */}
-      <DragOverlay dropAnimation={null}>
-        {activeDrag && ('family' in activeDrag ? (
-          <div className="rounded-lg border bg-card shadow-xl px-3 py-2 opacity-90 w-56 pointer-events-none">
-            <span className="font-mono text-xs font-semibold">{activeDrag.parentSampleId}</span>
-            <span className="mx-1.5 text-muted-foreground/50">·</span>
-            <span className="text-xs">{activeDrag.items.length} vials</span>
-          </div>
-        ) : (
-          <div className="rounded-lg border bg-card shadow-xl px-3 py-2 opacity-90 w-48 pointer-events-none">
-            <span className="font-mono text-xs font-medium">{activeDrag.sampleId}</span>
-            <span className="mx-1.5 text-muted-foreground/50">·</span>
-            <span className="text-xs">{activeDrag.groupName}</span>
-          </div>
-        ))}
-      </DragOverlay>
-    </DndContext>
+            ) : (
+              <div className="rounded-lg border bg-card shadow-xl px-3 py-2 opacity-90 w-48 pointer-events-none">
+                <span className="font-mono text-xs font-medium">
+                  {activeDrag.sampleId}
+                </span>
+                <span className="mx-1.5 text-muted-foreground/50">·</span>
+                <span className="text-xs">{activeDrag.groupName}</span>
+              </div>
+            ))}
+        </DragOverlay>
+      </DndContext>
     </div>
   )
 }
