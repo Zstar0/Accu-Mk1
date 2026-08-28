@@ -436,6 +436,7 @@ function KanbanView({
   lotHighlight,
   sampleSlaStatusesMap,
   collapsedCols,
+  searchActive,
   onToggleCollapse,
 }: {
   orders: ExplorerOrder[]
@@ -451,6 +452,9 @@ function KanbanView({
   lotHighlight?: string
   sampleSlaStatusesMap?: Map<string, SampleSlaSnapshot[]>
   collapsedCols: string[]
+  /** True while a server-side search axis is active — hidden columns are
+   *  overridden so the searched order's cards are visible wherever they sit. */
+  searchActive?: boolean
   onToggleCollapse: (key: string) => void
 }) {
   // Determine which columns to show — all if no filter, else just the active one
@@ -533,8 +537,13 @@ function KanbanView({
 
   // An explicit analysis-state filter means "show me exactly these columns" —
   // it overrides hidden/collapsed state, or filtering to Published while
-  // Published is hidden-by-default would render an empty board.
-  const effectiveCollapsed = activeStates.length > 0 ? [] : collapsedCols
+  // Published is hidden-by-default would render an empty board. An active
+  // server-side search overrides too (v1.11.6): a searched-for complete
+  // order's cards live in the hidden Published column, so without this the
+  // search "finds" the order but renders an empty-looking swimlane (prod
+  // report: order 6088).
+  const effectiveCollapsed =
+    activeStates.length > 0 || searchActive ? [] : collapsedCols
   // Grouped swimlanes have no per-column header to expand from, so hidden
   // columns are dropped from the lane grid entirely — the Columns dropdown
   // in the toolbar is their way back in.
@@ -1682,6 +1691,7 @@ export function OrderStatusPage() {
                     lotHighlight={orderFilters.lotFilter.trim() || undefined}
                     sampleSlaStatusesMap={orderSla.sampleStatusesBySampleId}
                     collapsedCols={orderFilters.collapsedKanbanCols}
+                    searchActive={serverSearchActive}
                     onToggleCollapse={toggleCollapsedCol}
                   />
                 </div>
