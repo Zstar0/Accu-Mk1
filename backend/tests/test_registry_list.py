@@ -42,6 +42,21 @@ def test_analytes_empty_when_missing_or_bad_json():
     assert registry_rows_to_list([_row(analytes='not json')])[0]['analytes'] == []
 
 
+def test_analyte_details_carry_declared_quantity():
+    row = _row(analytes=json.dumps([
+        {'name': 'BPC-157 - Identity (HPLC)', 'declared_quantity': '10 mg'},
+        {'name': 'Semax - Identity (HPLC)', 'declared_quantity': None},
+        {'name': 'Tirzepatide - Identity (HPLC)', 'declared_quantity': 30},
+    ]))
+    [out] = registry_rows_to_list([row])
+    assert out['analyte_details'] == [
+        {'name': 'BPC-157 - Identity (HPLC)', 'declared_quantity': '10 mg'},
+        {'name': 'Semax - Identity (HPLC)', 'declared_quantity': None},
+        {'name': 'Tirzepatide - Identity (HPLC)', 'declared_quantity': '30'},
+    ]
+    assert registry_rows_to_list([_row(analytes=None)])[0]['analyte_details'] == []
+
+
 def test_client_id_prefers_client_title_parity_with_senaite_samples():
     # /senaite/samples maps client_id from getClientTitle or ClientID (main.py
     # _item_to_model) — mirror that precedence here so the "Client" column and

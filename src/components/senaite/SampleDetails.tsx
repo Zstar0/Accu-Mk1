@@ -212,11 +212,17 @@ import {
   OrderedProducts,
   useOrderedProducts,
 } from '@/components/senaite/OrderedProducts'
-import { ProductChip, useProductColorClasses } from '@/components/senaite/ProductChip'
+import {
+  ProductChip,
+  useProductColorClasses,
+} from '@/components/senaite/ProductChip'
 import {
   computeProductCompletion,
   type ProductCompletionContext,
 } from '@/lib/product-completion'
+import { buildKeywordFamilyMap } from '@/lib/product-completion'
+import { useAnalysisProfiles } from '@/services/analysis-profiles'
+import { useAnalysisServices } from '@/services/analysis-services'
 import { VialsQuickLookDialog } from '@/components/senaite/VialsQuickLookDialog'
 import { EntityFlagButton } from '@/components/flags/EntityFlagButton'
 import { useRegisterActiveFlagEntity } from '@/components/flags/use-active-flag-entity'
@@ -256,7 +262,7 @@ const VIAL_OVERLAY_QUERY_KEY = PARENT_OVERLAY_QUERY_KEY
 // the overlay never engages. The SENAITE map (vialAssignmentByKeyword) is
 // untouched — this only applies to the native card's map.
 function chipsOnlyVialAssignmentMap(
-  map: Map<string, VialAssignment>,
+  map: Map<string, VialAssignment>
 ): Map<string, VialAssignment> {
   const out = new Map<string, VialAssignment>()
   for (const [keyword, assignment] of map) {
@@ -1149,7 +1155,11 @@ function AttachmentImage({ attachment }: { attachment: SenaiteAttachment }) {
  *  react-query so the wizard's retake path (which PATCHes the SAME photo id
  *  and invalidates ['packaging-photo-bytes', id]) refreshes this thumbnail. */
 function PackagingThumb({ photo }: { photo: PackagingPhoto }) {
-  const { data: src = null, isPending: loading, isError: error } = useQuery({
+  const {
+    data: src = null,
+    isPending: loading,
+    isError: error,
+  } = useQuery({
     queryKey: ['packaging-photo-bytes', photo.id],
     queryFn: () => fetchPackagingPhotoUrl(photo.id),
   })
@@ -1163,7 +1173,9 @@ function PackagingThumb({ photo }: { photo: PackagingPhoto }) {
       ) : error || !src ? (
         <div className="flex flex-col items-center justify-center gap-2 w-full h-48 rounded-lg bg-muted/40 border border-border/30">
           <ImageIcon size={24} className="text-muted-foreground" />
-          <span className="text-xs text-muted-foreground">Failed to load image</span>
+          <span className="text-xs text-muted-foreground">
+            Failed to load image
+          </span>
         </div>
       ) : (
         <ZoomableImage
@@ -1189,7 +1201,11 @@ function PackagingThumb({ photo }: { photo: PackagingPhoto }) {
 /** Read-only "Packaging" group for the Attachments section. Renders nothing
  *  when the parent sample has no packaging photos. Exported for isolated
  *  testing (SampleDetails is too heavy to render whole in a unit test). */
-export function PackagingAttachmentsGroup({ parentSampleId }: { parentSampleId: string }) {
+export function PackagingAttachmentsGroup({
+  parentSampleId,
+}: {
+  parentSampleId: string
+}) {
   const { data: photos } = useQuery({
     queryKey: ['packaging-photos', parentSampleId],
     queryFn: () => listPackagingPhotos(parentSampleId),
@@ -1200,7 +1216,9 @@ export function PackagingAttachmentsGroup({ parentSampleId }: { parentSampleId: 
 
   return (
     <div className="space-y-2">
-      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Packaging</p>
+      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+        Packaging
+      </p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {photos.map(photo => (
           <PackagingThumb key={photo.id} photo={photo} />
@@ -3438,9 +3456,7 @@ export function NativeParentAnalysesCard({
   if (analyses.length === 0) return null
 
   const requestRetest = (targets: SenaiteAnalysis[]) => {
-    const keywords = targets
-      .map(a => a.keyword)
-      .filter((k): k is string => !!k)
+    const keywords = targets.map(a => a.keyword).filter((k): k is string => !!k)
     setConfirm({
       titles: targets.map(a => a.title),
       keywords,
@@ -3458,7 +3474,9 @@ export function NativeParentAnalysesCard({
         retested += resp.new_row_ids.length
       }
       if (retested > 0) {
-        toast.success(`Retest cascaded — ${retested} source row${retested === 1 ? '' : 's'} retested`)
+        toast.success(
+          `Retest cascaded — ${retested} source row${retested === 1 ? '' : 's'} retested`
+        )
       } else {
         toast.warning('No eligible source rows — nothing changed')
       }
@@ -3469,7 +3487,9 @@ export function NativeParentAnalysesCard({
     } finally {
       setRetestPending(false)
       setConfirm(null)
-      void queryClient.invalidateQueries({ queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY] })
+      void queryClient.invalidateQueries({
+        queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY],
+      })
       onParentDataStale?.()
     }
   }
@@ -3492,8 +3512,8 @@ export function NativeParentAnalysesCard({
               native to Accu-Mk1
             </div>
             <div>
-              Results measured and promoted natively in Accu-Mk1 — not part
-              of the SENAITE AR.
+              Results measured and promoted natively in Accu-Mk1 — not part of
+              the SENAITE AR.
             </div>
             <div className="border-t border-primary-foreground/20 pt-1.5">
               Results are entered and submitted on the vials. Retesting a
@@ -3520,7 +3540,9 @@ export function NativeParentAnalysesCard({
         onParentRetest={a => requestRetest([a])}
         onParentBulkRetest={requestRetest}
         onTransitionComplete={() => {
-          void queryClient.invalidateQueries({ queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY] })
+          void queryClient.invalidateQueries({
+            queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY],
+          })
           onParentDataStale?.()
         }}
         analysisSlaMap={sla.byKeyword}
@@ -3560,15 +3582,16 @@ export function resolveAssignmentLabel(
   vialRoles: VialRoleRow[] | undefined,
   departments: Department[] | undefined,
   rolesLoading: boolean,
-  departmentsLoading: boolean,
+  departmentsLoading: boolean
 ): string | null {
   if (!currentAssignment) return null
   if (rolesLoading || departmentsLoading) return null
   const role = (vialRoles ?? []).find(r => r.code === currentAssignment)
   if (!role) return currentAssignment.toUpperCase()
-  const deptName = role.department_id != null
-    ? (departments ?? []).find(d => d.id === role.department_id)?.name
-    : null
+  const deptName =
+    role.department_id != null
+      ? (departments ?? []).find(d => d.id === role.department_id)?.name
+      : null
   return `${deptName ?? 'Extra'} — ${role.label}`
 }
 
@@ -3721,6 +3744,20 @@ export function SampleDetails() {
   // catalog source as the boxing lanes (Handler request, 2026-08-28).
   const productColorFor = useProductColorClasses()
 
+  // Catalog-driven keyword→family map so native families (heavy metals,
+  // fentanyl, USP 71) get completion checks; also the keyword-first
+  // classification's catalog half (see product-completion.ts).
+  const { data: profilesCatalogForFamilies } = useAnalysisProfiles()
+  const { data: servicesCatalogForFamilies } = useAnalysisServices()
+  const keywordFamilies = useMemo(
+    () =>
+      buildKeywordFamilyMap(
+        profilesCatalogForFamilies ?? [],
+        servicesCatalogForFamilies ?? []
+      ),
+    [profilesCatalogForFamilies, servicesCatalogForFamilies]
+  )
+
   // Worksheet membership for the header link. Reuses the OPEN worksheets
   // list (react-query-cached, same key as the drawer/inbox/list-page
   // consumers); finds the worksheet whose items include this sample.
@@ -3775,7 +3812,8 @@ export function SampleDetails() {
   const boxingOrderKey = data?.client_order_number ?? null
   const { data: boxingSamplesData } = useQuery({
     queryKey: ['boxes-session-samples', boxingOrderKey],
-    queryFn: () => getSenaiteSamples(undefined, 200, 0, boxingOrderKey!, 'order_number'),
+    queryFn: () =>
+      getSenaiteSamples(undefined, 200, 0, boxingOrderKey!, 'order_number'),
     enabled: wizardParent !== null && boxingOrderKey !== null,
   })
   const boxingSamples = (boxingSamplesData?.items ?? []).filter(
@@ -4078,8 +4116,10 @@ export function SampleDetails() {
     : (meVial?.assignment_role ?? null)
   const assignmentLabel = resolveAssignmentLabel(
     currentAssignment,
-    vialRolesQ.data, departmentsQ.data,
-    vialRolesQ.isLoading, departmentsQ.isLoading,
+    vialRolesQ.data,
+    departmentsQ.data,
+    vialRolesQ.isLoading,
+    departmentsQ.isLoading
   )
 
   const primaryAnalysisUids = useMemo(
@@ -4175,15 +4215,20 @@ export function SampleDetails() {
     }
   }
 
-  const handleAddAnalysis = async (service: AnalysisService & { id?: number }) => {
+  const handleAddAnalysis = async (
+    service: AnalysisService & { id?: number }
+  ) => {
     if (!data?.sample_id) return
     setAddingService(service.uid || service.keyword)
     try {
-      const native = pickerSourceFor(parentSampleId ?? null, data.sample_uid) === 'native'
+      const native =
+        pickerSourceFor(parentSampleId ?? null, data.sample_uid) === 'native'
       await addAnalysisToSample(
         data.sample_id,
         service.uid,
-        native ? { keyword: service.keyword, analysis_service_id: service.id } : undefined,
+        native
+          ? { keyword: service.keyword, analysis_service_id: service.id }
+          : undefined
       )
       toast.success(`Added ${service.title}`)
       refreshSample(data.sample_id)
@@ -4265,14 +4310,21 @@ export function SampleDetails() {
           }
         } catch (e) {
           // Mk1 lookup failed — fall through to the SENAITE lookup (legacy path).
-          console.warn(`[sample-details] Mk1 native lookup failed for ${id}; falling back to SENAITE`, e)
+          console.warn(
+            `[sample-details] Mk1 native lookup failed for ${id}; falling back to SENAITE`,
+            e
+          )
         }
       }
       // This return is shared by the parent branch and the legacy sub-sample
       // fallthrough above (parentId set but not mk1://-native, or the Mk1
       // lookup threw) — only route the parent read through the toggle so
       // sub-sample behavior stays untouched regardless of readSource.
-      return lookupSenaiteSample(id, true, parentId === undefined ? effectiveReadSource : 'senaite')
+      return lookupSenaiteSample(
+        id,
+        true,
+        parentId === undefined ? effectiveReadSource : 'senaite'
+      )
     },
     [effectiveReadSource]
   )
@@ -4311,7 +4363,9 @@ export function SampleDetails() {
     // Invalidation refetches ACTIVE queries only; on a vial page these are
     // inactive, so this is a cheap stale mark, no extra requests.
     invalidateParentVialOverlay(queryClient)
-    void queryClient.invalidateQueries({ queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY] })
+    void queryClient.invalidateQueries({
+      queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY],
+    })
     // Promotion badges are page-local state keyed to the CURRENT page's id
     // and re-fetched on every navigation — parent pages only.
     if (parentSampleId === null) {
@@ -4344,7 +4398,10 @@ export function SampleDetails() {
     if (!promotedRetest || !data) return
     setPromotedRetestPending(true)
     try {
-      const outcome = await runPromotedSourceRetest(promotedRetest.uid, vialSourceRetest)
+      const outcome = await runPromotedSourceRetest(
+        promotedRetest.uid,
+        vialSourceRetest
+      )
       toast.success(
         outcome.parentUnverified
           ? `Retested — parent value on ${promotedRetest.parentSampleId} returned to awaiting re-promotion`
@@ -4806,6 +4863,7 @@ export function SampleDetails() {
     analyses: data.analyses,
     promotionsByKeyword,
     varianceSet: varianceSetOverlay,
+    keywordFamilies,
   }
 
   const senaiteBaseUrl = getSenaiteUrl()
@@ -4969,7 +5027,9 @@ export function SampleDetails() {
                       <button
                         type="button"
                         onClick={() =>
-                          useUIStore.getState().navigateToBoxes(meVial.box_label!)
+                          useUIStore
+                            .getState()
+                            .navigateToBoxes(meVial.box_label!)
                         }
                         title="View in Active Boxes"
                         className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[11px] hover:bg-muted transition-colors"
@@ -6259,14 +6319,12 @@ export function SampleDetails() {
                     ?.photo_external_uid?.startsWith('mk1://')
                 }
                 photoReceivedAt={
-                  parentSummary?.sub_samples.find(
-                    s => s.sample_id === sampleId
-                  )?.received_at ?? null
+                  parentSummary?.sub_samples.find(s => s.sample_id === sampleId)
+                    ?.received_at ?? null
                 }
                 photoReceivedBy={
-                  parentSummary?.sub_samples.find(
-                    s => s.sample_id === sampleId
-                  )?.received_by ?? null
+                  parentSummary?.sub_samples.find(s => s.sample_id === sampleId)
+                    ?.received_by ?? null
                 }
                 attachments={vialAttachments}
                 chromatograms={vialChromatograms}
@@ -6862,7 +6920,9 @@ export function SampleDetails() {
         state={promotedRetest}
         pending={promotedRetestPending}
         onCancel={() => setPromotedRetest(null)}
-        onConfirm={() => { void executePromotedRetest() }}
+        onConfirm={() => {
+          void executePromotedRetest()
+        }}
       />
 
       {/* Native (Accu-Mk1) parent analyses — separate read-only card, not a
@@ -6874,16 +6934,18 @@ export function SampleDetails() {
           rows AND the pre-promotion 'ordered' placeholders server-side
           (list_parent_analyses_senaite_shape), so the card would only
           duplicate it (Handler UAT, P-0161 dupes / P-0160 placeholders). */}
-      {parentSampleId === null && data.sample_id && effectiveReadSource !== 'mk1' && (
-        <NativeParentAnalysesCard
-          sampleId={data.sample_id}
-          isParentPage={parentSampleId === null}
-          lookup={data}
-          promotionsByKeyword={promotionsByKeyword}
-          vialAssignmentByKeyword={nativeVialAssignmentByKeyword}
-          onParentDataStale={() => refreshSample(data.sample_id)}
-        />
-      )}
+      {parentSampleId === null &&
+        data.sample_id &&
+        effectiveReadSource !== 'mk1' && (
+          <NativeParentAnalysesCard
+            sampleId={data.sample_id}
+            isParentPage={parentSampleId === null}
+            lookup={data}
+            promotionsByKeyword={promotionsByKeyword}
+            vialAssignmentByKeyword={nativeVialAssignmentByKeyword}
+            onParentDataStale={() => refreshSample(data.sample_id)}
+          />
+        )}
 
       {parentSampleId === null && data.sample_id && (
         <VialsQuickLookDialog

@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { ReceiveSample } from '@/components/intake/ReceiveSample'
-import { getSetting } from '@/lib/api'
+import { getRegistrySamples, getSetting } from '@/lib/api'
 
 // Stub the heavy session shell with a sentinel that echoes the flattened sample
 // ids it was handed, so we can assert which orders a Process click opened.
@@ -207,5 +207,149 @@ describe('ReceiveSample — multi-order check-in flag gating', () => {
     // beforeEach already resolves 'true'; assert the checkboxes appear.
     renderPage()
     expect(await rowCheckbox('WP-1042')).toBeInTheDocument()
+  })
+})
+
+// Registry-shaped sample factory for the pagination / search / expand suite.
+function mkSample(i: number, over: Partial<Record<string, unknown>> = {}) {
+  return {
+    uid: `u${i}`,
+    id: `P-${i}`,
+    client_order_number: `WP-${1000 + i}`,
+    client_id: 'acme',
+    sample_type: 'Peptide',
+    review_state: 'sample_due',
+    date_sampled: null,
+    client_lot: null,
+    analytes: [],
+    ...over,
+  }
+}
+
+describe('ReceiveSample — full due list (pagination past 200)', () => {
+  it('keeps fetching pages until the whole due list is loaded', async () => {
+    const page1 = Array.from({ length: 200 }, (_, i) => mkSample(i))
+    const page2 = [mkSample(200), mkSample(201)]
+    vi.mocked(getRegistrySamples).mockClear()
+    vi.mocked(getRegistrySamples)
+      .mockResolvedValueOnce({ items: page1, total: 202, b_start: 0 } as never)
+      .mockResolvedValueOnce({
+        items: page2,
+        total: 202,
+        b_start: 200,
+      } as never)
+    renderPage()
+
+    // An order that only exists on the SECOND page must render — this is the
+    // exact failure that hid order 6344 (position ~235 of 326) in prod.
+    expect(await screen.findByText('WP-1201')).toBeInTheDocument()
+    expect(vi.mocked(getRegistrySamples)).toHaveBeenCalledWith(
+      'sample_due',
+      200,
+      0
+    )
+    expect(vi.mocked(getRegistrySamples)).toHaveBeenCalledWith(
+      'sample_due',
+      200,
+      200
+    )
+  })
+})
+
+describe('ReceiveSample — search axes + sort + expand', () => {
+  const richSamples = [
+    mkSample(10, {
+      client_order_number: 'WP-2001',
+      client_id: 'alpha@x.com',
+      analytes: ['BPC-157 - Identity (HPLC)'],
+      analyte_details: [
+        { name: 'BPC-157 - Identity (HPLC)', declared_quantity: '10 mg' },
+      ],
+      client_lot: 'LOT-AAA',
+    }),
+    mkSample(11, {
+      client_order_number: 'WP-2002',
+      client_id: 'beta@y.com',
+      analytes: ['Semax - Identity (HPLC)'],
+      client_lot: 'LOT-BBB',
+    }),
+    mkSample(12, {
+      client_order_number: 'WP-2003',
+      client_id: 'gamma@z.com',
+      analytes: ['NAD+ - Identity (HPLC)'],
+      client_lot: 'LOT-CCC',
+    }),
+  ]
+
+  function renderRich() {
+    vi.mocked(getRegistrySamples).mockClear()
+    vi.mocked(getRegistrySamples).mockResolvedValue({
+      items: richSamples,
+      total: 3,
+      b_start: 0,
+    } as never)
+    return renderPage()
+  }
+
+  it('filters by partial order number', async () => {
+    renderRich()
+    await screen.findByText('WP-2001')
+    fireEvent.change(screen.getByLabelText('Search by order number'), {
+      target: { value: '2002' },
+    })
+    expect(screen.queryByText('WP-2001')).toBeNull()
+    expect(screen.getByText('WP-2002')).toBeInTheDocument()
+    expect(screen.queryByText('WP-2003')).toBeNull()
+  })
+
+  it('filters by client email', async () => {
+    renderRich()
+    await screen.findByText('WP-2001')
+    fireEvent.change(screen.getByLabelText('Search by client or email'), {
+      target: { value: 'gamma@' },
+    })
+    expect(screen.queryByText('WP-2001')).toBeNull()
+    expect(screen.getByText('WP-2003')).toBeInTheDocument()
+  })
+
+  it('filters by analyte and lot, AND-combined', async () => {
+    renderRich()
+    await screen.findByText('WP-2001')
+    fireEvent.change(screen.getByLabelText('Search by analyte'), {
+      target: { value: 'semax' },
+    })
+    expect(screen.getByText('WP-2002')).toBeInTheDocument()
+    expect(screen.queryByText('WP-2001')).toBeNull()
+    // A lot from a DIFFERENT sample must AND to zero rows.
+    fireEvent.change(screen.getByLabelText('Search by lot number'), {
+      target: { value: 'LOT-CCC' },
+    })
+    expect(screen.queryByText('WP-2002')).toBeNull()
+    expect(
+      screen.getByText('No orders match the current search')
+    ).toBeInTheDocument()
+  })
+
+  it('sorts by Order # on header click', async () => {
+    renderRich()
+    await screen.findByText('WP-2001')
+    const header = screen.getByText('Order #')
+    fireEvent.click(header) // asc
+    fireEvent.click(header) // desc
+    const rows = screen.getAllByTestId('order-list-row')
+    expect(rows[0]!.textContent).toContain('WP-2003')
+  })
+
+  it('expand shows sample id, analytes, lot and declared qty', async () => {
+    renderRich()
+    await screen.findByText('WP-2001')
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Expand WP-2001' })
+    )
+    const detail = screen.getByTestId('order-detail-row')
+    expect(detail.textContent).toContain('P-10')
+    expect(detail.textContent).toContain('BPC-157 - Identity (HPLC)')
+    expect(detail.textContent).toContain('LOT-AAA')
+    expect(detail.textContent).toContain('10 mg')
   })
 })

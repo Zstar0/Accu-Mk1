@@ -15333,6 +15333,11 @@ async def upload_senaite_attachment(
         return SenaiteUploadAttachmentResponse(success=False, message=str(e))
 
 
+class SenaiteAnalyteDetail(BaseModel):
+    name: str
+    declared_quantity: Optional[str] = None
+
+
 class SenaiteSampleItem(BaseModel):
     uid: str
     id: str
@@ -15353,6 +15358,9 @@ class SenaiteSampleItem(BaseModel):
     tracking_number: Optional[str] = None
     tracking_url: Optional[str] = None
     analytes: list[str] = []
+    # Registry reads only — name + declared qty pairs for the receive page's
+    # expanded order rows. SENAITE-sourced lists leave it empty.
+    analyte_details: list[SenaiteAnalyteDetail] = []
 
 
 class SenaiteSamplesResponse(BaseModel):

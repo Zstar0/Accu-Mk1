@@ -4613,6 +4613,9 @@ export interface SenaiteSample {
   tracking_number?: string | null
   tracking_url?: string | null
   analytes: string[]
+  // Registry reads only — name + declared qty pairs for the receive page's
+  // expanded order rows. Absent/empty on SENAITE-sourced lists.
+  analyte_details?: { name: string; declared_quantity: string | null }[]
 }
 
 export interface SenaiteSamplesResponse {

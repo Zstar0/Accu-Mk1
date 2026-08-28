@@ -1,5 +1,57 @@
 # Changelog
 
+## v1.11.10 — 2026-08-28
+
+### Fixed
+
+- **Receive Sample page loads the ENTIRE due list** — the page fetched one
+  fixed page of 200 registry samples (raised once from 50), so every due
+  sample past the newest 200 was silently invisible: order 6344's three
+  samples sat at position ~235 of 326 and the lab couldn't receive them.
+  `loadDueSamples` now walks pages until `total` is reached (empty-page
+  break + id dedupe guard against the list shifting mid-walk), and the
+  By-Order ExplorerOrder join pages past the integration service's
+  200-per-request cap the same way.
+
+### Added
+
+- **Four independent search boxes on Receive Sample** — Order # (partial),
+  Client / email, Analyte, and Lot #, AND-combined, filtering both the
+  By-Order and By-Sample views entirely client-side over the full due list.
+- **Sortable By-Order columns** — Order #, Client / Email, and Created
+  headers now click-sort (asc/desc), matching the By-Sample table.
+- **Expandable By-Order rows** — a chevron on each order row unfolds its
+  samples with Sample ID, analytes, customer lot, and declared quantity.
+  Declared qty rides a new `analyte_details` field on `/registry/samples`
+  (name + declared_quantity pairs; the names-only `analytes` list is
+  unchanged for existing consumers).
+
+### Added
+
+- **Completion checks on Order Status product chips** — the chips from the
+  Products toggle now show the green check when a product's lab work is
+  done, derived from the analysis states already on the card (result
+  submitted / promoted / verified / published; no extra requests).
+  Variance chips show no check on the board — Sample Details remains the
+  authoritative variance view.
+- **Native families now complete everywhere** — heavy metals, fentanyl,
+  and Sterility USP 71 chips gain Complete/Pending checks on Sample
+  Details AND the board, catalog-driven from each profile's member
+  services (a future family added in the admin UI works with no code
+  change).
+
+### Fixed
+
+- **Product completion classification survives the mk1 read source** —
+  the category partition was service-group-name-based, but registry
+  lookups carry no group names (broken since the 2026-08-27 flip):
+  STER-PCR and every native-family row silently landed in the HPLC
+  bucket, blocking the HPLC check and making Sterility's check
+  unreachable. Classification is now keyword-first (group kept as a
+  SENAITE-era fallback), with an enumerated analytical-keyword allowlist
+  instead of a catch-all — unclassified rows (e.g. moisture) neither
+  block nor satisfy any check.
+
 ## v1.11.8 — 2026-08-28
 
 ### Added
