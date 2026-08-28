@@ -15036,6 +15036,13 @@ async def lookup_senaite_sample(
 
         from datetime import datetime, timezone
         now_iso = datetime.now(timezone.utc).isoformat()
+
+        # Logistics fields are registry-native (no SENAITE counterpart) — merge
+        # them in regardless of read source (Slice A 2026-08-27).
+        _logi = db.execute(
+            select(LimsSample).where(LimsSample.sample_id == sample_id)
+        ).scalar_one_or_none()
+
         result = SenaiteLookupResult(
             sample_id=sample_id,
             sample_uid=sample_uid or None,
@@ -15048,6 +15055,10 @@ async def lookup_senaite_sample(
             client_order_number=item.get("ClientOrderNumber") or item.get("getClientOrderNumber") or None,
             client_sample_id=item.get("ClientSampleID") or item.get("getClientSampleID") or None,
             client_lot=str(item["ClientLot"]) if item.get("ClientLot") is not None else None,
+            vendor_name=_logi.vendor_name if _logi else None,
+            shipping_carrier=_logi.shipping_carrier if _logi else None,
+            tracking_number=_logi.tracking_number if _logi else None,
+            tracking_url=_logi.tracking_url if _logi else None,
             review_state=item.get("review_state") or None,
             declared_weight_mg=declared_weight_mg,
             analytes=analytes,
@@ -15322,6 +15333,9 @@ class SenaiteSampleItem(BaseModel):
     # Customer lot/batch code (SENAITE ClientLot / lims_samples.client_lot).
     # Hydrated SENAITE items carry it; slim catalog-brains items don't (None).
     client_lot: Optional[str] = None
+    shipping_carrier: Optional[str] = None
+    tracking_number: Optional[str] = None
+    tracking_url: Optional[str] = None
     analytes: list[str] = []
 
 

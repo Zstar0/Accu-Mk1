@@ -68,3 +68,17 @@ def test_overlay_fields_covers_mapper_keys():
                client_order_number="O", client_sample_id="CS", client_lot="L", status="s",
                declared_total_quantity="1.0", analytes=json.dumps([{"name": "x", "declared_quantity": "1"}]))
     assert set(registry_row_to_display(row)).issubset(set(OVERLAY_FIELDS))
+
+
+def test_registry_read_emits_logistics_fields():
+    from models import LimsSample
+    from sub_samples.registry_read import registry_row_to_display, OVERLAY_FIELDS
+    row = LimsSample(sample_id="P-9300", vendor_name="Acme", shipping_carrier="UPS",
+                     tracking_number="1Z1", tracking_url="https://u/1Z1")
+    out = registry_row_to_display(row)
+    assert out["vendor_name"] == "Acme"
+    assert out["shipping_carrier"] == "UPS"
+    assert out["tracking_number"] == "1Z1"
+    assert out["tracking_url"] == "https://u/1Z1"
+    for f in ("vendor_name", "shipping_carrier", "tracking_number", "tracking_url"):
+        assert f in OVERLAY_FIELDS

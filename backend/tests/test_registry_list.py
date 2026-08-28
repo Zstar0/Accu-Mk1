@@ -237,3 +237,14 @@ def test_search_by_lot_case_insensitive(client):
     r = client.get("/registry/samples", params={"search": "lot-abc", "search_field": "lot"})
     assert r.status_code == 200
     assert r.json()["total"] == 1
+
+
+def test_registry_list_emits_shipping_fields():
+    from models import LimsSample
+    from sub_samples.registry_list import registry_rows_to_list
+    row = LimsSample(sample_id="P-9301", shipping_carrier="FedEx",
+                     tracking_number="9999", tracking_url="https://f/9999")
+    out = registry_rows_to_list([row])[0]
+    assert out["shipping_carrier"] == "FedEx"
+    assert out["tracking_number"] == "9999"
+    assert out["tracking_url"] == "https://f/9999"

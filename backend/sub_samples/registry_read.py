@@ -16,6 +16,7 @@ OVERLAY_FIELDS: tuple[str, ...] = (
     "date_received", "date_sampled", "client_order_number",
     "client_sample_id", "client_lot",
     "declared_weight_mg", "analytes",
+    "vendor_name", "shipping_carrier", "tracking_number", "tracking_url",
 )
 
 
@@ -32,6 +33,10 @@ def registry_row_to_display(row: LimsSample) -> dict[str, Any]:
     put("client_order_number", row.client_order_number)
     put("client_sample_id", row.client_sample_id)
     put("client_lot", row.client_lot)
+    put("vendor_name", row.vendor_name)
+    put("shipping_carrier", row.shipping_carrier)
+    put("tracking_number", row.tracking_number)
+    put("tracking_url", row.tracking_url)
     if row.date_received is not None:
         out["date_received"] = row.date_received.isoformat()
     if row.date_sampled is not None:
