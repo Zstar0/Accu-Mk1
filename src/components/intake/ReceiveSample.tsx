@@ -806,7 +806,7 @@ export function ReceiveSample() {
                     {visibleSamples.length === 0 && (
                       <TableRow>
                         <TableCell
-                          colSpan={8}
+                          colSpan={9}
                           className="py-8 text-center text-sm text-muted-foreground"
                         >
                           No samples match the current search
