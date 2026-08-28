@@ -35,6 +35,7 @@ export function OrderRow({
   sampleLookupMap,
   productsBySampleId,
   productColorFor,
+  keywordFamilies,
   activeAnalysisStates,
   defaultExpanded,
   highlightSampleId,
@@ -50,6 +51,8 @@ export function OrderRow({
   productsBySampleId?: Map<string, OrderedProduct[]>
   /** Passed through to SampleCard (see its productColorFor doc). */
   productColorFor?: (p: OrderedProduct) => string
+  /** keyword-to-family map for the chips' completion checks (pass-through). */
+  keywordFamilies?: Map<string, string>
   sampleLookupMap: Map<
     string,
     {
@@ -364,6 +367,7 @@ export function OrderRow({
                     analyte={s.analyte}
                     products={productsBySampleId?.get(s.senaiteId)}
                     productColorFor={productColorFor}
+                    keywordFamilies={keywordFamilies}
                     lot={s.lot}
                     highlightLot={highlightLot}
                     slaSnapshots={sampleSlaStatusesMap?.get(s.senaiteId)}

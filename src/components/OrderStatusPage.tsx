@@ -84,6 +84,11 @@ import { useSenaiteLookupMap } from '@/services/senaite-lookup-map'
 import { useAnalysisProfiles } from '@/services/analysis-profiles'
 import { buildProductsBySampleId } from '@/lib/product-chips'
 import {
+  buildKeywordFamilyMap,
+  computeProductCompletionFromStates,
+} from '@/lib/product-completion'
+import { useAnalysisServices } from '@/services/analysis-services'
+import {
   ProductChip,
   useProductColorClasses,
 } from '@/components/senaite/ProductChip'
@@ -271,6 +276,7 @@ function KanbanSampleCard({
   sampleSlaStatusesMap,
   products,
   productColorFor,
+  keywordFamilies,
 }: {
   item: KanbanSampleItem
   showOrder: boolean
@@ -288,6 +294,8 @@ function KanbanSampleCard({
   /** Role-catalog color resolver, passed from the page (keeps this card
    *  hook-free for closed-factory test harnesses). */
   productColorFor?: (p: OrderedProduct) => string
+  /** keyword-to-family map for state-derived completion checks. */
+  keywordFamilies?: Map<string, string>
 }) {
   const navigateToSample = useUIStore(state => state.navigateToSample)
   const navigateToOrderExplorer = useUIStore(
@@ -388,6 +396,15 @@ function KanbanSampleCard({
               xs
               product={p}
               colorClasses={productColorFor?.(p)}
+              completion={
+                item.lookup
+                  ? computeProductCompletionFromStates(
+                      p,
+                      item.lookup.analyses,
+                      keywordFamilies
+                    )
+                  : null
+              }
             />
           ))}
         </div>
@@ -472,6 +489,7 @@ function KanbanView({
   searchActive,
   productsBySampleId,
   productColorFor,
+  keywordFamilies,
   onToggleCollapse,
 }: {
   orders: ExplorerOrder[]
@@ -493,6 +511,8 @@ function KanbanView({
   /** senaite_id -> ordered products; empty map when the toggle is off. */
   productsBySampleId?: Map<string, OrderedProduct[]>
   productColorFor?: (p: OrderedProduct) => string
+  /** keyword-to-family map for the chips' state-derived completion checks. */
+  keywordFamilies?: Map<string, string>
   onToggleCollapse: (key: string) => void
 }) {
   // Determine which columns to show — all if no filter, else just the active one
@@ -648,6 +668,7 @@ function KanbanView({
                       sampleSlaStatusesMap={sampleSlaStatusesMap}
                       products={productsBySampleId?.get(item.sampleId)}
                       productColorFor={productColorFor}
+                      keywordFamilies={keywordFamilies}
                     />
                   ))}
                 </div>
@@ -729,6 +750,7 @@ function KanbanView({
                           sampleSlaStatusesMap={sampleSlaStatusesMap}
                           products={productsBySampleId?.get(item.sampleId)}
                           productColorFor={productColorFor}
+                          keywordFamilies={keywordFamilies}
                         />
                       ))
                     )}
@@ -1035,7 +1057,21 @@ export function OrderStatusPage() {
   // the profiles catalog supplies label/addon/role (role drives the
   // boxing-lane color). Map only built while the toggle is on.
   const profilesQuery = useAnalysisProfiles()
+  const servicesQuery = useAnalysisServices()
   const productColorFor = useProductColorClasses()
+  // Catalog keyword-to-family map: powers the state-derived completion check
+  // on each chip (incl. the native heavy_metals/fentanyl/usp71 families).
+  // Only built while the Products toggle is on, like the products map below.
+  const productKeywordFamilies = useMemo(
+    () =>
+      orderFilters.showProducts
+        ? buildKeywordFamilyMap(
+            profilesQuery.data ?? [],
+            servicesQuery.data ?? []
+          )
+        : undefined,
+    [orderFilters.showProducts, profilesQuery.data, servicesQuery.data]
+  )
   const productsBySampleId = useMemo(
     () =>
       orderFilters.showProducts
@@ -1739,6 +1775,7 @@ export function OrderStatusPage() {
                           sampleLookupMap={sampleLookupMap}
                           productsBySampleId={productsBySampleId}
                           productColorFor={productColorFor}
+                          keywordFamilies={productKeywordFamilies}
                           activeAnalysisStates={orderFilters.activeStates}
                           highlightLot={
                             orderFilters.lotFilter.trim() || undefined
@@ -1771,6 +1808,7 @@ export function OrderStatusPage() {
                     searchActive={serverSearchActive}
                     productsBySampleId={productsBySampleId}
                     productColorFor={productColorFor}
+                    keywordFamilies={productKeywordFamilies}
                     onToggleCollapse={toggleCollapsedCol}
                   />
                 </div>
