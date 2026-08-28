@@ -287,11 +287,12 @@ def parent_retest(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Native parent-tier retest (AnalysisTable card verb): retests the
-    promoted source vial rows and un-promotes the verified parent row via
-    cascade_parent_retest_to_sources. 409 invalid_transition unless the
-    active parent row is 'verified' or 'parent_to_verify' (awaiting
-    sign-off) — published parents are protected.
+    """Native parent-tier retest: retests the promoted source vial rows via
+    cascade_parent_retest_to_sources. A 'verified' or 'parent_to_verify'
+    parent is un-promoted (retracted, value cleared); a 'published' parent
+    keeps its citable value live and is superseded later by the retest's
+    re-promote (Handler ruling 2026-08-28). 409 invalid_transition for any
+    other state.
 
     analysis_service_id (S3, optional) identifies the parent row by its native
     identity key; without it the keyword resolves the row as before (exact

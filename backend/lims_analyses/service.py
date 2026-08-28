@@ -967,13 +967,17 @@ def promote_to_parent(
                 LimsAnalysis.lims_sample_pk == parent_sample_pk,
                 _ident_clause,
                 LimsAnalysis.retest_of_id.is_(None),
-                # Awaiting (parent_to_verify) or fully VERIFIED parents are
-                # both superseded — neither has been published, so neither is
-                # a citable COA source yet. A published parent IS a citable
-                # COA source — superseding it silently could invalidate an
-                # issued COA; that conflict is diagnosed explicitly below
-                # instead (ConflictError naming the COA-snapshot deferral).
-                LimsAnalysis.review_state.in_(("verified", "parent_to_verify")),
+                # Awaiting (parent_to_verify), VERIFIED and PUBLISHED parents
+                # are all superseded. Published joined the list with the
+                # published-parent-retest ruling (2026-08-28): retesting a
+                # published parent leaves its citable value live (the cascade
+                # never retracts published), so the retest re-promote is
+                # exactly where the supersede was deferred to — the issued
+                # COA PDF is a stored snapshot and is not rewritten by this;
+                # regeneration stays a deliberate, separate act.
+                LimsAnalysis.review_state.in_(
+                    ("verified", "parent_to_verify", "published")
+                ),
                 LimsAnalysis.lims_sub_sample_pk.is_(None),
                 # SENAITE phase-out defense-in-depth: these states already
                 # exclude the shadow sentinel ('senaite_mirror'), so this
@@ -999,29 +1003,9 @@ def promote_to_parent(
                 details=_deltas(old_parent_before, old_parent),
             ))
             db.flush()   # emit UPDATE before INSERT so Postgres sees vacated index slot
-        else:
-            # No verified/parent_to_verify row to supersede — but if the
-            # active blocker is a PUBLISHED parent, the naked IntegrityError
-            # the insert below would raise gives the caller no way to tell
-            # "already exists" apart from "this one is a citable COA source
-            # and needs a deliberate supersede/republish decision". Diagnose
-            # it here so the 409 names the real deferral instead.
-            published_blocker = db.execute(
-                select(LimsAnalysis).where(
-                    LimsAnalysis.lims_sample_pk == parent_sample_pk,
-                    _ident_clause,
-                    LimsAnalysis.retest_of_id.is_(None),
-                    LimsAnalysis.review_state == "published",
-                    LimsAnalysis.lims_sub_sample_pk.is_(None),
-                    LimsAnalysis.provenance == "canonical",
-                )
-            ).scalars().first()
-            if published_blocker is not None:
-                raise ConflictError(
-                    f"active parent-tier row for keyword={eff_parent_keyword!r} "
-                    f"is a published parent — supersede/republish ships with "
-                    f"the COA-snapshot release"
-                )
+        # The former else-branch ConflictError ("COA-snapshot deferral") is
+        # gone: published parents are now superseded by the lookup above, so
+        # there is no published blocker left for this branch to diagnose.
     # ── end retest-source supersession ───────────────────────────────────────
 
     # Promotion mints the parent-tier row in 'parent_to_verify' — it is the
@@ -2075,16 +2059,20 @@ def parent_retest(
         raise NotFoundError(
             f"no active native parent row for {_asked} on {sample_id!r}"
         )
-    if active.review_state not in ("verified", "parent_to_verify"):
+    if active.review_state not in ("verified", "parent_to_verify", "published"):
         raise InvalidTransitionError(
             active.review_state,
             "retest",
             message=(
-                "parent retest requires the parent row to be 'verified' or "
-                f"'parent_to_verify'; row is {active.review_state!r} "
-                "(published parents go through invalidate→retest)"
+                "parent retest requires the parent row to be 'verified', "
+                f"'parent_to_verify' or 'published'; row is "
+                f"{active.review_state!r}"
             ),
         )
+    # State AT THE CALL, before the cascade's un-promote can flip a
+    # verified/awaiting row to 'retracted' — both the published branch below
+    # and the activity event key off what the operator actually retested.
+    state_at_retest = active.review_state
     # Thread the resolved row's own service FK down rather than letting the
     # cascade re-derive identity from the keyword: whatever leg found `active`
     # above, the cascade must act on the row this function just guarded — the
@@ -2113,6 +2101,31 @@ def parent_retest(
             if sid is not None
         ]
 
+    # Published branch (Handler ruling 2026-08-28): the cascade deliberately
+    # never retracts a published parent — the published value stays the
+    # citable figure until the retest's re-promote supersedes it
+    # (promote_to_parent's retest-source supersession). Mark the row
+    # `retested` so the FE stops offering the verb while the re-run is in
+    # flight, and leave a row-level audit transition (published→published)
+    # so the act is traceable on the row itself, not only in the sample
+    # activity feed. Both only when the cascade actually created retest rows.
+    if new_ids and state_at_retest == "published":
+        active_before = _snapshot(active)
+        active.retested = True
+        active.updated_at = datetime.utcnow()
+        db.add(LimsAnalysisTransition(
+            analysis_id=active.id,
+            from_state="published",
+            to_state="published",
+            transition_kind="auto",
+            user_id=user_id,
+            reason=(
+                "parent retested; published value retained until re-promote "
+                "supersedes it"
+            ),
+            details=_deltas(active_before, active),
+        ))
+
     from models import AnalysisService
     svc = db.get(AnalysisService, active.analysis_service_id)
     # Record the RESOLVED row's identity, not the caller's input string: since
@@ -2124,6 +2137,7 @@ def parent_retest(
         "analysis_service_id": active.analysis_service_id,
         "source_row_ids": source_row_ids,
         "unpromoted": active.review_state == "retracted",
+        "parent_review_state_at_retest": state_at_retest,
         "service_origin": svc.origin if svc else None,
     }
     if keyword != active.keyword:
