@@ -11,7 +11,15 @@ import {
 } from '@/components/ui/tooltip'
 import { SlaBreakdownTooltip } from '@/components/explorer/SlaBreakdownTooltip'
 
-type CellColor = 'red' | 'amber' | 'green' | 'met' | 'missed' | 'loading' | 'error' | 'none'
+type CellColor =
+  | 'red'
+  | 'amber'
+  | 'green'
+  | 'met'
+  | 'missed'
+  | 'loading'
+  | 'error'
+  | 'none'
 
 const COLOR_CLASS: Record<CellColor, string> = {
   red: 'text-red-500',
@@ -25,8 +33,14 @@ const COLOR_CLASS: Record<CellColor, string> = {
 }
 
 const DOT: Record<CellColor, string> = {
-  red: '●', amber: '●', green: '●',
-  met: '✓', missed: '—', loading: '…', error: '—', none: '—',
+  red: '●',
+  amber: '●',
+  green: '●',
+  met: '✓',
+  missed: '—',
+  loading: '…',
+  error: '—',
+  none: '—',
 }
 
 interface SlaAgeIndicatorProps {
@@ -37,7 +51,11 @@ interface SlaAgeIndicatorProps {
   compact?: boolean
 }
 
-function pickColor(snap: SlaSubjectSnapshot | null, isLoading: boolean, isError: boolean): CellColor {
+function pickColor(
+  snap: SlaSubjectSnapshot | null,
+  isLoading: boolean,
+  isError: boolean
+): CellColor {
   if (isLoading) return 'loading'
   if (isError) return 'error'
   if (!snap) return 'none'
@@ -82,7 +100,11 @@ function SlaAgeIndicatorImpl(props: SlaAgeIndicatorProps) {
     <span
       data-testid="sla-age-indicator"
       data-sla-color={color}
-      className={cn('inline-flex items-center gap-1 font-mono tabular-nums', sizeClass, className)}
+      className={cn(
+        'inline-flex items-center gap-1 font-mono tabular-nums',
+        sizeClass,
+        className
+      )}
       title={hasBreakdown ? undefined : titleAttr}
     >
       <span aria-hidden="true">{dot}</span>
@@ -99,7 +121,7 @@ function SlaAgeIndicatorImpl(props: SlaAgeIndicatorProps) {
           <SlaBreakdownTooltip
             tier={snap.tier}
             status={snap.status}
-            reason={null}
+            reason={snap.reason ?? null}
             priority={snap.priority}
             receivedAt={snap.receivedAt}
             groupName={snap.groupName}
@@ -114,7 +136,10 @@ function SlaAgeIndicatorImpl(props: SlaAgeIndicatorProps) {
 
 /** Structural equality on the effective snapshot's visually-meaningful fields —
  *  same anti-flicker pattern as OrderSlaCell. */
-function propsEqual(prev: SlaAgeIndicatorProps, next: SlaAgeIndicatorProps): boolean {
+function propsEqual(
+  prev: SlaAgeIndicatorProps,
+  next: SlaAgeIndicatorProps
+): boolean {
   if (prev.isLoading !== next.isLoading) return false
   if (prev.isError !== next.isError) return false
   if ((prev.compact ?? false) !== (next.compact ?? false)) return false
@@ -128,9 +153,18 @@ function propsEqual(prev: SlaAgeIndicatorProps, next: SlaAgeIndicatorProps): boo
   if ((a.groupName ?? null) !== (b.groupName ?? null)) return false
   if (a.priority !== b.priority) return false
   if ((a.tier?.id ?? null) !== (b.tier?.id ?? null)) return false
-  if ((a.tier?.target_minutes ?? null) !== (b.tier?.target_minutes ?? null)) return false
-  if ((a.tier?.amber_threshold_percent ?? null) !== (b.tier?.amber_threshold_percent ?? null)) return false
-  if ((a.tier?.business_hours_only ?? null) !== (b.tier?.business_hours_only ?? null)) return false
+  if ((a.tier?.target_minutes ?? null) !== (b.tier?.target_minutes ?? null))
+    return false
+  if (
+    (a.tier?.amber_threshold_percent ?? null) !==
+    (b.tier?.amber_threshold_percent ?? null)
+  )
+    return false
+  if (
+    (a.tier?.business_hours_only ?? null) !==
+    (b.tier?.business_hours_only ?? null)
+  )
+    return false
   if (a.status.elapsed_minutes !== b.status.elapsed_minutes) return false
   if (a.status.remaining_minutes !== b.status.remaining_minutes) return false
   if (a.status.breached !== b.status.breached) return false

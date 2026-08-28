@@ -18,11 +18,10 @@ import {
   SERVICE_GROUP_COLORS,
   type ServiceGroupColor,
 } from '@/lib/service-group-colors'
-import type {
-  InboxAnalysisItem,
-  InboxVialItem,
-  InboxPriority,
-} from '@/lib/api'
+import type { InboxAnalysisItem, InboxVialItem, InboxPriority } from '@/lib/api'
+import type { SlaSubjectSnapshot } from '@/services/sla-subjects'
+import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
+import { inboxVialSlaKey, vialSlaDepartments } from '@/lib/inbox-sla'
 
 export interface DragData {
   sampleUid: string
@@ -33,7 +32,12 @@ export interface DragData {
   /** Department display name (the inbox's `group_name`); label only. */
   groupName: string
   dateReceived: string | null
-  analyses: { title: string; keyword: string | null; peptide_name: string | null; method: string | null }[]
+  analyses: {
+    title: string
+    keyword: string | null
+    peptide_name: string | null
+    method: string | null
+  }[]
 }
 
 /**
@@ -42,7 +46,10 @@ export interface DragData {
  * operates on the flat analyses[] shape (group context lives per-analysis).
  */
 function groupCoreAnalyses(analyses: InboxAnalysisItem[]) {
-  const peptideMap = new Map<string, { peptide: string; types: string[]; method: string | null }>()
+  const peptideMap = new Map<
+    string,
+    { peptide: string; types: string[]; method: string | null }
+  >()
   const standalone: InboxAnalysisItem[] = []
 
   for (const a of analyses) {
@@ -52,7 +59,7 @@ function groupCoreAnalyses(analyses: InboxAnalysisItem[]) {
     }
     const typeMatch = a.title.match(/\(([^)]+)\)/)
     const identMatch = a.title.match(/Identity/)
-    const type = identMatch ? 'Identity' : typeMatch?.[1] ?? a.title
+    const type = identMatch ? 'Identity' : (typeMatch?.[1] ?? a.title)
 
     const existing = peptideMap.get(a.peptide_name)
     if (existing) {
@@ -79,6 +86,12 @@ interface InboxVialCardProps {
    *  that the sample needs multiple vials tested. */
   parentHasVarianceSubs?: boolean
   onPriorityChange: (sampleUid: string, priority: InboxPriority) => void
+  /** SLA column (2026-08-27): snapshots resolved by the page's
+   *  useSlaForSubjects pass, keyed by inboxVialSlaKey(uid, departmentId).
+   *  Absent -> no indicator renders (keeps non-SLA consumers unchanged). */
+  slaByKey?: Map<string, SlaSubjectSnapshot>
+  slaLoading?: boolean
+  slaError?: boolean
 }
 
 export function InboxVialCard({
@@ -86,6 +99,9 @@ export function InboxVialCard({
   groupedWithPrevious,
   parentHasVarianceSubs,
   onPriorityChange,
+  slaByKey,
+  slaLoading,
+  slaError,
 }: InboxVialCardProps) {
   // Drag uses the first analysis's department (the `group_id` wire field
   // carries department identity as of S2). Today every vial's analyses[]
@@ -122,9 +138,10 @@ export function InboxVialCard({
     ? { opacity: 0.3, pointerEvents: 'none' }
     : undefined
 
-  const colorKey = (groupColor as ServiceGroupColor) in SERVICE_GROUP_COLORS
-    ? (groupColor as ServiceGroupColor)
-    : 'zinc'
+  const colorKey =
+    (groupColor as ServiceGroupColor) in SERVICE_GROUP_COLORS
+      ? (groupColor as ServiceGroupColor)
+      : 'zinc'
   const colorClasses = SERVICE_GROUP_COLORS[colorKey]
 
   const { peptideLines, standalone } = groupCoreAnalyses(vial.analyses)
@@ -137,21 +154,31 @@ export function InboxVialCard({
       ? vial.vial_total > 0
         ? `${vial.vial_total} vial${vial.vial_total === 1 ? '' : 's'}`
         : null
-      : vial.vial_total > 1 ? `Vial 1 / ${vial.vial_total}` : null
+      : vial.vial_total > 1
+        ? `Vial 1 / ${vial.vial_total}`
+        : null
     : `${vialLabel(vial.vial_sequence, vial.container_mode ?? false)} / ${vial.vial_total}`
 
   return (
-    <div className={cn('flex', groupedWithPrevious && !vial.is_parent && 'pl-6 relative')}>
+    <div
+      className={cn(
+        'flex',
+        groupedWithPrevious && !vial.is_parent && 'pl-6 relative'
+      )}
+    >
       {/* Connector line for sub-vials grouped under a parent above */}
       {groupedWithPrevious && !vial.is_parent && (
-        <div className="absolute left-2 top-0 bottom-0 w-px bg-border" aria-hidden="true" />
+        <div
+          className="absolute left-2 top-0 bottom-0 w-px bg-border"
+          aria-hidden="true"
+        />
       )}
       <div
         ref={setNodeRef}
         style={style}
         className={cn(
           'group flex-1 rounded-lg border bg-card transition-all duration-200 hover:border-primary/30 hover:shadow-md',
-          isDragging && 'shadow-lg ring-2 ring-primary/20',
+          isDragging && 'shadow-lg ring-2 ring-primary/20'
         )}
       >
         {/* Header */}
@@ -214,21 +241,44 @@ export function InboxVialCard({
           )}
 
           {groupName && (
-            <span className={cn('inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium', colorClasses)}>
+            <span
+              className={cn(
+                'inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium',
+                colorClasses
+              )}
+            >
               {groupName}
             </span>
           )}
 
           {positionLabel && (
-            <span className="text-[11px] text-muted-foreground font-mono">{positionLabel}</span>
+            <span className="text-[11px] text-muted-foreground font-mono">
+              {positionLabel}
+            </span>
           )}
 
           <div className="flex-1" />
 
+          {/* SLA — same indicator + breakdown tooltip as the Order Status
+              page column, resolved per (vial, department) with the worst
+              snapshot shown. Only renders when the page passes the resolved
+              map, so other consumers are untouched. */}
+          {slaByKey && (
+            <SlaAgeIndicator
+              snapshots={vialSlaDepartments(vial)
+                .map(d => slaByKey.get(inboxVialSlaKey(vial.uid, d)))
+                .filter((s): s is SlaSubjectSnapshot => s != null)}
+              isLoading={slaLoading ?? false}
+              isError={slaError ?? false}
+            />
+          )}
+
           {/* Priority */}
           <Select
             value={vial.priority}
-            onValueChange={value => onPriorityChange(vial.uid, value as InboxPriority)}
+            onValueChange={value =>
+              onPriorityChange(vial.uid, value as InboxPriority)
+            }
           >
             <SelectTrigger
               size="sm"
@@ -239,9 +289,15 @@ export function InboxVialCard({
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="normal"><PriorityBadge priority="normal" /></SelectItem>
-              <SelectItem value="high"><PriorityBadge priority="high" /></SelectItem>
-              <SelectItem value="expedited"><PriorityBadge priority="expedited" /></SelectItem>
+              <SelectItem value="normal">
+                <PriorityBadge priority="normal" />
+              </SelectItem>
+              <SelectItem value="high">
+                <PriorityBadge priority="high" />
+              </SelectItem>
+              <SelectItem value="expedited">
+                <PriorityBadge priority="expedited" />
+              </SelectItem>
             </SelectContent>
           </Select>
 
@@ -250,30 +306,46 @@ export function InboxVialCard({
 
         {/* Body */}
         <div className="px-3 py-2">
-          {(peptideLines.length === 0 && standalone.length === 0) ? (
-            <p className="text-xs text-muted-foreground italic">No analyses on this vial.</p>
+          {peptideLines.length === 0 && standalone.length === 0 ? (
+            <p className="text-xs text-muted-foreground italic">
+              No analyses on this vial.
+            </p>
           ) : (
             <div className="space-y-1">
               {peptideLines.map(line => (
-                <div key={line.peptide} className="flex items-center gap-2 text-xs">
+                <div
+                  key={line.peptide}
+                  className="flex items-center gap-2 text-xs"
+                >
                   <span className="font-medium">{line.peptide}</span>
                   <div className="flex gap-1">
                     {line.types.sort().map(t => (
-                      <Badge key={t} variant="outline" className="text-[10px] px-1.5 py-0 h-4">
+                      <Badge
+                        key={t}
+                        variant="outline"
+                        className="text-[10px] px-1.5 py-0 h-4"
+                      >
                         {t}
                       </Badge>
                     ))}
                   </div>
                   {line.method && (
-                    <span className="text-muted-foreground font-mono text-[10px]">{line.method}</span>
+                    <span className="text-muted-foreground font-mono text-[10px]">
+                      {line.method}
+                    </span>
                   )}
                 </div>
               ))}
               {standalone.map((a, i) => (
-                <div key={a.uid ?? `${a.keyword ?? 'kw'}-${i}`} className="flex items-center gap-2 text-xs">
+                <div
+                  key={a.uid ?? `${a.keyword ?? 'kw'}-${i}`}
+                  className="flex items-center gap-2 text-xs"
+                >
                   <span className="font-medium">{a.title}</span>
                   {a.method && (
-                    <span className="text-muted-foreground font-mono text-[10px]">{a.method}</span>
+                    <span className="text-muted-foreground font-mono text-[10px]">
+                      {a.method}
+                    </span>
                   )}
                 </div>
               ))}
