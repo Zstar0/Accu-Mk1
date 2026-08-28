@@ -11508,6 +11508,51 @@ async def _parent_attachment_kinds(sample_id: str, auth) -> Optional[dict]:
         return None
 
 
+def _parent_attachment_kinds_native(db, parent_pk: int) -> set[str]:
+    """mk1-mode twin of `_parent_attachment_kinds` (spec §5): classify a
+    parent's attachments for the COA attachments gate from
+    `lims_parent_attachments` — never SENAITE.
+
+    Returns a subset of {"image", "chromatogram"}. Fail-CLOSED: no matching
+    native rows (missing, wrong storage, or gated out) yields an empty set,
+    which the gate call site treats exactly like SENAITE's "nothing attached"
+    — the historical fail-OPEN-on-read-error posture is a SENAITE-branch-only
+    concept and does not apply here (a plain DB query has no equivalent
+    "can't reach the read-source" failure mode).
+
+    image = storage='s3' AND render_in_report AND (kind='receive_image' OR
+    attachment_type='Sample Image').
+    chromatogram = storage='s3' AND kind='chromatogram' (no render_in_report
+    requirement — chromatogram rows are minted render_in_report=False).
+    """
+    kinds: set = set()
+    has_image = db.execute(
+        select(LimsParentAttachment.id).where(
+            LimsParentAttachment.lims_sample_pk == parent_pk,
+            LimsParentAttachment.storage == "s3",
+            LimsParentAttachment.render_in_report.is_(True),
+            or_(
+                LimsParentAttachment.kind == "receive_image",
+                LimsParentAttachment.attachment_type == "Sample Image",
+            ),
+        ).limit(1)
+    ).first() is not None
+    if has_image:
+        kinds.add("image")
+
+    has_chromatogram = db.execute(
+        select(LimsParentAttachment.id).where(
+            LimsParentAttachment.lims_sample_pk == parent_pk,
+            LimsParentAttachment.storage == "s3",
+            LimsParentAttachment.kind == "chromatogram",
+        ).limit(1)
+    ).first() is not None
+    if has_chromatogram:
+        kinds.add("chromatogram")
+
+    return kinds
+
+
 async def _maybe_emit_regular_coa_child(db, sample_id, parent_row, primary_data):
     """For a variance sample, generate the Regular parent-services COA as a child
     of the just-created variance primary: a SECOND COABuilder /process WITHOUT
@@ -11645,11 +11690,33 @@ async def generate_sample_coa(
             # AR, and — when the sample carries analytical (non-micro) analytes —
             # a chromatogram. Both are attached from the sample page pickers
             # ("Select Vial Image" / "Select Vial Chromatogram") or the legacy
-            # check-in/auto-fill flows. Fail-OPEN when SENAITE can't be read
-            # (same posture as the resolver pre-flight: a flaky check must not
-            # permanently block generation; COABuilder fails loudly anyway if
-            # SENAITE is truly down).
-            kinds = await _parent_attachment_kinds(sample_id, _get_senaite_auth(current_user))
+            # check-in/auto-fill flows.
+            #
+            # mk1 mode (spec §5): classified from `lims_parent_attachments`
+            # instead — NEVER SENAITE, no fallback. That branch is fail-CLOSED:
+            # a read error or no matching native rows both collapse to an
+            # empty kinds set, which reads as "nothing attached" below and
+            # trips the existing blockers with unchanged wording. The SENAITE
+            # branch below keeps its historical fail-OPEN posture on read
+            # error (same posture as the resolver pre-flight: a flaky check
+            # must not permanently block generation; COABuilder fails loudly
+            # anyway if SENAITE is truly down) — that posture does not extend
+            # to the mk1 branch.
+            from coa.source_setting import coa_generation_source
+            if coa_generation_source(db) == "mk1":
+                _gate_parent_pk = db.execute(
+                    select(LimsSample.id).where(LimsSample.sample_id == sample_id)
+                ).scalar_one_or_none()
+                _native_kinds = (
+                    _parent_attachment_kinds_native(db, _gate_parent_pk)
+                    if _gate_parent_pk is not None else set()
+                )
+                kinds = {
+                    "has_image": "image" in _native_kinds,
+                    "has_chromatogram": "chromatogram" in _native_kinds,
+                }
+            else:
+                kinds = await _parent_attachment_kinds(sample_id, _get_senaite_auth(current_user))
             if kinds is not None:
                 from lims_analyses.seeder import coa_exempt_keywords as _micro_kws
                 if resolver_result is not None:
