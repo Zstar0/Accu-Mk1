@@ -6,6 +6,35 @@ import {
 } from '@/components/ui/tooltip'
 import type { OrderedProduct } from '@/lib/api'
 import type { ProductCompletion } from '@/lib/product-completion'
+import { ROLE_COLOR_BADGE, roleColorForCode } from '@/lib/role-display'
+import { useVialRoles } from '@/services/vial-roles'
+import { useDepartments } from '@/services/departments'
+
+/** The pre-colorization chip look — kept as the fallback for products with
+ *  no fulfillment_role (kind-dim products before their role landed, stale
+ *  wire rows) and for callers that don't resolve a color. */
+const FALLBACK_CHIP_CLASSES =
+  'border-violet-500/30 bg-violet-500/10 text-violet-300'
+
+/**
+ * Resolver hook: OrderedProduct -> the chip's color classes, from the
+ * product's fulfillment_role via the vial-role catalog — the SAME source the
+ * boxing lanes and RoleBadge use, so a product chip matches its bench color
+ * everywhere (Handler request, 2026-08-28). Role-less products keep the
+ * legacy violet. Lives here (not inside ProductChip) so the chip stays pure
+ * and hook-free — callers without a QueryClient (tests, storybook-ish
+ * renders) are unaffected.
+ */
+export function useProductColorClasses(): (p: OrderedProduct) => string {
+  const { data: roles } = useVialRoles()
+  const { data: departments } = useDepartments()
+  return (p: OrderedProduct) =>
+    p.fulfillment_role
+      ? ROLE_COLOR_BADGE[
+          roleColorForCode(p.fulfillment_role, roles, departments)
+        ]
+      : FALLBACK_CHIP_CLASSES
+}
 
 /**
  * Rich hover content for a product chip — the sectioned, `font-mono` card used
@@ -27,7 +56,8 @@ export function ProductChipTooltip({
   const met = completion?.met === true
   const vials = completion?.vials ?? []
   // Variance is fulfilled by locking the set; everything else by promotion.
-  const vialLabel = product.key === 'variance' ? 'Locked vials' : 'Promoted from'
+  const vialLabel =
+    product.key === 'variance' ? 'Locked vials' : 'Promoted from'
   return (
     <div
       data-testid="product-chip-tooltip"
@@ -76,29 +106,52 @@ export function ProductChip({
   product,
   completion,
   compact = false,
+  xs = false,
+  colorClasses,
 }: {
   product: OrderedProduct
   completion?: ProductCompletion | null
   compact?: boolean
+  /** Extra-small variant for dense surfaces (Order Status sample cards). */
+  xs?: boolean
+  /** Border/bg/text classes from useProductColorClasses(); omitted -> the
+   *  legacy violet, so hook-less callers and tests render unchanged. */
+  colorClasses?: string
 }) {
   const met = completion?.met === true
+  const sizeClasses = xs
+    ? 'px-1 py-px text-[10px]'
+    : compact
+      ? 'px-1.5 py-0.5 text-[11px]'
+      : 'px-2 py-1 text-xs'
+  const iconSize = xs ? 9 : compact ? 11 : 12
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <span
           className={
-            'inline-flex items-center gap-1 rounded-md border border-violet-500/30 bg-violet-500/10 text-violet-300 whitespace-nowrap ' +
-            (compact ? 'px-1.5 py-0.5 text-[11px]' : 'px-2 py-1 text-xs')
+            'inline-flex items-center gap-1 rounded-md border whitespace-nowrap ' +
+            (colorClasses ?? FALLBACK_CHIP_CLASSES) +
+            ' ' +
+            sizeClasses
           }
         >
-          <FlaskConical size={compact ? 11 : 12} className="shrink-0" />
-          <span className={compact ? 'max-w-[16ch] truncate' : undefined}>
+          <FlaskConical size={iconSize} className="shrink-0" />
+          <span
+            className={
+              xs
+                ? 'max-w-[12ch] truncate'
+                : compact
+                  ? 'max-w-[16ch] truncate'
+                  : undefined
+            }
+          >
             {product.label}
           </span>
           {met && (
             <span className="inline-flex shrink-0" data-testid="product-check">
               <CheckCircle2
-                size={compact ? 12 : 13}
+                size={xs ? 10 : compact ? 12 : 13}
                 className="text-emerald-400"
               />
             </span>

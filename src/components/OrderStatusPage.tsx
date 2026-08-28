@@ -19,6 +19,7 @@ import {
   ListTree,
   ChevronDown,
   ChevronRight,
+  FlaskConical,
 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
@@ -29,6 +30,7 @@ import {
   type ExplorerOrder,
   type SenaiteLookupResult,
   type SenaiteAnalysis,
+  type OrderedProduct,
 } from '@/lib/api'
 import {
   getActiveEnvironmentName,
@@ -79,6 +81,12 @@ import {
   type SampleSlaSnapshot,
 } from '@/services/order-sla'
 import { useSenaiteLookupMap } from '@/services/senaite-lookup-map'
+import { useAnalysisProfiles } from '@/services/analysis-profiles'
+import { buildProductsBySampleId } from '@/lib/product-chips'
+import {
+  ProductChip,
+  useProductColorClasses,
+} from '@/components/senaite/ProductChip'
 import { useEffectiveReadSource } from '@/lib/read-source'
 
 // Re-export TEST_EMAILS so the existing import surface
@@ -130,6 +138,10 @@ const KANBAN_COLUMNS: KanbanCol[] = [
 // kanban toolbar (or the flat view's column-header chevrons); the choice
 // persists in the saved filters.
 export const DEFAULT_COLLAPSED_KANBAN_COLS = ['sample_due', 'published']
+
+// Stable empty result for the Products-toggle-off state — keeps memo/prop
+// identity constant so rows don't re-render when the feature is off.
+const EMPTY_PRODUCTS_MAP = new Map<string, OrderedProduct[]>()
 
 interface KanbanSampleItem {
   sampleId: string
@@ -257,6 +269,8 @@ function KanbanSampleCard({
   showAnalysisServices,
   lotHighlight,
   sampleSlaStatusesMap,
+  products,
+  productColorFor,
 }: {
   item: KanbanSampleItem
   showOrder: boolean
@@ -268,6 +282,12 @@ function KanbanSampleCard({
   // service group). Until the indicator itself renders stacked rows, we pick
   // the first element so behavior stays single-tier-visible.
   sampleSlaStatusesMap?: Map<string, SampleSlaSnapshot[]>
+  /** Ordered-product chips (v1.11.8, Products toggle) — xs size, colored by
+   *  fulfillment role from the same catalog source as the boxing lanes. */
+  products?: OrderedProduct[]
+  /** Role-catalog color resolver, passed from the page (keeps this card
+   *  hook-free for closed-factory test harnesses). */
+  productColorFor?: (p: OrderedProduct) => string
 }) {
   const navigateToSample = useUIStore(state => state.navigateToSample)
   const navigateToOrderExplorer = useUIStore(
@@ -359,6 +379,19 @@ function KanbanSampleCard({
           </span>
         </div>
       )}
+      {/* Ordered-product chips (Products toggle) — xs, role-catalog colors */}
+      {products && products.length > 0 && (
+        <div className="flex flex-wrap gap-1 mt-1">
+          {products.map(p => (
+            <ProductChip
+              key={p.key}
+              xs
+              product={p}
+              colorClasses={productColorFor?.(p)}
+            />
+          ))}
+        </div>
+      )}
       {/* Row 2: secondary metadata — clearly separated from analysis state */}
       {(showOrder || item.lookup) && (
         <div className="flex items-center justify-between gap-1 mt-0.5">
@@ -437,6 +470,8 @@ function KanbanView({
   sampleSlaStatusesMap,
   collapsedCols,
   searchActive,
+  productsBySampleId,
+  productColorFor,
   onToggleCollapse,
 }: {
   orders: ExplorerOrder[]
@@ -455,6 +490,9 @@ function KanbanView({
   /** True while a server-side search axis is active — hidden columns are
    *  overridden so the searched order's cards are visible wherever they sit. */
   searchActive?: boolean
+  /** senaite_id -> ordered products; empty map when the toggle is off. */
+  productsBySampleId?: Map<string, OrderedProduct[]>
+  productColorFor?: (p: OrderedProduct) => string
   onToggleCollapse: (key: string) => void
 }) {
   // Determine which columns to show — all if no filter, else just the active one
@@ -608,6 +646,8 @@ function KanbanView({
                       showAnalysisServices={showAnalysisServices}
                       lotHighlight={lotHighlight}
                       sampleSlaStatusesMap={sampleSlaStatusesMap}
+                      products={productsBySampleId?.get(item.sampleId)}
+                      productColorFor={productColorFor}
                     />
                   ))}
                 </div>
@@ -687,6 +727,8 @@ function KanbanView({
                           showAnalysisServices={showAnalysisServices}
                           lotHighlight={lotHighlight}
                           sampleSlaStatusesMap={sampleSlaStatusesMap}
+                          products={productsBySampleId?.get(item.sampleId)}
+                          productColorFor={productColorFor}
                         />
                       ))
                     )}
@@ -762,6 +804,8 @@ interface OrderFilters {
   lotFilter: string
   hideTestOrders: boolean
   slaAtRisk: boolean
+  /** Show ordered-product chips on sample cards (table + kanban). */
+  showProducts: boolean
   collapsedKanbanCols: string[]
   /** One-time migration marker: stored filters from before the
    *  hidden-by-default columns existed get DEFAULT_COLLAPSED_KANBAN_COLS
@@ -796,6 +840,7 @@ export function loadOrderFilters(): OrderFilters {
         kanbanColDefaultsV2: true,
         analyteFilter: parsed.analyteFilter ?? '',
         lotFilter: parsed.lotFilter ?? '',
+        showProducts: parsed.showProducts ?? false,
       }
     }
   } catch {
@@ -810,6 +855,7 @@ export function loadOrderFilters(): OrderFilters {
     lotFilter: '',
     hideTestOrders: true,
     slaAtRisk: false,
+    showProducts: false,
     collapsedKanbanCols: [...DEFAULT_COLLAPSED_KANBAN_COLS],
     kanbanColDefaultsV2: true,
     viewMode: 'table',
@@ -985,6 +1031,19 @@ export function OrderStatusPage() {
   // 'sample_details' two-tier read-source setting — same mechanism as
   // SampleDetails.tsx; defaults to 'senaite' (no behavior change until the
   // Handler flips it).
+  // Ordered-product chips (v1.11.8): payload-derived, zero extra fetches —
+  // the profiles catalog supplies label/addon/role (role drives the
+  // boxing-lane color). Map only built while the toggle is on.
+  const profilesQuery = useAnalysisProfiles()
+  const productColorFor = useProductColorClasses()
+  const productsBySampleId = useMemo(
+    () =>
+      orderFilters.showProducts
+        ? buildProductsBySampleId(allOrders ?? [], profilesQuery.data ?? [])
+        : EMPTY_PRODUCTS_MAP,
+    [orderFilters.showProducts, allOrders, profilesQuery.data]
+  )
+
   const { effective: sampleDetailsSource } =
     useEffectiveReadSource('sample_details')
   const {
@@ -1436,6 +1495,22 @@ export function OrderStatusPage() {
               )}
               <button
                 type="button"
+                title="Show ordered products on each sample card"
+                onClick={() =>
+                  updateFilters({ showProducts: !orderFilters.showProducts })
+                }
+                className={cn(
+                  'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium border transition-colors',
+                  orderFilters.showProducts
+                    ? 'bg-foreground text-background border-foreground'
+                    : 'bg-transparent text-muted-foreground border-border hover:border-foreground/40 hover:text-foreground'
+                )}
+              >
+                <FlaskConical className="h-3.5 w-3.5" />
+                Products
+              </button>
+              <button
+                type="button"
                 title="Table view"
                 onClick={() => updateFilters({ viewMode: 'table' })}
                 className={cn(
@@ -1662,6 +1737,8 @@ export function OrderStatusPage() {
                           order={order}
                           wordpressHost={wordpressHost}
                           sampleLookupMap={sampleLookupMap}
+                          productsBySampleId={productsBySampleId}
+                          productColorFor={productColorFor}
                           activeAnalysisStates={orderFilters.activeStates}
                           highlightLot={
                             orderFilters.lotFilter.trim() || undefined
@@ -1692,6 +1769,8 @@ export function OrderStatusPage() {
                     sampleSlaStatusesMap={orderSla.sampleStatusesBySampleId}
                     collapsedCols={orderFilters.collapsedKanbanCols}
                     searchActive={serverSearchActive}
+                    productsBySampleId={productsBySampleId}
+                    productColorFor={productColorFor}
                     onToggleCollapse={toggleCollapsedCol}
                   />
                 </div>
