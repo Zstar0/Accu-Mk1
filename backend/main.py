@@ -20254,6 +20254,7 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
     item_sample_ids = {it.sample_id for it in all_items if it.sample_id}
     sub_sample_pk_map: dict[str, int] = {}
     sub_kind_map: dict[str, Optional[str]] = {}
+    sub_role_map: dict[str, Optional[str]] = {}
     sub_box_id_map: dict[str, Optional[int]] = {}
     if item_sample_ids:
         sub_rows = db.execute(
@@ -20261,6 +20262,12 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
                 LimsSubSample.sample_id,
                 LimsSubSample.id,
                 LimsSubSample.assignment_kind,  # variance badge passthrough
+                # Role badge passthrough (2026-08-27): under the
+                # hm-under-Analytical catalog state, department alone cannot
+                # distinguish an hm vial from hplc work — a dropped hm item
+                # rendered an hplc chip. The vial's own catalog role is the
+                # truth the inbox already badges by; the FE prefers it.
+                LimsSubSample.assignment_role,
                 LimsSubSample.box_id,  # current physical box, if any
             ).where(
                 LimsSubSample.sample_id.in_(item_sample_ids)
@@ -20268,6 +20275,7 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
         ).all()
         sub_sample_pk_map = {r.sample_id: r.id for r in sub_rows}
         sub_kind_map = {r.sample_id: r.assignment_kind for r in sub_rows}
+        sub_role_map = {r.sample_id: r.assignment_role for r in sub_rows}
         sub_box_id_map = {r.sample_id: r.box_id for r in sub_rows}
 
     # Resolve current box labels for boxed vials so techs know which
@@ -20403,6 +20411,10 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
                     # 'core' | 'variance' | None — None for parent-sample ids
                     # (no lims_sub_samples row), same join as lims_sub_sample_pk
                     "assignment_kind": sub_kind_map.get(it.sample_id),
+                    # The vial's catalog role ('hplc' | 'hm' | 'endo' | ...);
+                    # None for parent-sample ids. FE badge prefers this over
+                    # the department bench.
+                    "assignment_role": sub_role_map.get(it.sample_id),
                     "box_id": sub_box_id_map.get(it.sample_id),
                     "box_label": box_label_map.get(sub_box_id_map.get(it.sample_id)),
                     "analyses": json.loads(it.analyses_json) if it.analyses_json else (group_analyses_map.get(it.service_group_id, []) if it.service_group_id else []),

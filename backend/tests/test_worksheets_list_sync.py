@@ -392,3 +392,50 @@ def test_get_worksheet_by_id_404s_on_missing_and_staging(client, db):
     assert client.get("/worksheets/999999").status_code == 404
     # staging is invisible in the list; by-id must match that exclusion
     assert client.get(f"/worksheets/{staging.id}").status_code == 404
+
+
+# ── 2026-08-27 role passthrough: a dropped hm vial's worksheet item rendered
+# an hplc chip — under the hm-under-Analytical catalog state (hm role +
+# services carry department_id=Analytical in prod), department_name cannot
+# distinguish hm work from hplc. Items now additively carry the vial's own
+# assignment_role (joined off lims_sub_samples, like lims_sub_sample_pk);
+# the FE badge prefers it. ───────────────────────────────────────────────────
+
+def test_worksheet_item_carries_vial_assignment_role(client, db):
+    """Vial-scoped item -> its lims_sub_samples.assignment_role; parent-sample
+    item (no sub row) -> None. Pinned against the prod PB-0463-S04 case:
+    an hm vial whose item department is Analytical must still say role hm."""
+    import json as _json
+    from models import Department, LimsSample, LimsSubSample, WorksheetItem
+
+    analytical = Department(name="Analytical")
+    db.add(analytical); db.flush()
+    parent = LimsSample(sample_id="PB-0463", status="received")
+    db.add(parent); db.flush()
+    db.add(LimsSubSample(
+        sample_id="PB-0463-S04", external_lims_uid="mk1://PB-0463-S04",
+        parent_sample_pk=parent.id, vial_sequence=4,
+        assignment_role="hm",
+    ))
+    ws = Worksheet(title="WS HM Role", status="open")
+    db.add(ws); db.flush()
+    db.add(WorksheetItem(
+        worksheet_id=ws.id, sample_uid="mk1://PB-0463-S04",
+        sample_id="PB-0463-S04",
+        department_id=analytical.id,  # the hm-under-Analytical state
+        analyses_json=_json.dumps([
+            {"title": "Lead", "keyword": "LEAD-PPM", "peptide_name": None, "method": None},
+        ]),
+    ))
+    db.add(WorksheetItem(
+        worksheet_id=ws.id, sample_uid="PARENT-UID",
+        sample_id="PB-0463",  # parent-sample claim, no lims_sub_samples row
+        department_id=analytical.id,
+    ))
+    db.commit()
+
+    ws_out = next(w for w in client.get("/worksheets").json() if w["title"] == "WS HM Role")
+    by_sample = {it["sample_id"]: it for it in ws_out["items"]}
+    assert by_sample["PB-0463-S04"]["assignment_role"] == "hm"
+    assert by_sample["PB-0463-S04"]["department_name"] == "Analytical"  # unchanged
+    assert by_sample["PB-0463"]["assignment_role"] is None

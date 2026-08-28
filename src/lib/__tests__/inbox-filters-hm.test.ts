@@ -10,5 +10,31 @@ test('Heavy Metals department resolves to the hm bench', () => {
 })
 
 test('hm bench badges as hm', () => {
-  expect(itemRoleBadges({ department_name: 'Heavy Metals', analyses: [] })).toEqual(['hm'])
+  expect(
+    itemRoleBadges({ department_name: 'Heavy Metals', analyses: [] })
+  ).toEqual(['hm'])
+})
+
+// Role-passthrough (2026-08-27, prod PB-0463-S04): under the
+// hm-under-Analytical catalog state the item's department says Analytical,
+// so the bench-derived badge said hplc. The vial's own assignment_role wins.
+
+test('assignment_role wins over the department bench (hm under Analytical)', () => {
+  expect(
+    itemRoleBadges({
+      department_name: 'Analytical',
+      analyses: [],
+      assignment_role: 'hm',
+    })
+  ).toEqual(['hm'])
+})
+
+test('role-less items (parent claims) keep the department bench', () => {
+  expect(
+    itemRoleBadges({
+      department_name: 'Analytical',
+      analyses: [],
+      assignment_role: null,
+    })
+  ).toEqual(['hplc'])
 })

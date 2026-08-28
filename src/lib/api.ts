@@ -5623,6 +5623,9 @@ export interface WorksheetListItem {
     lims_sub_sample_pk: number | null
     /** 'core' | 'variance' | null — null for parent-sample items. */
     assignment_kind?: 'core' | 'variance' | null
+    /** The vial's catalog role ('hplc' | 'hm' | ...); null for parent-sample
+     *  items. Role pills prefer this over the department bench. */
+    assignment_role?: string | null
     /** Current physical box; null for parent-sample items / unboxed vials. */
     box_id: number | null
     box_label: string | null
