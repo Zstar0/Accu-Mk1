@@ -35,7 +35,7 @@ from fastapi import BackgroundTasks, FastAPI, Body, Depends, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field, validator
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import select, desc, delete, update, func, extract, and_
+from sqlalchemy import select, desc, delete, update, func, extract, and_, or_
 from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
@@ -13703,6 +13703,113 @@ async def create_sample_prep_endpoint(
         raise HTTPException(status_code=500, detail=f"Failed to save sample prep: {e}")
 
 
+def _attach_prep_sla(db: Session, rows: "list[dict]") -> None:
+    """Additive per-row `sla` context for the Sample Preps page (v1.11.1).
+
+    Mirrors the inbox's SLA signals: received date + priority + live analysis
+    keywords + department — the FE builds SLA subjects from this block and
+    the shared resolver applies priority > profile > group > default. Vial
+    resolution prefers the row's lims_sub_sample_pk (post prep-cutover
+    vial-scoped preps), then the senaite_sample_id as a vial id (P-XXXX-SNN),
+    then as a parent id (P-XXXX, legacy whole-sample preps — no native
+    analyses, so keywords stay empty and the default tier applies).
+
+    Every lookup is one batched query; enrichment is FAIL-OPEN at the caller
+    (rows without `sla` render the indicator's none state).
+    """
+    from models import LimsAnalysis
+
+    sample_ids = {r.get("senaite_sample_id") for r in rows if r.get("senaite_sample_id")}
+    row_pks = {r.get("lims_sub_sample_pk") for r in rows if r.get("lims_sub_sample_pk")}
+    if not sample_ids and not row_pks:
+        return
+
+    sub_filter = []
+    if sample_ids:
+        sub_filter.append(LimsSubSample.sample_id.in_(sample_ids))
+    if row_pks:
+        sub_filter.append(LimsSubSample.id.in_(row_pks))
+    subs = db.execute(
+        select(
+            LimsSubSample.id,
+            LimsSubSample.sample_id,
+            LimsSubSample.received_at,
+            LimsSubSample.external_lims_uid,
+        ).where(or_(*sub_filter))
+    ).all()
+    sub_by_pk = {r.id: r for r in subs}
+    sub_by_sid = {r.sample_id: r for r in subs}
+
+    parents = []
+    if sample_ids:
+        parents = db.execute(
+            select(
+                LimsSample.sample_id,
+                LimsSample.date_received,
+                LimsSample.external_lims_uid,
+            ).where(LimsSample.sample_id.in_(sample_ids))
+        ).all()
+    parent_by_sid = {r.sample_id: r for r in parents}
+
+    uids = {r.external_lims_uid for r in subs if r.external_lims_uid} | {
+        r.external_lims_uid for r in parents if r.external_lims_uid
+    }
+    priority_by_uid: dict = {}
+    if uids:
+        priority_by_uid = {
+            p.sample_uid: p.priority
+            for p in db.execute(
+                select(SamplePriority).where(SamplePriority.sample_uid.in_(uids))
+            ).scalars()
+        }
+
+    # Live analysis keywords + owning department per vial — same live-row
+    # predicate as the inbox's native fetch (retested=False, dead states out).
+    kws_by_pk: dict[int, list[str]] = {}
+    dept_by_pk: dict[int, int] = {}
+    if sub_by_pk:
+        arows = db.execute(
+            select(
+                LimsAnalysis.lims_sub_sample_pk,
+                LimsAnalysis.keyword,
+                AnalysisService.department_id,
+            )
+            .outerjoin(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
+            .where(LimsAnalysis.lims_sub_sample_pk.in_(set(sub_by_pk)))
+            .where(LimsAnalysis.retested.is_(False))
+            .where(LimsAnalysis.review_state.notin_(("rejected", "retracted")))
+        ).all()
+        for pk, kw, dept in arows:
+            if kw:
+                kws_by_pk.setdefault(pk, []).append(kw)
+            if dept is not None and pk not in dept_by_pk:
+                dept_by_pk[pk] = dept
+
+    for r in rows:
+        sub = sub_by_pk.get(r.get("lims_sub_sample_pk")) or sub_by_sid.get(
+            r.get("senaite_sample_id")
+        )
+        parent = parent_by_sid.get(r.get("senaite_sample_id"))
+        if sub is not None:
+            received = sub.received_at
+            uid = sub.external_lims_uid
+            keywords = kws_by_pk.get(sub.id, [])
+            department_id = dept_by_pk.get(sub.id)
+        elif parent is not None:
+            received = parent.date_received
+            uid = parent.external_lims_uid
+            keywords = []
+            department_id = None
+        else:
+            continue
+        r["sla"] = {
+            "received_at": (received.isoformat() + "Z") if received else None,
+            "priority": priority_by_uid.get(uid, "normal") if uid else "normal",
+            "keywords": keywords,
+            "department_id": department_id,
+        }
+
+
 @app.get("/sample-preps")
 async def list_sample_preps_endpoint(
     search: Optional[str] = None,
@@ -13711,6 +13818,7 @@ async def list_sample_preps_endpoint(
     offset: int = 0,
     exclude_statuses: Optional[str] = None,
     statuses: Optional[str] = None,
+    db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
     """List sample preps from the integration DB (newest first).
@@ -13746,6 +13854,12 @@ async def list_sample_preps_endpoint(
             for k in ("created_at", "updated_at"):
                 if row.get(k) and hasattr(row[k], "isoformat"):
                     row[k] = row[k].isoformat()
+        # SLA context is an overlay — a failure here must not take down the
+        # preps list (rows without `sla` render the FE's none state).
+        try:
+            _attach_prep_sla(db, rows)
+        except Exception:
+            logger.warning("sample-preps SLA enrichment failed", exc_info=True)
         return rows
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list sample preps: {e}")

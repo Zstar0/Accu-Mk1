@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   ClipboardList,
   Search,
@@ -39,6 +39,11 @@ import {
 } from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
 import { useWizardStore } from '@/store/wizard-store'
+import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
+import { useSlaForSubjects, type SlaSubject } from '@/services/sla-subjects'
+import { useServiceGroups } from '@/services/service-groups'
+import { departmentToGroupId } from '@/lib/inbox-sla'
+import type { InboxPriority } from '@/lib/api'
 import { SamplePrepHplcFlyout } from './SamplePrepHplcFlyout'
 import { SharePointBrowser } from './SharePointBrowser'
 import { LocalHplcFolderPicker } from './LocalHplcFolderPicker'
@@ -51,18 +56,33 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 const HIDDEN_PREP_STATUSES = ['hplc_complete', 'completed', 'curve_created']
 
 const STATUSES: { value: string; label: string; cls: string }[] = [
-  { value: 'awaiting_hplc',  label: 'Awaiting HPLC',  cls: 'bg-blue-600 text-white' },
-  { value: 'hplc_complete',  label: 'HPLC Complete',  cls: 'bg-teal-600 text-white' },
-  { value: 'curve_created',  label: 'Curve Created',  cls: 'bg-emerald-600 text-white' },
-  { value: 'completed',      label: 'Completed',      cls: 'bg-green-600 text-white' },
-  { value: 'on_hold',        label: 'On Hold',        cls: 'bg-amber-500 text-white' },
-  { value: 'review',         label: 'Review',         cls: 'bg-purple-600 text-white' },
+  {
+    value: 'awaiting_hplc',
+    label: 'Awaiting HPLC',
+    cls: 'bg-blue-600 text-white',
+  },
+  {
+    value: 'hplc_complete',
+    label: 'HPLC Complete',
+    cls: 'bg-teal-600 text-white',
+  },
+  {
+    value: 'curve_created',
+    label: 'Curve Created',
+    cls: 'bg-emerald-600 text-white',
+  },
+  { value: 'completed', label: 'Completed', cls: 'bg-green-600 text-white' },
+  { value: 'on_hold', label: 'On Hold', cls: 'bg-amber-500 text-white' },
+  { value: 'review', label: 'Review', cls: 'bg-purple-600 text-white' },
 ]
 
 function fmtDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-US', {
-    month: 'short', day: 'numeric', year: 'numeric',
-    hour: '2-digit', minute: '2-digit',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
   })
 }
 
@@ -83,7 +103,13 @@ interface ScanConsoleProps {
   onClose: () => void
 }
 
-function ScanConsole({ phase, logs, progress, matchCount, onClose }: ScanConsoleProps) {
+function ScanConsole({
+  phase,
+  logs,
+  progress,
+  matchCount,
+  onClose,
+}: ScanConsoleProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [dotFrame, setDotFrame] = useState(0)
 
@@ -101,13 +127,14 @@ function ScanConsole({ phase, logs, progress, matchCount, onClose }: ScanConsole
   }, [logs])
 
   const dots = ['·', '··', '···', '····', '·····'][dotFrame]
-  const colorForLevel = (level: HplcScanLogLine['level']) => ({
-    info:    'text-zinc-300',
-    dim:     'text-zinc-600',
-    warn:    'text-amber-400',
-    success: 'text-emerald-400',
-    error:   'text-red-400',
-  })[level]
+  const colorForLevel = (level: HplcScanLogLine['level']) =>
+    ({
+      info: 'text-zinc-300',
+      dim: 'text-zinc-600',
+      warn: 'text-amber-400',
+      success: 'text-emerald-400',
+      error: 'text-red-400',
+    })[level]
 
   return (
     <div className="rounded-lg overflow-hidden border border-zinc-800/80 shadow-2xl shadow-black/90 select-none">
@@ -115,12 +142,26 @@ function ScanConsole({ phase, logs, progress, matchCount, onClose }: ScanConsole
       <div className="bg-zinc-900 border-b border-zinc-800/80 px-3 py-2 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="flex gap-1.5 shrink-0">
-            <div className={cn('w-2.5 h-2.5 rounded-full transition-colors',
-              phase === 'error' ? 'bg-red-500' : 'bg-zinc-700')} />
-            <div className={cn('w-2.5 h-2.5 rounded-full transition-colors',
-              phase === 'running' ? 'bg-amber-500/70 animate-pulse' : 'bg-zinc-700')} />
-            <div className={cn('w-2.5 h-2.5 rounded-full transition-colors',
-              phase === 'done' ? 'bg-emerald-500' : 'bg-zinc-700')} />
+            <div
+              className={cn(
+                'w-2.5 h-2.5 rounded-full transition-colors',
+                phase === 'error' ? 'bg-red-500' : 'bg-zinc-700'
+              )}
+            />
+            <div
+              className={cn(
+                'w-2.5 h-2.5 rounded-full transition-colors',
+                phase === 'running'
+                  ? 'bg-amber-500/70 animate-pulse'
+                  : 'bg-zinc-700'
+              )}
+            />
+            <div
+              className={cn(
+                'w-2.5 h-2.5 rounded-full transition-colors',
+                phase === 'done' ? 'bg-emerald-500' : 'bg-zinc-700'
+              )}
+            />
           </div>
           <span className="text-[11px] text-zinc-500 font-mono truncate">
             <span className="text-zinc-600">$</span> accumark scan-hplc
@@ -157,12 +198,20 @@ function ScanConsole({ phase, logs, progress, matchCount, onClose }: ScanConsole
         className="bg-[#0d0d0d] px-3 py-3 space-y-1 max-h-52 overflow-y-auto"
       >
         {logs.map((line, i) => (
-          <div key={i} className={cn('font-mono text-[11px] leading-tight', colorForLevel(line.level))}>
+          <div
+            key={i}
+            className={cn(
+              'font-mono text-[11px] leading-tight',
+              colorForLevel(line.level)
+            )}
+          >
             {line.msg}
           </div>
         ))}
         {logs.length === 0 && (
-          <div className="text-zinc-700 font-mono text-[11px]">Initialising{dots}</div>
+          <div className="text-zinc-700 font-mono text-[11px]">
+            Initialising{dots}
+          </div>
         )}
       </div>
 
@@ -173,7 +222,8 @@ function ScanConsole({ phase, logs, progress, matchCount, onClose }: ScanConsole
         )}
         {phase === 'done' && (
           <span className="text-emerald-500/70">
-            ✓ scan complete — {matchCount} match{matchCount !== 1 ? 'es' : ''} found
+            ✓ scan complete — {matchCount} match{matchCount !== 1 ? 'es' : ''}{' '}
+            found
           </span>
         )}
         {phase === 'error' && (
@@ -197,19 +247,57 @@ export function SamplePreps() {
 
   const [preps, setPreps] = useState<SamplePrep[]>([])
   const [loading, setLoading] = useState(true)
+
+  // SLA column (v1.11.1): same indicator + breakdown tooltip as the Order
+  // Status / inbox columns. Subjects come from the BE's additive per-row
+  // `sla` block; the dept->group bridge + profile-aware shared resolver do
+  // the tier work (priority > profile > group > default).
+  const { data: serviceGroups = [] } = useServiceGroups()
+  const deptToGroup = useMemo(
+    () => departmentToGroupId(serviceGroups),
+    [serviceGroups]
+  )
+  const slaSubjects: SlaSubject[] = useMemo(
+    () =>
+      preps
+        .filter(p => p.sla?.received_at)
+        .map(p => ({
+          key: String(p.id),
+          priority: (p.sla?.priority as InboxPriority) || 'normal',
+          groupId:
+            p.sla?.department_id != null
+              ? (deptToGroup.get(p.sla.department_id) ?? null)
+              : null,
+          receivedAt: p.sla?.received_at ?? null,
+          keywords: p.sla?.keywords ?? [],
+        })),
+    [preps, deptToGroup]
+  )
+  const {
+    byKey: slaByKey,
+    isLoading: slaLoading,
+    isError: slaError,
+  } = useSlaForSubjects(slaSubjects)
   const [error, setError] = useState<string | null>(null)
   const [searchInput, setSearchInput] = useState('')
   const [openingId, setOpeningId] = useState<number | null>(null)
   const [updatingStatusId, setUpdatingStatusId] = useState<number | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<SamplePrep | null>(null)
   const [deleting, setDeleting] = useState(false)
-  const [standardFilter, setStandardFilter] = useState<'all' | 'standard' | 'production'>('all')
+  const [standardFilter, setStandardFilter] = useState<
+    'all' | 'standard' | 'production'
+  >('all')
 
   // Scan state
   const [scanPhase, setScanPhase] = useState<ScanPhase>('idle')
   const [scanLogs, setScanLogs] = useState<HplcScanLogLine[]>([])
-  const [scanProgress, setScanProgress] = useState<{ current: number; total: number } | null>(null)
-  const [scanMatches, setScanMatches] = useState<Map<number, HplcScanMatch>>(new Map())
+  const [scanProgress, setScanProgress] = useState<{
+    current: number
+    total: number
+  } | null>(null)
+  const [scanMatches, setScanMatches] = useState<Map<number, HplcScanMatch>>(
+    new Map()
+  )
   const [showConsole, setShowConsole] = useState(false)
   const cancelScanRef = useRef<(() => void) | null>(null)
   // Scan HPLC temporarily disabled (2026-07-09 hotfix). The whole-root crawl +
@@ -226,35 +314,49 @@ export function SamplePreps() {
   // scanMatches, so Process HPLC works identically downstream.
   const [overrideTarget, setOverrideTarget] = useState<SamplePrep | null>(null)
   const [overrideLoading, setOverrideLoading] = useState(false)
-  const [overrideTab, setOverrideTab] = useState<'sharepoint' | 'local'>('local')
+  const [overrideTab, setOverrideTab] = useState<'sharepoint' | 'local'>(
+    'local'
+  )
 
-  const load = useCallback(async (q?: string) => {
-    setLoading(true)
-    setError(null)
-    try {
-      const data = await listSamplePreps({
-        search: q || undefined,
-        is_standard: standardFilter === 'all' ? undefined : standardFilter === 'standard',
-        // Completed preps are excluded SERVER-side (they show on the History
-        // page) so the limit window applies to ACTIVE preps only — filtering
-        // client-side after the newest-100 fetch hid older active preps.
-        exclude_statuses: HIDDEN_PREP_STATUSES,
-        limit: 500,
-      })
-      // Belt-and-braces re-filter: keeps the page correct across deploy skew
-      // (new frontend against a backend that ignores exclude_statuses).
-      setPreps(data.filter(p => !HIDDEN_PREP_STATUSES.includes(p.status)))
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load sample preps')
-    } finally {
-      setLoading(false)
-    }
-  }, [standardFilter])
-
-  useEffect(() => { load() }, [load])
+  const load = useCallback(
+    async (q?: string) => {
+      setLoading(true)
+      setError(null)
+      try {
+        const data = await listSamplePreps({
+          search: q || undefined,
+          is_standard:
+            standardFilter === 'all'
+              ? undefined
+              : standardFilter === 'standard',
+          // Completed preps are excluded SERVER-side (they show on the History
+          // page) so the limit window applies to ACTIVE preps only — filtering
+          // client-side after the newest-100 fetch hid older active preps.
+          exclude_statuses: HIDDEN_PREP_STATUSES,
+          limit: 500,
+        })
+        // Belt-and-braces re-filter: keeps the page correct across deploy skew
+        // (new frontend against a backend that ignores exclude_statuses).
+        setPreps(data.filter(p => !HIDDEN_PREP_STATUSES.includes(p.status)))
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : 'Failed to load sample preps'
+        )
+      } finally {
+        setLoading(false)
+      }
+    },
+    [standardFilter]
+  )
 
   useEffect(() => {
-    const t = setTimeout(() => { load(searchInput || undefined) }, 400)
+    load()
+  }, [load])
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      load(searchInput || undefined)
+    }, 400)
     return () => clearTimeout(t)
   }, [searchInput, load])
 
@@ -263,17 +365,23 @@ export function SamplePreps() {
   async function openInWizard(prep: SamplePrep) {
     if (openingId != null) return
     if (!prep.wizard_session_id) {
-      alert(`Sample prep ${prep.sample_id} has no linked wizard session to edit.`)
+      alert(
+        `Sample prep ${prep.sample_id} has no linked wizard session to edit.`
+      )
       return
     }
     setOpeningId(prep.id)
     try {
       const session = await getWizardSession(prep.wizard_session_id)
-      useWizardStore.getState().startSession(session, prep.components_json ?? [])
+      useWizardStore
+        .getState()
+        .startSession(session, prep.components_json ?? [])
       useWizardStore.getState().setCurrentStep(1)
       navigateTo('hplc-analysis', 'new-analysis')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load wizard session')
+      setError(
+        err instanceof Error ? err.message : 'Failed to load wizard session'
+      )
     } finally {
       setOpeningId(null)
     }
@@ -285,7 +393,9 @@ export function SamplePreps() {
     setUpdatingStatusId(prep.id)
     try {
       const updated = await updateSamplePrep(prep.id, { status: newStatus })
-      setPreps(prev => prev.map(p => p.id === prep.id ? { ...p, status: updated.status } : p))
+      setPreps(prev =>
+        prev.map(p => (p.id === prep.id ? { ...p, status: updated.status } : p))
+      )
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update status')
     } finally {
@@ -303,7 +413,8 @@ export function SamplePreps() {
       setPreps(prev => prev.filter(p => p.id !== deleteTarget.id))
       setDeleteTarget(null)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to delete sample prep'
+      const msg =
+        err instanceof Error ? err.message : 'Failed to delete sample prep'
       if (msg.includes('404')) {
         setPreps(prev => prev.filter(p => p.id !== deleteTarget.id))
         setDeleteTarget(null)
@@ -327,11 +438,12 @@ export function SamplePreps() {
     setShowConsole(true)
 
     const cancel = scanSamplePrepsHplc({
-      onLog: (line) => setScanLogs(prev => [...prev, line]),
-      onMatch: (match) => setScanMatches(prev => new Map(prev).set(match.prep_id, match)),
+      onLog: line => setScanLogs(prev => [...prev, line]),
+      onMatch: match =>
+        setScanMatches(prev => new Map(prev).set(match.prep_id, match)),
       onProgress: (current, total) => setScanProgress({ current, total }),
-      onDone: (_matches) => setScanPhase('done'),
-      onError: (msg) => {
+      onDone: _matches => setScanPhase('done'),
+      onError: msg => {
         setScanLogs(prev => [...prev, { msg: `Error: ${msg}`, level: 'error' }])
         setScanPhase('error')
       },
@@ -346,7 +458,11 @@ export function SamplePreps() {
 
   // ── HPLC folder override ─────────────────────────────────────────────────────
 
-  async function applyFolderOverride(prep: SamplePrep, path: string, folderName: string) {
+  async function applyFolderOverride(
+    prep: SamplePrep,
+    path: string,
+    folderName: string
+  ) {
     setOverrideLoading(true)
     try {
       const res = await getHplcFolderMatch(path)
@@ -369,9 +485,12 @@ export function SamplePreps() {
       setScanMatches(prev => new Map(prev).set(prep.id, match))
       setOverrideTarget(null)
       setOverrideTab('local')
-      toast.success(`"${res.folder_name}" pinned to ${prep.senaite_sample_id ?? prep.sample_id}`, {
-        description: `${res.peak_files.length} PeakData, ${res.chrom_files.length} chromatogram file(s) — use Process HPLC.`,
-      })
+      toast.success(
+        `"${res.folder_name}" pinned to ${prep.senaite_sample_id ?? prep.sample_id}`,
+        {
+          description: `${res.peak_files.length} PeakData, ${res.chrom_files.length} chromatogram file(s) — use Process HPLC.`,
+        }
+      )
     } catch (e) {
       toast.error('Folder check failed', {
         description: e instanceof Error ? e.message : 'Unknown error',
@@ -381,7 +500,11 @@ export function SamplePreps() {
     }
   }
 
-  function applyLocalOverride(prep: SamplePrep, folderName: string, localFiles: LocalHplcFile[]) {
+  function applyLocalOverride(
+    prep: SamplePrep,
+    folderName: string,
+    localFiles: LocalHplcFile[]
+  ) {
     const peakCount = localFiles.filter(f => f.kind === 'peak').length
     if (peakCount === 0) {
       toast.error(`No *_PeakData.csv files in "${folderName}"`, {
@@ -404,9 +527,12 @@ export function SamplePreps() {
     setOverrideTarget(null)
     setOverrideTab('local')
     const chromCount = localFiles.filter(f => f.kind === 'chrom').length
-    toast.success(`"${folderName}" pinned to ${prep.senaite_sample_id ?? prep.sample_id}`, {
-      description: `${peakCount} PeakData, ${chromCount} chromatogram file(s) — use Process HPLC.`,
-    })
+    toast.success(
+      `"${folderName}" pinned to ${prep.senaite_sample_id ?? prep.sample_id}`,
+      {
+        description: `${peakCount} PeakData, ${chromCount} chromatogram file(s) — use Process HPLC.`,
+      }
+    )
   }
 
   // ── Render ────────────────────────────────────────────────────────────────────
@@ -421,12 +547,20 @@ export function SamplePreps() {
             Sample Preps
           </h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Completed HPLC sample preparation records saved to Integration-Services.
+            Completed HPLC sample preparation records saved to
+            Integration-Services.
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => load(searchInput || undefined)} disabled={loading}>
-            <RefreshCw className={`h-4 w-4 mr-1.5 ${loading ? 'animate-spin' : ''}`} />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => load(searchInput || undefined)}
+            disabled={loading}
+          >
+            <RefreshCw
+              className={`h-4 w-4 mr-1.5 ${loading ? 'animate-spin' : ''}`}
+            />
             Refresh
           </Button>
           {SCAN_HPLC_ENABLED && (
@@ -438,13 +572,20 @@ export function SamplePreps() {
               className="gap-1.5"
             >
               {scanPhase === 'running' ? (
-                <><Loader2 className="h-4 w-4 animate-spin" /> Scanning...</>
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" /> Scanning...
+                </>
               ) : (
-                <><ScanLine className="h-4 w-4" /> Scan HPLC</>
+                <>
+                  <ScanLine className="h-4 w-4" /> Scan HPLC
+                </>
               )}
             </Button>
           )}
-          <Button size="sm" onClick={() => navigateTo('hplc-analysis', 'new-analysis')}>
+          <Button
+            size="sm"
+            onClick={() => navigateTo('hplc-analysis', 'new-analysis')}
+          >
             <Plus className="h-4 w-4 mr-1.5" />
             New Prep
           </Button>
@@ -476,7 +617,11 @@ export function SamplePreps() {
         </div>
         <select
           value={standardFilter}
-          onChange={e => setStandardFilter(e.target.value as 'all' | 'standard' | 'production')}
+          onChange={e =>
+            setStandardFilter(
+              e.target.value as 'all' | 'standard' | 'production'
+            )
+          }
           className="rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
         >
           <option value="all">All Preps</option>
@@ -497,29 +642,60 @@ export function SamplePreps() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b bg-muted/50">
-                <th className="px-4 py-3 text-left font-medium text-muted-foreground">Sample ID</th>
-                <th className="px-4 py-3 text-left font-medium text-muted-foreground">Peptide</th>
-                <th className="px-4 py-3 text-right font-medium text-muted-foreground">Declared Wt.</th>
-                <th className="px-4 py-3 text-right font-medium text-muted-foreground">Target Conc.</th>
-                <th className="px-4 py-3 text-right font-medium text-muted-foreground">Actual Conc.</th>
-                <th className="px-4 py-3 text-left font-medium text-muted-foreground">Status</th>
-                <th className="px-4 py-3 text-left font-medium text-muted-foreground">Created</th>
-                <th className="px-4 py-3 text-left font-medium text-muted-foreground">Created By</th>
-                <th className="px-4 py-3 text-right font-medium text-muted-foreground">Actions</th>
+                <th className="px-4 py-3 text-left font-medium text-muted-foreground">
+                  Sample ID
+                </th>
+                <th className="px-4 py-3 text-left font-medium text-muted-foreground">
+                  Peptide
+                </th>
+                <th className="px-4 py-3 text-right font-medium text-muted-foreground">
+                  Declared Wt.
+                </th>
+                <th className="px-4 py-3 text-right font-medium text-muted-foreground">
+                  Target Conc.
+                </th>
+                <th className="px-4 py-3 text-right font-medium text-muted-foreground">
+                  Actual Conc.
+                </th>
+                <th className="px-4 py-3 text-left font-medium text-muted-foreground">
+                  SLA
+                </th>
+                <th className="px-4 py-3 text-left font-medium text-muted-foreground">
+                  Status
+                </th>
+                <th className="px-4 py-3 text-left font-medium text-muted-foreground">
+                  Created
+                </th>
+                <th className="px-4 py-3 text-left font-medium text-muted-foreground">
+                  Created By
+                </th>
+                <th className="px-4 py-3 text-right font-medium text-muted-foreground">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody>
               {loading && preps.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">Loading…</td>
+                  <td
+                    colSpan={9}
+                    className="px-4 py-8 text-center text-muted-foreground"
+                  >
+                    Loading…
+                  </td>
                 </tr>
               ) : preps.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
+                  <td
+                    colSpan={9}
+                    className="px-4 py-8 text-center text-muted-foreground"
+                  >
                     No sample preps found.{' '}
                     <button
                       className="underline text-primary"
-                      onClick={() => navigateTo('hplc-analysis', 'new-analysis')}
+                      onClick={() =>
+                        navigateTo('hplc-analysis', 'new-analysis')
+                      }
                     >
                       Start a new prep
                     </button>
@@ -535,12 +711,18 @@ export function SamplePreps() {
                       className="border-b hover:bg-muted/40 cursor-pointer transition-colors"
                       onClick={() => openInWizard(prep)}
                     >
-                      <td className="px-4 py-3 font-mono font-medium">{prep.senaite_sample_id ?? '—'}</td>
+                      <td className="px-4 py-3 font-mono font-medium">
+                        {prep.senaite_sample_id ?? '—'}
+                      </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5">
-                          {prep.peptide_abbreviation
-                            ? <span className="font-medium">{prep.peptide_abbreviation}</span>
-                            : <span className="text-muted-foreground">—</span>}
+                          {prep.peptide_abbreviation ? (
+                            <span className="font-medium">
+                              {prep.peptide_abbreviation}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
                           {prep.is_standard && (
                             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">
                               STD
@@ -548,12 +730,31 @@ export function SamplePreps() {
                           )}
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-right font-mono">{fmtNum(prep.declared_weight_mg, 2, 'mg')}</td>
-                      <td className="px-4 py-3 text-right font-mono">{fmtNum(prep.target_conc_ug_ml, 1, 'µg/mL')}</td>
-                      <td className="px-4 py-3 text-right font-mono">{fmtNum(prep.actual_conc_ug_ml, 2, 'µg/mL')}</td>
+                      <td className="px-4 py-3 text-right font-mono">
+                        {fmtNum(prep.declared_weight_mg, 2, 'mg')}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono">
+                        {fmtNum(prep.target_conc_ug_ml, 1, 'µg/mL')}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono">
+                        {fmtNum(prep.actual_conc_ug_ml, 2, 'µg/mL')}
+                      </td>
+
+                      {/* SLA — same indicator + breakdown tooltip as the
+                          Order Status / inbox columns */}
+                      <td className="px-4 py-3">
+                        <SlaAgeIndicator
+                          snapshot={slaByKey.get(String(prep.id)) ?? null}
+                          isLoading={slaLoading}
+                          isError={slaError}
+                        />
+                      </td>
 
                       {/* Status selector */}
-                      <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                      <td
+                        className="px-4 py-3"
+                        onClick={e => e.stopPropagation()}
+                      >
                         <div className="relative">
                           {updatingStatusId === prep.id && (
                             <Loader2 className="absolute right-1 top-1/2 -translate-y-1/2 h-3 w-3 animate-spin text-muted-foreground" />
@@ -565,18 +766,31 @@ export function SamplePreps() {
                             className="appearance-none rounded-full px-2 py-0.5 text-xs font-medium border-0 cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary"
                             style={{
                               backgroundColor:
-                                prep.status === 'awaiting_hplc'  ? 'rgb(37 99 235)'
-                                : prep.status === 'hplc_complete' ? 'rgb(13 148 136)'
-                                : prep.status === 'curve_created' ? 'rgb(5 150 105)'
-                                : prep.status === 'completed'     ? 'rgb(22 163 74)'
-                                : prep.status === 'on_hold'       ? 'rgb(245 158 11)'
-                                : prep.status === 'review'        ? 'rgb(147 51 234)'
-                                : 'transparent',
+                                prep.status === 'awaiting_hplc'
+                                  ? 'rgb(37 99 235)'
+                                  : prep.status === 'hplc_complete'
+                                    ? 'rgb(13 148 136)'
+                                    : prep.status === 'curve_created'
+                                      ? 'rgb(5 150 105)'
+                                      : prep.status === 'completed'
+                                        ? 'rgb(22 163 74)'
+                                        : prep.status === 'on_hold'
+                                          ? 'rgb(245 158 11)'
+                                          : prep.status === 'review'
+                                            ? 'rgb(147 51 234)'
+                                            : 'transparent',
                               color: 'white',
                             }}
                           >
                             {STATUSES.map(s => (
-                              <option key={s.value} value={s.value} style={{ background: '#1f2937', color: 'white' }}>
+                              <option
+                                key={s.value}
+                                value={s.value}
+                                style={{
+                                  background: '#1f2937',
+                                  color: 'white',
+                                }}
+                              >
                                 {s.label}
                               </option>
                             ))}
@@ -584,19 +798,28 @@ export function SamplePreps() {
                         </div>
                       </td>
 
-                      <td className="px-4 py-3 text-muted-foreground text-xs">{fmtDate(prep.created_at)}</td>
-                      <td className="px-4 py-3 text-muted-foreground text-xs">{prep.created_by_email ?? '—'}</td>
+                      <td className="px-4 py-3 text-muted-foreground text-xs">
+                        {fmtDate(prep.created_at)}
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground text-xs">
+                        {prep.created_by_email ?? '—'}
+                      </td>
 
                       {/* Actions */}
-                      <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                      <td
+                        className="px-4 py-3"
+                        onClick={e => e.stopPropagation()}
+                      >
                         <div className="flex items-center justify-end gap-1.5">
                           {/* Process HPLC — shown when scan found a match (or a
                               folder was pinned via the override picker) */}
                           {match && (
                             <button
-                              title={match.is_override
-                                ? `Process HPLC data from ${match.source === 'local' ? 'local folder' : 'override folder'}: ${match.folder_name}`
-                                : 'Process HPLC data'}
+                              title={
+                                match.is_override
+                                  ? `Process HPLC data from ${match.source === 'local' ? 'local folder' : 'override folder'}: ${match.folder_name}`
+                                  : 'Process HPLC data'
+                              }
                               className={cn(
                                 'flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium border transition-colors',
                                 match.is_override
@@ -615,17 +838,25 @@ export function SamplePreps() {
                           <button
                             title="Pick HPLC data folder (override)"
                             className="p-1 rounded text-muted-foreground hover:text-amber-500 hover:bg-amber-500/10 transition-colors"
-                            onClick={e => { e.stopPropagation(); setOverrideTarget(prep) }}
+                            onClick={e => {
+                              e.stopPropagation()
+                              setOverrideTarget(prep)
+                            }}
                           >
                             <FolderSearch className="h-4 w-4" />
                           </button>
-                          {openingId === prep.id
-                            ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                            : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+                          {openingId === prep.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                          ) : (
+                            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                          )}
                           <button
                             title="Delete sample prep"
                             className="p-1 rounded text-muted-foreground hover:text-red-500 hover:bg-red-500/10 transition-colors"
-                            onClick={e => { e.stopPropagation(); setDeleteTarget(prep) }}
+                            onClick={e => {
+                              e.stopPropagation()
+                              setDeleteTarget(prep)
+                            }}
                           >
                             <Trash2 className="h-4 w-4" />
                           </button>
@@ -641,31 +872,45 @@ export function SamplePreps() {
       )}
 
       <p className="text-xs text-muted-foreground">
-        {!loading && `${preps.length} record${preps.length !== 1 ? 's' : ''} shown`}
-        {scanMatches.size > 0 && ` · ${scanMatches.size} HPLC match${scanMatches.size !== 1 ? 'es' : ''} found`}
+        {!loading &&
+          `${preps.length} record${preps.length !== 1 ? 's' : ''} shown`}
+        {scanMatches.size > 0 &&
+          ` · ${scanMatches.size} HPLC match${scanMatches.size !== 1 ? 'es' : ''} found`}
       </p>
 
       {/* HPLC Processing flyout */}
       {flyoutPrep && flyoutMatch && (
         <SamplePrepHplcFlyout
           open={true}
-          onClose={() => { setFlyoutPrep(null); setFlyoutMatch(null) }}
+          onClose={() => {
+            setFlyoutPrep(null)
+            setFlyoutMatch(null)
+          }}
           prep={flyoutPrep}
           match={flyoutMatch}
         />
       )}
 
       {/* HPLC data folder override picker — SharePoint or Local files */}
-      <Dialog open={overrideTarget !== null} onOpenChange={v => { if (!v && !overrideLoading) { setOverrideTarget(null); setOverrideTab('local') } }}>
+      <Dialog
+        open={overrideTarget !== null}
+        onOpenChange={v => {
+          if (!v && !overrideLoading) {
+            setOverrideTarget(null)
+            setOverrideTab('local')
+          }
+        }}
+      >
         <DialogContent className="sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>
-              Pick HPLC data folder — {overrideTarget?.senaite_sample_id ?? overrideTarget?.sample_id}
+              Pick HPLC data folder —{' '}
+              {overrideTarget?.senaite_sample_id ?? overrideTarget?.sample_id}
             </DialogTitle>
           </DialogHeader>
           <p className="text-xs text-muted-foreground -mt-2">
-            Pin a folder&apos;s PeakData/chromatogram CSVs to this prep for processing
-            (this session only; nothing is saved to the prep).
+            Pin a folder&apos;s PeakData/chromatogram CSVs to this prep for
+            processing (this session only; nothing is saved to the prep).
           </p>
           {overrideLoading && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -674,10 +919,19 @@ export function SamplePreps() {
             </div>
           )}
           {overrideTarget && (
-            <Tabs value={overrideTab} onValueChange={v => setOverrideTab(v as 'sharepoint' | 'local')}>
+            <Tabs
+              value={overrideTab}
+              onValueChange={v => setOverrideTab(v as 'sharepoint' | 'local')}
+            >
               <TabsList>
-                <TabsTrigger value="sharepoint"><Cloud className="h-4 w-4 mr-1" />SharePoint</TabsTrigger>
-                <TabsTrigger value="local"><HardDrive className="h-4 w-4 mr-1" />Local files</TabsTrigger>
+                <TabsTrigger value="sharepoint">
+                  <Cloud className="h-4 w-4 mr-1" />
+                  SharePoint
+                </TabsTrigger>
+                <TabsTrigger value="local">
+                  <HardDrive className="h-4 w-4 mr-1" />
+                  Local files
+                </TabsTrigger>
               </TabsList>
               <TabsContent value="sharepoint">
                 <SharePointBrowser
@@ -712,19 +966,39 @@ export function SamplePreps() {
               </div>
               <div>
                 <h2 className="font-semibold text-base">Delete Sample Prep?</h2>
-                <p className="text-sm text-muted-foreground">This action cannot be undone.</p>
+                <p className="text-sm text-muted-foreground">
+                  This action cannot be undone.
+                </p>
               </div>
             </div>
             <p className="text-sm mb-6">
               You are about to permanently delete{' '}
-              <span className="font-mono font-semibold">{deleteTarget.sample_id}</span>.
+              <span className="font-mono font-semibold">
+                {deleteTarget.sample_id}
+              </span>
+              .
             </p>
             <div className="flex gap-3 justify-end">
-              <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleting}>
+              <Button
+                variant="outline"
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleting}
+              >
                 Cancel
               </Button>
-              <Button variant="destructive" onClick={confirmDelete} disabled={deleting}>
-                {deleting ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Deleting…</> : 'Delete'}
+              <Button
+                variant="destructive"
+                onClick={confirmDelete}
+                disabled={deleting}
+              >
+                {deleting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Deleting…
+                  </>
+                ) : (
+                  'Delete'
+                )}
               </Button>
             </div>
           </div>

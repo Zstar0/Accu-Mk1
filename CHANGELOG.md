@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.11.1 — 2026-08-27
+
+### Added
+
+- **SLA column on the Sample Preps page** — same indicator + breakdown
+  tooltip as the Order Status and inbox columns. GET /sample-preps rows
+  gain an additive `sla` block (received date, priority, live analysis
+  keywords, department) batch-resolved from the lims tables — vial link
+  preferred (prep's lims_sub_sample_pk, then vial-id match), parent
+  fallback for legacy whole-sample preps. Enrichment is fail-open: a
+  lims-side error leaves rows without the block instead of failing the
+  list. The FE reuses the shared profile-aware subject resolver
+  (priority > profile > group > default).
+
 ## v1.11.0 — 2026-08-27
 
 Worksheets performance + inbox SLA column (PRs #141, #142, #143).
