@@ -2,7 +2,11 @@ import { useState } from 'react'
 import { ChevronDown, ChevronRight, ExternalLink } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
-import type { ExplorerOrder, SenaiteLookupResult } from '@/lib/api'
+import type {
+  ExplorerOrder,
+  SenaiteLookupResult,
+  OrderedProduct,
+} from '@/lib/api'
 import type { OrderSlaVerdict } from '@/lib/sla-resolution'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 import { FlagIndicator } from '@/components/flags/FlagIndicator'
@@ -29,6 +33,8 @@ export function OrderRow({
   order,
   wordpressHost,
   sampleLookupMap,
+  productsBySampleId,
+  productColorFor,
   activeAnalysisStates,
   defaultExpanded,
   highlightSampleId,
@@ -39,6 +45,11 @@ export function OrderRow({
 }: {
   order: ExplorerOrder
   wordpressHost: string
+  /** senaite_id -> ordered products (v1.11.8, payload-derived). Undefined =
+   *  chips off (the Order Status Products toggle). */
+  productsBySampleId?: Map<string, OrderedProduct[]>
+  /** Passed through to SampleCard (see its productColorFor doc). */
+  productColorFor?: (p: OrderedProduct) => string
   sampleLookupMap: Map<
     string,
     {
@@ -99,7 +110,9 @@ export function OrderRow({
   const sampleEntries = order.sample_results
     ? Object.entries(order.sample_results).map(([key, val]) => {
         const idx = parseInt(key, 10) - 1
-        const payloadSample = Number.isNaN(idx) ? undefined : payloadSamples?.[idx]
+        const payloadSample = Number.isNaN(idx)
+          ? undefined
+          : payloadSamples?.[idx]
         const trimmed = payloadSample?.sample_identity?.trim()
         const trimmedLot = payloadSample?.lot_code?.trim()
         return {
@@ -158,211 +171,223 @@ export function OrderRow({
 
   return (
     <>
-    <tr
-      // Phase 30 — search-result test/E2E targeting. `data-expanded` echoes the
-      // PROP (OrderRow has no internal collapse state today; the prop signals
-      // search-mode intent for callers and downstream snapshot/E2E selectors).
-      // `data-highlight-sample-id` carries the matching sample id so E2E can
-      // assert on it without having to walk into the SampleCard children.
-      data-testid="order-row"
-      data-expanded={defaultExpanded ? 'true' : 'false'}
-      data-highlight-sample-id={highlightSampleId ?? ''}
-      className={cn(
-        'align-top border-l-3',
-        done && 'opacity-45',
-        hasAttention && 'bg-amber-500/[0.03]',
-        worstState
-          ? (STATE_BORDER_CLASS[worstState] ?? 'border-l-transparent')
-          : 'border-l-transparent'
-      )}
-      title={worstLabel ? `Earliest sample stage: ${worstLabel}` : undefined}
-    >
-      <td className="py-3 px-3 whitespace-nowrap">
-        <div className="flex items-center gap-1.5">
-          {showFinance && (
-            <button
-              type="button"
-              onClick={() => setFinanceExpanded(e => !e)}
-              aria-expanded={financeExpanded}
-              aria-label={
-                financeExpanded ? 'Hide finance details' : 'Show finance details'
-              }
-              className="text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm"
-            >
-              {financeExpanded ? (
-                <ChevronDown className="h-4 w-4" />
-              ) : (
-                <ChevronRight className="h-4 w-4" />
-              )}
-            </button>
-          )}
-          <a
-            href={wpUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 font-mono text-sm text-primary hover:underline"
-          >
-            {order.order_id}
-            <ExternalLink className="h-3 w-3" />
-          </a>
-          <FlagIndicator
-            scope={{
-              kind: 'order',
-              orderId: order.order_id,
-              sampleIds: flagSampleIds,
-              label: `#${order.order_number}`,
-            }}
-            variant="pill"
-          />
-        </div>
-      </td>
-      <td className="py-3 px-3">
-        {email ? (
-          <span className="text-sm block" title={email}>
-            {email}
-          </span>
-        ) : (
-          <span className="text-muted-foreground">{'—'}</span>
+      <tr
+        // Phase 30 — search-result test/E2E targeting. `data-expanded` echoes the
+        // PROP (OrderRow has no internal collapse state today; the prop signals
+        // search-mode intent for callers and downstream snapshot/E2E selectors).
+        // `data-highlight-sample-id` carries the matching sample id so E2E can
+        // assert on it without having to walk into the SampleCard children.
+        data-testid="order-row"
+        data-expanded={defaultExpanded ? 'true' : 'false'}
+        data-highlight-sample-id={highlightSampleId ?? ''}
+        className={cn(
+          'align-top border-l-3',
+          done && 'opacity-45',
+          hasAttention && 'bg-amber-500/[0.03]',
+          worstState
+            ? (STATE_BORDER_CLASS[worstState] ?? 'border-l-transparent')
+            : 'border-l-transparent'
         )}
-      </td>
-      <td className="py-3 px-3 whitespace-nowrap">
-        {progress.total > 0 ? (
-          <div className="flex items-center gap-2">
-            <div className="w-16 h-1.5 rounded-full bg-muted overflow-hidden">
-              <div
-                className={cn(
-                  'h-full rounded-full transition-all',
-                  progress.done === progress.total
-                    ? 'bg-green-500'
-                    : 'bg-blue-500'
+        title={worstLabel ? `Earliest sample stage: ${worstLabel}` : undefined}
+      >
+        <td className="py-3 px-3 whitespace-nowrap">
+          <div className="flex items-center gap-1.5">
+            {showFinance && (
+              <button
+                type="button"
+                onClick={() => setFinanceExpanded(e => !e)}
+                aria-expanded={financeExpanded}
+                aria-label={
+                  financeExpanded
+                    ? 'Hide finance details'
+                    : 'Show finance details'
+                }
+                className="text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm"
+              >
+                {financeExpanded ? (
+                  <ChevronDown className="h-4 w-4" />
+                ) : (
+                  <ChevronRight className="h-4 w-4" />
                 )}
-                style={{ width: `${(progress.done / progress.total) * 100}%` }}
-              />
-            </div>
-            <span className="text-xs font-mono text-muted-foreground">
-              {progress.done}/{progress.total}
-            </span>
+              </button>
+            )}
+            <a
+              href={wpUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 font-mono text-sm text-primary hover:underline"
+            >
+              {order.order_id}
+              <ExternalLink className="h-3 w-3" />
+            </a>
+            <FlagIndicator
+              scope={{
+                kind: 'order',
+                orderId: order.order_id,
+                sampleIds: flagSampleIds,
+                label: `#${order.order_number}`,
+              }}
+              variant="pill"
+            />
           </div>
-        ) : (
-          <span className="text-xs text-muted-foreground">{'—'}</span>
-        )}
-      </td>
-      <td className="py-3 px-3 whitespace-nowrap text-sm text-muted-foreground">
-        {formatDate(order.created_at)}
-      </td>
-      <td className="py-3 px-3 whitespace-nowrap align-top">
-        <div className="flex flex-col gap-0.5 text-xs">
-          <span
-            title={
-              order.completed_at
-                ? 'Total time from order placed to completion'
-                : 'Elapsed since the order was placed'
-            }
-          >
-            <span className="text-muted-foreground mr-1">Order</span>
-            <span
-              data-testid="order-time-since-order"
-              className={cn(
-                'font-mono',
-                order.completed_at ? 'text-green-600' : 'text-yellow-600'
-              )}
-            >
-              {formatProcessingTime(order.created_at, order.completed_at)}
+        </td>
+        <td className="py-3 px-3">
+          {email ? (
+            <span className="text-sm block" title={email}>
+              {email}
             </span>
-          </span>
-          <span
-            title={
-              receivedAt
-                ? 'Elapsed since the lab received a sample (outstanding)'
-                : 'No sample received yet'
-            }
-          >
-            <span className="text-muted-foreground mr-1">Lab</span>
-            <span
-              data-testid="order-outstanding"
-              className="font-mono text-muted-foreground"
-            >
-              {outstanding ?? 'Awaiting sample'}
-            </span>
-          </span>
-        </div>
-      </td>
-      <td className="py-3 px-3 whitespace-nowrap align-top">
-        <OrderSlaCell verdict={slaVerdict ?? { color: 'awaiting' }} isLoading={!slaVerdict} />
-      </td>
-      <td className="py-3 px-3">
-        {visibleSampleEntries.length === 0 ? (
-          <span className="text-muted-foreground text-xs">
-            {sampleEntries.length === 0 ? 'No samples' : 'No matching samples'}
-          </span>
-        ) : (
-          <div className="flex flex-wrap gap-2 max-w-[1060px]">
-            {visibleSampleEntries.map(s => {
-              // Sample never created in SENAITE (integration failure)
-              if (s.integrationStatus === 'failed' || !s.senaiteId) {
-                return (
-                  <div
-                    key={s.name}
-                    className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 min-w-[160px]"
-                  >
-                    <span className="text-xs font-medium text-destructive">
-                      {s.senaiteId || `Sample ${s.name}`}
-                    </span>
-                    {s.analyte && (
-                      <div
-                        className="text-xs text-muted-foreground truncate mb-1"
-                        title={s.analyte}
-                      >
-                        {s.analyte}
-                      </div>
-                    )}
-                    {s.lot && (
-                      <div
-                        className="text-xs text-muted-foreground truncate mb-1"
-                        title={s.lot}
-                      >
-                        Lot: <HighlightMatch text={s.lot} query={highlightLot} />
-                      </div>
-                    )}
-                    <div className="text-xs text-muted-foreground">
-                      Failed to create in SENAITE
-                    </div>
-                  </div>
-                )
-              }
-              const lookup = sampleLookupMap.get(s.senaiteId)
-              return (
-                <SampleCard
-                  key={s.senaiteId}
-                  sampleId={s.senaiteId}
-                  lookup={lookup?.data}
-                  isLoading={lookup?.isLoading ?? true}
-                  isError={lookup?.isError ?? false}
-                  analyte={s.analyte}
-                  lot={s.lot}
-                  highlightLot={highlightLot}
-                  slaSnapshots={sampleSlaStatusesMap?.get(s.senaiteId)}
+          ) : (
+            <span className="text-muted-foreground">{'—'}</span>
+          )}
+        </td>
+        <td className="py-3 px-3 whitespace-nowrap">
+          {progress.total > 0 ? (
+            <div className="flex items-center gap-2">
+              <div className="w-16 h-1.5 rounded-full bg-muted overflow-hidden">
+                <div
                   className={cn(
-                    highlightSampleId === s.senaiteId &&
-                      'ring-2 ring-primary ring-offset-2'
+                    'h-full rounded-full transition-all',
+                    progress.done === progress.total
+                      ? 'bg-green-500'
+                      : 'bg-blue-500'
                   )}
+                  style={{
+                    width: `${(progress.done / progress.total) * 100}%`,
+                  }}
                 />
-              )
-            })}
+              </div>
+              <span className="text-xs font-mono text-muted-foreground">
+                {progress.done}/{progress.total}
+              </span>
+            </div>
+          ) : (
+            <span className="text-xs text-muted-foreground">{'—'}</span>
+          )}
+        </td>
+        <td className="py-3 px-3 whitespace-nowrap text-sm text-muted-foreground">
+          {formatDate(order.created_at)}
+        </td>
+        <td className="py-3 px-3 whitespace-nowrap align-top">
+          <div className="flex flex-col gap-0.5 text-xs">
+            <span
+              title={
+                order.completed_at
+                  ? 'Total time from order placed to completion'
+                  : 'Elapsed since the order was placed'
+              }
+            >
+              <span className="text-muted-foreground mr-1">Order</span>
+              <span
+                data-testid="order-time-since-order"
+                className={cn(
+                  'font-mono',
+                  order.completed_at ? 'text-green-600' : 'text-yellow-600'
+                )}
+              >
+                {formatProcessingTime(order.created_at, order.completed_at)}
+              </span>
+            </span>
+            <span
+              title={
+                receivedAt
+                  ? 'Elapsed since the lab received a sample (outstanding)'
+                  : 'No sample received yet'
+              }
+            >
+              <span className="text-muted-foreground mr-1">Lab</span>
+              <span
+                data-testid="order-outstanding"
+                className="font-mono text-muted-foreground"
+              >
+                {outstanding ?? 'Awaiting sample'}
+              </span>
+            </span>
           </div>
-        )}
-      </td>
-    </tr>
-    {showFinance && financeExpanded && (
-      <tr data-testid="order-finance-row" className="bg-muted/20">
-        <td colSpan={7} className="p-0">
-          <OrderFinancePanel
-            orderId={order.order_id}
-            enabled={financeExpanded}
+        </td>
+        <td className="py-3 px-3 whitespace-nowrap align-top">
+          <OrderSlaCell
+            verdict={slaVerdict ?? { color: 'awaiting' }}
+            isLoading={!slaVerdict}
           />
         </td>
+        <td className="py-3 px-3">
+          {visibleSampleEntries.length === 0 ? (
+            <span className="text-muted-foreground text-xs">
+              {sampleEntries.length === 0
+                ? 'No samples'
+                : 'No matching samples'}
+            </span>
+          ) : (
+            <div className="flex flex-wrap gap-2 max-w-[1060px]">
+              {visibleSampleEntries.map(s => {
+                // Sample never created in SENAITE (integration failure)
+                if (s.integrationStatus === 'failed' || !s.senaiteId) {
+                  return (
+                    <div
+                      key={s.name}
+                      className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 min-w-[160px]"
+                    >
+                      <span className="text-xs font-medium text-destructive">
+                        {s.senaiteId || `Sample ${s.name}`}
+                      </span>
+                      {s.analyte && (
+                        <div
+                          className="text-xs text-muted-foreground truncate mb-1"
+                          title={s.analyte}
+                        >
+                          {s.analyte}
+                        </div>
+                      )}
+                      {s.lot && (
+                        <div
+                          className="text-xs text-muted-foreground truncate mb-1"
+                          title={s.lot}
+                        >
+                          Lot:{' '}
+                          <HighlightMatch text={s.lot} query={highlightLot} />
+                        </div>
+                      )}
+                      <div className="text-xs text-muted-foreground">
+                        Failed to create in SENAITE
+                      </div>
+                    </div>
+                  )
+                }
+                const lookup = sampleLookupMap.get(s.senaiteId)
+                return (
+                  <SampleCard
+                    key={s.senaiteId}
+                    sampleId={s.senaiteId}
+                    lookup={lookup?.data}
+                    isLoading={lookup?.isLoading ?? true}
+                    isError={lookup?.isError ?? false}
+                    analyte={s.analyte}
+                    products={productsBySampleId?.get(s.senaiteId)}
+                    productColorFor={productColorFor}
+                    lot={s.lot}
+                    highlightLot={highlightLot}
+                    slaSnapshots={sampleSlaStatusesMap?.get(s.senaiteId)}
+                    className={cn(
+                      highlightSampleId === s.senaiteId &&
+                        'ring-2 ring-primary ring-offset-2'
+                    )}
+                  />
+                )
+              })}
+            </div>
+          )}
+        </td>
       </tr>
-    )}
+      {showFinance && financeExpanded && (
+        <tr data-testid="order-finance-row" className="bg-muted/20">
+          <td colSpan={7} className="p-0">
+            <OrderFinancePanel
+              orderId={order.order_id}
+              enabled={financeExpanded}
+            />
+          </td>
+        </tr>
+      )}
     </>
   )
 }

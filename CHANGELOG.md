@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.11.8 — 2026-08-28
+
+### Added
+
+- **Product chips wear their bench colors** — the ordered-product chips
+  on the Sample Details / sub-sample header bar and Order Details card
+  are colored by each product's fulfillment role via the vial-role
+  catalog, matching the boxing lanes and role badges exactly. Role-less
+  products keep the previous violet.
+- **Products toggle on Order Status** — a new toolbar button shows each
+  sample's ordered products as extra-small chips on the cards, in both
+  table and kanban views. Payload-derived (zero extra requests), labels
+  and colors from the profiles catalog, per-user persistence.
+
 ## v1.11.7 — 2026-08-28
 
 ### Fixed
