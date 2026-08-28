@@ -4488,6 +4488,22 @@ export async function transitionAnalysis(
   // Phase 3: route mk1:<id> UIDs to the Mk1 transitions endpoint. The
   // 'retest' kind creates a linked retest row on the Mk1 side and returns
   // the NEW row (retest-aware promote phase).
+  // FastAPI error bodies carry `detail` as either a string or a structured
+  // dict ({code, message, ...}); `new Error(dict)` prints "[object Object]"
+  // in the toast — surface the message, falling back to a JSON dump.
+  const detailMessage = (detail: unknown): string | null => {
+    if (typeof detail === 'string' && detail) return detail
+    if (detail && typeof detail === 'object') {
+      const msg = (detail as { message?: unknown }).message
+      if (typeof msg === 'string' && msg) return msg
+      try {
+        return JSON.stringify(detail)
+      } catch {
+        return null
+      }
+    }
+    return null
+  }
   if (uid.startsWith('mk1:')) {
     const limsId = parseInt(uid.slice('mk1:'.length), 10)
     const response = await fetch(
@@ -4503,7 +4519,9 @@ export async function transitionAnalysis(
     )
     if (!response.ok) {
       const err = await response.json().catch(() => null)
-      throw new Error(err?.detail || `Transition (mk1) failed: ${response.status}`)
+      throw new Error(
+        detailMessage(err?.detail) || `Transition (mk1) failed: ${response.status}`
+      )
     }
     const row = await response.json()
     return {
@@ -4523,7 +4541,9 @@ export async function transitionAnalysis(
   )
   if (!response.ok) {
     const err = await response.json().catch(() => null)
-    throw new Error(err?.detail || `Transition failed: ${response.status}`)
+    throw new Error(
+      detailMessage(err?.detail) || `Transition failed: ${response.status}`
+    )
   }
   return response.json()
 }
