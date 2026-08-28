@@ -20,6 +20,28 @@ def _analyte_names(raw: str | None) -> list[str]:
     return names
 
 
+def _analyte_details(raw: str | None) -> list[dict[str, Any]]:
+    """Name + declared quantity pairs — the receive page's expanded order rows
+    show declared qty, which the names-only flattening above drops."""
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for a in parsed:
+        if isinstance(a, dict) and a.get("name"):
+            q = a.get("declared_quantity")
+            out.append({
+                "name": str(a["name"]),
+                "declared_quantity": None if q in (None, "") else str(q),
+            })
+    return out
+
+
 def registry_rows_to_list(rows: list[LimsSample]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for r in rows:
@@ -45,5 +67,6 @@ def registry_rows_to_list(rows: list[LimsSample]) -> list[dict[str, Any]]:
             "verification_code": r.verification_code,
             "client_lot": r.client_lot,
             "analytes": _analyte_names(r.analytes),
+            "analyte_details": _analyte_details(r.analytes),
         })
     return out

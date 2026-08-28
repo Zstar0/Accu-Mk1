@@ -4606,6 +4606,9 @@ export interface SenaiteSample {
   // SENAITE ClientLot on hydrated items (null on slim catalog-brains rows).
   client_lot: string | null
   analytes: string[]
+  // Registry reads only — name + declared qty pairs for the receive page's
+  // expanded order rows. Absent/empty on SENAITE-sourced lists.
+  analyte_details?: { name: string; declared_quantity: string | null }[]
 }
 
 export interface SenaiteSamplesResponse {
