@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.11.5 — 2026-08-27
+
+### Changed
+
+- **Order Status board populates in seconds** — mk1-source per-sample
+  lookups no longer ride the serialized SENAITE queue (that queue exists
+  only to protect single-threaded Zope). Registry lookups now run 12
+  concurrent through their own limiter, taking the default board (~370
+  samples at ~70ms each) from ~60s of one-at-a-time fetching to a few
+  seconds. SENAITE-source lookups keep both the serial queue and the
+  3-way limiter, byte-identically. The registry route was verified
+  threadpooled (run_in_threadpool) before widening the lane.
+
 ## v1.11.4 — 2026-08-27
 
 ### Changed
