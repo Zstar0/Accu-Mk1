@@ -36,17 +36,23 @@ def _coa_meta(parent) -> dict:
 
 
 def _analyte_slots(parent) -> dict:
-    """{'Analyte1Peptide': label, ...} for slots 1..4 with a label."""
+    """{'Analyte1Peptide': name, ...} for the first 4 list entries with a
+    name. `lims_samples.analytes` is a JSON LIST of
+    {"name": str, "declared_quantity": str|None}, slot = list position
+    (1-based), empty slots omitted (models.py:1236-1238; written by
+    sub_samples.service._parse_analyte_slots). Mirrors
+    sub_samples.registry_inbox._analyte_slot_fields."""
     try:
-        slots = json.loads(parent.analytes) if parent.analytes else {}
+        parsed = json.loads(parent.analytes) if parent.analytes else []
     except (ValueError, TypeError):
         return {}
+    if not isinstance(parsed, list):
+        return {}
     out = {}
-    if isinstance(slots, dict):
-        for n in ("1", "2", "3", "4"):
-            label = (slots.get(n) or {}).get("label") if isinstance(slots.get(n), dict) else None
-            if label:
-                out[f"Analyte{n}Peptide"] = label
+    for slot, entry in enumerate(parsed[:4], start=1):
+        name = (entry or {}).get("name") if isinstance(entry, dict) else None
+        if name:
+            out[f"Analyte{slot}Peptide"] = str(name)
     return out
 
 

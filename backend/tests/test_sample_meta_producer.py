@@ -27,7 +27,10 @@ def parent(db):
         sample_id="TEST-SM-01", status="verified",
         sample_type_title="Peptide Blend", client_sample_id="CS-1",
         declared_total_quantity="20.0", client_lot="LOT-9",
-        analytes=json.dumps({"1": {"label": "BPC-157"}, "2": {"label": "GHK-Cu"}}),
+        analytes=json.dumps([
+            {"name": "BPC-157", "declared_quantity": "10.0"},
+            {"name": "GHK-Cu", "declared_quantity": None},
+        ]),
         coa_meta=json.dumps({"CoaCompanyName": "Acme", "CoaEmail": "a@b.c",
                              "CoaWebsite": "acme.io", "CoaAddress": "1 Way"}),
         company_logo_url="/wp-content/logo.png",
@@ -66,7 +69,8 @@ def test_scalars_use_ar_key_spellings(db, parent):
     assert "Analyte3Peptide" not in meta        # absent slots omitted
     assert meta["CoaCompanyName"] == "Acme"
     for k in SAMPLE_META_SCALARS:
-        assert k in meta or k in ("ChromatographBackgroundUrl",)  # nullable
+        assert k in meta
+    assert meta["ChromatographBackgroundUrl"] is None  # no watermark configured
 
 
 def test_attachment_descriptors_roles_and_urls(db, parent):
