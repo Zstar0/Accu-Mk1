@@ -21453,6 +21453,61 @@ def s2s_upsert_lims_sample(
     return RegistrySampleSignalResponse(sample_id=row.sample_id, native_id=row.native_id)
 
 
+# ── Registry shipping update (logistics capture Slice A, 2026-08-27) ────
+# Called server-to-server by integration-service when a customer saves
+# carrier/tracking in WordPress. Per-sample received-lock (Handler-ruled):
+# only rows still in a pre-received status accept new tracking; a received
+# row keeps the tracking it actually arrived under. See
+# sub_samples.service._PRE_RECEIVED_STATES (same criterion as the receive
+# inbox) and models.LimsSample.shipping_carrier/tracking_number/tracking_url.
+
+class RegistryShippingUpdate(BaseModel):
+    """IS -> Mk1 shipping push (logistics slice A). Customer-supplied via WP;
+    applies ONLY to not-yet-received rows — a received sample keeps the
+    tracking it actually arrived under (per-sample lock, Handler-ruled)."""
+    samples: list[str]
+    shipping_carrier: Optional[str] = None
+    tracking_number: Optional[str] = None
+    tracking_url: Optional[str] = None
+
+
+class RegistryShippingUpdateResponse(BaseModel):
+    updated: list[str]
+    locked: list[str]
+    missing: list[str]
+
+
+@app.post("/s2s/lims-samples/shipping", response_model=RegistryShippingUpdateResponse)
+def s2s_update_lims_sample_shipping(
+    req: RegistryShippingUpdate,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_internal_service_token),
+):
+    """Bulk shipping update for an order's samples. Idempotent; never touches
+    vendor_name or any basic-info field. Lock criterion mirrors the receive
+    inbox: only pre-received rows accept new tracking."""
+    from sub_samples.service import _PRE_RECEIVED_STATES
+    updated: list[str] = []
+    locked: list[str] = []
+    missing: list[str] = []
+    for sid in req.samples:
+        row = db.execute(
+            select(LimsSample).where(LimsSample.sample_id == sid)
+        ).scalar_one_or_none()
+        if row is None:
+            missing.append(sid)
+            continue
+        if row.status not in _PRE_RECEIVED_STATES:
+            locked.append(sid)
+            continue
+        row.shipping_carrier = (req.shipping_carrier or None)
+        row.tracking_number = (req.tracking_number or None)
+        row.tracking_url = (req.tracking_url or None)
+        updated.append(sid)
+    db.commit()
+    return RegistryShippingUpdateResponse(updated=updated, locked=locked, missing=missing)
+
+
 # ── Registry debug (admin diagnostic) ─────────────────────────────────
 # Non-mutating registry-vs-SENAITE compare for the admin debug panel
 # (2026-07-07-sample-registry-debug-panel-design.md). Reads the raw
