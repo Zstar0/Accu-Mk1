@@ -9,6 +9,8 @@ import { getSettings, updateSetting, type Setting } from '@/lib/api'
 import {
   READ_SOURCE_SETTING_KEY,
   parseGlobalReadSource,
+  COA_SOURCE_KEY,
+  parseCoaGenerationSource,
   type PageKey,
   type ReadSource,
 } from '@/lib/read-source'
@@ -44,6 +46,7 @@ export function DataSourcePane() {
     worksheets_inbox: 'senaite',
   })
   const [isDirty, setIsDirty] = useState(false)
+  const [coaSource, setCoaSource] = useState<ReadSource>('senaite')
 
   // Fetch settings from backend
   const {
@@ -69,13 +72,17 @@ export function DataSourcePane() {
       samples_list: globalMap.samples_list ?? 'senaite',
       worksheets_inbox: globalMap.worksheets_inbox ?? 'senaite',
     })
+    setCoaSource(parseCoaGenerationSource(settingsMap.get(READ_SOURCE_SETTING_KEY)))
     setIsDirty(false)
   }
 
   // Mutation for saving the global map
   const saveMutation = useMutation({
     mutationFn: () =>
-      updateSetting(READ_SOURCE_SETTING_KEY, JSON.stringify(sourceByPage)),
+      updateSetting(
+        READ_SOURCE_SETTING_KEY,
+        JSON.stringify({ ...sourceByPage, [COA_SOURCE_KEY]: coaSource })
+      ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings'] })
       setIsDirty(false)
@@ -149,6 +156,36 @@ export function DataSourcePane() {
           )}
         </SettingsSection>
       ))}
+
+      <SettingsSection title="COA generation">
+        <div className="flex items-center gap-0.5 rounded border p-0.5 w-fit">
+          {(['senaite', 'mk1'] as const).map(source => (
+            <button
+              key={source}
+              type="button"
+              disabled={!isAdmin}
+              aria-label={`COA generation: ${source === 'mk1' ? 'Accu-Mk1' : 'SENAITE'}`}
+              onClick={() => { setCoaSource(source); setIsDirty(true) }}
+              className={cn(
+                'px-2 py-1 text-xs font-mono rounded disabled:opacity-50 disabled:cursor-not-allowed',
+                coaSource === source
+                  ? 'bg-emerald-600/30 text-emerald-400'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              {source === 'mk1' ? 'Accu-Mk1' : 'SENAITE'}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Where COABuilder sources legacy-family result rows (core HPLC,
+          endotoxin, sterility, bac water) at generation time. No per-user
+          override — this is what the backend actually does.
+        </p>
+        {!isAdmin && (
+          <p className="text-xs text-muted-foreground">Only admins can change this.</p>
+        )}
+      </SettingsSection>
 
       {isAdmin && (
         <div className="flex justify-end">

@@ -98,3 +98,40 @@ export function detailsFieldSource(
   if (readSource !== 'mk1') return undefined
   return (fieldSources ?? {})[field] ?? 'senaite'
 }
+
+/** Data Source map key for COA generation sourcing. Deliberately NOT a
+ *  PageKey: the BACKEND reads this key at wire-document assembly time
+ *  (backend/coa/source_setting.py), so per-session page overrides must
+ *  never apply — what the badge shows must be what the backend does. */
+export const COA_SOURCE_KEY = 'coa_generation'
+
+export function parseCoaGenerationSource(rawValue: string | undefined | null): ReadSource {
+  if (!rawValue) return DEFAULT_READ_SOURCE
+  try {
+    const parsed = JSON.parse(rawValue) as unknown
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const v = (parsed as Record<string, unknown>)[COA_SOURCE_KEY]
+      if (isSource(v)) return v
+    }
+  } catch { /* fall through */ }
+  return DEFAULT_READ_SOURCE
+}
+
+export function coaSourceLabel(source: ReadSource): string {
+  return source === 'mk1' ? 'Accu-Mk1' : 'SENAITE'
+}
+
+/** Badge label for the COA Actions menu. Sub-sample (-SXX) COA generation is
+ *  a pre-existing independent path the backend keeps SENAITE-sourced
+ *  regardless of the toggle (the is_sub gate ahead of wire-document assembly
+ *  in backend/main.py) — so on sub-sample pages the badge says SENAITE, not
+ *  what the toggle promises for parents. */
+export function coaSourceBadgeLabel(source: ReadSource, isParent: boolean): string {
+  return coaSourceLabel(isParent ? source : 'senaite')
+}
+
+export function useCoaGenerationSource(): ReadSource {
+  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: getSettings })
+  const raw = settings?.find((s) => s.key === READ_SOURCE_SETTING_KEY)?.value
+  return parseCoaGenerationSource(raw)
+}

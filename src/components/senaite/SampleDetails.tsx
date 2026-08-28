@@ -184,7 +184,12 @@ import { ReplaceAnalyteDialog } from '@/components/senaite/ReplaceAnalyteDialog'
 import { isHplcAnalyteService } from '@/lib/hplc-analyte-services'
 import { needsMk1AnalysesSwap } from '@/lib/mk1-analyses-swap'
 import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
-import { useEffectiveReadSource, detailsFieldSource } from '@/lib/read-source'
+import {
+  useEffectiveReadSource,
+  detailsFieldSource,
+  useCoaGenerationSource,
+  coaSourceBadgeLabel,
+} from '@/lib/read-source'
 import { FieldSourceGlyph } from '@/components/senaite/FieldSourceGlyph'
 import {
   buildVialAssignmentMap,
@@ -3637,6 +3642,9 @@ export function SampleDetails() {
     setOverride: setReadSourceOverride,
   } = useEffectiveReadSource('sample_details')
 
+  // COA generation source badge
+  const coaGenSource = useCoaGenerationSource()
+
   // Retest relationship metadata (banner + chain links)
   const [retestInfo, setRetestInfo] = useState<
     import('@/lib/api').SampleRetestInfo | null
@@ -5289,13 +5297,16 @@ export function SampleDetails() {
                           Actions
                         </Button>
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="w-52">
+                      <DropdownMenuContent align="end" className="w-60">
                         <DropdownMenuItem
                           onClick={handleGenerateCOA}
                           disabled={isGeneratingCOA}
                           className="cursor-pointer"
                         >
                           Generate Accumark COA
+                          <span className="ml-auto text-[10px] font-mono text-muted-foreground">
+                            {coaSourceBadgeLabel(coaGenSource, isParent)}
+                          </span>
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           onClick={handleGenerateVialCOAs}
@@ -5310,6 +5321,9 @@ export function SampleDetails() {
                           className="cursor-pointer"
                         >
                           Generate Per-Vial COAs
+                          <span className="ml-auto text-[10px] font-mono text-muted-foreground">
+                            {coaSourceBadgeLabel(coaGenSource, isParent)}
+                          </span>
                         </DropdownMenuItem>
                         {isParent && (
                           <DropdownMenuItem
