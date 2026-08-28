@@ -40,6 +40,14 @@ import { useUIStore } from '@/store/ui-store'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import {
   Card,
@@ -115,6 +123,13 @@ const KANBAN_COLUMNS: KanbanCol[] = [
   { key: 'verified', label: 'Verified', countKey: 'verified' },
   { key: 'published', label: 'Published', countKey: 'published' },
 ]
+
+// Hidden-by-default kanban columns (Handler request, 2026-08-27): Sample Due
+// and Published are the bookkeeping ends of the pipeline — the lab rarely
+// needs them rendering. Re-enabled per user via the Columns dropdown in the
+// kanban toolbar (or the flat view's column-header chevrons); the choice
+// persists in the saved filters.
+export const DEFAULT_COLLAPSED_KANBAN_COLS = ['sample_due', 'published']
 
 interface KanbanSampleItem {
   sampleId: string
@@ -516,6 +531,15 @@ function KanbanView({
     return items
   }, [orders, sampleLookupMap, visibleCols])
 
+  // An explicit analysis-state filter means "show me exactly these columns" —
+  // it overrides hidden/collapsed state, or filtering to Published while
+  // Published is hidden-by-default would render an empty board.
+  const effectiveCollapsed = activeStates.length > 0 ? [] : collapsedCols
+  // Grouped swimlanes have no per-column header to expand from, so hidden
+  // columns are dropped from the lane grid entirely — the Columns dropdown
+  // in the toolbar is their way back in.
+  const laneCols = visibleCols.filter(c => !effectiveCollapsed.includes(c.key))
+
   if (!groupByOrder) {
     // Flat Kanban — just columns of sample cards
     return (
@@ -524,7 +548,7 @@ function KanbanView({
         style={{
           gridTemplateColumns: visibleCols
             .map(c =>
-              collapsedCols.includes(c.key)
+              effectiveCollapsed.includes(c.key)
                 ? 'minmax(40px, auto)'
                 : 'minmax(180px, 1fr)'
             )
@@ -533,7 +557,7 @@ function KanbanView({
       >
         {visibleCols.map(col => {
           const colItems = allItems.filter(i => i.colKey === col.key)
-          const collapsed = collapsedCols.includes(col.key)
+          const collapsed = effectiveCollapsed.includes(col.key)
           return (
             <div key={col.key} className="flex flex-col gap-2 min-w-0">
               <button
@@ -631,10 +655,10 @@ function KanbanView({
             <div
               className="grid gap-0 divide-x divide-border/30"
               style={{
-                gridTemplateColumns: `repeat(${visibleCols.length}, 1fr)`,
+                gridTemplateColumns: `repeat(${laneCols.length}, 1fr)`,
               }}
             >
-              {visibleCols.map(col => {
+              {laneCols.map(col => {
                 const colItems = orderItems.filter(i => i.colKey === col.key)
                 return (
                   <div
@@ -730,6 +754,10 @@ interface OrderFilters {
   hideTestOrders: boolean
   slaAtRisk: boolean
   collapsedKanbanCols: string[]
+  /** One-time migration marker: stored filters from before the
+   *  hidden-by-default columns existed get DEFAULT_COLLAPSED_KANBAN_COLS
+   *  unioned in exactly once — after that the user's own toggles win. */
+  kanbanColDefaultsV2?: boolean
   viewMode: 'table' | 'kanban'
   groupByOrder: boolean
   showAnalysisServices: boolean
@@ -737,7 +765,7 @@ interface OrderFilters {
   kanbanSortDir: 'asc' | 'desc'
 }
 
-function loadOrderFilters(): OrderFilters {
+export function loadOrderFilters(): OrderFilters {
   try {
     const raw = localStorage.getItem(FILTERS_LS_KEY)
     if (raw) {
@@ -745,7 +773,18 @@ function loadOrderFilters(): OrderFilters {
       return {
         ...parsed,
         activeStates: (parsed.activeStates ?? []).filter(s => s !== 'pending'),
-        collapsedKanbanCols: parsed.collapsedKanbanCols ?? [],
+        // One-time default-hidden migration: existing saved filters predate
+        // the hidden-by-default columns, so union the defaults in once.
+        // An un-hide after that persists WITH the marker and sticks.
+        collapsedKanbanCols: parsed.kanbanColDefaultsV2
+          ? (parsed.collapsedKanbanCols ?? [])
+          : Array.from(
+              new Set([
+                ...(parsed.collapsedKanbanCols ?? []),
+                ...DEFAULT_COLLAPSED_KANBAN_COLS,
+              ])
+            ),
+        kanbanColDefaultsV2: true,
         analyteFilter: parsed.analyteFilter ?? '',
         lotFilter: parsed.lotFilter ?? '',
       }
@@ -762,7 +801,8 @@ function loadOrderFilters(): OrderFilters {
     lotFilter: '',
     hideTestOrders: true,
     slaAtRisk: false,
-    collapsedKanbanCols: [],
+    collapsedKanbanCols: [...DEFAULT_COLLAPSED_KANBAN_COLS],
+    kanbanColDefaultsV2: true,
     viewMode: 'table',
     groupByOrder: true,
     showAnalysisServices: false,
@@ -1285,6 +1325,56 @@ export function OrderStatusPage() {
                     <ListTree className="h-3.5 w-3.5" />
                     Services
                   </button>
+                  {/* Column visibility — Sample Due + Published are hidden by
+                      default (DEFAULT_COLLAPSED_KANBAN_COLS); this dropdown is
+                      the way back in for both kanban layouts. An active
+                      analysis-state filter overrides hidden state entirely
+                      (see effectiveCollapsed in KanbanView). */}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        title="Choose which kanban columns are shown"
+                        className={cn(
+                          'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium border transition-colors',
+                          orderFilters.collapsedKanbanCols.length > 0
+                            ? 'bg-transparent text-muted-foreground border-border hover:border-foreground/40 hover:text-foreground'
+                            : 'bg-foreground text-background border-foreground'
+                        )}
+                      >
+                        <Columns3 className="h-3.5 w-3.5" />
+                        Columns
+                        {orderFilters.collapsedKanbanCols.length > 0 && (
+                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-mono leading-none">
+                            {KANBAN_COLUMNS.length -
+                              orderFilters.collapsedKanbanCols.length}
+                            /{KANBAN_COLUMNS.length}
+                          </span>
+                        )}
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-48">
+                      <DropdownMenuLabel className="text-xs">
+                        Kanban columns
+                      </DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      {KANBAN_COLUMNS.map(col => (
+                        <DropdownMenuCheckboxItem
+                          key={col.key}
+                          className="text-xs"
+                          checked={
+                            !orderFilters.collapsedKanbanCols.includes(col.key)
+                          }
+                          // Keep the menu open so several columns can be
+                          // toggled in one visit.
+                          onSelect={e => e.preventDefault()}
+                          onCheckedChange={() => toggleCollapsedCol(col.key)}
+                        >
+                          {col.label}
+                        </DropdownMenuCheckboxItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                   {/* Sort controls */}
                   {
                     <div className="flex items-center gap-0.5 border border-border rounded-md overflow-hidden">
