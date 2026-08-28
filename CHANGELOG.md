@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.11.4 — 2026-08-27
+
+### Changed
+
+- **Kanban hides Sample Due + Published by default** — the bookkeeping
+  ends of the pipeline no longer render unless asked for. A new Columns
+  dropdown in the kanban toolbar toggles any column (choice persists per
+  user); the flat view's column-header chevrons still work, and the
+  grouped swimlane view now honors hidden columns too (it previously
+  ignored collapse state entirely). An active analysis-state filter
+  overrides hidden columns, so filtering to Published always shows it.
+  Existing users' saved filters get the new defaults exactly once; any
+  column they re-enable afterwards stays enabled.
+
 ## v1.11.3 — 2026-08-27
 
 ### Fixed
