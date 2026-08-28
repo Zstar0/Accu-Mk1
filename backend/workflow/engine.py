@@ -285,6 +285,47 @@ def evaluate_cascades(db: Session, sample: LimsSample, *, trigger: str,
     return fired
 
 
+def drive_sample_touchpoint(db: Session, sample_id: str, verb: str, *,
+                            from_status: Optional[str] = None,
+                            actor_user_id: Optional[int] = None,
+                            attested: Optional[dict] = None) -> bool:
+    """The sample-scope engine touchpoint: arm-if-unseeded, execute `verb`,
+    then follow-up cascades — shared by the bg transition chokepoint
+    (main._record_sample_transition_bg) and the receive page's native
+    check-in phase (main._receive_native_phase; PB-0486 finding 2026-08-28 —
+    that path recorded the transition but never drove the engine, stranding
+    native_status at its pre-receive state).
+
+    Row-locked (finding #2, 2026-07-27: interleave with run_cascades_bg's
+    own bg session). Flush-only — the caller commits alongside its own
+    writes. Never raises: an engine error must not cost the caller its log
+    write / check-in (same doctrine as the chokepoint's original inline
+    block). Arms from `from_status` — the PRE-transition state — when given;
+    `row.status` is the defensive fallback only (by touchpoint time the
+    heal has already advanced it, which would make `verb` a no_edge).
+    Returns True when the engine ran (flag on + sample found)."""
+    try:
+        if not shadow_enabled():
+            return False
+        row = db.execute(
+            select(LimsSample).where(LimsSample.sample_id == sample_id)
+            .with_for_update()
+        ).scalar_one_or_none()
+        if row is None:
+            return False
+        if row.native_status is None:
+            arm_native_status(db, row, from_status or row.status,
+                              trigger=verb, actor_user_id=actor_user_id)
+        execute_verb(db, row, verb, trigger=verb,
+                     actor_user_id=actor_user_id, attested=attested)
+        evaluate_cascades(db, row, trigger=verb,
+                          actor_user_id=actor_user_id)
+        return True
+    except Exception:
+        log.exception("sbs touchpoint failed (never-raise)")
+        return False
+
+
 def run_cascades_bg(sample_pk: int, actor_user_id: Optional[int]) -> None:
     """Own-session, never-raise cascade run — the Task 5 BackgroundTasks
     target. Same hardening pattern as main._record_sample_transition_bg."""

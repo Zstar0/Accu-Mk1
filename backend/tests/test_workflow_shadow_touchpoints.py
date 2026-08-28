@@ -292,3 +292,57 @@ def test_seed_native_status_error_path_per_row_commits(db):
             LimsWorkflowShadowEvaluation.lims_sample_pk.in_([sample1.id, sample2.id])))
         db.execute(delete(LimsSample).where(LimsSample.id.in_([sample1.id, sample2.id])))
         db.commit()
+
+
+# ─── Receive-page native phase drives the engine (PB-0486 finding) ──────────
+# 2026-08-28: `_receive_native_phase` (the receive page's check-in, #133)
+# recorded the transition inline — log + heal + date_received — but never
+# drove the engine, so every receive-page check-in stranded native_status at
+# its pre-receive state and the whole downstream trajectory could never walk.
+
+
+@pytest.fixture
+def tp_sample_receive_page(db):
+    row = LimsSample(sample_id="TEST-TP-0004", status="sample_due",
+                     native_status="test_tp_due")
+    db.add(row); db.flush(); db.commit()
+    yield row
+    db.execute(delete(LimsWorkflowShadowEvaluation).where(
+        LimsWorkflowShadowEvaluation.lims_sample_pk == row.id))
+    db.execute(delete(LimsSampleTransition).where(
+        LimsSampleTransition.lims_sample_pk == row.id))
+    db.execute(delete(LimsSample).where(LimsSample.id == row.id))
+    db.commit()
+
+
+def _run_receive_phase(sample_id):
+    from main import _receive_native_phase
+    return _receive_native_phase(sample_id=sample_id, image_bytes=None,
+                                 remarks=None, user_id=None)
+
+
+def test_receive_native_phase_drives_engine(db, receive_catalog,
+                                            tp_sample_receive_page):
+    res = _run_receive_phase(tp_sample_receive_page.sample_id)
+    assert res["ok"] is True
+    db.expire_all()
+    fresh = db.get(LimsSample, tp_sample_receive_page.id)
+    assert fresh.status == "sample_received"          # host path unchanged
+    assert fresh.native_status == "test_tp_received"  # engine walked
+    evals = db.execute(select(LimsWorkflowShadowEvaluation).where(
+        LimsWorkflowShadowEvaluation.lims_sample_pk == tp_sample_receive_page.id
+    )).scalars().all()
+    assert any(e.outcome == "advanced" and e.verb == "receive"
+               for e in evals)
+
+
+def test_receive_native_phase_engine_failure_never_breaks_checkin(
+        db, receive_catalog, tp_sample_receive_page):
+    with patch("workflow.engine.execute_verb",
+               side_effect=RuntimeError("boom")):
+        res = _run_receive_phase(tp_sample_receive_page.sample_id)
+    assert res["ok"] is True                           # check-in survives
+    db.expire_all()
+    fresh = db.get(LimsSample, tp_sample_receive_page.id)
+    assert fresh.status == "sample_received"           # log + heal landed
+    assert fresh.date_received is not None
