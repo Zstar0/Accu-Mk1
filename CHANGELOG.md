@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- **Searching shows the found order's cards even in hidden columns** — a
+  server-side search now overrides the hidden-by-default kanban columns,
+  the same way an analysis-state filter does. Without this, searching a
+  completed order (whose cards sit in the hidden Published column) found
+  the order but rendered an empty-looking swimlane (prod report: 6088).
+
+## v1.11.6 — 2026-08-28
+
+### Fixed
+
 - **Receive-page check-in drives the sample engine touchpoint** (PR #149) —
   `_receive_native_phase` recorded the receive transition but never drove
   the side-by-side engine, stranding `native_status` at its pre-receive
