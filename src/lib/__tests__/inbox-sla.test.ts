@@ -43,11 +43,11 @@ const vial = (over: Partial<InboxVialItem>): InboxVialItem =>
     ...over,
   }) as InboxVialItem
 
-const analysis = (group_id: number) =>
+const analysis = (group_id: number, keyword: string | null = null) =>
   ({
     uid: null,
     title: 'A',
-    keyword: null,
+    keyword,
     peptide_name: null,
     method: null,
     review_state: null,
@@ -85,10 +85,10 @@ test('buildInboxSlaSubjects: one subject per (vial, department); unowned departm
       vial({
         uid: 'u1',
         priority: 'high',
-        analyses: [analysis(1), analysis(2)],
+        analyses: [analysis(1, 'KW-A'), analysis(2, 'KW-B')],
       }),
       // hm-under-Analytical era: dept 3 owns no group -> default tier
-      vial({ uid: 'u2', analyses: [analysis(3)] }),
+      vial({ uid: 'u2', analyses: [analysis(3, 'KW-C')] }),
     ],
     deptToGroup
   )
@@ -98,18 +98,21 @@ test('buildInboxSlaSubjects: one subject per (vial, department); unowned departm
       priority: 'high',
       groupId: 1,
       receivedAt: '2026-08-24T12:12:00Z',
+      keywords: ['KW-A'],
     },
     {
       key: inboxVialSlaKey('u1', 2),
       priority: 'high',
       groupId: 2,
       receivedAt: '2026-08-24T12:12:00Z',
+      keywords: ['KW-B'],
     },
     {
       key: inboxVialSlaKey('u2', 3),
       priority: 'normal',
       groupId: null,
       receivedAt: '2026-08-24T12:12:00Z',
+      keywords: ['KW-C'],
     },
   ])
 })

@@ -150,6 +150,10 @@ function WorksheetDropZone({
         // over in S7, so this stays the group id on purpose.
         groupId: item.service_group_id,
         receivedAt: item.date_received ?? item.added_at,
+        // Profile-SLA step (Task 11): tiered profile beats the group tier.
+        keywords: (item.analyses ?? [])
+          .map(a => a.keyword)
+          .filter((k): k is string => Boolean(k)),
       })),
     [worksheet.items]
   )

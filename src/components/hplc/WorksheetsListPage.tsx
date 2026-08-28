@@ -101,6 +101,12 @@ export default function WorksheetsListPage() {
       groupId: item.service_group_id,
       receivedAt: item.date_received ?? item.added_at,
       completedAt: ws.completed_at,
+      // Profile-SLA step (Task 11): a tiered profile covering the item's
+      // analyses beats the group tier (e.g. usp71's 14-day tier — without
+      // this the item wrongly read the 24h default and showed breached).
+      keywords: item.analyses
+        .map(a => a.keyword)
+        .filter((k): k is string => Boolean(k)),
     })),
   )
   const { byKey: slaByKey, isLoading: slaLoading, isError: slaError } =

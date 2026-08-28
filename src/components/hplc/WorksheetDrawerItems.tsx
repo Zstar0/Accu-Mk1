@@ -33,7 +33,11 @@ import {
 import { CSS } from '@dnd-kit/utilities'
 import { PriorityBadge } from '@/components/hplc/PriorityBadge'
 import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
-import { useSlaForSubjects, type SlaSubject, type SlaSubjectSnapshot } from '@/services/sla-subjects'
+import {
+  useSlaForSubjects,
+  type SlaSubject,
+  type SlaSubjectSnapshot,
+} from '@/services/sla-subjects'
 import { isPrepStarted as itemPrepStarted } from '@/lib/worksheet-scope-key'
 import type { InboxPriority } from '@/lib/api'
 import {
@@ -44,7 +48,9 @@ import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
 import type { WorksheetListItem, Instrument } from '@/lib/api'
 
 /** Extract unique peptide names from analyses — compact display for worksheet */
-function getPeptideNames(analyses: { title: string; peptide_name: string | null }[]): string[] {
+function getPeptideNames(
+  analyses: { title: string; peptide_name: string | null }[]
+): string[] {
   const names = new Set<string>()
   for (const a of analyses) {
     if (a.peptide_name) names.add(a.peptide_name)
@@ -63,9 +69,24 @@ interface WorksheetDrawerItemsProps {
   prepStartedItems: Set<string>
   onRemove: (itemId: number) => void
   onReassign: (itemId: number, targetWorksheetId: number) => void
-  onStartPrep: (item: { sampleId: string; departmentId: number | null; serviceGroupId: number | null; groupName: string; peptideId: number | null; instrumentUid: string | null; limsSubSamplePk: number | null }) => void
+  onStartPrep: (item: {
+    sampleId: string
+    departmentId: number | null
+    serviceGroupId: number | null
+    groupName: string
+    peptideId: number | null
+    instrumentUid: string | null
+    limsSubSamplePk: number | null
+  }) => void
   instruments: Instrument[]
-  onUpdateItem: (itemId: number, data: { instrument_uid?: string; prep_status?: string; instrument_id?: number | null }) => void
+  onUpdateItem: (
+    itemId: number,
+    data: {
+      instrument_uid?: string
+      prep_status?: string
+      instrument_id?: number | null
+    }
+  ) => void
   onReorder: (itemIds: number[]) => void
 }
 
@@ -86,18 +107,26 @@ export function WorksheetDrawerItems({
   const otherWorksheets = openWorksheets.filter(ws => ws.id !== worksheetId)
 
   const slaSubjects: SlaSubject[] = useMemo(() => {
-    const worksheetCompletedAt =
-      isCompleted ? (worksheetCompletedAtProp ?? null) : null
+    const worksheetCompletedAt = isCompleted
+      ? (worksheetCompletedAtProp ?? null)
+      : null
     return items.map(item => ({
       key: String(item.id),
       priority: (item.priority as InboxPriority) || 'normal',
       groupId: item.service_group_id,
       receivedAt: item.date_received ?? item.added_at,
       completedAt: worksheetCompletedAt,
+      // Profile-SLA step (Task 11): tiered profile beats the group tier.
+      keywords: item.analyses
+        .map(a => a.keyword)
+        .filter((k): k is string => Boolean(k)),
     }))
   }, [items, isCompleted, worksheetCompletedAtProp])
-  const { byKey: slaByKey, isLoading: slaLoading, isError: slaError } =
-    useSlaForSubjects(slaSubjects)
+  const {
+    byKey: slaByKey,
+    isLoading: slaLoading,
+    isError: slaError,
+  } = useSlaForSubjects(slaSubjects)
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -164,7 +193,10 @@ export function WorksheetDrawerItems({
             collisionDetection={closestCenter}
             onDragEnd={handleDragEnd}
           >
-            <SortableContext items={itemIds} strategy={verticalListSortingStrategy}>
+            <SortableContext
+              items={itemIds}
+              strategy={verticalListSortingStrategy}
+            >
               <div className="pb-4">
                 {items.map(item => (
                   <SortableItemRow
@@ -203,8 +235,23 @@ interface SortableItemRowProps {
   slaError: boolean
   onRemove: (itemId: number) => void
   onReassign: (itemId: number, targetWorksheetId: number) => void
-  onStartPrep: (item: { sampleId: string; departmentId: number | null; serviceGroupId: number | null; groupName: string; peptideId: number | null; instrumentUid: string | null; limsSubSamplePk: number | null }) => void
-  onUpdateItem: (itemId: number, data: { instrument_uid?: string; prep_status?: string; instrument_id?: number | null }) => void
+  onStartPrep: (item: {
+    sampleId: string
+    departmentId: number | null
+    serviceGroupId: number | null
+    groupName: string
+    peptideId: number | null
+    instrumentUid: string | null
+    limsSubSamplePk: number | null
+  }) => void
+  onUpdateItem: (
+    itemId: number,
+    data: {
+      instrument_uid?: string
+      prep_status?: string
+      instrument_id?: number | null
+    }
+  ) => void
 }
 
 function SortableItemRow({
@@ -243,17 +290,21 @@ function SortableItemRow({
     prepStartedItems,
     item.sample_id,
     item.department_id,
-    item.service_group_id,
+    item.service_group_id
   )
-  const isHplcItem = item.analyses.some(a => a.keyword != null && /PURITY|IDENTITY/i.test(a.keyword))
-    || /hplc|core/i.test(item.group_name)
+  const isHplcItem =
+    item.analyses.some(
+      a => a.keyword != null && /PURITY|IDENTITY/i.test(a.keyword)
+    ) || /hplc|core/i.test(item.group_name)
   // Native (non-HPLC) items are keyed by the local instruments table (id),
   // not a SENAITE instrument UID — they have a lims_sub_sample_pk and no
   // peptide_id (peptide_id is the HPLC-lane marker).
-  const isNativeItem = item.lims_sub_sample_pk != null && item.peptide_id == null
-  const colorKey = (item.group_color as ServiceGroupColor) in SERVICE_GROUP_COLORS
-    ? (item.group_color as ServiceGroupColor)
-    : 'zinc'
+  const isNativeItem =
+    item.lims_sub_sample_pk != null && item.peptide_id == null
+  const colorKey =
+    (item.group_color as ServiceGroupColor) in SERVICE_GROUP_COLORS
+      ? (item.group_color as ServiceGroupColor)
+      : 'zinc'
   const groupColorClass = SERVICE_GROUP_COLORS[colorKey]
   const peptideNames = getPeptideNames(item.analyses)
 
@@ -302,7 +353,9 @@ function SortableItemRow({
 
       {/* Service group badge */}
       <div className="w-[110px] shrink-0">
-        <span className={`inline-flex rounded-md border px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap ${groupColorClass}`}>
+        <span
+          className={`inline-flex rounded-md border px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap ${groupColorClass}`}
+        >
           {item.group_name}
         </span>
       </div>
@@ -317,9 +370,7 @@ function SortableItemRow({
         {peptideNames.length === 0 ? (
           <span className="text-xs text-muted-foreground">—</span>
         ) : (
-          <span className="text-xs font-medium">
-            {peptideNames.join(', ')}
-          </span>
+          <span className="text-xs font-medium">{peptideNames.join(', ')}</span>
         )}
       </div>
 
@@ -337,15 +388,18 @@ function SortableItemRow({
       <div className="w-[120px] shrink-0">
         {isCompleted ? (
           <span className="text-[10px] text-muted-foreground font-mono truncate block">
-            {item.stamped_instrument_name
-              ?? instruments.find(i => i.senaite_uid === item.instrument_uid)?.name
-              ?? item.instrument_uid
-              ?? '—'}
+            {item.stamped_instrument_name ??
+              instruments.find(i => i.senaite_uid === item.instrument_uid)
+                ?.name ??
+              item.instrument_uid ??
+              '—'}
           </span>
         ) : isNativeItem ? (
           <Select
             value={item.instrument_id != null ? String(item.instrument_id) : ''}
-            onValueChange={value => onUpdateItem(item.id, { instrument_id: Number(value) })}
+            onValueChange={value =>
+              onUpdateItem(item.id, { instrument_id: Number(value) })
+            }
           >
             <SelectTrigger
               size="sm"
@@ -364,7 +418,9 @@ function SortableItemRow({
         ) : (
           <Select
             value={item.instrument_uid ?? ''}
-            onValueChange={value => onUpdateItem(item.id, { instrument_uid: value })}
+            onValueChange={value =>
+              onUpdateItem(item.id, { instrument_uid: value })
+            }
           >
             <SelectTrigger
               size="sm"
@@ -374,7 +430,10 @@ function SortableItemRow({
             </SelectTrigger>
             <SelectContent>
               {instruments.map(inst => (
-                <SelectItem key={inst.senaite_uid ?? inst.id} value={inst.senaite_uid ?? String(inst.id)}>
+                <SelectItem
+                  key={inst.senaite_uid ?? inst.id}
+                  value={inst.senaite_uid ?? String(inst.id)}
+                >
                   {inst.name}
                 </SelectItem>
               ))}
@@ -386,14 +445,21 @@ function SortableItemRow({
       {/* Box — which physical box currently holds this vial; '—' for
           parent-sample items / unboxed vials */}
       <div className="w-[80px] shrink-0">
-        <span className={`text-xs font-mono truncate block ${item.box_label ? 'text-foreground' : 'text-muted-foreground'}`}>
+        <span
+          className={`text-xs font-mono truncate block ${item.box_label ? 'text-foreground' : 'text-muted-foreground'}`}
+        >
           {item.box_label ?? '—'}
         </span>
       </div>
 
       {/* SLA */}
       <div className="w-[60px] shrink-0">
-        <SlaAgeIndicator snapshot={slaSnapshot} isLoading={slaLoading} isError={slaError} compact />
+        <SlaAgeIndicator
+          snapshot={slaSnapshot}
+          isLoading={slaLoading}
+          isError={slaError}
+          compact
+        />
       </div>
 
       {/* Status dropdown */}
@@ -413,19 +479,32 @@ function SortableItemRow({
           const colorClass = statusColors[status] ?? 'text-muted-foreground'
 
           return isCompleted ? (
-            <span className={`text-[10px] capitalize ${colorClass}`}>{status.replace('_', ' ')}</span>
+            <span className={`text-[10px] capitalize ${colorClass}`}>
+              {status.replace('_', ' ')}
+            </span>
           ) : (
             <Select
               value={status}
-              onValueChange={value => onUpdateItem(item.id, { prep_status: value })}
+              onValueChange={value =>
+                onUpdateItem(item.id, { prep_status: value })
+              }
             >
-              <SelectTrigger size="sm" className={`h-6 text-[10px] border-transparent shadow-none hover:border-border ${statusBg[status] ?? ''} ${colorClass}`}>
+              <SelectTrigger
+                size="sm"
+                className={`h-6 text-[10px] border-transparent shadow-none hover:border-border ${statusBg[status] ?? ''} ${colorClass}`}
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="ready"><span className="text-zinc-400">Ready</span></SelectItem>
-                <SelectItem value="in_progress"><span className="text-amber-500">In Progress</span></SelectItem>
-                <SelectItem value="complete"><span className="text-emerald-500">Complete</span></SelectItem>
+                <SelectItem value="ready">
+                  <span className="text-zinc-400">Ready</span>
+                </SelectItem>
+                <SelectItem value="in_progress">
+                  <span className="text-amber-500">In Progress</span>
+                </SelectItem>
+                <SelectItem value="complete">
+                  <span className="text-emerald-500">Complete</span>
+                </SelectItem>
               </SelectContent>
             </Select>
           )
@@ -441,9 +520,12 @@ function SortableItemRow({
             onReassign={onReassign}
           />
         )}
-        {!isCompleted && isHplcItem && (
-          isPrepStarted ? (
-            <span className="text-[10px] text-muted-foreground/60 italic">Prep</span>
+        {!isCompleted &&
+          isHplcItem &&
+          (isPrepStarted ? (
+            <span className="text-[10px] text-muted-foreground/60 italic">
+              Prep
+            </span>
           ) : (
             <button
               className="h-6 px-2 text-[10px] rounded-md border bg-secondary text-secondary-foreground opacity-0 group-hover/item:opacity-100 transition-opacity shrink-0"
@@ -461,8 +543,7 @@ function SortableItemRow({
             >
               Start Prep
             </button>
-          )
-        )}
+          ))}
       </div>
     </div>
   )
@@ -474,7 +555,11 @@ interface ReassignButtonProps {
   onReassign: (itemId: number, targetWorksheetId: number) => void
 }
 
-function ReassignButton({ item, otherWorksheets, onReassign }: ReassignButtonProps) {
+function ReassignButton({
+  item,
+  otherWorksheets,
+  onReassign,
+}: ReassignButtonProps) {
   const [open, setOpen] = useState(false)
   const hasTargets = otherWorksheets.length > 0
 
@@ -486,14 +571,18 @@ function ReassignButton({ item, otherWorksheets, onReassign }: ReassignButtonPro
           aria-label={`Move ${item.sample_id} to another worksheet`}
           disabled={!hasTargets}
           title={hasTargets ? undefined : 'No other open worksheets'}
-          onClick={e => { if (!hasTargets) e.preventDefault() }}
+          onClick={e => {
+            if (!hasTargets) e.preventDefault()
+          }}
         >
           <MoveRight className="h-3 w-3" />
         </button>
       </PopoverTrigger>
       {hasTargets && (
         <PopoverContent className="w-56 p-2" align="end">
-          <p className="text-xs font-semibold text-muted-foreground mb-2">Move to worksheet</p>
+          <p className="text-xs font-semibold text-muted-foreground mb-2">
+            Move to worksheet
+          </p>
           <Select
             onValueChange={value => {
               onReassign(item.id, Number(value))

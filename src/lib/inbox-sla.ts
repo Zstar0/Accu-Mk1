@@ -64,6 +64,13 @@ export function buildInboxSlaSubjects(
         priority: vial.priority as InboxPriority,
         groupId: deptToGroup.get(deptId) ?? null,
         receivedAt: vial.date_received,
+        // Profile-SLA step (Task 11): this department's analysis keywords —
+        // a tiered profile covering them (e.g. Sterility USP 71's 14-day
+        // tier) beats the group/default tier, matching Order Status.
+        keywords: vial.analyses
+          .filter(a => a.group_id === deptId)
+          .map(a => a.keyword)
+          .filter((k): k is string => Boolean(k)),
       })
     }
   }
