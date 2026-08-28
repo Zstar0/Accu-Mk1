@@ -9352,13 +9352,29 @@ async def get_explorer_orders(
       to the IS for customer-scoped requests.
     """
     # Phase 29: customer-scoped listing must round-trip to Integration Service.
-    if customer_id is not None:
+    # v1.11.3: so must any request carrying a search axis — the IS endpoint
+    # accepts the axes WITHOUT customer_id ("null param returns all orders"),
+    # and it owns the hardened jsonpath/ILIKE SQL (T-30-01). The direct
+    # fetch_orders branch below ignores the axes entirely, which made the
+    # Order Status page's server-side search (v1.11.2 FE) a silent no-op —
+    # an old order id (prod report: 5739) still matched nothing.
+    axes_active = any(
+        v is not None and v.strip() != ""
+        for v in (search_order_number, search_sample_id, search_analyte, search_lot)
+    )
+    if customer_id is not None or axes_active:
         import httpx as _httpx
         params: dict[str, str] = {
-            "customer_id": str(customer_id),
             "limit": str(limit),
             "offset": str(offset),
         }
+        if customer_id is not None:
+            params["customer_id"] = str(customer_id)
+        elif sort is None:
+            # Unscoped axis search: match the browse view's newest-first
+            # ordering (the IS default 'open_first' is the customer page's
+            # convention, not this one's).
+            params["sort"] = "date_desc"
         # Forward UX-revision search axes + sort only when set so the IS sees
         # the same absent-vs-empty semantics it would from a direct caller.
         # Empty string ('') IS forwarded as-is (back-compat with debounce-flush).
