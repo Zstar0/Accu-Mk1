@@ -313,6 +313,10 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
             existing.external_lims_system = prior_system
         if existing.date_received is None and prior_received is not None:
             existing.date_received = prior_received
+        # Vendor (Slice A): signal-owned, keep-prior on vendor-less replays —
+        # _populate_basic_info deliberately never touches it (reconcile safety).
+        if meta.get("VendorName"):
+            existing.vendor_name = str(meta["VendorName"])[:200]
         if existing.native_id is None:
             existing.native_id = mint_native_id(db, senaite_sample_id=existing.sample_id)
         db.flush()
@@ -325,6 +329,8 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
                            or meta.get("SampleTypeTitle")),
     )
     row = _create_sample_row(db, sample_id or native_id_value, meta)
+    if meta.get("VendorName"):
+        row.vendor_name = str(meta["VendorName"])[:200]
     row.native_id = native_id_value
     if not sample_id:
         row.external_lims_uid = None
