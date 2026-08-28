@@ -3703,6 +3703,17 @@ export interface SamplePrep {
   created_by_email: string | null
   updated_by_user_id: number | null
   updated_by_email: string | null
+  /** Additive SLA context (v1.11.1) — the linked sample's received date,
+   *  priority, live analysis keywords, and owning department. Absent when
+   *  the prep has no resolvable lims linkage (indicator shows the none
+   *  state). The FE builds SLA subjects from this via the shared resolver
+   *  (priority > profile > group > default). */
+  sla?: {
+    received_at: string | null
+    priority: string
+    keywords: string[]
+    department_id: number | null
+  }
 }
 
 export async function createSamplePrep(
