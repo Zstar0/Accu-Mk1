@@ -1167,7 +1167,18 @@ export async function getExplorerOrders(
   search?: string,
   limit = 50,
   offset = 0,
-  status?: string
+  status?: string,
+  // Same four server-side axes (and the same per-axis 2-char gate) as
+  // getExplorerOrdersByCustomer below — AND-combined at the IS SQL layer.
+  // Lets the Order Status page find orders OUTSIDE its newest-200 window
+  // (v1.11.2: typing an old order id previously matched nothing because
+  // filtering was purely client-side over the loaded page).
+  searchAxes?: {
+    order_number?: string
+    sample_id?: string
+    analyte?: string
+    lot?: string
+  }
 ): Promise<ExplorerOrder[]> {
   try {
     const params = new URLSearchParams()
@@ -1175,6 +1186,20 @@ export async function getExplorerOrders(
     if (status) params.set('status', status)
     params.set('limit', String(limit))
     params.set('offset', String(offset))
+    if (searchAxes) {
+      if (searchAxes.order_number && searchAxes.order_number.length >= 2) {
+        params.set('search_order_number', searchAxes.order_number)
+      }
+      if (searchAxes.sample_id && searchAxes.sample_id.length >= 2) {
+        params.set('search_sample_id', searchAxes.sample_id)
+      }
+      if (searchAxes.analyte && searchAxes.analyte.length >= 2) {
+        params.set('search_analyte', searchAxes.analyte)
+      }
+      if (searchAxes.lot && searchAxes.lot.length >= 2) {
+        params.set('search_lot', searchAxes.lot)
+      }
+    }
 
     const response = await fetch(
       `${API_BASE_URL()}/explorer/orders?${params}`,
