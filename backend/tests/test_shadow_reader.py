@@ -5,8 +5,9 @@ reportable surfaced; review_state=None aborts; resolver drops superseded
 originals exactly as with the HTTP reader."""
 import asyncio
 import pytest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+import main
 from coa.shadow_reader import ShadowAnalysesReader
 
 
@@ -111,3 +112,77 @@ def test_senaite_shape_response_carries_retest_of_id_and_reportable(db_session):
     assert f"mk1:{retest.id}" in by_uid
     assert by_uid[f"mk1:{retest.id}"].retest_of_id == original.id
     assert by_uid[f"mk1:{retest.id}"].reportable is False
+
+
+# ── review Finding 1 (Critical) regression pin: main.py's needs_chromatogram
+# fallback (runs when resolver_result stays None, e.g. the shadow reader's
+# fail-open abort) must derive the requirement NATIVELY in mk1 mode and must
+# NEVER call sub_samples.senaite.fetch_parent_analysis_keywords — a
+# synchronous, blocking SENAITE HTTP call that fires even with SENAITE_URL
+# unset (sub_samples/senaite.py resolves its own SENAITE_BASE_URL
+# independently, defaulting to localhost:8080).
+
+
+@pytest.mark.asyncio
+async def test_mk1_resolver_failure_derives_chromatogram_natively_no_senaite_call(
+    db_session, monkeypatch,
+):
+    from fastapi import HTTPException
+    from models import AnalysisService, LimsAnalysis, LimsSample
+    from types import SimpleNamespace
+
+    sample_id = "P-9500"
+    parent = LimsSample(sample_id=sample_id)
+    db_session.add(parent)
+    db_session.flush()
+    svc = AnalysisService(keyword="HPLC-PUR", title="Peptide Purity (HPLC)")
+    db_session.add(svc)
+    db_session.flush()
+    db_session.add(LimsAnalysis(
+        lims_sample_pk=parent.id, lims_sub_sample_pk=None,
+        analysis_service_id=svc.id, keyword=svc.keyword, title=svc.title,
+        review_state="verified", provenance="canonical",
+        retested=False, result_value="98.2",
+    ))
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "coa.source_setting.coa_generation_source", lambda db: "mk1")
+
+    # Force the resolver pre-flight to fail -> resolver_result stays None,
+    # exercising generate_sample_coa's existing fail-open catch.
+    def _boom(*a, **kw):
+        raise RuntimeError("simulated resolver failure")
+    monkeypatch.setattr("coa.source_resolver.resolve_sources", _boom)
+
+    # THE PIN: must never be called in mk1 mode.
+    forbidden = Mock(side_effect=AssertionError(
+        "fetch_parent_analysis_keywords (SENAITE HTTP) must not be called "
+        "in mk1 mode"))
+    monkeypatch.setattr(
+        "sub_samples.senaite.fetch_parent_analysis_keywords", forbidden)
+
+    # Variance-lock gate is unrelated to this fix and reaches Integration
+    # Service over HTTP by default; keep it fast/deterministic — it is
+    # already fail-soft in production when IS is unreachable.
+    monkeypatch.setattr(
+        "sub_samples.service.fetch_sample_services",
+        Mock(side_effect=RuntimeError("no IS in this test")))
+
+    monkeypatch.setattr(main, "COA_BUILDER_URL", "http://coabuilder.test")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await main.generate_sample_coa(
+            sample_id=sample_id, db=db_session,
+            current_user=SimpleNamespace(id=1),
+        )
+
+    forbidden.assert_not_called()
+
+    blockers = exc_info.value.detail["blockers"]
+    attach_blocker = next(b for b in blockers if b["code"] == "missing_attachments")
+    # needs_chromatogram derived True from the native HPLC-PUR row (no micro
+    # exemption configured in this fixture) — proves the native derivation
+    # ran and produced a real answer, not a silently-False fallback.
+    assert "chromatogram" in attach_blocker["missing"]
+    assert "sample_image" in attach_blocker["missing"]

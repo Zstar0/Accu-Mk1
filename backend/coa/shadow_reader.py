@@ -1,9 +1,17 @@
 """Shadow-backed SenaiteAnalysesReader (COA read-independence, spec §5).
 
 Serves the resolver's Protocol from list_parent_analyses_senaite_shape —
-zero SENAITE HTTP. Canonical-backed keywords never reach a reader
-(_resolve_mk1_parent_tier shadows them), so this covers only the
-SENAITE-only fall-through keywords, sourced from mirror shadow rows.
+zero SENAITE HTTP. The payload this reader returns is UNFILTERED: it
+includes both provenances (canonical + shadow) exactly as
+list_parent_analyses_senaite_shape produces them, canonical-backed
+keywords included. What actually decides those keywords is resolve_sources'
+merge step — for any keyword with an mk1 parent-tier verified row,
+_resolve_mk1_parent_tier already has a decision and the merge never
+consults this reader's candidates for that keyword (see resolve_sources:
+`if kw in mk1_decisions: base = mk1_decisions[kw]`). So in practice this
+reader's candidates only end up DECIDING the SENAITE-only fall-through
+keywords (sourced from mirror shadow rows) — the rows themselves are not
+filtered here, only out-voted downstream.
 retest_of_uid is synthesized as mk1:{retest_of_id} so the resolver's
 superseded_uids logic works in the mk1 uid space; reportable comes from the
 native column. review_state=None aborts (producer bug) — the resolver

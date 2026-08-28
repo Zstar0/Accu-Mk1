@@ -11716,8 +11716,7 @@ async def generate_sample_coa(
             # must not permanently block generation; COABuilder fails loudly
             # anyway if SENAITE is truly down) — that posture does not extend
             # to the mk1 branch.
-            from coa.source_setting import coa_generation_source
-            if coa_generation_source(db) == "mk1":
+            if _coa_src == "mk1":
                 _gate_parent_pk = db.execute(
                     select(LimsSample.id).where(LimsSample.sample_id == sample_id)
                 ).scalar_one_or_none()
@@ -11738,6 +11737,37 @@ async def generate_sample_coa(
                     needs_chromatogram = any(
                         d.analyte_keyword not in _micro for d in resolver_result.decisions
                     )
+                elif _coa_src == "mk1":
+                    # COA read-independence (Task 5 review Finding 1, R1
+                    # fix): resolver unavailable in mk1 mode (e.g. the
+                    # shadow reader's fail-open abort on a
+                    # review_state=None row) — derive the requirement
+                    # NATIVELY from the same rows the resolver would have
+                    # read, zero SENAITE HTTP. Must NEVER fall through to
+                    # the SENAITE keyword fetch below: that path is a
+                    # blocking, synchronous SENAITE HTTP call that fires
+                    # even with this module's SENAITE_URL unset —
+                    # sub_samples/senaite.py resolves its own
+                    # SENAITE_BASE_URL independently (defaults to
+                    # localhost:8080), so it does not honor this function's
+                    # SENAITE_URL gate. Fail open (no chromatogram
+                    # requirement) if the native read itself fails too —
+                    # same posture as the SENAITE branch below.
+                    try:
+                        from lims_analyses.service import list_parent_analyses_senaite_shape
+                        _micro = _micro_kws(db)
+                        # Mirrors sub_samples.senaite._INACTIVE_ANALYSIS_STATES —
+                        # "ACTIVE keyword" parity between the native and
+                        # SENAITE-sourced derivations below.
+                        _inactive_states = {"rejected", "retracted", "cancelled"}
+                        _native_rows = list_parent_analyses_senaite_shape(db, sample_id)
+                        needs_chromatogram = any(
+                            r.keyword and r.keyword not in _micro
+                            and r.review_state not in _inactive_states
+                            for r in _native_rows
+                        )
+                    except Exception:
+                        needs_chromatogram = False
                 else:
                     # Resolver unavailable — derive from the AR's active keywords;
                     # fail open (no chromatogram requirement) if that read fails too.
