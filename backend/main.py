@@ -76,6 +76,7 @@ from sub_samples.routes import router as sub_samples_router
 import sub_samples.service as sub_service
 from sub_samples.service import derive_base_demand
 from sub_samples import senaite
+from hplc_csv import build_chromatogram_csv
 from sub_samples.registry_debug import diff_registry_vs_senaite
 # Lookup-shape models moved to sub_samples/lookup_models.py (read-flip L4:
 # the native details builder types its return without importing main).
@@ -6444,15 +6445,10 @@ async def upload_chromatogram_to_senaite(
     if not chrom or not chrom.get("times") or not chrom.get("signals"):
         raise HTTPException(400, "No chromatogram data stored on this analysis")
 
-    # Step 1: Build CSV from chromatogram data
-    import io, csv as csv_mod
-    times = chrom["times"]
-    signals = chrom["signals"]
-    buf = io.StringIO()
-    writer = csv_mod.writer(buf)
-    for t, s in zip(times, signals):
-        writer.writerow([t, s])
-    csv_bytes = buf.getvalue().encode("utf-8")
+    # Step 1: Build CSV from chromatogram data (shared builder — backend/
+    # hplc_csv.py — so a Task-6 historical backfill produces byte-identical
+    # output to this live push; see test_hplc_csv.py).
+    csv_bytes = build_chromatogram_csv(analysis)
 
     # Step 2: Upload CSV to SENAITE as HPLC Graph attachment
     if SENAITE_URL is None:

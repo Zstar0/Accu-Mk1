@@ -255,7 +255,61 @@ def test_populate_full_record_fields(db):
     assert _json.loads(row.coa_meta) == {
         "CoaAddress": None, "CoaCompanyName": "Ftest' 123",
         "CoaEmail": None, "CoaWebsite": None,
+        "ChromatographBackgroundUrl": None,  # not set in _full_meta() fixture
     }
+
+
+# ── ChromatographBackgroundUrl sticky-preserve (Task 6) ─────────────────────
+# SENAITE exposes this key on ~zero ARs today (COA read-independence spec
+# §6) — it is populated by Mk1-side tooling (scripts/backfill_watermark_urls
+# .py), not sourced from SENAITE on every fetch. A blind full-tuple rebuild
+# of coa_meta on every refresh would silently erase a backfilled value the
+# very next time CACHE_FRESHNESS triggers a refresh — same failure shape as
+# the ContactFullName-doubling bug _collapse_self_doubled already guards
+# against ("a basic-info backfill degraded 1738 of 1822 rows", 2026-07-25).
+
+def test_refresh_preserves_existing_watermark_when_senaite_omits_it(db):
+    row = LimsSample(sample_id="P-0134", coa_meta=_json.dumps({
+        "CoaAddress": None, "CoaCompanyName": "Old Co", "CoaEmail": None,
+        "CoaWebsite": None, "ChromatographBackgroundUrl": "https://x/wm.png",
+    }))
+    meta = _full_meta()   # fixture carries no ChromatographBackgroundUrl key
+    service._populate_basic_info(row, meta)
+    saved = _json.loads(row.coa_meta)
+    assert saved["ChromatographBackgroundUrl"] == "https://x/wm.png"
+
+
+def test_refresh_overwrites_watermark_when_senaite_supplies_new_value(db):
+    row = LimsSample(sample_id="P-0134", coa_meta=_json.dumps({
+        "ChromatographBackgroundUrl": "https://old/wm.png",
+    }))
+    meta = _full_meta(ChromatographBackgroundUrl="https://new/wm.png")
+    service._populate_basic_info(row, meta)
+    saved = _json.loads(row.coa_meta)
+    assert saved["ChromatographBackgroundUrl"] == "https://new/wm.png"
+
+
+def test_refresh_still_overwrites_other_coa_fields_unconditionally(db):
+    """The sticky-preserve is SCOPED to ChromatographBackgroundUrl — the
+    other Coa* fields come reliably from SENAITE and must keep clearing
+    when SENAITE no longer supplies them (existing, intended behavior)."""
+    row = LimsSample(sample_id="P-0134", coa_meta=_json.dumps({
+        "CoaCompanyName": "Stale Co", "ChromatographBackgroundUrl": "https://x/wm.png",
+    }))
+    meta = _full_meta()
+    del meta["CoaCompanyName"]
+    service._populate_basic_info(row, meta)
+    saved = _json.loads(row.coa_meta)
+    assert saved["CoaCompanyName"] is None            # unconditional overwrite
+    assert saved["ChromatographBackgroundUrl"] == "https://x/wm.png"   # preserved
+
+
+def test_first_population_with_no_prior_coa_meta_defaults_watermark_none(db):
+    row = LimsSample(sample_id="P-0200")   # coa_meta starts NULL
+    meta = _full_meta()
+    service._populate_basic_info(row, meta)
+    saved = _json.loads(row.coa_meta)
+    assert saved["ChromatographBackgroundUrl"] is None
 
 
 def test_populate_analyte_slots_pairs_ordered(db):

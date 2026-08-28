@@ -137,7 +137,7 @@ def _populate_basic_info(row: LimsSample, meta: dict) -> None:
     row.client_lot = meta.get("ClientLot")
     row.client_reference = meta.get("ClientReference")
     row.company_logo_url = meta.get("CompanyLogoUrl")
-    row.coa_meta = json.dumps({k: meta.get(k) for k in _COA_META_FIELDS})
+    row.coa_meta = json.dumps(_merge_coa_meta(row.coa_meta, meta))
     row.last_synced_at = datetime.utcnow()
 
 
@@ -359,7 +359,45 @@ def _extract_label(value):
     return value
 
 
-_COA_META_FIELDS = ("CoaAddress", "CoaCompanyName", "CoaEmail", "CoaWebsite")
+_COA_META_FIELDS = ("CoaAddress", "CoaCompanyName", "CoaEmail", "CoaWebsite",
+                    "ChromatographBackgroundUrl")
+
+# ChromatographBackgroundUrl is the one _COA_META_FIELDS key SENAITE does NOT
+# reliably supply (verified ~zero AR coverage at COA read-independence spec
+# §6 time) — it's populated by Mk1-side tooling
+# (scripts/backfill_watermark_urls.py) rather than sourced from SENAITE on
+# every fetch. The other Coa* fields genuinely come from SENAITE and must
+# keep clearing when SENAITE stops supplying them (a real edit there should
+# propagate) — this set is deliberately narrow, not "all coa fields".
+_COA_META_STICKY_FIELDS = frozenset({"ChromatographBackgroundUrl"})
+
+
+def _merge_coa_meta(existing_coa_meta: Optional[str], meta: dict) -> dict:
+    """Build the coa_meta dict for a full basic-info write
+    (_populate_basic_info — create, refresh, and the basic-info backfill
+    script all route through it).
+
+    A blind `{k: meta.get(k) for k in _COA_META_FIELDS}` rebuild would
+    silently ERASE a _COA_META_STICKY_FIELDS value (e.g. a value the
+    watermark backfill script just wrote) on the very next refresh
+    (CACHE_FRESHNESS-triggered or otherwise), since SENAITE's own payload
+    carries nothing for that key — same failure shape as the
+    ContactFullName-doubling bug _collapse_self_doubled guards against ("a
+    basic-info backfill degraded 1738 of 1822 rows", 2026-07-25). For each
+    sticky field: SENAITE's value wins when it supplies a truthy one
+    (SENAITE CAN still update it); otherwise the row's current value is
+    preserved rather than nulled out."""
+    try:
+        existing = json.loads(existing_coa_meta) if existing_coa_meta else {}
+    except (ValueError, TypeError):
+        existing = {}
+    if not isinstance(existing, dict):
+        existing = {}
+    out = {k: meta.get(k) for k in _COA_META_FIELDS}
+    for k in _COA_META_STICKY_FIELDS:
+        if not out.get(k):
+            out[k] = existing.get(k)
+    return out
 
 
 def _parse_analyte_slots(meta: dict) -> list[dict]:
