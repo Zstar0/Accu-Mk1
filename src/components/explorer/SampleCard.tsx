@@ -3,6 +3,7 @@ import { AlertTriangle, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useUIStore } from '@/store/ui-store'
 import { ProductChip } from '@/components/senaite/ProductChip'
+import { computeProductCompletionFromStates } from '@/lib/product-completion'
 import { FlagIndicator } from '@/components/flags/FlagIndicator'
 import type { SenaiteLookupResult, OrderedProduct } from '@/lib/api'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
@@ -26,6 +27,7 @@ export function SampleCard({
   slaSnapshots,
   products,
   productColorFor,
+  keywordFamilies,
 }: {
   sampleId: string
   lookup: SenaiteLookupResult | undefined
@@ -72,6 +74,8 @@ export function SampleCard({
    *  @/lib/api with a closed factory). Absent -> chips keep the violet
    *  fallback. */
   productColorFor?: (p: OrderedProduct) => string
+  /** keyword-to-family map for the chips' state-derived completion checks. */
+  keywordFamilies?: Map<string, string>
 }) {
   const navigateToSample = useUIStore(state => state.navigateToSample)
   const productsEl =
@@ -86,6 +90,15 @@ export function SampleCard({
             xs
             product={p}
             colorClasses={productColorFor?.(p)}
+            completion={
+              lookup
+                ? computeProductCompletionFromStates(
+                    p,
+                    lookup.analyses,
+                    keywordFamilies
+                  )
+                : null
+            }
           />
         ))}
       </div>

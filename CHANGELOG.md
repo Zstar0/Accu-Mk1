@@ -1,5 +1,33 @@
 # Changelog
 
+## v1.11.9 — 2026-08-28
+
+### Added
+
+- **Completion checks on Order Status product chips** — the chips from the
+  Products toggle now show the green check when a product's lab work is
+  done, derived from the analysis states already on the card (result
+  submitted / promoted / verified / published; no extra requests).
+  Variance chips show no check on the board — Sample Details remains the
+  authoritative variance view.
+- **Native families now complete everywhere** — heavy metals, fentanyl,
+  and Sterility USP 71 chips gain Complete/Pending checks on Sample
+  Details AND the board, catalog-driven from each profile's member
+  services (a future family added in the admin UI works with no code
+  change).
+
+### Fixed
+
+- **Product completion classification survives the mk1 read source** —
+  the category partition was service-group-name-based, but registry
+  lookups carry no group names (broken since the 2026-08-27 flip):
+  STER-PCR and every native-family row silently landed in the HPLC
+  bucket, blocking the HPLC check and making Sterility's check
+  unreachable. Classification is now keyword-first (group kept as a
+  SENAITE-era fallback), with an enumerated analytical-keyword allowlist
+  instead of a catch-all — unclassified rows (e.g. moisture) neither
+  block nor satisfy any check.
+
 ## v1.11.8 — 2026-08-28
 
 ### Added
