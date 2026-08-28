@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.11.3 — 2026-08-27
+
+### Fixed
+
+- **Order Status search axes actually reach the database** — v1.11.2's
+  server-side search was a silent no-op: the backend forwarded the four
+  axes to the Integration Service only on the customer-scoped branch,
+  while the unscoped branch (the Order Status page) called the direct
+  fetch that ignores them. Any request carrying a non-empty axis now
+  routes through the IS (customer_id omitted — its endpoint treats null
+  as all orders), with newest-first ordering to match the browse view.
+
 ## v1.11.2 — 2026-08-27
 
 ### Fixed
