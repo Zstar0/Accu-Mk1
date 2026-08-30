@@ -3313,8 +3313,22 @@ def _serialize_senaite_shape_rows(
             r.mirror_review_state if r.provenance == "shadow" else r.review_state
         )
 
+        # A row's uid is its WRITE AUTHORITY, not just its name. The FE
+        # branches on the `mk1:` prefix to choose between the Mk1 endpoints
+        # and the SENAITE wizard endpoints, so a SHADOW row — which mirrors
+        # a line SENAITE owns — must serialize under that line's own uid, or
+        # mk1-mode reads address a SENAITE-owned line as native and every
+        # write dies on the Mk1 tier/state guards (the BW result-entry and
+        # legacy-retest outage, 2026-08-29). Canonical rows are Mk1's to
+        # write and always keep mk1:{id}; a shadow row with no recorded uid
+        # falls back to mk1:{id} and stays display-only, which is strictly
+        # better than routing a write at a line we cannot name.
+        _uid = f"mk1:{r.id}"
+        if r.provenance == "shadow" and (r.senaite_analysis_uid or "").strip():
+            _uid = r.senaite_analysis_uid.strip()
+
         out.append(SenaiteShapeAnalysisResponse(
-            uid=f"mk1:{r.id}",
+            uid=_uid,
             keyword=r.keyword,
             title=r.title,
             result=r.result_value,
