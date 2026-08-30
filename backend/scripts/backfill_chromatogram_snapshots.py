@@ -203,7 +203,15 @@ def reclassify_manual_chromatogram_rows(db_factory, *, apply: bool):
                 LimsParentAttachment.kind == "manual",
                 LimsParentAttachment.storage == "s3",
                 or_(
-                    LimsParentAttachment.filename.like("chromatogram_%.csv"),
+                    # The '_' is a LITERAL underscore, not a LIKE
+                    # single-character wildcard: unescaped, this also matched
+                    # 'chromatograms.csv' / 'chromatogram-notes-2026.csv' and
+                    # retagged them kind='chromatogram' with no reverse path,
+                    # after which _newest() would mint the wrong CSV onto a
+                    # certificate. Filenames are user-controlled (adopted
+                    # verbatim from SENAITE's AttachmentFile).
+                    LimsParentAttachment.filename.like(
+                        r"chromatogram\_%.csv", escape="\\"),
                     and_(
                         LimsParentAttachment.content_type == "text/csv",
                         LimsParentAttachment.attachment_type == "HPLC Graph",

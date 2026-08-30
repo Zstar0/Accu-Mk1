@@ -623,3 +623,52 @@ def test_main_exit_code_reflects_errors(db_factory, monkeypatch, capsys):
     assert rc == 1
     stats = json.loads(capsys.readouterr().out.strip())
     assert stats["errors"] == 1
+
+
+@pytest.mark.parametrize("filename", [
+    "chromatograms.csv",              # '_' wildcard matches 's'
+    "chromatogram-notes-2026.csv",    # '_' wildcard matches '-'
+])
+def test_reclassify_does_not_over_match_unescaped_like_wildcard(db_factory, filename):
+    """Review 2026-08-29, finding 7: the intended pattern is the literal
+    prefix 'chromatogram_', but an unescaped '_' is a single-character LIKE
+    wildcard, so unrelated manual CSVs matched and were retagged
+    kind='chromatogram' with no reverse path — after which _newest() would
+    mint the wrong CSV as the certificate's chromatogram. Filenames are
+    user-controlled (adopted verbatim from SENAITE's AttachmentFile) and the
+    manual+s3 row shape is real (the §4 repatriation sweep creates it).
+
+    content_type is deliberately NOT text/csv here: the second disjunct
+    (text/csv AND 'HPLC Graph') is a legitimate match, so leaving it would
+    let these rows qualify for the right reason and mask the wildcard bug.
+    """
+    db = db_factory()
+    parent = _parent(db, "P-0001")
+    _manual_attachment(db, parent, filename=filename,
+                       content_type="application/octet-stream")
+    db.commit(); db.close()
+
+    ctx, fake_storage = _patched()
+    with ctx[0], ctx[1]:
+        stats = backfill(db_factory, apply=True, limit=None)
+    assert stats["reclassified"] == 0, f"{filename} must not be retagged"
+    db = db_factory()
+    assert db.query(LimsParentAttachment).one().kind == "manual"
+    db.close()
+
+
+def test_reclassify_still_matches_the_literal_underscore_prefix(db_factory):
+    """The escape must not break the real pattern it exists to match."""
+    db = db_factory()
+    parent = _parent(db, "P-0001")
+    _manual_attachment(db, parent, filename="chromatogram_P-0001.csv",
+                       content_type="application/octet-stream")
+    db.commit(); db.close()
+
+    ctx, fake_storage = _patched()
+    with ctx[0], ctx[1]:
+        stats = backfill(db_factory, apply=True, limit=None)
+    assert stats["reclassified"] == 1
+    db = db_factory()
+    assert db.query(LimsParentAttachment).one().kind == "chromatogram"
+    db.close()
