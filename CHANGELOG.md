@@ -1,5 +1,36 @@
 # Changelog
 
+## v1.12.0 — 2026-08-30
+
+The read-independence train (PRs #155, #156, #157). Pairs with COA Builder
+v2.34.0 — deploy COA Builder first.
+
+### Added
+
+- **COA read-independence (#155)** — with `coa_generation=mk1`, COA
+  generation performs zero SENAITE reads: `sample_meta` wire block
+  (envelope + attachment descriptors), S2S attachment bytes route
+  (service-token), native attachments gate, shadow-backed source resolver,
+  native analyte-name and chromatogram-requirement derivations. Fail-closed
+  throughout; new env `MK1_PUBLIC_BASE_URL`. Backfill scripts:
+  chromatogram snapshots (reclassify + rebuild) and watermark URLs.
+- **Partial COAs (#155)** — a fully-pending armed section (e.g. sterility
+  not yet run) defers instead of blocking the certificate; the response
+  warns "regenerate when results land"; partially-filled sections still
+  refuse.
+- **Published-parent retest (#156)** — retest works on verified AND
+  published parents in mk1 mode; the published value stays citable until
+  the retest re-promote supersedes it.
+- **Shadow write-through (#157)** — shadow rows carry their SENAITE uid so
+  mk1-mode writes (BW result entry, legacy retest) reach SENAITE; unblocks
+  re-flipping `sample_details` to mk1 after the shadow backfill re-run.
+
+### Fixed
+
+- Parent retest routed via the dedicated route in mk1 read mode (#156 —
+  the "[object Object]" regression).
+- Reportable de-selections honoured across the mk1 read flip (#155).
+
 ## v1.11.10 — 2026-08-28
 
 ### Fixed
