@@ -76,6 +76,7 @@ more parents (rebuild pass) or rows (reclassify pass) errored (see
 "errors" in the stats line).
 """
 import argparse
+from collections import namedtuple
 import json
 import logging
 import os
@@ -98,6 +99,12 @@ log = logging.getLogger("backfill_chromatogram_snapshots")
 def _has_chromatogram_data(analysis) -> bool:
     chrom = analysis.chromatogram_data
     return bool(chrom and chrom.get("times") and chrom.get("signals"))
+
+
+# Lightweight stand-in for a streamed HPLCAnalysis row: exactly the
+# attributes resolve_parent_pk_for_analysis reads, plus the id the write
+# loop re-fetches by. Keeps discovery memory flat at prod scale.
+_CandidateRef = namedtuple("_CandidateRef", ("id", "sample_prep_id", "sample_id_label"))
 
 
 def resolve_parent_pk_for_analysis(
@@ -265,14 +272,24 @@ def backfill(db_factory, *, apply: bool, limit=None) -> dict:
 
     db = db_factory()
     try:
-        candidates = [
-            a for a in db.execute(
-                select(HPLCAnalysis)
-                .where(HPLCAnalysis.chromatogram_data.is_not(None))
-                .order_by(HPLCAnalysis.id)
-            ).scalars().all()
-            if _has_chromatogram_data(a)
-        ]
+        # Prod-scale memory guard (launch-night finding, 2026-08-30): the
+        # original `.all()` materialised EVERY chromatogram JSON blob at
+        # once (~4k rows on prod) and the process was SIGKILLed. Stream in
+        # server-cursor batches and keep only a lightweight ref per
+        # candidate — the blob is re-fetched per selected parent in the
+        # write loop below. The `_has_chromatogram_data` check runs on the
+        # streamed row, so candidacy semantics are byte-identical.
+        candidates = []
+        for a in db.execute(
+            select(HPLCAnalysis)
+            .where(HPLCAnalysis.chromatogram_data.is_not(None))
+            .order_by(HPLCAnalysis.id)
+            .execution_options(yield_per=200)
+        ).scalars():
+            if _has_chromatogram_data(a):
+                candidates.append(_CandidateRef(
+                    a.id, a.sample_prep_id, a.sample_id_label))
+            db.expunge(a)
         stats["analyses_with_data"] = len(candidates)
         if not candidates:
             return stats
@@ -330,14 +347,27 @@ def backfill(db_factory, *, apply: bool, limit=None) -> dict:
 
     for pk in gap_pks:
         parent = parents_by_pk.get(pk)
-        analysis = newest_by_parent_pk[pk]
+        ref = newest_by_parent_pk[pk]
         if parent is None:
             stats["errors"] += 1
             log.warning("backfill error parent_pk=%s err=parent-row-vanished", pk)
             continue
         try:
-            csv_bytes = build_chromatogram_csv(analysis)
-            filename = f"chromatogram_{analysis.sample_id_label}.csv"[:255]
+            # Re-fetch the full row (blob included) only for the parents
+            # actually being rebuilt — the streamed discovery kept refs only.
+            _ref_db = db_factory()
+            try:
+                analysis = _ref_db.get(HPLCAnalysis, ref.id)
+                if analysis is None or not _has_chromatogram_data(analysis):
+                    stats["errors"] += 1
+                    log.warning(
+                        "backfill error parent_pk=%s err=analysis-row-vanished id=%s",
+                        pk, ref.id)
+                    continue
+                csv_bytes = build_chromatogram_csv(analysis)
+                filename = f"chromatogram_{analysis.sample_id_label}.csv"[:255]
+            finally:
+                _ref_db.close()
             if apply:
                 db = db_factory()
                 try:
