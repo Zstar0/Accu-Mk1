@@ -192,3 +192,55 @@ def test_missing_base_url_aborts(db, parent):
     with patch.dict(os.environ, {"MK1_PUBLIC_BASE_URL": ""}), \
          pytest.raises(NativeSectionsError):
         build_sample_meta(db, row)
+
+
+# ── Review 2026-08-29, finding 2: the reportable-sidecar seam ────────────────
+# analysis_reportable is keyed by SENAITE analysis UID; every mk1-mode
+# candidate carries uid="mk1:{id}", so the sidecar lookup in
+# coa/source_resolver._apply_reportable can never hit. A de-selection the lab
+# made ("not fit to report") would therefore be silently ignored and the
+# excluded result could ride onto a certificate. Until the flag has a native
+# home, mk1 mode must refuse to certify such a sample rather than quietly
+# disagree with the lab.
+
+
+def test_deselected_sidecar_row_aborts_generation(db, parent):
+    from models import AnalysisReportable
+    row, _img, _csv = parent
+    db.add(AnalysisReportable(
+        sample_id=row.sample_id, analysis_uid="senaite-uid-1",
+        reportable=False, reason="TEST: not fit to report"))
+    db.flush()
+    with patch.dict(os.environ, ENV):
+        with pytest.raises(NativeSectionsError) as exc:
+            build_sample_meta(db, row)
+    detail = str(exc.value)
+    assert "reportable" in detail.lower()
+    assert "senaite-uid-1" in detail
+
+
+def test_reportable_true_sidecar_row_does_not_abort(db, parent):
+    """Only a de-selection is unhonourable — a reportable=True row states the
+    default, so ignoring it changes nothing and must not block a certificate."""
+    from models import AnalysisReportable
+    row, _img, _csv = parent
+    db.add(AnalysisReportable(
+        sample_id=row.sample_id, analysis_uid="senaite-uid-2",
+        reportable=True, reason="TEST: re-selected"))
+    db.flush()
+    with patch.dict(os.environ, ENV):
+        meta = build_sample_meta(db, row)
+    assert meta["SampleID"] == row.sample_id
+
+
+def test_other_samples_deselections_do_not_abort(db, parent):
+    """The guard is sample-scoped — another sample's flag is irrelevant."""
+    from models import AnalysisReportable
+    row, _img, _csv = parent
+    db.add(AnalysisReportable(
+        sample_id="SOME-OTHER-SAMPLE", analysis_uid="senaite-uid-3",
+        reportable=False, reason="TEST: unrelated"))
+    db.flush()
+    with patch.dict(os.environ, ENV):
+        meta = build_sample_meta(db, row)
+    assert meta["SampleID"] == row.sample_id

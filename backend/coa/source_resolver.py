@@ -101,11 +101,19 @@ def _gather_candidates_for(
                 unit=an.get("unit"),
                 state=an.get("review_state", ""),
                 # Default TRUE unless the reader payload already carries an
-                # explicit reportable flag (shadow reader, mk1 mode);
-                # _apply_reportable still stamps the real value afterward
-                # from the Mk1 sidecar for any candidate that has a row
-                # (HTTP-reader dicts never carry the key, so this is a
-                # no-op widening for the SENAITE path).
+                # explicit reportable flag (shadow reader, mk1 mode — it
+                # reads LimsAnalysis.reportable directly). HTTP-reader dicts
+                # never carry the key, so this is a no-op widening for the
+                # SENAITE path.
+                #
+                # NOTE (review 2026-08-29): _apply_reportable below does NOT
+                # rescue this in mk1 mode. The sidecar is keyed by SENAITE
+                # analysis UID and mk1-mode candidates carry "mk1:{id}", so
+                # the lookup can never hit — this reader-supplied value is
+                # the only reportable signal in that mode. Generation of a
+                # sample holding an unhonourable de-selection is blocked
+                # upstream, fail-closed, by
+                # coa.sample_meta._guard_unhonourable_reportable_flags.
                 reportable=an.get("reportable", True),
                 in_variance_set=in_variance_set,
                 is_parent_ar=is_parent_ar,

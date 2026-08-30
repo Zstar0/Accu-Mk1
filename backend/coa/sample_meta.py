@@ -72,6 +72,43 @@ def _newest(db, parent_pk: int, *, chromatogram: bool):
     return db.execute(q.order_by(A.id.desc()).limit(1)).scalar_one_or_none()
 
 
+def _guard_unhonourable_reportable_flags(db, parent) -> None:
+    """Fail closed when this sample carries a reportable de-selection mk1
+    mode cannot apply (review 2026-08-29, finding 2).
+
+    `analysis_reportable` is keyed by SENAITE analysis UID, but every
+    mk1-mode candidate carries `uid="mk1:{id}"` (the shadow reader emits the
+    Mk1 row id), so `coa.source_resolver._apply_reportable` can never match a
+    sidecar row in this mode — the flag is silently dropped and a result the
+    lab marked "not fit to report" becomes eligible again.
+
+    Only `reportable=False` rows block: a `True` row merely restates the
+    default, so ignoring it changes nothing. Scoped to this sample.
+
+    This is the fail-closed stand-in for the real fix (give the flag a native
+    home so it survives the read flip); it is inert on today's prod, which
+    has zero sidecar rows.
+    """
+    from models import AnalysisReportable
+
+    uids = db.execute(
+        select(AnalysisReportable.analysis_uid).where(
+            AnalysisReportable.sample_id == parent.sample_id,
+            AnalysisReportable.reportable.is_(False),
+        ).order_by(AnalysisReportable.analysis_uid)
+    ).scalars().all()
+    if uids:
+        raise NativeSectionsError(
+            f"sample_meta: {parent.sample_id} carries "
+            f"{len(uids)} reportable de-selection(s) "
+            f"({', '.join(uids)}) that mk1 mode cannot honour — the sidecar "
+            f"is keyed by SENAITE analysis UID and native candidates are "
+            f"not. Refusing to certify a sample whose excluded results "
+            f"would silently reappear; generate this one in senaite mode or "
+            f"clear the flag."
+        )
+
+
 def build_sample_meta(db, parent) -> dict:
     """Assemble the sample_meta wire block (spec §2). Fail-closed (R1): no
     SENAITE fallback -- a missing MK1_PUBLIC_BASE_URL, an empty
@@ -108,6 +145,7 @@ def build_sample_meta(db, parent) -> dict:
         raise NativeSectionsError(
             f"sample_meta: {parent.sample_id} has no native sample image — "
             f"upload one or run the image backfill")
+    _guard_unhonourable_reportable_flags(db, parent)
 
     from sub_samples.registry_details import _resolve_wp_url
     cm = _coa_meta(parent)

@@ -5,6 +5,8 @@ Pure-Python tests of the rule ladder — no DB, no SENAITE.
 
 from __future__ import annotations
 
+import pytest
+
 from families.schemas import AnalyteBreakdown
 from families.service import _derive_state, _is_hplc
 
@@ -286,3 +288,77 @@ def test_derive_family_state_end_to_end_threads_catalog_classifier(db_session):
         derive_family_state(db_session, parent.sample_id, _FakeEmptyReader())
     )
     assert response.state == "waiting_for_addon_results"
+
+
+# ── Review 2026-08-29, findings 3 + 5: the mk1-mode reader seam ──────────────
+
+
+def test_gather_analytes_ignores_non_reportable_payload_rows(db_session):
+    """Finding 3: in mk1 mode the payload comes from ShadowAnalysesReader,
+    which carries an explicit `reportable` flag. The legacy leg read only
+    keyword+review_state, so a canonical row the lab DE-SELECTED
+    (reportable=False) — correctly dropped by the Mk1 leg's
+    `reportable == True` filter — re-entered here and stamped parent_state,
+    letting an excluded result drive family state."""
+    from families.service import _build_hplc_classifier, _gather_analytes
+    from models import LimsSample
+
+    parent = LimsSample(sample_id="TEST-REPORTABLE-1", sample_type="x",
+                        status="received")
+    db_session.add(parent)
+    db_session.flush()
+
+    payload = [
+        {"keyword": "IDENTITY_BPC157", "review_state": "verified",
+         "reportable": False},
+    ]
+    is_hplc = _build_hplc_classifier(db_session)
+    breakdown = _gather_analytes(db_session, parent, payload, is_hplc)
+
+    assert "IDENTITY_BPC157" not in breakdown, (
+        "a de-selected (reportable=False) result must not drive family state"
+    )
+
+
+def test_gather_analytes_keeps_rows_without_a_reportable_key(db_session):
+    """The SENAITE HTTP reader never emits `reportable`; absence must keep
+    meaning reportable (senaite mode byte-identical)."""
+    from families.service import _build_hplc_classifier, _gather_analytes
+    from models import LimsSample
+
+    parent = LimsSample(sample_id="TEST-REPORTABLE-2", sample_type="x",
+                        status="received")
+    db_session.add(parent)
+    db_session.flush()
+
+    payload = [{"keyword": "IDENTITY_BPC157", "review_state": "verified"}]
+    is_hplc = _build_hplc_classifier(db_session)
+    breakdown = _gather_analytes(db_session, parent, payload, is_hplc)
+
+    assert breakdown["IDENTITY_BPC157"].parent_state == "verified"
+
+
+@pytest.mark.asyncio
+async def test_derive_family_state_survives_a_null_review_state_row(db_session):
+    """Finding 5: ShadowAnalysesReader raises ValueError on a NULL
+    review_state (a shadow row whose mirror_review_state is NULL). The COA
+    caller has a fail-open catch; this one did not, so GET
+    /api/families/{id}/state 500'd in mk1 mode where senaite mode returned a
+    state fine. The family panel must degrade, not die."""
+    from families.service import derive_family_state
+    from models import LimsSample
+
+    parent = LimsSample(sample_id="TEST-NULLSTATE-1", sample_type="x",
+                        status="received")
+    db_session.add(parent)
+    db_session.flush()
+
+    class _RaisingReader:
+        async def list_for_sample(self, sample_id):
+            raise ValueError(
+                f"analysis 1 on {sample_id} has review_state=None"
+            )
+
+    resp = await derive_family_state(db_session, "TEST-NULLSTATE-1",
+                                     _RaisingReader())
+    assert resp.state == "pending"
