@@ -476,6 +476,25 @@ def list_sample_preps_for_sub_samples(sub_sample_pks: list[int]) -> list[dict]:
             return [dict(r) for r in cur.fetchall()]
 
 
+def list_sample_preps_by_ids(prep_ids: list[int]) -> list[dict]:
+    """Preps matching the given ids (id IN ...). Mirror-image of
+    list_sample_preps_for_sub_samples — used by
+    scripts/backfill_chromatogram_snapshots.py to resolve
+    hplc_analyses.sample_prep_id -> lims_sub_sample_pk in bulk (one query
+    for the whole distinct prep-id set collected across all candidate
+    analyses, instead of one round trip per analysis)."""
+    if not prep_ids:
+        return []
+    with get_mk1_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, sample_id, senaite_sample_id, lims_sub_sample_pk "
+                "FROM sample_preps WHERE id = ANY(%s)",
+                [prep_ids],
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+
 def get_sample_prep(sample_prep_id: int) -> Optional[dict]:
     """Fetch a single sample prep by integer id (all columns)."""
     with get_mk1_db() as conn:

@@ -11,6 +11,7 @@ Spec: docs/superpowers/specs/2026-06-02-mk1-native-analyses-design.md
 
 from __future__ import annotations
 
+import logging
 from typing import Callable, Dict, List, Protocol
 
 from sqlalchemy import select
@@ -18,6 +19,8 @@ from sqlalchemy.orm import Session
 
 from families.schemas import AnalyteBreakdown, FamilyState, FamilyStateResponse
 from models import LimsAnalysis, LimsSample, LimsSubSample
+
+_log = logging.getLogger(__name__)
 
 
 class SenaiteAnalysesReader(Protocol):
@@ -165,6 +168,16 @@ def _gather_analytes(
         state = an.get("review_state")
         if not kw or not state:
             continue
+        # Review 2026-08-29 finding 3: honour an explicit de-selection.
+        # In mk1 mode this payload comes from ShadowAnalysesReader, which
+        # carries the row's own `reportable`; without this a canonical row
+        # the Mk1 leg above correctly dropped (reportable == True filter)
+        # re-entered here and stamped parent_state, letting a result the
+        # lab excluded drive family state. The SENAITE HTTP reader never
+        # emits the key, so absence still means reportable — senaite mode
+        # is byte-identical.
+        if not an.get("reportable", True):
+            continue
         if kw in breakdown and breakdown[kw].parent_state is not None:
             # Mk1 parent-tier row already captured — SENAITE shadowed.
             continue
@@ -273,7 +286,25 @@ async def derive_family_state(
         select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
     ).scalar_one_or_none()
 
-    senaite_payload: List[Dict] = await senaite_reader.list_for_sample(parent_sample_id)
+    # Review 2026-08-29 finding 5: ShadowAnalysesReader is FAIL-CLOSED — it
+    # raises on a row with no resolvable review_state (a shadow row whose
+    # mirror_review_state is NULL). That contract was written for COA
+    # generation, whose caller has its own fail-open catch; here it would
+    # surface as a bare HTTP 500 and take out the family panel for a sample
+    # that senaite mode reported on fine. Family state is a display
+    # derivation, not a certificate: degrade to the Mk1-only view (and, when
+    # there is no parent row either, the existing not-found error) rather
+    # than failing the request.
+    try:
+        senaite_payload: List[Dict] = await senaite_reader.list_for_sample(
+            parent_sample_id
+        )
+    except Exception as e:  # noqa: BLE001 — display path, never fatal
+        _log.warning(
+            "family-state reader failed for %s (%s: %s) — deriving from Mk1 rows only",
+            parent_sample_id, e.__class__.__name__, e,
+        )
+        senaite_payload = []
 
     if parent is None and not senaite_payload:
         raise FamilyNotFoundError(

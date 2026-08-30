@@ -3369,6 +3369,10 @@ def _serialize_senaite_shape_rows(
             # doesn't resolve, and the identity key must ship regardless.
             analysis_service_id=r.analysis_service_id,
             provenance=r.provenance,
+            # COA read-independence (Task 5): straight off the row, no
+            # extra lookup. See SenaiteShapeAnalysisResponse docstring.
+            retest_of_id=r.retest_of_id,
+            reportable=r.reportable,
         ))
     return out
 

@@ -276,6 +276,16 @@ class SenaiteShapeAnalysisResponse(BaseModel):
     profile_section_key: Optional[str] = None
     profile_section_label: Optional[str] = None
     profile_section_sort: Optional[int] = None
+    # COA read-independence (Task 5): the native retest link and the
+    # reportable flag, surfaced additively so ShadowAnalysesReader
+    # (backend/coa/shadow_reader.py) can serve the COA resolver's
+    # SenaiteAnalysesReader Protocol straight off this row without a
+    # second query. retest_of_id is the row's own LimsAnalysis.retest_of_id
+    # (None for originals and for rows that were never retested);
+    # reportable mirrors LimsAnalysis.reportable (defaults True). Both are
+    # new, optional fields — additive, no existing consumer reads them.
+    retest_of_id: Optional[int] = None
+    reportable: bool = True
 
 
 # ─── Phase 4a: promote_to_parent response shapes ─────────────────────────────

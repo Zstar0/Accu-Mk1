@@ -76,6 +76,7 @@ from sub_samples.routes import router as sub_samples_router
 import sub_samples.service as sub_service
 from sub_samples.service import derive_base_demand
 from sub_samples import senaite
+from hplc_csv import build_chromatogram_csv
 from sub_samples.registry_debug import diff_registry_vs_senaite
 # Lookup-shape models moved to sub_samples/lookup_models.py (read-flip L4:
 # the native details builder types its return without importing main).
@@ -6444,15 +6445,10 @@ async def upload_chromatogram_to_senaite(
     if not chrom or not chrom.get("times") or not chrom.get("signals"):
         raise HTTPException(400, "No chromatogram data stored on this analysis")
 
-    # Step 1: Build CSV from chromatogram data
-    import io, csv as csv_mod
-    times = chrom["times"]
-    signals = chrom["signals"]
-    buf = io.StringIO()
-    writer = csv_mod.writer(buf)
-    for t, s in zip(times, signals):
-        writer.writerow([t, s])
-    csv_bytes = buf.getvalue().encode("utf-8")
+    # Step 1: Build CSV from chromatogram data (shared builder — backend/
+    # hplc_csv.py — so a Task-6 historical backfill produces byte-identical
+    # output to this live push; see test_hplc_csv.py).
+    csv_bytes = build_chromatogram_csv(analysis)
 
     # Step 2: Upload CSV to SENAITE as HPLC Graph attachment
     if SENAITE_URL is None:
@@ -11328,16 +11324,29 @@ def _load_sample_aliases(db: Session, sample_id: str) -> dict[int, str]:
     return {r.slot: r.alias for r in rows}
 
 
-def _build_coa_analyte_name_resolver(db: Session, sample_id: str, *, alias_map: dict[int, str]):
+def _build_coa_analyte_name_resolver(
+    db: Session, sample_id: str, *, alias_map: dict[int, str],
+    coa_src: str = "senaite",
+):
     """Build a keyword→display-name function for the COA block message.
 
     Gathers three name sources (no failure is fatal — each degrades):
       - Mk1 catalog titles (AnalysisService.keyword → title)
-      - parent analyte-slot peptide names from SENAITE (best-effort)
+      - parent analyte-slot peptide names — NATIVE (lims_samples.analytes,
+        zero SENAITE HTTP) when coa_src == "mk1"; SENAITE (best-effort)
+        otherwise
       - per-sample customer aliases (passed in)
 
     Only invoked on the unresolved-block error path, so the one SENAITE
-    slot read here is off the happy path.
+    slot read here (senaite mode only) is off the happy path.
+
+    COA read-independence (final review Finding I1, R1 fix): mirrors the
+    Task 5 review Finding 1 pattern — sub_samples.senaite resolves its own
+    SENAITE_BASE_URL independently of this module's SENAITE_URL gate, so a
+    plain "call it and swallow the exception" try/except does NOT keep mk1
+    mode off the SENAITE wire; the synchronous, blocking HTTP call still
+    fires (and can still hang the event loop) before it fails. mk1 mode
+    must never reach fetch_parent_analyte_slots at all.
     """
     from coa.block_summary import build_name_resolver
     from models import AnalysisService
@@ -11349,14 +11358,38 @@ def _build_coa_analyte_name_resolver(db: Session, sample_id: str, *, alias_map: 
     }
 
     slot_names: dict[int, str] = {}
-    try:
-        from sub_samples import senaite as senaite_mod
-        for slot, label in senaite_mod.fetch_parent_analyte_slots(sample_id).items():
-            # Strip the "- Identity (HPLC)" service suffix → bare peptide name.
-            stripped = re.sub(r"\s*-\s*[^-]+\([^)]+\)\s*$", "", str(label)).strip()
-            slot_names[slot] = stripped or str(label)
-    except Exception:
-        pass
+    if coa_src == "mk1":
+        try:
+            from sub_samples.registry_inbox import _analyte_slot_fields
+            parent = db.execute(
+                select(LimsSample).where(LimsSample.sample_id == sample_id)
+            ).scalar_one_or_none()
+            if parent is not None:
+                for key, name in _analyte_slot_fields(parent.analytes).items():
+                    # "Analyte{n}Peptide" -> n. The stored name can carry
+                    # the SAME "- Identity (HPLC)" service-title suffix
+                    # SENAITE holds — registry_inbox._analyte_slot_fields'
+                    # own docstring says so, and sub_samples.service.
+                    # _parse_analyte_slots writes SENAITE's Analyte{i}Peptide
+                    # value through _extract_label unchanged when it's
+                    # already a string (not stripped there either). Apply
+                    # the identical suffix-strip the senaite branch below
+                    # uses — it's a no-op on an already-bare name, so this
+                    # is correct regardless of which shape a given row holds.
+                    slot = int(key[len("Analyte"):-len("Peptide")])
+                    stripped = re.sub(r"\s*-\s*[^-]+\([^)]+\)\s*$", "", str(name)).strip()
+                    slot_names[slot] = stripped or str(name)
+        except Exception:
+            pass
+    else:
+        try:
+            from sub_samples import senaite as senaite_mod
+            for slot, label in senaite_mod.fetch_parent_analyte_slots(sample_id).items():
+                # Strip the "- Identity (HPLC)" service suffix → bare peptide name.
+                stripped = re.sub(r"\s*-\s*[^-]+\([^)]+\)\s*$", "", str(label)).strip()
+                slot_names[slot] = stripped or str(label)
+        except Exception:
+            pass
 
     return build_name_resolver(
         catalog_titles=catalog_titles, slot_names=slot_names, aliases=alias_map,
@@ -11508,6 +11541,51 @@ async def _parent_attachment_kinds(sample_id: str, auth) -> Optional[dict]:
         return None
 
 
+def _parent_attachment_kinds_native(db, parent_pk: int) -> set[str]:
+    """mk1-mode twin of `_parent_attachment_kinds` (spec §5): classify a
+    parent's attachments for the COA attachments gate from
+    `lims_parent_attachments` — never SENAITE.
+
+    Returns a subset of {"image", "chromatogram"}. Fail-CLOSED: no matching
+    native rows (missing, wrong storage, or gated out) yields an empty set,
+    which the gate call site treats exactly like SENAITE's "nothing attached"
+    — the historical fail-OPEN-on-read-error posture is a SENAITE-branch-only
+    concept and does not apply here (a plain DB query has no equivalent
+    "can't reach the read-source" failure mode).
+
+    image = storage='s3' AND render_in_report AND (kind='receive_image' OR
+    attachment_type='Sample Image').
+    chromatogram = storage='s3' AND kind='chromatogram' (no render_in_report
+    requirement — chromatogram rows are minted render_in_report=False).
+    """
+    kinds: set = set()
+    has_image = db.execute(
+        select(LimsParentAttachment.id).where(
+            LimsParentAttachment.lims_sample_pk == parent_pk,
+            LimsParentAttachment.storage == "s3",
+            LimsParentAttachment.render_in_report.is_(True),
+            or_(
+                LimsParentAttachment.kind == "receive_image",
+                LimsParentAttachment.attachment_type == "Sample Image",
+            ),
+        ).limit(1)
+    ).first() is not None
+    if has_image:
+        kinds.add("image")
+
+    has_chromatogram = db.execute(
+        select(LimsParentAttachment.id).where(
+            LimsParentAttachment.lims_sample_pk == parent_pk,
+            LimsParentAttachment.storage == "s3",
+            LimsParentAttachment.kind == "chromatogram",
+        ).limit(1)
+    ).first() is not None
+    if has_chromatogram:
+        kinds.add("chromatogram")
+
+    return kinds
+
+
 async def _maybe_emit_regular_coa_child(db, sample_id, parent_row, primary_data):
     """For a variance sample, generate the Regular parent-services COA as a child
     of the just-created variance primary: a SECOND COABuilder /process WITHOUT
@@ -11610,13 +11688,49 @@ async def generate_sample_coa(
         _missing_attach = None
         _variance_required = False
 
-        if SENAITE_URL:
-            try:
-                reader = SenaiteAnalysesHttpReader(
-                    base_url=SENAITE_URL,
-                    auth=_get_senaite_auth(current_user),
+        # COA read-independence (Task 5): the pre-flight block below (resolver
+        # + attachments gate) must run in mk1 mode regardless of whether
+        # SENAITE_URL happens to be configured — mk1 mode reads
+        # ShadowAnalysesReader (native rows, zero SENAITE HTTP) and the
+        # attachments gate's mk1 branch (Task 4) reads native rows too, so
+        # neither needs SENAITE_URL. senaite mode is unchanged: it still
+        # requires SENAITE_URL, same as before this task.
+        from coa.source_setting import coa_generation_source
+        _coa_src = coa_generation_source(db)
+
+        # COA read-independence (Task 10): mk1 mode's existence authority
+        # for a parent sample is lims_samples — no row here means Mk1 has
+        # never seen this sample, full stop. Checked FIRST, ahead of the
+        # resolver/attachment pre-flight below: those gates fail-closed on
+        # empty native data (no rows -> "missing sample image" 422), which
+        # would otherwise mask a genuinely unknown sample_id behind a
+        # misleading attachments blocker instead of a clear not-found
+        # error. Abort before the COABuilder POST with Mk1-named wording,
+        # never SENAITE. senaite mode is unchanged: it has no existence
+        # authority in lims_samples, so no gate is added on that branch —
+        # it keeps falling through exactly as before this task.
+        if _coa_src == "mk1":
+            _exists_pk = db.execute(
+                select(LimsSample.id).where(LimsSample.sample_id == sample_id)
+            ).scalar_one_or_none()
+            if _exists_pk is None:
+                return SampleCOAActionResponse(
+                    success=False,
+                    message=f"sample {sample_id} not found in Accu-Mk1",
                 )
-                resolver_result = await resolve_sources(sample_id, db, reader)
+
+        if _coa_src == "mk1" or SENAITE_URL:
+            try:
+                if _coa_src == "mk1":
+                    from coa.shadow_reader import ShadowAnalysesReader
+                    reader = ShadowAnalysesReader(db)
+                    resolver_result = await resolve_sources(sample_id, db, reader)
+                elif SENAITE_URL:
+                    reader = SenaiteAnalysesHttpReader(
+                        base_url=SENAITE_URL,
+                        auth=_get_senaite_auth(current_user),
+                    )
+                    resolver_result = await resolve_sources(sample_id, db, reader)
             except Exception as e:
                 # Resolver failure is non-fatal in Phase 1; log and fall through.
                 _logger.warning("COA resolver pre-flight failed for %s: %s", sample_id, e)
@@ -11636,7 +11750,10 @@ async def generate_sample_coa(
 
                 micro_kw = coa_exempt_keywords(db)
                 if has_blocking_unresolved(resolver_result, micro_keywords=micro_kw):
-                    name_for = _build_coa_analyte_name_resolver(db, sample_id, alias_map=_load_sample_aliases(db, sample_id))
+                    name_for = _build_coa_analyte_name_resolver(
+                        db, sample_id, alias_map=_load_sample_aliases(db, sample_id),
+                        coa_src=_coa_src,
+                    )
                     _unresolved = summarize_unresolved(
                         resolver_result, micro_keywords=micro_kw, name_for=name_for,
                     )
@@ -11645,11 +11762,32 @@ async def generate_sample_coa(
             # AR, and — when the sample carries analytical (non-micro) analytes —
             # a chromatogram. Both are attached from the sample page pickers
             # ("Select Vial Image" / "Select Vial Chromatogram") or the legacy
-            # check-in/auto-fill flows. Fail-OPEN when SENAITE can't be read
-            # (same posture as the resolver pre-flight: a flaky check must not
-            # permanently block generation; COABuilder fails loudly anyway if
-            # SENAITE is truly down).
-            kinds = await _parent_attachment_kinds(sample_id, _get_senaite_auth(current_user))
+            # check-in/auto-fill flows.
+            #
+            # mk1 mode (spec §5): classified from `lims_parent_attachments`
+            # instead — NEVER SENAITE, no fallback. That branch is fail-CLOSED:
+            # a read error or no matching native rows both collapse to an
+            # empty kinds set, which reads as "nothing attached" below and
+            # trips the existing blockers with unchanged wording. The SENAITE
+            # branch below keeps its historical fail-OPEN posture on read
+            # error (same posture as the resolver pre-flight: a flaky check
+            # must not permanently block generation; COABuilder fails loudly
+            # anyway if SENAITE is truly down) — that posture does not extend
+            # to the mk1 branch.
+            if _coa_src == "mk1":
+                _gate_parent_pk = db.execute(
+                    select(LimsSample.id).where(LimsSample.sample_id == sample_id)
+                ).scalar_one_or_none()
+                _native_kinds = (
+                    _parent_attachment_kinds_native(db, _gate_parent_pk)
+                    if _gate_parent_pk is not None else set()
+                )
+                kinds = {
+                    "has_image": "image" in _native_kinds,
+                    "has_chromatogram": "chromatogram" in _native_kinds,
+                }
+            else:
+                kinds = await _parent_attachment_kinds(sample_id, _get_senaite_auth(current_user))
             if kinds is not None:
                 from lims_analyses.seeder import coa_exempt_keywords as _micro_kws
                 if resolver_result is not None:
@@ -11657,6 +11795,37 @@ async def generate_sample_coa(
                     needs_chromatogram = any(
                         d.analyte_keyword not in _micro for d in resolver_result.decisions
                     )
+                elif _coa_src == "mk1":
+                    # COA read-independence (Task 5 review Finding 1, R1
+                    # fix): resolver unavailable in mk1 mode (e.g. the
+                    # shadow reader's fail-open abort on a
+                    # review_state=None row) — derive the requirement
+                    # NATIVELY from the same rows the resolver would have
+                    # read, zero SENAITE HTTP. Must NEVER fall through to
+                    # the SENAITE keyword fetch below: that path is a
+                    # blocking, synchronous SENAITE HTTP call that fires
+                    # even with this module's SENAITE_URL unset —
+                    # sub_samples/senaite.py resolves its own
+                    # SENAITE_BASE_URL independently (defaults to
+                    # localhost:8080), so it does not honor this function's
+                    # SENAITE_URL gate. Fail open (no chromatogram
+                    # requirement) if the native read itself fails too —
+                    # same posture as the SENAITE branch below.
+                    try:
+                        from lims_analyses.service import list_parent_analyses_senaite_shape
+                        _micro = _micro_kws(db)
+                        # Mirrors sub_samples.senaite._INACTIVE_ANALYSIS_STATES —
+                        # "ACTIVE keyword" parity between the native and
+                        # SENAITE-sourced derivations below.
+                        _inactive_states = {"rejected", "retracted", "cancelled"}
+                        _native_rows = list_parent_analyses_senaite_shape(db, sample_id)
+                        needs_chromatogram = any(
+                            r.keyword and r.keyword not in _micro
+                            and r.review_state not in _inactive_states
+                            for r in _native_rows
+                        )
+                    except Exception:
+                        needs_chromatogram = False
                 else:
                     # Resolver unavailable — derive from the AR's active keywords;
                     # fail open (no chromatogram requirement) if that read fails too.
@@ -11894,10 +12063,18 @@ async def generate_sample_coa(
                 sample_id, generation_number, e,
             )
 
+    # Partial-COA fix (2026-08-29): surface any deferred (fully-pending)
+    # native sections as an operator-facing warning — the certificate
+    # generated successfully with the sections that WERE ready; this is a
+    # heads-up to regenerate once the pending profile has results, not a
+    # failure. native_sections is absent entirely for sub-sample COAs
+    # (helper returns None for a falsy doc, same as no deferrals).
+    from coa.wire_document import deferred_sections_warning
     return SampleCOAActionResponse(
         success=True,
         message=message,
         verification_code=verification_code,
+        warning=deferred_sections_warning(alias_body.get("native_sections")),
     )
 
 
@@ -12426,7 +12603,22 @@ async def regen_primary_coa(
     # integration service marks the new generation as published,
     # supersedes the old primary, and _publish_additional_coas sees no
     # draft children (existing additionals keep their codes).
-    return await publish_sample_coa(sample_id=sample_id, current_user=current_user, db=db)
+    #
+    # Partial-COA fix (2026-08-29): publish_sample_coa builds its OWN
+    # response (it has no idea a native section was deferred above), so the
+    # deferred-sections warning is computed HERE from this function's own
+    # wire doc and merged onto whatever publish_sample_coa returns — only
+    # on a successful regen, alongside any warning publish_sample_coa
+    # already set (e.g. the SENAITE pre-publish-state notice).
+    from coa.wire_document import deferred_sections_warning
+    _deferred_warning = deferred_sections_warning(alias_body.get("native_sections"))
+    _publish_resp = await publish_sample_coa(sample_id=sample_id, current_user=current_user, db=db)
+    if _deferred_warning and getattr(_publish_resp, "success", False):
+        _publish_resp.warning = (
+            f"{_publish_resp.warning} {_deferred_warning}"
+            if _publish_resp.warning else _deferred_warning
+        )
+    return _publish_resp
 
 
 @app.post("/wizard/senaite/additional-coas/{config_id}/regen-coa")
@@ -21383,6 +21575,64 @@ def get_sample_coa_sections(
         return build_coa_wire_document(db, parent)
     except NativeSectionsError as e:
         raise HTTPException(status_code=502, detail=e.detail)
+
+
+# ── S2S attachment bytes (read-independence spec §4) ──────────────────
+# Serves the bytes behind the URLs backend/coa/sample_meta.py mints for
+# sample_meta.attachments[*].url — COABuilder downloads each one with the
+# service-token header instead of walking SENAITE's AR attachments.
+# Byte-loading and header logic are cloned from the user-JWT download route
+# (download_registry_parent_attachment, /registry/sample/{sample_id}/
+# attachments/{attachment_id}/download, above): Content-Type and filename
+# come from the DB row, NEVER the storage-key extension (chromatogram
+# snapshots key as '.bin' while the row says text/csv). NO SENAITE branch
+# (R1) — storage='s3' is the only servable state; anything else 404s plainly,
+# with no proxy hint, because the producer never mints this URL for a
+# SENAITE-stored row.
+
+@app.get("/s2s/samples/{sample_id}/attachments/{attachment_id}")
+def s2s_get_sample_attachment(
+    sample_id: str,
+    attachment_id: int,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_internal_service_token),
+):
+    """Attachment bytes for S2S consumers (read-independence spec §4,
+    Task 3). Additive sibling of download_registry_parent_attachment —
+    same DB-row-authoritative headers, service-token gated instead of
+    user-JWT gated, no SENAITE-proxy branch."""
+    from sub_samples.photo_storage import PhotoNotFoundError, get_storage
+
+    att = db.execute(
+        select(LimsParentAttachment)
+        .join(LimsSample, LimsParentAttachment.lims_sample_pk == LimsSample.id)
+        .where(
+            LimsParentAttachment.id == attachment_id,
+            LimsSample.sample_id == sample_id.strip().upper(),
+        )
+    ).scalar_one_or_none()
+    if att is None:
+        raise HTTPException(
+            404, f"No attachment {attachment_id} on sample {sample_id}")
+    if att.storage != "s3":
+        raise HTTPException(404, "Attachment is not available via this route")
+    if not att.storage_key:
+        logger.warning(
+            "s2s_attachment.download_missing_key id=%s sample=%s",
+            att.id, sample_id)
+        raise HTTPException(404, "Attachment has no storage key")
+    try:
+        data = get_storage().fetch_photo(att.storage_key)
+    except PhotoNotFoundError:
+        logger.warning(
+            "s2s_attachment.download_object_missing id=%s key=%s",
+            att.id, att.storage_key)
+        raise HTTPException(404, "Attachment object missing from storage")
+    return Response(
+        content=data,
+        media_type=att.content_type or "application/octet-stream",
+        headers={"Content-Disposition": f'inline; filename="{att.filename}"'},
+    )
 
 
 @app.get("/s2s/catalog/service-keys")
