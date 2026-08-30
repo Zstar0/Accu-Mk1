@@ -13,6 +13,16 @@ generated at all. (Contrast with the variance overlay, which is best-effort.)
 Slice 1 of spec ownership (2026-08-03): Mk1 resolves the analysis_service_specs
 rule per member row, fills specification (structured dict) + conforms, and
 rule 5 — no resolvable active spec — aborts here at the producer.
+
+Partial-COA deferral (2026-08-29, P-2432): a profile with ZERO members
+carrying an eligible result (e.g. an armed add-on the bench hasn't run yet)
+is not the same failure as Rule 4's half-filled section — nothing has been
+tested, so there is nothing incomplete to print. That profile is DEFERRED
+(omitted from `sections`, logged loudly, and named in the wire document's
+`deferred_sections` list) instead of aborting the whole certificate. Rule 4
+still aborts, unchanged, the moment a profile has SOME eligible members and
+SOME missing — a half-filled section must never print. See
+build_native_sections for the eligible/partial/deferred split.
 """
 from __future__ import annotations
 
@@ -162,10 +172,14 @@ def _result_display(spec, result) -> Optional[str]:
 def build_native_sections(db: Session, parent) -> dict:
     """Assemble the native-sections wire document for a parent LimsSample.
 
-    Returns {"sample_id", "ordered_profiles", "sections"}. An order with no
-    reportable native profiles yields empty lists — a VALID document (the
-    ordered_profiles cross-check is what lets callers distinguish "nothing
-    ordered" from "something broke"). All failures raise NativeSectionsError.
+    Returns {"sample_id", "ordered_profiles", "sections"}, plus
+    "deferred_sections" (list of profile keys) when one or more profiles were
+    deferred rather than aborted — the key is OMITTED entirely when nothing
+    was deferred (additive-only wire shape; existing consumers see no
+    difference). An order with no reportable native profiles yields empty
+    lists — a VALID document (the ordered_profiles cross-check is what lets
+    callers distinguish "nothing ordered" from "something broke"). All
+    non-deferral failures raise NativeSectionsError.
     """
     sample_id = parent.sample_id
 
@@ -189,13 +203,35 @@ def build_native_sections(db: Session, parent) -> dict:
     peptide_id = sample_peptide_id(db, parent.id)
 
     sections = []
+    deferred_profiles: list[str] = []
     for prof in profiles:
+        # Resolve every member's eligible row up front so we can tell
+        # "nothing tested yet" (defer) apart from "some results are still
+        # missing" (Rule 4 abort) BEFORE committing to either path.
+        member_rows = [
+            (svc, _eligible_parent_row(db, parent.id, svc.id))
+            for svc in prof.analysis_services
+        ]
+        if all(row is None for _, row in member_rows):
+            # Partial-COA deferral: zero eligible members means the profile
+            # hasn't been started, not that it's half-finished. Omit the
+            # section, log loudly (a silently-dropped paid test is exactly
+            # what Rule 4 exists to prevent — this must stay visible), and
+            # flag it on the wire so the operator can regenerate later.
+            log.warning(
+                "native_section_deferred sample=%s profile=%s reason=no_eligible_results",
+                sample_id, prof.key,
+            )
+            deferred_profiles.append(prof.key)
+            continue
+
         rows = []
-        for svc in prof.analysis_services:
-            row = _eligible_parent_row(db, parent.id, svc.id)
+        for svc, row in member_rows:
             if row is None:
-                # Rule 4: a member without a certifiable result makes the
-                # section INCOMPLETE — abort, never skip.
+                # Rule 4: a partially-pending profile — SOME members have an
+                # eligible result and this one doesn't — makes the section
+                # INCOMPLETE — abort, never skip. (A fully-pending profile
+                # never reaches here; it was deferred above.)
                 raise NativeSectionsError(
                     f"native sections: profile '{prof.key}' member service "
                     f"'{svc.keyword}' (id={svc.id}) has no eligible result "
@@ -271,8 +307,14 @@ def build_native_sections(db: Session, parent) -> dict:
             "rows": rows,
         })
 
-    return {
+    doc = {
         "sample_id": sample_id,
         "ordered_profiles": [p.key for p in profiles],
         "sections": sections,
     }
+    if deferred_profiles:
+        # ordered_profiles is UNCHANGED — it still lists the deferred
+        # profile's key (spec: coab's ordered_profiles ⊆ sections check
+        # tolerates a key with no matching section; do not touch coab).
+        doc["deferred_sections"] = deferred_profiles
+    return doc
