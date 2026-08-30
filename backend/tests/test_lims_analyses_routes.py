@@ -678,9 +678,11 @@ def test_repromote_supersedes_parent_to_verify(_stable_auth, analysis_service):
     assert old_parent_row.review_state == "retracted"
 
 
-def test_repromote_over_published_409_names_deferral(_stable_auth, analysis_service):
-    """Re-promoting at a keyword whose active parent is published surfaces a
-    409 naming the COA-snapshot deferral, not the generic collision message."""
+def test_repromote_over_published_supersedes_published_parent(_stable_auth, analysis_service):
+    """Handler ruling 2026-08-28: a retest re-promote SUPERSEDES a published
+    parent — the published row is retracted ('superseded by retest promotion')
+    inside the same transaction and the new row mints parent_to_verify.
+    Replaces the former COA-snapshot 409 deferral."""
     db = SessionLocal()
     clean_sub = _find_clean_sub_for_route(db, analysis_service)
     db.close()
@@ -725,8 +727,26 @@ def test_repromote_over_published_409_names_deferral(_stable_auth, analysis_serv
             "reason": "HTTP-TEST: repromote over published parent",
         },
     )
-    assert r.status_code == 409, r.text
-    assert "COA-snapshot release" in str(r.json()["detail"])
+    assert r.status_code == 201, r.text
+    new_parent = r.json()["parent"]
+    _rename_parent_for_cleanup(new_parent["id"])
+    assert new_parent["review_state"] == "parent_to_verify"
+
+    db = SessionLocal()
+    try:
+        old = db.get(LimsAnalysis, parent_id)
+        assert old.review_state == "retracted"
+        supersede_tr = db.execute(
+            select(LimsAnalysisTransition).where(
+                LimsAnalysisTransition.analysis_id == parent_id,
+                LimsAnalysisTransition.to_state == "retracted",
+            )
+        ).scalars().all()
+        assert any(
+            "superseded by retest promotion" in (t.reason or "") for t in supersede_tr
+        ), [t.reason for t in supersede_tr]
+    finally:
+        db.close()
 
 
 # ── Phase 4b: senaite_shape promoted_to_parent_id ───────────────────────────

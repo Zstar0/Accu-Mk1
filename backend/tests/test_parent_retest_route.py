@@ -409,21 +409,86 @@ def test_parent_retest_on_awaiting_parent_unpromotes(
     assert parent_row.result_value is None
 
 
-def test_parent_retest_not_verified_409(client_with_promoted_parent_published, db_session):
-    """Published (or any non-verified) active parent row → 409, nothing retested."""
+def test_parent_retest_published_retests_sources_keeps_value(
+    client_with_promoted_parent_published, db_session
+):
+    """Handler ruling 2026-08-28: a PUBLISHED parent row may be retested in
+    accumk1 mode. The cascade retests the promoted sources, but the published
+    row is NOT retracted and its value is NOT cleared — it remains the citable
+    figure until the retest's re-promote supersedes it. The row is flagged
+    retested (stops repeat offers), a row-level audit transition records the
+    act, and the sample activity event names the state the parent was in."""
     client, sample_id, keyword, source_ids = client_with_promoted_parent_published
     r = client.post(
         f"/api/lims-analyses/parent/{sample_id}/retest", json={"keyword": keyword}
     )
-    assert r.status_code == 409
-    assert r.json()["detail"]["code"] == "invalid_transition"
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["new_row_ids"]) == 2
+    assert body["parent_review_state"] == "published"
 
-    from models import LimsAnalysis
+    from models import (
+        LimsAnalysis, LimsAnalysisTransition, LimsSample, LimsSubSampleEvent,
+    )
 
     db_session.expire_all()
     for sid in source_ids:
-        src = db_session.get(LimsAnalysis, sid)
-        assert src.retested is False
+        assert db_session.get(LimsAnalysis, sid).retested is True
+
+    parent = db_session.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one()
+    parent_row = db_session.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+            LimsAnalysis.keyword == keyword,
+            LimsAnalysis.retest_of_id.is_(None),
+        )
+    ).scalars().first()
+    assert parent_row is not None
+    assert parent_row.review_state == "published"
+    assert parent_row.result_value == "97.50"
+    assert parent_row.retested is True
+
+    audit = db_session.execute(
+        select(LimsAnalysisTransition).where(
+            LimsAnalysisTransition.analysis_id == parent_row.id,
+            LimsAnalysisTransition.from_state == "published",
+            LimsAnalysisTransition.to_state == "published",
+        )
+    ).scalars().first()
+    assert audit is not None
+    assert "retained" in (audit.reason or "")
+
+    event = db_session.execute(
+        select(LimsSubSampleEvent).where(
+            LimsSubSampleEvent.event == "parent_analysis_retested",
+            LimsSubSampleEvent.lims_sample_pk == parent.id,
+        )
+    ).scalars().first()
+    assert event is not None
+    assert event.details["unpromoted"] is False
+    assert event.details["parent_review_state_at_retest"] == "published"
+    assert set(event.details["source_row_ids"]) == set(source_ids)
+
+
+def test_parent_retest_published_repeat_is_noop(
+    client_with_promoted_parent_published, db_session
+):
+    """A second retest of the same published parent finds no eligible sources
+    (all already retested) and changes nothing — no double-cascade."""
+    client, sample_id, keyword, source_ids = client_with_promoted_parent_published
+    first = client.post(
+        f"/api/lims-analyses/parent/{sample_id}/retest", json={"keyword": keyword}
+    )
+    assert first.status_code == 200, first.text
+    second = client.post(
+        f"/api/lims-analyses/parent/{sample_id}/retest", json={"keyword": keyword}
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["new_row_ids"] == []
+    assert second.json()["parent_review_state"] == "published"
 
 
 def test_parent_retest_no_eligible_sources_returns_empty(

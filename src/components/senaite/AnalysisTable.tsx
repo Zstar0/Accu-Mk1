@@ -381,22 +381,55 @@ export function visibleRowTransitions(
 
 export type AnalysisVerbPolicy = 'default' | 'parent-native'
 
+/** Parent registry retest seam (read-flip main table, 2026-08-28): a
+ *  CANONICAL parent-tier row the dedicated parent-retest route can act on.
+ *  Shadow mirror rows are excluded (their state belongs to SENAITE; the
+ *  native cascade has no promotion provenance for them), as is a row whose
+ *  retest is already in flight (`retested` — the backend's repeat call is a
+ *  no-op, so offering the verb again only invites confusion). 'published'
+ *  is in the set per the published-parent-retest ruling: the cascade leaves
+ *  the published value live and the retest's re-promote supersedes it. */
+export function isParentRegistryRetestEligible(a: SenaiteAnalysis): boolean {
+  return (
+    !!a.uid?.startsWith('mk1:') &&
+    a.provenance === 'canonical' &&
+    !a.retested &&
+    (a.review_state === 'verified' ||
+      a.review_state === 'parent_to_verify' ||
+      a.review_state === 'published')
+  )
+}
+
 /** Policy-aware row verbs. 'parent-native' (the native parent analyses card)
- *  offers retest on a 'verified' row (routed via onParentRetest — the
- *  generic transition endpoint tier-blocks parent retest; the card calls
- *  the dedicated parent-retest route and owns the destructive confirm) and,
- *  on a 'parent_to_verify' row awaiting sign-off, both verify and retest —
- *  verify is non-destructive and routes through the generic transition
- *  endpoint directly. Everything else is display-only. */
+ *  offers retest on a 'verified' or 'published' row (routed via
+ *  onParentRetest — the generic transition endpoint tier-blocks parent
+ *  retest; the card calls the dedicated parent-retest route and owns the
+ *  destructive confirm) and, on a 'parent_to_verify' row awaiting sign-off,
+ *  both verify and retest — verify is non-destructive and routes through
+ *  the generic transition endpoint directly. Everything else is
+ *  display-only.
+ *
+ *  parentRegistrySeam (default policy only): the read-flip main table is
+ *  the native parent surface in mk1 read mode, so eligible canonical rows
+ *  get the card's verb set there too — retest on verified/published,
+ *  verify+retest on parent_to_verify. Non-eligible rows (shadow mirrors,
+ *  vial-tier hosts never pass the seam flag) fall through to the legacy
+ *  fn, byte-identical. */
 export function visibleRowTransitionsForPolicy(
   a: SenaiteAnalysis,
   policy: AnalysisVerbPolicy,
   parentLineStates?: Record<string, string>,
+  parentRegistrySeam = false,
 ): string[] {
   if (policy === 'parent-native') {
     if (!a.uid) return []
     if (a.review_state === 'parent_to_verify') return ['verify', 'retest']
+    if (a.review_state === 'published') return a.retested ? [] : ['retest']
     return a.review_state === 'verified' ? ['retest'] : []
+  }
+  if (parentRegistrySeam && isParentRegistryRetestEligible(a)) {
+    if (a.review_state === 'parent_to_verify') return ['verify', 'retest']
+    return ['retest']
   }
   return visibleRowTransitions(a, parentLineStates)
 }
@@ -415,6 +448,7 @@ export function deriveBulkActionsForPolicy(
   policy: AnalysisVerbPolicy,
   parentLineStates?: Record<string, string>,
   vialKind?: string | null,
+  parentRegistrySeam = false,
 ): { actions: BulkTransition[]; showPromote: boolean; showVarianceVerify: boolean } {
   if (policy === 'parent-native') {
     const allVerified =
@@ -424,7 +458,24 @@ export function deriveBulkActionsForPolicy(
     const actions: BulkTransition[] = allVerified ? ['retest'] : allToVerify ? ['verify'] : []
     return { actions, showPromote: false, showVarianceVerify: false }
   }
-  return deriveBulkActions(selected, parentLineStates, vialKind)
+  const base = deriveBulkActions(selected, parentLineStates, vialKind)
+  if (!parentRegistrySeam) return base
+  // Registry seam: on this surface EVERY row is parent-tier, so the generic
+  // bulk retest is broken by construction (tier-blocked per row). Offer bulk
+  // retest only when every selected row can take the dedicated route (and is
+  // in a state where retest is the whole verb — parent_to_verify keeps
+  // retest a row-level act, mirroring the card's bulk policy); otherwise
+  // strip it rather than fan out guaranteed 409s.
+  const actions: BulkTransition[] = base.actions.filter(t => t !== 'retest')
+  const retestable =
+    selected.length > 0 &&
+    selected.every(
+      a =>
+        isParentRegistryRetestEligible(a) &&
+        (a.review_state === 'verified' || a.review_state === 'published')
+    )
+  if (retestable) actions.push('retest')
+  return { ...base, actions }
 }
 
 /** Bulk toolbar actions: intersection of allowed transitions, except verify is
@@ -1343,6 +1394,7 @@ function AnalysisRow({
   verbPolicy = 'default',
   onParentRetest,
   onPromotedNativeRetest,
+  parentRegistryRetestSeam = false,
 }: {
   analysis: SenaiteAnalysis
   analyteNameMap: Map<number, string>
@@ -1378,7 +1430,8 @@ function AnalysisRow({
   resultsReadOnly?: boolean
   /** Verb policy — see AnalysisTableProps.verbPolicy. */
   verbPolicy?: AnalysisVerbPolicy
-  /** parent-native only: row retest requested — open the card's confirm. */
+  /** parent-native card AND the registry seam: row retest requested — open
+   *  the caller's confirm (routes to the dedicated parent-retest route). */
   onParentRetest?: (analysis: SenaiteAnalysis) => void
   /** Task 10: default-policy only. When provided, a promoted, native
    *  (mk1:), mk1-origin row offers Retest routed through this callback
@@ -1386,6 +1439,11 @@ function AnalysisRow({
    *  isPromotedSourceRetestEligible. Omitted (every existing surface) →
    *  byte-identical to today. */
   onPromotedNativeRetest?: (analysis: SenaiteAnalysis) => void
+  /** Read-flip main table (mk1 read mode) only: eligible canonical
+   *  parent-tier rows route Retest via onParentRetest and published rows
+   *  gain the verb — see isParentRegistryRetestEligible. Omitted (every
+   *  other surface, incl. vial-tier tables) → byte-identical to today. */
+  parentRegistryRetestSeam?: boolean
 }) {
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
@@ -1408,9 +1466,19 @@ function AnalysisRow({
     verbPolicy !== 'parent-native' &&
     !!onPromotedNativeRetest &&
     isPromotedSourceRetestEligible(analysis)
+  // Registry seam (read-flip main table): retest on an eligible canonical
+  // parent row must take the dedicated route — the generic transition
+  // endpoint tier-blocks parent retest (the PB-0486 regression).
+  const parentRegistrySeamActive =
+    verbPolicy !== 'parent-native' &&
+    parentRegistryRetestSeam &&
+    !!onParentRetest &&
+    isParentRegistryRetestEligible(analysis)
   const allowedTransitions = promotedSourceRetestSeam
     ? ['retest']
-    : visibleRowTransitionsForPolicy(analysis, verbPolicy, parentLineStates)
+    : visibleRowTransitionsForPolicy(
+        analysis, verbPolicy, parentLineStates, parentRegistrySeamActive
+      )
   const canPromote = verbPolicy !== 'parent-native' && isPromotable(analysis, vialKind) && !locked
   const canVarVerify = verbPolicy !== 'parent-native' && canVarianceVerify(analysis, vialKind)
   const isPromoted = analysis.promoted_to_parent_id != null
@@ -1722,6 +1790,8 @@ function AnalysisRow({
                       } else {
                         onParentRetest?.(analysis)
                       }
+                    } else if (parentRegistrySeamActive && t === 'retest') {
+                      onParentRetest?.(analysis)
                     } else if (DESTRUCTIVE_TRANSITIONS.has(t)) {
                       transition.requestConfirm(analysis.uid, t, analysis.title)
                     } else {
@@ -1959,13 +2029,20 @@ interface AnalysisTableProps {
    *  verified rows via onParentRetest/onParentBulkRetest; method/instrument
    *  editing suppressed; promote/variance side channels suppressed. */
   verbPolicy?: AnalysisVerbPolicy
-  /** parent-native only: row retest requested — open the card's confirm. */
+  /** parent-native card AND the registry seam: row retest requested — open
+   *  the caller's confirm (dedicated parent-retest route). */
   onParentRetest?: (analysis: SenaiteAnalysis) => void
-  /** parent-native only: bulk retest over the selected current rows. */
+  /** parent-native card AND the registry seam: bulk retest over the
+   *  selected current rows. */
   onParentBulkRetest?: (analyses: SenaiteAnalysis[]) => void
   /** Task 10: default-policy only — see isPromotedSourceRetestEligible.
    *  Omitted (every existing surface) → byte-identical to today. */
   onPromotedNativeRetest?: (analysis: SenaiteAnalysis) => void
+  /** Read-flip main table (mk1 read mode) only: eligible canonical
+   *  parent-tier rows route Retest via onParentRetest / onParentBulkRetest,
+   *  and published rows gain the verb (published-parent-retest ruling
+   *  2026-08-28). Omitted → byte-identical to today. */
+  parentRegistryRetestSeam?: boolean
 }
 
 export function AnalysisTable({
@@ -1993,6 +2070,7 @@ export function AnalysisTable({
   onParentRetest,
   onParentBulkRetest,
   onPromotedNativeRetest,
+  parentRegistryRetestSeam = false,
 }: AnalysisTableProps) {
   const [analysisFilter, setAnalysisFilter] = useState<'all' | 'verified' | 'pending' | 'invalid'>('all')
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null)
@@ -2115,7 +2193,9 @@ export function AnalysisTable({
     .filter(g => g.current.uid && bulk.selectedUids.has(g.current.uid))
     .map(g => g.current)
   const { actions: bulkAvailableActions, showPromote: bulkShowPromote, showVarianceVerify: bulkShowVarianceVerify } =
-    deriveBulkActionsForPolicy(selectedAnalyses, verbPolicy, parentLineStates, vialKind)
+    deriveBulkActionsForPolicy(
+      selectedAnalyses, verbPolicy, parentLineStates, vialKind, parentRegistryRetestSeam
+    )
 
   // Disable toolbar when any per-row transition is in-flight
   const toolbarDisabled = transition.pendingUids.size > 0
@@ -2269,6 +2349,14 @@ export function AnalysisTable({
                         }
                         return
                       }
+                      // Registry seam: a bulk 'retest' only reaches the
+                      // toolbar when every selected row is eligible (see
+                      // deriveBulkActionsForPolicy), so route the whole
+                      // selection through the dedicated parent path.
+                      if (parentRegistryRetestSeam && t === 'retest') {
+                        onParentBulkRetest?.(selectedAnalyses)
+                        return
+                      }
                       if (DESTRUCTIVE_TRANSITIONS.has(t)) {
                         setBulkPendingConfirm({ transition: t, count: bulk.selectedUids.size })
                       } else {
@@ -2381,6 +2469,7 @@ export function AnalysisTable({
                       verbPolicy={verbPolicy}
                       onParentRetest={onParentRetest}
                       onPromotedNativeRetest={onPromotedNativeRetest}
+                      parentRegistryRetestSeam={parentRegistryRetestSeam}
                     />
                     {isExpanded && group.history.map(h => (
                       <HistoryRow
