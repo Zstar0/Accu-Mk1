@@ -1892,6 +1892,14 @@ def _run_migrations():
         # analytical_vials (2026-08-24, heavy-metals pooling): of a profile's
         # vials_required vials, how many carry analyses. NULL = all.
         "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS analytical_vials INTEGER",
+        # senaite_analysis_uid (shadow write-through): the SENAITE line a
+        # shadow row mirrors, so mk1-mode reads can serialize it under its
+        # SENAITE identity and writes route back to SENAITE. NULL on
+        # canonical rows and on pre-existing shadow rows until the backfill
+        # (scripts/backfill_shadow_senaite_uids.py) runs.
+        "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS senaite_analysis_uid VARCHAR(50)",
+        "CREATE INDEX IF NOT EXISTS ix_lims_analyses_senaite_analysis_uid "
+        "ON lims_analyses (senaite_analysis_uid)",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

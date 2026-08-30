@@ -16660,6 +16660,7 @@ async def set_analysis_result(
                     sample_id=_sid, keyword=_kw,
                     mirror_review_state=item.get("review_state"),
                     result_value=req.result,
+                    senaite_analysis_uid=item.get("uid"),
                 )
 
             return AnalysisResultResponse(
@@ -16745,6 +16746,7 @@ async def set_analysis_method_instrument(
                     _mirror_parent_analysis_bg,
                     sample_id=_sid, keyword=_kw,
                     mirror_review_state=item.get("review_state"),
+                    senaite_analysis_uid=item.get("uid"),
                 )
 
             return AnalysisResultResponse(
@@ -16903,6 +16905,7 @@ async def transition_analysis(
                         result_value=(_retract_item.get("Result") or None),
                         is_retest=True,
                         old_mirror_review_state="retracted",
+                        senaite_analysis_uid=_retract_item.get("uid"),
                     )
 
                 return AnalysisResultResponse(
@@ -17072,6 +17075,7 @@ async def transition_analysis(
                     mirror_review_state=_mirror_state,
                     result_value=_retest_result,
                     is_retest=_is_retest,
+                    senaite_analysis_uid=item.get("uid"),
                 )
 
             return AnalysisResultResponse(

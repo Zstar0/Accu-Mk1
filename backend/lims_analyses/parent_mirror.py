@@ -74,7 +74,8 @@ def mirror_parent_analysis(db: Session, *, sample_id: str, keyword: str,
                            result_value: Optional[str] = None,
                            result_unit: Optional[str] = None,
                            is_retest: bool = False,
-                           old_mirror_review_state: Optional[str] = None) -> bool:
+                           old_mirror_review_state: Optional[str] = None,
+                           senaite_analysis_uid: Optional[str] = None) -> bool:
     """Upsert a parent shadow row. Returns False (no-op) if the parent isn't
     registered. Caller commits. Best-effort — callers wrap in try/except.
 
@@ -125,6 +126,7 @@ def mirror_parent_analysis(db: Session, *, sample_id: str, keyword: str,
             review_state=SHADOW_STATE, provenance="shadow",
             mirror_review_state=mirror_review_state,
             result_value=result_value, result_unit=result_unit,
+            senaite_analysis_uid=senaite_analysis_uid,
             retest_of_id=(old.id if old is not None else None),
         )
         db.add(new_row)
@@ -142,6 +144,7 @@ def mirror_parent_analysis(db: Session, *, sample_id: str, keyword: str,
             lims_sample_pk=parent.id, analysis_service_id=svc.id,
             keyword=svc.keyword, title=svc.title,
             review_state=SHADOW_STATE, provenance="shadow",
+            senaite_analysis_uid=senaite_analysis_uid,
         )
         db.add(row)
         db.flush()
@@ -150,6 +153,12 @@ def mirror_parent_analysis(db: Session, *, sample_id: str, keyword: str,
             transition_kind="auto", reason="shadow mirror: initial insert",
         ))
 
+    if senaite_analysis_uid is not None:
+        # Self-heal: SENAITE retract/replace mints a NEW line for the same
+        # (parent, service), and a stale uid would route writes at a line
+        # that no longer exists. `is not None` (never falsy-blank) so a
+        # caller that simply doesn't know the uid can't erase a good one.
+        row.senaite_analysis_uid = senaite_analysis_uid
     if mirror_review_state is not None:
         row.mirror_review_state = mirror_review_state
     if result_value is not None:
@@ -250,6 +259,10 @@ def sync_parent_shadows_from_items(db: Session, *, sample_id: str,
             result_value=line.get("result"),
             result_unit=line.get("unit"),
             is_retest=False,
+            # The AR line's own uid — this registration-time sweep is what
+            # heals rows whose uid the event hooks never supplied, and what
+            # re-points a row after SENAITE replaced its line.
+            senaite_analysis_uid=line.get("uid"),
         )
         if not ok:
             stats["skipped"] += 1
