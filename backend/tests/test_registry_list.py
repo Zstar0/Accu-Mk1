@@ -265,6 +265,10 @@ def test_registry_list_emits_shipping_fields():
     assert out["tracking_url"] == "https://f/9999"
 
 
+def test_wc_line_item_ids_passthrough():
+    [out] = registry_rows_to_list([_row(wc_line_item_ids=[13049, 13052])])
+    assert out['wc_line_item_ids'] == [13049, 13052]
+    assert registry_rows_to_list([_row()])[0]['wc_line_item_ids'] == []
 # ── Customer note column (2026-08-30) ───────────────────────────────────────
 # The receive page surfaces the customer's order note. lims_sample_remarks
 # holds three kinds of row and only ONE of them is customer-origin:

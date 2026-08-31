@@ -32,6 +32,7 @@ import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
 import type { ParentInfo } from '@/components/intake/ReceiveWizard/useReceiveWizard'
 import {
   getExplorerOrders,
+  getRegistryOrders,
   getRegistrySamples,
   getSetting,
   listSubSamples,
@@ -337,6 +338,23 @@ export function ReceiveSample() {
     enabled: expectedVialsKeys.length > 0,
     staleTime: 60_000,
   })
+
+  // ONE batched registry-orders query for the ship-from address shown in each
+  // expanded order row — mirrors the expected-vials batch above. Never per-row.
+  const orderNumbers = Array.from(
+    new Set(
+      enriched.map(g => g.orderKey).filter((k): k is string => k != null)
+    )
+  ).sort()
+  const registryOrdersQ = useQuery({
+    queryKey: ['registry-orders', orderNumbers.join(',')],
+    queryFn: () => getRegistryOrders(orderNumbers),
+    enabled: orderNumbers.length > 0,
+    staleTime: 60_000,
+  })
+  const ordersByNumber = new Map(
+    (registryOrdersQ.data ?? []).map(o => [o.order_number, o])
+  )
 
   const qOrder = searchOrder.trim().toLowerCase()
   const qEmail = searchEmail.trim().toLowerCase()
@@ -708,6 +726,11 @@ export function ReceiveSample() {
                               : undefined
                           }
                           expectedVialsLoading={expectedVialsQ.isLoading}
+                          registryOrder={
+                            group.orderKey
+                              ? ordersByNumber.get(group.orderKey)
+                              : undefined
+                          }
                           selectable={multiOrderEnabled}
                           selected={
                             group.orderKey != null &&

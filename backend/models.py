@@ -7,7 +7,7 @@ from datetime import datetime, time, date
 from decimal import Decimal
 from typing import Optional, List
 import uuid
-from sqlalchemy import String, Text, Float, Integer, BigInteger, Boolean, DateTime, Time, Date, ForeignKey, JSON, Column, Table, UniqueConstraint, CheckConstraint, Index, Numeric, text
+from sqlalchemy import String, Text, Float, Integer, BigInteger, Boolean, DateTime, Time, Date, ForeignKey, JSON, Column, Table, UniqueConstraint, CheckConstraint, Index, Numeric, text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -1282,12 +1282,49 @@ class LimsSample(Base):
     shipping_carrier: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     tracking_number: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     tracking_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # Order entity (2026-08-28 design): WC line item ids this sample was
+    # split from, for the order<->sample line-item cross-reference. Written
+    # by Task 3's split logic; NULL/empty for pre-order-entity rows.
+    wc_line_item_ids: Mapped[Optional[list]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     sub_samples: Mapped[List["LimsSubSample"]] = relationship(
         "LimsSubSample", back_populates="parent_sample",
         cascade="all, delete-orphan", order_by="LimsSubSample.vial_sequence",
+    )
+
+
+class LimsOrder(Base):
+    """WP order registry row — the parent entity for lims_samples
+    (join: order_number == lims_samples.client_order_number, no FK by
+    design). Upserted by the IS at order acceptance and by the backfill;
+    NEVER carries logistics fields (vendor/tracking live per-sample)."""
+
+    __tablename__ = "lims_orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    wp_order_id: Mapped[int] = mapped_column(Integer, nullable=False, unique=True, index=True)
+    order_number: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    status: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    customer_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    customer_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    customer_email: Mapped[Optional[str]] = mapped_column(String(254), nullable=True)
+    billing: Mapped[Optional[dict]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True
+    )
+    shipping: Mapped[Optional[dict]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True
+    )
+    wp_created_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    wp_paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
 

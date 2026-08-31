@@ -38,6 +38,10 @@ def test_link_hash_for_routes_to_the_entity_page():
     # Worksheet deep link → worksheet drawer + flag thread.
     assert link_hash_for({"kind": "worksheet", "id": "9"}, 7) == (
         "#hplc-analysis/worksheet-detail?id=9&flag=7")
+    # Order deep link → receive-sample page + flag thread (Task 5 fix round 1:
+    # seams._order_context's deep_link is {"kind": "order", "id": ...}).
+    assert link_hash_for({"kind": "order", "id": "WP-6344"}, 7) == (
+        "#senaite/receive-sample?id=WP-6344&flag=7")
     # No usable deep link → dashboard fallback (thread still opens).
     assert link_hash_for({"kind": "none", "id": "42"}, 7) == (
         "#dashboard/orders?flag=7")

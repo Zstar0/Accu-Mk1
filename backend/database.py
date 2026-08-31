@@ -1898,6 +1898,37 @@ def _run_migrations():
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS shipping_carrier VARCHAR(100)",
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS tracking_number VARCHAR(120)",
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS tracking_url VARCHAR(500)",
+        # Order entity (2026-08-28 design): the parent registry row for
+        # lims_samples, joined by order_number == client_order_number (no
+        # FK by design, matching the registry pattern).
+        """
+        CREATE TABLE IF NOT EXISTS lims_orders (
+            id               SERIAL PRIMARY KEY,
+            wp_order_id      INTEGER NOT NULL UNIQUE,
+            order_number     VARCHAR(40) NOT NULL,
+            status           VARCHAR(40),
+            customer_user_id INTEGER,
+            customer_name    VARCHAR(200),
+            customer_email   VARCHAR(254),
+            billing          JSONB,
+            shipping         JSONB,
+            wp_created_at    TIMESTAMPTZ,
+            wp_paid_at       TIMESTAMPTZ,
+            created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_lims_orders_order_number ON lims_orders (order_number)",
+        # Order entity (2026-08-28 design): WC line item ids a sample was
+        # split from — the order<->sample line-item cross-reference.
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS wc_line_item_ids JSONB",
+        # Order entity (Task 5, 2026-08-28 design): seed the flags module's
+        # "order" item kind idempotently, mirroring the general_task seed above.
+        """
+        INSERT INTO flag_item_kinds (slug, label, color, is_active, is_builtin, sort_order)
+        SELECT 'order', 'Order', '#f59e0b', TRUE, TRUE, 5
+        WHERE NOT EXISTS (SELECT 1 FROM flag_item_kinds WHERE slug='order')
+        """,
         # senaite_analysis_uid (shadow write-through): the SENAITE line a
         # shadow row mirrors, so mk1-mode reads can serialize it under its
         # SENAITE identity and writes route back to SENAITE. NULL on

@@ -120,6 +120,7 @@ def registry_rows_to_list(
             "tracking_url": r.tracking_url,
             "analytes": _analyte_names(r.analytes),
             "analyte_details": _analyte_details(r.analytes),
+            "wc_line_item_ids": list(r.wc_line_item_ids or []),
             # Customer's wizard note ("Notes for Lab"); None when absent.
             "customer_note": (customer_notes or {}).get(getattr(r, "id", None)),
         })

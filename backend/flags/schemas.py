@@ -92,7 +92,7 @@ class EventResponse(BaseModel):
 
 class DeepLink(BaseModel):
     """How the frontend navigates to a flagged entity. `kind` ∈
-    sample | worksheet | none; `id` is the navigator argument."""
+    sample | worksheet | order | none; `id` is the navigator argument."""
     kind: str
     id: str
 
@@ -107,6 +107,12 @@ class EntityContext(BaseModel):
     sample_id: Optional[str] = None
     analyses: List[str] = Field(default_factory=list)
     lot: Optional[str] = None  # deferred — additive hook only (lives in SENAITE)
+    # order-only fields (Task 5) — additive hooks, same pattern as
+    # sample_id/analyses/lot above: unset (None/[]) for every other entity
+    # type's context, populated only by seams._order_context.
+    customer_name: Optional[str] = None
+    customer_email: Optional[str] = None
+    sample_ids: List[str] = Field(default_factory=list)
     deep_link: DeepLink
 
 
