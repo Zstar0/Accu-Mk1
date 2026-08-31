@@ -47,6 +47,7 @@ import {
 } from '@/lib/inbox-orders'
 import { OrderListRow } from '@/components/intake/OrderListRow'
 import { TrackingLink } from '@/components/intake/TrackingLink'
+import { CustomerNoteCell } from '@/components/intake/CustomerNoteCell'
 import { getOrderBoxLabelSummaries } from '@/lib/api'
 import { getOrderEmail } from '@/components/explorer/helpers'
 import { OrderReceiveSession } from '@/components/intake/OrderReceiveSession'
@@ -709,6 +710,8 @@ export function ReceiveSample() {
                           onSort={handleOrderSort}
                           className="w-36"
                         />
+                        <TableHead className="w-28">Tracking</TableHead>
+                        <TableHead className="w-52">Customer Note</TableHead>
                         <TableHead className="w-24" />
                       </TableRow>
                     </TableHeader>
@@ -744,7 +747,7 @@ export function ReceiveSample() {
                       {visibleOrders.length === 0 && (
                         <TableRow>
                           <TableCell
-                            colSpan={6}
+                            colSpan={8}
                             className="py-8 text-center text-sm text-muted-foreground"
                           >
                             No orders match the current search
@@ -807,6 +810,7 @@ export function ReceiveSample() {
                         className="w-24 text-center"
                       />
                       <TableHead className="w-28">Tracking</TableHead>
+                      <TableHead className="w-52">Customer Note</TableHead>
                       <SortableHead
                         column="review_state"
                         label="State"
@@ -829,7 +833,7 @@ export function ReceiveSample() {
                     {visibleSamples.length === 0 && (
                       <TableRow>
                         <TableCell
-                          colSpan={9}
+                          colSpan={10}
                           className="py-8 text-center text-sm text-muted-foreground"
                         >
                           No samples match the current search
@@ -871,6 +875,9 @@ export function ReceiveSample() {
                             trackingNumber={s.tracking_number}
                             trackingUrl={s.tracking_url}
                           />
+                        </TableCell>
+                        <TableCell>
+                          <CustomerNoteCell note={s.customer_note} />
                         </TableCell>
                         <TableCell className="text-center">
                           <StateBadge state={s.review_state} />

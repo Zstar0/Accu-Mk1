@@ -429,3 +429,48 @@ describe('ReceiveSample — search axes + sort + expand', () => {
     expect(after.length).toBeGreaterThan(before)
   })
 })
+
+// ── Column headers (2026-08-30) ─────────────────────────────────────────────
+// A sequential string-replace while adding these columns matched the ORDER
+// table's newly-inserted Tracking head instead of the sample table's, so the
+// order view shipped TWO "Customer Note" headers and the sample view none.
+// Header text is unique per view — assert it, so that class of edit can't
+// pass again.
+
+describe('ReceiveSample — column headers are not duplicated', () => {
+  // Earlier suites in this file reshape the shared getRegistrySamples mock
+  // (pagination, search axes), so re-establish a known one-row list rather
+  // than inheriting whatever the previous describe left behind.
+  beforeEach(() => {
+    vi.mocked(getRegistrySamples).mockResolvedValue({
+      items: [
+        {
+          uid: 'u1',
+          id: 'P-1',
+          client_order_number: 'WP-1042',
+          client_id: 'acme',
+          sample_type: 'Peptide',
+          review_state: 'sample_due',
+          date_sampled: null,
+          customer_note: 'Customer note (order #1042): ship cold',
+        },
+      ],
+    } as unknown as Awaited<ReturnType<typeof getRegistrySamples>>)
+  })
+
+  it('the order view has exactly one Tracking and one Customer Note header', async () => {
+    renderPage()
+    // Same row-ready signal the rest of this suite uses.
+    await rowCheckbox('WP-1042')
+    expect(screen.getAllByText('Tracking')).toHaveLength(1)
+    expect(screen.getAllByText('Customer Note')).toHaveLength(1)
+  })
+
+  it('the sample view also has exactly one of each', async () => {
+    renderPage()
+    await rowCheckbox('WP-1042')
+    fireEvent.click(screen.getByRole('button', { name: 'By sample' }))
+    expect(screen.getAllByText('Tracking')).toHaveLength(1)
+    expect(screen.getAllByText('Customer Note')).toHaveLength(1)
+  })
+})

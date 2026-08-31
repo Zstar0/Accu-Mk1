@@ -4639,6 +4639,11 @@ export interface SenaiteSample {
   // Registry passthrough (Task 2) — the WooCommerce line-item ids this sample
   // was created from. Absent on SENAITE-sourced lists.
   wc_line_item_ids?: number[]
+  // The customer's wizard note ("Notes for Lab"). Customer-origin remarks
+  // ONLY — never a lab remark. Registry reads only; null/absent when the
+  // sample has none, which is every sample ordered before the note was
+  // persisted natively.
+  customer_note?: string | null
 }
 
 export interface SenaiteSamplesResponse {

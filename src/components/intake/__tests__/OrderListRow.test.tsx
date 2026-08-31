@@ -143,3 +143,39 @@ describe('OrderListRow', () => {
     expect(screen.queryByRole('checkbox')).toBeNull()
   })
 })
+
+// ── Tracking + Customer Note columns (2026-08-30) ───────────────────────────
+// Tracking used to live inside the Order cell's subtitle, wedged after the
+// sample count and expected-vials text. Both now have their own column, and
+// the note column is customer-origin only (the backend query guarantees that).
+
+describe('OrderListRow tracking + customer note columns', () => {
+  function groupWith(over: Record<string, unknown>): EnrichedOrderGroup {
+    const g = makeGroup(7, 'a@b.com')
+    return {
+      ...g,
+      samples: [{ ...g.samples[0], ...over }] as unknown as SenaiteSample[],
+    }
+  }
+
+  it('renders the customer note in its own cell', () => {
+    renderRow(
+      groupWith({ customer_note: 'Customer note (order #1042): ship cold' })
+    )
+    const note = screen.getByTestId('customer-note')
+    expect(note).toHaveTextContent('Customer note (order #1042): ship cold')
+    // Its own cell — not folded into the Order cell's subtitle line.
+    expect(note.closest('td')).not.toHaveTextContent('WP-1042')
+  })
+
+  it('renders no note cell content when the sample has none', () => {
+    renderRow(groupWith({}))
+    expect(screen.queryByTestId('customer-note')).toBeNull()
+  })
+
+  it('renders the tracking number outside the order cell', () => {
+    renderRow(groupWith({ tracking_number: '1Z999AA10123456784' }))
+    const tracking = screen.getByText('1Z999AA10123456784')
+    expect(tracking.closest('td')).not.toHaveTextContent('WP-1042')
+  })
+})

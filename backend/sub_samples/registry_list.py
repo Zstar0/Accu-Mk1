@@ -1,7 +1,9 @@
 """Map lims_samples rows into the SenaiteSample list shape for GET /registry/samples."""
 import json
 from typing import Any
-from models import LimsSample
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+from models import LimsSample, LimsSampleRemark
 
 
 def _analyte_names(raw: str | None) -> list[str]:
@@ -42,7 +44,54 @@ def _analyte_details(raw: str | None) -> list[dict[str, Any]]:
     return out
 
 
-def registry_rows_to_list(rows: list[LimsSample]) -> list[dict[str, Any]]:
+def fetch_customer_notes(db: Session, rows: list[LimsSample]) -> dict[int, str]:
+    """{lims_sample_pk: customer note} for a page of registry rows.
+
+    lims_sample_remarks holds three kinds of row and only ONE is
+    customer-origin:
+      * customer order note  -- author_user_id NULL *and* author_label NULL
+                               (written by upsert_sample_from_signal from the
+                               order signal's Remarks)
+      * lab remark           -- a real author_user_id (receive / Add Remark)
+      * backfilled SENAITE   -- author_label carries the SENAITE login
+
+    The receive page's column is deliberately narrow (Handler ruling
+    2026-08-30): a column that mixes a customer's shipping instruction with a
+    lab remark a tech added later cannot be trusted at a glance.
+
+    ONE grouped query for the whole page, never per row -- this feeds a list
+    endpoint, so an N+1 here would scale with page size.
+
+    Earliest-wins when a sample somehow carries several: at most one is
+    expected (the note is written only on registry-row creation), but the read
+    must be deterministic rather than order-of-insertion.
+    """
+    pks = [r.id for r in rows if getattr(r, "id", None) is not None]
+    if not pks:
+        return {}
+    stmt = (
+        select(LimsSampleRemark.lims_sample_pk, LimsSampleRemark.content)
+        .where(
+            LimsSampleRemark.lims_sample_pk.in_(pks),
+            LimsSampleRemark.author_user_id.is_(None),
+            LimsSampleRemark.author_label.is_(None),
+        )
+        # Earliest first, then let the first write into the dict win.
+        .order_by(LimsSampleRemark.created_at.asc(), LimsSampleRemark.id.asc())
+    )
+    notes: dict[int, str] = {}
+    for pk, content in db.execute(stmt).all():
+        notes.setdefault(pk, content)
+    return notes
+
+
+def registry_rows_to_list(
+    rows: list[LimsSample],
+    customer_notes: dict[int, str] | None = None,
+) -> list[dict[str, Any]]:
+    """`customer_notes` comes from fetch_customer_notes(); omitted (None) means
+    every row reports no note, which keeps callers that do not need the column
+    working unchanged."""
     out: list[dict[str, Any]] = []
     for r in rows:
         out.append({
@@ -72,5 +121,7 @@ def registry_rows_to_list(rows: list[LimsSample]) -> list[dict[str, Any]]:
             "analytes": _analyte_names(r.analytes),
             "analyte_details": _analyte_details(r.analytes),
             "wc_line_item_ids": list(r.wc_line_item_ids or []),
+            # Customer's wizard note ("Notes for Lab"); None when absent.
+            "customer_note": (customer_notes or {}).get(getattr(r, "id", None)),
         })
     return out
