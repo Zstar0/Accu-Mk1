@@ -63,7 +63,18 @@ def _newest(db, parent_pk: int, *, chromatogram: bool):
     from models import LimsParentAttachment as A
     q = select(A).where(A.lims_sample_pk == parent_pk, A.storage == "s3")
     if chromatogram:
-        q = q.where(A.kind == "chromatogram")
+        # kind='chromatogram' = the HPLC-prep push / Select-Vial flow. The
+        # attachment_type arm (BW-0106, 2026-08-31) admits CSVs attached
+        # manually from the sample page (kind='manual', SENAITE-typed
+        # 'HPLC Graph') — symmetric with the image arm below. text/* only:
+        # the coab wire role is chromatogram_csv and the renderer parses
+        # CSV, so an image typed 'HPLC Graph' must not qualify. Twin of
+        # main.py's _parent_attachment_kinds_native — keep in lockstep.
+        q = q.where(
+            (A.kind == "chromatogram")
+            | ((A.attachment_type == "HPLC Graph")
+               & A.content_type.ilike("text/%"))
+        )
     else:
         q = q.where(
             A.render_in_report.is_(True),

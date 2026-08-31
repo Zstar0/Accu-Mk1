@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.12.5 — 2026-08-31
+
+### Fixed
+
+- **Manually-attached chromatogram CSVs now satisfy the COA gate (mk1
+  mode)** — a CSV attached from the sample page lands `kind='manual'` with
+  SENAITE's "HPLC Graph" type, which the chromatogram gate (and the
+  sample_meta minter) couldn't see: they only accepted
+  `kind='chromatogram'` (the HPLC-prep push). Both now also accept
+  `attachment_type='HPLC Graph'` with a `text/*` content type — symmetric
+  with the image arm — so BW-style manual attaches work, and the ~300
+  historical CSVs typed by the attachment-type backfill become visible
+  too. Non-CSV files typed "HPLC Graph" (chromatogram screenshots) still
+  don't qualify: the COA renderer parses CSV. Found on BW-0106.
+
 ## v1.12.4 — 2026-08-31
 
 ### Fixed
