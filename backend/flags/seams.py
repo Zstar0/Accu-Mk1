@@ -527,7 +527,7 @@ def register_mk1_entities() -> None:
                 "customer_name": row.customer_name if row else None,
                 "customer_email": row.customer_email if row else None,
                 "sample_ids": sample_ids,
-                "deep_link": "/#senaite/receive-sample"}
+                "deep_link": {"kind": "order", "id": eid}}
 
     def _order_descendants(db, eid):
         from models import LimsSample
