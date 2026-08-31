@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.14.1 — 2026-08-31
+
+### Fixed
+
+- **COA console step labels follow the COA source.** With `coa_generation=mk1`
+  (read-independence, live in prod) the Generate console said "Connecting to
+  SENAITE" while the backend read the native registry. The first step now
+  says "Reading sample registry" in mk1 mode; the attach step keeps its
+  SENAITE label because the PDF attach (and publish transition) still write
+  to SENAITE in both modes. Sub-sample COAs keep SENAITE labels, matching
+  the backend is_sub gate. Step ids are unchanged (errorStepFor contract).
+
 ## v1.14.0 — 2026-08-31
 - **Order flags on Receive** — a "Raise a flag" button now sits next to
   Process on every By-Order row (`entity_type="order"`, keyed by order
