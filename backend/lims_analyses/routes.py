@@ -223,14 +223,23 @@ def list_for_host(
 @router.get("/parent-line-states")
 def get_parent_line_states(
     parent_sample_id: str = Query(...),
+    source: str = Query("senaite"),
+    db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Return SENAITE analysis states keyed by keyword for a parent AR.
+    """Return analysis states keyed by keyword for a parent AR — the FE's
+    isLockedByParent lock map for vial rows.
 
-    Best-effort: transport or SENAITE errors return {"states": {}} rather
-    than propagating as 5xx.  The frontend uses this to lock vial rows whose
-    parent line is already verified.
+    source='senaite' (default): live SENAITE line states, best-effort —
+    transport or SENAITE errors return {"states": {}} rather than 5xx.
+    source='mk1' (the page's effective read source, passed by the FE): the
+    native map — canonical tier owns its keywords, shadow fallback for
+    keywords with no canonical history, zero SENAITE reads. Post promote-
+    divergence (1.12.1) the SENAITE line stays verified forever, so mirroring
+    it would permanently lock retested keywords' vials.
     """
+    if source == "mk1":
+        return {"states": service.native_parent_line_states(db, parent_sample_id)}
     try:
         states = list_parent_line_states(parent_sample_id)
         return {"states": states}

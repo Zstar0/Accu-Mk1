@@ -6662,15 +6662,22 @@ export async function parentRetestAnalysis(
 }
 
 /**
- * Fetch SENAITE analysis states for all lines on a parent AR, keyed by keyword.
+ * Fetch analysis states for all lines on a parent AR, keyed by keyword —
+ * the isLockedByParent lock map for vial rows.
  * Returns {"states": {"STER-PCR": "verified", ...}}.
- * The backend is best-effort: any SENAITE error returns {"states": {}}.
- * The frontend mirrors this: .catch(() => ({states: {}})).
+ * source='senaite' (default) reads live SENAITE lines, best-effort: any
+ * SENAITE error returns {"states": {}} (the frontend mirrors this:
+ * .catch(() => ({states: {}}))). Pass the page's effective read source:
+ * 'mk1' serves the native map (canonical tier owns its keywords, shadow
+ * fallback for keywords with no canonical history) — post promote
+ * divergence (1.12.1) the SENAITE line stays verified forever, so
+ * mirroring it would permanently lock retested keywords' vials.
  */
 export async function listParentLineStates(
-  parentSampleId: string
+  parentSampleId: string,
+  source: 'senaite' | 'mk1' = 'senaite'
 ): Promise<{ states: Record<string, string> }> {
-  const params = new URLSearchParams({ parent_sample_id: parentSampleId })
+  const params = new URLSearchParams({ parent_sample_id: parentSampleId, source })
   const response = await fetch(`${API_BASE_URL()}/api/lims-analyses/parent-line-states?${params}`, {
     headers: getBearerHeaders(),
   })

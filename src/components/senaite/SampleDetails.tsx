@@ -4053,12 +4053,16 @@ export function SampleDetails() {
   // Fetch parent AR analysis states for native sub-sample pages.
   // parentSampleId is non-null only when we are a sub-sample (have -SNN suffix).
   // Best-effort: catch → empty states, UI degrades gracefully (no locking).
+  // The page's effective read source is passed through: in mk1 mode the
+  // backend serves the native lock map (canonical-tier authority) — the
+  // SENAITE line stays verified forever post promote-divergence, so
+  // mirroring it would permanently lock retested keywords' vials.
   useEffect(() => {
     if (!parentSampleId) return
-    listParentLineStates(parentSampleId)
+    listParentLineStates(parentSampleId, effectiveReadSource)
       .then(({ states }) => setParentLineStates(states))
       .catch(() => setParentLineStates({}))
-  }, [parentSampleId])
+  }, [parentSampleId, effectiveReadSource])
 
   // This vial's own record in the parent's sub-samples list (null on parent
   // pages or before the list loads). Shared by the header's role lookup,

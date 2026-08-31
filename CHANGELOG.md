@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.12.2 — 2026-08-30
+
+### Fixed
+
+- **Vial Promote unreachable after a parent retest (mk1 mode)** — the vial
+  table's lock map (`isLockedByParent`) was always read from live SENAITE
+  line states, and post promote-divergence (1.12.1) a SENAITE line stays
+  verified forever, so a retested keyword's vial rows stayed locked with no
+  Promote affordance. `/parent-line-states` now takes the page's effective
+  read source: in mk1 mode it serves a native map — the canonical tier owns
+  any keyword it has ever held (a live canonical row's state locks; live
+  canonical gone because a retest is in flight → unlocked), while keywords
+  with no canonical history fall back to the live shadow row so legacy
+  vials keep their lock — with zero SENAITE reads. SENAITE mode unchanged.
+
 ## v1.12.1 — 2026-08-30
 
 ### Changed

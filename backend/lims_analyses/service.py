@@ -1458,6 +1458,66 @@ def list_promotions_for_parent(
 # ─── Read-flip L4/Task1: parent-tier analyses in senaite shape ──────────────
 
 
+def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, str]:
+    """Keyword → review_state lock map for the FE's isLockedByParent gate,
+    served from native rows — the mk1-mode substitute for SENAITE's
+    list_parent_line_states (zero SENAITE reads).
+
+    Post promote-divergence (1.12.1) the SENAITE parent line stays verified
+    forever, so mirroring it would lock a retested keyword's vial rows with
+    no Promote path (the PB-0486 Endo dead end). Authority rule:
+
+      - The canonical tier owns any keyword it has EVER held: only a LIVE
+        canonical row (retested=False, not retracted, parent-TIER per
+        tier_of — parent-hosted mid-run variance rows are vial-tier and
+        never lock) contributes its state. Live canonical gone (retest in
+        flight: retracted by the verified-path cascade, or retested=True by
+        the published-path) → keyword absent → vials unlocked to
+        re-promote, even though the shadow still mirrors verified.
+      - Keywords with NO canonical history fall back to the live shadow
+        row's mirror_review_state, so legacy vials keep their lock without
+        a SENAITE call (shadow rows are native DB).
+    """
+    from models import LimsSample
+
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        return {}
+
+    rows = list(db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+            LimsAnalysis.provenance.in_(("canonical", "shadow")),
+        )
+    ).scalars().all())
+
+    canonical_ever = {r.keyword for r in rows if r.provenance == "canonical"}
+    states: Dict[str, str] = {}
+    for r in rows:
+        if r.provenance != "canonical" or r.retested or r.review_state == "retracted":
+            continue
+        if tier_of(
+            lims_sample_pk=r.lims_sample_pk,
+            lims_sub_sample_pk=r.lims_sub_sample_pk,
+            review_state=r.review_state,
+        ) != TIER_PARENT:
+            continue
+        states[r.keyword] = r.review_state
+    for r in rows:
+        if (
+            r.provenance == "shadow"
+            and not r.retested
+            and r.keyword not in canonical_ever
+            and r.keyword not in states
+            and r.mirror_review_state
+        ):
+            states[r.keyword] = r.mirror_review_state
+    return states
+
+
 def list_parent_analyses_senaite_shape(
     db: Session,
     parent_sample_id: str,
