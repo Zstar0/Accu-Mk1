@@ -40,7 +40,7 @@ from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
 from sla_engine import BusinessSchedule, compute_business_minutes, sla_status_dict
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment, MethodAttachment, method_services
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment, MethodAttachment, method_services, LimsOrder
 from catalog.change_log import apply_and_log, log_create, log_delete, log_members
 from auth import (
     get_current_user, require_admin, create_access_token,
@@ -21534,6 +21534,84 @@ def s2s_update_lims_sample_shipping(
         updated.append(sid)
     db.commit()
     return RegistryShippingUpdateResponse(updated=updated, locked=locked, missing=missing)
+
+
+# ── Order entity upsert (order-entity Task 3, 2026-08-28) ────────────────
+# Called server-to-server by integration-service at acceptance push and by
+# the backfill job. Idempotent on wp_order_id. NEVER touches logistics
+# columns (vendor/tracking live per-sample, see shipping update above);
+# missing registry samples in `samples[]` are reported, not errored — the
+# registry sync may lag the first order push.
+
+class S2SOrderSampleStamp(BaseModel):
+    senaite_sample_id: str
+    line_item_ids: list[int] = []
+
+
+class S2SOrderCustomer(BaseModel):
+    user_id: Optional[int] = None
+    name: Optional[str] = None
+    email: Optional[str] = None
+
+
+class S2SOrderUpsert(BaseModel):
+    wp_order_id: int
+    order_number: str
+    status: Optional[str] = None
+    customer: Optional[S2SOrderCustomer] = None
+    billing: Optional[dict] = None
+    shipping: Optional[dict] = None
+    wp_created_at: Optional[datetime] = None
+    wp_paid_at: Optional[datetime] = None
+    samples: list[S2SOrderSampleStamp] = []
+
+
+class S2SOrdersUpsertRequest(BaseModel):
+    orders: list[S2SOrderUpsert]
+
+
+class S2SOrdersUpsertResponse(BaseModel):
+    upserted: int
+    samples_stamped: int
+    samples_missing: int
+
+
+@app.post("/s2s/orders/upsert", response_model=S2SOrdersUpsertResponse)
+def s2s_upsert_orders(
+    req: S2SOrdersUpsertRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_internal_service_token),
+):
+    """Idempotent order upsert from the integration service (acceptance push
+    + backfill). Never touches logistics columns; missing registry samples
+    are reported, not errors (registry sync may lag the first push)."""
+    upserted = stamped = missing = 0
+    for o in req.orders:
+        row = db.query(LimsOrder).filter_by(wp_order_id=o.wp_order_id).first()
+        if row is None:
+            row = LimsOrder(wp_order_id=o.wp_order_id, order_number=o.order_number)
+            db.add(row)
+        row.order_number = o.order_number
+        row.status = o.status
+        if o.customer is not None:
+            row.customer_user_id = o.customer.user_id
+            row.customer_name = o.customer.name
+            row.customer_email = o.customer.email
+        row.billing = o.billing
+        row.shipping = o.shipping
+        row.wp_created_at = o.wp_created_at
+        row.wp_paid_at = o.wp_paid_at
+        upserted += 1
+        for s in o.samples:
+            sample = db.query(LimsSample).filter_by(sample_id=s.senaite_sample_id).first()
+            if sample is None:
+                missing += 1
+                continue
+            sample.wc_line_item_ids = list(s.line_item_ids)
+            stamped += 1
+    db.commit()
+    return S2SOrdersUpsertResponse(upserted=upserted, samples_stamped=stamped,
+                                    samples_missing=missing)
 
 
 # ── Registry debug (admin diagnostic) ─────────────────────────────────
