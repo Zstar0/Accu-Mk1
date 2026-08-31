@@ -11555,8 +11555,14 @@ def _parent_attachment_kinds_native(db, parent_pk: int) -> set[str]:
 
     image = storage='s3' AND render_in_report AND (kind='receive_image' OR
     attachment_type='Sample Image').
-    chromatogram = storage='s3' AND kind='chromatogram' (no render_in_report
-    requirement — chromatogram rows are minted render_in_report=False).
+    chromatogram = storage='s3' AND (kind='chromatogram' OR
+    (attachment_type='HPLC Graph' AND content_type text/*)) — the second arm
+    (BW-0106, 2026-08-31) admits CSVs attached manually from the sample page,
+    symmetric with the image arm; text/* keeps non-CSV 'HPLC Graph' files
+    (chromatogram screenshots) out, since coab's chromatogram_csv role
+    parses CSV. No render_in_report requirement — chromatogram rows are
+    minted render_in_report=False. Twin of coa/sample_meta._newest — keep
+    in lockstep.
     """
     kinds: set = set()
     has_image = db.execute(
@@ -11577,7 +11583,13 @@ def _parent_attachment_kinds_native(db, parent_pk: int) -> set[str]:
         select(LimsParentAttachment.id).where(
             LimsParentAttachment.lims_sample_pk == parent_pk,
             LimsParentAttachment.storage == "s3",
-            LimsParentAttachment.kind == "chromatogram",
+            or_(
+                LimsParentAttachment.kind == "chromatogram",
+                and_(
+                    LimsParentAttachment.attachment_type == "HPLC Graph",
+                    LimsParentAttachment.content_type.ilike("text/%"),
+                ),
+            ),
         ).limit(1)
     ).first() is not None
     if has_chromatogram:

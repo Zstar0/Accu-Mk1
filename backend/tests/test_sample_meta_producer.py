@@ -244,3 +244,29 @@ def test_other_samples_deselections_do_not_abort(db, parent):
     with patch.dict(os.environ, ENV):
         meta = build_sample_meta(db, row)
     assert meta["SampleID"] == row.sample_id
+
+
+# ─── Manual chromatogram uploads (BW-0106, 2026-08-31) ──────────────────────
+# The minter must agree with the gate (_parent_attachment_kinds_native):
+# a manual CSV typed 'HPLC Graph' is an eligible chromatogram; a non-CSV
+# typed 'HPLC Graph' is not (coab's chromatogram_csv role parses CSV).
+
+def test_manual_csv_typed_hplc_graph_mints_chromatogram_descriptor(db, parent):
+    row, img, csv = parent
+    csv.kind = "manual"          # the sample-page upload shape
+    db.flush()
+    with patch.dict(os.environ, ENV):
+        meta = build_sample_meta(db, row)
+    roles = {a["role"] for a in meta["attachments"]}
+    assert "chromatogram_csv" in roles
+
+
+def test_image_typed_hplc_graph_not_minted_as_chromatogram(db, parent):
+    row, img, csv = parent
+    csv.kind = "manual"
+    csv.content_type = "image/jpeg"
+    db.flush()
+    with patch.dict(os.environ, ENV):
+        meta = build_sample_meta(db, row)
+    roles = {a["role"] for a in meta["attachments"]}
+    assert "chromatogram_csv" not in roles

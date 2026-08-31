@@ -44,3 +44,29 @@ def test_empty_without_rows(db):
 def test_senaite_storage_invisible(db):
     row = _sample(db, img={"kind": "receive_image", "storage": "senaite"})
     assert _parent_attachment_kinds_native(db, row.id) == set()
+
+
+# ─── Manual chromatogram uploads (BW-0106, 2026-08-31) ──────────────────────
+# A CSV attached from the sample page lands kind='manual' with SENAITE's
+# 'HPLC Graph' type — the gate must accept it (symmetric with the image
+# arm's attachment_type alternative). A non-CSV typed 'HPLC Graph' (e.g. a
+# chromatogram screenshot) must NOT: the coab wire role is chromatogram_csv
+# and the renderer parses CSV.
+
+def test_manual_csv_typed_hplc_graph_counts_as_chromatogram(db):
+    row = _sample(db,
+        chrom={"kind": "manual", "at": "HPLC Graph", "ct": "text/csv"})
+    assert _parent_attachment_kinds_native(db, row.id) == {"chromatogram"}
+
+
+def test_manual_senaite_ct_variant_counts(db):
+    row = _sample(db,
+        chrom={"kind": "manual", "at": "HPLC Graph",
+               "ct": "text/comma-separated-values"})
+    assert _parent_attachment_kinds_native(db, row.id) == {"chromatogram"}
+
+
+def test_image_typed_hplc_graph_is_not_a_chromatogram(db):
+    row = _sample(db,
+        chrom={"kind": "manual", "at": "HPLC Graph", "ct": "image/jpeg"})
+    assert _parent_attachment_kinds_native(db, row.id) == set()

@@ -1,9 +1,6 @@
 # Changelog
 
-## v1.13.0 — 2026-08-31
-
-### Added
-
+## v1.14.0 — 2026-08-31
 - **Order flags on Receive** — a "Raise a flag" button now sits next to
   Process on every By-Order row (`entity_type="order"`, keyed by order
   number) and next to each sample in the expanded order detail
@@ -20,6 +17,36 @@
 - **`wc_line_item_ids` registry passthrough** — `SenaiteSample` (and the
   `/registry/samples` read it comes from) now carries the WooCommerce
   line-item ids a sample was created from.
+## v1.13.0 — 2026-08-31
+- **Logistics capture (customer-portal Slice A, PR #150)** — four new
+  `lims_samples` registry columns: `vendor_name` (customer-declared
+  vendor/manufacturer, arrives on the IS creation signal, internal-only),
+  plus `shipping_carrier` / `tracking_number` / `tracking_url`
+  (customer-saved after checkout via the new
+  `POST /s2s/lims-samples/shipping` bulk endpoint, which applies only to
+  not-yet-received samples and reports `{updated, locked, missing}` —
+  received samples keep the tracking they arrived under). All four render
+  on sample-details in both read sources; the Receive page (both views)
+  gets a clickable tracking link that opens the carrier page without
+  triggering the receive wizard. Reconcile/backfill provably cannot
+  clobber the new columns; vendor survives creation-signal replays.
+
+
+## v1.12.5 — 2026-08-31
+
+### Fixed
+
+- **Manually-attached chromatogram CSVs now satisfy the COA gate (mk1
+  mode)** — a CSV attached from the sample page lands `kind='manual'` with
+  SENAITE's "HPLC Graph" type, which the chromatogram gate (and the
+  sample_meta minter) couldn't see: they only accepted
+  `kind='chromatogram'` (the HPLC-prep push). Both now also accept
+  `attachment_type='HPLC Graph'` with a `text/*` content type — symmetric
+  with the image arm — so BW-style manual attaches work, and the ~300
+  historical CSVs typed by the attachment-type backfill become visible
+  too. Non-CSV files typed "HPLC Graph" (chromatogram screenshots) still
+  don't qualify: the COA renderer parses CSV. Found on BW-0106.
+
 ## v1.12.4 — 2026-08-31
 
 ### Fixed
