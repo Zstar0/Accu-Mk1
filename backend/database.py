@@ -1919,6 +1919,9 @@ def _run_migrations():
         )
         """,
         "CREATE INDEX IF NOT EXISTS ix_lims_orders_order_number ON lims_orders (order_number)",
+        # Order entity (2026-08-28 design): WC line item ids a sample was
+        # split from — the order<->sample line-item cross-reference.
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS wc_line_item_ids JSONB",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

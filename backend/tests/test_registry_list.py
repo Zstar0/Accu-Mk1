@@ -263,3 +263,9 @@ def test_registry_list_emits_shipping_fields():
     assert out["shipping_carrier"] == "FedEx"
     assert out["tracking_number"] == "9999"
     assert out["tracking_url"] == "https://f/9999"
+
+
+def test_wc_line_item_ids_passthrough():
+    [out] = registry_rows_to_list([_row(wc_line_item_ids=[13049, 13052])])
+    assert out['wc_line_item_ids'] == [13049, 13052]
+    assert registry_rows_to_list([_row()])[0]['wc_line_item_ids'] == []

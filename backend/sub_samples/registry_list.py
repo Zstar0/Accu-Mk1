@@ -71,5 +71,6 @@ def registry_rows_to_list(rows: list[LimsSample]) -> list[dict[str, Any]]:
             "tracking_url": r.tracking_url,
             "analytes": _analyte_names(r.analytes),
             "analyte_details": _analyte_details(r.analytes),
+            "wc_line_item_ids": list(r.wc_line_item_ids or []),
         })
     return out

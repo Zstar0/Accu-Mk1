@@ -1282,6 +1282,12 @@ class LimsSample(Base):
     shipping_carrier: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     tracking_number: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     tracking_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # Order entity (2026-08-28 design): WC line item ids this sample was
+    # split from, for the order<->sample line-item cross-reference. Written
+    # by Task 3's split logic; NULL/empty for pre-order-entity rows.
+    wc_line_item_ids: Mapped[Optional[list]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

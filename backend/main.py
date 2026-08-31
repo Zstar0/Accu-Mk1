@@ -15361,6 +15361,9 @@ class SenaiteSampleItem(BaseModel):
     # Registry reads only — name + declared qty pairs for the receive page's
     # expanded order rows. SENAITE-sourced lists leave it empty.
     analyte_details: list[SenaiteAnalyteDetail] = []
+    # Order entity (2026-08-28 design): WC line item ids this sample was
+    # split from. Registry reads only — SENAITE-sourced items leave it empty.
+    wc_line_item_ids: list[int] = []
 
 
 class SenaiteSamplesResponse(BaseModel):
