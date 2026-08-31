@@ -158,6 +158,23 @@ const MK1_EDITABLE_STATES = new Set<string | null>([
   'unassigned', 'assigned', 'to_be_verified', null,
 ])
 
+/** Parent-bench exemption from the parent page's result-entry deterrent
+ *  (resultsReadOnly). A SHADOW row whose keyword has NO vial assignment is a
+ *  test with no vial home — Bac Water's Benzyl Alcohol / pH / Fill volume
+ *  trio (BW samples historically have no sub-ARs; entry has always happened
+ *  on the parent, now via the shadow write-through). Handler ruling
+ *  2026-08-31 (BW-0106): those rows are enterable WITHOUT the Manage
+ *  Analyses opt-in checkbox. Rows whose keyword IS vial-backed (peptide
+ *  HPLC mirrors, sterility) keep the deterrent — their work belongs on the
+ *  vials. isResultEditable still gates by state on top of this. */
+export function isParentBenchRow(
+  a: { provenance?: string | null },
+  vialAssign: unknown,
+): boolean {
+  return a.provenance === 'shadow' && !vialAssign
+}
+
+
 export function isResultEditable(a: { uid?: string | null; review_state: string | null }): boolean {
   if (!a.uid) return false
   return a.uid.startsWith('mk1:')
@@ -1621,7 +1638,12 @@ function AnalysisRow({
           )}
         </div>
       </td>
-      <EditableResultCell analysis={analysis} editing={editing} conformsValue={conformsValue} readOnly={resultsReadOnly} />
+      <EditableResultCell
+        analysis={analysis}
+        editing={editing}
+        conformsValue={conformsValue}
+        readOnly={resultsReadOnly && !isParentBenchRow(analysis, vialAssign)}
+      />
       <td className="py-2.5 px-3 text-center">
         {analysis.retested ? (
           <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400">

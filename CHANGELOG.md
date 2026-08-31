@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.12.4 — 2026-08-31
+
+### Fixed
+
+- **Bac Water result entry on the parent (mk1 mode)** — a shadow row whose
+  keyword has no vial assignment (BW's Benzyl Alcohol, pH, Fill volume — BW
+  samples have never had sub-AR vials; the parent is the bench) is now
+  result-enterable without the Manage Analyses "Allow result entry on this
+  parent" opt-in. Vial-backed rows (peptide HPLC mirrors, sterility) keep
+  the deterrent, and SENAITE read mode is unchanged (its rows carry no
+  provenance). Found on BW-0106, the first BW sample through the catalog
+  check-in.
+
 ## v1.12.3 — 2026-08-30
 
 ### Changed

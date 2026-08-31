@@ -6,6 +6,7 @@ import {
   AnalysisTable,
   deriveBulkActions,
   deriveBulkActionsForPolicy,
+  isParentBenchRow,
   visibleRowTransitions,
   visibleRowTransitionsForPolicy,
 } from '@/components/senaite/AnalysisTable'
@@ -482,5 +483,80 @@ describe('AnalysisTable render — parent registry retest seam (default policy)'
 
     expect(bulkSpy).toHaveBeenCalledWith([a, b])
     expect(transitionAnalysis).not.toHaveBeenCalled()
+  })
+})
+
+// ─── Parent-bench exemption (Handler ruling 2026-08-31, BW-0106) ────────────
+// A shadow row whose keyword has no vial assignment is a test with no vial
+// home (Bac Water's Benzyl/pH/Fill trio) — the parent IS the bench, so the
+// parent page's result-entry deterrent (resultsReadOnly) must not apply.
+
+describe('isParentBenchRow', () => {
+  it('shadow row with no vial assignment is exempt', () => {
+    expect(isParentBenchRow({ provenance: 'shadow' }, undefined)).toBe(true)
+  })
+  it('shadow row WITH a vial assignment keeps the deterrent', () => {
+    expect(
+      isParentBenchRow({ provenance: 'shadow' }, { matches: [], editable: false })
+    ).toBe(false)
+  })
+  it.each(['canonical', 'ordered', undefined, null])(
+    'provenance %s is never exempt',
+    prov => {
+      expect(isParentBenchRow({ provenance: prov as string | null }, undefined)).toBe(false)
+    }
+  )
+})
+
+describe('AnalysisTable render — parent-bench result entry', () => {
+  function renderReadOnlyTable(
+    analyses: SenaiteAnalysis[],
+    vialAssignmentByKeyword?: Map<string, { matches: never[]; editable: boolean }>
+  ) {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    return render(
+      <QueryClientProvider client={qc}>
+        <AnalysisTable
+          analyses={analyses}
+          analyteNameMap={new Map()}
+          resultsReadOnly
+          vialAssignmentByKeyword={
+            vialAssignmentByKeyword as Parameters<typeof AnalysisTable>[0]['vialAssignmentByKeyword']
+          }
+        />
+      </QueryClientProvider>
+    )
+  }
+
+  const bwShadow = row({
+    uid: 'aeba844fa4bb404f9ef05f993fcd67f7',
+    keyword: 'PH-DETERM',
+    title: 'pH Determination',
+    result: null,
+    review_state: 'unassigned',
+    provenance: 'shadow',
+  } as Partial<SenaiteAnalysis>)
+
+  it('shadow row with no vial home renders the result input despite resultsReadOnly', () => {
+    renderReadOnlyTable([bwShadow])
+    expect(screen.getByRole('textbox')).toBeInTheDocument()
+  })
+
+  it('same row with a vial assignment for its keyword stays read-only', () => {
+    renderReadOnlyTable(
+      [bwShadow],
+      new Map([['PH-DETERM', { matches: [] as never[], editable: false }]])
+    )
+    expect(screen.queryByRole('textbox')).toBeNull()
+  })
+
+  it('canonical parent row stays read-only', () => {
+    renderReadOnlyTable([
+      row({
+        uid: 'mk1:9', keyword: 'HM-PB', result: null,
+        review_state: 'unassigned', provenance: 'canonical',
+      } as Partial<SenaiteAnalysis>),
+    ])
+    expect(screen.queryByRole('textbox')).toBeNull()
   })
 })
