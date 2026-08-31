@@ -1922,6 +1922,13 @@ def _run_migrations():
         # Order entity (2026-08-28 design): WC line item ids a sample was
         # split from — the order<->sample line-item cross-reference.
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS wc_line_item_ids JSONB",
+        # Order entity (Task 5, 2026-08-28 design): seed the flags module's
+        # "order" item kind idempotently, mirroring the general_task seed above.
+        """
+        INSERT INTO flag_item_kinds (slug, label, color, is_active, is_builtin, sort_order)
+        SELECT 'order', 'Order', '#f59e0b', TRUE, TRUE, 5
+        WHERE NOT EXISTS (SELECT 1 FROM flag_item_kinds WHERE slug='order')
+        """,
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

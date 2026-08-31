@@ -510,6 +510,30 @@ def register_mk1_entities() -> None:
         list route never falls back to a per-id loop for a real entity."""
         return {str(e): _worksheet_context(db, str(e)) for e in eids}
 
+    def _order_label(db, eid):
+        from models import LimsOrder
+        row = (db.query(LimsOrder).filter_by(order_number=eid).first()
+               if db is not None else None)
+        return f"{eid} · {row.customer_name}" if row and row.customer_name else eid
+
+    def _order_context(db, eid):
+        from models import LimsOrder, LimsSample
+        row = db.query(LimsOrder).filter_by(order_number=eid).first()
+        sample_ids = [s.sample_id for s in
+                      db.query(LimsSample).filter_by(client_order_number=eid)]
+        if row is None and not sample_ids:
+            return None
+        return {"label": _order_label(db, eid),
+                "customer_name": row.customer_name if row else None,
+                "customer_email": row.customer_email if row else None,
+                "sample_ids": sample_ids,
+                "deep_link": "/#senaite/receive-sample"}
+
+    def _order_descendants(db, eid):
+        from models import LimsSample
+        return [("sample", s.sample_id) for s in
+                db.query(LimsSample).filter_by(client_order_number=eid)]
+
     # --- typeahead search closures (link pickers) ------------------------
     # entity_id is per-type to match how each type's context/deep-link
     # resolves and how existing links dedup: sample → human sample_id,
@@ -569,3 +593,9 @@ def register_mk1_entities() -> None:
                     context=_worksheet_context,
                     contexts=_worksheet_contexts,
                     search=_worksheet_search)
+    register_entity("order",
+                    label=_order_label,
+                    deep_link=lambda eid: "/#senaite/receive-sample",
+                    can_flag=lambda user, eid: True,
+                    context=_order_context,
+                    descendants=_order_descendants)
