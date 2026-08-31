@@ -482,3 +482,52 @@ def test_parent_line_states_happy_path_returns_states(route_client):
 
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"states": fake_states}
+
+
+# ─── Promote divergence (Handler ruling 2026-08-30) ──────────────────────────
+# A LOCKED SENAITE parent line (verified/published) must NOT block the native
+# promote: post read-independence nothing reads that line for certificates —
+# the canonical row is the authority. The route logs, records a
+# 'senaite_line_diverged' audit event, and proceeds. Generic write-back
+# failures still 502 (pinned above).
+
+
+def test_promote_diverges_when_senaite_line_locked(route_client, promote_fixture):
+    from lims_analyses.senaite_writeback import SenaiteParentLineLocked
+    from models import LimsSubSampleEvent
+    db, parent, sub, analysis, payload = promote_fixture
+
+    def _locked_writeback(parent_sample_id, keyword, result_value, remark):
+        raise SenaiteParentLineLocked(
+            uid="uid-locked", state="verified",
+            message=f"Analysis {keyword} on {parent_sample_id} is locked in SENAITE",
+        )
+
+    with patch("lims_analyses.routes.senaite_writeback.writeback_promotion",
+               side_effect=_locked_writeback):
+        resp = route_client.post("/api/lims-analyses/promote", json=payload)
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["parent"]["review_state"] == "parent_to_verify"
+
+    # Parent-tier row persisted despite the locked SENAITE line
+    parent_rows = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.keyword == "PURITY-HPLC",
+        )
+    ).scalars().all()
+    assert len(parent_rows) == 1
+
+    # Audit event written, naming the divergence
+    events = db.execute(
+        select(LimsSubSampleEvent).where(
+            LimsSubSampleEvent.lims_sample_pk == parent.id,
+            LimsSubSampleEvent.event == "senaite_line_diverged",
+        )
+    ).scalars().all()
+    assert len(events) == 1
+    d = events[0].details
+    assert d["keyword"] == "PURITY-HPLC"
+    assert d["senaite_state"] == "verified"
+    assert d["senaite_uid"] == "uid-locked"

@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.12.1 — 2026-08-30
+
+### Changed
+
+- **Promote divergence over locked SENAITE lines** — re-promoting a retested
+  parent analysis on a senaite-origin family (HPLC, Endotoxin, Sterility-PCR,
+  BacWater) no longer 502s when the SENAITE parent line is already
+  verified/published (SENAITE cannot retract those). Post read-independence
+  the canonical Mk1 row is the certificate authority, so the promote now
+  proceeds natively, leaves the SENAITE line as-is, logs
+  `senaite_promote_divergence`, and records a `senaite_line_diverged` audit
+  event (keyword, SENAITE state + uid, user). All other write-back failures
+  (missing line, network, silent rejection) still abort with 502.
+
 ## v1.12.0 — 2026-08-30
 
 The read-independence train (PRs #155, #156, #157). Pairs with COA Builder

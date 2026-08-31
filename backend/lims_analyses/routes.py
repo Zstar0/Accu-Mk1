@@ -19,7 +19,11 @@ from sqlalchemy.orm import Session
 from auth import get_current_user, require_admin
 from database import get_db
 from lims_analyses import manage_native, senaite_writeback, service
-from lims_analyses.senaite_writeback import SenaiteWritebackError, list_parent_line_states
+from lims_analyses.senaite_writeback import (
+    SenaiteParentLineLocked,
+    SenaiteWritebackError,
+    list_parent_line_states,
+)
 from lims_analyses.schemas import (
     AddNativeProfileRequest,
     AddNativeProfileResponse,
@@ -615,6 +619,29 @@ def promote(
                 req.result_value,
                 remark,
             )
+        except SenaiteParentLineLocked as e:
+            # Locked line (verified/published) — SENAITE can never retract it,
+            # so aborting here would dead-end every retest re-promote on a
+            # senaite-origin family. Handler ruling 2026-08-30: the canonical
+            # row is the certificate authority post read-independence, so
+            # diverge deliberately — record it and promote natively.
+            from models import LimsSubSampleEvent
+            logger.warning(
+                "senaite_promote_divergence parent=%s keyword=%s senaite_state=%s uid=%s "
+                "— native promote proceeds, SENAITE line left as-is",
+                parent_sample_id, parent_row.keyword, e.state, e.uid,
+            )
+            db.add(LimsSubSampleEvent(
+                lims_sample_pk=parent_row.lims_sample_pk,
+                event="senaite_line_diverged",
+                details={
+                    "keyword": parent_row.keyword,
+                    "senaite_state": e.state,
+                    "senaite_uid": e.uid,
+                    "reason": "promote over locked SENAITE line — canonical value takes control",
+                },
+                user_id=getattr(current_user, "id", None),
+            ))
         except SenaiteWritebackError as e:
             db.rollback()
             raise HTTPException(
