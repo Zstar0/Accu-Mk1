@@ -21787,6 +21787,74 @@ def s2s_update_lims_sample_shipping(
     return RegistryShippingUpdateResponse(updated=updated, locked=locked, missing=missing)
 
 
+# ── Registry targeted field mirror (customer portal Slice B, 2026-08-31) ──
+# Called server-to-server by integration-service when a customer edits COA
+# branding / analytes pre-receipt in the WordPress portal. Same per-sample
+# received-lock as the shipping route above (_PRE_RECEIVED_STATES). Fields
+# are SENAITE-shaped CHANGED keys only, applied via the exact same mirror
+# logic Mk1's own field-edit endpoints use (sub_samples.service.
+# _apply_senaite_fields_to_row) — extracted from apply_senaite_fields_to_row
+# so this route can resolve the row by `sample_id` (S2S has no SENAITE uid
+# to hand us) instead of `external_lims_uid`.
+#
+# Alias cleanup: sample_analyte_aliases rows are keyed by SLOT NUMBER, not
+# analyte identity. When any Analyte{N}Peptide key is present in the pushed
+# fields, the analyte slots are being rebuilt — a stale slot-keyed alias
+# would silently re-point onto whatever peptide now occupies that slot
+# (documented trap). So any Analyte{N}Peptide key present triggers deleting
+# ALL alias rows for the sample in the same transaction, even slots not
+# otherwise touched by this push.
+
+class RegistryFieldMirror(BaseModel):
+    """IS -> Mk1 targeted field mirror (Slice B pre-receipt sample editing).
+    fields = SENAITE-shaped CHANGED keys only; applied via the same mirror
+    logic Mk1's own field endpoint uses. Never touches vendor/shipping/basic
+    info beyond the mirrored keys."""
+    samples: list[dict]  # [{"sample_id": str, "fields": dict}]
+
+
+class RegistryFieldMirrorResponse(BaseModel):
+    updated: list[str]
+    locked: list[str]
+    missing: list[str]
+
+
+@app.post("/s2s/lims-samples/fields", response_model=RegistryFieldMirrorResponse)
+def s2s_mirror_lims_sample_fields(
+    req: RegistryFieldMirror,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_internal_service_token),
+):
+    """Targeted field mirror for an order's samples (pre-receipt customer
+    edits). Idempotent; only mirrors the keys present in `fields`. Lock
+    criterion mirrors the receive inbox / shipping route: only pre-received
+    rows accept edits."""
+    from sub_samples.service import _PRE_RECEIVED_STATES, _apply_senaite_fields_to_row
+    updated: list[str] = []
+    locked: list[str] = []
+    missing: list[str] = []
+    _ANALYTE_KEY = re.compile(r"^Analyte[1-8]Peptide$")
+    for item in req.samples:
+        sid = item.get("sample_id") or ""
+        fields = item.get("fields") or {}
+        row = db.execute(select(LimsSample).where(LimsSample.sample_id == sid)).scalar_one_or_none()
+        if row is None:
+            missing.append(sid)
+            continue
+        if row.status not in _PRE_RECEIVED_STATES:
+            locked.append(sid)
+            continue
+        _apply_senaite_fields_to_row(db, row, fields)
+        if any(_ANALYTE_KEY.match(k) for k in fields):
+            n = db.query(SampleAnalyteAlias).filter(
+                SampleAnalyteAlias.senaite_sample_id == sid).delete()
+            if n:
+                logger.info("field_mirror_alias_cleanup sample_id=%s deleted=%s", sid, n)
+        updated.append(sid)
+    db.commit()
+    return RegistryFieldMirrorResponse(updated=updated, locked=locked, missing=missing)
+
+
 # ── Registry debug (admin diagnostic) ─────────────────────────────────
 # Non-mutating registry-vs-SENAITE compare for the admin debug panel
 # (2026-07-07-sample-registry-debug-panel-design.md). Reads the raw
