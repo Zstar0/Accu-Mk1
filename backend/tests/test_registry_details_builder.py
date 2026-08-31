@@ -344,6 +344,34 @@ def test_registry_missing_returns_complete_empty_result(db_session):
     assert res.cached_at is not None
 
 
+def test_logistics_fields_carry_actual_values_not_just_sourced(db_session):
+    """The field_sources completeness test only checks KEYS. This asserts the
+    mk1-native branch actually forwards the logistics VALUES from the
+    registry row into the response (registry_details.py's build_native_details
+    sets these via display.get(...), mirroring client_lot) — the specific
+    path the Slice A logistics-capture feature depends on for the sample-
+    details page and downstream frontend consumers."""
+    from sub_samples.registry_details import build_native_details
+
+    _seed_full_sample(
+        db_session,
+        vendor_name="Acme Peptides",
+        shipping_carrier="UPS",
+        tracking_number="1Z999AA10123456784",
+        tracking_url="https://ups.com/track?tn=1Z999AA10123456784",
+    )
+    res = build_native_details(db_session, SID)
+
+    assert res.vendor_name == "Acme Peptides"
+    assert res.shipping_carrier == "UPS"
+    assert res.tracking_number == "1Z999AA10123456784"
+    assert res.tracking_url == "https://ups.com/track?tn=1Z999AA10123456784"
+    assert res.field_sources["vendor_name"] == "mk1"
+    assert res.field_sources["shipping_carrier"] == "mk1"
+    assert res.field_sources["tracking_number"] == "mk1"
+    assert res.field_sources["tracking_url"] == "mk1"
+
+
 def test_field_sources_cover_every_lookup_field(db_session):
     """Every SenaiteLookupResult data field is accounted for in
     field_sources, on both the present and the missing path."""

@@ -113,6 +113,11 @@ class SenaiteLookupResult(BaseModel):
     client_order_number: Optional[str] = None
     client_sample_id: Optional[str] = None
     client_lot: Optional[str] = None
+    # Logistics (Slice A) — registry-native; no SENAITE counterpart.
+    vendor_name: Optional[str] = None
+    shipping_carrier: Optional[str] = None
+    tracking_number: Optional[str] = None
+    tracking_url: Optional[str] = None
     review_state: Optional[str] = None
     declared_weight_mg: Optional[float] = None
     analytes: list[SenaiteAnalyte]

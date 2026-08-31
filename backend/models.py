@@ -1274,6 +1274,14 @@ class LimsSample(Base):
     catalog_snapshot: Mapped[Optional[dict]] = mapped_column(
         JSONB().with_variant(JSON(), "sqlite"), nullable=True
     )
+    # Logistics capture (Slice A 2026-08-27). vendor_name arrives on the IS
+    # creation signal (meta VendorName) — internal-only, never on a COA.
+    # shipping_* are WP-customer-supplied post-order via /s2s/lims-samples/shipping
+    # and are deliberately NOT basic info (reconcile must never write them).
+    vendor_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    shipping_carrier: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    tracking_number: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    tracking_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

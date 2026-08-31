@@ -1892,6 +1892,12 @@ def _run_migrations():
         # analytical_vials (2026-08-24, heavy-metals pooling): of a profile's
         # vials_required vials, how many carry analyses. NULL = all.
         "ALTER TABLE analysis_profiles ADD COLUMN IF NOT EXISTS analytical_vials INTEGER",
+        # Logistics capture (2026-08-27): vendor set at creation via IS signal;
+        # carrier/tracking pushed later by the WP tracking-save s2s update.
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS vendor_name VARCHAR(200)",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS shipping_carrier VARCHAR(100)",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS tracking_number VARCHAR(120)",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS tracking_url VARCHAR(500)",
         # senaite_analysis_uid (shadow write-through): the SENAITE line a
         # shadow row mirrors, so mk1-mode reads can serialize it under its
         # SENAITE identity and writes route back to SENAITE. NULL on

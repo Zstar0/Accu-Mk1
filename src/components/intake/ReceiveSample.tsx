@@ -45,6 +45,7 @@ import {
   type OrderGroup,
 } from '@/lib/inbox-orders'
 import { OrderListRow } from '@/components/intake/OrderListRow'
+import { TrackingLink } from '@/components/intake/TrackingLink'
 import { getOrderBoxLabelSummaries } from '@/lib/api'
 import { getOrderEmail } from '@/components/explorer/helpers'
 import { OrderReceiveSession } from '@/components/intake/OrderReceiveSession'
@@ -782,6 +783,7 @@ export function ReceiveSample() {
                         onSort={handleSort}
                         className="w-24 text-center"
                       />
+                      <TableHead className="w-28">Tracking</TableHead>
                       <SortableHead
                         column="review_state"
                         label="State"
@@ -804,7 +806,7 @@ export function ReceiveSample() {
                     {visibleSamples.length === 0 && (
                       <TableRow>
                         <TableCell
-                          colSpan={8}
+                          colSpan={9}
                           className="py-8 text-center text-sm text-muted-foreground"
                         >
                           No samples match the current search
@@ -840,6 +842,12 @@ export function ReceiveSample() {
                         </TableCell>
                         <TableCell className="text-center">
                           <VialCount sampleId={s.id} />
+                        </TableCell>
+                        <TableCell className="text-sm">
+                          <TrackingLink
+                            trackingNumber={s.tracking_number}
+                            trackingUrl={s.tracking_url}
+                          />
                         </TableCell>
                         <TableCell className="text-center">
                           <StateBadge state={s.review_state} />

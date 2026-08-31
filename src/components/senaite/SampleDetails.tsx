@@ -5606,6 +5606,35 @@ export function SampleDetails() {
                     sourceGlyph={fieldGlyph('client_lot', 'Client Lot')}
                   />
                   <DataRow
+                    label="Vendor/Mfr"
+                    value={data.vendor_name}
+                    sourceGlyph={fieldGlyph('vendor_name', 'Vendor/Mfr')}
+                  />
+                  <DataRow
+                    label="Shipping"
+                    value={data.shipping_carrier}
+                    sourceGlyph={fieldGlyph('shipping_carrier', 'Shipping')}
+                  />
+                  <DataRow
+                    label="Tracking #"
+                    value={
+                      data.tracking_number && data.tracking_url ? (
+                        <a
+                          href={data.tracking_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-mono hover:underline"
+                        >
+                          {data.tracking_number}
+                        </a>
+                      ) : (
+                        data.tracking_number
+                      )
+                    }
+                    mono
+                    sourceGlyph={fieldGlyph('tracking_number', 'Tracking #')}
+                  />
+                  <DataRow
                     label="Contact"
                     value={data.contact}
                     sourceGlyph={fieldGlyph('contact', 'Contact')}

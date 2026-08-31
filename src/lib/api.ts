@@ -4079,6 +4079,10 @@ export interface SenaiteLookupResult {
   client_order_number: string | null
   client_sample_id: string | null
   client_lot: string | null
+  vendor_name?: string | null
+  shipping_carrier?: string | null
+  tracking_number?: string | null
+  tracking_url?: string | null
   review_state: string | null
   declared_weight_mg: number | null
   analytes: SenaiteAnalyte[]
@@ -4625,6 +4629,9 @@ export interface SenaiteSample {
   // Customer lot/batch code — lims_samples.client_lot in registry mode,
   // SENAITE ClientLot on hydrated items (null on slim catalog-brains rows).
   client_lot: string | null
+  shipping_carrier?: string | null
+  tracking_number?: string | null
+  tracking_url?: string | null
   analytes: string[]
   // Registry reads only — name + declared qty pairs for the receive page's
   // expanded order rows. Absent/empty on SENAITE-sourced lists.

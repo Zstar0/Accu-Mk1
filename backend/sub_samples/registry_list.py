@@ -66,6 +66,9 @@ def registry_rows_to_list(rows: list[LimsSample]) -> list[dict[str, Any]]:
             "contact": r.contact_title,
             "verification_code": r.verification_code,
             "client_lot": r.client_lot,
+            "shipping_carrier": r.shipping_carrier,
+            "tracking_number": r.tracking_number,
+            "tracking_url": r.tracking_url,
             "analytes": _analyte_names(r.analytes),
             "analyte_details": _analyte_details(r.analytes),
         })

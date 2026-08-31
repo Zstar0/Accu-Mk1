@@ -15244,6 +15244,13 @@ async def lookup_senaite_sample(
 
         from datetime import datetime, timezone
         now_iso = datetime.now(timezone.utc).isoformat()
+
+        # Logistics fields are registry-native (no SENAITE counterpart) — merge
+        # them in regardless of read source (Slice A 2026-08-27).
+        _logi = db.execute(
+            select(LimsSample).where(LimsSample.sample_id == sample_id)
+        ).scalar_one_or_none()
+
         result = SenaiteLookupResult(
             sample_id=sample_id,
             sample_uid=sample_uid or None,
@@ -15256,6 +15263,10 @@ async def lookup_senaite_sample(
             client_order_number=item.get("ClientOrderNumber") or item.get("getClientOrderNumber") or None,
             client_sample_id=item.get("ClientSampleID") or item.get("getClientSampleID") or None,
             client_lot=str(item["ClientLot"]) if item.get("ClientLot") is not None else None,
+            vendor_name=_logi.vendor_name if _logi else None,
+            shipping_carrier=_logi.shipping_carrier if _logi else None,
+            tracking_number=_logi.tracking_number if _logi else None,
+            tracking_url=_logi.tracking_url if _logi else None,
             review_state=item.get("review_state") or None,
             declared_weight_mg=declared_weight_mg,
             analytes=analytes,
@@ -15535,6 +15546,9 @@ class SenaiteSampleItem(BaseModel):
     # Customer lot/batch code (SENAITE ClientLot / lims_samples.client_lot).
     # Hydrated SENAITE items carry it; slim catalog-brains items don't (None).
     client_lot: Optional[str] = None
+    shipping_carrier: Optional[str] = None
+    tracking_number: Optional[str] = None
+    tracking_url: Optional[str] = None
     analytes: list[str] = []
     # Registry reads only — name + declared qty pairs for the receive page's
     # expanded order rows. SENAITE-sourced lists leave it empty.
@@ -21713,6 +21727,64 @@ def s2s_upsert_lims_sample(
     # gated on) the SENAITE analyses shadow-sync scheduled above.
     background_tasks.add_task(_arm_native_status_at_registration_bg, row.sample_id)
     return RegistrySampleSignalResponse(sample_id=row.sample_id, native_id=row.native_id)
+
+
+# ── Registry shipping update (logistics capture Slice A, 2026-08-27) ────
+# Called server-to-server by integration-service when a customer saves
+# carrier/tracking in WordPress. Per-sample received-lock (Handler-ruled):
+# only rows still in a pre-received status accept new tracking; a received
+# row keeps the tracking it actually arrived under. See
+# sub_samples.service._PRE_RECEIVED_STATES (same criterion as the receive
+# inbox) and models.LimsSample.shipping_carrier/tracking_number/tracking_url.
+
+class RegistryShippingUpdate(BaseModel):
+    """IS -> Mk1 shipping push (logistics slice A). Customer-supplied via WP;
+    applies ONLY to not-yet-received rows — a received sample keeps the
+    tracking it actually arrived under (per-sample lock, Handler-ruled)."""
+    samples: list[str]
+    shipping_carrier: Optional[str] = None
+    tracking_number: Optional[str] = None
+    tracking_url: Optional[str] = None
+
+
+class RegistryShippingUpdateResponse(BaseModel):
+    updated: list[str]
+    locked: list[str]
+    missing: list[str]
+
+
+@app.post("/s2s/lims-samples/shipping", response_model=RegistryShippingUpdateResponse)
+def s2s_update_lims_sample_shipping(
+    req: RegistryShippingUpdate,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_internal_service_token),
+):
+    """Bulk shipping update for an order's samples. Idempotent; never touches
+    vendor_name or any basic-info field. Lock criterion mirrors the receive
+    inbox: only pre-received rows accept new tracking."""
+    from sub_samples.service import _PRE_RECEIVED_STATES
+    updated: list[str] = []
+    locked: list[str] = []
+    missing: list[str] = []
+    for sid in req.samples:
+        row = db.execute(
+            select(LimsSample).where(LimsSample.sample_id == sid)
+        ).scalar_one_or_none()
+        if row is None:
+            missing.append(sid)
+            continue
+        if row.status not in _PRE_RECEIVED_STATES:
+            locked.append(sid)
+            continue
+        # Admin-configured carrier/URL values have no length guard upstream;
+        # slice defensively before assignment so an over-length value can't
+        # 500 on Postgres's VARCHAR limit (SQLite in tests won't catch it).
+        row.shipping_carrier = req.shipping_carrier[:100] if req.shipping_carrier else None
+        row.tracking_number = req.tracking_number[:120] if req.tracking_number else None
+        row.tracking_url = req.tracking_url[:500] if req.tracking_url else None
+        updated.append(sid)
+    db.commit()
+    return RegistryShippingUpdateResponse(updated=updated, locked=locked, missing=missing)
 
 
 # ── Registry debug (admin diagnostic) ─────────────────────────────────

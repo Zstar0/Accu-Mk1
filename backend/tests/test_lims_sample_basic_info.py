@@ -124,13 +124,19 @@ def test_populate_basic_info_client_id_getter_fallback(db):
 def test_populate_basic_info_never_touches_non_basic_fields(db):
     row = LimsSample(sample_id="P-0134", container_mode=True,
                      assignment_role="ster", in_variance_set=False,
-                     customer_remarks="keep me", is_retest=True)
+                     customer_remarks="keep me", is_retest=True,
+                     vendor_name="Keep Vendor", shipping_carrier="UPS",
+                     tracking_number="1Z1", tracking_url="https://x/1Z1")
     service._populate_basic_info(row, _full_meta())
     assert row.container_mode is True
     assert row.assignment_role == "ster"
     assert row.in_variance_set is False
     assert row.customer_remarks == "keep me"
     assert row.is_retest is True
+    assert row.vendor_name == "Keep Vendor"
+    assert row.shipping_carrier == "UPS"
+    assert row.tracking_number == "1Z1"
+    assert row.tracking_url == "https://x/1Z1"
 
 
 def test_ensure_sample_row_now_sets_dates_on_create(db):
