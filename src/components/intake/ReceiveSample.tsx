@@ -693,7 +693,6 @@ export function ReceiveSample() {
                           className="w-36"
                         />
                         <TableHead className="w-28">Tracking</TableHead>
-                      <TableHead className="w-52">Customer Note</TableHead>
                         <TableHead className="w-52">Customer Note</TableHead>
                         <TableHead className="w-24" />
                       </TableRow>
@@ -788,6 +787,7 @@ export function ReceiveSample() {
                         className="w-24 text-center"
                       />
                       <TableHead className="w-28">Tracking</TableHead>
+                      <TableHead className="w-52">Customer Note</TableHead>
                       <SortableHead
                         column="review_state"
                         label="State"
