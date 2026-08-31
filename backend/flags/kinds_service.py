@@ -19,9 +19,15 @@ from flags.models import FlagFlag
 from models import FlagItemKind
 
 
-# The general-task builtin. (slug, label, color, sort_order)
+# The general-task + order builtins. (slug, label, color, sort_order)
+# Mirrors database.py's Postgres migration seeds exactly (slug/label/color/
+# sort_order, plus is_active/is_builtin=TRUE baked into the INSERT there) --
+# this is the SQLite-parity path for test sessions (create_all builds the
+# table but runs no migrations), so a drift here silently starves any test
+# that exercises the "order" kind of its seed row.
 _BUILTINS = [
     ("general_task", "General Task", "#6b7280", 0),
+    ("order", "Order", "#f59e0b", 5),
 ]
 
 

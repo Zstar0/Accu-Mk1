@@ -38,6 +38,18 @@ def test_general_task_builtin_seeded(db):
     assert k.is_active
 
 
+def test_order_builtin_seeded(db):
+    """order-entity: kinds_service._BUILTINS is the SQLite-parity mirror of
+    database.py's Postgres migration seed for the 'order' item kind — this
+    guards against the two drifting (create_all builds the table but runs no
+    migrations, so a test session only ever sees rows seed_builtins adds)."""
+    from flags import kinds_service
+    k = kinds_service.get_kind_by_slug(db, "order")
+    assert k is not None and k.is_builtin and k.label == "Order"
+    assert k.color == "#f59e0b" and k.sort_order == 5
+    assert k.is_active
+
+
 def test_create_rename_recolor_deactivate(db):
     from flags import kinds_service
     k = kinds_service.create_kind(db, label="Purchase Task", color="#111111")
