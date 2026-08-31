@@ -4636,6 +4636,11 @@ export interface SenaiteSample {
   // Registry reads only — name + declared qty pairs for the receive page's
   // expanded order rows. Absent/empty on SENAITE-sourced lists.
   analyte_details?: { name: string; declared_quantity: string | null }[]
+  // The customer's wizard note ("Notes for Lab"). Customer-origin remarks
+  // ONLY — never a lab remark. Registry reads only; null/absent when the
+  // sample has none, which is every sample ordered before the note was
+  // persisted natively.
+  customer_note?: string | null
 }
 
 export interface SenaiteSamplesResponse {

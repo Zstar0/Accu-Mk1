@@ -8,7 +8,7 @@ from unittest.mock import patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from database import Base
-from models import LimsSample, LimsNativeIdSequence
+from models import LimsSample, LimsNativeIdSequence, LimsSampleRemark
 
 
 @pytest.fixture
@@ -260,3 +260,63 @@ def test_field_mirror_failure_leaves_session_usable(db):
     db.rollback()   # what both main.py except-blocks do before logging
     # session still works
     assert db.query(LimsSample).filter_by(sample_id="P-3001").one() is not None
+
+
+# ── Customer order note (2026-08-30) ────────────────────────────────────────
+# The wizard's "Notes for Lab" rides the signal meta as `Remarks` (IS puts it
+# there via ARData.to_senaite_payload). Before this, upsert_sample_from_signal
+# dropped it: the note reached Mk1 and was never persisted, so it lived only on
+# the SENAITE AR — which the mk1-mode read path deliberately ignores in favour
+# of lims_sample_remarks. Net effect: customer notes vanished after the read
+# flip, while older (backfilled) samples still showed theirs.
+
+def _note_contents(db, row):
+    return [r.content for r in db.query(LimsSampleRemark)
+            .filter_by(lims_sample_pk=row.id).all()]
+
+
+def test_signal_records_customer_note_prefixed_with_the_order_number(db):
+    row = upsert_sample_from_signal(
+        db, "P-2010", "AR_UID_10",
+        _signal_meta(uid="AR_UID_10", Remarks="Please rush, client is waiting"))
+    assert _note_contents(db, row) == [
+        "Customer note (order #3031): Please rush, client is waiting"
+    ]
+
+
+def test_customer_note_has_no_mk1_author(db):
+    # No Mk1 user wrote it, so the FK stays NULL — the prefix carries the
+    # attribution instead.
+    row = upsert_sample_from_signal(
+        db, "P-2011", "AR_UID_11", _signal_meta(uid="AR_UID_11", Remarks="note"))
+    note = db.query(LimsSampleRemark).filter_by(lims_sample_pk=row.id).one()
+    assert note.author_user_id is None
+
+
+def test_signal_without_remarks_writes_no_note(db):
+    row = upsert_sample_from_signal(db, "P-2012", "AR_UID_12",
+                                    _signal_meta(uid="AR_UID_12"))
+    assert _note_contents(db, row) == []
+
+
+def test_blank_remarks_writes_no_note(db):
+    row = upsert_sample_from_signal(
+        db, "P-2013", "AR_UID_13", _signal_meta(uid="AR_UID_13", Remarks="   "))
+    assert _note_contents(db, row) == []
+
+
+def test_replayed_signal_does_not_duplicate_the_customer_note(db):
+    # The signal is retried (IS sends an Idempotency-Key and treats the call as
+    # best-effort), so a replay must not stack a second copy of the same note.
+    meta = _signal_meta(uid="AR_UID_14", Remarks="Handle with care")
+    r1 = upsert_sample_from_signal(db, "P-2014", "AR_UID_14", meta)
+    r2 = upsert_sample_from_signal(db, "P-2014", "AR_UID_14", meta)
+    assert r2.id == r1.id
+    assert len(_note_contents(db, r1)) == 1
+
+
+def test_customer_note_falls_back_when_the_order_number_is_missing(db):
+    meta = _signal_meta(uid="AR_UID_15", Remarks="No order ref on this one")
+    meta.pop("ClientOrderNumber")
+    row = upsert_sample_from_signal(db, "P-2015", "AR_UID_15", meta)
+    assert _note_contents(db, row) == ["Customer note: No order ref on this one"]

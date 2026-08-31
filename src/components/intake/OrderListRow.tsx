@@ -12,6 +12,7 @@ import type { EnrichedOrderGroup } from '@/lib/inbox-orders'
 import { customerDetailHash } from '@/lib/inbox-orders'
 import { OrderExpectedVials } from '@/components/intake/OrderExpectedVials'
 import { TrackingLink } from '@/components/intake/TrackingLink'
+import { CustomerNoteCell } from '@/components/intake/CustomerNoteCell'
 import type { OrderBoxLabelSummary } from '@/lib/api'
 
 interface OrderListRowProps {
@@ -55,6 +56,13 @@ function firstTrackedSample(
   return group.samples.find(s => Boolean(s.tracking_number)) ?? null
 }
 
+// The order's customer note, if any sample in the group carries one. Notes are
+// entered per sample in the wizard but are almost always identical across an
+// order, so the first one stands in for the group rather than stacking them.
+function firstOrderNote(group: EnrichedOrderGroup): string | null {
+  return group.samples.find(s => Boolean(s.customer_note))?.customer_note ?? null
+}
+
 function worstSampleState(group: EnrichedOrderGroup): string | null {
   let worst: string | null = null
   let worstPri = Infinity
@@ -95,6 +103,7 @@ export function OrderListRow({
 
   const worst = worstSampleState(group)
   const trackedSample = firstTrackedSample(group)
+  const orderNote = firstOrderNote(group)
 
   const sampleTypes = Array.from(
     new Set(
@@ -154,16 +163,6 @@ export function OrderListRow({
               summary={expectedVialsSummary}
               loading={expectedVialsLoading}
             />
-            {trackedSample ? (
-              <>
-                {' '}
-                <span aria-hidden="true">·</span>{' '}
-                <TrackingLink
-                  trackingNumber={trackedSample.tracking_number}
-                  trackingUrl={trackedSample.tracking_url}
-                />
-              </>
-            ) : null}
           </span>
         </div>
       </td>
@@ -204,6 +203,17 @@ export function OrderListRow({
       <td className="py-3 px-3 whitespace-nowrap text-sm text-muted-foreground">
         {formatDate(order?.created_at ?? null)}
       </td>
+      <td className="py-3 px-3 whitespace-nowrap text-sm">
+        {trackedSample ? (
+          <TrackingLink
+            trackingNumber={trackedSample.tracking_number}
+            trackingUrl={trackedSample.tracking_url}
+          />
+        ) : null}
+      </td>
+      <td className="py-3 px-3 align-middle">
+        <CustomerNoteCell note={orderNote} />
+      </td>
       <td className="py-3 px-3 whitespace-nowrap text-right">
         <Button size="sm" onClick={() => onProcess(group)}>
           Process
@@ -212,7 +222,7 @@ export function OrderListRow({
     </tr>
     {expanded && (
       <tr data-testid="order-detail-row" className="bg-muted/20">
-        <td colSpan={6} className="px-4 pb-3 pt-1">
+        <td colSpan={8} className="px-4 pb-3 pt-1">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-xs text-muted-foreground">

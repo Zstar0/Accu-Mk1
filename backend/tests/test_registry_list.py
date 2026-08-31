@@ -263,3 +263,85 @@ def test_registry_list_emits_shipping_fields():
     assert out["shipping_carrier"] == "FedEx"
     assert out["tracking_number"] == "9999"
     assert out["tracking_url"] == "https://f/9999"
+
+
+# ── Customer note column (2026-08-30) ───────────────────────────────────────
+# The receive page surfaces the customer's order note. lims_sample_remarks
+# holds three kinds of row and only ONE of them is customer-origin:
+#   * customer order note  — author_user_id NULL *and* author_label NULL
+#   * lab remark           — real author_user_id (receive / Add Remark form)
+#   * backfilled SENAITE   — author_label carries the SENAITE login
+# Mixing them would make the column untrustworthy at a glance, so the query
+# is deliberately narrow (Handler ruling 2026-08-30: customer-only).
+
+@pytest.fixture
+def notes_db():
+    engine = create_engine("sqlite:///:memory:",
+                           connect_args={"check_same_thread": False},
+                           poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    s = sessionmaker(bind=engine)()
+    yield s
+    s.close()
+
+
+def _persist(db, sample_id):
+    row = LimsSample(sample_id=sample_id)
+    db.add(row)
+    db.flush()
+    return row
+
+
+def test_customer_note_is_none_when_no_map_supplied():
+    [out] = registry_rows_to_list([_row(sample_id='P-9')])
+    assert out['customer_note'] is None
+
+
+def test_customer_note_is_attached_to_the_matching_row():
+    from sub_samples.registry_list import registry_rows_to_list as to_list
+    a, b = _row(sample_id='P-1'), _row(sample_id='P-2')
+    a.id, b.id = 1, 2
+    out = to_list([a, b], customer_notes={2: 'Customer note (order #77): rush'})
+    assert out[0]['customer_note'] is None
+    assert out[1]['customer_note'] == 'Customer note (order #77): rush'
+
+
+def test_fetch_customer_notes_returns_only_customer_origin_remarks(notes_db):
+    from models import LimsSampleRemark
+    from sub_samples.registry_list import fetch_customer_notes
+    row = _persist(notes_db, 'P-100')
+    notes_db.add_all([
+        # Lab remark — a tech wrote it.
+        LimsSampleRemark(lims_sample_pk=row.id, content='Vial cracked',
+                         author_user_id=7),
+        # Backfilled from SENAITE — author_label carries the login.
+        LimsSampleRemark(lims_sample_pk=row.id, content='old AR remark',
+                         author_label='admin'),
+        # The one we want.
+        LimsSampleRemark(lims_sample_pk=row.id,
+                         content='Customer note (order #12): handle cold'),
+    ])
+    notes_db.flush()
+    assert fetch_customer_notes(notes_db, [row]) == {
+        row.id: 'Customer note (order #12): handle cold'
+    }
+
+
+def test_fetch_customer_notes_takes_the_earliest_when_several_exist(notes_db):
+    from datetime import datetime
+    from models import LimsSampleRemark
+    from sub_samples.registry_list import fetch_customer_notes
+    row = _persist(notes_db, 'P-101')
+    notes_db.add_all([
+        LimsSampleRemark(lims_sample_pk=row.id, content='second',
+                         created_at=datetime(2026, 8, 30, 12, 0, 0)),
+        LimsSampleRemark(lims_sample_pk=row.id, content='first',
+                         created_at=datetime(2026, 8, 30, 9, 0, 0)),
+    ])
+    notes_db.flush()
+    assert fetch_customer_notes(notes_db, [row]) == {row.id: 'first'}
+
+
+def test_fetch_customer_notes_is_empty_for_no_rows(notes_db):
+    from sub_samples.registry_list import fetch_customer_notes
+    assert fetch_customer_notes(notes_db, []) == {}
