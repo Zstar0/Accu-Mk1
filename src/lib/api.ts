@@ -4492,6 +4492,22 @@ export async function transitionAnalysis(
   // Phase 3: route mk1:<id> UIDs to the Mk1 transitions endpoint. The
   // 'retest' kind creates a linked retest row on the Mk1 side and returns
   // the NEW row (retest-aware promote phase).
+  // FastAPI error bodies carry `detail` as either a string or a structured
+  // dict ({code, message, ...}); `new Error(dict)` prints "[object Object]"
+  // in the toast — surface the message, falling back to a JSON dump.
+  const detailMessage = (detail: unknown): string | null => {
+    if (typeof detail === 'string' && detail) return detail
+    if (detail && typeof detail === 'object') {
+      const msg = (detail as { message?: unknown }).message
+      if (typeof msg === 'string' && msg) return msg
+      try {
+        return JSON.stringify(detail)
+      } catch {
+        return null
+      }
+    }
+    return null
+  }
   if (uid.startsWith('mk1:')) {
     const limsId = parseInt(uid.slice('mk1:'.length), 10)
     const response = await fetch(
@@ -4507,7 +4523,9 @@ export async function transitionAnalysis(
     )
     if (!response.ok) {
       const err = await response.json().catch(() => null)
-      throw new Error(err?.detail || `Transition (mk1) failed: ${response.status}`)
+      throw new Error(
+        detailMessage(err?.detail) || `Transition (mk1) failed: ${response.status}`
+      )
     }
     const row = await response.json()
     return {
@@ -4527,7 +4545,9 @@ export async function transitionAnalysis(
   )
   if (!response.ok) {
     const err = await response.json().catch(() => null)
-    throw new Error(err?.detail || `Transition failed: ${response.status}`)
+    throw new Error(
+      detailMessage(err?.detail) || `Transition failed: ${response.status}`
+    )
   }
   return response.json()
 }
@@ -6682,15 +6702,22 @@ export async function parentRetestAnalysis(
 }
 
 /**
- * Fetch SENAITE analysis states for all lines on a parent AR, keyed by keyword.
+ * Fetch analysis states for all lines on a parent AR, keyed by keyword —
+ * the isLockedByParent lock map for vial rows.
  * Returns {"states": {"STER-PCR": "verified", ...}}.
- * The backend is best-effort: any SENAITE error returns {"states": {}}.
- * The frontend mirrors this: .catch(() => ({states: {}})).
+ * source='senaite' (default) reads live SENAITE lines, best-effort: any
+ * SENAITE error returns {"states": {}} (the frontend mirrors this:
+ * .catch(() => ({states: {}}))). Pass the page's effective read source:
+ * 'mk1' serves the native map (canonical tier owns its keywords, shadow
+ * fallback for keywords with no canonical history) — post promote
+ * divergence (1.12.1) the SENAITE line stays verified forever, so
+ * mirroring it would permanently lock retested keywords' vials.
  */
 export async function listParentLineStates(
-  parentSampleId: string
+  parentSampleId: string,
+  source: 'senaite' | 'mk1' = 'senaite'
 ): Promise<{ states: Record<string, string> }> {
-  const params = new URLSearchParams({ parent_sample_id: parentSampleId })
+  const params = new URLSearchParams({ parent_sample_id: parentSampleId, source })
   const response = await fetch(`${API_BASE_URL()}/api/lims-analyses/parent-line-states?${params}`, {
     headers: getBearerHeaders(),
   })

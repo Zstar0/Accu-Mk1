@@ -19,7 +19,11 @@ from sqlalchemy.orm import Session
 from auth import get_current_user, require_admin
 from database import get_db
 from lims_analyses import manage_native, senaite_writeback, service
-from lims_analyses.senaite_writeback import SenaiteWritebackError, list_parent_line_states
+from lims_analyses.senaite_writeback import (
+    SenaiteParentLineLocked,
+    SenaiteWritebackError,
+    list_parent_line_states,
+)
 from lims_analyses.schemas import (
     AddNativeProfileRequest,
     AddNativeProfileResponse,
@@ -219,14 +223,23 @@ def list_for_host(
 @router.get("/parent-line-states")
 def get_parent_line_states(
     parent_sample_id: str = Query(...),
+    source: str = Query("senaite"),
+    db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Return SENAITE analysis states keyed by keyword for a parent AR.
+    """Return analysis states keyed by keyword for a parent AR — the FE's
+    isLockedByParent lock map for vial rows.
 
-    Best-effort: transport or SENAITE errors return {"states": {}} rather
-    than propagating as 5xx.  The frontend uses this to lock vial rows whose
-    parent line is already verified.
+    source='senaite' (default): live SENAITE line states, best-effort —
+    transport or SENAITE errors return {"states": {}} rather than 5xx.
+    source='mk1' (the page's effective read source, passed by the FE): the
+    native map — canonical tier owns its keywords, shadow fallback for
+    keywords with no canonical history, zero SENAITE reads. Post promote-
+    divergence (1.12.1) the SENAITE line stays verified forever, so mirroring
+    it would permanently lock retested keywords' vials.
     """
+    if source == "mk1":
+        return {"states": service.native_parent_line_states(db, parent_sample_id)}
     try:
         states = list_parent_line_states(parent_sample_id)
         return {"states": states}
@@ -287,11 +300,12 @@ def parent_retest(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Native parent-tier retest (AnalysisTable card verb): retests the
-    promoted source vial rows and un-promotes the verified parent row via
-    cascade_parent_retest_to_sources. 409 invalid_transition unless the
-    active parent row is 'verified' or 'parent_to_verify' (awaiting
-    sign-off) — published parents are protected.
+    """Native parent-tier retest: retests the promoted source vial rows via
+    cascade_parent_retest_to_sources. A 'verified' or 'parent_to_verify'
+    parent is un-promoted (retracted, value cleared); a 'published' parent
+    keeps its citable value live and is superseded later by the retest's
+    re-promote (Handler ruling 2026-08-28). 409 invalid_transition for any
+    other state.
 
     analysis_service_id (S3, optional) identifies the parent row by its native
     identity key; without it the keyword resolves the row as before (exact
@@ -614,6 +628,29 @@ def promote(
                 req.result_value,
                 remark,
             )
+        except SenaiteParentLineLocked as e:
+            # Locked line (verified/published) — SENAITE can never retract it,
+            # so aborting here would dead-end every retest re-promote on a
+            # senaite-origin family. Handler ruling 2026-08-30: the canonical
+            # row is the certificate authority post read-independence, so
+            # diverge deliberately — record it and promote natively.
+            from models import LimsSubSampleEvent
+            logger.warning(
+                "senaite_promote_divergence parent=%s keyword=%s senaite_state=%s uid=%s "
+                "— native promote proceeds, SENAITE line left as-is",
+                parent_sample_id, parent_row.keyword, e.state, e.uid,
+            )
+            db.add(LimsSubSampleEvent(
+                lims_sample_pk=parent_row.lims_sample_pk,
+                event="senaite_line_diverged",
+                details={
+                    "keyword": parent_row.keyword,
+                    "senaite_state": e.state,
+                    "senaite_uid": e.uid,
+                    "reason": "promote over locked SENAITE line — canonical value takes control",
+                },
+                user_id=getattr(current_user, "id", None),
+            ))
         except SenaiteWritebackError as e:
             db.rollback()
             raise HTTPException(

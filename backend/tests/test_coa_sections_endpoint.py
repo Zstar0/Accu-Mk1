@@ -333,12 +333,17 @@ def test_s2s_coa_sections_carries_legacy_rows_in_mk1_mode(client, db_session, mo
                         "ServiceTitle": "t", "Result": "12", "Unit": "%",
                         "review_state": "published", "ResultCaptureDate": None}],
     )
+    monkeypatch.setattr(
+        wd, "build_sample_meta",
+        lambda db, p: {"source": "mk1", "SampleID": "P-9001", "attachments": []},
+    )
     with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}):
         resp = client.get("/samples/P-9001/coa-sections", headers=SVC_TOKEN_HEADER)
     assert resp.status_code == 200
     body = resp.json()
     assert body["legacy_rows"]["source"] == "mk1"
     assert body["legacy_rows"]["rows"][0]["Keyword"] == "HPLC-PUR"
+    assert body["sample_meta"]["source"] == "mk1"
 
 
 def test_s2s_coa_sections_unchanged_in_senaite_mode(client, db_session, monkeypatch):

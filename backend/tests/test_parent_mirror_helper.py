@@ -418,3 +418,90 @@ def test_mark_shadows_published_skips_rejected_and_retracted_live_shadows(
     assert live_ok.mirror_review_state == "published"
     assert live_rejected.mirror_review_state == "rejected"  # unchanged
     assert live_retracted.mirror_review_state == "retracted"  # unchanged
+
+
+# ── SENAITE analysis uid on shadow rows (write-through slice) ───────────────
+# A shadow row mirrors a real SENAITE analysis line. Recording that line's
+# uid is what lets the mk1-sourced read surface present the row under its
+# SENAITE identity, so writes (result entry, transitions) route back to
+# SENAITE exactly as they did before the read flip.
+
+
+def test_create_stamps_the_senaite_analysis_uid(db, seed_parent_and_service):
+    parent, svc = seed_parent_and_service
+    assert mirror_parent_analysis(
+        db, sample_id=parent.sample_id, keyword=svc.keyword,
+        mirror_review_state="unassigned", senaite_analysis_uid="uid-aaa",
+    ) is True
+    db.commit()
+    row = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.provenance == "shadow",
+        )
+    ).scalars().one()
+    assert row.senaite_analysis_uid == "uid-aaa"
+
+
+def test_update_self_heals_a_changed_senaite_uid(db, seed_parent_and_service):
+    """SENAITE replaces a line (retract/replace) and the mirror sees the new
+    uid for the same (parent, service). The stored uid must follow, or writes
+    would be routed at a line that no longer exists."""
+    parent, svc = seed_parent_and_service
+    mirror_parent_analysis(
+        db, sample_id=parent.sample_id, keyword=svc.keyword,
+        mirror_review_state="unassigned", senaite_analysis_uid="uid-old")
+    db.commit()
+    mirror_parent_analysis(
+        db, sample_id=parent.sample_id, keyword=svc.keyword,
+        mirror_review_state="to_be_verified", result_value="1.0",
+        senaite_analysis_uid="uid-new")
+    db.commit()
+    row = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.provenance == "shadow",
+        )
+    ).scalars().one()
+    assert row.senaite_analysis_uid == "uid-new"
+
+
+def test_update_without_a_uid_leaves_the_stored_one_intact(db, seed_parent_and_service):
+    """Callers that don't know the uid (older hooks) must not blank it."""
+    parent, svc = seed_parent_and_service
+    mirror_parent_analysis(
+        db, sample_id=parent.sample_id, keyword=svc.keyword,
+        mirror_review_state="unassigned", senaite_analysis_uid="uid-keep")
+    db.commit()
+    mirror_parent_analysis(
+        db, sample_id=parent.sample_id, keyword=svc.keyword,
+        mirror_review_state="verified", result_value="2.0")
+    db.commit()
+    row = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.provenance == "shadow",
+        )
+    ).scalars().one()
+    assert row.senaite_analysis_uid == "uid-keep"
+
+
+def test_retest_insert_carries_the_new_uid(db, seed_parent_and_service):
+    parent, svc = seed_parent_and_service
+    mirror_parent_analysis(
+        db, sample_id=parent.sample_id, keyword=svc.keyword,
+        mirror_review_state="verified", senaite_analysis_uid="uid-1")
+    db.commit()
+    mirror_parent_analysis(
+        db, sample_id=parent.sample_id, keyword=svc.keyword,
+        mirror_review_state="unassigned", is_retest=True,
+        senaite_analysis_uid="uid-2")
+    db.commit()
+    live = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.provenance == "shadow",
+            LimsAnalysis.retested.is_(False),
+        )
+    ).scalars().one()
+    assert live.senaite_analysis_uid == "uid-2"

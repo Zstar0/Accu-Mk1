@@ -967,13 +967,17 @@ def promote_to_parent(
                 LimsAnalysis.lims_sample_pk == parent_sample_pk,
                 _ident_clause,
                 LimsAnalysis.retest_of_id.is_(None),
-                # Awaiting (parent_to_verify) or fully VERIFIED parents are
-                # both superseded — neither has been published, so neither is
-                # a citable COA source yet. A published parent IS a citable
-                # COA source — superseding it silently could invalidate an
-                # issued COA; that conflict is diagnosed explicitly below
-                # instead (ConflictError naming the COA-snapshot deferral).
-                LimsAnalysis.review_state.in_(("verified", "parent_to_verify")),
+                # Awaiting (parent_to_verify), VERIFIED and PUBLISHED parents
+                # are all superseded. Published joined the list with the
+                # published-parent-retest ruling (2026-08-28): retesting a
+                # published parent leaves its citable value live (the cascade
+                # never retracts published), so the retest re-promote is
+                # exactly where the supersede was deferred to — the issued
+                # COA PDF is a stored snapshot and is not rewritten by this;
+                # regeneration stays a deliberate, separate act.
+                LimsAnalysis.review_state.in_(
+                    ("verified", "parent_to_verify", "published")
+                ),
                 LimsAnalysis.lims_sub_sample_pk.is_(None),
                 # SENAITE phase-out defense-in-depth: these states already
                 # exclude the shadow sentinel ('senaite_mirror'), so this
@@ -999,29 +1003,9 @@ def promote_to_parent(
                 details=_deltas(old_parent_before, old_parent),
             ))
             db.flush()   # emit UPDATE before INSERT so Postgres sees vacated index slot
-        else:
-            # No verified/parent_to_verify row to supersede — but if the
-            # active blocker is a PUBLISHED parent, the naked IntegrityError
-            # the insert below would raise gives the caller no way to tell
-            # "already exists" apart from "this one is a citable COA source
-            # and needs a deliberate supersede/republish decision". Diagnose
-            # it here so the 409 names the real deferral instead.
-            published_blocker = db.execute(
-                select(LimsAnalysis).where(
-                    LimsAnalysis.lims_sample_pk == parent_sample_pk,
-                    _ident_clause,
-                    LimsAnalysis.retest_of_id.is_(None),
-                    LimsAnalysis.review_state == "published",
-                    LimsAnalysis.lims_sub_sample_pk.is_(None),
-                    LimsAnalysis.provenance == "canonical",
-                )
-            ).scalars().first()
-            if published_blocker is not None:
-                raise ConflictError(
-                    f"active parent-tier row for keyword={eff_parent_keyword!r} "
-                    f"is a published parent — supersede/republish ships with "
-                    f"the COA-snapshot release"
-                )
+        # The former else-branch ConflictError ("COA-snapshot deferral") is
+        # gone: published parents are now superseded by the lookup above, so
+        # there is no published blocker left for this branch to diagnose.
     # ── end retest-source supersession ───────────────────────────────────────
 
     # Promotion mints the parent-tier row in 'parent_to_verify' — it is the
@@ -1472,6 +1456,66 @@ def list_promotions_for_parent(
 
 
 # ─── Read-flip L4/Task1: parent-tier analyses in senaite shape ──────────────
+
+
+def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, str]:
+    """Keyword → review_state lock map for the FE's isLockedByParent gate,
+    served from native rows — the mk1-mode substitute for SENAITE's
+    list_parent_line_states (zero SENAITE reads).
+
+    Post promote-divergence (1.12.1) the SENAITE parent line stays verified
+    forever, so mirroring it would lock a retested keyword's vial rows with
+    no Promote path (the PB-0486 Endo dead end). Authority rule:
+
+      - The canonical tier owns any keyword it has EVER held: only a LIVE
+        canonical row (retested=False, not retracted, parent-TIER per
+        tier_of — parent-hosted mid-run variance rows are vial-tier and
+        never lock) contributes its state. Live canonical gone (retest in
+        flight: retracted by the verified-path cascade, or retested=True by
+        the published-path) → keyword absent → vials unlocked to
+        re-promote, even though the shadow still mirrors verified.
+      - Keywords with NO canonical history fall back to the live shadow
+        row's mirror_review_state, so legacy vials keep their lock without
+        a SENAITE call (shadow rows are native DB).
+    """
+    from models import LimsSample
+
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        return {}
+
+    rows = list(db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+            LimsAnalysis.provenance.in_(("canonical", "shadow")),
+        )
+    ).scalars().all())
+
+    canonical_ever = {r.keyword for r in rows if r.provenance == "canonical"}
+    states: Dict[str, str] = {}
+    for r in rows:
+        if r.provenance != "canonical" or r.retested or r.review_state == "retracted":
+            continue
+        if tier_of(
+            lims_sample_pk=r.lims_sample_pk,
+            lims_sub_sample_pk=r.lims_sub_sample_pk,
+            review_state=r.review_state,
+        ) != TIER_PARENT:
+            continue
+        states[r.keyword] = r.review_state
+    for r in rows:
+        if (
+            r.provenance == "shadow"
+            and not r.retested
+            and r.keyword not in canonical_ever
+            and r.keyword not in states
+            and r.mirror_review_state
+        ):
+            states[r.keyword] = r.mirror_review_state
+    return states
 
 
 def list_parent_analyses_senaite_shape(
@@ -2075,16 +2119,20 @@ def parent_retest(
         raise NotFoundError(
             f"no active native parent row for {_asked} on {sample_id!r}"
         )
-    if active.review_state not in ("verified", "parent_to_verify"):
+    if active.review_state not in ("verified", "parent_to_verify", "published"):
         raise InvalidTransitionError(
             active.review_state,
             "retest",
             message=(
-                "parent retest requires the parent row to be 'verified' or "
-                f"'parent_to_verify'; row is {active.review_state!r} "
-                "(published parents go through invalidate→retest)"
+                "parent retest requires the parent row to be 'verified', "
+                f"'parent_to_verify' or 'published'; row is "
+                f"{active.review_state!r}"
             ),
         )
+    # State AT THE CALL, before the cascade's un-promote can flip a
+    # verified/awaiting row to 'retracted' — both the published branch below
+    # and the activity event key off what the operator actually retested.
+    state_at_retest = active.review_state
     # Thread the resolved row's own service FK down rather than letting the
     # cascade re-derive identity from the keyword: whatever leg found `active`
     # above, the cascade must act on the row this function just guarded — the
@@ -2113,6 +2161,31 @@ def parent_retest(
             if sid is not None
         ]
 
+    # Published branch (Handler ruling 2026-08-28): the cascade deliberately
+    # never retracts a published parent — the published value stays the
+    # citable figure until the retest's re-promote supersedes it
+    # (promote_to_parent's retest-source supersession). Mark the row
+    # `retested` so the FE stops offering the verb while the re-run is in
+    # flight, and leave a row-level audit transition (published→published)
+    # so the act is traceable on the row itself, not only in the sample
+    # activity feed. Both only when the cascade actually created retest rows.
+    if new_ids and state_at_retest == "published":
+        active_before = _snapshot(active)
+        active.retested = True
+        active.updated_at = datetime.utcnow()
+        db.add(LimsAnalysisTransition(
+            analysis_id=active.id,
+            from_state="published",
+            to_state="published",
+            transition_kind="auto",
+            user_id=user_id,
+            reason=(
+                "parent retested; published value retained until re-promote "
+                "supersedes it"
+            ),
+            details=_deltas(active_before, active),
+        ))
+
     from models import AnalysisService
     svc = db.get(AnalysisService, active.analysis_service_id)
     # Record the RESOLVED row's identity, not the caller's input string: since
@@ -2124,6 +2197,7 @@ def parent_retest(
         "analysis_service_id": active.analysis_service_id,
         "source_row_ids": source_row_ids,
         "unpromoted": active.review_state == "retracted",
+        "parent_review_state_at_retest": state_at_retest,
         "service_origin": svc.origin if svc else None,
     }
     if keyword != active.keyword:
@@ -3313,8 +3387,22 @@ def _serialize_senaite_shape_rows(
             r.mirror_review_state if r.provenance == "shadow" else r.review_state
         )
 
+        # A row's uid is its WRITE AUTHORITY, not just its name. The FE
+        # branches on the `mk1:` prefix to choose between the Mk1 endpoints
+        # and the SENAITE wizard endpoints, so a SHADOW row — which mirrors
+        # a line SENAITE owns — must serialize under that line's own uid, or
+        # mk1-mode reads address a SENAITE-owned line as native and every
+        # write dies on the Mk1 tier/state guards (the BW result-entry and
+        # legacy-retest outage, 2026-08-29). Canonical rows are Mk1's to
+        # write and always keep mk1:{id}; a shadow row with no recorded uid
+        # falls back to mk1:{id} and stays display-only, which is strictly
+        # better than routing a write at a line we cannot name.
+        _uid = f"mk1:{r.id}"
+        if r.provenance == "shadow" and (r.senaite_analysis_uid or "").strip():
+            _uid = r.senaite_analysis_uid.strip()
+
         out.append(SenaiteShapeAnalysisResponse(
-            uid=f"mk1:{r.id}",
+            uid=_uid,
             keyword=r.keyword,
             title=r.title,
             result=r.result_value,
@@ -3341,6 +3429,10 @@ def _serialize_senaite_shape_rows(
             # doesn't resolve, and the identity key must ship regardless.
             analysis_service_id=r.analysis_service_id,
             provenance=r.provenance,
+            # COA read-independence (Task 5): straight off the row, no
+            # extra lookup. See SenaiteShapeAnalysisResponse docstring.
+            retest_of_id=r.retest_of_id,
+            reportable=r.reportable,
         ))
     return out
 

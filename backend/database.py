@@ -1929,6 +1929,14 @@ def _run_migrations():
         SELECT 'order', 'Order', '#f59e0b', TRUE, TRUE, 5
         WHERE NOT EXISTS (SELECT 1 FROM flag_item_kinds WHERE slug='order')
         """,
+        # senaite_analysis_uid (shadow write-through): the SENAITE line a
+        # shadow row mirrors, so mk1-mode reads can serialize it under its
+        # SENAITE identity and writes route back to SENAITE. NULL on
+        # canonical rows and on pre-existing shadow rows until the backfill
+        # (scripts/backfill_shadow_senaite_uids.py) runs.
+        "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS senaite_analysis_uid VARCHAR(50)",
+        "CREATE INDEX IF NOT EXISTS ix_lims_analyses_senaite_analysis_uid "
+        "ON lims_analyses (senaite_analysis_uid)",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

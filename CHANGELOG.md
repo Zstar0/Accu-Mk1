@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.12.0 — 2026-08-30
+## v1.13.0 — 2026-08-31
 
 ### Added
 
@@ -20,6 +20,91 @@
 - **`wc_line_item_ids` registry passthrough** — `SenaiteSample` (and the
   `/registry/samples` read it comes from) now carries the WooCommerce
   line-item ids a sample was created from.
+## v1.12.4 — 2026-08-31
+
+### Fixed
+
+- **Bac Water result entry on the parent (mk1 mode)** — a shadow row whose
+  keyword has no vial assignment (BW's Benzyl Alcohol, pH, Fill volume — BW
+  samples have never had sub-AR vials; the parent is the bench) is now
+  result-enterable without the Manage Analyses "Allow result entry on this
+  parent" opt-in. Vial-backed rows (peptide HPLC mirrors, sterility) keep
+  the deterrent, and SENAITE read mode is unchanged (its rows carry no
+  provenance). Found on BW-0106, the first BW sample through the catalog
+  check-in.
+
+## v1.12.3 — 2026-08-30
+
+### Changed
+
+- **Partial-COA deferral is now silent** — when a fully-pending section
+  (e.g. sterility not yet run) is left off a certificate, the generate and
+  regen responses no longer carry the "Pending section(s) omitted —
+  regenerate the COA when results land" notice. The COA presents the
+  generated sections as if that's all that's on it. The deferral is still
+  logged server-side and still rides the wire's `deferred_sections` key
+  (COA Builder's completeness-rule exemption); regenerating after results
+  land still adds the section.
+
+## v1.12.2 — 2026-08-30
+
+### Fixed
+
+- **Vial Promote unreachable after a parent retest (mk1 mode)** — the vial
+  table's lock map (`isLockedByParent`) was always read from live SENAITE
+  line states, and post promote-divergence (1.12.1) a SENAITE line stays
+  verified forever, so a retested keyword's vial rows stayed locked with no
+  Promote affordance. `/parent-line-states` now takes the page's effective
+  read source: in mk1 mode it serves a native map — the canonical tier owns
+  any keyword it has ever held (a live canonical row's state locks; live
+  canonical gone because a retest is in flight → unlocked), while keywords
+  with no canonical history fall back to the live shadow row so legacy
+  vials keep their lock — with zero SENAITE reads. SENAITE mode unchanged.
+
+## v1.12.1 — 2026-08-30
+
+### Changed
+
+- **Promote divergence over locked SENAITE lines** — re-promoting a retested
+  parent analysis on a senaite-origin family (HPLC, Endotoxin, Sterility-PCR,
+  BacWater) no longer 502s when the SENAITE parent line is already
+  verified/published (SENAITE cannot retract those). Post read-independence
+  the canonical Mk1 row is the certificate authority, so the promote now
+  proceeds natively, leaves the SENAITE line as-is, logs
+  `senaite_promote_divergence`, and records a `senaite_line_diverged` audit
+  event (keyword, SENAITE state + uid, user). All other write-back failures
+  (missing line, network, silent rejection) still abort with 502.
+
+## v1.12.0 — 2026-08-30
+
+The read-independence train (PRs #155, #156, #157). Pairs with COA Builder
+v2.34.0 — deploy COA Builder first.
+
+### Added
+
+- **COA read-independence (#155)** — with `coa_generation=mk1`, COA
+  generation performs zero SENAITE reads: `sample_meta` wire block
+  (envelope + attachment descriptors), S2S attachment bytes route
+  (service-token), native attachments gate, shadow-backed source resolver,
+  native analyte-name and chromatogram-requirement derivations. Fail-closed
+  throughout; new env `MK1_PUBLIC_BASE_URL`. Backfill scripts:
+  chromatogram snapshots (reclassify + rebuild) and watermark URLs.
+- **Partial COAs (#155)** — a fully-pending armed section (e.g. sterility
+  not yet run) defers instead of blocking the certificate; the response
+  warns "regenerate when results land"; partially-filled sections still
+  refuse.
+- **Published-parent retest (#156)** — retest works on verified AND
+  published parents in mk1 mode; the published value stays citable until
+  the retest re-promote supersedes it.
+- **Shadow write-through (#157)** — shadow rows carry their SENAITE uid so
+  mk1-mode writes (BW result entry, legacy retest) reach SENAITE; unblocks
+  re-flipping `sample_details` to mk1 after the shadow backfill re-run.
+
+### Fixed
+
+- Parent retest routed via the dedicated route in mk1 read mode (#156 —
+  the "[object Object]" regression).
+- Reportable de-selections honoured across the mk1 read flip (#155).
 
 ## v1.11.10 — 2026-08-28
 

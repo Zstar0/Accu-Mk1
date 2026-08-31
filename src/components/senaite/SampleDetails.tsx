@@ -123,7 +123,6 @@ import {
   fetchPackagingPhotoUrl,
   type PackagingPhoto,
   listNativeParentAnalysesShaped,
-  parentRetestAnalysis,
   vialSourceRetest,
   listNativeAnalysisServices,
   type VialRoleRow,
@@ -132,16 +131,13 @@ import {
 } from '@/lib/api'
 import {
   NATIVE_PARENT_ANALYSES_QUERY_KEY,
-  buildBulkParentRetestImpact,
   resolvePromotedSourceDialogParentState,
   runPromotedSourceRetest,
 } from '@/lib/native-parent-analyses'
 import { NativeManageAnalysesBlock } from '@/components/senaite/NativeManageAnalysesBlock'
 import { pickerSourceFor } from '@/lib/manage-analyses-picker'
-import {
-  ParentRetestConfirmDialog,
-  type ParentRetestConfirmState,
-} from '@/components/senaite/ParentRetestConfirmDialog'
+import { ParentRetestConfirmDialog } from '@/components/senaite/ParentRetestConfirmDialog'
+import { useParentRetestFlow } from '@/hooks/use-parent-retest-flow'
 import {
   PromotedSourceRetestDialog,
   type PromotedSourceRetestState,
@@ -3450,49 +3446,21 @@ export function NativeParentAnalysesCard({
     [lookup, analyses]
   )
   const sla = useAnalysisSlaMap(slaLookup)
-  const [confirm, setConfirm] = useState<ParentRetestConfirmState | null>(null)
-  const [retestPending, setRetestPending] = useState(false)
+  // Shared confirm flow (also drives the read-flip main table's registry
+  // seam) — behavior identical to the pre-extraction inline version.
+  const { confirm, retestPending, requestRetest, executeRetest, cancelRetest } =
+    useParentRetestFlow({
+      sampleId,
+      promotionsByKeyword,
+      onDone: () => {
+        void queryClient.invalidateQueries({
+          queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY],
+        })
+        onParentDataStale?.()
+      },
+    })
 
   if (analyses.length === 0) return null
-
-  const requestRetest = (targets: SenaiteAnalysis[]) => {
-    const keywords = targets.map(a => a.keyword).filter((k): k is string => !!k)
-    setConfirm({
-      titles: targets.map(a => a.title),
-      keywords,
-      impact: buildBulkParentRetestImpact(keywords, promotionsByKeyword),
-    })
-  }
-
-  const executeRetest = async () => {
-    if (!confirm || !sampleId) return
-    setRetestPending(true)
-    try {
-      let retested = 0
-      for (const keyword of confirm.keywords) {
-        const resp = await parentRetestAnalysis(sampleId, keyword)
-        retested += resp.new_row_ids.length
-      }
-      if (retested > 0) {
-        toast.success(
-          `Retest cascaded — ${retested} source row${retested === 1 ? '' : 's'} retested`
-        )
-      } else {
-        toast.warning('No eligible source rows — nothing changed')
-      }
-    } catch (e) {
-      toast.error('Parent retest failed', {
-        description: e instanceof Error ? e.message : String(e),
-      })
-    } finally {
-      setRetestPending(false)
-      setConfirm(null)
-      void queryClient.invalidateQueries({
-        queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY],
-      })
-      onParentDataStale?.()
-    }
-  }
 
   const header = (
     <div className="flex items-center gap-1.5">
@@ -3554,7 +3522,7 @@ export function NativeParentAnalysesCard({
       <ParentRetestConfirmDialog
         state={confirm}
         pending={retestPending}
-        onCancel={() => setConfirm(null)}
+        onCancel={cancelRetest}
         onConfirm={executeRetest}
       />
     </>
@@ -4085,12 +4053,16 @@ export function SampleDetails() {
   // Fetch parent AR analysis states for native sub-sample pages.
   // parentSampleId is non-null only when we are a sub-sample (have -SNN suffix).
   // Best-effort: catch → empty states, UI degrades gracefully (no locking).
+  // The page's effective read source is passed through: in mk1 mode the
+  // backend serves the native lock map (canonical-tier authority) — the
+  // SENAITE line stays verified forever post promote-divergence, so
+  // mirroring it would permanently lock retested keywords' vials.
   useEffect(() => {
     if (!parentSampleId) return
-    listParentLineStates(parentSampleId)
+    listParentLineStates(parentSampleId, effectiveReadSource)
       .then(({ states }) => setParentLineStates(states))
       .catch(() => setParentLineStates({}))
-  }, [parentSampleId])
+  }, [parentSampleId, effectiveReadSource])
 
   // This vial's own record in the parent's sub-samples list (null on parent
   // pages or before the list loads). Shared by the header's role lookup,
@@ -4393,6 +4365,22 @@ export function SampleDetails() {
       parentState,
     })
   }
+
+  // Registry retest seam (read-flip main table): in mk1 read mode the main
+  // table IS the native parent surface (the card below is hidden), so its
+  // canonical parent rows need the card's retest path — the dedicated
+  // parent-retest route + destructive confirm. Published rows carry the
+  // published-specific dialog copy (see ParentRetestConfirmDialog).
+  const parentRegistryRetestActive =
+    parentSampleId === null && effectiveReadSource === 'mk1'
+  const mainParentRetest = useParentRetestFlow({
+    sampleId: data?.sample_id,
+    promotionsByKeyword:
+      parentSampleId === null ? promotionsByKeyword : undefined,
+    onDone: () => {
+      if (data) refreshSample(data.sample_id)
+    },
+  })
 
   const executePromotedRetest = async () => {
     if (!promotedRetest || !data) return
@@ -6855,6 +6843,15 @@ export function SampleDetails() {
         analyteNameMap={analyteNameMap}
         primaryAnalysisUids={primaryAnalysisUids}
         primaryRole={currentAssignment}
+        parentRegistryRetestSeam={parentRegistryRetestActive}
+        onParentRetest={
+          parentRegistryRetestActive
+            ? a => mainParentRetest.requestRetest([a])
+            : undefined
+        }
+        onParentBulkRetest={
+          parentRegistryRetestActive ? mainParentRetest.requestRetest : undefined
+        }
         promotionsByKeyword={
           parentSampleId === null ? promotionsByKeyword : undefined
         }
@@ -6910,6 +6907,18 @@ export function SampleDetails() {
         isAnalysisSlaPublished={analysisSla.isPublished}
         analysisSlaPriority={analysisSla.priority}
         vialKind={currentVialKind}
+      />
+
+      {/* Registry retest seam: destructive confirm for parent-tier retests
+          requested from the main table (mk1 read mode only — the state is
+          null everywhere else, so this renders nothing elsewhere). */}
+      <ParentRetestConfirmDialog
+        state={mainParentRetest.confirm}
+        pending={mainParentRetest.retestPending}
+        onCancel={mainParentRetest.cancelRetest}
+        onConfirm={() => {
+          void mainParentRetest.executeRetest()
+        }}
       />
 
       {/* Task 10: promoted-source (vial-side) retest warning — sub-sample

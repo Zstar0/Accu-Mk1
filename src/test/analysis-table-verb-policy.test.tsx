@@ -6,6 +6,7 @@ import {
   AnalysisTable,
   deriveBulkActions,
   deriveBulkActionsForPolicy,
+  isParentBenchRow,
   visibleRowTransitions,
   visibleRowTransitionsForPolicy,
 } from '@/components/senaite/AnalysisTable'
@@ -74,7 +75,7 @@ describe('visibleRowTransitionsForPolicy', () => {
       visibleRowTransitionsForPolicy(row({ review_state: 'parent_to_verify' }), 'parent-native')
     ).toEqual(['verify', 'retest'])
   })
-  it.each(['retracted', 'published', 'to_be_verified', 'unassigned'])(
+  it.each(['retracted', 'to_be_verified', 'unassigned'])(
     'parent-native: %s row is display-only',
     state => {
       expect(
@@ -82,6 +83,18 @@ describe('visibleRowTransitionsForPolicy', () => {
       ).toEqual([])
     }
   )
+  it('parent-native: published row offers retest (published-parent-retest ruling 2026-08-28)', () => {
+    expect(
+      visibleRowTransitionsForPolicy(row({ review_state: 'published' }), 'parent-native')
+    ).toEqual(['retest'])
+  })
+  it('parent-native: published row already retested is display-only (repeat retest is a no-op)', () => {
+    expect(
+      visibleRowTransitionsForPolicy(
+        row({ review_state: 'published', retested: true }), 'parent-native'
+      )
+    ).toEqual([])
+  })
   it('default policy delegates to the legacy fn unchanged', () => {
     const a = row({ review_state: 'to_be_verified' })
     expect(visibleRowTransitionsForPolicy(a, 'default')).toEqual(visibleRowTransitions(a))
@@ -329,5 +342,221 @@ describe('default policy — parent_to_verify (read-flip main table seam)', () =
         row({ uid: 'mk1:8', review_state: 'verified' }),
       ]).actions
     ).toEqual([])
+  })
+})
+
+// ── Parent registry retest seam (read-flip main table, 2026-08-28) ─────────
+// In mk1 read mode the main AnalysisTable is the native parent surface; the
+// generic transition endpoint tier-blocks parent retest, so retest on a
+// canonical parent row must route through onParentRetest (the dedicated
+// route) — and published canonical rows gain the verb (Handler ruling).
+
+describe('visibleRowTransitionsForPolicy — parent registry retest seam', () => {
+  const canonical = (over: Partial<SenaiteAnalysis> = {}) =>
+    row({ provenance: 'canonical', ...over })
+
+  it('seam: published canonical mk1 row offers retest', () => {
+    expect(
+      visibleRowTransitionsForPolicy(
+        canonical({ review_state: 'published' }), 'default', undefined, true
+      )
+    ).toEqual(['retest'])
+  })
+  it('seam: published canonical row already retested offers nothing', () => {
+    expect(
+      visibleRowTransitionsForPolicy(
+        canonical({ review_state: 'published', retested: true }), 'default', undefined, true
+      )
+    ).toEqual([])
+  })
+  it('seam: published SHADOW row offers nothing (mirror rows are not natively retestable)', () => {
+    expect(
+      visibleRowTransitionsForPolicy(
+        row({ provenance: 'shadow', review_state: 'published' }), 'default', undefined, true
+      )
+    ).toEqual([])
+  })
+  it('seam: parent_to_verify canonical row offers verify + retest (matches the card policy)', () => {
+    expect(
+      visibleRowTransitionsForPolicy(
+        canonical({ review_state: 'parent_to_verify' }), 'default', undefined, true
+      )
+    ).toEqual(['verify', 'retest'])
+  })
+  it('seam off: published rows stay display-only (other surfaces byte-identical)', () => {
+    expect(
+      visibleRowTransitionsForPolicy(canonical({ review_state: 'published' }), 'default')
+    ).toEqual([])
+  })
+})
+
+describe('deriveBulkActionsForPolicy — parent registry retest seam', () => {
+  const canonical = (over: Partial<SenaiteAnalysis> = {}) =>
+    row({ provenance: 'canonical', ...over })
+
+  it('seam: all-eligible verified + published selection offers retest', () => {
+    expect(
+      deriveBulkActionsForPolicy(
+        [canonical({}), canonical({ uid: 'mk1:8', review_state: 'published' })],
+        'default', undefined, undefined, true
+      ).actions
+    ).toEqual(['retest'])
+  })
+  it('seam: a shadow row in the selection kills bulk retest (generic path would tier-block)', () => {
+    expect(
+      deriveBulkActionsForPolicy(
+        [canonical({}), row({ uid: 'mk1:8', provenance: 'shadow' })],
+        'default', undefined, undefined, true
+      ).actions
+    ).toEqual([])
+  })
+  it('seam: all-parent_to_verify selection keeps verify only (retest stays a row verb there)', () => {
+    expect(
+      deriveBulkActionsForPolicy(
+        [canonical({ review_state: 'parent_to_verify' }),
+         canonical({ uid: 'mk1:8', review_state: 'parent_to_verify' })],
+        'default', undefined, undefined, true
+      ).actions
+    ).toEqual(['verify'])
+  })
+})
+
+describe('AnalysisTable render — parent registry retest seam (default policy)', () => {
+  function renderSeamTable(
+    analyses: SenaiteAnalysis[],
+    onParentRetest: (a: SenaiteAnalysis) => void,
+    onParentBulkRetest?: (a: SenaiteAnalysis[]) => void,
+  ) {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    return render(
+      <QueryClientProvider client={qc}>
+        <AnalysisTable
+          analyses={analyses}
+          analyteNameMap={new Map()}
+          resultsReadOnly
+          parentRegistryRetestSeam
+          onParentRetest={onParentRetest}
+          onParentBulkRetest={onParentBulkRetest}
+        />
+      </QueryClientProvider>
+    )
+  }
+
+  beforeEach(() => {
+    vi.mocked(transitionAnalysis).mockReset()
+  })
+
+  it('verified canonical row routes Retest through onParentRetest, never the generic endpoint (the PB-0486 regression)', async () => {
+    const spy = vi.fn()
+    const verifiedRow = row({ provenance: 'canonical', review_state: 'verified' })
+    renderSeamTable([verifiedRow], spy)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Analysis actions' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Retest' }))
+
+    expect(spy).toHaveBeenCalledWith(verifiedRow)
+    expect(transitionAnalysis).not.toHaveBeenCalled()
+  })
+
+  it('published canonical row offers Retest and routes through onParentRetest', async () => {
+    const spy = vi.fn()
+    const publishedRow = row({ provenance: 'canonical', review_state: 'published' })
+    renderSeamTable([publishedRow], spy)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Analysis actions' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Retest' }))
+
+    expect(spy).toHaveBeenCalledWith(publishedRow)
+    expect(transitionAnalysis).not.toHaveBeenCalled()
+  })
+
+  it('bulk: two eligible rows selected offer "Retest selected", routed through onParentBulkRetest', async () => {
+    const rowSpy = vi.fn()
+    const bulkSpy = vi.fn()
+    const a = row({ provenance: 'canonical', uid: 'mk1:10', keyword: 'HM', title: 'Heavy Metals', review_state: 'verified' })
+    const b = row({ provenance: 'canonical', uid: 'mk1:11', keyword: 'HM2', title: 'Heavy Metals 2', review_state: 'published' })
+    renderSeamTable([a, b], rowSpy, bulkSpy)
+
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select Heavy Metals' }))
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select Heavy Metals 2' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Retest selected' }))
+
+    expect(bulkSpy).toHaveBeenCalledWith([a, b])
+    expect(transitionAnalysis).not.toHaveBeenCalled()
+  })
+})
+
+// ─── Parent-bench exemption (Handler ruling 2026-08-31, BW-0106) ────────────
+// A shadow row whose keyword has no vial assignment is a test with no vial
+// home (Bac Water's Benzyl/pH/Fill trio) — the parent IS the bench, so the
+// parent page's result-entry deterrent (resultsReadOnly) must not apply.
+
+describe('isParentBenchRow', () => {
+  it('shadow row with no vial assignment is exempt', () => {
+    expect(isParentBenchRow({ provenance: 'shadow' }, undefined)).toBe(true)
+  })
+  it('shadow row WITH a vial assignment keeps the deterrent', () => {
+    expect(
+      isParentBenchRow({ provenance: 'shadow' }, { matches: [], editable: false })
+    ).toBe(false)
+  })
+  it.each(['canonical', 'ordered', undefined, null])(
+    'provenance %s is never exempt',
+    prov => {
+      expect(isParentBenchRow({ provenance: prov as string | null }, undefined)).toBe(false)
+    }
+  )
+})
+
+describe('AnalysisTable render — parent-bench result entry', () => {
+  function renderReadOnlyTable(
+    analyses: SenaiteAnalysis[],
+    vialAssignmentByKeyword?: Map<string, { matches: never[]; editable: boolean }>
+  ) {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    return render(
+      <QueryClientProvider client={qc}>
+        <AnalysisTable
+          analyses={analyses}
+          analyteNameMap={new Map()}
+          resultsReadOnly
+          vialAssignmentByKeyword={
+            vialAssignmentByKeyword as Parameters<typeof AnalysisTable>[0]['vialAssignmentByKeyword']
+          }
+        />
+      </QueryClientProvider>
+    )
+  }
+
+  const bwShadow = row({
+    uid: 'aeba844fa4bb404f9ef05f993fcd67f7',
+    keyword: 'PH-DETERM',
+    title: 'pH Determination',
+    result: null,
+    review_state: 'unassigned',
+    provenance: 'shadow',
+  } as Partial<SenaiteAnalysis>)
+
+  it('shadow row with no vial home renders the result input despite resultsReadOnly', () => {
+    renderReadOnlyTable([bwShadow])
+    expect(screen.getByRole('textbox')).toBeInTheDocument()
+  })
+
+  it('same row with a vial assignment for its keyword stays read-only', () => {
+    renderReadOnlyTable(
+      [bwShadow],
+      new Map([['PH-DETERM', { matches: [] as never[], editable: false }]])
+    )
+    expect(screen.queryByRole('textbox')).toBeNull()
+  })
+
+  it('canonical parent row stays read-only', () => {
+    renderReadOnlyTable([
+      row({
+        uid: 'mk1:9', keyword: 'HM-PB', result: null,
+        review_state: 'unassigned', provenance: 'canonical',
+      } as Partial<SenaiteAnalysis>),
+    ])
+    expect(screen.queryByRole('textbox')).toBeNull()
   })
 })

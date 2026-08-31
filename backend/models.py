@@ -1961,6 +1961,19 @@ class LimsAnalysis(Base):
     # For shadow rows only: the true SENAITE review_state (the row's own
     # review_state is the sentinel 'senaite_mirror'). NULL on canonical rows.
     mirror_review_state: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # The SENAITE analysis line this SHADOW row mirrors (NULL on canonical
+    # rows, and on shadow rows written before this column existed).
+    #
+    # Load-bearing for writes, not just provenance: in mk1 read mode the
+    # registry is the read surface for parent analyses, so a shadow row is
+    # how a SENAITE-owned line reaches the UI. Serializing the row under
+    # this uid is what keeps result entry and transitions routing back to
+    # SENAITE — the row's uid IS its write authority. NULL means "unknown
+    # line": the row serializes as mk1:{id} and stays display-only rather
+    # than routing a write at a line we cannot name.
+    senaite_analysis_uid: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True, index=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False

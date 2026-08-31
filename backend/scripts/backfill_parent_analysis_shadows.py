@@ -230,6 +230,14 @@ def backfill(db_factory, *, sleep_s: float, batch_size: int,
                             result_value=line.get("result"),
                             result_unit=line.get("unit"),
                             is_retest=False,  # backfill records CURRENT state, not history
+                            # Shadow write-through: stamp the AR line's uid so
+                            # mk1-mode reads serialize this row under its
+                            # SENAITE identity and its writes route back to
+                            # SENAITE. Re-running this script is therefore also
+                            # the healer for rows created before the column
+                            # existed (they carry NULL and stay display-only
+                            # until it runs).
+                            senaite_analysis_uid=line.get("uid"),
                         )
                         if ok:
                             if existed:
