@@ -22420,6 +22420,42 @@ async def list_samples_from_registry(
     return SenaiteSamplesResponse(items=items, total=total, b_start=b_start)
 
 
+class RegistryOrderItem(BaseModel):
+    wp_order_id: int
+    order_number: str
+    status: Optional[str] = None
+    customer_name: Optional[str] = None
+    customer_email: Optional[str] = None
+    billing: Optional[dict] = None
+    shipping: Optional[dict] = None
+    wp_created_at: Optional[datetime] = None
+    wp_paid_at: Optional[datetime] = None
+
+
+class RegistryOrdersResponse(BaseModel):
+    orders: list[RegistryOrderItem]
+
+
+@app.get("/registry/orders", response_model=RegistryOrdersResponse)
+def list_registry_orders(
+    numbers: str,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Batched lims_orders read for the Receive page's ship-from line —
+    one request for the visible order groups, never per-row."""
+    wanted = [n.strip() for n in numbers.split(",") if n.strip()][:100]
+    if not wanted:
+        return RegistryOrdersResponse(orders=[])
+    rows = db.query(LimsOrder).filter(LimsOrder.order_number.in_(wanted)).all()
+    return RegistryOrdersResponse(orders=[RegistryOrderItem(
+        wp_order_id=r.wp_order_id, order_number=r.order_number, status=r.status,
+        customer_name=r.customer_name, customer_email=r.customer_email,
+        billing=r.billing, shipping=r.shipping,
+        wp_created_at=r.wp_created_at, wp_paid_at=r.wp_paid_at,
+    ) for r in rows])
+
+
 # ── Peptide requests API (integration-service bridge) ────────────────
 # Called server-to-server by integration-service when a WP user submits the
 # peptide-request form. Internal service token + idempotency key are required.
