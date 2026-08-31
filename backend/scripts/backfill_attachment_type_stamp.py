@@ -71,7 +71,9 @@ def extract_attachment_type(detail: dict) -> Optional[str]:
     """AttachmentType title from an Attachment detail payload — same
     string-or-{title|Title}-dict extraction as the L3 sweep's
     _rows_for_sample and the display path in main.py. Clamped to the
-    column's VARCHAR(100). Returns None when the detail carries no type."""
+    column's VARCHAR(100). Returns None when the detail carries no inline
+    title (live SENAITE probed 2026-08-30 returns a REF dict with only
+    api_url/uid/url — resolve_type_title handles that shape)."""
     attachment_type = (
         detail.get("AttachmentType") or detail.get("getAttachmentType") or None
     )
@@ -82,6 +84,41 @@ def extract_attachment_type(detail: dict) -> Optional[str]:
     if isinstance(attachment_type, str) and attachment_type.strip():
         return attachment_type[:100]
     return None
+
+
+def resolve_type_title(detail: dict, cache: dict) -> Optional[str]:
+    """Title for a detail's AttachmentType, resolving the ref-dict shape.
+
+    Live SENAITE (probed 2026-08-30) returns AttachmentType as a reference
+    {api_url, uid, url} with NO inline title — the title lives on the
+    AttachmentType object itself (attachmenttype-1 = 'Sample Image',
+    attachmenttype-2 = 'HPLC Graph'). Only a handful of type objects exist,
+    so the uid→title resolution is cached: the whole run costs ~2 extra
+    SENAITE calls. Inline-title shapes short-circuit without a fetch.
+    A ref whose resolution fails or yields no title caches None (counted
+    by the caller as no_type; no per-row retry storm)."""
+    inline = extract_attachment_type(detail)
+    if inline is not None:
+        return inline
+    ref = detail.get("AttachmentType") or detail.get("getAttachmentType")
+    uid = ref.get("uid") if isinstance(ref, dict) else None
+    if not uid:
+        return None
+    if uid in cache:
+        return cache[uid]
+    from lims_analyses.senaite_writeback import SENAITE_BASE_URL, _get
+    title: Optional[str] = None
+    try:
+        resp = _get(f"{SENAITE_BASE_URL}/@@API/senaite/v1/attachmenttype/{uid}")
+        if resp.status_code < 300:
+            items = resp.json().get("items", [])
+            raw = (items[0] if items else {}).get("title")
+            if isinstance(raw, str) and raw.strip():
+                title = raw[:100]
+    except Exception as e:
+        log.warning("attachmenttype resolve failed uid=%s: %s", uid, e)
+    cache[uid] = title
+    return title
 
 
 def run(*, apply: bool, limit: Optional[int], probe: int, throttle: float,
@@ -120,15 +157,16 @@ def run(*, apply: bool, limit: Optional[int], probe: int, throttle: float,
 
     stats = {"stamped": 0, "probed": 0, "no_type": 0, "errors": 0}
     by_type: dict[str, int] = {}
+    type_cache: dict = {}
     failures: list[tuple[int, str, str]] = []
     consecutive_errors = 0
 
     for att, sample_id in rows:
-        if not apply and stats["probed"] >= probe:
+        if not apply and (stats["probed"] + stats["no_type"]) >= probe:
             break
         try:
             detail = sen.fetch_attachment_meta(att.senaite_attachment_uid)
-            att_type = extract_attachment_type(detail)
+            att_type = resolve_type_title(detail, type_cache)
             if att_type is None:
                 stats["no_type"] += 1
                 log.info("no AttachmentType in SENAITE for id=%s sample=%s "

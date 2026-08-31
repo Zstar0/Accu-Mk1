@@ -16,7 +16,11 @@ from sqlalchemy.orm import sessionmaker
 
 from database import Base
 from models import LimsParentAttachment, LimsSample
-from scripts.backfill_attachment_type_stamp import extract_attachment_type, run
+from scripts.backfill_attachment_type_stamp import (
+    extract_attachment_type,
+    resolve_type_title,
+    run,
+)
 
 
 # ── extract_attachment_type ──────────────────────────────────────────────────
@@ -43,6 +47,58 @@ def test_extract_missing_and_blank_return_none():
 
 def test_extract_clamps_to_column_width():
     assert extract_attachment_type({"AttachmentType": "x" * 150}) == "x" * 100
+
+
+# ── resolve_type_title: the live ref-dict shape (probed 2026-08-30) ─────────
+
+class _FakeResp:
+    def __init__(self, payload, status=200):
+        self._payload = payload
+        self.status_code = status
+
+    def json(self):
+        return self._payload
+
+
+def test_resolve_ref_dict_fetches_and_caches():
+    detail = {"AttachmentType": {"uid": "t1", "url": "u", "api_url": "a"}}
+    calls = []
+
+    def _fake_get(url):
+        calls.append(url)
+        return _FakeResp({"items": [{"title": "Sample Image"}]})
+
+    cache = {}
+    with patch("lims_analyses.senaite_writeback._get", side_effect=_fake_get):
+        assert resolve_type_title(detail, cache) == "Sample Image"
+        assert resolve_type_title(detail, cache) == "Sample Image"  # cached
+    assert len(calls) == 1
+    assert cache == {"t1": "Sample Image"}
+
+
+def test_resolve_inline_title_short_circuits_without_fetch():
+    with patch("lims_analyses.senaite_writeback._get",
+               side_effect=AssertionError("no fetch expected")):
+        assert resolve_type_title(
+            {"AttachmentType": "HPLC Graph"}, {}) == "HPLC Graph"
+
+
+def test_resolve_failed_fetch_caches_none():
+    detail = {"AttachmentType": {"uid": "t9"}}
+    cache = {}
+    with patch("lims_analyses.senaite_writeback._get",
+               side_effect=RuntimeError("senaite down")):
+        assert resolve_type_title(detail, cache) is None
+    assert cache == {"t9": None}
+    # second call resolves from cache — no retry storm
+    with patch("lims_analyses.senaite_writeback._get",
+               side_effect=AssertionError("must not refetch")):
+        assert resolve_type_title(detail, cache) is None
+
+
+def test_resolve_no_ref_returns_none():
+    assert resolve_type_title({}, {}) is None
+    assert resolve_type_title({"AttachmentType": {"url": "u"}}, {}) is None
 
 
 # ── run(): cohort + stamping ─────────────────────────────────────────────────
