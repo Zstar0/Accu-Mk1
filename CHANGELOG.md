@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.13.0 — 2026-08-31
+
+### Added
+
+- **Logistics capture (customer-portal Slice A, PR #150)** — four new
+  `lims_samples` registry columns: `vendor_name` (customer-declared
+  vendor/manufacturer, arrives on the IS creation signal, internal-only),
+  plus `shipping_carrier` / `tracking_number` / `tracking_url`
+  (customer-saved after checkout via the new
+  `POST /s2s/lims-samples/shipping` bulk endpoint, which applies only to
+  not-yet-received samples and reports `{updated, locked, missing}` —
+  received samples keep the tracking they arrived under). All four render
+  on sample-details in both read sources; the Receive page (both views)
+  gets a clickable tracking link that opens the carrier page without
+  triggering the receive wizard. Reconcile/backfill provably cannot
+  clobber the new columns; vendor survives creation-signal replays.
+
+
 ## v1.12.5 — 2026-08-31
 
 ### Fixed
