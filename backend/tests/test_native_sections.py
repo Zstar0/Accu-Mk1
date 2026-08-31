@@ -119,7 +119,13 @@ def test_rule1_is_fetch_failure_aborts(db_session, monkeypatch):
         build_native_sections(db_session, parent)
 
 
-def test_rule4_ineligible_state_aborts_not_skips(db_session, monkeypatch):
+def test_rule4_ineligible_state_alone_defers_not_aborts(db_session, monkeypatch):
+    """Partial-COA fix (2026-08-29): a SOLE member in an ineligible state
+    (to_be_verified) means the profile has ZERO eligible members — nothing
+    has been tested yet, so it's DEFERRED (omitted + flagged), not aborted.
+    Rule 4's abort is reserved for a PARTIALLY-pending profile — see
+    test_rule4_partial_pending_profile_aborts_not_skips below, which is the
+    direct descendant of this test's original "aborts_not_skips" intent."""
     prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
                                     services=[("HM-PB", "mk1")])
     parent = _mk_parent_with_rows(db_session, svcs, state="to_be_verified")
@@ -127,13 +133,17 @@ def test_rule4_ineligible_state_aborts_not_skips(db_session, monkeypatch):
         "coa.native_sections.fetch_sample_services",
         lambda sample_id: {"services": {"heavy_metals": True}, "package": None},
     )
-    with pytest.raises(NativeSectionsError, match="no eligible result"):
-        build_native_sections(db_session, parent)
+    doc = build_native_sections(db_session, parent)   # must NOT raise
+    assert doc["sections"] == []
+    assert doc["deferred_sections"] == ["heavy_metals"]
+    assert doc["ordered_profiles"] == ["heavy_metals"]   # unchanged either way
 
 
-def test_rule4_parent_to_verify_state_aborts_not_skips(db_session, monkeypatch):
-    """Task 6 pin: a promoted-but-unreviewed row (parent_to_verify — awaiting
-    the reviewer's verify sign-off) is not certifiable, same as to_be_verified.
+def test_rule4_parent_to_verify_state_alone_defers_not_aborts(db_session, monkeypatch):
+    """Task 6 pin, updated for the partial-COA fix: a promoted-but-unreviewed
+    row (parent_to_verify — awaiting the reviewer's verify sign-off) is not
+    certifiable, same as to_be_verified — but as the SOLE member it makes the
+    profile fully-pending, so it defers rather than aborting.
     ELIGIBLE_STATES is already ('verified', 'published') here — narrower than
     coa/source_resolver's pre-Task-6 _LIVE_RESULT_STATES by design (native
     services have no SENAITE verify step) — so this was already correct
@@ -145,8 +155,94 @@ def test_rule4_parent_to_verify_state_aborts_not_skips(db_session, monkeypatch):
         "coa.native_sections.fetch_sample_services",
         lambda sample_id: {"services": {"heavy_metals": True}, "package": None},
     )
+    doc = build_native_sections(db_session, parent)   # must NOT raise
+    assert doc["sections"] == []
+    assert doc["deferred_sections"] == ["heavy_metals"]
+
+
+def test_rule4_partial_pending_profile_aborts_not_skips(db_session, monkeypatch):
+    """Partial-COA fix (2026-08-29): a profile with SOME eligible members and
+    SOME missing/ineligible must still abort exactly as before — a
+    half-filled section must never print. HM-PB has a verified result;
+    HM-AS is stuck at to_be_verified (ineligible, and not simply absent) —
+    that member's row keeps the profile out of the "zero eligible" deferral
+    path, so Rule 4 fires with its original message, unpinned by this fix."""
+    prof, svcs = _mk_native_profile(
+        db_session, key="heavy_metals",
+        services=[("HM-PB", "mk1"), ("HM-AS", "mk1")],
+    )
+    from models import LimsAnalysis, LimsSample
+    parent = LimsSample(sample_id="P-7001")
+    db_session.add(parent); db_session.flush()
+    db_session.add(LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=svcs[0].id,
+        keyword=svcs[0].keyword, title=svcs[0].title,
+        result_value="0.12", result_unit=svcs[0].unit, review_state="verified",
+    ))
+    db_session.add(LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=svcs[1].id,
+        keyword=svcs[1].keyword, title=svcs[1].title,
+        result_value="0.05", result_unit=svcs[1].unit, review_state="to_be_verified",
+    ))
+    db_session.flush()
+    monkeypatch.setattr(
+        "coa.native_sections.fetch_sample_services",
+        lambda sample_id: {"services": {"heavy_metals": True}, "package": None},
+    )
     with pytest.raises(NativeSectionsError, match="no eligible result"):
         build_native_sections(db_session, parent)
+
+
+def test_fully_pending_profile_deferred_other_sections_still_render(db_session, monkeypatch, caplog):
+    """(a) The core partial-COA scenario: an armed profile with ZERO results
+    yet (P-2432) must not block the rest of the certificate. Two profiles
+    ordered — heavy_metals (complete) and sterility_usp71 (armed, no
+    result) — build_native_sections must render heavy_metals normally,
+    omit sterility_usp71 from `sections`, name it in `deferred_sections`,
+    and still list it in `ordered_profiles` (unchanged, per spec). Deferral
+    must also be LOUD (design point 3): the log warning is the only signal
+    an operator gets that a section silently vanished from a paid
+    certificate — a future refactor that drops it must fail this test."""
+    hm_prof, hm_svcs = _mk_native_profile(
+        db_session, key="heavy_metals", services=[("HM-PB", "mk1")], sort=10,
+    )
+    ster_prof, ster_svcs = _mk_native_profile(
+        db_session, key="sterility_usp71", services=[("STERILITY_USP71", "mk1")],
+        sort=20,
+    )
+    parent = _mk_parent_with_rows(db_session, hm_svcs)   # only HM has a result
+    monkeypatch.setattr(
+        "coa.native_sections.fetch_sample_services",
+        lambda sample_id: {
+            "services": {"heavy_metals": True, "sterility_usp71": True},
+            "package": None,
+        },
+    )
+    with caplog.at_level("WARNING", logger="coa.native_sections"):
+        doc = build_native_sections(db_session, parent)   # must NOT raise
+    assert doc["ordered_profiles"] == ["heavy_metals", "sterility_usp71"]
+    assert [s["profile_key"] for s in doc["sections"]] == ["heavy_metals"]
+    assert doc["deferred_sections"] == ["sterility_usp71"]
+    assert any(
+        "native_section_deferred" in r.getMessage()
+        and "profile=sterility_usp71" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_no_deferrals_omits_deferred_sections_key(db_session, monkeypatch):
+    """(c) When nothing was deferred, `deferred_sections` is ABSENT from the
+    document entirely — not an empty list — so existing consumers see no
+    shape change at all (additive-only wire contract)."""
+    prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
+                                    services=[("HM-PB", "mk1")])
+    parent = _mk_parent_with_rows(db_session, svcs)
+    monkeypatch.setattr(
+        "coa.native_sections.fetch_sample_services",
+        lambda sample_id: {"services": {"heavy_metals": True}, "package": None},
+    )
+    doc = build_native_sections(db_session, parent)
+    assert "deferred_sections" not in doc
 
 
 def test_rule3_empty_result_aborts(db_session, monkeypatch):
@@ -192,7 +288,8 @@ def test_null_archetype_profile_is_not_reportable(db_session, monkeypatch):
 def test_retested_row_is_not_current(db_session, monkeypatch):
     """A parent row that has been retest-superseded (retracted) plus a new
     verified retest row: the retest row is used; if ONLY the retracted row
-    exists, the section aborts (rule 4)."""
+    exists, the profile has zero eligible members and DEFERS (partial-COA
+    fix, 2026-08-29) rather than aborting."""
     from models import LimsAnalysis
     prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
                                     services=[("HM-PB", "mk1")])
@@ -201,8 +298,9 @@ def test_retested_row_is_not_current(db_session, monkeypatch):
         "coa.native_sections.fetch_sample_services",
         lambda sample_id: {"services": {"heavy_metals": True}, "package": None},
     )
-    with pytest.raises(NativeSectionsError, match="no eligible result"):
-        build_native_sections(db_session, parent)
+    doc = build_native_sections(db_session, parent)   # must NOT raise
+    assert doc["sections"] == []
+    assert doc["deferred_sections"] == ["heavy_metals"]
     db_session.add(LimsAnalysis(
         lims_sample_pk=parent.id, analysis_service_id=svcs[0].id,
         keyword="HM-PB", title="Hm-Pb", result_value="0.09",
@@ -211,6 +309,7 @@ def test_retested_row_is_not_current(db_session, monkeypatch):
     db_session.flush()
     doc = build_native_sections(db_session, parent)
     assert doc["sections"][0]["rows"][0]["result"] == "0.09"
+    assert "deferred_sections" not in doc
 
 
 def test_no_order_linked_yields_empty_document(db_session, monkeypatch):
@@ -254,9 +353,10 @@ def test_method_label_from_hplc_methods(db_session, monkeypatch):
 def test_retest_of_id_row_is_not_current(db_session, monkeypatch):
     """Design spec (2026-07-28-native-coa-sections-design.md:73): a row is
     only "current" when retest_of_id IS NULL, even if review_state is
-    otherwise eligible. Alone, a retest_of_id-set row must NOT be picked (the
-    section aborts, rule 4). Alongside a current (retest_of_id NULL) row, the
-    current one's result is used."""
+    otherwise eligible. Alone, a retest_of_id-set row must NOT be picked —
+    the profile has zero eligible members, so it DEFERS (partial-COA fix,
+    2026-08-29) rather than aborting. Alongside a current (retest_of_id
+    NULL) row, the current one's result is used and the deferral clears."""
     from models import LimsAnalysis, LimsSample
     prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
                                     services=[("HM-PB", "mk1")])
@@ -281,8 +381,9 @@ def test_retest_of_id_row_is_not_current(db_session, monkeypatch):
         "coa.native_sections.fetch_sample_services",
         lambda sample_id: {"services": {"heavy_metals": True}, "package": None},
     )
-    with pytest.raises(NativeSectionsError, match="no eligible result"):
-        build_native_sections(db_session, parent)
+    doc = build_native_sections(db_session, parent)   # must NOT raise
+    assert doc["sections"] == []
+    assert doc["deferred_sections"] == ["heavy_metals"]
 
     current_row = LimsAnalysis(
         lims_sample_pk=parent.id, analysis_service_id=svcs[0].id,
@@ -292,6 +393,7 @@ def test_retest_of_id_row_is_not_current(db_session, monkeypatch):
     db_session.add(current_row); db_session.flush()
     doc = build_native_sections(db_session, parent)
     assert doc["sections"][0]["rows"][0]["result"] == "0.12"
+    assert "deferred_sections" not in doc
 
 
 def test_blank_unit_logs_warning_and_still_builds(db_session, monkeypatch, caplog):

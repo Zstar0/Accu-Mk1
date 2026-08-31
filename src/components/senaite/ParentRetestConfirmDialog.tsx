@@ -8,6 +8,11 @@ export interface ParentRetestConfirmState {
   titles: string[]
   keywords: string[]
   impact: ParentRetestImpact
+  /** Titles of targets whose parent row is PUBLISHED (published-parent-
+   *  retest ruling 2026-08-28): those keep their citable value live until
+   *  the retest's re-promote supersedes it, so the dialog copy must not
+   *  claim an un-promote. Omitted/empty → existing copy verbatim. */
+  publishedTitles?: string[]
 }
 
 /** Destructive confirm for the native parent-tier retest. Names the exact
@@ -24,6 +29,7 @@ export function ParentRetestConfirmDialog({
 }) {
   const impact = state?.impact
   const blocked = !impact || impact.sourceCount === 0
+  const publishedCount = state?.publishedTitles?.length ?? 0
   return (
     <AlertDialog open={!!state} onOpenChange={open => { if (!open && !pending) onCancel() }}>
       <AlertDialogContent>
@@ -43,16 +49,35 @@ export function ParentRetestConfirmDialog({
                   Retest is unavailable here until it can be shown.
                 </div>
               ) : (
-                <div>
-                  This retracts {impact.sourceCount} promoted source{' '}
-                  {impact.sourceCount === 1 ? 'result' : 'results'}
-                  {impact.vialIds.length > 0 && (
-                    <> on vial{impact.vialIds.length === 1 ? '' : 's'}{' '}
-                      <span className="font-mono">{impact.vialIds.join(', ')}</span></>
+                <>
+                  <div>
+                    This retracts {impact.sourceCount} promoted source{' '}
+                    {impact.sourceCount === 1 ? 'result' : 'results'}
+                    {impact.vialIds.length > 0 && (
+                      <> on vial{impact.vialIds.length === 1 ? '' : 's'}{' '}
+                        <span className="font-mono">{impact.vialIds.join(', ')}</span></>
+                    )}
+                    {publishedCount === 0 ? (
+                      <>, creates fresh retest rows there, and un-promotes this
+                        parent result. Published COAs are not affected.</>
+                    ) : publishedCount < (state?.titles.length ?? 0) ? (
+                      <>, creates fresh retest rows there, and un-promotes the
+                        not-yet-published parent results.</>
+                    ) : (
+                      <> and creates fresh retest rows there.</>
+                    )}
+                  </div>
+                  {publishedCount > 0 && (
+                    <div>
+                      {publishedCount === 1
+                        ? 'This result is PUBLISHED: its'
+                        : `${publishedCount} of these results are PUBLISHED: each`}{' '}
+                      published value stays on the issued certificate until the
+                      retested result is promoted and verified over it. The
+                      existing COA PDF is unchanged until it is regenerated.
+                    </div>
                   )}
-                  , creates fresh retest rows there, and un-promotes this parent
-                  result. Published COAs are not affected.
-                </div>
+                </>
               )}
             </div>
           </AlertDialogDescription>

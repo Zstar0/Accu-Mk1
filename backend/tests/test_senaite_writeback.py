@@ -259,7 +259,7 @@ def test_find_parent_analysis_line_only_verified_raises_with_correct_message():
 
     msg = str(exc_info.value)
     assert "already verified in SENAITE" in msg
-    assert "retest or retract there first" in msg
+    assert "line is locked there" in msg
     mock_update.assert_not_called()
     mock_transition.assert_not_called()
 
@@ -438,3 +438,34 @@ def test_writeback_parent_verify_prefers_active_line_over_verified():
 
     assert result == "verified"
     assert "uid-new" in mock_post.call_args.args[0]
+
+
+# ---------------------------------------------------------------------------
+# Promote divergence (Handler ruling 2026-08-30): a LOCKED SENAITE line
+# (verified/published — SENAITE can never retract it) raises the DISTINCT
+# SenaiteParentLineLocked subclass carrying uid+state, so the promote route
+# can diverge deliberately instead of 502ing. Still no writes attempted.
+# ---------------------------------------------------------------------------
+
+def test_writeback_promotion_locked_verified_raises_typed_subclass():
+    from lims_analyses.senaite_writeback import SenaiteParentLineLocked
+    find_resp = _ok_resp([_analysis_item("uid-xyz", "HPLC_ASSAY", "verified")])
+    with patch("lims_analyses.senaite_writeback._get", return_value=find_resp), \
+         patch("lims_analyses.senaite_writeback._post_json") as mock_post:
+        with pytest.raises(SenaiteParentLineLocked) as exc_info:
+            writeback_promotion("P-0042", "HPLC_ASSAY", "98.5", "remark")
+    mock_post.assert_not_called()
+    assert exc_info.value.uid == "uid-xyz"
+    assert exc_info.value.state == "verified"
+    assert isinstance(exc_info.value, SenaiteWritebackError)  # old catches still work
+
+
+def test_writeback_promotion_locked_published_raises_typed_subclass():
+    from lims_analyses.senaite_writeback import SenaiteParentLineLocked
+    find_resp = _ok_resp([_analysis_item("uid-pub", "HPLC_ASSAY", "published")])
+    with patch("lims_analyses.senaite_writeback._get", return_value=find_resp), \
+         patch("lims_analyses.senaite_writeback._post_json") as mock_post:
+        with pytest.raises(SenaiteParentLineLocked) as exc_info:
+            writeback_promotion("P-0042", "HPLC_ASSAY", "98.5", "remark")
+    mock_post.assert_not_called()
+    assert exc_info.value.state == "published"

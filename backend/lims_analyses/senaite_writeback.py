@@ -40,6 +40,23 @@ class SenaiteWritebackError(RuntimeError):
     """Write-back failed; promote must abort (fail-closed)."""
 
 
+class SenaiteParentLineLocked(SenaiteWritebackError):
+    """The SENAITE parent line is verified/published — locked. SENAITE can
+    never retract it, so this is NOT a failure the caller can remedy there.
+
+    Handler ruling 2026-08-30 (promote divergence): post read-independence
+    nothing reads the SENAITE line for certificates — the canonical row is
+    the authority — so the promote route treats this as a deliberate,
+    audited divergence (log + 'senaite_line_diverged' event, proceed
+    natively) instead of a 502. Any caller catching the broad
+    SenaiteWritebackError keeps its old fail-closed behavior."""
+
+    def __init__(self, *, uid: str, state: str, message: str):
+        super().__init__(message)
+        self.uid = uid
+        self.state = state
+
+
 # ---------------------------------------------------------------------------
 # HTTP thin wrappers — identical signature to sub_samples/senaite.py so the
 # same patch("lims_analyses.senaite_writeback._get") pattern works in tests.
@@ -120,8 +137,8 @@ def find_parent_analysis_line(parent_sample_id: str, keyword: str) -> dict:
     never targets a retracted/rejected/verified one.  Preference order:
       1. Lines not in (retracted, rejected, verified) — write-back targets
          these directly.
-      2. If only verified lines remain → error: caller must retest or retract
-         in SENAITE first.
+      2. If only verified lines remain → SenaiteParentLineLocked: the caller
+         decides whether to diverge (promote route) or fail closed.
       3. All retracted/rejected → error unchanged.
     """
     matched = _matched_parent_lines(parent_sample_id, keyword)
@@ -129,12 +146,17 @@ def find_parent_analysis_line(parent_sample_id: str, keyword: str) -> dict:
     for line in matched:
         if line["review_state"] not in ("retracted", "rejected", "verified"):
             return line
-    # No active line — check for verified line(s) before falling through.
-    if any(line["review_state"] == "verified" for line in matched):
-        raise SenaiteWritebackError(
-            f"Analysis {keyword} on {parent_sample_id} is already verified in "
-            f"SENAITE — retest or retract there first"
-        )
+    # No active line — check for locked line(s) before falling through.
+    for line in matched:
+        if line["review_state"] == "verified":
+            raise SenaiteParentLineLocked(
+                uid=line["uid"],
+                state=line["review_state"],
+                message=(
+                    f"Analysis {keyword} on {parent_sample_id} is already "
+                    f"{line['review_state']} in SENAITE — line is locked there"
+                ),
+            )
     if matched:
         raise SenaiteWritebackError(
             f"all {len(matched)} SENAITE lines for keyword={keyword} on "
@@ -304,8 +326,9 @@ def writeback_promotion(
 
     Orchestration:
       1. Locate the analysis line (find_parent_analysis_line).
-      2. If already ``verified``: raise SenaiteWritebackError — retract in
-         SENAITE first.
+      2. If already ``verified``/``published``: raise SenaiteParentLineLocked
+         (a SenaiteWritebackError subclass) — the caller decides whether to
+         diverge (promote route) or fail closed (everything else).
       3. POST result + remark to the analysis line (_update).
       4. If not already ``to_be_verified``: submit the line (_transition).
 
@@ -320,10 +343,14 @@ def writeback_promotion(
     uid = line["uid"]
     initial_state = line["review_state"]
 
-    if initial_state == "verified":
-        raise SenaiteWritebackError(
-            f"Analysis {keyword} on {parent_sample_id} is already verified in "
-            f"SENAITE — retract there first before promoting"
+    if initial_state in ("verified", "published"):
+        raise SenaiteParentLineLocked(
+            uid=uid,
+            state=initial_state,
+            message=(
+                f"Analysis {keyword} on {parent_sample_id} is already "
+                f"{initial_state} in SENAITE — line is locked there"
+            ),
         )
 
     _update(uid, {"Result": result_value, "Remarks": remark})

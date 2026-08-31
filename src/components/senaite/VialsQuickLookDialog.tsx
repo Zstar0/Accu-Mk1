@@ -38,6 +38,7 @@ import type {
   SubSample,
 } from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
+import { useEffectiveReadSource } from '@/lib/read-source'
 import { AnalysisTable } from '@/components/senaite/AnalysisTable'
 import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
 import { vialLabel, vialTotal } from '@/lib/vial-label'
@@ -124,9 +125,14 @@ export function VialsQuickLookDialog({
     (a, b) => a.vial_sequence - b.vial_sequence
   )
 
+  // Lock map follows the sample-details page's effective read source: in
+  // mk1 mode the backend serves the native (canonical-authority) map —
+  // see listParentLineStates. Keyed into the query cache so flipping the
+  // source refetches.
+  const { effective: lockMapSource } = useEffectiveReadSource('sample_details')
   const { data: lineStatesData, refetch: refetchLineStates } = useQuery({
-    queryKey: ['quicklook-parent-line-states', parentSampleId],
-    queryFn: () => listParentLineStates(parentSampleId),
+    queryKey: ['quicklook-parent-line-states', parentSampleId, lockMapSource],
+    queryFn: () => listParentLineStates(parentSampleId, lockMapSource),
     enabled: open,
   })
   const parentLineStates = lineStatesData?.states

@@ -155,6 +155,20 @@ PERMANENT: dict[tuple[str, str, str], tuple[int, str]] = {
         "The registry-debug panel diffs a keyword-keyed SENAITE payload against "
         "local rows; keying the title backfill by service id would not join.",
     ),
+    ("main.py", "generate_sample_coa", "r"): (
+        1,
+        "COA read-independence Task 5 mk1-mode fallback (needs_chromatogram "
+        "native branch, 'Task 5 review Finding 1, R1 fix'): r is "
+        "SenaiteShapeAnalysisResponse (lims_analyses/schemas.py) -- the "
+        "read-flip's native substitute for SENAITE's own analyses proxy -- "
+        "which carries no analysis_service_id field at all. _micro "
+        "(coa_exempt_keywords, lims_analyses/seeder.py) is itself a RULED "
+        "(S2, 2026-08-12) AnalysisService.keyword projection. This branch "
+        "exists specifically to mirror the SENAITE-sourced sibling leg "
+        "immediately below it ('ACTIVE keyword parity' comment) -- an "
+        "unavoidable SENAITE-wire keyword fetch. Same SENAITE-boundary-"
+        "translator class as lookup_senaite_sample/AnalysisService above.",
+    ),
     # --- The sanctioned _ident_clause idiom: senaite arm of an origin ternary --
     ("lims_analyses/service.py", "promote_to_parent", "row"): (
         1,
@@ -298,7 +312,7 @@ PER_FILE_FLOOR = {
     "lims_analyses/parent_mirror.py": 1,
     "workflow/observer.py": 1,
     "coa/source_resolver.py": 2,
-    "main.py": 6,
+    "main.py": 7,
 }
 
 

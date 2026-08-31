@@ -482,3 +482,147 @@ def test_parent_line_states_happy_path_returns_states(route_client):
 
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"states": fake_states}
+
+
+# ─── Promote divergence (Handler ruling 2026-08-30) ──────────────────────────
+# A LOCKED SENAITE parent line (verified/published) must NOT block the native
+# promote: post read-independence nothing reads that line for certificates —
+# the canonical row is the authority. The route logs, records a
+# 'senaite_line_diverged' audit event, and proceeds. Generic write-back
+# failures still 502 (pinned above).
+
+
+def test_promote_diverges_when_senaite_line_locked(route_client, promote_fixture):
+    from lims_analyses.senaite_writeback import SenaiteParentLineLocked
+    from models import LimsSubSampleEvent
+    db, parent, sub, analysis, payload = promote_fixture
+
+    def _locked_writeback(parent_sample_id, keyword, result_value, remark):
+        raise SenaiteParentLineLocked(
+            uid="uid-locked", state="verified",
+            message=f"Analysis {keyword} on {parent_sample_id} is locked in SENAITE",
+        )
+
+    with patch("lims_analyses.routes.senaite_writeback.writeback_promotion",
+               side_effect=_locked_writeback):
+        resp = route_client.post("/api/lims-analyses/promote", json=payload)
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["parent"]["review_state"] == "parent_to_verify"
+
+    # Parent-tier row persisted despite the locked SENAITE line
+    parent_rows = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.keyword == "PURITY-HPLC",
+        )
+    ).scalars().all()
+    assert len(parent_rows) == 1
+
+    # Audit event written, naming the divergence
+    events = db.execute(
+        select(LimsSubSampleEvent).where(
+            LimsSubSampleEvent.lims_sample_pk == parent.id,
+            LimsSubSampleEvent.event == "senaite_line_diverged",
+        )
+    ).scalars().all()
+    assert len(events) == 1
+    d = events[0].details
+    assert d["keyword"] == "PURITY-HPLC"
+    assert d["senaite_state"] == "verified"
+    assert d["senaite_uid"] == "uid-locked"
+
+
+# ─── parent-line-states, source=mk1 (native lock map, 1.12.2) ────────────────
+# The FE's isLockedByParent gate read SENAITE line states — post divergence
+# (1.12.1) a SENAITE line stays verified forever, so a retested keyword's
+# vial rows stayed locked with no Promote (Handler's PB-0486 Endo dead end).
+# In mk1 mode the map is served natively: the canonical tier owns any
+# keyword it has EVER held (live canonical state locks; live canonical gone
+# → unlocked, even though the shadow still mirrors SENAITE's verified);
+# keywords with no canonical history fall back to live shadow rows so
+# legacy vials keep their lock. Zero SENAITE reads on this branch.
+
+
+def _parent_tier_row(db, parent, svc, keyword, **kw):
+    row = LimsAnalysis(
+        lims_sample_pk=parent.id,
+        analysis_service_id=svc.id,
+        keyword=keyword,
+        title=keyword,
+        **kw,
+    )
+    db.add(row)
+    db.commit()
+    return row
+
+
+@pytest.fixture
+def line_states_parent(route_client):
+    db = route_client._test_session
+    svc = AnalysisService(title="Endotoxin", keyword="ENDO")
+    db.add(svc)
+    parent = LimsSample(sample_id="P-0002", external_lims_uid="uid-P-0002")
+    db.add(parent)
+    db.commit()
+    return db, parent, svc
+
+
+def _get_states_mk1(route_client):
+    with patch(
+        "lims_analyses.routes.list_parent_line_states",
+        side_effect=AssertionError("SENAITE read on mk1 branch"),
+    ):
+        resp = route_client.get(
+            "/api/lims-analyses/parent-line-states",
+            params={"parent_sample_id": "P-0002", "source": "mk1"},
+        )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["states"]
+
+
+def test_parent_line_states_mk1_native_map_zero_senaite(route_client, line_states_parent):
+    db, parent, svc = line_states_parent
+    # Live canonical verified → locks its keyword.
+    _parent_tier_row(db, parent, svc, "ENDO",
+                     provenance="canonical", review_state="verified")
+    # Shadow-only keyword (no canonical history) → mirror state locks (legacy).
+    _parent_tier_row(db, parent, svc, "STER-PCR",
+                     provenance="shadow", review_state="senaite_mirror",
+                     mirror_review_state="verified")
+    # Parent-hosted canonical mid-run (TIER_VIAL under tier_of) → excluded.
+    _parent_tier_row(db, parent, svc, "VAR-RUN",
+                     provenance="canonical", review_state="to_be_verified")
+    states = _get_states_mk1(route_client)
+    assert states.get("ENDO") == "verified"
+    assert states.get("STER-PCR") == "verified"
+    assert "VAR-RUN" not in states
+
+
+def test_parent_line_states_mk1_retracted_canonical_unlocks_despite_shadow(
+    route_client, line_states_parent
+):
+    """THE PB-0486 case: verified-parent retest retracts the canonical row;
+    the shadow keeps mirroring SENAITE's eternal verified. Canonical history
+    owns the keyword → absent from the map → vial unlocked to re-promote."""
+    db, parent, svc = line_states_parent
+    _parent_tier_row(db, parent, svc, "ENDO",
+                     provenance="canonical", review_state="retracted")
+    _parent_tier_row(db, parent, svc, "ENDO",
+                     provenance="shadow", review_state="senaite_mirror",
+                     mirror_review_state="verified")
+    states = _get_states_mk1(route_client)
+    assert "ENDO" not in states
+
+
+def test_parent_line_states_mk1_retested_published_canonical_unlocks(
+    route_client, line_states_parent
+):
+    """#156 published-parent retest marks the canonical row retested=True
+    (value stays citable) — retest in flight, vial must be promotable."""
+    db, parent, svc = line_states_parent
+    _parent_tier_row(db, parent, svc, "ENDO",
+                     provenance="canonical", review_state="published",
+                     retested=True)
+    states = _get_states_mk1(route_client)
+    assert "ENDO" not in states

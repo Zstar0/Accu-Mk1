@@ -594,3 +594,63 @@ def test_bac_water_panel_keyword_fallback_section(db_session):
         assert by_kw[kw].profile_section_label == "Bac Water", kw
     assert (by_kw["Benzyl_Alcohol_Assay"].profile_section_sort
             > by_kw["STER-PCR"].profile_section_sort)
+
+
+# ── write-through: a shadow row's uid IS its write authority ────────────────
+# In mk1 read mode the registry is the read surface for parent analyses, so a
+# SENAITE-owned line reaches the UI only as a shadow row. Serializing it under
+# its SENAITE uid is what keeps result entry and transitions routed at
+# SENAITE — the FE branches on the `mk1:` prefix. Without it those rows are
+# addressed as native, and every write dies on the Mk1 tier/state guards
+# (the BW "can't place results" and legacy-retest outage, 2026-08-29).
+
+
+def test_shadow_row_serializes_under_its_senaite_uid(db_session):
+    from lims_analyses.service import list_parent_analyses_senaite_shape
+
+    parent = _mk_parent(db_session, "TEST-WT-P1")
+    svc = _mk_service(db_session, "PH-DETERM", "pH Determination")
+    row = _mk_parent_analysis(
+        db_session, parent, svc, provenance="shadow",
+        review_state="senaite_mirror", mirror_review_state="unassigned",
+        senaite_analysis_uid="senaite-uid-123",
+    )
+
+    rows = list_parent_analyses_senaite_shape(db_session, parent.sample_id)
+    by_kw = {r.keyword: r for r in rows}
+    assert by_kw["PH-DETERM"].uid == "senaite-uid-123"
+    assert f"mk1:{row.id}" not in {r.uid for r in rows}
+
+
+def test_shadow_row_without_a_uid_stays_native_addressed(db_session):
+    """Back-compat: rows written before the column existed (and any the
+    backfill can't resolve) keep the mk1: form and stay display-only —
+    better than routing a write at a line we cannot name."""
+    from lims_analyses.service import list_parent_analyses_senaite_shape
+
+    parent = _mk_parent(db_session, "TEST-WT-P2")
+    svc = _mk_service(db_session, "BENZYL", "Benzyl Alcohol")
+    row = _mk_parent_analysis(
+        db_session, parent, svc, provenance="shadow",
+        review_state="senaite_mirror", mirror_review_state="unassigned",
+    )
+
+    rows = list_parent_analyses_senaite_shape(db_session, parent.sample_id)
+    assert rows[0].uid == f"mk1:{row.id}"
+
+
+def test_canonical_row_keeps_the_mk1_uid_even_if_a_uid_is_stamped(db_session):
+    """Native rows are Mk1's to write, always — the SENAITE uid on a
+    canonical row (a promoted row whose service also has an AR line) must
+    never redirect its verbs at SENAITE."""
+    from lims_analyses.service import list_parent_analyses_senaite_shape
+
+    parent = _mk_parent(db_session, "TEST-WT-P3")
+    svc = _mk_service(db_session, "HM-PB", "Lead")
+    row = _mk_parent_analysis(
+        db_session, parent, svc, provenance="canonical",
+        review_state="verified", senaite_analysis_uid="senaite-uid-999",
+    )
+
+    rows = list_parent_analyses_senaite_shape(db_session, parent.sample_id)
+    assert rows[0].uid == f"mk1:{row.id}"

@@ -15,9 +15,13 @@ _ROWS = [{"uid": "mk1:1", "Keyword": "HPLC-PUR", "Title": "t",
           "review_state": "published", "ResultCaptureDate": None}]
 
 
+_SAMPLE_META = {"source": "mk1", "SampleID": "P-0161", "attachments": []}
+
+
 def _patch(monkeypatch, source):
     monkeypatch.setattr(wd, "build_native_sections", lambda db, p: dict(_NATIVE_DOC))
     monkeypatch.setattr(wd, "build_legacy_rows", lambda db, p: list(_ROWS))
+    monkeypatch.setattr(wd, "build_sample_meta", lambda db, p: dict(_SAMPLE_META))
     monkeypatch.setattr(wd, "coa_generation_source", lambda db: source)
 
 
@@ -32,6 +36,7 @@ def test_mk1_mode_attaches_legacy_block(monkeypatch):
     _patch(monkeypatch, "mk1")
     doc = build_coa_wire_document(None, _PARENT)
     assert doc["legacy_rows"] == {"source": "mk1", "rows": _ROWS}
+    assert doc["sample_meta"] == _SAMPLE_META
     assert doc["ordered_profiles"] == ["heavy_metals"]   # native part intact
 
 
@@ -46,7 +51,8 @@ def test_vial_doc_is_legacy_only_in_mk1_mode(monkeypatch):
     _patch(monkeypatch, "mk1")
     doc = build_vial_wire_document(None, _PARENT)
     assert doc == {"sample_id": "P-0161", "ordered_profiles": [],
-                   "sections": [], "legacy_rows": {"source": "mk1", "rows": _ROWS}}
+                   "sections": [], "legacy_rows": {"source": "mk1", "rows": _ROWS},
+                   "sample_meta": _SAMPLE_META}
 
 
 def test_warn_fires_on_source_mismatch(caplog):
