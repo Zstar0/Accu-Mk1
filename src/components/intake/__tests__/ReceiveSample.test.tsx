@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { ReceiveSample } from '@/components/intake/ReceiveSample'
-import { getRegistrySamples, getSetting } from '@/lib/api'
+import { getRegistrySamples, getRegistryOrders, getSetting } from '@/lib/api'
 
 // Stub the heavy session shell with a sentinel that echoes the flattened sample
 // ids it was handed, so we can assert which orders a Process click opened.
@@ -91,10 +91,43 @@ vi.mock('@/lib/api', async importOriginal => {
     listSubSamples: vi
       .fn()
       .mockResolvedValue({ parent: { sub_sample_count: 0 } }),
+    // Batched ship-from/customer read for the By-Order list (Task 6). Empty
+    // by default; overridden per-test where the ship-from line is asserted.
+    getRegistryOrders: vi.fn().mockResolvedValue([]),
     // Multi-order check-in flag. Default resolves 'true' (set per-test in
     // beforeEach) so the selection/combine suite keeps its checkboxes; the
     // gating suite overrides it to reject (missing key) or resolve 'false'.
     getSetting: vi.fn(),
+  }
+})
+
+// RaiseFlagButton (Task 6) now renders on every order row + expanded sample
+// row. Stub its data hooks so mounting it doesn't hit the network — mirrors
+// the established pattern in RaiseFlagButton.test.tsx.
+vi.mock('@/components/flags/flag-users', () => ({
+  useFlagUsers: () => new Map(),
+  nameForUser: (_m: unknown, id: number | null) =>
+    id == null ? 'Unassigned' : `User ${id}`,
+}))
+vi.mock('@/hooks/use-flags', async orig => {
+  const actual = (await orig()) as Record<string, unknown>
+  return {
+    ...actual,
+    useCreateFlag: () => ({ mutate: vi.fn(), isPending: false }),
+  }
+})
+vi.mock('@/services/flag-types', async orig => {
+  const actual = (await orig()) as Record<string, unknown>
+  return {
+    ...actual,
+    useFlagTypes: () => ({ data: [] }),
+  }
+})
+vi.mock('@/services/item-kinds', async orig => {
+  const actual = (await orig()) as Record<string, unknown>
+  return {
+    ...actual,
+    useItemKinds: () => ({ data: [] }),
   }
 })
 
@@ -351,5 +384,48 @@ describe('ReceiveSample — search axes + sort + expand', () => {
     expect(detail.textContent).toContain('BPC-157 - Identity (HPLC)')
     expect(detail.textContent).toContain('LOT-AAA')
     expect(detail.textContent).toContain('10 mg')
+  })
+
+  it('shows the ship-from line in the expanded order detail', async () => {
+    vi.mocked(getRegistryOrders).mockResolvedValue([
+      {
+        wp_order_id: 2001,
+        order_number: 'WP-2001',
+        status: 'processing',
+        customer_name: 'Alpha Co',
+        customer_email: 'alpha@x.com',
+        billing: { city: 'Austin', state: 'TX', country: 'US' },
+        shipping: null,
+        wp_created_at: null,
+        wp_paid_at: null,
+      },
+    ])
+    renderRich()
+    await screen.findByText('WP-2001')
+    fireEvent.click(screen.getByRole('button', { name: 'Expand WP-2001' }))
+    expect(
+      await screen.findByText(/Ships from: Austin, TX US/)
+    ).toBeInTheDocument()
+  })
+
+  it('renders a flag button per order row and per expanded sample', async () => {
+    renderRich()
+    await screen.findByText('WP-2001')
+    // RaiseFlagButton's default/compact trigger renders "Raise a flag" (its
+    // popover's internal submit button is "Raise flag" without the "a", but
+    // that button only exists once the popover is open — not asserted here).
+    expect(
+      screen.getAllByRole('button', { name: /Raise a flag/i }).length
+    ).toBeGreaterThan(0)
+
+    // Expand a row and confirm the per-sample flag button also renders.
+    const before = screen.getAllByRole('button', {
+      name: /Raise a flag/i,
+    }).length
+    fireEvent.click(screen.getByRole('button', { name: 'Expand WP-2001' }))
+    const after = await screen.findAllByRole('button', {
+      name: /Raise a flag/i,
+    })
+    expect(after.length).toBeGreaterThan(before)
   })
 })

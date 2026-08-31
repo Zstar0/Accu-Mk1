@@ -4616,6 +4616,9 @@ export interface SenaiteSample {
   // Registry reads only — name + declared qty pairs for the receive page's
   // expanded order rows. Absent/empty on SENAITE-sourced lists.
   analyte_details?: { name: string; declared_quantity: string | null }[]
+  // Registry passthrough (Task 2) — the WooCommerce line-item ids this sample
+  // was created from. Absent on SENAITE-sourced lists.
+  wc_line_item_ids?: number[]
 }
 
 export interface SenaiteSamplesResponse {
@@ -4678,6 +4681,36 @@ export async function getRegistrySamples(
     throw new Error(err?.detail || `Registry samples failed: ${response.status}`)
   }
   return response.json()
+}
+
+/** Order record from the local lims_orders registry (GET /registry/orders).
+ *  Batched by order_number — mirrors getRegistrySamples' registry-read shape. */
+export interface RegistryOrder {
+  wp_order_id: number
+  order_number: string
+  status: string | null
+  customer_name: string | null
+  customer_email: string | null
+  billing: Record<string, string> | null
+  shipping: Record<string, string> | null
+  wp_created_at: string | null
+  wp_paid_at: string | null
+}
+
+/** Batched registry-orders read for the receive page's order list (ship-from
+ *  address, customer info). Never call per-row — batch all visible order
+ *  numbers into ONE request (backend caps at 100 numbers per call). */
+export async function getRegistryOrders(
+  numbers: string[]
+): Promise<RegistryOrder[]> {
+  if (numbers.length === 0) return []
+  const params = new URLSearchParams({ numbers: numbers.slice(0, 100).join(',') })
+  const response = await fetch(`${API_BASE_URL()}/registry/orders?${params}`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) return []
+  const data = (await response.json()) as { orders: RegistryOrder[] }
+  return data.orders
 }
 
 export interface SenaiteReceiveSampleResponse {

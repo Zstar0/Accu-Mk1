@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.12.0 — 2026-08-30
+
+### Added
+
+- **Order flags on Receive** — a "Raise a flag" button now sits next to
+  Process on every By-Order row (`entity_type="order"`, keyed by order
+  number) and next to each sample in the expanded order detail
+  (`entity_type="sample"`), so lab staff can flag an order or a specific
+  sample without leaving the receive workflow.
+- **Ship-from line in the expanded order detail** — each expanded By-Order
+  row shows "Ships from: {city}, {state} {country}" sourced from the new
+  registry-backed order read, batched (one request for every visible order
+  number, never per-row) via `getRegistryOrders` / `GET /registry/orders`.
+- **`lims_orders` registry + server-to-server upsert** — a local orders
+  registry table backs the new `GET /registry/orders` batch read and a
+  server-to-server upsert endpoint that keeps it current, mirroring the
+  existing `lims_samples` registry pattern.
+- **`wc_line_item_ids` registry passthrough** — `SenaiteSample` (and the
+  `/registry/samples` read it comes from) now carries the WooCommerce
+  line-item ids a sample was created from.
+
 ## v1.11.10 — 2026-08-28
 
 ### Fixed
