@@ -15553,6 +15553,11 @@ class SenaiteSampleItem(BaseModel):
     # Registry reads only — name + declared qty pairs for the receive page's
     # expanded order rows. SENAITE-sourced lists leave it empty.
     analyte_details: list[SenaiteAnalyteDetail] = []
+    # The customer's wizard note ("Notes for Lab"), surfaced as its own column
+    # on the receive page. Customer-origin remarks ONLY — never a lab remark
+    # (see registry_list.fetch_customer_notes). None when the sample has none,
+    # which is every sample ordered before the note was persisted natively.
+    customer_note: Optional[str] = None
 
 
 class SenaiteSamplesResponse(BaseModel):
@@ -22539,7 +22544,8 @@ async def list_samples_from_registry(
     """Samples-list read sourced from the local lims_samples registry (no SENAITE
     round-trip). Live/SENAITE-only fields (analytes, current review_state) are
     refreshed per-row on the client via progressive backfill."""
-    from sub_samples.registry_list import registry_rows_to_list
+    from sub_samples.registry_list import (fetch_customer_notes,
+                                            registry_rows_to_list)
 
     stmt = select(LimsSample)
     if review_state:
@@ -22575,7 +22581,8 @@ async def list_samples_from_registry(
     rows = db.execute(
         stmt.order_by(LimsSample.id.desc()).offset(b_start).limit(limit)
     ).scalars().all()
-    items = registry_rows_to_list(rows)
+    # One grouped remark query for the page — never per row.
+    items = registry_rows_to_list(rows, fetch_customer_notes(db, rows))
     # Verification codes: overlay the ACTIVE code from the IS DB (one batched
     # query per page). The stored lims_samples copy goes stale when a COA is
     # regenerated (IS-side mutation the registry never sees); on IS-DB failure
