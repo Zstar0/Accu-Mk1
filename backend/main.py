@@ -12063,18 +12063,16 @@ async def generate_sample_coa(
                 sample_id, generation_number, e,
             )
 
-    # Partial-COA fix (2026-08-29): surface any deferred (fully-pending)
-    # native sections as an operator-facing warning — the certificate
-    # generated successfully with the sections that WERE ready; this is a
-    # heads-up to regenerate once the pending profile has results, not a
-    # failure. native_sections is absent entirely for sub-sample COAs
-    # (helper returns None for a falsy doc, same as no deferrals).
-    from coa.wire_document import deferred_sections_warning
+    # Partial-COA deferral is silent to operators (Handler ruling
+    # 2026-08-30): a fully-pending native section is left off the
+    # certificate and the response says nothing about it — the COA presents
+    # the generated sections as if that's all that's on it. The deferral is
+    # still logged by build_native_sections and still rides the wire's
+    # deferred_sections key (COA Builder's completeness-rule exemption).
     return SampleCOAActionResponse(
         success=True,
         message=message,
         verification_code=verification_code,
-        warning=deferred_sections_warning(alias_body.get("native_sections")),
     )
 
 
@@ -12604,21 +12602,11 @@ async def regen_primary_coa(
     # supersedes the old primary, and _publish_additional_coas sees no
     # draft children (existing additionals keep their codes).
     #
-    # Partial-COA fix (2026-08-29): publish_sample_coa builds its OWN
-    # response (it has no idea a native section was deferred above), so the
-    # deferred-sections warning is computed HERE from this function's own
-    # wire doc and merged onto whatever publish_sample_coa returns — only
-    # on a successful regen, alongside any warning publish_sample_coa
-    # already set (e.g. the SENAITE pre-publish-state notice).
-    from coa.wire_document import deferred_sections_warning
-    _deferred_warning = deferred_sections_warning(alias_body.get("native_sections"))
-    _publish_resp = await publish_sample_coa(sample_id=sample_id, current_user=current_user, db=db)
-    if _deferred_warning and getattr(_publish_resp, "success", False):
-        _publish_resp.warning = (
-            f"{_publish_resp.warning} {_deferred_warning}"
-            if _publish_resp.warning else _deferred_warning
-        )
-    return _publish_resp
+    # Partial-COA deferral is silent to operators (Handler ruling
+    # 2026-08-30): no deferred-sections text is merged onto the response —
+    # publish_sample_coa's own warnings (e.g. the SENAITE pre-publish-state
+    # notice) pass through untouched.
+    return await publish_sample_coa(sample_id=sample_id, current_user=current_user, db=db)
 
 
 @app.post("/wizard/senaite/additional-coas/{config_id}/regen-coa")

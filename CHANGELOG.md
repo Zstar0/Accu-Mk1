@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.12.3 — 2026-08-30
+
+### Changed
+
+- **Partial-COA deferral is now silent** — when a fully-pending section
+  (e.g. sterility not yet run) is left off a certificate, the generate and
+  regen responses no longer carry the "Pending section(s) omitted —
+  regenerate the COA when results land" notice. The COA presents the
+  generated sections as if that's all that's on it. The deferral is still
+  logged server-side and still rides the wire's `deferred_sections` key
+  (COA Builder's completeness-rule exemption); regenerating after results
+  land still adds the section.
+
 ## v1.12.2 — 2026-08-30
 
 ### Fixed

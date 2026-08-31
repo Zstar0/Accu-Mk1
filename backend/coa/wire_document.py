@@ -51,26 +51,6 @@ def build_vial_wire_document(db, parent):
     }
 
 
-def deferred_sections_warning(doc) -> str | None:
-    """Operator-facing warning for a wire document carrying deferred native
-    sections (partial-COA fix, 2026-08-29), or None when there's nothing to
-    surface — `doc` is falsy (e.g. a failed/skipped assembly never reached
-    this point) or carries no `deferred_sections`. Callers append/set this
-    on the response's `warning` field after a successful generation only;
-    it does not gate success — the certificate already printed with the
-    sections that WERE ready.
-    """
-    if not doc:
-        return None
-    deferred = doc.get("deferred_sections")
-    if not deferred:
-        return None
-    return (
-        f"Pending section(s) omitted: {', '.join(deferred)} — "
-        "regenerate the COA when results land."
-    )
-
-
 def warn_if_source_ignored(doc, response_json, sample_id) -> None:
     """Drift detector: the toggle said mk1 but COABuilder didn't use the rows
     (old COABuilder deployed, or the block was dropped en route). Loud, never

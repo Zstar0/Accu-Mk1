@@ -1,78 +1,37 @@
-"""Partial-COA fix (2026-08-29, P-2432): the operator-facing warning that
-surfaces a deferred native section (build_native_sections' fully-pending
-profile deferral — see test_native_sections.py) through the generate and
-regen-primary endpoints.
+"""Partial-COA deferral is SILENT to operators (Handler ruling 2026-08-30,
+reversing the 08-29 warning): a fully-pending native section is simply left
+off the certificate, and the generate/regen responses carry NO message about
+it — the COA presents the generated sections as if that's all that's on it.
+The `deferred_sections` wire key itself is untouched (COA Builder needs it to
+exempt the missing section from its completeness rule), and the backend log
+line remains for forensics.
 
 Covers:
-  - coa.wire_document.deferred_sections_warning: the extracted helper, unit
-    tested directly (per the task's fallback: endpoint-level coverage is
-    ALSO included below, but the helper is pinned on its own too).
   - generate_sample_coa: a successful generation whose wire document carried
-    deferred_sections surfaces the warning; one with no deferrals leaves it
-    unset.
-  - regen_primary_coa: same surfacing, merged onto whatever
-    publish_sample_coa's own response returns (publish_sample_coa is stubbed
-    out here — it has its own SENAITE/Integration-Service network calls that
-    are orthogonal to this fix; test_native_sections.py's deferral tests
-    already cover build_native_sections itself, and
-    test_generate_coa_existence_gate.py / test_regular_coa_child.py pin the
-    same in-process call + httpx-monkeypatch idiom used below).
+    deferred_sections leaves `warning` unset — same as a no-deferral run.
+  - regen_primary_coa: same silence, and publish_sample_coa's OWN warning
+    (e.g. the SENAITE pre-publish-state notice) still passes through
+    untouched (publish_sample_coa is stubbed out here — it has its own
+    SENAITE/Integration-Service network calls that are orthogonal;
+    test_native_sections.py's deferral tests cover build_native_sections
+    itself, and test_generate_coa_existence_gate.py /
+    test_regular_coa_child.py pin the same in-process call +
+    httpx-monkeypatch idiom used below).
 
 Endpoint tests rely on coa_generation_source(db) defaulting to "senaite"
 (coa/source_setting.py: no Settings row -> "senaite") and SENAITE_URL
 defaulting unset, which together skip the resolver pre-flight and the
 legacy_rows/sample_meta assembly entirely — build_native_sections itself
-(the part this fix touches) is NOT gated by that toggle and runs regardless.
+is NOT gated by that toggle and runs regardless.
 """
 from types import SimpleNamespace
 
 import pytest
 
-from coa.wire_document import deferred_sections_warning
 from tests.test_native_sections import _mk_native_profile, _mk_parent_with_rows
 
 import main
 
-
-# ── deferred_sections_warning: the extracted helper ─────────────────────────
-
-def test_helper_none_doc_returns_none():
-    assert deferred_sections_warning(None) is None
-
-
-def test_helper_empty_doc_returns_none():
-    assert deferred_sections_warning({}) is None
-
-
-def test_helper_doc_without_deferrals_key_returns_none():
-    doc = {"sample_id": "P-1", "ordered_profiles": ["heavy_metals"], "sections": []}
-    assert deferred_sections_warning(doc) is None
-
-
-def test_helper_doc_with_empty_deferred_list_returns_none():
-    """Defensive: build_native_sections never emits an empty list (it omits
-    the key instead), but the helper must not misbehave if one ever
-    reaches it some other way."""
-    doc = {"deferred_sections": []}
-    assert deferred_sections_warning(doc) is None
-
-
-def test_helper_single_deferral_message():
-    doc = {"deferred_sections": ["sterility_usp71"]}
-    msg = deferred_sections_warning(doc)
-    assert msg == (
-        "Pending section(s) omitted: sterility_usp71 — "
-        "regenerate the COA when results land."
-    )
-
-
-def test_helper_multiple_deferrals_join_with_comma():
-    doc = {"deferred_sections": ["sterility_usp71", "endotoxin"]}
-    msg = deferred_sections_warning(doc)
-    assert "sterility_usp71, endotoxin" in msg
-
-
-# ── generate_sample_coa: endpoint-level surfacing ────────────────────────────
 
 class _FakeResponse:
     def __init__(self, json_data):
@@ -136,7 +95,7 @@ def _patch_generate_prereqs(monkeypatch, json_data):
 
 
 @pytest.mark.asyncio
-async def test_generate_sample_coa_surfaces_deferred_sections_warning(
+async def test_generate_sample_coa_silent_on_deferred_sections(
     db_session, monkeypatch,
 ):
     _seed_deferred_and_complete_profiles(db_session, monkeypatch, sample_id="P-9500")
@@ -150,18 +109,14 @@ async def test_generate_sample_coa_surfaces_deferred_sections_warning(
     )
 
     assert result.success is True
-    assert result.warning is not None
-    assert "sterility_usp71" in result.warning
-    assert "Pending section(s) omitted" in result.warning
+    assert result.warning is None
 
 
 @pytest.mark.asyncio
 async def test_generate_sample_coa_no_warning_when_nothing_deferred(
     db_session, monkeypatch,
 ):
-    """Control: an order with every native profile fully resultant leaves
-    `warning` unset — this fix must not manufacture noise on the common
-    path."""
+    """Control: the common no-deferral path is equally silent."""
     _prof, svcs = _mk_native_profile(
         db_session, key="heavy_metals", services=[("HM-PB", "mk1")],
     )
@@ -185,10 +140,8 @@ async def test_generate_sample_coa_no_warning_when_nothing_deferred(
     assert result.warning is None
 
 
-# ── regen_primary_coa: endpoint-level surfacing, merged onto publish's own response ──
-
 @pytest.mark.asyncio
-async def test_regen_primary_coa_surfaces_deferred_sections_warning(
+async def test_regen_primary_coa_silent_on_deferred_sections(
     db_session, monkeypatch,
 ):
     _seed_deferred_and_complete_profiles(db_session, monkeypatch, sample_id="P-9502")
@@ -208,17 +161,16 @@ async def test_regen_primary_coa_surfaces_deferred_sections_warning(
     )
 
     assert result.success is True
-    assert result.warning is not None
-    assert "sterility_usp71" in result.warning
+    assert result.warning is None
 
 
 @pytest.mark.asyncio
-async def test_regen_primary_coa_preserves_publish_warning_alongside_deferred(
+async def test_regen_primary_coa_preserves_publish_warning_verbatim(
     db_session, monkeypatch,
 ):
     """publish_sample_coa can carry its own warning (e.g. the SENAITE
-    pre-publish-state notice) — the deferred-sections warning must be
-    ADDED to it, never overwrite it."""
+    pre-publish-state notice) — it must pass through untouched, with no
+    deferral text appended."""
     _seed_deferred_and_complete_profiles(db_session, monkeypatch, sample_id="P-9503")
     _patch_generate_prereqs(
         monkeypatch,
@@ -236,38 +188,6 @@ async def test_regen_primary_coa_preserves_publish_warning_alongside_deferred(
         sample_id="P-9503", db=db_session, current_user=SimpleNamespace(id=1),
     )
 
-    assert "should not typically be published" in result.warning
-    assert "sterility_usp71" in result.warning
-
-
-@pytest.mark.asyncio
-async def test_regen_primary_coa_no_warning_when_nothing_deferred(
-    db_session, monkeypatch,
-):
-    _prof, svcs = _mk_native_profile(
-        db_session, key="heavy_metals", services=[("HM-PB", "mk1")],
+    assert result.warning == (
+        "Warning: Sample should not typically be published from state X."
     )
-    parent = _mk_parent_with_rows(db_session, svcs)
-    parent.sample_id = "P-9504"
-    db_session.flush()
-    monkeypatch.setattr(
-        "coa.native_sections.fetch_sample_services",
-        lambda sid: {"services": {"heavy_metals": True}, "package": None},
-    )
-    _patch_generate_prereqs(
-        monkeypatch,
-        {"verification_code": "QRST-7890", "pdf_base64": None},
-    )
-
-    async def _fake_publish(sample_id, current_user, db):
-        return main.SampleCOAActionResponse(
-            success=True, message="COA published", verification_code="QRST-7890",
-        )
-    monkeypatch.setattr(main, "publish_sample_coa", _fake_publish)
-
-    result = await main.regen_primary_coa(
-        sample_id="P-9504", db=db_session, current_user=SimpleNamespace(id=1),
-    )
-
-    assert result.success is True
-    assert result.warning is None
