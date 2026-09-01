@@ -38,6 +38,7 @@ from sub_samples.schemas import (
     AddSubSampleAttachmentRequest,
     CustomerRemarksUpdate,
     OrderedProduct, OrderedProductsResponse,
+    VialBoardResponse,
 )
 from sub_samples.product_registry import build_ordered_products
 
@@ -386,6 +387,32 @@ def list_sub_samples(
         ),
         sub_samples=items,
     )
+
+
+@router.get("/board", response_model=VialBoardResponse)
+def get_vial_board(
+    hide_test_orders: bool = True,
+    show_xtra: bool = False,
+    lane: Optional[str] = None,
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Cross-order Vial Status Board (spec 2026-08-31 §4).
+
+    A vial is included while >=1 current vial-tier analysis is in
+    unassigned/assigned/to_be_verified; the payload carries ALL its current
+    analyses. Multiple open worksheets claiming one vial: most recent
+    added_at wins. Read-only.
+    """
+    try:
+        return service.board_vials(
+            db,
+            hide_test_orders=hide_test_orders,
+            show_xtra=show_xtra,
+            lane=lane,
+        )
+    except service.UnknownLaneError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/aggregates", response_model=AggregatesResponse)

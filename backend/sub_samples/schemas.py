@@ -290,3 +290,46 @@ class OrderedProductsResponse(BaseModel):
     sample_id: str
     wp_order_number: Optional[str] = None
     products: list[OrderedProduct]
+
+
+# ── Vial Status Board (spec 2026-08-31) ─────────────────────────────────────
+
+
+class BoardWorksheetOut(BaseModel):
+    id: int
+    title: str
+    status: str
+
+
+class BoardAnalysisOut(BaseModel):
+    id: int
+    title: str
+    review_state: str
+    analyst_user_id: Optional[int] = None
+    analyst_name: Optional[str] = None
+
+
+class BoardParentOut(BaseModel):
+    id: int
+    sample_id: str
+    label: Optional[str] = None
+    client_sample_id: Optional[str] = None
+    priority: str = "normal"
+    is_test_order: bool = False
+
+
+class BoardVialOut(BaseModel):
+    id: int
+    sample_id: str
+    external_lims_uid: str
+    assignment_role: str
+    vial_sequence: int
+    received_at: datetime
+    parent: BoardParentOut
+    analyses: list[BoardAnalysisOut]
+    worksheet: Optional[BoardWorksheetOut] = None
+
+
+class VialBoardResponse(BaseModel):
+    total: int
+    vials: list[BoardVialOut]

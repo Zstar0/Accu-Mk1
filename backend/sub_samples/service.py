@@ -18,12 +18,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, List
 from sqlalchemy import select, func, delete, case
 from sqlalchemy.orm import Session
-from models import (LimsSample, LimsSampleRemark, LimsSubSample,
-                    LimsSubSampleEvent)
+from models import (LimsAnalysis, LimsSample, LimsSampleRemark, LimsSubSample,
+                    LimsSubSampleEvent, SamplePriority, User, Worksheet,
+                    WorksheetItem)
 from sub_samples import native
 from sub_samples import senaite
 from sub_samples.native_id import mint_native_id
 from sub_samples.senaite import SecondaryFalloutError
+from users_display import user_display_name
 
 
 CACHE_FRESHNESS = timedelta(minutes=5)
@@ -2638,3 +2640,191 @@ def unlock_variance_set(
     ))
     db.commit()
     return parent
+
+
+# ── Vial Status Board (spec docs/superpowers/specs/2026-08-31-vial-status-board-design.md) ──
+
+# A vial is ON the board while >=1 current (retested=False) vial-tier analysis
+# sits in one of these states. This is the complement of the inbox's
+# EXCLUDED_STATES (main.py:19203) restricted to the vial-tier lifecycle
+# (lims_analyses/state_machine.py). Single source for the board's inclusion
+# rule — the endpoint and tests both hang off this constant.
+BOARD_LIVE_STATES = ("unassigned", "assigned", "to_be_verified")
+
+
+class UnknownLaneError(ValueError):
+    """Raised for a lane key not in the catalog lane set (route maps to 400)."""
+
+
+def _board_test_order_sample_ids() -> set:
+    """Parent sample_ids belonging to TEST_EMAILS orders. Wraps
+    main._test_order_senaite_ids (main.py:9732) via deferred import; empty
+    set on any failure (graceful degradation, inbox precedent)."""
+    try:
+        from main import _test_order_senaite_ids
+
+        return _test_order_senaite_ids()
+    except Exception:
+        return set()
+
+
+def board_vials(
+    db: Session,
+    *,
+    hide_test_orders: bool = True,
+    show_xtra: bool = False,
+    lane: Optional[str] = None,
+):
+    """Cross-order vial board: every vial with >=1 live vial-tier analysis,
+    carrying ALL its current analyses so terminal columns can render a
+    vial's whole story while it is in flight. Read-only; five bulk queries,
+    no N+1 (spec §4). Multiple open worksheets for one vial: most recent
+    added_at wins; priority defaults to "normal" when no sample_priorities
+    row exists; test orders (TEST_EMAILS billing email) are filtered out
+    when hide_test_orders is true, else stamped via parent.is_test_order.
+    """
+    from sub_samples.schemas import (
+        BoardAnalysisOut,
+        BoardParentOut,
+        BoardVialOut,
+        BoardWorksheetOut,
+        VialBoardResponse,
+    )
+
+    # Lane → allowed role codes (catalog-driven; unknown key = 400 upstream).
+    allowed_roles: Optional[set] = None
+    if lane is not None:
+        from catalog.roles import inbox_lanes
+
+        lanes = inbox_lanes(db)
+        if lane not in lanes:
+            raise UnknownLaneError(
+                f"Invalid lane: {lane!r}. Expected one of {sorted(lanes)} or omit."
+            )
+        allowed_roles = set(lanes[lane].role_codes)
+        if show_xtra:
+            allowed_roles.add("xtra")
+
+    # Query 1: candidate vials + parents via live vial-tier analyses.
+    live_vial_pks = (
+        select(LimsAnalysis.lims_sub_sample_pk)
+        .where(LimsAnalysis.lims_sub_sample_pk.isnot(None))
+        .where(LimsAnalysis.retested.is_(False))
+        .where(LimsAnalysis.review_state.in_(BOARD_LIVE_STATES))
+        .distinct()
+    )
+    pairs = db.execute(
+        select(LimsSubSample, LimsSample)
+        .join(LimsSample, LimsSample.id == LimsSubSample.parent_sample_pk)
+        .where(LimsSubSample.id.in_(live_vial_pks))
+        .where(LimsSubSample.assignment_role.isnot(None))
+    ).all()
+
+    def _role_ok(code: str) -> bool:
+        if allowed_roles is not None:
+            return code in allowed_roles
+        if code == "xtra":
+            return show_xtra
+        return True
+
+    pairs = [(sub, par) for sub, par in pairs if _role_ok(sub.assignment_role)]
+
+    # Test orders: filter (hide_test_orders) or stamp (is_test_order).
+    test_ids = _board_test_order_sample_ids()
+    if hide_test_orders and test_ids:
+        pairs = [(sub, par) for sub, par in pairs if par.sample_id not in test_ids]
+
+    vial_pks = [sub.id for sub, _ in pairs]
+    vial_uids = [sub.external_lims_uid for sub, _ in pairs]
+    parent_uids = {par.external_lims_uid for _, par in pairs if par.external_lims_uid}
+
+    # Query 3: open worksheets claiming these vials. Ascending added_at so the
+    # dict's last write wins == most recent claim (endpoint docstring rule).
+    ws_by_uid = {}
+    if vial_uids:
+        for uid, _added_at, ws in db.execute(
+            select(WorksheetItem.sample_uid, WorksheetItem.added_at, Worksheet)
+            .join(Worksheet, Worksheet.id == WorksheetItem.worksheet_id)
+            .where(Worksheet.status == "open")
+            .where(WorksheetItem.sample_uid.in_(vial_uids))
+            .order_by(WorksheetItem.added_at)
+        ).all():
+            ws_by_uid[uid] = BoardWorksheetOut(id=ws.id, title=ws.title, status=ws.status)
+
+    # Query 5: priorities keyed on the parent's external uid; missing = normal.
+    priority_by_uid = {}
+    if parent_uids:
+        priority_by_uid = {
+            row.sample_uid: row.priority
+            for row in db.execute(
+                select(SamplePriority).where(SamplePriority.sample_uid.in_(parent_uids))
+            ).scalars()
+        }
+
+    # Query 2: ALL current vial-tier analyses for the included vials.
+    analyses_by_vial: dict = {}
+    if vial_pks:
+        for row in (
+            db.execute(
+                select(LimsAnalysis)
+                .where(LimsAnalysis.lims_sub_sample_pk.in_(vial_pks))
+                .where(LimsAnalysis.retested.is_(False))
+                .order_by(LimsAnalysis.id)
+            )
+            .scalars()
+            .all()
+        ):
+            analyses_by_vial.setdefault(row.lims_sub_sample_pk, []).append(row)
+
+    # Query 4: analyst display names, batched (users_display rule).
+    analyst_ids = {
+        a.analyst_user_id
+        for rows in analyses_by_vial.values()
+        for a in rows
+        if a.analyst_user_id
+    }
+    analyst_name_by_id = {}
+    if analyst_ids:
+        analyst_name_by_id = {
+            u.id: user_display_name(u)
+            for u in db.execute(select(User).where(User.id.in_(analyst_ids))).scalars()
+        }
+
+    out = []
+    for sub, par in pairs:
+        out.append(
+            BoardVialOut(
+                id=sub.id,
+                sample_id=sub.sample_id,
+                external_lims_uid=sub.external_lims_uid,
+                assignment_role=sub.assignment_role,
+                vial_sequence=sub.vial_sequence,
+                received_at=sub.received_at,
+                parent=BoardParentOut(
+                    id=par.id,
+                    sample_id=par.sample_id,
+                    label=par.peptide_name,
+                    client_sample_id=par.client_sample_id,
+                    priority=priority_by_uid.get(par.external_lims_uid or "", "normal"),
+                    is_test_order=par.sample_id in test_ids,
+                ),
+                analyses=[
+                    BoardAnalysisOut(
+                        id=a.id,
+                        title=a.title or a.keyword or "",
+                        review_state=a.review_state,
+                        analyst_user_id=a.analyst_user_id,
+                        analyst_name=analyst_name_by_id.get(a.analyst_user_id),
+                    )
+                    for a in analyses_by_vial.get(sub.id, [])
+                ],
+                worksheet=ws_by_uid.get(sub.external_lims_uid),
+            )
+        )
+
+    out.sort(key=lambda v: (v.parent.sample_id, v.vial_sequence))
+
+    if len(out) > 2000:
+        log.warning("sub_samples.board_large_result count=%s", len(out))
+
+    return VialBoardResponse(total=len(out), vials=out)
