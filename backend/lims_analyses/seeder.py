@@ -59,6 +59,15 @@ log = logging.getLogger(__name__)
 # Translated by the mirror into the slot peptide's per-substance PUR_<X>/QTY_<X>.
 _PARENT_ANALYTE = re.compile(r"^ANALYTE-([1-4])-(PUR|QTY)$")
 
+# Bac Water trio: entered on PARENT shadow rows (isParentBenchRow ruling,
+# 1.12.4) — a vial-tier mk1 row has no SENAITE uid to write results through.
+# Their services are Analytical-department since 2026-09-01 (worksheet-inbox
+# lane visibility), which would otherwise let the department allow-list mirror
+# them onto the S01 vial and open a second, dead-end entry surface.
+_PARENT_BENCH_ONLY_KEYWORDS = frozenset({
+    "Benzyl_Alcohol_Assay", "PH-DETERM", "FILL-NET-CONTENT",
+})
+
 # Role → set of WP service keys that imply analyses at this role.
 #
 # THE CATALOG IS AUTHORITATIVE; this map is the legacy fallback for the five
@@ -526,6 +535,8 @@ def mirror_parent_hplc_analyses(
             if svc is None:          # keyword not in the Mk1 catalog at all
                 continue
         if svc.department_id != analytical_dept_id:   # fail-closed: Analytical only
+            continue
+        if svc.keyword in _PARENT_BENCH_ONLY_KEYWORDS:  # parent-bench entry only
             continue
         if svc.id in existing_service_ids or svc.keyword in existing_kw:
             continue
