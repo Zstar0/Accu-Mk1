@@ -347,3 +347,48 @@ def test_mirror_returns_empty_when_analytical_department_has_no_tagged_services(
         commit=False,
     )
     assert created == []
+
+
+def test_bacwater_trio_never_mirrors_onto_the_vial(db_session, monkeypatch):
+    """The Bac Water trio is Analytical-department since 2026-09-01 (worksheet-
+    inbox lane visibility fix), so the department allow-list ALONE would now
+    mirror them onto the S01 vial — but their results are entered on PARENT
+    shadow rows (isParentBenchRow ruling, 1.12.4) and a vial-tier mk1 row has
+    no SENAITE uid to write through. The explicit parent-bench guard must keep
+    them off the vial while ordinary Analytical keywords still mirror."""
+    from lims_analyses.seeder import mirror_parent_hplc_analyses
+    from models import AnalysisService, Department
+
+    analytical = Department(name="Analytical")
+    db_session.add(analytical)
+    db_session.commit()
+    db_session.add_all([
+        AnalysisService(title="Purity X", keyword="PUR_X",
+                        department_id=analytical.id),
+        AnalysisService(title="Benzyl Alcohol Assay (HPLC)",
+                        keyword="Benzyl_Alcohol_Assay",
+                        department_id=analytical.id),
+        AnalysisService(title="pH Determination", keyword="PH-DETERM",
+                        department_id=analytical.id),
+        AnalysisService(title="Fill volume / Net content",
+                        keyword="FILL-NET-CONTENT",
+                        department_id=analytical.id),
+    ])
+    db_session.commit()
+    vial = _mk_isolated_vial(db_session)
+
+    monkeypatch.setattr(
+        "sub_samples.senaite.fetch_parent_analysis_keywords",
+        lambda _sid: ["PUR_X", "Benzyl_Alcohol_Assay", "PH-DETERM",
+                      "FILL-NET-CONTENT"],
+    )
+    created = mirror_parent_hplc_analyses(
+        db_session,
+        sub_sample=vial,
+        parent_sample_id="BW-9999",
+        existing_kw=set(),
+        existing_service_ids=set(),
+        created_by_user_id=None,
+        commit=False,
+    )
+    assert {row.keyword for row in created} == {"PUR_X"}
