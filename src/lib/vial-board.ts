@@ -23,12 +23,36 @@ export interface VialStageColumn {
 // authority swap, this constant flips to a catalog read (lims_workflow_states
 // already carries label/category/sort_order) without touching either view.
 export const VIAL_STAGE_COLUMNS: VialStageColumn[] = [
-  { key: 'unassigned', label: 'Unassigned', pillClass: 'bg-zinc-500/15 text-zinc-400' },
-  { key: 'assigned', label: 'Assigned', pillClass: 'bg-amber-500/15 text-amber-400' },
-  { key: 'to_be_verified', label: 'To Verify', pillClass: 'bg-orange-500/15 text-orange-400' },
-  { key: 'promoted', label: 'Promoted', pillClass: 'bg-teal-500/15 text-teal-400' },
-  { key: 'variance_verified', label: 'Verified — Variance', pillClass: 'bg-teal-500/15 text-teal-400' },
-  { key: 'rejected', label: 'Rejected', pillClass: 'bg-red-500/15 text-red-400' },
+  {
+    key: 'unassigned',
+    label: 'Unassigned',
+    pillClass: 'bg-zinc-500/15 text-zinc-400',
+  },
+  {
+    key: 'assigned',
+    label: 'Assigned',
+    pillClass: 'bg-amber-500/15 text-amber-400',
+  },
+  {
+    key: 'to_be_verified',
+    label: 'To Verify',
+    pillClass: 'bg-orange-500/15 text-orange-400',
+  },
+  {
+    key: 'promoted',
+    label: 'Promoted',
+    pillClass: 'bg-teal-500/15 text-teal-400',
+  },
+  {
+    key: 'variance_verified',
+    label: 'Verified — Variance',
+    pillClass: 'bg-teal-500/15 text-teal-400',
+  },
+  {
+    key: 'rejected',
+    label: 'Rejected',
+    pillClass: 'bg-red-500/15 text-red-400',
+  },
 ]
 
 export const DEFAULT_COLLAPSED_COLUMNS: VialStage[] = ['rejected']
@@ -56,12 +80,16 @@ export interface BoardVialLike {
 
 /** Analyses that can place cards / feed matrix cells — retracted never
  *  counts (mirrors the worksheet analyst-stamping exclusion; spec §5). */
-export function placeableAnalyses<A extends BoardAnalysisLike>(analyses: A[]): A[] {
+export function placeableAnalyses<A extends BoardAnalysisLike>(
+  analyses: A[]
+): A[] {
   return analyses.filter(a => a.review_state !== 'retracted')
 }
 
 /** Per-column analysis counts for one vial (multi-column placement, spec §2). */
-export function stageCounts(vial: BoardVialLike): Partial<Record<VialStage, number>> {
+export function stageCounts(
+  vial: BoardVialLike
+): Partial<Record<VialStage, number>> {
   const counts: Partial<Record<VialStage, number>> = {}
   for (const a of placeableAnalyses(vial.analyses)) {
     if (STAGE_KEYS.has(a.review_state)) {
@@ -119,7 +147,10 @@ export const DEFAULT_VIAL_BOARD_FILTERS: VialBoardFilters = {
   sortDir: 'asc',
 }
 
-export function vialMatchesSampleId(vial: BoardVialLike, query: string): boolean {
+export function vialMatchesSampleId(
+  vial: BoardVialLike,
+  query: string
+): boolean {
   const needle = query.trim().toLowerCase()
   if (!needle) return true
   return (
@@ -128,7 +159,10 @@ export function vialMatchesSampleId(vial: BoardVialLike, query: string): boolean
   )
 }
 
-export function vialMatchesAnalyte(vial: BoardVialLike, query: string): boolean {
+export function vialMatchesAnalyte(
+  vial: BoardVialLike,
+  query: string
+): boolean {
   const needle = query.trim().toLowerCase()
   if (!needle) return true
   return placeableAnalyses(vial.analyses).some(a =>
@@ -143,12 +177,18 @@ export function vialMatchesTech(vial: BoardVialLike, techId: string): boolean {
   )
 }
 
-export function vialMatchesWorksheet(vial: BoardVialLike, title: string): boolean {
+export function vialMatchesWorksheet(
+  vial: BoardVialLike,
+  title: string
+): boolean {
   if (!title) return true
   return vial.worksheet?.title === title
 }
 
-export function vialMatchesStages(vial: BoardVialLike, activeStages: string[]): boolean {
+export function vialMatchesStages(
+  vial: BoardVialLike,
+  activeStages: string[]
+): boolean {
   if (activeStages.length === 0) return true
   return vialColumns(vial).some(c => activeStages.includes(c))
 }
@@ -165,7 +205,11 @@ export function applyBoardFilters<V extends BoardVialLike>(
   vials: V[],
   filters: Pick<
     VialBoardFilters,
-    'activeStages' | 'sampleIdFilter' | 'analyteFilter' | 'techFilter' | 'worksheetFilter'
+    | 'activeStages'
+    | 'sampleIdFilter'
+    | 'analyteFilter'
+    | 'techFilter'
+    | 'worksheetFilter'
   >,
   laneRoleCodes: string[] | null,
   subRole: string
@@ -246,18 +290,25 @@ export function matrixCell(analyses: BoardAnalysisLike[]): MatrixCell {
     a => a.review_state === 'promoted' || a.review_state === 'variance_verified'
   ).length
   const submitted = live.filter(a => a.review_state === 'to_be_verified').length
-  if (total === 0) return { status: 'not_ordered', done: 0, submitted: 0, total: 0 }
+  if (total === 0)
+    return { status: 'not_ordered', done: 0, submitted: 0, total: 0 }
   if (live.some(a => a.review_state === 'rejected'))
     return { status: 'rejected', done, submitted, total }
   if (done === total) return { status: 'complete', done, submitted, total }
-  if (live.some(a => a.review_state === 'assigned' || a.review_state === 'to_be_verified'))
+  if (
+    live.some(
+      a => a.review_state === 'assigned' || a.review_state === 'to_be_verified'
+    )
+  )
     return { status: 'in_progress', done, submitted, total }
   return { status: 'not_started', done, submitted, total }
 }
 
 /** Worst-of roll-up: any rejected → issue; any ordered role not complete →
  *  in_progress; else complete. not_ordered never counts against a row. */
-export function matrixOverall(cells: MatrixCell[]): 'complete' | 'in_progress' | 'issue' {
+export function matrixOverall(
+  cells: MatrixCell[]
+): 'complete' | 'in_progress' | 'issue' {
   const ordered = cells.filter(c => c.status !== 'not_ordered')
   if (ordered.some(c => c.status === 'rejected')) return 'issue'
   if (ordered.some(c => c.status !== 'complete')) return 'in_progress'
@@ -294,7 +345,9 @@ export function buildMatrixRows<V extends BoardVialLike>(
         ),
       ]
       const worksheets = [
-        ...new Set(group.map(v => v.worksheet?.title).filter((t): t is string => !!t)),
+        ...new Set(
+          group.map(v => v.worksheet?.title).filter((t): t is string => !!t)
+        ),
       ]
       const earliestReceived = group.map(v => v.received_at).sort()[0] ?? ''
       return {
@@ -324,7 +377,10 @@ export function loadVialBoardFilters(): VialBoardFilters {
   } catch {
     // ignore parse errors
   }
-  return { ...DEFAULT_VIAL_BOARD_FILTERS, collapsedCols: [...DEFAULT_COLLAPSED_COLUMNS] }
+  return {
+    ...DEFAULT_VIAL_BOARD_FILTERS,
+    collapsedCols: [...DEFAULT_COLLAPSED_COLUMNS],
+  }
 }
 
 export function saveVialBoardFilters(filters: VialBoardFilters): void {

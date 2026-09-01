@@ -54,7 +54,9 @@ function laneSubChipsFor(
     .sort((a, b) => {
       const ra = byCode.get(a)
       const rb = byCode.get(b)
-      return (ra?.sort_order ?? 999) - (rb?.sort_order ?? 999) || a.localeCompare(b)
+      return (
+        (ra?.sort_order ?? 999) - (rb?.sort_order ?? 999) || a.localeCompare(b)
+      )
     })
     .map(code => ({ value: code, label: byCode.get(code)?.label ?? code }))
 }
@@ -78,14 +80,18 @@ export function VialStatusPage() {
   // precedent — laneBadgeClass is not exported there, so re-declared here).
   const laneBadgeClass = (key: string): string =>
     vialRolesQ.data?.some(r => r.code === key)
-      ? ROLE_COLOR_BADGE[roleColorForCode(key, vialRolesQ.data, departmentsQ.data)]
+      ? ROLE_COLOR_BADGE[
+          roleColorForCode(key, vialRolesQ.data, departmentsQ.data)
+        ]
       : 'bg-violet-500/15 text-violet-700 border-violet-500/40 dark:text-violet-300'
 
   // Lane persistence: raw stored key, validated against the fetched lane set
   // (WorksheetsInboxPage.tsx:142-172 idiom — a stale admin-deleted key must
   // never 400; `lane` is DERIVED, not stateful, and is null only until lanes
   // resolve).
-  const [storedLane, setStoredLane] = useState<string | null>(loadStoredBoardLane)
+  const [storedLane, setStoredLane] = useState<string | null>(
+    loadStoredBoardLane
+  )
   const [firstLane] = lanes
   const lane: string | null = firstLane
     ? lanes.some(l => l.key === storedLane)
@@ -145,7 +151,10 @@ export function VialStatusPage() {
 
   // Sub-chips for the ACTIVE lane, one per role the lane's department owns —
   // rendered only when there is more than one (WorksheetsInboxPage.tsx:180-194).
-  const laneSubChips = laneSubChipsFor(currentLane?.role_codes ?? [], vialRolesQ.data)
+  const laneSubChips = laneSubChipsFor(
+    currentLane?.role_codes ?? [],
+    vialRolesQ.data
+  )
 
   // Faceted sub-chip counts: what clicking each chip yields under the active
   // text/tech/worksheet/stage filters, ignoring the sub-role filter itself
@@ -164,7 +173,9 @@ export function VialStatusPage() {
   // Distinct open-worksheet titles present on the board, for the worksheet
   // filter dropdown.
   const worksheetTitles = [
-    ...new Set(allVials.map(v => v.worksheet?.title).filter((t): t is string => !!t)),
+    ...new Set(
+      allVials.map(v => v.worksheet?.title).filter((t): t is string => !!t)
+    ),
   ].sort()
 
   // Never render half a board: a lanes or board fetch failure gets a single
@@ -175,7 +186,9 @@ export function VialStatusPage() {
       <div className="h-[calc(100vh-4rem)] overflow-hidden p-6">
         <div className="flex flex-col items-center justify-center gap-4 rounded-md border border-destructive/30 bg-destructive/5 py-12">
           <p className="text-sm text-destructive font-medium">
-            {err instanceof Error ? err.message : 'Failed to load the vial board'}
+            {err instanceof Error
+              ? err.message
+              : 'Failed to load the vial board'}
           </p>
           <Button
             variant="outline"
@@ -222,12 +235,18 @@ export function VialStatusPage() {
   const activeFilterSummary: string[] = []
   if (currentLane) activeFilterSummary.push(currentLane.label)
   if (subRole) {
-    activeFilterSummary.push(laneSubChips.find(c => c.value === subRole)?.label ?? subRole)
+    activeFilterSummary.push(
+      laneSubChips.find(c => c.value === subRole)?.label ?? subRole
+    )
   }
-  if (filters.sampleIdFilter) activeFilterSummary.push(`Sample ID "${filters.sampleIdFilter}"`)
-  if (filters.analyteFilter) activeFilterSummary.push(`Analyte "${filters.analyteFilter}"`)
+  if (filters.sampleIdFilter)
+    activeFilterSummary.push(`Sample ID "${filters.sampleIdFilter}"`)
+  if (filters.analyteFilter)
+    activeFilterSummary.push(`Analyte "${filters.analyteFilter}"`)
   if (filters.techFilter) {
-    activeFilterSummary.push(`Tech ${nameForUser(userMap, Number(filters.techFilter))}`)
+    activeFilterSummary.push(
+      `Tech ${nameForUser(userMap, Number(filters.techFilter))}`
+    )
   }
   if (filters.worksheetFilter) {
     activeFilterSummary.push(`Worksheet "${filters.worksheetFilter}"`)
@@ -242,7 +261,9 @@ export function VialStatusPage() {
       <div className="flex items-start justify-between gap-4 mb-4">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold tracking-tight">Vial Status</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">
+              Vial Status
+            </h1>
             <span className="inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 text-sm font-medium text-muted-foreground">
               {vials.length} vial{vials.length === 1 ? '' : 's'}
             </span>
@@ -257,7 +278,9 @@ export function VialStatusPage() {
           onClick={() => boardQ.refetch()}
           className="gap-2"
         >
-          <RefreshCw className={cn('size-3.5', boardQ.isFetching && 'animate-spin')} />
+          <RefreshCw
+            className={cn('size-3.5', boardQ.isFetching && 'animate-spin')}
+          />
           Refresh
         </Button>
       </div>
@@ -296,7 +319,10 @@ export function VialStatusPage() {
         row above: the test never pins these buttons' names. */}
       {laneSubChips.length > 0 && (
         <div className="mb-6 flex items-center gap-1.5 pl-4">
-          <span className="text-muted-foreground/40 select-none" aria-hidden="true">
+          <span
+            className="text-muted-foreground/40 select-none"
+            aria-hidden="true"
+          >
             &#8627;
           </span>
           {[{ value: '', label: 'All' }, ...laneSubChips].map(c => (
@@ -361,7 +387,9 @@ export function VialStatusPage() {
 
         <button
           type="button"
-          onClick={() => updateFilters({ hideTestOrders: !filters.hideTestOrders })}
+          onClick={() =>
+            updateFilters({ hideTestOrders: !filters.hideTestOrders })
+          }
           className={cn(
             'rounded-md px-2.5 py-1 text-xs font-medium border transition-colors',
             filters.hideTestOrders
@@ -390,7 +418,9 @@ export function VialStatusPage() {
               <button
                 type="button"
                 title="Group cards by sample"
-                onClick={() => updateFilters({ groupBySample: !filters.groupBySample })}
+                onClick={() =>
+                  updateFilters({ groupBySample: !filters.groupBySample })
+                }
                 className={cn(
                   'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium border transition-colors',
                   filters.groupBySample
@@ -404,7 +434,9 @@ export function VialStatusPage() {
               <button
                 type="button"
                 title="Show analyses in each card"
-                onClick={() => updateFilters({ showAnalyses: !filters.showAnalyses })}
+                onClick={() =>
+                  updateFilters({ showAnalyses: !filters.showAnalyses })
+                }
                 className={cn(
                   'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium border transition-colors',
                   filters.showAnalyses
@@ -431,14 +463,17 @@ export function VialStatusPage() {
                     Columns
                     {filters.collapsedCols.length > 0 && (
                       <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-mono leading-none">
-                        {VIAL_STAGE_COLUMNS.length - filters.collapsedCols.length}/
-                        {VIAL_STAGE_COLUMNS.length}
+                        {VIAL_STAGE_COLUMNS.length -
+                          filters.collapsedCols.length}
+                        /{VIAL_STAGE_COLUMNS.length}
                       </span>
                     )}
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-48">
-                  <DropdownMenuLabel className="text-xs">Kanban columns</DropdownMenuLabel>
+                  <DropdownMenuLabel className="text-xs">
+                    Kanban columns
+                  </DropdownMenuLabel>
                   <DropdownMenuSeparator />
                   {VIAL_STAGE_COLUMNS.map(col => (
                     <DropdownMenuCheckboxItem
@@ -447,7 +482,12 @@ export function VialStatusPage() {
                       checked={!filters.collapsedCols.includes(col.key)}
                       onSelect={e => e.preventDefault()}
                       onCheckedChange={() =>
-                        updateFilters({ collapsedCols: toggleKey(filters.collapsedCols, col.key) })
+                        updateFilters({
+                          collapsedCols: toggleKey(
+                            filters.collapsedCols,
+                            col.key
+                          ),
+                        })
                       }
                     >
                       {col.label}
@@ -497,7 +537,9 @@ export function VialStatusPage() {
               key={col.key}
               type="button"
               onClick={() =>
-                updateFilters({ activeStages: toggleKey(filters.activeStages, col.key) })
+                updateFilters({
+                  activeStages: toggleKey(filters.activeStages, col.key),
+                })
               }
               className={cn(
                 'inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors',
@@ -531,11 +573,15 @@ export function VialStatusPage() {
           groupBySample={filters.groupBySample}
           collapsedCols={filters.collapsedCols}
           onToggleCollapse={key =>
-            updateFilters({ collapsedCols: toggleKey(filters.collapsedCols, key) })
+            updateFilters({
+              collapsedCols: toggleKey(filters.collapsedCols, key),
+            })
           }
           roleShort={code => roleShortLabel(code, vialRolesQ.data)}
           roleChipClass={code =>
-            ROLE_COLOR_CHIP[roleColorForCode(code, vialRolesQ.data, departmentsQ.data)]
+            ROLE_COLOR_CHIP[
+              roleColorForCode(code, vialRolesQ.data, departmentsQ.data)
+            ]
           }
         />
       ) : (

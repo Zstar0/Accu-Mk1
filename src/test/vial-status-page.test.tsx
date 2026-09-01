@@ -31,7 +31,12 @@ const mockGetInboxLanes = vi.mocked(getInboxLanes)
 
 const LANES: InboxLaneRow[] = [
   { key: 'hplc', label: 'Analytical', role_codes: ['hplc'], sort_order: 0 },
-  { key: 'microbiology', label: 'Microbiology', role_codes: ['endo', 'ster'], sort_order: 1 },
+  {
+    key: 'microbiology',
+    label: 'Microbiology',
+    role_codes: ['endo', 'ster'],
+    sort_order: 1,
+  },
 ]
 
 const EMPTY_BOARD: VialBoardResponse = { total: 0, vials: [] }
@@ -58,8 +63,12 @@ beforeEach(() => {
 describe('VialStatusPage — lane chips + persistence', () => {
   it('renders a chip per catalog lane once lanes resolve', async () => {
     renderPage()
-    expect(await screen.findByRole('button', { name: 'Analytical' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Microbiology' })).toBeInTheDocument()
+    expect(
+      await screen.findByRole('button', { name: 'Analytical' })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Microbiology' })
+    ).toBeInTheDocument()
   })
 
   it('falls back to the first lane when the stored key is stale, and persists the correction', async () => {

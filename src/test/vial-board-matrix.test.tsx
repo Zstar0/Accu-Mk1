@@ -35,7 +35,13 @@ describe('VialBoardMatrix', () => {
   it('renders one row per parent with role columns; not-ordered renders as a dash', () => {
     const v = boardVial({
       analyses: [
-        { id: 1, title: 'Purity', review_state: 'promoted', analyst_user_id: 7, analyst_name: 'J. Chen' },
+        {
+          id: 1,
+          title: 'Purity',
+          review_state: 'promoted',
+          analyst_user_id: 7,
+          analyst_name: 'J. Chen',
+        },
       ],
       worksheet: { id: 5, title: 'WS-2026-08-29-043', status: 'open' },
     })
@@ -66,24 +72,62 @@ describe('VialBoardMatrix', () => {
   it('in-progress cell shows the n/m promoted sub-line (or submitted when none promoted)', () => {
     const promoted = boardVial({
       analyses: [
-        { id: 1, title: 'A', review_state: 'promoted', analyst_user_id: null, analyst_name: null },
-        { id: 2, title: 'B', review_state: 'assigned', analyst_user_id: null, analyst_name: null },
-        { id: 3, title: 'C', review_state: 'to_be_verified', analyst_user_id: null, analyst_name: null },
+        {
+          id: 1,
+          title: 'A',
+          review_state: 'promoted',
+          analyst_user_id: null,
+          analyst_name: null,
+        },
+        {
+          id: 2,
+          title: 'B',
+          review_state: 'assigned',
+          analyst_user_id: null,
+          analyst_name: null,
+        },
+        {
+          id: 3,
+          title: 'C',
+          review_state: 'to_be_verified',
+          analyst_user_id: null,
+          analyst_name: null,
+        },
       ],
     })
     const { rerender } = render(
-      <VialBoardMatrix vials={[promoted]} roleCodes={['hplc']} roleLabel={() => 'HPLC'} />
+      <VialBoardMatrix
+        vials={[promoted]}
+        roleCodes={['hplc']}
+        roleLabel={() => 'HPLC'}
+      />
     )
     expect(screen.getByText('1/3 promoted')).toBeInTheDocument()
 
     const submittedOnly = boardVial({
       analyses: [
-        { id: 1, title: 'A', review_state: 'to_be_verified', analyst_user_id: null, analyst_name: null },
-        { id: 2, title: 'B', review_state: 'assigned', analyst_user_id: null, analyst_name: null },
+        {
+          id: 1,
+          title: 'A',
+          review_state: 'to_be_verified',
+          analyst_user_id: null,
+          analyst_name: null,
+        },
+        {
+          id: 2,
+          title: 'B',
+          review_state: 'assigned',
+          analyst_user_id: null,
+          analyst_name: null,
+        },
       ],
     })
     rerender(
-      <VialBoardMatrix vials={[submittedOnly]} roleCodes={['hplc']} roleLabel={() => 'HPLC'} />
+      <VialBoardMatrix
+        vials={[submittedOnly]}
+        roleCodes={['hplc']}
+        roleLabel={() => 'HPLC'}
+      />
     )
     expect(screen.getByText('1/2 submitted')).toBeInTheDocument()
   })
@@ -91,10 +135,22 @@ describe('VialBoardMatrix', () => {
   it('overall is worst-of: a rejected role renders Issue', () => {
     const v = boardVial({
       analyses: [
-        { id: 1, title: 'A', review_state: 'rejected', analyst_user_id: null, analyst_name: null },
+        {
+          id: 1,
+          title: 'A',
+          review_state: 'rejected',
+          analyst_user_id: null,
+          analyst_name: null,
+        },
       ],
     })
-    render(<VialBoardMatrix vials={[v]} roleCodes={['hplc']} roleLabel={() => 'HPLC'} />)
+    render(
+      <VialBoardMatrix
+        vials={[v]}
+        roleCodes={['hplc']}
+        roleLabel={() => 'HPLC'}
+      />
+    )
     expect(screen.getByText('Issue')).toBeInTheDocument()
   })
 })

@@ -83,7 +83,9 @@ describe('placement (spec §2 multi-column rule)', () => {
   })
 
   it('unknown states (defensive) place nothing', () => {
-    const v = vial({ analyses: [{ title: 'A', review_state: 'parent_to_verify' }] })
+    const v = vial({
+      analyses: [{ title: 'A', review_state: 'parent_to_verify' }],
+    })
     expect(vialColumns(v)).toEqual([])
   })
 })
@@ -145,9 +147,16 @@ describe('filters', () => {
       techFilter: '',
       worksheetFilter: '',
     }
-    expect(applyBoardFilters([hplc, endo], filters, ['endo', 'ster'], '')).toEqual([endo])
-    expect(applyBoardFilters([hplc, endo], filters, null, '')).toEqual([hplc, endo])
-    expect(applyBoardFilters([hplc, endo], filters, null, 'endo')).toEqual([endo])
+    expect(
+      applyBoardFilters([hplc, endo], filters, ['endo', 'ster'], '')
+    ).toEqual([endo])
+    expect(applyBoardFilters([hplc, endo], filters, null, '')).toEqual([
+      hplc,
+      endo,
+    ])
+    expect(applyBoardFilters([hplc, endo], filters, null, 'endo')).toEqual([
+      endo,
+    ])
     expect(vialMatchesRole(hplc, 'hplc')).toBe(true)
   })
 })
@@ -155,10 +164,21 @@ describe('filters', () => {
 describe('sortVials + toggleKey', () => {
   it('sorts by received_at asc (oldest first) and flips on dir', () => {
     const older = vial({ received_at: '2026-08-01T00:00:00Z' })
-    const newer = vial({ sample_id: 'PB-0009-S01', received_at: '2026-08-30T00:00:00Z' })
-    expect(sortVials([newer, older], 'received_at', 'asc')).toEqual([older, newer])
-    expect(sortVials([newer, older], 'received_at', 'desc')).toEqual([newer, older])
-    expect(sortVials([newer, older], 'sample_id', 'asc')[0]?.sample_id).toBe('PB-0001-S01')
+    const newer = vial({
+      sample_id: 'PB-0009-S01',
+      received_at: '2026-08-30T00:00:00Z',
+    })
+    expect(sortVials([newer, older], 'received_at', 'asc')).toEqual([
+      older,
+      newer,
+    ])
+    expect(sortVials([newer, older], 'received_at', 'desc')).toEqual([
+      newer,
+      older,
+    ])
+    expect(sortVials([newer, older], 'sample_id', 'asc')[0]?.sample_id).toBe(
+      'PB-0001-S01'
+    )
   })
 
   it('toggleKey adds absent keys and removes present ones', () => {
@@ -169,7 +189,12 @@ describe('sortVials + toggleKey', () => {
 
 describe('matrixCell (spec §5 cell-status ladder)', () => {
   it('no analyses → not_ordered (visually distinct from not started)', () => {
-    expect(matrixCell([])).toEqual({ status: 'not_ordered', done: 0, submitted: 0, total: 0 })
+    expect(matrixCell([])).toEqual({
+      status: 'not_ordered',
+      done: 0,
+      submitted: 0,
+      total: 0,
+    })
   })
 
   it('any rejected wins the ladder', () => {
@@ -186,7 +211,12 @@ describe('matrixCell (spec §5 cell-status ladder)', () => {
       { title: 'A', review_state: 'promoted' },
       { title: 'B', review_state: 'variance_verified' },
     ])
-    expect(cell).toEqual({ status: 'complete', done: 2, submitted: 0, total: 2 })
+    expect(cell).toEqual({
+      status: 'complete',
+      done: 2,
+      submitted: 0,
+      total: 2,
+    })
   })
 
   it('any assigned/to_be_verified → in_progress with n/m counts', () => {
@@ -195,7 +225,12 @@ describe('matrixCell (spec §5 cell-status ladder)', () => {
       { title: 'B', review_state: 'to_be_verified' },
       { title: 'C', review_state: 'assigned' },
     ])
-    expect(cell).toEqual({ status: 'in_progress', done: 1, submitted: 1, total: 3 })
+    expect(cell).toEqual({
+      status: 'in_progress',
+      done: 1,
+      submitted: 1,
+      total: 3,
+    })
   })
 
   it('all unassigned → not_started; retracted rows are ignored entirely', () => {
@@ -221,20 +256,34 @@ describe('matrixCell (spec §5 cell-status ladder)', () => {
 })
 
 describe('matrixOverall (worst-of, spec §5)', () => {
-  const cell = (status: MatrixCellStatus): MatrixCell =>
-    ({ status, done: 0, submitted: 0, total: status === 'not_ordered' ? 0 : 1 })
+  const cell = (status: MatrixCellStatus): MatrixCell => ({
+    status,
+    done: 0,
+    submitted: 0,
+    total: status === 'not_ordered' ? 0 : 1,
+  })
 
   it('any rejected → issue', () => {
     expect(matrixOverall([cell('rejected'), cell('complete')])).toBe('issue')
   })
 
   it('any ordered role not complete → in_progress; not_ordered ignored', () => {
-    expect(matrixOverall([cell('complete'), cell('in_progress'), cell('not_ordered')])).toBe('in_progress')
-    expect(matrixOverall([cell('complete'), cell('not_started')])).toBe('in_progress')
+    expect(
+      matrixOverall([
+        cell('complete'),
+        cell('in_progress'),
+        cell('not_ordered'),
+      ])
+    ).toBe('in_progress')
+    expect(matrixOverall([cell('complete'), cell('not_started')])).toBe(
+      'in_progress'
+    )
   })
 
   it('all ordered complete → complete', () => {
-    expect(matrixOverall([cell('complete'), cell('not_ordered')])).toBe('complete')
+    expect(matrixOverall([cell('complete'), cell('not_ordered')])).toBe(
+      'complete'
+    )
   })
 })
 
@@ -248,7 +297,11 @@ describe('buildMatrixRows', () => {
           received_at: '2026-08-27T14:02:00Z',
           worksheet: { title: 'WS-A' },
           analyses: [
-            { title: 'Purity', review_state: 'promoted', analyst_name: 'J. Chen' },
+            {
+              title: 'Purity',
+              review_state: 'promoted',
+              analyst_name: 'J. Chen',
+            },
           ],
         }),
         vial({
@@ -257,7 +310,11 @@ describe('buildMatrixRows', () => {
           received_at: '2026-08-26T09:00:00Z',
           worksheet: { title: 'WS-B' },
           analyses: [
-            { title: 'Endotoxin', review_state: 'assigned', analyst_name: 'R. Patel' },
+            {
+              title: 'Endotoxin',
+              review_state: 'assigned',
+              analyst_name: 'R. Patel',
+            },
           ],
         }),
       ],
