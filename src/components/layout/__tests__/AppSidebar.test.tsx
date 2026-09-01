@@ -105,7 +105,7 @@ describe('AppSidebar — Customers entry (Phase 29-03)', () => {
     expect(customersBtn).toBeInTheDocument()
   })
 
-  it('orders AccuMark Tools sub-items as Overview → Order Explorer → Order Status → Customers → COA Explorer → Digital COA → Chromatographs', () => {
+  it('orders AccuMark Tools sub-items as Overview → Order Explorer → Order Status → Vial Status → Customers → COA Explorer → Digital COA → Chromatographs', () => {
     renderSidebar()
     // Scope to the AccuMark Tools group: walk up from a uniquely-named
     // sibling (Order Explorer is only present under accumark-tools) to find
@@ -121,6 +121,7 @@ describe('AppSidebar — Customers entry (Phase 29-03)', () => {
       'Overview',
       'Order Explorer',
       'Order Status',
+      'Vial Status',
       'Customers',
       'COA Explorer',
       'Digital COA',

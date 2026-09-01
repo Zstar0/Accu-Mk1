@@ -308,3 +308,35 @@ export function buildMatrixRows<V extends BoardVialLike>(
       }
     })
 }
+
+// ── localStorage persistence (Order Status pattern; spec §5) ────────────────
+
+export const VIAL_BOARD_FILTERS_LS_KEY = 'vial-board-filters'
+export const VIAL_BOARD_LANE_LS_KEY = 'accu_mk1_vial_board_lane'
+
+export function loadVialBoardFilters(): VialBoardFilters {
+  try {
+    const raw = localStorage.getItem(VIAL_BOARD_FILTERS_LS_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<VialBoardFilters>
+      return { ...DEFAULT_VIAL_BOARD_FILTERS, ...parsed }
+    }
+  } catch {
+    // ignore parse errors
+  }
+  return { ...DEFAULT_VIAL_BOARD_FILTERS, collapsedCols: [...DEFAULT_COLLAPSED_COLUMNS] }
+}
+
+export function saveVialBoardFilters(filters: VialBoardFilters): void {
+  try {
+    localStorage.setItem(VIAL_BOARD_FILTERS_LS_KEY, JSON.stringify(filters))
+  } catch {
+    // ignore quota errors
+  }
+}
+
+export function loadStoredBoardLane(): string | null {
+  return typeof window !== 'undefined'
+    ? window.localStorage.getItem(VIAL_BOARD_LANE_LS_KEY)
+    : null
+}

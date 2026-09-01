@@ -50,6 +50,7 @@ export type AccuMarkToolsSubSection =
   | 'coa-explorer'
   | 'chromatographs'
   | 'digital-coa'
+  | 'vial-status'
 export type ReportsSubSection =
   | 'dashboard'
   | 'checkin-times'

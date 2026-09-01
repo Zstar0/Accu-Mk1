@@ -132,6 +132,7 @@ const navItems: NavItem[] = [
       { id: 'overview', label: 'Overview' },
       { id: 'order-explorer', label: 'Order Explorer' },
       { id: 'order-status', label: 'Order Status' },
+      { id: 'vial-status', label: 'Vial Status' },
       { id: 'customers', label: 'Customers' },
       { id: 'coa-explorer', label: 'COA Explorer' },
       { id: 'digital-coa', label: 'Digital COA' },

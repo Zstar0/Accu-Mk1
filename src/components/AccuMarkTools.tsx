@@ -5,6 +5,7 @@ import { OrderStatusPage } from '@/components/OrderStatusPage'
 import { CustomerStatusPage } from '@/components/CustomerStatusPage'
 import { COAExplorer } from '@/components/COAExplorer'
 import { DigitalCOA } from '@/components/DigitalCOA'
+import { VialStatusPage } from '@/components/vial-board/VialStatusPage'
 
 /**
  * AccuMark Tools section - debugging and utility tools.
@@ -25,6 +26,8 @@ export function AccuMarkTools() {
       return <DigitalCOA />
     case 'order-status':
       return <OrderStatusPage />
+    case 'vial-status':
+      return <VialStatusPage />
     case 'customers':
     case 'customer-detail':
       return <CustomerStatusPage />
