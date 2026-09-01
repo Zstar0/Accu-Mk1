@@ -189,7 +189,15 @@ def resolve_virtual_kind(db: Session, entity_type: str):
     kind still 400s / returns [] (no deep-link/state/search affordances). Only
     ACTIVE kinds resolve — a deactivated kind can't take new flags. Kept here
     (not in the pure core) so the module still reaches host models only through a
-    seam, mirroring resolve_user."""
+    seam, mirroring resolve_user.
+
+    A registered entity seam WINS the slug: 'order' is both a registered entity
+    and a builtin item kind (flag_item_kinds seed), and resolving it as a kind
+    made create_flag reject every entity-anchored order flag ("takes no
+    entity_id"). A slug in both worlds is an entity here; the kind row remains
+    only a picker category/chip."""
+    if is_registered(entity_type):
+        return None
     from sqlalchemy import select
     from models import FlagItemKind
     return db.execute(
