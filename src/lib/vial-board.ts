@@ -305,61 +305,79 @@ export function matrixCell(analyses: BoardAnalysisLike[]): MatrixCell {
 }
 
 /** Worst-of roll-up: any rejected → issue; any ordered role not complete →
- *  in_progress; else complete. not_ordered never counts against a row. */
+ *  in_progress; else complete. not_ordered never counts against a row. A row
+ *  only reaches the board because it has live work, so an empty/all-
+ *  not_ordered `cells` set (reachable via xtra-only parents when showXtra is
+ *  on) must never read as "Complete" — that would be an affirmative
+ *  falsehood — so it resolves to in_progress instead. */
 export function matrixOverall(
   cells: MatrixCell[]
 ): 'complete' | 'in_progress' | 'issue' {
   const ordered = cells.filter(c => c.status !== 'not_ordered')
+  if (ordered.length === 0) return 'in_progress'
   if (ordered.some(c => c.status === 'rejected')) return 'issue'
   if (ordered.some(c => c.status !== 'complete')) return 'in_progress'
   return 'complete'
 }
 
-/** Rows = parent samples of the passed (already-filtered) vials; columns =
- *  the selected lane's role codes. Sorted by parent sample_id. */
+/** Two-source contract (spec §5: cell status is computed "over all vial-tier
+ *  analyses on that parent's vials with that role"; "an empty cell never
+ *  reads as forgotten work"):
+ *  - `filteredVials` (the fully-filtered — sub-role chip, tech, worksheet,
+ *    stage, search — set) decides row SELECTION only: one row per distinct
+ *    `parent.sample_id` present in it, sorted by parent sample_id.
+ *  - `laneVials` (lane-scoped but otherwise UNfiltered) decides row CONTENT:
+ *    cells, techs, worksheets, earliestReceived, and label are all computed
+ *    from that parent's vials within `laneVials`, so filtering to one
+ *    sub-role never makes a sibling role's real work render as "not
+ *    ordered" on a row that still appears.
+ *  Columns = the selected lane's role codes. */
 export function buildMatrixRows<V extends BoardVialLike>(
-  vials: V[],
+  filteredVials: V[],
+  laneVials: V[],
   roleCodes: string[]
 ): MatrixRow[] {
   const byParent = new Map<string, V[]>()
-  for (const v of vials) {
+  for (const v of laneVials) {
     const group = byParent.get(v.parent.sample_id) ?? []
     group.push(v)
     byParent.set(v.parent.sample_id, group)
   }
-  return [...byParent.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([parentSampleId, group]) => {
-      const cells: Record<string, MatrixCell> = {}
-      for (const code of roleCodes) {
-        cells[code] = matrixCell(
-          group.filter(v => v.assignment_role === code).flatMap(v => v.analyses)
-        )
-      }
-      const techs = [
-        ...new Set(
-          group
-            .flatMap(v => placeableAnalyses(v.analyses))
-            .map(a => a.analyst_name)
-            .filter((n): n is string => !!n)
-        ),
-      ]
-      const worksheets = [
-        ...new Set(
-          group.map(v => v.worksheet?.title).filter((t): t is string => !!t)
-        ),
-      ]
-      const earliestReceived = group.map(v => v.received_at).sort()[0] ?? ''
-      return {
-        parentSampleId,
-        label: group[0]?.parent.label ?? null,
-        cells,
-        overall: matrixOverall(Object.values(cells)),
-        techs,
-        worksheets,
-        earliestReceived,
-      }
-    })
+  const parentIds = [
+    ...new Set(filteredVials.map(v => v.parent.sample_id)),
+  ].sort((a, b) => a.localeCompare(b))
+  return parentIds.map(parentSampleId => {
+    const group = byParent.get(parentSampleId) ?? []
+    const cells: Record<string, MatrixCell> = {}
+    for (const code of roleCodes) {
+      cells[code] = matrixCell(
+        group.filter(v => v.assignment_role === code).flatMap(v => v.analyses)
+      )
+    }
+    const techs = [
+      ...new Set(
+        group
+          .flatMap(v => placeableAnalyses(v.analyses))
+          .map(a => a.analyst_name)
+          .filter((n): n is string => !!n)
+      ),
+    ]
+    const worksheets = [
+      ...new Set(
+        group.map(v => v.worksheet?.title).filter((t): t is string => !!t)
+      ),
+    ]
+    const earliestReceived = group.map(v => v.received_at).sort()[0] ?? ''
+    return {
+      parentSampleId,
+      label: group[0]?.parent.label ?? null,
+      cells,
+      overall: matrixOverall(Object.values(cells)),
+      techs,
+      worksheets,
+      earliestReceived,
+    }
+  })
 }
 
 // ── localStorage persistence (Order Status pattern; spec §5) ────────────────

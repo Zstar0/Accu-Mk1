@@ -94,14 +94,16 @@ function MatrixCellView({ cell }: { cell: MatrixCell }) {
 
 export function VialBoardMatrix({
   vials,
+  laneVials,
   roleCodes,
   roleLabel,
 }: {
   vials: BoardVial[]
+  laneVials: BoardVial[]
   roleCodes: string[]
   roleLabel: (code: string) => string
 }) {
-  const rows = buildMatrixRows(vials, roleCodes)
+  const rows = buildMatrixRows(vials, laneVials, roleCodes)
   return (
     <div className="overflow-x-auto rounded-lg border border-border/50">
       <table className="w-full text-sm">

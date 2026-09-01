@@ -143,6 +143,14 @@ export function VialStatusPage() {
   ]
 
   const laneCodes = currentLane ? currentLaneCodesFor(currentLane) : null
+  // Lane-scoped but otherwise UNfiltered vials — the matrix view's row-content
+  // source (Finding 1, spec §5): a sub-role/tech/worksheet/stage/search
+  // filter must never make a sibling role's real work on the same parent
+  // render as "not ordered".
+  const laneVials =
+    laneCodes === null
+      ? allVials
+      : allVials.filter(v => laneCodes.includes(v.assignment_role))
   const vials = sortVials(
     applyBoardFilters(allVials, filters, laneCodes, subRole),
     filters.sortKey,
@@ -587,6 +595,7 @@ export function VialStatusPage() {
       ) : (
         <VialBoardMatrix
           vials={vials}
+          laneVials={laneVials}
           roleCodes={currentLane?.role_codes ?? []}
           roleLabel={code => roleFullLabel(code, vialRolesQ.data)}
         />

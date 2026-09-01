@@ -285,41 +285,44 @@ describe('matrixOverall (worst-of, spec §5)', () => {
       'complete'
     )
   })
+
+  it('an all-not_ordered row (or no cells at all) is in_progress, never complete — a row only reaches the board because it has live work, so "Complete" would be an affirmative falsehood (Finding 2)', () => {
+    expect(matrixOverall([cell('not_ordered')])).toBe('in_progress')
+    expect(matrixOverall([])).toBe('in_progress')
+  })
 })
 
 describe('buildMatrixRows', () => {
   it('groups by parent, keys cells by role, aggregates techs/worksheets/received', () => {
-    const rows = buildMatrixRows(
-      [
-        vial({
-          sample_id: 'PB-0001-S01',
-          assignment_role: 'hplc',
-          received_at: '2026-08-27T14:02:00Z',
-          worksheet: { title: 'WS-A' },
-          analyses: [
-            {
-              title: 'Purity',
-              review_state: 'promoted',
-              analyst_name: 'J. Chen',
-            },
-          ],
-        }),
-        vial({
-          sample_id: 'PB-0001-S02',
-          assignment_role: 'endo',
-          received_at: '2026-08-26T09:00:00Z',
-          worksheet: { title: 'WS-B' },
-          analyses: [
-            {
-              title: 'Endotoxin',
-              review_state: 'assigned',
-              analyst_name: 'R. Patel',
-            },
-          ],
-        }),
-      ],
-      ['hplc', 'endo', 'ster']
-    )
+    const vials = [
+      vial({
+        sample_id: 'PB-0001-S01',
+        assignment_role: 'hplc',
+        received_at: '2026-08-27T14:02:00Z',
+        worksheet: { title: 'WS-A' },
+        analyses: [
+          {
+            title: 'Purity',
+            review_state: 'promoted',
+            analyst_name: 'J. Chen',
+          },
+        ],
+      }),
+      vial({
+        sample_id: 'PB-0001-S02',
+        assignment_role: 'endo',
+        received_at: '2026-08-26T09:00:00Z',
+        worksheet: { title: 'WS-B' },
+        analyses: [
+          {
+            title: 'Endotoxin',
+            review_state: 'assigned',
+            analyst_name: 'R. Patel',
+          },
+        ],
+      }),
+    ]
+    const rows = buildMatrixRows(vials, vials, ['hplc', 'endo', 'ster'])
     expect(rows).toHaveLength(1)
     const row = rows[0]
     expect(row?.parentSampleId).toBe('PB-0001')
@@ -333,22 +336,53 @@ describe('buildMatrixRows', () => {
   })
 
   it('parents sort by sample_id and distinct-dedupes techs/worksheets', () => {
-    const rows = buildMatrixRows(
-      [
-        vial({ parent: { sample_id: 'PB-0002' }, sample_id: 'PB-0002-S01' }),
-        vial({
-          sample_id: 'PB-0001-S01',
-          worksheet: { title: 'WS-A' },
-          analyses: [
-            { title: 'A', review_state: 'assigned', analyst_name: 'J. Chen' },
-            { title: 'B', review_state: 'assigned', analyst_name: 'J. Chen' },
-          ],
-        }),
-      ],
-      ['hplc']
-    )
+    const vials = [
+      vial({ parent: { sample_id: 'PB-0002' }, sample_id: 'PB-0002-S01' }),
+      vial({
+        sample_id: 'PB-0001-S01',
+        worksheet: { title: 'WS-A' },
+        analyses: [
+          { title: 'A', review_state: 'assigned', analyst_name: 'J. Chen' },
+          { title: 'B', review_state: 'assigned', analyst_name: 'J. Chen' },
+        ],
+      }),
+    ]
+    const rows = buildMatrixRows(vials, vials, ['hplc'])
     expect(rows.map(r => r.parentSampleId)).toEqual(['PB-0001', 'PB-0002'])
     expect(rows[0]?.techs).toEqual(['J. Chen'])
     expect(rows[0]?.worksheets).toEqual(['WS-A'])
+  })
+
+  it('row content reads laneVials (lane-scoped, unfiltered) while row selection reads filteredVials — a sub-role filter must never render a sibling role\'s real work as "not ordered" (Finding 1, spec §5)', () => {
+    const hplcVial = vial({
+      sample_id: 'PB-0001-S01',
+      assignment_role: 'hplc',
+      analyses: [{ title: 'Purity', review_state: 'promoted' }],
+    })
+    const endoVial = vial({
+      sample_id: 'PB-0001-S02',
+      assignment_role: 'endo',
+      analyses: [{ title: 'Endotoxin', review_state: 'assigned' }],
+    })
+    const otherParentVial = vial({
+      parent: { sample_id: 'PB-0002' },
+      sample_id: 'PB-0002-S01',
+      assignment_role: 'endo',
+      analyses: [{ title: 'Endotoxin', review_state: 'assigned' }],
+    })
+    const laneVials = [hplcVial, endoVial, otherParentVial]
+    // Simulates filtering to the endo sub-chip: the sibling hplc vial and the
+    // PB-0002 parent both fall out of the filtered set.
+    const filteredVials = [endoVial]
+
+    const rows = buildMatrixRows(filteredVials, laneVials, ['hplc', 'endo'])
+
+    // Row SELECTION: only the parent present in filteredVials gets a row —
+    // PB-0002 produces none even though it's present in laneVials.
+    expect(rows.map(r => r.parentSampleId)).toEqual(['PB-0001'])
+    // Row CONTENT: the hplc cell is read from laneVials, so the promoted
+    // sibling vial still shows complete — never 'not_ordered'.
+    expect(rows[0]?.cells.hplc?.status).toBe('complete')
+    expect(rows[0]?.cells.endo?.status).toBe('in_progress')
   })
 })

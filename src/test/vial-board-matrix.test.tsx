@@ -48,6 +48,7 @@ describe('VialBoardMatrix', () => {
     render(
       <VialBoardMatrix
         vials={[v]}
+        laneVials={[v]}
         roleCodes={['hplc', 'endo']}
         roleLabel={code => (code === 'hplc' ? 'HPLC' : 'Endotoxin')}
       />
@@ -98,6 +99,7 @@ describe('VialBoardMatrix', () => {
     const { rerender } = render(
       <VialBoardMatrix
         vials={[promoted]}
+        laneVials={[promoted]}
         roleCodes={['hplc']}
         roleLabel={() => 'HPLC'}
       />
@@ -125,6 +127,7 @@ describe('VialBoardMatrix', () => {
     rerender(
       <VialBoardMatrix
         vials={[submittedOnly]}
+        laneVials={[submittedOnly]}
         roleCodes={['hplc']}
         roleLabel={() => 'HPLC'}
       />
@@ -147,6 +150,7 @@ describe('VialBoardMatrix', () => {
     render(
       <VialBoardMatrix
         vials={[v]}
+        laneVials={[v]}
         roleCodes={['hplc']}
         roleLabel={() => 'HPLC'}
       />
