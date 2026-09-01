@@ -19,11 +19,13 @@ from typing import Optional, Tuple, List
 from sqlalchemy import select, func, delete, case
 from sqlalchemy.orm import Session
 from models import (LimsAnalysis, LimsSample, LimsSampleRemark, LimsSubSample,
-                    LimsSubSampleEvent)
+                    LimsSubSampleEvent, SamplePriority, User, Worksheet,
+                    WorksheetItem)
 from sub_samples import native
 from sub_samples import senaite
 from sub_samples.native_id import mint_native_id
 from sub_samples.senaite import SecondaryFalloutError
+from users_display import user_display_name
 
 
 CACHE_FRESHNESS = timedelta(minutes=5)
@@ -2654,6 +2656,18 @@ class UnknownLaneError(ValueError):
     """Raised for a lane key not in the catalog lane set (route maps to 400)."""
 
 
+def _board_test_order_sample_ids() -> set:
+    """Parent sample_ids belonging to TEST_EMAILS orders. Wraps
+    main._test_order_senaite_ids (main.py:9732) via deferred import; empty
+    set on any failure (graceful degradation, inbox precedent)."""
+    try:
+        from main import _test_order_senaite_ids
+
+        return _test_order_senaite_ids()
+    except Exception:
+        return set()
+
+
 def board_vials(
     db: Session,
     *,
@@ -2665,7 +2679,9 @@ def board_vials(
     carrying ALL its current analyses so terminal columns can render a
     vial's whole story while it is in flight. Read-only; five bulk queries,
     no N+1 (spec §4). Multiple open worksheets for one vial: most recent
-    added_at wins.
+    added_at wins; priority defaults to "normal" when no sample_priorities
+    row exists; test orders (TEST_EMAILS billing email) are filtered out
+    when hide_test_orders is true, else stamped via parent.is_test_order.
     """
     from sub_samples.schemas import (
         BoardAnalysisOut,
@@ -2713,13 +2729,37 @@ def board_vials(
 
     pairs = [(sub, par) for sub, par in pairs if _role_ok(sub.assignment_role)]
 
-    # Task 2 fills in: test-order filtering, worksheets, analysts, priorities.
-    test_ids: set = set()
-    ws_by_uid: dict = {}
-    analyst_name_by_id: dict = {}
-    priority_by_uid: dict = {}
+    # Test orders: filter (hide_test_orders) or stamp (is_test_order).
+    test_ids = _board_test_order_sample_ids()
+    if hide_test_orders and test_ids:
+        pairs = [(sub, par) for sub, par in pairs if par.sample_id not in test_ids]
 
     vial_pks = [sub.id for sub, _ in pairs]
+    vial_uids = [sub.external_lims_uid for sub, _ in pairs]
+    parent_uids = {par.external_lims_uid for _, par in pairs if par.external_lims_uid}
+
+    # Query 3: open worksheets claiming these vials. Ascending added_at so the
+    # dict's last write wins == most recent claim (endpoint docstring rule).
+    ws_by_uid = {}
+    if vial_uids:
+        for uid, _added_at, ws in db.execute(
+            select(WorksheetItem.sample_uid, WorksheetItem.added_at, Worksheet)
+            .join(Worksheet, Worksheet.id == WorksheetItem.worksheet_id)
+            .where(Worksheet.status == "open")
+            .where(WorksheetItem.sample_uid.in_(vial_uids))
+            .order_by(WorksheetItem.added_at)
+        ).all():
+            ws_by_uid[uid] = BoardWorksheetOut(id=ws.id, title=ws.title, status=ws.status)
+
+    # Query 5: priorities keyed on the parent's external uid; missing = normal.
+    priority_by_uid = {}
+    if parent_uids:
+        priority_by_uid = {
+            row.sample_uid: row.priority
+            for row in db.execute(
+                select(SamplePriority).where(SamplePriority.sample_uid.in_(parent_uids))
+            ).scalars()
+        }
 
     # Query 2: ALL current vial-tier analyses for the included vials.
     analyses_by_vial: dict = {}
@@ -2735,6 +2775,20 @@ def board_vials(
             .all()
         ):
             analyses_by_vial.setdefault(row.lims_sub_sample_pk, []).append(row)
+
+    # Query 4: analyst display names, batched (users_display rule).
+    analyst_ids = {
+        a.analyst_user_id
+        for rows in analyses_by_vial.values()
+        for a in rows
+        if a.analyst_user_id
+    }
+    analyst_name_by_id = {}
+    if analyst_ids:
+        analyst_name_by_id = {
+            u.id: user_display_name(u)
+            for u in db.execute(select(User).where(User.id.in_(analyst_ids))).scalars()
+        }
 
     out = []
     for sub, par in pairs:

@@ -244,3 +244,113 @@ def test_vials_sorted_by_parent_then_sequence(client, db):
 
     ids = [v["sample_id"] for v in _get_board(client)["vials"]]
     assert ids == ["PB-9007-S01", "PB-9007-S02", "PB-9008-S01"]
+
+
+def _worksheet(db, *, title, status="open", analyst=None):
+    ws = Worksheet(title=title, status=status, assigned_analyst_id=analyst)
+    db.add(ws)
+    db.flush()
+    return ws
+
+
+def _claim(db, *, ws, vial, added_at=None):
+    item = WorksheetItem(
+        worksheet_id=ws.id,
+        sample_uid=vial.external_lims_uid,
+        sample_id=vial.sample_id,
+    )
+    if added_at is not None:
+        item.added_at = added_at
+    db.add(item)
+    db.flush()
+    return item
+
+
+def test_worksheet_join_open_most_recent_wins(client, db):
+    from datetime import datetime
+
+    p = _parent(db, sid="PB-9101")
+    v = _vial(db, parent=p)
+    _analysis(db, vial=v, state="assigned")
+
+    ws_old = _worksheet(db, title="WS-2026-08-01-001")
+    ws_new = _worksheet(db, title="WS-2026-08-29-043")
+    ws_done = _worksheet(db, title="WS-DONE", status="completed")
+    ws_cancelled = _worksheet(db, title="WS-CXL", status="cancelled")
+    _claim(db, ws=ws_old, vial=v, added_at=datetime(2026, 8, 1, 9, 0))
+    _claim(db, ws=ws_new, vial=v, added_at=datetime(2026, 8, 29, 9, 0))
+    _claim(db, ws=ws_done, vial=v, added_at=datetime(2026, 8, 30, 9, 0))
+    _claim(db, ws=ws_cancelled, vial=v, added_at=datetime(2026, 8, 31, 9, 0))
+    db.commit()
+
+    vial = _get_board(client)["vials"][0]
+    assert vial["worksheet"]["title"] == "WS-2026-08-29-043"
+    assert vial["worksheet"]["status"] == "open"
+
+
+def test_vial_on_no_worksheet_returns_null(client, db):
+    p = _parent(db, sid="PB-9102")
+    v = _vial(db, parent=p)
+    _analysis(db, vial=v, state="unassigned")
+    db.commit()
+    assert _get_board(client)["vials"][0]["worksheet"] is None
+
+
+def test_analyst_names_follow_display_rule(client, db):
+    """First+Last when set; email fallback (backend/users_display.py)."""
+    named = User(id=7, email="jchen@accumark.test", hashed_password="x",
+                 first_name="J.", last_name="Chen")
+    bare = User(id=8, email="bare@accumark.test", hashed_password="x")
+    db.add_all([named, bare])
+    p = _parent(db, sid="PB-9103")
+    v = _vial(db, parent=p)
+    _analysis(db, vial=v, state="assigned", analyst=7)
+    _analysis(db, vial=v, state="assigned", analyst=8)
+    _analysis(db, vial=v, state="unassigned")
+    db.commit()
+
+    by_id = {a["analyst_user_id"]: a["analyst_name"]
+             for a in _get_board(client)["vials"][0]["analyses"]}
+    assert by_id[7] == "J. Chen"
+    assert by_id[8] == "bare@accumark.test"
+    assert by_id[None] is None
+
+
+def test_priority_from_sample_priorities_default_normal(client, db):
+    p_hi = _parent(db, sid="PB-9104", uid="uid-PB-9104")
+    p_norm = _parent(db, sid="PB-9105")
+    db.add(SamplePriority(sample_uid="uid-PB-9104", priority="expedited"))
+    for p in (p_hi, p_norm):
+        v = _vial(db, parent=p)
+        _analysis(db, vial=v, state="unassigned")
+    db.commit()
+
+    by_parent = {v["parent"]["sample_id"]: v["parent"]["priority"]
+                 for v in _get_board(client)["vials"]}
+    assert by_parent["PB-9104"] == "expedited"
+    assert by_parent["PB-9105"] == "normal"
+
+
+def test_hide_test_orders_gating(client, db, monkeypatch):
+    import sub_samples.service as svc_module
+
+    p_test = _parent(db, sid="PB-9106")
+    p_real = _parent(db, sid="PB-9107")
+    for p in (p_test, p_real):
+        v = _vial(db, parent=p)
+        _analysis(db, vial=v, state="unassigned")
+    db.commit()
+
+    monkeypatch.setattr(
+        svc_module, "_board_test_order_sample_ids", lambda: {"PB-9106"}
+    )
+
+    body = _get_board(client)  # hide_test_orders defaults true
+    assert body["total"] == 1
+    assert body["vials"][0]["parent"]["sample_id"] == "PB-9107"
+
+    body = _get_board(client, hide_test_orders="false")
+    assert body["total"] == 2
+    flags = {v["parent"]["sample_id"]: v["parent"]["is_test_order"]
+             for v in body["vials"]}
+    assert flags == {"PB-9106": True, "PB-9107": False}
