@@ -5249,6 +5249,63 @@ export async function deleteVialRole(id: number): Promise<void> {
   if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to delete vial role'))
 }
 
+// ─── Vial Status Board ──────────────────────────────────────────────────────
+// GET /api/sub-samples/board (spec docs/superpowers/specs/
+// 2026-08-31-vial-status-board-design.md §4). Read-only cross-order vial
+// board; a vial is present while >=1 current vial-tier analysis is live
+// (unassigned/assigned/to_be_verified) and carries ALL its current analyses.
+
+export interface BoardWorksheet {
+  id: number
+  title: string
+  status: string
+}
+
+export interface BoardAnalysis {
+  id: number
+  title: string
+  review_state: string
+  analyst_user_id: number | null
+  analyst_name: string | null
+}
+
+export interface BoardParent {
+  id: number
+  sample_id: string
+  label: string | null
+  client_sample_id: string | null
+  priority: InboxPriority
+  is_test_order: boolean
+}
+
+export interface BoardVial {
+  id: number
+  sample_id: string
+  external_lims_uid: string
+  assignment_role: string
+  vial_sequence: number
+  received_at: string
+  parent: BoardParent
+  analyses: BoardAnalysis[]
+  /** Most recent OPEN worksheet claiming this vial, or null. */
+  worksheet: BoardWorksheet | null
+}
+
+export interface VialBoardResponse {
+  total: number
+  vials: BoardVial[]
+}
+
+export async function getVialBoard(opts: {
+  hideTestOrders: boolean
+  showXtra: boolean
+}): Promise<VialBoardResponse> {
+  const params = new URLSearchParams()
+  params.set('hide_test_orders', String(opts.hideTestOrders))
+  if (opts.showXtra) params.set('show_xtra', 'true')
+  return apiFetch<VialBoardResponse>(`/api/sub-samples/board?${params}`)
+}
+
 // ─── SLA tiers (sub-project A revised + C) ──────────────────────────────────
 
 export interface SlaTier {
