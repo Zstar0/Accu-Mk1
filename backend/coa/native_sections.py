@@ -44,6 +44,45 @@ log = logging.getLogger(__name__)
 # no SENAITE verify step, so Mk1 review_state is the only gate that exists.
 ELIGIBLE_STATES = ("verified", "published")
 
+# Liveness predicate for the lab-added union below. MUST stay in lockstep with
+# lims_analyses.manage_native.DEAD_STATES — the import runs the other way
+# (manage_native imports this module), so the tuple is duplicated here and a
+# drift-guard test pins the pair (test_native_sections_lab_added).
+_DEAD_STATES = ("rejected", "retracted")
+
+
+def _lab_added_profile_keys(db: Session, parent_pk: int) -> list[str]:
+    """Keys of ACTIVE profiles with >=1 member service carrying a LIVE
+    parent-tier row ('ordered' placeholder or non-dead 'canonical' — the same
+    "on the sample" notion as manage_native._live_parent_service_ids).
+
+    Gate-rule change (2026-09-01, Handler ruling): the order is no longer the
+    SOLE authority for reportable native profiles. A profile the lab put on
+    the sample via Manage Analyses (comps, format retrofits) reports exactly
+    like an ordered one; removing it there (rows rejected/retracted) withdraws
+    it. Archetype/all-mk1/rules 3-5 still apply downstream — this helper only
+    widens which keys are CONSIDERED, never what may print."""
+    from models import AnalysisProfile, LimsAnalysis
+
+    live_service_ids = set(db.execute(
+        select(LimsAnalysis.analysis_service_id).where(
+            LimsAnalysis.lims_sample_pk == parent_pk,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+            LimsAnalysis.provenance.in_(("ordered", "canonical")),
+            LimsAnalysis.review_state.notin_(_DEAD_STATES),
+        )
+    ).scalars().all())
+    live_service_ids.discard(None)
+    if not live_service_ids:
+        return []
+    keys: list[str] = []
+    for prof in db.execute(
+        select(AnalysisProfile).where(AnalysisProfile.active.is_(True))
+    ).scalars():
+        if any(m.id in live_service_ids for m in prof.analysis_services):
+            keys.append(prof.key)
+    return keys
+
 
 class NativeSectionsError(Exception):
     """Any condition that must abort COA generation (fail-closed rules 1-5)."""
@@ -191,11 +230,21 @@ def build_native_sections(db: Session, parent) -> dict:
             f"native sections: order lookup failed for {sample_id}: {e}"
         ) from e
 
-    if raw is None:
-        # IS 404 — no linked order. Nothing native can have been bought.
+    # Lab-added union (2026-09-01 gate-rule change): profiles the lab put on
+    # the sample via Manage Analyses report like ordered ones. An ordered
+    # False key the lab deliberately added anyway flips True — same authority
+    # the seeding union already grants (manage_native.placeholder_profile_keys).
+    services = dict(((raw or {}).get("services")) or {})
+    for key in _lab_added_profile_keys(db, parent.id):
+        if not services.get(key):
+            services[key] = True
+
+    if raw is None and not services:
+        # IS 404 — no linked order AND nothing lab-added. Nothing native can
+        # have been bought or granted; same empty document as before.
         return {"sample_id": sample_id, "ordered_profiles": [], "sections": []}
 
-    profiles = _ordered_native_profiles(db, raw.get("services") or {}, raw.get("package"))
+    profiles = _ordered_native_profiles(db, services, (raw or {}).get("package"))
     matrix = normalize_matrix(parent.sample_type_title)
     # R6: the identity anchor is the peptide_id FK, resolved once per parent
     # (not per row) — a blend or a non-peptide family returns None (R5), and
