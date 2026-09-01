@@ -16,7 +16,12 @@ import {
   applyBoardFilters,
   sortVials,
   toggleKey,
+  matrixCell,
+  matrixOverall,
+  buildMatrixRows,
   type BoardVialLike,
+  type MatrixCell,
+  type MatrixCellStatus,
 } from '@/lib/vial-board'
 
 function vial(over: Partial<BoardVialLike> = {}): BoardVialLike {
@@ -159,5 +164,134 @@ describe('sortVials + toggleKey', () => {
   it('toggleKey adds absent keys and removes present ones', () => {
     expect(toggleKey(['a'], 'b')).toEqual(['a', 'b'])
     expect(toggleKey(['a', 'b'], 'b')).toEqual(['a'])
+  })
+})
+
+describe('matrixCell (spec §5 cell-status ladder)', () => {
+  it('no analyses → not_ordered (visually distinct from not started)', () => {
+    expect(matrixCell([])).toEqual({ status: 'not_ordered', done: 0, submitted: 0, total: 0 })
+  })
+
+  it('any rejected wins the ladder', () => {
+    expect(
+      matrixCell([
+        { title: 'A', review_state: 'rejected' },
+        { title: 'B', review_state: 'promoted' },
+      ]).status
+    ).toBe('rejected')
+  })
+
+  it('all promoted/variance_verified → complete', () => {
+    const cell = matrixCell([
+      { title: 'A', review_state: 'promoted' },
+      { title: 'B', review_state: 'variance_verified' },
+    ])
+    expect(cell).toEqual({ status: 'complete', done: 2, submitted: 0, total: 2 })
+  })
+
+  it('any assigned/to_be_verified → in_progress with n/m counts', () => {
+    const cell = matrixCell([
+      { title: 'A', review_state: 'promoted' },
+      { title: 'B', review_state: 'to_be_verified' },
+      { title: 'C', review_state: 'assigned' },
+    ])
+    expect(cell).toEqual({ status: 'in_progress', done: 1, submitted: 1, total: 3 })
+  })
+
+  it('all unassigned → not_started; retracted rows are ignored entirely', () => {
+    expect(
+      matrixCell([
+        { title: 'A', review_state: 'unassigned' },
+        { title: 'B', review_state: 'retracted' },
+      ])
+    ).toEqual({ status: 'not_started', done: 0, submitted: 0, total: 1 })
+  })
+
+  it('promoted + unassigned mix is not_started per the spec ladder (no assigned/to_be_verified rows)', () => {
+    // Deliberate spec choice (§5): In Progress requires >=1 assigned or
+    // to_be_verified; done-but-not-all with the rest untouched reads as
+    // Not Started with the n/m visible via done/total.
+    const cell = matrixCell([
+      { title: 'A', review_state: 'promoted' },
+      { title: 'B', review_state: 'unassigned' },
+    ])
+    expect(cell.status).toBe('not_started')
+    expect(cell.done).toBe(1)
+  })
+})
+
+describe('matrixOverall (worst-of, spec §5)', () => {
+  const cell = (status: MatrixCellStatus): MatrixCell =>
+    ({ status, done: 0, submitted: 0, total: status === 'not_ordered' ? 0 : 1 })
+
+  it('any rejected → issue', () => {
+    expect(matrixOverall([cell('rejected'), cell('complete')])).toBe('issue')
+  })
+
+  it('any ordered role not complete → in_progress; not_ordered ignored', () => {
+    expect(matrixOverall([cell('complete'), cell('in_progress'), cell('not_ordered')])).toBe('in_progress')
+    expect(matrixOverall([cell('complete'), cell('not_started')])).toBe('in_progress')
+  })
+
+  it('all ordered complete → complete', () => {
+    expect(matrixOverall([cell('complete'), cell('not_ordered')])).toBe('complete')
+  })
+})
+
+describe('buildMatrixRows', () => {
+  it('groups by parent, keys cells by role, aggregates techs/worksheets/received', () => {
+    const rows = buildMatrixRows(
+      [
+        vial({
+          sample_id: 'PB-0001-S01',
+          assignment_role: 'hplc',
+          received_at: '2026-08-27T14:02:00Z',
+          worksheet: { title: 'WS-A' },
+          analyses: [
+            { title: 'Purity', review_state: 'promoted', analyst_name: 'J. Chen' },
+          ],
+        }),
+        vial({
+          sample_id: 'PB-0001-S02',
+          assignment_role: 'endo',
+          received_at: '2026-08-26T09:00:00Z',
+          worksheet: { title: 'WS-B' },
+          analyses: [
+            { title: 'Endotoxin', review_state: 'assigned', analyst_name: 'R. Patel' },
+          ],
+        }),
+      ],
+      ['hplc', 'endo', 'ster']
+    )
+    expect(rows).toHaveLength(1)
+    const row = rows[0]
+    expect(row?.parentSampleId).toBe('PB-0001')
+    expect(row?.cells.hplc?.status).toBe('complete')
+    expect(row?.cells.endo?.status).toBe('in_progress')
+    expect(row?.cells.ster?.status).toBe('not_ordered')
+    expect(row?.overall).toBe('in_progress')
+    expect(row?.techs.sort()).toEqual(['J. Chen', 'R. Patel'])
+    expect(row?.worksheets.sort()).toEqual(['WS-A', 'WS-B'])
+    expect(row?.earliestReceived).toBe('2026-08-26T09:00:00Z')
+  })
+
+  it('parents sort by sample_id and distinct-dedupes techs/worksheets', () => {
+    const rows = buildMatrixRows(
+      [
+        vial({ parent: { sample_id: 'PB-0002' }, sample_id: 'PB-0002-S01' }),
+        vial({
+          sample_id: 'PB-0001-S01',
+          worksheet: { title: 'WS-A' },
+          analyses: [
+            { title: 'A', review_state: 'assigned', analyst_name: 'J. Chen' },
+            { title: 'B', review_state: 'assigned', analyst_name: 'J. Chen' },
+          ],
+        }),
+      ],
+      ['hplc']
+    )
+    expect(rows.map(r => r.parentSampleId)).toEqual(['PB-0001', 'PB-0002'])
+    expect(rows[0]?.techs).toEqual(['J. Chen'])
+    expect(rows[0]?.worksheets).toEqual(['WS-A'])
   })
 })

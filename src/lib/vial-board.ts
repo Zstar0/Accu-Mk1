@@ -201,3 +201,110 @@ export function sortVials<V extends BoardVialLike>(
 export function toggleKey(keys: string[], key: string): string[] {
   return keys.includes(key) ? keys.filter(k => k !== key) : [...keys, key]
 }
+
+// ── Matrix view aggregation (spec §5 "Matrix view") ─────────────────────────
+
+export type MatrixCellStatus =
+  | 'not_ordered'
+  | 'not_started'
+  | 'in_progress'
+  | 'complete'
+  | 'rejected'
+
+export interface MatrixCell {
+  status: MatrixCellStatus
+  /** promoted + variance_verified count. */
+  done: number
+  /** to_be_verified count (the "n/m submitted" sub-line when done === 0). */
+  submitted: number
+  /** All non-retracted analyses for the (parent, role). */
+  total: number
+}
+
+export interface MatrixRow {
+  parentSampleId: string
+  label: string | null
+  /** Keyed by role code — columns come from the selected lane's catalog roles. */
+  cells: Record<string, MatrixCell>
+  overall: 'complete' | 'in_progress' | 'issue'
+  /** Distinct analyst names across the row's non-retracted analyses. */
+  techs: string[]
+  /** Distinct open-worksheet titles across the row's vials. */
+  worksheets: string[]
+  /** Earliest vial received_at (ISO string; '' when impossible). */
+  earliestReceived: string
+}
+
+/** Cell-status ladder over all vial-tier analyses on that parent's vials
+ *  with that role — retracted ignored (spec §5, in ladder order):
+ *  none → not_ordered; any rejected → rejected; all done → complete;
+ *  any assigned/to_be_verified → in_progress; else not_started. */
+export function matrixCell(analyses: BoardAnalysisLike[]): MatrixCell {
+  const live = placeableAnalyses(analyses)
+  const total = live.length
+  const done = live.filter(
+    a => a.review_state === 'promoted' || a.review_state === 'variance_verified'
+  ).length
+  const submitted = live.filter(a => a.review_state === 'to_be_verified').length
+  if (total === 0) return { status: 'not_ordered', done: 0, submitted: 0, total: 0 }
+  if (live.some(a => a.review_state === 'rejected'))
+    return { status: 'rejected', done, submitted, total }
+  if (done === total) return { status: 'complete', done, submitted, total }
+  if (live.some(a => a.review_state === 'assigned' || a.review_state === 'to_be_verified'))
+    return { status: 'in_progress', done, submitted, total }
+  return { status: 'not_started', done, submitted, total }
+}
+
+/** Worst-of roll-up: any rejected → issue; any ordered role not complete →
+ *  in_progress; else complete. not_ordered never counts against a row. */
+export function matrixOverall(cells: MatrixCell[]): 'complete' | 'in_progress' | 'issue' {
+  const ordered = cells.filter(c => c.status !== 'not_ordered')
+  if (ordered.some(c => c.status === 'rejected')) return 'issue'
+  if (ordered.some(c => c.status !== 'complete')) return 'in_progress'
+  return 'complete'
+}
+
+/** Rows = parent samples of the passed (already-filtered) vials; columns =
+ *  the selected lane's role codes. Sorted by parent sample_id. */
+export function buildMatrixRows<V extends BoardVialLike>(
+  vials: V[],
+  roleCodes: string[]
+): MatrixRow[] {
+  const byParent = new Map<string, V[]>()
+  for (const v of vials) {
+    const group = byParent.get(v.parent.sample_id) ?? []
+    group.push(v)
+    byParent.set(v.parent.sample_id, group)
+  }
+  return [...byParent.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([parentSampleId, group]) => {
+      const cells: Record<string, MatrixCell> = {}
+      for (const code of roleCodes) {
+        cells[code] = matrixCell(
+          group.filter(v => v.assignment_role === code).flatMap(v => v.analyses)
+        )
+      }
+      const techs = [
+        ...new Set(
+          group
+            .flatMap(v => placeableAnalyses(v.analyses))
+            .map(a => a.analyst_name)
+            .filter((n): n is string => !!n)
+        ),
+      ]
+      const worksheets = [
+        ...new Set(group.map(v => v.worksheet?.title).filter((t): t is string => !!t)),
+      ]
+      const earliestReceived = group.map(v => v.received_at).sort()[0] ?? ''
+      return {
+        parentSampleId,
+        label: group[0]?.parent.label ?? null,
+        cells,
+        overall: matrixOverall(Object.values(cells)),
+        techs,
+        worksheets,
+        earliestReceived,
+      }
+    })
+}
