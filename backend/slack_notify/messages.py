@@ -4,7 +4,8 @@ from __future__ import annotations
 from typing import Optional
 from urllib.parse import quote
 
-_ENTITY_LABEL = {"sample": "Sample", "sub_sample": "Vial", "worksheet": "Worksheet"}
+_ENTITY_LABEL = {"sample": "Sample", "sub_sample": "Vial", "worksheet": "Worksheet",
+                 "order": "Order"}
 _STATUS_LABEL = {"open": "Open", "in_progress": "In progress", "blocked": "Blocked",
                  "resolved": "Resolved", "closed": "Closed"}
 
@@ -42,6 +43,8 @@ def link_hash_for(deep_link: Optional[dict], flag_id: int) -> str:
         return f"#senaite/sample-details?id={eid}&flag={flag_id}"
     if kind == "worksheet" and eid:
         return f"#hplc-analysis/worksheet-detail?id={eid}&flag={flag_id}"
+    if kind == "order" and eid:
+        return f"#senaite/receive-sample?id={eid}&flag={flag_id}"
     return f"#dashboard/orders?flag={flag_id}"
 
 

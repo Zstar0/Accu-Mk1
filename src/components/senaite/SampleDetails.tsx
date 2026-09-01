@@ -185,6 +185,7 @@ import {
   detailsFieldSource,
   useCoaGenerationSource,
   coaSourceBadgeLabel,
+  type ReadSource,
 } from '@/lib/read-source'
 import { FieldSourceGlyph } from '@/components/senaite/FieldSourceGlyph'
 import {
@@ -351,13 +352,28 @@ function inferErrorStepIdx(
   return -1
 }
 
-const GENERATE_STEPS: StepDef[] = [
-  { id: 'senaite', label: 'Connecting to SENAITE', delay: 0 },
-  { id: 'coabuilder', label: 'Running COABuilder', delay: 700 },
-  { id: 'verification', label: 'Reserving verification code', delay: 3800 },
-  { id: 's3', label: 'Uploading PDF to S3', delay: 4800 },
-  { id: 'attach', label: 'Attaching to SENAITE', delay: 6200 },
-]
+// Step labels mirror what the backend actually does per COA source: with
+// coa_generation=mk1 the wire document is assembled from the native
+// registry (zero SENAITE reads — read-independence), while the PDF attach
+// (and publish's transition) still WRITE to SENAITE in both modes. Step ids
+// are load-bearing (errorStepFor maps failure text onto them) — only the
+// label varies. Sub-sample (-SXX) COAs stay SENAITE-sourced regardless of
+// the toggle, so callers pass 'senaite' for non-parents (same rule as
+// coaSourceBadgeLabel).
+export function generateSteps(source: ReadSource): StepDef[] {
+  return [
+    {
+      id: 'senaite',
+      label:
+        source === 'mk1' ? 'Reading sample registry' : 'Connecting to SENAITE',
+      delay: 0,
+    },
+    { id: 'coabuilder', label: 'Running COABuilder', delay: 700 },
+    { id: 'verification', label: 'Reserving verification code', delay: 3800 },
+    { id: 's3', label: 'Uploading PDF to S3', delay: 4800 },
+    { id: 'attach', label: 'Attaching to SENAITE', delay: 6200 },
+  ]
+}
 
 const PUBLISH_STEPS: StepDef[] = [
   { id: 'draft', label: 'Locating draft generation', delay: 0 },
@@ -4719,7 +4735,10 @@ export function SampleDetails() {
 
   const handleGenerateCOA = async () => {
     setIsGeneratingCOA(true)
-    const settle = startCOAConsole(`generate-coa ${sampleId}`, GENERATE_STEPS)
+    const settle = startCOAConsole(
+      `generate-coa ${sampleId}`,
+      generateSteps(isParent ? coaGenSource : 'senaite')
+    )
     try {
       const result = await generateSenaiteCOA(sampleId)
       if (result.success) {
@@ -4771,7 +4790,7 @@ export function SampleDetails() {
     setIsGeneratingVialCOAs(true)
     const settle = startCOAConsole(
       `generate-vial-coas ${sampleId}`,
-      GENERATE_STEPS
+      generateSteps(isParent ? coaGenSource : 'senaite')
     )
     try {
       const result = await generateVialCOAs(sampleId)

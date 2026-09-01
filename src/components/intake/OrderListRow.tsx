@@ -12,7 +12,9 @@ import type { EnrichedOrderGroup } from '@/lib/inbox-orders'
 import { customerDetailHash } from '@/lib/inbox-orders'
 import { OrderExpectedVials } from '@/components/intake/OrderExpectedVials'
 import { TrackingLink } from '@/components/intake/TrackingLink'
-import type { OrderBoxLabelSummary } from '@/lib/api'
+import { CustomerNoteCell } from '@/components/intake/CustomerNoteCell'
+import type { OrderBoxLabelSummary, RegistryOrder } from '@/lib/api'
+import { RaiseFlagButton } from '@/components/flags/RaiseFlagButton'
 
 interface OrderListRowProps {
   group: EnrichedOrderGroup
@@ -32,6 +34,10 @@ interface OrderListRowProps {
   // per-row (the per-row fetch melted the DB pool; prod brownout 2026-07-09).
   expectedVialsSummary?: OrderBoxLabelSummary
   expectedVialsLoading?: boolean
+  // From the parent's ONE batched registry-orders query (Task 6) — ship-from
+  // address + customer info. Undefined while loading or for the no-order
+  // bucket.
+  registryOrder?: RegistryOrder
 }
 
 // SENAITE review_state → the STATE_PRIORITY key used for the worst-state border.
@@ -53,6 +59,13 @@ function firstTrackedSample(
   group: EnrichedOrderGroup
 ): EnrichedOrderGroup['samples'][number] | null {
   return group.samples.find(s => Boolean(s.tracking_number)) ?? null
+}
+
+// The order's customer note, if any sample in the group carries one. Notes are
+// entered per sample in the wizard but are almost always identical across an
+// order, so the first one stands in for the group rather than stacking them.
+function firstOrderNote(group: EnrichedOrderGroup): string | null {
+  return group.samples.find(s => Boolean(s.customer_note))?.customer_note ?? null
 }
 
 function worstSampleState(group: EnrichedOrderGroup): string | null {
@@ -85,6 +98,7 @@ export function OrderListRow({
   onProcess,
   expectedVialsSummary,
   expectedVialsLoading = false,
+  registryOrder,
 }: OrderListRowProps) {
   const order = group.order
   const canSelect = selectable && group.orderKey != null
@@ -95,6 +109,7 @@ export function OrderListRow({
 
   const worst = worstSampleState(group)
   const trackedSample = firstTrackedSample(group)
+  const orderNote = firstOrderNote(group)
 
   const sampleTypes = Array.from(
     new Set(
@@ -154,16 +169,6 @@ export function OrderListRow({
               summary={expectedVialsSummary}
               loading={expectedVialsLoading}
             />
-            {trackedSample ? (
-              <>
-                {' '}
-                <span aria-hidden="true">·</span>{' '}
-                <TrackingLink
-                  trackingNumber={trackedSample.tracking_number}
-                  trackingUrl={trackedSample.tracking_url}
-                />
-              </>
-            ) : null}
           </span>
         </div>
       </td>
@@ -204,15 +209,50 @@ export function OrderListRow({
       <td className="py-3 px-3 whitespace-nowrap text-sm text-muted-foreground">
         {formatDate(order?.created_at ?? null)}
       </td>
+      <td className="py-3 px-3 whitespace-nowrap text-sm">
+        {trackedSample ? (
+          <TrackingLink
+            trackingNumber={trackedSample.tracking_number}
+            trackingUrl={trackedSample.tracking_url}
+          />
+        ) : null}
+      </td>
+      <td className="py-3 px-3 align-middle">
+        <CustomerNoteCell note={orderNote} />
+      </td>
       <td className="py-3 px-3 whitespace-nowrap text-right">
-        <Button size="sm" onClick={() => onProcess(group)}>
-          Process
-        </Button>
+        <div className="flex items-center justify-end gap-1">
+          <Button size="sm" onClick={() => onProcess(group)}>
+            Process
+          </Button>
+          {group.orderKey != null && (
+            <RaiseFlagButton
+              entityType="order"
+              entityId={group.orderKey ?? ''}
+              candidates={group.samples.map(s => ({
+                entityType: 'sample',
+                entityId: s.id,
+                label: s.id,
+              }))}
+              variant="compact"
+              targetLabel={group.orderLabel}
+            />
+          )}
+        </div>
       </td>
     </tr>
     {expanded && (
       <tr data-testid="order-detail-row" className="bg-muted/20">
-        <td colSpan={6} className="px-4 pb-3 pt-1">
+        <td colSpan={8} className="px-4 pb-3 pt-1">
+          {registryOrder?.billing && (
+            <p className="pb-1 text-xs text-muted-foreground">
+              Ships from:{' '}
+              {[registryOrder.billing.city, registryOrder.billing.state]
+                .filter(Boolean)
+                .join(', ')}{' '}
+              {registryOrder.billing.country ?? ''}
+            </p>
+          )}
           <table className="w-full text-sm">
             <thead>
               <tr className="text-xs text-muted-foreground">
@@ -221,9 +261,10 @@ export function OrderListRow({
                 </th>
                 <th className="py-1 pr-4 text-left font-medium">Analytes</th>
                 <th className="py-1 pr-4 text-left font-medium w-44">Lot</th>
-                <th className="py-1 text-left font-medium w-32">
+                <th className="py-1 pr-4 text-left font-medium w-32">
                   Declared Qty
                 </th>
+                <th className="py-1 text-right font-medium w-10" />
               </tr>
             </thead>
             <tbody>
@@ -255,12 +296,20 @@ export function OrderListRow({
                     <td className="py-1.5 pr-4 font-mono text-xs align-top">
                       {s.client_lot ?? '—'}
                     </td>
-                    <td className="py-1.5 text-xs align-top">
+                    <td className="py-1.5 pr-4 text-xs align-top">
                       {details.some(d => d.declared_quantity)
                         ? details
                             .map(d => d.declared_quantity ?? '—')
                             .join(', ')
                         : '—'}
+                    </td>
+                    <td className="py-1.5 text-right align-top">
+                      <RaiseFlagButton
+                        entityType="sample"
+                        entityId={s.id}
+                        variant="compact"
+                        targetLabel={s.id}
+                      />
                     </td>
                   </tr>
                 )

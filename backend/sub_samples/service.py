@@ -18,7 +18,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, List
 from sqlalchemy import select, func, delete, case
 from sqlalchemy.orm import Session
-from models import LimsSample, LimsSubSample, LimsSubSampleEvent
+from models import (LimsSample, LimsSampleRemark, LimsSubSample,
+                    LimsSubSampleEvent)
 from sub_samples import native
 from sub_samples import senaite
 from sub_samples.native_id import mint_native_id
@@ -246,6 +247,47 @@ def _quarantine_collision(db: Session, existing: LimsSample,
     return row
 
 
+def _record_customer_order_note(db: Session, row: LimsSample, meta: dict) -> None:
+    """Persist the customer's wizard note ("Notes for Lab") as a native remark.
+
+    The note rides the IS creation signal as `meta["Remarks"]` — IS puts it
+    there via `ARData.to_senaite_payload()`. Until 2026-08-30 this function's
+    caller dropped it, so the note existed ONLY on the SENAITE AR, and the
+    mk1-mode sample-details read deliberately ignores that field in favour of
+    `lims_sample_remarks` (read-flip spec §6). Net effect after the read flip:
+    customer notes silently vanished on new orders while older, backfilled
+    samples still showed theirs — which read as an intermittent bug.
+
+    No Mk1 user authored this, so `author_user_id` stays NULL; the
+    "Customer note (order #N)" prefix carries the attribution instead
+    (Handler ruling 2026-08-30) so a tech can tell it from a lab remark.
+
+    Called ONLY on the create branch: a replayed signal returns through the
+    `existing` path and must not stack a second copy of the same note.
+
+    `Remarks` arrives as the string IS sent, never SENAITE's read-back list —
+    the isinstance guard keeps a list-shaped payload from stringifying into
+    the note rather than being skipped.
+    """
+    raw = meta.get("Remarks")
+    if not isinstance(raw, str):
+        return
+    content = raw.strip()
+    if not content:
+        return
+    # ClientOrderNumber is "WP-<wc order number>"; show the bare number the
+    # customer and the lab both recognise.
+    order_ref = str(meta.get("ClientOrderNumber") or "").strip()
+    if order_ref.upper().startswith("WP-"):
+        order_ref = order_ref[3:]
+    prefix = f"Customer note (order #{order_ref}): " if order_ref else "Customer note: "
+    db.add(LimsSampleRemark(
+        lims_sample_pk=row.id,
+        content=prefix + content,
+        author_user_id=None,
+    ))
+
+
 def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
                               senaite_uid: Optional[str], meta: dict) -> LimsSample:
     """Create/refresh a registry row from the IS creation signal
@@ -335,6 +377,9 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
     if not sample_id:
         row.external_lims_uid = None
         row.external_lims_system = "mk1"
+    db.flush()
+    # After the flush — the remark's FK needs row.id.
+    _record_customer_order_note(db, row, meta)
     db.flush()
     return row
 

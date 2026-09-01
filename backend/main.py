@@ -40,7 +40,7 @@ from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
 from sla_engine import BusinessSchedule, compute_business_minutes, sla_status_dict
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment, MethodAttachment, method_services
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment, MethodAttachment, method_services, LimsOrder
 from catalog.change_log import apply_and_log, log_create, log_delete, log_members
 from auth import (
     get_current_user, require_admin, create_access_token,
@@ -15553,6 +15553,14 @@ class SenaiteSampleItem(BaseModel):
     # Registry reads only — name + declared qty pairs for the receive page's
     # expanded order rows. SENAITE-sourced lists leave it empty.
     analyte_details: list[SenaiteAnalyteDetail] = []
+    # Order entity (2026-08-28 design): WC line item ids this sample was
+    # split from. Registry reads only — SENAITE-sourced items leave it empty.
+    wc_line_item_ids: list[int] = []
+    # The customer's wizard note ("Notes for Lab"), surfaced as its own column
+    # on the receive page. Customer-origin remarks ONLY — never a lab remark
+    # (see registry_list.fetch_customer_notes). None when the sample has none,
+    # which is every sample ordered before the note was persisted natively.
+    customer_note: Optional[str] = None
 
 
 class SenaiteSamplesResponse(BaseModel):
@@ -21854,6 +21862,83 @@ def s2s_mirror_lims_sample_fields(
     db.commit()
     return RegistryFieldMirrorResponse(updated=updated, locked=locked, missing=missing)
 
+# ── Order entity upsert (order-entity Task 3, 2026-08-28) ────────────────
+# Called server-to-server by integration-service at acceptance push and by
+# the backfill job. Idempotent on wp_order_id. NEVER touches logistics
+# columns (vendor/tracking live per-sample, see shipping update above);
+# missing registry samples in `samples[]` are reported, not errored — the
+# registry sync may lag the first order push.
+
+class S2SOrderSampleStamp(BaseModel):
+    senaite_sample_id: str
+    line_item_ids: list[int] = []
+
+
+class S2SOrderCustomer(BaseModel):
+    user_id: Optional[int] = None
+    name: Optional[str] = None
+    email: Optional[str] = None
+
+
+class S2SOrderUpsert(BaseModel):
+    wp_order_id: int
+    order_number: str
+    status: Optional[str] = None
+    customer: Optional[S2SOrderCustomer] = None
+    billing: Optional[dict] = None
+    shipping: Optional[dict] = None
+    wp_created_at: Optional[datetime] = None
+    wp_paid_at: Optional[datetime] = None
+    samples: list[S2SOrderSampleStamp] = []
+
+
+class S2SOrdersUpsertRequest(BaseModel):
+    orders: list[S2SOrderUpsert]
+
+
+class S2SOrdersUpsertResponse(BaseModel):
+    upserted: int
+    samples_stamped: int
+    samples_missing: int
+
+
+@app.post("/s2s/orders/upsert", response_model=S2SOrdersUpsertResponse)
+def s2s_upsert_orders(
+    req: S2SOrdersUpsertRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_internal_service_token),
+):
+    """Idempotent order upsert from the integration service (acceptance push
+    + backfill). Never touches logistics columns; missing registry samples
+    are reported, not errors (registry sync may lag the first push)."""
+    upserted = stamped = missing = 0
+    for o in req.orders:
+        row = db.query(LimsOrder).filter_by(wp_order_id=o.wp_order_id).first()
+        if row is None:
+            row = LimsOrder(wp_order_id=o.wp_order_id, order_number=o.order_number)
+            db.add(row)
+        row.order_number = o.order_number
+        row.status = o.status
+        if o.customer is not None:
+            row.customer_user_id = o.customer.user_id
+            row.customer_name = o.customer.name
+            row.customer_email = o.customer.email
+        row.billing = o.billing
+        row.shipping = o.shipping
+        row.wp_created_at = o.wp_created_at
+        row.wp_paid_at = o.wp_paid_at
+        upserted += 1
+        for s in o.samples:
+            sample = db.query(LimsSample).filter_by(sample_id=s.senaite_sample_id).first()
+            if sample is None:
+                missing += 1
+                continue
+            sample.wc_line_item_ids = list(s.line_item_ids)
+            stamped += 1
+    db.commit()
+    return S2SOrdersUpsertResponse(upserted=upserted, samples_stamped=stamped,
+                                    samples_missing=missing)
+
 
 # ── Registry debug (admin diagnostic) ─────────────────────────────────
 # Non-mutating registry-vs-SENAITE compare for the admin debug panel
@@ -22607,7 +22692,8 @@ async def list_samples_from_registry(
     """Samples-list read sourced from the local lims_samples registry (no SENAITE
     round-trip). Live/SENAITE-only fields (analytes, current review_state) are
     refreshed per-row on the client via progressive backfill."""
-    from sub_samples.registry_list import registry_rows_to_list
+    from sub_samples.registry_list import (fetch_customer_notes,
+                                            registry_rows_to_list)
 
     stmt = select(LimsSample)
     if review_state:
@@ -22643,7 +22729,8 @@ async def list_samples_from_registry(
     rows = db.execute(
         stmt.order_by(LimsSample.id.desc()).offset(b_start).limit(limit)
     ).scalars().all()
-    items = registry_rows_to_list(rows)
+    # One grouped remark query for the page — never per row.
+    items = registry_rows_to_list(rows, fetch_customer_notes(db, rows))
     # Verification codes: overlay the ACTIVE code from the IS DB (one batched
     # query per page). The stored lims_samples copy goes stale when a COA is
     # regenerated (IS-side mutation the registry never sees); on IS-DB failure
@@ -22659,6 +22746,42 @@ async def list_samples_from_registry(
         except Exception:
             pass
     return SenaiteSamplesResponse(items=items, total=total, b_start=b_start)
+
+
+class RegistryOrderItem(BaseModel):
+    wp_order_id: int
+    order_number: str
+    status: Optional[str] = None
+    customer_name: Optional[str] = None
+    customer_email: Optional[str] = None
+    billing: Optional[dict] = None
+    shipping: Optional[dict] = None
+    wp_created_at: Optional[datetime] = None
+    wp_paid_at: Optional[datetime] = None
+
+
+class RegistryOrdersResponse(BaseModel):
+    orders: list[RegistryOrderItem]
+
+
+@app.get("/registry/orders", response_model=RegistryOrdersResponse)
+def list_registry_orders(
+    numbers: str,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Batched lims_orders read for the Receive page's ship-from line —
+    one request for the visible order groups, never per-row."""
+    wanted = [n.strip() for n in numbers.split(",") if n.strip()][:100]
+    if not wanted:
+        return RegistryOrdersResponse(orders=[])
+    rows = db.query(LimsOrder).filter(LimsOrder.order_number.in_(wanted)).all()
+    return RegistryOrdersResponse(orders=[RegistryOrderItem(
+        wp_order_id=r.wp_order_id, order_number=r.order_number, status=r.status,
+        customer_name=r.customer_name, customer_email=r.customer_email,
+        billing=r.billing, shipping=r.shipping,
+        wp_created_at=r.wp_created_at, wp_paid_at=r.wp_paid_at,
+    ) for r in rows])
 
 
 # ── Peptide requests API (integration-service bridge) ────────────────

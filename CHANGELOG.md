@@ -1,9 +1,35 @@
 # Changelog
 
+## v1.14.1 — 2026-08-31
+
+### Fixed
+
+- **COA console step labels follow the COA source.** With `coa_generation=mk1`
+  (read-independence, live in prod) the Generate console said "Connecting to
+  SENAITE" while the backend read the native registry. The first step now
+  says "Reading sample registry" in mk1 mode; the attach step keeps its
+  SENAITE label because the PDF attach (and publish transition) still write
+  to SENAITE in both modes. Sub-sample COAs keep SENAITE labels, matching
+  the backend is_sub gate. Step ids are unchanged (errorStepFor contract).
+
+## v1.14.0 — 2026-08-31
+- **Order flags on Receive** — a "Raise a flag" button now sits next to
+  Process on every By-Order row (`entity_type="order"`, keyed by order
+  number) and next to each sample in the expanded order detail
+  (`entity_type="sample"`), so lab staff can flag an order or a specific
+  sample without leaving the receive workflow.
+- **Ship-from line in the expanded order detail** — each expanded By-Order
+  row shows "Ships from: {city}, {state} {country}" sourced from the new
+  registry-backed order read, batched (one request for every visible order
+  number, never per-row) via `getRegistryOrders` / `GET /registry/orders`.
+- **`lims_orders` registry + server-to-server upsert** — a local orders
+  registry table backs the new `GET /registry/orders` batch read and a
+  server-to-server upsert endpoint that keeps it current, mirroring the
+  existing `lims_samples` registry pattern.
+- **`wc_line_item_ids` registry passthrough** — `SenaiteSample` (and the
+  `/registry/samples` read it comes from) now carries the WooCommerce
+  line-item ids a sample was created from.
 ## v1.13.0 — 2026-08-31
-
-### Added
-
 - **Logistics capture (customer-portal Slice A, PR #150)** — four new
   `lims_samples` registry columns: `vendor_name` (customer-declared
   vendor/manufacturer, arrives on the IS creation signal, internal-only),
