@@ -483,17 +483,14 @@ _FIELD_MIRROR_SCALARS = {
 _ANALYTE_KEY_RE = re.compile(r"^Analyte([1-8])(Peptide|DeclaredQuantity)$")
 
 
-def apply_senaite_fields_to_row(db: Session, senaite_uid: str, fields: dict) -> bool:
-    """Mirror a SENAITE field update onto the registry row (dual-write
-    slice 1). Returns False when no row carries this uid (pre-registry
-    samples) — callers treat that as a no-op, and callers must NEVER fail
-    the user's request over a mirror problem."""
-    row = db.execute(
-        select(LimsSample).where(LimsSample.external_lims_uid == senaite_uid)
-    ).scalar_one_or_none()
-    if row is None:
-        return False
-
+def _apply_senaite_fields_to_row(db: Session, row: "LimsSample", fields: dict) -> None:
+    """Mirror SENAITE-shaped changed fields onto an ALREADY-RESOLVED registry
+    row. Pure mutation + flush — row resolution and commit/rollback are the
+    caller's responsibility. Extracted from `apply_senaite_fields_to_row`
+    (customer portal Slice B) so the S2S targeted-field-mirror endpoint
+    (resolves rows by `sample_id`, not `external_lims_uid`) can reuse the
+    exact same mirror logic Mk1's own field-edit endpoints use, without a
+    second row lookup."""
     for senaite_key, column in _FIELD_MIRROR_SCALARS.items():
         if senaite_key in fields:
             v = fields[senaite_key]
@@ -528,6 +525,19 @@ def apply_senaite_fields_to_row(db: Session, senaite_uid: str, fields: dict) -> 
 
     row.last_synced_at = datetime.utcnow()
     db.flush()
+
+
+def apply_senaite_fields_to_row(db: Session, senaite_uid: str, fields: dict) -> bool:
+    """Mirror a SENAITE field update onto the registry row (dual-write
+    slice 1). Returns False when no row carries this uid (pre-registry
+    samples) — callers treat that as a no-op, and callers must NEVER fail
+    the user's request over a mirror problem."""
+    row = db.execute(
+        select(LimsSample).where(LimsSample.external_lims_uid == senaite_uid)
+    ).scalar_one_or_none()
+    if row is None:
+        return False
+    _apply_senaite_fields_to_row(db, row, fields)
     return True
 
 
