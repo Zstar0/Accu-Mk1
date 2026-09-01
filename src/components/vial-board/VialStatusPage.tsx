@@ -110,15 +110,16 @@ export function VialStatusPage() {
 
   // Sub-role selection is transient and resets on lane change (inbox
   // precedent — a stale sub-role from a foreign lane must never survive).
-  // ThemeProvider.tsx:32 precedent for suppressing set-state-in-effect with
-  // justification: this reset genuinely belongs in an effect (it isn't
-  // derivable during render the way lane/currentLane are — it's clearing a
-  // user selection in response to lane switching, not deriving a value).
+  // Reset during render — React's documented "adjusting state when a prop
+  // changes" idiom (not an effect): tracking the lane we last reset for lets
+  // this run as a plain render-time state adjustment, which needs no
+  // react-hooks/set-state-in-effect suppression at all.
   const [subRole, setSubRole] = useState('')
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- clearing a stale sub-role selection when the lane changes
-    setSubRole('')
-  }, [lane])
+  const [prevLane, setPrevLane] = useState<string | null>(null)
+  if (lane !== prevLane) {
+    setPrevLane(lane)
+    if (subRole !== '') setSubRole('')
+  }
 
   const boardQ = useVialBoard({
     hideTestOrders: filters.hideTestOrders,
