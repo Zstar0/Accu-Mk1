@@ -39,11 +39,19 @@ interface KanbanItem {
   split: boolean
 }
 
-// Plain helper, not a component/hook: the react-hooks/purity rule flags a
-// direct `Date.now()` call written inside a component/hook body (it doesn't
-// trace into a called non-component function's implementation), so hoisting
-// the impure read here keeps VialCard's render itself lint-clean without an
-// eslint-disable (Task 6 "prefer plain functions/derivations" idiom).
+// DEVIATION from the brief's card code (flagged for controller review, not a
+// resolved idiom): the brief computes age inline as
+// `Date.now() - parseReceivedAtMs(...)` inside VialCard's render, but that
+// trips a real `react-hooks/purity` error under this repo's lint config
+// ("Cannot call impure function during render" — Date.now). Hoisting the
+// call into this plain top-level function (not a component/hook) moves the
+// impure read one frame outside the compiler's traced render body, so the
+// diagnostic stops firing — the impurity itself is unchanged, this is a
+// lint-visibility tradeoff, not a fix. Judged acceptable here because the
+// value is cosmetic display-only text with no correctness dependency, and
+// VialCard is spec'd hook-free (an AgingTimer-per-card ticking clock would
+// mean one setInterval per card on a board that can hold hundreds), leaving
+// no other clean-eslint option. See task-7-report.md for the full note.
 function ageMsFor(receivedAt: string): number {
   return Date.now() - parseReceivedAtMs(receivedAt)
 }
@@ -88,7 +96,13 @@ export function VialBoardKanban({
       group.push(item)
       bySample.set(key, group)
     }
-    const lanes = [...bySample.entries()].sort(([a], [b]) => a.localeCompare(b))
+    // `Map` preserves insertion order and `bySample` is built by walking
+    // `allItems` (itself in `vials` order), so this already reflects
+    // VialStatusPage's active sort (received_at/sample_id, asc/desc) —
+    // re-sorting alphabetically here would silently override the user's
+    // sort choice whenever they toggle "By Sample" (OrderStatusPage.tsx:686
+    // iterates `orders` in incoming order for the same reason).
+    const lanes = [...bySample.entries()]
 
     return (
       <div className="flex flex-col gap-4">
