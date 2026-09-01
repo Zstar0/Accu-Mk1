@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.15.0 — 2026-09-01
+
+### Added
+
+- **Vial Status Board (read-only v1)** — department kanban + matrix view over
+  sub-samples: role columns, per-cell status ladder, worst-of overall. Matrix
+  cells read lane-scoped vials; overall is never "Complete" without ordered
+  work. (#164)
+- **Lab-added native profiles report on the COA** — gate-rule change: the WP
+  order is no longer the sole authority for reportable native profiles. A
+  profile added to the sample via Manage Analyses (comps, format retrofits)
+  reports exactly like an ordered one: half-entered aborts, removal withdraws,
+  not-yet-run defers. Samples with no lab-added profiles produce a
+  byte-identical wire document. (#166)
+
+### Fixed
+
+- **Receive-page order flags no longer 400.** `order` is both a registered
+  flag entity and a builtin item kind; the virtual-kind lookup now yields to
+  registered entity seams, so entity-anchored order flags create instead of
+  being rejected with "item kind 'order' takes no entity_id". (#163)
+- **Bac Water trio never mirrors onto HPLC vials.** The trio services joined
+  the Analytical department (worksheet-inbox lane visibility, 2026-09-01);
+  an explicit parent-bench guard keeps check-in seeding from minting dead-end
+  vial-tier rows — BW results stay on parent shadow rows. (#165)
 ## v1.14.1 — 2026-08-31
 
 ### Fixed
