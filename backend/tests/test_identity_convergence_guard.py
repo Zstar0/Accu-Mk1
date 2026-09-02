@@ -96,12 +96,19 @@ SHRINKING: dict[tuple[str, str, str], tuple[int, str]] = {
     # it PERMANENT would fire "restore this site" on the day the keyword index
     # drops, which is the wrong instruction.
     ("lims_analyses/seeder.py", "mirror_parent_hplc_analyses", "svc"): (
-        1,
-        "Keyword leg of the Task-4 ruled union skip. Retires when the keyword "
-        "root index (uq_lims_analyses_sub_service_root, database.py:696) is "
-        "dropped -- RULED deferred past mirror decommission. Until then the "
-        "union is collision-correct and the leg must stay: dropping it early "
-        "lets a duplicate slip past the still-live index and raise on insert.",
+        2,
+        "Two legs. (1) Keyword leg of the Task-4 ruled union skip. Retires "
+        "when the keyword root index (uq_lims_analyses_sub_service_root, "
+        "database.py:696) is dropped -- RULED deferred past mirror "
+        "decommission. Until then the union is collision-correct and the leg "
+        "must stay: dropping it early lets a duplicate slip past the "
+        "still-live index and raise on insert. (2) _PARENT_BENCH_ONLY_KEYWORDS "
+        "guard (PR #165): the BW trio joined the Analytical department "
+        "2026-09-01 (inbox lane visibility) but is entered on PARENT shadow "
+        "rows (isParentBenchRow ruling, 1.12.4) -- the allow-list alone would "
+        "mirror them onto the S01 vial as a dead-end second entry surface. "
+        "Retires when the Bac Water family goes native (trio re-originated "
+        "mk1 with vial-tier entry) or the mirror itself is decommissioned.",
     ),
     ("lims_analyses/seeder.py", "_seed_rows_from_services", "svc"): (
         1,
