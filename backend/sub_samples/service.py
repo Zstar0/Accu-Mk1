@@ -2602,8 +2602,11 @@ def lock_variance_set(db: Session, parent_sample_id: str, user_id: int) -> LimsS
             unfinished.extend(f"{s.sample_id}:{r.keyword}" for r in rows)
         if unfinished:
             raise VarianceSeriesIncompleteError(
-                "variance series incomplete — unfinished rows: "
+                "variance series incomplete — these analyses must be run and "
+                "signed off (promoted or variance-verified) before locking: "
                 + ", ".join(sorted(unfinished))
+                + ". A pending retest with no result also blocks here — finish "
+                "the retest; do not reject it."
             )
     from models import AuditLog
     parent.variance_locked_at = datetime.utcnow()
