@@ -7530,7 +7530,9 @@ export async function lockVarianceSet(parentSampleId: string): Promise<{ parent_
     const body = await r.json().catch(() => ({}))
     throw new Error(body.detail?.message ?? 'need >=2 selected vials to lock')
   }
-  if (!r.ok) throw new Error(`lockVarianceSet failed: ${r.status}`)
+  // The 409 series-incomplete detail NAMES the exact unfinished vial:keyword
+  // rows — surface it, or the toast is just a bare status (P-2423, 2026-09-02).
+  if (!r.ok) throw new Error(await extractErrorMessage(r, `lockVarianceSet failed: ${r.status}`))
   return r.json()
 }
 
@@ -7540,7 +7542,7 @@ export async function unlockVarianceSet(parentSampleId: string): Promise<{ paren
     { method: 'POST', headers: getBearerHeaders() }
   )
   if (r.status === 403) throw new Error('admin role required to unlock variance sets')
-  if (!r.ok) throw new Error(`unlockVarianceSet failed: ${r.status}`)
+  if (!r.ok) throw new Error(await extractErrorMessage(r, `unlockVarianceSet failed: ${r.status}`))
   return r.json()
 }
 
