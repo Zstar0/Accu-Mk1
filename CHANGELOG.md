@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.15.1 — 2026-09-08
+
+### Fixed
+- Multi-sample orders lost their native parent-tier placeholders for every sample but the last (P-2687/P-2688/P-2689 vs P-2690): the registration-signal background task asked IS for the sample's services before IS had committed the order and returned silently on the 404. The order upsert (`POST /s2s/orders/upsert`), which IS sends after its commit, now carries `services`/`package` on each sample stamp and seeds the placeholders + `catalog_snapshot` itself (second phase after the stamp commit, per-sample commit, never fails the upsert). The registration path stays as an idempotent fallback and warns instead of returning silently.
+- Order upsert no longer clears a stamped `wc_line_item_ids` when a stamp arrives with an empty list.
+
+### Added
+- `lims_analyses/order_seed.py` — one seed path (`seed_parent_from_services`) shared by the order upsert, the registration fallback, and the new heal script; `find_parents_missing_native_placeholders` finder.
+- `scripts/heal_missing_placeholders.py` — dry-run/`--apply` convergence heal for parents whose live native vial rows have no parent-tier row (cron-able via `docker exec`).
+- Spec + plan: `docs/superpowers/specs/2026-09-08-order-upsert-placeholder-seed-design.md`, `docs/superpowers/plans/2026-09-08-order-upsert-placeholder-seed.md`.
+
 ## v1.15.0 — 2026-09-01
 
 ### Added
