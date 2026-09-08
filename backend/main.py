@@ -16498,53 +16498,45 @@ def _native_placeholders_at_registration_bg(sample_id: str) -> None:
     catalog miss or IS outage must not fail the registration; there is no
     automatic re-seed after registration; the admin "Re-sync from order"
     action (lims_analyses.manage_native.resync_parent_from_order) is the heal.
+
+    2026-09-08: this is now the FALLBACK. The primary seed is the order
+    upsert (s2s_upsert_orders phase 2), whose stamps carry the services
+    after IS has committed the order. This callback races that commit and
+    lost for every sample but the last of a multi-sample order (P-2687/88/89
+    vs P-2690); it stays for old-IS compatibility and is idempotent, and it
+    may never return silently again. Seeding itself lives in
+    lims_analyses.order_seed.seed_parent_from_services.
     """
     db = None
     try:
         from database import SessionLocal
-        from lims_analyses.parent_placeholders import seed_parent_placeholders
         from sub_samples.service import fetch_sample_services
         from models import LimsSample
-        from catalog.snapshot import compute_catalog_snapshot
 
         raw = fetch_sample_services(sample_id)
         if not raw:
+            # Never silent: IS answers 404 until it commits the whole order,
+            # so this fallback loses the race for every sample but the last of
+            # a multi-sample order. This line is how we know it fired and
+            # found nothing.
+            logger.warning(
+                "registry.native_placeholder_seed_skipped sample_id=%s reason=no_services_from_is",
+                sample_id,
+            )
             return
         db = SessionLocal()
         parent = db.query(LimsSample).filter_by(sample_id=sample_id).one_or_none()
         if parent is None:
+            logger.warning(
+                "registry.native_placeholder_seed_skipped sample_id=%s reason=parent_not_in_registry",
+                sample_id,
+            )
             return
-        stats = seed_parent_placeholders(
-            db, parent=parent,
-            services=raw.get("services") or {}, package=raw.get("package"),
+        seed_parent_from_services(
+            db, parent=parent, services=raw.get("services") or {},
+            package=raw.get("package"), source="registration_signal",
         )
-        # Once-only: a replayed registration signal (IS retry, duplicate
-        # webhook) must NOT restamp — the whole point is freezing what was
-        # resolved the FIRST time. System write (s2s has no user); no
-        # change-log row for the stamp itself (that ledger is task 7's
-        # audited reprovision, a deliberate human/API action).
-        #
-        # Isolated in its own try/except: a snapshot-compute failure (bad
-        # catalog row, unexpected shape) must NOT roll back the placeholder
-        # seed that already succeeded above — that seed is the load-bearing
-        # bench-visibility guarantee this sibling exists for. catalog_snapshot
-        # stays NULL on failure, so the once-only guard retries on the next
-        # registration signal / replay instead of stamping half-built data.
-        if parent.catalog_snapshot is None:
-            try:
-                parent.catalog_snapshot = compute_catalog_snapshot(
-                    db, raw.get("services") or {}, raw.get("package"),
-                )
-            except Exception as snapshot_err:  # noqa: BLE001
-                logger.warning(
-                    "catalog_snapshot.stamp_failed sample_id=%s err=%s",
-                    sample_id, snapshot_err,
-                )
         db.commit()
-        logger.info(
-            "registry.native_placeholder_seed sample_id=%s created=%s existing=%s skipped=%s",
-            sample_id, stats["created"], stats["existing"], stats["skipped"],
-        )
     except Exception as seed_err:  # noqa: BLE001
         if db is not None:
             try:
@@ -21802,9 +21794,20 @@ def s2s_update_lims_sample_shipping(
 # missing registry samples in `samples[]` are reported, not errored — the
 # registry sync may lag the first order push.
 
+# Order upsert seeds native parent placeholders from the stamp's services
+# (2026-09-08 spec: docs/superpowers/specs/2026-09-08-order-upsert-placeholder-seed-design.md).
+# Module-level import so tests can patch `main.seed_parent_from_services`.
+from lims_analyses.order_seed import seed_parent_from_services  # noqa: E402
+
+
 class S2SOrderSampleStamp(BaseModel):
     senaite_sample_id: str
     line_item_ids: list[int] = []
+    # 2026-09-08: per-sample services ride the post-commit upsert so the
+    # parent-tier placeholders seed here instead of racing IS's commit from
+    # the registration signal's callback. Optional for old-IS compatibility.
+    services: Optional[dict] = None
+    package: Optional[str] = None
 
 
 class S2SOrderCustomer(BaseModel):
@@ -21833,6 +21836,7 @@ class S2SOrdersUpsertResponse(BaseModel):
     upserted: int
     samples_stamped: int
     samples_missing: int
+    placeholders_created: int = 0
 
 
 @app.post("/s2s/orders/upsert", response_model=S2SOrdersUpsertResponse)
@@ -21866,11 +21870,38 @@ def s2s_upsert_orders(
             if sample is None:
                 missing += 1
                 continue
-            sample.wc_line_item_ids = list(s.line_item_ids)
+            if s.line_item_ids:  # never clear a stamped list with an empty one
+                sample.wc_line_item_ids = list(s.line_item_ids)
             stamped += 1
     db.commit()
+
+    # Phase 2 — native parent placeholders from the stamp's services. Runs
+    # AFTER the stamp commit and commits per sample so a seeding failure can
+    # never roll back the order stamps and one bad sample never blocks its
+    # siblings (idempotent: re-pushes report 0 created). Stamps without
+    # services (old IS) skip this phase entirely.
+    placeholders_created = 0
+    for o in req.orders:
+        for s in o.samples:
+            if s.services is None:
+                continue
+            sample = db.query(LimsSample).filter_by(sample_id=s.senaite_sample_id).first()
+            if sample is None:
+                continue
+            try:
+                stats = seed_parent_from_services(
+                    db, parent=sample, services=s.services, package=s.package,
+                    source="order_upsert",
+                )
+                db.commit()
+                placeholders_created += stats["created"]
+            except Exception as seed_err:  # noqa: BLE001
+                db.rollback()
+                logger.warning("registry.order_upsert_seed_failed sample_id=%s err=%s",
+                               s.senaite_sample_id, seed_err)
     return S2SOrdersUpsertResponse(upserted=upserted, samples_stamped=stamped,
-                                    samples_missing=missing)
+                                    samples_missing=missing,
+                                    placeholders_created=placeholders_created)
 
 
 # ── Registry debug (admin diagnostic) ─────────────────────────────────

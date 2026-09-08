@@ -451,3 +451,53 @@ def test_sync_rolls_back_session_when_backfill_raises(db_session, monkeypatch):
     svc = db_session.query(AnalysisService).filter_by(
         senaite_id="analysisservice-100").one()
     assert svc.department_id is None  # backfill never ran to completion
+
+
+
+# ── 2026-09-08: profile members must live in their role's department ─────────
+# P-2690: the hm role and its four -PPM services were created under Analytical,
+# so coa_exempt_keywords (department-driven, ruled 2026-08-12) never saw them
+# and the ordered placeholders blocked COA generation. The backfill never
+# clobbers a set department (admin edits survive), so it must at least be LOUD.
+
+
+def _seed_hm_world(db_session, *, member_dept_name):
+    from catalog.departments import backfill_departments, department_id_by_name, HEAVY_METALS_DEPARTMENT
+    from models import AnalysisProfile, AnalysisService, VialRole
+    backfill_departments(db_session)
+    hm_id = department_id_by_name(db_session, HEAVY_METALS_DEPARTMENT)
+    member_id = department_id_by_name(db_session, member_dept_name)
+    db_session.add(VialRole(code="hm", label="Heavy Metals", department_id=hm_id))
+    svc = AnalysisService(title="Lead", keyword="LEAD-PPM", origin="mk1", department_id=member_id)
+    db_session.add(svc)
+    db_session.flush()
+    prof = AnalysisProfile(key="heavy_metals", name="Heavy Metals", is_addon=True,
+                           fulfillment_role="hm")
+    prof.analysis_services.append(svc)
+    db_session.add(prof)
+    db_session.commit()
+    return hm_id, member_id
+
+
+def test_profile_department_mismatches_reports_member_outside_role_department(db_session):
+    from catalog.departments import profile_department_mismatches
+    hm_id, analytical_id = _seed_hm_world(db_session, member_dept_name="Analytical")
+    found = profile_department_mismatches(db_session)
+    assert [(m["profile"], m["keyword"], m["expected_department_id"], m["actual_department_id"])
+            for m in found] == [("heavy_metals", "LEAD-PPM", hm_id, analytical_id)]
+
+
+def test_profile_department_mismatches_empty_when_consistent(db_session):
+    from catalog.departments import profile_department_mismatches
+    _seed_hm_world(db_session, member_dept_name="Heavy Metals")
+    assert profile_department_mismatches(db_session) == []
+
+
+def test_backfill_logs_error_for_profile_department_mismatch(db_session, caplog):
+    import logging
+    from catalog.departments import backfill_departments
+    _seed_hm_world(db_session, member_dept_name="Analytical")
+    with caplog.at_level(logging.ERROR, logger="catalog.departments"):
+        backfill_departments(db_session)  # re-run: idempotent, must not clobber, must shout
+    msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert any("profile_member_department_mismatch" in m and "LEAD-PPM" in m for m in msgs)

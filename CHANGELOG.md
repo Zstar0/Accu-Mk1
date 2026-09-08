@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.15.1 — 2026-09-08
+
+### Fixed
+- Multi-sample orders lost their native parent-tier placeholders for every sample but the last (P-2687/P-2688/P-2689 vs P-2690): the registration-signal background task asked IS for the sample's services before IS had committed the order and returned silently on the 404. The order upsert (`POST /s2s/orders/upsert`), which IS sends after its commit, now carries `services`/`package` on each sample stamp and seeds the placeholders + `catalog_snapshot` itself (second phase after the stamp commit, per-sample commit, never fails the upsert). The registration path stays as an idempotent fallback and warns instead of returning silently.
+- Order upsert no longer clears a stamped `wc_line_item_ids` when a stamp arrives with an empty list.
+- Heavy Metals blocked COA generation on P-2690 ("No verified result yet" for Arsenic/Cadmium/Lead/Mercury) despite the 2026-08-12 ruling that HM never blocks: the `hm` vial role and its four `-PPM` services had been created under **Analytical**, so the department-driven exemption (`coa_exempt_keywords`) never covered them and their `ordered` placeholders read as missing sources. Data correction via the new audited `scripts/fix_heavy_metals_department.py` (dry-run default, CatalogChangeLog row per service); `backfill_departments` now logs `catalog.backfill.profile_member_department_mismatch` at ERROR on every boot for any profile member outside its role's department, so this class of defect can no longer hide. Side effect once corrected: HM classifies as an addon family (not HPLC) in the COA family classifier, which is the documented intent.
+
+### Added
+- `lims_analyses/order_seed.py` — one seed path (`seed_parent_from_services`) shared by the order upsert, the registration fallback, and the new heal script; `find_parents_missing_native_placeholders` finder.
+- `catalog.departments.profile_department_mismatches` (pure read) + boot-time ERROR guard; `scripts/fix_heavy_metals_department.py`.
+- `scripts/heal_missing_placeholders.py` — dry-run/`--apply` convergence heal for parents whose live native vial rows have no parent-tier row (cron-able via `docker exec`).
+- Spec + plan: `docs/superpowers/specs/2026-09-08-order-upsert-placeholder-seed-design.md`, `docs/superpowers/plans/2026-09-08-order-upsert-placeholder-seed.md`.
+
 ## v1.15.0 — 2026-09-01
 
 ### Added
