@@ -21802,9 +21802,20 @@ def s2s_update_lims_sample_shipping(
 # missing registry samples in `samples[]` are reported, not errored — the
 # registry sync may lag the first order push.
 
+# Order upsert seeds native parent placeholders from the stamp's services
+# (2026-09-08 spec: docs/superpowers/specs/2026-09-08-order-upsert-placeholder-seed-design.md).
+# Module-level import so tests can patch `main.seed_parent_from_services`.
+from lims_analyses.order_seed import seed_parent_from_services  # noqa: E402
+
+
 class S2SOrderSampleStamp(BaseModel):
     senaite_sample_id: str
     line_item_ids: list[int] = []
+    # 2026-09-08: per-sample services ride the post-commit upsert so the
+    # parent-tier placeholders seed here instead of racing IS's commit from
+    # the registration signal's callback. Optional for old-IS compatibility.
+    services: Optional[dict] = None
+    package: Optional[str] = None
 
 
 class S2SOrderCustomer(BaseModel):
@@ -21833,6 +21844,7 @@ class S2SOrdersUpsertResponse(BaseModel):
     upserted: int
     samples_stamped: int
     samples_missing: int
+    placeholders_created: int = 0
 
 
 @app.post("/s2s/orders/upsert", response_model=S2SOrdersUpsertResponse)
@@ -21866,11 +21878,38 @@ def s2s_upsert_orders(
             if sample is None:
                 missing += 1
                 continue
-            sample.wc_line_item_ids = list(s.line_item_ids)
+            if s.line_item_ids:  # never clear a stamped list with an empty one
+                sample.wc_line_item_ids = list(s.line_item_ids)
             stamped += 1
     db.commit()
+
+    # Phase 2 — native parent placeholders from the stamp's services. Runs
+    # AFTER the stamp commit and commits per sample so a seeding failure can
+    # never roll back the order stamps and one bad sample never blocks its
+    # siblings (idempotent: re-pushes report 0 created). Stamps without
+    # services (old IS) skip this phase entirely.
+    placeholders_created = 0
+    for o in req.orders:
+        for s in o.samples:
+            if s.services is None:
+                continue
+            sample = db.query(LimsSample).filter_by(sample_id=s.senaite_sample_id).first()
+            if sample is None:
+                continue
+            try:
+                stats = seed_parent_from_services(
+                    db, parent=sample, services=s.services, package=s.package,
+                    source="order_upsert",
+                )
+                db.commit()
+                placeholders_created += stats["created"]
+            except Exception as seed_err:  # noqa: BLE001
+                db.rollback()
+                logger.warning("registry.order_upsert_seed_failed sample_id=%s err=%s",
+                               s.senaite_sample_id, seed_err)
     return S2SOrdersUpsertResponse(upserted=upserted, samples_stamped=stamped,
-                                    samples_missing=missing)
+                                    samples_missing=missing,
+                                    placeholders_created=placeholders_created)
 
 
 # ── Registry debug (admin diagnostic) ─────────────────────────────────

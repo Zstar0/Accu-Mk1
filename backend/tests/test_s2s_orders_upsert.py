@@ -102,6 +102,104 @@ def test_upsert_stamps_line_items_and_reports_missing(client, db_session):
     }]}
     with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}):
         r = client.post(URL, json=body, headers=HDR)
-    assert r.json() == {"upserted": 1, "samples_stamped": 1, "samples_missing": 1}
+    assert r.json() == {"upserted": 1, "samples_stamped": 1, "samples_missing": 1,
+                        "placeholders_created": 0}  # 2026-09-08: no services on the stamps
     row = db_session.query(LimsSample).filter_by(sample_id="P-2289").one()
     assert row.wc_line_item_ids == [13049, 13052]
+
+
+
+# ── 2026-09-08: order upsert seeds native parent placeholders from stamps ──
+from unittest.mock import patch as _patch  # noqa: E402
+
+from models import AnalysisProfile, AnalysisService, LimsAnalysis  # noqa: E402
+from lims_analyses.parent_placeholders import PROVENANCE_ORDERED  # noqa: E402
+
+
+def _native_pcr_profile(db):
+    svc = AnalysisService(title="Sterility PCR", keyword="STERILITY-PCR", origin="mk1")
+    db.add(svc)
+    db.commit()
+    prof = AnalysisProfile(key="sterility_pcr", name="Sterility PCR", is_addon=True,
+                           coa_archetype="limit_table")
+    prof.analysis_services.append(svc)
+    db.add(prof)
+    db.commit()
+    return prof
+
+
+def _order_with_services(sample_id="P-8001", services=None, line_item_ids=None):
+    stamp = {"senaite_sample_id": sample_id, "line_item_ids": line_item_ids or []}
+    if services is not None:
+        stamp["services"] = services
+        stamp["package"] = None
+    return {"orders": [{"wp_order_id": 8001, "order_number": "WP-8001",
+                        "status": "order-submitted", "samples": [stamp]}]}
+
+
+def _ordered_rows(db, parent_id):
+    return db.query(LimsAnalysis).filter_by(
+        lims_sample_pk=parent_id, lims_sub_sample_pk=None, provenance=PROVENANCE_ORDERED).all()
+
+
+def test_stamp_with_services_seeds_placeholders(client, db_session):
+    _native_pcr_profile(db_session)
+    parent = LimsSample(sample_id="P-8001", sample_type="x", status="received")
+    db_session.add(parent)
+    db_session.commit()
+    with _patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}),          _patch("lims_analyses.order_seed.compute_catalog_snapshot", return_value={"profiles": []}):
+        r = client.post(URL, json=_order_with_services(services={"sterility_pcr": True}), headers=HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["samples_stamped"] == 1
+    assert body["placeholders_created"] == 1
+    assert [x.keyword for x in _ordered_rows(db_session, parent.id)] == ["STERILITY-PCR"]
+
+
+def test_re_upsert_is_idempotent(client, db_session):
+    _native_pcr_profile(db_session)
+    db_session.add(LimsSample(sample_id="P-8001", sample_type="x", status="received"))
+    db_session.commit()
+    body = _order_with_services(services={"sterility_pcr": True})
+    with _patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}),          _patch("lims_analyses.order_seed.compute_catalog_snapshot", return_value={}):
+        client.post(URL, json=body, headers=HDR)
+        r = client.post(URL, json=body, headers=HDR)
+    assert r.json()["placeholders_created"] == 0
+    parent = db_session.query(LimsSample).filter_by(sample_id="P-8001").one()
+    assert len(_ordered_rows(db_session, parent.id)) == 1
+
+
+def test_stamp_without_services_seeds_nothing(client, db_session):
+    _native_pcr_profile(db_session)
+    parent = LimsSample(sample_id="P-8001", sample_type="x", status="received")
+    db_session.add(parent)
+    db_session.commit()
+    with _patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}):
+        r = client.post(URL, json=_order_with_services(), headers=HDR)
+    assert r.json()["placeholders_created"] == 0
+    assert _ordered_rows(db_session, parent.id) == []
+
+
+def test_empty_line_item_ids_does_not_clear_existing(client, db_session):
+    parent = LimsSample(sample_id="P-8001", sample_type="x", status="received",
+                        wc_line_item_ids=[41, 42])
+    db_session.add(parent)
+    db_session.commit()
+    with _patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}):
+        client.post(URL, json=_order_with_services(), headers=HDR)
+    db_session.refresh(parent)
+    assert parent.wc_line_item_ids == [41, 42]
+
+
+def test_seed_failure_does_not_fail_upsert(client, db_session):
+    parent = LimsSample(sample_id="P-8001", sample_type="x", status="received")
+    db_session.add(parent)
+    db_session.commit()
+    with _patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}),          _patch("main.seed_parent_from_services", side_effect=RuntimeError("boom")):
+        r = client.post(URL, json=_order_with_services(services={"sterility_pcr": True},
+                                                       line_item_ids=[7]), headers=HDR)
+    assert r.status_code == 200
+    assert r.json()["samples_stamped"] == 1
+    assert r.json()["placeholders_created"] == 0
+    db_session.refresh(parent)
+    assert parent.wc_line_item_ids == [7]
