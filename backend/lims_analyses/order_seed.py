@@ -15,7 +15,6 @@ from typing import List, Optional, Set, Tuple
 
 from sqlalchemy import select
 
-from catalog.snapshot import compute_catalog_snapshot
 from lims_analyses.parent_placeholders import PROVENANCE_ORDERED, seed_parent_placeholders
 from models import AnalysisService, LimsAnalysis, LimsSample, LimsSubSample
 
@@ -34,6 +33,9 @@ def seed_parent_from_services(db, *, parent: LimsSample, services: Optional[dict
     "heal") so the three callers stay distinguishable in prod logs.
     """
     from sub_samples.service import _apply_variance_override  # local: avoids the import cycle
+    # Resolved at call time (not bound at import) so test/ops patches on
+    # catalog.snapshot.compute_catalog_snapshot reach every caller of this seed.
+    from catalog.snapshot import compute_catalog_snapshot
 
     raw = _apply_variance_override(
         parent.sample_id, {"services": dict(services or {}), "package": package}

@@ -147,7 +147,7 @@ def test_stamp_with_services_seeds_placeholders(client, db_session):
     parent = LimsSample(sample_id="P-8001", sample_type="x", status="received")
     db_session.add(parent)
     db_session.commit()
-    with _patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}),          _patch("lims_analyses.order_seed.compute_catalog_snapshot", return_value={"profiles": []}):
+    with _patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}),          _patch("catalog.snapshot.compute_catalog_snapshot", return_value={"profiles": []}):
         r = client.post(URL, json=_order_with_services(services={"sterility_pcr": True}), headers=HDR)
     assert r.status_code == 200, r.text
     body = r.json()
@@ -161,7 +161,7 @@ def test_re_upsert_is_idempotent(client, db_session):
     db_session.add(LimsSample(sample_id="P-8001", sample_type="x", status="received"))
     db_session.commit()
     body = _order_with_services(services={"sterility_pcr": True})
-    with _patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}),          _patch("lims_analyses.order_seed.compute_catalog_snapshot", return_value={}):
+    with _patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}),          _patch("catalog.snapshot.compute_catalog_snapshot", return_value={}):
         client.post(URL, json=body, headers=HDR)
         r = client.post(URL, json=body, headers=HDR)
     assert r.json()["placeholders_created"] == 0

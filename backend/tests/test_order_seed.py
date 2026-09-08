@@ -72,7 +72,7 @@ def _ordered_rows(db, parent):
 
 
 def test_seeds_one_ordered_row_per_native_member(db, parent, pcr_profile):
-    with patch("lims_analyses.order_seed.compute_catalog_snapshot", return_value={"profiles": []}):
+    with patch("catalog.snapshot.compute_catalog_snapshot", return_value={"profiles": []}):
         stats = seed_parent_from_services(
             db, parent=parent, services={"sterility_pcr": True}, package=None, source="test")
     db.commit()
@@ -82,7 +82,7 @@ def test_seeds_one_ordered_row_per_native_member(db, parent, pcr_profile):
 
 
 def test_second_call_is_idempotent(db, parent, pcr_profile):
-    with patch("lims_analyses.order_seed.compute_catalog_snapshot", return_value={"profiles": []}):
+    with patch("catalog.snapshot.compute_catalog_snapshot", return_value={"profiles": []}):
         seed_parent_from_services(db, parent=parent, services={"sterility_pcr": True}, package=None, source="test")
         db.commit()
         stats = seed_parent_from_services(db, parent=parent, services={"sterility_pcr": True}, package=None, source="test")
@@ -92,7 +92,7 @@ def test_second_call_is_idempotent(db, parent, pcr_profile):
 
 
 def test_snapshot_stamped_once_only(db, parent, pcr_profile):
-    with patch("lims_analyses.order_seed.compute_catalog_snapshot", return_value={"profiles": ["first"]}) as snap:
+    with patch("catalog.snapshot.compute_catalog_snapshot", return_value={"profiles": ["first"]}) as snap:
         seed_parent_from_services(db, parent=parent, services={"sterility_pcr": True}, package=None, source="test")
         db.commit()
         assert parent.catalog_snapshot == {"profiles": ["first"]}
@@ -104,7 +104,7 @@ def test_snapshot_stamped_once_only(db, parent, pcr_profile):
 
 
 def test_snapshot_failure_keeps_seeded_rows(db, parent, pcr_profile):
-    with patch("lims_analyses.order_seed.compute_catalog_snapshot", side_effect=RuntimeError("bad catalog")):
+    with patch("catalog.snapshot.compute_catalog_snapshot", side_effect=RuntimeError("bad catalog")):
         stats = seed_parent_from_services(
             db, parent=parent, services={"sterility_pcr": True}, package=None, source="test")
     db.commit()
@@ -144,7 +144,7 @@ def test_finder_reports_parent_with_native_vial_row_and_no_parent_row(db, parent
 def test_finder_ignores_parent_once_placeholder_exists(db, parent, pcr_profile):
     svc = pcr_profile.analysis_services[0]
     _vial_row(db, _vial(db, parent, 5), svc)
-    with patch("lims_analyses.order_seed.compute_catalog_snapshot", return_value={}):
+    with patch("catalog.snapshot.compute_catalog_snapshot", return_value={}):
         seed_parent_from_services(db, parent=parent, services={"sterility_pcr": True}, package=None, source="test")
     db.commit()
     assert find_parents_missing_native_placeholders(db) == []
