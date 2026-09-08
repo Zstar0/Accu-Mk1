@@ -105,6 +105,41 @@ def department_id_for_role(db: Session, role_code: str) -> Optional[int]:
     return row.department_id if row is not None else None
 
 
+def profile_department_mismatches(db: Session) -> list[dict]:
+    """Members of a role-fulfilled profile that live outside their role's
+    department. Pure read.
+
+    Why (2026-09-08, P-2690): the hm role and its -PPM services were created
+    under Analytical, so the department-driven COA exemption (RULED
+    2026-08-12: Heavy Metals never blocks) never covered them and their
+    ordered placeholders blocked COA generation. backfill_departments never
+    clobbers a set department, so the invariant is enforced by being LOUD —
+    see the ERROR at the end of backfill_departments — and corrected by
+    scripts/fix_heavy_metals_department.py (or the catalog admin).
+    """
+    from models import AnalysisProfile, VialRole
+
+    roles = {r.code: r.department_id for r in db.query(VialRole).all()}
+    out: list[dict] = []
+    for prof in db.query(AnalysisProfile).filter(
+        AnalysisProfile.fulfillment_role.isnot(None)
+    ).order_by(AnalysisProfile.key).all():
+        expected = roles.get(prof.fulfillment_role)
+        if expected is None:
+            continue  # unknown role or the deliberately department-less 'xtra'
+        for svc in prof.analysis_services:
+            if svc.department_id != expected:
+                out.append({
+                    "profile": prof.key,
+                    "role": prof.fulfillment_role,
+                    "keyword": svc.keyword,
+                    "service_id": svc.id,
+                    "expected_department_id": expected,
+                    "actual_department_id": svc.department_id,
+                })
+    return out
+
+
 def backfill_departments(db: Session) -> None:
     """Idempotently seed departments and assign department_id from live groups.
 
@@ -228,6 +263,18 @@ def backfill_departments(db: Session) -> None:
             "ungrouped keyword prefixes.", ANALYTICAL_DEPARTMENT,
         )
 
+    # Defense in depth (2026-09-08): a profile member outside its role's
+    # department is invisible to every department-driven gate (COA exemption,
+    # worksheet lanes, HPLC allow-list). Never auto-corrected here (admin
+    # edits survive) — shouted so it cannot hide. Fix with
+    # scripts/fix_heavy_metals_department.py or the catalog admin.
+    for m in profile_department_mismatches(db):
+        log.error(
+            "catalog.backfill.profile_member_department_mismatch profile=%s role=%s "
+            "keyword=%s service_id=%s expected_department_id=%s actual_department_id=%s",
+            m["profile"], m["role"], m["keyword"], m["service_id"],
+            m["expected_department_id"], m["actual_department_id"],
+        )
 
 def department_totality_report(db: Session) -> dict:
     """Read-only drift snapshot: how complete is department assignment across
