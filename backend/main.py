@@ -21278,6 +21278,17 @@ async def complete_worksheet(
     ws.status = "completed"
     ws.completed_by = current_user.id
     ws.completed_at = datetime.utcnow()
+    # Worksheet→state (2026-09-08): rows the worksheet claimed (`assigned`) but
+    # never submitted go back to `unassigned` + analyst cleared, like per-item
+    # removal. Best-effort: a release failure must not block completion.
+    from lims_analyses.worksheet_analyst import release_for_worksheet
+    import logging as _logging
+    try:
+        release_for_worksheet(db, worksheet=ws, acting_user_id=getattr(current_user, "id", None))
+    except Exception:
+        _logging.getLogger(__name__).exception(
+            "worksheet_release_failed worksheet_id=%s", worksheet_id
+        )
     db.commit()
     return {"status": "completed", "completed_by": current_user.email, "completed_at": ws.completed_at.isoformat()}
 
@@ -21328,6 +21339,7 @@ async def reassign_worksheet_item_by_id(
             db, sample_uid=sample_uid, service_group_id=gid, department_id=dept_id,
             acting_user_id=acting_id, worksheet_id=worksheet_id,
             worksheet_title=src_ws_title,
+            reset_state=False,  # moving worksheets keeps the `assigned` claim
         )
         stamp_for_item(
             db, sample_uid=sample_uid, service_group_id=gid, department_id=dept_id,

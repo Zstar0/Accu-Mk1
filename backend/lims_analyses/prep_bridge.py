@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from models import AnalysisService, HPLCAnalysis, LimsAnalysis, LimsSample, LimsSubSample, Peptide
 from lims_analyses.service import apply_transition
+from lims_analyses.state_machine import RESULT_PENDING_STATES
 
 logger = logging.getLogger(__name__)
 
@@ -256,7 +257,7 @@ def bridge_blend_aggregates(
     # Completeness: at least one component pair, and every per-component purity &
     # quantity row is filled (no longer 'unassigned').
     comp_rows = pur_rows + qty_rows
-    if not comp_rows or any(r.review_state == "unassigned" for r in comp_rows):
+    if not comp_rows or any(r.review_state in RESULT_PENDING_STATES for r in comp_rows):
         return []
 
     total_qty = sum(c["qty"] for c in comps.values() if c.get("qty") is not None)
@@ -271,7 +272,7 @@ def bridge_blend_aggregates(
     # Processor on aggregate rows = the acting user: an aggregate is computed
     # from multiple component writes (possibly different analyses/processors),
     # so there is no single source HPLCAnalysis to carry attribution from.
-    if pept_total is not None and pept_total.review_state == "unassigned":
+    if pept_total is not None and pept_total.review_state in RESULT_PENDING_STATES:
         val = _fmt_num(total_qty)
         if val is not None:
             apply_transition(db, analysis_id=pept_total.id, kind="submit", result_value=val,
@@ -279,7 +280,7 @@ def bridge_blend_aggregates(
                              user_id=user_id, processed_by_user_id=user_id)
             written.append(pept_total.id)
     # Mass-weighted blend purity → BLEND-PUR (needs Σqty > 0 to weight)
-    if blend_pur.review_state == "unassigned" and total_qty > 0:
+    if blend_pur.review_state in RESULT_PENDING_STATES and total_qty > 0:
         val = _fmt_num(weighted / total_qty)
         if val is not None:
             apply_transition(db, analysis_id=blend_pur.id, kind="submit", result_value=val,
@@ -306,7 +307,7 @@ def stamp_prep_assignment(
 
     Fill-only-NULL: a value already on a row (bench overlay, earlier prep) is
     never overwritten. Micro rows (no HPLC category per _category) and rows
-    past 'unassigned' are untouched. Audit rides set_method_instrument's
+    past result-pending (unassigned/assigned) are untouched. Audit rides set_method_instrument's
     existing 'auto' transition. Returns the ids of rows that changed.
     """
     if instrument_id is None and method_id is None:
@@ -314,7 +315,7 @@ def stamp_prep_assignment(
     rows = db.execute(
         select(LimsAnalysis).where(
             LimsAnalysis.lims_sub_sample_pk == lims_sub_sample_pk,
-            LimsAnalysis.review_state == "unassigned",
+            LimsAnalysis.review_state.in_(RESULT_PENDING_STATES),
         )
     ).scalars().all()
 
@@ -392,14 +393,14 @@ def bridge_prep_result_to_vial(
     Write `analysis`'s results onto the vial's unassigned HPLC lims_analyses
     rows and submit them. Returns submitted analysis ids.
 
-    Guards: only 'unassigned' rows; peptide-specific identity rows (ID_<PEPTIDE>)
+    Guards: only result-pending rows (unassigned/assigned); peptide-specific identity rows (ID_<PEPTIDE>)
     must match `peptide`; a result category with 0 or 2+ matching rows is skipped
     (never guess); rows with no derivable value are skipped.
     """
     rows = db.execute(
         select(LimsAnalysis).where(
             LimsAnalysis.lims_sub_sample_pk == lims_sub_sample_pk,
-            LimsAnalysis.review_state == "unassigned",
+            LimsAnalysis.review_state.in_(RESULT_PENDING_STATES),
         )
     ).scalars().all()
 
