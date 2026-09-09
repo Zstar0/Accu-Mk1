@@ -12900,6 +12900,17 @@ async def publish_sample_coa(
             _logger.warning("delivered_at stamp failed for %s", sample_id, exc_info=True)
 
     # 3 & 4. Write verification code and transition SENAITE workflow — guaranteed
+    #
+    # Authority flip (spec §4.4/§5): whatever SENAITE does here — accept,
+    # silently refuse, or fail transport-wise — the NATIVE publish still has
+    # to run, because the COA is already live on IS/WordPress. So the block
+    # below no longer raises out of the function: it records SENAITE's last
+    # known state and defers its HTTPException, and the unconditional
+    # `_after_publish_native` call after it commits the native verb (and the
+    # retry row) before the deferred error is re-raised. The user-facing
+    # responses are byte-identical; only the ordering changed.
+    _senaite_actual_state = ""
+    _deferred_error: Optional[HTTPException] = None
     if senaite_uid:
         try:
             async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
@@ -12967,6 +12978,7 @@ async def publish_sample_coa(
                 #     transition is accepted and the COA is live.
                 items = transition_resp.json().get("items", [])
                 actual_state = items[0].get("review_state", "") if items else ""
+                _senaite_actual_state = actual_state
                 accepted_states = {
                     "published",
                     "to_be_verified",
@@ -12988,6 +13000,7 @@ async def publish_sample_coa(
                         verify_items = verify_resp.json().get("items", [])
                         if verify_items:
                             actual_state = verify_items[0].get("review_state", "")
+                    _senaite_actual_state = actual_state
                     if actual_state in pre_publish_states:
                         warning = (
                             f"Warning: Sample should not typically be published "
@@ -13026,23 +13039,29 @@ async def publish_sample_coa(
                     await run_in_threadpool(
                         _mark_shadows_published_bg, sample_id=sample_id
                     )
-                # Authority flip: native publish runs regardless of what
-                # SENAITE accepted; a refusal is queued for retry (spec §5).
-                from fastapi.concurrency import run_in_threadpool as _rit
-                await _rit(
-                    _after_publish_native, db,
-                    sample_id=sample_id, pre_publish_status=_pre_publish_status,
-                    actor_user_id=getattr(current_user, "id", None),
-                    senaite_actual_state=actual_state,
-                )
-        except HTTPException:
-            raise
+        except HTTPException as e:
+            _deferred_error = e
         except Exception as e:
             # COA is published in our system — surface SENAITE failure clearly
-            raise HTTPException(
+            _deferred_error = HTTPException(
                 status_code=502,
                 detail=f"COA published in system but SENAITE transition failed: {e}",
             )
+
+    # Authority flip (spec §4.4/§5): the native publish verb is the user's own
+    # intent, so it runs on EVERY SENAITE outcome — including the two 502
+    # paths above and a sample with no `senaite_uid` at all. A SENAITE state
+    # that never read back as 'published' becomes a `publish` retry row inside
+    # the helper. It flushes, commits and never raises.
+    from fastapi.concurrency import run_in_threadpool as _rit
+    await _rit(
+        _after_publish_native, db,
+        sample_id=sample_id, pre_publish_status=_pre_publish_status,
+        actor_user_id=getattr(current_user, "id", None),
+        senaite_actual_state=_senaite_actual_state,
+    )
+    if _deferred_error is not None:
+        raise _deferred_error
 
     return SampleCOAActionResponse(
         success=True,
