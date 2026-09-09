@@ -2156,7 +2156,8 @@ class LimsWorkflowShadowEvaluation(Base):
     """
     __tablename__ = "lims_workflow_shadow_evaluations"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     lims_sample_pk: Mapped[int] = mapped_column(
         Integer, ForeignKey("lims_samples.id", ondelete="CASCADE"), nullable=False)
     evaluated_at: Mapped[datetime] = mapped_column(
