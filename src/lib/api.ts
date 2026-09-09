@@ -6167,6 +6167,7 @@ export interface ThroughputDay {
   ster: number // sterility PCR
   endo: number // endotoxin LAL
   bacw: number // Bac Water panel (once per sample)
+  hm: number // heavy-metals panel (once per sample)
   other: number // anything else, per keyword
   tests: number
   vials: number // vials received (native check-in, Jun 2026+)

@@ -26,6 +26,7 @@ export type SumKey =
   | 'ster'
   | 'endo'
   | 'bacw'
+  | 'hm'
   | 'other'
   | 'tests'
   | 'vials'
@@ -43,6 +44,7 @@ const SUM_KEYS: SumKey[] = [
   'ster',
   'endo',
   'bacw',
+  'hm',
   'other',
   'tests',
   'vials',

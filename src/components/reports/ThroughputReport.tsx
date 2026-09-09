@@ -47,6 +47,7 @@ const FAMILY_COLORS: Record<FamilyKey, string> = {
   ster: '#d95926',
   endo: '#9085e9',
   bacw: '#c98500',
+  hm: '#f472b6', // not in the CVD-validated set; distinct hue + luminance from the four above
   other: '#6b7280',
 }
 const INSTRUMENT_RAMP = ['#1FA3BE', '#125E70', '#79BFCF', '#0b3a45']
@@ -56,12 +57,13 @@ const TICK = '#9ca3af'
 const INTAKE = '#9ca3af'
 const ACCENT = '#1FA3BE'
 
-type FamilyKey = 'hplc' | 'ster' | 'endo' | 'bacw' | 'other'
+type FamilyKey = 'hplc' | 'ster' | 'endo' | 'bacw' | 'hm' | 'other'
 const FAMILIES: { k: FamilyKey; name: string }[] = [
   { k: 'hplc', name: 'HPLC panel' },
-  { k: 'ster', name: 'Sterility (PCR)' },
-  { k: 'endo', name: 'Endotoxin (LAL)' },
+  { k: 'ster', name: 'Sterility' },
+  { k: 'endo', name: 'Endotoxin' },
   { k: 'bacw', name: 'Bac Water panel' },
+  { k: 'hm', name: 'Heavy metals' },
   { k: 'other', name: 'Other' },
 ]
 
@@ -602,11 +604,11 @@ function AttachChart({ months }: { months: MonthAgg[] }) {
                 title: `${String(d.label)}${d.full ? '' : ' (to date)'}`,
                 rows: [
                   {
-                    name: 'Sterility (PCR)',
+                    name: 'Sterility',
                     value: `${f1(Number(d.ster_pct))}%`,
                   },
                   {
-                    name: 'Endotoxin (LAL)',
+                    name: 'Endotoxin',
                     value: `${f1(Number(d.endo_pct))}%`,
                   },
                   {
@@ -672,6 +674,7 @@ function MonthlyTable({
       ster: a.ster + m.ster,
       endo: a.endo + m.endo,
       bacw: a.bacw + m.bacw,
+      hm: a.hm + m.hm,
       vials: a.vials + (m.m >= notes.vials_from ? m.vials : 0),
       bench_vials: a.bench_vials + m.bench_vials,
       fp: a.fp + m.fp,
@@ -686,6 +689,7 @@ function MonthlyTable({
       ster: 0,
       endo: 0,
       bacw: 0,
+      hm: 0,
       vials: 0,
       bench_vials: 0,
       fp: 0,
@@ -703,6 +707,7 @@ function MonthlyTable({
     'Sterility',
     'Endotoxin',
     'Bac Water',
+    'Heavy metals',
     'Ster attach',
     'Vials in',
     'HPLC vials run',
@@ -743,6 +748,7 @@ function MonthlyTable({
               <td className={TD}>{fmt(m.ster)}</td>
               <td className={TD}>{fmt(m.endo)}</td>
               <td className={TD}>{fmt(m.bacw)}</td>
+              <td className={TD}>{fmt(m.hm)}</td>
               <td className={TD}>{f1(m.ster_pct)}%</td>
               <td className={TD}>
                 {m.m < notes.vials_from ? NA : fmt(m.vials)}
@@ -766,6 +772,7 @@ function MonthlyTable({
             <td className={TD}>{fmt(tot.ster)}</td>
             <td className={TD}>{fmt(tot.endo)}</td>
             <td className={TD}>{fmt(tot.bacw)}</td>
+            <td className={TD}>{fmt(tot.hm)}</td>
             <td className={TD}>{f1(pct(tot.ster, tot.samples))}%</td>
             <td className={TD}>{fmt(tot.vials)}</td>
             <td className={TD}>{fmt(tot.bench_vials)}</td>
@@ -890,8 +897,9 @@ export function ThroughputReport() {
 
 function ReportBody({ data, range }: { data: Report; range: RangeKey }) {
   const days = data.days
+  // The optional families only take a legend slot when the data has them.
   const present: FamilyKey[] = FAMILIES.map(f => f.k).filter(k =>
-    k === 'other' ? days.some(d => d.other > 0) : true
+    k === 'other' || k === 'hm' ? days.some(d => d[k] > 0) : true
   )
   const legend = FAMILIES.filter(f => present.includes(f.k)).map(f => ({
     name: f.name,
@@ -959,7 +967,7 @@ function ReportBody({ data, range }: { data: Report; range: RangeKey }) {
           label="Add-on attach rate"
           value={f1(kAttach)}
           unit="%"
-          sub={`of samples ordered sterility PCR · endotoxin ${f1(pct(sumKey(last30, 'endo'), sumKey(last30, 'samples')))}%`}
+          sub={`of samples ordered sterility · endotoxin ${f1(pct(sumKey(last30, 'endo'), sumKey(last30, 'samples')))}%`}
           delta={pctChange(kAttach, pAttach)}
           neutral
         />
@@ -983,7 +991,7 @@ function ReportBody({ data, range }: { data: Report; range: RangeKey }) {
 
       <Section
         title="Tests received per day, by type"
-        sub="Each bar is one calendar day (lab time). A test is one HPLC panel, one sterility PCR, one endotoxin LAL, or one Bac Water panel ordered on a sample that arrived that day. Weekends are shaded; holidays are ticked. Follows the range selector."
+        sub="Each bar is one calendar day (lab time). A test is one HPLC panel, one sterility test (PCR or USP 71), one endotoxin test, one Bac Water panel or one heavy-metals panel ordered on a sample that arrived that day. Weekends are shaded; holidays are ticked. Follows the range selector."
       >
         <Legend items={legend} />
         <div className={CHART}>
@@ -1097,12 +1105,15 @@ function ReportBody({ data, range }: { data: Report; range: RangeKey }) {
             <b className="text-foreground">Test</b> = one analysis family
             ordered on a sample: the HPLC panel (identity + purity + quantity,
             incl. blend analytes — counted once per sample no matter how many
-            vials or analytes), Sterility (STER-PCR), Endotoxin (ENDO-LAL), and
-            the Bac Water panel (benzyl alcohol assay + pH + fill volume —
-            counted once per sample). Anything else (e.g. KF moisture) appears
-            as &quot;Other&quot;. Source: <code>lims_analyses</code>{' '}
-            de-duplicated on (sample, keyword) across the SENAITE mirror and
-            native rows, so pre-June samples are included.
+            vials or analytes), Sterility (STER-PCR, STERILITY-PCR or
+            STERILITY-USP71), Endotoxin (ENDO-LAL or ENDOTOXIN-USP85LAL), the
+            Heavy metals panel (lead, cadmium, mercury, arsenic — counted once
+            per sample), and the Bac Water panel (benzyl alcohol assay + pH +
+            fill volume — counted once per sample). Anything else (e.g. KF
+            moisture) appears as &quot;Other&quot;. Source:{' '}
+            <code>lims_analyses</code> de-duplicated on (sample, keyword) across
+            the SENAITE mirror and native rows, so pre-June samples are
+            included.
           </li>
           <li>
             <b className="text-foreground">Day</b> = the day the sample was

@@ -49,6 +49,7 @@ function day(d: string, over: Partial<ThroughputDay> = {}): ThroughputDay {
     ster: 0,
     endo: 0,
     bacw: 0,
+    hm: 0,
     other: 0,
     tests: 0,
     vials: 0,
@@ -209,6 +210,19 @@ describe('ThroughputReport', () => {
     expect(labels.some(t => t.startsWith('Aug 2026'))).toBe(true)
     expect(labels.some(t => t.startsWith('Sep 2026(to date)'))).toBe(true)
     expect(labels.some(t => t.startsWith('Total'))).toBe(true)
+  })
+
+  it('shows the Heavy metals family in the legend only when the data has it', async () => {
+    const withHm = report()
+    const base = withHm.days[10]
+    if (!base) throw new Error('fixture has no day 10')
+    withHm.days[10] = { ...base, hm: 1, tests: base.tests + 1 }
+    mockGet.mockResolvedValue(withHm)
+    renderPage()
+    await waitFor(() =>
+      expect(screen.getAllByText('Heavy metals').length).toBeGreaterThan(0)
+    )
+    expect(screen.queryByText('Other')).not.toBeInTheDocument()
   })
 
   it('shows the error state when the request fails', async () => {

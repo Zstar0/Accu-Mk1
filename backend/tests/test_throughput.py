@@ -84,10 +84,50 @@ def day(result, iso):
         ("PH-DETERM", None, "bacw"),
         ("FILL-NET-CONTENT", None, "bacw"),
         ("KF", "Chemistry", "other"),
+        # catalog-arc keyword forms (live in prod since 2026-09-01)
+        ("STERILITY-PCR", "Sterility", "ster"),
+        ("STERILITY-USP71", "Sterility", "ster"),
+        ("ENDOTOXIN-USP85LAL", "Toxicology", "endo"),
+        ("ENDOTOXIN-USP85LAL", None, "endo"),
+        ("LEAD-PPM", "Heavy Metals", "hm"),
+        ("CADMIUM-PPM", None, "hm"),
+        ("MECURY-PPM", None, "hm"),  # prod typo, keyword-classified on purpose
+        ("ARSENIC-PPM", None, "hm"),
+        ("MOISTURE-KF", "Moisture", "other"),
+        ("FENTANYL", None, "other"),
     ],
 )
 def test_classify_keyword(keyword, category, expected):
     assert classify_keyword(keyword, category) == expected
+
+
+def test_heavy_metals_panel_counts_once_per_sample():
+    r = build(
+        samples=[sample(1, "P-1", datetime(2026, 7, 1, 18, 0))],
+        analyses=[
+            AnalysisIn(1, "LEAD-PPM"),
+            AnalysisIn(1, "CADMIUM-PPM"),
+            AnalysisIn(1, "MECURY-PPM"),
+            AnalysisIn(1, "ARSENIC-PPM"),
+            AnalysisIn(1, "HPLC-PUR"),
+        ],
+    )
+    d = day(r, "2026-07-01")
+    assert d["hm"] == 1 and d["hplc"] == 1 and d["other"] == 0
+    assert d["tests"] == 2
+
+
+def test_new_sterility_and_endotoxin_keywords_join_their_families():
+    r = build(
+        samples=[sample(1, "P-1", datetime(2026, 7, 1, 18, 0))],
+        analyses=[
+            AnalysisIn(1, "STERILITY-PCR"),
+            AnalysisIn(1, "STERILITY-USP71"),  # same family, still one sterility test
+            AnalysisIn(1, "ENDOTOXIN-USP85LAL"),
+        ],
+    )
+    d = day(r, "2026-07-01")
+    assert (d["ster"], d["endo"], d["other"], d["tests"]) == (1, 1, 0, 2)
 
 
 # ---------------------------------------------------------------- lab_day

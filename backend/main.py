@@ -9958,6 +9958,7 @@ class ThroughputDayOut(BaseModel):
     ster: int                   # STER-PCR
     endo: int                   # ENDO-LAL
     bacw: int                   # Bac Water panel (once per sample)
+    hm: int                     # heavy-metals panel (once per sample)
     other: int                  # anything else, per keyword
     tests: int
     vials: int                  # vials received (native check-in, Jun 2026+)

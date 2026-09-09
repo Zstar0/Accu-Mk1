@@ -30,6 +30,7 @@ function day(d: string, over: Partial<ThroughputDay> = {}): ThroughputDay {
     ster: 0,
     endo: 0,
     bacw: 0,
+    hm: 0,
     other: 0,
     tests: 0,
     vials: 0,

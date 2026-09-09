@@ -9,8 +9,11 @@ re-derive):
 
 * **test** — one analysis *family* on a sample: the HPLC panel (identity +
   purity + quantity incl. blend / ``PUR_`` / ``QTY_`` analytes, once per
-  sample), ``STER-PCR``, ``ENDO-LAL``, the Bac Water panel (benzyl alcohol +
-  pH + fill volume, once per sample). Anything else is "other", per keyword.
+  sample), sterility (legacy ``STER-PCR`` or the catalog-arc ``STERILITY-PCR``
+  / ``STERILITY-USP71``), endotoxin (``ENDO-LAL`` / ``ENDOTOXIN-USP85LAL``),
+  the Bac Water panel (benzyl alcohol + pH + fill volume, once per sample) and
+  the heavy-metals panel (``LEAD-PPM`` … ``ARSENIC-PPM``, once per sample).
+  Anything else is "other", per keyword (e.g. ``MOISTURE-KF``, ``FENTANYL``).
   Analyses are de-duplicated on (sample, keyword) across ``shadow`` and
   ``canonical`` provenance so pre-June samples count.
 * **day** — ``lims_samples.date_received`` (naive UTC) in the lab timezone.
@@ -38,6 +41,17 @@ HPLC_CATEGORIES = frozenset({"HPLC", "Peptide Identity", "Peptide Analysis"})
 HPLC_KEYWORDS = frozenset({"HPLC-PUR", "PEPT-Total", "HPLC-ID", "BLEND-PUR"})
 HPLC_PREFIXES = ("ID_", "ANALYTE-", "PUR_", "QTY_")
 BACW_KEYWORDS = frozenset({"Benzyl_Alcohol_Assay", "PH-DETERM", "FILL-NET-CONTENT"})
+# Legacy SENAITE keyword + the catalog-arc forms live in prod since 2026-09-01.
+STER_KEYWORDS = frozenset({"STER-PCR", "STERILITY-PCR", "STERILITY-USP71"})
+STER_CATEGORY = "Sterility"
+ENDO_KEYWORDS = frozenset({"ENDO-LAL", "ENDOTOXIN-USP85LAL"})
+ENDO_PREFIX = "ENDOTOXIN"
+# Heavy-metals panel: classified by keyword suffix on purpose — the category is
+# NULL on several prod rows (see the hm-under-Analytical department state).
+HM_CATEGORY = "Heavy Metals"
+HM_SUFFIX = "-PPM"
+
+FAMILIES = ("hplc", "ster", "endo", "bacw", "hm")  # once-per-sample families; "other" is per keyword
 
 AGE_BUCKETS = (("0-2d", 2), ("3-7d", 7), ("8-14d", 14), ("15-30d", 30))
 STALE_BUCKET = ">30d"
@@ -86,10 +100,12 @@ class LabCalendar:
 
 def classify_keyword(keyword: str, category: Optional[str]) -> str:
     """Map an analysis keyword (+ its service category) to a test family."""
-    if keyword == "STER-PCR":
+    if keyword in STER_KEYWORDS or category == STER_CATEGORY:
         return "ster"
-    if keyword == "ENDO-LAL":
+    if keyword in ENDO_KEYWORDS or keyword.startswith(ENDO_PREFIX):
         return "endo"
+    if category == HM_CATEGORY or keyword.endswith(HM_SUFFIX):
+        return "hm"
     if (category or "") in HPLC_CATEGORIES:
         return "hplc"
     if keyword in HPLC_KEYWORDS or keyword.startswith(HPLC_PREFIXES):
@@ -248,8 +264,9 @@ def build_throughput(
                 "ster": c["ster"],
                 "endo": c["endo"],
                 "bacw": c["bacw"],
+                "hm": c["hm"],
                 "other": c["other"],
-                "tests": c["hplc"] + c["ster"] + c["endo"] + c["bacw"] + c["other"],
+                "tests": sum(c[f] for f in FAMILIES) + c["other"],
                 "vials": c["vials"],
                 "retest": c["retest"],
                 "clients": len(clients_day.get(d, ())),
