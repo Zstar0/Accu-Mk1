@@ -24,6 +24,7 @@ import { ProfilePage } from '@/components/auth/ProfilePage'
 import { ReportsDashboard } from '@/components/reports/ReportsDashboard'
 import { ReportsSyncDebug } from '@/components/reports/ReportsSyncDebug'
 import { CheckInTimesReport } from '@/components/reports/CheckInTimesReport'
+import { ThroughputReport } from '@/components/reports/ThroughputReport'
 import { TurnaroundReport } from '@/components/reports/TurnaroundReport'
 import { PeptideRequestsList } from '@/pages/PeptideRequestsList'
 import { PeptideRequestDetail } from '@/pages/PeptideRequestDetail'
@@ -76,6 +77,7 @@ export function MainWindowContent({
       case 'reports':
         if (activeSubSection === 'sync-debug') return <ReportsSyncDebug />
         if (activeSubSection === 'checkin-times') return <CheckInTimesReport />
+        if (activeSubSection === 'throughput') return <ThroughputReport />
         if (activeSubSection === 'bottlenecks') return <TurnaroundReport />
         return <ReportsDashboard />
       case 'accumark-tools':

@@ -703,20 +703,98 @@ function GeneratedCOAPdfButton({
 }
 
 /**
+ * Primary-COA "Regen & Republish" action. Shared by PublishedCOACard (SENAITE
+ * read mode, ARReport attached) and GeneratedCOAFallbackList (mk1 read mode,
+ * where published_coa is never populated). The action is read-mode agnostic:
+ * regen-primary-coa talks to COA Builder + the ledger with
+ * skip_additional_coas, mints a new primary code, and only best-effort
+ * attaches to SENAITE — additional COAs keep their codes.
+ */
+function PrimaryRegenButton({
+  sampleId,
+  onRegenerated,
+}: {
+  sampleId: string
+  onRegenerated: () => void
+}) {
+  const [regenerating, setRegenerating] = useState(false)
+
+  const handleRegen = async () => {
+    const confirmed = window.confirm(
+      `Regenerate & republish the primary COA for ${sampleId}?\n\n` +
+        `This mints a NEW verification code for the primary.\n` +
+        `Additional COAs keep their existing codes (untouched).`
+    )
+    if (!confirmed) return
+    setRegenerating(true)
+    try {
+      const result = await regenPrimaryCOA(sampleId)
+      if (result.success) {
+        toast.success('Primary COA regenerated & republished', {
+          description: result.verification_code
+            ? `New code: ${result.verification_code}`
+            : undefined,
+        })
+        onRegenerated()
+      } else {
+        toast.error('Regen failed', { description: result.message })
+      }
+    } catch (err) {
+      toast.error('Regen failed', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      })
+    } finally {
+      setRegenerating(false)
+    }
+  }
+
+  return (
+    <button
+      onClick={handleRegen}
+      disabled={regenerating}
+      title="Regenerate & republish the primary COA. Mints a new verification code. Does NOT touch additional COAs."
+      className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-600 hover:bg-amber-500/20 transition-colors disabled:opacity-50 cursor-pointer dark:text-amber-400"
+    >
+      {regenerating ? (
+        <Loader2 size={11} className="animate-spin" />
+      ) : (
+        <RefreshCw size={11} />
+      )}
+      Regen & Republish
+    </button>
+  )
+}
+
+/**
  * Fallback list for the "Generated COAs" card when SENAITE has no attached
  * ARReport (data.published_coa is null) but Integration Service has root
  * generations. Also powers the "Core COA" card. Mirrors the visual language
  * of PublishedCOACard / the Additional COAs section; each row links to its COA
  * PDF via the IS signed URL.
+ *
+ * In mk1 read mode this is the ONLY path for the primary: the native details
+ * builder never populates published_coa (backend/sub_samples/
+ * registry_details.py), so PublishedCOACard never mounts. Pass
+ * `onPrimaryRegenerated` to surface the primary Regen & Republish action on
+ * the current published root; the Core COA card omits it (a child is not a
+ * primary). Exported for the render test.
  */
-function GeneratedCOAFallbackList({
+export function GeneratedCOAFallbackList({
   generations,
   sampleId,
+  onPrimaryRegenerated,
 }: {
   generations: ExplorerCOAGeneration[]
   sampleId: string
+  /** When set, the newest published root row gets Regen & Republish. */
+  onPrimaryRegenerated?: () => void
 }) {
   const allDraft = generations.every(g => g.status === 'draft')
+  // Newest first (selectRootGenerations), so `find` is the current published
+  // primary. A superseded cert carries status 'superseded', never 'published'.
+  const regenTarget = onPrimaryRegenerated
+    ? generations.find(g => g.status === 'published')
+    : undefined
   return (
     <div className="space-y-2">
       {generations.map(gen => {
@@ -769,6 +847,12 @@ function GeneratedCOAFallbackList({
                     sampleId={sampleId}
                     generationNumber={gen.generation_number}
                   />
+                  {onPrimaryRegenerated && gen.id === regenTarget?.id && (
+                    <PrimaryRegenButton
+                      sampleId={sampleId}
+                      onRegenerated={onPrimaryRegenerated}
+                    />
+                  )}
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-x-3 gap-y-1">
@@ -913,37 +997,7 @@ function PublishedCOACard({
   onRefresh: () => void
 }) {
   const [loading, setLoading] = useState(false)
-  const [regenerating, setRegenerating] = useState(false)
   const release = coaReleaseStatus(generation)
-
-  const handleRegen = async () => {
-    const confirmed = window.confirm(
-      `Regenerate & republish the primary COA for ${sampleId}?\n\n` +
-        `This mints a NEW verification code for the primary.\n` +
-        `Additional COAs keep their existing codes (untouched).`
-    )
-    if (!confirmed) return
-    setRegenerating(true)
-    try {
-      const result = await regenPrimaryCOA(sampleId)
-      if (result.success) {
-        toast.success('Primary COA regenerated & republished', {
-          description: result.verification_code
-            ? `New code: ${result.verification_code}`
-            : undefined,
-        })
-        onRefresh()
-      } else {
-        toast.error('Regen failed', { description: result.message })
-      }
-    } catch (err) {
-      toast.error('Regen failed', {
-        description: err instanceof Error ? err.message : 'Unknown error',
-      })
-    } finally {
-      setRegenerating(false)
-    }
-  }
 
   const handleOpen = async () => {
     setLoading(true)
@@ -1010,19 +1064,7 @@ function PublishedCOACard({
               )}
               PDF
             </button>
-            <button
-              onClick={handleRegen}
-              disabled={regenerating}
-              title="Regenerate & republish the primary COA. Mints a new verification code. Does NOT touch additional COAs."
-              className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-600 hover:bg-amber-500/20 transition-colors disabled:opacity-50 cursor-pointer dark:text-amber-400"
-            >
-              {regenerating ? (
-                <Loader2 size={11} className="animate-spin" />
-              ) : (
-                <RefreshCw size={11} />
-              )}
-              Regen & Republish
-            </button>
+            <PrimaryRegenButton sampleId={sampleId} onRegenerated={onRefresh} />
           </div>
         </div>
         <div className="grid grid-cols-2 gap-x-3 gap-y-1">
@@ -5890,46 +5932,52 @@ export function SampleDetails() {
             {/* Generated COAs */}
             <Card className="p-4">
               <SectionHeader icon={FileText} title="Generated COAs">
-                {data.published_coa ? (
-                  <PublishedCOACard
-                    coa={data.published_coa}
-                    sampleId={data.sample_id}
-                    verificationCode={data.coa.verification_code}
-                    generation={
-                      coaGenerations.find(
-                        g =>
-                          g.parent_generation_id == null &&
-                          g.status !== 'superseded'
-                      ) ?? null
-                    }
-                    onRefresh={() => {
-                      refreshSample(sampleId)
-                      getExplorerCOAGenerations(sampleId, 50)
-                        .then(setCoaGenerations)
-                        .catch(() => {})
-                      getSampleAdditionalCOAs(sampleId)
-                        .then(setAdditionalCoas)
-                        .catch(() => {})
-                    }}
-                  />
-                ) : (
-                  (() => {
-                    // No SENAITE-attached ARReport (e.g. dev stacks lack the
-                    // prod-only @@accumark-attach-coa addon). Fall back to the
-                    // root generations Integration Service already has.
-                    const rootGens = selectRootGenerations(coaGenerations)
-                    return rootGens.length > 0 ? (
-                      <GeneratedCOAFallbackList
-                        generations={rootGens}
-                        sampleId={sampleId}
+                {(() => {
+                  const refreshGeneratedCoas = () => {
+                    refreshSample(sampleId)
+                    getExplorerCOAGenerations(sampleId, 50)
+                      .then(setCoaGenerations)
+                      .catch(() => {})
+                    getSampleAdditionalCOAs(sampleId)
+                      .then(setAdditionalCoas)
+                      .catch(() => {})
+                  }
+                  if (data.published_coa) {
+                    return (
+                      <PublishedCOACard
+                        coa={data.published_coa}
+                        sampleId={data.sample_id}
+                        verificationCode={data.coa.verification_code}
+                        generation={
+                          coaGenerations.find(
+                            g =>
+                              g.parent_generation_id == null &&
+                              g.status !== 'superseded'
+                          ) ?? null
+                        }
+                        onRefresh={refreshGeneratedCoas}
                       />
-                    ) : (
-                      <p className="text-sm text-muted-foreground">
-                        No COA generated yet
-                      </p>
                     )
-                  })()
-                )}
+                  }
+                  // No SENAITE-attached ARReport: always the case in mk1 read
+                  // mode (registry_details.py never populates published_coa),
+                  // and on dev stacks lacking the prod-only
+                  // @@accumark-attach-coa addon. Fall back to the root
+                  // generations Integration Service already has, with the
+                  // primary Regen & Republish action on the published root.
+                  const rootGens = selectRootGenerations(coaGenerations)
+                  return rootGens.length > 0 ? (
+                    <GeneratedCOAFallbackList
+                      generations={rootGens}
+                      sampleId={sampleId}
+                      onPrimaryRegenerated={refreshGeneratedCoas}
+                    />
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      No COA generated yet
+                    </p>
+                  )
+                })()}
               </SectionHeader>
             </Card>
 
