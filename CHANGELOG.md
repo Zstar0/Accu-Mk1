@@ -2,8 +2,13 @@
 
 ## Unreleased
 
+## v1.16.1 — 2026-09-09
+
 ### Added
 - **Lab Throughput report** (`GET /reports/throughput`, [ThroughputReport.tsx](src/components/reports/ThroughputReport.tsx)) under Reports → Lab Throughput. Tests received per day by family (HPLC panel / sterility incl. the catalog-arc `STERILITY-PCR`+`STERILITY-USP71` / endotoxin incl. `ENDOTOXIN-USP85LAL` / Bac Water panel / heavy-metals panel), samples and vials received, primary + additional COA output and samples completed, HPLC bench vials by instrument, open backlog with age/status buckets, day-of-week profile and add-on attach rate; the KPI row compares the last 30 days with the prior 30 per business day. Unlike the sibling reports, days are bucketed server-side in the lab timezone by a pure engine (`backend/throughput.py`) that de-duplicates analyses on (sample, keyword) across shadow + canonical provenance; test orders are hidden by default and `include_test_orders=true` refetches with them. Server-side filters `client=`, `order=`, `department=` and `family=` scope the counted samples (the page copies the Vial Status department chips + sub-chips, a Customer select and an Order # box; facets ride in the response), backed by a 60-second per-process row cache so a filter change is a cheap round trip with the same ~60 KB response; a failed refresh serves the cached rows with `cache.stale`. In-app port of the offline `lab-throughput-report` skill. Spec: `docs/superpowers/specs/2026-09-09-lab-throughput-report-design.md`.
+
+### Fixed
+- Sample details: the primary-COA **Regen & Republish** action is reachable again in mk1 read mode. The native details builder never populates `published_coa` (`registry_details.py`), so since the 2026-08-27 `sample_details` read-source flip the Generated COAs card always rendered the read-only fallback list and `PublishedCOACard`, the only owner of the button, never mounted (the Additional COAs Regen survived because it keys off `generation_id`). The confirm + `regen-primary-coa` + toast flow is extracted to a shared `PrimaryRegenButton`; the fallback list renders it on the newest published root row only when the Generated COAs card passes `onPrimaryRegenerated` (the Core COA card does not). `regen-primary-coa` needs nothing from the SENAITE ARReport and still sends `skip_additional_coas`, so additional COAs keep their codes. Render test `src/test/generated-coa-fallback-regen.test.tsx`. (#175)
 
 ## v1.16.0 — 2026-09-09
 
