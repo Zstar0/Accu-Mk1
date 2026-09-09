@@ -22,7 +22,7 @@ set -euo pipefail
 
 # ── Configuration ───────────────────────────────────────────
 REMOTE_USER="root"
-REMOTE_HOST="165.227.241.81"
+REMOTE_HOST="${REMOTE_HOST:-165.227.241.81}"   # Tailscale path (2026-09-08 firewall): REMOTE_HOST=100.120.92.93 bash scripts/deploy.sh
 REMOTE_DIR="/root/accu-mk1"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION=$(grep '"version"' "$PROJECT_DIR/package.json" | head -1 | sed 's/.*: "\(.*\)".*/\1/')
