@@ -54,44 +54,64 @@ def read_back_state(sample: LimsSample) -> str:
     return str(meta.get("review_state") or "")
 
 
-def _pending_row(db: Session, sample: LimsSample, verb: str) -> Optional[LimsSenaiteTeeRetry]:
+def _row_for(db: Session, sample: LimsSample, verb: str) -> Optional[LimsSenaiteTeeRetry]:
+    """The LATEST tee-retry row for this (sample, verb), in any status."""
     return db.execute(
         select(LimsSenaiteTeeRetry).where(
             LimsSenaiteTeeRetry.lims_sample_pk == sample.id,
             LimsSenaiteTeeRetry.verb == verb,
-            LimsSenaiteTeeRetry.status == "pending",
-        )
+        ).order_by(LimsSenaiteTeeRetry.id.desc())
     ).scalars().first()
+
+
+def _resolve_done(db: Session, sample: LimsSample, verb: str) -> None:
+    """Resolve any non-done row for (sample, verb) to 'done'. Flush-only."""
+    row = _row_for(db, sample, verb)
+    if row is not None and row.status != "done":
+        row.status = "done"
+        db.flush()
 
 
 def enqueue_retry(db: Session, sample: LimsSample, verb: str, *, error: str,
                   now: Optional[datetime] = None) -> LimsSenaiteTeeRetry:
-    """One pending row per (sample, verb); a repeat refusal bumps attempts
-    and reschedules per BACKOFF_MINUTES. Flush-only."""
+    """One row per (sample, verb), regardless of status. A pending row's
+    attempts bump and reschedule per BACKOFF_MINUTES; a row parked in
+    done/gave_up/senaite_only is REVIVED (attempts reset to 0) before the
+    same bump/backoff is applied. Flush-only."""
     t = _now(now)
-    row = _pending_row(db, sample, verb)
+    row = _row_for(db, sample, verb)
+    created = row is None
+    revived = False
     if row is None:
         row = LimsSenaiteTeeRetry(lims_sample_pk=sample.id, verb=verb,
                                   expected_state=EXPECTED_AR_STATES[verb],
                                   attempts=0, next_attempt_at=t)
         db.add(row)
+    elif row.status != "pending":
+        revived = True
+        row.status = "pending"
+        row.attempts = 0
     row.attempts += 1
     row.last_error = (error or "")[:1000]
     if row.attempts >= MAX_ATTEMPTS:
         row.status = "gave_up"
     else:
+        row.status = "pending"
         row.next_attempt_at = t + timedelta(minutes=BACKOFF_MINUTES[row.attempts - 1])
     db.flush()
+    if created or revived:
+        log.warning("senaite_tee.enqueued sample=%s verb=%s attempts=%s error=%s",
+                    sample.sample_id, verb, row.attempts, row.last_error)
     return row
 
 
 def _mark_senaite_only(db: Session, sample: LimsSample, verb: str, *, note: str,
                        now: Optional[datetime] = None) -> LimsSenaiteTeeRetry:
-    row = _pending_row(db, sample, verb) or LimsSenaiteTeeRetry(
+    row = _row_for(db, sample, verb) or LimsSenaiteTeeRetry(
         lims_sample_pk=sample.id, verb=verb, expected_state=EXPECTED_AR_STATES[verb],
         attempts=0, next_attempt_at=_now(now))
     row.status = "senaite_only"
-    row.last_error = note[:1000]
+    row.last_error = (note or "")[:1000]
     db.add(row)
     db.flush()
     return row
@@ -100,7 +120,11 @@ def _mark_senaite_only(db: Session, sample: LimsSample, verb: str, *, note: str,
 def tee_now(db: Session, sample: LimsSample, verb: str, *,
             now: Optional[datetime] = None) -> str:
     """Tee `verb` to SENAITE and prove it. Returns 'done' | 'pending' |
-    'senaite_only' | 'skipped'. Never raises."""
+    'senaite_only' | 'skipped' | 'error'. 'error' means the transition/
+    read-back itself may have succeeded but this call's own bookkeeping
+    (enqueue/resolve) raised — never propagated to the caller. Never
+    raises; flush-only (does not roll back the caller's session/transaction
+    on 'error' — that's the caller's to own)."""
     if verb not in EXPECTED_AR_STATES:
         return "skipped"
     uid = (sample.external_lims_uid or "").strip()
@@ -108,25 +132,27 @@ def tee_now(db: Session, sample: LimsSample, verb: str, *,
         return "skipped"
     expected = EXPECTED_AR_STATES[verb]
     try:
-        if verb == "cancel":
-            current = read_back_state(sample)
-            if current == "cancelled":
-                return "done"
-            if current not in SENAITE_CANCELLABLE_STATES:
-                _mark_senaite_only(db, sample, verb, now=now,
-                                   note=f"SENAITE forbids cancel from {current!r}")
-                return "senaite_only"
-        _ar_transition(uid, verb)
-        actual = read_back_state(sample)
-    except Exception as e:  # transport, auth, parse — all retryable
-        enqueue_retry(db, sample, verb, error=f"{type(e).__name__}: {e}", now=now)
+        try:
+            if verb == "cancel":
+                current = read_back_state(sample)
+                if current == "cancelled":
+                    _resolve_done(db, sample, verb)
+                    return "done"
+                if current not in SENAITE_CANCELLABLE_STATES:
+                    _mark_senaite_only(db, sample, verb, now=now,
+                                       note=f"SENAITE forbids cancel from {current!r}")
+                    return "senaite_only"
+            _ar_transition(uid, verb)
+            actual = read_back_state(sample)
+        except Exception as e:  # transport, auth, parse — all retryable
+            enqueue_retry(db, sample, verb, error=f"{type(e).__name__}: {e}", now=now)
+            return "pending"
+        if actual == expected:
+            _resolve_done(db, sample, verb)
+            return "done"
+        enqueue_retry(db, sample, verb, now=now,
+                      error=f"read-back {actual!r} != expected {expected!r}")
         return "pending"
-    if actual == expected:
-        row = _pending_row(db, sample, verb)
-        if row is not None:
-            row.status = "done"
-            db.flush()
-        return "done"
-    enqueue_retry(db, sample, verb, now=now,
-                  error=f"read-back {actual!r} != expected {expected!r}")
-    return "pending"
+    except Exception:
+        log.exception("senaite_tee.tee_now failed sample=%s verb=%s", sample.sample_id, verb)
+        return "error"

@@ -1310,7 +1310,7 @@ def _run_migrations():
         "CREATE INDEX IF NOT EXISTS ix_senaite_tee_retries_due "
         "ON lims_senaite_tee_retries (next_attempt_at) WHERE status = 'pending'",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_senaite_tee_retries_pending "
-        "ON lims_senaite_tee_retries (lims_sample_pk, verb) WHERE status = 'pending',"
+        "ON lims_senaite_tee_retries (lims_sample_pk, verb) WHERE status = 'pending'",
         # Catalog data (spec §8 decision 3): cascade-eligible builtin edges +
         # the publish edge's attested requirement. Guarded → idempotent.
         "UPDATE lims_workflow_transitions SET auto_fire = TRUE "

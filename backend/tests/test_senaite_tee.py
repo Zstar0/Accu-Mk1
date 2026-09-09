@@ -83,3 +83,55 @@ def test_no_uid_is_skipped(db_session):
     from workflow import senaite_tee as tee
     row = _sample(db_session, sid="P-TEE-5", uid=None)
     assert tee.tee_now(db_session, row, "verify") == "skipped"
+
+
+def test_repeated_cancel_tee_reuses_the_senaite_only_row(db_session):
+    from workflow import senaite_tee as tee
+    from models import LimsSenaiteTeeRetry
+    row = _sample(db_session, sid="P-TEE-7", uid="U-TEE-7", status="published")
+    with patch("workflow.senaite_tee._ar_transition"), \
+         patch("workflow.senaite_tee.read_back_state", return_value="published"):
+        assert tee.tee_now(db_session, row, "cancel") == "senaite_only"
+        assert tee.tee_now(db_session, row, "cancel") == "senaite_only"
+    rows = db_session.execute(select(LimsSenaiteTeeRetry)).scalars().all()
+    assert len(rows) == 1 and rows[0].status == "senaite_only"
+
+
+def test_refusal_after_gave_up_revives_the_same_row(db_session):
+    from workflow import senaite_tee as tee
+    from models import LimsSenaiteTeeRetry
+    row = _sample(db_session, sid="P-TEE-8", uid="U-TEE-8", status="verified")
+    q = LimsSenaiteTeeRetry(lims_sample_pk=row.id, verb="verify", expected_state="verified",
+                            attempts=8, next_attempt_at=datetime.now(timezone.utc), status="gave_up")
+    db_session.add(q)
+    db_session.flush()
+    with patch("workflow.senaite_tee._ar_transition"), \
+         patch("workflow.senaite_tee.read_back_state", return_value="to_be_verified"):
+        assert tee.tee_now(db_session, row, "verify") == "pending"
+    rows = db_session.execute(select(LimsSenaiteTeeRetry)).scalars().all()
+    assert len(rows) == 1 and rows[0].id == q.id
+    assert rows[0].status == "pending" and rows[0].attempts == 1
+
+
+def test_already_cancelled_fast_path_resolves_an_earlier_pending_row(db_session):
+    from workflow import senaite_tee as tee
+    from models import LimsSenaiteTeeRetry
+    row = _sample(db_session, sid="P-TEE-9", uid="U-TEE-9", status="cancelled")
+    q = LimsSenaiteTeeRetry(lims_sample_pk=row.id, verb="cancel", expected_state="cancelled",
+                            attempts=1, next_attempt_at=datetime.now(timezone.utc), status="pending")
+    db_session.add(q)
+    db_session.flush()
+    with patch("workflow.senaite_tee._ar_transition") as tr, \
+         patch("workflow.senaite_tee.read_back_state", return_value="cancelled"):
+        assert tee.tee_now(db_session, row, "cancel") == "done"
+    tr.assert_not_called()
+    assert q.status == "done"
+
+
+def test_tee_now_never_raises_on_bookkeeping_failure(db_session):
+    from workflow import senaite_tee as tee
+    row = _sample(db_session, sid="P-TEE-10", uid="U-TEE-10", status="verified")
+    with patch("workflow.senaite_tee._ar_transition"), \
+         patch("workflow.senaite_tee.read_back_state", return_value="sample_received"), \
+         patch("workflow.senaite_tee.enqueue_retry", side_effect=RuntimeError("db down")):
+        assert tee.tee_now(db_session, row, "verify") == "error"
