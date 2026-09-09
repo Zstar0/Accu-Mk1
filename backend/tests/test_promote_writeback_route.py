@@ -626,3 +626,85 @@ def test_parent_line_states_mk1_retested_published_canonical_unlocks(
                      retested=True)
     states = _get_states_mk1(route_client)
     assert "ENDO" not in states
+
+
+# ─── shadow fallback must not lock a family with unfinished vial work ────────
+# P-2553 / P-2606 (2026-09-09): a promote whose SENAITE half landed and whose
+# Mk1 half did not leaves the keyword with NO canonical history and a shadow
+# mirroring SENAITE's eternal verified. The fallback locked it, the FE hid
+# every verb (isLockedByParent), and the lab was wedged holding a
+# to_be_verified vial row it could not push up — while the backend would have
+# accepted that promote, since it diverges over a locked SENAITE line (1.12.1)
+# and records senaite_line_diverged. The fallback's job is keeping LEGACY
+# families locked; a family that still has unfinished vial work is not that.
+# "Unfinished" is the same set lock_variance_set's series guard uses, so the
+# two agree: what the variance guard demands you finish, this map must leave
+# finishable.
+
+
+def _vial_row(db, parent, svc, keyword, *, seq=1, **kw):
+    sub = LimsSubSample(
+        parent_sample_pk=parent.id,
+        external_lims_uid=f"uid-{parent.sample_id}-S{seq:02d}",
+        sample_id=f"{parent.sample_id}-S{seq:02d}",
+        vial_sequence=seq,
+    )
+    db.add(sub)
+    db.flush()
+    row = LimsAnalysis(
+        lims_sub_sample_pk=sub.id,
+        analysis_service_id=svc.id,
+        keyword=keyword,
+        title=keyword,
+        **kw,
+    )
+    db.add(row)
+    db.commit()
+    return row
+
+
+def test_parent_line_states_mk1_unfinished_vial_unlocks_shadow_only_keyword(
+    route_client, line_states_parent
+):
+    """THE P-2553 / P-2606 case: shadow mirrors verified, no canonical history,
+    and a live to_be_verified vial row is waiting to go up. The keyword must be
+    absent from the map so the FE offers Promote."""
+    db, parent, svc = line_states_parent
+    _parent_tier_row(db, parent, svc, "ENDO",
+                     provenance="shadow", review_state="senaite_mirror",
+                     mirror_review_state="verified")
+    _vial_row(db, parent, svc, "ENDO",
+              review_state="to_be_verified", result_value="3.85")
+    states = _get_states_mk1(route_client)
+    assert "ENDO" not in states
+
+
+def test_parent_line_states_mk1_finished_vial_keeps_shadow_lock(
+    route_client, line_states_parent
+):
+    """The fallback still protects legacy families: a vial row that is already
+    finished leaves the lab nothing to push up, so the shadow's verified keeps
+    the keyword locked. Guards against an over-broad "any vial row unlocks"."""
+    db, parent, svc = line_states_parent
+    _parent_tier_row(db, parent, svc, "ENDO",
+                     provenance="shadow", review_state="senaite_mirror",
+                     mirror_review_state="verified")
+    _vial_row(db, parent, svc, "ENDO",
+              review_state="rejected", result_value="3.85")
+    states = _get_states_mk1(route_client)
+    assert states.get("ENDO") == "verified"
+
+
+def test_parent_line_states_mk1_superseded_vial_keeps_shadow_lock(
+    route_client, line_states_parent
+):
+    """Current-row idiom: a retested=True vial row is superseded history, not
+    live work, so it must not unlock the keyword on its own."""
+    db, parent, svc = line_states_parent
+    _parent_tier_row(db, parent, svc, "ENDO",
+                     provenance="shadow", review_state="senaite_mirror",
+                     mirror_review_state="verified")
+    _vial_row(db, parent, svc, "ENDO", review_state="to_be_verified",
+              result_value="3.85", retested=True)
+    states = _get_states_mk1(route_client)
+    assert states.get("ENDO") == "verified"

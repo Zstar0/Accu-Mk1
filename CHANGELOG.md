@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- Sample details: a vial row is no longer locked out of **Promote** when the parent's SENAITE line is verified but Mk1 never recorded the promotion. `native_parent_line_states` falls back to the shadow row's mirror state for any keyword the canonical tier has never held, which is what keeps genuinely legacy families locked — but it also locked families whose promote had landed in SENAITE and been lost on the Mk1 side, leaving the lab a "Ready to Promote" row with a padlock, no verbs, and a `lockVarianceSet` 409 behind it (P-2553, P-2606). The fallback now skips any keyword whose family still has unfinished vial work, using the same finished-state set `lock_variance_set`'s series guard uses, so the two guards agree: what the variance guard demands you finish, the lock map leaves finishable. Promote itself already accepted these — it diverges over a locked SENAITE line and records `senaite_line_diverged` (1.12.1) — so this only stops the UI hiding a verb the backend would have honoured. Families with no vial rows, with finished vial rows, or whose only rows are superseded (`retested=True`) keep the lock exactly as before.
+
 ## v1.16.3 — 2026-09-09
 
 ### Fixed
