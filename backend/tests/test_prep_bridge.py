@@ -665,3 +665,56 @@ def test_blend_aggregates_stamp_acting_user(db_session):
     db.refresh(bp); db.refresh(pt)
     assert bp.processed_by_user_id == 5
     assert pt.processed_by_user_id == 5
+
+
+# ── 2026-09-08 PB-0469 guards: never route a per-substance peptide into a generic
+# slot, and never guess when a parent lists the same peptide in two slots ──────
+
+def test_no_slot_fallback_when_per_substance_rows_already_bridged(db_session, monkeypatch):
+    """PB-0469: a Process-HPLC re-run found PUR_/QTY_GHKCU already submitted and
+    fell through to the generic ANALYTE-{slot} rows — duplicating the result.
+    Once per-substance rows for the peptide exist in ANY live state, tier 1 is
+    authoritative: an already-bridged peptide is a no-op, never a slot write."""
+    from lims_analyses import prep_bridge
+    db = db_session
+    pep = _peptide(db, name="GHK-Cu", abbr="GHK-CU")
+    vial = _vial(db)
+    _svc(db, keyword="PUR_GHKCU", peptide=pep, title="GHK-Cu - Purity")
+    _svc(db, keyword="QTY_GHKCU", peptide=pep, title="GHK-Cu - Quantity")
+    ps_pur = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                             analysis_service_id=164, keyword="PUR_GHKCU", title="GHK-Cu - Purity")
+    ps_qty = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                             analysis_service_id=186, keyword="QTY_GHKCU", title="GHK-Cu - Quantity")
+    gen_pur = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                              analysis_service_id=85, keyword="ANALYTE-1-PUR", title="Analyte 1 (Purity)")
+    gen_qty = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                              analysis_service_id=78, keyword="ANALYTE-1-QTY", title="Analyte 1 (Quantity)")
+    monkeypatch.setattr(prep_bridge, "_resolve_slot", lambda db, **kw: 1)
+    first = _hplc(db, pep, purity=99.97, qty=54.48)
+    assert set(bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=first, peptide=pep, user_id=1)) == {ps_pur.id, ps_qty.id}
+
+    rerun = _hplc(db, pep, purity=99.97, qty=54.48)
+    ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=rerun, peptide=pep, user_id=1)
+
+    assert ids == []
+    db.refresh(gen_pur); db.refresh(gen_qty)
+    assert gen_pur.review_state == "unassigned" and gen_pur.result_value is None
+    assert gen_qty.review_state == "unassigned" and gen_qty.result_value is None
+
+
+def test_resolve_slot_refuses_ambiguous_duplicate_peptide(db_session, monkeypatch):
+    """A parent whose slot map lists the same peptide twice is corrupt input;
+    the resolver must return None (skip, warn) rather than 'first wins'."""
+    from lims_analyses import prep_bridge
+    import sub_samples.senaite as senaite_mod
+    db = db_session
+    pep = _peptide(db, name="GHK-Cu", abbr="GHK-CU")
+    monkeypatch.setattr(senaite_mod, "fetch_parent_analyte_slots", lambda sid: {
+        1: "GHK-Cu", 2: "GHK-Cu - Identity (HPLC)", 3: "BPC-157 - Identity (HPLC)",
+    })
+    assert prep_bridge._resolve_slot(db, parent_sample_id="PB-0469", peptide=pep) is None
+
+    monkeypatch.setattr(senaite_mod, "fetch_parent_analyte_slots", lambda sid: {
+        1: "KPV - Identity (HPLC)", 2: "GHK-Cu - Identity (HPLC)",
+    })
+    assert prep_bridge._resolve_slot(db, parent_sample_id="PB-0469", peptide=pep) == 2

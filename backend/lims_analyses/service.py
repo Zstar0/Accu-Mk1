@@ -1222,7 +1222,7 @@ def _overlay_live_vial_state(db: Session, parent_pk: int, shaped: list) -> None:
 # patterns) but keeps intent readable.
 _LEGACY_SECTION_RULES: tuple = (
     ("core", "Core HPLC", 0,
-     ("ID_", "PUR_", "QTY_", "BLEND", "HPLC", "PEPT")),
+     ("ID_", "PUR_", "QTY_", "BLEND", "HPLC", "PEPT", "ANALYTE")),
     ("endotoxin", "Endotoxin", 1, ("ENDO",)),
     ("sterility_pcr", "Sterility", 2, ("STER", "PCR-")),
     ("bac_water_panel", "Bac Water", 3, ("BENZYL", "FILL-", "PH-")),
@@ -2998,6 +2998,59 @@ def replace_analyte_slot(
     }
     vials = summary["vials"]  # type: ignore[assignment]
 
+    _retire_peptide_vial_rows(
+        db, parent_sample_id=parent_sample_id, old_peptide_id=old_peptide_id,
+        confirm_retract=confirm_retract, force=force, user_id=user_id,
+        reason=f"replaced analyte slot {slot} ({old_peptide_id}->{new_peptide_id})",
+        vials=vials,
+    )
+
+    # Re-seed each non-xtra vial: the seeder reads the (caller-updated) slot
+    # title and translates it into the new peptide's per-substance rows. Skips
+    # keywords a vial already carries, so this only adds the new rows.
+    try:
+        from sub_samples import service as ss_service
+        wp_services = ss_service._fetch_wp_services_for_parent(parent_sample_id) or {}
+    except Exception:
+        wp_services = {}
+
+    subs = db.execute(
+        select(LimsSubSample).where(
+            LimsSubSample.parent_sample_pk == parent.id,
+            LimsSubSample.assignment_role.is_not(None),
+            LimsSubSample.assignment_role != "xtra",
+        ).order_by(LimsSubSample.vial_sequence)
+    ).scalars().all()
+    for sub in subs:
+        try:
+            _seeder.seed_analyses_for_vial(
+                db, sub_sample=sub, role=sub.assignment_role,
+                wp_services=wp_services, parent_sample_id=parent_sample_id,
+            )
+            vials["reseeded"].append(sub.sample_id)
+        except Exception:
+            db.rollback()
+            continue
+
+    return summary
+
+
+def _retire_peptide_vial_rows(
+    db: Session,
+    *,
+    parent_sample_id: str,
+    old_peptide_id: int,
+    confirm_retract: bool,
+    force: bool,
+    user_id: Optional[int],
+    reason: str,
+    vials: Dict[str, list],
+) -> None:
+    """Shared by Replace and Clear: retire the OLD peptide's per-substance rows
+    across the family's non-xtra vials -- pristine -> hard delete; worked ->
+    reject (only with confirm/force); blocked -> force_retract when force, else
+    reported. Never raises per-row; results land in `vials` (deleted /
+    retracted / blocked)."""
     impact = classify_slot_replacement_impact(
         db, parent_sample_id=parent_sample_id, old_peptide_id=old_peptide_id
     )
@@ -3034,41 +3087,67 @@ def replace_analyte_slot(
         try:
             apply_transition(
                 db, analysis_id=e["analysis_id"], kind="reject",
-                reason=f"replaced analyte slot {slot} ({old_peptide_id}->{new_peptide_id})",
-                user_id=user_id,
+                reason=reason, user_id=user_id,
             )
             vials["retracted"].append(_brief(e))
         except Exception:
             db.rollback()
             continue
 
-    # Re-seed each non-xtra vial: the seeder reads the (caller-updated) slot
-    # title and translates it into the new peptide's per-substance rows. Skips
-    # keywords a vial already carries, so this only adds the new rows.
-    try:
-        from sub_samples import service as ss_service
-        wp_services = ss_service._fetch_wp_services_for_parent(parent_sample_id) or {}
-    except Exception:
-        wp_services = {}
 
-    subs = db.execute(
-        select(LimsSubSample).where(
-            LimsSubSample.parent_sample_pk == parent.id,
-            LimsSubSample.assignment_role.is_not(None),
-            LimsSubSample.assignment_role != "xtra",
-        ).order_by(LimsSubSample.vial_sequence)
-    ).scalars().all()
-    for sub in subs:
-        try:
-            _seeder.seed_analyses_for_vial(
-                db, sub_sample=sub, role=sub.assignment_role,
-                wp_services=wp_services, parent_sample_id=parent_sample_id,
-            )
-            vials["reseeded"].append(sub.sample_id)
-        except Exception:
-            db.rollback()
-            continue
-
+def clear_analyte_slot(
+    db: Session,
+    *,
+    parent_sample_id: str,
+    slot: int,
+    old_peptide_id: Optional[int],
+    confirm_retract: bool,
+    user_id: Optional[int],
+    force: bool = False,
+    cascade: bool = True,
+) -> Dict[str, object]:
+    """Mk1 side of clearing one analyte slot (the blend lost an analyte,
+    2026-09-08). Retires the slot peptide's per-substance vial rows exactly
+    like Replace (via _retire_peptide_vial_rows) but NEVER re-seeds -- nothing
+    replaces the slot. cascade=False is the duplicate-peptide shape (PB-0469:
+    the same peptide still occupies another slot): rows and identity belong to
+    the surviving slot, so only the caller's SENAITE field blanking happens.
+    Emits one analyte_slot_cleared event on the parent (when registered)."""
+    from models import LimsSample, LimsSubSampleEvent
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
+    ).scalar_one_or_none()
+    do_cascade = bool(cascade and old_peptide_id and parent is not None)
+    summary: Dict[str, object] = {
+        "slot": slot,
+        "old_peptide_id": old_peptide_id,
+        "cascade": do_cascade,
+        "vials": {"deleted": [], "retracted": [], "blocked": []},
+        "pre_subsample": parent is None,
+    }
+    vials = summary["vials"]  # type: ignore[assignment]
+    if do_cascade:
+        _retire_peptide_vial_rows(
+            db, parent_sample_id=parent_sample_id, old_peptide_id=old_peptide_id,
+            confirm_retract=confirm_retract, force=force, user_id=user_id,
+            reason=f"cleared analyte slot {slot} (peptide {old_peptide_id})",
+            vials=vials,
+        )
+    if parent is not None:
+        db.add(LimsSubSampleEvent(
+            lims_sample_pk=parent.id,
+            event="analyte_slot_cleared",
+            details={
+                "slot": slot,
+                "peptide_id": old_peptide_id,
+                "cascade": do_cascade,
+                "deleted": len(vials["deleted"]),
+                "retracted": len(vials["retracted"]),
+                "blocked": len(vials["blocked"]),
+            },
+            user_id=user_id,
+        ))
+        db.flush()
     return summary
 
 

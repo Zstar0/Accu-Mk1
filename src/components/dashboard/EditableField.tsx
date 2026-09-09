@@ -213,6 +213,12 @@ interface EditableDataRowProps {
   children?: React.ReactNode
   /** Per-field provenance marker (FieldSourceGlyph) — mk1 read mode only. */
   sourceGlyph?: React.ReactNode
+  /** Render the value without any edit affordance. Used for analyte-slot
+   *  peptides once a sample has vials: a free-text write there bypasses the
+   *  Replace/Clear cascades (PB-0469, 2026-09-08). `readOnlyHint` becomes the
+   *  hover title so the lock explains itself. */
+  readOnly?: boolean
+  readOnlyHint?: string
 }
 
 export function EditableDataRow({
@@ -230,7 +236,36 @@ export function EditableDataRow({
   onSave,
   children,
   sourceGlyph,
+  readOnly = false,
+  readOnlyHint,
 }: EditableDataRowProps) {
+  if (readOnly) {
+    const shown = formatDisplay
+      ? formatDisplay(value)
+      : value === null || value === undefined || value === ''
+        ? '—'
+        : `${value}${suffix ? ` ${suffix}` : ''}`
+    return (
+      <div
+        className="flex items-baseline justify-between py-1.5 border-b border-border/50 last:border-0"
+        title={readOnlyHint}
+      >
+        <span className="text-xs text-muted-foreground shrink-0 min-w-28 mr-3 inline-flex items-center gap-1">
+          {label}
+          {sourceGlyph}
+        </span>
+        <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
+          {children}
+          <span
+            className={`text-sm truncate ${mono ? 'font-mono' : ''} ${emphasis ? 'font-semibold' : ''}`}
+            data-readonly-field={senaiteField}
+          >
+            {shown}
+          </span>
+        </div>
+      </div>
+    )
+  }
   return (
     <div className="flex items-baseline justify-between py-1.5 border-b border-border/50 last:border-0">
       <span className="text-xs text-muted-foreground shrink-0 min-w-28 mr-3 inline-flex items-center gap-1">

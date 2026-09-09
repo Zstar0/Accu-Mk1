@@ -1754,6 +1754,73 @@ export async function getPeptidesWithServiceSet(): Promise<number[]> {
   return r.peptide_ids
 }
 
+/** Dry-run preview of clearing an analyte slot (POST .../analytes/{slot}/clear
+ *  with dry_run) — what the confirm dialog shows before anything is written. */
+export interface ClearAnalytePreview {
+  dry_run: true
+  slot: number
+  cleared_peptide: string
+  old_peptide_id: number | null
+  identity_keyword: string | null
+  /** false = the same peptide still occupies another slot (PB-0469 shape):
+   *  only the slot fields are blanked; rows + identity stay with that slot. */
+  cascade: boolean
+  duplicate_elsewhere: boolean
+  pre_subsample: boolean
+  impact: RemovalImpact
+  presubsample_blocked: string[]
+}
+
+export interface ClearAnalyteResult {
+  success: boolean
+  field_updated: string[]
+  cleared_peptide: string
+  identity: { removed: string | null; added: string | null }
+  slot: number
+  old_peptide_id: number | null
+  cascade: boolean
+  vials: { deleted: unknown[]; retracted: unknown[]; blocked: unknown[] }
+  pre_subsample: boolean
+}
+
+/** Clear (empty) one analyte slot — the blend lost an analyte. `dryRun`
+ *  returns a ClearAnalytePreview and writes nothing; `confirm` authorises
+ *  rejecting worked vial rows / force-retracting promoted ones. Throws on
+ *  non-2xx with `.status`, `.detail`, and `.impact` on 412 (same contract as
+ *  replaceAnalyte). */
+export async function clearAnalyteSlot(
+  sampleId: string,
+  slot: number,
+  body: { senaiteUid: string; oldPeptideId?: number | null; confirm?: boolean; dryRun?: boolean },
+): Promise<ClearAnalytePreview | ClearAnalyteResult> {
+  const response = await fetch(
+    `${API_BASE_URL()}/explorer/samples/${encodeURIComponent(sampleId)}/analytes/${slot}/clear`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({
+        senaite_uid: body.senaiteUid,
+        old_peptide_id: body.oldPeptideId ?? null,
+        confirm: body.confirm ?? false,
+        dry_run: body.dryRun ?? false,
+      }),
+    },
+  )
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    const err = new Error(
+      typeof payload?.detail === 'string' ? payload.detail : `Clear failed: ${response.status}`,
+    ) as Error & { status?: number; impact?: RemovalImpact; detail?: unknown }
+    err.status = response.status
+    err.detail = payload?.detail
+    if (response.status === 412 && payload?.detail && typeof payload.detail === 'object') {
+      err.impact = payload.detail as RemovalImpact
+    }
+    throw err
+  }
+  return response.json()
+}
+
 export interface ReplaceAnalyteResult {
   success: boolean
   field_updated: string

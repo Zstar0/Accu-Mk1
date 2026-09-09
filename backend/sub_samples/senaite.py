@@ -413,6 +413,42 @@ def _coerce_label(v: Any) -> Optional[str]:
     return v or None
 
 
+_IDENTITY_SUFFIX_RE = re.compile(r"\s*-\s*identity\s*\(hplc\)\s*$", re.I)
+
+
+def normalize_slot_peptide(label) -> str:
+    """Peptide identity of an Analyte{N}Peptide value, for slot-vs-slot
+    comparison: strips the ' - Identity (HPLC)' title suffix the IS writes at
+    creation, then lower-cases and drops non-alphanumerics -- so the bare
+    'GHK-Cu' a human types and 'GHK-Cu - Identity (HPLC)' compare equal
+    (PB-0469, 2026-09-08). Empty/None -> ''."""
+    text = _coerce_label(label) or ""
+    text = _IDENTITY_SUFFIX_RE.sub("", str(text))
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def _slots_from_ar(ar: dict) -> dict[int, str]:
+    out: dict[int, str] = {}
+    for n in range(1, 5):
+        label = _coerce_label(ar.get(f"Analyte{n}Peptide"))
+        if label:
+            out[n] = label
+    return out
+
+
+def fetch_analyte_slots_by_uid(uid: str) -> dict[int, str]:
+    """{slot: AnalyteNPeptide title} for a sample addressed by SENAITE UID --
+    the inline field editor only has the uid. Raises on SENAITE HTTP error."""
+    resp = _get(f"{SENAITE_BASE_URL}/@@API/senaite/v1/search", params={
+        "UID": uid,
+        "catalog": "senaite_catalog_sample",
+        "complete": "true",
+    })
+    resp.raise_for_status()
+    items = resp.json().get("items", [])
+    return _slots_from_ar(items[0]) if items else {}
+
+
 def fetch_parent_analyte_slots(parent_sample_id: str) -> dict[int, str]:
     """Return {slot: AnalyteNPeptide title} for slots 1-4 that are populated.
     Values are identity-service titles, e.g. 'GHK-Cu - Identity (HPLC)'.
