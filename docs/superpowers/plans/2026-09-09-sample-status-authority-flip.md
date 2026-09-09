@@ -1515,6 +1515,17 @@ with
 
 Note: `_after_publish_native` replaces the old `_record_sample_transition_bg(..., verb="publish")` call on this path only; the helper stays for its other callers. The route's request `db` is used deliberately (the helper commits it; the response is built after).
 
+Also (Task 4 review ruling): in `_record_sample_transition_bg` (main.py, the helper whose body calls `record_sample_transition(db, **kwargs)` and then `heal_sample_status(db, kwargs["sample_id"], kwargs["to_status"])`), thread the caller's source through to the heal so a native caller is honoured under mk1 authority:
+
+```python
+        wrote_status = heal_sample_status(
+            db, kwargs["sample_id"], kwargs["to_status"],
+            source=kwargs.get("source", "senaite"),
+        )
+```
+
+(keep the surrounding variable names exactly as they are in the file; only the `source=` kwarg is added).
+
 - [ ] **Step 5: Run the tests**
 
 Run: `.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider tests/test_senaite_tee.py tests/test_publish_route_authority.py tests/test_workflow_engine.py tests/test_coa_*.py`
