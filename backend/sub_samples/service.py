@@ -649,9 +649,21 @@ def _refresh_parent_from_senaite(db: Session, parent: LimsSample) -> None:
         )
     db.flush()
     if mk1_authority:
-        # the column was restored above, so compare SENAITE's state directly
+        # the column was restored above, so compare SENAITE's state directly.
+        # A persistently diverged sample would otherwise re-log on EVERY page
+        # view (the column never converges to SENAITE's state under mk1), so
+        # log only when SENAITE's state differs from the last reconcile row.
         logged_to = senaite_state
         should_log = bool(senaite_state) and senaite_state != old_status
+        if should_log:
+            from sqlalchemy import select as _select
+            from models import LimsSampleTransition as _LST
+            last_reconcile = db.execute(
+                _select(_LST.to_status).where(
+                    _LST.lims_sample_pk == parent.id, _LST.source == "reconcile"
+                ).order_by(_LST.id.desc()).limit(1)
+            ).scalar_one_or_none()
+            should_log = last_reconcile != senaite_state
     else:
         logged_to = parent.status
         should_log = parent.status != old_status

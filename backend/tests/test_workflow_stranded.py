@@ -48,7 +48,7 @@ def test_lines_verified_but_status_behind_raises_one_flag(db_session):
     from workflow.stranded import find_stranded, run_check
     _base(db_session)
     p = _parent_with_verified_line(db_session, "P-ST-1", "sample_received")
-    found = find_stranded(db_session)
+    found = find_stranded(db_session, now=NOW)
     assert [(s.sample.sample_id, s.condition) for s in found] == [("P-ST-1", "lines_verified_status_behind")]
     stats = run_check(db_session, now=NOW)
     assert stats["flagged"] == 1
@@ -84,7 +84,7 @@ def test_published_in_ledger_but_not_status(db_session):
     db_session.add(LimsSampleTransition(lims_sample_pk=p.id, verb="publish", from_status="verified",
                                         to_status="published", source="mk1", occurred_at=NOW))
     db_session.flush()
-    assert [s.condition for s in find_stranded(db_session)] == ["published_in_ledger_not_status"]
+    assert [s.condition for s in find_stranded(db_session, now=NOW)] == ["published_in_ledger_not_status"]
 
 
 def test_native_mirror_disagree_only_in_mk1_mode(db_session):
@@ -93,7 +93,7 @@ def test_native_mirror_disagree_only_in_mk1_mode(db_session):
     db_session.add(LimsSample(sample_id="P-ST-4", status="sample_received", native_status="verified",
                               date_received=datetime(2026, 9, 1, tzinfo=timezone.utc)))
     db_session.flush()
-    assert [s.condition for s in find_stranded(db_session)] == ["native_mirror_disagree"]
+    assert [s.condition for s in find_stranded(db_session, now=NOW)] == ["native_mirror_disagree"]
 
 
 def test_gave_up_tee_is_stranded(db_session):
@@ -106,7 +106,7 @@ def test_gave_up_tee_is_stranded(db_session):
     db_session.add(LimsSenaiteTeeRetry(lims_sample_pk=p.id, verb="publish", expected_state="published",
                                        attempts=8, next_attempt_at=NOW, status="gave_up"))
     db_session.flush()
-    assert [s.condition for s in find_stranded(db_session)] == ["senaite_tee_gave_up"]
+    assert [s.condition for s in find_stranded(db_session, now=NOW)] == ["senaite_tee_gave_up"]
 
 
 def test_no_admin_user_skips_flagging(db_session):
@@ -126,7 +126,7 @@ def test_addon_pending_sample_is_not_stranded(db_session):
     from workflow.stranded import find_stranded
     _base(db_session)
     _parent_with_verified_line(db_session, "P-ST-7", "waiting_for_addon_results")
-    assert find_stranded(db_session) == []
+    assert find_stranded(db_session, now=NOW) == []
 
 
 def test_flag_first_comment_carries_the_diagnosis(db_session):
@@ -191,11 +191,11 @@ def test_cancelled_after_publish_is_not_stranded(db_session):
     db_session.add(LimsSampleTransition(lims_sample_pk=p.id, verb="publish", from_status="verified",
                                         to_status="published", source="mk1", occurred_at=NOW))
     db_session.flush()
-    assert find_stranded(db_session) == []
+    assert find_stranded(db_session, now=NOW) == []
     p.status = "verified"
     p.native_status = "verified"
     db_session.flush()
-    assert [s.condition for s in find_stranded(db_session)] == ["published_in_ledger_not_status"]
+    assert [s.condition for s in find_stranded(db_session, now=NOW)] == ["published_in_ledger_not_status"]
 
 
 def test_natively_cancelled_sample_with_verified_lines_is_not_stranded(db_session):
@@ -207,4 +207,4 @@ def test_natively_cancelled_sample_with_verified_lines_is_not_stranded(db_sessio
     p = _parent_with_verified_line(db_session, "P-ST-12", "sample_received")
     p.native_status = "cancelled"
     db_session.flush()
-    assert find_stranded(db_session) == []
+    assert find_stranded(db_session, now=NOW) == []

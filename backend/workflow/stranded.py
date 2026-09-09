@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Optional
 
@@ -41,11 +41,16 @@ class Stranded:
     diagnosis: str
 
 
-def _recent_samples(db: Session, since_days: int) -> list[LimsSample]:
+def _recent_samples(db: Session, since_days: int,
+                    now: Optional[datetime] = None) -> list[LimsSample]:
     # `LimsSample.date_received` is a NAIVE `DateTime` column (models.py), so
     # the cutoff has to be naive UTC too — an aware cutoff compares against a
-    # naive column and is only accidentally right.
-    cutoff = datetime.utcnow() - timedelta(days=since_days)
+    # naive column and is only accidentally right. `now` (the job's clock,
+    # threaded from run_check) keeps the window testable; aware → naive UTC.
+    base = now or datetime.utcnow()
+    if base.tzinfo is not None:
+        base = base.astimezone(timezone.utc).replace(tzinfo=None)
+    cutoff = base - timedelta(days=since_days)
     return db.execute(
         select(LimsSample).where(LimsSample.date_received >= cutoff)
     ).scalars().all()
@@ -74,7 +79,8 @@ def _diagnosis(db: Session, sample: LimsSample, condition: str) -> str:
     return "\n".join(lines)
 
 
-def find_stranded(db: Session, *, since_days: int = 90) -> list[Stranded]:
+def find_stranded(db: Session, *, since_days: int = 90,
+                  now: Optional[datetime] = None) -> list[Stranded]:
     mk1 = sample_status_authority(db) == "mk1"
     gave_up_pks = set(db.execute(
         select(LimsSenaiteTeeRetry.lims_sample_pk).where(LimsSenaiteTeeRetry.status == "gave_up")
@@ -84,7 +90,7 @@ def find_stranded(db: Session, *, since_days: int = 90) -> list[Stranded]:
             LimsSampleTransition.verb == "publish", LimsSampleTransition.source == "mk1")
     ).scalars().all())
     out: list[Stranded] = []
-    for s in _recent_samples(db, since_days):
+    for s in _recent_samples(db, since_days, now):
         condition: Optional[str] = None
         # A cancelled sample is a deliberate dead end (spec §8): its lines stay
         # wherever they were, and a published-then-cancelled sample keeps its
@@ -144,7 +150,7 @@ def run_check(db: Session, *, now: Optional[datetime] = None, since_days: int = 
     flag_seams.register_mk1_entities()
     stats = {"flagged": 0, "resolved": 0, "skipped_no_actor": 0, "errors": 0}
     actor = _actor(db)
-    stranded = find_stranded(db, since_days=since_days)
+    stranded = find_stranded(db, since_days=since_days, now=now)
     stranded_ids = {s.sample.sample_id for s in stranded}
     if actor is None:
         stats["skipped_no_actor"] = len(stranded)

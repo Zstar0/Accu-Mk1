@@ -106,3 +106,32 @@ def test_is_event_heal_accepts_a_runtime_catalog_state(db_session):
     assert row.status == "rejected" and stats["healed"] == 2
     _heal_status(db_session, row.id, "analyzing", now, stats)      # IS vocab, never
     assert row.status == "rejected" and stats["healed"] == 2
+
+
+def test_refresh_reconcile_row_not_repeated_while_diverged_in_mk1(db_session):
+    """mk1 authority: the column never converges to SENAITE's state, so a
+    diverged sample must not re-log a reconcile row on every page view —
+    only when SENAITE's state CHANGES again."""
+    from sqlalchemy import select
+    from models import LimsSampleTransition
+    from sub_samples.service import _refresh_parent_from_senaite
+    _mode(db_session, "mk1")
+    row = LimsSample(sample_id="P-GATE-5", status="sample_received",
+                     external_lims_uid="U-GATE-5")
+    db_session.add(row)
+    db_session.flush()
+
+    def _rows():
+        return db_session.execute(select(LimsSampleTransition).where(
+            LimsSampleTransition.lims_sample_pk == row.id,
+            LimsSampleTransition.source == "reconcile")).scalars().all()
+
+    with patch("sub_samples.senaite.fetch_parent_metadata", return_value=dict(META, uid="U-GATE-5")):
+        _refresh_parent_from_senaite(db_session, row)
+        _refresh_parent_from_senaite(db_session, row)      # same SENAITE state again
+    assert [r.to_status for r in _rows()] == ["verified"]
+    with patch("sub_samples.senaite.fetch_parent_metadata",
+               return_value=dict(META, uid="U-GATE-5", review_state="published")):
+        _refresh_parent_from_senaite(db_session, row)      # SENAITE moved on
+    assert [r.to_status for r in _rows()] == ["verified", "published"]
+    assert row.status == "sample_received"
