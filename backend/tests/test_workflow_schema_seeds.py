@@ -79,10 +79,18 @@ def test_publish_edges_gate_on_verified_or_published():
     from workflow.seeds import SEED_TRANSITIONS
     publish_edges = [t for t in SEED_TRANSITIONS
                      if t[0] == "sample" and t[3] == "publish"]
-    assert len(publish_edges) == 2
+    # 2026-09-09 (spec §3.3): a THIRD seeded publish edge — the partial-publish
+    # pathway sample_received -> waiting_for_addon_results — is gated on the
+    # publish touchpoint's coa_published attestation only (no analysis-state
+    # gate: the add-on lines are still pending by definition).
+    assert len(publish_edges) == 3
     assert {t[1] for t in publish_edges} == {
-        "verified", "waiting_for_addon_results"}
-    for _scope, _frm, to, _verb, _auto, reqs, _desc in publish_edges:
+        "verified", "waiting_for_addon_results", "sample_received"}
+    for _scope, frm, to, _verb, _auto, reqs, _desc in publish_edges:
+        if frm == "sample_received":
+            assert to == "waiting_for_addon_results"
+            assert [r["kind"] for r in reqs] == ["coa_published"]
+            continue
         assert to == "published"
         gate = next(r for r in reqs if r["kind"] == "all_analyses_in_state")
         assert gate["value"] == "verified,published"
