@@ -1542,6 +1542,8 @@ git add backend/workflow/engine.py backend/main.py backend/tests/test_senaite_te
 git commit -m "feat(workflow): tee native advances to SENAITE; publish route runs native verb synchronously + queues refusals"
 ```
 
+**Execution rulings (2026-09-09, two fix rounds — the shipped code differs from the steps above in these ways):** (1) under mk1 authority the engine (`execute_verb`) is the SINGLE `lims_sample_transitions` writer for the verbs it executes — the explicit `record_sample_transition(source="mk1")` calls at the receive phase, `_after_publish_native` and `_record_sample_transition_bg` are skipped when `sample_status_authority(db) == "mk1"` (spec §4.1 "one row"); a refused engine verb therefore leaves no ledger row in that mode (the refusal lives in the shadow evaluations). (2) `_write_status_if_authoritative` takes the engine's pre-advance native state as the ledger's `from_status` instead of reading `sample.status` — the receive path heals `status` before the engine runs, which produced `sample_received → sample_received`. (3) Two pre-flip tests in `tests/test_sample_transition_log.py` were stale by spec §4.4/§5 and now pin the new behaviour (a SENAITE `to_be_verified` read-back still logs the native publish and queues a retry; a recorder exception inside `_after_publish_native` never fails the route). (4) The route-test fixture needs one verified `LimsAnalysis` row: the seeded publish edge's all-analyses gate fails closed on zero lines.
+
 ---
 
 ### Task 10: Stranded-sample detector (flags)
