@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useEffect, useState, type ReactNode } from 'react'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { Loader2, XCircle } from 'lucide-react'
 import {
   Bar,
@@ -17,8 +17,12 @@ import {
 } from 'recharts'
 import { cn } from '@/lib/utils'
 import { getThroughput } from '@/lib/api'
-import type { ThroughputDay, ThroughputReport as Report } from '@/lib/api'
-import { Checkbox } from '@/components/ui/checkbox'
+import type {
+  ThroughputDay,
+  ThroughputQuery,
+  ThroughputReport as Report,
+} from '@/lib/api'
+import { Input } from '@/components/ui/input'
 import {
   AGE_ORDER,
   RANGE_KEYS,
@@ -58,6 +62,7 @@ const INTAKE = '#9ca3af'
 const ACCENT = '#1FA3BE'
 
 type FamilyKey = 'hplc' | 'ster' | 'endo' | 'bacw' | 'hm' | 'other'
+const CORE_FAMILIES: FamilyKey[] = ['hplc', 'ster', 'endo', 'bacw']
 const FAMILIES: { k: FamilyKey; name: string }[] = [
   { k: 'hplc', name: 'HPLC panel' },
   { k: 'ster', name: 'Sterility' },
@@ -826,15 +831,54 @@ const CHART_SM = 'h-[240px]'
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
+/** Debounce a text input so the Order # box doesn't refetch per keystroke. */
+function useDebounced<T>(value: T, ms: number): T {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), ms)
+    return () => clearTimeout(t)
+  }, [value, ms])
+  return debounced
+}
+
+// Chip look mirrors the Vial Status board's lane chips (its neutral-violet
+// fallback — the report has no catalog role colours to borrow).
+const CHIP_ON =
+  'bg-violet-500/15 text-violet-700 border-violet-500/40 dark:text-violet-300'
+const CHIP_OFF =
+  'bg-transparent text-muted-foreground border-border hover:bg-muted/40'
+
 export function ThroughputReport() {
   const [range, setRange] = useState<RangeKey>('90')
   const [hideTestOrders, setHideTestOrders] = useState(true)
+  const [department, setDepartment] = useState('')
+  const [family, setFamily] = useState('')
+  const [client, setClient] = useState('')
+  const [orderInput, setOrderInput] = useState('')
+  const order = useDebounced(orderInput.trim(), 400)
 
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['reports', 'throughput', !hideTestOrders],
-    queryFn: () => getThroughput(!hideTestOrders),
+  const query: ThroughputQuery = {
+    includeTestOrders: !hideTestOrders,
+    client,
+    order,
+    departments: department ? [department] : [],
+    families: family ? [family] : [],
+  }
+  const { data, isLoading, isFetching, error } = useQuery({
+    queryKey: ['reports', 'throughput', query],
+    queryFn: () => getThroughput(query),
     staleTime: 60_000,
+    // Filters refetch server-side; keep the last report (and its facets) on
+    // screen while the next one loads so the chips never blink away.
+    placeholderData: keepPreviousData,
   })
+
+  const facets = data?.facets
+  const subChips =
+    department && facets
+      ? facets.families.filter(f => f.department === department)
+      : []
+  const scoped = Boolean(client || order || department || family)
 
   return (
     <div className="flex flex-col gap-4 p-4 h-full overflow-auto">
@@ -846,36 +890,152 @@ export function ThroughputReport() {
             Tests, samples, COAs and bench load per day
             {data &&
               ` · ${shortDay(data.start)} – ${shortDay(data.today)} · lab time (${data.tz})`}
+            {isFetching && data && ' · updating…'}
           </p>
         </div>
-        <div className="flex items-center gap-4">
-          <label className="flex items-center gap-2 text-sm text-muted-foreground whitespace-nowrap cursor-pointer">
-            <Checkbox
-              checked={hideTestOrders}
-              onCheckedChange={checked => setHideTestOrders(checked === true)}
-            />
-            Hide test orders
-          </label>
-          <div className="flex rounded-md border border-border/50 overflow-hidden">
-            {RANGE_KEYS.map(r => (
+        <div className="flex rounded-md border border-border/50 overflow-hidden">
+          {RANGE_KEYS.map(r => (
+            <button
+              key={r}
+              type="button"
+              aria-pressed={range === r}
+              onClick={() => setRange(r)}
+              className={cn(
+                'px-3 py-1 text-xs font-medium transition-colors cursor-pointer',
+                range === r
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50'
+              )}
+            >
+              {r === 'all' ? 'All' : `${r}d`}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Department chips — same block as the Vial Status board; the filter is
+          applied server-side, so each click is a (cached, ~50 ms) refetch. */}
+      <div className="flex flex-col gap-2">
+        {facets && (
+          <div className="flex flex-wrap items-center gap-2">
+            {[
+              { key: '', name: 'All departments', tests: 0 },
+              ...facets.departments,
+            ].map(d => (
               <button
-                key={r}
+                key={d.key || 'all'}
                 type="button"
-                aria-pressed={range === r}
-                onClick={() => setRange(r)}
+                aria-pressed={department === d.key}
+                onClick={() => {
+                  setDepartment(d.key)
+                  setFamily('')
+                }}
+                title={
+                  d.key
+                    ? `${d.tests} test${d.tests === 1 ? '' : 's'}`
+                    : undefined
+                }
                 className={cn(
-                  'px-3 py-1 text-xs font-medium transition-colors cursor-pointer',
-                  range === r
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                  'inline-flex items-center rounded-full border px-3 py-1 text-sm font-medium transition-colors',
+                  department === d.key ? CHIP_ON : CHIP_OFF
                 )}
               >
-                {r === 'all' ? 'All' : `${r}d`}
+                {d.name}
               </button>
             ))}
           </div>
+        )}
+        {subChips.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 pl-4">
+            <span
+              className="text-muted-foreground/40 select-none"
+              aria-hidden="true"
+            >
+              &#8627;
+            </span>
+            {[
+              {
+                key: '',
+                name: 'All',
+                tests: subChips.reduce((n, f) => n + f.tests, 0),
+              },
+              ...subChips,
+            ].map(f => (
+              <button
+                key={f.key || 'all'}
+                type="button"
+                aria-pressed={family === f.key}
+                onClick={() => setFamily(f.key)}
+                className={cn(
+                  'inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors',
+                  family === f.key ? CHIP_ON : CHIP_OFF
+                )}
+              >
+                {f.name}
+                <span className="tabular-nums text-[10px] opacity-60">
+                  {f.tests}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+        {/* Filter bar */}
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            aria-label="Customer"
+            value={client}
+            onChange={e => setClient(e.target.value)}
+            className="h-8 max-w-64 rounded-md border border-border bg-transparent px-2 text-sm text-muted-foreground"
+          >
+            <option value="">All customers</option>
+            {(facets?.clients ?? []).map(c => (
+              <option key={c.name} value={c.name}>
+                {c.name} ({c.samples})
+              </option>
+            ))}
+          </select>
+          <Input
+            placeholder="Order #"
+            value={orderInput}
+            onChange={e => setOrderInput(e.target.value)}
+            className="h-8 w-32 text-sm"
+          />
+          <button
+            type="button"
+            aria-pressed={hideTestOrders}
+            onClick={() => setHideTestOrders(v => !v)}
+            className={cn(
+              'rounded-md px-2.5 py-1 text-xs font-medium border transition-colors',
+              hideTestOrders
+                ? 'bg-foreground text-background border-foreground'
+                : 'bg-transparent text-muted-foreground border-border hover:border-foreground/40 hover:text-foreground'
+            )}
+          >
+            Hide test orders
+          </button>
+          {scoped && (
+            <button
+              type="button"
+              onClick={() => {
+                setDepartment('')
+                setFamily('')
+                setClient('')
+                setOrderInput('')
+              }}
+              className="rounded-md px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+            >
+              Clear filters
+            </button>
+          )}
         </div>
       </div>
+
+      {data?.cache.stale && (
+        <p className="text-xs text-amber-400">
+          Integration Service unreachable — showing rows cached{' '}
+          {data.cache.age_seconds}s ago.
+        </p>
+      )}
 
       {isLoading && (
         <div className="flex items-center justify-center py-20">
@@ -883,23 +1043,32 @@ export function ThroughputReport() {
         </div>
       )}
 
-      {error && (
+      {error && !data && (
         <div className="flex items-center gap-2 text-red-400 py-8 justify-center text-sm">
           <XCircle className="h-4 w-4" />
           Failed to load throughput data
         </div>
       )}
 
-      {data && <ReportBody data={data} range={range} />}
+      {data && <ReportBody data={data} range={range} scoped={scoped} />}
     </div>
   )
 }
 
-function ReportBody({ data, range }: { data: Report; range: RangeKey }) {
+function ReportBody({
+  data,
+  range,
+  scoped,
+}: {
+  data: Report
+  range: RangeKey
+  scoped: boolean
+}) {
   const days = data.days
-  // The optional families only take a legend slot when the data has them.
-  const present: FamilyKey[] = FAMILIES.map(f => f.k).filter(k =>
-    k === 'other' || k === 'hm' ? days.some(d => d[k] > 0) : true
+  // Unscoped: the four core families always hold a legend slot, the optional ones
+  // (heavy metals, other) only when the data has them. Scoped: data-driven only.
+  const present: FamilyKey[] = FAMILIES.map(f => f.k).filter(
+    k => days.some(d => d[k] > 0) || (!scoped && CORE_FAMILIES.includes(k))
   )
   const legend = FAMILIES.filter(f => present.includes(f.k)).map(f => ({
     name: f.name,

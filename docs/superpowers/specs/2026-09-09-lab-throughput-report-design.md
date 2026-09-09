@@ -55,8 +55,22 @@ today is partial; open samples older than 30 days are largely stale/abandoned wo
 - Test orders (billing e-mail in `TEST_EMAILS`, via the existing `_test_order_senaite_ids()`)
   are **excluded by default**; `include_test_orders=true` includes them. The offline report
   did not exclude them, so in-app numbers may differ by a handful.
-- IS DB failure → **503** like the other IS-backed reports. No server cache for v1
-  (TanStack `staleTime` like siblings).
+- IS DB failure → **503** like the other IS-backed reports.
+- **Server-side filters (added 2026-09-09 after UAT):** `client=` (exact `client_title`,
+  case-insensitive), `order=` (exact `client_order_number`), repeatable `department=`
+  (`analytical` | `microbiology` | `heavy_metals`) and `family=` (`hplc` | `ster` | `endo` |
+  `bacw` | `hm` | `other`; unknown values → 422). A sample is kept when it matches the customer
+  and order and has at least one test in scope; when any filter is set, COA output, bench rows
+  and backlog are restricted to the kept samples. The response carries `facets` (customers with
+  sample counts, departments and families with test counts, computed **before** the scoping
+  filters so the dropdowns stay stable) and `filters` (echo). Departments are mapped from the
+  family, not from `analysis_services.department_id`, because prod still files heavy-metals
+  services under Analytical.
+- **Row cache:** the expensive part is the fetch (IS `coa_generations`, the `order_submissions`
+  test-order scan, ~30k Mk1 rows ≈ 1 s), not the engine (~ms). Rows are cached per process for
+  60 s and filters are applied per request, so a filter change is a ~50 ms round trip with the
+  same ~60 KB day-row response. If a refresh fails and a warm cache exists, the cached rows are
+  served with `cache.stale = true` (the page shows a notice); with no cache it is the usual 503.
 
 Response shape:
 
@@ -85,6 +99,14 @@ Response shape:
 - Wired like its siblings: `'throughput'` added to `ReportsSubSection` in the ui-store,
   a case in `MainWindowContent`, an entry in `AppSidebar` after Check-In Times,
   `getThroughput()` in `api.ts`.
+- **Filter block (copied from the Vial Status board):** department chips (All departments /
+  Analytical / Microbiology / Heavy Metals, from `facets.departments`) with family sub-chips
+  and counts for the chosen department; a Customer `<select>` from `facets.clients`; an
+  Order # input (debounced); the "Hide test orders" toggle; Clear filters. Every change
+  refetches (`placeholderData: keepPreviousData` keeps the last report and its facets on
+  screen while the next loads). Tech is deliberately NOT here — it belongs to work done on
+  vials/analyses (analyst on `lims_analyses`, processor on `hplc_analyses`), a vial-grain view
+  that should live as a History tab on the Vial Status board.
 - v1 sections (parity with the offline report minus the client/peptide mix):
   1. **StatCard row** — last 30 vs prior 30 calendar days, per business day: tests, samples
      (+ vials received), COAs published (+ samples completed), HPLC vials run, add-on attach

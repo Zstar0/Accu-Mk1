@@ -6188,6 +6188,44 @@ export interface ThroughputBacklogNow {
   age: Record<string, number>
 }
 
+/** Echo of the server-side scoping that produced the day rows. */
+export interface ThroughputFilters {
+  client: string | null
+  order: string | null
+  departments: string[]
+  families: string[]
+}
+
+export interface ThroughputClientFacet {
+  name: string
+  samples: number
+}
+
+export interface ThroughputDepartmentFacet {
+  key: string // 'analytical' | 'microbiology' | 'heavy_metals'
+  name: string
+  tests: number
+}
+
+export interface ThroughputFamilyFacet {
+  key: string // 'hplc' | 'ster' | 'endo' | 'bacw' | 'hm' | 'other'
+  name: string
+  department: string
+  tests: number
+}
+
+/** Dropdown / chip options with counts — computed before the scoping filters. */
+export interface ThroughputFacets {
+  clients: ThroughputClientFacet[]
+  departments: ThroughputDepartmentFacet[]
+  families: ThroughputFamilyFacet[]
+}
+
+export interface ThroughputCache {
+  stale: boolean // the refresh failed and cached rows were served
+  age_seconds: number
+}
+
 export interface ThroughputReport {
   start: string
   end: string
@@ -6198,11 +6236,30 @@ export interface ThroughputReport {
   holidays: string[]
   days: ThroughputDay[]
   backlog_now: ThroughputBacklogNow
+  filters: ThroughputFilters
+  facets: ThroughputFacets
+  cache: ThroughputCache
   notes: { jan_excluded: boolean; vials_from: string; bench_from: string }
 }
 
-export async function getThroughput(includeTestOrders = false): Promise<ThroughputReport> {
-  const suffix = includeTestOrders ? '?include_test_orders=true' : ''
+export interface ThroughputQuery {
+  includeTestOrders?: boolean
+  client?: string
+  order?: string
+  departments?: string[]
+  families?: string[]
+}
+
+export async function getThroughput(query: ThroughputQuery = {}): Promise<ThroughputReport> {
+  const qs = new URLSearchParams()
+  if (query.includeTestOrders) qs.set('include_test_orders', 'true')
+  const client = query.client?.trim()
+  if (client) qs.set('client', client)
+  const order = query.order?.trim()
+  if (order) qs.set('order', order)
+  for (const d of query.departments ?? []) qs.append('department', d)
+  for (const f of query.families ?? []) qs.append('family', f)
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
   const response = await fetch(`${API_BASE_URL()}/reports/throughput${suffix}`, {
     headers: getBearerHeaders(),
   })

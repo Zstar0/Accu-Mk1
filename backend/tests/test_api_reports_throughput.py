@@ -46,6 +46,8 @@ def _use(monkeypatch, inputs, coas=(), test_ids=frozenset(), fetch=None):
     monkeypatch.setattr(main_module, "_load_throughput_inputs", lambda db: inputs)
     monkeypatch.setattr(main_module, "_fetch_throughput_coas", fetch or (lambda: list(coas)))
     monkeypatch.setattr(main_module, "_test_order_senaite_ids", lambda: set(test_ids))
+    # Every test starts with a cold row cache so cached rows from one test never leak into the next.
+    monkeypatch.setattr(main_module, "_throughput_rows_cache", {})
 
 
 def _sample(pk, sid, received, status="sample_received"):
@@ -120,6 +122,97 @@ def test_integration_db_failure_is_503(monkeypatch):
     assert "Reports database error" in resp.json()["detail"]
 
 
+# ---------------------------------------------------------------- filters + facets + row cache
+
+
+def _customers():
+    return _inputs(
+        samples=[
+            SampleIn(pk=1, sample_id="P-1", date_received=datetime(2026, 7, 1, 18, 0), status="sample_received", client="Acme Peptides", order="3271"),
+            SampleIn(pk=2, sample_id="B-1", date_received=datetime(2026, 7, 2, 18, 0), status="sample_received", client="Beta Labs", order="4001"),
+        ],
+        analyses=[AnalysisIn(1, "STER-PCR"), AnalysisIn(2, "LEAD-PPM")],
+    )
+
+
+def test_client_order_department_and_family_params_reach_the_engine(monkeypatch):
+    _use(monkeypatch, _customers())
+    by_client = client.get("/reports/throughput", params={"client": "Beta Labs"}).json()
+    assert sum(d["samples"] for d in by_client["days"]) == 1
+    assert by_client["filters"]["client"] == "Beta Labs"
+
+    by_order = client.get("/reports/throughput", params={"order": "3271"}).json()
+    assert sum(d["samples"] for d in by_order["days"]) == 1
+
+    by_dept = client.get("/reports/throughput", params=[("department", "microbiology"), ("department", "heavy_metals")]).json()
+    assert by_dept["filters"]["departments"] == ["microbiology", "heavy_metals"]
+    assert sum(d["tests"] for d in by_dept["days"]) == 2
+
+    by_family = client.get("/reports/throughput", params={"department": "microbiology", "family": "ster"}).json()
+    assert by_family["filters"]["families"] == ["ster"]
+    assert sum(d["samples"] for d in by_family["days"]) == 1
+
+
+def test_unknown_department_or_family_is_a_422(monkeypatch):
+    _use(monkeypatch, _customers())
+    assert client.get("/reports/throughput", params={"department": "plumbing"}).status_code == 422
+    assert client.get("/reports/throughput", params={"family": "plumbing"}).status_code == 422
+
+
+def test_facets_ride_in_the_response_and_ignore_the_active_filters(monkeypatch):
+    _use(monkeypatch, _customers())
+    body = client.get("/reports/throughput", params={"client": "Beta Labs"}).json()
+    assert [c["name"] for c in body["facets"]["clients"]] == ["Acme Peptides", "Beta Labs"]
+    assert [d["key"] for d in body["facets"]["departments"]] == ["analytical", "microbiology", "heavy_metals"]
+    assert any(f["key"] == "hm" and f["tests"] == 1 for f in body["facets"]["families"])
+
+
+def test_rows_are_fetched_once_per_ttl_window_across_filter_changes(monkeypatch):
+    calls = {"inputs": 0, "coas": 0, "ids": 0}
+    inputs = _customers()
+
+    def _load(db):
+        calls["inputs"] += 1
+        return inputs
+
+    def _coas():
+        calls["coas"] += 1
+        return []
+
+    def _ids():
+        calls["ids"] += 1
+        return set()
+
+    _use(monkeypatch, inputs)
+    monkeypatch.setattr(main_module, "_load_throughput_inputs", _load)
+    monkeypatch.setattr(main_module, "_fetch_throughput_coas", _coas)
+    monkeypatch.setattr(main_module, "_test_order_senaite_ids", _ids)
+
+    assert client.get("/reports/throughput").status_code == 200
+    assert client.get("/reports/throughput", params={"client": "Beta Labs"}).status_code == 200
+    assert client.get("/reports/throughput", params={"include_test_orders": "true"}).status_code == 200
+    assert calls == {"inputs": 1, "coas": 1, "ids": 1}
+
+    # Past the TTL the next request refreshes every source.
+    monkeypatch.setattr(main_module, "_THROUGHPUT_CACHE_TTL_SECONDS", 0)
+    assert client.get("/reports/throughput").status_code == 200
+    assert calls == {"inputs": 2, "coas": 2, "ids": 2}
+
+
+def test_integration_db_failure_after_a_warm_cache_still_serves_the_cached_rows(monkeypatch):
+    _use(monkeypatch, _customers())
+    assert client.get("/reports/throughput").status_code == 200
+
+    def _boom():
+        raise RuntimeError("no IS")
+
+    monkeypatch.setattr(main_module, "_fetch_throughput_coas", _boom)
+    monkeypatch.setattr(main_module, "_THROUGHPUT_CACHE_TTL_SECONDS", 0)
+    resp = client.get("/reports/throughput")
+    assert resp.status_code == 200
+    assert resp.json()["cache"]["stale"] is True
+
+
 # ---------------------------------------------------------------- ORM loader
 
 
@@ -144,7 +237,7 @@ def test_load_throughput_inputs_reads_the_orm_tables(db_session):
     inst = Instrument(name="1290a")
     db.add(inst)
     old = LimsSample(sample_id="P-OLD", external_lims_uid="u0", date_received=datetime(2026, 1, 15, 18, 0), status="published")
-    s = LimsSample(sample_id="P-1", external_lims_uid="u1", date_received=datetime(2026, 7, 1, 18, 0), status="sample_received", client_title="acme", is_retest=True)
+    s = LimsSample(sample_id="P-1", external_lims_uid="u1", date_received=datetime(2026, 7, 1, 18, 0), status="sample_received", client_title="acme", is_retest=True, client_order_number="3271")
     bare = LimsSample(sample_id="P-2", external_lims_uid="u2", date_received=datetime(2026, 7, 1, 19, 0), status=None, client_title=None)
     db.add_all([old, s, bare])
     db.flush()
@@ -173,6 +266,7 @@ def test_load_throughput_inputs_reads_the_orm_tables(db_session):
 
     assert [x.sample_id for x in out["samples"]] == ["P-1", "P-2"]  # January row filtered at the DB
     assert out["samples"][0].is_retest is True and out["samples"][0].client == "acme"
+    assert out["samples"][0].order == "3271"
     assert out["samples"][1].status is None and out["samples"][1].client is None  # engine normalises these
     assert out["analyses"] == [AnalysisIn(s.id, "STER-PCR")]  # DISTINCT across provenance
     assert out["vial_counts"] == {s.id: 2}

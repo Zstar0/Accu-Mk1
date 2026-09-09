@@ -9979,6 +9979,42 @@ class ThroughputBacklogNowOut(BaseModel):
     age: dict[str, int]
 
 
+class ThroughputFiltersOut(BaseModel):
+    client: Optional[str] = None
+    order: Optional[str] = None
+    departments: list[str] = []
+    families: list[str] = []
+
+
+class ThroughputClientFacet(BaseModel):
+    name: str
+    samples: int
+
+
+class ThroughputDepartmentFacet(BaseModel):
+    key: str
+    name: str
+    tests: int
+
+
+class ThroughputFamilyFacet(BaseModel):
+    key: str
+    name: str
+    department: str
+    tests: int
+
+
+class ThroughputFacetsOut(BaseModel):
+    clients: list[ThroughputClientFacet]
+    departments: list[ThroughputDepartmentFacet]
+    families: list[ThroughputFamilyFacet]
+
+
+class ThroughputCacheOut(BaseModel):
+    stale: bool            # True when the refresh failed and cached rows were served
+    age_seconds: int
+
+
 class ThroughputReportOut(BaseModel):
     start: str
     end: str
@@ -9989,7 +10025,53 @@ class ThroughputReportOut(BaseModel):
     holidays: list[str]
     days: list[ThroughputDayOut]
     backlog_now: ThroughputBacklogNowOut
+    filters: ThroughputFiltersOut
+    facets: ThroughputFacetsOut
+    cache: ThroughputCacheOut
     notes: dict[str, Any]
+
+
+ThroughputDepartmentKey = Literal["analytical", "microbiology", "heavy_metals"]
+ThroughputFamilyKey = Literal["hplc", "ster", "endo", "bacw", "hm", "other"]
+
+# Row cache: the expensive part of the report is FETCHING (IS coa_generations,
+# the order_submissions payload scan for test orders, ~30k Mk1 rows), not the
+# engine (~ms). Filters are applied per request on the cached rows, so a filter
+# change is a cheap round trip instead of a ~1 s refetch. One entry per process.
+_THROUGHPUT_CACHE_TTL_SECONDS = 60
+_throughput_rows_cache: dict = {}
+import threading as _threading  # noqa: E402
+_throughput_rows_lock = _threading.Lock()
+
+
+def _throughput_rows(db: Session) -> tuple[dict, bool]:
+    """Return ``(rows, stale)``; refreshes once per TTL window.
+
+    If the refresh fails (Integration Service down) and a warm cache exists,
+    the cached rows are served with ``stale=True``; with no cache it raises
+    the same 503 as the sibling reports.
+    """
+    import time as _time
+
+    now = _time.monotonic()
+    cached = _throughput_rows_cache
+    if cached and now - cached["at"] < _THROUGHPUT_CACHE_TTL_SECONDS:
+        return cached, False
+    with _throughput_rows_lock:
+        cached = _throughput_rows_cache
+        if cached and now - cached["at"] < _THROUGHPUT_CACHE_TTL_SECONDS:
+            return cached, False
+        try:
+            coas = _fetch_throughput_coas()
+            inputs = _load_throughput_inputs(db)
+            test_ids = frozenset(_test_order_senaite_ids())
+        except Exception as e:
+            if cached:
+                return cached, True
+            raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
+        _throughput_rows_cache.clear()
+        _throughput_rows_cache.update({"at": now, "coas": coas, "inputs": inputs, "test_ids": test_ids})
+        return _throughput_rows_cache, False
 
 
 def _load_throughput_inputs(db: Session) -> dict:
@@ -10019,8 +10101,9 @@ def _load_throughput_inputs(db: Session) -> dict:
             status=status_,
             client=client_title,
             is_retest=bool(is_retest),
+            order=order_no,
         )
-        for pk, sid, received, status_, client_title, is_retest in db.execute(
+        for pk, sid, received, status_, client_title, is_retest, order_no in db.execute(
             select(
                 LimsSample.id,
                 LimsSample.sample_id,
@@ -10028,6 +10111,7 @@ def _load_throughput_inputs(db: Session) -> dict:
                 LimsSample.status,
                 LimsSample.client_title,
                 LimsSample.is_retest,
+                LimsSample.client_order_number,
             ).where(LimsSample.date_received.is_not(None), LimsSample.date_received >= window_start)
         ).all()
     ]
@@ -10095,6 +10179,10 @@ def reports_throughput(
     from_date: Optional[str] = Query(None, alias="from"),
     to_date: Optional[str] = Query(None, alias="to"),
     include_test_orders: bool = Query(False),
+    client: Optional[str] = Query(None, description="Exact customer (client_title), case-insensitive"),
+    order: Optional[str] = Query(None, description="Exact client_order_number"),
+    department: list[ThroughputDepartmentKey] = Query(default=[]),
+    family: list[ThroughputFamilyKey] = Query(default=[]),
     db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
@@ -10108,28 +10196,34 @@ def reports_throughput(
     every analysis row. Weekly/monthly rollups still happen in the browser.
 
     Test orders (billing e-mail in TEST_EMAILS) are excluded unless
-    ``include_test_orders=true``. ``from``/``to`` (inclusive YYYY-MM-DD) slice
-    the returned day series; the backlog value on the first returned day still
-    carries the history before the window. Plain ``def`` on purpose: the DB
-    work is synchronous and runs in the threadpool.
+    ``include_test_orders=true``. ``client`` / ``order`` / ``department`` /
+    ``family`` scope the counted samples server-side (rows come from a
+    60-second per-process cache, so a filter change is cheap); the response
+    carries ``facets`` for the dropdowns and ``filters`` echoing what was
+    applied. ``from``/``to`` (inclusive YYYY-MM-DD) slice the returned day
+    series; the backlog value on the first returned day still carries the
+    history before the window. Plain ``def`` on purpose: the DB work is
+    synchronous and runs in the threadpool.
     """
-    # Integration Service first so an outage fails fast, before the Mk1 queries.
-    try:
-        coas = _fetch_throughput_coas()
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
-    inputs = _load_throughput_inputs(db)
+    import time as _time
 
-    excluded = frozenset() if include_test_orders else frozenset(_test_order_senaite_ids())
+    rows, stale = _throughput_rows(db)
+    inputs = rows["inputs"]
+    excluded = frozenset() if include_test_orders else rows["test_ids"]
     now_utc = datetime.now(timezone.utc)
     today = throughput_lab_day(now_utc, inputs["calendar"].tz)
     report = build_throughput(
         **inputs,
-        coas=coas,
+        coas=rows["coas"],
         start=THROUGHPUT_SERIES_START,
         today=today,
         excluded_sample_ids=excluded,
+        client=client,
+        order=order,
+        departments=list(department),
+        families=list(family),
     )
+    report["cache"] = {"stale": stale, "age_seconds": int(max(0.0, _time.monotonic() - rows["at"]))}
 
     lo = _parse_day_bound(from_date, end=False)
     hi = _parse_day_bound(to_date, end=True)

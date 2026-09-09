@@ -109,8 +109,58 @@ function report(): Report {
       status: { sample_received: 9, waiting_for_addon_results: 5 },
       age: { '0-2d': 6, '3-7d': 3, '>30d': 5 },
     },
+    filters: { client: null, order: null, departments: [], families: [] },
+    facets: {
+      clients: [
+        { name: 'Acme Peptides', samples: 120 },
+        { name: 'Beta Labs', samples: 40 },
+      ],
+      departments: [
+        { key: 'analytical', name: 'Analytical', tests: 300 },
+        { key: 'microbiology', name: 'Microbiology', tests: 200 },
+        { key: 'heavy_metals', name: 'Heavy Metals', tests: 0 },
+      ],
+      families: [
+        {
+          key: 'hplc',
+          name: 'HPLC panel',
+          department: 'analytical',
+          tests: 280,
+        },
+        {
+          key: 'ster',
+          name: 'Sterility',
+          department: 'microbiology',
+          tests: 130,
+        },
+        {
+          key: 'endo',
+          name: 'Endotoxin',
+          department: 'microbiology',
+          tests: 70,
+        },
+        {
+          key: 'bacw',
+          name: 'Bac Water panel',
+          department: 'analytical',
+          tests: 20,
+        },
+        {
+          key: 'hm',
+          name: 'Heavy metals',
+          department: 'heavy_metals',
+          tests: 0,
+        },
+        { key: 'other', name: 'Other', department: 'analytical', tests: 0 },
+      ],
+    },
+    cache: { stale: false, age_seconds: 3 },
     notes: { jan_excluded: true, vials_from: '2026-06', bench_from: '2026-03' },
   }
+}
+
+function lastCall() {
+  return mockGet.mock.calls[mockGet.mock.calls.length - 1]?.[0]
 }
 
 function renderPage() {
@@ -187,13 +237,106 @@ describe('ThroughputReport', () => {
     expect(screen.getByText(/9 live/)).toBeInTheDocument()
   })
 
-  it('refetches with include_test_orders when "Hide test orders" is unticked', async () => {
+  it('refetches with includeTestOrders when "Hide test orders" is toggled off', async () => {
     renderPage()
-    await waitFor(() => expect(mockGet).toHaveBeenCalledWith(false))
+    await waitFor(() =>
+      expect(lastCall()).toMatchObject({ includeTestOrders: false })
+    )
 
-    fireEvent.click(screen.getByRole('checkbox', { name: /hide test orders/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Hide test orders' }))
 
-    await waitFor(() => expect(mockGet).toHaveBeenCalledWith(true))
+    await waitFor(() =>
+      expect(lastCall()).toMatchObject({ includeTestOrders: true })
+    )
+  })
+
+  it('renders department chips from the facets and refetches with the chosen department', async () => {
+    renderPage()
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Microbiology' })
+      ).toBeInTheDocument()
+    )
+    expect(
+      screen.getByRole('button', { name: 'All departments' })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Heavy Metals' })
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Microbiology' }))
+
+    await waitFor(() =>
+      expect(lastCall()).toMatchObject({
+        departments: ['microbiology'],
+        families: [],
+      })
+    )
+    // Family sub-chips for the chosen department, with their facet counts.
+    expect(
+      screen.getByRole('button', { name: /^Sterility\s*130$/ })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /^Endotoxin\s*70$/ })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /^HPLC panel/ })
+    ).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /^Endotoxin\s*70$/ }))
+    await waitFor(() =>
+      expect(lastCall()).toMatchObject({
+        departments: ['microbiology'],
+        families: ['endo'],
+      })
+    )
+  })
+
+  it('offers the customers from the facets and refetches with the chosen one', async () => {
+    renderPage()
+    await waitFor(() =>
+      expect(
+        screen.getByRole('combobox', { name: 'Customer' })
+      ).toBeInTheDocument()
+    )
+    const select = screen.getByRole('combobox', { name: 'Customer' })
+    // The select is on screen before the data; its options arrive with the facets.
+    await waitFor(() =>
+      expect(
+        within(select).getByRole('option', { name: /Acme Peptides/ })
+      ).toBeInTheDocument()
+    )
+
+    fireEvent.change(select, { target: { value: 'Beta Labs' } })
+
+    await waitFor(() =>
+      expect(lastCall()).toMatchObject({ client: 'Beta Labs' })
+    )
+  })
+
+  it('refetches with the order number typed into the Order # box', async () => {
+    renderPage()
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText('Order #')).toBeInTheDocument()
+    )
+
+    fireEvent.change(screen.getByPlaceholderText('Order #'), {
+      target: { value: '3271' },
+    })
+
+    await waitFor(() => expect(lastCall()).toMatchObject({ order: '3271' }))
+  })
+
+  it('warns when the server served stale cached rows', async () => {
+    const stale = report()
+    stale.cache = { stale: true, age_seconds: 95 }
+    mockGet.mockResolvedValue(stale)
+    renderPage()
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Integration Service unreachable/)
+      ).toBeInTheDocument()
+    )
   })
 
   it('lists every month in the monthly table with the partial month flagged', async () => {

@@ -29,7 +29,7 @@ def cal(holidays=()):
     return LabCalendar(tz=LA, working_days=WEEKDAYS, holidays=frozenset(holidays))
 
 
-def sample(pk, sid, received, status="sample_received", client="acme", retest=False):
+def sample(pk, sid, received, status="sample_received", client="acme", retest=False, order=None):
     return SampleIn(
         pk=pk,
         sample_id=sid,
@@ -37,6 +37,7 @@ def sample(pk, sid, received, status="sample_received", client="acme", retest=Fa
         status=status,
         client=client,
         is_retest=retest,
+        order=order,
     )
 
 
@@ -381,6 +382,102 @@ def test_coa_for_a_sample_missing_from_mk1_counts_as_published_but_not_completed
 def test_null_status_is_reported_as_unknown_in_the_backlog_snapshot():
     r = build(samples=[sample(1, "P-1", datetime(2026, 7, 6, 18, 0), status=None)])
     assert r["backlog_now"]["status"] == {"unknown": 1}
+
+
+# ---------------------------------------------------------------- filters (server-side)
+
+
+def _two_customers():
+    """acme: P-1 (HPLC + sterility, order 3271), P-2 (HPLC). beta: B-1 (heavy metals + endotoxin)."""
+    return dict(
+        samples=[
+            sample(1, "P-1", datetime(2026, 7, 1, 18, 0), client="Acme Peptides", order="3271"),
+            sample(2, "P-2", datetime(2026, 7, 2, 18, 0), client="Acme Peptides", order="3280"),
+            sample(3, "B-1", datetime(2026, 7, 2, 18, 0), client="Beta Labs", order="4001"),
+        ],
+        analyses=[
+            AnalysisIn(1, "HPLC-PUR"),
+            AnalysisIn(1, "STER-PCR"),
+            AnalysisIn(2, "HPLC-PUR"),
+            AnalysisIn(3, "LEAD-PPM"),
+            AnalysisIn(3, "ENDO-LAL"),
+        ],
+        vial_counts={1: 2, 2: 1, 3: 3},
+        coas=[
+            CoaIn("P-1", datetime(2026, 7, 3, 18, 0), True),
+            CoaIn("B-1", datetime(2026, 7, 3, 18, 0), True),
+            CoaIn("GHOST", datetime(2026, 7, 3, 18, 0), True),
+        ],
+        bench=[
+            BenchIn("P-1-S01", datetime(2026, 7, 3, 18, 0), 1),
+            BenchIn("B-1-S01", datetime(2026, 7, 3, 18, 0), 1),
+        ],
+        instruments={1: "1290a"},
+    )
+
+
+def test_client_filter_is_a_case_insensitive_exact_match_on_client_title():
+    r = build(**_two_customers(), client="acme peptides")
+    assert sum(d["samples"] for d in r["days"]) == 2
+    assert day(r, "2026-07-01")["ster"] == 1
+    assert day(r, "2026-07-02")["hm"] == 0
+    assert r["filters"]["client"] == "acme peptides"
+
+
+def test_order_filter_matches_the_client_order_number():
+    r = build(**_two_customers(), order=" 3271 ")
+    assert sum(d["samples"] for d in r["days"]) == 1
+    assert day(r, "2026-07-01")["vials"] == 2
+
+
+def test_department_filter_counts_only_that_departments_tests_and_samples():
+    r = build(**_two_customers(), departments=frozenset({"microbiology"}))
+    # P-1 (sterility) and B-1 (endotoxin) have microbiology tests; P-2 does not.
+    assert sum(d["samples"] for d in r["days"]) == 2
+    assert sum(d["tests"] for d in r["days"]) == 2
+    assert sum(d["hplc"] for d in r["days"]) == 0
+    assert sum(d["hm"] for d in r["days"]) == 0
+    assert day(r, "2026-07-01")["ster"] == 1 and day(r, "2026-07-02")["endo"] == 1
+
+
+def test_family_filter_narrows_within_the_department():
+    r = build(**_two_customers(), departments=frozenset({"microbiology"}), families=frozenset({"endo"}))
+    assert sum(d["samples"] for d in r["days"]) == 1
+    assert sum(d["tests"] for d in r["days"]) == 1
+    assert day(r, "2026-07-02")["endo"] == 1 and day(r, "2026-07-01")["ster"] == 0
+
+
+def test_scoped_filters_restrict_coas_bench_and_backlog_to_the_kept_samples():
+    r = build(**_two_customers(), client="Beta Labs")
+    d3 = day(r, "2026-07-03")
+    assert d3["coa"] == 1 and d3["fp"] == 1  # B-1 only; P-1 and GHOST dropped
+    assert d3["bench_vials"] == 1 and d3["bench_inst"] == {"1290a": 1}
+    assert r["backlog_now"]["total"] == 0  # B-1 published
+    unfiltered = build(**_two_customers())
+    assert day(unfiltered, "2026-07-03")["coa"] == 3  # GHOST still counts when nothing is scoped
+
+
+def test_facets_are_computed_before_client_order_and_department_filters():
+    r = build(**_two_customers(), client="Beta Labs", departments=frozenset({"heavy_metals"}))
+    f = r["facets"]
+    assert f["clients"] == [{"name": "Acme Peptides", "samples": 2}, {"name": "Beta Labs", "samples": 1}]
+    assert [d["key"] for d in f["departments"]] == ["analytical", "microbiology", "heavy_metals"]
+    by_key = {d["key"]: d for d in f["departments"]}
+    assert by_key["analytical"] == {"key": "analytical", "name": "Analytical", "tests": 2}
+    assert by_key["microbiology"]["tests"] == 2 and by_key["heavy_metals"]["tests"] == 1
+    fam = {x["key"]: x for x in f["families"]}
+    assert fam["ster"] == {"key": "ster", "name": "Sterility", "department": "microbiology", "tests": 1}
+    assert fam["other"]["department"] == "analytical" and fam["other"]["tests"] == 0
+
+
+def test_facets_honour_the_test_order_exclusion():
+    r = build(**_two_customers(), excluded_sample_ids=frozenset({"B-1"}))
+    assert [c["name"] for c in r["facets"]["clients"]] == ["Acme Peptides"]
+
+
+def test_filters_echo_defaults_when_nothing_is_scoped():
+    r = build(**_two_customers())
+    assert r["filters"] == {"client": None, "order": None, "departments": [], "families": []}
 
 
 # ---------------------------------------------------------------- envelope

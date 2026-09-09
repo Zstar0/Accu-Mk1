@@ -28,7 +28,7 @@ import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Optional
+from typing import Iterable, Optional
 from zoneinfo import ZoneInfo
 
 # January 2026 is a migration artifact (every sample shares one receipt
@@ -52,6 +52,28 @@ HM_CATEGORY = "Heavy Metals"
 HM_SUFFIX = "-PPM"
 
 FAMILIES = ("hplc", "ster", "endo", "bacw", "hm")  # once-per-sample families; "other" is per keyword
+ALL_FAMILIES = FAMILIES + ("other",)
+FAMILY_NAMES = {
+    "hplc": "HPLC panel",
+    "ster": "Sterility",
+    "endo": "Endotoxin",
+    "bacw": "Bac Water panel",
+    "hm": "Heavy metals",
+    "other": "Other",
+}
+# Department chips mirror the Vial Status board (Analytical / Microbiology / Heavy Metals).
+# Mapped from the family, not from analysis_services.department_id, because prod still
+# files the heavy-metals services under Analytical (see the hm-under-Analytical note).
+DEPARTMENTS = (("analytical", "Analytical"), ("microbiology", "Microbiology"), ("heavy_metals", "Heavy Metals"))
+DEPARTMENT_KEYS = tuple(k for k, _ in DEPARTMENTS)
+DEPARTMENT_OF_FAMILY = {
+    "hplc": "analytical",
+    "bacw": "analytical",
+    "other": "analytical",
+    "ster": "microbiology",
+    "endo": "microbiology",
+    "hm": "heavy_metals",
+}
 
 AGE_BUCKETS = (("0-2d", 2), ("3-7d", 7), ("8-14d", 14), ("15-30d", 30))
 STALE_BUCKET = ">30d"
@@ -66,6 +88,7 @@ class SampleIn:
     status: Optional[str]
     client: Optional[str]
     is_retest: bool = False
+    order: Optional[str] = None  # lims_samples.client_order_number (the WP order number)
 
 
 @dataclass(frozen=True)
@@ -156,8 +179,24 @@ def build_throughput(
     start: date,
     today: date,
     excluded_sample_ids: frozenset[str] = frozenset(),
+    client: Optional[str] = None,
+    order: Optional[str] = None,
+    departments: Optional[Iterable[str]] = None,
+    families: Optional[Iterable[str]] = None,
 ) -> dict:
+    """Build the report.
+
+    ``excluded_sample_ids`` (test orders) is applied first and also shapes the
+    facets. ``client`` / ``order`` / ``departments`` / ``families`` then scope
+    the counted samples and, when any of them is set, COA output and bench rows
+    are restricted to the kept samples too (unscoped, every published COA
+    counts, even for samples Mk1 never registered).
+    """
     tz = calendar.tz
+    dept_filter = list(dict.fromkeys(departments or ()))
+    family_filter = list(dict.fromkeys(families or ()))
+    client_key = (client or "").strip().casefold() or None
+    order_key = (order or "").strip().casefold() or None
 
     # ---- samples in window ----
     by_pk: dict[int, dict] = {}
@@ -172,13 +211,13 @@ def build_throughput(
             "d": d,
             "status": s.status or "unknown",
             "client": (s.client or "").strip() or "unknown",
+            "order": (s.order or "").strip().casefold(),
             "retest": bool(s.is_retest),
             "families": set(),
             "other": 0,
             "vials": vial_counts.get(s.pk, 0),
             "pub": None,
         }
-    by_sid = {v["sid"]: v for v in by_pk.values()}
 
     # ---- analyses: distinct (sample, keyword) ----
     seen: set[tuple[int, str]] = set()
@@ -193,11 +232,41 @@ def build_throughput(
         else:
             s["families"].add(fam)
 
+    # ---- facets: computed BEFORE the scoping filters so the dropdowns stay stable ----
+    facets = _facets(by_pk.values())
+
+    # ---- scoping filters ----
+    if family_filter:
+        in_scope = set(family_filter)
+    elif dept_filter:
+        in_scope = {f for f, dep in DEPARTMENT_OF_FAMILY.items() if dep in dept_filter}
+    else:
+        in_scope = None
+    scoped = bool(client_key or order_key or in_scope is not None)
+    if scoped:
+        kept: dict[int, dict] = {}
+        for pk, s in by_pk.items():
+            if client_key and s["client"].casefold() != client_key:
+                continue
+            if order_key and s["order"] != order_key:
+                continue
+            if in_scope is not None:
+                s["families"] = {f for f in s["families"] if f in in_scope}
+                if "other" not in in_scope:
+                    s["other"] = 0
+                if not s["families"] and not s["other"]:
+                    continue
+            kept[pk] = s
+        by_pk = kept
+    by_sid = {v["sid"]: v for v in by_pk.values()}
+
     # ---- COA output ----
     coa_day: Counter = Counter()
     acoa_day: Counter = Counter()
     for c in coas:
         if c.sample_id in excluded_sample_ids:
+            continue
+        if scoped and c.sample_id not in by_sid:
             continue
         d = lab_day(c.published_at, tz)
         if c.is_primary:
@@ -213,7 +282,10 @@ def build_throughput(
     bench_vials: dict[date, set[str]] = defaultdict(set)
     bench_inst: dict[date, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
     for b in bench:
-        if b.label in excluded_sample_ids or bench_sample_id(b.label) in excluded_sample_ids:
+        parent = bench_sample_id(b.label)
+        if b.label in excluded_sample_ids or parent in excluded_sample_ids:
+            continue
+        if scoped and b.label not in by_sid and parent not in by_sid:
             continue
         d = lab_day(b.created_at, tz)
         if d is None or d < start:
@@ -303,5 +375,31 @@ def build_throughput(
         "holidays": sorted(h.isoformat() for h in calendar.holidays if start <= h <= today),
         "days": days,
         "backlog_now": {"total": len(open_now), "status": dict(status_counts), "age": dict(age)},
+        "filters": {"client": client, "order": order, "departments": dept_filter, "families": family_filter},
+        "facets": facets,
         "notes": dict(NOTES),
+    }
+
+
+def _facets(samples: Iterable[dict]) -> dict:
+    """Dropdown/chip options with counts: customers, departments, families."""
+    clients: Counter = Counter()
+    fam_tests: Counter = Counter()
+    for s in samples:
+        clients[s["client"]] += 1
+        for f in s["families"]:
+            fam_tests[f] += 1
+        fam_tests["other"] += s["other"]
+    dept_tests: Counter = Counter()
+    for f, n in fam_tests.items():
+        dept_tests[DEPARTMENT_OF_FAMILY[f]] += n
+    return {
+        "clients": [
+            {"name": name, "samples": n} for name, n in sorted(clients.items(), key=lambda kv: (-kv[1], kv[0].casefold()))
+        ],
+        "departments": [{"key": k, "name": name, "tests": dept_tests.get(k, 0)} for k, name in DEPARTMENTS],
+        "families": [
+            {"key": f, "name": FAMILY_NAMES[f], "department": DEPARTMENT_OF_FAMILY[f], "tests": fam_tests.get(f, 0)}
+            for f in ALL_FAMILIES
+        ],
     }

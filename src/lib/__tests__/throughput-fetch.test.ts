@@ -11,35 +11,65 @@ const report = {
   holidays: [],
   days: [],
   backlog_now: { total: 0, status: {}, age: {} },
+  filters: { client: null, order: null, departments: [], families: [] },
+  facets: { clients: [], departments: [], families: [] },
+  cache: { stale: false, age_seconds: 0 },
   notes: { jan_excluded: true, vials_from: '2026-06', bench_from: '2026-03' },
+}
+
+function stubFetch() {
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValue({ ok: true, status: 200, json: async () => report })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+function calledUrl(fetchMock: ReturnType<typeof vi.fn>) {
+  return String(fetchMock.mock.calls[0]?.[0])
 }
 
 describe('getThroughput', () => {
   beforeEach(() => vi.restoreAllMocks())
 
-  it('hits /reports/throughput without the test-order flag by default', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue({ ok: true, status: 200, json: async () => report })
-    vi.stubGlobal('fetch', fetchMock)
-
-    const out = await getThroughput()
-
+  it('hits /reports/throughput with no query string by default', async () => {
+    const fetchMock = stubFetch()
+    const out = await getThroughput({})
     expect(out).toEqual(report)
-    const url = String(fetchMock.mock.calls[0]?.[0])
-    expect(url).toMatch(/\/reports\/throughput$/)
+    expect(calledUrl(fetchMock)).toMatch(/\/reports\/throughput$/)
   })
 
   it('adds include_test_orders=true when asked', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue({ ok: true, status: 200, json: async () => report })
-    vi.stubGlobal('fetch', fetchMock)
+    const fetchMock = stubFetch()
+    await getThroughput({ includeTestOrders: true })
+    expect(calledUrl(fetchMock)).toMatch(
+      /\/reports\/throughput\?include_test_orders=true$/
+    )
+  })
 
-    await getThroughput(true)
+  it('serialises client, order, repeated department and family params', async () => {
+    const fetchMock = stubFetch()
+    await getThroughput({
+      client: 'Acme Peptides',
+      order: '3271',
+      departments: ['microbiology', 'heavy_metals'],
+      families: ['ster'],
+    })
+    const url = new URL(calledUrl(fetchMock), 'http://x')
+    expect(url.searchParams.get('client')).toBe('Acme Peptides')
+    expect(url.searchParams.get('order')).toBe('3271')
+    expect(url.searchParams.getAll('department')).toEqual([
+      'microbiology',
+      'heavy_metals',
+    ])
+    expect(url.searchParams.getAll('family')).toEqual(['ster'])
+    expect(url.searchParams.has('include_test_orders')).toBe(false)
+  })
 
-    const url = String(fetchMock.mock.calls[0]?.[0])
-    expect(url).toMatch(/\/reports\/throughput\?include_test_orders=true$/)
+  it('omits blank client and order values', async () => {
+    const fetchMock = stubFetch()
+    await getThroughput({ client: '  ', order: '' })
+    expect(calledUrl(fetchMock)).toMatch(/\/reports\/throughput$/)
   })
 
   it('throws with the status on a non-2xx response', async () => {
@@ -49,7 +79,6 @@ describe('getThroughput', () => {
         .fn()
         .mockResolvedValue({ ok: false, status: 503, json: async () => ({}) })
     )
-
-    await expect(getThroughput()).rejects.toThrow('Throughput failed: 503')
+    await expect(getThroughput({})).rejects.toThrow('Throughput failed: 503')
   })
 })
