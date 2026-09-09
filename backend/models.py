@@ -3,7 +3,7 @@ SQLAlchemy models for Accu-Mk1 database.
 Uses SQLAlchemy 2.0 style with mapped_column.
 """
 
-from datetime import datetime, time, date
+from datetime import datetime, time, date, timezone
 from decimal import Decimal
 from typing import Optional, List
 import uuid
@@ -2172,6 +2172,29 @@ class LimsWorkflowShadowEvaluation(Base):
         JSONB().with_variant(JSON(), "sqlite"), nullable=False, default=list)
     actor_user_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("users.id"), nullable=True)
+
+
+TEE_STATUSES = ("pending", "done", "gave_up", "senaite_only")
+
+
+class LimsSenaiteTeeRetry(Base):
+    """One queued SENAITE transition that failed its read-back (spec §3.2).
+    Vocabulary in code (TEE_STATUSES), not a CHECK. Drained by
+    workflow.senaite_tee.run_retries on the flags scheduler."""
+    __tablename__ = "lims_senaite_tee_retries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    lims_sample_pk: Mapped[int] = mapped_column(
+        Integer, ForeignKey("lims_samples.id", ondelete="CASCADE"), nullable=False, index=True)
+    verb: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_state: Mapped[str] = mapped_column(Text, nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+                                                 onupdate=lambda: datetime.now(timezone.utc))
 
 
 class LimsSubSampleEvent(Base):

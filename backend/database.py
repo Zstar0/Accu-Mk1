@@ -1292,6 +1292,25 @@ def _run_migrations():
         "ON lims_workflow_shadow_evaluations (lims_sample_pk, evaluated_at)",
         "CREATE INDEX IF NOT EXISTS ix_shadow_evals_nonadvanced "
         "ON lims_workflow_shadow_evaluations (outcome) WHERE outcome != 'advanced'",
+        # ── Sample-status authority flip (2026-09-09 spec §3.2) — additive.
+        """
+        CREATE TABLE IF NOT EXISTS lims_senaite_tee_retries (
+            id               SERIAL PRIMARY KEY,
+            lims_sample_pk   INTEGER NOT NULL REFERENCES lims_samples(id) ON DELETE CASCADE,
+            verb             TEXT NOT NULL,
+            expected_state   TEXT NOT NULL,
+            attempts         INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at  TIMESTAMPTZ NOT NULL,
+            last_error       TEXT,
+            status           TEXT NOT NULL DEFAULT 'pending',
+            created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_senaite_tee_retries_due "
+        "ON lims_senaite_tee_retries (next_attempt_at) WHERE status = 'pending'",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_senaite_tee_retries_pending "
+        "ON lims_senaite_tee_retries (lims_sample_pk, verb) WHERE status = 'pending',"
         # Catalog data (spec §8 decision 3): cascade-eligible builtin edges +
         # the publish edge's attested requirement. Guarded → idempotent.
         "UPDATE lims_workflow_transitions SET auto_fire = TRUE "
