@@ -137,13 +137,16 @@ can later add a requirement (e.g. `distinct_actor`) in the pane without code.
 
 Two more seeded transitions give the partial-publish flow a native pathway,
 so the addon-pending samples do not regress to a "Received" badge at the flip
-(§9): `sample_received → waiting_for_addon_results` (verb `partial_publish`,
-`auto_fire=True`, requirements `[coa_published]`) and
+(§9): `sample_received → waiting_for_addon_results` keyed by the **`publish`**
+verb (`auto_fire=False`, requirement `coa_published` — which the engine
+satisfies only from the publish touchpoint's attestation, so the edge must
+carry the verb that touchpoint executes; cascades never attest) and
 `waiting_for_addon_results → to_be_verified` (verb `submit`, `auto_fire=True`,
 same requirement entry as the seeded `sample_received → to_be_verified`
-submit edge). The existing `waiting_for_addon_results → published` edge stays.
-The plan verifies the exact `coa_published` semantics against the engine
-before pinning the entry; no new requirement kind is added.
+submit edge). The existing `verified → published` and
+`waiting_for_addon_results → published` publish edges stay. No new
+requirement kind is added. (Plan revision 2026-09-09: the working name
+`partial_publish` was dropped for this reason.)
 
 ### 3.4 Analysis-tier `cancel` verb (code — the tier the catalog does not govern)
 
