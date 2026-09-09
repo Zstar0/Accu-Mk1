@@ -191,3 +191,20 @@ def test_naive_scheduler_clock_is_normalised_to_utc(db_session):
     tr.assert_called_once_with("U-P-RJ-13", "verify")
     assert stats["retried"] == 1
     assert q.next_attempt_at.tzinfo is not None
+
+
+def test_row_for_sample_without_senaite_uid_settles_senaite_only(db_session):
+    """Native-born sample (no SENAITE AR): the job must not burn attempts into
+    gave_up — nothing can ever complete the row — it settles as senaite_only
+    without touching SENAITE."""
+    from workflow.senaite_tee import run_retries
+    sample, q = _queued(db_session, "S-NOUID", "publish", status="published")  # not superseded
+    sample.external_lims_uid = ""
+    db_session.flush()
+    with patch("workflow.senaite_tee._ar_transition") as tr,          patch("workflow.senaite_tee.read_back_state") as rb:
+        run_retries(db_session, now=T0)
+    db_session.refresh(q)
+    assert q.status == "senaite_only"
+    assert "no SENAITE uid" in (q.last_error or "")
+    tr.assert_not_called()
+    rb.assert_not_called()

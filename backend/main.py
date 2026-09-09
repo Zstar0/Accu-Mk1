@@ -17266,10 +17266,16 @@ def _after_publish_native(db, *, sample_id: str, pre_publish_status, actor_user_
         if senaite_actual_state != "published":
             row = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)
                              ).scalar_one_or_none()
-            if row is not None:
+            # Native-born sample with no SENAITE AR: nothing to tee, so no retry
+            # row (the job could never complete it and would end in a false
+            # `senaite_tee_gave_up` stranding). Same rule as tee_now's 'skipped'.
+            if row is not None and (row.external_lims_uid or "").strip():
                 senaite_tee.enqueue_retry(
                     db, row, "publish",
                     error=f"publish route read-back {senaite_actual_state!r}")
+            elif row is not None:
+                logger.info("after-publish native: %s has no SENAITE uid — nothing to tee",
+                            sample_id)
         db.commit()
     except Exception:
         logger.exception("after-publish native step failed (never-raise) %s", sample_id)

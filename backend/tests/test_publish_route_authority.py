@@ -223,11 +223,17 @@ def test_publish_route_silent_refusal_still_runs_the_native_publish(db_session):
 
 
 def test_publish_route_without_a_senaite_uid_still_runs_the_native_publish(db_session):
-    """No SENAITE row at all (SENAITE_URL unset): the whole `if senaite_uid:`
-    block is skipped, the user gets the normal success body — and the native
-    publish still runs, with an empty read-back state, so the tee's publish
-    retry row is minted rather than the sample silently going unrecorded."""
-    row = _publishable_sample(db_session, "P-PUB-5", "U-PUB-5", "TEST-PUB-KW-5")
+    """Native-born sample with NO SENAITE AR (empty external_lims_uid and no
+    request uid): the whole `if senaite_uid:` block is skipped, the user gets
+    the normal success body, the native publish still runs — and NO publish
+    retry row is minted (nothing to tee; a row here could never complete and
+    would end as a false `senaite_tee_gave_up` stranding)."""
+    row = _publishable_sample(db_session, "P-PUB-5", "", "TEST-PUB-KW-5")
     resp = _run_publish(db_session, "P-PUB-5", _client_factory(uid=""), senaite_url="")
     assert resp.success is True and resp.warning is None
-    _assert_native_publish_landed(db_session, row)
+    ledger = db_session.execute(select(LimsSampleTransition).where(
+        LimsSampleTransition.lims_sample_pk == row.id,
+        LimsSampleTransition.verb == "publish")).scalars().all()
+    assert len(ledger) == 1
+    assert row.status == "published"
+    assert db_session.execute(select(LimsSenaiteTeeRetry)).scalars().all() == []

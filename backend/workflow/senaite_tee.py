@@ -179,6 +179,11 @@ def _attempt(db: Session, sample: LimsSample, row: LimsSenaiteTeeRetry, *,
              now: Optional[datetime]) -> str:
     """One retry attempt for a pending row. Returns the row's new status."""
     uid = (sample.external_lims_uid or "").strip()
+    if not uid:
+        # No SENAITE AR to drive (native-born sample): the row can never be
+        # completed, so settle it instead of burning attempts into gave_up.
+        _mark_senaite_only(db, sample, row.verb, now=now, note="no SENAITE uid — nothing to tee")
+        return "senaite_only"
     expected = row.expected_state
     current = ""
     try:
