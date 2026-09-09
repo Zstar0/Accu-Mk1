@@ -689,8 +689,13 @@ class TestReplaceRegistryDualWrite:
             select(LimsSample).where(LimsSample.sample_id == "P-RDW01")
         ).scalar_one()
         assert row.analytes is not None
-        names = [a["name"] for a in _json.loads(row.analytes)]
+        # Positional list since 2026-09-08: slot 1 is empty in this meta, so
+        # index 0 is a {"name": None} placeholder -- skip name-less entries
+        # exactly as every reader does (registry_details, _analyte_slot_fields).
+        slots = _json.loads(row.analytes)
+        names = [a["name"] for a in slots if a.get("name")]
         assert any("TB500" in n for n in names)
+        assert slots[1]["name"] and "TB500" in slots[1]["name"]  # slot 2 stays slot 2
 
     def test_registry_refresh_failure_is_non_fatal(self, route_client):
         from unittest.mock import patch as _patch
