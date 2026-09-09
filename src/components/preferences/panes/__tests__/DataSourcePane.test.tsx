@@ -68,3 +68,19 @@ it('saving a page toggle preserves an existing coa_generation value', async () =
   const written = put.mock.calls[0]?.[1]
   expect(JSON.parse(written as string)).toMatchObject({ sample_details: 'mk1', coa_generation: 'mk1' })
 })
+
+it('saving includes sample_status in the written map and preserves it when untouched', async () => {
+  vi.spyOn(api, 'getSettings').mockResolvedValue([
+    { key: 'registry_read_source', value: JSON.stringify({ sample_details: 'senaite', sample_status: 'mk1' }) } as api.Setting,
+  ])
+  const put = vi.spyOn(api, 'updateSetting').mockResolvedValue({} as api.Setting)
+  put.mockClear()
+  renderPane()
+  await screen.findByText(/Sample status authority/i)
+  expect(screen.getByRole('button', { name: /Sample status authority: Accu-Mk1/i })).toHaveAttribute('aria-pressed', 'true')
+  await userEvent.click(screen.getByRole('button', { name: /Sample details.*SENAITE|SENAITE.*Sample details/i }))
+  await userEvent.click(screen.getByRole('button', { name: /^Save/i }))
+  await waitFor(() => expect(put).toHaveBeenCalled())
+  const written = put.mock.calls[0]?.[1]
+  expect(JSON.parse(written as string)).toMatchObject({ sample_status: 'mk1' })
+})
