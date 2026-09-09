@@ -21,6 +21,7 @@ re-derive):
 """
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -107,12 +108,23 @@ def lab_day(ts: Optional[datetime], tz: str) -> Optional[date]:
     return ts.astimezone(ZoneInfo(tz)).date()
 
 
-def _bench_sample_id(label: str) -> str:
-    """``P-0142-2`` (vial label) -> ``P-0142``; plain sample ids pass through."""
-    head, sep, tail = label.rpartition("-")
-    if sep and tail.isdigit() and head.count("-") >= 1:
-        return head
-    return label
+_VIAL_TAIL = re.compile(r"[SR]?\d+")
+
+
+def bench_sample_id(label: str) -> str:
+    """Parent sample id for an HPLC bench label.
+
+    Vial-scoped preps label rows with the native vial id (``P-0134-S01``), a
+    retest adds another suffix (``P-0134-S01-R01``), and legacy rows may use a
+    bare ordinal (``P-0142-2``). Strip every trailing ``-S01`` / ``-R01`` /
+    ``-2`` segment; plain sample ids (``P-0142``, ``BW-0076``) pass through.
+    """
+    while True:
+        head, sep, tail = label.rpartition("-")
+        if sep and head.count("-") >= 1 and _VIAL_TAIL.fullmatch(tail):
+            label = head
+        else:
+            return label
 
 
 def build_throughput(
@@ -185,7 +197,7 @@ def build_throughput(
     bench_vials: dict[date, set[str]] = defaultdict(set)
     bench_inst: dict[date, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
     for b in bench:
-        if b.label in excluded_sample_ids or _bench_sample_id(b.label) in excluded_sample_ids:
+        if b.label in excluded_sample_ids or bench_sample_id(b.label) in excluded_sample_ids:
             continue
         d = lab_day(b.created_at, tz)
         if d is None or d < start:

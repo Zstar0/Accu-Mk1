@@ -15,6 +15,7 @@ from throughput import (
     CoaIn,
     LabCalendar,
     SampleIn,
+    bench_sample_id,
     build_throughput,
     classify_keyword,
     lab_day,
@@ -298,6 +299,48 @@ def test_bench_counts_distinct_vials_per_instrument_and_all_rows():
     assert d["bench_vials"] == 3
     assert d["bench_inst"] == {"1290a": 1, "1290b": 1, "unassigned": 1}
     assert r["instruments"] == ["1290a", "1290b", "unassigned"]
+
+
+@pytest.mark.parametrize(
+    "label,expected",
+    [
+        ("P-0142", "P-0142"),
+        ("BW-0076", "BW-0076"),
+        ("P-0142-2", "P-0142"),
+        ("P-0134-S01", "P-0134"),  # native vial id
+        ("P-0134-S01-R01", "P-0134"),  # retest of a vial
+        ("PB-0301-S12", "PB-0301"),
+    ],
+)
+def test_bench_sample_id_strips_vial_and_retest_suffixes(label, expected):
+    assert bench_sample_id(label) == expected
+
+
+def test_excluded_sample_hides_its_vial_labelled_bench_rows():
+    r = build(
+        samples=[sample(1, "T-1", datetime(2026, 7, 1, 18, 0))],
+        bench=[
+            BenchIn("T-1-S01", datetime(2026, 7, 2, 18, 0), 1),
+            BenchIn("T-1-S02-R01", datetime(2026, 7, 2, 18, 0), 1),
+            BenchIn("P-9-S01", datetime(2026, 7, 2, 18, 0), 1),
+        ],
+        instruments={1: "1290a"},
+        excluded_sample_ids=frozenset({"T-1"}),
+    )
+    d = day(r, "2026-07-02")
+    assert d["bench_rows"] == 1 and d["bench_vials"] == 1
+    assert d["bench_inst"] == {"1290a": 1}
+
+
+def test_coa_for_a_sample_missing_from_mk1_counts_as_published_but_not_completed():
+    r = build(coas=[CoaIn("GHOST-1", datetime(2026, 7, 2, 18, 0), True)])
+    d = day(r, "2026-07-02")
+    assert d["coa"] == 1 and d["fp"] == 0
+
+
+def test_null_status_is_reported_as_unknown_in_the_backlog_snapshot():
+    r = build(samples=[sample(1, "P-1", datetime(2026, 7, 6, 18, 0), status=None)])
+    assert r["backlog_now"]["status"] == {"unknown": 1}
 
 
 # ---------------------------------------------------------------- envelope

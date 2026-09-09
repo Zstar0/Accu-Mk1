@@ -8,6 +8,8 @@ import {
   LabelList,
   Line,
   LineChart,
+  ReferenceArea,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -240,6 +242,30 @@ function DailyChart({
           minTickGap={24}
         />
         <YAxis allowDecimals={false} {...axisProps} width={32} />
+        {/* Weekend wash + holiday ticks (spec §Frontend item 2) */}
+        {data
+          .filter(d => !d.biz && !d.hol && d.dow >= 5)
+          .map(d => (
+            <ReferenceArea
+              key={`wk-${d.d}`}
+              x1={d.label}
+              x2={d.label}
+              fill="#ffffff"
+              fillOpacity={0.04}
+              stroke="none"
+            />
+          ))}
+        {data
+          .filter(d => d.hol)
+          .map(d => (
+            <ReferenceLine
+              key={`hol-${d.d}`}
+              x={d.label}
+              stroke={TICK}
+              strokeDasharray="2 3"
+              strokeOpacity={0.6}
+            />
+          ))}
         <Tooltip
           cursor={{ fill: '#ffffff', fillOpacity: 0.04 }}
           content={
@@ -828,6 +854,7 @@ export function ThroughputReport() {
               <button
                 key={r}
                 type="button"
+                aria-pressed={range === r}
                 onClick={() => setRange(r)}
                 className={cn(
                   'px-3 py-1 text-xs font-medium transition-colors cursor-pointer',
@@ -956,7 +983,7 @@ function ReportBody({ data, range }: { data: Report; range: RangeKey }) {
 
       <Section
         title="Tests received per day, by type"
-        sub="Each bar is one calendar day (lab time). A test is one HPLC panel, one sterility PCR, one endotoxin LAL, or one Bac Water panel ordered on a sample that arrived that day. Follows the range selector."
+        sub="Each bar is one calendar day (lab time). A test is one HPLC panel, one sterility PCR, one endotoxin LAL, or one Bac Water panel ordered on a sample that arrived that day. Weekends are shaded; holidays are ticked. Follows the range selector."
       >
         <Legend items={legend} />
         <div className={CHART}>

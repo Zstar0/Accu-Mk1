@@ -10007,7 +10007,9 @@ def _load_throughput_inputs(db: Session) -> dict:
     holidays = frozenset(r[0] for r in db.execute(select(LabHoliday.holiday_date)).all())
     calendar = ThroughputLabCalendar(tz=tz, working_days=working_days, holidays=holidays)
 
-    window_start = datetime.combine(THROUGHPUT_SERIES_START, time.min)
+    # One day of slack: date_received is naive UTC while the series boundary is
+    # a lab-timezone day, and the engine re-applies the exact boundary anyway.
+    window_start = datetime.combine(THROUGHPUT_SERIES_START - date.resolution, time.min)
     samples = [
         ThroughputSampleIn(
             pk=pk,
@@ -10110,11 +10112,12 @@ def reports_throughput(
     carries the history before the window. Plain ``def`` on purpose: the DB
     work is synchronous and runs in the threadpool.
     """
-    inputs = _load_throughput_inputs(db)
+    # Integration Service first so an outage fails fast, before the Mk1 queries.
     try:
         coas = _fetch_throughput_coas()
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
+    inputs = _load_throughput_inputs(db)
 
     excluded = frozenset() if include_test_orders else frozenset(_test_order_senaite_ids())
     now_utc = datetime.now(timezone.utc)

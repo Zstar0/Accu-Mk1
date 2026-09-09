@@ -119,6 +119,8 @@ Deferred (cheap follow-ups, not in v1): top clients / peptides mix; CSV export.
 
 ## Delivery
 
-Worktree off `origin/master` → branch `feat/reports-throughput` → PR with this spec,
-CHANGELOG entry and version bump in lockstep (as `c7ec644d`). **PR only — no merge, no
-deploy**; those are separate sign-offs.
+Worktree off `origin/master` → branch `feat/reports-throughput` → PR with this spec and a
+CHANGELOG entry under `## Unreleased`. **No version bump in the PR**: the house release
+commit (`chore: release vX.Y.Z`) carries the bump and folds the entry under the version
+heading, which keeps this PR from colliding with the other open ones. **PR only — no
+merge, no deploy**; those are separate sign-offs.
