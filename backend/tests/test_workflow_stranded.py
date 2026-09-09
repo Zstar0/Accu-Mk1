@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from flags.models import FlagEntityLink, FlagFlag
+from flags.models import FlagFlag
 from models import (AnalysisService, LimsAnalysis, LimsSample, LimsSampleTransition,
                     LimsSenaiteTeeRetry, Settings, User)
 
@@ -54,8 +54,7 @@ def test_lines_verified_but_status_behind_raises_one_flag(db_session):
     assert stats["flagged"] == 1
     flags = _flags(db_session)
     assert len(flags) == 1 and flags[0].status == "open"
-    link = db_session.execute(select(FlagEntityLink).where(FlagEntityLink.flag_id == flags[0].id)).scalar_one()
-    assert (link.entity_type, link.entity_id) == ("sample", "P-ST-1")
+    assert (flags[0].entity_type, flags[0].entity_id) == ("sample", "P-ST-1")
     # second run: no duplicate
     run_check(db_session, now=NOW)
     assert len(_flags(db_session)) == 1
@@ -119,3 +118,61 @@ def test_no_admin_user_skips_flagging(db_session):
     _parent_with_verified_line(db_session, "P-ST-6", "sample_received")
     stats = run_check(db_session, now=NOW)
     assert stats["skipped_no_actor"] == 1 and _flags(db_session) == []
+
+
+def test_addon_pending_sample_is_not_stranded(db_session):
+    """waiting_for_addon_results is the partial-publish parking state: the
+    HPLC lines are verified, the add-on line may not even exist yet."""
+    from workflow.stranded import find_stranded
+    _base(db_session)
+    _parent_with_verified_line(db_session, "P-ST-7", "waiting_for_addon_results")
+    assert find_stranded(db_session) == []
+
+
+def test_flag_first_comment_carries_the_diagnosis(db_session):
+    from flags.models import FlagComment, FlagFlag
+    from models import LimsWorkflowShadowEvaluation
+    from workflow.stranded import run_check
+    _base(db_session)
+    p = _parent_with_verified_line(db_session, "P-ST-8", "sample_received")
+    db_session.add(LimsWorkflowShadowEvaluation(
+        lims_sample_pk=p.id, trigger="analysis_cascade", verb="submit",
+        from_status="sample_received", to_status="sample_received",
+        outcome="requirements_unmet", requirements_met=False,
+        outcomes=[{"kind": "all_analyses_in_state", "met": False, "detail": "1 of 2 lines"}]))
+    db_session.flush()
+    run_check(db_session, now=NOW)
+    flag = db_session.execute(select(FlagFlag).where(FlagFlag.type == "workflow_stranded")).scalar_one()
+    assert (flag.entity_type, flag.entity_id) == ("sample", "P-ST-8")
+    body = db_session.execute(select(FlagComment.body).where(FlagComment.flag_id == flag.id)
+                              .order_by(FlagComment.id)).scalars().first()
+    assert "Condition: lines_verified_status_behind" in body
+    assert "verb=submit" in body and "requirements_unmet" in body and "all_analyses_in_state" in body
+
+
+def test_resolve_adds_the_cleared_note(db_session):
+    from flags.models import FlagComment, FlagFlag
+    from workflow.stranded import run_check
+    _base(db_session)
+    p = _parent_with_verified_line(db_session, "P-ST-9", "sample_received")
+    run_check(db_session, now=NOW)
+    p.status = "verified"
+    db_session.flush()
+    run_check(db_session, now=NOW)
+    flag = db_session.execute(select(FlagFlag).where(FlagFlag.type == "workflow_stranded")).scalar_one()
+    assert flag.status == "resolved"
+    bodies = db_session.execute(select(FlagComment.body).where(FlagComment.flag_id == flag.id)).scalars().all()
+    assert any("Condition cleared" in b for b in bodies)
+
+
+def test_orphan_free_dedupe_uses_the_primary_anchor(db_session):
+    """A second run never mints a second flag, and no FlagEntityLink row is
+    needed for the dedupe (the primary anchor columns carry it)."""
+    from flags.models import FlagEntityLink, FlagFlag
+    from workflow.stranded import run_check
+    _base(db_session)
+    _parent_with_verified_line(db_session, "P-ST-10", "sample_received")
+    run_check(db_session, now=NOW)
+    run_check(db_session, now=NOW)
+    assert len(db_session.execute(select(FlagFlag).where(FlagFlag.type == "workflow_stranded")).scalars().all()) == 1
+    assert db_session.execute(select(FlagEntityLink)).scalars().all() == []

@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from flags import catalog as flag_catalog
 from flags import seams as flag_seams
 from flags import service as flag_service
-from flags.models import FlagEntityLink, FlagFlag
+from flags.models import FlagFlag
 from models import (LimsSample, LimsSampleTransition, LimsSenaiteTeeRetry,
                     LimsWorkflowShadowEvaluation, User)
 from workflow.authority import sample_status_authority
@@ -25,9 +25,13 @@ from workflow.engine import _live_parent_line_states
 log = logging.getLogger(__name__)
 
 FLAG_TYPE = "workflow_stranded"
+# "waiting_for_addon_results" is the documented partial-publish parking state
+# (a primary COA is already out; the add-on line is pending and sometimes not
+# even provisioned as a row yet) — _live_parent_line_states only ever sees the
+# HPLC parent-tier lines, so it can read "all verified" there for a perfectly
+# normal sample. Excluded per controller ruling F2 (2026-09-09 review).
 _BEHIND_VERIFIED = frozenset({"sample_registered", "sample_due", "sample_received",
-                              "ready_for_initial_review", "waiting_for_addon_results",
-                              "to_be_verified"})
+                              "ready_for_initial_review", "to_be_verified"})
 
 
 @dataclass
@@ -103,12 +107,18 @@ def _actor(db: Session):
 
 
 def _open_flag_for(db: Session, sample_id: str) -> Optional[FlagFlag]:
+    """Dedupe on the flag's PRIMARY anchor columns (FlagFlag.entity_type/
+    entity_id) — the same shape as the identity_collision precedent
+    (sub_samples/service.py::_flag_identity_collision). FlagEntityLink is a
+    separate, navigational "related item" reference, not a rollup anchor
+    (per its own docstring); it is never written by this module, so it can't
+    be joined on here (controller ruling F1, 2026-09-09 review)."""
     return db.execute(
-        select(FlagFlag).join(FlagEntityLink, FlagEntityLink.flag_id == FlagFlag.id).where(
+        select(FlagFlag).where(
             FlagFlag.type == FLAG_TYPE,
             FlagFlag.status.in_(flag_catalog.OPEN_STATES),
-            FlagEntityLink.entity_type == "sample",
-            FlagEntityLink.entity_id == sample_id,
+            FlagFlag.entity_type == "sample",
+            FlagFlag.entity_id == sample_id,
         ).order_by(FlagFlag.id.desc()).limit(1)
     ).scalars().first()
 
@@ -134,32 +144,24 @@ def run_check(db: Session, *, now: Optional[datetime] = None, since_days: int = 
         try:
             if _open_flag_for(db, s.sample.sample_id) is not None:
                 continue
-            flag = flag_service.create_flag(
+            flag_service.create_flag(
                 db, user=actor, entity_type="sample", entity_id=s.sample.sample_id,
                 type=FLAG_TYPE,
                 title=f"{s.sample.sample_id} stranded: {s.condition.replace('_', ' ')}",
                 first_comment=s.diagnosis)
-            # `create_flag` only sets FlagFlag.entity_type/entity_id (the
-            # primary anchor) — it does not touch FlagEntityLink (that table
-            # is the separate "related item" seam; see its docstring). This
-            # module's own dedup (_open_flag_for, below) joins on
-            # FlagEntityLink, so record the link explicitly.
-            flag_service.add_entity_link(db, user=actor, flag_id=flag.id,
-                                         entity_type="sample",
-                                         entity_id=s.sample.sample_id)
             stats["flagged"] += 1
         except Exception:
             log.exception("stranded.flag_failed sample=%s", s.sample.sample_id)
             stats["errors"] += 1
-    # resolve flags whose sample is no longer stranded
+    # resolve flags whose sample is no longer stranded — same primary-anchor
+    # columns as the create path above, no FlagEntityLink join.
     open_flags = db.execute(
-        select(FlagFlag, FlagEntityLink.entity_id)
-        .join(FlagEntityLink, FlagEntityLink.flag_id == FlagFlag.id)
-        .where(FlagFlag.type == FLAG_TYPE, FlagFlag.status.in_(flag_catalog.OPEN_STATES),
-               FlagEntityLink.entity_type == "sample")
-    ).all()
-    for flag, sample_id in open_flags:
-        if sample_id in stranded_ids:
+        select(FlagFlag).where(
+            FlagFlag.type == FLAG_TYPE, FlagFlag.status.in_(flag_catalog.OPEN_STATES),
+            FlagFlag.entity_type == "sample")
+    ).scalars().all()
+    for flag in open_flags:
+        if flag.entity_id in stranded_ids:
             continue
         try:
             flag_service.add_comment(db, user=actor, flag_id=flag.id,
