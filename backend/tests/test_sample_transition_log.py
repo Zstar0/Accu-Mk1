@@ -332,6 +332,10 @@ def test_publish_refused_by_senaite_still_logs_natively_and_queues_retry(db, see
     user's direct intent and runs regardless — the ledger row is written
     unconditionally and the SENAITE-side refusal is queued as a retry
     instead of suppressing the write."""
+    # A SENAITE-refused publish implies an AR exists: give the sample a uid,
+    # otherwise the tee (correctly) has nothing to queue (no-uid rule, 09-09).
+    seed_sample.external_lims_uid = "U-TSL-PUB"
+    db.commit()
     r = _drive_publish_coa(seed_sample.sample_id, transition_state="to_be_verified")
 
     assert r.status_code == 200, r.text
