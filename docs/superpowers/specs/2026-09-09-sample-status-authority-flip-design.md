@@ -233,9 +233,16 @@ rules:
 
 - **publish refused because the AR is `to_be_verified`** (the PB-0462 class):
   issue `verify` first, read back, then `publish` in the same attempt.
-- **cancel refused because the AR is verified/published** (SENAITE forbids
-  cancel after verification): mark `senaite_only` immediately, no retry —
-  this is a documented SENAITE-only pathway, and the badge is already right.
+- **cancel refused by SENAITE** (its `guard_cancel` allows cancel only while
+  every analysis is unassigned/registered — i.e. before any worksheet
+  assignment): mark `senaite_only` immediately, no retry — this is a
+  documented SENAITE-only pathway, and the badge is already right.
+  *(Corrected 2026-09-09 at final review: this section first said SENAITE
+  forbids cancel only "after verification". Read from senaite.core in the
+  local container, `guard_cancel` returns True only when EVERY analysis is
+  `unassigned`/`registered`/detached and `to_be_verified` has no `cancel`
+  exit at all, so the refusal starts at the first worksheet assignment — far
+  earlier than the original text assumed.)*
 
 Retry never overrides a later native state: before re-issuing, the job checks
 `sample.status` still equals the verb's target; otherwise it marks `done`
@@ -399,9 +406,9 @@ No refund logic. Each is named here so nobody infers it.
 3. Flip `sample_status` to `mk1` in the admin UI. Watch the summary for 48 h.
 4. Cancel ships in the same deploy and works in both modes, with one stated
    limit: in senaite mode the badge still follows SENAITE, and SENAITE allows
-   cancel only before verification — so a post-verification cancel moves
-   `native_status` and cancels the rows but the badge does not change until
-   the flip. The dialog states this while the switch is in senaite mode.
+   cancel only before any analysis is assigned — so a cancel SENAITE refuses
+   moves `native_status` and cancels the rows but the badge does not change
+   until the flip. The dialog states this while the switch is in senaite mode.
 5. Later slice: IS notification on cancel; reinstate; retiring the
    SENAITE-sourced writers entirely when SENAITE is disconnected.
 

@@ -17278,10 +17278,11 @@ def _after_publish_native(db, *, sample_id: str, pre_publish_status, actor_user_
 
 def _record_sample_transition_bg(**kwargs) -> None:
     """Best-effort native sample-transition log write (Task 3) on its own
-    short-lived session — never holds the request `db` across the SENAITE
-    HTTP calls at the two call sites (publish, receive). Never raises: a
-    log-write failure must never fail or delay-fail the endpoint it's
-    scheduled from.
+    short-lived session. No production callers since the publish route moved
+    to `_after_publish_native` (2026-09-09); kept for the touchpoint tests and
+    as the bg chokepoint contract — never holds the request `db` across the
+    SENAITE HTTP calls at a call site, and never raises: a log-write failure
+    must never fail or delay-fail the endpoint it's scheduled from.
 
     `SessionLocal()` and the recorder import live INSIDE the try, same
     hardening rationale as `_mirror_parent_analysis_bg`: `db` starts as None
