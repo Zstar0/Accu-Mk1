@@ -1,5 +1,7 @@
 import pytest
 
+import models  # noqa: F401  -- register tables on Base.metadata before the db_session fixture runs create_all
+
 from lims_analyses.state_machine import (InvalidTransitionError, STATES, TIER_PARENT,
                                          TIER_VIAL, TRANSITION_KINDS, next_state, tier_allows)
 
