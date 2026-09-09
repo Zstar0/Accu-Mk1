@@ -85,11 +85,19 @@ def clear_sample_state_cache() -> None:
     _SAMPLE_STATE_CACHE["slugs"] = None
 
 
+def _seed_sample_slugs() -> frozenset[str]:
+    """The seed constant's sample-scope slugs — shared fallback for both the
+    failed-query and empty-result cases below."""
+    from workflow.seeds import SEED_STATES
+    return frozenset(slug for (scope, slug, *_r) in SEED_STATES if scope == "sample")
+
+
 def sample_state_slugs(db: Session) -> frozenset:
     """Live sample-tier vocabulary: every ACTIVE `entity_scope='sample'` state
     in the catalog (the Settings -> Workflow pane is its editor). Cached 60 s
-    per process. Falls back to the seed constant if the query fails (boot
-    before seed) so the status writers never lose their guard."""
+    per process. Falls back to the seed constant if the query fails, OR
+    returns no rows (boot before seed: the table exists but is still empty),
+    so the status writers never lose their guard."""
     now = _time.monotonic()
     if (_SAMPLE_STATE_CACHE["slugs"] is not None
             and now - _SAMPLE_STATE_CACHE["at"] < _SAMPLE_STATE_TTL_S):
@@ -102,9 +110,10 @@ def sample_state_slugs(db: Session) -> frozenset:
             )
         ).scalars().all()
         slugs = frozenset(rows)
+        if not slugs:
+            slugs = _seed_sample_slugs()
     except Exception:
-        from workflow.seeds import SEED_STATES
-        slugs = frozenset(slug for (scope, slug, *_r) in SEED_STATES if scope == "sample")
+        slugs = _seed_sample_slugs()
     _SAMPLE_STATE_CACHE["at"] = now
     _SAMPLE_STATE_CACHE["slugs"] = slugs
     return slugs

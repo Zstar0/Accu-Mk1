@@ -80,3 +80,14 @@ def test_heal_in_mk1_mode_only_from_native_sources(db_session):
     assert row.status == "sample_received"
     assert heal_sample_status(db_session, "P-AUTH-2", "verified", source="mk1") is True
     assert row.status == "verified"
+
+
+def test_sample_state_slugs_falls_back_to_seed_when_catalog_is_empty(db_session):
+    """Boot before seed: the table exists but holds no sample states — the
+    writers must keep the seed vocabulary, not an empty set."""
+    from workflow.catalog import sample_state_slugs, clear_sample_state_cache
+    from workflow.seeds import SEED_STATES
+    clear_sample_state_cache()
+    slugs = sample_state_slugs(db_session)          # nothing seeded in this session
+    expected = frozenset(slug for (scope, slug, *_r) in SEED_STATES if scope == "sample")
+    assert slugs == expected
