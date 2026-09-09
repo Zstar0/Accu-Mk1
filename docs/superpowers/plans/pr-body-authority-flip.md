@@ -31,7 +31,7 @@ Spec: `docs/superpowers/specs/2026-09-09-sample-status-authority-flip-design.md`
 - **Flip pre-check:** confirm prod `lims_workflow_states` (sample scope, active) ⊇ the seed list; the boot seed inserts missing states/edges but never updates existing rows.
 
 ## Test gates
-- Backend (solo runs, branch venv): pristine `origin/master` a4f78fb4 = 99 failed / 3181 passed / 4 errors (known non-zero baseline); branch after merging master = 103 failed / 3250 passed / 4 errors. Net-new after rulings: **0 real** — 2 × `test_httpx_shared_ssl` (the `.venv`-BOM environmental class, fails only in worktrees carrying a `.venv`), and 2 publish-edge tests that pinned exactly two publish edges, updated for the seeded partial-publish edge (spec §3.3).
+- Backend (solo runs, branch venv): pristine `origin/master` a4f78fb4 = 99 failed / 3181 passed / 4 errors (known non-zero baseline); branch after the final-review fix wave = 102 failed / 3267 passed / 4 errors. Net-new: **0 real** — only the 2 × `test_httpx_shared_ssl` environmental pair (a BOM'ed file under the worktree's `.venv` trips that test's source scan; passes in a worktree without a `.venv`). Two publish-edge tests that pinned exactly two publish edges were updated for the seeded partial-publish edge (spec §3.3).
 - Frontend: `tsc --noEmit` clean; full vitest 1741 passed, 6 failed under CPU contention → 2 pass in isolation, the other 4 fail identically on pristine `origin/master` (pre-existing). Net-new: **0**.
 - New tests: 9 backend files (authority, status write, gated writers, cascade refusals, tee, tee retry job, publish route authority, stranded, cancel state machine) + cancel cascade, cancel seeds, cancel route; 4 frontend files (authority toggle, workflow-states store, cancel dialog).
 
