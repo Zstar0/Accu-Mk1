@@ -1456,8 +1456,12 @@ def _after_publish_native(db, *, sample_id: str, pre_publish_status, actor_user_
         record_sample_transition(db, sample_id=sample_id, verb="publish",
                                  to_status="published", from_status=pre_publish_status,
                                  source="mk1", actor_user_id=actor_user_id)
+        # The publish touchpoint is the attester the engine's `coa_published`
+        # requirement kind needs (engine._eval_one reads `attested`); without
+        # it the verified -> published edge is requirements_unmet.
         drive_sample_touchpoint(db, sample_id, "publish", from_status=pre_publish_status,
-                                actor_user_id=actor_user_id)
+                                actor_user_id=actor_user_id,
+                                attested={"coa_published": True})
         if senaite_actual_state != "published":
             row = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)
                              ).scalar_one_or_none()
