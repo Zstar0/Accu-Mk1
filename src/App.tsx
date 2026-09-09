@@ -14,6 +14,7 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { LoginPage } from './components/auth/LoginPage'
 import { useAuthStore } from './store/auth-store'
 import { fetchCurrentUser } from './lib/auth-api'
+import { WorkflowStatesLoader } from './lib/workflow-states-store'
 
 function App() {
   const isAuthenticated = useAuthStore(state => state.isAuthenticated)
@@ -109,6 +110,7 @@ function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider>
+        <WorkflowStatesLoader />
         {isAuthenticated ? <MainWindow /> : <LoginPage />}
       </ThemeProvider>
     </ErrorBoundary>
