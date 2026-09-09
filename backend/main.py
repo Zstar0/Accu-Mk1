@@ -40,6 +40,16 @@ from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
 from sla_engine import BusinessSchedule, compute_business_minutes, sla_status_dict
+from throughput import (
+    SERIES_START as THROUGHPUT_SERIES_START,
+    AnalysisIn as ThroughputAnalysisIn,
+    BenchIn as ThroughputBenchIn,
+    CoaIn as ThroughputCoaIn,
+    LabCalendar as ThroughputLabCalendar,
+    SampleIn as ThroughputSampleIn,
+    build_throughput,
+    lab_day as throughput_lab_day,
+)
 from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment, MethodAttachment, method_services, LimsOrder
 from catalog.change_log import apply_and_log, log_create, log_delete, log_members
 from auth import (
@@ -9935,6 +9945,198 @@ async def reports_turnaround(
         for (sample_id, ordered_at, received_at, submitted_at,
              verified_at, published_at, is_test) in rows
     ]
+
+
+class ThroughputDayOut(BaseModel):
+    d: str                      # YYYY-MM-DD in the lab timezone
+    dow: int                    # Mon=0..Sun=6
+    biz: bool                   # working day and not a lab holiday
+    hol: bool
+    samples: int
+    cancelled: int
+    hplc: int                   # HPLC panels ordered (once per sample)
+    ster: int                   # STER-PCR
+    endo: int                   # ENDO-LAL
+    bacw: int                   # Bac Water panel (once per sample)
+    other: int                  # anything else, per keyword
+    tests: int
+    vials: int                  # vials received (native check-in, Jun 2026+)
+    retest: int
+    clients: int                # distinct client titles receiving that day
+    coa: int                    # primary COAs published (re-issues included)
+    acoa: int                   # additional (branded) COAs published
+    fp: int                     # samples completed = first primary publication
+    bench_rows: int             # hplc_analyses rows (processing runs)
+    bench_vials: int            # distinct vial labels run on the HPLC bench
+    bench_inst: dict[str, int]  # bench_vials split by instrument name
+    backlog: int                # open samples at end of day
+
+
+class ThroughputBacklogNowOut(BaseModel):
+    total: int
+    status: dict[str, int]
+    age: dict[str, int]
+
+
+class ThroughputReportOut(BaseModel):
+    start: str
+    end: str
+    today: str
+    tz: str
+    generated_at: str
+    instruments: list[str]
+    holidays: list[str]
+    days: list[ThroughputDayOut]
+    backlog_now: ThroughputBacklogNowOut
+    notes: dict[str, Any]
+
+
+def _load_throughput_inputs(db: Session) -> dict:
+    """Fetch the Mk1-side rows the throughput engine needs (one query per table).
+
+    Returns the keyword arguments for ``throughput.build_throughput`` except
+    ``coas`` (Integration Service, see ``_fetch_throughput_coas``), ``start``,
+    ``today`` and ``excluded_sample_ids``. Samples are pre-filtered at the DB to
+    the series window; the engine re-applies the exact lab-day boundary.
+    """
+    from models import LimsAnalysis
+
+    cfg = db.get(BusinessHoursConfig, 1)
+    tz = (cfg.timezone if cfg and cfg.timezone else "America/Los_Angeles")
+    working_days = frozenset(cfg.working_days) if cfg and cfg.working_days else frozenset({0, 1, 2, 3, 4})
+    holidays = frozenset(r[0] for r in db.execute(select(LabHoliday.holiday_date)).all())
+    calendar = ThroughputLabCalendar(tz=tz, working_days=working_days, holidays=holidays)
+
+    window_start = datetime.combine(THROUGHPUT_SERIES_START, time.min)
+    samples = [
+        ThroughputSampleIn(
+            pk=pk,
+            sample_id=sid,
+            date_received=received,
+            status=status_,
+            client=client_title,
+            is_retest=bool(is_retest),
+        )
+        for pk, sid, received, status_, client_title, is_retest in db.execute(
+            select(
+                LimsSample.id,
+                LimsSample.sample_id,
+                LimsSample.date_received,
+                LimsSample.status,
+                LimsSample.client_title,
+                LimsSample.is_retest,
+            ).where(LimsSample.date_received.is_not(None), LimsSample.date_received >= window_start)
+        ).all()
+    ]
+    analyses = [
+        ThroughputAnalysisIn(sample_pk=pk, keyword=kw)
+        for pk, kw in db.execute(
+            select(LimsAnalysis.lims_sample_pk, LimsAnalysis.keyword)
+            .where(LimsAnalysis.lims_sample_pk.is_not(None))
+            .distinct()
+        ).all()
+    ]
+    vial_counts = {
+        pk: int(n)
+        for pk, n in db.execute(
+            select(LimsSubSample.parent_sample_pk, func.count(LimsSubSample.id)).group_by(LimsSubSample.parent_sample_pk)
+        ).all()
+    }
+    bench = [
+        ThroughputBenchIn(label=label, created_at=created, instrument_id=inst_id)
+        for label, created, inst_id in db.execute(
+            select(HPLCAnalysis.sample_id_label, HPLCAnalysis.created_at, HPLCAnalysis.instrument_id).where(
+                HPLCAnalysis.created_at >= window_start
+            )
+        ).all()
+    ]
+    instruments = {iid: name for iid, name in db.execute(select(Instrument.id, Instrument.name)).all()}
+    service_categories = {
+        kw: cat
+        for kw, cat in db.execute(
+            select(AnalysisService.keyword, AnalysisService.category).where(AnalysisService.keyword.is_not(None))
+        ).all()
+    }
+    return {
+        "samples": samples,
+        "analyses": analyses,
+        "vial_counts": vial_counts,
+        "bench": bench,
+        "instruments": instruments,
+        "service_categories": service_categories,
+        "calendar": calendar,
+    }
+
+
+def _fetch_throughput_coas() -> list:
+    """Every published COA generation from the Integration Service.
+
+    ``parent_generation_id IS NULL`` marks a primary (first-party) COA; the rest
+    are additional/branded copies. Raises on connection failure — the route maps
+    that to 503 like the other IS-backed reports.
+    """
+    with get_integration_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT sample_id, published_at, parent_generation_id IS NULL AS is_primary "
+                "FROM coa_generations WHERE published_at IS NOT NULL"
+            )
+            return [
+                ThroughputCoaIn(sample_id=str(sid), published_at=published_at, is_primary=bool(is_primary))
+                for sid, published_at, is_primary in cur.fetchall()
+            ]
+
+
+@app.get("/reports/throughput", response_model=ThroughputReportOut)
+def reports_throughput(
+    from_date: Optional[str] = Query(None, alias="from"),
+    to_date: Optional[str] = Query(None, alias="to"),
+    include_test_orders: bool = Query(False),
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Lab throughput: tests received per day by family, samples, vials, COA
+    output, HPLC bench load and open backlog — one row per calendar day in the
+    lab timezone from Feb 2026 to today.
+
+    Unlike the other reports this one buckets days SERVER-side: the lab calendar
+    (timezone, working days, holidays) lives here, and the (sample, keyword)
+    de-duplication across shadow+canonical analyses is far cheaper than shipping
+    every analysis row. Weekly/monthly rollups still happen in the browser.
+
+    Test orders (billing e-mail in TEST_EMAILS) are excluded unless
+    ``include_test_orders=true``. ``from``/``to`` (inclusive YYYY-MM-DD) slice
+    the returned day series; the backlog value on the first returned day still
+    carries the history before the window. Plain ``def`` on purpose: the DB
+    work is synchronous and runs in the threadpool.
+    """
+    inputs = _load_throughput_inputs(db)
+    try:
+        coas = _fetch_throughput_coas()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
+
+    excluded = frozenset() if include_test_orders else frozenset(_test_order_senaite_ids())
+    now_utc = datetime.now(timezone.utc)
+    today = throughput_lab_day(now_utc, inputs["calendar"].tz)
+    report = build_throughput(
+        **inputs,
+        coas=coas,
+        start=THROUGHPUT_SERIES_START,
+        today=today,
+        excluded_sample_ids=excluded,
+    )
+
+    lo = _parse_day_bound(from_date, end=False)
+    hi = _parse_day_bound(to_date, end=True)
+    if lo is not None or hi is not None:
+        lo_iso = lo.date().isoformat() if lo is not None else report["start"]
+        hi_iso = hi.date().isoformat() if hi is not None else report["end"]
+        report["days"] = [d for d in report["days"] if lo_iso <= d["d"] <= hi_iso]
+        report["start"] = max(report["start"], lo_iso)
+        report["end"] = min(report["end"], hi_iso)
+    report["generated_at"] = now_utc.isoformat().replace("+00:00", "Z")
+    return report
 
 
 class ReportsSyncStatus(BaseModel):
