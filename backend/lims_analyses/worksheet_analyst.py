@@ -16,6 +16,8 @@ from typing import List, Optional, Tuple
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from lims_analyses.service import apply_transition
+
 from models import (
     AnalysisService,
     LimsAnalysis,
@@ -28,6 +30,31 @@ from models import (
 )
 
 _DEAD_STATES = ("retracted", "rejected")
+
+
+def _assign_pending(db: Session, rows: List[LimsAnalysis], *, user_id: Optional[int],
+                    reason: str) -> List[LimsAnalysis]:
+    """Apply the state machine's `assign` to every resolved row still in
+    `unassigned` (2026-09-08: before this, add-to-worksheet only stamped the
+    analyst and `assigned` was never written). commit=False: the caller's
+    route owns the transaction. Returns the rows moved."""
+    moved = [r for r in rows if r.review_state == "unassigned"]
+    for r in moved:
+        apply_transition(db, analysis_id=r.id, kind="assign", user_id=user_id,
+                         reason=reason, commit=False)
+    return moved
+
+
+def _reset_assigned(db: Session, rows: List[LimsAnalysis], *, user_id: Optional[int],
+                    reason: str) -> List[LimsAnalysis]:
+    """Apply `reset` to every resolved row still in `assigned` -- a claim
+    released without a result goes back to the inbox state. Rows that
+    already carry a submission (to_be_verified+) are never touched."""
+    moved = [r for r in rows if r.review_state == "assigned"]
+    for r in moved:
+        apply_transition(db, analysis_id=r.id, kind="reset", user_id=user_id,
+                         reason=reason, commit=False, preserve_draft=True)
+    return moved
 
 
 def _resolve(
@@ -116,11 +143,16 @@ def stamp_for_item(
     for r in changed:
         r.analyst_user_id = analyst_user_id
     db.flush()
+    assigned = _assign_pending(
+        db, rows, user_id=acting_user_id,
+        reason=f"worksheet_assigned: {worksheet_title or worksheet_id}",
+    )
     _emit(db, sub.id, "worksheet_assigned", {
         "worksheet_id": worksheet_id,
         "worksheet_title": worksheet_title,
         "analyst_email": _email(db, analyst_user_id),
         "keywords": sorted(r.keyword for r in changed),
+        "assigned_keywords": sorted(r.keyword for r in assigned),
     }, acting_user_id)
     return len(changed)
 
@@ -134,9 +166,14 @@ def clear_for_item(
     worksheet_id: int,
     worksheet_title: Optional[str] = None,
     department_id: Optional[int] = None,
+    reset_state: bool = True,
 ) -> int:
     """Clear on removal from a worksheet. Emits worksheet_removed when the uid
-    resolves to a vial. Returns the number of rows cleared."""
+    resolves to a vial. Returns the number of rows cleared.
+
+    reset_state=False (the reassign routes): the vial is moving to another
+    worksheet, so `assigned` rows keep their claim -- the following stamp
+    finds them already assigned. Default True reverts assigned -> unassigned."""
     sub, rows = _resolve(
         db, sample_uid=sample_uid, department_id=department_id, service_group_id=service_group_id
     )
@@ -146,12 +183,54 @@ def clear_for_item(
     for r in changed:
         r.analyst_user_id = None
     db.flush()
+    reset_rows = _reset_assigned(
+        db, rows, user_id=acting_user_id,
+        reason=f"worksheet_removed: {worksheet_title or worksheet_id}",
+    ) if reset_state else []
     _emit(db, sub.id, "worksheet_removed", {
         "worksheet_id": worksheet_id,
         "worksheet_title": worksheet_title,
         "keywords": sorted(r.keyword for r in changed),
+        "reset_keywords": sorted(r.keyword for r in reset_rows),
     }, acting_user_id)
     return len(changed)
+
+
+def release_for_worksheet(
+    db: Session, *, worksheet: Worksheet, acting_user_id: Optional[int]
+) -> int:
+    """On worksheet completion: any vial-tier row still `assigned` (claimed,
+    never submitted) goes back to `unassigned` with its analyst cleared, like
+    a per-item removal -- otherwise it would sit in "Assigned" forever with
+    no open worksheet. Submitted rows keep their state and analyst. Emits one
+    worksheet_released event per vial that had rows reset. Returns rows reset."""
+    items = db.execute(
+        select(WorksheetItem).where(WorksheetItem.worksheet_id == worksheet.id)
+    ).scalars().all()
+    total = 0
+    for item in items:
+        sub, rows = _resolve(
+            db, sample_uid=item.sample_uid,
+            department_id=item.department_id, service_group_id=item.service_group_id,
+        )
+        if sub is None:
+            continue
+        reset_rows = _reset_assigned(
+            db, rows, user_id=acting_user_id,
+            reason=f"worksheet_released: {worksheet.title}",
+        )
+        if not reset_rows:
+            continue
+        for r in reset_rows:
+            r.analyst_user_id = None
+        db.flush()
+        _emit(db, sub.id, "worksheet_released", {
+            "worksheet_id": worksheet.id,
+            "worksheet_title": worksheet.title,
+            "reset_keywords": sorted(r.keyword for r in reset_rows),
+        }, acting_user_id)
+        total += len(reset_rows)
+    return total
 
 
 def restamp_for_worksheet(

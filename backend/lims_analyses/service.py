@@ -377,10 +377,19 @@ def apply_transition(
     method_id: Optional[int] = None,
     instrument_id: Optional[int] = None,
     processed_by_user_id: Optional[int] = None,
+    commit: bool = True,
+    preserve_draft: bool = False,
 ) -> LimsAnalysis:
     """
     Validate (from_state, kind) via the state machine, apply the
     state change, update timestamps, write the audit row, commit.
+
+    commit=False flushes instead of committing -- for callers that run inside
+    a host transaction they own (worksheet_analyst.py's add/remove/complete
+    hooks); the audit row and state change still land in the same transaction.
+    preserve_draft=True makes kind='reset' revert ONLY the state: a worksheet
+    releasing its claim does not own the row's draft result or its prep
+    method/instrument stamps (removal never cleared those before 2026-09-08).
 
     Semantic guards beyond the state machine:
       - 'submit' requires a result_value (either already on the row or
@@ -509,8 +518,11 @@ def apply_transition(
             details=_deltas(before, row),
         ))
 
-        db.commit()
-        db.refresh(new_row)
+        if commit:
+            db.commit()
+            db.refresh(new_row)
+        else:
+            db.flush()
         return new_row
     # ── end retest branch ────────────────────────────────────────────────────
 
@@ -556,7 +568,7 @@ def apply_transition(
             raise BadRequestError(
                 "variance_verify requires the host vial to be assigned to a variance bucket"
             )
-    elif kind == "reset":
+    elif kind == "reset" and not preserve_draft:
         # Clear any draft result + provenance on the way back to unassigned.
         row.result_value = None
         row.result_unit = None
@@ -613,8 +625,11 @@ def apply_transition(
         reason=reason,
         details=_deltas(before, row),
     ))
-    db.commit()
-    db.refresh(row)
+    if commit:
+        db.commit()
+        db.refresh(row)
+    else:
+        db.flush()
     return row
 
 

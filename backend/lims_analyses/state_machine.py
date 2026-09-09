@@ -86,6 +86,14 @@ STATES: FrozenSet[str] = frozenset({
 
 TERMINAL_STATES: FrozenSet[str] = frozenset({"published", "rejected"})
 
+# Bench "result pending" pair -- the legal predecessors of `submit`. `assigned`
+# is `unassigned` + a worksheet claim (worksheet_analyst.py applies `assign` on
+# add, `reset` on removal). Result-PRODUCTION paths (the HPLC prep bridge's
+# auto-fill and method/instrument stamping) must accept BOTH, or a vial on a
+# worksheet turns invisible to results. NOT a "pristine" predicate: a claim is
+# activity -- Manage Analyses removal / custody cleanup keep `unassigned` strict.
+RESULT_PENDING_STATES: FrozenSet[str] = frozenset({"unassigned", "assigned"})
+
 TRANSITION_KINDS: FrozenSet[str] = frozenset({
     "assign", "submit", "verify", "retract", "reject",
     "retest", "publish", "reset", "auto", "variance_verify",
