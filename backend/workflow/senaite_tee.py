@@ -156,3 +156,80 @@ def tee_now(db: Session, sample: LimsSample, verb: str, *,
     except Exception:
         log.exception("senaite_tee.tee_now failed sample=%s verb=%s", sample.sample_id, verb)
         return "error"
+
+
+def _attempt(db: Session, sample: LimsSample, row: LimsSenaiteTeeRetry, *,
+             now: Optional[datetime]) -> str:
+    """One retry attempt for a pending row. Returns the row's new status."""
+    uid = (sample.external_lims_uid or "").strip()
+    expected = row.expected_state
+    try:
+        if row.verb == "publish":
+            # PB-0462 rule: SENAITE refuses publish while the AR is unverified
+            # (its own auto-verify miscounts once an analysis was rejected).
+            current = read_back_state(sample)
+            if current == "to_be_verified":
+                _ar_transition(uid, "verify")
+                current = read_back_state(sample)
+                if current != "verified":
+                    enqueue_retry(db, sample, row.verb, now=now,
+                                  error=f"verify-before-publish read-back {current!r}")
+                    return row.status
+        _ar_transition(uid, row.verb)
+        actual = read_back_state(sample)
+    except Exception as e:
+        enqueue_retry(db, sample, row.verb, error=f"{type(e).__name__}: {e}", now=now)
+        return row.status
+    if actual == expected:
+        row.status = "done"
+        db.flush()
+        return "done"
+    enqueue_retry(db, sample, row.verb, now=now,
+                  error=f"read-back {actual!r} != expected {expected!r}")
+    return row.status
+
+
+def run_retries(db: Session, *, now: Optional[datetime] = None, batch: int = 50) -> dict:
+    """Scheduler job body (registered as `senaite_tee_retry`, every 5 min):
+    drain due pending rows. Never raises past a single row; caller commits."""
+    t = _now(now)
+    stats = {"retried": 0, "done": 0, "gave_up": 0, "superseded": 0, "errors": 0}
+    due = db.execute(
+        select(LimsSenaiteTeeRetry).where(
+            LimsSenaiteTeeRetry.status == "pending",
+            LimsSenaiteTeeRetry.next_attempt_at <= t,
+        ).order_by(LimsSenaiteTeeRetry.next_attempt_at).limit(batch)
+    ).scalars().all()
+    for row in due:
+        try:
+            sample = db.get(LimsSample, row.lims_sample_pk)
+            if sample is None:
+                row.status = "done"
+                stats["superseded"] += 1
+                continue
+            # A later native state wins: never push SENAITE somewhere Mk1 has left.
+            if sample.status != row.expected_state:
+                row.status = "done"
+                row.last_error = f"superseded: native status is {sample.status!r}"
+                stats["superseded"] += 1
+                continue
+            stats["retried"] += 1
+            new_status = _attempt(db, sample, row, now=now)
+            if new_status == "done":
+                stats["done"] += 1
+            elif new_status == "gave_up":
+                stats["gave_up"] += 1
+        except Exception:
+            log.exception("senaite_tee.retry_failed row=%s", row.id)
+            stats["errors"] += 1
+        db.flush()
+    log.info("senaite_tee.run_retries %s", stats)
+    return stats
+
+
+def gave_up_count(db: Session) -> int:
+    from sqlalchemy import func
+    return int(db.execute(
+        select(func.count()).select_from(LimsSenaiteTeeRetry).where(
+            LimsSenaiteTeeRetry.status == "gave_up")
+    ).scalar() or 0)

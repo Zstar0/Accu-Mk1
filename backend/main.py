@@ -454,6 +454,20 @@ async def lifespan(app: FastAPI):
     from flags import watches as _flag_watches
     _flag_scheduler.register("flag_watch_poller", interval=_timedelta(minutes=2),
                              fn=_flag_watches._watch_poll_job)
+    # Sample-status authority flip (2026-09-09 spec §5): drain SENAITE tee
+    # refusals. Runs in BOTH authority modes — the silent-200 class is
+    # SENAITE's defect regardless of who owns the badge.
+    from workflow import senaite_tee as _senaite_tee
+
+    def _tee_retry_job(now):
+        db = _SessionLocal()
+        try:
+            _senaite_tee.run_retries(db, now=now)
+            db.commit()
+        finally:
+            db.close()
+    _flag_scheduler.register("senaite_tee_retry", interval=_timedelta(minutes=5),
+                             fn=_tee_retry_job)
     _flag_scheduler.start()
     # Seed default settings and admin user
     from database import SessionLocal
