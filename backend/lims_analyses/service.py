@@ -28,7 +28,7 @@ from lims_analyses.state_machine import (
     tier_allows,
     tier_of,
 )
-from models import LimsAnalysis, LimsAnalysisTransition, LimsSubSampleEvent
+from models import LimsAnalysis, LimsAnalysisTransition, LimsSubSampleEvent, WorksheetItem
 
 
 # ─── Typed exceptions ────────────────────────────────────────────────────────
@@ -3595,3 +3595,67 @@ def list_analyses_in_senaite_shape(
                 promo_by_source[p.source_analysis_id] = p.parent_analysis_id
 
     return _serialize_senaite_shape_rows(db, rows, promo_by_source=promo_by_source)
+
+
+# ─── Native cancel cascade (spec §3.4, §8.3) ─────────────────────────────────
+
+CANCEL_PENDING_STATES = frozenset({"unassigned", "assigned", "to_be_verified", "parent_to_verify"})
+
+
+def _cancel_targets(db: Session, *, parent_sample_pk: int):
+    """Live canonical/ordered, non-retested rows on the parent and its vials.
+    Partitioned into pending (still awaiting work -- a customer cancellation
+    kills these) and kept (finished history rows that stay, spec §3.4)."""
+    from models import LimsSubSample
+    from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
+    vial_pks = [v.id for v in db.execute(
+        select(LimsSubSample).where(LimsSubSample.parent_sample_pk == parent_sample_pk)
+    ).scalars()]
+    rows = db.execute(
+        select(LimsAnalysis).where(
+            or_(LimsAnalysis.lims_sample_pk == parent_sample_pk,
+                LimsAnalysis.lims_sub_sample_pk.in_(vial_pks or [-1])),
+            LimsAnalysis.provenance.in_(("canonical", PROVENANCE_ORDERED)),
+            LimsAnalysis.retested.is_(False),
+        ).order_by(LimsAnalysis.id)
+    ).scalars().all()
+    pending_rows = [r for r in rows if r.review_state in CANCEL_PENDING_STATES]
+    kept_rows = [r for r in rows if r.review_state not in CANCEL_PENDING_STATES]
+    uids = [v.external_lims_uid for v in db.execute(
+        select(LimsSubSample).where(LimsSubSample.parent_sample_pk == parent_sample_pk)
+    ).scalars() if v.external_lims_uid]
+    items = db.execute(
+        select(WorksheetItem).where(WorksheetItem.sample_uid.in_(uids or ["-"]))
+    ).scalars().all() if uids else []
+    return pending_rows, kept_rows, items
+
+
+def preview_cancel(db: Session, *, parent_sample_pk: int) -> Dict:
+    pending_rows, kept_rows, items = _cancel_targets(db, parent_sample_pk=parent_sample_pk)
+    return {"cancelled_rows": [r.id for r in pending_rows],
+            "released_worksheets": sorted({i.worksheet_id for i in items}),
+            "kept_rows": [r.id for r in kept_rows]}
+
+
+def cancel_pending_rows(db: Session, *, parent_sample_pk: int, user_id: Optional[int],
+                        reason: str) -> Dict:
+    """Spec §8.3: cancel every pending row (audited per row), then release the
+    vials from their worksheets WITHOUT a reset transition (the rows are dead).
+    Flush-only; the route commits."""
+    from lims_analyses.worksheet_analyst import clear_for_item
+    pending_rows, kept_rows, items = _cancel_targets(db, parent_sample_pk=parent_sample_pk)
+    cancelled = []
+    for r in pending_rows:
+        apply_transition(db, analysis_id=r.id, kind="cancel", reason=reason,
+                         user_id=user_id, commit=False)
+        cancelled.append(r.id)
+    released = []
+    for item in items:
+        clear_for_item(db, sample_uid=item.sample_uid, service_group_id=item.service_group_id,
+                       acting_user_id=user_id, worksheet_id=item.worksheet_id,
+                       department_id=item.department_id, reset_state=False)
+        released.append(item.worksheet_id)
+        db.delete(item)
+    db.flush()
+    return {"cancelled_rows": cancelled, "released_worksheets": sorted(set(released)),
+            "kept_rows": [r.id for r in kept_rows]}
