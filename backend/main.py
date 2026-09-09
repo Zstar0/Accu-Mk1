@@ -16265,12 +16265,16 @@ def _receive_native_phase(
         already = row.status not in pre_received
         if not already:
             from_status = row.status or "sample_due"
-            record_sample_transition(
-                db, sample_id=row.sample_id, to_status="sample_received",
-                source="mk1", verb="receive",
-                from_status=from_status,
-                actor_user_id=user_id,
-            )
+            from workflow.authority import sample_status_authority
+            engine_owns_ledger = sample_status_authority(db) == "mk1"
+            # mk1 authority: the engine (execute_verb) is the single ledger writer (spec §4.1)
+            if not engine_owns_ledger:
+                record_sample_transition(
+                    db, sample_id=row.sample_id, to_status="sample_received",
+                    source="mk1", verb="receive",
+                    from_status=from_status,
+                    actor_user_id=user_id,
+                )
             heal_sample_status(db, row.sample_id, "sample_received", source="mk1")
             if row.date_received is None:
                 row.date_received = datetime.utcnow()
@@ -16911,9 +16915,13 @@ def _after_publish_native(db, *, sample_id: str, pre_publish_status, actor_user_
         from workflow.engine import drive_sample_touchpoint
         from workflow.sample_log import record_sample_transition
         from workflow import senaite_tee
-        record_sample_transition(db, sample_id=sample_id, verb="publish",
-                                 to_status="published", from_status=pre_publish_status,
-                                 source="mk1", actor_user_id=actor_user_id)
+        from workflow.authority import sample_status_authority
+        engine_owns_ledger = sample_status_authority(db) == "mk1"
+        # mk1 authority: the engine (execute_verb) is the single ledger writer (spec §4.1)
+        if not engine_owns_ledger:
+            record_sample_transition(db, sample_id=sample_id, verb="publish",
+                                     to_status="published", from_status=pre_publish_status,
+                                     source="mk1", actor_user_id=actor_user_id)
         # The publish touchpoint is the attester the engine's `coa_published`
         # requirement kind needs (engine._eval_one reads `attested`); without
         # it the verified -> published edge is requirements_unmet.
@@ -16948,8 +16956,14 @@ def _record_sample_transition_bg(**kwargs) -> None:
     try:
         from database import SessionLocal
         from workflow.sample_log import heal_sample_status, record_sample_transition
+        from workflow.authority import sample_status_authority
         db = SessionLocal()
-        wrote_log = record_sample_transition(db, **kwargs)
+        engine_owns_ledger = sample_status_authority(db) == "mk1"
+        # mk1 authority: the engine (execute_verb) is the single ledger writer (spec §4.1)
+        if engine_owns_ledger:
+            wrote_log = False
+        else:
+            wrote_log = record_sample_transition(db, **kwargs)
         # 2026-07-14 inbox-desync RC1: ALSO heal lims_samples.status here.
         # The log row alone leaves the registry column stale, and the IS
         # event sync can't fix it later — its dup guard sees this mk1 row as
