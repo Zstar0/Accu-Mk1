@@ -613,6 +613,15 @@ def _refresh_parent_from_senaite(db: Session, parent: LimsSample) -> None:
     prior_uid = parent.external_lims_uid
     prior_system = parent.external_lims_system
     _populate_basic_info(parent, meta)
+    # Authority flip (spec §4.2): under mk1 authority the engine owns this
+    # column; SENAITE's review_state is still LOGGED by the transition hooks
+    # (below) but never written here. _populate_basic_info is shared with
+    # the row-creation and signal-upsert paths, which stay SENAITE-sourced,
+    # so the gate restores the pre-fetch status here rather than touching
+    # the helper's unconditional write.
+    from workflow.authority import sample_status_authority
+    if sample_status_authority(db) == "mk1":
+        parent.status = old_status
     if not incoming_uid and prior_uid:
         # Malformed/partial fetch response: restore identity instead of
         # letting _populate_basic_info NULL it (same prior-identity-restore

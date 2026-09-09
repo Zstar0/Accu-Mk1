@@ -103,6 +103,10 @@ def _heal_status(db: Session, sample_pk: int, new_status: str,
     Heal failure never breaks the sync loop (same contract as the recorder)."""
     from workflow.sample_log import SAMPLE_REVIEW_STATE_WHITELIST
     try:
+        from workflow.authority import sample_status_authority
+        if sample_status_authority(db) == "mk1":
+            stats["skipped_authority"] = stats.get("skipped_authority", 0) + 1
+            return
         if new_status not in SAMPLE_REVIEW_STATE_WHITELIST:
             return
         sample = db.get(LimsSample, sample_pk)

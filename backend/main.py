@@ -16257,7 +16257,7 @@ def _receive_native_phase(
                 from_status=from_status,
                 actor_user_id=user_id,
             )
-            heal_sample_status(db, row.sample_id, "sample_received")
+            heal_sample_status(db, row.sample_id, "sample_received", source="mk1")
             if row.date_received is None:
                 row.date_received = datetime.utcnow()
             # Engine touchpoint (PB-0486 finding, 2026-08-28): this phase
