@@ -212,6 +212,29 @@ def _find_edge(db: Session, from_slug: str, verb: str,
     return (row[0], row[1]) if row else None
 
 
+def _write_status_if_authoritative(db: Session, sample: LimsSample, to_slug: str, *,
+                                   verb: str, actor_user_id: Optional[int]) -> bool:
+    """mk1 authority (spec §4.1): the engine is the writer of
+    lims_samples.status. Only catalog slugs are ever written; a foreign slug
+    logs and leaves the column alone. Ledger row source='mk1' (never
+    deduped). senaite authority: no-op."""
+    from workflow.authority import sample_status_authority
+    from workflow.catalog import sample_state_slugs
+    from workflow.sample_log import record_sample_transition
+    if sample_status_authority(db) != "mk1":
+        return False
+    if to_slug not in sample_state_slugs(db):
+        log.warning("workflow.status_write_refused sample=%s slug=%r not in catalog",
+                    sample.sample_id, to_slug)
+        return False
+    prev = sample.status
+    sample.status = to_slug
+    record_sample_transition(db, sample_id=sample.sample_id, to_status=to_slug,
+                             source="mk1", verb=verb, from_status=prev,
+                             actor_user_id=actor_user_id)
+    return True
+
+
 def execute_verb(db: Session, sample: LimsSample, verb: str, *, trigger: str,
                  actor_user_id: Optional[int] = None,
                  attested: Optional[dict] = None,
@@ -239,6 +262,8 @@ def execute_verb(db: Session, sample: LimsSample, verb: str, *, trigger: str,
                        outcomes=outcomes, actor_user_id=actor_user_id)
     frm = sample.native_status
     sample.native_status = to_slug
+    _write_status_if_authoritative(db, sample, to_slug, verb=verb,
+                                   actor_user_id=actor_user_id)
     db.flush()
     return _record(db, sample, trigger=trigger, verb=verb, from_status=frm,
                    to_status=to_slug, outcome="advanced",
