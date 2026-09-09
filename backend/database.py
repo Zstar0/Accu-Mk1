@@ -965,6 +965,12 @@ def _run_migrations():
         SELECT 'identity_collision', 'Identity Collision', '#e5484d', 'issue', TRUE, TRUE, 7, '[]'::jsonb, TRUE
         WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='identity_collision')
         """,
+        # Sample-status authority flip (2026-09-09 spec §6.2): stranded samples.
+        """
+        INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
+        SELECT 'workflow_stranded', 'Workflow Stranded', '#f59e0b', 'issue', FALSE, TRUE, 8, '[]'::jsonb, TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='workflow_stranded')
+        """,
         # Extend the NAMED status CHECK to admit 'blocked' (Plan 5). A dedicated
         # DROP+ADD statement — NOT an edit to the IF-NOT-EXISTS flag_flags create
         # (which never re-runs once the table exists). Postgres-only; on the

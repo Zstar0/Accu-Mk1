@@ -468,6 +468,20 @@ async def lifespan(app: FastAPI):
             db.close()
     _flag_scheduler.register("senaite_tee_retry", interval=_timedelta(minutes=5),
                              fn=_tee_retry_job)
+    # Sample-status authority flip (2026-09-09 spec §6.2): stranded-sample
+    # detector. Detection, not sweeping — this job never advances a status;
+    # its only writes are flags (Handler ruling).
+    from workflow import stranded as _stranded
+
+    def _stranded_job(now):
+        db = _SessionLocal()
+        try:
+            _stranded.run_check(db, now=now)
+            db.commit()
+        finally:
+            db.close()
+    _flag_scheduler.register("workflow_stranded_check", interval=_timedelta(minutes=15),
+                             fn=_stranded_job)
     _flag_scheduler.start()
     # Seed default settings and admin user
     from database import SessionLocal
