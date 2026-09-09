@@ -292,26 +292,64 @@ describe('ThroughputReport', () => {
     )
   })
 
-  it('offers the customers from the facets and refetches with the chosen one', async () => {
+  it('filters the customers from the facets as you type and refetches with the chosen one', async () => {
     renderPage()
     await waitFor(() =>
       expect(
         screen.getByRole('combobox', { name: 'Customer' })
       ).toBeInTheDocument()
     )
-    const select = screen.getByRole('combobox', { name: 'Customer' })
-    // The select is on screen before the data; its options arrive with the facets.
+    const box = screen.getByRole('combobox', { name: 'Customer' })
+    // The box is on screen before the data; its options arrive with the facets.
+    fireEvent.focus(box)
     await waitFor(() =>
       expect(
-        within(select).getByRole('option', { name: /Acme Peptides/ })
+        screen.getByRole('option', { name: /Acme Peptides/ })
       ).toBeInTheDocument()
     )
 
-    fireEvent.change(select, { target: { value: 'Beta Labs' } })
+    // Typing narrows the list without refetching.
+    const before = mockGet.mock.calls.length
+    fireEvent.change(box, { target: { value: 'beta' } })
+    expect(
+      screen.queryByRole('option', { name: /Acme Peptides/ })
+    ).not.toBeInTheDocument()
+    expect(mockGet.mock.calls).toHaveLength(before)
+
+    fireEvent.click(screen.getByRole('option', { name: /Beta Labs/ }))
 
     await waitFor(() =>
       expect(lastCall()).toMatchObject({ client: 'Beta Labs' })
     )
+    expect(box).toHaveValue('Beta Labs')
+  })
+
+  it('clears the customer box along with the other filters', async () => {
+    renderPage()
+    await waitFor(() =>
+      expect(
+        screen.getByRole('combobox', { name: 'Customer' })
+      ).toBeInTheDocument()
+    )
+    const box = screen.getByRole('combobox', { name: 'Customer' })
+    fireEvent.focus(box)
+    await waitFor(() =>
+      expect(
+        screen.getByRole('option', { name: /Beta Labs/ })
+      ).toBeInTheDocument()
+    )
+    fireEvent.click(screen.getByRole('option', { name: /Beta Labs/ }))
+    await waitFor(() =>
+      expect(lastCall()).toMatchObject({ client: 'Beta Labs' })
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }))
+
+    // Back to the unscoped report: the box empties and the Clear button goes.
+    await waitFor(() => expect(box).toHaveValue(''))
+    expect(
+      screen.queryByRole('button', { name: 'Clear filters' })
+    ).not.toBeInTheDocument()
   })
 
   it('refetches with the order number typed into the Order # box', async () => {
