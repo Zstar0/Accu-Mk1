@@ -1,6 +1,7 @@
 import { useId, useRef, useState } from 'react'
 
 import { cn } from '@/lib/utils'
+import { Input } from '@/components/ui/input'
 import type { ThroughputClientFacet } from '@/lib/api'
 
 /**
@@ -116,7 +117,7 @@ export function CustomerCombobox({
         }
       }}
     >
-      <input
+      <Input
         type="text"
         role="combobox"
         aria-label="Customer"
@@ -137,7 +138,7 @@ export function CustomerCombobox({
           setOpen(true)
         }}
         onKeyDown={onKeyDown}
-        className="h-8 w-56 rounded-md border border-border bg-transparent px-2 text-sm text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+        className="h-8 w-56 text-sm"
       />
       {open && (
         <div className="absolute left-0 top-9 z-20 max-h-64 w-72 overflow-auto rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md">
@@ -158,7 +159,9 @@ export function CustomerCombobox({
                   !row.value && 'text-muted-foreground'
                 )}
               >
-                <span className="truncate">{row.label}</span>
+                <span className="truncate" title={row.label}>
+                  {row.label}
+                </span>
                 {row.count !== null && (
                   <span className="shrink-0 tabular-nums text-xs opacity-60">
                     {row.count}

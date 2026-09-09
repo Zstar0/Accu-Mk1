@@ -152,6 +152,19 @@ describe('CustomerCombobox', () => {
     expect(input).toHaveAttribute('aria-activedescendant', option.id)
   })
 
+  it('holds focus in the box while an option is being clicked', () => {
+    // A real browser blurs the input on mousedown, which would close the list
+    // before the click landed on the option. jsdom does not, so assert the
+    // guard itself: the option cancels the mousedown default.
+    const { input } = setup()
+    fireEvent.focus(input)
+    const option = screen.getByRole('option', { name: /Beta Labs/ })
+
+    const notCancelled = fireEvent.mouseDown(option)
+
+    expect(notCancelled).toBe(false)
+  })
+
   it('says so when nothing matches', () => {
     const { input } = setup()
     fireEvent.focus(input)
