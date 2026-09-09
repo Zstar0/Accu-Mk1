@@ -1,0 +1,310 @@
+"""Unit tests for the pure lab-throughput engine (backend/throughput.py).
+
+The engine takes already-fetched rows (plain dataclasses) and returns the
+/reports/throughput payload. No DB, no FastAPI — mirrors sla_engine.py.
+"""
+from __future__ import annotations
+
+from datetime import date, datetime
+
+import pytest
+
+from throughput import (
+    AnalysisIn,
+    BenchIn,
+    CoaIn,
+    LabCalendar,
+    SampleIn,
+    build_throughput,
+    classify_keyword,
+    lab_day,
+)
+
+LA = "America/Los_Angeles"
+WEEKDAYS = frozenset({0, 1, 2, 3, 4})
+
+
+def cal(holidays=()):
+    return LabCalendar(tz=LA, working_days=WEEKDAYS, holidays=frozenset(holidays))
+
+
+def sample(pk, sid, received, status="sample_received", client="acme", retest=False):
+    return SampleIn(
+        pk=pk,
+        sample_id=sid,
+        date_received=received,
+        status=status,
+        client=client,
+        is_retest=retest,
+    )
+
+
+def build(**kw):
+    defaults = dict(
+        samples=[],
+        analyses=[],
+        vial_counts={},
+        coas=[],
+        bench=[],
+        instruments={},
+        service_categories={},
+        calendar=cal(),
+        start=date(2026, 7, 1),
+        today=date(2026, 7, 7),
+        excluded_sample_ids=frozenset(),
+    )
+    defaults.update(kw)
+    return build_throughput(**defaults)
+
+
+def day(result, iso):
+    return next(d for d in result["days"] if d["d"] == iso)
+
+
+# ---------------------------------------------------------------- classify
+
+
+@pytest.mark.parametrize(
+    "keyword,category,expected",
+    [
+        ("STER-PCR", None, "ster"),
+        ("ENDO-LAL", None, "endo"),
+        ("BPC157-PURITY", "HPLC", "hplc"),
+        ("X", "Peptide Identity", "hplc"),
+        ("X", "Peptide Analysis", "hplc"),
+        ("HPLC-PUR", None, "hplc"),
+        ("PEPT-Total", None, "hplc"),
+        ("BLEND-PUR", None, "hplc"),
+        ("PUR_BPC157", None, "hplc"),
+        ("QTY_BPC157", None, "hplc"),
+        ("ID_BPC157", None, "hplc"),
+        ("ANALYTE-1", None, "hplc"),
+        ("Benzyl_Alcohol_Assay", None, "bacw"),
+        ("PH-DETERM", None, "bacw"),
+        ("FILL-NET-CONTENT", None, "bacw"),
+        ("KF", "Chemistry", "other"),
+    ],
+)
+def test_classify_keyword(keyword, category, expected):
+    assert classify_keyword(keyword, category) == expected
+
+
+# ---------------------------------------------------------------- lab_day
+
+
+def test_lab_day_converts_naive_utc_to_lab_timezone():
+    # 02:30 UTC on 1 Jul is still 30 Jun in Los Angeles (PDT = UTC-7)
+    assert lab_day(datetime(2026, 7, 1, 2, 30), LA) == date(2026, 6, 30)
+
+
+def test_lab_day_none_is_none():
+    assert lab_day(None, LA) is None
+
+
+# ---------------------------------------------------------------- tests per sample
+
+
+def test_hplc_panel_counts_once_per_sample_regardless_of_analyte_rows():
+    r = build(
+        samples=[sample(1, "P-1", datetime(2026, 7, 1, 18, 0))],
+        analyses=[
+            AnalysisIn(1, "HPLC-PUR"),
+            AnalysisIn(1, "PUR_BPC157"),
+            AnalysisIn(1, "QTY_BPC157"),
+            AnalysisIn(1, "STER-PCR"),
+        ],
+    )
+    d = day(r, "2026-07-01")
+    assert (d["hplc"], d["ster"], d["endo"], d["bacw"], d["other"]) == (1, 1, 0, 0, 0)
+    assert d["tests"] == 2
+    assert d["samples"] == 1
+
+
+def test_duplicate_sample_keyword_rows_across_provenance_count_once():
+    r = build(
+        samples=[sample(1, "P-1", datetime(2026, 7, 1, 18, 0))],
+        analyses=[AnalysisIn(1, "STER-PCR"), AnalysisIn(1, "STER-PCR")],  # shadow + canonical
+    )
+    assert day(r, "2026-07-01")["ster"] == 1
+
+
+def test_bac_water_panel_counts_once_per_sample():
+    r = build(
+        samples=[sample(1, "BW-1", datetime(2026, 7, 1, 18, 0))],
+        analyses=[
+            AnalysisIn(1, "Benzyl_Alcohol_Assay"),
+            AnalysisIn(1, "PH-DETERM"),
+            AnalysisIn(1, "FILL-NET-CONTENT"),
+        ],
+    )
+    d = day(r, "2026-07-01")
+    assert d["bacw"] == 1
+    assert d["tests"] == 1
+
+
+def test_other_family_counts_per_keyword():
+    r = build(
+        samples=[sample(1, "P-1", datetime(2026, 7, 1, 18, 0))],
+        analyses=[AnalysisIn(1, "KF"), AnalysisIn(1, "MYSTERY")],
+    )
+    assert day(r, "2026-07-01")["other"] == 2
+
+
+def test_category_lookup_drives_hplc_classification():
+    r = build(
+        samples=[sample(1, "P-1", datetime(2026, 7, 1, 18, 0))],
+        analyses=[AnalysisIn(1, "BPC157-PURITY")],
+        service_categories={"BPC157-PURITY": "HPLC"},
+    )
+    assert day(r, "2026-07-01")["hplc"] == 1
+
+
+# ---------------------------------------------------------------- window & calendar
+
+
+def test_series_spans_start_to_today_inclusive_with_calendar_flags():
+    r = build(start=date(2026, 7, 1), today=date(2026, 7, 7), calendar=cal(holidays=[date(2026, 7, 3)]))
+    assert [d["d"] for d in r["days"]] == [f"2026-07-0{i}" for i in range(1, 8)]
+    fri_holiday = day(r, "2026-07-03")
+    assert fri_holiday["hol"] is True and fri_holiday["biz"] is False
+    sat = day(r, "2026-07-04")
+    assert sat["dow"] == 5 and sat["biz"] is False and sat["hol"] is False
+    mon = day(r, "2026-07-06")
+    assert mon["biz"] is True
+
+
+def test_samples_received_before_start_are_ignored():
+    r = build(samples=[sample(1, "P-1", datetime(2026, 6, 30, 18, 0))])
+    assert sum(d["samples"] for d in r["days"]) == 0
+
+
+def test_receipt_day_is_bucketed_in_lab_timezone():
+    # 02:00 UTC on 3 Jul == 19:00 PDT on 2 Jul
+    r = build(samples=[sample(1, "P-1", datetime(2026, 7, 3, 2, 0))])
+    assert day(r, "2026-07-02")["samples"] == 1
+    assert day(r, "2026-07-03")["samples"] == 0
+
+
+def test_excluded_sample_ids_are_dropped_everywhere():
+    r = build(
+        samples=[sample(1, "P-1", datetime(2026, 7, 1, 18, 0)), sample(2, "T-1", datetime(2026, 7, 1, 18, 0))],
+        analyses=[AnalysisIn(1, "STER-PCR"), AnalysisIn(2, "STER-PCR")],
+        coas=[CoaIn("T-1", datetime(2026, 7, 2, 18, 0), True)],
+        bench=[BenchIn("T-1", datetime(2026, 7, 2, 18, 0), None), BenchIn("T-1-2", datetime(2026, 7, 2, 18, 0), None)],
+        excluded_sample_ids=frozenset({"T-1"}),
+    )
+    d1 = day(r, "2026-07-01")
+    assert d1["samples"] == 1 and d1["ster"] == 1
+    d2 = day(r, "2026-07-02")
+    assert d2["coa"] == 0 and d2["bench_vials"] == 0 and d2["bench_rows"] == 0
+    assert r["backlog_now"]["total"] == 1
+
+
+# ---------------------------------------------------------------- COA output
+
+
+def test_primary_and_additional_coas_count_on_publish_day():
+    r = build(
+        samples=[sample(1, "P-1", datetime(2026, 7, 1, 18, 0))],
+        coas=[
+            CoaIn("P-1", datetime(2026, 7, 2, 18, 0), True),
+            CoaIn("P-1", datetime(2026, 7, 3, 18, 0), True),  # re-issue
+            CoaIn("P-1", datetime(2026, 7, 3, 19, 0), False),  # additional
+        ],
+    )
+    d2, d3 = day(r, "2026-07-02"), day(r, "2026-07-03")
+    assert (d2["coa"], d2["acoa"], d2["fp"]) == (1, 0, 1)
+    assert (d3["coa"], d3["acoa"], d3["fp"]) == (1, 1, 0)
+
+
+def test_first_publication_never_lands_before_receipt_day():
+    # published (clock skew / migration) before the receipt day -> counted on the receipt day
+    r = build(
+        samples=[sample(1, "P-1", datetime(2026, 7, 3, 18, 0))],
+        coas=[CoaIn("P-1", datetime(2026, 7, 2, 18, 0), True)],
+    )
+    assert day(r, "2026-07-03")["fp"] == 1
+    assert day(r, "2026-07-02")["fp"] == 0
+
+
+# ---------------------------------------------------------------- backlog
+
+
+def test_backlog_series_rises_on_receipt_and_falls_on_first_primary_publication():
+    r = build(
+        samples=[
+            sample(1, "P-1", datetime(2026, 7, 1, 18, 0)),
+            sample(2, "P-2", datetime(2026, 7, 1, 18, 0)),
+            sample(3, "P-3", datetime(2026, 7, 2, 18, 0), status="cancelled"),
+        ],
+        coas=[CoaIn("P-1", datetime(2026, 7, 3, 18, 0), True)],
+    )
+    assert [day(r, f"2026-07-0{i}")["backlog"] for i in range(1, 5)] == [2, 2, 1, 1]
+
+
+def test_backlog_now_buckets_open_samples_by_age_and_status():
+    r = build(
+        samples=[
+            sample(1, "P-1", datetime(2026, 7, 6, 18, 0)),  # 1 day old
+            sample(2, "P-2", datetime(2026, 7, 1, 18, 0), status="waiting_for_addon_results"),  # 6 days
+            sample(3, "P-3", datetime(2026, 7, 1, 18, 0)),  # published -> not open
+            sample(4, "P-4", datetime(2026, 7, 1, 18, 0), status="cancelled"),
+        ],
+        coas=[CoaIn("P-3", datetime(2026, 7, 2, 18, 0), True)],
+        today=date(2026, 7, 7),
+    )
+    assert r["backlog_now"] == {
+        "total": 2,
+        "status": {"sample_received": 1, "waiting_for_addon_results": 1},
+        "age": {"0-2d": 1, "3-7d": 1},
+    }
+
+
+# ---------------------------------------------------------------- vials & bench
+
+
+def test_vial_counts_and_retests_roll_into_the_receipt_day():
+    r = build(
+        samples=[sample(1, "P-1", datetime(2026, 7, 1, 18, 0), retest=True)],
+        vial_counts={1: 4},
+    )
+    d = day(r, "2026-07-01")
+    assert d["vials"] == 4 and d["retest"] == 1
+
+
+def test_distinct_clients_per_day():
+    r = build(
+        samples=[
+            sample(1, "P-1", datetime(2026, 7, 1, 18, 0), client="a"),
+            sample(2, "P-2", datetime(2026, 7, 1, 18, 0), client="a"),
+            sample(3, "P-3", datetime(2026, 7, 1, 18, 0), client="b"),
+        ]
+    )
+    assert day(r, "2026-07-01")["clients"] == 2
+
+
+def test_bench_counts_distinct_vials_per_instrument_and_all_rows():
+    r = build(
+        bench=[
+            BenchIn("P-1", datetime(2026, 7, 1, 18, 0), 1),
+            BenchIn("P-1", datetime(2026, 7, 1, 19, 0), 1),  # re-processed
+            BenchIn("P-2", datetime(2026, 7, 1, 19, 0), 2),
+            BenchIn("P-3", datetime(2026, 7, 1, 19, 0), None),
+        ],
+        instruments={1: "1290a", 2: "1290b"},
+    )
+    d = day(r, "2026-07-01")
+    assert d["bench_rows"] == 4
+    assert d["bench_vials"] == 3
+    assert d["bench_inst"] == {"1290a": 1, "1290b": 1, "unassigned": 1}
+    assert r["instruments"] == ["1290a", "1290b", "unassigned"]
+
+
+# ---------------------------------------------------------------- envelope
+
+
+def test_envelope_carries_window_calendar_and_notes():
+    r = build(calendar=cal(holidays=[date(2026, 7, 3), date(2026, 1, 1)]))
+    assert r["start"] == "2026-07-01" and r["today"] == "2026-07-07" and r["tz"] == LA
+    assert r["holidays"] == ["2026-07-03"]  # only holidays inside the window
+    assert r["notes"] == {"jan_excluded": True, "vials_from": "2026-06", "bench_from": "2026-03"}
