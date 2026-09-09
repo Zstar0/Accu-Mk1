@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Changed
+- Lab Throughput: the **Customer** filter is a type-to-filter combobox instead of a `<select>` ([CustomerCombobox.tsx](src/components/reports/CustomerCombobox.tsx)). Production has a few hundred customers in the facet list, which is more than a native dropdown can be walked through. The box filters the already-loaded facets as you type; only picking an option changes the filter, so keystrokes never refetch the report. Arrow keys + Enter pick, Escape or leaving the box restores the committed customer, and "All customers" clears it. Deliberately a plain input + listbox rather than the shadcn Popover + Command recipe, which nothing else in this repo composes.
+
 ## v1.16.1 — 2026-09-09
 
 ### Added
