@@ -591,7 +591,7 @@ export function StatusBadge({ state, promotable = false, varianceReady = false }
   // the exported STATUS_LABELS map stays the fallback for an empty store and
   // for this file's other importers. The two sub-sample overrides below are
   // row-context labels, not state names, so they still win.
-  const catalogLabel = useStateLabel(state, STATUS_LABELS[state] ?? state.replace(/_/g, ' '))
+  const catalogLabel = useStateLabel(state, STATUS_LABELS[state] ?? state.replace(/_/g, ' '), 'analysis')
   const label =
     state === 'to_be_verified' && varianceReady
       ? 'Ready to Verify'
