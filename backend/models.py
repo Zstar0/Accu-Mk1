@@ -2152,7 +2152,8 @@ class LimsWorkflowShadowEvaluation(Base):
                'registration' (2026-07-27: first-touch arming at the
                registry-signal creation hook — see `workflow.engine.
                arm_native_status` and `main._arm_native_status_at_
-               registration_bg`; always paired with outcome='seeded')
+               registration_bg`; always paired with outcome='seeded') |
+               'cancel' (2026-09-09: POST /api/samples/{id}/cancel)
     """
     __tablename__ = "lims_workflow_shadow_evaluations"
 

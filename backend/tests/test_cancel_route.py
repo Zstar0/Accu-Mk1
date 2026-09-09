@@ -17,7 +17,10 @@ from fastapi.testclient import TestClient
 from main import app
 from auth import get_current_user
 from database import get_db, Base
-from models import LimsSample, LimsSubSampleEvent, Settings
+from models import (
+    LimsSample, LimsSubSampleEvent, LimsWorkflowShadowEvaluation,
+    LimsWorkflowState, LimsWorkflowTransition, Settings,
+)
 
 
 @pytest.fixture
@@ -123,5 +126,97 @@ def test_senaite_mode_moves_native_only(route_client):
         r = route_client.post("/api/samples/P-CX-1/cancel",
                               json={"reason": "customer asked", "confirm": True})
     assert r.status_code == 200
+    # Response `status` must report the engine's view (native_status), not
+    # the SENAITE-mirrored column, which stays "sample_received" until the
+    # tee lands (ruling 3).
+    assert r.json()["status"] == "cancelled"
     db.expire_all()
     assert row.native_status == "cancelled" and row.status == "sample_received"
+
+
+def _seeded_cancel_edge(db):
+    return db.execute(
+        select(LimsWorkflowTransition)
+        .join(LimsWorkflowState, LimsWorkflowTransition.from_state_id == LimsWorkflowState.id)
+        .where(LimsWorkflowTransition.entity_scope == "sample",
+               LimsWorkflowTransition.verb == "cancel",
+               LimsWorkflowState.slug == "sample_received")
+    ).scalars().one()
+
+
+def test_no_edge_is_409_and_records_refusal(route_client):
+    db = route_client._test_session
+    row = _prep(db)
+    edge = _seeded_cancel_edge(db)
+    edge.is_active = False
+    db.commit()
+    r = route_client.post("/api/samples/P-CX-1/cancel",
+                          json={"reason": "customer asked", "confirm": True})
+    assert r.status_code == 409
+    db.expire_all()
+    # The _find_edge pre-check raises 409 before execute_verb ever runs, so
+    # no LimsWorkflowShadowEvaluation row is written for this path — assert
+    # the sample stays armed at its prior native_status/status instead.
+    evals = db.execute(
+        select(LimsWorkflowShadowEvaluation).where(
+            LimsWorkflowShadowEvaluation.lims_sample_pk == row.id,
+            LimsWorkflowShadowEvaluation.verb == "cancel",
+        )
+    ).scalars().all()
+    assert evals == []
+    assert row.native_status == "sample_received"
+    assert row.status == "sample_received"
+
+
+def test_requirements_unmet_is_412_and_persists_refusal(route_client):
+    db = route_client._test_session
+    row = _prep(db)
+    edge = _seeded_cancel_edge(db)
+    edge.requirements = [{"kind": "field_present", "value": "client_sample_id", "note": "test"}]
+    db.commit()
+    r = route_client.post("/api/samples/P-CX-1/cancel",
+                          json={"reason": "customer asked", "confirm": True})
+    assert r.status_code == 412
+    reqs = r.json()["detail"]["requirements"]
+    assert reqs and reqs[0]["met"] is False
+    db.expire_all()
+    evals = db.execute(
+        select(LimsWorkflowShadowEvaluation).where(
+            LimsWorkflowShadowEvaluation.lims_sample_pk == row.id,
+            LimsWorkflowShadowEvaluation.verb == "cancel",
+        )
+    ).scalars().all()
+    assert len(evals) == 1 and evals[0].outcome == "requirements_unmet"
+
+    # Repeat: identical refusal dedups (_record returns None) but must still
+    # answer 412 with the latest outcomes, and must not grow the audit trail.
+    r2 = route_client.post("/api/samples/P-CX-1/cancel",
+                           json={"reason": "customer asked", "confirm": True})
+    assert r2.status_code == 412
+    assert r2.json()["detail"]["requirements"]
+    db.expire_all()
+    evals2 = db.execute(
+        select(LimsWorkflowShadowEvaluation).where(
+            LimsWorkflowShadowEvaluation.lims_sample_pk == row.id,
+            LimsWorkflowShadowEvaluation.verb == "cancel",
+        )
+    ).scalars().all()
+    assert len(evals2) == 1
+
+
+def test_cancel_from_published_keeps_coa_live(route_client):
+    db = route_client._test_session
+    row = _prep(db, status="published", code="ABCD-EFGH")
+    with patch("workflow.cancel_routes.SessionLocal", lambda: sessionmaker(bind=db.get_bind())()), \
+         patch("workflow.senaite_tee.tee_now", return_value="senaite_only"):
+        r = route_client.post("/api/samples/P-CX-1/cancel",
+                              json={"reason": "customer asked", "confirm": True})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "cancelled"
+    assert body["from_status"] == "published"
+    assert body["published_coa_still_live"] is True
+    db.expire_all()
+    assert row.native_status == "cancelled"
+    ev = db.execute(select(LimsSubSampleEvent).where(LimsSubSampleEvent.lims_sample_pk == row.id)).scalar_one()
+    assert ev.details["published_coa"] is True
