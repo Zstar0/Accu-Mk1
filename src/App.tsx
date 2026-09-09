@@ -110,8 +110,14 @@ function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider>
-        <WorkflowStatesLoader />
-        {isAuthenticated ? <MainWindow /> : <LoginPage />}
+        {isAuthenticated ? (
+          <>
+            <WorkflowStatesLoader />
+            <MainWindow />
+          </>
+        ) : (
+          <LoginPage />
+        )}
       </ThemeProvider>
     </ErrorBoundary>
   )
