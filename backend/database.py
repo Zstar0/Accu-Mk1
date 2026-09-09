@@ -805,6 +805,16 @@ def _run_migrations():
                 ('assign','submit','verify','retract','reject',
                  'retest','publish','reset','auto','variance_verify','observed'))
         """,
+        # Native cancel (2026-09-09 sample-status-authority-flip Task 11):
+        # pending analysis-tier rows die with the sample. Drop+recreate the
+        # transition-kind CHECK with 'cancel' added (idempotent).
+        "ALTER TABLE lims_analysis_transitions DROP CONSTRAINT IF EXISTS lims_analysis_transitions_transition_kind_check",
+        """
+        ALTER TABLE lims_analysis_transitions ADD CONSTRAINT lims_analysis_transitions_transition_kind_check
+            CHECK (transition_kind IN
+                ('assign','submit','verify','retract','reject',
+                 'retest','publish','reset','auto','variance_verify','observed','cancel'))
+        """,
         # Variance addon: lab-side override until WP variance addon ships.
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS variance_override TEXT",
         # --- Registry dual-write slice 1: the complete sample record ---
@@ -1100,6 +1110,23 @@ def _run_migrations():
                 'unassigned', 'assigned', 'to_be_verified', 'verified',
                 'published', 'rejected', 'retracted', 'promoted',
                 'variance_verified', 'senaite_mirror', 'parent_to_verify'
+            ))
+        """,
+        # Native cancel (2026-09-09 sample-status-authority-flip Task 11):
+        # pending analysis-tier rows (vial-tier unassigned/assigned/
+        # to_be_verified, parent-tier parent_to_verify) can be cancelled when
+        # the sample dies; verified/promoted/variance-verified/published rows
+        # never do. Drop+recreate the review_state CHECK with 'cancelled'
+        # added (idempotent; this pair sits after every prior review_state
+        # CHECK pair so last-boot-wins yields the extended list).
+        "ALTER TABLE lims_analyses DROP CONSTRAINT IF EXISTS lims_analyses_review_state_check",
+        """
+        ALTER TABLE lims_analyses ADD CONSTRAINT lims_analyses_review_state_check
+            CHECK (review_state IN (
+                'unassigned', 'assigned', 'to_be_verified', 'verified',
+                'published', 'rejected', 'retracted', 'promoted',
+                'variance_verified', 'senaite_mirror', 'parent_to_verify',
+                'cancelled'
             ))
         """,
         # Make the parent-tier root index provenance-aware: a shadow mirror
