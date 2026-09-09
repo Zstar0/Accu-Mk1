@@ -346,3 +346,105 @@ def test_receive_native_phase_engine_failure_never_breaks_checkin(
     fresh = db.get(LimsSample, tp_sample_receive_page.id)
     assert fresh.status == "sample_received"           # log + heal landed
     assert fresh.date_received is not None
+
+
+# ─── Receive site under Mk1 authority: ledger from_status is the TRUE prior ──
+# 2026-09-09 (Task 9 fix round 2 finding): `_receive_native_phase` heals
+# `lims_samples.status` to sample_received BEFORE it drives the engine. Under
+# mk1 authority the engine is the single ledger writer, and it used to read
+# `sample.status` for the row's from_status — i.e. the already-healed value —
+# producing a sample_received -> sample_received self-loop instead of
+# sample_due -> sample_received. The engine now passes its own pre-advance
+# `native_status`. This pins the REAL site's call sequence (not a simulation).
+
+
+@pytest.fixture
+def mk1_status_authority(db):
+    """Flip the shared dev DB's registry_read_source.sample_status to 'mk1'
+    for one test; restore the prior JSON (or delete the row) afterwards."""
+    import json
+    from models import Settings
+    from workflow.authority import READ_SOURCE_SETTING_KEY, SAMPLE_STATUS_KEY
+    row = db.execute(select(Settings).where(
+        Settings.key == READ_SOURCE_SETTING_KEY)).scalar_one_or_none()
+    prior = row.value if row is not None else None
+    try:
+        parsed = json.loads(prior) if prior else {}
+    except (ValueError, TypeError):
+        parsed = {}
+    if not isinstance(parsed, dict):
+        parsed = {}
+    parsed[SAMPLE_STATUS_KEY] = "mk1"
+    if row is None:
+        db.add(Settings(key=READ_SOURCE_SETTING_KEY, value=json.dumps(parsed)))
+    else:
+        row.value = json.dumps(parsed)
+    db.commit()
+    yield
+    row = db.execute(select(Settings).where(
+        Settings.key == READ_SOURCE_SETTING_KEY)).scalar_one_or_none()
+    if prior is None:
+        if row is not None:
+            db.delete(row)
+    elif row is not None:
+        row.value = prior
+    db.commit()
+
+
+@pytest.fixture
+def tp_sample_receive_mk1(db):
+    """A sample on the REAL seeded catalog states (sample_due -> receive ->
+    sample_received), armed, so the engine's write is a catalog slug."""
+    from workflow.seeds import seed_workflow_catalog
+    seed_workflow_catalog(db)          # insert-if-missing; idempotent
+    db.commit()
+    row = LimsSample(sample_id="TEST-TP-0005", status="sample_due",
+                     native_status="sample_due")
+    db.add(row); db.flush(); db.commit()
+    yield row
+    from models import LimsSenaiteTeeRetry
+    db.execute(delete(LimsSenaiteTeeRetry).where(
+        LimsSenaiteTeeRetry.lims_sample_pk == row.id))
+    db.execute(delete(LimsWorkflowShadowEvaluation).where(
+        LimsWorkflowShadowEvaluation.lims_sample_pk == row.id))
+    db.execute(delete(LimsSampleTransition).where(
+        LimsSampleTransition.lims_sample_pk == row.id))
+    db.execute(delete(LimsSample).where(LimsSample.id == row.id))
+    db.commit()
+
+
+def test_receive_native_phase_mk1_ledger_from_status_is_prior_state(
+        db, mk1_status_authority, tp_sample_receive_mk1):
+    res = _run_receive_phase(tp_sample_receive_mk1.sample_id)
+    assert res["ok"] is True
+    db.expire_all()
+    fresh = db.get(LimsSample, tp_sample_receive_mk1.id)
+    assert fresh.status == "sample_received"          # engine wrote the mirror
+    assert fresh.native_status == "sample_received"
+    rows = db.execute(select(LimsSampleTransition).where(
+        LimsSampleTransition.lims_sample_pk == tp_sample_receive_mk1.id
+    )).scalars().all()
+    receive_rows = [t for t in rows if t.verb == "receive"]
+    assert len(receive_rows) == 1, [(t.from_status, t.to_status, t.source) for t in rows]
+    t = receive_rows[0]
+    assert (t.from_status, t.to_status, t.source) == ("sample_due", "sample_received", "mk1")
+    assert not [t for t in rows if t.from_status == t.to_status], "self-loop ledger row"
+
+
+def test_bg_chokepoint_mk1_ledger_from_status_is_prior_state(
+        db, mk1_status_authority, tp_sample_receive_mk1):
+    """Same class at the bg chokepoint (`_record_sample_transition_bg`,
+    receive branch): heal(source=mk1) runs before the engine there too."""
+    _run_hook(tp_sample_receive_mk1.sample_id)
+    db.expire_all()
+    fresh = db.get(LimsSample, tp_sample_receive_mk1.id)
+    assert fresh.status == "sample_received"
+    assert fresh.native_status == "sample_received"
+    rows = db.execute(select(LimsSampleTransition).where(
+        LimsSampleTransition.lims_sample_pk == tp_sample_receive_mk1.id
+    )).scalars().all()
+    receive_rows = [t for t in rows if t.verb == "receive"]
+    assert len(receive_rows) == 1, [(t.from_status, t.to_status, t.source) for t in rows]
+    assert (receive_rows[0].from_status, receive_rows[0].to_status,
+            receive_rows[0].source) == ("sample_due", "sample_received", "mk1")
+    assert not [t for t in rows if t.from_status == t.to_status], "self-loop ledger row"
