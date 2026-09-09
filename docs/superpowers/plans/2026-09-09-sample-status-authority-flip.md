@@ -1902,6 +1902,8 @@ git add backend/workflow/stranded.py backend/flags/types_service.py backend/data
 git commit -m "feat(workflow): stranded-sample detector raises/resolves workflow_stranded flags"
 ```
 
+**Execution rulings (2026-09-09, task review fix round 1 — the shipped module differs from Step 4 in these ways):** two facts in this plan were wrong — the `sample` entity seam is registered by `flags.seams.register_mk1_entities()` (called in the app lifespan; the job calls it itself), and `create_flag` writes the PRIMARY anchor columns `FlagFlag.entity_type` / `FlagFlag.entity_id` and never `FlagEntityLink` (a navigational reference, "NOT a rollup anchor"). So `_open_flag_for` and the resolve loop select by the primary anchor exactly like `sub_samples/service.py::_flag_identity_collision`, with no link join or link write; `entity_id` is the sample_id STRING (the seam accepts both; the identity_collision precedent's numeric form is a pre-existing inconsistency). `waiting_for_addon_results` was removed from `_BEHIND_VERIFIED`: it is the partial-publish parking state and its add-on lines may not be provisioned as rows, so "all live lines verified" is vacuous there. Four tests were added (addon-pending not stranded; first comment carries the diagnosis; resolve note; primary-anchor dedupe with no link rows). The implementer also appended `workflow_stranded` to the builtin slug lists in `tests/test_flags_routes.py` and `tests/test_flags_types_service.py` (same as the identity_collision commit).
+
 ---
 
 ### Task 11: Analysis-tier `cancel` verb
