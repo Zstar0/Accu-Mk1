@@ -213,11 +213,18 @@ def _find_edge(db: Session, from_slug: str, verb: str,
 
 
 def _write_status_if_authoritative(db: Session, sample: LimsSample, to_slug: str, *,
-                                   verb: str, actor_user_id: Optional[int]) -> bool:
+                                   verb: str, actor_user_id: Optional[int],
+                                   from_status: Optional[str]) -> bool:
     """mk1 authority (spec §4.1): the engine is the writer of
     lims_samples.status. Only catalog slugs are ever written; a foreign slug
     logs and leaves the column alone. Ledger row source='mk1' (never
-    deduped). senaite authority: no-op."""
+    deduped). senaite authority: no-op.
+
+    from_status is the engine's own pre-advance native state (`frm` in
+    execute_verb), NOT sample.status — on the receive path,
+    heal_sample_status writes sample.status before the engine runs, so
+    sample.status would already equal to_slug and produce a self-loop
+    ledger row."""
     from workflow.authority import sample_status_authority
     from workflow.catalog import sample_state_slugs
     from workflow.sample_log import record_sample_transition
@@ -227,10 +234,9 @@ def _write_status_if_authoritative(db: Session, sample: LimsSample, to_slug: str
         log.warning("workflow.status_write_refused sample=%s slug=%r not in catalog",
                     sample.sample_id, to_slug)
         return False
-    prev = sample.status
     sample.status = to_slug
     record_sample_transition(db, sample_id=sample.sample_id, to_status=to_slug,
-                             source="mk1", verb=verb, from_status=prev,
+                             source="mk1", verb=verb, from_status=from_status,
                              actor_user_id=actor_user_id)
     return True
 
@@ -263,7 +269,7 @@ def execute_verb(db: Session, sample: LimsSample, verb: str, *, trigger: str,
     frm = sample.native_status
     sample.native_status = to_slug
     _write_status_if_authoritative(db, sample, to_slug, verb=verb,
-                                   actor_user_id=actor_user_id)
+                                   actor_user_id=actor_user_id, from_status=frm)
     db.flush()
     return _record(db, sample, trigger=trigger, verb=verb, from_status=frm,
                    to_status=to_slug, outcome="advanced",

@@ -50,3 +50,19 @@ def test_refusal_never_writes_status(db_session):
     ev = execute_verb(db_session, row, "publish", trigger="publish")   # no edge from sample_due
     assert ev.outcome == "no_edge"
     assert row.status == "sample_due"
+
+
+def test_ledger_from_status_is_the_engine_pre_advance_state_even_if_status_was_healed_first(db_session):
+    """Receive path: the heal writes status before the engine runs. The ledger
+    row must still say sample_due -> sample_received (the engine's own frm),
+    not sample_received -> sample_received."""
+    from workflow.engine import execute_verb
+    row = _seeded(db_session, "mk1")            # status = native_status = sample_due
+    row.status = "sample_received"              # the heal already ran
+    db_session.flush()
+    ev = execute_verb(db_session, row, "receive", trigger="receive", actor_user_id=7)
+    assert ev.outcome == "advanced"
+    t = db_session.execute(select(LimsSampleTransition).where(
+        LimsSampleTransition.lims_sample_pk == row.id)).scalar_one()
+    assert (t.from_status, t.to_status, t.source) == ("sample_due", "sample_received", "mk1")
+    assert row.status == "sample_received" and row.native_status == "sample_received"
