@@ -41,8 +41,9 @@ def _coa_meta(parent) -> dict:
 def _analyte_slots(parent) -> dict:
     """{'Analyte1Peptide': name, ...} for the first 4 list entries with a
     name. `lims_samples.analytes` is a JSON LIST of
-    {"name": str, "declared_quantity": str|None}, slot = list position
-    (1-based), empty slots omitted (models.py:1236-1238; written by
+    {"name": str|None, "declared_quantity": str|None}, slot = list position
+    (1-based) == SENAITE slot number; an empty middle slot is a name-less
+    placeholder and is skipped here (models.py; written by
     sub_samples.service._parse_analyte_slots). Mirrors
     sub_samples.registry_inbox._analyte_slot_fields."""
     try:

@@ -256,12 +256,16 @@ PERMANENT: dict[tuple[str, str, str], tuple[int, str]] = {
     ),
     # --- Cross-provenance collapse ---
     ("lims_analyses/service.py", "list_parent_analyses_senaite_shape", "r"): (
-        1,
+        2,
         "P-0143 cross-provenance keyword collapse. Keyword -- NOT service id -- is "
         "the collapse key on purpose: the mirror resolves duplicate-keyword "
         "services to the lowest id, so canonical and shadow can legitimately "
         "hold different service ids for the same logical line. Converting this "
-        "regresses the double-render.",
+        "regresses the double-render. Two legs since 2026-09-08 (PB-0469): shadow "
+        "rows collapse on every keyword the canonical tier EVER held (retracted/"
+        "rejected included -- SENAITE cannot retract its verified line, so the "
+        "mirror would resurface the withdrawn value on the table and the COA "
+        "wire); ordered placeholders collapse on LIVE canonical keywords only.",
     ),
     # --- keyword is the DATUM, not the key ---
     ("lims_analyses/service.py", "parent_retest", "active"): (

@@ -1676,15 +1676,36 @@ def list_parent_analyses_senaite_shape(
     # straight back as a live shadow row for the same keyword — both are
     # "current" by their own provenance's liveness rules, and this AR-shaped
     # view would show the test twice. The canonical row IS the native
-    # authority for that line, so a shadow is emitted only when no live
-    # canonical shares its keyword. Keyword (not service id) is the collapse
+    # authority for that line, so a shadow is emitted only when no canonical
+    # row EVER shared its keyword. Keyword (not service id) is the collapse
     # key: the mirror resolves duplicate-keyword services to the lowest id
     # (resolve_shadow_target), so the two provenances can legitimately hold
     # different service ids for the same logical line.
-    canonical_keywords = {r.keyword for r in rows if r.provenance == "canonical"}
+    #
+    # "Ever" -- any state, retested included -- not just the live canonical
+    # rows already in `rows` (PB-0469, 2026-09-08): un-promote / retest
+    # retracts the canonical row while SENAITE keeps its verified line
+    # (locked, never retractable there), and the mirror must not resurface
+    # the withdrawn value on this table or on the COA wire (legacy_rows
+    # delegates row selection here). Same rule native_parent_line_states
+    # applies: the canonical tier owns any keyword it ever held.
+    live_canonical_keywords = {r.keyword for r in rows if r.provenance == "canonical"}
+    canonical_ever = set(db.execute(
+        select(LimsAnalysis.keyword).where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+            LimsAnalysis.provenance == "canonical",
+        ).distinct()
+    ).scalars().all()) | live_canonical_keywords
     rows = [
         r for r in rows
-        if r.provenance == "canonical" or r.keyword not in canonical_keywords
+        if r.provenance == "canonical"
+        # shadow: hidden once the canonical tier EVER held the keyword
+        or (r.provenance == "shadow" and r.keyword not in canonical_ever)
+        # ordered placeholders: live-canonical collapse only -- a retracted
+        # canonical must NOT hide the demand marker (pinned by
+        # test_retracted_canonical_does_not_suppress_placeholder)
+        or (r.provenance != "shadow" and r.keyword not in live_canonical_keywords)
     ]
 
     shaped = _serialize_senaite_shape_rows(db, rows)

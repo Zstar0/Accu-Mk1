@@ -137,19 +137,20 @@ def analytes_from_registry_json(raw: Optional[str]) -> list[SenaiteAnalyte]:
     """lims_samples.analytes JSON → typed SenaiteAnalyte list.
 
     Registry shape (dual-write slice 1): a JSON list of
-    `{"name": str, "declared_quantity": str|None}`, analyte slots in order,
-    empty slots omitted. The typed model wants more than the registry
-    stores — every default chosen here, explicitly:
+    `{"name": str|None, "declared_quantity": str|None}`, POSITIONAL -- index
+    + 1 == SENAITE slot number; an empty slot below the last occupied one is
+    a name-less placeholder (2026-09-08). The typed model wants more than
+    the registry stores — every default chosen here, explicitly:
 
     - `raw_name`: `str(entry["name"])` verbatim. The registry stores the
       display label (SENAITE's Analyte{N}Peptide title); no method-suffix
       stripping is applied because the registry writer already stores the
       bare label.
-    - `slot_number` (required, no natural source): the 1-based POSITION in
-      the stored list. The original SENAITE slot index is not persisted
-      (empty slots are omitted at write time), so position is the best
-      available approximation. A malformed entry is skipped but still
-      consumes its position, so surviving entries keep stable slots.
+    - `slot_number` (required): the 1-based POSITION in the stored list,
+      which IS the SENAITE slot number (empty middle slots are stored as
+      name-less placeholders since 2026-09-08). A placeholder or malformed
+      entry is skipped but still consumes its position, so surviving
+      entries keep their SENAITE slots.
     - `matched_peptide_id` / `matched_peptide_name`: None. senaite mode
       fuzzy-matches the raw name against the local peptides table at lookup
       time (main._fuzzy_match_peptide); the registry stores no match and
