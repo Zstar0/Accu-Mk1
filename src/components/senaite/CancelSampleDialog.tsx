@@ -21,7 +21,16 @@ interface Props {
 }
 
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`
-const PAST_VERIFICATION = new Set(['verified', 'published', 'waiting_for_addon_results'])
+// SENAITE's guard_cancel only returns True while EVERY analysis is still
+// unassigned/registered, and `to_be_verified` has no cancel exit at all —
+// so in practice SENAITE stops allowing cancel at the first worksheet
+// assignment, well before verification (corrected 2026-09-09, final review).
+const SENAITE_LOCKED = new Set([
+  'to_be_verified',
+  'verified',
+  'published',
+  'waiting_for_addon_results',
+])
 
 /**
  * Cancel a sample at any point in the process (customer request). Dry-run
@@ -99,7 +108,7 @@ export function CancelSampleDialog({
             Status authority is SENAITE: the status badge keeps following SENAITE until the
             authority is switched to Accu-Mk1. Pending work is still stopped and the
             cancellation is recorded in Accu-Mk1
-            {PAST_VERIFICATION.has(currentStatus) ? '; SENAITE itself does not allow cancel after verification, so the badge will not change until the flip.' : '.'}
+            {SENAITE_LOCKED.has(currentStatus) ? '; SENAITE itself only allows cancel before any analysis is assigned, so the badge will not change until the flip.' : '.'}
           </p>
         )}
         {preview === null && previewError === null && (

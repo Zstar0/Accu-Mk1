@@ -6,6 +6,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { useStateLabel } from '@/lib/workflow-states-store'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -586,12 +587,17 @@ export function StatusBadge({ state, promotable = false, varianceReady = false }
   // Sub-sample rows can't self-verify — to_be_verified there means "awaiting
   // promotion" ("Ready to Promote") or, on a variance replicate where promote
   // is no longer the path, "awaiting variance sign-off" ("Ready to Verify").
+  // Catalog is the source of truth for state labels (spec 2026-09-09 §7.2);
+  // the exported STATUS_LABELS map stays the fallback for an empty store and
+  // for this file's other importers. The two sub-sample overrides below are
+  // row-context labels, not state names, so they still win.
+  const catalogLabel = useStateLabel(state, STATUS_LABELS[state] ?? state.replace(/_/g, ' '))
   const label =
     state === 'to_be_verified' && varianceReady
       ? 'Ready to Verify'
       : promotable && state === 'to_be_verified'
         ? 'Ready to Promote'
-        : STATUS_LABELS[state] ?? state.replace(/_/g, ' ')
+        : catalogLabel
   return (
     <span
       className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border ${color}`}

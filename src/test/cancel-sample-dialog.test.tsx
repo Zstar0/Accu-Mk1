@@ -103,12 +103,12 @@ describe('CancelSampleDialog', () => {
     expect(onCancelled).not.toHaveBeenCalled()
   })
 
-  it('shows the senaite-mode note by default and the post-verification wording for published samples', async () => {
+  it('shows the senaite-mode note by default and the senaite-locked wording for published samples', async () => {
     mockCancel.mockResolvedValueOnce(PREVIEW)
     renderDialog({ currentStatus: 'published' })
     await screen.findByText(/2 pending results/i)
     expect(screen.getByTestId('senaite-mode-note')).toHaveTextContent(
-      /does not allow cancel after verification/i
+      /only allows cancel before any analysis is assigned/i
     )
   })
 
