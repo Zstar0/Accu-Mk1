@@ -378,8 +378,11 @@ def run_cascades_bg(sample_pk: int, actor_user_id: Optional[int]) -> None:
         # impact.
         sample = db.get(LimsSample, sample_pk, with_for_update=True)
         if sample is not None:
-            evaluate_cascades(db, sample, trigger="analysis_cascade",
-                              actor_user_id=actor_user_id)
+            fired = evaluate_cascades(db, sample, trigger="analysis_cascade",
+                                      actor_user_id=actor_user_id)
+            db.commit()
+            # Spec §5: prove each SENAITE-representable advance; refusals queue.
+            tee_advances(db, sample, fired)
             db.commit()
     except Exception:
         log.exception("sbs.run_cascades_bg failed (never-raise)")
@@ -388,3 +391,19 @@ def run_cascades_bg(sample_pk: int, actor_user_id: Optional[int]) -> None:
     finally:
         if db is not None:
             db.close()
+
+
+_TEE_TO_STATES = frozenset({"verified", "published", "cancelled"})
+
+
+def tee_advances(db: Session, sample: LimsSample, fired: list) -> None:
+    """Spec §5: tee each native advance SENAITE can represent (verify /
+    publish / cancel), prove it by read-back, queue refusals. Never raises."""
+    from workflow import senaite_tee
+    for ev in fired:
+        if ev.to_status in _TEE_TO_STATES and ev.verb in senaite_tee.EXPECTED_AR_STATES:
+            try:
+                senaite_tee.tee_now(db, sample, ev.verb)
+            except Exception:
+                log.exception("senaite tee failed (never-raise) sample=%s verb=%s",
+                              sample.sample_id, ev.verb)

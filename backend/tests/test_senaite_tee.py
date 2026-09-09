@@ -135,3 +135,20 @@ def test_tee_now_never_raises_on_bookkeeping_failure(db_session):
          patch("workflow.senaite_tee.read_back_state", return_value="sample_received"), \
          patch("workflow.senaite_tee.enqueue_retry", side_effect=RuntimeError("db down")):
         assert tee.tee_now(db_session, row, "verify") == "error"
+
+
+def test_tee_advances_only_for_senaite_representable_states(db_session):
+    from workflow import engine
+    from models import LimsWorkflowShadowEvaluation
+    row = _sample(db_session, sid="P-TEE-6", uid="U-TEE-6", status="verified")
+    fired = [
+        LimsWorkflowShadowEvaluation(lims_sample_pk=row.id, trigger="t", verb="submit",
+                                     from_status="sample_received", to_status="to_be_verified",
+                                     outcome="advanced", requirements_met=True, outcomes=[]),
+        LimsWorkflowShadowEvaluation(lims_sample_pk=row.id, trigger="t", verb="verify",
+                                     from_status="to_be_verified", to_status="verified",
+                                     outcome="advanced", requirements_met=True, outcomes=[]),
+    ]
+    with patch("workflow.senaite_tee.tee_now") as tn:
+        engine.tee_advances(db_session, row, fired)
+    tn.assert_called_once_with(db_session, row, "verify")

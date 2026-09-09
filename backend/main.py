@@ -12710,15 +12710,15 @@ async def publish_sample_coa(
                     await run_in_threadpool(
                         _mark_shadows_published_bg, sample_id=sample_id
                     )
-                    # Task 3: native sample-transition log (own session,
-                    # never-fail — see _record_sample_transition_bg).
-                    await run_in_threadpool(
-                        _record_sample_transition_bg,
-                        sample_id=sample_id, verb="publish", to_status="published",
-                        from_status=_pre_publish_status,
-                        source="mk1",
-                        actor_user_id=getattr(current_user, "id", None),
-                    )
+                # Authority flip: native publish runs regardless of what
+                # SENAITE accepted; a refusal is queued for retry (spec §5).
+                from fastapi.concurrency import run_in_threadpool as _rit
+                await _rit(
+                    _after_publish_native, db,
+                    sample_id=sample_id, pre_publish_status=_pre_publish_status,
+                    actor_user_id=getattr(current_user, "id", None),
+                    senaite_actual_state=actual_state,
+                )
         except HTTPException:
             raise
         except Exception as e:
@@ -16901,6 +16901,38 @@ def _arm_native_status_at_registration_bg(sample_id: str) -> None:
             db.close()
 
 
+def _after_publish_native(db, *, sample_id: str, pre_publish_status, actor_user_id,
+                          senaite_actual_state: str) -> None:
+    """Sample-status authority flip (spec §4.4 / §5): the native publish verb is
+    the user's direct intent, so it runs synchronously (ledger + engine), and a
+    SENAITE publish that did not read back as 'published' becomes a retry row.
+    Flush + commit here; never raises (publish already succeeded on IS)."""
+    try:
+        from workflow.engine import drive_sample_touchpoint
+        from workflow.sample_log import record_sample_transition
+        from workflow import senaite_tee
+        record_sample_transition(db, sample_id=sample_id, verb="publish",
+                                 to_status="published", from_status=pre_publish_status,
+                                 source="mk1", actor_user_id=actor_user_id)
+        # The publish touchpoint is the attester the engine's `coa_published`
+        # requirement kind needs (engine._eval_one reads `attested`); without
+        # it the verified -> published edge is requirements_unmet.
+        drive_sample_touchpoint(db, sample_id, "publish", from_status=pre_publish_status,
+                                actor_user_id=actor_user_id,
+                                attested={"coa_published": True})
+        if senaite_actual_state != "published":
+            row = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)
+                             ).scalar_one_or_none()
+            if row is not None:
+                senaite_tee.enqueue_retry(
+                    db, row, "publish",
+                    error=f"publish route read-back {senaite_actual_state!r}")
+        db.commit()
+    except Exception:
+        logger.exception("after-publish native step failed (never-raise) %s", sample_id)
+        db.rollback()
+
+
 def _record_sample_transition_bg(**kwargs) -> None:
     """Best-effort native sample-transition log write (Task 3) on its own
     short-lived session — never holds the request `db` across the SENAITE
@@ -16925,7 +16957,8 @@ def _record_sample_transition_bg(**kwargs) -> None:
         # inserts. Healing is whitelist-gated + idempotent, and runs even
         # when the recorder deduped (the status may still be behind).
         wrote_status = heal_sample_status(
-            db, kwargs["sample_id"], kwargs["to_status"]
+            db, kwargs["sample_id"], kwargs["to_status"],
+            source=kwargs.get("source", "senaite"),
         )
         # Read-flip UAT catch (P-0143): date_received was only ever written
         # from SENAITE metadata during a senaite-touching fetch
