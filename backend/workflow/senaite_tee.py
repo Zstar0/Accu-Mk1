@@ -191,7 +191,15 @@ def _attempt(db: Session, sample: LimsSample, row: LimsSenaiteTeeRetry, *,
 
 def run_retries(db: Session, *, now: Optional[datetime] = None, batch: int = 50) -> dict:
     """Scheduler job body (registered as `senaite_tee_retry`, every 5 min):
-    drain due pending rows. Never raises past a single row; caller commits."""
+    drain due pending rows. Never raises past a single row; caller commits.
+
+    Each row's processing runs inside its own SAVEPOINT (`db.begin_nested()`,
+    same idiom as `workflow.sample_log.record_sample_transition`). On
+    Postgres a failed statement aborts the enclosing transaction until it's
+    rolled back — without a savepoint, one bad row would turn every later
+    statement in the batch into an `errors` count too. The savepoint scopes
+    the damage to just that row; the outer transaction (and the rest of the
+    batch) stays usable."""
     t = _now(now)
     stats = {"retried": 0, "done": 0, "gave_up": 0, "superseded": 0, "errors": 0}
     due = db.execute(
@@ -202,23 +210,30 @@ def run_retries(db: Session, *, now: Optional[datetime] = None, batch: int = 50)
     ).scalars().all()
     for row in due:
         try:
-            sample = db.get(LimsSample, row.lims_sample_pk)
-            if sample is None:
-                row.status = "done"
-                stats["superseded"] += 1
-                continue
-            # A later native state wins: never push SENAITE somewhere Mk1 has left.
-            if sample.status != row.expected_state:
-                row.status = "done"
-                row.last_error = f"superseded: native status is {sample.status!r}"
-                stats["superseded"] += 1
-                continue
-            stats["retried"] += 1
-            new_status = _attempt(db, sample, row, now=now)
-            if new_status == "done":
-                stats["done"] += 1
-            elif new_status == "gave_up":
-                stats["gave_up"] += 1
+            with db.begin_nested():
+                sample = db.get(LimsSample, row.lims_sample_pk)
+                if sample is None:
+                    row.status = "done"
+                    stats["superseded"] += 1
+                    continue
+                # A later native state wins: never push SENAITE somewhere
+                # Mk1 has left. `native_status` is the engine's OWN column;
+                # `status` is SENAITE's mirror, which lags under senaite
+                # authority (today's default) — exactly while a retry row
+                # is pending. Fall back to `status` only when native_status
+                # was never seeded (NULL, side-by-side engine not yet run).
+                native = sample.native_status if sample.native_status is not None else sample.status
+                if native != row.expected_state:
+                    row.status = "done"
+                    row.last_error = f"superseded: native status is {native!r}"
+                    stats["superseded"] += 1
+                    continue
+                stats["retried"] += 1
+                new_status = _attempt(db, sample, row, now=now)
+                if new_status == "done":
+                    stats["done"] += 1
+                elif new_status == "gave_up":
+                    stats["gave_up"] += 1
         except Exception:
             log.exception("senaite_tee.retry_failed row=%s", row.id)
             stats["errors"] += 1

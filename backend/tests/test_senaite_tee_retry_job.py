@@ -72,6 +72,8 @@ def test_backoff_and_give_up(db_session):
 def test_superseded_by_later_native_state(db_session):
     from workflow.senaite_tee import run_retries
     row, q = _queued(db_session, "P-RJ-5", "verify", status="cancelled")   # native moved on
+    row.native_status = "cancelled"
+    db_session.flush()
     with patch("workflow.senaite_tee._ar_transition") as tr:
         stats = run_retries(db_session, now=T0)
     tr.assert_not_called()
@@ -84,3 +86,68 @@ def test_summary_reports_gave_up_count(db_session):
     q.status = "gave_up"
     db_session.flush()
     assert gave_up_count(db_session) == 1
+
+
+def test_mirror_lagging_but_native_reached_target_is_retried(db_session):
+    """senaite authority: lims_samples.status is SENAITE's mirror and lags;
+    the engine's native_status is the truth the retry must respect."""
+    from workflow.senaite_tee import run_retries
+    row, q = _queued(db_session, "P-RJ-7", "publish", status="to_be_verified")
+    row.native_status = "published"
+    db_session.flush()
+    with patch("workflow.senaite_tee._ar_transition") as tr, \
+         patch("workflow.senaite_tee.read_back_state", return_value="published"):
+        stats = run_retries(db_session, now=T0)
+    assert stats["retried"] == 1 and stats["superseded"] == 0 and q.status == "done"
+    assert tr.call_count >= 1
+
+
+def test_native_status_moved_on_is_superseded(db_session):
+    from workflow.senaite_tee import run_retries
+    row, q = _queued(db_session, "P-RJ-8", "verify", status="verified")
+    row.native_status = "cancelled"
+    db_session.flush()
+    with patch("workflow.senaite_tee._ar_transition") as tr:
+        stats = run_retries(db_session, now=T0)
+    tr.assert_not_called()
+    assert q.status == "done" and stats["superseded"] == 1 and "cancelled" in (q.last_error or "")
+
+
+def test_one_failing_row_does_not_poison_the_batch(db_session):
+    """Per-row savepoint: a row whose processing fails INSIDE A FLUSH is
+    isolated to that row's SAVEPOINT; the next row in the batch still gets
+    processed and completed, and the failure is counted as an error rather
+    than corrupting the session for every later row.
+
+    A plain `RuntimeError` from a mock never touches the session (nothing
+    was ever flushed), so it can't discriminate a fixed run_retries from an
+    unfixed one — both just catch it and move on. The failure mode this
+    guards against is a failed *statement*: on Postgres that aborts the
+    whole transaction until rolled back; here it's reproduced
+    dialect-independently by colliding on `LimsSenaiteTeeRetry.id` inside
+    `_attempt`'s flush, which SQLite also rejects.
+    """
+    from workflow import senaite_tee as tee
+    row1, q1 = _queued(db_session, "P-RJ-9", "verify", due=T0)
+    row2, q2 = _queued(db_session, "P-RJ-10", "verify", due=T0 + timedelta(seconds=1))
+
+    calls = {"n": 0}
+
+    def _boom_then_ok(db, sample, row, *, now):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # Duplicate primary key -> IntegrityError raised INSIDE flush,
+            # not a bare Python exception — this is what actually leaves a
+            # real (non-nested) session unusable for the next row.
+            db.add(LimsSenaiteTeeRetry(id=q2.id, lims_sample_pk=row1.id, verb="verify",
+                                       expected_state="verified", attempts=1,
+                                       next_attempt_at=T0, status="pending"))
+            db.flush()
+        return "done"
+
+    # both rows must be in the due batch (row1 first, row2 second) — "now"
+    # has to be >= row2's due timestamp, not just row1's.
+    with patch("workflow.senaite_tee._attempt", side_effect=_boom_then_ok) as at:
+        stats = tee.run_retries(db_session, now=T0 + timedelta(seconds=1))
+    assert stats["errors"] == 1 and stats["retried"] == 2
+    assert at.call_count == 2
