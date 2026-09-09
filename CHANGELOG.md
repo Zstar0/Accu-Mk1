@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.15.3 — 2026-09-08
+
+### Fixed
+- Registry analyte slots are positional again: `lims_samples.analytes` keeps an empty middle slot as a `{"name": null}` placeholder (trailing empties trimmed) instead of compacting the list, so every `Analyte{N}`-by-position reader — registry details `slot_number`, the parent-table labels, the COA name resolver, `coa.sample_meta`, the inbox overlay — keeps SENAITE's slot numbers after a slot is cleared. On PB-0469, clearing slot 2 had re-labelled BPC-157 as "Analyte 2" against the slot-2 results, TB500 as "Analyte 3", and left slot 4 unlabeled, on the sample page and in COABuilder's declared list alike. The dual-write mirror (`apply_senaite_fields_to_row`) follows the same rule. (#173)
+- Parent table / COA wire: a SENAITE shadow row is now hidden once its keyword has ANY canonical history (retracted or rejected included), not only when a live canonical row exists. Un-promote / retest retracts the native row but SENAITE keeps its verified line (locked, never retractable there), so the mirror kept resurfacing the withdrawn value — PB-0469's orphaned slot-2 duplicate rode into COABuilder as a fourth measured pair. Same rule `native_parent_line_states` already applied. (#173)
+
 ## v1.15.2 — 2026-09-08
 
 ### Fixed
