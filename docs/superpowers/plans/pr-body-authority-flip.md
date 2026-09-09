@@ -30,6 +30,11 @@ Spec: `docs/superpowers/specs/2026-09-09-sample-status-authority-flip-design.md`
 - **Cancel route authorization** is any authenticated user (spec §8.1; matches the Clear/Replace/worksheet-delete precedent). Consider an admin/manager gate or the catalog's `distinct_actor` requirement on the cancel edges at flip time.
 - **Flip pre-check:** confirm prod `lims_workflow_states` (sample scope, active) ⊇ the seed list; the boot seed inserts missing states/edges but never updates existing rows.
 
+### Follow-ups deferred from the final re-review (minor, not regressions)
+- Wrap the publish route's SENAITE block in `try/finally` so a client disconnect mid-call (`CancelledError`) still runs the native publish step; today only `Exception`/`HTTPException` are deferred, same shape as master.
+- The analysis-scope graph fetch carries `usage_counts` (two `GROUP BY` scans over `lims_analyses` per app load per user, 10-minute staleTime); add `?counts=false` on the graph route if login latency shows it.
+- A failed `VerificationCode` write to SENAITE leaves the sample natively `published` while the AR lacks the code; the minted `publish` retry re-issues only the transition. Operator remedy unchanged: re-run publish.
+
 ## Test gates
 - Backend (solo runs, branch venv): pristine `origin/master` a4f78fb4 = 99 failed / 3181 passed / 4 errors (known non-zero baseline); branch after the final-review fix wave = 102 failed / 3267 passed / 4 errors. Net-new: **0 real** — only the 2 × `test_httpx_shared_ssl` environmental pair (a BOM'ed file under the worktree's `.venv` trips that test's source scan; passes in a worktree without a `.venv`). Two publish-edge tests that pinned exactly two publish edges were updated for the seeded partial-publish edge (spec §3.3).
 - Frontend: `tsc --noEmit` clean; full vitest 1741 passed, 6 failed under CPU contention → 2 pass in isolation, the other 4 fail identically on pristine `origin/master` (pre-existing). Net-new: **0**.
