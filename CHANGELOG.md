@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.15.2 — 2026-09-08
+
+### Fixed
+- Vial Status Board "Assigned" column was always empty: adding a vial to a worksheet only stamped the analyst and never applied the `assign` transition, so no `lims_analyses` row ever carried `review_state='assigned'`. Worksheet add now applies `assign` to the vial's pending rows, remove applies `reset` (result draft preserved via `preserve_draft`), worksheet complete releases every claim (`worksheet_released` event), and reassign keeps the claim instead of bouncing assign→reset→assign. `apply_transition` gains `commit`/`preserve_draft`; new `RESULT_PENDING_STATES = {unassigned, assigned}` so the prep bridge lands results on assigned rows too. One-off `scripts/backfill_worksheet_assign.py` (dry-run default, `--apply`) stamps the rows already sitting on open worksheets. (#171)
+- PB-0469 duplicate-analyte incident: the sample page's inline per-slot Peptide editor could write the same peptide into two SENAITE analyte slots (free text, no gates, no cascade); a Process-HPLC re-run then fell through the prep bridge's slot routing into the generic `ANALYTE-{slot}` rows and bulk promote duplicated the result on the parent. The inline editor now refuses `Analyte{N}Peptide` writes once the sample has vials (409 — use Replace or Clear) and values that duplicate another slot (409; live slot map read from SENAITE, 502 fail-closed); Replace refuses a peptide that already occupies another slot (409); the prep bridge never falls back to generic rows once a peptide's per-substance `PUR_/QTY_` rows exist in any live state, and `_resolve_slot` returns None on an ambiguous slot map instead of "first wins"; `ANALYTE-{n}-*` rows classify as Core HPLC (the unlabeled section on the parent table). One-off `scripts/repair_pb0469_duplicate_slot.py` (dry-run default, `--apply [--rename-to GLOW]`). (#172)
+- `scripts/deploy.sh` honours a `REMOTE_HOST` env override so deploys can run over Tailscale after the 2026-09-08 firewall change. (#170)
+
+### Added
+- **Clear analyte slot** — `POST /explorer/samples/{id}/analytes/{slot}/clear` mirrors Replace's gate order: `dry_run` preview → 409 on published → 412 with impact unless `confirm` → blank `Analyte{slot}Peptide` + `DeclaredQuantity` → drop alias → remove the parent identity service → retire the peptide's vial rows (pristine deleted, worked rejected, promoted force-retracted) → registry refresh → `analyte_slot_cleared` event. Fields-only when the same peptide still occupies another slot. Sample Details gets a **Clear** button beside Replace with a dry-run cascade preview and typed-confirm dialog; the inline Peptide / Declared Qty editors render read-only once vials exist. (#172)
+
 ## v1.15.1 — 2026-09-08
 
 ### Fixed
