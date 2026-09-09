@@ -80,6 +80,33 @@ SEED_TRANSITIONS = [
     ("analysis", "verified", "promoted", "promote", False, [], "Sub-sample tier: promote result to parent."),
 ]
 
+# Native cancel (2026-09-09 spec §3.3): a customer can cancel at ANY point, so
+# every sample state except `cancelled` gets an edge. Data, not code — the
+# Settings -> Workflow pane owns these afterwards (seed is insert-if-missing).
+_CANCEL_FROM = [slug for (scope, slug, *_r) in SEED_STATES if scope == "sample" and slug != "cancelled"]
+SEED_TRANSITIONS += [
+    ("sample", frm, "cancelled", "cancel", False, [],
+     "Customer-requested cancellation; allowed at any point.")
+    for frm in _CANCEL_FROM
+    if frm not in ("sample_due", "sample_received")   # the two original edges stay as written
+]
+# Partial-publish pathway (spec §3.3): a primary COA published while add-on
+# lines are still pending. Keyed by the `publish` verb because the engine's
+# `coa_published` requirement is satisfied ONLY by the publish touchpoint's
+# attestation (engine._eval_one: `met = bool((attested or {}).get("coa_published"))`)
+# and _find_edge looks up (from_state, verb) — so the touchpoint's own verb
+# must be the edge's verb. Not auto_fire (cascades never attest).
+_SUBMIT_REQS = next(reqs for (scope, f, t, verb, _af, reqs, _d) in SEED_TRANSITIONS
+                    if scope == "sample" and f == "sample_received" and verb == "submit")
+_COA_PUBLISHED_REQ = [{"kind": "coa_published", "value": None,
+                       "note": "attested by the publish touchpoint"}]
+SEED_TRANSITIONS += [
+    ("sample", "sample_received", "waiting_for_addon_results", "publish", False,
+     _COA_PUBLISHED_REQ, "Primary COA out while add-on lines are still pending (partial publish)."),
+    ("sample", "waiting_for_addon_results", "to_be_verified", "submit", True, _SUBMIT_REQS,
+     "Add-on results submitted; back onto the verify path."),
+]
+
 
 def seed_workflow_catalog(db: Session) -> dict:
     created_s = created_t = 0
