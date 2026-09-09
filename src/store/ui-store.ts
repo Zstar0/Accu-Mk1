@@ -54,6 +54,7 @@ export type AccuMarkToolsSubSection =
 export type ReportsSubSection =
   | 'dashboard'
   | 'checkin-times'
+  | 'throughput'
   | 'bottlenecks'
   | 'sync-debug'
 export type AccountSubSection = 'profile' | 'user-management'
