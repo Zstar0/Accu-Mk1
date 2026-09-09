@@ -96,8 +96,12 @@ SEED_TRANSITIONS += [
 # attestation (engine._eval_one: `met = bool((attested or {}).get("coa_published"))`)
 # and _find_edge looks up (from_state, verb) — so the touchpoint's own verb
 # must be the edge's verb. Not auto_fire (cascades never attest).
-_SUBMIT_REQS = next(reqs for (scope, f, t, verb, _af, reqs, _d) in SEED_TRANSITIONS
-                    if scope == "sample" and f == "sample_received" and verb == "submit")
+_SUBMIT_REQS = next((reqs for (scope, f, t, verb, _af, reqs, _d) in SEED_TRANSITIONS
+                     if scope == "sample" and f == "sample_received" and verb == "submit"), None)
+if _SUBMIT_REQS is None:  # fail loudly at import, not with a bare StopIteration
+    raise RuntimeError("workflow.seeds: the seeded sample_received -> to_be_verified "
+                       "'submit' edge is missing; the partial-publish pathway copies its requirements")
+_SUBMIT_REQS = [dict(r) for r in _SUBMIT_REQS]   # own copy — never alias another edge's list
 _COA_PUBLISHED_REQ = [{"kind": "coa_published", "value": None,
                        "note": "attested by the publish touchpoint"}]
 SEED_TRANSITIONS += [
