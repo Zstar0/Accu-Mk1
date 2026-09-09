@@ -453,19 +453,39 @@ def _merge_coa_meta(existing_coa_meta: Optional[str], meta: dict) -> dict:
     return out
 
 
+_EMPTY_SLOT = {"name": None, "declared_quantity": None}
+
+
 def _parse_analyte_slots(meta: dict) -> list[dict]:
-    """Analyte slots 1-8 as ordered {name, declared_quantity} pairs; empty
-    slots omitted. IS writes up to 8 slots; the Mk1 UI shows 4."""
+    """Analyte slots 1-8 as POSITIONAL {name, declared_quantity} pairs:
+    list index + 1 == SENAITE slot number. An empty slot below the last
+    occupied one is kept as a {"name": None, "declared_quantity": None}
+    placeholder so the position-keyed readers (registry details
+    slot_number, the COA name resolver, coa.sample_meta, the inbox overlay)
+    keep SENAITE's slot numbers after a middle slot is cleared -- PB-0469
+    (2026-09-08): compacting slot 2 away re-labelled BPC-157/TB500 as
+    Analyte 2/3 against the slot-3/4 results, on the parent table and on
+    the COA wire alike. Trailing empties are trimmed; all-empty -> [].
+    IS writes up to 8 slots; the Mk1 UI shows 4."""
     slots: list[dict] = []
     for i in range(1, 9):
         name = _extract_label(meta.get(f"Analyte{i}Peptide"))
         if not name or not str(name).strip():
+            slots.append(dict(_EMPTY_SLOT))
             continue
         qty = meta.get(f"Analyte{i}DeclaredQuantity")
         slots.append({
             "name": str(name).strip(),
             "declared_quantity": str(qty) if qty not in (None, "") else None,
         })
+    return _trim_trailing_empty_slots(slots)
+
+
+def _trim_trailing_empty_slots(slots: list[dict]) -> list[dict]:
+    """Drop name-less entries past the last named slot (in place; returned
+    for chaining). Middle placeholders are kept -- see _parse_analyte_slots."""
+    while slots and not (slots[-1] or {}).get("name"):
+        slots.pop()
     return slots
 
 
@@ -524,7 +544,9 @@ def apply_senaite_fields_to_row(db: Session, senaite_uid: str, fields: dict) -> 
                 slots[idx]["name"] = str(value).strip() if value else None
             else:
                 slots[idx]["declared_quantity"] = str(value) if value not in (None, "") else None
-        slots = [s for s in slots if s.get("name")]
+        # Positional list (see _parse_analyte_slots): a cleared middle slot
+        # stays as a placeholder; only trailing empties are dropped.
+        slots = _trim_trailing_empty_slots(slots)
         row.analytes = json.dumps(slots) if slots else None
         row.peptide_name = slots[0]["name"] if slots else None
 

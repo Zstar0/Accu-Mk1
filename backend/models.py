@@ -1232,9 +1232,11 @@ class LimsSample(Base):
     date_created: Mapped[Optional[datetime]] = mapped_column(DateTime)
     verification_code: Mapped[Optional[str]] = mapped_column(String(50))
     client_order_number: Mapped[Optional[str]] = mapped_column(String(100))
-    # JSON list of {"name": str, "declared_quantity": str|None}, analyte
-    # slots 1-8 in order, empty slots omitted. peptide_name stays = slot-1
-    # label for back-compat.
+    # JSON list of {"name": str|None, "declared_quantity": str|None},
+    # POSITIONAL: index + 1 == SENAITE slot number (1-8). An empty slot below
+    # the last occupied one is a {"name": None, ...} placeholder; trailing
+    # empties are trimmed (sub_samples.service._parse_analyte_slots).
+    # peptide_name stays = slot-1 label for back-compat.
     analytes: Mapped[Optional[str]] = mapped_column(Text)
     declared_total_quantity: Mapped[Optional[str]] = mapped_column(String(50))
     client_lot: Mapped[Optional[str]] = mapped_column(String(100))
