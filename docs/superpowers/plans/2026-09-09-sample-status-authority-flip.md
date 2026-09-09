@@ -1327,6 +1327,8 @@ git add backend/workflow/senaite_tee.py backend/main.py backend/workflow/routes.
 git commit -m "feat(workflow): senaite_tee_retry scheduler job + senaite_lagging summary count"
 ```
 
+**Execution rulings (2026-09-09, task review fix round 1 — the shipped `run_retries` differs from Step 3 in these ways):** each row is processed inside `with db.begin_nested():` (SAVEPOINT) so a failing row rolls back only itself and the session stays usable for the rest of the batch (on Postgres a failed statement otherwise poisons the transaction); the "later native state wins" check compares the verb's target against `sample.native_status` when set (falling back to `status`) — under senaite authority `status` is SENAITE's lagging mirror, so the Step 3 comparison would have marked every refused transition superseded on its first pass. The third test was strengthened to an IntegrityError raised inside the flush (a bare Python exception never touches the session and cannot discriminate the fix).
+
 ---
 
 ### Task 9: Wire the tee at the touchpoints
