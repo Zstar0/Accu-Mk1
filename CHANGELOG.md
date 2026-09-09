@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+- **Sample-status authority switch** (`Settings → Data Source → Sample status authority`): under `Accu-Mk1` the workflow engine writes the sample's status from the catalog and SENAITE follows; the SENAITE-sourced mirrors (registry heal, IS event stream, sub-sample parent refresh) stop writing it. Default stays `SENAITE`. Spec `docs/superpowers/specs/2026-09-09-sample-status-authority-flip-design.md`.
+- **SENAITE tee with read-back and retry**: verify / publish / cancel are teed to SENAITE, proven by re-reading the AR (SENAITE answers 200 to refused transitions), and refusals are queued in `lims_senaite_tee_retries` for the `senaite_tee_retry` job (5 min; backoff 5 → 720 min; gives up after 8 attempts). A refused publish issues `verify` first (the PB-0462 "stuck To Verify" class). Cancel after verification is recorded as `senaite_only` (SENAITE forbids it). The shadow summary reports `senaite_lagging`.
+- **Stranded-sample detector** (`workflow_stranded_check`, 15 min, read-only): raises one `Workflow Stranded` flag per sample whose verified lines are ahead of its status, whose publish ledger has no matching status, whose native and mirror disagree under Mk1 authority, or whose SENAITE tee gave up; resolves the flag when the condition clears. Cascade refusals are now recorded with their first unmet requirement. No scheduled converge: divergences are surfaced, not swept.
+- **Cancel sample** from any state: `POST /api/samples/{id}/cancel` (dry-run preview, reason, confirm; 409 already cancelled / no edge, 412 preview-or-requirements) plus the sample page's "Cancel sample…" action with a typed confirm. Pending analysis rows are cancelled (new analysis-tier `cancel` verb, `cancelled` state) and released from their worksheets; finished rows stay as history; a published COA stays live and the dialog says so. Catalog `cancel` edges seeded from every sample state.
+- **Catalog is the source of truth for status vocabulary**: the status writers accept any active catalog state (Settings → Workflow), badges take their label from the catalog with the hardcoded map as fallback, and a seeded partial-publish pathway (`sample_received → waiting_for_addon_results` on `publish`, back to `to_be_verified` on `submit`) keeps the add-on-pending badge meaningful.
+
 ## v1.16.1 — 2026-09-09
 
 ### Added
