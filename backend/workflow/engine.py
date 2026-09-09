@@ -276,8 +276,8 @@ def evaluate_cascades(db: Session, sample: LimsSample, *, trigger: str,
                       ) -> list[LimsWorkflowShadowEvaluation]:
     """Fire auto_fire edges out of native_status until none applies
     (cap CASCADE_CAP). Only edges whose requirements are ALL met fire —
-    refusals are NOT recorded here (cascade probing is speculative; recording
-    every probe would spam the trajectory). Flush-only."""
+    the refusal that STOPS the run is recorded once (spec §6.1); probes
+    that had nothing to fire record nothing. Flush-only."""
     if sample.native_status is None:
         return []
     from sqlalchemy.orm import aliased
@@ -295,8 +295,9 @@ def evaluate_cascades(db: Session, sample: LimsSample, *, trigger: str,
                       LimsWorkflowTransition.id)
         ).scalars().all()
         advanced = None
+        first_refusal = None   # (verb, outcomes) of the first unmet candidate
         for edge in candidates:
-            met, _outc = evaluate_requirements(
+            met, outc = evaluate_requirements(
                 db, sample, edge.requirements or [],
                 actor_user_id=actor_user_id)
             if met:
@@ -304,7 +305,18 @@ def evaluate_cascades(db: Session, sample: LimsSample, *, trigger: str,
                     db, sample, edge.verb, trigger=trigger,
                     actor_user_id=actor_user_id)
                 break
+            if first_refusal is None:
+                first_refusal = (edge.verb, outc)
         if advanced is None or advanced.outcome != "advanced":
+            # Spec §6.1: record WHY the cascade stopped (once per run; the
+            # _record delta-dedup keeps repeats from spamming the trajectory).
+            # No candidates at all = nothing to fire = record nothing.
+            if advanced is None and first_refusal is not None:
+                _record(db, sample, trigger=trigger, verb=first_refusal[0],
+                        from_status=sample.native_status,
+                        to_status=sample.native_status,
+                        outcome="requirements_unmet", requirements_met=False,
+                        outcomes=first_refusal[1], actor_user_id=actor_user_id)
             break
         fired.append(advanced)
     return fired
