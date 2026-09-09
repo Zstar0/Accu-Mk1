@@ -131,6 +131,20 @@ describe('leadingFamily', () => {
     expect(leadingFamily(trend('2026-08', { late_total: 0 }))).toBeNull()
     expect(leadingFamily(null)).toBeNull()
   })
+
+  it('refuses to name a department that has too few timed samples', () => {
+    // A customer-scoped month can clear the late-sample floor while the family
+    // that gated most of it ran five samples all year. Naming it would make the
+    // headline contradict the "too few" marker on its own table row.
+    const row = trend('2026-08', { hm_gate_late: 4, ster_gate_late: 3 })
+    expect(leadingFamily(row)).toBe('hm')
+    expect(leadingFamily(row, new Set(['hm']))).toBeNull()
+  })
+
+  it('still names a solid leader when some other department is thin', () => {
+    const row = trend('2026-08', { ster_gate_late: 6, hm_gate_late: 2 })
+    expect(leadingFamily(row, new Set(['hm']))).toBe('ster')
+  })
 })
 
 describe('chartableFamilies', () => {

@@ -84,9 +84,18 @@ export function readableMonth(
   return solid[solid.length - 1] ?? trend[trend.length - 1] ?? null
 }
 
-/** The family that finished last most often in a month, or null if none did. */
+/**
+ * The family that finished last most often in a month, or null if none did.
+ *
+ * Pass `thin` (the families the engine flagged as having too few timed samples)
+ * and a thin winner returns null rather than being named. The runner-up is not
+ * promoted in its place: if the department that actually gated the most work
+ * cannot carry a claim, there is no claim to make, and saying "sterility led"
+ * while heavy metals quietly gated more would be its own distortion.
+ */
 export function leadingFamily(
-  row: SlaPerfGatingMonth | null
+  row: SlaPerfGatingMonth | null,
+  thin?: ReadonlySet<string>
 ): GatingFamilyKey | null {
   if (!row || !row.late_total) return null
   let best: GatingFamilyKey | null = null
@@ -98,6 +107,7 @@ export function leadingFamily(
       bestN = n
     }
   }
+  if (best && thin?.has(best)) return null
   return best
 }
 

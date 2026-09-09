@@ -357,6 +357,32 @@ describe('SlaPerformanceReport', () => {
     )
   })
 
+  it('does not headline a department that has too few timed samples', async () => {
+    // Scope the report to one customer and the month can clear the late-sample
+    // floor while the department that gated it ran a handful of samples all
+    // year. Naming it would contradict the "too few" marker on its own row.
+    const thin = report()
+    thin.gating.families = thin.gating.families.map(f =>
+      f.k === 'ster' ? { ...f, thin: true } : f
+    )
+    mockGet.mockReset()
+    mockGet.mockResolvedValue(thin)
+    renderPage()
+    await waitFor(() =>
+      expect(
+        screen.getByRole('table', { name: 'Departments' })
+      ).toBeInTheDocument()
+    )
+    expect(screen.queryByText(/Sterility finished last on/)).toBeNull()
+    // The table still lists it -- suppressing the claim, not the data.
+    const rows = within(screen.getByRole('table', { name: 'Departments' }))
+      .getAllByRole('row')
+      .map(r => r.textContent ?? '')
+    expect(
+      rows.some(t => t.includes('Sterility') && t.includes('too few'))
+    ).toBe(true)
+  })
+
   it('lists each department with its own receipt-to-done timing', async () => {
     renderPage()
     await waitFor(() =>

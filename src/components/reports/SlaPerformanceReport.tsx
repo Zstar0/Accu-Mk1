@@ -374,7 +374,10 @@ function ReportBody({ data }: { data: Report }) {
   const { best, worst } = bestAndWorst(months, data.today)
   const stale = staleOpen(months)
   const readable = readableMonth(gating.trend, gating.min_late_for_trend)
-  const leader = leadingFamily(readable)
+  const thinFamilies = new Set(
+    gating.families.filter(f => f.thin).map(f => f.k)
+  )
+  const leader = leadingFamily(readable, thinFamilies)
   const first = gating.trend[0] ?? null
   const chartFamilies = chartableFamilies(gating.trend)
   const showGating = hasGatingSignal(gating)
