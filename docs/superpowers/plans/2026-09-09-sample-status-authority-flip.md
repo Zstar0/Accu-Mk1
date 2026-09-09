@@ -1095,6 +1095,8 @@ git add backend/workflow/senaite_tee.py backend/tests/test_senaite_tee.py
 git commit -m "feat(workflow): SENAITE tee with read-back and retry enqueue"
 ```
 
+**Execution rulings (2026-09-09, task review fix round 1 — the shipped module differs from Step 3 in these ways):** one row per (sample, verb) regardless of status — `_row_for()` (latest row, any status) replaces `_pending_row()`; `enqueue_retry` revives a `done`/`gave_up`/`senaite_only` row (status → pending, attempts reset, then the normal bump) instead of minting a second; `_mark_senaite_only` reuses the row; a shared `_resolve_done()` marks an existing row `done` from both the cancel already-cancelled fast path and the matched read-back path; `tee_now` wraps its whole body in a never-raise guard that logs and returns a fifth value `"error"` (no rollback of the caller's session); `enqueue_retry` logs `senaite_tee.enqueued` on create/revive. Also fixed in the same commit: Task 6's `database.py` partial-unique-index literal carried its comma inside the quotes (Python concatenated it with the next `UPDATE` migration into invalid SQL).
+
 ---
 
 ### Task 8: Retry job + scheduler registration + summary count
