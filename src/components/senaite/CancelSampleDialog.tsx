@@ -15,11 +15,13 @@ interface Props {
   open: boolean
   sampleId: string
   currentStatus: string
+  statusAuthority?: 'senaite' | 'mk1'
   onClose: () => void
   onCancelled: () => void
 }
 
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`
+const PAST_VERIFICATION = new Set(['verified', 'published', 'waiting_for_addon_results'])
 
 /**
  * Cancel a sample at any point in the process (customer request). Dry-run
@@ -30,6 +32,7 @@ export function CancelSampleDialog({
   open,
   sampleId,
   currentStatus,
+  statusAuthority = 'senaite',
   onClose,
   onCancelled,
 }: Props) {
@@ -91,6 +94,14 @@ export function CancelSampleDialog({
           Current status: {currentStatus}. Cancelling stops all pending work on
           this sample.
         </p>
+        {statusAuthority === 'senaite' && (
+          <p className="text-xs text-muted-foreground -mt-1" data-testid="senaite-mode-note">
+            Status authority is SENAITE: the status badge keeps following SENAITE until the
+            authority is switched to Accu-Mk1. Pending work is still stopped and the
+            cancellation is recorded in Accu-Mk1
+            {PAST_VERIFICATION.has(currentStatus) ? '; SENAITE itself does not allow cancel after verification, so the badge will not change until the flip.' : '.'}
+          </p>
+        )}
         {preview === null && previewError === null && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
             <Loader2 size={14} className="animate-spin" /> Checking what this

@@ -150,3 +150,10 @@ export function parseSampleStatusAuthority(rawValue: string | undefined | null):
     return DEFAULT_READ_SOURCE
   }
 }
+
+/** Reactive read of the sample-status authority (spec 2026-09-09 §3.1 / §11.4). */
+export function useSampleStatusAuthority(): ReadSource {
+  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: getSettings })
+  const raw = settings?.find((s) => s.key === READ_SOURCE_SETTING_KEY)?.value
+  return parseSampleStatusAuthority(raw)
+}

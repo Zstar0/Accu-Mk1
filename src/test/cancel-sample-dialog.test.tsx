@@ -23,14 +23,17 @@ const PREVIEW = {
 }
 const RESULT = { ...PREVIEW, status: 'cancelled', dry_run: false as const }
 
-function renderDialog() {
+function renderDialog(
+  overrides: { currentStatus?: string; statusAuthority?: 'senaite' | 'mk1' } = {}
+) {
   const onClose = vi.fn()
   const onCancelled = vi.fn()
   render(
     <CancelSampleDialog
       open
       sampleId="PB-0001"
-      currentStatus="published"
+      currentStatus={overrides.currentStatus ?? 'published'}
+      statusAuthority={overrides.statusAuthority}
       onClose={onClose}
       onCancelled={onCancelled}
     />
@@ -98,5 +101,24 @@ describe('CancelSampleDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: /^cancel sample$/i }))
     await waitFor(() => expect(toast.error).toHaveBeenCalled())
     expect(onCancelled).not.toHaveBeenCalled()
+  })
+
+  it('shows the senaite-mode note by default and the post-verification wording for published samples', async () => {
+    mockCancel.mockResolvedValueOnce(PREVIEW)
+    renderDialog({ currentStatus: 'published' })
+    await screen.findByText(/2 pending results/i)
+    expect(screen.getByTestId('senaite-mode-note')).toHaveTextContent(
+      /does not allow cancel after verification/i
+    )
+  })
+
+  it('hides the senaite-mode note under Accu-Mk1 authority', async () => {
+    mockCancel.mockResolvedValueOnce(PREVIEW)
+    renderDialog({ statusAuthority: 'mk1' })
+    await screen.findByText(/2 pending results/i)
+    expect(
+      screen.getByText(/Cancelling stops all pending work/i)
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId('senaite-mode-note')).toBeNull()
   })
 })

@@ -189,6 +189,7 @@ import {
   detailsFieldSource,
   useCoaGenerationSource,
   coaSourceBadgeLabel,
+  useSampleStatusAuthority,
   type ReadSource,
 } from '@/lib/read-source'
 import { FieldSourceGlyph } from '@/components/senaite/FieldSourceGlyph'
@@ -3697,6 +3698,7 @@ export function SampleDetails() {
 
   // COA generation source badge
   const coaGenSource = useCoaGenerationSource()
+  const statusAuthority = useSampleStatusAuthority()
 
   // Retest relationship metadata (banner + chain links)
   const [retestInfo, setRetestInfo] = useState<
@@ -6959,6 +6961,7 @@ export function SampleDetails() {
         open={cancelOpen}
         sampleId={data.sample_id}
         currentStatus={data.review_state ?? ''}
+        statusAuthority={statusAuthority}
         onClose={() => setCancelOpen(false)}
         onCancelled={() => refreshSample(data.sample_id)}
       />
