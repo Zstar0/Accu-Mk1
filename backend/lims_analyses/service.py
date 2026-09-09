@@ -28,7 +28,7 @@ from lims_analyses.state_machine import (
     tier_allows,
     tier_of,
 )
-from models import LimsAnalysis, LimsAnalysisTransition, LimsSubSampleEvent, WorksheetItem
+from models import LimsAnalysis, LimsAnalysisTransition, LimsSubSampleEvent, Worksheet, WorksheetItem
 
 
 # ─── Typed exceptions ────────────────────────────────────────────────────────
@@ -3605,12 +3605,16 @@ CANCEL_PENDING_STATES = frozenset({"unassigned", "assigned", "to_be_verified", "
 def _cancel_targets(db: Session, *, parent_sample_pk: int):
     """Live canonical/ordered, non-retested rows on the parent and its vials.
     Partitioned into pending (still awaiting work -- a customer cancellation
-    kills these) and kept (finished history rows that stay, spec §3.4)."""
+    kills these) and kept (finished history rows that stay, spec §3.4).
+    `cancelled` rows are neither -- a dead row is not history, and a repeat
+    call must not keep re-reporting it as "kept"."""
     from models import LimsSubSample
     from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
-    vial_pks = [v.id for v in db.execute(
+    vials = db.execute(
         select(LimsSubSample).where(LimsSubSample.parent_sample_pk == parent_sample_pk)
-    ).scalars()]
+    ).scalars().all()
+    vial_pks = [v.id for v in vials]
+    uids = [v.external_lims_uid for v in vials if v.external_lims_uid]
     rows = db.execute(
         select(LimsAnalysis).where(
             or_(LimsAnalysis.lims_sample_pk == parent_sample_pk,
@@ -3620,12 +3624,10 @@ def _cancel_targets(db: Session, *, parent_sample_pk: int):
         ).order_by(LimsAnalysis.id)
     ).scalars().all()
     pending_rows = [r for r in rows if r.review_state in CANCEL_PENDING_STATES]
-    kept_rows = [r for r in rows if r.review_state not in CANCEL_PENDING_STATES]
-    uids = [v.external_lims_uid for v in db.execute(
-        select(LimsSubSample).where(LimsSubSample.parent_sample_pk == parent_sample_pk)
-    ).scalars() if v.external_lims_uid]
+    kept_rows = [r for r in rows if r.review_state not in CANCEL_PENDING_STATES
+                and r.review_state != "cancelled"]
     items = db.execute(
-        select(WorksheetItem).where(WorksheetItem.sample_uid.in_(uids or ["-"]))
+        select(WorksheetItem).where(WorksheetItem.sample_uid.in_(uids))
     ).scalars().all() if uids else []
     return pending_rows, kept_rows, items
 
@@ -3649,10 +3651,15 @@ def cancel_pending_rows(db: Session, *, parent_sample_pk: int, user_id: Optional
         apply_transition(db, analysis_id=r.id, kind="cancel", reason=reason,
                          user_id=user_id, commit=False)
         cancelled.append(r.id)
+    ws_ids = {item.worksheet_id for item in items}
+    titles = dict(db.execute(
+        select(Worksheet.id, Worksheet.title).where(Worksheet.id.in_(ws_ids))
+    ).all()) if ws_ids else {}
     released = []
     for item in items:
         clear_for_item(db, sample_uid=item.sample_uid, service_group_id=item.service_group_id,
                        acting_user_id=user_id, worksheet_id=item.worksheet_id,
+                       worksheet_title=titles.get(item.worksheet_id),
                        department_id=item.department_id, reset_state=False)
         released.append(item.worksheet_id)
         db.delete(item)
