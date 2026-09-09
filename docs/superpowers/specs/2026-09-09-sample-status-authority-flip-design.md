@@ -201,8 +201,9 @@ synchronous via `heal_sample_status`, now `source="mk1"`), publish (the ledger
 row + `drive_sample_touchpoint(verb="publish")` move from background to
 before-commit; the SENAITE tee stays after commit), cancel (§8, synchronous).
 Analysis-driven submit/verify keep the existing background cascade — the
-badge follows within one cascade tick. The cascade's "refusals are not
-recorded" rule stays; the converge job (§6) covers the strandings.
+badge follows within one cascade tick. A cascade that stops now records why
+(§6.1), and the stranded-sample detector (§6.2) raises a flag if the sample
+does not move; nothing sweeps it forward silently.
 
 ## 5. SENAITE tee with read-back and retry
 
@@ -237,23 +238,46 @@ Retry never overrides a later native state: before re-issuing, the job checks
 `sample.status` still equals the verb's target; otherwise it marks `done`
 (superseded).
 
-## 6. Scheduled converge
+## 6. Detection, not sweeping (Handler ruling, 2026-09-09)
 
-**Job `native_status_converge`** (scheduler, every 15 min, batch ≤ 200
-samples received in the last 90 days): the logic of the proven
-`backfill_native_converge.py`, made resident —
+There is no scheduled converge. A sample whose status stops moving is a bug
+to find and fix at the root, not a row to sweep. The slice therefore makes
+strandings **visible with their cause** and leaves repair to a human.
 
-1. seed `native_status` where NULL from `status` (arm);
-2. for samples whose live parent lines are all verified (excluding retracted /
-   rejected / cancelled) but `native_status` lags, run `evaluate_cascades`;
-3. for samples with a Mk1 publish ledger row and `native_status='verified'`,
-   `execute_verb("publish")`;
-4. in mk1 mode these advances write `status` (§4.1) and record
-   `source='reconcile_native'`.
+### 6.1 Cascade refusals are recorded
 
-Every advance is a shadow-evaluation row (`trigger='converge'`), so the
-summary shows what the job did. The job is idempotent and bounded; a failure
-on one sample logs and continues.
+`evaluate_cascades` today records advances only ("probing is speculative").
+It now also records the refusal that *stopped* the cascade — one
+`LimsWorkflowShadowEvaluation` row per run with `outcome` `no_edge` or
+`requirements_unmet`, the verb tried and the requirement outcomes — so the
+divergence surface can say *why* a sample sits where it sits. Successful
+probes that simply had nothing to fire still record nothing (no noise).
+
+### 6.2 Stranded-sample detector
+
+**Job `workflow_stranded_check`** (scheduler, every 15 min, read-only,
+samples received in the last 90 days). A sample is *stranded* when any of:
+
+- its live parent lines (excluding retracted / rejected / cancelled) are all
+  verified, but its status is behind `verified`;
+- Mk1's publish ledger has a row for it, but its status is not `published`;
+- `native_status` is set and differs from `status` (after the flip this is a
+  self-check that must stay empty);
+- a `lims_senaite_tee_retries` row for it reached `gave_up` (§5).
+
+For each stranded sample the job raises **one** flag (kind `issue`, type
+`workflow_stranded`, entity-linked to the sample, de-duplicated per sample
+while open) whose body carries the diagnosis: the condition that matched, the
+latest cascade refusal from §6.1 with its requirement outcomes, and the last
+three transition-log rows. When the condition clears, the job resolves the
+flag with a note. The job never writes `status`, `native_status` or SENAITE.
+
+### 6.3 Manual repair stays manual
+
+`backfill_native_converge.py` (dry-run default) remains the tool for closing
+a gap **after** its root cause is fixed — run by hand, on a named set of
+samples, with the flag as the audit trail. It is not registered on the
+scheduler and this spec adds no other automatic status advance.
 
 ## 7. The catalog as the only source of truth
 
@@ -338,10 +362,10 @@ No refund logic. Each is named here so nobody infers it.
 
 | class (2026-09-09 count) | at flip |
 |---|---|
-| native `sample_received` vs mirror `waiting_for_addon_results` (5) | the seeded `partial_publish` edge (§3.3) moves them natively into the existing `waiting_for_addon_results` state once the converge runs, so the badge keeps its meaning; no new state is added. |
-| native `to_be_verified` vs mirror `published`, last eval `no_edge:publish` (11) | diagnosed **before** the flip (which line the engine sees as unverified — BW trio shadows are the suspect); fixed by the converge once the requirement is met, or by a documented rule. |
-| native `verified` vs mirror `sample_received` (2) | native is right; the tee retry job pushes SENAITE forward. |
-| seeded mid-flight `waiting_for_addon_results` (1) | converge re-seeds from line states. |
+| native `sample_received` vs mirror `waiting_for_addon_results` (5) | the seeded `partial_publish` edge (§3.3) gives them a native pathway; after the seed lands, the next touchpoint or a named manual converge (§6.3) moves them, so the badge keeps its meaning; no new state is added. |
+| native `to_be_verified` vs mirror `published`, last eval `no_edge:publish` (11) | root-caused **before** the flip (which line the engine sees as unverified — the BW trio shadows are the suspect); the fix is a rule or data correction, then a named manual converge. |
+| native `verified` vs mirror `sample_received` (2) | native is right; the tee retry job pushes SENAITE forward, or flags it if SENAITE keeps refusing. |
+| seeded mid-flight `waiting_for_addon_results` (1) | diagnosed by hand; re-seeded from line states if the seed was wrong. |
 
 ## 10. Error handling and fail-safes
 
@@ -350,8 +374,9 @@ No refund logic. Each is named here so nobody infers it.
 - The engine's status write only accepts slugs in the live catalog; anything
   else logs `workflow.status_write_refused` and leaves `status` alone.
 - Tee failures never surface to the user; they become queue rows.
-- The converge and retry jobs are bounded, idempotent, per-sample try/except,
-  and log one summary line per run (`healed / retried / gave_up / errors`).
+- The detector and the tee retry job are bounded, idempotent, per-sample
+  try/except, and log one summary line per run (`flagged / resolved /
+  retried / gave_up / errors`). Neither advances a sample's status.
 - Rollback = set `sample_status` back to `senaite`, then one
   `_refresh_parent_from_senaite` sweep over samples touched since the flip
   (the transition log identifies them: `source in ('mk1','reconcile_native')`
@@ -359,12 +384,15 @@ No refund logic. Each is named here so nobody infers it.
 
 ## 11. Rollout
 
-1. Deploy dark: switch absent, jobs registered but writing only
-   `native_status` and queue rows; the tee retry job runs in both modes (it
-   fixes the silent-200 class regardless of authority).
-2. Run the converge for a day; diagnose the 11 `no_edge:publish` residuals;
-   review `GET /api/workflow/shadow/summary` — flip when agreement on
-   Mk1-pathway verbs is at 100% minus the documented SENAITE-only classes.
+1. Deploy dark: switch absent; the engine keeps writing only
+   `native_status`; the detector and the tee retry job run in both modes (the
+   retry fixes the silent-200 class regardless of authority; the detector
+   starts flagging strandings immediately).
+2. Work the flags: root-cause the 11 `no_edge:publish` residuals and whatever
+   else the detector raises in its first days; fix each at the source (a rule,
+   a seed, a data correction), then a named manual converge. Flip when the
+   detector has been clean for 48 h except the documented SENAITE-only
+   classes, and `GET /api/workflow/shadow/summary` agrees.
 3. Flip `sample_status` to `mk1` in the admin UI. Watch the summary for 48 h.
 4. Cancel ships in the same deploy and works in both modes, with one stated
    limit: in senaite mode the badge still follows SENAITE, and SENAITE allows
@@ -385,8 +413,12 @@ No refund logic. Each is named here so nobody infers it.
 - Tee + queue: read-back mismatch enqueues; retry job backoff, `done`,
   `gave_up`, the verify-then-publish rule, the cancel `senaite_only` rule,
   the superseded-by-later-state rule. SENAITE mocked by response fixtures.
-- Converge job: arm / cascade / publish steps on fixture samples; bounded;
-  per-sample failure isolation.
+- Cascade refusal recording: a stopped cascade leaves exactly one refusal row
+  with the requirement outcomes; a cascade with nothing to fire leaves none.
+- Detector: each stranded condition on fixture samples raises one flag with
+  the diagnosis; a second run does not duplicate it; the flag resolves when
+  the condition clears; the job writes nothing else; per-sample failure
+  isolation.
 - Cancel: edges exist from every seeded state after seeding; route 409/412/200
   shapes; dry-run writes nothing; cascade cancels only pending rows; worksheet
   release; event; published-COA flag; frontend dialog (preview, reason
