@@ -31,6 +31,7 @@ import {
   Terminal,
   CornerDownRight,
   Radar,
+  Eraser,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -177,6 +178,7 @@ import {
 } from '@/components/senaite/AnalysisTable'
 import { RemovalConfirmModal } from '@/components/senaite/RemovalConfirmModal'
 import { ReplaceAnalyteDialog } from '@/components/senaite/ReplaceAnalyteDialog'
+import { ClearAnalyteDialog } from '@/components/senaite/ClearAnalyteDialog'
 import { isHplcAnalyteService } from '@/lib/hplc-analyte-services'
 import { needsMk1AnalysesSwap } from '@/lib/mk1-analyses-swap'
 import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
@@ -3702,6 +3704,12 @@ export function SampleDetails() {
     oldPeptideId: number | null
     oldPeptideName: string
   } | null>(null)
+  // Clear analyte slot (the blend lost an analyte) — sibling of Replace.
+  const [clearSlot, setClearSlot] = useState<{
+    slot: number
+    peptideId: number | null
+    peptideName: string
+  } | null>(null)
   // Task 10: promoted-source (vial-side) retest warning — sub-sample pages
   // only. Carries the target row's uid alongside the dialog's own state
   // shape (superset — PromotedSourceRetestDialog only reads its 3 fields).
@@ -6126,11 +6134,28 @@ export function SampleDetails() {
                               <RefreshCw size={11} aria-hidden="true" />
                               Replace
                             </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setClearSlot({
+                                  slot,
+                                  peptideId: analyte.matched_peptide_id ?? null,
+                                  peptideName: displayName,
+                                })
+                              }
+                              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-destructive transition-colors"
+                              title="Clear this analyte slot (the blend has one analyte fewer)"
+                            >
+                              <Eraser size={11} aria-hidden="true" />
+                              Clear
+                            </button>
                           </div>
                           <div className="[&>div]:border-0 [&>div]:py-1">
                             <EditableDataRow
                               label="Peptide"
                               value={displayName}
+                              readOnly={subSamples.length > 0}
+                              readOnlyHint="Locked once vials exist — use Replace or Clear so vial rows and the identity service follow the change"
                               senaiteField={`Analyte${slot}Peptide`}
                               sampleUid={data.sample_uid ?? ''}
                               onSaved={v =>
@@ -6153,6 +6178,8 @@ export function SampleDetails() {
                             <EditableDataRow
                               label="Declared Qty"
                               value={analyte.declared_quantity}
+                              readOnly={subSamples.length > 0}
+                              readOnlyHint="Locked once vials exist — Replace or Clear the slot instead"
                               senaiteField={`Analyte${slot}DeclaredQuantity`}
                               sampleUid={data.sample_uid ?? ''}
                               type="number"
@@ -6853,6 +6880,18 @@ export function SampleDetails() {
           oldPeptideName={replaceSlot.oldPeptideName}
           onClose={() => setReplaceSlot(null)}
           onReplaced={() => refreshSample(data.sample_id)}
+        />
+      )}
+      {clearSlot && data && (
+        <ClearAnalyteDialog
+          open
+          sampleId={data.sample_id}
+          senaiteUid={data.sample_uid ?? ''}
+          slot={clearSlot.slot}
+          peptideId={clearSlot.peptideId}
+          peptideName={clearSlot.peptideName}
+          onClose={() => setClearSlot(null)}
+          onCleared={() => refreshSample(data.sample_id)}
         />
       )}
 

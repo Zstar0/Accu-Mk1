@@ -87,11 +87,20 @@ def _resolve_slot(db: Session, *, parent_sample_id: Optional[str], peptide: Opti
     from sub_samples.senaite import fetch_parent_analyte_slots
     slots = fetch_parent_analyte_slots(parent_sample_id)
     wants = {_norm(t) for t in (peptide.name, peptide.abbreviation) if t}
+    matches = []
     for n, title in slots.items():
         name = re.sub(r"\s*-\s*identity\s*\(hplc\)\s*$", "", title or "", flags=re.I)
         if _norm(name) in wants:
-            return n
-    return None
+            matches.append(n)
+    if len(matches) > 1:
+        # PB-0469 (2026-09-08): the same peptide in two slots is corrupt input;
+        # "first wins" routed one result into two slots. Never guess.
+        logger.warning(
+            "prep_bridge: parent=%s lists peptide=%s in slots %s -- ambiguous, "
+            "analyte rows skipped", parent_sample_id, peptide.name, matches,
+        )
+        return None
+    return matches[0] if matches else None
 
 
 def _fmt_num(v: Optional[float]) -> Optional[str]:
@@ -405,6 +414,18 @@ def bridge_prep_result_to_vial(
     ).scalars().all()
 
     pep_token = _norm(peptide.abbreviation or peptide.name) if peptide else ""
+    # Every LIVE keyword on the vial (any state but dead). PB-0469 (2026-09-08):
+    # once a peptide's per-substance PUR_/QTY_ row exists in ANY live state,
+    # tier 1 is authoritative -- an already-bridged peptide must never fall
+    # through to the generic ANALYTE-{slot} rows on a Process-HPLC re-run.
+    live_keywords = {
+        (kw or "").upper() for kw in db.execute(
+            select(LimsAnalysis.keyword).where(
+                LimsAnalysis.lims_sub_sample_pk == lims_sub_sample_pk,
+                LimsAnalysis.review_state.notin_(["retracted", "rejected"]),
+            )
+        ).scalars()
+    }
 
     # Bucket candidate rows by result category. Identity rows are NOT filtered
     # here by token; _pick_target selects the right ID_<X> row per-peptide
@@ -443,6 +464,15 @@ def bridge_prep_result_to_vial(
     submitted: list[int] = []
     for category, candidates in by_category.items():
         peptide_kw = pur_kw if category == "purity" else (qty_kw if category == "quantity" else None)
+        if peptide_kw and peptide_kw.upper() in live_keywords and not any(
+            (c.keyword or "").upper() == peptide_kw.upper() for c in candidates
+        ):
+            logger.info(
+                "prep_bridge: %s for vial=%s peptide=%s already bridged "
+                "(per-substance row past pending) -- skipping", category,
+                lims_sub_sample_pk, (peptide.name if peptide else None),
+            )
+            continue
         row = _pick_target(category, candidates, slot=slot, peptide_kw=peptide_kw,
                            id_kw=id_kw, pep_token=pep_token)
         if row is None:

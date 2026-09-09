@@ -654,3 +654,21 @@ def test_canonical_row_keeps_the_mk1_uid_even_if_a_uid_is_stamped(db_session):
 
     rows = list_parent_analyses_senaite_shape(db_session, parent.sample_id)
     assert rows[0].uid == f"mk1:{row.id}"
+
+
+def test_generic_analyte_slot_rows_classify_as_core_hplc(db_session):
+    """PB-0469 (2026-09-08): ANALYTE-{n}-PUR/QTY rows rendered in an unlabeled
+    section because the legacy classifier matched ID_/PUR_/QTY_/HPLC/PEPT but
+    not the generic slot keywords."""
+    from lims_analyses.service import list_parent_analyses_senaite_shape
+
+    _mk_profile_row(db_session, "core", "Core HPLC")
+    parent = _mk_parent(db_session)
+    for kw, title in (("ANALYTE-1-PUR", "Analyte 1 (Purity)"),
+                      ("ANALYTE-2-QTY", "Analyte 2 (Quantity)")):
+        _mk_parent_analysis(db_session, parent, _mk_service(db_session, kw, title))
+    rows = list_parent_analyses_senaite_shape(db_session, parent.sample_id)
+    by_kw = {r.keyword: r for r in rows}
+    assert by_kw["ANALYTE-1-PUR"].profile_section_key == "core"
+    assert by_kw["ANALYTE-1-PUR"].profile_section_label == "Core HPLC"
+    assert by_kw["ANALYTE-2-QTY"].profile_section_key == "core"

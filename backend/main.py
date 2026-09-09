@@ -33,7 +33,7 @@ APP_VERSION = _read_app_version()
 
 from fastapi import BackgroundTasks, FastAPI, Body, Depends, Form, HTTPException, Header, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, ConfigDict, Field, validator
+from pydantic import BaseModel, ConfigDict, Field, validator, PrivateAttr
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select, desc, delete, update, func, extract, and_, or_
 from sqlalchemy.exc import IntegrityError
@@ -10826,7 +10826,7 @@ async def _swap_parent_identity_service(client, sample_id, old_id_kw, new_id_svc
             identity["removed"] = old_id_kw
         except Exception as _e:
             logger.warning("replace_analyte: remove %s failed: %s", old_id_kw, _e)
-    if new_id_svc.senaite_uid:
+    if new_id_svc is not None and new_id_svc.senaite_uid:
         try:
             r = await client.post(
                 f"{INTEGRATION_SERVICE_URL}/explorer/samples/{sample_id}/analyses",
@@ -10929,6 +10929,29 @@ async def replace_analyte(
     ).scalars().first()
     if new_id_svc is None or not new_id_svc.title:
         raise HTTPException(400, f"{new_pep.name} has no Identity service title")
+    # A peptide may occupy only ONE slot (PB-0469, 2026-09-08) -- Replace
+    # gated the OLD peptide's rows but never looked at the other slots.
+    from sub_samples import senaite as _senaite_slots
+    try:
+        _live_slots = _senaite_slots.fetch_parent_analyte_slots(sample_id)
+    except Exception as _slot_err:
+        raise HTTPException(
+            502,
+            f"Could not read analyte slots from SENAITE to check for a duplicate "
+            f"peptide -- try again. ({_slot_err})",
+        )
+    _wants = {
+        _senaite_slots.normalize_slot_peptide(t)
+        for t in (new_pep.name, new_pep.abbreviation) if t
+    }
+    for _other, _title in _live_slots.items():
+        if _other != slot and _senaite_slots.normalize_slot_peptide(_title) in _wants:
+            raise HTTPException(
+                409,
+                f"{new_pep.name} already occupies slot {_other} -- a peptide can "
+                f"appear in only one analyte slot. Clear that slot first if the "
+                f"blend really changed.",
+            )
 
     # ── 2. pre-write impact gate ──────────────────────────────────────────────
     impact = classify_slot_replacement_impact(
@@ -10986,9 +11009,11 @@ async def replace_analyte(
     _rep_logger = _logging.getLogger(__name__)
 
     # ── 3. write the slot's peptide (canonical source of truth) ───────────────
+    _slot_req = SenaiteFieldUpdateRequest(fields={f"Analyte{slot}Peptide": new_id_svc.title})
+    _slot_req._skip_slot_guards = True  # the orchestrator owns the cascade
     field_result = await update_senaite_sample_fields(
         uid=body.senaite_uid,
-        req=SenaiteFieldUpdateRequest(fields={f"Analyte{slot}Peptide": new_id_svc.title}),
+        req=_slot_req,
         current_user=_current_user,
     )
     if not getattr(field_result, "success", False):
@@ -11078,6 +11103,211 @@ async def replace_analyte(
         "success": True,
         "field_updated": f"Analyte{slot}Peptide",
         "new_peptide": new_pep.name,
+        "identity": identity,
+        **summary,
+    }
+
+
+class ClearAnalyteBody(BaseModel):
+    """Clear (empty) one analyte slot of a parent blend -- the blend lost an
+    analyte (KLOW -> GLOW dropped KPV; PB-0469, 2026-09-08). `confirm` is the
+    typed-confirm from the dialog: it authorises rejecting worked vial rows
+    and force-retracting promoted ones, exactly like Replace's `force`.
+    old_peptide_id is optional -- the route resolves it from the slot title."""
+    senaite_uid: str
+    old_peptide_id: Optional[int] = None
+    confirm: bool = False
+    # dry_run: preview only -- resolve the slot's peptide, classify the vial-row
+    # impact and report it; write nothing. The confirm dialog shows this.
+    dry_run: bool = False
+
+
+@app.post("/explorer/samples/{sample_id}/analytes/{slot}/clear")
+async def clear_analyte(
+    sample_id: str,
+    slot: int,
+    body: ClearAnalyteBody,
+    _current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Clear analyte slot {slot} on a parent blend. Mirrors Replace's order:
+      1. live slot map from SENAITE (502 fail-closed); 404 if the slot is empty
+      2. resolve the slot's peptide; if the SAME peptide still occupies another
+         slot, this is a fields-only clear (rows + identity belong to the
+         surviving slot -- PB-0469's shape)
+      3. pre-write impact on the peptide's vial rows -- published block (409);
+         worked/blocked need `confirm` (412 + impact)
+      4. blank Analyte{slot}Peptide + Analyte{slot}DeclaredQuantity on the AR
+      5. drop the slot's COA display alias
+      6. remove the parent AR identity service via the IS proxy (cascade only)
+      7. retire the peptide's vial rows (clear_analyte_slot) -- never re-seeds
+      8. refresh the registry row so `analytes` drops the slot
+    """
+    from sqlalchemy import select as _select
+    from models import AnalysisService, LimsSample, Peptide, SampleAnalyteAlias
+    from lims_analyses.service import (
+        classify_slot_replacement_impact,
+        clear_analyte_slot,
+        presubsample_slot_blocked_keywords,
+        BadRequestError as _BadRequestError,
+        NotFoundError as _NotFoundError,
+    )
+    from sub_samples import senaite as _senaite_slots
+    import logging as _logging
+    _clr_logger = _logging.getLogger(__name__)
+    if slot < 1 or slot > 4:
+        raise HTTPException(400, "slot must be between 1 and 4")
+    try:
+        live_slots = _senaite_slots.fetch_parent_analyte_slots(sample_id)
+    except Exception as _slot_err:
+        raise HTTPException(
+            502, f"Could not read analyte slots from SENAITE -- try again. ({_slot_err})"
+        )
+    slot_title = live_slots.get(slot)
+    if not slot_title:
+        raise HTTPException(404, f"Slot {slot} is already empty on {sample_id}")
+    slot_norm = _senaite_slots.normalize_slot_peptide(slot_title)
+    old_pep = db.get(Peptide, body.old_peptide_id) if body.old_peptide_id else None
+    if old_pep is None and slot_norm:
+        for _p in db.execute(_select(Peptide)).scalars():
+            if slot_norm in {
+                _senaite_slots.normalize_slot_peptide(t) for t in (_p.name, _p.abbreviation) if t
+            }:
+                old_pep = _p
+                break
+    duplicate_elsewhere = any(
+        _o != slot and _senaite_slots.normalize_slot_peptide(_t) == slot_norm
+        for _o, _t in live_slots.items()
+    )
+    cascade = old_pep is not None and not duplicate_elsewhere
+    old_id_kw = None
+    if old_pep is not None:
+        old_id_kw = db.execute(
+            _select(AnalysisService.keyword).where(
+                AnalysisService.peptide_id == old_pep.id,
+                AnalysisService.keyword.like("ID%"),
+            ).order_by(AnalysisService.keyword)
+        ).scalars().first()
+    _is_presubsample = db.execute(
+        _select(LimsSample.id).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none() is None
+    impact = {"pristine": [], "worked_unverified": [], "blocked": []}
+    _blocked_kw: list = []
+    if cascade:
+        if _is_presubsample:
+            from lims_analyses.senaite_writeback import (
+                list_parent_line_states,
+                SenaiteWritebackError,
+            )
+            try:
+                _senaite_states = list_parent_line_states(sample_id)
+            except SenaiteWritebackError:
+                raise HTTPException(
+                    502,
+                    f"Could not read SENAITE results for {sample_id} to verify the "
+                    "slot is safe to clear -- try again.",
+                )
+            _blocked_kw = presubsample_slot_blocked_keywords(
+                _senaite_states, slot=slot, identity_keyword=old_id_kw
+            )
+        else:
+            impact = classify_slot_replacement_impact(
+                db, parent_sample_id=sample_id, old_peptide_id=old_pep.id
+            )
+    if body.dry_run:
+        return {
+            "dry_run": True,
+            "slot": slot,
+            "cleared_peptide": old_pep.name if old_pep else slot_title,
+            "old_peptide_id": old_pep.id if old_pep else None,
+            "identity_keyword": old_id_kw,
+            "cascade": cascade,
+            "duplicate_elsewhere": duplicate_elsewhere,
+            "pre_subsample": _is_presubsample,
+            "impact": impact,
+            "presubsample_blocked": _blocked_kw,
+        }
+    if cascade:
+        if _blocked_kw:
+            raise HTTPException(
+                409,
+                f"Slot {slot} has verified/published result(s) in SENAITE "
+                f"({', '.join(_blocked_kw)}) -- invalidate or retest in SENAITE first.",
+            )
+        published = [b for b in impact["blocked"] if b.get("review_state") == "published"]
+        if published:
+            raise HTTPException(
+                409,
+                f"{len(published)} result(s) are on a published COA -- invalidate or "
+                "retest in SENAITE first.",
+            )
+        if (impact["worked_unverified"] or impact["blocked"]) and not body.confirm:
+            raise HTTPException(412, detail=impact)
+    # -- writes --------------------------------------------------------------
+    _slot_req = SenaiteFieldUpdateRequest(fields={
+        f"Analyte{slot}Peptide": "",
+        f"Analyte{slot}DeclaredQuantity": "",
+    })
+    _slot_req._skip_slot_guards = True  # the orchestrator owns the cascade
+    field_result = await update_senaite_sample_fields(
+        uid=body.senaite_uid, req=_slot_req, current_user=_current_user, db=db,
+    )
+    if not field_result.success:
+        raise HTTPException(502, f"SENAITE field update failed: {field_result.message}")
+    try:
+        _alias = db.execute(
+            _select(SampleAnalyteAlias).where(
+                SampleAnalyteAlias.senaite_sample_id == sample_id,
+                SampleAnalyteAlias.slot == slot,
+            )
+        ).scalar_one_or_none()
+        if _alias is not None:
+            db.delete(_alias)
+            db.commit()
+    except Exception as _alias_err:
+        db.rollback()
+        _clr_logger.warning("clear_analyte: alias reset failed for %s slot=%s: %s",
+                            sample_id, slot, _alias_err)
+    identity = {"removed": None, "added": None}
+    if cascade and old_id_kw:
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=30.0) as client:
+            identity = await _swap_parent_identity_service(
+                client, sample_id, old_id_kw, None, _clr_logger,
+            )
+        if identity.get("removed"):
+            from fastapi.concurrency import run_in_threadpool as _rtp
+            await _rtp(
+                _mirror_parent_analysis_bg,
+                sample_id=sample_id, keyword=identity["removed"],
+                mirror_review_state="rejected",
+            )
+    try:
+        summary = clear_analyte_slot(
+            db, parent_sample_id=sample_id, slot=slot,
+            old_peptide_id=old_pep.id if old_pep else None,
+            confirm_retract=body.confirm, force=body.confirm,
+            user_id=getattr(_current_user, "id", None), cascade=cascade,
+        )
+    except (_BadRequestError, _NotFoundError) as e:
+        raise HTTPException(400, str(e))
+    db.commit()
+    if not _is_presubsample:
+        from starlette.concurrency import run_in_threadpool
+        from sub_samples import service as _ss
+        try:
+            _row = db.execute(
+                _select(LimsSample).where(LimsSample.sample_id == sample_id)
+            ).scalar_one_or_none()
+            if _row is not None:
+                await run_in_threadpool(_ss._refresh_parent_from_senaite, db, _row)
+                db.commit()
+        except Exception as _e:
+            db.rollback()
+            _clr_logger.warning("clear_analyte: registry refresh failed for %s: %s", sample_id, _e)
+    return {
+        "success": True,
+        "field_updated": [f"Analyte{slot}Peptide", f"Analyte{slot}DeclaredQuantity"],
+        "cleared_peptide": old_pep.name if old_pep else slot_title,
         "identity": identity,
         **summary,
     }
@@ -16206,8 +16436,16 @@ async def _receive_senaite_tee(
 # --- SENAITE field update endpoint ---
 
 
+_ANALYTE_PEPTIDE_FIELD_RE = re.compile(r"^Analyte([1-8])Peptide$")
+
+
 class SenaiteFieldUpdateRequest(BaseModel):
     fields: dict  # e.g. {"ClientOrderNumber": "WP-1234", "ClientLot": "LOT-5"}
+    # Set ONLY by internal orchestrators (Replace / Clear analyte slot) that
+    # own the vial-row + identity cascade; a private attr is not settable
+    # from the HTTP body, so the inline editor can never opt out of the
+    # analyte-slot guards below.
+    _skip_slot_guards: bool = PrivateAttr(default=False)
 
 
 class SenaiteFieldUpdateResponse(BaseModel):
@@ -16284,7 +16522,56 @@ async def update_senaite_sample_fields(
         return SenaiteFieldUpdateResponse(
             success=False, message="No fields provided"
         )
-
+    # Analyte-slot peptide guards (PB-0469, 2026-09-08): this generic endpoint
+    # is the inline "Peptide" editor's write path -- free text, straight to
+    # SENAITE. (1) Once the sample has vials the slot's peptide is Replace's /
+    # Clear's business (they cascade to vial rows + the parent identity service;
+    # this path cascades nothing). (2) A peptide may occupy only ONE slot: the
+    # prep bridge and promotion route results by slot, and a duplicate turned
+    # one GHK-Cu result into two verified parent rows. Read the live slot map
+    # from SENAITE; fail closed if it can't be read.
+    _slot_writes = {
+        k: v for k, v in req.fields.items()
+        if isinstance(k, str) and _ANALYTE_PEPTIDE_FIELD_RE.match(k)
+    }
+    if _slot_writes and not getattr(req, "_skip_slot_guards", False):
+        from sub_samples import senaite as _senaite_slots
+        _row = db.execute(
+            select(LimsSample).where(LimsSample.external_lims_uid == uid)
+        ).scalar_one_or_none()
+        if _row is not None:
+            _has_vials = db.execute(
+                select(LimsSubSample.id)
+                .where(LimsSubSample.parent_sample_pk == _row.id)
+                .limit(1)
+            ).scalar_one_or_none() is not None
+            if _has_vials:
+                raise HTTPException(
+                    409,
+                    "Analyte slot peptides are locked once vials exist -- use "
+                    "Replace (or Clear) on the Analytes card so vial rows and "
+                    "the identity service follow the change.",
+                )
+        try:
+            _live_slots = _senaite_slots.fetch_analyte_slots_by_uid(uid)
+        except Exception as _slot_err:
+            raise HTTPException(
+                502,
+                f"Could not read analyte slots from SENAITE to check for a "
+                f"duplicate peptide -- try again. ({_slot_err})",
+            )
+        for _field, _value in _slot_writes.items():
+            _n = int(_ANALYTE_PEPTIDE_FIELD_RE.match(_field).group(1))
+            _new = _senaite_slots.normalize_slot_peptide(_value)
+            if not _new:
+                continue  # blanking a slot is never a duplicate
+            for _other, _title in _live_slots.items():
+                if _other != _n and _senaite_slots.normalize_slot_peptide(_title) == _new:
+                    raise HTTPException(
+                        409,
+                        f"{_value} already occupies slot {_other} -- a peptide "
+                        f"can appear in only one analyte slot.",
+                    )
     try:
         async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
             timeout=httpx.Timeout(30.0, connect=5.0),
