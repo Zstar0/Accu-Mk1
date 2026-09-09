@@ -227,3 +227,39 @@ def test_mixed_batch_scopes_updates_locks_and_alias_cleanup_independently(client
     assert received_aliases[0].alias == "Received Alias"
     received_row = db_session.query(LimsSample).filter_by(sample_id="P-8501").one()
     assert json.loads(received_row.coa_meta)["CoaCompanyName"] == "OldCo"  # locked -> unchanged
+
+
+# 9. sample-type mirror (Slice B.1): SampleType uid + SampleTypeTitle land in
+#    their columns; nothing else on the row moves; a dict-shaped SampleType
+#    (SENAITE reference form) is coerced to its uid.
+def test_sample_type_fields_mirror_to_columns(client, db_session):
+    db_session.add(LimsSample(
+        sample_id="P-8300", status="sample_due",
+        sample_type="uid-single", sample_type_title="Peptide",
+        analytes=json.dumps([{"name": "BPC-157", "declared_quantity": "5"}]),
+    ))
+    db_session.commit()
+    body = {"samples": [{"sample_id": "P-8300", "fields": {
+        "SampleType": "uid-blend", "SampleTypeTitle": "Peptide Blend",
+    }}]}
+    with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}):
+        r = client.post(URL, json=body, headers=HDR)
+    assert r.status_code == 200
+    assert r.json()["updated"] == ["P-8300"]
+    row = db_session.query(LimsSample).filter_by(sample_id="P-8300").one()
+    assert row.sample_type == "uid-blend"
+    assert row.sample_type_title == "Peptide Blend"
+    assert json.loads(row.analytes) == [{"name": "BPC-157", "declared_quantity": "5"}]  # untouched
+
+
+def test_sample_type_dict_form_is_coerced_to_uid(client, db_session):
+    db_session.add(LimsSample(sample_id="P-8301", status="sample_due", sample_type="uid-single"))
+    db_session.commit()
+    body = {"samples": [{"sample_id": "P-8301", "fields": {
+        "SampleType": {"uid": "uid-blend", "title": "Peptide Blend"},
+    }}]}
+    with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}):
+        r = client.post(URL, json=body, headers=HDR)
+    assert r.status_code == 200
+    row = db_session.query(LimsSample).filter_by(sample_id="P-8301").one()
+    assert row.sample_type == "uid-blend"

@@ -501,6 +501,11 @@ _FIELD_MIRROR_SCALARS = {
     "DeclaredTotalQuantity": "declared_total_quantity",
     "VerificationCode": "verification_code",
     "CompanyLogoUrl": "company_logo_url",
+    # Slice B.1 (customer Single↔Blend conversion): IS pushes the AR's new
+    # SampleType uid + title. sample_type_title feeds coa/sample_meta.py
+    # (COABuilder's SampleTypeTitle = COA layout), so it must follow.
+    "SampleType": "sample_type",
+    "SampleTypeTitle": "sample_type_title",
 }
 _ANALYTE_KEY_RE = re.compile(r"^Analyte([1-8])(Peptide|DeclaredQuantity)$")
 
@@ -516,6 +521,8 @@ def _apply_senaite_fields_to_row(db: Session, row: "LimsSample", fields: dict) -
     for senaite_key, column in _FIELD_MIRROR_SCALARS.items():
         if senaite_key in fields:
             v = fields[senaite_key]
+            if senaite_key == "SampleType" and isinstance(v, dict):
+                v = _extract_uid(v)  # SENAITE reference form {uid,title,...}
             setattr(row, column, str(v) if v not in (None, "") else None)
 
     coa_updates = {k: v for k, v in fields.items() if k in _COA_META_FIELDS}
