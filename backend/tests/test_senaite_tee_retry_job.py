@@ -151,3 +151,43 @@ def test_one_failing_row_does_not_poison_the_batch(db_session):
         stats = tee.run_retries(db_session, now=T0 + timedelta(seconds=1))
     assert stats["errors"] == 1 and stats["retried"] == 2
     assert at.call_count == 2
+
+
+def test_cancel_retry_past_assignment_is_senaite_only_without_posting(db_session):
+    """The read-back gate lives in the retry job too: an AR SENAITE will never
+    cancel is marked senaite_only instead of being re-POSTed to `gave_up`."""
+    from workflow.senaite_tee import run_retries
+    row, q = _queued(db_session, "P-RJ-11", "cancel", status="cancelled")
+    with patch("workflow.senaite_tee._ar_transition") as tr, \
+         patch("workflow.senaite_tee.read_back_state", return_value="to_be_verified"):
+        run_retries(db_session, now=T0)
+    tr.assert_not_called()
+    assert q.status == "senaite_only"
+
+
+def test_cancel_retry_refused_at_200_is_senaite_only_not_pending(db_session):
+    """Still cancellable by state, but SENAITE refuses at 200 (an analysis is
+    already assigned) — terminal, and the attempt counter does not advance."""
+    from workflow.senaite_tee import run_retries
+    row, q = _queued(db_session, "P-RJ-12", "cancel", status="cancelled", attempts=1)
+    with patch("workflow.senaite_tee._ar_transition") as tr, \
+         patch("workflow.senaite_tee.read_back_state", return_value="sample_received"):
+        run_retries(db_session, now=T0)
+    tr.assert_called_once_with("U-P-RJ-12", "cancel")
+    assert q.status == "senaite_only" and q.attempts == 1
+
+
+def test_naive_scheduler_clock_is_normalised_to_utc(db_session):
+    """main.py builds the scheduler with a naive `datetime.utcnow` clock; the
+    retry row's next_attempt_at is TIMESTAMPTZ, so the tee must normalise
+    before it compares or writes."""
+    from workflow.senaite_tee import _now, run_retries
+    naive = datetime(2026, 9, 9, 12, 1)
+    assert _now(naive).tzinfo is timezone.utc
+    row, q = _queued(db_session, "P-RJ-13", "verify", due=T0)
+    with patch("workflow.senaite_tee._ar_transition") as tr, \
+         patch("workflow.senaite_tee.read_back_state", return_value="sample_received"):
+        stats = run_retries(db_session, now=naive)
+    tr.assert_called_once_with("U-P-RJ-13", "verify")
+    assert stats["retried"] == 1
+    assert q.next_attempt_at.tzinfo is not None

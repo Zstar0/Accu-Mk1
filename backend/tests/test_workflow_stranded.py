@@ -176,3 +176,35 @@ def test_orphan_free_dedupe_uses_the_primary_anchor(db_session):
     run_check(db_session, now=NOW)
     assert len(db_session.execute(select(FlagFlag).where(FlagFlag.type == "workflow_stranded")).scalars().all()) == 1
     assert db_session.execute(select(FlagEntityLink)).scalars().all() == []
+
+
+def test_cancelled_after_publish_is_not_stranded(db_session):
+    """Spec §8 lets a published sample be cancelled natively (the COA stays
+    live), so the mk1 publish ledger row must not flag it forever. The same
+    sample still verified IS stranded."""
+    from workflow.stranded import find_stranded
+    _base(db_session)
+    p = LimsSample(sample_id="P-ST-11", status="cancelled", native_status="cancelled",
+                   date_received=datetime(2026, 9, 1, tzinfo=timezone.utc))
+    db_session.add(p)
+    db_session.flush()
+    db_session.add(LimsSampleTransition(lims_sample_pk=p.id, verb="publish", from_status="verified",
+                                        to_status="published", source="mk1", occurred_at=NOW))
+    db_session.flush()
+    assert find_stranded(db_session) == []
+    p.status = "verified"
+    p.native_status = "verified"
+    db_session.flush()
+    assert [s.condition for s in find_stranded(db_session)] == ["published_in_ledger_not_status"]
+
+
+def test_natively_cancelled_sample_with_verified_lines_is_not_stranded(db_session):
+    """Cancelled natively while SENAITE refused the cancel (senaite_only): the
+    mirror still reads sample_received and the lines are verified. That is the
+    documented divergence, not a status lagging its lines."""
+    from workflow.stranded import find_stranded
+    _base(db_session)
+    p = _parent_with_verified_line(db_session, "P-ST-12", "sample_received")
+    p.native_status = "cancelled"
+    db_session.flush()
+    assert find_stranded(db_session) == []

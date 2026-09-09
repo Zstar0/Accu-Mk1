@@ -152,3 +152,48 @@ def test_tee_advances_only_for_senaite_representable_states(db_session):
     with patch("workflow.senaite_tee.tee_now") as tn:
         engine.tee_advances(db_session, row, fired)
     tn.assert_called_once_with(db_session, row, "verify")
+
+
+def test_cancel_refused_at_200_is_senaite_only_not_a_retry(db_session):
+    """SENAITE's guard_cancel allows cancel only while every analysis is
+    unassigned/registered, so a `sample_received` AR whose vials are already
+    on a worksheet answers 200 and stays put. Mk1 has cancelled its own rows
+    already and no retry changes SENAITE's analysis states — the row is a
+    documented senaite_only divergence, never a pending retry."""
+    from workflow import senaite_tee as tee
+    from models import LimsSenaiteTeeRetry
+    row = _sample(db_session, sid="P-TEE-11", uid="U-TEE-11", status="cancelled")
+    with patch("workflow.senaite_tee._ar_transition") as tr, \
+         patch("workflow.senaite_tee.read_back_state", return_value="sample_received"):
+        assert tee.tee_now(db_session, row, "cancel") == "senaite_only"
+    tr.assert_called_once_with("U-TEE-11", "cancel")
+    q = db_session.execute(select(LimsSenaiteTeeRetry)).scalar_one()
+    assert (q.verb, q.status, q.attempts) == ("cancel", "senaite_only", 0)
+    assert "sample_received" in (q.last_error or "")
+
+
+def test_cancel_from_to_be_verified_is_senaite_only_without_posting(db_session):
+    """`to_be_verified` has no `cancel` exit in senaite_sample_workflow at all
+    — don't even spend the POST."""
+    from workflow import senaite_tee as tee
+    from models import LimsSenaiteTeeRetry
+    row = _sample(db_session, sid="P-TEE-12", uid="U-TEE-12", status="cancelled")
+    with patch("workflow.senaite_tee._ar_transition") as tr, \
+         patch("workflow.senaite_tee.read_back_state", return_value="to_be_verified"):
+        assert tee.tee_now(db_session, row, "cancel") == "senaite_only"
+    tr.assert_not_called()
+    q = db_session.execute(select(LimsSenaiteTeeRetry)).scalar_one()
+    assert (q.verb, q.status) == ("cancel", "senaite_only")
+
+
+def test_cancel_transport_error_still_retries(db_session):
+    """Only a 200-refusal is terminal; a transport failure proves nothing
+    about SENAITE's guard, so it stays a pending retry."""
+    from workflow import senaite_tee as tee
+    from models import LimsSenaiteTeeRetry
+    row = _sample(db_session, sid="P-TEE-13", uid="U-TEE-13", status="cancelled")
+    with patch("workflow.senaite_tee._ar_transition", side_effect=ConnectionError("down")), \
+         patch("workflow.senaite_tee.read_back_state", return_value="sample_received"):
+        assert tee.tee_now(db_session, row, "cancel") == "pending"
+    q = db_session.execute(select(LimsSenaiteTeeRetry)).scalar_one()
+    assert q.status == "pending" and "ConnectionError" in (q.last_error or "")

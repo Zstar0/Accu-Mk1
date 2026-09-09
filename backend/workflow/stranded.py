@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Optional
 
@@ -42,7 +42,10 @@ class Stranded:
 
 
 def _recent_samples(db: Session, since_days: int) -> list[LimsSample]:
-    cutoff = datetime.now(timezone.utc) - timedelta(days=since_days)
+    # `LimsSample.date_received` is a NAIVE `DateTime` column (models.py), so
+    # the cutoff has to be naive UTC too — an aware cutoff compares against a
+    # naive column and is only accidentally right.
+    cutoff = datetime.utcnow() - timedelta(days=since_days)
     return db.execute(
         select(LimsSample).where(LimsSample.date_received >= cutoff)
     ).scalars().all()
@@ -83,11 +86,17 @@ def find_stranded(db: Session, *, since_days: int = 90) -> list[Stranded]:
     out: list[Stranded] = []
     for s in _recent_samples(db, since_days):
         condition: Optional[str] = None
-        if s.status in _BEHIND_VERIFIED:
+        # A cancelled sample is a deliberate dead end (spec §8): its lines stay
+        # wherever they were, and a published-then-cancelled sample keeps its
+        # mk1 publish ledger row while the COA stays live. Neither is a
+        # stranding — only the two mirror/tee conditions still apply.
+        dead = (s.status == "cancelled") or (s.native_status == "cancelled")
+        if not dead and s.status in _BEHIND_VERIFIED:
             states = _live_parent_line_states(db, s)
             if states and all(v == "verified" for v in states.values()):
                 condition = "lines_verified_status_behind"
-        if condition is None and s.id in published_pks and s.status != "published":
+        if (condition is None and not dead
+                and s.id in published_pks and s.status != "published"):
             condition = "published_in_ledger_not_status"
         if condition is None and mk1 and s.native_status and s.native_status != s.status:
             condition = "native_mirror_disagree"

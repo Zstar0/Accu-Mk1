@@ -57,3 +57,52 @@ def test_is_event_heal_skipped_in_mk1(db_session):
     assert row.status == "sample_received"
     assert stats["healed"] == 0
     assert stats.get("skipped_authority") == 1
+
+
+def test_refresh_logs_senaite_state_as_reconcile_in_mk1(db_session):
+    """The status column is the engine's under mk1 authority, but SENAITE's
+    live review_state must still be LOGGED — that row is how a SENAITE-UI
+    transition after the flip shows up as a divergence (spec §4.2) and what
+    §10's rollback sweep reads."""
+    from sqlalchemy import select
+    from models import LimsSampleTransition
+    from sub_samples.service import _refresh_parent_from_senaite
+    _mode(db_session, "mk1")
+    row = LimsSample(sample_id="P-GATE-4", status="sample_received",
+                     external_lims_uid="U-GATE-4")
+    db_session.add(row)
+    db_session.flush()
+    with patch("sub_samples.senaite.fetch_parent_metadata", return_value=dict(META, uid="U-GATE-4")):
+        _refresh_parent_from_senaite(db_session, row)
+    assert row.status == "sample_received"        # engine still owns the column
+    rows = db_session.execute(select(LimsSampleTransition).where(
+        LimsSampleTransition.lims_sample_pk == row.id,
+        LimsSampleTransition.source == "reconcile")).scalars().all()
+    assert len(rows) == 1
+    assert (rows[0].to_status, rows[0].from_status) == ("verified", "sample_received")
+
+
+def test_is_event_heal_accepts_a_runtime_catalog_state(db_session):
+    """spec §7.1: the heal guard reads the LIVE catalog, not the code
+    constant, so a state added in the Settings -> Workflow pane heals from IS
+    events in senaite mode. The two SENAITE-only legacy values the catalog
+    doesn't carry (`rejected`, `stored`) must keep healing too."""
+    from models import LimsWorkflowState
+    from workflow.catalog import clear_sample_state_cache
+    from workflow.is_event_stream import _heal_status
+    _mode(db_session, "senaite")
+    db_session.add(LimsWorkflowState(entity_scope="sample", slug="on_hold", label="On hold",
+                                     category="active", sort_order=55, is_builtin=False,
+                                     is_active=True))
+    row = LimsSample(sample_id="P-GATE-5", status="sample_received")
+    db_session.add(row)
+    db_session.flush()
+    clear_sample_state_cache()
+    stats = {"healed": 0, "errors": 0}
+    now = datetime.utcnow()          # occurred_at is NAIVE UTC (is_event_stream docstring)
+    _heal_status(db_session, row.id, "on_hold", now, stats)
+    assert row.status == "on_hold" and stats["healed"] == 1
+    _heal_status(db_session, row.id, "rejected", now, stats)
+    assert row.status == "rejected" and stats["healed"] == 2
+    _heal_status(db_session, row.id, "analyzing", now, stats)      # IS vocab, never
+    assert row.status == "rejected" and stats["healed"] == 2

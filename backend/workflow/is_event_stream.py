@@ -98,16 +98,19 @@ def _heal_status(db: Session, sample_pk: int, new_status: str,
         (worksheet_assigned -> 'analyzing') that are NOT review_states;
         writing them poisons a column every read surface compares against
         SENAITE vocabulary. The transition LOG still records the raw event —
-        only the status-column write is gated.
+        only the status-column write is gated. The vocabulary comes from the
+        LIVE catalog (spec §7.1), the same operand `heal_sample_status` reads,
+        so a state added in the Settings -> Workflow pane heals too.
 
     Heal failure never breaks the sync loop (same contract as the recorder)."""
-    from workflow.sample_log import SAMPLE_REVIEW_STATE_WHITELIST
+    from workflow.sample_log import _LEGACY_MIRROR_EXTRA
     try:
         from workflow.authority import sample_status_authority
+        from workflow.catalog import sample_state_slugs
         if sample_status_authority(db) == "mk1":
             stats["skipped_authority"] = stats.get("skipped_authority", 0) + 1
             return
-        if new_status not in SAMPLE_REVIEW_STATE_WHITELIST:
+        if new_status not in (sample_state_slugs(db) | _LEGACY_MIRROR_EXTRA):
             return
         sample = db.get(LimsSample, sample_pk)
         if sample is None or not new_status or sample.status == new_status:
