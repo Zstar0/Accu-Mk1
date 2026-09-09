@@ -156,6 +156,7 @@ function report(): Report {
           gated: 260,
           gated_late: 152,
           gated_late_pct: 40.5,
+          thin: false,
         },
         {
           k: 'ster',
@@ -169,6 +170,21 @@ function report(): Report {
           gated: 325,
           gated_late: 146,
           gated_late_pct: 38.9,
+          thin: false,
+        },
+        {
+          k: 'hm',
+          name: 'Heavy metals',
+          department: 'analytical',
+          n: 5,
+          med: 14.2,
+          p90: 26.0,
+          over_target: 4,
+          over_pct: 80,
+          gated: 2,
+          gated_late: 2,
+          gated_late_pct: 50,
+          thin: true,
         },
       ],
       trend: [
@@ -208,6 +224,7 @@ function report(): Report {
       wait_n: 460,
       wait_over_day: 158,
       min_late_for_trend: 5,
+      min_timed_for_family: 20,
     },
     at_risk: {
       total: 320,
@@ -356,6 +373,28 @@ describe('SlaPerformanceReport', () => {
     expect(rows.some(t => t.includes('HPLC panel') && t.includes('19.1'))).toBe(
       true
     )
+  })
+
+  it('marks a department with too few timed samples and drops its red flag', async () => {
+    // Heavy metals ran 5 samples. An 80% over-target on that many swings on one
+    // result -- the row still shows, but it must not read as a finding.
+    renderPage()
+    await waitFor(() =>
+      expect(
+        screen.getByRole('table', { name: 'Departments' })
+      ).toBeInTheDocument()
+    )
+    const rows = within(
+      screen.getByRole('table', { name: 'Departments' })
+    ).getAllByRole('row')
+    const hm = rows.find(r => (r.textContent ?? '').includes('Heavy metals'))
+    expect(hm).toBeDefined()
+    expect(hm?.textContent).toContain('too few')
+    // 80% clears the 25% threshold that reddens a real row; a thin one is dimmed.
+    expect(hm?.querySelector('.text-red-400')).toBeNull()
+    const ster = rows.find(r => (r.textContent ?? '').includes('Sterility'))
+    expect(ster?.textContent).not.toContain('too few')
+    expect(ster?.querySelector('.text-red-400')).not.toBeNull()
   })
 
   it('shows the cohort table with the honest of-received rate', async () => {

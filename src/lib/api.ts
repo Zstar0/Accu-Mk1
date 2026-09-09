@@ -6343,6 +6343,7 @@ export interface SlaPerfGatingFamily {
   gated: number // times it finished last
   gated_late: number // times it finished last on a LATE sample
   gated_late_pct: number
+  thin: boolean // too few timed samples for the percentages to mean anything
 }
 
 /** One publication month of the gating cut. Family keys are data, not schema:
@@ -6366,6 +6367,7 @@ export interface SlaPerfGating {
   wait_n: number
   wait_over_day: number
   min_late_for_trend: number
+  min_timed_for_family: number
 }
 
 export interface SlaPerfOpenRow {

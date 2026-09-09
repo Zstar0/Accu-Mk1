@@ -64,6 +64,7 @@ const report = {
     wait_n: 0,
     wait_over_day: 0,
     min_late_for_trend: 5,
+    min_timed_for_family: 20,
   },
   at_risk: { total: 0, late: 0, buckets: [], status: {}, rows: [] },
   filters: { client: null, order: null, departments: [], families: [] },

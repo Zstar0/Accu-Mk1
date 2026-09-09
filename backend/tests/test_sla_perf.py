@@ -389,3 +389,62 @@ def test_an_empty_window_reports_zeroes_rather_than_missing_keys():
     out = build()
     for key in ("n", "rate", "med", "p90", "ontime", "late"):
         assert out["kpi"]["last30"][key] == 0
+
+
+# ── keyword classification across shadow + canonical rows ───────────────────
+def test_a_shadow_row_with_no_category_does_not_steal_the_classification():
+    """Prod carries a shadow row and a canonical row per (sample, keyword).
+
+    Only the canonical row has a category, and for a keyword the family sets do
+    not name (``MOISTURE-KF``) the category is the *only* thing that classifies
+    it. The engine builds its (sample, keyword) -> family map in one pass over
+    both rows, so whichever row it happens to see last must not win.
+    """
+    rec = datetime(2026, 7, 6, 16, 0)  # Mon 09:00 lab
+    s = sample(1, "P-1", rec)
+    hplc_done = datetime(2026, 7, 7, 20, 0)  # Tue 13:00 lab
+    shadow = AnalysisIn(sample_pk=1, keyword="MOISTURE-KF", category=None,
+                        verified_at=None, service_id=10)
+    canonical = AnalysisIn(sample_pk=1, keyword="MOISTURE-KF", category="HPLC",
+                           verified_at=hplc_done, service_id=10)
+    ster_done = datetime(2026, 7, 8, 20, 0)  # Wed 13:00 lab, finishes last
+    for rows in ([shadow, canonical], [canonical, shadow]):  # either DB order
+        out = build(samples=[s], analyses=[*rows, ster(1, ster_done)],
+                    coas=[coa("P-1", datetime(2026, 7, 9, 20, 0))])
+        fams = {f["k"]: f for f in out["gating"]["families"]}
+        # Classified by its category, not dropped into "other" by the NULL row.
+        assert "hplc" in fams, f"row order {rows} lost the HPLC classification"
+        assert fams["hplc"]["n"] == 1
+        # And the gating cut still lands on the family that finished last.
+        assert fams["ster"]["gated"] == 1
+
+
+# ── thin departments ────────────────────────────────────────────────────────
+def test_a_department_with_too_few_timed_samples_is_marked_thin():
+    """Heavy metals ran 5 samples in prod. Its 0%/100% must not read as a trend.
+
+    The row still renders -- hiding a department would be its own distortion --
+    but it carries a flag the page uses to dim it and drop the red threshold.
+    """
+    from sla_perf import MIN_TIMED_FOR_FAMILY
+
+    samples, analyses, coas_in = [], [], []
+    rec = datetime(2026, 7, 6, 16, 0)
+    hplc_done = datetime(2026, 7, 7, 20, 0)
+    ster_done = datetime(2026, 7, 8, 20, 0)
+    # Enough sterility+HPLC pairs to clear the floor, with HM on only three.
+    for pk in range(MIN_TIMED_FOR_FAMILY):
+        sid = f"P-{pk}"
+        samples.append(sample(pk, sid, rec))
+        analyses += [hplc(pk, hplc_done), ster(pk, ster_done)]
+        if pk < 3:
+            analyses.append(AnalysisIn(sample_pk=pk, keyword="LEAD-PPM",
+                                       category="Heavy Metals",
+                                       verified_at=hplc_done, service_id=70))
+        coas_in.append(coa(sid, datetime(2026, 7, 9, 20, 0)))
+    out = build(samples=samples, analyses=analyses, coas=coas_in)
+    fams = {f["k"]: f for f in out["gating"]["families"]}
+    assert fams["hm"]["n"] == 3 and fams["hm"]["thin"] is True
+    assert fams["ster"]["n"] == MIN_TIMED_FOR_FAMILY
+    assert fams["ster"]["thin"] is False
+    assert out["gating"]["min_timed_for_family"] == MIN_TIMED_FOR_FAMILY

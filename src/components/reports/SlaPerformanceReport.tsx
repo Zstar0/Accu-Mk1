@@ -830,7 +830,13 @@ function ReportBody({ data }: { data: Report }) {
                   {gating.families.map(f => (
                     <tr
                       key={f.k}
-                      className="border-b border-border/20 hover:bg-muted/30"
+                      className={cn(
+                        'border-b border-border/20 hover:bg-muted/30',
+                        // A department with a handful of timed samples still
+                        // gets a row -- hiding it would be its own lie -- but
+                        // its percentages are dimmed and never flagged red.
+                        f.thin && 'text-muted-foreground'
+                      )}
                     >
                       <td className={cn(TD, 'text-left whitespace-nowrap')}>
                         <span
@@ -841,6 +847,14 @@ function ReportBody({ data }: { data: Report }) {
                           }}
                         />
                         {f.name}
+                        {f.thin && (
+                          <span
+                            className="ml-1.5 text-[10px] uppercase tracking-wide text-muted-foreground"
+                            title={`Fewer than ${gating.min_timed_for_family} timed samples`}
+                          >
+                            too few
+                          </span>
+                        )}
                       </td>
                       <td className={TD}>{fmt(f.n)}</td>
                       <td className={TD}>{f1(f.med)}</td>
@@ -848,7 +862,9 @@ function ReportBody({ data }: { data: Report }) {
                       <td
                         className={cn(
                           TD,
-                          f.over_pct > 25 ? 'text-red-400' : undefined
+                          !f.thin && f.over_pct > 25
+                            ? 'text-red-400'
+                            : undefined
                         )}
                       >
                         {f1(f.over_pct)}%
@@ -858,7 +874,9 @@ function ReportBody({ data }: { data: Report }) {
                       <td
                         className={cn(
                           TD,
-                          f.gated_late_pct > 33 ? 'text-red-400' : undefined
+                          !f.thin && f.gated_late_pct > 33
+                            ? 'text-red-400'
+                            : undefined
                         )}
                       >
                         {f1(f.gated_late_pct)}%
@@ -872,8 +890,11 @@ function ReportBody({ data }: { data: Report }) {
               Counted over {fmt(gating.mixed)} delivered samples carrying two or
               more departments, {fmt(gating.late_mixed)} of them late. A
               department finishing last on fewer late samples does not by itself
-              mean it sped up — another department may now finish after it. Read
-              it with the median column.
+              mean it sped up — another department may now finish after it. Rows
+              marked <span className="uppercase tracking-wide">too few</span>{' '}
+              have under {fmt(gating.min_timed_for_family)} timed samples: their
+              percentages swing on a single result and are not a trend. Read it
+              with the median column.
             </p>
           </>
         ) : (

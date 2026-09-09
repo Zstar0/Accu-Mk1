@@ -75,6 +75,7 @@ CURVE_MAX = 80        # everything slower lands in the final bin
 RECENT_DAYS = 90      # "how we run today" curve
 KPI_DAYS = 30
 MIN_LATE_FOR_TREND = 5  # a month needs this many late samples to carry a claim
+MIN_TIMED_FOR_FAMILY = 20  # below this a department's numbers are noise, not a trend
 
 MONTHS_SHORT = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
@@ -215,12 +216,22 @@ def build_sla_performance(
     # ── per-sample analysis facts ───────────────────────────────────────────
     # De-duplicate on (sample, keyword) across shadow + canonical provenance,
     # keeping the latest verified_at: only canonical rows carry one.
+    # One pass over the analysis rows. The (pk, keyword) -> family map is built
+    # here rather than re-derived later: classifying on the way past is free,
+    # and re-scanning `analyses` per (sample, keyword) would be quadratic over
+    # tens of thousands of prod rows.
     verified_by_keyword: dict[int, dict[str, Optional[datetime]]] = defaultdict(dict)
+    family_of_keyword: dict[tuple[int, str], str] = {}
     families_of: dict[int, set] = defaultdict(set)
     services_of: dict[int, set] = defaultdict(set)
     for a in analyses:
         fam = classify_keyword(a.keyword, a.category)
         families_of[a.sample_pk].add(fam)
+        # A shadow row can carry a NULL category where the canonical row has one,
+        # so keep the classification that resolved to a real family.
+        key = (a.sample_pk, a.keyword)
+        if key not in family_of_keyword or fam != "other":
+            family_of_keyword[key] = fam
         if a.service_id is not None:
             services_of[a.sample_pk].add(a.service_id)
         seen = verified_by_keyword[a.sample_pk].get(a.keyword)
@@ -234,7 +245,7 @@ def build_sla_performance(
         for kw, v in by_kw.items():
             if v is None:
                 continue
-            fam = _family_of_keyword(kw, analyses, pk)
+            fam = family_of_keyword.get((pk, kw)) or classify_keyword(kw, None)
             prev = verified_by_family[pk].get(fam)
             if prev is None or v > prev:
                 verified_by_family[pk][fam] = v
@@ -360,14 +371,6 @@ def _naive(dt: datetime) -> datetime:
     """Drop tzinfo. Integration Service timestamps arrive tz-aware; Mk1's are naive
     UTC by codebase convention, and the two are compared against each other."""
     return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
-
-
-def _family_of_keyword(keyword: str, analyses: Iterable[AnalysisIn], pk: int) -> str:
-    """Classify a keyword using the category recorded on that sample's row."""
-    for a in analyses:
-        if a.sample_pk == pk and a.keyword == keyword:
-            return classify_keyword(keyword, a.category)
-    return classify_keyword(keyword, None)
 
 
 def _group_tier_for(service_ids: set, tier_of_service: dict) -> Optional[TierIn]:
@@ -530,6 +533,7 @@ def _gating(delivered: Sequence[dict], bh) -> dict:
         families_out.append({
             "k": fam,
             "name": FAMILY_NAMES[fam],
+            "thin": len(vals) < MIN_TIMED_FOR_FAMILY,
             "department": DEPARTMENT_OF_FAMILY.get(fam),
             "n": len(vals),
             "med": round(median(vals), 1),
@@ -563,6 +567,7 @@ def _gating(delivered: Sequence[dict], bh) -> dict:
         "wait_n": len(waits),
         "wait_over_day": sum(1 for w in waits if w > 8),
         "min_late_for_trend": MIN_LATE_FOR_TREND,
+        "min_timed_for_family": MIN_TIMED_FOR_FAMILY,
     }
 
 

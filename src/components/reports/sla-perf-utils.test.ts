@@ -218,6 +218,7 @@ describe('hasGatingSignal', () => {
     wait_n: 0,
     wait_over_day: 0,
     min_late_for_trend: 5,
+    min_timed_for_family: 20,
   }
 
   it('is false with no late mixed samples', () => {
