@@ -127,6 +127,43 @@ def _mark_senaite_only(db: Session, sample: LimsSample, verb: str, *, note: str,
     return row
 
 
+def _tee_cancel_once(db: Session, sample: LimsSample, uid: str, *,
+                     now: Optional[datetime]) -> str:
+    """ONE best-effort cancel attempt. Returns 'done' or 'senaite_only'.
+
+    Mk1 OWNS cancel (Handler ruling 2026-09-09): once Accu-Mk1 has cancelled a
+    sample, Mk1's state is authoritative and SENAITE is NOT kept in sync. The
+    tee is a courtesy so a still-cancellable AR follows along; every other
+    outcome -- a `guard_cancel` refusal (SENAITE allows cancel only while every
+    analysis is unassigned/registered) or a transport failure -- is recorded as
+    `senaite_only` and never retried. A deliberate cancellation must never
+    become a `senaite_tee_gave_up` stranding for the lab to chase.
+    """
+    try:
+        current = read_back_state(sample)
+        if current == "cancelled":
+            _resolve_done(db, sample, "cancel")
+            return "done"
+        if current not in SENAITE_CANCELLABLE_STATES:
+            _mark_senaite_only(db, sample, "cancel", now=now,
+                               note=f"SENAITE refused cancel from {current!r}")
+            return "senaite_only"
+        _ar_transition(uid, "cancel")
+        actual = read_back_state(sample)
+    except Exception as e:
+        # Transport/auth/parse: unlike verify/publish this is NOT retried --
+        # Mk1's cancel already stands and nothing downstream waits on SENAITE.
+        _mark_senaite_only(db, sample, "cancel", now=now,
+                           note=f"cancel not teed ({type(e).__name__}: {e})")
+        return "senaite_only"
+    if actual == "cancelled":
+        _resolve_done(db, sample, "cancel")
+        return "done"
+    _mark_senaite_only(db, sample, "cancel", now=now,
+                       note=f"SENAITE refused cancel from {current!r}")
+    return "senaite_only"
+
+
 def tee_now(db: Session, sample: LimsSample, verb: str, *,
             now: Optional[datetime] = None) -> str:
     """Tee `verb` to SENAITE and prove it. Returns 'done' | 'pending' |
@@ -141,18 +178,11 @@ def tee_now(db: Session, sample: LimsSample, verb: str, *,
     if not uid:
         return "skipped"
     expected = EXPECTED_AR_STATES[verb]
-    current = ""
     try:
+        if verb == "cancel":
+            # Mk1 owns cancel — one courtesy attempt, never a retry.
+            return _tee_cancel_once(db, sample, uid, now=now)
         try:
-            if verb == "cancel":
-                current = read_back_state(sample)
-                if current == "cancelled":
-                    _resolve_done(db, sample, verb)
-                    return "done"
-                if current not in SENAITE_CANCELLABLE_STATES:
-                    _mark_senaite_only(db, sample, verb, now=now,
-                                       note=f"SENAITE refused cancel from {current!r}")
-                    return "senaite_only"
             _ar_transition(uid, verb)
             actual = read_back_state(sample)
         except Exception as e:  # transport, auth, parse — all retryable
@@ -161,12 +191,6 @@ def tee_now(db: Session, sample: LimsSample, verb: str, *,
         if actual == expected:
             _resolve_done(db, sample, verb)
             return "done"
-        if verb == "cancel":
-            # A 200-refusal: SENAITE's guard said no (an analysis is already
-            # assigned/submitted). Terminal — a retry can only repeat it.
-            _mark_senaite_only(db, sample, verb, now=now,
-                               note=f"SENAITE refused cancel from {current!r}")
-            return "senaite_only"
         enqueue_retry(db, sample, verb, now=now,
                       error=f"read-back {actual!r} != expected {expected!r}")
         return "pending"
@@ -184,21 +208,12 @@ def _attempt(db: Session, sample: LimsSample, row: LimsSenaiteTeeRetry, *,
         # completed, so settle it instead of burning attempts into gave_up.
         _mark_senaite_only(db, sample, row.verb, now=now, note="no SENAITE uid — nothing to tee")
         return "senaite_only"
+    if row.verb == "cancel":
+        # Mk1 owns cancel: settle a legacy pending row, never retry it.
+        return _tee_cancel_once(db, sample, uid, now=now)
     expected = row.expected_state
     current = ""
     try:
-        if row.verb == "cancel":
-            # Same guard as tee_now: read back FIRST, and never turn a refusal
-            # into another attempt (the transport-error path below still does).
-            current = read_back_state(sample)
-            if current == "cancelled":
-                row.status = "done"
-                db.flush()
-                return "done"
-            if current not in SENAITE_CANCELLABLE_STATES:
-                _mark_senaite_only(db, sample, row.verb, now=now,
-                                   note=f"SENAITE refused cancel from {current!r}")
-                return "senaite_only"
         if row.verb == "publish":
             # PB-0462 rule: SENAITE refuses publish while the AR is unverified
             # (its own auto-verify miscounts once an analysis was rejected).
@@ -219,10 +234,6 @@ def _attempt(db: Session, sample: LimsSample, row: LimsSenaiteTeeRetry, *,
         row.status = "done"
         db.flush()
         return "done"
-    if row.verb == "cancel":
-        _mark_senaite_only(db, sample, row.verb, now=now,
-                           note=f"SENAITE refused cancel from {current!r}")
-        return "senaite_only"
     enqueue_retry(db, sample, row.verb, now=now,
                   error=f"read-back {actual!r} != expected {expected!r}")
     return row.status

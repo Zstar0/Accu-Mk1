@@ -208,3 +208,31 @@ def test_natively_cancelled_sample_with_verified_lines_is_not_stranded(db_sessio
     p.native_status = "cancelled"
     db_session.flush()
     assert find_stranded(db_session, now=NOW) == []
+
+
+def _gave_up(db, sid, status):
+    """A sample carrying a gave_up publish tee row."""
+    row = LimsSample(sample_id=sid, status=status, native_status=status,
+                     date_received=datetime(2026, 9, 1, tzinfo=timezone.utc))
+    db.add(row)
+    db.flush()
+    db.add(LimsSenaiteTeeRetry(
+        lims_sample_pk=row.id, verb="publish", expected_state="published",
+        status="gave_up", attempts=8, next_attempt_at=NOW))
+    db.flush()
+    return row
+
+
+def test_cancelled_sample_never_flags_a_gave_up_tee(db_session):
+    """Mk1 owns cancel (Handler ruling 2026-09-09): SENAITE is not kept in
+    sync for a cancelled sample, so a gave_up tee row on one is not a
+    stranding for the lab to chase. The same row on a live sample still is."""
+    from workflow.stranded import find_stranded
+    _base(db_session)
+    _gave_up(db_session, "P-ST-90", "cancelled")
+    assert find_stranded(db_session, now=NOW) == []
+
+    _gave_up(db_session, "P-ST-91", "verified")
+    found = find_stranded(db_session, now=NOW)
+    assert [(f.sample.sample_id, f.condition) for f in found] == [
+        ("P-ST-91", "senaite_tee_gave_up")]

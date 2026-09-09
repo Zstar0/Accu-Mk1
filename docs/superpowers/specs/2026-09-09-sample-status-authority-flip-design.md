@@ -233,10 +233,16 @@ rules:
 
 - **publish refused because the AR is `to_be_verified`** (the PB-0462 class):
   issue `verify` first, read back, then `publish` in the same attempt.
-- **cancel refused by SENAITE** (its `guard_cancel` allows cancel only while
-  every analysis is unassigned/registered — i.e. before any worksheet
-  assignment): mark `senaite_only` immediately, no retry — this is a
-  documented SENAITE-only pathway, and the badge is already right.
+- **cancel is Mk1-owned and never retried** (Handler ruling 2026-09-09: "if we
+  cancel in accumk1, accumk1 owns the state and we no longer need to keep
+  state in sync with senaite"). The tee fires ONE best-effort attempt so a
+  still-cancellable AR follows along; every other outcome — a `guard_cancel`
+  refusal (SENAITE allows cancel only while every analysis is
+  unassigned/registered, i.e. before any worksheet assignment) *or a transport
+  failure* — is recorded `senaite_only` and never queued. A deliberate
+  cancellation must never age into a `senaite_tee_gave_up` stranding, so the
+  detector also ignores gave-up tee rows on a cancelled sample. Cancel is the
+  one verb where SENAITE divergence is expected and closed, not tracked.
   *(Corrected 2026-09-09 at final review: this section first said SENAITE
   forbids cancel only "after verification". Read from senaite.core in the
   local container, `guard_cancel` returns True only when EVERY analysis is

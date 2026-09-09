@@ -92,10 +92,13 @@ def find_stranded(db: Session, *, since_days: int = 90,
     out: list[Stranded] = []
     for s in _recent_samples(db, since_days, now):
         condition: Optional[str] = None
-        # A cancelled sample is a deliberate dead end (spec §8): its lines stay
-        # wherever they were, and a published-then-cancelled sample keeps its
-        # mk1 publish ledger row while the COA stays live. Neither is a
-        # stranding — only the two mirror/tee conditions still apply.
+        # A cancelled sample is a deliberate dead end and Mk1 owns its state
+        # (Handler ruling 2026-09-09): its lines stay wherever they were, a
+        # published-then-cancelled sample keeps its mk1 publish ledger row
+        # while the COA stays live, and its SENAITE side is intentionally NOT
+        # kept in sync — so none of those is a stranding to chase. Only
+        # `native_mirror_disagree` still applies (native != mirror on a
+        # cancelled sample means one of the two writes did not land).
         dead = (s.status == "cancelled") or (s.native_status == "cancelled")
         if not dead and s.status in _BEHIND_VERIFIED:
             states = _live_parent_line_states(db, s)
@@ -106,7 +109,7 @@ def find_stranded(db: Session, *, since_days: int = 90,
             condition = "published_in_ledger_not_status"
         if condition is None and mk1 and s.native_status and s.native_status != s.status:
             condition = "native_mirror_disagree"
-        if condition is None and s.id in gave_up_pks:
+        if condition is None and not dead and s.id in gave_up_pks:
             condition = "senaite_tee_gave_up"
         if condition is not None:
             out.append(Stranded(sample=s, condition=condition,

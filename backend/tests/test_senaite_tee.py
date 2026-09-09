@@ -186,14 +186,31 @@ def test_cancel_from_to_be_verified_is_senaite_only_without_posting(db_session):
     assert (q.verb, q.status) == ("cancel", "senaite_only")
 
 
-def test_cancel_transport_error_still_retries(db_session):
-    """Only a 200-refusal is terminal; a transport failure proves nothing
-    about SENAITE's guard, so it stays a pending retry."""
+def test_cancel_transport_error_is_senaite_only_never_pending(db_session):
+    """Mk1 OWNS cancel (Handler ruling 2026-09-09): once Accu-Mk1 has
+    cancelled the sample, SENAITE is not kept in sync. A transport failure is
+    therefore terminal like a guard refusal -- recorded as senaite_only, never
+    a pending retry that could age into a false `senaite_tee_gave_up`
+    stranding for a cancellation the lab made on purpose."""
     from workflow import senaite_tee as tee
     from models import LimsSenaiteTeeRetry
     row = _sample(db_session, sid="P-TEE-13", uid="U-TEE-13", status="cancelled")
     with patch("workflow.senaite_tee._ar_transition", side_effect=ConnectionError("down")), \
          patch("workflow.senaite_tee.read_back_state", return_value="sample_received"):
-        assert tee.tee_now(db_session, row, "cancel") == "pending"
+        assert tee.tee_now(db_session, row, "cancel") == "senaite_only"
     q = db_session.execute(select(LimsSenaiteTeeRetry)).scalar_one()
-    assert q.status == "pending" and "ConnectionError" in (q.last_error or "")
+    assert q.status == "senaite_only" and "ConnectionError" in (q.last_error or "")
+    assert q.attempts == 0            # nothing queued, nothing to age
+
+
+def test_verify_transport_error_still_retries(db_session):
+    """The cancel rule is cancel-only: verify/publish still queue a retry on a
+    transport failure (the tee is how SENAITE catches up for those verbs)."""
+    from workflow import senaite_tee as tee
+    from models import LimsSenaiteTeeRetry
+    row = _sample(db_session, sid="P-TEE-14", uid="U-TEE-14", status="verified")
+    with patch("workflow.senaite_tee._ar_transition", side_effect=ConnectionError("down")), \
+         patch("workflow.senaite_tee.read_back_state", return_value="to_be_verified"):
+        assert tee.tee_now(db_session, row, "verify") == "pending"
+    q = db_session.execute(select(LimsSenaiteTeeRetry)).scalar_one()
+    assert (q.verb, q.status) == ("verify", "pending")

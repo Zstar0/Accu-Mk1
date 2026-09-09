@@ -208,3 +208,19 @@ def test_row_for_sample_without_senaite_uid_settles_senaite_only(db_session):
     assert "no SENAITE uid" in (q.last_error or "")
     tr.assert_not_called()
     rb.assert_not_called()
+
+
+def test_legacy_pending_cancel_row_settles_without_retrying(db_session):
+    """Rows queued before the Mk1-owns-cancel ruling must settle, not retry:
+    a transport failure on the attempt marks the row senaite_only rather than
+    burning attempts toward gave_up."""
+    from workflow.senaite_tee import run_retries
+    row, q = _queued(db_session, "P-RJ-13", "cancel", status="cancelled", attempts=3)
+    row.native_status = "cancelled"
+    db_session.flush()
+    with patch("workflow.senaite_tee._ar_transition", side_effect=ConnectionError("down")), \
+         patch("workflow.senaite_tee.read_back_state", return_value="sample_received"):
+        run_retries(db_session, now=T0)
+    db_session.refresh(q)
+    assert q.status == "senaite_only"
+    assert q.attempts == 3            # not incremented -- no new attempt queued
