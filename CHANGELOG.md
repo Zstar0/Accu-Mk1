@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Lab Throughput report** (`GET /reports/throughput`, [ThroughputReport.tsx](src/components/reports/ThroughputReport.tsx)) under Reports → Lab Throughput. Tests received per day by family (HPLC panel / sterility PCR / endotoxin LAL / Bac Water panel), samples and vials received, primary + additional COA output and samples completed, HPLC bench vials by instrument, open backlog with age/status buckets, day-of-week profile and add-on attach rate; the KPI row compares the last 30 days with the prior 30 per business day. Unlike the sibling reports, days are bucketed server-side in the lab timezone by a pure engine (`backend/throughput.py`) that de-duplicates analyses on (sample, keyword) across shadow + canonical provenance; test orders are hidden by default and `include_test_orders=true` refetches with them. In-app port of the offline `lab-throughput-report` skill. Spec: `docs/superpowers/specs/2026-09-09-lab-throughput-report-design.md`.
+
 ## v1.16.0 — 2026-09-09
 
 ### Added

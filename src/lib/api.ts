@@ -6153,6 +6153,62 @@ export async function getTurnaround(): Promise<TurnaroundSample[]> {
   return response.json()
 }
 
+// ─── Lab Throughput ──────────────────────────────────────────────────────────
+
+/** One calendar day in the lab timezone (server-side bucketing). */
+export interface ThroughputDay {
+  d: string // YYYY-MM-DD
+  dow: number // Mon=0..Sun=6
+  biz: boolean // working day and not a lab holiday
+  hol: boolean
+  samples: number
+  cancelled: number
+  hplc: number // HPLC panels (once per sample)
+  ster: number // sterility PCR
+  endo: number // endotoxin LAL
+  bacw: number // Bac Water panel (once per sample)
+  other: number // anything else, per keyword
+  tests: number
+  vials: number // vials received (native check-in, Jun 2026+)
+  retest: number
+  clients: number
+  coa: number // primary COAs published (re-issues included)
+  acoa: number // additional (branded) COAs
+  fp: number // samples completed = first primary publication
+  bench_rows: number // hplc_analyses rows (processing runs)
+  bench_vials: number // distinct vials run on the HPLC bench
+  bench_inst: Record<string, number> // bench_vials by instrument name
+  backlog: number // open samples at end of day
+}
+
+export interface ThroughputBacklogNow {
+  total: number
+  status: Record<string, number>
+  age: Record<string, number>
+}
+
+export interface ThroughputReport {
+  start: string
+  end: string
+  today: string
+  tz: string
+  generated_at: string
+  instruments: string[]
+  holidays: string[]
+  days: ThroughputDay[]
+  backlog_now: ThroughputBacklogNow
+  notes: { jan_excluded: boolean; vials_from: string; bench_from: string }
+}
+
+export async function getThroughput(includeTestOrders = false): Promise<ThroughputReport> {
+  const suffix = includeTestOrders ? '?include_test_orders=true' : ''
+  const response = await fetch(`${API_BASE_URL()}/reports/throughput${suffix}`, {
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(`Throughput failed: ${response.status}`)
+  return response.json()
+}
+
 // ─── Sample Activity Timeline ────────────────────────────────────────────────
 
 export interface SampleActivityEvent {
