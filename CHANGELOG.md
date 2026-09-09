@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.16.0 — 2026-09-09
+
+### Added
+- **`POST /s2s/lims-samples/fields`** — targeted field mirror for pre-receipt
+  customer edits (portal Slice B, PR #161). The Integration Service pushes the
+  SENAITE-shaped field set a customer changed on the order page (branding
+  `Coa*` fields, `Analyte{i}Peptide` / `Analyte{i}DeclaredQuantity` slots) and
+  Mk1 applies it to the resolved `lims_samples` row through the same mirror
+  logic its own field-edit endpoints use (`_apply_senaite_fields_to_row`,
+  extracted so both paths share one implementation). Response is
+  `{updated, locked, missing}` per sample: a received sample is `locked` and
+  left untouched; an unknown sample id is `missing`. Analyte edits rebuild the
+  slot list positionally (the v1.15.3 rule) and clear the sample's stored
+  analyte aliases only when an `Analyte{n}Peptide` key is present in the push,
+  so a branding-only edit never touches aliases. Internal-service-token gated.
+
 ## v1.15.3 — 2026-09-08
 
 ### Fixed
