@@ -55,6 +55,7 @@ export type ReportsSubSection =
   | 'dashboard'
   | 'checkin-times'
   | 'throughput'
+  | 'sla-performance'
   | 'bottlenecks'
   | 'sync-debug'
 export type AccountSubSection = 'profile' | 'user-management'

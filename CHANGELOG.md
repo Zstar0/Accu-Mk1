@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added
+- **SLA Performance report** (`GET /reports/sla-performance`, [SlaPerformanceReport.tsx](src/components/reports/SlaPerformanceReport.tsx)) under Reports → SLA Performance. Companion to Lab Throughput: that one counts the work arriving, this one measures what came back out and whether it met target. Receipt-month cohorts that count still-open work against the rate (the delivery-month view drops it and flatters the lab), a delivery curve against the target line, **which department finished last on late samples** — the gating cut, per (sample, family) `max(verified_at)` — the bench-versus-publishing stage split, and an at-risk board of open work by business hours remaining. Filters for customer, order, department and family, with facets computed before scoping, backed by a 60-second per-process row cache like the sibling report. Elapsed time and tier precedence come from `sla_engine` (`compute_business_minutes`, `resolve_sla_tier`) and family classification from `throughput.classify_keyword`, so the report cannot drift from the app or from its sibling. Target resolves per sample, so the numbers follow the day a service group is given its own tier. Pure engine in `backend/sla_perf.py`.
+
+## Unreleased
+
 ## v1.16.1 — 2026-09-09
 
 ### Added
