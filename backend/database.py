@@ -161,6 +161,16 @@ def init_db():
             seed_vial_roles(_db)
     except Exception as e:  # never block startup
         log.warning("catalog_vial_roles_seed_skipped err=%s", e)
+    # HPLC-native family (spec 2026-09-10, M2): five generic services + the
+    # hplc-purity-identity profile + wildcard specs. Before service_spec_seed
+    # for symmetry; after vial roles (role 'hplc' is a system role and already
+    # exists, but keep the order explicit).
+    try:
+        from catalog.hplc_native_seed import seed_hplc_native_catalog
+        with SessionLocal() as _db:
+            seed_hplc_native_catalog(_db)
+    except Exception as e:  # never block startup
+        log.warning("catalog_hplc_native_seed_skipped err=%s", e)
     try:
         from catalog.service_spec_seed import seed_service_specs
         with SessionLocal() as _db:
