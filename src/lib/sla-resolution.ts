@@ -1,7 +1,6 @@
 import type {
   AnalysisProfile,
   AnalysisServiceRecord,
-  InboxPriority,
   SenaiteAnalysis,
   SenaiteLookupResult,
   ServiceGroup,
@@ -15,7 +14,10 @@ export type OrderSlaColor = SlaColor | 'met' | 'awaiting' | 'loading' | 'error'
 
 export interface SampleSlaInputs {
   analyses: SenaiteAnalysis[]
-  priority: InboxPriority | null
+  /** Effective priority KEY off the row (`priority?.key`). `'default'` is the
+   *  sparsity sentinel: the override maps never carry a row for it, so a
+   *  default-priority sample falls through to the profile/group/default steps. */
+  priority: string | null
 }
 
 export interface SampleSlaCellState {
@@ -153,7 +155,7 @@ export function resolveSampleTier(
   inputs: SampleSlaInputs,
   keywordToServiceId: Map<string, number>,
   serviceToGroupTier: Map<number, SlaTier>,
-  priorityToTier: Map<InboxPriority, SlaTier>,
+  priorityToTier: Map<string, SlaTier>,
   defaultTier: SlaTier | null,
   serviceToProfileTier?: Map<number, ServiceProfileTier>
 ): SlaTier | null {
@@ -226,7 +228,7 @@ export type PriorityScope = 'global' | 'group'
  */
 export interface SampleSlaReason {
   tierSource: TierSource
-  priorityUsed?: InboxPriority
+  priorityUsed?: string
   priorityScope?: PriorityScope
   multiGroupCandidates?: { tierName: string; targetMinutes: number }[]
   unmappedKeywords: string[]
@@ -246,7 +248,7 @@ export function resolveSampleTierWithReason(
   inputs: SampleSlaInputs,
   keywordToServiceId: Map<string, number>,
   serviceToGroupTier: Map<number, SlaTier>,
-  priorityToTier: Map<InboxPriority, SlaTier>,
+  priorityToTier: Map<string, SlaTier>,
   defaultTier: SlaTier | null,
   serviceToProfileTier?: Map<number, ServiceProfileTier>
 ): { tier: SlaTier | null; reason: SampleSlaReason } {
@@ -487,8 +489,8 @@ export function buildGroupIdToTierMap(
 export function buildGlobalPriorityToTierMap(
   rows: SlaPriorityTier[],
   tiersById: Map<number, SlaTier>
-): Map<InboxPriority, SlaTier> {
-  const out = new Map<InboxPriority, SlaTier>()
+): Map<string, SlaTier> {
+  const out = new Map<string, SlaTier>()
   for (const row of rows) {
     if (row.service_group_id != null) continue
     const tier = tiersById.get(row.sla_tier_id)
@@ -544,7 +546,7 @@ export function resolveSampleTiersByGroup(
   serviceIdToGroupId: Map<number, number>,
   serviceIdToProfileTier: Map<number, ServiceProfileTier>,
   groupIdToTier: Map<number, SlaTier>,
-  globalPriorityToTier: Map<InboxPriority, SlaTier>,
+  globalPriorityToTier: Map<string, SlaTier>,
   perGroupPriorityToTier: Map<string, SlaTier>,
   defaultTier: SlaTier | null
 ): Map<GroupKey, { tier: SlaTier | null; reason: SampleSlaReason }> {

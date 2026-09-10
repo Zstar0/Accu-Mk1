@@ -4,6 +4,7 @@
 
 import { getApiBaseUrl } from './config'
 import { getAuthToken } from '@/store/auth-store'
+import type { EffectivePriority } from '@/lib/api-priorities'
 
 // Helper to get current API base URL (called dynamically)
 export const API_BASE_URL = () => getApiBaseUrl()
@@ -827,6 +828,14 @@ export interface ExplorerOrder {
   updated_at: string
   completed_at: string | null
   wp_order_status: string | null
+  /** Order-level priority (sample-priority spec §5), joined from the Mk1
+   *  registry by order_number. `priority_key` is the order's OWN explicit key
+   *  (null = inherit from the customer), `priority_source` says who set it and
+   *  `effective_priority` is the resolved order → customer chain. All three are
+   *  null/absent when the order has no lims_orders row yet. */
+  priority_key?: string | null
+  priority_source?: string | null
+  effective_priority?: EffectivePriority | null
 }
 
 /**
@@ -4166,6 +4175,14 @@ export interface SenaiteLookupResult {
   read_source?: 'mk1'
   /** True when a 'mk1' read fell back because no registry record exists yet. */
   registry_missing?: boolean
+  /** Resolved effective priority for this sample (sample-priority spec §5) —
+   *  the SLA input. Null for a SENAITE-only sample with no registry row. */
+  priority?: EffectivePriority | null
+  /** lims_samples.id — the registry pk the priority controls write against.
+   *  Null when the sample has no registry row. */
+  registry_pk?: number | null
+  /** The sample's OWN explicit priority key (null = inherit up the chain). */
+  explicit_priority_key?: string | null
 }
 
 export interface SenaiteStatusResponse {
@@ -4711,6 +4728,9 @@ export interface SenaiteSample {
   // sample has none, which is every sample ordered before the note was
   // persisted natively.
   customer_note?: string | null
+  /** Resolved effective priority for the row (sample-priority spec §5).
+   *  Absent/null on SENAITE-sourced lists and rows without a registry record. */
+  priority?: EffectivePriority | null
 }
 
 export interface SenaiteSamplesResponse {
@@ -5404,7 +5424,10 @@ export interface SlaTierUpdate {
 
 export interface SlaPriorityTier {
   id: number
-  priority: InboxPriority
+  /** Priority KEY from the priorities catalog (sample-priority spec) — any
+   *  admin-defined key, not just the three legacy literals. The catalog's
+   *  default key never has a row (sparsity contract). */
+  priority: string
   sla_tier_id: number
   // Multi-tier follow-on: null = global override for this priority; an integer
   // scopes the override to a single service group. Precedence on the resolver:
@@ -5447,11 +5470,10 @@ export async function getSlaPriorityTiers(): Promise<SlaPriorityTier[]> {
   return response.json()
 }
 
-// `priority` widened to string (sample-priority spec, Task 5): overrides are
-// now keyed by an admin-defined priority key from the priorities catalog, not
-// only the three legacy InboxPriority literals. The value is only interpolated
-// into the URL here; SlaPriorityTier.priority stays InboxPriority because the
-// client-side resolver still keys its maps by that union.
+// `priority` is an admin-defined priority key from the priorities catalog
+// (sample-priority spec, Task 5) — interpolated into the URL here and carried
+// on SlaPriorityTier.priority, which the client-side resolver keys its
+// override maps by.
 export async function setSlaPriorityTier(
   priority: string,
   slaTierId: number,
@@ -5602,6 +5624,12 @@ export interface SamplePriorityLookupItem {
   priority: InboxPriority
 }
 
+/**
+ * @deprecated Reads `sample_priorities`, a table nothing writes any more.
+ * Effective priority now travels inline on the row (`priority` /
+ * `priority_effective`). No SLA consumer calls this; kept for one release and
+ * removed with the endpoint.
+ */
 export async function samplePrioritiesLookup(
   sampleUids: string[]
 ): Promise<SamplePriorityLookupItem[]> {
@@ -5631,7 +5659,8 @@ export async function getSenaiteAnalysts(): Promise<SenaiteAnalyst[]> {
 
 // ─── Inbox Types ─────────────────────────────────────────────────────────────
 
-export type InboxPriority = 'normal' | 'high' | 'expedited'
+/** @deprecated Priority keys are data now (see api-priorities.ts). Kept as a string alias for one release. */
+export type InboxPriority = string
 
 // Widened to string (spec 4, Task 10 — catalog-driven worksheet-inbox lanes):
 // was 'hplc' | 'microbiology'. A lane key is now any GET /worksheets/inbox/
@@ -5688,6 +5717,10 @@ export interface InboxVialItem {
    *  back-compat with a pre-1.8.5 backend; consumers fall back to
    *  [assignment_role]. */
   role_tags?: string[]
+  /** Resolved effective priority (sample-priority spec §5) — the SLA input.
+   *  The legacy `priority` string above is a rank-CLAMPED compatibility value
+   *  for one release; read this instead. */
+  priority_effective?: EffectivePriority | null
 }
 
 export interface InboxResponse {
@@ -6709,6 +6742,9 @@ export interface SubSample {
    *  the named sibling anchor and carries no analyses of its own. Only the
    *  list endpoint populates it. */
   material_for?: string | null
+  /** Resolved effective priority for the vial (sample-priority spec §5) —
+   *  the vial → sample → order → customer chain. Null when unresolved. */
+  priority?: EffectivePriority | null
 }
 
 export interface ParentSampleSummary {

@@ -11,7 +11,7 @@
 // (Heavy Metals today, the "Other"/0 legacy bucket) resolve to a null group
 // = the default tier, exactly like group-less items on the worksheet pages.
 
-import type { InboxVialItem, InboxPriority, ServiceGroup } from '@/lib/api'
+import type { InboxVialItem, ServiceGroup } from '@/lib/api'
 import type { SlaSubject } from '@/services/sla-subjects'
 
 /** department id -> owning service group id. First group wins, in the BE's
@@ -42,6 +42,19 @@ export function vialSlaDepartments(
   return seen
 }
 
+/** Effective priority KEY for a vial. Reads the inline `priority_effective`
+ *  the backend resolves; falls back to the legacy rank-clamped `priority`
+ *  string this release ('normal' being the legacy name for the catalog's
+ *  default, which maps to the `'default'` sparsity sentinel). */
+export function inboxVialPriorityKey(
+  vial: Pick<InboxVialItem, 'priority' | 'priority_effective'>
+): string {
+  return (
+    vial.priority_effective?.key ??
+    (vial.priority === 'normal' ? 'default' : vial.priority)
+  )
+}
+
 /** Subject/React key for one (vial, department) SLA lane. `|` cannot appear
  *  in a uid or a numeric department id, so the key is collision-free. */
 export function inboxVialSlaKey(uid: string, departmentId: number): string {
@@ -61,7 +74,7 @@ export function buildInboxSlaSubjects(
     for (const deptId of vialSlaDepartments(vial)) {
       subjects.push({
         key: inboxVialSlaKey(vial.uid, deptId),
-        priority: vial.priority as InboxPriority,
+        priority: inboxVialPriorityKey(vial),
         groupId: deptToGroup.get(deptId) ?? null,
         receivedAt: vial.date_received,
         // Profile-SLA step (Task 11): this department's analysis keywords —

@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import type { InboxPriority, SenaiteLookupResult } from '@/lib/api'
+import type { SenaiteLookupResult } from '@/lib/api'
 import {
   buildKeywordToServiceIdMap,
   buildServiceIdToGroupIdMap,
@@ -20,7 +20,8 @@ export interface AnalysisSlaMapResult {
   isLoading: boolean
   isError: boolean
   isPublished: boolean
-  priority: InboxPriority | null
+  /** Effective priority KEY that fed tier resolution ('default' when none). */
+  priority: string | null
 }
 
 /**
