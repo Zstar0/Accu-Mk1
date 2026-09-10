@@ -1472,6 +1472,12 @@ def list_promotions_for_parent(
 
 # ─── Read-flip L4/Task1: parent-tier analyses in senaite shape ──────────────
 
+# Vial-tier states a promote would actually accept as a source. Kept identical
+# to promote_to_parent's own precondition ("all sources must be in
+# 'to_be_verified'") — this list exists to answer "is there a promote here that
+# the lock map would be hiding?", so it must not drift from that guard.
+_VIAL_PROMOTABLE_STATES = ("to_be_verified",)
+
 
 def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, str]:
     """Keyword → review_state lock map for the FE's isLockedByParent gate,
@@ -1491,9 +1497,29 @@ def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, s
         re-promote, even though the shadow still mirrors verified.
       - Keywords with NO canonical history fall back to the live shadow
         row's mirror_review_state, so legacy vials keep their lock without
-        a SENAITE call (shadow rows are native DB).
+        a SENAITE call (shadow rows are native DB) — EXCEPT where the family
+        still holds a PROMOTABLE vial row for that keyword (see below).
+
+    The fallback's exception (P-2553 / P-2606, 2026-09-09): a promote whose
+    SENAITE half landed and whose Mk1 half did not leaves the keyword with no
+    canonical history and a shadow mirroring SENAITE's eternal verified —
+    indistinguishable, to this map, from a legacy family. The fallback locked
+    it, the FE hid every verb, and the lab was wedged holding a
+    to_be_verified vial row it could not push up, while promote itself would
+    have accepted that click: it diverges over a locked SENAITE line (1.12.1)
+    and records senaite_line_diverged. So the fallback stands down for
+    keywords that still have a vial row promote would take as a source, which
+    is exactly _VIAL_PROMOTABLE_STATES.
+
+    Keying off promote's own precondition, rather than off any row the
+    variance guard would call unfinished, is deliberate: an unresulted row
+    cannot be promoted, so it is no evidence of a stuck promote, and
+    unlocking it would only hand the bench verbs on a value SENAITE has
+    already verified. Measured against prod before shipping — the wider rule
+    changed exactly four dormant unassigned rows (BW-0028..31, WP-4067) and
+    no genuinely stuck family; this one changes neither.
     """
-    from models import LimsSample
+    from models import LimsSample, LimsSubSample
 
     parent = db.execute(
         select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
@@ -1506,6 +1532,16 @@ def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, s
             LimsAnalysis.lims_sample_pk == parent.id,
             LimsAnalysis.lims_sub_sample_pk.is_(None),
             LimsAnalysis.provenance.in_(("canonical", "shadow")),
+        )
+    ).scalars().all())
+
+    promotable_vial_keywords = set(db.execute(
+        select(LimsAnalysis.keyword)
+        .join(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
+        .where(
+            LimsSubSample.parent_sample_pk == parent.id,
+            LimsAnalysis.retested.is_(False),
+            LimsAnalysis.review_state.in_(_VIAL_PROMOTABLE_STATES),
         )
     ).scalars().all())
 
@@ -1527,6 +1563,7 @@ def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, s
             and not r.retested
             and r.keyword not in canonical_ever
             and r.keyword not in states
+            and r.keyword not in promotable_vial_keywords
             and r.mirror_review_state
         ):
             states[r.keyword] = r.mirror_review_state
