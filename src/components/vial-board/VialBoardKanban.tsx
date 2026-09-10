@@ -280,7 +280,7 @@ function VialCard({
       <div className="flex items-center gap-1.5 min-w-0">
         <PriorityGlyph
           priority={legacyEffectivePriority(vial.parent.priority)}
-          size="row"
+          size="card"
         />
         <span className="font-mono text-[11px] font-semibold truncate">
           {vial.sample_id}

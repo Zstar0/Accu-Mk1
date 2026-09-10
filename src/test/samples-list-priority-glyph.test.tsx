@@ -115,9 +115,12 @@ describe('SampleCard priority glyph', () => {
       />,
       { wrapper }
     )
-    expect(
-      await screen.findByRole('img', { name: 'Expedited via order 3291' })
-    ).toBeInTheDocument()
+    const glyph = await screen.findByRole('img', {
+      name: 'Expedited via order 3291',
+    })
+    expect(glyph).toBeInTheDocument()
+    // SampleCard is a CARD surface: the tinted square, not the bare row icon.
+    expect(glyph).toHaveClass('w-[22px]')
     expect(
       fetchSpy.mock.calls.filter(([u]) =>
         String(u).includes('/priorities/resolve')

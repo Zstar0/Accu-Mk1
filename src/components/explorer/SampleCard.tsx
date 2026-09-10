@@ -185,7 +185,7 @@ export function SampleCard({
       )}
     >
       <div className="flex items-center gap-2 mb-1">
-        <PriorityGlyph priority={lookup.priority} size="row" />
+        <PriorityGlyph priority={lookup.priority} size="card" />
         <button
           type="button"
           className="text-xs font-mono font-medium text-primary hover:underline cursor-pointer"

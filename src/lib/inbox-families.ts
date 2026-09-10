@@ -21,9 +21,13 @@ export interface FamilyDragData {
 /** A family sorts by its MOST URGENT vial: the max catalog rank across its
  *  vials (higher rank = more urgent), read off the resolved
  *  `priority_effective` the row carries. Rows with no resolved priority read
- *  as the catalog default's 0. */
+ *  as the catalog default's 0. Ranks BELOW the default (negative) are kept —
+ *  clamping them to 0 would sort a de-prioritised family level with a default
+ *  one and leave the header glyph with no vial to read. */
 export function familyPriorityRank(vials: InboxVialItem[]): number {
-  return Math.max(0, ...vials.map(v => v.priority_effective?.rank ?? 0))
+  return vials.length
+    ? Math.max(...vials.map(v => v.priority_effective?.rank ?? 0))
+    : 0
 }
 
 /** Group vials by parent_sample_id and sort for rendering: families ordered
