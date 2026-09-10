@@ -115,6 +115,32 @@ describe('useAssignPriority', () => {
       )
     )
   })
+
+  it('invalidates the SENAITE lookup queries that feed SLA after a sample-level assign', async () => {
+    // `['senaite','lookup',id,source]` carries the inline effective priority
+    // every SLA surface resolves its tier from; 'senaite' is invisible to the
+    // sample|order|inbox|… predicate, so it needs its own explicit call.
+    const lookupKey = ['senaite', 'lookup', 'PB-1', 'mk1']
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    qc.setQueryData(lookupKey, { sample_id: 'PB-1' })
+    expect(qc.getQueryState(lookupKey)?.isInvalidated).toBe(false)
+
+    const { result } = renderHook(() => useAssignPriority(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+      ),
+    })
+    await result.current.mutateAsync({
+      level: 'sample',
+      id: '42',
+      priority_key: 'rush',
+    })
+    await waitFor(() =>
+      expect(qc.getQueryState(lookupKey)?.isInvalidated).toBe(true)
+    )
+  })
 })
 describe('SLA priority-tier mutations', () => {
   function seeded() {

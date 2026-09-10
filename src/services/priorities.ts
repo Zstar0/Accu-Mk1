@@ -46,6 +46,12 @@ function useInvalidateAfterAssign() {
         typeof q.queryKey[0] === 'string' &&
         /sample|order|inbox|worksheet|vial|registry|sla/i.test(q.queryKey[0]),
     })
+    // The per-sample SENAITE lookup (`['senaite','lookup',id,source]`, see
+    // services/senaite-lookup-map.ts) carries the inline effective priority
+    // that every SLA surface now resolves its tier from, and its first key
+    // segment ('senaite') is invisible to the predicate above. Prefix match
+    // covers every id/source combination.
+    qc.invalidateQueries({ queryKey: ['senaite', 'lookup'] })
     // Customer-level assigns land in a key the predicate cannot see.
     qc.invalidateQueries({ queryKey: priorityQueryKeys.customers })
   }

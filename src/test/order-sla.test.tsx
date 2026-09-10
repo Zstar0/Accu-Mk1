@@ -11,7 +11,6 @@ import type {
 } from '@/lib/api'
 
 const fetchSlaStatusesMock = vi.fn<(items: SlaStatusRequestItem[]) => Promise<SlaStatusResultItem[]>>()
-const samplePrioritiesLookupMock = vi.fn<(uids: string[]) => Promise<{ sample_uid: string; priority: 'normal' | 'high' | 'expedited' }[]>>()
 const getAnalysisServicesMock = vi.fn().mockResolvedValue([])
 const getServiceGroupsMock = vi.fn().mockResolvedValue([])
 const getSlaTiersMock = vi.fn().mockResolvedValue([])
@@ -25,7 +24,6 @@ vi.mock('@/lib/api', async () => {
   return {
     ...actual,
     fetchSlaStatuses: (items: SlaStatusRequestItem[]) => fetchSlaStatusesMock(items),
-    samplePrioritiesLookup: (uids: string[]) => samplePrioritiesLookupMock(uids),
     getAnalysisServices: () => getAnalysisServicesMock(),
     getServiceGroups: () => getServiceGroupsMock(),
     getSlaTiers: () => getSlaTiersMock(),
@@ -86,7 +84,6 @@ function makeLookup(
 
 beforeEach(() => {
   fetchSlaStatusesMock.mockReset()
-  samplePrioritiesLookupMock.mockReset().mockResolvedValue([])
   getAnalysisServicesMock.mockClear()
   getServiceGroupsMock.mockClear()
   getSlaTiersMock.mockReset().mockResolvedValue([
@@ -101,7 +98,7 @@ beforeEach(() => {
       updated_at: '2026-01-01T00:00:00',
     },
   ])
-  getSlaPriorityTiersMock.mockClear()
+  getSlaPriorityTiersMock.mockReset().mockResolvedValue([])
   getAnalysisProfilesMock.mockClear().mockResolvedValue([])
 })
 
@@ -383,5 +380,89 @@ describe('useOrderSlaStatuses', () => {
     // Without keepPreviousData: isLoading flips to true during refetch.
     // With keepPreviousData: isLoading stays false (we have placeholder data).
     expect(result.current.isLoading).toBe(false)
+  })
+
+  it("resolves the tier from the lookup row's inline effective priority key", async () => {
+    // The order path reads priority off each sample's SENAITE lookup row (the
+    // order's sample_results carry none), so a custom catalog key on the row
+    // must drive the global priority override.
+    getSlaTiersMock.mockResolvedValue([
+      {
+        id: 1,
+        name: 'default',
+        target_minutes: 1440,
+        business_hours_only: false,
+        is_default: true,
+        amber_threshold_percent: 80,
+        created_at: '2026-01-01T00:00:00',
+        updated_at: '2026-01-01T00:00:00',
+      },
+      {
+        id: 2,
+        name: 'Rush 4h',
+        target_minutes: 240,
+        business_hours_only: false,
+        is_default: false,
+        amber_threshold_percent: 80,
+        created_at: '2026-01-01T00:00:00',
+        updated_at: '2026-01-01T00:00:00',
+      },
+    ])
+    getSlaPriorityTiersMock.mockResolvedValue([
+      { id: 9, priority: 'rush', sla_tier_id: 2, service_group_id: null },
+    ])
+    fetchSlaStatusesMock.mockResolvedValue([
+      {
+        key: 'uid-PB-001|no-group',
+        status: {
+          target_minutes: 240,
+          elapsed_minutes: 120,
+          remaining_minutes: 120,
+          breached: false,
+        },
+      },
+    ])
+    const lookup = {
+      ...makeLookup('uid-PB-001', '2026-01-01T09:00:00', 'sample_received'),
+      priority: {
+        key: 'rush',
+        rank: 30,
+        source_level: 'order',
+        source_id: '3291',
+      },
+      // One (unmapped) analysis so the resolver runs — the zero-analyses path
+      // short-circuits to the default tier.
+      analyses: [{ keyword: 'orphan_kw' } as never],
+    } as SenaiteLookupResult
+    const lookupMap = new Map([
+      ['PB-001', { data: lookup, isLoading: false, isError: false }],
+    ])
+    const orders = [
+      makeOrder({
+        order_id: 'OPRIO',
+        sample_results: {
+          '1': { senaite_id: 'PB-001', status: 'ok' },
+        } as never,
+      }),
+    ]
+    const { result } = renderHook(
+      () => useOrderSlaStatuses(orders, lookupMap),
+      { wrapper }
+    )
+    await waitFor(() => {
+      expect(
+        result.current.sampleStatusesBySampleId.get('PB-001')?.length
+      ).toBe(1)
+    })
+    const snapshot = result.current.sampleStatusesBySampleId.get('PB-001')?.[0]
+    expect(snapshot?.priority).toBe('rush')
+    expect(snapshot?.tier.name).toBe('Rush 4h')
+    expect(snapshot?.reason.tierSource).toBe('priority')
+    expect(snapshot?.reason.priorityUsed).toBe('rush')
+    // Order verdict aggregates the (sample, group) cells — one cell here, so
+    // it must carry that snapshot's color through.
+    expect(result.current.verdictByOrderId.get('OPRIO')?.color).toBe(
+      snapshot?.color
+    )
   })
 })
