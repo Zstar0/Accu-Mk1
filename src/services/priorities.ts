@@ -29,6 +29,8 @@ function useInvalidateAfterAssign() {
   return () => {
     // Every list that embeds `priority` and every SLA consumer re-reads.
     qc.invalidateQueries({ predicate: q => typeof q.queryKey[0] === 'string' && /sample|order|inbox|worksheet|vial|registry|sla/i.test(q.queryKey[0]) })
+    // Customer-level assigns land in a key the predicate cannot see.
+    qc.invalidateQueries({ queryKey: priorityQueryKeys.customers })
   }
 }
 
