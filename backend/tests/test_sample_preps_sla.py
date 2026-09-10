@@ -25,7 +25,7 @@ from models import (
     LimsAnalysis,
     LimsSample,
     LimsSubSample,
-    SamplePriority,
+    Priority,
 )
 
 
@@ -72,8 +72,18 @@ def _seed_vial_world(db):
         lims_sub_sample_pk=vial.id, analysis_service_id=svc.id,
         keyword="STER-USP71", title="Sterility USP71", review_state="unassigned",
     ))
-    db.add(SamplePriority(sample_uid="uid-vial-9001-s01", priority="high"))
+    # Task 8: the SLA block reads the EFFECTIVE priority, so the explicit key
+    # lives on the vial row itself (create_all seeds no `priorities` rows).
+    db.add_all([
+        Priority(key="default", name="Default", rank=0, icon="minus",
+                 color="zinc", pulse=False, is_default=True, is_active=True),
+        Priority(key="high", name="High", rank=10, icon="chevron-up",
+                 color="amber", pulse=False, is_default=False, is_active=True),
+    ])
+    vial.priority_key = "high"
     db.commit()
+    from priority import service as priority_service
+    priority_service.invalidate_priority_cache()
     return parent, vial
 
 
