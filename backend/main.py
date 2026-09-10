@@ -10643,6 +10643,276 @@ def reports_sla_performance(
     return report
 
 
+# ── Ready to Publish report ─────────────────────────────────────────
+
+class ReadyFlagOut(BaseModel):
+    id: int
+    type: str
+    kind: str
+    label: str
+    color: str
+    status: str
+    title: str
+
+
+class ReadyLinesOut(BaseModel):
+    total: int
+    verified: int
+    pending: list[str]
+
+
+class ReadySlaOut(BaseModel):
+    tier: str
+    target_minutes: int
+    elapsed_minutes: float
+    remaining_minutes: float
+    breached: bool
+    color: str
+
+
+class ReadyRowOut(BaseModel):
+    sample_id: str
+    status: str
+    client: Optional[str] = None
+    order: str
+    email: Optional[str] = None
+    created_at: Optional[str] = None
+    received_at: Optional[str] = None
+    lot: Optional[str] = None
+    analytes: list[str]
+    reasons: list[str]
+    flags: list[ReadyFlagOut]
+    lines: ReadyLinesOut
+    priority: str
+    sla: Optional[ReadySlaOut] = None
+
+
+class ReadyFlagTypeOut(BaseModel):
+    slug: str
+    label: str
+    color: str
+    kind: str
+
+
+class ReadyToPublishOut(BaseModel):
+    generated_at: str
+    rows: list[ReadyRowOut]
+    totals: dict[str, int]
+    flag_types: list[ReadyFlagTypeOut]
+
+
+# Terminal statuses end eligibility unless an open Ready flag says otherwise
+# (see the loader); the second set can never hold a verified parent line, so
+# their line map is skipped unless the sample is flagged.
+_RTP_TERMINAL_STATUSES = frozenset({"published", "cancelled", "invalid", "rejected"})
+_RTP_NO_LINES_STATUSES = frozenset({"sample_due", "scheduled_sampling", "registered"})
+
+
+def _load_ready_to_publish_inputs(db: Session) -> dict:
+    """Fetch everything ``ready_to_publish.build_ready_rows`` needs.
+
+    Line states come from ``native_parent_line_states`` per candidate — the
+    same lock map the sample page reads — computed only for samples that can
+    hold a verified line (received or beyond) or that carry a Ready flag, so
+    the 200-odd ``sample_due`` rows cost nothing. The SLA inputs (schedule,
+    holidays, tiers, groups) are loaded the way ``_load_sla_perf_inputs``
+    loads them; tiers additionally carry ``amber_threshold_percent`` so the
+    colour matches the SLA column.
+    """
+    from flags.models import FlagEntityLink, FlagFlag
+    from lims_analyses.service import native_parent_line_states
+    from models import LimsAnalysis
+    from ready_to_publish import (
+        OPEN_FLAG_STATUSES,
+        FlagIn as RtpFlagIn,
+        FlagTypeIn as RtpFlagTypeIn,
+        GroupIn as RtpGroupIn,
+        SampleIn as RtpSampleIn,
+        TierIn as RtpTierIn,
+        resolve_ready_flag_kinds,
+    )
+
+    flag_types = [
+        RtpFlagTypeIn(slug=ft.slug, label=ft.label, color=ft.color or "")
+        for ft in db.execute(select(FlagType).where(FlagType.is_active.is_(True))).scalars().all()
+    ]
+    ready_kinds = resolve_ready_flag_kinds(flag_types)
+
+    # Open Ready flags: direct entity plus multi-entity links, sample-typed only.
+    flags: list[RtpFlagIn] = []
+    flagged_sample_ids: set[str] = set()
+    if ready_kinds:
+        open_flags = db.execute(
+            select(FlagFlag).where(
+                FlagFlag.type.in_(list(ready_kinds)),
+                FlagFlag.status.in_(list(OPEN_FLAG_STATUSES)),
+            )
+        ).scalars().all()
+        flag_ids = [f.id for f in open_flags]
+        links: dict[int, list[str]] = {}
+        if flag_ids:
+            for fid, etype, eid in db.execute(
+                select(FlagEntityLink.flag_id, FlagEntityLink.entity_type, FlagEntityLink.entity_id)
+                .where(FlagEntityLink.flag_id.in_(flag_ids))
+            ).all():
+                if etype == "sample" and eid:
+                    links.setdefault(fid, []).append(eid)
+        for f in open_flags:
+            targets: list[str] = []
+            if f.entity_type == "sample" and f.entity_id:
+                targets.append(f.entity_id)
+            targets.extend(links.get(f.id, []))
+            for sid in dict.fromkeys(targets):
+                flagged_sample_ids.add(sid)
+                flags.append(RtpFlagIn(id=f.id, sample_id=sid, type_slug=f.type, status=f.status,
+                                       title=f.title or "", created_at=f.created_at))
+
+    # A terminal status (published/cancelled) normally ends the sample's
+    # eligibility — but an OPEN Ready flag is an explicit human signal that a
+    # publish is still owed (prod P-2432: primary published, "Ready for
+    # Partial Publish" open while USP 71 finishes), so flagged samples are
+    # admitted regardless of status.
+    status_ok = LimsSample.status.not_in(list(_RTP_TERMINAL_STATUSES)) | LimsSample.status.is_(None)
+    if flagged_sample_ids:
+        status_ok = status_ok | LimsSample.sample_id.in_(sorted(flagged_sample_ids))
+    sample_rows = db.execute(
+        select(LimsSample).where(status_ok, ~LimsSample.sample_id.like("aP-%"))
+    ).scalars().all()
+
+    samples: list[RtpSampleIn] = []
+    line_states_by_pk: dict[int, dict] = {}
+    candidate_pks: list[int] = []
+    for s in sample_rows:
+        status = s.status or ""
+        can_have_lines = status not in _RTP_NO_LINES_STATUSES
+        if not can_have_lines and s.sample_id not in flagged_sample_ids:
+            continue
+        try:
+            analyte_names = tuple(
+                str((e or {}).get("name") or "")
+                for e in (json.loads(s.analytes) if s.analytes else [])
+                if isinstance(e, dict)
+            )
+        except (ValueError, TypeError):
+            analyte_names = ()
+        samples.append(RtpSampleIn(
+            pk=s.id, sample_id=s.sample_id, status=status, client=s.client_title,
+            order=s.client_order_number, email=s.contact_email,
+            created_at=s.date_created or s.created_at, date_received=s.date_received,
+            lot=s.client_lot, analytes=analyte_names, external_uid=s.external_lims_uid,
+        ))
+        candidate_pks.append(s.id)
+        if can_have_lines:
+            line_states_by_pk[s.id] = native_parent_line_states(db, s.sample_id)
+
+    services_of: dict[int, set] = {}
+    if candidate_pks:
+        for pk, svc in db.execute(
+            select(LimsAnalysis.lims_sample_pk, LimsAnalysis.analysis_service_id)
+            .where(LimsAnalysis.lims_sample_pk.in_(candidate_pks),
+                   LimsAnalysis.analysis_service_id.is_not(None))
+        ).all():
+            services_of.setdefault(pk, set()).add(svc)
+
+    uids = [s.external_uid for s in samples if s.external_uid]
+    priorities: dict[str, str] = {}
+    if uids:
+        priorities = {
+            uid: prio for uid, prio in db.execute(
+                select(SamplePriority.sample_uid, SamplePriority.priority)
+                .where(SamplePriority.sample_uid.in_(uids))
+            ).all()
+        }
+
+    tiers = [
+        RtpTierIn(id=t.id, name=t.name, target_minutes=t.target_minutes, is_default=bool(t.is_default),
+                  amber_threshold_percent=int(getattr(t, "amber_threshold_percent", 25) or 25))
+        for t in db.execute(select(SlaTier)).scalars().all()
+    ]
+    members: dict[int, set] = {}
+    for gid, svc_id in db.execute(
+        select(service_group_members.c.service_group_id, service_group_members.c.analysis_service_id)
+    ).all():
+        members.setdefault(gid, set()).add(svc_id)
+    groups = [
+        RtpGroupIn(id=gid, name=name, sla_tier_id=tier_id, service_ids=frozenset(members.get(gid, set())))
+        for gid, name, tier_id in db.execute(
+            select(ServiceGroup.id, ServiceGroup.name, ServiceGroup.sla_tier_id)
+        ).all()
+    ]
+
+    cfg = db.get(BusinessHoursConfig, 1)
+    schedule = SlaBusinessSchedule(
+        open_time=(cfg.open_time if cfg else time(9, 0)),
+        close_time=(cfg.close_time if cfg else time(17, 0)),
+        timezone=(cfg.timezone if cfg and cfg.timezone else "America/Los_Angeles"),
+        working_days=frozenset(cfg.working_days) if cfg and cfg.working_days else frozenset({0, 1, 2, 3, 4}),
+    )
+    holidays = frozenset(r[0] for r in db.execute(select(LabHoliday.holiday_date)).all())
+
+    return {
+        "samples": samples,
+        "line_states_by_pk": line_states_by_pk,
+        "flags": flags,
+        "flag_types": flag_types,
+        "priorities": priorities,
+        "services_of": services_of,
+        "tiers": tiers,
+        "groups": groups,
+        "schedule": schedule,
+        "holidays": holidays,
+    }
+
+
+@app.get("/reports/ready-to-publish", response_model=ReadyToPublishOut)
+def reports_ready_to_publish(
+    include_test_orders: bool = Query(False),
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Samples ready to publish: every live parent line verified, or an open
+    "Ready for Publish" / "Ready for Partial Publish" flag on the sample.
+
+    Rows are returned most-critical-first (SLA red → amber → green → none,
+    then least time remaining, then priority, then oldest received); the
+    browser groups by order and never re-sorts across groups. SLA and colour
+    come from ``sla_engine`` with the tier's own amber threshold, so the
+    column here and the one on Order Status cannot disagree. Test orders
+    (billing e-mail in TEST_EMAILS) are excluded unless
+    ``include_test_orders=true``. Plain ``def`` on purpose: the DB work is
+    synchronous and runs in the threadpool.
+    """
+    from ready_to_publish import build_ready_rows, resolve_ready_flag_kinds, sort_rows
+
+    try:
+        inputs = _load_ready_to_publish_inputs(db)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
+    excluded = frozenset() if include_test_orders else frozenset(_test_order_senaite_ids())
+    now_utc = datetime.now(timezone.utc)
+    rows = sort_rows(build_ready_rows(
+        **inputs, now=now_utc.replace(tzinfo=None), excluded_sample_ids=excluded,
+    ))
+    kinds = resolve_ready_flag_kinds(inputs["flag_types"])
+    totals = {
+        "rows": len(rows),
+        "orders": len({r["order"] for r in rows}),
+        "all_verified": sum(1 for r in rows if "all_verified" in r["reasons"]),
+        "flag_ready": sum(1 for r in rows if "flag_ready" in r["reasons"]),
+        "flag_partial": sum(1 for r in rows if "flag_partial" in r["reasons"]),
+        "breached": sum(1 for r in rows if r["sla"] and r["sla"]["breached"]),
+    }
+    return {
+        "generated_at": now_utc.isoformat().replace("+00:00", "Z"),
+        "rows": rows,
+        "totals": totals,
+        "flag_types": [
+            {"slug": ft.slug, "label": ft.label, "color": ft.color, "kind": kinds[ft.slug]}
+            for ft in inputs["flag_types"] if ft.slug in kinds
+        ],
+    }
+
+
 # ── Reports read-model: source-set SQL ─────────────────────────────
 # `published_coa_results` mirrors published PRIMARY COAs only — one row per
 # analyte per LAB RESULT, which is the grain every reader assumes.

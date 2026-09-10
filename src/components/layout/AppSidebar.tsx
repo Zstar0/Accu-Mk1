@@ -120,6 +120,7 @@ const navItems: NavItem[] = [
     subItems: [
       { id: 'dashboard', label: 'Dashboard' },
       { id: 'checkin-times', label: 'Check-In Times' },
+      { id: 'ready-to-publish', label: 'Ready to Publish' },
       { id: 'throughput', label: 'Lab Throughput' },
       { id: 'sla-performance', label: 'SLA Performance' },
       { id: 'bottlenecks', label: 'Bottlenecks' },

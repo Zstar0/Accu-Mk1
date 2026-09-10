@@ -8191,3 +8191,72 @@ export async function mintCaptureToken(args: {
     throw new Error(`mintCaptureToken failed: ${response.status}`)
   return response.json()
 }
+
+// ─── Ready to Publish report ───────────────────────────────────────────────
+
+export type ReadyReason = 'all_verified' | 'flag_ready' | 'flag_partial'
+
+export interface ReadyFlag {
+  id: number
+  type: string
+  kind: 'flag_ready' | 'flag_partial'
+  label: string
+  color: string
+  status: string
+  title: string
+}
+
+export interface ReadySla {
+  tier: string
+  target_minutes: number
+  elapsed_minutes: number
+  remaining_minutes: number
+  breached: boolean
+  color: 'red' | 'amber' | 'green'
+}
+
+export interface ReadyRow {
+  sample_id: string
+  status: string
+  client: string | null
+  order: string
+  email: string | null
+  created_at: string | null
+  received_at: string | null
+  lot: string | null
+  analytes: string[]
+  reasons: ReadyReason[]
+  flags: ReadyFlag[]
+  lines: { total: number; verified: number; pending: string[] }
+  priority: string
+  sla: ReadySla | null
+}
+
+export interface ReadyToPublishReport {
+  generated_at: string
+  rows: ReadyRow[]
+  totals: {
+    rows: number
+    orders: number
+    all_verified: number
+    flag_ready: number
+    flag_partial: number
+    breached: number
+  }
+  flag_types: { slug: string; label: string; color: string; kind: string }[]
+}
+
+export async function getReadyToPublish(
+  query: { includeTestOrders?: boolean } = {}
+): Promise<ReadyToPublishReport> {
+  const qs = new URLSearchParams()
+  if (query.includeTestOrders) qs.set('include_test_orders', 'true')
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  const response = await fetch(
+    `${API_BASE_URL()}/reports/ready-to-publish${suffix}`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok)
+    throw new Error(`Ready to publish failed: ${response.status}`)
+  return response.json()
+}
