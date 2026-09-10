@@ -12,12 +12,10 @@ import {
   type AssignInput,
   type Priority,
 } from '@/lib/api-priorities'
+import { priorityQueryKeys } from '@/services/priority-keys'
 import { slaQueryKeys } from '@/services/sla'
 
-export const priorityQueryKeys = {
-  all: ['priorities'] as const,
-  customers: ['priorities', 'customers'] as const,
-}
+export { priorityQueryKeys } from '@/services/priority-keys'
 
 export function usePriorities() {
   return useQuery({

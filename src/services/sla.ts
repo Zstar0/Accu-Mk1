@@ -5,6 +5,7 @@ import {
   getSlaPriorityTiers, setSlaPriorityTier, deleteSlaPriorityTier,
   type SlaTier, type SlaTierCreate, type SlaTierUpdate,
 } from '@/lib/api'
+import { priorityQueryKeys } from '@/services/priority-keys'
 
 export const slaQueryKeys = {
   tiers: ['sla', 'tiers'] as const,
@@ -63,7 +64,13 @@ export function useSetPriorityTier() {
       slaTierId: number
       serviceGroupId?: number | null
     }) => setSlaPriorityTier(priority, slaTierId, serviceGroupId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: slaQueryKeys.priorityTiers }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: slaQueryKeys.priorityTiers })
+      // `Priority.sla_tier_id` is derived from the same DB row this writes,
+      // and the catalog query is cached for 5 minutes - without this the
+      // Priorities pane keeps showing the tier it had before this edit.
+      qc.invalidateQueries({ queryKey: priorityQueryKeys.all })
+    },
     onError: (e: Error) => toast.error(e.message),
   })
 }
@@ -80,7 +87,13 @@ export function useDeletePriorityTier() {
       priority: string
       serviceGroupId?: number | null
     }) => deleteSlaPriorityTier(priority, serviceGroupId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: slaQueryKeys.priorityTiers }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: slaQueryKeys.priorityTiers })
+      // `Priority.sla_tier_id` is derived from the same DB row this writes,
+      // and the catalog query is cached for 5 minutes - without this the
+      // Priorities pane keeps showing the tier it had before this edit.
+      qc.invalidateQueries({ queryKey: priorityQueryKeys.all })
+    },
     onError: (e: Error) => toast.error(e.message),
   })
 }

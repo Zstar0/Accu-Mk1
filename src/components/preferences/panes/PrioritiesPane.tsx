@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowDown, ArrowUp, Plus, Search } from 'lucide-react'
+import { ArrowDown, ArrowUp, Loader2, Plus, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
@@ -47,6 +47,17 @@ const COLORS: PriorityColor[] = [
 ]
 const NONE = '__none__'
 
+function PaneSpinner() {
+  return (
+    <div
+      data-testid="pane-spinner"
+      className="flex items-center justify-center py-8"
+    >
+      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+    </div>
+  )
+}
+
 export function PrioritiesPane() {
   const { t } = useTranslation()
   // Catalog editing is admin work, but per the Task 5 ruling nothing is gated
@@ -55,10 +66,10 @@ export function PrioritiesPane() {
   // to flip when gating lands: thread `disabled={!isAdmin}` down from here,
   // the way SlaPane does.
   const isAdmin = useAuthStore(state => state.user?.role === 'admin')
-  const { data: list = [] } = usePriorities()
+  const listQuery = usePriorities()
   const { data: tiers = [] } = useSlaTiers()
   const m = usePriorityMutations()
-  const sorted = [...list].sort(
+  const sorted = [...(listQuery.data ?? [])].sort(
     (a, b) => b.rank - a.rank || a.name.localeCompare(b.name)
   )
   const patch = (
@@ -71,6 +82,13 @@ export function PrioritiesPane() {
     const a = sorted[i],
       b = sorted[j]
     if (!a || !b) return
+    if (a.rank === b.rank) {
+      // Equal ranks sort by name, so swapping them is a no-op the user would
+      // read as a broken button. Nudge the moved row one step past its
+      // neighbour instead (j < i means it is moving up, i.e. to a higher rank).
+      patch(a.key, { rank: j < i ? b.rank + 1 : b.rank - 1 })
+      return
+    }
     patch(a.key, { rank: b.rank })
     patch(b.key, { rank: a.rank })
   }
@@ -79,6 +97,17 @@ export function PrioritiesPane() {
     id == null
       ? t('preferences.prioritiesPane.followProfile')
       : (tiers.find(ti => ti.id === id)?.name ?? String(id))
+
+  // The catalog is the whole pane's subject: rendering an Add form beside an
+  // empty table would read a failed fetch as "no priorities exist".
+  if (listQuery.isLoading) return <PaneSpinner />
+  if (listQuery.isError) {
+    return (
+      <p className="text-sm text-destructive">
+        {t('preferences.prioritiesPane.loadError')}
+      </p>
+    )
+  }
 
   return (
     <div className="space-y-8" data-admin={isAdmin}>
@@ -110,13 +139,37 @@ export function PrioritiesPane() {
                   {p.name}
                 </span>
                 <Input
+                  // Keyed on the server-side name: whenever the true name
+                  // changes the input remounts on it, so an uncontrolled
+                  // defaultValue can never drift from what the row is called.
+                  key={`${p.key}:${p.name}`}
                   defaultValue={p.name}
-                  aria-label={`Name ${p.name}`}
+                  aria-label={t('preferences.prioritiesPane.aria.name', {
+                    name: p.name,
+                  })}
                   className="h-8 w-44"
-                  onBlur={e =>
-                    e.target.value !== p.name &&
-                    patch(p.key, { name: e.target.value })
-                  }
+                  onBlur={e => {
+                    const el = e.target
+                    const next = el.value.trim()
+                    // A blank field is not a rename; put the real name back
+                    // rather than leaving the row looking nameless.
+                    if (!next) {
+                      el.value = p.name
+                      return
+                    }
+                    if (next === p.name) return
+                    // A rejected rename leaves the catalog (and therefore the
+                    // remount key) unchanged, so the field has to be restored
+                    // by hand or it keeps showing a name the server refused.
+                    m.patch.mutate(
+                      { key: p.key, body: { name: next } },
+                      {
+                        onError: () => {
+                          el.value = p.name
+                        },
+                      }
+                    )
+                  }}
                 />
                 <span className="font-mono text-xs text-muted-foreground">
                   rank {p.rank}
@@ -124,7 +177,9 @@ export function PrioritiesPane() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  aria-label={`Move up ${p.name}`}
+                  aria-label={t('preferences.prioritiesPane.aria.moveUp', {
+                    name: p.name,
+                  })}
                   disabled={i === 0}
                   onClick={() => swapRank(i, i - 1)}
                 >
@@ -133,7 +188,9 @@ export function PrioritiesPane() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  aria-label={`Move down ${p.name}`}
+                  aria-label={t('preferences.prioritiesPane.aria.moveDown', {
+                    name: p.name,
+                  })}
                   disabled={i === sorted.length - 1}
                   onClick={() => swapRank(i, i + 1)}
                 >
@@ -145,7 +202,9 @@ export function PrioritiesPane() {
                 >
                   <SelectTrigger
                     className="h-8 w-40"
-                    aria-label={`Icon ${p.name}`}
+                    aria-label={t('preferences.prioritiesPane.aria.icon', {
+                      name: p.name,
+                    })}
                   >
                     {/* Explicit children: a closed Radix Select has no mounted
                         item to portal its label from. */}
@@ -167,7 +226,9 @@ export function PrioritiesPane() {
                 >
                   <SelectTrigger
                     className="h-8 w-28"
-                    aria-label={`Color ${p.name}`}
+                    aria-label={t('preferences.prioritiesPane.aria.color', {
+                      name: p.name,
+                    })}
                   >
                     <SelectValue>{p.color}</SelectValue>
                   </SelectTrigger>
@@ -182,7 +243,9 @@ export function PrioritiesPane() {
                 <label className="flex items-center gap-1 text-xs">
                   <Switch
                     checked={p.pulse}
-                    aria-label={`Pulse ${p.name}`}
+                    aria-label={t('preferences.prioritiesPane.aria.pulse', {
+                      name: p.name,
+                    })}
                     onCheckedChange={v => patch(p.key, { pulse: v })}
                   />{' '}
                   {t('preferences.prioritiesPane.pulse')}
@@ -197,7 +260,9 @@ export function PrioritiesPane() {
                 >
                   <SelectTrigger
                     className="h-8 w-52"
-                    aria-label={`SLA tier ${p.name}`}
+                    aria-label={t('preferences.prioritiesPane.aria.slaTier', {
+                      name: p.name,
+                    })}
                   >
                     <SelectValue>{tierName(p.sla_tier_id)}</SelectValue>
                   </SelectTrigger>
@@ -219,7 +284,9 @@ export function PrioritiesPane() {
                     type="radio"
                     name="default-priority"
                     checked={p.is_default}
-                    aria-label={`Default ${p.name}`}
+                    aria-label={t('preferences.prioritiesPane.aria.default', {
+                      name: p.name,
+                    })}
                     onChange={() => m.setDefault.mutate(p.key)}
                   />{' '}
                   {t('preferences.prioritiesPane.default')}
@@ -230,7 +297,9 @@ export function PrioritiesPane() {
                   <Switch
                     checked={p.is_active}
                     disabled={p.is_default}
-                    aria-label={`Active ${p.name}`}
+                    aria-label={t('preferences.prioritiesPane.aria.active', {
+                      name: p.name,
+                    })}
                     onCheckedChange={v => patch(p.key, { is_active: v })}
                   />{' '}
                   {t('preferences.prioritiesPane.active')}
@@ -273,7 +342,8 @@ export function PrioritiesPane() {
 
 function CustomerPrioritiesSection({ priorities }: { priorities: Priority[] }) {
   const { t } = useTranslation()
-  const { data: rows = [] } = useCustomerPriorities()
+  const rowsQuery = useCustomerPriorities()
+  const rows = rowsQuery.data ?? []
   const assign = useAssignPriority()
   const [q, setQ] = useState('')
   const [found, setFound] = useState<CustomerSeen[]>([])
@@ -324,7 +394,10 @@ function CustomerPrioritiesSection({ priorities }: { priorities: Priority[] }) {
               >
                 <SelectTrigger
                   className="h-8 w-44"
-                  aria-label={`Set priority for ${c.customer_email}`}
+                  aria-label={t(
+                    'preferences.prioritiesPane.aria.setPriorityFor',
+                    { email: c.customer_email }
+                  )}
                 >
                   <SelectValue
                     placeholder={t('preferences.prioritiesPane.setPriority')}
@@ -342,48 +415,65 @@ function CustomerPrioritiesSection({ priorities }: { priorities: Priority[] }) {
           ))}
         </ul>
       )}
-      <table className="mt-4 w-full text-sm">
-        <thead className="text-xs uppercase text-muted-foreground">
-          <tr>
-            <th className="text-start">Customer</th>
-            <th className="text-start">Priority</th>
-            <th className="text-start">Note</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(r => (
-            <tr key={r.wp_customer_user_id} className="border-t">
-              <td className="py-1">
-                {r.customer_name ?? r.wp_customer_user_id}{' '}
-                <span className="text-muted-foreground">
-                  {r.customer_email}
-                </span>
-              </td>
-              <td>
-                {priorities.find(p => p.key === r.priority_key)?.name ??
-                  r.priority_key}
-              </td>
-              <td className="text-muted-foreground">{r.note}</td>
-              <td className="text-end">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() =>
-                    assign.mutate({
-                      level: 'customer',
-                      id: String(r.wp_customer_user_id),
-                      priority_key: null,
-                    })
-                  }
-                >
-                  {t('preferences.prioritiesPane.clear')}
-                </Button>
-              </td>
+      {/* Only the assignment table waits on its query — the search above it
+          works regardless, so gating the whole section would take away a
+          working control. */}
+      {rowsQuery.isLoading ? (
+        <PaneSpinner />
+      ) : rowsQuery.isError ? (
+        <p className="mt-4 text-sm text-destructive">
+          {t('preferences.prioritiesPane.loadError')}
+        </p>
+      ) : (
+        <table className="mt-4 w-full text-sm">
+          <thead className="text-xs uppercase text-muted-foreground">
+            <tr>
+              <th className="text-start">
+                {t('preferences.prioritiesPane.columns.customer')}
+              </th>
+              <th className="text-start">
+                {t('preferences.prioritiesPane.columns.priority')}
+              </th>
+              <th className="text-start">
+                {t('preferences.prioritiesPane.columns.note')}
+              </th>
+              <th />
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map(r => (
+              <tr key={r.wp_customer_user_id} className="border-t">
+                <td className="py-1">
+                  {r.customer_name ?? r.wp_customer_user_id}{' '}
+                  <span className="text-muted-foreground">
+                    {r.customer_email}
+                  </span>
+                </td>
+                <td>
+                  {priorities.find(p => p.key === r.priority_key)?.name ??
+                    r.priority_key}
+                </td>
+                <td className="text-muted-foreground">{r.note}</td>
+                <td className="text-end">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      assign.mutate({
+                        level: 'customer',
+                        id: String(r.wp_customer_user_id),
+                        priority_key: null,
+                      })
+                    }
+                  >
+                    {t('preferences.prioritiesPane.clear')}
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </SettingsSection>
   )
 }

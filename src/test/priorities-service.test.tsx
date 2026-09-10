@@ -2,6 +2,22 @@ import { describe, it, expect, vi } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
+import type * as ApiModule from '@/lib/api'
+
+// The SLA priority-tier mutations write the same DB row that carries
+// `Priority.sla_tier_id`, so they have to invalidate the catalog too.
+const setSlaPriorityTierMock = vi.fn().mockResolvedValue({})
+const deleteSlaPriorityTierMock = vi.fn().mockResolvedValue(undefined)
+vi.mock('@/lib/api', async () => ({
+  ...(await vi.importActual<typeof ApiModule>('@/lib/api')),
+  setSlaPriorityTier: (
+    priority: string,
+    slaTierId: number,
+    serviceGroupId?: number | null
+  ) => setSlaPriorityTierMock(priority, slaTierId, serviceGroupId),
+  deleteSlaPriorityTier: (priority: string, serviceGroupId?: number | null) =>
+    deleteSlaPriorityTierMock(priority, serviceGroupId),
+}))
 
 vi.mock('@/lib/api-priorities', () => ({
   getPriorities: vi.fn(async () => [
@@ -55,6 +71,7 @@ import {
   useAssignPriority,
   priorityQueryKeys,
 } from '@/services/priorities'
+import { useDeletePriorityTier, useSetPriorityTier } from '@/services/sla'
 
 function wrapper({ children }: { children: ReactNode }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -96,6 +113,39 @@ describe('useAssignPriority', () => {
       expect(qc.getQueryState(priorityQueryKeys.customers)?.isInvalidated).toBe(
         true
       )
+    )
+  })
+})
+describe('SLA priority-tier mutations', () => {
+  function seeded() {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    qc.setQueryData(priorityQueryKeys.all, [])
+    expect(qc.getQueryState(priorityQueryKeys.all)?.isInvalidated).toBe(false)
+    return {
+      qc,
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+      ),
+    }
+  }
+
+  it('invalidates the priorities catalog after setting a tier', async () => {
+    const { qc, wrapper } = seeded()
+    const { result } = renderHook(() => useSetPriorityTier(), { wrapper })
+    await result.current.mutateAsync({ priority: 'expedited', slaTierId: 2 })
+    await waitFor(() =>
+      expect(qc.getQueryState(priorityQueryKeys.all)?.isInvalidated).toBe(true)
+    )
+  })
+
+  it('invalidates the priorities catalog after deleting a tier override', async () => {
+    const { qc, wrapper } = seeded()
+    const { result } = renderHook(() => useDeletePriorityTier(), { wrapper })
+    await result.current.mutateAsync({ priority: 'expedited' })
+    await waitFor(() =>
+      expect(qc.getQueryState(priorityQueryKeys.all)?.isInvalidated).toBe(true)
     )
   })
 })

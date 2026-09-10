@@ -678,17 +678,25 @@ const NONE = '__none__'
 
 export function PrioritiesPane() {
   const { t } = useTranslation()
-  const { data: list = [] } = usePriorities()
+  const listQuery = usePriorities()
   const { data: tiers = [] } = useSlaTiers()
   const m = usePriorityMutations()
-  const sorted = [...list].sort((a, b) => b.rank - a.rank || a.name.localeCompare(b.name))
+  const sorted = [...(listQuery.data ?? [])].sort((a, b) => b.rank - a.rank || a.name.localeCompare(b.name))
   const patch = (key: string, body: Parameters<typeof m.patch.mutate>[0]['body']) => m.patch.mutate({ key, body })
   const swapRank = (i: number, j: number) => {
     const a = sorted[i], b = sorted[j]
     if (!a || !b) return
+    // Equal ranks tie-break by name, so a swap would be a visible no-op; nudge
+    // the moved row one step past its neighbour instead (j < i = moving up).
+    if (a.rank === b.rank) { patch(a.key, { rank: j < i ? b.rank + 1 : b.rank - 1 }); return }
     patch(a.key, { rank: b.rank }); patch(b.key, { rank: a.rank })
   }
   const [newName, setNewName] = useState('')
+
+  // A failed catalog fetch must not render as an empty catalog beside a live
+  // Add form (same spinner/loadError shape as SlaPane).
+  if (listQuery.isLoading) return <PaneSpinner />
+  if (listQuery.isError) return <p className="text-sm text-destructive">{t('preferences.prioritiesPane.loadError')}</p>
 
   return (
     <div className="space-y-8">
@@ -699,25 +707,25 @@ export function PrioritiesPane() {
             <div key={p.key} data-testid="priority-row" className="grid grid-cols-[28px_1fr_auto] items-center gap-3 px-3 py-2">
               <PriorityGlyph priority={{ key: p.key, rank: p.rank, source_level: 'sample', source_id: null }} size="card" />
               <div className="flex flex-wrap items-center gap-2">
-                <Input defaultValue={p.name} aria-label={`Name ${p.name}`} className="h-8 w-44"
+                <Input defaultValue={p.name} aria-label={t('preferences.prioritiesPane.aria.name', { name: p.name })} className="h-8 w-44"
                   onBlur={e => e.target.value !== p.name && patch(p.key, { name: e.target.value })} />
                 <span className="font-mono text-xs text-muted-foreground">rank {p.rank}</span>
-                <Button variant="ghost" size="icon" aria-label={`Move up ${p.name}`} disabled={i === 0} onClick={() => swapRank(i, i - 1)}><ArrowUp size={14} /></Button>
-                <Button variant="ghost" size="icon" aria-label={`Move down ${p.name}`} disabled={i === sorted.length - 1} onClick={() => swapRank(i, i + 1)}><ArrowDown size={14} /></Button>
+                <Button variant="ghost" size="icon" aria-label={t('preferences.prioritiesPane.aria.moveUp', { name: p.name })} disabled={i === 0} onClick={() => swapRank(i, i - 1)}><ArrowUp size={14} /></Button>
+                <Button variant="ghost" size="icon" aria-label={t('preferences.prioritiesPane.aria.moveDown', { name: p.name })} disabled={i === sorted.length - 1} onClick={() => swapRank(i, i + 1)}><ArrowDown size={14} /></Button>
                 <Select value={p.icon} onValueChange={v => patch(p.key, { icon: v as PriorityIcon })}>
-                  <SelectTrigger className="h-8 w-40" aria-label={`Icon ${p.name}`}><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="h-8 w-40" aria-label={t('preferences.prioritiesPane.aria.icon', { name: p.name })}><SelectValue /></SelectTrigger>
                   <SelectContent>{ICONS.map(ic => <SelectItem key={ic} value={ic}>{ic}</SelectItem>)}</SelectContent>
                 </Select>
                 <Select value={p.color} onValueChange={v => patch(p.key, { color: v as PriorityColor })}>
-                  <SelectTrigger className="h-8 w-28" aria-label={`Color ${p.name}`}><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="h-8 w-28" aria-label={t('preferences.prioritiesPane.aria.color', { name: p.name })}><SelectValue /></SelectTrigger>
                   <SelectContent>{COLORS.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
                 </Select>
                 <label className="flex items-center gap-1 text-xs">
-                  <Switch checked={p.pulse} aria-label={`Pulse ${p.name}`} onCheckedChange={v => patch(p.key, { pulse: v })} /> {t('preferences.priorities.pulse')}
+                  <Switch checked={p.pulse} aria-label={t('preferences.prioritiesPane.aria.pulse', { name: p.name })} onCheckedChange={v => patch(p.key, { pulse: v })} /> {t('preferences.priorities.pulse')}
                 </label>
                 <Select value={p.sla_tier_id == null ? NONE : String(p.sla_tier_id)}
                   onValueChange={v => patch(p.key, { sla_tier_id: v === NONE ? null : Number(v) })}>
-                  <SelectTrigger className="h-8 w-52" aria-label={`SLA tier ${p.name}`}><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="h-8 w-52" aria-label={t('preferences.prioritiesPane.aria.slaTier', { name: p.name })}><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value={NONE}>{t('preferences.priorities.followProfile')}</SelectItem>
                     {tiers.map(tier => <SelectItem key={tier.id} value={String(tier.id)}>{tier.name}</SelectItem>)}
@@ -726,8 +734,8 @@ export function PrioritiesPane() {
               </div>
               <div className="flex items-center gap-3 text-xs">
                 <label className="flex items-center gap-1"><input type="radio" name="default-priority" checked={p.is_default}
-                  aria-label={`Default ${p.name}`} onChange={() => m.setDefault.mutate(p.key)} /> {t('preferences.priorities.default')}</label>
-                <label className="flex items-center gap-1"><Switch checked={p.is_active} disabled={p.is_default} aria-label={`Active ${p.name}`}
+                  aria-label={t('preferences.prioritiesPane.aria.default', { name: p.name })} onChange={() => m.setDefault.mutate(p.key)} /> {t('preferences.priorities.default')}</label>
+                <label className="flex items-center gap-1"><Switch checked={p.is_active} disabled={p.is_default} aria-label={t('preferences.prioritiesPane.aria.active', { name: p.name })}
                   onCheckedChange={v => patch(p.key, { is_active: v })} /> {t('preferences.priorities.active')}</label>
               </div>
             </div>
@@ -764,7 +772,7 @@ function CustomerPrioritiesSection({ priorities }: { priorities: Priority[] }) {
             <li key={c.wp_customer_user_id} className="flex items-center justify-between gap-3 px-3 py-2">
               <span>{c.customer_name ?? '—'} <span className="text-muted-foreground">{c.customer_email}</span></span>
               <Select onValueChange={v => assign.mutate({ level: 'customer', id: String(c.wp_customer_user_id), priority_key: v })}>
-                <SelectTrigger className="h-8 w-44" aria-label={`Set priority for ${c.customer_email}`}><SelectValue placeholder={t('preferences.priorities.setPriority')} /></SelectTrigger>
+                <SelectTrigger className="h-8 w-44" aria-label={t('preferences.prioritiesPane.aria.setPriorityFor', { email: c.customer_email })}><SelectValue placeholder={t('preferences.priorities.setPriority')} /></SelectTrigger>
                 <SelectContent>{priorities.map(p => <SelectItem key={p.key} value={p.key}>{p.name}</SelectItem>)}</SelectContent>
               </Select>
             </li>
@@ -772,7 +780,7 @@ function CustomerPrioritiesSection({ priorities }: { priorities: Priority[] }) {
         </ul>
       )}
       <table className="mt-4 w-full text-sm">
-        <thead className="text-xs uppercase text-muted-foreground"><tr><th className="text-start">Customer</th><th className="text-start">Priority</th><th className="text-start">Note</th><th /></tr></thead>
+        <thead className="text-xs uppercase text-muted-foreground"><tr><th className="text-start">{t('preferences.prioritiesPane.columns.customer')}</th><th className="text-start">{t('preferences.prioritiesPane.columns.priority')}</th><th className="text-start">{t('preferences.prioritiesPane.columns.note')}</th><th /></tr></thead>
         <tbody>
           {rows.map(r => (
             <tr key={r.wp_customer_user_id} className="border-t">
@@ -789,7 +797,7 @@ function CustomerPrioritiesSection({ priorities }: { priorities: Priority[] }) {
 }
 ```
 
-Add to `locales/en.json` under `preferences`: `"priorities": "Priorities"` and a `"priorities"` object is not possible with the same key; use `"prioritiesPane": { "title": "Priorities", "description": "Manage sample priorities, their glyph, and the SLA tier each maps to. Default follows the analysis profile or service group tier.", "pulse": "Pulse", "followProfile": "Follow profile / group tier", "default": "Default", "active": "Active", "newName": "New priority name", "add": "Add", "customers": "Customer priorities", "customersDescription": "Set a priority for a customer account; their orders and samples inherit it unless overridden.", "searchCustomer": "Search customers seen on orders", "setPriority": "Set priority", "clear": "Clear" }` and reference `t('preferences.prioritiesPane.*')` in the component (rename the keys above accordingly).
+Add to `locales/en.json` under `preferences`: `"priorities": "Priorities"` and a `"priorities"` object is not possible with the same key; use `"prioritiesPane": { "title": "Priorities", "description": "Manage sample priorities, their glyph, and the SLA tier each maps to. Default follows the analysis profile or service group tier.", "pulse": "Pulse", "followProfile": "Follow profile / group tier", "default": "Default", "active": "Active", "newName": "New priority name", "add": "Add", "customers": "Customer priorities", "customersDescription": "Set a priority for a customer account; their orders and samples inherit it unless overridden.", "searchCustomer": "Search customers seen on orders", "setPriority": "Set priority", "clear": "Clear" }` and reference `t('preferences.prioritiesPane.*')` in the component (rename the keys above accordingly). Plus `"loadError": "Failed to load priorities."`, `"columns": { "customer", "priority", "note" }` for the customer table headers, and an `"aria"` group (`name`/`moveUp`/`moveDown`/`icon`/`color`/`pulse`/`slaTier`/`default`/`active` as `"... {{name}}"`, `setPriorityFor` as `"Set priority for {{email}}"`) so no screen-reader-visible English is built in JSX. The customer-assignment table gets the same spinner/`loadError` gate on its own query, while the section title and the customer search stay outside it (they work regardless).
 
 Register in `panes.tsx` and generalize `SlaPane.tsx`: replace `const OVERRIDABLE: ('high' | 'expedited')[] = ['high', 'expedited']` with `const { data: overridable = [] } = useActivePriorities()` and map `overridable.filter(p => !p.is_default)`, passing `p.key` where `priority` was used and `p.name` for the label; change `InboxPriority` imports in the pane to `string`.
 
