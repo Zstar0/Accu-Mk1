@@ -45,7 +45,9 @@ import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
 
 describe('SampleActivityLog priority lines', () => {
   it('renders a priority_audit event with its description, note and marker', async () => {
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
     // The Sheet renders through a portal, so query document.body, not the
     // render container.
     render(

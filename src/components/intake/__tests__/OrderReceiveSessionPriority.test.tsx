@@ -112,9 +112,7 @@ describe('OrderReceiveSession priority row', () => {
     expect(
       await screen.findByRole('combobox', { name: 'Priority' })
     ).toBeInTheDocument()
-    expect(
-      screen.queryByText(/values shown may be out of date/i)
-    ).toBeNull()
+    expect(screen.queryByText(/values shown may be out of date/i)).toBeNull()
   })
 
   it('shows the stale-details line when a details refresh failed', async () => {
