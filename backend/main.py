@@ -21341,11 +21341,16 @@ async def bulk_update_inbox(
                 detail=f"No native sample or vial for uid(s): {', '.join(unmapped)}",
             )
         for uid, (level, entity_id) in targets.items():
-            assign(
-                db, level=level, entity_id=entity_id,
-                priority_key=None if data.priority == "normal" else data.priority,
-                user_id=getattr(_current_user, "id", None), source="bulk",
-            )
+            try:
+                assign(
+                    db, level=level, entity_id=entity_id,
+                    priority_key=None if data.priority == "normal" else data.priority,
+                    user_id=getattr(_current_user, "id", None), source="bulk",
+                )
+            except ValueError as e:
+                # Same 400 the single-uid routes give (e.g. a key that was
+                # deactivated between page load and click) — never a 500.
+                raise HTTPException(status_code=400, detail=str(e))
 
     # Upsert analyst/instrument per bench scope as staging worksheet_items
     if data.analyst_id is not None or data.instrument_uid is not None:
