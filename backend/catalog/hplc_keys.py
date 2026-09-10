@@ -19,6 +19,9 @@ def hplc_primary_selected(services: dict | None) -> bool:
 
 
 def hplc_primary_count(entitlement: dict | None) -> int:
-    """Max entitlement across the primary keys (variance replicate count)."""
+    """Max entitlement across the primary keys (variance replicate count).
+
+    Precondition: values are ints, as produced by normalize_variance_entitlement.
+    """
     entitlement = entitlement or {}
     return max((int(entitlement.get(k, 0) or 0) for k in HPLC_PRIMARY_KEYS), default=0)
