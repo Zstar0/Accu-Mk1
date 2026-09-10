@@ -50,6 +50,15 @@ from throughput import (
     build_throughput,
     lab_day as throughput_lab_day,
 )
+from sla_engine import BusinessSchedule as SlaBusinessSchedule  # noqa: E402
+from sla_perf import (  # noqa: E402
+    AnalysisIn as SlaPerfAnalysisIn,
+    CoaIn as SlaPerfCoaIn,
+    GroupIn as SlaPerfGroupIn,
+    SampleIn as SlaPerfSampleIn,
+    TierIn as SlaPerfTierIn,
+    build_sla_performance,
+)
 from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment, MethodAttachment, method_services, LimsOrder
 from catalog.change_log import apply_and_log, log_create, log_delete, log_members
 from auth import (
@@ -10233,6 +10242,367 @@ def reports_throughput(
         report["days"] = [d for d in report["days"] if lo_iso <= d["d"] <= hi_iso]
         report["start"] = max(report["start"], lo_iso)
         report["end"] = min(report["end"], hi_iso)
+    report["generated_at"] = now_utc.isoformat().replace("+00:00", "Z")
+    return report
+
+
+class SlaPerfStatsOut(BaseModel):
+    n: int
+    ontime: int
+    late: int
+    rate: float
+    med: float
+    p75: float
+    p90: float
+    max: float
+
+
+class SlaPerfKpiOut(BaseModel):
+    last30: SlaPerfStatsOut
+    prev30: SlaPerfStatsOut
+
+
+class SlaPerfTargetOut(BaseModel):
+    name: str
+    bh: float
+    samples: int
+
+
+class SlaPerfTotalsOut(BaseModel):
+    samples: int
+    delivered: int
+    open: int
+    cancelled: int
+
+
+class SlaPerfMonthOut(BaseModel):
+    m: str
+    label: str
+    received: int
+    delivered: int
+    open: int
+    ontime: int
+    late: int
+    open_late: int
+    rate_delivered: float
+    rate_received: float
+    med: float
+    p90: float
+
+
+class SlaPerfCurvePointOut(BaseModel):
+    bh: int
+    n: int
+    cum_pct: float
+
+
+class SlaPerfCurveOut(BaseModel):
+    all: list[SlaPerfCurvePointOut]
+    recent: list[SlaPerfCurvePointOut]
+    recent_n: int
+    within_target: float
+
+
+class SlaPerfStageMonthOut(BaseModel):
+    m: str
+    label: str
+    n: int
+    bench: float
+    lag: float
+
+
+class SlaPerfStagesOut(BaseModel):
+    n: int
+    coverage: float
+    bench_med: float
+    bench_p90: float
+    lag_med: float
+    lag_p90: float
+    lag_share: float
+    lag_over_day: int
+    by_month: list[SlaPerfStageMonthOut]
+
+
+class SlaPerfGatingFamilyOut(BaseModel):
+    k: str
+    name: str
+    department: Optional[str] = None
+    n: int
+    med: float
+    p90: float
+    over_target: int
+    over_pct: float
+    gated: int
+    gated_late: int
+    gated_late_pct: float
+
+
+class SlaPerfGatingOut(BaseModel):
+    mixed: int
+    late_mixed: int
+    families: list[SlaPerfGatingFamilyOut]
+    # One dict per publication month: label, n, late_total, per-family medians and
+    # gate counts. Free-form because the family keys are data, not schema.
+    trend: list[dict]
+    wait_med: float
+    wait_p90: float
+    wait_n: int
+    wait_over_day: int
+    min_late_for_trend: int
+
+
+class SlaPerfRiskBucketOut(BaseModel):
+    label: str
+    n: int
+
+
+class SlaPerfOpenRowOut(BaseModel):
+    sid: str
+    client: Optional[str] = None
+    order: str
+    status: str
+    received: str
+    bh: float
+    over: float
+    families: list[str]
+
+
+class SlaPerfAtRiskOut(BaseModel):
+    total: int
+    late: int
+    buckets: list[SlaPerfRiskBucketOut]
+    status: dict[str, int]
+    rows: list[SlaPerfOpenRowOut]
+
+
+class SlaPerfFiltersOut(BaseModel):
+    client: Optional[str] = None
+    order: Optional[str] = None
+    departments: list[str]
+    families: list[str]
+
+
+class SlaPerfClientFacet(BaseModel):
+    name: str
+    samples: int
+
+
+class SlaPerfDepartmentFacet(BaseModel):
+    key: str
+    name: str
+    samples: int
+
+
+class SlaPerfFamilyFacet(BaseModel):
+    key: str
+    name: str
+    department: Optional[str] = None
+    samples: int
+
+
+class SlaPerfFacetsOut(BaseModel):
+    clients: list[SlaPerfClientFacet]
+    departments: list[SlaPerfDepartmentFacet]
+    families: list[SlaPerfFamilyFacet]
+
+
+class SlaPerfCacheOut(BaseModel):
+    stale: bool
+    age_seconds: int
+
+
+class SlaPerfReportOut(BaseModel):
+    start: str
+    today: str
+    tz: str
+    generated_at: str
+    target_bh: float
+    targets: list[SlaPerfTargetOut]
+    totals: SlaPerfTotalsOut
+    overall: SlaPerfStatsOut
+    kpi: SlaPerfKpiOut
+    months: list[SlaPerfMonthOut]
+    curve: SlaPerfCurveOut
+    stages: SlaPerfStagesOut
+    gating: SlaPerfGatingOut
+    at_risk: SlaPerfAtRiskOut
+    filters: SlaPerfFiltersOut
+    facets: SlaPerfFacetsOut
+    cache: SlaPerfCacheOut
+    notes: dict
+
+
+SlaPerfDepartmentKey = Literal["analytical", "microbiology", "heavy_metals"]
+SlaPerfFamilyKey = Literal["hplc", "ster", "endo", "bacw", "hm", "other"]
+
+# Row cache, same shape and reasoning as the throughput one: the fetch dominates
+# (Integration Service coa_generations plus the test-order scan), the engine is
+# ~ms, so filters are applied per request on cached rows. Separate cache because
+# this report needs verified_at, service ids and the SLA tier wiring, none of
+# which the throughput loader fetches.
+_SLA_PERF_CACHE_TTL_SECONDS = 60
+_sla_perf_rows_cache: dict = {}
+_sla_perf_rows_lock = _threading.Lock()
+
+
+def _sla_perf_rows(db: Session) -> tuple[dict, bool]:
+    """Return ``(rows, stale)``; refreshes once per TTL window.
+
+    A failed refresh with a warm cache serves the cached rows with
+    ``stale=True``; a cold cache raises the sibling reports' 503.
+    """
+    import time as _time
+
+    now = _time.monotonic()
+    cached = _sla_perf_rows_cache
+    if cached and now - cached["at"] < _SLA_PERF_CACHE_TTL_SECONDS:
+        return cached, False
+    with _sla_perf_rows_lock:
+        cached = _sla_perf_rows_cache
+        if cached and now - cached["at"] < _SLA_PERF_CACHE_TTL_SECONDS:
+            return cached, False
+        try:
+            coas = [
+                SlaPerfCoaIn(sample_id=c.sample_id, published_at=c.published_at, is_primary=c.is_primary)
+                for c in _fetch_throughput_coas()
+            ]
+            inputs = _load_sla_perf_inputs(db)
+            test_ids = frozenset(_test_order_senaite_ids())
+        except Exception as e:
+            if cached:
+                return cached, True
+            raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
+        _sla_perf_rows_cache.clear()
+        _sla_perf_rows_cache.update({"at": now, "coas": coas, "inputs": inputs, "test_ids": test_ids})
+        return _sla_perf_rows_cache, False
+
+
+def _load_sla_perf_inputs(db: Session) -> dict:
+    """Fetch the Mk1-side rows the SLA performance engine needs.
+
+    Returns the keyword arguments for ``sla_perf.build_sla_performance`` except
+    ``coas`` (Integration Service), ``now`` and the filter arguments. The
+    business schedule comes from the same ``business_hours_config`` row the SLA
+    column reads, so the report cannot drift from the app's own clock.
+    """
+    from models import LimsAnalysis
+
+    cfg = db.get(BusinessHoursConfig, 1)
+    tz = (cfg.timezone if cfg and cfg.timezone else "America/Los_Angeles")
+    working_days = frozenset(cfg.working_days) if cfg and cfg.working_days else frozenset({0, 1, 2, 3, 4})
+    schedule = SlaBusinessSchedule(
+        open_time=(cfg.open_time if cfg else time(9, 0)),
+        close_time=(cfg.close_time if cfg else time(17, 0)),
+        timezone=tz,
+        working_days=working_days,
+    )
+    holidays = frozenset(r[0] for r in db.execute(select(LabHoliday.holiday_date)).all())
+
+    # One day of slack: date_received is naive UTC while the series boundary is a
+    # lab-timezone day, and the engine re-applies the exact boundary anyway.
+    window_start = datetime.combine(THROUGHPUT_SERIES_START - date.resolution, time.min)
+    samples = [
+        SlaPerfSampleIn(pk=pk, sample_id=sid, date_received=received, status=status_,
+                        client=client_title, order=order_no)
+        for pk, sid, received, status_, client_title, order_no in db.execute(
+            select(
+                LimsSample.id,
+                LimsSample.sample_id,
+                LimsSample.date_received,
+                LimsSample.status,
+                LimsSample.client_title,
+                LimsSample.client_order_number,
+            ).where(LimsSample.date_received.is_not(None), LimsSample.date_received >= window_start)
+        ).all()
+    ]
+    # verified_at only exists on canonical rows, so the engine de-duplicates on
+    # (sample, keyword) keeping the latest — a shadow row must not erase it.
+    analyses = [
+        SlaPerfAnalysisIn(sample_pk=pk, keyword=kw, category=cat, verified_at=verified, service_id=svc)
+        for pk, kw, cat, verified, svc in db.execute(
+            select(
+                LimsAnalysis.lims_sample_pk,
+                LimsAnalysis.keyword,
+                AnalysisService.category,
+                LimsAnalysis.verified_at,
+                LimsAnalysis.analysis_service_id,
+            )
+            .join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id, isouter=True)
+            .where(LimsAnalysis.lims_sample_pk.is_not(None), LimsAnalysis.keyword.is_not(None))
+        ).all()
+    ]
+    tiers = [
+        SlaPerfTierIn(id=tid, name=name, target_minutes=target, is_default=bool(is_default))
+        for tid, name, target, is_default in db.execute(
+            select(SlaTier.id, SlaTier.name, SlaTier.target_minutes, SlaTier.is_default)
+        ).all()
+    ]
+    members: dict[int, set] = {}
+    for gid, svc_id in db.execute(
+        select(service_group_members.c.service_group_id, service_group_members.c.analysis_service_id)
+    ).all():
+        members.setdefault(gid, set()).add(svc_id)
+    groups = [
+        SlaPerfGroupIn(id=gid, name=name, sla_tier_id=tier_id,
+                       service_ids=frozenset(members.get(gid, set())))
+        for gid, name, tier_id in db.execute(
+            select(ServiceGroup.id, ServiceGroup.name, ServiceGroup.sla_tier_id)
+        ).all()
+    ]
+    return {
+        "samples": samples,
+        "analyses": analyses,
+        "tiers": tiers,
+        "groups": groups,
+        "schedule": schedule,
+        "holidays": holidays,
+    }
+
+
+@app.get("/reports/sla-performance", response_model=SlaPerfReportOut)
+def reports_sla_performance(
+    include_test_orders: bool = Query(False),
+    client: Optional[str] = Query(None, description="Exact customer (client_title), case-insensitive"),
+    order: Optional[str] = Query(None, description="Substring of client_order_number"),
+    department: list[SlaPerfDepartmentKey] = Query(default=[]),
+    family: list[SlaPerfFamilyKey] = Query(default=[]),
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """SLA performance: receipt to first primary COA against the configured
+    target, from Feb 2026 to today.
+
+    Companion to ``/reports/throughput`` — that one counts the work arriving,
+    this one measures what came back out and whether it was on time. Everything
+    is aggregated SERVER-side (cohorts, the delivery curve, stage split, the
+    department gating cut and the at-risk board), because the gating cut alone
+    needs a verified timestamp per (sample, family) and shipping those rows to
+    the browser would be far more expensive than the ~ms the engine costs.
+
+    Elapsed time and tier precedence come from ``sla_engine`` — the same
+    functions the SLA column uses — so the report and the app cannot disagree.
+    Test orders are excluded unless ``include_test_orders=true``.
+    ``client`` / ``order`` / ``department`` / ``family`` scope the report
+    server-side against a 60-second row cache; the response carries ``facets``
+    for the filter controls and ``filters`` echoing what was applied. Plain
+    ``def`` on purpose: the DB work is synchronous and runs in the threadpool.
+    """
+    import time as _time
+
+    rows, stale = _sla_perf_rows(db)
+    excluded = frozenset() if include_test_orders else rows["test_ids"]
+    now_utc = datetime.now(timezone.utc)
+    report = build_sla_performance(
+        **rows["inputs"],
+        coas=rows["coas"],
+        now=now_utc.replace(tzinfo=None),
+        excluded_sample_ids=excluded,
+        client=client,
+        order=order,
+        departments=list(department),
+        families=list(family),
+    )
+    report["cache"] = {"stale": stale, "age_seconds": int(max(0.0, _time.monotonic() - rows["at"]))}
     report["generated_at"] = now_utc.isoformat().replace("+00:00", "Z")
     return report
 

@@ -121,6 +121,7 @@ const navItems: NavItem[] = [
       { id: 'dashboard', label: 'Dashboard' },
       { id: 'checkin-times', label: 'Check-In Times' },
       { id: 'throughput', label: 'Lab Throughput' },
+      { id: 'sla-performance', label: 'SLA Performance' },
       { id: 'bottlenecks', label: 'Bottlenecks' },
       { id: 'sync-debug', label: 'Sync Debug', adminOnly: true },
     ],
