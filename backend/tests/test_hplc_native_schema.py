@@ -181,3 +181,79 @@ def test_slice1_boot_statements_execute_against_live_db():
     finally:
         outer.rollback()
         s.close()
+
+
+def _svc(db, keyword="HPLC-PURITY"):
+    from models import AnalysisService
+    svc = AnalysisService(title=keyword, keyword=keyword, origin="mk1")
+    db.add(svc)
+    db.flush()
+    return svc
+
+
+def _vial(db):
+    from models import LimsSample, LimsSubSample
+    parent = LimsSample(sample_id="P-9001")
+    db.add(parent)
+    db.flush()
+    vial = LimsSubSample(
+        parent_sample_pk=parent.id,
+        external_lims_uid="P-9001-S01",
+        sample_id="P-9001-S01",
+        vial_sequence=1,
+    )
+    db.add(vial)
+    db.flush()
+    return vial
+
+
+def test_create_analysis_stamps_peptide_id_slot_and_reason(db_session):
+    from lims_analyses.service import create_analysis
+    svc = _svc(db_session)
+    vial = _vial(db_session)
+    row = create_analysis(
+        db_session, host_kind="sub_sample", host_pk=vial.id,
+        analysis_service_id=svc.id, keyword=svc.keyword,
+        title="BPC-157 - Purity (HPLC)", peptide_id=None, slot=2,
+        reportable_reason="analyte_unresolved: Bpc 157", commit=False,
+    )
+    assert (row.slot, row.peptide_id, row.reportable_reason) == (
+        2, None, "analyte_unresolved: Bpc 157")
+
+
+def test_create_analysis_defaults_unchanged(db_session):
+    from lims_analyses.service import create_analysis
+    svc = _svc(db_session)
+    vial = _vial(db_session)
+    row = create_analysis(
+        db_session, host_kind="sub_sample", host_pk=vial.id,
+        analysis_service_id=svc.id, keyword=svc.keyword, title="t", commit=False,
+    )
+    assert row.slot is None and row.peptide_id is None and row.reportable_reason is None
+
+
+def test_senaite_shape_carries_peptide_id_and_slot():
+    from lims_analyses.schemas import SenaiteShapeAnalysisResponse
+    fields = SenaiteShapeAnalysisResponse.model_fields
+    assert "peptide_id" in fields and "slot" in fields
+    assert fields["peptide_id"].default is None and fields["slot"].default is None
+
+
+def test_retest_child_inherits_peptide_id_and_slot(db_session):
+    """The retest child is minted inside apply_transition(kind='retest')
+    (service.py's retest branch, ~line 479). Walk a fresh vial-tier row
+    through assign -> submit to reach 'to_be_verified' (the same setup
+    idiom as tests/test_vial_retest.py's _walk_to_tbv), then retest it and
+    confirm the child keeps the source row's slot/peptide_id identity."""
+    from lims_analyses.service import apply_transition, create_analysis
+    svc = _svc(db_session)
+    vial = _vial(db_session)
+    row = create_analysis(db_session, host_kind="sub_sample", host_pk=vial.id,
+                          analysis_service_id=svc.id, keyword=svc.keyword,
+                          title="t", slot=3, commit=False)
+    db_session.commit()
+    apply_transition(db_session, analysis_id=row.id, kind="assign", reason="t")
+    apply_transition(db_session, analysis_id=row.id, kind="submit",
+                     result_value="98.5", reason="t")
+    child = apply_transition(db_session, analysis_id=row.id, kind="retest", reason="t")
+    assert (child.slot, child.peptide_id) == (3, None)

@@ -194,6 +194,9 @@ def create_analysis(
     instrument_id: Optional[int] = None,
     created_by_user_id: Optional[int] = None,
     commit: bool = True,
+    peptide_id: Optional[int] = None,
+    slot: Optional[int] = None,
+    reportable_reason: Optional[str] = None,
 ) -> LimsAnalysis:
     """Insert a new lims_analyses row in state='unassigned'. Writes the
     initial audit row (from_state=NULL, to_state='unassigned',
@@ -223,6 +226,9 @@ def create_analysis(
         method_id=method_id,
         instrument_id=instrument_id,
         created_by_user_id=created_by_user_id,
+        peptide_id=peptide_id,
+        slot=slot,
+        reportable_reason=reportable_reason,
     )
     db.add(row)
     db.flush()  # populate row.id before writing the audit log
@@ -487,6 +493,8 @@ def apply_transition(
             review_state="unassigned",
             retest_of_id=row.id,
             created_by_user_id=user_id,
+            peptide_id=row.peptide_id,
+            slot=row.slot,
         )
         db.add(new_row)
         db.flush()  # populate new_row.id before audit rows
@@ -3585,6 +3593,8 @@ def _serialize_senaite_shape_rows(
             # extra lookup. See SenaiteShapeAnalysisResponse docstring.
             retest_of_id=r.retest_of_id,
             reportable=r.reportable,
+            peptide_id=r.peptide_id,
+            slot=r.slot,
         ))
     return out
 

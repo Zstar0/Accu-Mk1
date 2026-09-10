@@ -286,6 +286,11 @@ class SenaiteShapeAnalysisResponse(BaseModel):
     # new, optional fields — additive, no existing consumer reads them.
     retest_of_id: Optional[int] = None
     reportable: bool = True
+    # HPLC-native slice 1 (M1): the row's own peptide identity + blend slot,
+    # surfaced additively so the FE can render slot-aware blend rows without
+    # a second query. None for every pre-slice row and for non-blend rows.
+    peptide_id: Optional[int] = None
+    slot: Optional[int] = None
 
 
 # ─── Phase 4a: promote_to_parent response shapes ─────────────────────────────
