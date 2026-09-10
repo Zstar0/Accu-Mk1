@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.18.3 — 2026-09-10
+
+### Fixed
+- **Accu-Mk1 now owns the identity CONFORMS verdict on the COA wire.** P-1986 (HGH) rendered its identity DOES NOT CONFORM on the certificate although the stored result was a pass. In mk1 mode COABuilder derives the expected name from the registry analyte slot title — `lims_samples.analytes`, the check-in copy of the SENAITE service title, `"Somatropin - Identity (HPLC)"` — and does a `startswith` against the raw result the prep bridge wrote, which is the catalog peptide name `"HGH (Somatropin)"`. Two Mk1 catalog fields that disagree (service 264 vs peptide 235) made a conforming identity unsatisfiable, and nothing read SENAITE to get there. The new `coa/identity_verdict.py` evaluates the stored value with the existing identity rule against the linked peptide name, the service's legacy `peptide_name`, and the service-title prefix (fail tokens win), and `legacy_rows` emits the literal **`Conforms`** token when it passes — the same vocabulary the HPLC native-born design writes for native identity rows and one COABuilder's matcher already accepts. On a pass COABuilder prints the slot display name, never the raw string, so certificate text is unchanged; non-conforming, free-text and blank values ride raw and keep failing exactly as before. Measured against every production identity row (8,552): the only rows whose verdict changes are P-1986's three. Variance replicates and per-vial figures are deliberately untouched — their identity cell is customer-visible on the variance matrix. (#185)
+
 ## v1.18.2 — 2026-09-10
 
 ### Fixed
