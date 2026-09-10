@@ -26,9 +26,20 @@ assert set(Color.__args__) == set(PRIORITY_COLORS)
 
 
 def slugify(name: str) -> str:
+    """Build a key that ALWAYS satisfies KEY_RE.
+
+    A name with no Latin alphanumerics ("Прио") reduces to "", and one starting
+    with a digit ("2 Day Rush") yields a leading digit — both are rejected by
+    KEY_RE, which would make the created priority permanently unassignable.
+    Normalise both cases before the length cap.
+    """
     s = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
-    # Slice first, then re-strip: the cut can leave a trailing hyphen.
-    return s[:KEY_MAX].strip("-") or "priority"
+    if not s:
+        s = "priority"
+    if s[0].isdigit():
+        s = f"p-{s}"
+    # Slice last, then re-strip: the cut can leave a trailing hyphen.
+    return s[:KEY_MAX].strip("-")
 
 
 class PriorityOut(BaseModel):

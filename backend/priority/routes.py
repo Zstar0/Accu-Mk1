@@ -92,7 +92,7 @@ def set_default(key: str, db: Session = Depends(get_db), _=Depends(get_current_u
 def assign_one(body: AssignIn, db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
         res = service.assign(db, level=body.level, entity_id=body.id, priority_key=body.priority_key,
-                             user_id=user.get("id"), source="ui", note=body.note)
+                             user_id=getattr(user, "id", None), source="ui", note=body.note)
     except ValueError as e:
         raise HTTPException(422, str(e))
     db.commit()
@@ -106,7 +106,7 @@ def assign_bulk(body: BulkAssignIn, db: Session = Depends(get_db), user=Depends(
     try:
         for item in body.items:
             res = service.assign(db, level=item.level, entity_id=item.id, priority_key=item.priority_key,
-                                 user_id=user.get("id"), source="bulk", note=item.note)
+                                 user_id=getattr(user, "id", None), source="bulk", note=item.note)
             out.append(AssignOut(level=res.level, id=res.entity_id, old_key=res.old_key, new_key=res.new_key,
                                  affected_sample_pks=res.affected_sample_pks))
     except ValueError as e:
