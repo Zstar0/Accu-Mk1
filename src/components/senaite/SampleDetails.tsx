@@ -207,6 +207,8 @@ import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
 import { SampleRegistryDebug } from '@/components/senaite/SampleRegistryDebug'
 import { ReadSourceBanner } from '@/components/senaite/ReadSourceBanner'
 import { ReadSourceControls } from '@/components/senaite/ReadSourceControls'
+import { SamplePriorityRow } from '@/components/senaite/SamplePriorityRow'
+import { PriorityGlyph } from '@/components/common/PriorityGlyph'
 import {
   OrderedProducts,
   useOrderedProducts,
@@ -5022,6 +5024,10 @@ export function SampleDetails() {
                     {data.sample_type}
                   </Badge>
                 )}
+                {/* Effective priority for this sample — resolved server-side
+                    up the sample → order → customer chain. Renders nothing
+                    when the effective priority is the default. */}
+                <PriorityGlyph priority={data.priority} size="header" />
                 {/* Read-source indicator + tri-state override — parent-only.
                     The override only affects parent basic-info reads (see
                     resolveSampleData: sub-sample fetches are hardcoded to
@@ -5115,6 +5121,21 @@ export function SampleDetails() {
                       <RoleHeaderBadge role={currentAssignment} />
                     </>
                   )}
+                </div>
+              )}
+              {/* Vial-level priority control — sub-sample pages hide the main
+                  grid (parent-level sections), so the header is the only host.
+                  meVial is this vial's row in the parent's sub-samples list;
+                  its pk is the registry write target. */}
+              {!isParent && meVial && (
+                <div className="mt-1 max-w-[20rem]">
+                  <SamplePriorityRow
+                    level="vial"
+                    registryPk={meVial.id}
+                    explicitKey={meVial.priority_key ?? null}
+                    effective={meVial.priority}
+                    onAssigned={() => refreshSample(sampleId)}
+                  />
                 </div>
               )}
               <div className="text-xs text-muted-foreground mt-0.5">
@@ -5585,6 +5606,16 @@ export function SampleDetails() {
                     label="Date Received"
                     value={formatDate(data.date_received)}
                     sourceGlyph={fieldGlyph('date_received', 'Date Received')}
+                  />
+                  {/* Sample-level priority. registry_pk is present only once
+                      the sample has a lims_samples row (i.e. after receive);
+                      without it there is nothing to write against, so the row
+                      degrades to glyph + hint. */}
+                  <SamplePriorityRow
+                    registryPk={data.registry_pk}
+                    explicitKey={data.explicit_priority_key ?? null}
+                    effective={data.priority}
+                    onAssigned={() => refreshSample(sampleId)}
                   />
                 </div>
               </SectionHeader>
