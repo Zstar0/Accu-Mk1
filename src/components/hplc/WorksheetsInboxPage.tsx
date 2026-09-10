@@ -25,7 +25,7 @@ import {
 } from '@/lib/inbox-families'
 import { WorksheetDropPanel } from '@/components/hplc/WorksheetDropPanel'
 import { vialMatchesSampleId, vialMatchesAnalyte } from '@/lib/inbox-filters'
-import { useInboxSamples, usePriorityMutation } from '@/hooks/use-inbox-samples'
+import { useInboxSamples } from '@/hooks/use-inbox-samples'
 import {
   getWorksheetUsers,
   getInboxSamples,
@@ -37,7 +37,6 @@ import {
   updateWorksheet,
   deleteWorksheet,
   removeWorksheetItem,
-  type InboxPriority,
 } from '@/lib/api'
 import { useInboxLanes } from '@/services/inbox-lanes'
 import { useServiceGroups } from '@/services/service-groups'
@@ -239,8 +238,6 @@ export default function WorksheetsInboxPage() {
     }
   }
 
-  const priorityMutation = usePriorityMutation()
-
   const { data: users = [] } = useQuery({
     queryKey: ['worksheet-users'],
     queryFn: getWorksheetUsers,
@@ -350,10 +347,6 @@ export default function WorksheetsInboxPage() {
     (role === 'hplc' && analyteFilter.trim().length > 0) ||
     subRole.length > 0
   const displayCount = filtersActive ? visibleVials.length : total
-
-  function handlePriorityChange(sampleUid: string, priority: InboxPriority) {
-    priorityMutation.mutate({ sampleUid, priority })
-  }
 
   function clearFilters() {
     setSampleIdFilter('')
@@ -774,7 +767,6 @@ export default function WorksheetsInboxPage() {
                           hasVarianceSubs={varianceParents.has(
                             fam.parentSampleId
                           )}
-                          onPriorityChange={handlePriorityChange}
                           slaByKey={slaByKey}
                           slaLoading={slaLoading}
                           slaError={slaError}
@@ -790,7 +782,6 @@ export default function WorksheetsInboxPage() {
                         vial={vial}
                         groupedWithPrevious={idx > 0}
                         parentHasVarianceSubs={familyHasVariance}
-                        onPriorityChange={handlePriorityChange}
                         slaByKey={slaByKey}
                         slaLoading={slaLoading}
                         slaError={slaError}

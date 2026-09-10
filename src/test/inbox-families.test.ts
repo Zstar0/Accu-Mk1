@@ -47,13 +47,38 @@ describe('groupInboxFamilies', () => {
   })
 
   it('a mixed-priority family stays together, ranked by its most urgent vial', () => {
+    // Ordering reads the CATALOG RANK off `priority_effective`, not the legacy
+    // string. Parent ids are chosen so alphabetical tie-break would give the
+    // opposite order — only the rank can produce the expected one.
+    const eff = (key: string, rank: number) => ({
+      key,
+      rank,
+      source_level: 'vial' as const,
+      source_id: null,
+    })
     const fams = groupInboxFamilies([
-      vial({ uid: 'a1', parent_sample_id: 'P-0A', sample_id: 'P-0A-S01', priority: 'normal' }),
-      vial({ uid: 'b1', parent_sample_id: 'P-0B', sample_id: 'P-0B-S01', priority: 'high' }),
-      vial({ uid: 'a2', parent_sample_id: 'P-0A', sample_id: 'P-0A-S02', vial_sequence: 2, priority: 'expedited' }),
+      vial({
+        uid: 'b1',
+        parent_sample_id: 'P-0B',
+        sample_id: 'P-0B-S01',
+        priority_effective: eff('default', 0),
+      }),
+      vial({
+        uid: 'a1',
+        parent_sample_id: 'P-0A',
+        sample_id: 'P-0A-S01',
+        priority_effective: eff('high', 10),
+      }),
+      vial({
+        uid: 'b2',
+        parent_sample_id: 'P-0B',
+        sample_id: 'P-0B-S02',
+        vial_sequence: 2,
+        priority_effective: eff('expedited', 20),
+      }),
     ])
-    // P-0A ranks expedited (its best vial) and so sorts before P-0B (high)
-    expect(fams.map(f => f.parentSampleId)).toEqual(['P-0A', 'P-0B'])
+    // P-0B ranks 20 (its most urgent vial) and so sorts before P-0A (10).
+    expect(fams.map(f => f.parentSampleId)).toEqual(['P-0B', 'P-0A'])
     expect(fams[0]!.vials).toHaveLength(2)
   })
 

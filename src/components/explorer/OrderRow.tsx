@@ -10,6 +10,7 @@ import type {
 import type { OrderSlaVerdict } from '@/lib/sla-resolution'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 import { FlagIndicator } from '@/components/flags/FlagIndicator'
+import { PriorityGlyph } from '@/components/common/PriorityGlyph'
 import { OrderFinancePanel } from './OrderFinancePanel'
 import { OrderSlaCell } from './OrderSlaCell'
 import { SampleCard } from './SampleCard'
@@ -214,6 +215,7 @@ export function OrderRow({
                 )}
               </button>
             )}
+            <PriorityGlyph priority={order.effective_priority} size="row" />
             <a
               href={wpUrl}
               target="_blank"

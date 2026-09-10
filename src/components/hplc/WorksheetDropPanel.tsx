@@ -30,10 +30,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { PriorityBadge } from '@/components/hplc/PriorityBadge'
+import { PriorityGlyph } from '@/components/common/PriorityGlyph'
+import { legacyEffectivePriority, legacyToKey } from '@/lib/inbox-sla'
 import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
 import { useSlaForSubjects, type SlaSubject } from '@/services/sla-subjects'
-import type { WorksheetUser, InboxPriority } from '@/lib/api'
+import type { WorksheetUser } from '@/lib/api'
 import { itemRoleBadges } from '@/lib/inbox-filters'
 import { RoleBadge } from '@/components/shared/RoleBadge'
 
@@ -145,7 +146,7 @@ function WorksheetDropZone({
     () =>
       worksheet.items.map(item => ({
         key: String(item.id),
-        priority: (item.priority as InboxPriority) || 'normal',
+        priority: legacyToKey(item.priority),
         // SLA tiers are still keyed on service groups — departments take that
         // over in S7, so this stays the group id on purpose.
         groupId: item.service_group_id,
@@ -303,7 +304,10 @@ function WorksheetDropZone({
               </span>
               <ItemRolePills item={item} />
               <div className="flex-1" />
-              <PriorityBadge priority={item.priority as InboxPriority} />
+              <PriorityGlyph
+                priority={legacyEffectivePriority(item.priority)}
+                size="row"
+              />
               <SlaAgeIndicator
                 snapshot={dropSlaByKey.get(String(item.id)) ?? null}
                 isLoading={dropSlaLoading}

@@ -5,6 +5,7 @@ import { useUIStore } from '@/store/ui-store'
 import { ProductChip } from '@/components/senaite/ProductChip'
 import { computeProductCompletionFromStates } from '@/lib/product-completion'
 import { FlagIndicator } from '@/components/flags/FlagIndicator'
+import { PriorityGlyph } from '@/components/common/PriorityGlyph'
 import type { SenaiteLookupResult, OrderedProduct } from '@/lib/api'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 import {
@@ -184,6 +185,7 @@ export function SampleCard({
       )}
     >
       <div className="flex items-center gap-2 mb-1">
+        <PriorityGlyph priority={lookup.priority} size="row" />
         <button
           type="button"
           className="text-xs font-mono font-medium text-primary hover:underline cursor-pointer"

@@ -20218,6 +20218,10 @@ class InboxVialItem(BaseModel):
     priority: str = "normal"
     # The real shape: {key, rank, source_level, source_id} — spec §5.
     priority_effective: Optional[dict] = None
+    # lims_sub_samples.id — the native vial pk the priority controls write
+    # against (PUT /priorities/assign level='vial'). None for parent rows and
+    # for any row with no native vial; the UI skips those when bulk-assigning.
+    sub_sample_pk: Optional[int] = None
     analyses: list[InboxAnalysisItem] = []
     assignment_summary: str = ""  # e.g., "1/1 assigned" — vial-level
     # Every role whose WORK is on this vial: the vial's own assignment_role
@@ -20529,6 +20533,7 @@ def _build_native_vial_inbox_items(
             assignment_summary=summary,
             analyses=analyses,
             role_tags=_inbox_role_tags(db, sub.id, role),
+            sub_sample_pk=sub.id,
         ))
     return out
 
@@ -21205,6 +21210,11 @@ async def get_worksheets_inbox(
                      if vial_meta is not None and not vial_meta.get("is_parent")
                      else None),
                     vial_role,
+                ),
+                sub_sample_pk=(
+                    vial_meta.get("sub_sample_pk")
+                    if vial_meta is not None and not vial_meta.get("is_parent")
+                    else None
                 ),
             )
         )

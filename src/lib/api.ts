@@ -5721,6 +5721,10 @@ export interface InboxVialItem {
    *  The legacy `priority` string above is a rank-CLAMPED compatibility value
    *  for one release; read this instead. */
   priority_effective?: EffectivePriority | null
+  /** lims_sub_samples.id — the native vial pk `PUT /priorities/assign`
+   *  (level 'vial') writes against. Null/absent for parent rows and for any
+   *  row with no native vial; those are skipped when bulk-assigning. */
+  sub_sample_pk?: number | null
 }
 
 export interface InboxResponse {
@@ -5803,18 +5807,6 @@ export async function getInboxSamples(opts: GetInboxOptions = {}): Promise<Inbox
   })
   if (!response.ok) throw new Error(`Inbox fetch failed: ${response.status}`)
   return response.json()
-}
-
-export async function updateInboxPriority(sampleUid: string, priority: InboxPriority): Promise<void> {
-  // sample_uid travels in the BODY, not the path: Mk1-native UIDs are
-  // `mk1://<hex>` and a slash-bearing UID in a path segment gets mangled by the
-  // nginx proxy (encoded `://` -> decoded + slash-merged -> wrong route -> 404).
-  const response = await fetch(`${API_BASE_URL()}/worksheets/inbox/priority`, {
-    method: 'PUT',
-    headers: getBearerHeaders('application/json'),
-    body: JSON.stringify({ sample_uid: sampleUid, priority }),
-  })
-  if (!response.ok) throw new Error(`Priority update failed: ${response.status}`)
 }
 
 export async function getWorksheetUsers(): Promise<WorksheetUser[]> {
@@ -7541,6 +7533,9 @@ export interface LimsBox {
     parent_sample_id: string | null
     assignment_role: string | null
     vial_sequence: number
+    /** Resolved effective priority for the vial (sample-priority spec §5).
+     *  Null when unresolvable; absent on pre-priority responses. */
+    priority?: EffectivePriority | null
   }[]
 }
 

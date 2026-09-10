@@ -9,7 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { PriorityBadge } from '@/components/hplc/PriorityBadge'
+import { PriorityGlyph } from '@/components/common/PriorityGlyph'
 import { AgingTimer } from '@/components/hplc/AgingTimer'
 import { cn } from '@/lib/utils'
 import { vialLabel } from '@/lib/vial-label'
@@ -18,7 +18,12 @@ import {
   SERVICE_GROUP_COLORS,
   type ServiceGroupColor,
 } from '@/lib/service-group-colors'
-import type { InboxAnalysisItem, InboxVialItem, InboxPriority } from '@/lib/api'
+import type { InboxAnalysisItem, InboxVialItem } from '@/lib/api'
+import {
+  priorityByKey,
+  useActivePriorities,
+  useAssignPriority,
+} from '@/services/priorities'
 import type { SlaSubjectSnapshot } from '@/services/sla-subjects'
 import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
 import { inboxVialSlaKey, vialSlaDepartments } from '@/lib/inbox-sla'
@@ -85,7 +90,6 @@ interface InboxVialCardProps {
    *  parent card surfaces it (a Layers icon before the ID) — an at-a-glance cue
    *  that the sample needs multiple vials tested. */
   parentHasVarianceSubs?: boolean
-  onPriorityChange: (sampleUid: string, priority: InboxPriority) => void
   /** SLA column (2026-08-27): snapshots resolved by the page's
    *  useSlaForSubjects pass, keyed by inboxVialSlaKey(uid, departmentId).
    *  Absent -> no indicator renders (keeps non-SLA consumers unchanged). */
@@ -98,7 +102,6 @@ export function InboxVialCard({
   vial,
   groupedWithPrevious,
   parentHasVarianceSubs,
-  onPriorityChange,
   slaByKey,
   slaLoading,
   slaError,
@@ -108,6 +111,16 @@ export function InboxVialCard({
   // collapses to a single department after the server-side role filter
   // (Analytical for HPLC, Microbiology for ster/endo), so this is always
   // unambiguous. A future HPLC sub-department split could revisit this.
+  // Priority is assigned at the VIAL level against the native sub-sample pk
+  // the inbox row carries. Parent rows (and any row with no native vial) have
+  // none, so the picker is read-only there — the glyph still shows the
+  // inherited value.
+  const priorities = useActivePriorities().data
+  const assign = useAssignPriority()
+  const vialPk = vial.sub_sample_pk
+  const currentKey = vial.priority_effective?.key ?? null
+  const currentName = priorityByKey(priorities, currentKey)?.name ?? 'Inherit'
+
   const firstGroup = vial.analyses[0]
   const departmentId = firstGroup?.group_id ?? 0
   const groupName = firstGroup?.group_name ?? ''
@@ -273,31 +286,40 @@ export function InboxVialCard({
             />
           )}
 
-          {/* Priority */}
+          {/* Priority — catalog-driven; writes the VIAL level. */}
           <Select
-            value={vial.priority}
+            value={vial.priority_effective?.key ?? '__inherit__'}
+            disabled={vialPk == null || assign.isPending}
             onValueChange={value =>
-              onPriorityChange(vial.uid, value as InboxPriority)
+              assign.mutate({
+                level: 'vial',
+                id: String(vialPk),
+                priority_key: value === '__inherit__' ? null : value,
+              })
             }
           >
             <SelectTrigger
               size="sm"
+              aria-label={`Priority for ${vial.sample_id}`}
               className="h-6 w-auto min-w-[90px] border-transparent bg-transparent shadow-none text-xs hover:border-border"
             >
               <SelectValue>
-                <PriorityBadge priority={vial.priority} />
+                <span className="inline-flex items-center gap-1.5">
+                  <PriorityGlyph
+                    priority={vial.priority_effective}
+                    size="card"
+                  />
+                  {currentName}
+                </span>
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="normal">
-                <PriorityBadge priority="normal" />
-              </SelectItem>
-              <SelectItem value="high">
-                <PriorityBadge priority="high" />
-              </SelectItem>
-              <SelectItem value="expedited">
-                <PriorityBadge priority="expedited" />
-              </SelectItem>
+              <SelectItem value="__inherit__">Inherit</SelectItem>
+              {(priorities ?? []).map(p => (
+                <SelectItem key={p.key} value={p.key}>
+                  {p.name}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
 

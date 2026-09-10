@@ -12,6 +12,7 @@
 // = the default tier, exactly like group-less items on the worksheet pages.
 
 import type { InboxVialItem, ServiceGroup } from '@/lib/api'
+import type { EffectivePriority } from '@/lib/api-priorities'
 import type { SlaSubject } from '@/services/sla-subjects'
 
 /** department id -> owning service group id. First group wins, in the BE's
@@ -42,17 +43,38 @@ export function vialSlaDepartments(
   return seen
 }
 
+/** Legacy priority STRING -> catalog key. 'normal' was the legacy name for
+ *  the catalog's default, which the sparse tier/glyph maps address as
+ *  `'default'`; every other legacy value ('high', 'expedited') is already a
+ *  catalog key and passes through. Empty/absent reads as the default. */
+export function legacyToKey(s: string | null | undefined): string {
+  return !s || s === 'normal' ? 'default' : s
+}
+
 /** Effective priority KEY for a vial. Reads the inline `priority_effective`
  *  the backend resolves; falls back to the legacy rank-clamped `priority`
- *  string this release ('normal' being the legacy name for the catalog's
- *  default, which maps to the `'default'` sparsity sentinel). */
+ *  string this release. */
 export function inboxVialPriorityKey(
   vial: Pick<InboxVialItem, 'priority' | 'priority_effective'>
 ): string {
-  return (
-    vial.priority_effective?.key ??
-    (vial.priority === 'normal' ? 'default' : vial.priority)
-  )
+  return vial.priority_effective?.key ?? legacyToKey(vial.priority)
+}
+
+/** Glyph input for a row that carries ONLY the legacy priority string (the
+ *  vial board's `BoardParent.priority`, the AddSamplesModal's flattened
+ *  items). `rank` is unused by the glyph (it renders from the catalog entry)
+ *  and `source_level: 'sample'` is the level the legacy string was written
+ *  at, so the tooltip reads "<name> via sample" rather than inventing a
+ *  provenance the wire never carried. */
+export function legacyEffectivePriority(
+  s: string | null | undefined
+): EffectivePriority {
+  return {
+    key: legacyToKey(s),
+    rank: 0,
+    source_level: 'sample',
+    source_id: null,
+  }
 }
 
 /** Subject/React key for one (vial, department) SLA lane. `|` cannot appear
