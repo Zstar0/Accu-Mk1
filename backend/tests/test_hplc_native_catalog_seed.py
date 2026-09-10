@@ -163,3 +163,74 @@ def test_spec_audit_rows_written(db_session):
         assert entry.entity_type == "analysis_service_spec"
         assert entry.details["before"] is None
         assert entry.details["actor_user_id"] is None
+
+
+def test_init_db_calls_hplc_native_seed_between_vial_roles_and_specs(monkeypatch):
+    """Order pin: vial_roles -> hplc_native -> service_specs. Uses the same
+    trick as test_workflow_engine: run the REAL init_db with every seeder
+    stubbed to record its name."""
+    import database
+    calls = []
+
+    def _rec(name):
+        def _f(*a, **k):
+            calls.append(name)
+        return _f
+
+    class _FakeSession:
+        """No-op stand-in for a real SQLAlchemy Session/context manager, so
+        `with SessionLocal() as _db:` in init_db never opens a connection --
+        every seeder it wraps is stubbed below and never touches `_db`."""
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def commit(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(database, "_run_migrations", _rec("migrations"))
+    monkeypatch.setattr(database.Base.metadata, "create_all", _rec("create_all"))
+    monkeypatch.setattr(database, "_seed_federal_holidays_window", _rec("holidays"))
+    # init_db also opens a fresh SessionLocal() around every seeder call; stub
+    # it too so no stubbed seeder (or the try/except plumbing around it) ever
+    # touches a real database connection.
+    monkeypatch.setattr(database, "SessionLocal", lambda: _FakeSession())
+
+    import catalog.per_substance_reconciler as psr
+    import workflow.seeds as wfs
+    import catalog.departments as dep
+    import catalog.profile_seed as ps
+    import catalog.vial_roles_seed as vr
+    import catalog.hplc_native_seed as hn
+    import catalog.service_spec_seed as ss
+    import catalog.demand_verify as dv
+
+    monkeypatch.setattr(psr, "reconcile_per_substance_services", _rec("reconcile_per_substance"))
+    monkeypatch.setattr(wfs, "seed_workflow_catalog", _rec("workflow_catalog"))
+    monkeypatch.setattr(dep, "backfill_departments", _rec("backfill_departments"))
+    monkeypatch.setattr(ps, "seed_profiles_from_registry", _rec("profiles_from_registry"))
+    monkeypatch.setattr(vr, "seed_vial_roles", _rec("vial_roles"))
+    monkeypatch.setattr(hn, "seed_hplc_native_catalog", _rec("hplc_native"))
+    monkeypatch.setattr(ss, "seed_service_specs", _rec("service_specs"))
+    monkeypatch.setattr(dv, "verify_demand_catalog", _rec("demand_verify"))
+
+    database.init_db()
+
+    assert calls.index("vial_roles") < calls.index("hplc_native") < calls.index("service_specs")
+
+
+def test_seeded_services_match_admin_create_contract(db_session):
+    """The admin POST /analysis-services validator must accept every seeded
+    keyword AFTER the seed too (exclude_id) -- proves an operator can edit
+    them without tripping the collision rule."""
+    from catalog.hplc_native_seed import seed_hplc_native_catalog
+    from main import validate_new_keyword
+    from models import AnalysisService
+    seed_hplc_native_catalog(db_session)
+    for svc in db_session.query(AnalysisService).all():
+        validate_new_keyword(db_session, svc.keyword, exclude_id=svc.id)
