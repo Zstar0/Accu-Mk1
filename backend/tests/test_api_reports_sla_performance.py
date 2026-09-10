@@ -293,3 +293,88 @@ def test_the_loader_pre_filters_january_at_the_database(sqlite_session):
     sqlite_session.commit()
     inputs = main_module._load_sla_perf_inputs(sqlite_session)
     assert [s.sample_id for s in inputs["samples"]] == ["P-feb"]
+
+
+# ── the response model must not silently drop engine keys ───────────────────
+def _walk_for_dropped_keys(path, payload, model, gaps, freeform):
+    """Collect payload keys the Pydantic model does not declare.
+
+    FastAPI's ``response_model`` serialises only declared fields, and Pydantic
+    ignores extras on the way in, so an engine key the model forgot is dropped
+    with no error anywhere -- it simply never reaches the browser.
+    """
+    declared = set(model.model_fields)
+    for extra in sorted(set(payload) - declared):
+        gaps.append(f"{path}.{extra}")
+    for fname, field in model.model_fields.items():
+        if fname not in payload or fname in freeform:
+            continue
+        ann = field.annotation
+        if hasattr(ann, "model_fields"):
+            _walk_for_dropped_keys(f"{path}.{fname}", payload[fname], ann, gaps, freeform)
+            continue
+        inner = next((a for a in getattr(ann, "__args__", ()) if hasattr(a, "model_fields")), None)
+        if inner and isinstance(payload[fname], list) and payload[fname]:
+            _walk_for_dropped_keys(f"{path}.{fname}[0]", payload[fname][0], inner, gaps, freeform)
+
+
+def test_response_model_declares_every_key_the_engine_emits(monkeypatch):
+    """Guards the whole envelope, not one field.
+
+    `thin` shipped to production in 1.16.2 invisible to the UI because
+    SlaPerfGatingFamilyOut never declared it: the engine set it, the frontend
+    typed it, every unit test asserted it -- and response_model stripped it in
+    between. This walks the real payload against the real models so the next
+    added key cannot repeat that.
+    """
+    from main import SlaPerfReportOut
+    from sla_perf import build_sla_performance
+
+    rec = datetime(2026, 7, 6, 16, 0)
+    hplc_done = datetime(2026, 7, 7, 20, 0)
+    ster_done = datetime(2026, 7, 8, 20, 0)
+    samples, analyses, coas = [], [], []
+    for pk in range(4):
+        sid = f"P-{pk}"
+        samples.append(_sample(pk, sid, rec))
+        analyses += [_hplc(pk, hplc_done), _ster(pk, ster_done)]
+        coas.append(_coa(sid, datetime(2026, 7, 9, 20, 0)))
+    samples.append(_sample(99, "P-99", rec))  # open, so at_risk has a row
+    analyses.append(_hplc(99))
+    _use(monkeypatch, _inputs(samples, analyses), coas=coas)
+
+    # Walk the ENGINE's output, not the route's. The response is what the model
+    # already filtered, so a dropped key is gone from it and this test would
+    # vacuously pass -- which is exactly how 1.16.2 shipped.
+    body = build_sla_performance(
+        **_inputs(samples, analyses), coas=coas,
+        now=datetime(2026, 7, 10, 18, 0),
+    )
+    body["generated_at"] = "2026-07-10T18:00:00+00:00"
+    body["cache"] = {"stale": False, "age_seconds": 0}
+    assert body["gating"]["families"], "fixture must produce at least one family row"
+    assert body["at_risk"]["rows"], "fixture must produce at least one at-risk row"
+    assert body["months"], "fixture must produce at least one cohort month"
+
+    gaps: list[str] = []
+    # notes/trend/status are declared as bare dict on purpose -- family keys there
+    # are data, not schema.
+    _walk_for_dropped_keys("report", body, SlaPerfReportOut, gaps,
+                           freeform={"notes", "trend", "status"})
+    assert gaps == [], f"response_model drops engine keys: {gaps}"
+
+
+def test_the_thin_flag_and_its_floor_survive_the_response_model(monkeypatch):
+    """The two keys 1.16.2 dropped, asserted by name over the wire."""
+    rec = datetime(2026, 7, 6, 16, 0)
+    samples = [_sample(1, "P-1", rec)]
+    analyses = [_hplc(1, datetime(2026, 7, 7, 20, 0)), _ster(1, datetime(2026, 7, 8, 20, 0))]
+    _use(monkeypatch, _inputs(samples, analyses), coas=[_coa("P-1", datetime(2026, 7, 9, 20, 0))])
+
+    gating = client.get("/reports/sla-performance").json()["gating"]
+    assert "min_timed_for_family" in gating
+    assert gating["min_timed_for_family"] > 0
+    for fam in gating["families"]:
+        assert "thin" in fam, f"{fam['k']} lost its thin flag"
+    # One timed sample is far under the floor, so it must read as thin.
+    assert all(f["thin"] is True for f in gating["families"])
