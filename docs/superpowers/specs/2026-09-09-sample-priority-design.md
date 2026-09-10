@@ -63,6 +63,8 @@ drift (seed 48h vs prod 24h) and the empty Core HPLC service group.
 10. Approach **A, resolve at read**, with audit rows as the timeline and
     **snapshots at the SLA clock events** (receive, in-flight change,
     completion) so reports grade against what was promised at the time.
+11. Glyph style (demo 2026-09-09): bare glyph on rows; tinted square on cards
+    and headers; pulse is a per-priority setting.
 
 ## 3. Data model
 
@@ -78,11 +80,12 @@ drift (seed 48h vs prod 24h) and the empty Core HPLC service group.
 | color | varchar(20) | enum of theme palette names: `red`, `amber`, `emerald`, `sky`, `violet`, `zinc` |
 | is_default | bool | exactly one `true`; partial unique index `uq_priorities_single_default` (same pattern as `uq_sla_tier_single_default`) |
 | is_active | bool | soft deactivate; inactive keys resolve as inherit and log a warning |
+| pulse | bool | glyph pulses (Handler 2026-09-09: a per-priority setting on the management page; seeded on for Expedited only) |
 | created_at / updated_at | timestamp | |
 
 Seed (migration): `default` ("Default", rank 0, `minus`, `zinc`, is_default),
 `high` ("High", rank 10, `chevron-up`, `amber`), `expedited` ("Expedited",
-rank 20, `chevrons-up`, `red`). The old `normal` literal maps to `default`.
+rank 20, `chevrons-up`, `red`, pulse). The old `normal` literal maps to `default`.
 
 ### 3.2 `sla_priority_tiers`
 
@@ -144,9 +147,17 @@ touchpoint). Reports read the snapshot; live views read the resolver.
   test suites so the two cannot drift (same pattern as the SLA engine
   mirror).
 
-Consumers: `POST /sla/status` passes `effective.key` into
-`resolve_sla_tier`; the Slack notifier's planner does the same; the inbox's
-copy-from-order code paths are deleted.
+Consumers. SLA tier resolution runs CLIENT-side today: `services/sample-sla.ts`,
+`order-sla.ts`, `analysis-sla.ts` and `lib/inbox-sla.ts` read the priority from
+`POST /sample-priorities/lookup` (keyed by SENAITE uid, default `'normal'`) and
+feed `resolveSampleTiersByGroup`; `POST /sla/status` only receives the computed
+target. So the swap is: those services read `priority.key` from the inline row
+shape (or `POST /priorities/resolve` where a row is not at hand) instead of the
+uid lookup, and `sla-resolution.ts` maps are keyed by priority key. The backend
+`sla_engine` is unchanged except that `PRIORITIES` goes away. The inbox's
+copy-from-order code paths are deleted. Snapshots (3.5) are the only backend
+consumer of tier resolution and use the global priority row, else the default
+tier (per-analysis profile/group nuance stays a live-view concern).
 
 ## 5. API
 
@@ -183,8 +194,8 @@ The two `sla-priority-tiers` routes validate `priority` against the table.
 `panes.tsx` next to SLA.
 
 - Table sorted by rank: glyph preview, name (inline edit), rank up/down,
-  icon picker (the five icons), color picker (the six theme colors), SLA
-  tier select (existing tiers, "Follow profile/group" = no row), active
+  icon picker (the six icons), color picker (the six theme colors), pulse
+  switch, SLA tier select (existing tiers, "Follow profile/group" = no row), active
   switch, "Default" radio. Add row at the bottom. Deactivating a priority
   in use shows the count of explicit assignments and proceeds.
 - Section "Customer priorities": search over `GET /customers/seen`, set or
