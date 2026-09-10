@@ -238,6 +238,7 @@ export function OrderRow({
                 effective={order.effective_priority}
                 compact
                 className="w-40"
+                ariaLabel={`Priority for order ${order.order_number}`}
                 onAssigned={() =>
                   queryClient.invalidateQueries({ queryKey: ['explorer'] })
                 }

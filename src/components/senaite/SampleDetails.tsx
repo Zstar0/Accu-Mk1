@@ -5615,6 +5615,7 @@ export function SampleDetails() {
                     registryPk={data.registry_pk}
                     explicitKey={data.explicit_priority_key ?? null}
                     effective={data.priority}
+                    ariaLabel={`Priority for ${sampleId}`}
                     onAssigned={() => refreshSample(sampleId)}
                   />
                 </div>

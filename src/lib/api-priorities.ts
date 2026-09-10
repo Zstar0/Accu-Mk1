@@ -15,7 +15,10 @@ export type PriorityColor =
   | 'violet'
   | 'zinc'
 export type PriorityLevel = 'customer' | 'order' | 'sample' | 'vial'
-export type PrioritySource = PriorityLevel | 'default'
+/** 'unknown' is the provenance of a glyph built from a LEGACY priority
+ *  string (see lib/inbox-sla.ts): the wire carried a name but no level, so
+ *  the tooltip must not invent one. */
+export type PrioritySource = PriorityLevel | 'default' | 'unknown'
 
 export interface Priority {
   key: string
@@ -27,6 +30,8 @@ export interface Priority {
   is_default: boolean
   is_active: boolean
   sla_tier_id: number | null
+  /** Rows anywhere carrying this key explicitly. 0 on single-row responses. */
+  explicit_count: number
 }
 export interface EffectivePriority {
   key: string
@@ -54,6 +59,7 @@ export interface CustomerPriority {
   updated_at: string | null
   customer_name: string | null
   customer_email: string | null
+  updated_by_name: string | null
 }
 export interface CustomerSeen {
   wp_customer_user_id: number

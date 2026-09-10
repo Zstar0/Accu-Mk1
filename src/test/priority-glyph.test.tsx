@@ -41,6 +41,7 @@ vi.mock('@/lib/api-priorities', () => ({
   ]),
 }))
 import { PriorityGlyph } from '@/components/common/PriorityGlyph'
+import { legacyEffectivePriority } from '@/lib/inbox-sla'
 
 const wrap = (ui: ReactNode) => {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -128,5 +129,14 @@ describe('PriorityGlyph', () => {
     )
     const el = await screen.findByRole('img', { name: 'High via sample' })
     expect(el.className).toContain('w-7')
+  })
+  it('a legacy-wire glyph reads the bare name, inventing no provenance', async () => {
+    // legacyEffectivePriority stamps source_level 'unknown': the legacy
+    // priority STRING carried a name and no level, so "via sample" would be a
+    // claim the wire never made.
+    const p = legacyEffectivePriority('high')
+    expect(p.source_level).toBe('unknown')
+    wrap(<PriorityGlyph priority={p} size="card" />)
+    expect(await screen.findByRole('img', { name: 'High' })).toBeVisible()
   })
 })

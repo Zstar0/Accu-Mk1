@@ -23,6 +23,7 @@ const prios = [
     is_default: false,
     is_active: true,
     sla_tier_id: 2,
+    explicit_count: 3,
   },
   {
     key: 'default',
@@ -34,6 +35,7 @@ const prios = [
     is_default: true,
     is_active: true,
     sla_tier_id: null,
+    explicit_count: 0,
   },
 ]
 vi.mock('@/lib/api-priorities', () => ({
@@ -86,10 +88,12 @@ vi.mock('@/store/auth-store', () => ({
 import {
   assignPriority,
   createPriority,
+  deactivatePriority,
   getCustomerPriorities,
   getCustomersSeen,
   getPriorities,
   patchPriority,
+  setDefaultPriority,
 } from '@/lib/api-priorities'
 import { PrioritiesPane } from '@/components/preferences/panes/PrioritiesPane'
 
@@ -108,6 +112,7 @@ const prio = (
   is_default: false,
   is_active: true,
   sla_tier_id: null,
+  explicit_count: 0,
   ...over,
 })
 
@@ -230,6 +235,67 @@ describe('PrioritiesPane', () => {
     // otherwise keep showing the name the server refused.
     await waitFor(() => expect(input).toHaveValue('Expedited'))
   })
+
+  it('moves the default marker through PUT /priorities/default', async () => {
+    wrap(<PrioritiesPane />)
+    await screen.findAllByTestId('priority-row')
+    fireEvent.click(screen.getByRole('radio', { name: 'Default Expedited' }))
+    // react-query hands the mutationFn a second (context) argument, so assert
+    // on the payload rather than the whole call signature.
+    await waitFor(() => expect(setDefaultPriority).toHaveBeenCalled())
+    expect(vi.mocked(setDefaultPriority).mock.calls[0]?.[0]).toBe('expedited')
+  })
+
+  it('shows the explicit assignment count on each row', async () => {
+    wrap(<PrioritiesPane />)
+    const rows = await screen.findAllByTestId('priority-row')
+    expect(rows[0]).toHaveTextContent('3 assigned')
+    expect(rows[1]).toHaveTextContent('0 assigned')
+  })
+
+  it('deactivates through DELETE once the usage confirm is accepted', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    wrap(<PrioritiesPane />)
+    await screen.findAllByTestId('priority-row')
+    fireEvent.click(screen.getByRole('switch', { name: 'Active Expedited' }))
+    await waitFor(() => expect(deactivatePriority).toHaveBeenCalled())
+    expect(vi.mocked(deactivatePriority).mock.calls[0]?.[0]).toBe('expedited')
+    // The confirm quotes the row's real usage, not a placeholder.
+    expect(confirm).toHaveBeenCalledWith(
+      '3 explicit assignments will fall back to Inherit. Deactivate?'
+    )
+    // Deactivation is the DELETE route's job — never a PATCH as well.
+    expect(patchPriority).not.toHaveBeenCalled()
+    confirm.mockRestore()
+  })
+
+  it('sends nothing at all when the deactivation confirm is declined', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    wrap(<PrioritiesPane />)
+    await screen.findAllByTestId('priority-row')
+    fireEvent.click(screen.getByRole('switch', { name: 'Active Expedited' }))
+    expect(confirm).toHaveBeenCalled()
+    expect(deactivatePriority).not.toHaveBeenCalled()
+    // The declined path must not fall through to the reactivate PATCH either.
+    expect(patchPriority).not.toHaveBeenCalled()
+    confirm.mockRestore()
+  })
+
+  it('reactivates through PATCH is_active without any confirm', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    vi.mocked(getPriorities).mockResolvedValueOnce([
+      prio({ key: 'stale', name: 'Stale', is_active: false }),
+    ])
+    wrap(<PrioritiesPane />)
+    await screen.findAllByTestId('priority-row')
+    fireEvent.click(screen.getByRole('switch', { name: 'Active Stale' }))
+    await waitFor(() =>
+      expect(patchPriority).toHaveBeenCalledWith('stale', { is_active: true })
+    )
+    expect(confirm).not.toHaveBeenCalled()
+    expect(deactivatePriority).not.toHaveBeenCalled()
+    confirm.mockRestore()
+  })
 })
 
 describe('PrioritiesPane — customer priorities', () => {
@@ -237,9 +303,10 @@ describe('PrioritiesPane — customer priorities', () => {
     wp_customer_user_id: 7,
     priority_key: 'expedited',
     note: 'Key account',
-    updated_at: null,
+    updated_at: '2026-09-08T14:05:00Z',
     customer_name: 'Acme Labs',
     customer_email: 'ops@acme.test',
+    updated_by_name: 'Ada Lovelace',
   }
 
   it('lists assigned customers and clears one', async () => {
@@ -255,6 +322,25 @@ describe('PrioritiesPane — customer priorities', () => {
         priority_key: null,
       })
     )
+  })
+
+  it('shows who last changed each customer row, and when', async () => {
+    vi.mocked(getCustomerPriorities).mockResolvedValueOnce([row])
+    wrap(<PrioritiesPane />)
+    expect(
+      await screen.findByRole('columnheader', { name: 'Updated' })
+    ).toBeVisible()
+    expect(screen.getByText(/Ada Lovelace/)).toBeInTheDocument()
+  })
+
+  it('falls back to an em dash when nobody is recorded', async () => {
+    vi.mocked(getCustomerPriorities).mockResolvedValueOnce([
+      { ...row, updated_by_name: null, updated_at: null },
+    ])
+    wrap(<PrioritiesPane />)
+    await screen.findByText('Acme Labs')
+    // Both halves degrade: unknown author and unknown timestamp.
+    expect(screen.getByText('— · —')).toBeInTheDocument()
   })
 
   it('searches customers and assigns a priority to one', async () => {

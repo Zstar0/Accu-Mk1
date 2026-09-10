@@ -62,6 +62,35 @@ const wrap = (ui: ReactNode) => {
 }
 
 describe('PrioritySelect', () => {
+  it('defaults to the bare "Priority" label and takes a per-entity override', async () => {
+    // List surfaces mount one control per row, so a shared name would make
+    // every trigger ambiguous; single-control surfaces keep the bare default.
+    const { unmount } = wrap(
+      <PrioritySelect
+        level="order"
+        id="3291"
+        explicitKey={null}
+        effective={null}
+      />
+    )
+    expect(
+      await screen.findByRole('combobox', { name: 'Priority' })
+    ).toBeVisible()
+    unmount()
+    wrap(
+      <PrioritySelect
+        level="order"
+        id="3291"
+        explicitKey={null}
+        effective={null}
+        ariaLabel="Priority for order 3291"
+      />
+    )
+    expect(
+      await screen.findByRole('combobox', { name: 'Priority for order 3291' })
+    ).toBeVisible()
+  })
+
   it('labels the inherit option with the effective source and assigns on change', async () => {
     wrap(
       <PrioritySelect

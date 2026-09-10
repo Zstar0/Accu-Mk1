@@ -734,6 +734,7 @@ function KanbanView({
                 effective={order.effective_priority}
                 compact
                 className="w-48"
+                ariaLabel={`Priority for order ${order.order_number}`}
                 onAssigned={() =>
                   queryClient.invalidateQueries({ queryKey: ['explorer'] })
                 }

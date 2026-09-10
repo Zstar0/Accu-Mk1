@@ -18,12 +18,15 @@ export function SamplePriorityRow({
   explicitKey,
   effective,
   level = 'sample',
+  ariaLabel,
   onAssigned,
 }: {
   registryPk: number | null | undefined
   explicitKey: string | null
   effective: EffectivePriority | null | undefined
   level?: 'sample' | 'vial'
+  /** Forwarded to the select. Omitted keeps PrioritySelect's bare 'Priority'. */
+  ariaLabel?: string
   onAssigned?: () => void
 }) {
   return (
@@ -39,6 +42,7 @@ export function SamplePriorityRow({
             effective={effective}
             compact
             className="w-56"
+            ariaLabel={ariaLabel}
             onAssigned={onAssigned}
           />
         ) : (

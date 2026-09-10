@@ -63,16 +63,16 @@ export function inboxVialPriorityKey(
 /** Glyph input for a row that carries ONLY the legacy priority string (the
  *  vial board's `BoardParent.priority`, the AddSamplesModal's flattened
  *  items). `rank` is unused by the glyph (it renders from the catalog entry)
- *  and `source_level: 'sample'` is the level the legacy string was written
- *  at, so the tooltip reads "<name> via sample" rather than inventing a
- *  provenance the wire never carried. */
+ *  and the level is 'unknown': the legacy wire carried a NAME and no level, so
+ *  anything else ("via sample") would invent a provenance. `priorityTooltip`
+ *  falls through to the bare name for it. */
 export function legacyEffectivePriority(
   s: string | null | undefined
 ): EffectivePriority {
   return {
     key: legacyToKey(s),
     rank: 0,
-    source_level: 'sample',
+    source_level: 'unknown',
     source_id: null,
   }
 }

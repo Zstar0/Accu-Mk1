@@ -24,6 +24,7 @@ export function PrioritySelect({
   effective,
   compact = false,
   className,
+  ariaLabel = 'Priority',
   onAssigned,
 }: {
   level: PriorityLevel
@@ -32,6 +33,11 @@ export function PrioritySelect({
   effective: EffectivePriority | null | undefined
   compact?: boolean
   className?: string
+  /** Accessible name for the trigger. Defaults to the bare 'Priority' the
+   *  single-control surfaces (wizard, sample details rows) rely on; list
+   *  surfaces that mount one per row pass a per-entity label so the controls
+   *  are distinguishable. */
+  ariaLabel?: string
   /** Called after a successful assign. For surfaces whose data does not live
    *  in react-query (sample-details keeps its lookup in local state), so the
    *  mutation's cache invalidation alone would leave them stale. */
@@ -72,7 +78,7 @@ export function PrioritySelect({
     >
       <SelectTrigger
         className={cn(compact ? 'h-7 text-xs' : 'h-8 text-sm', className)}
-        aria-label="Priority"
+        aria-label={ariaLabel}
       >
         <SelectValue />
       </SelectTrigger>

@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { SettingsSection } from '../shared/SettingsComponents'
+import { formatDate } from '@/components/senaite/senaite-utils'
 import { PriorityGlyph } from '@/components/common/PriorityGlyph'
 import { useAuthStore } from '@/store/auth-store'
 import {
@@ -174,6 +175,13 @@ export function PrioritiesPane() {
                 <span className="font-mono text-xs text-muted-foreground">
                   rank {p.rank}
                 </span>
+                {/* How much this row is actually in use — the number the
+                    deactivation confirm below quotes back. */}
+                <span className="text-xs text-muted-foreground">
+                  {t('preferences.prioritiesPane.assignedCount', {
+                    count: p.explicit_count,
+                  })}
+                </span>
                 <Button
                   variant="ghost"
                   size="icon"
@@ -300,7 +308,25 @@ export function PrioritiesPane() {
                     aria-label={t('preferences.prioritiesPane.aria.active', {
                       name: p.name,
                     })}
-                    onCheckedChange={v => patch(p.key, { is_active: v })}
+                    onCheckedChange={v => {
+                      // Turning OFF is the DELETE route, not a PATCH: it is
+                      // the one that owns deactivation. Every explicit
+                      // assignment silently falls back to Inherit, so the
+                      // count is quoted before anything is sent.
+                      if (!v) {
+                        if (
+                          !window.confirm(
+                            t('preferences.prioritiesPane.deactivateConfirm', {
+                              count: p.explicit_count,
+                            })
+                          )
+                        )
+                          return
+                        m.deactivate.mutate(p.key)
+                        return
+                      }
+                      patch(p.key, { is_active: true })
+                    }}
                   />{' '}
                   {t('preferences.prioritiesPane.active')}
                 </label>
@@ -437,6 +463,9 @@ function CustomerPrioritiesSection({ priorities }: { priorities: Priority[] }) {
               <th className="text-start">
                 {t('preferences.prioritiesPane.columns.note')}
               </th>
+              <th className="text-start">
+                {t('preferences.prioritiesPane.columns.updated')}
+              </th>
               <th />
             </tr>
           </thead>
@@ -454,6 +483,9 @@ function CustomerPrioritiesSection({ priorities }: { priorities: Priority[] }) {
                     r.priority_key}
                 </td>
                 <td className="text-muted-foreground">{r.note}</td>
+                <td className="text-muted-foreground">
+                  {r.updated_by_name ?? '—'} · {formatDate(r.updated_at)}
+                </td>
                 <td className="text-end">
                   <Button
                     size="sm"

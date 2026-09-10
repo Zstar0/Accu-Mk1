@@ -44,7 +44,9 @@ function useInvalidateAfterAssign() {
     qc.invalidateQueries({
       predicate: q =>
         typeof q.queryKey[0] === 'string' &&
-        /sample|order|inbox|worksheet|vial|registry|sla/i.test(q.queryKey[0]),
+        /sample|order|inbox|worksheet|vial|box|registry|sla/i.test(
+          q.queryKey[0]
+        ),
     })
     // The per-sample SENAITE lookup (`['senaite','lookup',id,source]`, see
     // services/senaite-lookup-map.ts) carries the inline effective priority
