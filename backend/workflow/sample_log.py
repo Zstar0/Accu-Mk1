@@ -35,23 +35,32 @@ RECONCILE_DEDUP_WINDOW = timedelta(minutes=60)
 # SENAITE sample states the catalog doesn't carry yet.
 from workflow.seeds import SEED_STATES
 
+# Fallback vocabulary only — heal_sample_status reads the live catalog (Task 2).
 SAMPLE_REVIEW_STATE_WHITELIST: frozenset[str] = frozenset(
     slug for (scope, slug, *_rest) in SEED_STATES if scope == "sample"
 ) | {"rejected", "stored"}
 
+NATIVE_STATUS_SOURCES = frozenset({"mk1", "reconcile_native"})
+# SENAITE-only legacy values the mirror must still accept in senaite mode.
+_LEGACY_MIRROR_EXTRA = frozenset({"rejected", "stored"})
 
-def heal_sample_status(db: Session, sample_id: str, to_status: str) -> bool:
-    """Guarded write of lims_samples.status (the registry mirror of SENAITE's
-    review_state). Returns True iff the column was changed. Guards:
 
-      - vocabulary: only SAMPLE_REVIEW_STATE_WHITELIST members are ever
-        written (RC3 — IS order-progress vocab must not poison the column);
-      - existence: unknown sample_id is a no-op (False);
-      - idempotence: an already-matching status is a no-op (False).
-
-    Flush-only, never commits — same transaction contract as
-    record_sample_transition; callers own the commit."""
-    if to_status not in SAMPLE_REVIEW_STATE_WHITELIST:
+def heal_sample_status(db: Session, sample_id: str, to_status: str, *,
+                       source: str = "senaite") -> bool:
+    """Guarded write of lims_samples.status. Returns True iff the column was
+    changed. Guards:
+      - vocabulary: the LIVE catalog's active sample states (+ the two
+        SENAITE-only legacy values) — a state added in the pane is honoured;
+        IS order-progress vocab never is (RC3);
+      - authority: in mk1 mode only native sources ('mk1',
+        'reconcile_native') may write; SENAITE-sourced heals are no-ops;
+      - existence + idempotence as before.
+    Flush-only, never commits."""
+    from workflow.authority import sample_status_authority
+    from workflow.catalog import sample_state_slugs
+    if to_status not in (sample_state_slugs(db) | _LEGACY_MIRROR_EXTRA):
+        return False
+    if sample_status_authority(db) == "mk1" and source not in NATIVE_STATUS_SOURCES:
         return False
     row = db.execute(
         select(LimsSample).where(LimsSample.sample_id == sample_id)

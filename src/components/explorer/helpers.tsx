@@ -1,5 +1,6 @@
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
+import { useStateLabel } from '@/lib/workflow-states-store'
 import type {
   ExplorerOrder,
   SenaiteAnalysis,
@@ -133,9 +134,10 @@ export function SampleStateBadge({ state }: { state: string | null }) {
     variant: 'outline' as const,
     label: state ?? 'Unknown',
   }
+  const label = useStateLabel(s, c.label)
   return (
     <Badge variant={c.variant} className="text-xs">
-      {c.label}
+      {label}
     </Badge>
   )
 }

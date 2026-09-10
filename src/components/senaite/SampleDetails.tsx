@@ -32,6 +32,7 @@ import {
   CornerDownRight,
   Radar,
   Eraser,
+  Ban,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -179,6 +180,7 @@ import {
 import { RemovalConfirmModal } from '@/components/senaite/RemovalConfirmModal'
 import { ReplaceAnalyteDialog } from '@/components/senaite/ReplaceAnalyteDialog'
 import { ClearAnalyteDialog } from '@/components/senaite/ClearAnalyteDialog'
+import { CancelSampleDialog } from './CancelSampleDialog'
 import { isHplcAnalyteService } from '@/lib/hplc-analyte-services'
 import { needsMk1AnalysesSwap } from '@/lib/mk1-analyses-swap'
 import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
@@ -187,6 +189,7 @@ import {
   detailsFieldSource,
   useCoaGenerationSource,
   coaSourceBadgeLabel,
+  useSampleStatusAuthority,
   type ReadSource,
 } from '@/lib/read-source'
 import { FieldSourceGlyph } from '@/components/senaite/FieldSourceGlyph'
@@ -3695,6 +3698,7 @@ export function SampleDetails() {
 
   // COA generation source badge
   const coaGenSource = useCoaGenerationSource()
+  const statusAuthority = useSampleStatusAuthority()
 
   // Retest relationship metadata (banner + chain links)
   const [retestInfo, setRetestInfo] = useState<
@@ -3752,6 +3756,8 @@ export function SampleDetails() {
     peptideId: number | null
     peptideName: string
   } | null>(null)
+  // Cancel-sample dialog (customer withdrew) — header action.
+  const [cancelOpen, setCancelOpen] = useState(false)
   // Task 10: promoted-source (vial-side) retest warning — sub-sample pages
   // only. Carries the target row's uid alongside the dialog's own state
   // shape (superset — PromotedSourceRetestDialog only reads its 3 fields).
@@ -5460,6 +5466,15 @@ export function SampleDetails() {
                             Publish Accumark COA
                           </DropdownMenuItem>
                         )}
+                        {data.review_state !== 'cancelled' && (
+                          <DropdownMenuItem
+                            onClick={() => setCancelOpen(true)}
+                            className="text-destructive focus:text-destructive"
+                          >
+                            <Ban className="h-4 w-4 mr-2" />
+                            Cancel sample…
+                          </DropdownMenuItem>
+                        )}
                       </DropdownMenuContent>
                     </DropdownMenu>
                     <COAConsole
@@ -6942,6 +6957,14 @@ export function SampleDetails() {
           onCleared={() => refreshSample(data.sample_id)}
         />
       )}
+      <CancelSampleDialog
+        open={cancelOpen}
+        sampleId={data.sample_id}
+        currentStatus={data.review_state ?? ''}
+        statusAuthority={statusAuthority}
+        onClose={() => setCancelOpen(false)}
+        onCancelled={() => refreshSample(data.sample_id)}
+      />
 
       {/* Analyses Table */}
       <AnalysisTable

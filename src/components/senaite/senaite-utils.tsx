@@ -2,6 +2,8 @@
  * Shared utilities for SENAITE components — status badges, date formatting, labels.
  */
 
+import { useStateLabel } from '@/lib/workflow-states-store'
+
 export const STATE_LABELS: Record<string, { label: string; className: string }> = {
   sample_registered:         { label: 'Registered',       className: 'bg-zinc-700 text-zinc-200' },
   sample_due:                { label: 'Due',               className: 'bg-yellow-900 text-yellow-300' },
@@ -21,9 +23,10 @@ export const STATE_LABELS: Record<string, { label: string; className: string }> 
 
 export function StateBadge({ state }: { state: string }) {
   const config = STATE_LABELS[state] ?? { label: state, className: 'bg-zinc-700 text-zinc-200' }
+  const label = useStateLabel(state, config.label)
   return (
     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${config.className}`}>
-      {config.label}
+      {label}
     </span>
   )
 }

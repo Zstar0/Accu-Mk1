@@ -365,6 +365,7 @@ def _shadow_summary_payload(db: Session, since) -> dict:
 
     from models import (LimsSample, LimsSampleTransition,
                         LimsWorkflowShadowEvaluation as Ev)
+    from workflow import senaite_tee
     from workflow.engine import _find_edge, evaluate_requirements
 
     samples = db.execute(
@@ -481,7 +482,8 @@ def _shadow_summary_payload(db: Session, since) -> dict:
                 "unmet": unmet,
             })
     return {"total_seeded": len(samples), "buckets": buckets,
-            "divergent": divergent}
+            "divergent": divergent,
+            "senaite_lagging": senaite_tee.gave_up_count(db)}
 
 
 @router.get("/shadow/summary", dependencies=[Depends(require_admin)])
