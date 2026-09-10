@@ -2023,6 +2023,51 @@ def _run_migrations():
         """,
         "CREATE INDEX IF NOT EXISTS ix_lims_analyses_peptide_id "
         "ON lims_analyses (peptide_id)",
+        # Slot-aware root uniqueness (spec 2026-09-10, M1). A blend holds N
+        # rows of the SAME generic service (HPLC-PURITY x slots 1..N) on one
+        # vial and on one parent, so every "one live root row per (host,
+        # service)" index gains COALESCE(slot, 0). Legacy rows (slot NULL)
+        # compare as 0 — exactly as unique as before; a widened index is
+        # strictly looser so the CREATE cannot fail on existing data.
+        # DROP+CREATE because IF NOT EXISTS is a no-op on the old shape
+        # (last-boot-wins, precedent: provenance-aware widen above).
+        "DROP INDEX IF EXISTS uq_lims_analyses_sub_service_root",
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_sub_service_root
+            ON lims_analyses (lims_sub_sample_pk, keyword, COALESCE(slot, 0))
+            WHERE retest_of_id IS NULL AND lims_sub_sample_pk IS NOT NULL
+              AND review_state NOT IN ('retracted', 'rejected')
+        """,
+        "DROP INDEX IF EXISTS uq_lims_analyses_sub_service_id_root",
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_sub_service_id_root
+            ON lims_analyses (lims_sub_sample_pk, analysis_service_id, COALESCE(slot, 0))
+            WHERE retest_of_id IS NULL AND lims_sub_sample_pk IS NOT NULL
+              AND review_state NOT IN ('retracted', 'rejected')
+        """,
+        "DROP INDEX IF EXISTS uq_lims_analyses_parent_service_root",
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_parent_service_root
+            ON lims_analyses (lims_sample_pk, keyword, COALESCE(slot, 0))
+            WHERE retest_of_id IS NULL AND lims_sample_pk IS NOT NULL
+              AND review_state NOT IN ('retracted', 'rejected')
+              AND provenance = 'canonical'
+        """,
+        "DROP INDEX IF EXISTS uq_lims_analyses_parent_service_id_root",
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_parent_service_id_root
+            ON lims_analyses (lims_sample_pk, analysis_service_id, COALESCE(slot, 0))
+            WHERE retest_of_id IS NULL AND lims_sample_pk IS NOT NULL
+              AND review_state NOT IN ('retracted', 'rejected')
+              AND provenance = 'canonical'
+        """,
+        "DROP INDEX IF EXISTS uq_lims_analyses_parent_service_ordered",
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_parent_service_ordered
+            ON lims_analyses (lims_sample_pk, analysis_service_id, COALESCE(slot, 0))
+            WHERE provenance = 'ordered' AND lims_sample_pk IS NOT NULL
+              AND review_state NOT IN ('retracted', 'rejected')
+        """,
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
