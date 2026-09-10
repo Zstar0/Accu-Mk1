@@ -216,7 +216,9 @@ def order_priority_fields(db: Session, order_numbers: Iterable[str]) -> dict[str
         return {}
     prios = priority_map(db)
     orders = db.execute(
-        select(LimsOrder).where(LimsOrder.order_number.in_(wanted))
+        # order_number is NOT unique: assign() picks the LOWEST id on duplicates,
+        # so this payload must agree — order by id and keep the first seen.
+        select(LimsOrder).where(LimsOrder.order_number.in_(wanted)).order_by(LimsOrder.id)
     ).scalars().all()
     cust_ids = {o.customer_user_id for o in orders if o.customer_user_id is not None}
     customers: dict[int, CustomerPriority] = {}
@@ -243,11 +245,11 @@ def order_priority_fields(db: Session, order_numbers: Iterable[str]) -> dict[str
             # No default priority configured — read paths degrade, never 500.
             logger.warning("order priority skipped: no default priority configured")
             return {}
-        out[o.order_number] = {
+        out.setdefault(o.order_number, {
             "priority_key": o.priority_key,
             "priority_source": o.priority_source,
             "effective_priority": eff.as_dict(),
-        }
+        })
     return out
 
 

@@ -122,6 +122,8 @@ def test_assign_order_survives_duplicate_order_numbers(db_session):
     assert other.priority_key is None
     # The resolver must read the same duplicate assign() wrote to (lowest id).
     assert service.load_effective(db_session, sample_pks=[s.id])[0][s.id].key == "high"
+    # ...and so must the order-list payload helper.
+    assert service.order_priority_fields(db_session, ["WP-9003"])["WP-9003"]["priority_key"] == "high"
 
 
 def test_assign_clear_to_inherit(db_session):
