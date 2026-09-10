@@ -24,6 +24,7 @@ export function PrioritySelect({
   effective,
   compact = false,
   className,
+  onAssigned,
 }: {
   level: PriorityLevel
   id: string
@@ -31,6 +32,10 @@ export function PrioritySelect({
   effective: EffectivePriority | null | undefined
   compact?: boolean
   className?: string
+  /** Called after a successful assign. For surfaces whose data does not live
+   *  in react-query (sample-details keeps its lookup in local state), so the
+   *  mutation's cache invalidation alone would leave them stale. */
+  onAssigned?: () => void
 }) {
   const { data: all } = usePriorities()
   const { data: active } = useActivePriorities()
@@ -59,7 +64,10 @@ export function PrioritySelect({
       value={explicitKey ?? INHERIT}
       disabled={assign.isPending || !active}
       onValueChange={v =>
-        assign.mutate({ level, id, priority_key: v === INHERIT ? null : v })
+        assign.mutate(
+          { level, id, priority_key: v === INHERIT ? null : v },
+          { onSuccess: onAssigned }
+        )
       }
     >
       <SelectTrigger

@@ -123,6 +123,28 @@ describe('PrioritySelect', () => {
     )
   })
 
+  it('calls onAssigned after a successful assign', async () => {
+    const onAssigned = vi.fn()
+    wrap(
+      <PrioritySelect
+        level="sample"
+        id="42"
+        explicitKey={null}
+        effective={null}
+        onAssigned={onAssigned}
+      />
+    )
+    const trigger = await screen.findByRole('combobox', { name: 'Priority' })
+    await waitFor(() => expect(trigger).toHaveTextContent('Inherit (Default)'))
+    expect(onAssigned).not.toHaveBeenCalled()
+    fireEvent.click(trigger)
+    fireEvent.click(await screen.findByRole('option', { name: 'High' }))
+    await waitFor(() => expect(assignPriority).toHaveBeenCalled())
+    // Fires only once the mutation resolves — surfaces whose data is not in
+    // react-query refetch off this.
+    await waitFor(() => expect(onAssigned).toHaveBeenCalledTimes(1))
+  })
+
   it('keeps a deactivated explicit priority visible and selectable', async () => {
     wrap(
       <PrioritySelect

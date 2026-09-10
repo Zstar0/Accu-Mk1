@@ -6737,6 +6737,9 @@ export interface SubSample {
   /** Resolved effective priority for the vial (sample-priority spec §5) —
    *  the vial → sample → order → customer chain. Null when unresolved. */
   priority?: EffectivePriority | null
+  /** The vial's OWN explicit priority key (null = inherit up the chain).
+   *  Binds the vial-level PrioritySelect on the sub-sample page. */
+  priority_key?: string | null
 }
 
 export interface ParentSampleSummary {
