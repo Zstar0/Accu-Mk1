@@ -6,7 +6,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from database import Base
-from models import VialRole, CatalogChangeLog
+from models import VialRole, CatalogChangeLog, Priority
+from priority.service import invalidate_priority_cache
 from catalog.change_log import apply_and_log, log_create, log_delete, log_members, _json_safe
 
 
@@ -162,6 +163,17 @@ def route_client():
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     shared_session = Session()
+    # The /sla-priority-tiers routes now validate the path key against the
+    # `priorities` table, so this throwaway schema needs the seed rows the real
+    # migration inserts. The cache is a process global, so invalidate it on the
+    # way in and out or this in-memory map leaks into DB-backed tests.
+    shared_session.add_all([
+        Priority(key="default", name="Default", rank=0, is_default=True),
+        Priority(key="high", name="High", rank=10),
+        Priority(key="expedited", name="Expedited", rank=20),
+    ])
+    shared_session.commit()
+    invalidate_priority_cache()
 
     def _override_get_db():
         yield shared_session
@@ -177,6 +189,7 @@ def route_client():
         app.dependency_overrides.pop(get_db, None)
     else:
         app.dependency_overrides[get_db] = prev_db
+    invalidate_priority_cache()
     if prev_user is None:
         app.dependency_overrides.pop(get_current_user, None)
     else:

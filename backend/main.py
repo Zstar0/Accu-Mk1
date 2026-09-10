@@ -2863,9 +2863,10 @@ _RESERVED_LEGACY_ROLES = {"hplc", "endo", "ster"}
 
 # ─── SLA tier schemas (sub-project A, revised to tiers) ───
 
-# Priority tiers mirror SamplePriority/WorksheetItem.priority. Validated here at
-# the API edge — the DB columns are unconstrained VARCHAR.
-SlaPriority = Literal["normal", "high", "expedited"]
+# Priority keys are user-managed rows in the `priorities` table, so the API edge
+# can no longer enforce a fixed Literal. The tier routes validate the path
+# parameter against priority_map(db) instead; the DB columns stay VARCHAR.
+SlaPriority = str
 
 
 class SlaTierCreate(BaseModel):
@@ -19667,6 +19668,10 @@ async def set_sla_priority_tier(
     service_group_id to upsert the global override; supply it to scope the
     override to a single service group.
     """
+    from priority.service import priority_map
+    if priority not in priority_map(db):
+        raise HTTPException(status_code=422, detail=f"unknown priority {priority!r}")
+
     if not db.get(SlaTier, data.sla_tier_id):
         raise HTTPException(404, f"SLA tier {data.sla_tier_id} not found")
     if data.service_group_id is not None and not db.get(
@@ -19720,6 +19725,10 @@ async def delete_sla_priority_tier(
     Without `service_group_id`, removes the global (NULL group) override.
     With `service_group_id`, removes the override scoped to that group only.
     """
+    from priority.service import priority_map
+    if priority not in priority_map(db):
+        raise HTTPException(status_code=422, detail=f"unknown priority {priority!r}")
+
     q = select(SlaPriorityTier).where(SlaPriorityTier.priority == priority)
     if service_group_id is None:
         q = q.where(SlaPriorityTier.service_group_id.is_(None))
