@@ -1830,6 +1830,37 @@ export async function clearAnalyteSlot(
   return response.json()
 }
 
+export interface CancelSamplePreview {
+  status: string
+  from_status: string
+  cancelled_rows: number[]
+  released_worksheets: number[]
+  published_coa_still_live: boolean
+  dry_run: true
+}
+export interface CancelSampleResult extends Omit<CancelSamplePreview, 'dry_run'> { dry_run: false }
+
+export async function cancelSample(
+  sampleId: string,
+  body: { reason: string; confirm?: boolean; dryRun?: boolean },
+): Promise<CancelSamplePreview | CancelSampleResult> {
+  const response = await fetch(`${API_BASE_URL()}/api/samples/${encodeURIComponent(sampleId)}/cancel`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({ reason: body.reason, confirm: body.confirm ?? false, dry_run: body.dryRun ?? false }),
+  })
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    const err = new Error(
+      typeof payload?.detail === 'string' ? payload.detail : `Cancel failed: ${response.status}`,
+    ) as Error & { status?: number; detail?: unknown }
+    err.status = response.status
+    err.detail = payload?.detail
+    throw err
+  }
+  return response.json()
+}
+
 export interface ReplaceAnalyteResult {
   success: boolean
   field_updated: string

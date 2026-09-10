@@ -1,11 +1,18 @@
-"""Task 2: fail-closed SENAITE write-back on promote.
+"""Task 2: SENAITE write-back on promote — Accu-Mk1 writes FIRST.
 Task 3: promotions read endpoint + parent activity events.
+
+Ordering (Handler ruling 2026-09-10): promote commits the Mk1 rows, THEN
+tees the write-back to SENAITE. Mk1 is the canonical tier post
+read-independence, so the mirror must never be able to take the source of
+truth down with it. Until this ruling the order was reversed and fail-closed,
+which is how P-2553 and P-2606 ended up with a verified SENAITE line, no Mk1
+promotion, and no Promote verb left in the UI.
 
 Tests (Task 2):
   1. Happy path: writeback succeeds → 201, parent row persisted, write-back
      called with correct parent_sample_id / keyword / result / remark.
-  2. Write-back raises SenaiteWritebackError → 502, no parent-tier row left,
-     source vial still in to_be_verified.
+  2. Write-back raises SenaiteWritebackError → 201 anyway, the promotion
+     stands, and the lagging mirror is recorded on the parent.
   3. Validation error (wrong-state source) → 400-family, write-back NOT called.
 
 Tests (Task 3):
@@ -239,14 +246,27 @@ def test_promote_per_substance_writes_back_under_parent_keyword(
     assert parent_row.keyword == "ANALYTE-2-PUR"
 
 
-# ─── Test 2: write-back fails → 502, rollback ─────────────────────────────────
+# ─── Test 2: write-back fails → the Mk1 promotion SURVIVES ───────────────────
+# CONTRACT CHANGE, Handler ruling 2026-09-10: Accu-Mk1 writes first.
+#
+# This test previously pinned the opposite (502 + rollback, no parent row).
+# That order was written when SENAITE was the source of truth. Since the
+# read flip Mk1 is the canonical tier and what Sample Details and the COA
+# wire actually read, so fail-closed sacrificed the source of truth to
+# protect the mirror — and when the lost half was the Mk1 commit, the family
+# wedged with no UI path out at all (P-2553, P-2606; both needed a by-hand
+# replay of promote_to_parent against prod).
+#
+# Promote now commits Mk1, THEN tees SENAITE. A write-back failure leaves the
+# promotion standing and is reconciled in the background.
 
 
-def test_promote_writeback_failure_returns_502_and_rolls_back(
+def test_promote_writeback_failure_keeps_mk1_promotion(
     route_client, promote_fixture
 ):
-    """writeback_promotion raises SenaiteWritebackError → 502; no parent-tier
-    row persisted for (parent, keyword); source vial still to_be_verified."""
+    """writeback_promotion raises → 201 anyway; the parent-tier row is
+    persisted and the source vial is promoted. Mk1 never loses the write it
+    already owns because the mirror was unreachable."""
     db, parent, sub, analysis, payload = promote_fixture
 
     def _failing_writeback(parent_sample_id, keyword, result_value, remark):
@@ -256,24 +276,54 @@ def test_promote_writeback_failure_returns_502_and_rolls_back(
                side_effect=_failing_writeback):
         resp = route_client.post("/api/lims-analyses/promote", json=payload)
 
-    assert resp.status_code == 502, resp.text
-    assert "SENAITE write-back failed" in resp.json()["detail"]
+    assert resp.status_code == 201, resp.text
 
-    # No parent-tier row left in the DB
     parent_rows = db.execute(
         select(LimsAnalysis).where(
             LimsAnalysis.lims_sample_pk == parent.id,
             LimsAnalysis.keyword == "PURITY-HPLC",
         )
     ).scalars().all()
-    assert len(parent_rows) == 0, (
-        f"Expected 0 parent-tier rows but found {len(parent_rows)}"
+    assert len(parent_rows) == 1, (
+        f"Expected the promotion to stand but found {len(parent_rows)} parent rows"
     )
+    assert parent_rows[0].review_state == "parent_to_verify"
 
-    # Source vial still in to_be_verified (rollback didn't corrupt it)
     db.expire(analysis)
     db.refresh(analysis)
-    assert analysis.review_state == "to_be_verified"
+    assert analysis.review_state == "promoted"
+
+
+def test_promote_writeback_failure_records_a_visible_event(
+    route_client, promote_fixture
+):
+    """A lagging mirror has to be visible where someone will find it. Under
+    the old fail-closed order the 502 itself was the signal; now the promotion
+    succeeds, so the only trace would otherwise be a log line that rotates
+    (exactly what cost us the P-2553 diagnosis). The failed tee is recorded on
+    the parent instead."""
+    db, parent, sub, analysis, payload = promote_fixture
+
+    def _failing_writeback(parent_sample_id, keyword, result_value, remark):
+        raise SenaiteWritebackError("SENAITE timed out (test)")
+
+    with patch("lims_analyses.routes.senaite_writeback.writeback_promotion",
+               side_effect=_failing_writeback):
+        resp = route_client.post("/api/lims-analyses/promote", json=payload)
+    assert resp.status_code == 201, resp.text
+
+    from models import LimsSubSampleEvent
+    events = db.execute(
+        select(LimsSubSampleEvent).where(
+            LimsSubSampleEvent.lims_sample_pk == parent.id,
+            LimsSubSampleEvent.event == "senaite_promote_writeback_failed",
+        )
+    ).scalars().all()
+    assert len(events) == 1, (
+        "the failed write-back left no durable trace on the parent"
+    )
+    assert events[0].details["keyword"] == "PURITY-HPLC"
+    assert "timed out" in events[0].details["error"]
 
 
 # ─── Test 3: validation error → 400-family, write-back not called ─────────────
@@ -626,3 +676,109 @@ def test_parent_line_states_mk1_retested_published_canonical_unlocks(
                      retested=True)
     states = _get_states_mk1(route_client)
     assert "ENDO" not in states
+
+
+# ─── shadow fallback must not lock a family with unfinished vial work ────────
+# P-2553 / P-2606 (2026-09-09): a promote whose SENAITE half landed and whose
+# Mk1 half did not leaves the keyword with NO canonical history and a shadow
+# mirroring SENAITE's eternal verified. The fallback locked it, the FE hid
+# every verb (isLockedByParent), and the lab was wedged holding a
+# to_be_verified vial row it could not push up — while the backend would have
+# accepted that promote, since it diverges over a locked SENAITE line (1.12.1)
+# and records senaite_line_diverged. The fallback's job is keeping LEGACY
+# families locked; a family that still has unfinished vial work is not that.
+# "Unfinished" is the same set lock_variance_set's series guard uses, so the
+# two agree: what the variance guard demands you finish, this map must leave
+# finishable.
+
+
+def _vial_row(db, parent, svc, keyword, *, seq=1, **kw):
+    sub = LimsSubSample(
+        parent_sample_pk=parent.id,
+        external_lims_uid=f"uid-{parent.sample_id}-S{seq:02d}",
+        sample_id=f"{parent.sample_id}-S{seq:02d}",
+        vial_sequence=seq,
+    )
+    db.add(sub)
+    db.flush()
+    row = LimsAnalysis(
+        lims_sub_sample_pk=sub.id,
+        analysis_service_id=svc.id,
+        keyword=keyword,
+        title=keyword,
+        **kw,
+    )
+    db.add(row)
+    db.commit()
+    return row
+
+
+def test_parent_line_states_mk1_unfinished_vial_unlocks_shadow_only_keyword(
+    route_client, line_states_parent
+):
+    """THE P-2553 / P-2606 case: shadow mirrors verified, no canonical history,
+    and a live to_be_verified vial row is waiting to go up. The keyword must be
+    absent from the map so the FE offers Promote."""
+    db, parent, svc = line_states_parent
+    _parent_tier_row(db, parent, svc, "ENDO",
+                     provenance="shadow", review_state="senaite_mirror",
+                     mirror_review_state="verified")
+    _vial_row(db, parent, svc, "ENDO",
+              review_state="to_be_verified", result_value="3.85")
+    states = _get_states_mk1(route_client)
+    assert "ENDO" not in states
+
+
+def test_parent_line_states_mk1_finished_vial_keeps_shadow_lock(
+    route_client, line_states_parent
+):
+    """The fallback still protects legacy families: a vial row that is already
+    finished leaves the lab nothing to push up, so the shadow's verified keeps
+    the keyword locked. Guards against an over-broad "any vial row unlocks"."""
+    db, parent, svc = line_states_parent
+    _parent_tier_row(db, parent, svc, "ENDO",
+                     provenance="shadow", review_state="senaite_mirror",
+                     mirror_review_state="verified")
+    _vial_row(db, parent, svc, "ENDO",
+              review_state="rejected", result_value="3.85")
+    states = _get_states_mk1(route_client)
+    assert states.get("ENDO") == "verified"
+
+
+def test_parent_line_states_mk1_superseded_vial_keeps_shadow_lock(
+    route_client, line_states_parent
+):
+    """Current-row idiom: a retested=True vial row is superseded history, not
+    live work, so it must not unlock the keyword on its own."""
+    db, parent, svc = line_states_parent
+    _parent_tier_row(db, parent, svc, "ENDO",
+                     provenance="shadow", review_state="senaite_mirror",
+                     mirror_review_state="verified")
+    _vial_row(db, parent, svc, "ENDO", review_state="to_be_verified",
+              result_value="3.85", retested=True)
+    states = _get_states_mk1(route_client)
+    assert states.get("ENDO") == "verified"
+
+
+def test_parent_line_states_mk1_unresulted_vial_keeps_shadow_lock(
+    route_client, line_states_parent
+):
+    """A vial row that has not been resulted yet cannot be promoted at all —
+    promote_to_parent requires every source in to_be_verified — so an
+    unassigned row is no evidence of a stuck promote and must not unlock.
+
+    Found on live data before this shipped: BW-0028..31 (order WP-4067, July)
+    carry empty unassigned PH-DETERM vial rows under a SENAITE-verified pH,
+    dormant since check-in. They were the ONLY families a wider "any row the
+    variance guard calls unfinished" rule would have changed, and unlocking
+    them would hand the bench verbs on a value SENAITE has already verified,
+    for no gain. Keying off promote's own precondition instead leaves them
+    exactly as they are.
+    """
+    db, parent, svc = line_states_parent
+    _parent_tier_row(db, parent, svc, "ENDO",
+                     provenance="shadow", review_state="senaite_mirror",
+                     mirror_review_state="verified")
+    _vial_row(db, parent, svc, "ENDO", review_state="unassigned")
+    states = _get_states_mk1(route_client)
+    assert states.get("ENDO") == "verified"

@@ -623,6 +623,20 @@ def _refresh_parent_from_senaite(db: Session, parent: LimsSample) -> None:
     prior_uid = parent.external_lims_uid
     prior_system = parent.external_lims_system
     _populate_basic_info(parent, meta)
+    # Authority flip (spec §4.2): under mk1 authority the engine owns this
+    # column, so the gate restores the pre-fetch status here rather than
+    # touching _populate_basic_info's unconditional write (that helper is
+    # shared with the row-creation and signal-upsert paths, which stay
+    # SENAITE-sourced). SENAITE's own review_state is still LOGGED — as a
+    # `reconcile` row at the bottom of this function, keyed off the captured
+    # `senaite_state` rather than the restored column, because that log is
+    # the ONLY place a SENAITE-UI transition after the flip becomes visible
+    # (and what spec §10's rollback sweep reads).
+    from workflow.authority import sample_status_authority
+    senaite_state = meta.get("review_state")
+    mk1_authority = sample_status_authority(db) == "mk1"
+    if mk1_authority:
+        parent.status = old_status
     if not incoming_uid and prior_uid:
         # Malformed/partial fetch response: restore identity instead of
         # letting _populate_basic_info NULL it (same prior-identity-restore
@@ -634,11 +648,30 @@ def _refresh_parent_from_senaite(db: Session, parent: LimsSample) -> None:
             parent.sample_id,
         )
     db.flush()
-    if parent.status != old_status:
+    if mk1_authority:
+        # the column was restored above, so compare SENAITE's state directly.
+        # A persistently diverged sample would otherwise re-log on EVERY page
+        # view (the column never converges to SENAITE's state under mk1), so
+        # log only when SENAITE's state differs from the last reconcile row.
+        logged_to = senaite_state
+        should_log = bool(senaite_state) and senaite_state != old_status
+        if should_log:
+            from sqlalchemy import select as _select
+            from models import LimsSampleTransition as _LST
+            last_reconcile = db.execute(
+                _select(_LST.to_status).where(
+                    _LST.lims_sample_pk == parent.id, _LST.source == "reconcile"
+                ).order_by(_LST.id.desc()).limit(1)
+            ).scalar_one_or_none()
+            should_log = last_reconcile != senaite_state
+    else:
+        logged_to = parent.status
+        should_log = parent.status != old_status
+    if should_log:
         from workflow.sample_log import record_sample_transition
         try:
             record_sample_transition(
-                db, sample_id=parent.sample_id, to_status=parent.status,
+                db, sample_id=parent.sample_id, to_status=logged_to,
                 from_status=old_status, source="reconcile", occurred_at=None,
             )
         except Exception as e:

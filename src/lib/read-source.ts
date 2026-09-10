@@ -135,3 +135,25 @@ export function useCoaGenerationSource(): ReadSource {
   const raw = settings?.find((s) => s.key === READ_SOURCE_SETTING_KEY)?.value
   return parseCoaGenerationSource(raw)
 }
+
+/** Backend-read key: who WRITES lims_samples.status (spec 2026-09-09 §3.1).
+ *  Absent/malformed -> 'senaite' (SENAITE mirror), 'mk1' -> native engine. */
+export const SAMPLE_STATUS_KEY = 'sample_status'
+
+export function parseSampleStatusAuthority(rawValue: string | undefined | null): ReadSource {
+  if (!rawValue) return DEFAULT_READ_SOURCE
+  try {
+    const parsed = JSON.parse(rawValue) as Record<string, unknown>
+    const v = parsed?.[SAMPLE_STATUS_KEY]
+    return v === 'mk1' || v === 'senaite' ? v : DEFAULT_READ_SOURCE
+  } catch {
+    return DEFAULT_READ_SOURCE
+  }
+}
+
+/** Reactive read of the sample-status authority (spec 2026-09-09 §3.1 / §11.4). */
+export function useSampleStatusAuthority(): ReadSource {
+  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: getSettings })
+  const raw = settings?.find((s) => s.key === READ_SOURCE_SETTING_KEY)?.value
+  return parseSampleStatusAuthority(raw)
+}

@@ -72,3 +72,48 @@ def graph_payload(db: Session, scope: str) -> dict:
             "is_builtin": t.is_builtin, "is_active": t.is_active,
         } for t in transitions],
     }
+
+
+import time as _time
+
+_SAMPLE_STATE_CACHE: dict = {"at": 0.0, "slugs": None}
+_SAMPLE_STATE_TTL_S = 60.0
+
+
+def clear_sample_state_cache() -> None:
+    _SAMPLE_STATE_CACHE["at"] = 0.0
+    _SAMPLE_STATE_CACHE["slugs"] = None
+
+
+def _seed_sample_slugs() -> frozenset[str]:
+    """The seed constant's sample-scope slugs — shared fallback for both the
+    failed-query and empty-result cases below."""
+    from workflow.seeds import SEED_STATES
+    return frozenset(slug for (scope, slug, *_r) in SEED_STATES if scope == "sample")
+
+
+def sample_state_slugs(db: Session) -> frozenset:
+    """Live sample-tier vocabulary: every ACTIVE `entity_scope='sample'` state
+    in the catalog (the Settings -> Workflow pane is its editor). Cached 60 s
+    per process. Falls back to the seed constant if the query fails, OR
+    returns no rows (boot before seed: the table exists but is still empty),
+    so the status writers never lose their guard."""
+    now = _time.monotonic()
+    if (_SAMPLE_STATE_CACHE["slugs"] is not None
+            and now - _SAMPLE_STATE_CACHE["at"] < _SAMPLE_STATE_TTL_S):
+        return _SAMPLE_STATE_CACHE["slugs"]
+    try:
+        rows = db.execute(
+            select(LimsWorkflowState.slug).where(
+                LimsWorkflowState.entity_scope == "sample",
+                LimsWorkflowState.is_active.is_(True),
+            )
+        ).scalars().all()
+        slugs = frozenset(rows)
+        if not slugs:
+            slugs = _seed_sample_slugs()
+    except Exception:
+        slugs = _seed_sample_slugs()
+    _SAMPLE_STATE_CACHE["at"] = now
+    _SAMPLE_STATE_CACHE["slugs"] = slugs
+    return slugs

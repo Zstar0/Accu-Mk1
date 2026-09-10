@@ -28,7 +28,7 @@ from lims_analyses.state_machine import (
     tier_allows,
     tier_of,
 )
-from models import LimsAnalysis, LimsAnalysisTransition, LimsSubSampleEvent
+from models import LimsAnalysis, LimsAnalysisTransition, LimsSubSampleEvent, Worksheet, WorksheetItem
 
 
 # ─── Typed exceptions ────────────────────────────────────────────────────────
@@ -1472,6 +1472,12 @@ def list_promotions_for_parent(
 
 # ─── Read-flip L4/Task1: parent-tier analyses in senaite shape ──────────────
 
+# Vial-tier states a promote would actually accept as a source. Kept identical
+# to promote_to_parent's own precondition ("all sources must be in
+# 'to_be_verified'") — this list exists to answer "is there a promote here that
+# the lock map would be hiding?", so it must not drift from that guard.
+_VIAL_PROMOTABLE_STATES = ("to_be_verified",)
+
 
 def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, str]:
     """Keyword → review_state lock map for the FE's isLockedByParent gate,
@@ -1491,9 +1497,29 @@ def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, s
         re-promote, even though the shadow still mirrors verified.
       - Keywords with NO canonical history fall back to the live shadow
         row's mirror_review_state, so legacy vials keep their lock without
-        a SENAITE call (shadow rows are native DB).
+        a SENAITE call (shadow rows are native DB) — EXCEPT where the family
+        still holds a PROMOTABLE vial row for that keyword (see below).
+
+    The fallback's exception (P-2553 / P-2606, 2026-09-09): a promote whose
+    SENAITE half landed and whose Mk1 half did not leaves the keyword with no
+    canonical history and a shadow mirroring SENAITE's eternal verified —
+    indistinguishable, to this map, from a legacy family. The fallback locked
+    it, the FE hid every verb, and the lab was wedged holding a
+    to_be_verified vial row it could not push up, while promote itself would
+    have accepted that click: it diverges over a locked SENAITE line (1.12.1)
+    and records senaite_line_diverged. So the fallback stands down for
+    keywords that still have a vial row promote would take as a source, which
+    is exactly _VIAL_PROMOTABLE_STATES.
+
+    Keying off promote's own precondition, rather than off any row the
+    variance guard would call unfinished, is deliberate: an unresulted row
+    cannot be promoted, so it is no evidence of a stuck promote, and
+    unlocking it would only hand the bench verbs on a value SENAITE has
+    already verified. Measured against prod before shipping — the wider rule
+    changed exactly four dormant unassigned rows (BW-0028..31, WP-4067) and
+    no genuinely stuck family; this one changes neither.
     """
-    from models import LimsSample
+    from models import LimsSample, LimsSubSample
 
     parent = db.execute(
         select(LimsSample).where(LimsSample.sample_id == parent_sample_id)
@@ -1506,6 +1532,16 @@ def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, s
             LimsAnalysis.lims_sample_pk == parent.id,
             LimsAnalysis.lims_sub_sample_pk.is_(None),
             LimsAnalysis.provenance.in_(("canonical", "shadow")),
+        )
+    ).scalars().all())
+
+    promotable_vial_keywords = set(db.execute(
+        select(LimsAnalysis.keyword)
+        .join(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
+        .where(
+            LimsSubSample.parent_sample_pk == parent.id,
+            LimsAnalysis.retested.is_(False),
+            LimsAnalysis.review_state.in_(_VIAL_PROMOTABLE_STATES),
         )
     ).scalars().all())
 
@@ -1527,6 +1563,7 @@ def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, s
             and not r.retested
             and r.keyword not in canonical_ever
             and r.keyword not in states
+            and r.keyword not in promotable_vial_keywords
             and r.mirror_review_state
         ):
             states[r.keyword] = r.mirror_review_state
@@ -3595,3 +3632,74 @@ def list_analyses_in_senaite_shape(
                 promo_by_source[p.source_analysis_id] = p.parent_analysis_id
 
     return _serialize_senaite_shape_rows(db, rows, promo_by_source=promo_by_source)
+
+
+# ─── Native cancel cascade (spec §3.4, §8.3) ─────────────────────────────────
+
+CANCEL_PENDING_STATES = frozenset({"unassigned", "assigned", "to_be_verified", "parent_to_verify"})
+
+
+def _cancel_targets(db: Session, *, parent_sample_pk: int):
+    """Live canonical/ordered, non-retested rows on the parent and its vials.
+    Partitioned into pending (still awaiting work -- a customer cancellation
+    kills these) and kept (finished history rows that stay, spec §3.4).
+    `cancelled` rows are neither -- a dead row is not history, and a repeat
+    call must not keep re-reporting it as "kept"."""
+    from models import LimsSubSample
+    from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
+    vials = db.execute(
+        select(LimsSubSample).where(LimsSubSample.parent_sample_pk == parent_sample_pk)
+    ).scalars().all()
+    vial_pks = [v.id for v in vials]
+    uids = [v.external_lims_uid for v in vials if v.external_lims_uid]
+    rows = db.execute(
+        select(LimsAnalysis).where(
+            or_(LimsAnalysis.lims_sample_pk == parent_sample_pk,
+                LimsAnalysis.lims_sub_sample_pk.in_(vial_pks or [-1])),
+            LimsAnalysis.provenance.in_(("canonical", PROVENANCE_ORDERED)),
+            LimsAnalysis.retested.is_(False),
+        ).order_by(LimsAnalysis.id)
+    ).scalars().all()
+    pending_rows = [r for r in rows if r.review_state in CANCEL_PENDING_STATES]
+    kept_rows = [r for r in rows if r.review_state not in CANCEL_PENDING_STATES
+                and r.review_state != "cancelled"]
+    items = db.execute(
+        select(WorksheetItem).where(WorksheetItem.sample_uid.in_(uids))
+    ).scalars().all() if uids else []
+    return pending_rows, kept_rows, items
+
+
+def preview_cancel(db: Session, *, parent_sample_pk: int) -> Dict:
+    pending_rows, kept_rows, items = _cancel_targets(db, parent_sample_pk=parent_sample_pk)
+    return {"cancelled_rows": [r.id for r in pending_rows],
+            "released_worksheets": sorted({i.worksheet_id for i in items}),
+            "kept_rows": [r.id for r in kept_rows]}
+
+
+def cancel_pending_rows(db: Session, *, parent_sample_pk: int, user_id: Optional[int],
+                        reason: str) -> Dict:
+    """Spec §8.3: cancel every pending row (audited per row), then release the
+    vials from their worksheets WITHOUT a reset transition (the rows are dead).
+    Flush-only; the route commits."""
+    from lims_analyses.worksheet_analyst import clear_for_item
+    pending_rows, kept_rows, items = _cancel_targets(db, parent_sample_pk=parent_sample_pk)
+    cancelled = []
+    for r in pending_rows:
+        apply_transition(db, analysis_id=r.id, kind="cancel", reason=reason,
+                         user_id=user_id, commit=False)
+        cancelled.append(r.id)
+    ws_ids = {item.worksheet_id for item in items}
+    titles = dict(db.execute(
+        select(Worksheet.id, Worksheet.title).where(Worksheet.id.in_(ws_ids))
+    ).all()) if ws_ids else {}
+    released = []
+    for item in items:
+        clear_for_item(db, sample_uid=item.sample_uid, service_group_id=item.service_group_id,
+                       acting_user_id=user_id, worksheet_id=item.worksheet_id,
+                       worksheet_title=titles.get(item.worksheet_id),
+                       department_id=item.department_id, reset_state=False)
+        released.append(item.worksheet_id)
+        db.delete(item)
+    db.flush()
+    return {"cancelled_rows": cancelled, "released_worksheets": sorted(set(released)),
+            "kept_rows": [r.id for r in kept_rows]}

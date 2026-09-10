@@ -38,8 +38,17 @@ SEED_TRANSITIONS = [
     ("sample", "sample_received", "to_be_verified", "submit", True,
      [{"kind": "all_analyses_in_state", "value": "to_be_verified,verified,published", "note": None}],
      "All analyses submitted."),
+    # verify gates on verified-OR-published for the same reason the publish
+    # edges below do (2026-09-09, the `no_edge:publish` residual class): a
+    # legacy family's line that SENAITE already PUBLISHED surfaces in
+    # `native_parent_line_states` as 'published' (Mk1 holds only a
+    # senaite_mirror shadow row for it), so a strict 'verified' list refused
+    # verify on 12 fully-finished samples, which then refused publish with
+    # no_edge and stranded at to_be_verified. Verify was the only edge the
+    # 2026-08-23 widening missed.
     ("sample", "to_be_verified", "verified", "verify", True,
-     [{"kind": "all_analyses_in_state", "value": "verified", "note": None}],
+     [{"kind": "all_analyses_in_state", "value": "verified,published",
+       "note": None}],
      "Lab verification of all results."),
     # publish gates on verified-OR-published (not verified alone): the A6
     # publish hook flips shadow-mirrored analyses to 'published' before the
@@ -78,6 +87,37 @@ SEED_TRANSITIONS = [
      "Spawns a new unassigned retest line (retest_of link); the original stays verified, flagged retested."),
     ("analysis", "verified", "published", "publish", False, [], "Rides the sample COA publish."),
     ("analysis", "verified", "promoted", "promote", False, [], "Sub-sample tier: promote result to parent."),
+]
+
+# Native cancel (2026-09-09 spec §3.3): a customer can cancel at ANY point, so
+# every sample state except `cancelled` gets an edge. Data, not code — the
+# Settings -> Workflow pane owns these afterwards (seed is insert-if-missing).
+_CANCEL_FROM = [slug for (scope, slug, *_r) in SEED_STATES if scope == "sample" and slug != "cancelled"]
+SEED_TRANSITIONS += [
+    ("sample", frm, "cancelled", "cancel", False, [],
+     "Customer-requested cancellation; allowed at any point.")
+    for frm in _CANCEL_FROM
+    if frm not in ("sample_due", "sample_received")   # the two original edges stay as written
+]
+# Partial-publish pathway (spec §3.3): a primary COA published while add-on
+# lines are still pending. Keyed by the `publish` verb because the engine's
+# `coa_published` requirement is satisfied ONLY by the publish touchpoint's
+# attestation (engine._eval_one: `met = bool((attested or {}).get("coa_published"))`)
+# and _find_edge looks up (from_state, verb) — so the touchpoint's own verb
+# must be the edge's verb. Not auto_fire (cascades never attest).
+_SUBMIT_REQS = next((reqs for (scope, f, t, verb, _af, reqs, _d) in SEED_TRANSITIONS
+                     if scope == "sample" and f == "sample_received" and verb == "submit"), None)
+if _SUBMIT_REQS is None:  # fail loudly at import, not with a bare StopIteration
+    raise RuntimeError("workflow.seeds: the seeded sample_received -> to_be_verified "
+                       "'submit' edge is missing; the partial-publish pathway copies its requirements")
+_SUBMIT_REQS = [dict(r) for r in _SUBMIT_REQS]   # own copy — never alias another edge's list
+_COA_PUBLISHED_REQ = [{"kind": "coa_published", "value": None,
+                       "note": "attested by the publish touchpoint"}]
+SEED_TRANSITIONS += [
+    ("sample", "sample_received", "waiting_for_addon_results", "publish", False,
+     _COA_PUBLISHED_REQ, "Primary COA out while add-on lines are still pending (partial publish)."),
+    ("sample", "waiting_for_addon_results", "to_be_verified", "submit", True, _SUBMIT_REQS,
+     "Add-on results submitted; back onto the verify path."),
 ]
 
 

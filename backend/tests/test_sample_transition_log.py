@@ -36,7 +36,7 @@ from sqlalchemy import delete, select
 import main
 from auth import get_current_user
 from database import SessionLocal
-from models import LimsSample, LimsSampleTransition
+from models import LimsSample, LimsSampleTransition, LimsSenaiteTeeRetry
 from sub_samples.service import _refresh_parent_from_senaite
 from workflow.sample_log import record_sample_transition
 
@@ -325,19 +325,34 @@ def test_publish_hook_writes_transition(db, seed_sample):
     assert row.actor_user_id == 1
 
 
-def test_publish_hook_skipped_when_not_actually_published(db, seed_sample):
-    """Mirrors test_publish_no_mirror_when_partial_publish_deferred in
-    test_parent_mirror_hooks.py: to_be_verified is an ACCEPTED-but-deferred
-    state, not 'published' — the transition-log hook must not fire either."""
+def test_publish_refused_by_senaite_still_logs_natively_and_queues_retry(db, seed_sample):
+    """Authority-flip behavior (spec §4.4/§5), superseding the old
+    'skipped when not actually published' rule: to_be_verified is a SENAITE
+    read-back that is NOT 'published', but the native publish verb is the
+    user's direct intent and runs regardless — the ledger row is written
+    unconditionally and the SENAITE-side refusal is queued as a retry
+    instead of suppressing the write."""
+    # A SENAITE-refused publish implies an AR exists: give the sample a uid,
+    # otherwise the tee (correctly) has nothing to queue (no-uid rule, 09-09).
+    seed_sample.external_lims_uid = "U-TSL-PUB"
+    db.commit()
     r = _drive_publish_coa(seed_sample.sample_id, transition_state="to_be_verified")
 
     assert r.status_code == 200, r.text
     assert r.json()["success"] is True
 
-    row = db.query(LimsSampleTransition).filter_by(
-        lims_sample_pk=seed_sample.id
-    ).one_or_none()
-    assert row is None
+    rows = db.query(LimsSampleTransition).filter_by(
+        lims_sample_pk=seed_sample.id, verb="publish"
+    ).all()
+    assert len(rows) == 1
+    assert rows[0].source == "mk1"
+    assert rows[0].to_status == "published"
+
+    retry_rows = db.query(LimsSenaiteTeeRetry).filter_by(
+        lims_sample_pk=seed_sample.id, verb="publish"
+    ).all()
+    assert len(retry_rows) == 1
+    assert retry_rows[0].status == "pending"
 
 
 def test_publish_hook_never_fails_on_recorder_exception(db, seed_sample, caplog):
@@ -363,7 +378,7 @@ def test_publish_hook_never_fails_on_recorder_exception(db, seed_sample, caplog)
              patch.object(main, "_mark_shadows_published_bg", lambda sample_id: None), \
              patch("workflow.sample_log.record_sample_transition",
                    side_effect=RuntimeError("boom")), \
-             caplog.at_level(logging.WARNING):
+             caplog.at_level(logging.ERROR):
             r = _client_as_user().post(
                 f"/wizard/senaite/samples/{seed_sample.sample_id}/publish-coa"
             )
@@ -372,7 +387,11 @@ def test_publish_hook_never_fails_on_recorder_exception(db, seed_sample, caplog)
 
     assert r.status_code == 200, r.text
     assert r.json()["success"] is True
-    assert any("workflow.sample_log_failed" in rec.message for rec in caplog.records)
+    # Task 9 authority flip: the publish route now runs _after_publish_native
+    # instead of the old _record_sample_transition_bg, so the never-raise
+    # catch (and its log line) moved with it — logged via logger.exception
+    # (ERROR), not the old helper's WARNING "workflow.sample_log_failed".
+    assert any("after-publish native step failed" in rec.message for rec in caplog.records)
 
     row = db.query(LimsSampleTransition).filter_by(
         lims_sample_pk=seed_sample.id

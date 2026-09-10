@@ -121,6 +121,7 @@ from slack_notify.routes import router as slack_prefs_router
 from slack_notify.interactions import router as slack_interactions_router
 from workflow.routes import router as workflow_router
 from priority.routes import router as priority_router
+from workflow.cancel_routes import router as cancel_router
 from conformance.routes import router as conformance_router
 
 import logging
@@ -474,6 +475,34 @@ async def lifespan(app: FastAPI):
     from flags import watches as _flag_watches
     _flag_scheduler.register("flag_watch_poller", interval=_timedelta(minutes=2),
                              fn=_flag_watches._watch_poll_job)
+    # Sample-status authority flip (2026-09-09 spec §5): drain SENAITE tee
+    # refusals. Runs in BOTH authority modes — the silent-200 class is
+    # SENAITE's defect regardless of who owns the badge.
+    from workflow import senaite_tee as _senaite_tee
+
+    def _tee_retry_job(now):
+        db = _SessionLocal()
+        try:
+            _senaite_tee.run_retries(db, now=now)
+            db.commit()
+        finally:
+            db.close()
+    _flag_scheduler.register("senaite_tee_retry", interval=_timedelta(minutes=5),
+                             fn=_tee_retry_job)
+    # Sample-status authority flip (2026-09-09 spec §6.2): stranded-sample
+    # detector. Detection, not sweeping — this job never advances a status;
+    # its only writes are flags (Handler ruling).
+    from workflow import stranded as _stranded
+
+    def _stranded_job(now):
+        db = _SessionLocal()
+        try:
+            _stranded.run_check(db, now=now)
+            db.commit()
+        finally:
+            db.close()
+    _flag_scheduler.register("workflow_stranded_check", interval=_timedelta(minutes=15),
+                             fn=_stranded_job)
     _flag_scheduler.start()
     # Seed default settings and admin user
     from database import SessionLocal
@@ -555,6 +584,7 @@ app.include_router(slack_prefs_router)
 app.include_router(slack_interactions_router)
 app.include_router(workflow_router)
 app.include_router(priority_router)
+app.include_router(cancel_router)
 app.include_router(conformance_router)
 
 # --- Endpoints ---
@@ -10469,6 +10499,11 @@ class SlaPerfGatingFamilyOut(BaseModel):
     gated: int
     gated_late: int
     gated_late_pct: float
+    # Under min_timed_for_family timed samples: the page dims the row, marks it
+    # "too few" and drops the red threshold, and it cannot be named as the
+    # leading department. MUST stay declared -- response_model silently strips
+    # anything it does not list.
+    thin: bool
 
 
 class SlaPerfGatingOut(BaseModel):
@@ -10483,6 +10518,7 @@ class SlaPerfGatingOut(BaseModel):
     wait_n: int
     wait_over_day: int
     min_late_for_trend: int
+    min_timed_for_family: int
 
 
 class SlaPerfRiskBucketOut(BaseModel):
@@ -10741,6 +10777,74 @@ def reports_sla_performance(
     return report
 
 
+# ── Reports read-model: source-set SQL ─────────────────────────────
+# `published_coa_results` mirrors published PRIMARY COAs only — one row per
+# analyte per LAB RESULT, which is the grain every reader assumes.
+#
+# Additional COAs (children: `parent_generation_id IS NOT NULL`) are the same
+# lab result reissued under another brand. They carry no extra lab workload, and
+# every one of them sits on a sample that already has a published primary COA.
+# Because a child mints its OWN verification_code, the readers' dedupe
+# (`DISTINCT ON (verification_code)` in /reports/dashboard) cannot collapse it,
+# and /reports/purity-trend does not dedupe at all — so admitting children would
+# double-count dashboard totals and put a duplicate point on every trend chart.
+# Handler ruling 2026-09-10: ACOAs are copies and must never count.
+#
+# The `parent_generation_id IS NULL` predicate below is what enforces that.
+# Extracted into constants so the grain is stated once and can be exercised
+# directly in tests (backend/tests/test_api_reports_sync_grain.py).
+_REPORTS_SOURCE_COUNT_SQL = (
+    "SELECT count(*) FROM coa_generations"
+    " WHERE status = 'published' AND parent_generation_id IS NULL"
+)
+
+_REPORTS_SOURCE_CODES_SQL = (
+    "SELECT count(DISTINCT verification_code) FROM coa_generations"
+    " WHERE status = 'published' AND parent_generation_id IS NULL"
+)
+
+# Report-side counts are deliberately UNFILTERED: they report what is physically
+# in the table. The banner compares them against the primary-only source counts,
+# so a mismatch is the signal that the table holds rows it should not (orphans,
+# listed below it on the page) and that Re-sync has work to do. Filtering these
+# would hide exactly the condition the page exists to surface.
+_REPORTS_TABLE_ROWS_SQL = "SELECT count(*) FROM published_coa_results"
+
+_REPORTS_TABLE_CODES_SQL = "SELECT count(DISTINCT verification_code) FROM published_coa_results"
+
+_REPORTS_MISSING_CODES_SQL = """
+    SELECT verification_code FROM coa_generations
+    WHERE status = 'published' AND parent_generation_id IS NULL AND coa_data IS NOT NULL
+      AND verification_code NOT IN (SELECT DISTINCT verification_code FROM published_coa_results)
+"""
+
+# Orphaned = present in the read model but not a published primary. This covers
+# both superseded generations and any additional-COA rows left behind by the
+# 2026-04 creation backfill, which predates this grain rule.
+_REPORTS_ORPHANED_CODES_SQL = """
+    SELECT DISTINCT verification_code FROM published_coa_results
+    WHERE verification_code NOT IN (
+        SELECT verification_code FROM coa_generations
+        WHERE status = 'published' AND parent_generation_id IS NULL
+    )
+"""
+
+_REPORTS_DELETE_ORPHANS_SQL = """
+    DELETE FROM published_coa_results
+    WHERE verification_code NOT IN (
+        SELECT verification_code FROM coa_generations
+        WHERE status = 'published' AND parent_generation_id IS NULL
+    )
+"""
+
+_REPORTS_MISSING_ROWS_SQL = """
+    SELECT id, sample_id, verification_code, coa_data, published_at, created_at
+    FROM coa_generations
+    WHERE status = 'published' AND parent_generation_id IS NULL AND coa_data IS NOT NULL
+      AND verification_code NOT IN (SELECT DISTINCT verification_code FROM published_coa_results)
+"""
+
+
 class ReportsSyncStatus(BaseModel):
     source_published: int
     source_verification_codes: int
@@ -10760,32 +10864,23 @@ async def reports_sync_status(
         with get_integration_db() as conn:
             with conn.cursor() as cur:
                 # Source: coa_generations
-                cur.execute("SELECT count(*) FROM coa_generations WHERE status = 'published'")
+                cur.execute(_REPORTS_SOURCE_COUNT_SQL)
                 source_published = cur.fetchone()[0]
-                cur.execute("SELECT count(DISTINCT verification_code) FROM coa_generations WHERE status = 'published'")
+                cur.execute(_REPORTS_SOURCE_CODES_SQL)
                 source_codes = cur.fetchone()[0]
 
                 # Report table
-                cur.execute("SELECT count(*) FROM published_coa_results")
+                cur.execute(_REPORTS_TABLE_ROWS_SQL)
                 report_rows = cur.fetchone()[0]
-                cur.execute("SELECT count(DISTINCT verification_code) FROM published_coa_results")
+                cur.execute(_REPORTS_TABLE_CODES_SQL)
                 report_codes = cur.fetchone()[0]
 
                 # Missing: in source but not in report table
-                cur.execute("""
-                    SELECT verification_code FROM coa_generations
-                    WHERE status = 'published' AND coa_data IS NOT NULL
-                      AND verification_code NOT IN (SELECT DISTINCT verification_code FROM published_coa_results)
-                """)
+                cur.execute(_REPORTS_MISSING_CODES_SQL)
                 missing = [r[0] for r in cur.fetchall()]
 
                 # Orphaned: in report table but no longer published in source
-                cur.execute("""
-                    SELECT DISTINCT verification_code FROM published_coa_results
-                    WHERE verification_code NOT IN (
-                        SELECT verification_code FROM coa_generations WHERE status = 'published'
-                    )
-                """)
+                cur.execute(_REPORTS_ORPHANED_CODES_SQL)
                 orphaned = [r[0] for r in cur.fetchall()]
 
                 return ReportsSyncStatus(
@@ -10813,21 +10908,11 @@ async def reports_resync(
         with get_integration_db() as conn:
             with conn.cursor() as cur:
                 # Remove orphaned rows
-                cur.execute("""
-                    DELETE FROM published_coa_results
-                    WHERE verification_code NOT IN (
-                        SELECT verification_code FROM coa_generations WHERE status = 'published'
-                    )
-                """)
+                cur.execute(_REPORTS_DELETE_ORPHANS_SQL)
                 removed = cur.rowcount
 
                 # Find missing codes
-                cur.execute("""
-                    SELECT id, sample_id, verification_code, coa_data, published_at, created_at
-                    FROM coa_generations
-                    WHERE status = 'published' AND coa_data IS NOT NULL
-                      AND verification_code NOT IN (SELECT DISTINCT verification_code FROM published_coa_results)
-                """)
+                cur.execute(_REPORTS_MISSING_ROWS_SQL)
                 missing_rows = cur.fetchall()
 
                 def _parse_float(val):
@@ -13374,6 +13459,17 @@ async def publish_sample_coa(
             _logger.warning("delivered_at stamp failed for %s", sample_id, exc_info=True)
 
     # 3 & 4. Write verification code and transition SENAITE workflow — guaranteed
+    #
+    # Authority flip (spec §4.4/§5): whatever SENAITE does here — accept,
+    # silently refuse, or fail transport-wise — the NATIVE publish still has
+    # to run, because the COA is already live on IS/WordPress. So the block
+    # below no longer raises out of the function: it records SENAITE's last
+    # known state and defers its HTTPException, and the unconditional
+    # `_after_publish_native` call after it commits the native verb (and the
+    # retry row) before the deferred error is re-raised. The user-facing
+    # responses are byte-identical; only the ordering changed.
+    _senaite_actual_state = ""
+    _deferred_error: Optional[HTTPException] = None
     if senaite_uid:
         try:
             async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
@@ -13441,6 +13537,7 @@ async def publish_sample_coa(
                 #     transition is accepted and the COA is live.
                 items = transition_resp.json().get("items", [])
                 actual_state = items[0].get("review_state", "") if items else ""
+                _senaite_actual_state = actual_state
                 accepted_states = {
                     "published",
                     "to_be_verified",
@@ -13462,6 +13559,7 @@ async def publish_sample_coa(
                         verify_items = verify_resp.json().get("items", [])
                         if verify_items:
                             actual_state = verify_items[0].get("review_state", "")
+                    _senaite_actual_state = actual_state
                     if actual_state in pre_publish_states:
                         warning = (
                             f"Warning: Sample should not typically be published "
@@ -13500,23 +13598,29 @@ async def publish_sample_coa(
                     await run_in_threadpool(
                         _mark_shadows_published_bg, sample_id=sample_id
                     )
-                    # Task 3: native sample-transition log (own session,
-                    # never-fail — see _record_sample_transition_bg).
-                    await run_in_threadpool(
-                        _record_sample_transition_bg,
-                        sample_id=sample_id, verb="publish", to_status="published",
-                        from_status=_pre_publish_status,
-                        source="mk1",
-                        actor_user_id=getattr(current_user, "id", None),
-                    )
-        except HTTPException:
-            raise
+        except HTTPException as e:
+            _deferred_error = e
         except Exception as e:
             # COA is published in our system — surface SENAITE failure clearly
-            raise HTTPException(
+            _deferred_error = HTTPException(
                 status_code=502,
                 detail=f"COA published in system but SENAITE transition failed: {e}",
             )
+
+    # Authority flip (spec §4.4/§5): the native publish verb is the user's own
+    # intent, so it runs on EVERY SENAITE outcome — including the two 502
+    # paths above and a sample with no `senaite_uid` at all. A SENAITE state
+    # that never read back as 'published' becomes a `publish` retry row inside
+    # the helper. It flushes, commits and never raises.
+    from fastapi.concurrency import run_in_threadpool as _rit
+    await _rit(
+        _after_publish_native, db,
+        sample_id=sample_id, pre_publish_status=_pre_publish_status,
+        actor_user_id=getattr(current_user, "id", None),
+        senaite_actual_state=_senaite_actual_state,
+    )
+    if _deferred_error is not None:
+        raise _deferred_error
 
     return SampleCOAActionResponse(
         success=True,
@@ -17127,13 +17231,17 @@ def _receive_native_phase(
         already = row.status not in pre_received
         if not already:
             from_status = row.status or "sample_due"
-            record_sample_transition(
-                db, sample_id=row.sample_id, to_status="sample_received",
-                source="mk1", verb="receive",
-                from_status=from_status,
-                actor_user_id=user_id,
-            )
-            heal_sample_status(db, row.sample_id, "sample_received")
+            from workflow.authority import sample_status_authority
+            engine_owns_ledger = sample_status_authority(db) == "mk1"
+            # mk1 authority: the engine (execute_verb) is the single ledger writer (spec §4.1)
+            if not engine_owns_ledger:
+                record_sample_transition(
+                    db, sample_id=row.sample_id, to_status="sample_received",
+                    source="mk1", verb="receive",
+                    from_status=from_status,
+                    actor_user_id=user_id,
+                )
+            heal_sample_status(db, row.sample_id, "sample_received", source="mk1")
             if row.date_received is None:
                 row.date_received = datetime.utcnow()
             # Engine touchpoint (PB-0486 finding, 2026-08-28): this phase
@@ -17764,12 +17872,55 @@ def _arm_native_status_at_registration_bg(sample_id: str) -> None:
             db.close()
 
 
+def _after_publish_native(db, *, sample_id: str, pre_publish_status, actor_user_id,
+                          senaite_actual_state: str) -> None:
+    """Sample-status authority flip (spec §4.4 / §5): the native publish verb is
+    the user's direct intent, so it runs synchronously (ledger + engine), and a
+    SENAITE publish that did not read back as 'published' becomes a retry row.
+    Flush + commit here; never raises (publish already succeeded on IS)."""
+    try:
+        from workflow.engine import drive_sample_touchpoint
+        from workflow.sample_log import record_sample_transition
+        from workflow import senaite_tee
+        from workflow.authority import sample_status_authority
+        engine_owns_ledger = sample_status_authority(db) == "mk1"
+        # mk1 authority: the engine (execute_verb) is the single ledger writer (spec §4.1)
+        if not engine_owns_ledger:
+            record_sample_transition(db, sample_id=sample_id, verb="publish",
+                                     to_status="published", from_status=pre_publish_status,
+                                     source="mk1", actor_user_id=actor_user_id)
+        # The publish touchpoint is the attester the engine's `coa_published`
+        # requirement kind needs (engine._eval_one reads `attested`); without
+        # it the verified -> published edge is requirements_unmet.
+        drive_sample_touchpoint(db, sample_id, "publish", from_status=pre_publish_status,
+                                actor_user_id=actor_user_id,
+                                attested={"coa_published": True})
+        if senaite_actual_state != "published":
+            row = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)
+                             ).scalar_one_or_none()
+            # Native-born sample with no SENAITE AR: nothing to tee, so no retry
+            # row (the job could never complete it and would end in a false
+            # `senaite_tee_gave_up` stranding). Same rule as tee_now's 'skipped'.
+            if row is not None and (row.external_lims_uid or "").strip():
+                senaite_tee.enqueue_retry(
+                    db, row, "publish",
+                    error=f"publish route read-back {senaite_actual_state!r}")
+            elif row is not None:
+                logger.info("after-publish native: %s has no SENAITE uid — nothing to tee",
+                            sample_id)
+        db.commit()
+    except Exception:
+        logger.exception("after-publish native step failed (never-raise) %s", sample_id)
+        db.rollback()
+
+
 def _record_sample_transition_bg(**kwargs) -> None:
     """Best-effort native sample-transition log write (Task 3) on its own
-    short-lived session — never holds the request `db` across the SENAITE
-    HTTP calls at the two call sites (publish, receive). Never raises: a
-    log-write failure must never fail or delay-fail the endpoint it's
-    scheduled from.
+    short-lived session. No production callers since the publish route moved
+    to `_after_publish_native` (2026-09-09); kept for the touchpoint tests and
+    as the bg chokepoint contract — never holds the request `db` across the
+    SENAITE HTTP calls at a call site, and never raises: a log-write failure
+    must never fail or delay-fail the endpoint it's scheduled from.
 
     `SessionLocal()` and the recorder import live INSIDE the try, same
     hardening rationale as `_mirror_parent_analysis_bg`: `db` starts as None
@@ -17779,8 +17930,14 @@ def _record_sample_transition_bg(**kwargs) -> None:
     try:
         from database import SessionLocal
         from workflow.sample_log import heal_sample_status, record_sample_transition
+        from workflow.authority import sample_status_authority
         db = SessionLocal()
-        wrote_log = record_sample_transition(db, **kwargs)
+        engine_owns_ledger = sample_status_authority(db) == "mk1"
+        # mk1 authority: the engine (execute_verb) is the single ledger writer (spec §4.1)
+        if engine_owns_ledger:
+            wrote_log = False
+        else:
+            wrote_log = record_sample_transition(db, **kwargs)
         # 2026-07-14 inbox-desync RC1: ALSO heal lims_samples.status here.
         # The log row alone leaves the registry column stale, and the IS
         # event sync can't fix it later — its dup guard sees this mk1 row as
@@ -17788,7 +17945,8 @@ def _record_sample_transition_bg(**kwargs) -> None:
         # inserts. Healing is whitelist-gated + idempotent, and runs even
         # when the recorder deduped (the status may still be behind).
         wrote_status = heal_sample_status(
-            db, kwargs["sample_id"], kwargs["to_status"]
+            db, kwargs["sample_id"], kwargs["to_status"],
+            source=kwargs.get("source", "senaite"),
         )
         # Read-flip UAT catch (P-0143): date_received was only ever written
         # from SENAITE metadata during a senaite-touching fetch

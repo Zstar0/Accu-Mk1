@@ -939,6 +939,16 @@ def _run_migrations():
                 ('assign','submit','verify','retract','reject',
                  'retest','publish','reset','auto','variance_verify','observed'))
         """,
+        # Native cancel (2026-09-09 sample-status-authority-flip Task 11):
+        # pending analysis-tier rows die with the sample. Drop+recreate the
+        # transition-kind CHECK with 'cancel' added (idempotent).
+        "ALTER TABLE lims_analysis_transitions DROP CONSTRAINT IF EXISTS lims_analysis_transitions_transition_kind_check",
+        """
+        ALTER TABLE lims_analysis_transitions ADD CONSTRAINT lims_analysis_transitions_transition_kind_check
+            CHECK (transition_kind IN
+                ('assign','submit','verify','retract','reject',
+                 'retest','publish','reset','auto','variance_verify','observed','cancel'))
+        """,
         # Variance addon: lab-side override until WP variance addon ships.
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS variance_override TEXT",
         # --- Registry dual-write slice 1: the complete sample record ---
@@ -1099,6 +1109,12 @@ def _run_migrations():
         SELECT 'identity_collision', 'Identity Collision', '#e5484d', 'issue', TRUE, TRUE, 7, '[]'::jsonb, TRUE
         WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='identity_collision')
         """,
+        # Sample-status authority flip (2026-09-09 spec §6.2): stranded samples.
+        """
+        INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
+        SELECT 'workflow_stranded', 'Workflow Stranded', '#f59e0b', 'issue', FALSE, TRUE, 8, '[]'::jsonb, TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='workflow_stranded')
+        """,
         # Extend the NAMED status CHECK to admit 'blocked' (Plan 5). A dedicated
         # DROP+ADD statement — NOT an edit to the IF-NOT-EXISTS flag_flags create
         # (which never re-runs once the table exists). Postgres-only; on the
@@ -1228,6 +1244,23 @@ def _run_migrations():
                 'unassigned', 'assigned', 'to_be_verified', 'verified',
                 'published', 'rejected', 'retracted', 'promoted',
                 'variance_verified', 'senaite_mirror', 'parent_to_verify'
+            ))
+        """,
+        # Native cancel (2026-09-09 sample-status-authority-flip Task 11):
+        # pending analysis-tier rows (vial-tier unassigned/assigned/
+        # to_be_verified, parent-tier parent_to_verify) can be cancelled when
+        # the sample dies; verified/promoted/variance-verified/published rows
+        # never do. Drop+recreate the review_state CHECK with 'cancelled'
+        # added (idempotent; this pair sits after every prior review_state
+        # CHECK pair so last-boot-wins yields the extended list).
+        "ALTER TABLE lims_analyses DROP CONSTRAINT IF EXISTS lims_analyses_review_state_check",
+        """
+        ALTER TABLE lims_analyses ADD CONSTRAINT lims_analyses_review_state_check
+            CHECK (review_state IN (
+                'unassigned', 'assigned', 'to_be_verified', 'verified',
+                'published', 'rejected', 'retracted', 'promoted',
+                'variance_verified', 'senaite_mirror', 'parent_to_verify',
+                'cancelled'
             ))
         """,
         # Make the parent-tier root index provenance-aware: a shadow mirror
@@ -1426,6 +1459,25 @@ def _run_migrations():
         "ON lims_workflow_shadow_evaluations (lims_sample_pk, evaluated_at)",
         "CREATE INDEX IF NOT EXISTS ix_shadow_evals_nonadvanced "
         "ON lims_workflow_shadow_evaluations (outcome) WHERE outcome != 'advanced'",
+        # ── Sample-status authority flip (2026-09-09 spec §3.2) — additive.
+        """
+        CREATE TABLE IF NOT EXISTS lims_senaite_tee_retries (
+            id               SERIAL PRIMARY KEY,
+            lims_sample_pk   INTEGER NOT NULL REFERENCES lims_samples(id) ON DELETE CASCADE,
+            verb             TEXT NOT NULL,
+            expected_state   TEXT NOT NULL,
+            attempts         INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at  TIMESTAMPTZ NOT NULL,
+            last_error       TEXT,
+            status           TEXT NOT NULL DEFAULT 'pending',
+            created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_senaite_tee_retries_due "
+        "ON lims_senaite_tee_retries (next_attempt_at) WHERE status = 'pending'",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_senaite_tee_retries_pending "
+        "ON lims_senaite_tee_retries (lims_sample_pk, verb) WHERE status = 'pending'",
         # Catalog data (spec §8 decision 3): cascade-eligible builtin edges +
         # the publish edge's attested requirement. Guarded → idempotent.
         "UPDATE lims_workflow_transitions SET auto_fire = TRUE "
@@ -1479,6 +1531,19 @@ def _run_migrations():
         "replace(requirements::text, '\"value\": \"verified\"', "
         "'\"value\": \"verified,published\"')::jsonb "
         "WHERE entity_scope='sample' AND verb='publish' AND is_builtin "
+        "AND requirements::text LIKE '%\"value\": \"verified\"%'",
+        # Verify gate widened the same way (2026-09-09): the 2026-08-23
+        # widening above covered publish but NOT verify, so a sample whose
+        # lines SENAITE had already published could never satisfy verify
+        # ('published' is not in a strict 'verified' list), stuck at
+        # to_be_verified, and then refused publish with no_edge — the 12
+        # `no_edge:publish` residuals found at the authority flip. Same
+        # idempotent LIKE guard: an already-widened 'verified,published'
+        # value cannot match (the comma breaks the closing-quote match).
+        "UPDATE lims_workflow_transitions SET requirements = "
+        "replace(requirements::text, '\"value\": \"verified\"', "
+        "'\"value\": \"verified,published\"')::jsonb "
+        "WHERE entity_scope='sample' AND verb='verify' AND is_builtin "
         "AND requirements::text LIKE '%\"value\": \"verified\"%'",
         # waiting_for_addon_results → published publish edge (burn-in finding
         # 2026-08-23, stuck_behind bucket): the state was seeded with NO

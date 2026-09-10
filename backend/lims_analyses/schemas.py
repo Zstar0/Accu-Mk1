@@ -57,7 +57,7 @@ ReviewState = Literal[
 
 TransitionKind = Literal[
     "assign", "submit", "verify", "retract", "reject",
-    "retest", "publish", "reset", "auto", "variance_verify",
+    "retest", "publish", "reset", "auto", "variance_verify", "cancel",
 ]
 
 HostKind = Literal["sample", "sub_sample"]

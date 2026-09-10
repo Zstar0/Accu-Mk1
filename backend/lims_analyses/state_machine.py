@@ -82,6 +82,7 @@ STATES: FrozenSet[str] = frozenset({
     "variance_verified",
     "rejected",
     "retracted",
+    "cancelled",
 })
 
 TERMINAL_STATES: FrozenSet[str] = frozenset({"published", "rejected"})
@@ -96,7 +97,7 @@ RESULT_PENDING_STATES: FrozenSet[str] = frozenset({"unassigned", "assigned"})
 
 TRANSITION_KINDS: FrozenSet[str] = frozenset({
     "assign", "submit", "verify", "retract", "reject",
-    "retest", "publish", "reset", "auto", "variance_verify",
+    "retest", "publish", "reset", "auto", "variance_verify", "cancel",
 })
 # NOTE: 'observed' is a valid lims_analysis_transitions.transition_kind value
 # (workflow state system, spec 2026-07-12) but is deliberately NOT a member
@@ -146,6 +147,13 @@ _ALLOWED: Dict[Tuple[str, str], str] = {
     # analyte was wrong is abandoned. Un-promotion retracts the parent
     # canonical row + drops the promotion link first, then rejects the source.
     ("promoted",       "reject"):   "rejected",
+
+    # Native cancel (2026-09-09 spec §3.4): pending work dies with the sample;
+    # verified / promoted / variance-verified / published rows are history.
+    ("unassigned",       "cancel"): "cancelled",
+    ("assigned",         "cancel"): "cancelled",
+    ("to_be_verified",   "cancel"): "cancelled",
+    ("parent_to_verify", "cancel"): "cancelled",
 }
 
 # Tier × kind matrix. Sub-sample (vial) rows do bench work (assign through
@@ -159,10 +167,10 @@ _ALLOWED: Dict[Tuple[str, str], str] = {
 _TIER_ALLOWED_KINDS: Dict[str, FrozenSet[str]] = {
     TIER_VIAL: frozenset({
         "assign", "submit", "retract", "reject", "reset", "retest", "auto",
-        "variance_verify",
+        "variance_verify", "cancel",
     }),
     TIER_PARENT: frozenset({
-        "publish", "retract", "auto", "verify",
+        "publish", "retract", "auto", "verify", "cancel",
     }),
 }
 

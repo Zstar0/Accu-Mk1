@@ -23,6 +23,7 @@ import {
 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
+import { labelFor, useWorkflowStatesStore } from '@/lib/workflow-states-store'
 import {
   getExplorerStatus,
   getExplorerOrders,
@@ -267,7 +268,8 @@ function sampleStateLabel(state: string | null): string {
     rejected: 'Rejected',
     cancelled: 'Cancelled',
   }
-  return map[s] ?? state ?? 'Unknown'
+  // Catalog first (spec 2026-09-09 §7.2), then this map, then the raw value.
+  return labelFor(s, map[s] ?? state ?? 'Unknown')
 }
 
 function KanbanSampleCard({
@@ -926,6 +928,9 @@ function saveOrderFilters(f: OrderFilters) {
 // --- Main component ---
 
 export function OrderStatusPage() {
+  // sampleStateLabel() reads the catalog through the store's non-hook
+  // accessor, so subscribe here to re-render the page once it loads.
+  useWorkflowStatesStore(s => s.states)
   const [showAll, setShowAll] = useState(false)
   const [envName, setEnvName] = useState(() => getActiveEnvironmentName())
   const [orderFilters, setOrderFilters] =

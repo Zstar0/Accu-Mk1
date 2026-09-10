@@ -448,8 +448,8 @@ def test_sbs_boot_statements_execute_against_live_db(
                "verified,published")
     sbs_stmts = [c for c in captured_migration_statements
                 if any(m in str(c) for m in markers)]
-    assert len(sbs_stmts) == 5, (
-        f"expected exactly 5 workflow-catalog boot statements, found "
+    assert len(sbs_stmts) == 6, (
+        f"expected exactly 6 workflow-catalog boot statements, found "
         f"{len(sbs_stmts)}: {[str(s)[:80] for s in sbs_stmts]}"
     )
     from sqlalchemy import text as _text
@@ -462,8 +462,16 @@ def test_sbs_boot_statements_execute_against_live_db(
             "SELECT t.requirements::text FROM lims_workflow_transitions t "
             "WHERE t.entity_scope='sample' AND t.verb='publish' AND t.is_builtin"
         )).scalars().all()
-        assert len(gates) == 2, gates
-        for g in gates:
+        # 2026-09-09 (spec §3.3): a THIRD builtin publish edge exists — the
+        # partial-publish pathway sample_received -> waiting_for_addon_results,
+        # gated on the publish touchpoint's coa_published attestation, not on
+        # analysis states. The two original gates keep 'verified,published'.
+        assert len(gates) == 3, gates
+        aas_gates = [g for g in gates if "all_analyses_in_state" in g]
+        partial_gates = [g for g in gates if "all_analyses_in_state" not in g]
+        assert len(aas_gates) == 2, gates
+        assert len(partial_gates) == 1 and '"kind": "coa_published"' in partial_gates[0], gates
+        for g in aas_gates:
             assert '"verified,published"' in g, g
             assert '"value": "verified"' not in g, g
         waiting_edges = conn.execute(_text(

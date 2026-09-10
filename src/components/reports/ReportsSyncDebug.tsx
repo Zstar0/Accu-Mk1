@@ -67,6 +67,17 @@ export function ReportsSyncDebug() {
   })
 
   const handleResync = async () => {
+    // Re-sync deletes every report row that is not a published primary COA —
+    // superseded generations plus additional-COA rows left by the 2026-04
+    // backfill. That is a destructive write against prod reporting data, so
+    // confirm the counts first.
+    const confirmed = window.confirm(
+      `Re-sync will backfill ${data?.missing_codes.length ?? 0} missing primary COA(s) and ` +
+        `DELETE the rows for ${data?.orphaned_codes.length ?? 0} orphaned code(s).` +
+        '\n\n' +
+        'Orphans are superseded COAs and additional-COA copies, which must not count. Continue?'
+    )
+    if (!confirmed) return
     setSyncing(true)
     setSyncResult(null)
     try {
@@ -87,7 +98,9 @@ export function ReportsSyncDebug() {
         <div>
           <h1 className="text-lg font-semibold">Reports Sync Debug</h1>
           <p className="text-xs text-muted-foreground">
-            Compare published_coa_results with coa_generations source
+            Compare published_coa_results with the published PRIMARY COAs in coa_generations.
+            Additional COAs are rebranded copies of a result that already has a primary COA, so they
+            never belong in the report table — counting them would double every dashboard total.
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isLoading}>
@@ -130,7 +143,7 @@ export function ReportsSyncDebug() {
 
           {/* Comparison */}
           <div className="rounded-lg border border-border/50 bg-card/30 p-3">
-            <StatRow label="Source COAs (coa_generations)" value={data.source_verification_codes} />
+            <StatRow label="Source COAs (primary only)" value={data.source_verification_codes} />
             <StatRow
               label="Report COAs (published_coa_results)"
               value={data.report_verification_codes}
@@ -143,7 +156,7 @@ export function ReportsSyncDebug() {
           {data.missing_codes.length > 0 && (
             <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
               <div className="text-xs font-medium text-amber-400 mb-1">
-                Missing from report table ({data.missing_codes.length})
+                Missing from report table ({data.missing_codes.length}) — primary COAs that never landed
               </div>
               <div className="flex flex-wrap gap-1">
                 {data.missing_codes.map(code => (
@@ -159,7 +172,7 @@ export function ReportsSyncDebug() {
           {data.orphaned_codes.length > 0 && (
             <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3">
               <div className="text-xs font-medium text-red-400 mb-1">
-                Orphaned in report table ({data.orphaned_codes.length})
+                Orphaned in report table ({data.orphaned_codes.length}) — superseded or additional-COA rows to purge
               </div>
               <div className="flex flex-wrap gap-1">
                 {data.orphaned_codes.map(code => (
