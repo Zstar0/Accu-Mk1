@@ -38,8 +38,17 @@ SEED_TRANSITIONS = [
     ("sample", "sample_received", "to_be_verified", "submit", True,
      [{"kind": "all_analyses_in_state", "value": "to_be_verified,verified,published", "note": None}],
      "All analyses submitted."),
+    # verify gates on verified-OR-published for the same reason the publish
+    # edges below do (2026-09-09, the `no_edge:publish` residual class): a
+    # legacy family's line that SENAITE already PUBLISHED surfaces in
+    # `native_parent_line_states` as 'published' (Mk1 holds only a
+    # senaite_mirror shadow row for it), so a strict 'verified' list refused
+    # verify on 12 fully-finished samples, which then refused publish with
+    # no_edge and stranded at to_be_verified. Verify was the only edge the
+    # 2026-08-23 widening missed.
     ("sample", "to_be_verified", "verified", "verify", True,
-     [{"kind": "all_analyses_in_state", "value": "verified", "note": None}],
+     [{"kind": "all_analyses_in_state", "value": "verified,published",
+       "note": None}],
      "Lab verification of all results."),
     # publish gates on verified-OR-published (not verified alone): the A6
     # publish hook flips shadow-mirrored analyses to 'published' before the

@@ -54,15 +54,30 @@ def test_seed_idempotent(db):
     assert sentinel.is_active is False and sentinel.category == "exception"
 
 
-def test_seed_requirements_shape(db):
-    seed_workflow_catalog(db)
-    db.commit()
-    verify = (db.query(LimsWorkflowTransition)
-              .join(LimsWorkflowState, LimsWorkflowTransition.to_state_id == LimsWorkflowState.id)
-              .filter(LimsWorkflowTransition.entity_scope == "sample",
-                      LimsWorkflowTransition.verb == "verify").one())
-    assert verify.requirements == [
-        {"kind": "all_analyses_in_state", "value": "verified", "note": None}]
+def test_seed_requirements_shape():
+    """The sample-scope verify edge gates on verified-OR-published.
+
+    Same reason the publish edges do (2026-09-09, the `no_edge:publish`
+    residual class): a legacy family's line that SENAITE already published
+    reads 'published' in `native_parent_line_states`, and a strict 'verified'
+    list stranded 12 finished samples at to_be_verified, which then refused
+    publish with no_edge. Verify was the only edge the 2026-08-23 widening
+    missed.
+
+    Asserted on the SEED LIST, not a DB row — same fresh-vs-existing split as
+    test_publish_edges_gate_on_verified_or_published: the shared dev DB
+    carries a pre-widen row that the insert-if-missing seed never updates, so
+    a row assertion here would pin the OLD value forever. The existing-DB half
+    is the guarded boot UPDATE, exercised in test_workflow_engine.py::
+    test_sbs_boot_statements_execute_against_live_db.
+    """
+    from workflow.seeds import SEED_TRANSITIONS
+    verify_edges = [t for t in SEED_TRANSITIONS
+                    if t[0] == "sample" and t[3] == "verify"]
+    assert len(verify_edges) == 1
+    assert verify_edges[0][5] == [
+        {"kind": "all_analyses_in_state", "value": "verified,published",
+         "note": None}]
 
 
 def test_publish_edges_gate_on_verified_or_published():
