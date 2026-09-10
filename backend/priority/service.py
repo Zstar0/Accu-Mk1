@@ -65,8 +65,12 @@ def load_effective(
     order_nos = {s.client_order_number for s in samples.values() if s.client_order_number}
     orders: dict[str, LimsOrder] = {}
     if order_nos:
-        for o in db.execute(select(LimsOrder).where(LimsOrder.order_number.in_(order_nos))).scalars():
-            orders[o.order_number] = o
+        # order_number is NOT unique: assign() picks the LOWEST id on duplicates,
+        # so the resolver must agree — order by id and keep the first seen.
+        for o in db.execute(
+            select(LimsOrder).where(LimsOrder.order_number.in_(order_nos)).order_by(LimsOrder.id)
+        ).scalars():
+            orders.setdefault(o.order_number, o)
 
     cust_ids = {o.customer_user_id for o in orders.values() if o.customer_user_id is not None}
     customers: dict[int, CustomerPriority] = {}

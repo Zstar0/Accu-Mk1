@@ -120,6 +120,8 @@ def test_assign_order_survives_duplicate_order_numbers(db_session):
     assert res.affected_sample_pks == [s.id]
     assert lowest.priority_key == "high" and lowest.priority_source == "ui"
     assert other.priority_key is None
+    # The resolver must read the same duplicate assign() wrote to (lowest id).
+    assert service.load_effective(db_session, sample_pks=[s.id])[0][s.id].key == "high"
 
 
 def test_assign_clear_to_inherit(db_session):
