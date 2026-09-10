@@ -2,15 +2,22 @@
 log derives lines from priority_audit, and the inbox priority PUTs route
 through priority.service.assign.
 
-The TestClient tests read the local dev Postgres; they early-return when the
-registry is empty (a fresh DB) rather than failing. The db_session tests are
-pure sqlite units (conftest fixture) and always run.
+The TestClient tests run against the local dev Postgres and are HERMETIC: each
+seeds its own lims_samples (+ lims_sub_samples) row through `engine.begin()`
+and removes it, with its priority_audit rows, in `finally`. Nothing asserts
+against pre-existing registry content, and none of them early-return — a fresh
+database exercises them exactly like a populated one. The db_session tests are
+pure sqlite units (conftest fixture).
 """
+import uuid
+from contextlib import contextmanager
+from datetime import datetime, timezone
+
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
 import auth
-from database import engine
+from database import _run_migrations, engine
 from main import app
 from models import (
     CustomerPriority, LimsOrder, LimsSample, LimsSubSample, Priority, SlaTier,
@@ -20,79 +27,113 @@ from priority import service
 app.dependency_overrides[auth.get_current_user] = lambda: {"id": 0, "username": "test"}
 client = TestClient(app)
 
+# TestClient built outside a `with` block never fires the app lifespan, so nothing
+# else in this module runs migrations — and without the seeded `priorities` rows
+# every effective-priority read degrades to None. Same import-time call
+# `test_priority_migration.py` uses; `_run_migrations()` is idempotent.
+_run_migrations()
 
-def _newest_sample():
-    with engine.connect() as c:
-        return c.execute(text(
-            "SELECT id, sample_id FROM lims_samples ORDER BY id DESC LIMIT 1"
-        )).first()
+
+@contextmanager
+def temp_sample(with_vial: bool = False):
+    """Seed a throwaway registry row (optionally with one vial) on the dev
+    Postgres and tear it down — audit rows first, then vial, then sample.
+
+    `last_synced_at` is stamped with a naive UTC value, not SQL NOW(): the
+    column is a naive TIMESTAMP and `service.list_sub_samples` compares it to
+    `datetime.utcnow()`; a server-local NOW() can read as stale and fire a
+    SENAITE reconcile round-trip inside the test.
+    """
+    tag = uuid.uuid4().hex[:8]
+    # Uppercase: registry lookups normalise sample_id with .upper().
+    sid = f"PB-T{tag}".upper()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    sample_pk = vial_pk = None
+    vial_uid = f"mk1://t-{tag}"
+    try:
+        with engine.begin() as c:
+            sample_pk = c.execute(text(
+                "INSERT INTO lims_samples (sample_id, external_lims_uid, status, "
+                "last_synced_at) VALUES (:sid, :uid, 'sample_received', :now) "
+                "RETURNING id"
+            ), {"sid": sid, "uid": f"mk1test-{tag}", "now": now}).scalar()
+            if with_vial:
+                vial_pk = c.execute(text(
+                    "INSERT INTO lims_sub_samples (parent_sample_pk, sample_id, "
+                    "external_lims_uid, vial_sequence) "
+                    "VALUES (:pk, :sid, :uid, 1) RETURNING id"
+                ), {"pk": sample_pk, "sid": f"{sid}-S01", "uid": vial_uid}).scalar()
+        yield {"pk": sample_pk, "sample_id": sid, "vial_pk": vial_pk,
+               "vial_uid": vial_uid}
+    finally:
+        with engine.begin() as c:
+            if vial_pk is not None:
+                c.execute(text("DELETE FROM priority_audit WHERE level = 'vial' "
+                               "AND entity_id = :id"), {"id": str(vial_pk)})
+            if sample_pk is not None:
+                c.execute(text("DELETE FROM priority_audit WHERE level = 'sample' "
+                               "AND entity_id = :id"), {"id": str(sample_pk)})
+                c.execute(text("DELETE FROM lims_sub_samples WHERE parent_sample_pk = :pk"),
+                          {"pk": sample_pk})
+                c.execute(text("DELETE FROM lims_samples WHERE id = :pk"), {"pk": sample_pk})
 
 
-# ── list / detail rows ──────────────────────────────────────────────────────
+# ── list / detail rows ────────────────────────────────────────────────────
 
 def test_registry_samples_rows_carry_priority_shape():
-    r = client.get("/registry/samples", params={"limit": 5})
-    assert r.status_code == 200
-    for item in r.json()["items"]:
-        assert "priority" in item and set(item["priority"]) >= {"key", "rank", "source_level"}
+    with temp_sample() as t:
+        r = client.get("/registry/samples",
+                       params={"search": t["sample_id"], "limit": 5})
+        assert r.status_code == 200, r.text
+        items = r.json()["items"]
+        row = next((i for i in items if i["id"] == t["sample_id"]), None)
+        assert row is not None, f"seeded row missing from {[i['id'] for i in items]}"
+        assert set(row["priority"]) >= {"key", "rank", "source_level"}
+        assert row["priority"]["key"] == "default"
+        assert row["priority"]["source_level"] == "default"
 
 
 def test_sub_samples_list_rows_carry_priority_shape():
-    with engine.connect() as c:
-        sid = c.execute(text(
-            "SELECT s.sample_id FROM lims_samples s JOIN lims_sub_samples v "
-            "ON v.parent_sample_pk = s.id ORDER BY s.id DESC LIMIT 1"
-        )).scalar()
-    if not sid:
-        return
-    r = client.get("/api/sub-samples", params={"parent_sample_id": sid})
-    assert r.status_code == 200
-    vials = r.json()["sub_samples"]
-    assert vials
-    for v in vials:
-        assert "priority_key" in v
-        assert v["priority"] and set(v["priority"]) >= {"key", "rank", "source_level"}
+    with temp_sample(with_vial=True) as t:
+        r = client.get("/api/sub-samples",
+                       params={"parent_sample_id": t["sample_id"]})
+        assert r.status_code == 200, r.text
+        vials = r.json()["sub_samples"]
+        assert [v["id"] for v in vials] == [t["vial_pk"]]
+        v = vials[0]
+        assert "priority_key" in v and v["priority_key"] is None
+        assert set(v["priority"]) >= {"key", "rank", "source_level"}
+        assert v["priority"]["key"] == "default"
 
 
 def test_registry_details_payload_carries_priority_fields():
-    row = _newest_sample()
-    if not row:
-        return
-    pk, sid = row
-    from sub_samples.registry_details import build_native_details
     from database import SessionLocal
-    db = SessionLocal()
-    try:
-        out = build_native_details(db, sid)
-    finally:
-        db.close()
-    assert out.registry_pk == pk
-    assert out.priority and out.priority["key"]
-    # explicit_priority_key is the row's own column — None means "inherit"
-    assert out.explicit_priority_key is None or isinstance(out.explicit_priority_key, str)
+    from sub_samples.registry_details import build_native_details
+    with temp_sample() as t:
+        db = SessionLocal()
+        try:
+            out = build_native_details(db, t["sample_id"])
+        finally:
+            db.close()
+        assert out.registry_pk == t["pk"]
+        assert out.priority and out.priority["key"] == "default"
+        # explicit_priority_key is the row's own column - None means "inherit"
+        assert out.explicit_priority_key is None
 
 
-# ── activity log ────────────────────────────────────────────────────────────
+# ── activity log ─────────────────────────────────────────────────────────
 
 def test_activity_log_includes_priority_audit_lines():
-    row = _newest_sample()
-    if not row:
-        return
-    pk, sid = row
-    try:
+    with temp_sample() as t:
         r = client.put("/priorities/assign", json={
-            "level": "sample", "id": str(pk), "priority_key": "high", "note": "t"})
+            "level": "sample", "id": str(t["pk"]), "priority_key": "high",
+            "note": "embed test"})
         assert r.status_code == 200, r.text
-        events = client.get(f"/samples/{sid}/activity").json()["events"]
-        assert any(
-            e.get("source") == "priority_audit"
-            and e.get("type") == "priority"
-            and "High" in (e.get("description") or "")
-            for e in events
-        )
-    finally:
-        client.put("/priorities/assign",
-                   json={"level": "sample", "id": str(pk), "priority_key": None})
+        events = client.get(f"/samples/{t['sample_id']}/activity").json()["events"]
+        line = next((e for e in events if e.get("source") == "priority_audit"), None)
+        assert line is not None, "no priority_audit line in the activity feed"
+        assert line["type"] == "priority"
+        assert "High" in (line.get("description") or "")
 
 
 # ── uid → assign target (inbox PUTs) ────────────────────────────────────────

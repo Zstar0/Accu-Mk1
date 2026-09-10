@@ -120,9 +120,24 @@ def load_effective_safe(
 
 def legacy_priority_string(eff: Effective) -> str:
     """The pre-Task-8 inbox/worksheet vocabulary ("normal" | "high" |
-    "expedited"). Kept for one release so the current frontend keeps working:
-    the default priority reads as "normal", every other key passes through."""
-    return "normal" if eff.source_level == "default" or eff.key == "default" else eff.key
+    "expedited") — a RANK-CLAMPED compatibility view, retired by the frontend
+    plan once every consumer reads `priority` / `priority_effective` instead.
+
+    The legacy field's contract is that closed three-value vocabulary: the
+    frontend types it as 'normal' | 'high' | 'expedited' and the inbox PUTs
+    reject anything else with a 400. Priorities are admin-created now, so
+    echoing `eff.key` would leak e.g. "rush" into that field. Clamp by rank
+    instead: >= the expedited rank reads "expedited", anything above default
+    reads "high", default (and any below-default key) reads "normal".
+
+    `priority_effective` / `priority` carry the REAL key — this narrowing is
+    confined to the legacy string.
+    """
+    if eff.rank >= 20:
+        return "expedited"
+    if eff.rank > 0:
+        return "high"
+    return "normal"
 
 
 def priority_target_for_uid(db: Session, uid: str) -> Optional[tuple[str, str]]:

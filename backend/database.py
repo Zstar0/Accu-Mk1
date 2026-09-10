@@ -572,6 +572,28 @@ def _run_migrations():
                 SELECT 1 FROM priority_audit a
                  WHERE a.level = 'sample' AND a.entity_id = s.id::text AND a.source = 'migration')
         """,
+        # Same backfill at the VIAL level. The retired inbox writes keyed
+        # sample_priorities by the row's own uid, and the native inbox rows are
+        # VIALS (mk1:// uids live on lims_sub_samples, never on lims_samples) —
+        # without this those rows would silently revert to the default at deploy.
+        """
+        UPDATE lims_sub_samples v
+           SET priority_key = sp.priority
+          FROM sample_priorities sp
+         WHERE sp.sample_uid = v.external_lims_uid
+           AND sp.priority IN ('high', 'expedited')
+           AND v.priority_key IS NULL
+        """,
+        """
+        INSERT INTO priority_audit (level, entity_id, old_key, new_key, source, note)
+        SELECT 'vial', v.id::text, NULL, sp.priority, 'migration', 'backfill from sample_priorities'
+          FROM sample_priorities sp
+          JOIN lims_sub_samples v ON v.external_lims_uid = sp.sample_uid
+         WHERE sp.priority IN ('high', 'expedited')
+           AND NOT EXISTS (
+                SELECT 1 FROM priority_audit a
+                 WHERE a.level = 'vial' AND a.entity_id = v.id::text AND a.source = 'migration')
+        """,
         # FK from the sparse SLA override map to the priorities table. Only
         # after every existing value is a known key (the seed guarantees the
         # three legacy literals; 'normal' never had a row by the sparsity contract).

@@ -132,3 +132,22 @@ def test_assign_customer_keeps_note_when_none_supplied(db_session):
                    user_id=2, note=None)
     row = db_session.get(CustomerPriority, 777)
     assert (row.priority_key, row.note, row.updated_by) == ("expedited", "VIP", 2)
+
+
+def test_legacy_priority_string_clamps_by_rank():
+    """The legacy inbox/worksheet field is typed 'normal' | 'high' | 'expedited'
+    on the frontend and the inbox PUTs 400 anything else — an admin-created key
+    must never reach it verbatim. Clamp by rank, not by key."""
+    from priority.resolver import Effective
+    assert service.legacy_priority_string(
+        Effective("rush", 25, "sample", "1")) == "expedited"
+    assert service.legacy_priority_string(
+        Effective("expedited", 20, "vial", "1")) == "expedited"
+    assert service.legacy_priority_string(
+        Effective("high", 10, "order", "WP-1")) == "high"
+    assert service.legacy_priority_string(
+        Effective("nudge", 5, "customer", "42")) == "high"
+    assert service.legacy_priority_string(
+        Effective("backburner", -10, "sample", "1")) == "normal"
+    assert service.legacy_priority_string(
+        Effective("default", 0, "default", None)) == "normal"

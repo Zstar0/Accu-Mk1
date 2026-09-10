@@ -3,6 +3,9 @@
 `_run_migrations()` is idempotent, so the module calls it directly at import
 rather than relying on the app's startup lifespan having run.
 """
+import uuid
+from datetime import datetime, timezone
+
 from sqlalchemy import text
 
 from database import engine, _run_migrations
@@ -56,3 +59,60 @@ def test_sla_priority_tiers_has_fk_to_priorities():
             "WHERE table_name='sla_priority_tiers' AND constraint_name='fk_sla_priority_tiers_priority'"
         )).scalar()
     assert n == 1
+
+
+def test_vial_keyed_sample_priorities_backfill_into_lims_sub_samples():
+    """A sample_priorities row keyed by a VIAL uid must land on
+    lims_sub_samples.priority_key (the retired inbox wrote native mk1:// vial
+    uids there), with one vial-level migration audit row."""
+    tag = uuid.uuid4().hex[:8]
+    uid = f"mk1://mig-{tag}"
+    sample_pk = vial_pk = None
+    try:
+        with engine.begin() as c:
+            sample_pk = c.execute(text(
+                "INSERT INTO lims_samples (sample_id, external_lims_uid, last_synced_at) "
+                "VALUES (:sid, :uid, :now) RETURNING id"
+            ), {"sid": f"PB-M{tag}", "uid": f"mk1test-{tag}",
+                "now": datetime.now(timezone.utc).replace(tzinfo=None)}).scalar()
+            vial_pk = c.execute(text(
+                "INSERT INTO lims_sub_samples (parent_sample_pk, sample_id, "
+                "external_lims_uid, vial_sequence) "
+                "VALUES (:pk, :sid, :uid, 1) RETURNING id"
+            ), {"pk": sample_pk, "sid": f"PB-M{tag}-S01", "uid": uid}).scalar()
+            c.execute(text(
+                "INSERT INTO sample_priorities (sample_uid, priority, updated_at) "
+                "VALUES (:uid, 'expedited', :now)"
+            ), {"uid": uid, "now": datetime.now(timezone.utc)})
+
+        _run_migrations()
+
+        with engine.connect() as c:
+            assert c.execute(text(
+                "SELECT priority_key FROM lims_sub_samples WHERE id = :id"
+            ), {"id": vial_pk}).scalar() == "expedited"
+            assert c.execute(text(
+                "SELECT count(*) FROM priority_audit WHERE level = 'vial' "
+                "AND entity_id = :id AND source = 'migration' AND new_key = 'expedited'"
+            ), {"id": str(vial_pk)}).scalar() == 1
+
+        # Idempotent: a second pass adds no duplicate audit row.
+        _run_migrations()
+        with engine.connect() as c:
+            assert c.execute(text(
+                "SELECT count(*) FROM priority_audit WHERE level = 'vial' "
+                "AND entity_id = :id AND source = 'migration'"
+            ), {"id": str(vial_pk)}).scalar() == 1
+    finally:
+        with engine.begin() as c:
+            if vial_pk is not None:
+                c.execute(text("DELETE FROM priority_audit WHERE level = 'vial' AND entity_id = :id"),
+                          {"id": str(vial_pk)})
+            if sample_pk is not None:
+                c.execute(text("DELETE FROM priority_audit WHERE level = 'sample' AND entity_id = :id"),
+                          {"id": str(sample_pk)})
+            c.execute(text("DELETE FROM sample_priorities WHERE sample_uid = :uid"), {"uid": uid})
+            if vial_pk is not None:
+                c.execute(text("DELETE FROM lims_sub_samples WHERE id = :id"), {"id": vial_pk})
+            if sample_pk is not None:
+                c.execute(text("DELETE FROM lims_samples WHERE id = :id"), {"id": sample_pk})
