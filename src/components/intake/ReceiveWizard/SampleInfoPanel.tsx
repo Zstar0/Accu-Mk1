@@ -12,6 +12,9 @@ interface Props {
   details: SenaiteLookupResult | null
   loading: boolean
   error: string | null
+  /** Set when an in-place refresh failed. The panel keeps rendering the last
+   *  good payload and warns that it may be stale. */
+  refreshError?: string | null
   /** Fired after a successful priority assign so the owner can re-read the
    *  lookup — the effective value/source is resolved server-side. */
   onPriorityAssigned?: () => void
@@ -53,6 +56,7 @@ export function SampleInfoPanel({
   details,
   loading,
   error,
+  refreshError,
   onPriorityAssigned,
 }: Props) {
   if (loading) {
@@ -116,6 +120,15 @@ export function SampleInfoPanel({
               effective={details.priority}
               onAssigned={onPriorityAssigned}
             />
+            {refreshError ? (
+              <span
+                className="text-[11px] text-muted-foreground"
+                title={refreshError}
+              >
+                Couldn&rsquo;t refresh sample info — the values shown may be out
+                of date.
+              </span>
+            ) : null}
             <StackedField
               label="Client Sample ID"
               value={details.client_sample_id}

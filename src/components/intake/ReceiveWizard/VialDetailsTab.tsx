@@ -97,7 +97,7 @@ export function VialDetailsTab({
         {subSamples.length === 0 ? (
           <p className="text-sm text-muted-foreground">No sub-samples yet.</p>
         ) : (
-          <div className="rounded border overflow-hidden">
+          <div className="rounded border overflow-hidden overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-muted/40 text-muted-foreground">
                 <tr className="text-left">

@@ -5,6 +5,8 @@ interface Props {
   parentDetails: SenaiteLookupResult | null
   parentDetailsLoading: boolean
   parentDetailsError: string | null
+  /** Non-destructive refresh failure — the panel stays mounted and warns. */
+  parentDetailsRefreshError?: string | null
   /** Parent lookup refetch — re-reads the effective priority after an assign. */
   onPriorityAssigned?: () => void
 }
@@ -13,6 +15,7 @@ export function WizardSidebar({
   parentDetails,
   parentDetailsLoading,
   parentDetailsError,
+  parentDetailsRefreshError,
   onPriorityAssigned,
 }: Props) {
   return (
@@ -21,6 +24,7 @@ export function WizardSidebar({
         details={parentDetails}
         loading={parentDetailsLoading}
         error={parentDetailsError}
+        refreshError={parentDetailsRefreshError}
         onPriorityAssigned={onPriorityAssigned}
       />
     </aside>

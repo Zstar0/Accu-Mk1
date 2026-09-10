@@ -245,6 +245,7 @@ export function ReceiveWizard({
       parentDetails={parentDetails.details}
       parentDetailsLoading={parentDetails.loading}
       parentDetailsError={parentDetails.error}
+      parentDetailsRefreshError={parentDetails.refreshError}
       onPriorityAssigned={parentDetails.refresh}
     />
   )
