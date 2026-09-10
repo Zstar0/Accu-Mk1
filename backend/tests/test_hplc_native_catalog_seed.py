@@ -100,10 +100,66 @@ def test_change_log_rows_written(db_session):
     """entity_type literals mirror main.py's live routes (POST
     /analysis-services and POST /analysis-profiles use "service" / "profile",
     not "analysis_service" / "analysis_profile" — confirmed by grepping
-    log_create( call sites in main.py, ~3668 and ~18972)."""
-    from catalog.hplc_native_seed import seed_hplc_native_catalog
-    from models import CatalogChangeLog
-    seed_hplc_native_catalog(db_session)
-    actions = [(r.entity_type, r.action) for r in db_session.query(CatalogChangeLog).all()]
+    log_create( call sites in main.py, ~3668 and ~18972). Also covers the
+    profile_members audit row written by log_members (PUT
+    /analysis-profiles/{id}/members ~19191 uses entity_type="profile_members",
+    field="member_ids")."""
+    from catalog.hplc_native_seed import seed_hplc_native_catalog, HPLC_NATIVE_PROFILE_KEY
+    from models import AnalysisProfile, AnalysisService, CatalogChangeLog
+    report = seed_hplc_native_catalog(db_session)
+    rows = db_session.query(CatalogChangeLog).all()
+    actions = [(r.entity_type, r.action) for r in rows]
     assert actions.count(("service", "create")) == 5
     assert actions.count(("profile", "create")) == 1
+
+    member_rows = [r for r in rows if r.entity_type == "profile_members"]
+    assert len(member_rows) == 1
+    member_row = member_rows[0]
+    assert member_row.action == "update"
+
+    prof = db_session.query(AnalysisProfile).filter_by(key=HPLC_NATIVE_PROFILE_KEY).one()
+    assert member_row.entity_pk == prof.id
+
+    expected_service_ids = [
+        db_session.query(AnalysisService).filter_by(keyword=kw).one().id
+        for kw in KEYWORDS
+    ]
+    changed = member_row.details["changed"]["member_ids"]
+    assert changed["before"] == []
+    assert changed["after"] == expected_service_ids
+
+    # A second run must not write any additional change-log rows of any kind.
+    before_count = db_session.query(CatalogChangeLog).count()
+    report2 = seed_hplc_native_catalog(db_session)
+    assert report2 == {"services": 0, "profile": 0, "members": 0, "specs": 0}
+    assert db_session.query(CatalogChangeLog).count() == before_count
+
+
+def test_spec_audit_rows_written(db_session):
+    """Finding 2: record_spec_change writes one AuditLog row per seeded spec
+    (operation="analysis_service_spec_changed"), before=None for creation.
+    Mirrors test_service_spec_seed.py::test_seed_writes_audit_rows."""
+    from catalog.hplc_native_seed import HPLC_NATIVE_SPECS, seed_hplc_native_catalog
+    from models import AnalysisService, AnalysisServiceSpec, AuditLog
+    seed_hplc_native_catalog(db_session)
+    logs = (db_session.query(AuditLog)
+            .filter(AuditLog.operation == "analysis_service_spec_changed")
+            .all())
+    assert len(logs) == 5
+
+    expected_spec_ids = set()
+    for keyword in HPLC_NATIVE_SPECS:
+        svc = db_session.query(AnalysisService).filter_by(keyword=keyword).one()
+        spec = (db_session.query(AnalysisServiceSpec)
+                .filter(AnalysisServiceSpec.analysis_service_id == svc.id,
+                        AnalysisServiceSpec.matrix.is_(None),
+                        AnalysisServiceSpec.peptide_id.is_(None))
+                .one())
+        expected_spec_ids.add(spec.id)
+
+    logged_ids = {int(entry.entity_id) for entry in logs}
+    assert logged_ids == expected_spec_ids
+    for entry in logs:
+        assert entry.entity_type == "analysis_service_spec"
+        assert entry.details["before"] is None
+        assert entry.details["actor_user_id"] is None
