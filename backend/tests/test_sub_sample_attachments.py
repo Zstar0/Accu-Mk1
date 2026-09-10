@@ -394,6 +394,7 @@ def test_route_make_primary_200():
     sub.assignment_role = None
     sub.assignment_kind = None
     sub.external_lims_uid = "mk1://deadbeef"
+    sub.priority_key = None   # explicit: MagicMock would fail str validation
     sub.parent_sample = MagicMock(sample_id="P-1")
     with patch("sub_samples.routes.service.set_primary_attachment",
                return_value=sub) as svc:
