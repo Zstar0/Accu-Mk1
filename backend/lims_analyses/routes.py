@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import List, Literal, Union
+from typing import List, Literal, Optional, Union
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import select
@@ -620,6 +620,34 @@ def promote(
     _parent_svc = db.get(AnalysisService, parent_row.analysis_service_id)
     _skip_writeback = _parent_svc is not None and _parent_svc.origin == "mk1"
 
+    # ── Accu-Mk1 writes FIRST (Handler ruling 2026-09-10) ────────────────────
+    # Post read-independence Mk1 is the canonical tier: these rows are what
+    # Sample Details and the COA wire read, and SENAITE's analysis line is the
+    # mirror. Committing the mirror first and the source of truth second is
+    # what allowed a lost Mk1 commit to strand a family with a verified SENAITE
+    # line, no Mk1 promotion, and — because the lock map then read that mirror
+    # — no Promote verb in the UI either (P-2553, P-2606; both needed a
+    # by-hand replay of promote_to_parent against prod).
+    #
+    # So the local write is made durable BEFORE SENAITE is touched, and the
+    # write-back becomes a tee that can fail without taking the promotion down
+    # with it. A commit failure here means nothing was written anywhere, which
+    # is a clean failure with no divergence to reconcile.
+    try:
+        db.commit()
+    except Exception:
+        logger.exception(
+            "promote_commit_failed parent=%s keyword=%s — SENAITE was not called, "
+            "nothing to reconcile",
+            parent_sample_id, parent_row.keyword,
+        )
+        raise
+    db.refresh(parent_row)
+    for p in promotion_rows:
+        db.refresh(p)
+
+    # ── Tee to SENAITE (best effort; the promotion above already stands) ─────
+    _sync_event: Optional[tuple] = None
     if not _skip_writeback:
         try:
             senaite_writeback.writeback_promotion(
@@ -634,50 +662,56 @@ def promote(
             # senaite-origin family. Handler ruling 2026-08-30: the canonical
             # row is the certificate authority post read-independence, so
             # diverge deliberately — record it and promote natively.
-            from models import LimsSubSampleEvent
             logger.warning(
                 "senaite_promote_divergence parent=%s keyword=%s senaite_state=%s uid=%s "
                 "— native promote proceeds, SENAITE line left as-is",
                 parent_sample_id, parent_row.keyword, e.state, e.uid,
             )
-            db.add(LimsSubSampleEvent(
-                lims_sample_pk=parent_row.lims_sample_pk,
-                event="senaite_line_diverged",
-                details={
-                    "keyword": parent_row.keyword,
-                    "senaite_state": e.state,
-                    "senaite_uid": e.uid,
-                    "reason": "promote over locked SENAITE line — canonical value takes control",
-                },
-                user_id=getattr(current_user, "id", None),
-            ))
+            _sync_event = ("senaite_line_diverged", {
+                "keyword": parent_row.keyword,
+                "senaite_state": e.state,
+                "senaite_uid": e.uid,
+                "reason": "promote over locked SENAITE line — canonical value takes control",
+            })
         except SenaiteWritebackError as e:
-            db.rollback()
-            raise HTTPException(
-                status_code=502,
-                detail=f"SENAITE write-back failed — promote aborted: {e}",
+            # Unreachable / refused / line missing. The promotion is already
+            # committed, so this is the MIRROR falling behind, not lost work.
+            # Recorded on the parent so it is visible in the activity feed
+            # rather than living only in a log line that rotates.
+            logger.error(
+                "senaite_promote_writeback_failed parent=%s keyword=%s — the Mk1 "
+                "promotion stands, SENAITE's line is now behind: %s",
+                parent_sample_id, parent_row.keyword, e,
             )
+            _sync_event = ("senaite_promote_writeback_failed", {
+                "keyword": parent_row.keyword,
+                "error": str(e)[:500],
+                "reason": "SENAITE unreachable or refused — Mk1 promotion committed, mirror lagging",
+            })
     else:
         logger.info(
             "native_promote_writeback_skipped parent_analysis_id=%s service_id=%s keyword=%s",
             parent_row.id, parent_row.analysis_service_id, parent_row.keyword,
         )
 
-    try:
-        db.commit()
-    except Exception:
-        # SENAITE is now AHEAD of Mk1: the parent AR line was written and
-        # verified but the Mk1 promote failed to persist. Surface loudly so
-        # an operator reconciles (a retry will 502 with "already verified").
-        logger.error(
-            "SENAITE write-back committed but Mk1 commit failed for "
-            "parent=%s keyword=%s — manual reconciliation required",
-            parent_sample_id, parent_row.keyword,
-        )
-        raise
-    db.refresh(parent_row)
-    for p in promotion_rows:
-        db.refresh(p)
+    if _sync_event is not None:
+        # Its own transaction: the promotion is committed and must not be put
+        # at risk by the bookkeeping that records how the tee went.
+        try:
+            from models import LimsSubSampleEvent
+            db.add(LimsSubSampleEvent(
+                lims_sample_pk=parent_row.lims_sample_pk,
+                event=_sync_event[0],
+                details=_sync_event[1],
+                user_id=getattr(current_user, "id", None),
+            ))
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception(
+                "promote_sync_event_write_failed parent=%s keyword=%s event=%s",
+                parent_sample_id, parent_row.keyword, _sync_event[0],
+            )
 
     # side-by-side engine: schedules workflow.engine.run_cascades_bg post-response
     _schedule_sbs_cascade(background_tasks, db, parent_row, current_user)
