@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added
+- **HPLC-native foundation** (slice 1 of the native-born HPLC program, spec `docs/superpowers/specs/2026-09-10-hplc-native-born-design.md`): `lims_analyses.peptide_id` + `slot` (nullable, additive) with slot-aware root unique indexes; boot seed of the five native HPLC services, the `hplc-purity-identity` profile and their wildcard specs; `hplc-purity-identity` accepted as the HPLC primary key alongside `hplcpurity_identity` in demand, seeding, verification and product-completion. Dark: no order carries the new key until the WordPress `profile_key` is set.
+
 ## v1.18.2 — 2026-09-10
 
 ### Fixed
