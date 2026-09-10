@@ -14,12 +14,15 @@ from sqlalchemy.orm import sessionmaker
 
 from database import Base
 from main import INBOX_SUB_SAMPLE_COLUMNS, _build_native_vial_inbox_items
+from priority import service
 from models import (
     AnalysisService,
     Department,
     LimsAnalysis,
     LimsSample,
+    LimsOrder,
     LimsSubSample,
+    Priority,
     SamplePriority,
     ServiceGroup,
     service_group_members,
@@ -119,8 +122,6 @@ def _call(db, subs, **overrides):
         hide_prepped=True,
         prepped_sub_pks=set(),
         prepped_senaite_ids=set(),
-        priority_map={},
-        order_priority=None,
         assignment_map={},
         keyword_to_peptide={},
     )
@@ -211,21 +212,34 @@ def test_vial_without_live_analyses_hidden(db, family):
     assert [i.sample_id for i in items] == ["P-0300-S02"]
 
 
-def test_order_priority_inherited_and_persisted(db, family):
-    """Order-level priority (WP payload) flows onto native vials exactly like
-    step 4b does for parents: persisted to sample_priorities so it survives
-    reloads and is read by the worksheet add endpoints."""
-    _parent, subs = family
-    items = _call(db, subs, order_priority="expedited")
-    assert all(i.priority == "expedited" for i in items)
-    persisted = db.execute(
-        select(SamplePriority).where(SamplePriority.sample_uid == "mk1://nat-001")
-    ).scalar_one()
-    assert persisted.priority == "expedited"
-    # Manual override wins over order priority
-    items = _call(db, subs, order_priority="expedited",
-                  priority_map={"mk1://nat-001": "normal"})
-    assert items[0].priority == "normal"
+def test_order_priority_reaches_vial_through_the_resolver(db, family):
+    """The builder no longer copies order priority into sample_priorities
+    (Task 8). Order priority now reaches the vial through the resolver chain:
+    lims_orders.priority_key -> lims_samples.client_order_number -> vial."""
+    parent, subs = family
+    db.add_all([
+        Priority(key="default", name="Default", rank=0, icon="minus",
+                 color="zinc", pulse=False, is_default=True, is_active=True),
+        Priority(key="expedited", name="Expedited", rank=20, icon="chevrons-up",
+                 color="red", pulse=True, is_default=False, is_active=True),
+    ])
+    db.add(LimsOrder(wp_order_id=555, order_number="WP-555", priority_key="expedited"))
+    parent.client_order_number = "WP-555"
+    db.commit()
+    service.invalidate_priority_cache()
+
+    # The builder itself leaves the legacy default in place ...
+    items = _call(db, subs)
+    assert all(i.priority == "normal" for i in items)
+    # ... and nothing is written to sample_priorities any more.
+    assert db.execute(select(SamplePriority)).scalars().all() == []
+
+    # ... the endpoint's one-shot embed is what stamps the rows.
+    eff = service.load_effective_for_uids(db, [i.uid for i in items])
+    for i in items:
+        assert eff[i.uid].key == "expedited"
+        assert eff[i.uid].source_level == "order"
+        assert service.legacy_priority_string(eff[i.uid]) == "expedited"
 
 
 def test_assignment_kind_passthrough(db, family):

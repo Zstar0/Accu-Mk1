@@ -128,6 +128,14 @@ class SenaiteLookupResult(BaseModel):
     published_coa: Optional[SenaitePublishedCOA] = None
     senaite_url: Optional[str] = None  # e.g. "/clients/client-8/PB-0057"
     cached_at: Optional[str] = None  # ISO timestamp when this result was cached
+    # Sample-priority controls (spec §5). Populated whenever a lims_samples row
+    # exists for this sample id; all three stay None for a SENAITE-only sample.
+    #   registry_pk           — lims_samples.id, the assign() entity id
+    #   explicit_priority_key — the sample's OWN key (None = inherit)
+    #   priority              — resolved {key, rank, source_level, source_id}
+    registry_pk: Optional[int] = None
+    explicit_priority_key: Optional[str] = None
+    priority: Optional[dict] = None
 
 
 class RegistrySampleReadResult(SenaiteLookupResult):

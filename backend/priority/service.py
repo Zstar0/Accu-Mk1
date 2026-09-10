@@ -2,6 +2,7 @@
 and (Task 4) assign(). Spec §4/§5."""
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
@@ -14,6 +15,8 @@ from models import (
     LimsSubSample, Priority, PriorityAudit,
 )
 from priority.resolver import Effective, PriorityInfo, resolve
+
+logger = logging.getLogger(__name__)
 
 _CACHE_TTL_S = 60.0
 _cache: dict = {"at": 0.0, "map": None}
@@ -94,6 +97,133 @@ def load_effective(
     by_vial = {pk: chain(samples.get(subs[pk].parent_sample_pk) if pk in subs else None, subs.get(pk))
                for pk in sub_pks}
     return by_sample, by_vial
+
+
+def load_effective_safe(
+    db: Session,
+    sample_pks: Iterable[int] = (),
+    sub_sample_pks: Iterable[int] = (),
+) -> tuple[dict[int, Effective], dict[int, Effective]]:
+    """READ-path wrapper around load_effective.
+
+    resolve() raises when the priorities table has no default row — correct for
+    a write (assign must refuse to guess), wrong for a list endpoint: a
+    half-migrated database would 500 the samples list, the inbox and the vial
+    board instead of merely omitting a chip. Degrades to "no priority known".
+    """
+    try:
+        return load_effective(db, sample_pks=sample_pks, sub_sample_pks=sub_sample_pks)
+    except ValueError:
+        logger.warning("priority embed skipped: no default priority configured")
+        return {}, {}
+
+
+def legacy_priority_string(eff: Effective) -> str:
+    """The pre-Task-8 inbox/worksheet vocabulary ("normal" | "high" |
+    "expedited"). Kept for one release so the current frontend keeps working:
+    the default priority reads as "normal", every other key passes through."""
+    return "normal" if eff.source_level == "default" or eff.key == "default" else eff.key
+
+
+def priority_target_for_uid(db: Session, uid: str) -> Optional[tuple[str, str]]:
+    """(level, entity_id) for a worksheet-inbox row uid, or None when the uid
+    has no native row.
+
+    Vial FIRST: native `mk1://…` uids live on lims_sub_samples, and the legacy
+    sample_priorities writes these routes replaced were per-VIAL for exactly
+    those rows. Falling back to the parent level would silently widen the
+    blast radius of a per-vial priority change.
+    """
+    if not uid:
+        return None
+    vial_pk = db.execute(
+        select(LimsSubSample.id).where(LimsSubSample.external_lims_uid == uid)
+    ).scalars().first()
+    if vial_pk is not None:
+        return ("vial", str(vial_pk))
+    sample_pk = db.execute(
+        select(LimsSample.id).where(LimsSample.external_lims_uid == uid)
+    ).scalars().first()
+    if sample_pk is not None:
+        return ("sample", str(sample_pk))
+    return None
+
+
+def load_effective_for_uids(db: Session, uids: Iterable[str]) -> dict[str, Effective]:
+    """Effective priority keyed by external_lims_uid — the identity the
+    worksheets inbox rows carry. Two id queries plus ONE load_effective for the
+    whole page (never per row). Uids with no native row are omitted."""
+    wanted = [u for u in dict.fromkeys(uids) if u]
+    if not wanted:
+        return {}
+    vial_by_uid = {
+        uid: pk for pk, uid in db.execute(
+            select(LimsSubSample.id, LimsSubSample.external_lims_uid)
+            .where(LimsSubSample.external_lims_uid.in_(wanted))
+        ).all()
+    }
+    remaining = [u for u in wanted if u not in vial_by_uid]
+    sample_by_uid = {
+        uid: pk for pk, uid in db.execute(
+            select(LimsSample.id, LimsSample.external_lims_uid)
+            .where(LimsSample.external_lims_uid.in_(remaining))
+        ).all()
+    } if remaining else {}
+    by_sample, by_vial = load_effective_safe(
+        db, sample_pks=sample_by_uid.values(), sub_sample_pks=vial_by_uid.values())
+    out: dict[str, Effective] = {}
+    for uid, pk in vial_by_uid.items():
+        if pk in by_vial:
+            out[uid] = by_vial[pk]
+    for uid, pk in sample_by_uid.items():
+        if pk in by_sample:
+            out[uid] = by_sample[pk]
+    return out
+
+
+def order_priority_fields(db: Session, order_numbers: Iterable[str]) -> dict[str, dict]:
+    """{order_number: {priority_key, priority_source, effective_priority}} for
+    the order-list/detail payloads. Order rows resolve through the order →
+    customer half of the chain only (there is no sample in play). Batched:
+    one orders query, one customers query, one priority map."""
+    wanted = [n for n in dict.fromkeys(order_numbers) if n]
+    if not wanted:
+        return {}
+    prios = priority_map(db)
+    orders = db.execute(
+        select(LimsOrder).where(LimsOrder.order_number.in_(wanted))
+    ).scalars().all()
+    cust_ids = {o.customer_user_id for o in orders if o.customer_user_id is not None}
+    customers: dict[int, CustomerPriority] = {}
+    if cust_ids:
+        for c in db.execute(
+            select(CustomerPriority).where(CustomerPriority.wp_customer_user_id.in_(cust_ids))
+        ).scalars():
+            customers[c.wp_customer_user_id] = c
+    out: dict[str, dict] = {}
+    for o in orders:
+        cust = customers.get(o.customer_user_id) if o.customer_user_id is not None else None
+        try:
+            eff = resolve(
+                {"order": o.priority_key, "customer": cust.priority_key if cust else None},
+                prios,
+                explicit_ids={
+                    k: v for k, v in {
+                        "order": o.order_number,
+                        "customer": str(cust.wp_customer_user_id) if cust else None,
+                    }.items() if v
+                },
+            )
+        except ValueError:
+            # No default priority configured — read paths degrade, never 500.
+            logger.warning("order priority skipped: no default priority configured")
+            return {}
+        out[o.order_number] = {
+            "priority_key": o.priority_key,
+            "priority_source": o.priority_source,
+            "effective_priority": eff.as_dict(),
+        }
+    return out
 
 
 @dataclass
