@@ -16995,6 +16995,28 @@ async def receive_senaite_sample(
     )
 
 
+def _sla_snapshot_after_touchpoint(db, sample_row) -> int:
+    """Write the SLA clock snapshot for `sample_row` after a workflow
+    touchpoint (Task 9, spec section 3.5): the receive and publish events are where
+    the promise is recorded, so reports never re-grade history against a later
+    mapping. No `only_in_flight` -- a publish must be recorded too.
+
+    Fail-open by design: `snapshot.refresh` raises (NoResultFound) when no
+    default SlaTier row exists and (ValueError) when no default priority is
+    configured, and a half-configured install must never block a receive or a
+    publish. Both raise before any column is mutated, so there is no partial
+    snapshot to clean up. Returns the number of samples snapshotted (0 on
+    failure) so callers can gate their commit on it.
+    """
+    try:
+        from priority.snapshot import refresh as _sla_snapshot
+        return _sla_snapshot(db, [sample_row.id])
+    except Exception as snap_err:  # noqa: BLE001 -- clock snapshot is advisory
+        logger.warning("priority.sla_snapshot_failed sample_id=%s err=%s",
+                       getattr(sample_row, "sample_id", None), snap_err)
+        return 0
+
+
 def _receive_native_phase(
     *,
     sample_id: str,
@@ -17087,6 +17109,7 @@ def _receive_native_phase(
                 db, row.sample_id, "receive",
                 from_status=from_status, actor_user_id=user_id,
             )
+            _sla_snapshot_after_touchpoint(db, row)
             steps.append("received_native")
 
         db.commit()
@@ -17739,6 +17762,7 @@ def _record_sample_transition_bg(**kwargs) -> None:
         # within a second of SENAITE's own DateReceived. NULL-gated: never
         # overwrites a SENAITE-sourced value.
         wrote_received = False
+        _row = None
         if kwargs.get("verb") == "receive":
             _row = db.execute(select(LimsSample).where(
                 LimsSample.sample_id == kwargs["sample_id"]
@@ -17753,6 +17777,7 @@ def _record_sample_transition_bg(**kwargs) -> None:
         # receive page's native phase drives the identical path (PB-0486
         # finding, 2026-08-28).
         wrote_engine = False
+        wrote_snapshot = False
         _verb = kwargs.get("verb")
         if _verb in ("receive", "publish"):
             from workflow.engine import drive_sample_touchpoint
@@ -17763,7 +17788,16 @@ def _record_sample_transition_bg(**kwargs) -> None:
                 attested={"coa_published": True}
                 if _verb == "publish" else None,
             )
-        if wrote_log or wrote_status or wrote_received or wrote_engine:
+            # Clock-event SLA snapshot (Task 9). Own flag in the commit gate
+            # below: `refresh` only flushes, so a publish where the recorder
+            # deduped and the heal was a no-op would otherwise write snapshot
+            # columns that never commit.
+            _snap_row = _row if _row is not None else db.execute(select(LimsSample).where(
+                LimsSample.sample_id == kwargs["sample_id"]
+            )).scalar_one_or_none()
+            if _snap_row is not None:
+                wrote_snapshot = bool(_sla_snapshot_after_touchpoint(db, _snap_row))
+        if wrote_log or wrote_status or wrote_received or wrote_engine or wrote_snapshot:
             db.commit()
     except Exception as log_err:  # noqa: BLE001
         if db is not None:
@@ -23000,6 +23034,10 @@ class S2SOrderUpsert(BaseModel):
     wp_created_at: Optional[datetime] = None
     wp_paid_at: Optional[datetime] = None
     samples: list[S2SOrderSampleStamp] = []
+    # Priority feature (Task 9, 2026-09-09-sample-priority-design section 6): the
+    # WordPress order's priority key. Applied on CREATE only -- a later push
+    # must never stomp a priority a human has since set in Mk1.
+    priority: Optional[str] = None
 
 
 class S2SOrdersUpsertRequest(BaseModel):
@@ -23028,6 +23066,29 @@ def s2s_upsert_orders(
         if row is None:
             row = LimsOrder(wp_order_id=o.wp_order_id, order_number=o.order_number)
             db.add(row)
+            # CREATE ONLY (Task 9): map the payload's priority onto the order
+            # with source 'order-payload' + an audit row. `assign` selects the
+            # order by order_number, so the insert must be flushed first.
+            # Unknown keys are logged and ignored -- a WordPress typo or a
+            # priority an admin has since deleted must not 500 the push.
+            # Fail-open like the placeholder-seed phase below: `assign`
+            # refreshes the SLA snapshot, which raises when no default SlaTier
+            # is configured, and an order stamp may never be lost to that.
+            if o.priority:
+                db.flush()
+                try:
+                    from priority.service import assign, priority_map
+                    if o.priority in priority_map(db):
+                        assign(db, level="order", entity_id=row.order_number,
+                               priority_key=o.priority, user_id=None,
+                               source="order-payload", note="from order payload")
+                    else:
+                        logger.warning(
+                            "registry.order_upsert_unknown_priority order_number=%s priority=%r",
+                            o.order_number, o.priority)
+                except Exception as prio_err:  # noqa: BLE001 -- never fail the upsert
+                    logger.warning("registry.order_upsert_priority_failed order_number=%s err=%s",
+                                   o.order_number, prio_err)
         row.order_number = o.order_number
         row.status = o.status
         if o.customer is not None:
