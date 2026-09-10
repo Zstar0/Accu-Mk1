@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.17.0 — 2026-09-09
+
 ### Added
 - **Sample-status authority switch** (`Settings → Data Source → Sample status authority`): under `Accu-Mk1` the workflow engine writes the sample's status from the catalog and SENAITE follows; the SENAITE-sourced mirrors (registry heal, IS event stream, sub-sample parent refresh) stop writing it. Default stays `SENAITE`. Spec `docs/superpowers/specs/2026-09-09-sample-status-authority-flip-design.md`.
 - **SENAITE tee with read-back and retry**: verify / publish / cancel are teed to SENAITE, proven by re-reading the AR (SENAITE answers 200 to refused transitions), and refusals are queued in `lims_senaite_tee_retries` for the `senaite_tee_retry` job (5 min; backoff 5 → 720 min; gives up after 8 attempts). A refused publish issues `verify` first (the PB-0462 "stuck To Verify" class). **Cancel is Mk1-owned**: once Accu-Mk1 cancels a sample its state is authoritative and SENAITE is not kept in sync — the tee fires one best-effort attempt, and any other outcome (SENAITE allows cancel only before any analysis is assigned; transport failures count too) is recorded `senaite_only` and never queued, so a deliberate cancellation cannot age into a stranded flag. The shadow summary reports `senaite_lagging`.
