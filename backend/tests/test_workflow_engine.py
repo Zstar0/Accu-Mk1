@@ -448,8 +448,8 @@ def test_sbs_boot_statements_execute_against_live_db(
                "verified,published")
     sbs_stmts = [c for c in captured_migration_statements
                 if any(m in str(c) for m in markers)]
-    assert len(sbs_stmts) == 5, (
-        f"expected exactly 5 workflow-catalog boot statements, found "
+    assert len(sbs_stmts) == 6, (
+        f"expected exactly 6 workflow-catalog boot statements, found "
         f"{len(sbs_stmts)}: {[str(s)[:80] for s in sbs_stmts]}"
     )
     from sqlalchemy import text as _text

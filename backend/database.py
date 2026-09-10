@@ -1398,6 +1398,19 @@ def _run_migrations():
         "'\"value\": \"verified,published\"')::jsonb "
         "WHERE entity_scope='sample' AND verb='publish' AND is_builtin "
         "AND requirements::text LIKE '%\"value\": \"verified\"%'",
+        # Verify gate widened the same way (2026-09-09): the 2026-08-23
+        # widening above covered publish but NOT verify, so a sample whose
+        # lines SENAITE had already published could never satisfy verify
+        # ('published' is not in a strict 'verified' list), stuck at
+        # to_be_verified, and then refused publish with no_edge — the 12
+        # `no_edge:publish` residuals found at the authority flip. Same
+        # idempotent LIKE guard: an already-widened 'verified,published'
+        # value cannot match (the comma breaks the closing-quote match).
+        "UPDATE lims_workflow_transitions SET requirements = "
+        "replace(requirements::text, '\"value\": \"verified\"', "
+        "'\"value\": \"verified,published\"')::jsonb "
+        "WHERE entity_scope='sample' AND verb='verify' AND is_builtin "
+        "AND requirements::text LIKE '%\"value\": \"verified\"%'",
         # waiting_for_addon_results → published publish edge (burn-in finding
         # 2026-08-23, stuck_behind bucket): the state was seeded with NO
         # out-edges, so every real publish from it logged no_edge and
