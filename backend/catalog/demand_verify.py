@@ -31,12 +31,10 @@ from scripts/s9_demand_precheck.py (the pre-deploy gate).
 """
 import logging
 
-from catalog.hplc_keys import HPLC_PRIMARY_KEYS
-
 log = logging.getLogger(__name__)
 
-LEGACY_DEMAND_KEYS = tuple(sorted(HPLC_PRIMARY_KEYS)) + (
-    "bac_water_panel", "endotoxin", "sterility_pcr",
+LEGACY_DEMAND_KEYS = (
+    "hplcpurity_identity", "bac_water_panel", "endotoxin", "sterility_pcr",
 )
 
 

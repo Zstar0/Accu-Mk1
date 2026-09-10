@@ -77,20 +77,39 @@ def test_seeder_role_map_includes_new_key():
     assert "hplcpurity_identity" in ROLE_TO_WP_KEYS["hplc"]
 
 
-def test_demand_verify_knows_new_key():
-    from catalog.demand_verify import LEGACY_DEMAND_KEYS
-    assert "hplc-purity-identity" in LEGACY_DEMAND_KEYS
+def test_demand_verify_does_not_require_native_key(db_session):
+    """`hplc-purity-identity` is a catalog row like any other native
+    profile, NOT a deploy-gate invariant. LEGACY_DEMAND_KEYS stays the four
+    legacy wire keys exactly as on master — the pre-deploy precheck
+    (scripts/s9_demand_precheck.py) runs against the live prod DB, which
+    does not yet have the native profile (it is created by the boot seed
+    AFTER deploy). Including the native key there would fail the deploy
+    gate before the seed ever runs."""
+    from catalog.demand_verify import LEGACY_DEMAND_KEYS, verify_demand_catalog
+    from catalog.profile_seed import seed_profiles_from_registry
+
+    assert LEGACY_DEMAND_KEYS == (
+        "hplcpurity_identity", "bac_water_panel", "endotoxin", "sterility_pcr",
+    )
+    assert "hplc-purity-identity" not in LEGACY_DEMAND_KEYS
+
+    # Seeded WITHOUT the native HPLC catalog (only the legacy profiles) —
+    # the native key must not be reported missing, because it is not a
+    # legacy-completeness invariant at all.
+    seed_profiles_from_registry(db_session)
+    db_session.commit()
+
+    violations = verify_demand_catalog(db_session)
+    completeness_hits = [v for v in violations if v.startswith("legacy demand key ")]
+    assert not any("hplc-purity-identity" in v for v in completeness_hits)
 
 
 def test_demand_verify_no_error_for_native_key(db_session):
-    """The S9 legacy-key-completeness check (LEGACY_DEMAND_KEYS loop, check
-    #1) must not flag `hplc-purity-identity` as missing/inactive/misconfigured
-    now that Task 4 seeds it as a real analysis_profiles row. Department/
-    vial_roles wiring (checks #2-4) is orthogonal — those flag every
-    role-dim profile equally in this minimal fixture (no boot-time
-    department backfill here), so the legacy `hplcpurity_identity` key
-    trips them too. What matters is parity: the native key is never worse
-    off than the legacy key it aliases."""
+    """Once Task 4's boot seed has created the native profile as an
+    ordinary catalog row, it must be verified the same way every other
+    non-legacy role-dim profile is (checks #2-4), and never appear in the
+    legacy-completeness violations (check #1) since it is not in
+    LEGACY_DEMAND_KEYS."""
     from catalog.demand_verify import verify_demand_catalog
     from catalog.hplc_native_seed import seed_hplc_native_catalog
     from catalog.profile_seed import seed_profiles_from_registry
