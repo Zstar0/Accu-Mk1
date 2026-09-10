@@ -6502,6 +6502,12 @@ export interface SampleActivityEvent {
   label: string
   details: Record<string, unknown>
   source: string
+  /** priority_audit lines (sample-priority spec §3.4) carry the same text as
+   *  `label` here, plus the operator's free-text note and the acting user. */
+  description?: string | null
+  type?: string | null
+  note?: string | null
+  user_id?: number | null
 }
 
 export interface SampleActivityResponse {

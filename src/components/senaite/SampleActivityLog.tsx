@@ -16,7 +16,7 @@ import {
 } from '@/components/ui/sheet'
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
-import { X, RefreshCw } from 'lucide-react'
+import { X, RefreshCw, ArrowUpNarrowWide } from 'lucide-react'
 import { getSampleActivity, type SampleActivityEvent } from '@/lib/api'
 import { getWordpressUrl } from '@/lib/api-profiles'
 import { getUserDirectory } from '@/lib/auth-api'
@@ -71,6 +71,10 @@ function eventToLevel(event: string): EventLevel {
     // result must be visually loud, per the ISO intent of this slice.
     case 'result_entered':    return 'info'
     case 'analysis_amended':  return 'warn'
+    // sample-priority spec §3.4: priority_audit lines are derived at read
+    // time from the audit table. Accent (not dim) — a priority change is a
+    // deliberate operator action, same weight as role_assigned.
+    case 'priority_changed':  return 'accent'
     default:                  return 'dim'
   }
 }
@@ -165,6 +169,13 @@ function DetailLine({
       break
     case 'status_change': {
       if (d.wp_notified) parts.push('wp_notified=true')
+      break
+    }
+    case 'priority_changed': {
+      // The actor is already inside the description line; `details.by` here is
+      // a display name, not an email, so it must not go through UserTag. Only
+      // the operator's free-text note adds anything.
+      if (d.note) parts.push(String(d.note))
       break
     }
     default: {
@@ -334,6 +345,10 @@ export function SampleActivityLog({ open, onClose, sampleId }: Props) {
               const curDate = ts.slice(0, 10)
               const showDateSep = i > 0 && curDate !== prevDate
 
+              // Priority lines (source priority_audit) carry a lucide marker
+              // rather than the terminal glyph, and their primary text is the
+              // server-derived `description` (identical to `label`).
+              const isPriority = ev.source === 'priority_audit'
               const isCoa = ev.event === 'coa_generated' || ev.event === 'coa_published' || ev.event === 'coa_superseded'
               const vcode = isCoa ? (ev.details.verification_code as string | undefined) : undefined
 
@@ -355,9 +370,21 @@ export function SampleActivityLog({ open, onClose, sampleId }: Props) {
                   )}>
                     <span className="text-zinc-700">{ts}</span>
                     {'  '}
-                    <span className={levelColor[level]}>{icon}</span>
+                    {isPriority ? (
+                      <span
+                        data-testid="priority-audit-marker"
+                        className={cn(
+                          'inline-flex align-text-bottom',
+                          levelColor[level]
+                        )}
+                      >
+                        <ArrowUpNarrowWide size={13} aria-hidden="true" />
+                      </span>
+                    ) : (
+                      <span className={levelColor[level]}>{icon}</span>
+                    )}
                     {'  '}
-                    {ev.label}
+                    {ev.description ?? ev.label}
                     {vcode && (
                       <>{'  '}<VerificationLink code={vcode} /></>
                     )}
