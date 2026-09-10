@@ -24,6 +24,7 @@ all-skip-state sample hits the existing fail-closed empty abort.
 
 Spec: docs/superpowers/specs/2026-08-26-coa-legacy-rows-mk1-source-design.md
 """
+from coa.identity_verdict import identity_wire_result
 from coa.native_sections import NativeSectionsError
 
 # Twin contract: src/coabuilder_core/legacy_rows.py + tests/
@@ -78,12 +79,20 @@ def build_legacy_rows(db, parent) -> list[dict]:
             raise NativeSectionsError(
                 f"legacy rows: analysis {r.uid} on {parent.sample_id} has no "
                 f"keyword — aborting")
+        # Identity rows: Mk1 owns the verdict (coa/identity_verdict.py).
+        # A conforming value rides as the literal "Conforms" token so
+        # COABuilder never re-derives conformance from the slot-title vs
+        # peptide-name pair (P-1986 class); everything else rides raw.
+        wire_result = identity_wire_result(
+            db, keyword=r.keyword, result=r.result,
+            analysis_service_id=getattr(r, "analysis_service_id", None),
+        )
         rows.append({
             "uid": r.uid,
             "Keyword": r.keyword,
             "Title": r.title,
             "ServiceTitle": r.title,
-            "Result": r.result,
+            "Result": wire_result,
             "Unit": r.unit,
             "review_state": r.review_state,
             "ResultCaptureDate": r.captured,
