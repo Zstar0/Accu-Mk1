@@ -21,6 +21,26 @@ the same audit trail as a hand-created row — task-4-brief.md calls for
 log_create/log_members explicitly and pins the behavior with
 test_change_log_rows_written.
 
+Final review Finding 2 (controller ruling): the profile is seeded
+INACTIVE (active=False). native_profiles_for_parent (the Manage Analyses
+picker payload) lists every active all-mk1 profile, so an active seed would
+put "HPLC Purity + Identity" in front of the lab as addable to EVERY
+existing sample on deploy day, before anyone decided to sell it. Activating
+it is a deliberate flip-runbook step performed in Mk1 admin, not something
+this boot seed does for you. sub_samples.catalog_demand still fulfills an
+inactive profile for a paid order (with a warning) — inactivity here only
+hides it from the picker, it does not block fulfillment of an order that
+already references it.
+
+Final review Finding 3 (controller ruling): before creating any of the five
+services, check for an existing AnalysisService with the same keyword
+regardless of origin. If one already exists under a DIFFERENT origin (e.g.
+a SENAITE-imported row), skip that service — creating a same-keyword mk1
+row alongside it would be a cross-origin keyword duplicate, which nothing
+in this catalog enforces at the DB level (uniqueness here is scoped to
+(keyword, origin)). A collision on any of the five aborts profile creation
+entirely (log why) rather than seed a profile with fewer than five members.
+
 The `ck_analysis_service_specs_rule_shape` CHECK (models.py) only restricts
 equals_value/min_value/max_value/loq on an 'informational' row — it does not
 forbid `unit` or `display_override` — so both are kept on the two
@@ -83,16 +103,34 @@ def seed_hplc_native_catalog(db: Session) -> dict[str, int]:
     dept_id = department_id_by_name(db, "Analytical")
     if dept_id is None:
         log.warning("hplc_native_seed.no_analytical_department — services seed "
-                    "with department_id NULL; backfill_departments tags HPLC-%% on this boot")
+                    "with department_id NULL; backfill_departments tags HPLC-%% "
+                    "on the NEXT boot (backfill_departments runs before this seeder)")
 
     # --- services ---
+    # Finding 3: uniqueness in this catalog is scoped to (keyword, origin),
+    # so an mk1 row can coexist with a same-keyword row of a different
+    # origin (e.g. a SENAITE-imported service) with nothing at the DB level
+    # to stop it. Check for ANY origin before minting the mk1 row; a
+    # collision skips just that service and logs loudly for the admin to
+    # resolve, rather than silently minting a cross-origin duplicate.
     services: dict[str, AnalysisService] = {}
+    collisions: list[str] = []
     for keyword, title, unit, result_type, variance_capable in HPLC_NATIVE_SERVICES:
         svc = (db.query(AnalysisService)
                .filter(AnalysisService.keyword == keyword,
                        AnalysisService.origin == "mk1")
                .one_or_none())
         if svc is None:
+            other = (db.query(AnalysisService)
+                     .filter(AnalysisService.keyword == keyword,
+                             AnalysisService.origin != "mk1")
+                     .one_or_none())
+            if other is not None:
+                log.error("hplc_native_seed.keyword_collision keyword=%s origin=%s "
+                           "id=%s — skipping; resolve in the catalog admin",
+                           keyword, other.origin, other.id)
+                collisions.append(keyword)
+                continue
             svc = AnalysisService(
                 title=title, keyword=keyword, unit=unit, result_type=result_type,
                 category="HPLC", origin="mk1", department_id=dept_id,
@@ -105,13 +143,31 @@ def seed_hplc_native_catalog(db: Session) -> dict[str, int]:
             report["services"] += 1
         services[keyword] = svc
 
+    if collisions:
+        log.error("hplc_native_seed.profile_creation_aborted collided_keywords=%s "
+                   "— %s cannot seed with all five members until the keyword "
+                   "collision(s) above are resolved in the catalog admin",
+                   collisions, HPLC_NATIVE_PROFILE_KEY)
+        db.commit()
+        if any(report.values()):
+            log.info("catalog.hplc_native_seed %s", report)
+        return report
+
     # --- profile (+ members only on first creation) ---
+    # Finding 2 (controller ruling): seeded INACTIVE — activating it is an
+    # explicit flip-runbook step in Mk1 admin, not something this boot seed
+    # decides. native_profiles_for_parent only lists ACTIVE all-mk1
+    # profiles, so leaving this False keeps it out of the Manage Analyses
+    # picker until someone flips it on purpose. catalog_demand still
+    # fulfills an inactive profile for a paid order (with a warning) — this
+    # only hides it from the picker, it does not block an order that
+    # already references it.
     prof = db.query(AnalysisProfile).filter_by(key=HPLC_NATIVE_PROFILE_KEY).one_or_none()
     if prof is None:
         prof = AnalysisProfile(
             key=HPLC_NATIVE_PROFILE_KEY, name=HPLC_NATIVE_PROFILE_NAME,
             is_addon=False, vials_required=1, fulfillment_role="hplc",
-            fulfillment_dim="role", sort_order=0, active=True,
+            fulfillment_dim="role", sort_order=0, active=False,
             coa_archetype=None,
         )
         db.add(prof)

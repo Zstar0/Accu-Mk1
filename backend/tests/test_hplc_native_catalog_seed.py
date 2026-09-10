@@ -46,22 +46,29 @@ def test_seed_creates_five_mk1_services_in_analytical(db_session):
 
 
 def test_seed_creates_profile_with_ordered_members(db_session):
+    """Finding 2 (final review): seeded INACTIVE — activating it is an
+    explicit flip-runbook step, not something the boot seed decides."""
     from catalog.hplc_native_seed import seed_hplc_native_catalog, HPLC_NATIVE_PROFILE_KEY
     from models import AnalysisProfile
     seed_hplc_native_catalog(db_session)
     prof = db_session.query(AnalysisProfile).filter_by(key=HPLC_NATIVE_PROFILE_KEY).one()
     assert (prof.is_addon, prof.vials_required, prof.fulfillment_role,
             prof.fulfillment_dim, prof.coa_archetype, prof.active) == (
-        False, 1, "hplc", "role", None, True)
+        False, 1, "hplc", "role", None, False)
     assert [s.keyword for s in prof.analysis_services] == list(KEYWORDS)
 
 
 def test_seed_is_idempotent_and_keeps_admin_edits(db_session):
+    """Finding 2: the seed mints the profile INACTIVE; an admin flipping
+    active=True (the flip-runbook step) must survive a re-seed exactly like
+    any other admin edit — the seed never resurrects/reverts it."""
     from catalog.hplc_native_seed import seed_hplc_native_catalog
     from models import AnalysisProfile, AnalysisService
     seed_hplc_native_catalog(db_session)
     prof = db_session.query(AnalysisProfile).filter_by(key="hplc-purity-identity").one()
+    assert prof.active is False   # seeded inactive
     prof.vials_required = 2          # admin edit
+    prof.active = True               # admin flip-runbook step
     svc = db_session.query(AnalysisService).filter_by(keyword="HPLC-PURITY").one()
     svc.title = "Purity (edited)"    # admin edit
     db_session.commit()
@@ -69,12 +76,15 @@ def test_seed_is_idempotent_and_keeps_admin_edits(db_session):
     assert report == {"services": 0, "profile": 0, "members": 0, "specs": 0}
     assert db_session.query(AnalysisService).count() == 5
     assert prof.vials_required == 2 and svc.title == "Purity (edited)"
+    assert prof.active is True
 
 
 def test_seed_skips_when_department_missing(db_session, caplog):
     """No Analytical department (fresh dev DB before backfill): services still
-    seed with department_id NULL and a WARNING — backfill_departments'
-    HPLC-% LIKE rescue tags them on the same boot."""
+    seed with department_id NULL and a WARNING — backfill_departments runs
+    BEFORE this seeder in database.init_db, so it can't have tagged rows
+    that didn't exist yet; its HPLC-% LIKE rescue only catches them on the
+    NEXT boot."""
     from catalog.hplc_native_seed import seed_hplc_native_catalog
     from models import AnalysisService
     with caplog.at_level("WARNING"):
@@ -234,3 +244,82 @@ def test_seeded_services_match_admin_create_contract(db_session):
     seed_hplc_native_catalog(db_session)
     for svc in db_session.query(AnalysisService).all():
         validate_new_keyword(db_session, svc.keyword, exclude_id=svc.id)
+
+
+def test_seeded_inactive_profile_hidden_from_manage_analyses_picker(db_session):
+    """Finding 2: native_profiles_for_parent (the Manage Analyses picker
+    payload) filters on AnalysisProfile.active.is_(True). The seed mints
+    hplc-purity-identity INACTIVE specifically so it does not appear as
+    addable on every existing sample on deploy day -- assert that directly
+    against the real picker function, not just the raw `active` column."""
+    from catalog.hplc_native_seed import seed_hplc_native_catalog
+    from lims_analyses.manage_native import native_profiles_for_parent
+    from models import LimsSample
+
+    seed_hplc_native_catalog(db_session)
+    parent = LimsSample(sample_id="TEST-PICKER-1", sample_type="x", status="received")
+    db_session.add(parent)
+    db_session.commit()
+
+    profiles = native_profiles_for_parent(db_session, parent=parent)
+    assert "hplc-purity-identity" not in {p["key"] for p in profiles}
+
+
+def test_verify_demand_catalog_logs_no_violation_for_inactive_seeded_profile(db_session, caplog):
+    """Finding 2: hplc-purity-identity is not one of the four
+    LEGACY_DEMAND_KEYS, and it IS role-dim with a fulfillment_role -- the
+    only demand_verify checks that would fire on an inactive role-dim
+    profile are scoped to `role_dim` (active-only) by controller ruling, so
+    seeding it inactive must not trip verify_demand_catalog at all."""
+    from catalog.demand_verify import verify_demand_catalog
+    from catalog.hplc_native_seed import seed_hplc_native_catalog
+
+    seed_hplc_native_catalog(db_session)
+    with caplog.at_level("ERROR"):
+        violations = verify_demand_catalog(db_session)
+    assert not any("hplc-purity-identity" in v for v in violations)
+    assert not any("hplc-purity-identity" in r.message for r in caplog.records)
+
+
+def test_keyword_collision_skips_service_and_aborts_profile(db_session, caplog):
+    """Finding 3: a pre-existing senaite-origin HPLC-PURITY row must block
+    the mk1 seed from minting a cross-origin duplicate under the same
+    keyword. No mk1 duplicate, an ERROR logged, and (per the controller
+    ruling) no profile created at all -- five members or none."""
+    from catalog.hplc_native_seed import (HPLC_NATIVE_PROFILE_KEY,
+                                          seed_hplc_native_catalog)
+    from models import AnalysisProfile, AnalysisService
+
+    senaite_row = AnalysisService(title="HPLC Purity (SENAITE)", keyword="HPLC-PURITY",
+                                  origin="senaite")
+    db_session.add(senaite_row)
+    db_session.commit()
+
+    with caplog.at_level("ERROR"):
+        report = seed_hplc_native_catalog(db_session)
+
+    mk1_dupes = (db_session.query(AnalysisService)
+                 .filter_by(keyword="HPLC-PURITY", origin="mk1").all())
+    assert mk1_dupes == []
+    assert report["profile"] == 0
+    assert db_session.query(AnalysisProfile).filter_by(key=HPLC_NATIVE_PROFILE_KEY).one_or_none() is None
+    assert any("hplc_native_seed.keyword_collision" in r.message
+               and "HPLC-PURITY" in r.message for r in caplog.records)
+    assert any("hplc_native_seed.profile_creation_aborted" in r.message
+               for r in caplog.records)
+
+    # The other four (non-colliding) services still seed normally.
+    other_kws = {kw for kw in KEYWORDS if kw != "HPLC-PURITY"}
+    seeded = {s.keyword for s in db_session.query(AnalysisService)
+              .filter(AnalysisService.origin == "mk1").all()}
+    assert seeded == other_kws
+    assert report["services"] == 4
+
+    # Re-running after the collision is resolved (senaite row renamed away)
+    # lets the seed complete on the next boot.
+    senaite_row.keyword = "HPLC-PURITY-LEGACY"
+    db_session.commit()
+    report2 = seed_hplc_native_catalog(db_session)
+    assert report2["services"] == 1 and report2["profile"] == 1 and report2["members"] == 5
+    prof = db_session.query(AnalysisProfile).filter_by(key=HPLC_NATIVE_PROFILE_KEY).one()
+    assert [s.keyword for s in prof.analysis_services] == list(KEYWORDS)
