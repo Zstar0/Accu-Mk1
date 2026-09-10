@@ -83,37 +83,51 @@ _ROOT_INDEXES = (
 )
 
 
-def _last_create_for(stmts, name):
-    """The LAST CREATE for an index name is what a boot leaves in place."""
-    hits = [s for s in stmts if f"CREATE UNIQUE INDEX IF NOT EXISTS {name}" in s]
-    assert hits, f"no CREATE for {name}"
-    return hits[-1]
+def _do_block_for(stmts, name):
+    """The LAST statement mentioning an index name is the atomic DO $$
+    block that widens it — a boot leaves that block's effect in place."""
+    hits = [s for s in stmts if name in s]
+    assert hits, f"no statement mentions {name}"
+    last = hits[-1]
+    assert "DO $$" in last, f"last statement for {name} is not a DO block: {last!r}"
+    return last
 
 
-def test_root_indexes_become_slot_aware_last_boot_wins():
+def test_root_indexes_widen_atomically():
+    """Each of the five root indexes must be widened by ONE atomic DO $$
+    block (DROP + CREATE inside a single transaction), never a standalone
+    DROP followed by a standalone CREATE — _run_migrations swallows a
+    failing CREATE as migration_skipped, so a DROP that already committed
+    would silently delete the identity-uniqueness guarantee. (Two of these
+    five names — the plain _root, non-_id_root pair — also carry an OLDER,
+    pre-existing standalone DROP+CREATE pair earlier in the migrations list
+    from prior, out-of-scope tasks; that history predates this slice and is
+    not what this test or Finding B govern. What matters is that nothing
+    mentions the index AFTER its atomic widen block, i.e. the DO block is
+    genuinely the last word.)"""
     stmts = _captured()
     for name in _ROOT_INDEXES:
-        last = _last_create_for(stmts, name)
-        assert "COALESCE(slot, 0)" in last, name
-        # a DROP must precede the final CREATE (IF NOT EXISTS is a no-op on
-        # the old-shaped index otherwise)
-        drop_positions = [i for i, s in enumerate(stmts) if s.strip() == f"DROP INDEX IF EXISTS {name}"]
-        create_position = max(i for i, s in enumerate(stmts)
-                              if f"CREATE UNIQUE INDEX IF NOT EXISTS {name}" in s)
-        assert drop_positions and max(drop_positions) < create_position, name
+        # _do_block_for already asserts the LAST statement mentioning this
+        # name is a DO $$ block, not a standalone "DROP INDEX IF EXISTS" —
+        # i.e. whatever a boot leaves in place is the atomic widen, never a
+        # standalone DROP paired with a swallow-able CREATE.
+        block = _do_block_for(stmts, name)
+        assert f"DROP INDEX {name}" in block, name
+        assert f"CREATE UNIQUE INDEX {name}" in block, name
+        assert "COALESCE(slot, 0)" in block, name
 
 
 def test_slot_aware_indexes_keep_their_predicates():
     """Widening must not loosen the WHERE clauses — copy them verbatim."""
     stmts = _captured()
-    sub_root = _last_create_for(stmts, "uq_lims_analyses_sub_service_root")
+    sub_root = _do_block_for(stmts, "uq_lims_analyses_sub_service_root")
     assert "retest_of_id IS NULL AND lims_sub_sample_pk IS NOT NULL" in sub_root
     assert "review_state NOT IN ('retracted', 'rejected')" in sub_root
-    parent_root = _last_create_for(stmts, "uq_lims_analyses_parent_service_root")
+    parent_root = _do_block_for(stmts, "uq_lims_analyses_parent_service_root")
     assert "provenance = 'canonical'" in parent_root
-    parent_id_root = _last_create_for(stmts, "uq_lims_analyses_parent_service_id_root")
+    parent_id_root = _do_block_for(stmts, "uq_lims_analyses_parent_service_id_root")
     assert "provenance = 'canonical'" in parent_id_root
-    ordered = _last_create_for(stmts, "uq_lims_analyses_parent_service_ordered")
+    ordered = _do_block_for(stmts, "uq_lims_analyses_parent_service_ordered")
     assert "provenance = 'ordered'" in ordered
 
 
@@ -127,21 +141,31 @@ def test_slice1_boot_statements_execute_against_live_db():
     from sqlalchemy.exc import IntegrityError
     from database import SessionLocal
 
-    # Task 1 (4 statements) and Task 2 (10 statements) are the final
-    # contiguous block appended to the migrations list — nothing else is
-    # appended after them, so the last 14 captured statements ARE exactly
-    # these. (Marker-based substring matching is unsafe here: other tables
-    # also gain a `peptide_id` column, and these five index names have
-    # earlier DROP/CREATE history in the same list — both give false
-    # positives on a substring filter.)
+    # Task 1's four statements are identified by markers scoped to
+    # lims_analyses (bare "peptide_id"/"slot" substrings are too loose —
+    # other tables gain their own peptide_id columns/indexes elsewhere in
+    # this same migrations list). Task 2/Finding-B's five atomic widen
+    # blocks are identified by `COALESCE(slot, 0)`, which appears only
+    # inside those five DO $$ blocks (verified: no other statement in
+    # database.py uses that literal). Position-based slicing (`stmts[-14:]`)
+    # is deliberately NOT used — Finding B replaced the five standalone
+    # DROP+CREATE pairs with five DO blocks, changing the statement count
+    # for this section from 14 to 9.
     all_stmts = _captured()
-    stmts = all_stmts[-14:]
-    assert "ADD COLUMN IF NOT EXISTS peptide_id" in stmts[0]
-    assert "ADD COLUMN IF NOT EXISTS slot" in stmts[1]
-    assert "ck_lims_analyses_slot_range" in stmts[2]
-    assert "ix_lims_analyses_peptide_id" in stmts[3]
-    assert sum(1 for s in stmts if "COALESCE(slot, 0)" in s) == 5
-    assert sum(1 for s in stmts if s.strip().startswith("DROP INDEX IF EXISTS uq_lims_analyses_")) == 5
+    task1 = [s for s in all_stmts
+             if "lims_analyses ADD COLUMN IF NOT EXISTS peptide_id" in s
+             or "lims_analyses ADD COLUMN IF NOT EXISTS slot" in s
+             or "ck_lims_analyses_slot_range" in s
+             or "ix_lims_analyses_peptide_id" in s]
+    do_blocks = [s for s in all_stmts if "COALESCE(slot, 0)" in s]
+    stmts = task1 + do_blocks
+    assert len(stmts) == 9
+    assert any("ADD COLUMN IF NOT EXISTS peptide_id" in s for s in task1)
+    assert any("ADD COLUMN IF NOT EXISTS slot" in s for s in task1)
+    assert any("ck_lims_analyses_slot_range" in s for s in task1)
+    assert any("ix_lims_analyses_peptide_id" in s for s in task1)
+    assert len(do_blocks) == 5
+    assert all("DO $$" in s for s in do_blocks)
 
     s = SessionLocal()
     conn = s.connection()
