@@ -726,22 +726,62 @@ def _run_migrations():
         # senaite-writeback: retracted/rejected parent rows must not block
         # re-promotion — "retract the parent row, then re-promote" is the
         # documented undo. Rebuild the parent-tier root index with a state
-        # exclusion (drop+create is idempotent as a pair).
+        # exclusion.
         # native-manage-analyses: retracted/rejected vial rows must not block
         # re-adding the same service (mirrors the parent-tier index fix).
-        "DROP INDEX IF EXISTS uq_lims_analyses_sub_service_root",
+        # hplc-native-slice1 Finding 1 fix: this pair used to be an
+        # unconditional standalone DROP + CREATE, re-run every boot ("idempotent
+        # as a pair"). That stopped being true once M1 slot data existed: two
+        # rows can now share (host, keyword) differing only by slot, so the
+        # unwidened CREATE below fails on real data (migration_skipped), and
+        # the DROP that already committed leaves uniqueness unenforced until
+        # the widened DO $$ block further down recreates it. Guarded exactly
+        # like that later block so this pair becomes a no-op once the index
+        # is already widened, instead of rebuilding (and briefly dropping) it
+        # on every single boot.
         """
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_sub_service_root
-            ON lims_analyses (lims_sub_sample_pk, keyword)
-            WHERE retest_of_id IS NULL AND lims_sub_sample_pk IS NOT NULL
-              AND review_state NOT IN ('retracted', 'rejected')
+        DO $$ BEGIN
+          IF EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_sub_service_root'
+              AND indexdef NOT LIKE '%COALESCE%'
+          ) THEN
+            EXECUTE 'DROP INDEX uq_lims_analyses_sub_service_root';
+          END IF;
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_sub_service_root'
+          ) THEN
+            EXECUTE $idx$
+              CREATE UNIQUE INDEX uq_lims_analyses_sub_service_root
+                ON lims_analyses (lims_sub_sample_pk, keyword)
+                WHERE retest_of_id IS NULL AND lims_sub_sample_pk IS NOT NULL
+                  AND review_state NOT IN ('retracted', 'rejected')
+            $idx$;
+          END IF;
+        END $$
         """,
-        "DROP INDEX IF EXISTS uq_lims_analyses_parent_service_root",
         """
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_parent_service_root
-            ON lims_analyses (lims_sample_pk, keyword)
-            WHERE retest_of_id IS NULL AND lims_sample_pk IS NOT NULL
-              AND review_state NOT IN ('retracted', 'rejected')
+        DO $$ BEGIN
+          IF EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_parent_service_root'
+              AND indexdef NOT LIKE '%COALESCE%'
+          ) THEN
+            EXECUTE 'DROP INDEX uq_lims_analyses_parent_service_root';
+          END IF;
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_parent_service_root'
+          ) THEN
+            EXECUTE $idx$
+              CREATE UNIQUE INDEX uq_lims_analyses_parent_service_root
+                ON lims_analyses (lims_sample_pk, keyword)
+                WHERE retest_of_id IS NULL AND lims_sample_pk IS NOT NULL
+                  AND review_state NOT IN ('retracted', 'rejected')
+            $idx$;
+          END IF;
+        END $$
         """,
         # Sub-sample 'promoted' workflow state. Re-create the review_state CHECK
         # to allow 'promoted', then backfill: sub-samples promoted under the old
@@ -1142,13 +1182,32 @@ def _run_migrations():
         # Make the parent-tier root index provenance-aware: a shadow mirror
         # row must never occupy the canonical slot, so 'canonical' rows and
         # 'shadow' rows can coexist for the same (parent, keyword).
-        "DROP INDEX IF EXISTS uq_lims_analyses_parent_service_root",
+        # hplc-native-slice1 Finding 1 fix: guarded like the sibling pair
+        # above and the widened DO $$ block further down — see that block's
+        # comment for why an unconditional DROP+CREATE here is unsafe once
+        # slot data exists.
         """
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_parent_service_root
-            ON lims_analyses (lims_sample_pk, keyword)
-            WHERE retest_of_id IS NULL AND lims_sample_pk IS NOT NULL
-              AND review_state NOT IN ('retracted', 'rejected')
-              AND provenance = 'canonical'
+        DO $$ BEGIN
+          IF EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_parent_service_root'
+              AND indexdef NOT LIKE '%COALESCE%'
+          ) THEN
+            EXECUTE 'DROP INDEX uq_lims_analyses_parent_service_root';
+          END IF;
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_parent_service_root'
+          ) THEN
+            EXECUTE $idx$
+              CREATE UNIQUE INDEX uq_lims_analyses_parent_service_root
+                ON lims_analyses (lims_sample_pk, keyword)
+                WHERE retest_of_id IS NULL AND lims_sample_pk IS NOT NULL
+                  AND review_state NOT IN ('retracted', 'rejected')
+                  AND provenance = 'canonical'
+            $idx$;
+          END IF;
+        END $$
         """,
         # parent-analysis-native-mirror Task 3: fail-loud backstop for the
         # shadow mirror's own "live row" invariant. At most one non-retested
@@ -2048,13 +2107,17 @@ def _run_migrations():
         # (test_identity_indexes.py::test_migration_list_contains_both_statements
         # pins "no standalone DROP" for exactly this reason). The IF EXISTS /
         # IF NOT EXISTS guards make re-running this block on every boot a
-        # no-op once the index is already widened.
+        # no-op once the index is already widened. Guard predicate matches
+        # on indexdef NOT LIKE '%COALESCE%' (not '%COALESCE(slot%'): Postgres
+        # normalizes the stored indexdef to COALESCE((slot)::integer, 0), so
+        # a literal '%COALESCE(slot%' substring never matches a widened
+        # index and the guard would fire (drop + rebuild) on every boot.
         """
         DO $$ BEGIN
           IF EXISTS (
             SELECT 1 FROM pg_indexes
             WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_sub_service_root'
-              AND indexdef NOT LIKE '%COALESCE(slot%'
+              AND indexdef NOT LIKE '%COALESCE%'
           ) THEN
             EXECUTE 'DROP INDEX uq_lims_analyses_sub_service_root';
           END IF;
@@ -2076,7 +2139,7 @@ def _run_migrations():
           IF EXISTS (
             SELECT 1 FROM pg_indexes
             WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_sub_service_id_root'
-              AND indexdef NOT LIKE '%COALESCE(slot%'
+              AND indexdef NOT LIKE '%COALESCE%'
           ) THEN
             EXECUTE 'DROP INDEX uq_lims_analyses_sub_service_id_root';
           END IF;
@@ -2098,7 +2161,7 @@ def _run_migrations():
           IF EXISTS (
             SELECT 1 FROM pg_indexes
             WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_parent_service_root'
-              AND indexdef NOT LIKE '%COALESCE(slot%'
+              AND indexdef NOT LIKE '%COALESCE%'
           ) THEN
             EXECUTE 'DROP INDEX uq_lims_analyses_parent_service_root';
           END IF;
@@ -2121,7 +2184,7 @@ def _run_migrations():
           IF EXISTS (
             SELECT 1 FROM pg_indexes
             WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_parent_service_id_root'
-              AND indexdef NOT LIKE '%COALESCE(slot%'
+              AND indexdef NOT LIKE '%COALESCE%'
           ) THEN
             EXECUTE 'DROP INDEX uq_lims_analyses_parent_service_id_root';
           END IF;
@@ -2144,7 +2207,7 @@ def _run_migrations():
           IF EXISTS (
             SELECT 1 FROM pg_indexes
             WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_parent_service_ordered'
-              AND indexdef NOT LIKE '%COALESCE(slot%'
+              AND indexdef NOT LIKE '%COALESCE%'
           ) THEN
             EXECUTE 'DROP INDEX uq_lims_analyses_parent_service_ordered';
           END IF;

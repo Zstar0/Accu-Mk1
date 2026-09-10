@@ -98,13 +98,17 @@ def test_root_indexes_widen_atomically():
     block (DROP + CREATE inside a single transaction), never a standalone
     DROP followed by a standalone CREATE — _run_migrations swallows a
     failing CREATE as migration_skipped, so a DROP that already committed
-    would silently delete the identity-uniqueness guarantee. (Two of these
-    five names — the plain _root, non-_id_root pair — also carry an OLDER,
-    pre-existing standalone DROP+CREATE pair earlier in the migrations list
-    from prior, out-of-scope tasks; that history predates this slice and is
-    not what this test or Finding B govern. What matters is that nothing
-    mentions the index AFTER its atomic widen block, i.e. the DO block is
-    genuinely the last word.)"""
+    would silently delete the identity-uniqueness guarantee. (Finding 1 fix:
+    two of these five names — the plain _root, non-_id_root pair — used to
+    also carry an OLDER, pre-existing standalone DROP+CREATE pair earlier in
+    the migrations list, from prior tasks that predate this slice. Once M1
+    slot data exists, that legacy pair's unwidened CREATE fails on real
+    duplicate rows and the already-committed DROP leaves the index briefly
+    missing on every boot — the same hazard this test polices, reached
+    through a different door. Those legacy pairs were converted to the same
+    guarded DO $$ idiom; see test_no_standalone_drop_remains_for_root_indexes
+    for the assertion that no standalone DROP remains anywhere for any of
+    the five names.)"""
     stmts = _captured()
     for name in _ROOT_INDEXES:
         # _do_block_for already asserts the LAST statement mentioning this
@@ -115,6 +119,22 @@ def test_root_indexes_widen_atomically():
         assert f"DROP INDEX {name}" in block, name
         assert f"CREATE UNIQUE INDEX {name}" in block, name
         assert "COALESCE(slot, 0)" in block, name
+
+
+def test_no_standalone_drop_remains_for_root_indexes():
+    """Finding 1 fix also converted the pre-slice legacy
+    `DROP INDEX IF EXISTS <name>` + `CREATE UNIQUE INDEX IF NOT EXISTS <name>`
+    pairs (two sites for uq_lims_analyses_sub_service_root /
+    uq_lims_analyses_parent_service_root, one extra site for the latter)
+    into the same guarded DO $$ idiom used by the five Task-2 widen blocks.
+    Those pairs used to run unconditionally on every boot; once M1 slot data
+    exists the old unwidened CREATE fails on real duplicate rows, and the
+    already-committed DROP leaves root uniqueness briefly unenforced. Assert
+    no standalone `DROP INDEX IF EXISTS <name>` statement remains anywhere in
+    the full migrations list for any of the five root index names."""
+    stmts = _captured()
+    for name in _ROOT_INDEXES:
+        assert not any(f"DROP INDEX IF EXISTS {name}" in s for s in stmts), name
 
 
 def test_slot_aware_indexes_keep_their_predicates():
@@ -202,6 +222,67 @@ def test_slice1_boot_statements_execute_against_live_db():
         with pytest.raises(IntegrityError):
             conn.execute(ins, {"v": vial_pk, "s": svc_id, "slot": None})
         sp.rollback()
+    finally:
+        outer.rollback()
+        s.close()
+
+
+def test_root_index_widen_guard_is_idempotent_and_preserves_oid():
+    """Finding 1 (final review): the guard `indexdef NOT LIKE '%COALESCE(slot%'`
+    is TRUE even on an already-widened index, because Postgres normalizes the
+    stored indexdef to `COALESCE((slot)::integer, 0)` — the literal substring
+    `COALESCE(slot` never appears. That made every boot drop and rebuild all
+    five unique indexes under an ACCESS EXCLUSIVE lock. The fix widened the
+    guard to `NOT LIKE '%COALESCE%'`. Prove the fix on SEMANTICS, not source
+    text: run the five DO blocks against the live dev DB inside a rolled-back
+    savepoint, assert the guard condition is False for all five afterward
+    (it would not fire again), run the blocks a SECOND time, and assert the
+    five index OIDs are byte-identical between the two runs (no drop+recreate
+    happened on the second pass)."""
+    from sqlalchemy import text
+    from database import SessionLocal
+
+    all_stmts = _captured()
+    do_blocks = [s for s in all_stmts if "COALESCE(slot, 0)" in s]
+    assert len(do_blocks) == 5
+
+    s = SessionLocal()
+    conn = s.connection()
+    outer = conn.begin_nested()
+    try:
+        # First pass: bring the indexes to the widened state (no-op if a
+        # prior boot on this shared dev DB already widened them).
+        for stmt in do_blocks:
+            conn.execute(text(stmt))
+
+        guard_rows = dict(conn.execute(text(
+            "SELECT indexname, (indexdef NOT LIKE '%COALESCE%') FROM pg_indexes "
+            "WHERE tablename='lims_analyses' AND indexname LIKE 'uq_lims_analyses_%'"
+        )).all())
+        for name in _ROOT_INDEXES:
+            assert guard_rows[name] is False, (
+                f"{name}: guard would still fire (indexdef missing COALESCE) -> "
+                f"{guard_rows[name]!r}"
+            )
+
+        oid_rows_before = dict(conn.execute(text(
+            "SELECT relname, oid FROM pg_class WHERE relname = ANY(:names)"
+        ), {"names": list(_ROOT_INDEXES)}).all())
+        assert set(oid_rows_before) == set(_ROOT_INDEXES)
+
+        # Second pass: re-run the identical DO blocks. If the guard still
+        # misfired, this would DROP + CREATE each index and mint new OIDs.
+        for stmt in do_blocks:
+            conn.execute(text(stmt))
+
+        oid_rows_after = dict(conn.execute(text(
+            "SELECT relname, oid FROM pg_class WHERE relname = ANY(:names)"
+        ), {"names": list(_ROOT_INDEXES)}).all())
+
+        assert oid_rows_before == oid_rows_after, (
+            "index OIDs changed on re-run -> guard fired and rebuilt: "
+            f"before={oid_rows_before} after={oid_rows_after}"
+        )
     finally:
         outer.rollback()
         s.close()
