@@ -9,6 +9,16 @@
 - **Cancel sample** from any state: `POST /api/samples/{id}/cancel` (dry-run preview, reason, confirm; 409 already cancelled / no edge, 412 preview-or-requirements) plus the sample page's "Cancel sample…" action with a typed confirm. Pending analysis rows are cancelled (new analysis-tier `cancel` verb, `cancelled` state) and released from their worksheets; finished rows stay as history; a published COA stays live and the dialog says so. Catalog `cancel` edges seeded from every sample state.
 - **Catalog is the source of truth for status vocabulary**: the status writers accept any active catalog state (Settings → Workflow), badges take their label from the catalog with the hardcoded map as fallback, and a seeded partial-publish pathway (`sample_received → waiting_for_addon_results` on `publish`, back to `to_be_verified` on `submit`) keeps the add-on-pending badge meaningful.
 
+## v1.16.3 — 2026-09-09
+
+### Fixed
+- **SLA Performance: `thin` and `min_timed_for_family` reached the browser.** Both were dropped by FastAPI's `response_model` in 1.16.2 — `SlaPerfGatingFamilyOut` and `SlaPerfGatingOut` never declared them, and Pydantic ignores extras on input, so nothing raised at any layer. The department table therefore rendered heavy metals (5 timed samples) with no "too few" marker and its over-target percentage reddened, and the headline sentence could name it as the gating department: exactly the misreading the flag exists to prevent. Regression guard `test_response_model_declares_every_key_the_engine_emits` walks the *engine's* output against the real response models and fails on any undeclared key at any depth — walking the route's response instead passes vacuously, because a stripped key is already absent from it. (#181)
+
+## v1.16.2 — 2026-09-09
+
+### Added
+- **SLA Performance report** (`GET /reports/sla-performance`, [SlaPerformanceReport.tsx](src/components/reports/SlaPerformanceReport.tsx)) under Reports → SLA Performance. Companion to Lab Throughput: that one counts the work arriving, this one measures what came back out and whether it met target. Receipt-month cohorts that count still-open work against the rate (the delivery-month view drops it and flatters the lab), a delivery curve against the target line, **which department finished last on late samples** — the gating cut, per (sample, family) `max(verified_at)` — the bench-versus-publishing stage split, and an at-risk board of open work by business hours remaining. Filters for customer, order, department and family, with facets computed before scoping, backed by a 60-second per-process row cache like the sibling report. Elapsed time and tier precedence come from `sla_engine` (`compute_business_minutes`, `resolve_sla_tier`) and family classification from `throughput.classify_keyword`, so the report cannot drift from the app or from its sibling. Target resolves per sample, so the numbers follow the day a service group is given its own tier. Pure engine in `backend/sla_perf.py`.
+
 ## v1.16.1 — 2026-09-09
 
 ### Added
