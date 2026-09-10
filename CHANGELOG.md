@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.18.0 — 2026-09-10
+
 ### Changed
 - **Promote writes Accu-Mk1 first** (Handler ruling 2026-09-10). `POST /api/lims-analyses/promote` used to write and verify the SENAITE analysis line and only then commit the Mk1 rows, failing closed with a 502 if SENAITE refused. That order dated from when SENAITE was the source of truth; post read-independence the canonical rows are what Sample Details and the COA wire actually read, so it put the mirror ahead of the source of truth — and when the half that failed was the Mk1 commit, the family was left with a verified SENAITE line, no Mk1 promotion, and (because the lock map reads that mirror) no Promote verb in the UI either. Both P-2553 and P-2606 landed in that state and needed `promote_to_parent` replayed by hand against production. Promote now commits the Mk1 promotion **before** SENAITE is contacted, then tees the write-back. A write-back failure leaves the promotion standing, logs `senaite_promote_writeback_failed`, and records the same event on the parent so the lagging mirror is visible in the activity feed rather than only in a log line that rotates. Unchanged: `origin='mk1'` services still skip the write-back entirely, a locked SENAITE line still diverges deliberately and records `senaite_line_diverged`, and a Mk1 commit failure still fails the request — but now with nothing written to SENAITE and so nothing to reconcile. Contract change: promote no longer returns 502 when SENAITE is unreachable; the two tests that pinned the old behaviour were rewritten deliberately, not repaired.
 
