@@ -1443,6 +1443,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 **Interfaces:**
 - Every row type gains `priority: Optional[EffectiveOut]` (shape `{key, rank, source_level, source_id}`), populated once per response via `service.load_effective`. Inbox items keep their legacy `priority: str` field for one release, now filled from `effective.key` (`default` → `"normal"` for the old consumers) so the current frontend keeps working until the frontend plan lands.
 - The activity endpoint gains lines from `priority_audit`.
+- Page payloads the frontend set-controls need (frontend plan Tasks 8–9): the sample-details lookup result (`SenaiteLookupResult` builder in `main.py` and `sub_samples/registry_details.py`) gains `registry_pk: Optional[int]`, `explicit_priority_key: Optional[str]`, `priority: Optional[dict]`; `SubSampleResponse` gains `priority_key: Optional[str]`; order payloads (`OrderStatusPage` source endpoints under `/explorer/orders` and `/orders/{order_number}`) gain `priority_key: Optional[str]`, `priority_source: Optional[str]`, `effective_priority: Optional[dict]` (customer-inherited: resolve with `explicit={"order": order.priority_key, "customer": <customer row key>}`).
 
 - [ ] **Step 1: Write the failing tests**
 

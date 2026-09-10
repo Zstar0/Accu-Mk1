@@ -1095,6 +1095,45 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Modify: `src/components/senaite/SampleActivityLog.tsx` — render `source === 'priority_audit'` events with the glyph-colored dot and the description verbatim
 - Test: extend an existing activity-log test if present; otherwise `src/test/sample-activity-priority.test.tsx` asserting the description "Priority: Inherit → High" renders.
 
-- [ ] **Step 1:** Add the test, run to fail, implement the render branch, run to pass.
-- [ ] **Step 2:** `npm run check:all` (typecheck, lint, ast:lint, format:check, rust, tests). Fix anything in changed files; pre-existing failures are listed in the vault (App.test, peptide-requests-list, worksheets-inbox-lanes, PackagingPanel) and must be unchanged.
-- [ ] **Step 3:** `gitnexus_detect_changes()`; commit; push; PR titled `feat(priority): sample priority — data-driven priorities, four-level resolution, glyphs, SLA mapping` with the spec and both plans linked; release as a Mk1 minor (1.17.0) per the accumark-deploy skill (full deploy; migration runs on backend boot).
+- [ ] **Step 1: Write the failing test**
+
+```tsx
+// src/test/sample-activity-priority.test.tsx
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+
+vi.mock('@/lib/api', async (orig) => ({ ...(await orig<typeof import('@/lib/api')>()),
+  getSampleActivity: vi.fn(async () => [
+    { timestamp: '2026-09-09T17:00:00Z', type: 'priority', description: 'Priority: Inherit → High', source: 'priority_audit', user_id: 5, note: 'VIP' },
+  ]) }))
+vi.mock('@/lib/api-priorities', () => ({ getPriorities: vi.fn(async () => []) }))
+import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
+
+describe('SampleActivityLog priority lines', () => {
+  it('renders a priority_audit event with its description and note', async () => {
+    const qc = new QueryClient()
+    render(<QueryClientProvider client={qc}><SampleActivityLog sampleId="PB-0512" /></QueryClientProvider>)
+    expect(await screen.findByText('Priority: Inherit → High')).toBeInTheDocument()
+    expect(screen.getByText('VIP')).toBeInTheDocument()
+  })
+})
+```
+
+(Read `SampleActivityLog`'s props first; if it takes the events rather than fetching, pass them directly and drop the `getSampleActivity` mock.)
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `npx vitest run src/test/sample-activity-priority.test.tsx`
+Expected: FAIL — the unknown `source` renders without the description, or the note is not shown.
+
+- [ ] **Step 3: Implement**
+
+In `SampleActivityLog.tsx`, in the per-source render switch, add a branch for `source === 'priority_audit'` that renders an `ArrowUpNarrowWide` icon (lucide) as the row marker, the `description` as the primary text, and `note` in muted text when present.
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `npx vitest run src/test/sample-activity-priority.test.tsx`
+Expected: 1 passed.
+- [ ] **Step 5:** `npm run check:all` (typecheck, lint, ast:lint, format:check, rust, tests). Fix anything in changed files; pre-existing failures are listed in the vault (App.test, peptide-requests-list, worksheets-inbox-lanes, PackagingPanel) and must be unchanged.
+- [ ] **Step 6:** `gitnexus_detect_changes()`; commit; push; PR titled `feat(priority): sample priority — data-driven priorities, four-level resolution, glyphs, SLA mapping` with the spec and both plans linked; release as a Mk1 minor (1.17.0) per the accumark-deploy skill (full deploy; migration runs on backend boot).
