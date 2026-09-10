@@ -10643,6 +10643,74 @@ def reports_sla_performance(
     return report
 
 
+# ── Reports read-model: source-set SQL ─────────────────────────────
+# `published_coa_results` mirrors published PRIMARY COAs only — one row per
+# analyte per LAB RESULT, which is the grain every reader assumes.
+#
+# Additional COAs (children: `parent_generation_id IS NOT NULL`) are the same
+# lab result reissued under another brand. They carry no extra lab workload, and
+# every one of them sits on a sample that already has a published primary COA.
+# Because a child mints its OWN verification_code, the readers' dedupe
+# (`DISTINCT ON (verification_code)` in /reports/dashboard) cannot collapse it,
+# and /reports/purity-trend does not dedupe at all — so admitting children would
+# double-count dashboard totals and put a duplicate point on every trend chart.
+# Handler ruling 2026-09-10: ACOAs are copies and must never count.
+#
+# The `parent_generation_id IS NULL` predicate below is what enforces that.
+# Extracted into constants so the grain is stated once and can be exercised
+# directly in tests (backend/tests/test_api_reports_sync_grain.py).
+_REPORTS_SOURCE_COUNT_SQL = (
+    "SELECT count(*) FROM coa_generations"
+    " WHERE status = 'published' AND parent_generation_id IS NULL"
+)
+
+_REPORTS_SOURCE_CODES_SQL = (
+    "SELECT count(DISTINCT verification_code) FROM coa_generations"
+    " WHERE status = 'published' AND parent_generation_id IS NULL"
+)
+
+# Report-side counts are deliberately UNFILTERED: they report what is physically
+# in the table. The banner compares them against the primary-only source counts,
+# so a mismatch is the signal that the table holds rows it should not (orphans,
+# listed below it on the page) and that Re-sync has work to do. Filtering these
+# would hide exactly the condition the page exists to surface.
+_REPORTS_TABLE_ROWS_SQL = "SELECT count(*) FROM published_coa_results"
+
+_REPORTS_TABLE_CODES_SQL = "SELECT count(DISTINCT verification_code) FROM published_coa_results"
+
+_REPORTS_MISSING_CODES_SQL = """
+    SELECT verification_code FROM coa_generations
+    WHERE status = 'published' AND parent_generation_id IS NULL AND coa_data IS NOT NULL
+      AND verification_code NOT IN (SELECT DISTINCT verification_code FROM published_coa_results)
+"""
+
+# Orphaned = present in the read model but not a published primary. This covers
+# both superseded generations and any additional-COA rows left behind by the
+# 2026-04 creation backfill, which predates this grain rule.
+_REPORTS_ORPHANED_CODES_SQL = """
+    SELECT DISTINCT verification_code FROM published_coa_results
+    WHERE verification_code NOT IN (
+        SELECT verification_code FROM coa_generations
+        WHERE status = 'published' AND parent_generation_id IS NULL
+    )
+"""
+
+_REPORTS_DELETE_ORPHANS_SQL = """
+    DELETE FROM published_coa_results
+    WHERE verification_code NOT IN (
+        SELECT verification_code FROM coa_generations
+        WHERE status = 'published' AND parent_generation_id IS NULL
+    )
+"""
+
+_REPORTS_MISSING_ROWS_SQL = """
+    SELECT id, sample_id, verification_code, coa_data, published_at, created_at
+    FROM coa_generations
+    WHERE status = 'published' AND parent_generation_id IS NULL AND coa_data IS NOT NULL
+      AND verification_code NOT IN (SELECT DISTINCT verification_code FROM published_coa_results)
+"""
+
+
 class ReportsSyncStatus(BaseModel):
     source_published: int
     source_verification_codes: int
@@ -10662,32 +10730,23 @@ async def reports_sync_status(
         with get_integration_db() as conn:
             with conn.cursor() as cur:
                 # Source: coa_generations
-                cur.execute("SELECT count(*) FROM coa_generations WHERE status = 'published'")
+                cur.execute(_REPORTS_SOURCE_COUNT_SQL)
                 source_published = cur.fetchone()[0]
-                cur.execute("SELECT count(DISTINCT verification_code) FROM coa_generations WHERE status = 'published'")
+                cur.execute(_REPORTS_SOURCE_CODES_SQL)
                 source_codes = cur.fetchone()[0]
 
                 # Report table
-                cur.execute("SELECT count(*) FROM published_coa_results")
+                cur.execute(_REPORTS_TABLE_ROWS_SQL)
                 report_rows = cur.fetchone()[0]
-                cur.execute("SELECT count(DISTINCT verification_code) FROM published_coa_results")
+                cur.execute(_REPORTS_TABLE_CODES_SQL)
                 report_codes = cur.fetchone()[0]
 
                 # Missing: in source but not in report table
-                cur.execute("""
-                    SELECT verification_code FROM coa_generations
-                    WHERE status = 'published' AND coa_data IS NOT NULL
-                      AND verification_code NOT IN (SELECT DISTINCT verification_code FROM published_coa_results)
-                """)
+                cur.execute(_REPORTS_MISSING_CODES_SQL)
                 missing = [r[0] for r in cur.fetchall()]
 
                 # Orphaned: in report table but no longer published in source
-                cur.execute("""
-                    SELECT DISTINCT verification_code FROM published_coa_results
-                    WHERE verification_code NOT IN (
-                        SELECT verification_code FROM coa_generations WHERE status = 'published'
-                    )
-                """)
+                cur.execute(_REPORTS_ORPHANED_CODES_SQL)
                 orphaned = [r[0] for r in cur.fetchall()]
 
                 return ReportsSyncStatus(
@@ -10715,21 +10774,11 @@ async def reports_resync(
         with get_integration_db() as conn:
             with conn.cursor() as cur:
                 # Remove orphaned rows
-                cur.execute("""
-                    DELETE FROM published_coa_results
-                    WHERE verification_code NOT IN (
-                        SELECT verification_code FROM coa_generations WHERE status = 'published'
-                    )
-                """)
+                cur.execute(_REPORTS_DELETE_ORPHANS_SQL)
                 removed = cur.rowcount
 
                 # Find missing codes
-                cur.execute("""
-                    SELECT id, sample_id, verification_code, coa_data, published_at, created_at
-                    FROM coa_generations
-                    WHERE status = 'published' AND coa_data IS NOT NULL
-                      AND verification_code NOT IN (SELECT DISTINCT verification_code FROM published_coa_results)
-                """)
+                cur.execute(_REPORTS_MISSING_ROWS_SQL)
                 missing_rows = cur.fetchall()
 
                 def _parse_float(val):
