@@ -1440,8 +1440,9 @@ def derive_variance_demand(services: dict) -> dict:
     The hplc bucket is BW-aware — it reads hplcpurity_identity OR bac_water_panel
     (mirroring derive_base_demand), since both produce chromatography vials and
     are mutually exclusive per order. (Handler decision 2026-06-17.)"""
+    from catalog.hplc_keys import hplc_primary_count
     entitlement = normalize_variance_entitlement({"variance": (services or {}).get("variance")})
-    hplc_total = max(entitlement.get("hplcpurity_identity", 0), entitlement.get("bac_water_panel", 0))
+    hplc_total = max(hplc_primary_count(entitlement), entitlement.get("bac_water_panel", 0))
     return {
         "hplc": max(0, hplc_total - 1),
         "endo": max(0, entitlement.get("endotoxin", 0) - 1),
@@ -1482,7 +1483,8 @@ def derive_base_demand(services: dict, db=None, snapshot: Optional[dict] = None)
     not as the expected steady-state noise it would otherwise be for every
     post-registration legacy-bucket purchase.
     """
-    hplc = bool(services.get("hplcpurity_identity") or services.get("bac_water_panel"))
+    from catalog.hplc_keys import hplc_primary_selected
+    hplc = hplc_primary_selected(services) or bool(services.get("bac_water_panel"))
     endo = bool(services.get("endotoxin"))
     ster = bool(services.get("sterility_pcr"))
     legacy = {
