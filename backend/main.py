@@ -17007,6 +17007,15 @@ def _sla_snapshot_after_touchpoint(db, sample_row) -> int:
     publish. Both raise before any column is mutated, so there is no partial
     snapshot to clean up. Returns the number of samples snapshotted (0 on
     failure) so callers can gate their commit on it.
+
+    CALL GATE (fix round 1): callers must invoke this ONLY when the touchpoint
+    actually transitioned. `sla_snapshot_at` is re-stamped unconditionally by
+    `snapshot.refresh`, so calling it on a deduped replay -- a COA republish
+    re-entering the transition hook, say -- would move the recorded promise to
+    today's mapping and re-grade history, exactly what recording the snapshot
+    at the clock event is meant to prevent. `_record_sample_transition_bg`
+    gates on `wrote_log or wrote_engine`; `_receive_native_phase` is reached
+    only on a real (non-`already`) check-in, so its call needs no flag.
     """
     try:
         from priority.snapshot import refresh as _sla_snapshot
@@ -17788,15 +17797,20 @@ def _record_sample_transition_bg(**kwargs) -> None:
                 attested={"coa_published": True}
                 if _verb == "publish" else None,
             )
-            # Clock-event SLA snapshot (Task 9). Own flag in the commit gate
-            # below: `refresh` only flushes, so a publish where the recorder
-            # deduped and the heal was a no-op would otherwise write snapshot
-            # columns that never commit.
-            _snap_row = _row if _row is not None else db.execute(select(LimsSample).where(
-                LimsSample.sample_id == kwargs["sample_id"]
-            )).scalar_one_or_none()
-            if _snap_row is not None:
-                wrote_snapshot = bool(_sla_snapshot_after_touchpoint(db, _snap_row))
+            # Clock-event SLA snapshot (Task 9). Gated on a REAL transition
+            # (fix round 1): this hook is re-entered on a COA republish, where
+            # the recorder dedupes and the engine is a no-op. `refresh`
+            # re-stamps `sla_snapshot_at` unconditionally, so snapshotting a
+            # deduped replay would move the recorded promise to today's mapping
+            # and re-grade history. Own flag in the commit gate below too:
+            # `refresh` only flushes, so a snapshot taken when nothing else
+            # wrote would otherwise never commit.
+            if wrote_log or wrote_engine:
+                _snap_row = _row if _row is not None else db.execute(select(LimsSample).where(
+                    LimsSample.sample_id == kwargs["sample_id"]
+                )).scalar_one_or_none()
+                if _snap_row is not None:
+                    wrote_snapshot = bool(_sla_snapshot_after_touchpoint(db, _snap_row))
         if wrote_log or wrote_status or wrote_received or wrote_engine or wrote_snapshot:
             db.commit()
     except Exception as log_err:  # noqa: BLE001

@@ -8,7 +8,7 @@ fixture idiom already established in `test_s2s_orders_upsert.py` is used
 instead so the tests leave no rows behind anywhere.
 """
 import os
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -139,10 +139,16 @@ def test_priority_failure_does_not_fail_the_upsert(client, db_session):
 @pytest.fixture
 def session_local(db_session):
     """`database.SessionLocal` for the touchpoint code paths, which open their
-    own short-lived session. Close is a no-op so the fixture keeps the handle."""
+    own short-lived session. Close is a no-op so the fixture keeps the handle.
+
+    `commit` is a spy over the real commit: because close() is a no-op,
+    flushed-but-uncommitted rows stay visible to the test session, so "the row
+    has the column" only proves written, not committed. Tests that care about
+    the commit gate assert on this counter instead. Yields the handle."""
     class _Handle:
         def __init__(self, s):
             self._s = s
+            self.commit = MagicMock(side_effect=s.commit)
 
         def __getattr__(self, name):
             return getattr(self._s, name)
@@ -150,9 +156,10 @@ def session_local(db_session):
         def close(self):
             pass
 
+    handle = _Handle(db_session)
     prev = database.SessionLocal
-    database.SessionLocal = lambda: _Handle(db_session)
-    yield
+    database.SessionLocal = lambda: handle
+    yield handle
     database.SessionLocal = prev
 
 
@@ -198,23 +205,71 @@ def test_receive_page_touchpoint_snapshot_failure_is_fail_open(session_local, db
     assert s.sla_priority_key is None
 
 
-@pytest.mark.parametrize("verb", ["receive", "publish"])
-def test_transition_hook_touchpoint_writes_the_snapshot(session_local, db_session, verb):
+def _drive_hook(verb, *, wrote_log, wrote_engine):
+    """Run the bg transition hook with the recorder / heal / engine pinned."""
     from main import _record_sample_transition_bg
-    s = _pre_received_sample(db_session)
-    _seed_default_tier(db_session)
     import workflow.engine as engine_mod
     import workflow.sample_log as log_mod
-    with patch.object(log_mod, "record_sample_transition", return_value=False), \
+    with patch.object(log_mod, "record_sample_transition", return_value=wrote_log), \
          patch.object(log_mod, "heal_sample_status", return_value=False), \
-         patch.object(engine_mod, "drive_sample_touchpoint", return_value=False):
+         patch.object(engine_mod, "drive_sample_touchpoint", return_value=wrote_engine):
         _record_sample_transition_bg(sample_id="PB-7100", to_status="published",
                                      source="mk1", verb=verb, from_status="received",
                                      actor_user_id=None)
+
+
+@pytest.mark.parametrize("verb", ["receive", "publish"])
+def test_transition_hook_touchpoint_writes_the_snapshot(session_local, db_session, verb):
+    _pre_received_sample(db_session)
+    _seed_default_tier(db_session)
+    session_local.commit.reset_mock()  # the two seeds above committed
+    _drive_hook(verb, wrote_log=True, wrote_engine=False)
     db_session.expire_all()
     row = db_session.query(LimsSample).filter_by(sample_id="PB-7100").one()
     assert row.sla_priority_key == "default"
     assert row.sla_snapshot_at is not None
+    # `refresh` only flushes -- prove the hook actually COMMITTED. The fixture's
+    # close() is a no-op, so the columns above read back identically from an
+    # uncommitted flush; only the spy discriminates.
+    assert session_local.commit.call_count == 1
+
+
+def test_transition_hook_deduped_touchpoint_does_not_commit(session_local, db_session):
+    """Nothing transitioned: recorder deduped, heal a no-op, engine a no-op. No
+    snapshot is taken, and the hook must not commit at all."""
+    _pre_received_sample(db_session)
+    _seed_default_tier(db_session)
+    session_local.commit.reset_mock()
+    _drive_hook("publish", wrote_log=False, wrote_engine=False)
+    db_session.expire_all()
+    row = db_session.query(LimsSample).filter_by(sample_id="PB-7100").one()
+    assert row.sla_priority_key is None
+    assert row.sla_snapshot_at is None
+    assert session_local.commit.call_count == 0
+
+
+def test_republish_does_not_restamp_the_snapshot(session_local, db_session):
+    """A COA republish re-enters this hook; the recorder dedupes and the engine
+    is a no-op. `snapshot.refresh` re-stamps `sla_snapshot_at` unconditionally,
+    so snapshotting there would move the recorded promise to today's mapping and
+    re-grade history. The helper must not even be reached on the second pass."""
+    import main
+    _pre_received_sample(db_session)
+    _seed_default_tier(db_session)
+
+    _drive_hook("publish", wrote_log=True, wrote_engine=False)  # the real publish
+    db_session.expire_all()
+    first_stamp = db_session.query(LimsSample).filter_by(
+        sample_id="PB-7100").one().sla_snapshot_at
+    assert first_stamp is not None
+
+    spy = MagicMock(side_effect=main._sla_snapshot_after_touchpoint)
+    with patch.object(main, "_sla_snapshot_after_touchpoint", spy):
+        _drive_hook("publish", wrote_log=False, wrote_engine=False)  # the republish
+    spy.assert_not_called()
+    db_session.expire_all()
+    assert db_session.query(LimsSample).filter_by(
+        sample_id="PB-7100").one().sla_snapshot_at == first_stamp
 
 
 def test_transition_hook_snapshot_failure_is_fail_open(session_local, db_session):
