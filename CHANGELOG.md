@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v1.18.2 — 2026-09-10
+
+### Fixed
+- **The Reports sync-debug source set is now published PRIMARY COAs only.** `published_coa_results` is a read model at lab-result grain — one row per analyte per published primary COA — but `/reports/sync-status` and `/reports/resync` never encoded that grain, treating every published generation as owed a row. In production that meant a permanent "Tables are out of sync" banner listing **2869 missing codes, every one of them an Additional COA and not a single primary** (primaries were 2811/2811, i.e. 100% covered; additionals 188/3057). An ACOA is the same lab result reissued under another brand, carries no extra lab workload, and all 1115 ACOA samples already have a published primary — so the far more serious half was the **"Re-sync Now" button**, which used the same naive query and would have inserted all 2869 rows. Because a child mints its own `verification_code`, `/reports/dashboard`'s `DISTINCT ON (verification_code)` cannot collapse a copy and `/reports/purity-trend` does not dedupe at all: pressing it would have inflated `total_coas` 3018 → ~5868, double-counted conforming/non-conforming for 1115 samples, and put a duplicate point on every trend chart. The source set now filters `parent_generation_id IS NULL`, and orphans are redefined as report rows that are not a published primary — which also catches the 188 additional-COA rows left behind by the table's 2026-04 creation backfill. Report-side counts stay deliberately unfiltered (physical table contents) so the banner's mismatch still surfaces "the table holds rows it should not"; that decision is pinned by a test. Verified read-only against production Postgres: missing 2869 → 0, orphans 19 → 207 (342 rows). Handler ruling 2026-09-10. Corollary: the Integration Service write path is now **correct as-is** — `_populate_reporting_table` is never called for children, and the unwired ACOA publish path is the desired behaviour, not a bug to fix later.
+
+### Changed
+- The sync-debug page states the grain in its own copy, and **Re-sync now asks for confirmation**, showing how many primaries it will backfill and how many orphaned codes it will delete — the purge is 342 rows, not the 19 it was before this change.
+
 ## v1.18.1 — 2026-09-10
 
 ### Fixed
