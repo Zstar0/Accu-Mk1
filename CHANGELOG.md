@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.16.3 — 2026-09-09
+
+### Fixed
+- **SLA Performance: `thin` and `min_timed_for_family` reached the browser.** Both were dropped by FastAPI's `response_model` in 1.16.2 — `SlaPerfGatingFamilyOut` and `SlaPerfGatingOut` never declared them, and Pydantic ignores extras on input, so nothing raised at any layer. The department table therefore rendered heavy metals (5 timed samples) with no "too few" marker and its over-target percentage reddened, and the headline sentence could name it as the gating department: exactly the misreading the flag exists to prevent. Regression guard `test_response_model_declares_every_key_the_engine_emits` walks the *engine's* output against the real response models and fails on any undeclared key at any depth — walking the route's response instead passes vacuously, because a stripped key is already absent from it. (#181)
+
 ## v1.16.2 — 2026-09-09
 
 ### Added
