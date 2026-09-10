@@ -708,3 +708,27 @@ def test_parent_line_states_mk1_superseded_vial_keeps_shadow_lock(
               result_value="3.85", retested=True)
     states = _get_states_mk1(route_client)
     assert states.get("ENDO") == "verified"
+
+
+def test_parent_line_states_mk1_unresulted_vial_keeps_shadow_lock(
+    route_client, line_states_parent
+):
+    """A vial row that has not been resulted yet cannot be promoted at all —
+    promote_to_parent requires every source in to_be_verified — so an
+    unassigned row is no evidence of a stuck promote and must not unlock.
+
+    Found on live data before this shipped: BW-0028..31 (order WP-4067, July)
+    carry empty unassigned PH-DETERM vial rows under a SENAITE-verified pH,
+    dormant since check-in. They were the ONLY families a wider "any row the
+    variance guard calls unfinished" rule would have changed, and unlocking
+    them would hand the bench verbs on a value SENAITE has already verified,
+    for no gain. Keying off promote's own precondition instead leaves them
+    exactly as they are.
+    """
+    db, parent, svc = line_states_parent
+    _parent_tier_row(db, parent, svc, "ENDO",
+                     provenance="shadow", review_state="senaite_mirror",
+                     mirror_review_state="verified")
+    _vial_row(db, parent, svc, "ENDO", review_state="unassigned")
+    states = _get_states_mk1(route_client)
+    assert states.get("ENDO") == "verified"
