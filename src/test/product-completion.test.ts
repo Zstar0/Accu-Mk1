@@ -251,6 +251,27 @@ describe('computeProductCompletion', () => {
     )!
     expect(r.met).toBe(true)
   })
+
+  describe('native HPLC profile key', () => {
+    it('treats hplc-purity-identity like hplcpurity_identity for completion', () => {
+      const legacy = computeProductCompletion(
+        prod('hplcpurity_identity'),
+        ctx({
+          analyses: [ana('HPLC-PUR', 'Analytics')],
+          promos: [promo('HPLC-PUR', ['P-1-S01'])],
+        })
+      )
+      const native = computeProductCompletion(
+        prod('hplc-purity-identity'),
+        ctx({
+          analyses: [ana('HPLC-PUR', 'Analytics')],
+          promos: [promo('HPLC-PUR', ['P-1-S01'])],
+        })
+      )
+      expect(native?.met).toBe(legacy?.met)
+      expect(native?.met).toBe(true)
+    })
+  })
 })
 
 // ── Native catalog families + keyword-first classification (v1.11.9) ────────
