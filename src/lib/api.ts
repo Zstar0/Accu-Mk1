@@ -6,12 +6,12 @@ import { getApiBaseUrl } from './config'
 import { getAuthToken } from '@/store/auth-store'
 
 // Helper to get current API base URL (called dynamically)
-const API_BASE_URL = () => getApiBaseUrl()
+export const API_BASE_URL = () => getApiBaseUrl()
 
 /**
  * Get headers with JWT Bearer token for authenticated requests.
  */
-function getBearerHeaders(contentType?: string): HeadersInit {
+export function getBearerHeaders(contentType?: string): HeadersInit {
   const token = getAuthToken()
   const headers: HeadersInit = {}
   if (token) {
@@ -1959,7 +1959,7 @@ export interface SampleCOAActionResponse {
   warning?: string | null
 }
 
-async function extractErrorMessage(response: Response, fallback: string): Promise<string> {
+export async function extractErrorMessage(response: Response, fallback: string): Promise<string> {
   try {
     const body = await response.json()
     const detail = body?.detail ?? body?.message ?? fallback
