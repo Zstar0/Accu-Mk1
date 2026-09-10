@@ -648,7 +648,8 @@ def load_effective(
         return resolve(explicit, prios, explicit_ids={k: v for k, v in ids.items() if v})
 
     by_sample = {pk: chain(samples.get(pk), None) for pk in sample_pks}
-    by_vial = {pk: chain(samples.get(v.parent_sample_pk), v) for pk, v in subs.items()}
+    by_vial = {pk: chain(samples.get(subs[pk].parent_sample_pk) if pk in subs else None, subs.get(pk))
+               for pk in sub_pks}
     return by_sample, by_vial
 ```
 

@@ -55,3 +55,11 @@ def test_missing_ids_resolve_default(db_session):
     by_s, by_v = service.load_effective(db_session, sample_pks=[999999])
     assert by_s[999999].key == "default" and by_s[999999].source_level == "default"
     assert by_v == {}
+
+
+def test_unknown_vial_pk_resolves_default(db_session):
+    service.invalidate_priority_cache()
+    _seed_priorities(db_session)
+    by_s, by_v = service.load_effective(db_session, sub_sample_pks=[999999])
+    assert by_v[999999].key == "default" and by_v[999999].source_level == "default"
+    assert by_s == {}
