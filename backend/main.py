@@ -1605,12 +1605,13 @@ async def get_sample_activity(
     # The log is derived at read time (spec §3.4) — no per-sample copy of the
     # audit exists. Sample- and vial-level rows key off the native pks; an
     # order-level change is shown on every sample of that order.
-    # Customer-level rows are deliberately OUT of scope this release: a single
-    # customer change fans out across every order they ever placed, and the
-    # per-sample line would be noise without the order context.
+    # Customer-level rows are included too (spec §2.7), narrowed to the one
+    # customer who owns this sample's order — a customer change that alters
+    # this sample's effective value belongs in its history.
     from models import Priority, PriorityAudit
     priority_names = {p.key: p.name for p in db.execute(select(Priority)).scalars()}
     audit_sample = None if direct_sub is not None else parent
+    audit_customer_label = None
     if direct_sub is not None:
         audit_vial_ids = [str(direct_sub.id)]
         audit_sample = db.get(LimsSample, direct_sub.parent_sample_pk)
@@ -1628,6 +1629,19 @@ async def get_sample_activity(
                     (PriorityAudit.level == "order")
                     & (PriorityAudit.entity_id == audit_sample.client_order_number)
                 )
+                # lims_orders.order_number is indexed, not unique — lowest id.
+                audit_order = db.execute(
+                    select(LimsOrder)
+                    .where(LimsOrder.order_number == audit_sample.client_order_number)
+                    .order_by(LimsOrder.id).limit(1)
+                ).scalars().first()
+                cust_id = getattr(audit_order, "customer_user_id", None)
+                if cust_id is not None:
+                    audit_customer_label = audit_order.customer_name or str(cust_id)
+                    clauses.append(
+                        (PriorityAudit.level == "customer")
+                        & (PriorityAudit.entity_id == str(cust_id))
+                    )
         if audit_vial_ids:
             clauses.append(
                 (PriorityAudit.level == "vial")
@@ -1636,6 +1650,16 @@ async def get_sample_activity(
         audit_rows = db.execute(
             select(PriorityAudit).where(or_(*clauses)).order_by(PriorityAudit.at)
         ).scalars().all()
+        # One batched actor lookup for the whole block — the sibling sources
+        # above resolve per row because they iterate one vial at a time.
+        actor_ids = {a.user_id for a in audit_rows if a.user_id}
+        actor_by_id: dict[int, str] = {}
+        if actor_ids:
+            for u in db.execute(select(User).where(User.id.in_(actor_ids))).scalars():
+                actor_by_id[u.id] = (
+                    " ".join(p for p in (u.first_name, u.last_name) if p).strip()
+                    or u.email
+                )
         for a in audit_rows:
             old = priority_names.get(a.old_key, a.old_key) if a.old_key else "Inherit"
             new = priority_names.get(a.new_key, a.new_key) if a.new_key else "Inherit"
@@ -1643,9 +1667,12 @@ async def get_sample_activity(
                 "sample": "",
                 "vial": f" (vial {a.entity_id})",
                 "order": f" via order {a.entity_id}",
-                "customer": f" via customer {a.entity_id}",
+                "customer": f" via customer {audit_customer_label or a.entity_id}",
             }.get(a.level, "")
+            actor = actor_by_id.get(a.user_id) if a.user_id else None
             line = f"Priority: {old} → {new}{where}"
+            if actor:
+                line = f"{line} ({actor})"
             events.append({
                 "timestamp": a.at.isoformat() if a.at else None,
                 "event": "priority_changed",
@@ -1663,6 +1690,7 @@ async def get_sample_activity(
                     "source": a.source,
                     "note": a.note,
                     "user_id": a.user_id,
+                    "by": actor,
                 },
                 "user_id": a.user_id,
                 "note": a.note,

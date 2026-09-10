@@ -98,6 +98,30 @@ def test_assign_customer_affects_every_sample_on_their_orders(db_session):
     assert s.sla_priority_key == "high" and s.sla_priority_source == "customer"
 
 
+def test_assign_order_survives_duplicate_order_numbers(db_session):
+    """lims_orders.order_number is indexed, NOT unique. scalar_one_or_none()
+    raised MultipleResultsFound when two rows shared a number; assign now takes
+    the lowest id and leaves the duplicate alone."""
+    service.invalidate_priority_cache()
+    _seed_priorities(db_session)
+    _seed_default_tier(db_session)
+    s, _ = _mk(db_session, order_no="WP-9003")
+    db_session.add(LimsOrder(wp_order_id=9003, order_number="WP-9003", customer_user_id=777))
+    db_session.flush()
+    orders = db_session.execute(
+        select(LimsOrder).where(LimsOrder.order_number == "WP-9003")).scalars().all()
+    assert len(orders) == 2
+    lowest = min(orders, key=lambda o: o.id)
+    other = max(orders, key=lambda o: o.id)
+
+    res = service.assign(db_session, level="order", entity_id="WP-9003",
+                         priority_key="high", user_id=1)
+    assert (res.old_key, res.new_key) == (None, "high")
+    assert res.affected_sample_pks == [s.id]
+    assert lowest.priority_key == "high" and lowest.priority_source == "ui"
+    assert other.priority_key is None
+
+
 def test_assign_clear_to_inherit(db_session):
     service.invalidate_priority_cache()
     _seed_priorities(db_session)

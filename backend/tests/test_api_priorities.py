@@ -9,6 +9,7 @@ from sqlalchemy import text
 import auth
 from database import engine
 from main import app
+from priority import service
 from priority.schemas import KEY_RE, slugify
 
 app.dependency_overrides[auth.get_current_user] = lambda: {"id": 0, "username": "test"}
@@ -18,12 +19,17 @@ client = TestClient(app)
 @pytest.fixture(autouse=True)
 def _cleanup():
     created: list[str] = []
+    # The priority map is a 60 s PROCESS cache: raw-SQL teardown below is
+    # invisible to it, so a later test in the same process would resolve
+    # against a key this fixture deleted. Drop the cache on both edges.
+    service.invalidate_priority_cache()
     yield created
     with engine.begin() as c:
         for key in created:
             c.execute(text("DELETE FROM sla_priority_tiers WHERE priority = :k"), {"k": key})
             c.execute(text("DELETE FROM priority_audit WHERE new_key = :k OR old_key = :k"), {"k": key})
             c.execute(text("DELETE FROM priorities WHERE key = :k"), {"k": key})
+    service.invalidate_priority_cache()
 
 
 def test_list_has_seeded_default_first_by_rank_desc():

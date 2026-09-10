@@ -117,7 +117,10 @@ def assign_bulk(body: BulkAssignIn, db: Session = Depends(get_db), user=Depends(
 
 @router.post("/resolve", response_model=ResolveOut)
 def resolve(body: ResolveIn, db: Session = Depends(get_db), _=Depends(get_current_user)):
-    by_s, by_v = service.load_effective(db, sample_pks=body.sample_pks, sub_sample_pks=body.sub_sample_pks)
+    # Read path: degrade to "no priority known" on a half-migrated DB rather
+    # than 500, exactly like every other read that embeds a priority.
+    by_s, by_v = service.load_effective_safe(db, sample_pks=body.sample_pks,
+                                             sub_sample_pks=body.sub_sample_pks)
     return ResolveOut(samples={str(k): EffectiveOut(**v.as_dict()) for k, v in by_s.items()},
                       sub_samples={str(k): EffectiveOut(**v.as_dict()) for k, v in by_v.items()})
 

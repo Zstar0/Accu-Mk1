@@ -301,7 +301,13 @@ def assign(
         ).scalars())
         affected = _samples_for_order_numbers(db, order_nos)
     elif level == "order":
-        order = db.execute(select(LimsOrder).where(LimsOrder.order_number == entity_id)).scalar_one_or_none()
+        # order_number is indexed, NOT unique: two rows may share one number.
+        # scalar_one_or_none() would raise MultipleResultsFound; take the
+        # lowest id deterministically instead.
+        order = db.execute(
+            select(LimsOrder).where(LimsOrder.order_number == entity_id)
+            .order_by(LimsOrder.id).limit(1)
+        ).scalars().first()
         if order is None:
             raise ValueError(f"order {entity_id!r} not found")
         old = order.priority_key

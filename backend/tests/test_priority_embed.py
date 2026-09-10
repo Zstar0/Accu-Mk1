@@ -124,6 +124,11 @@ def test_registry_details_payload_carries_priority_fields():
 # ── activity log ─────────────────────────────────────────────────────────
 
 def test_activity_log_includes_priority_audit_lines():
+    """The module's auth override is a plain dict, so routes resolve
+    `getattr(user, "id", None)` -> None and the audit row carries no user.
+    That is the unknown/system actor: siblings render `by: None` and no name,
+    so the line must stay bare — pinned exactly so an actor suffix cannot
+    appear from nowhere."""
     with temp_sample() as t:
         r = client.put("/priorities/assign", json={
             "level": "sample", "id": str(t["pk"]), "priority_key": "high",
@@ -133,7 +138,86 @@ def test_activity_log_includes_priority_audit_lines():
         line = next((e for e in events if e.get("source") == "priority_audit"), None)
         assert line is not None, "no priority_audit line in the activity feed"
         assert line["type"] == "priority"
-        assert "High" in (line.get("description") or "")
+        assert line["description"] == "Priority: Inherit → High"
+        assert line["details"]["by"] is None
+
+
+def test_activity_priority_line_names_the_actor():
+    """spec §7: "Priority: High → Expedited (Jane)". The actor is resolved
+    server-side from priority_audit.user_id, like every sibling source in the
+    endpoint."""
+    from database import SessionLocal
+    from models import PriorityAudit, User
+
+    tag = uuid.uuid4().hex[:8]
+    db = SessionLocal()
+    user_id = None
+    try:
+        with temp_sample() as t:
+            u = User(email=f"prio-{tag}@example.test", hashed_password="x",
+                     role="standard", first_name="Ada", last_name="Lovelace")
+            db.add(u)
+            db.flush()
+            user_id = u.id
+            db.add(PriorityAudit(user_id=user_id, level="sample",
+                                 entity_id=str(t["pk"]), old_key="high",
+                                 new_key="expedited", source="ui"))
+            db.commit()
+            events = client.get(f"/samples/{t['sample_id']}/activity").json()["events"]
+            line = next((e for e in events if e.get("source") == "priority_audit"), None)
+            assert line is not None
+            assert line["description"] == "Priority: High → Expedited (Ada Lovelace)"
+            assert line["details"]["by"] == "Ada Lovelace"
+    finally:
+        db.rollback()
+        db.close()
+        if user_id is not None:
+            with engine.begin() as c:
+                c.execute(text("DELETE FROM users WHERE id = :i"), {"i": user_id})
+
+
+def test_activity_log_includes_customer_lines_for_this_customer_only():
+    """spec §2.7: a customer-level change that alters this sample's effective
+    value is part of its history. Only the customer who owns the sample's
+    order qualifies — another customer's row must not leak in."""
+    mine, other = 999003, 999004
+    tag = uuid.uuid4().hex[:8]
+    order_no = f"WP-T{tag}".upper()
+    wp_order_id = 990000 + int(tag[:4], 16) % 9000
+    cust_name = f"Acme {tag}"
+    try:
+        with temp_sample() as t:
+            with engine.begin() as c:
+                c.execute(text(
+                    "INSERT INTO lims_orders (wp_order_id, order_number, "
+                    "customer_user_id, customer_name) "
+                    "VALUES (:w, :o, :c, :n)"),
+                    {"w": wp_order_id, "o": order_no, "c": mine, "n": cust_name})
+                c.execute(text("UPDATE lims_samples SET client_order_number = :o "
+                               "WHERE id = :pk"), {"o": order_no, "pk": t["pk"]})
+            for cid in (mine, other):
+                r = client.put("/priorities/assign", json={
+                    "level": "customer", "id": str(cid), "priority_key": "expedited"})
+                assert r.status_code == 200, r.text
+
+            events = client.get(f"/samples/{t['sample_id']}/activity").json()["events"]
+            cust = [e for e in events
+                    if e.get("source") == "priority_audit"
+                    and e["details"]["level"] == "customer"]
+            assert [e["details"]["entity_id"] for e in cust] == [str(mine)], cust
+            assert cust[0]["description"] == (
+                f"Priority: Inherit → Expedited via customer {cust_name}")
+    finally:
+        with engine.begin() as c:
+            for cid in (mine, other):
+                c.execute(text("DELETE FROM priority_audit WHERE level = 'customer' "
+                               "AND entity_id = :i"), {"i": str(cid)})
+                c.execute(text("DELETE FROM customer_priorities "
+                               "WHERE wp_customer_user_id = :i"), {"i": cid})
+            c.execute(text("DELETE FROM priority_audit WHERE level = 'order' "
+                           "AND entity_id = :o"), {"o": order_no})
+            c.execute(text("DELETE FROM lims_orders WHERE wp_order_id = :w"),
+                      {"w": wp_order_id})
 
 
 # ── uid → assign target (inbox PUTs) ────────────────────────────────────────
