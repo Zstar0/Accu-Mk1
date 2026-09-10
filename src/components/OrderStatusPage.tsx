@@ -1812,6 +1812,7 @@ export function OrderStatusPage() {
                           sampleSlaStatusesMap={
                             orderSla.sampleStatusesBySampleId
                           }
+                          showPriorityControl
                         />
                       ))}
                     </tbody>

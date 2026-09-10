@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, ExternalLink } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
@@ -11,6 +12,7 @@ import type { OrderSlaVerdict } from '@/lib/sla-resolution'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 import { FlagIndicator } from '@/components/flags/FlagIndicator'
 import { PriorityGlyph } from '@/components/common/PriorityGlyph'
+import { PrioritySelect } from '@/components/common/PrioritySelect'
 import { OrderFinancePanel } from './OrderFinancePanel'
 import { OrderSlaCell } from './OrderSlaCell'
 import { SampleCard } from './SampleCard'
@@ -44,6 +46,7 @@ export function OrderRow({
   showFinance,
   slaVerdict,
   sampleSlaStatusesMap,
+  showPriorityControl,
 }: {
   order: ExplorerOrder
   wordpressHost: string
@@ -95,8 +98,16 @@ export function OrderRow({
   // Undefined when the page hasn't plumbed it yet; SampleCard renders no
   // indicator in that case.
   sampleSlaStatusesMap?: Map<string, SampleSlaSnapshot[]>
+  /** Opt-in (order-status table only). Renders the order-level priority
+   *  control beside the effective glyph. Off by default so the customer
+   *  detail page's rows stay read-only. */
+  showPriorityControl?: boolean
 }) {
   const [financeExpanded, setFinanceExpanded] = useState(false)
+  // The explorer orders query key starts with 'explorer', which
+  // useAssignPriority's invalidation predicate cannot see, so an order-level
+  // assign refreshes it explicitly.
+  const queryClient = useQueryClient()
   const wpUrl = `${wordpressHost}/wp-admin/post.php?post=${order.order_id}&action=edit`
 
   // Phase 31 — surface analyte (sample_identity) on each SampleCard.
@@ -216,6 +227,22 @@ export function OrderRow({
               </button>
             )}
             <PriorityGlyph priority={order.effective_priority} size="row" />
+            {/* Order-level set control. Opt-in: the order-status table is
+                the app's default order view and the only place an order's
+                priority can be set (there is no single-order page). */}
+            {showPriorityControl && (
+              <PrioritySelect
+                level="order"
+                id={order.order_number}
+                explicitKey={order.priority_key ?? null}
+                effective={order.effective_priority}
+                compact
+                className="w-40"
+                onAssigned={() =>
+                  queryClient.invalidateQueries({ queryKey: ['explorer'] })
+                }
+              />
+            )}
             <a
               href={wpUrl}
               target="_blank"
