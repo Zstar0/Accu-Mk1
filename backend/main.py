@@ -9778,16 +9778,46 @@ class CheckInRecord(BaseModel):
     is_test_order: bool = False  # sample belongs to a TEST_EMAILS order (see inbox)
 
 
+# Internal / test CLIENT titles (lims_samples.client_title, case-insensitive).
+# The e-mail rule below only reaches samples that came through a WordPress
+# order; internal samples registered straight into the LIMS carry no order
+# and no billing e-mail, so they are recognised by client instead
+# (Handler 2026-09-10: "Valence Internal 2" is the internal test client).
+TEST_CLIENT_TITLES = frozenset({"valence internal 2"})
+
+
+def _test_client_sample_ids(db: Session) -> set[str]:
+    """Sample IDs whose lims_samples.client_title is an internal/test client."""
+    if not TEST_CLIENT_TITLES:
+        return set()
+    return {
+        sid for (sid,) in db.execute(
+            select(LimsSample.sample_id).where(
+                func.lower(LimsSample.client_title).in_(sorted(TEST_CLIENT_TITLES))
+            )
+        ).all()
+    }
+
+
 def _test_order_senaite_ids() -> set[str]:
-    """SENAITE sample IDs that belong to a test order (billing email in TEST_EMAILS).
+    """Sample IDs that belong to a test order (billing email in TEST_EMAILS)
+    or to an internal/test client (client_title in TEST_CLIENT_TITLES).
 
     Mirrors the /worksheets/inbox test-order definition: read order_submissions
     from the integration DB, map each order's sample_results → senaite_id, and
-    flag those whose payload.billing.email is a known test email. Returns an
-    empty set on any failure (graceful degradation — nothing flagged as test).
+    flag those whose payload.billing.email is a known test email. Then adds
+    every Mk1 sample registered under a test client (no order needed). Each
+    leg degrades to an empty set on failure — nothing flagged as test.
     """
     TEST_EMAILS = {"forrestp@outlook.com", "forrest@valenceanalytical.com"}
     test_ids: set[str] = set()
+
+    try:
+        from database import SessionLocal
+        with SessionLocal() as _db:
+            test_ids |= _test_client_sample_ids(_db)
+    except Exception:
+        pass
 
     def _as_dict(val):
         if isinstance(val, dict):
