@@ -2002,6 +2002,27 @@ def _run_migrations():
         "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS senaite_analysis_uid VARCHAR(50)",
         "CREATE INDEX IF NOT EXISTS ix_lims_analyses_senaite_analysis_uid "
         "ON lims_analyses (senaite_analysis_uid)",
+        # --- HPLC-native slice 1 (spec 2026-09-10, M1) ---
+        # peptide_id + slot on analysis rows. Additive, nullable, no backfill:
+        # NULL on every legacy row by contract. CHECK uses the union-preserve
+        # idiom (guarded DO block) so re-boots are no-ops.
+        "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS peptide_id INTEGER "
+        "REFERENCES peptides(id) ON DELETE SET NULL",
+        "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS slot SMALLINT",
+        """
+        DO $$ BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint
+            WHERE conname = 'ck_lims_analyses_slot_range'
+              AND conrelid = 'lims_analyses'::regclass
+          ) THEN
+            ALTER TABLE lims_analyses ADD CONSTRAINT ck_lims_analyses_slot_range
+              CHECK (slot IS NULL OR (slot BETWEEN 1 AND 8));
+          END IF;
+        END $$
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_lims_analyses_peptide_id "
+        "ON lims_analyses (peptide_id)",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
