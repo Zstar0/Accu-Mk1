@@ -74,7 +74,7 @@ drift (seed 48h vs prod 24h) and the empty Core HPLC service group.
 | key | varchar(40) unique, immutable | slug, referenced by every other table |
 | name | varchar(100) | display |
 | rank | int | higher is more urgent; Default = 0; negatives allowed |
-| icon | varchar(30) | enum: `chevrons-up`, `chevron-up`, `minus`, `chevron-down`, `chevrons-down` |
+| icon | varchar(30) | enum: `chevrons-up`, `chevron-up`, `minus`, `chevron-down`, `chevrons-down`, `flame` |
 | color | varchar(20) | enum of theme palette names: `red`, `amber`, `emerald`, `sky`, `violet`, `zinc` |
 | is_default | bool | exactly one `true`; partial unique index `uq_priorities_single_default` (same pattern as `uq_sla_tier_single_default`) |
 | is_active | bool | soft deactivate; inactive keys resolve as inherit and log a warning |
@@ -202,8 +202,9 @@ The two `sla-priority-tiers` routes validate `priority` against the table.
   Props `{priority: {key, rank, source_level, ...} | null, size: 'row' |
   'card' | 'header', showLabel?}`. Renders nothing for the default key;
   otherwise the icon in the priority color with a tooltip "Expedited via
-  customer (Acme Labs)". Icons are lucide (`ChevronsUp`, `ChevronUp`,
-  `Minus`, `ChevronDown`, `ChevronsDown`).
+  customer (Acme Labs)". Rows use the bare glyph; cards and headers use the
+  tinted-square variant (Handler pick from the 2026-09-09 glyph demo). Icons are lucide (`ChevronsUp`, `ChevronUp`,
+  `Minus`, `ChevronDown`, `ChevronsDown`, `Flame`).
 - Placement: samples list rows and cards, order list rows and order status
   page, vial status board cards, worksheets inbox family header and vial
   cards, worksheet drawer items, active boxes, receive wizard header.
