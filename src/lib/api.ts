@@ -5447,8 +5447,13 @@ export async function getSlaPriorityTiers(): Promise<SlaPriorityTier[]> {
   return response.json()
 }
 
+// `priority` widened to string (sample-priority spec, Task 5): overrides are
+// now keyed by an admin-defined priority key from the priorities catalog, not
+// only the three legacy InboxPriority literals. The value is only interpolated
+// into the URL here; SlaPriorityTier.priority stays InboxPriority because the
+// client-side resolver still keys its maps by that union.
 export async function setSlaPriorityTier(
-  priority: InboxPriority,
+  priority: string,
   slaTierId: number,
   serviceGroupId?: number | null,
 ): Promise<SlaPriorityTier> {
@@ -5464,8 +5469,9 @@ export async function setSlaPriorityTier(
   return response.json()
 }
 
+// See setSlaPriorityTier: `priority` is any catalog priority key.
 export async function deleteSlaPriorityTier(
-  priority: InboxPriority,
+  priority: string,
   serviceGroupId?: number | null,
 ): Promise<void> {
   // Without serviceGroupId, deletes the global (NULL group) override; with it,

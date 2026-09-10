@@ -49,6 +49,7 @@
   "preferences.advanced.option3": "Option 3 d'exemple",
 
   "preferences.sla": "SLAs",
+  "preferences.priorities": "Priorities",
   "preferences.sla.tiers": "SLA Tiers",
   "preferences.sla.tiersDescription": "Turnaround targets. Services inherit their group's tier; priorities can override.",
   "preferences.sla.addTier": "Add SLA",
@@ -71,6 +72,20 @@
   "preferences.sla.loadError": "Failed to load SLA settings.",
   "preferences.sla.amberThreshold": "Amber at",
   "preferences.sla.percentRemaining": "% remaining",
+
+  "preferences.prioritiesPane.title": "Priorities",
+  "preferences.prioritiesPane.description": "Manage sample priorities, their glyph, and the SLA tier each maps to. Default follows the analysis profile or service group tier.",
+  "preferences.prioritiesPane.pulse": "Pulse",
+  "preferences.prioritiesPane.followProfile": "Follow profile / group tier",
+  "preferences.prioritiesPane.default": "Default",
+  "preferences.prioritiesPane.active": "Active",
+  "preferences.prioritiesPane.newName": "New priority name",
+  "preferences.prioritiesPane.add": "Add",
+  "preferences.prioritiesPane.customers": "Customer priorities",
+  "preferences.prioritiesPane.customersDescription": "Set a priority for a customer account; their orders and samples inherit it unless overridden.",
+  "preferences.prioritiesPane.searchCustomer": "Search customers seen on orders",
+  "preferences.prioritiesPane.setPriority": "Set priority",
+  "preferences.prioritiesPane.clear": "Clear",
 
   "preferences.businessHours": "Business Hours",
   "preferences.businessHours.readOnly": "You have read-only access to business-hours settings.",

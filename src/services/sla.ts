@@ -3,7 +3,7 @@ import { toast } from 'sonner'
 import {
   getSlaTiers, createSlaTier, updateSlaTier, deleteSlaTier,
   getSlaPriorityTiers, setSlaPriorityTier, deleteSlaPriorityTier,
-  type SlaTier, type SlaTierCreate, type SlaTierUpdate, type InboxPriority,
+  type SlaTier, type SlaTierCreate, type SlaTierUpdate,
 } from '@/lib/api'
 
 export const slaQueryKeys = {
@@ -58,7 +58,8 @@ export function useSetPriorityTier() {
       slaTierId,
       serviceGroupId,
     }: {
-      priority: InboxPriority
+      // Any priority key from the catalog (Task 5), not just the legacy trio.
+      priority: string
       slaTierId: number
       serviceGroupId?: number | null
     }) => setSlaPriorityTier(priority, slaTierId, serviceGroupId),
@@ -76,7 +77,7 @@ export function useDeletePriorityTier() {
       priority,
       serviceGroupId,
     }: {
-      priority: InboxPriority
+      priority: string
       serviceGroupId?: number | null
     }) => deleteSlaPriorityTier(priority, serviceGroupId),
     onSuccess: () => qc.invalidateQueries({ queryKey: slaQueryKeys.priorityTiers }),

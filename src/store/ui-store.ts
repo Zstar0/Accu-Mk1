@@ -68,6 +68,7 @@ export type SettingsSubSection =
   | 'dataPipeline'
   | 'dataSource'
   | 'sla'
+  | 'priorities'
   | 'businessHours'
   | 'flags'
   | 'checkIn'
