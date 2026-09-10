@@ -120,6 +120,7 @@ from flags.routes import router as flags_router
 from slack_notify.routes import router as slack_prefs_router
 from slack_notify.interactions import router as slack_interactions_router
 from workflow.routes import router as workflow_router
+from priority.routes import router as priority_router
 from conformance.routes import router as conformance_router
 
 import logging
@@ -553,6 +554,7 @@ app.include_router(flags_router)
 app.include_router(slack_prefs_router)
 app.include_router(slack_interactions_router)
 app.include_router(workflow_router)
+app.include_router(priority_router)
 app.include_router(conformance_router)
 
 # --- Endpoints ---

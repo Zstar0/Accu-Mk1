@@ -118,3 +118,17 @@ def test_assign_rejects_unknown_key_and_level(db_session):
         service.assign(db_session, level="sample", entity_id=str(s.id), priority_key="nope", user_id=1)
     with pytest.raises(ValueError):
         service.assign(db_session, level="planet", entity_id="1", priority_key="high", user_id=1)
+
+
+def test_assign_customer_keeps_note_when_none_supplied(db_session):
+    """Re-prioritising a customer without a note must preserve the stored one."""
+    service.invalidate_priority_cache()
+    _seed_priorities(db_session)
+    _seed_default_tier(db_session)
+    _mk(db_session)
+    service.assign(db_session, level="customer", entity_id="777", priority_key="high",
+                   user_id=1, note="VIP")
+    service.assign(db_session, level="customer", entity_id="777", priority_key="expedited",
+                   user_id=2, note=None)
+    row = db_session.get(CustomerPriority, 777)
+    assert (row.priority_key, row.note, row.updated_by) == ("expedited", "VIP", 2)

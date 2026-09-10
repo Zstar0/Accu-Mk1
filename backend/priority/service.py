@@ -138,7 +138,11 @@ def assign(
             if row:
                 db.delete(row)
         elif row:
-            row.priority_key, row.note, row.updated_by = priority_key, note, user_id
+            # A note is only written when one is supplied: re-prioritising a
+            # customer from the picker (no note) must not erase the stored one.
+            row.priority_key, row.updated_by = priority_key, user_id
+            if note is not None:
+                row.note = note
         else:
             db.add(CustomerPriority(wp_customer_user_id=cid, priority_key=priority_key, note=note, updated_by=user_id))
         order_nos = list(db.execute(
