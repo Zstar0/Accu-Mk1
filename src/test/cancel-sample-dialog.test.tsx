@@ -121,4 +121,43 @@ describe('CancelSampleDialog', () => {
     ).toBeInTheDocument()
     expect(screen.queryByTestId('senaite-mode-note')).toBeNull()
   })
+
+  it('a failed preview still lets the operator cancel', async () => {
+    // arcitest UAT 2026-09-09: the preview 404'd and BOTH inputs stayed
+    // disabled, so the operator could not type a reason or confirm. The
+    // impact summary is a courtesy; the server is the authority.
+    mockCancel
+      .mockRejectedValueOnce(
+        Object.assign(new Error('Not Found'), { status: 404 })
+      )
+      .mockResolvedValueOnce(RESULT)
+    const { onCancelled } = renderDialog()
+    expect(
+      await screen.findByText(/could not preview the change/i)
+    ).toBeInTheDocument()
+
+    const reason = screen.getByLabelText(/reason/i)
+    const typed = screen.getByLabelText(/type pb-0001 to confirm/i)
+    expect(reason).toBeEnabled()
+    expect(typed).toBeEnabled()
+
+    const button = screen.getByRole('button', { name: /^cancel sample$/i })
+    expect(button).toBeDisabled()
+    fireEvent.change(reason, {
+      target: { value: 'Customer withdrew the order' },
+    })
+    fireEvent.change(typed, { target: { value: 'PB-0001' } })
+    expect(button).toBeEnabled()
+    fireEvent.click(button)
+    await waitFor(() =>
+      expect(mockCancel).toHaveBeenLastCalledWith(
+        'PB-0001',
+        expect.objectContaining({
+          confirm: true,
+          reason: 'Customer withdrew the order',
+        })
+      )
+    )
+    await waitFor(() => expect(onCancelled).toHaveBeenCalled())
+  })
 })

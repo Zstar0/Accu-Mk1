@@ -71,8 +71,14 @@ export function CancelSampleDialog({
   }, [open, sampleId])
 
   const confirmMatches = typed.trim().toLowerCase() === sampleId.toLowerCase()
+  /** Only the in-flight preview blocks the form. A FAILED preview must not:
+   *  the impact summary is a courtesy, the server is the authority, and
+   *  gating on it left the operator with a disabled reason box and no way
+   *  out (arcitest UAT, 2026-09-09). A cancel attempted without a preview
+   *  surfaces the real server error as a toast. */
+  const previewLoading = preview === null && previewError === null
   const canSubmit =
-    preview !== null && reason.trim().length >= 3 && confirmMatches && !pending
+    !previewLoading && reason.trim().length >= 3 && confirmMatches && !pending
 
   async function doCancel() {
     setPending(true)
@@ -111,7 +117,7 @@ export function CancelSampleDialog({
             {SENAITE_LOCKED.has(currentStatus) ? '; SENAITE itself only allows cancel before any analysis is assigned, so the badge will not change until the flip.' : '.'}
           </p>
         )}
-        {preview === null && previewError === null && (
+        {previewLoading && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
             <Loader2 size={14} className="animate-spin" /> Checking what this
             would touch…
@@ -123,7 +129,11 @@ export function CancelSampleDialog({
               size={14}
               className="mt-0.5 shrink-0 text-destructive"
             />
-            <span>Could not preview the change: {previewError}</span>
+            <span>
+              Could not preview the change: {previewError}. You can still
+              cancel — the impact summary above is unavailable, and any error
+              is reported when you confirm.
+            </span>
           </div>
         )}
         {preview !== null && (
@@ -149,7 +159,7 @@ export function CancelSampleDialog({
           <textarea
             value={reason}
             onChange={e => setReason(e.target.value)}
-            disabled={preview === null}
+            disabled={previewLoading}
             rows={2}
             className="mt-1 w-full px-3 py-2 text-sm rounded-md border border-input bg-background focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
           />
@@ -160,7 +170,7 @@ export function CancelSampleDialog({
             type="text"
             value={typed}
             onChange={e => setTyped(e.target.value)}
-            disabled={preview === null}
+            disabled={previewLoading}
             autoComplete="off"
             className="mt-1 w-full px-3 py-2 text-sm rounded-md border border-input bg-background focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
           />
