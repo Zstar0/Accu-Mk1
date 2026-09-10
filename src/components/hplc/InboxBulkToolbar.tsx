@@ -66,7 +66,12 @@ export function InboxBulkToolbar({
         <div className="w-px h-5 bg-border shrink-0" />
 
         {/* Set Priority — catalog-driven, plus an explicit Inherit. */}
-        <Select onValueChange={setPriority} disabled={assignBulk.isPending}>
+        {/* Held at '' so re-picking the same priority still fires. */}
+        <Select
+          value=""
+          onValueChange={setPriority}
+          disabled={assignBulk.isPending}
+        >
           <SelectTrigger size="sm" className="w-36" aria-label="Set Priority">
             <SelectValue placeholder="Set Priority" />
           </SelectTrigger>

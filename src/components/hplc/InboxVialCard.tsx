@@ -7,7 +7,6 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from '@/components/ui/select'
 import { PriorityGlyph } from '@/components/common/PriorityGlyph'
 import { AgingTimer } from '@/components/hplc/AgingTimer'
@@ -286,9 +285,17 @@ export function InboxVialCard({
             />
           )}
 
-          {/* Priority — catalog-driven; writes the VIAL level. */}
+          {/* Priority — catalog-driven; writes the VIAL level.
+
+              WRITE-ONLY menu, deliberately: the row carries only the RESOLVED
+              `priority_effective`, not the vial's own explicit key, so binding
+              it as the control value would misreport an inherited value as a
+              pin — and would make re-picking that same value a Radix no-op, so
+              you could never pin what you're inheriting. Held at '' (Radix's
+              "no selection") so every pick is a change and fires; the trigger
+              shows the resolved value beside the glyph instead. */}
           <Select
-            value={vial.priority_effective?.key ?? '__inherit__'}
+            value=""
             disabled={vialPk == null || assign.isPending}
             onValueChange={value =>
               assign.mutate({
@@ -303,15 +310,10 @@ export function InboxVialCard({
               aria-label={`Priority for ${vial.sample_id}`}
               className="h-6 w-auto min-w-[90px] border-transparent bg-transparent shadow-none text-xs hover:border-border"
             >
-              <SelectValue>
-                <span className="inline-flex items-center gap-1.5">
-                  <PriorityGlyph
-                    priority={vial.priority_effective}
-                    size="card"
-                  />
-                  {currentName}
-                </span>
-              </SelectValue>
+              <span className="inline-flex items-center gap-1.5">
+                <PriorityGlyph priority={vial.priority_effective} size="card" />
+                {currentName}
+              </span>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__inherit__">Inherit</SelectItem>

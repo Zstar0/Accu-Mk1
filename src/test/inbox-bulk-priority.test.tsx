@@ -48,10 +48,36 @@ vi.mock('@/lib/api-priorities', async importOriginal => ({
     },
   ]),
   assignPriorityBulk: vi.fn(async () => []),
+  assignPriority: vi.fn(async () => ({
+    level: 'vial',
+    id: '11',
+    old_key: null,
+    new_key: 'expedited',
+    affected_sample_pks: [],
+  })),
 }))
 
-const { assignPriorityBulk } = await import('@/lib/api-priorities')
+vi.mock('@dnd-kit/core', () => ({
+  useDraggable: () => ({
+    attributes: {},
+    listeners: {},
+    setNodeRef: vi.fn(),
+    isDragging: false,
+  }),
+}))
+
+vi.mock('@/store/ui-store', () => {
+  const state = { navigateToSample: vi.fn() }
+  const useUIStore = <T,>(selector: (s: typeof state) => T): T =>
+    selector(state)
+  useUIStore.getState = () => state
+  return { useUIStore }
+})
+
+const { assignPriority, assignPriorityBulk } =
+  await import('@/lib/api-priorities')
 const { InboxBulkToolbar } = await import('@/components/hplc/InboxBulkToolbar')
+const { InboxVialCard } = await import('@/components/hplc/InboxVialCard')
 
 function wrapper({ children }: { children: React.ReactNode }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -158,5 +184,62 @@ describe('InboxBulkToolbar priority assign', () => {
         { level: 'vial', id: '11', priority_key: null },
       ])
     )
+  })
+})
+
+describe('InboxVialCard priority picker', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('pins a value the vial is only INHERITING (the picker is write-only)', async () => {
+    // The row resolves to expedited from its ORDER, with no explicit vial key.
+    // A picker bound to the resolved value would already read 'Expedited' and
+    // Radix would swallow the re-pick; this must still write.
+    render(
+      <InboxVialCard
+        vial={vial({
+          sub_sample_pk: 11,
+          priority_effective: {
+            key: 'expedited',
+            rank: 20,
+            source_level: 'order',
+            source_id: '3291',
+          },
+        })}
+        groupedWithPrevious={false}
+      />,
+      { wrapper }
+    )
+
+    // The inherited value is still shown, via the glyph's accessible name.
+    expect(
+      await screen.findByRole('img', { name: 'Expedited via order 3291' })
+    ).toBeInTheDocument()
+
+    fireEvent.click(
+      await screen.findByRole('combobox', { name: /priority for P-0141-S01/i })
+    )
+    fireEvent.click(await screen.findByRole('option', { name: 'Expedited' }))
+
+    await waitFor(() =>
+      expect(assignPriority).toHaveBeenCalledWith({
+        level: 'vial',
+        id: '11',
+        priority_key: 'expedited',
+      })
+    )
+  })
+
+  it('cannot be used on a row with no native vial', async () => {
+    render(
+      <InboxVialCard
+        vial={vial({ is_parent: true, sub_sample_pk: null })}
+        groupedWithPrevious={false}
+      />,
+      { wrapper }
+    )
+    expect(
+      await screen.findByRole('combobox', { name: /priority for P-0141-S01/i })
+    ).toBeDisabled()
+    expect(assignPriority).not.toHaveBeenCalled()
   })
 })
