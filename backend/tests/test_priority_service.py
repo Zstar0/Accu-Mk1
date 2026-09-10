@@ -1,5 +1,9 @@
 """Loader tests. Uses the conftest db_session (rolled back per test)."""
-from models import CustomerPriority, LimsOrder, LimsSample, LimsSubSample, Priority
+from sqlalchemy import select
+
+from models import (
+    CustomerPriority, LimsOrder, LimsSample, LimsSubSample, Priority, PriorityAudit, SlaTier,
+)
 from priority import service
 
 
@@ -14,6 +18,12 @@ def _seed_priorities(db):
         Priority(key="expedited", name="Expedited", rank=20, icon="chevrons-up",
                  color="red", pulse=True, is_default=False, is_active=True),
     ])
+    db.flush()
+
+
+def _seed_default_tier(db):
+    """snapshot._targets() needs exactly one default tier; create_all seeds none."""
+    db.add(SlaTier(name="Standard", target_minutes=2880, is_default=True))
     db.flush()
 
 
@@ -63,3 +73,48 @@ def test_unknown_vial_pk_resolves_default(db_session):
     by_s, by_v = service.load_effective(db_session, sub_sample_pks=[999999])
     assert by_v[999999].key == "default" and by_v[999999].source_level == "default"
     assert by_s == {}
+
+
+def test_assign_sample_writes_column_audit_and_snapshot(db_session):
+    service.invalidate_priority_cache()
+    _seed_priorities(db_session)
+    _seed_default_tier(db_session)
+    s, v = _mk(db_session)
+    res = service.assign(db_session, level="sample", entity_id=str(s.id), priority_key="expedited", user_id=5)
+    assert (res.old_key, res.new_key) == (None, "expedited") and res.affected_sample_pks == [s.id]
+    assert s.priority_key == "expedited"
+    audit = db_session.execute(select(PriorityAudit).where(PriorityAudit.entity_id == str(s.id))).scalar_one()
+    assert (audit.level, audit.new_key, audit.user_id, audit.source) == ("sample", "expedited", 5, "ui")
+    assert s.sla_priority_key == "expedited" and s.sla_priority_source == "sample"
+
+
+def test_assign_customer_affects_every_sample_on_their_orders(db_session):
+    service.invalidate_priority_cache()
+    _seed_priorities(db_session)
+    _seed_default_tier(db_session)
+    s, _ = _mk(db_session)
+    res = service.assign(db_session, level="customer", entity_id="777", priority_key="high", user_id=1, note="VIP")
+    assert res.affected_sample_pks == [s.id]
+    assert s.sla_priority_key == "high" and s.sla_priority_source == "customer"
+
+
+def test_assign_clear_to_inherit(db_session):
+    service.invalidate_priority_cache()
+    _seed_priorities(db_session)
+    _seed_default_tier(db_session)
+    s, _ = _mk(db_session)
+    service.assign(db_session, level="sample", entity_id=str(s.id), priority_key="high", user_id=1)
+    res = service.assign(db_session, level="sample", entity_id=str(s.id), priority_key=None, user_id=1)
+    assert (res.old_key, res.new_key) == ("high", None) and s.priority_key is None
+
+
+def test_assign_rejects_unknown_key_and_level(db_session):
+    import pytest
+    service.invalidate_priority_cache()
+    _seed_priorities(db_session)
+    _seed_default_tier(db_session)
+    s, _ = _mk(db_session)
+    with pytest.raises(ValueError):
+        service.assign(db_session, level="sample", entity_id=str(s.id), priority_key="nope", user_id=1)
+    with pytest.raises(ValueError):
+        service.assign(db_session, level="planet", entity_id="1", priority_key="high", user_id=1)

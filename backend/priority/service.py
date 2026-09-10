@@ -3,12 +3,16 @@ and (Task 4) assign(). Spec §4/§5."""
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from models import CustomerPriority, LimsOrder, LimsSample, LimsSubSample, Priority
+from models import (
+    PRIORITY_LEVELS, PRIORITY_SOURCES, CustomerPriority, LimsOrder, LimsSample,
+    LimsSubSample, Priority, PriorityAudit,
+)
 from priority.resolver import Effective, PriorityInfo, resolve
 
 _CACHE_TTL_S = 60.0
@@ -90,3 +94,82 @@ def load_effective(
     by_vial = {pk: chain(samples.get(subs[pk].parent_sample_pk) if pk in subs else None, subs.get(pk))
                for pk in sub_pks}
     return by_sample, by_vial
+
+
+@dataclass
+class AssignResult:
+    level: str
+    entity_id: str
+    old_key: Optional[str]
+    new_key: Optional[str]
+    affected_sample_pks: list[int] = field(default_factory=list)
+
+
+def _samples_for_order_numbers(db: Session, order_numbers: list[str]) -> list[int]:
+    if not order_numbers:
+        return []
+    return list(db.execute(
+        select(LimsSample.id).where(LimsSample.client_order_number.in_(order_numbers))
+    ).scalars())
+
+
+def assign(
+    db: Session, *, level: str, entity_id: str, priority_key: Optional[str],
+    user_id: Optional[int], source: str = "ui", note: Optional[str] = None,
+) -> AssignResult:
+    """Set (or clear, with None) the explicit priority at one level. One audit
+    row; SLA snapshot refreshed for every in-flight sample whose effective
+    value could have changed. Spec §5 `PUT /priorities/assign`."""
+    from priority import snapshot  # local import: snapshot imports this module
+
+    if level not in PRIORITY_LEVELS:
+        raise ValueError(f"unknown level {level!r}")
+    if source not in PRIORITY_SOURCES:
+        raise ValueError(f"unknown source {source!r}")
+    if priority_key is not None and priority_key not in priority_map(db):
+        raise ValueError(f"unknown priority {priority_key!r}")
+
+    affected: list[int] = []
+    if level == "customer":
+        cid = int(entity_id)
+        row = db.get(CustomerPriority, cid)
+        old = row.priority_key if row else None
+        if priority_key is None:
+            if row:
+                db.delete(row)
+        elif row:
+            row.priority_key, row.note, row.updated_by = priority_key, note, user_id
+        else:
+            db.add(CustomerPriority(wp_customer_user_id=cid, priority_key=priority_key, note=note, updated_by=user_id))
+        order_nos = list(db.execute(
+            select(LimsOrder.order_number).where(LimsOrder.customer_user_id == cid)
+        ).scalars())
+        affected = _samples_for_order_numbers(db, order_nos)
+    elif level == "order":
+        order = db.execute(select(LimsOrder).where(LimsOrder.order_number == entity_id)).scalar_one_or_none()
+        if order is None:
+            raise ValueError(f"order {entity_id!r} not found")
+        old = order.priority_key
+        order.priority_key = priority_key
+        order.priority_source = None if priority_key is None else source
+        affected = _samples_for_order_numbers(db, [order.order_number])
+    elif level == "sample":
+        sample = db.get(LimsSample, int(entity_id))
+        if sample is None:
+            raise ValueError(f"sample {entity_id!r} not found")
+        old = sample.priority_key
+        sample.priority_key = priority_key
+        affected = [sample.id]
+    else:  # vial
+        vial = db.get(LimsSubSample, int(entity_id))
+        if vial is None:
+            raise ValueError(f"vial {entity_id!r} not found")
+        old = vial.priority_key
+        vial.priority_key = priority_key
+        affected = [vial.parent_sample_pk]
+
+    db.add(PriorityAudit(user_id=user_id, level=level, entity_id=str(entity_id),
+                         old_key=old, new_key=priority_key, source=source, note=note))
+    db.flush()
+    snapshot.refresh(db, affected, only_in_flight=True)
+    return AssignResult(level, str(entity_id), old, priority_key, sorted(affected))
