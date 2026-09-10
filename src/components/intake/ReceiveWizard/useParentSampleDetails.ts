@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { lookupSenaiteSample, type SenaiteLookupResult } from '@/lib/api'
 
 interface FetchState {
@@ -33,33 +33,47 @@ const INITIAL: FetchState = {
 export function useParentSampleDetails(parentSampleId: string) {
   const [state, setState] = useState<FetchState>(INITIAL)
 
+  // Shared by the mount effect and refresh(). Never writes a "loading" state:
+  // a refresh triggered by an inline control (the priority row's assign) must
+  // not unmount the panel behind the user's cursor — the visible values just
+  // swap when the new payload lands.
+  const fetchDetails = useCallback(
+    (isCancelled: () => boolean = () => false) =>
+      lookupSenaiteSample(parentSampleId)
+        .then(result => {
+          if (isCancelled()) return
+          setState({
+            forSampleId: parentSampleId,
+            details: result,
+            loading: false,
+            error: null,
+          })
+        })
+        .catch((e: unknown) => {
+          if (isCancelled()) return
+          setState({
+            forSampleId: parentSampleId,
+            details: null,
+            loading: false,
+            error: e instanceof Error ? e.message : String(e),
+          })
+        }),
+    [parentSampleId]
+  )
+
   useEffect(() => {
     let cancelled = false
-
-    lookupSenaiteSample(parentSampleId)
-      .then(result => {
-        if (cancelled) return
-        setState({
-          forSampleId: parentSampleId,
-          details: result,
-          loading: false,
-          error: null,
-        })
-      })
-      .catch((e: unknown) => {
-        if (cancelled) return
-        setState({
-          forSampleId: parentSampleId,
-          details: null,
-          loading: false,
-          error: e instanceof Error ? e.message : String(e),
-        })
-      })
-
+    void fetchDetails(() => cancelled)
     return () => {
       cancelled = true
     }
-  }, [parentSampleId])
+  }, [fetchDetails])
+
+  /** Re-read the parent's payload in place (e.g. after a priority assign, so
+   *  the effective value and its source refresh without a remount). */
+  const refresh = useCallback(() => {
+    void fetchDetails()
+  }, [fetchDetails])
 
   // If the parent sampleId changed since the last completed fetch, the cached
   // state is stale — surface it as still-loading so the UI doesn't flash old
@@ -69,5 +83,6 @@ export function useParentSampleDetails(parentSampleId: string) {
     details: isStale ? null : state.details,
     loading: isStale ? true : state.loading,
     error: isStale ? null : state.error,
+    refresh,
   }
 }

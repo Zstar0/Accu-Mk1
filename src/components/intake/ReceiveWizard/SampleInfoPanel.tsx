@@ -5,12 +5,16 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
 import type { SenaiteLookupResult } from '@/lib/api'
+import { SamplePriorityRow } from '@/components/senaite/SamplePriorityRow'
 import { cn } from '@/lib/utils'
 
 interface Props {
   details: SenaiteLookupResult | null
   loading: boolean
   error: string | null
+  /** Fired after a successful priority assign so the owner can re-read the
+   *  lookup — the effective value/source is resolved server-side. */
+  onPriorityAssigned?: () => void
 }
 
 function formatDate(dateStr: string | null): string {
@@ -45,7 +49,12 @@ function StackedField({
   )
 }
 
-export function SampleInfoPanel({ details, loading, error }: Props) {
+export function SampleInfoPanel({
+  details,
+  loading,
+  error,
+  onPriorityAssigned,
+}: Props) {
   if (loading) {
     return (
       <div className="mb-3 rounded border bg-background/40 px-2 py-2 text-xs text-muted-foreground">
@@ -97,6 +106,16 @@ export function SampleInfoPanel({ details, loading, error }: Props) {
           <div className="border-t border-border/50 pt-2 flex flex-col gap-2">
             <StackedField label="Sample Type" value={details.sample_type} />
             <StackedField label="Order #" value={details.client_order_number} />
+            {/* Sample-level priority (sample-priority spec §5): glyph shows the
+                resolved value, the select writes this sample's own override.
+                registry_pk is null until the sample is received, in which case
+                the row degrades to a read-only hint. */}
+            <SamplePriorityRow
+              registryPk={details.registry_pk}
+              explicitKey={details.explicit_priority_key ?? null}
+              effective={details.priority}
+              onAssigned={onPriorityAssigned}
+            />
             <StackedField
               label="Client Sample ID"
               value={details.client_sample_id}

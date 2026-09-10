@@ -6,6 +6,7 @@ import {
 } from '@/lib/api'
 import { vialPosition } from '@/lib/vial-label'
 import { RoleBadge } from '@/components/shared/RoleBadge'
+import { SamplePriorityRow } from '@/components/senaite/SamplePriorityRow'
 import { useUIStore } from '@/store/ui-store'
 import { usePrintLabel } from '@/components/samples/usePrintLabel'
 import { PrintLabelPortal } from '@/components/samples/PrintLabelPortal'
@@ -16,6 +17,9 @@ interface Props {
   onCloseAndNavigate: (sampleId: string) => void
   /** Container family: S01 IS Vial 1 (position = vial_sequence). */
   containerMode: boolean
+  /** Fired after a vial-level priority assign — the wizard re-reads its vial
+   *  list so the row shows the newly resolved effective value. */
+  onVialAssigned?: () => void
 }
 
 /**
@@ -70,7 +74,13 @@ function SubSamplePhotoCell({
   )
 }
 
-export function VialDetailsTab({ vials, orderNumber, onCloseAndNavigate, containerMode }: Props) {
+export function VialDetailsTab({
+  vials,
+  orderNumber,
+  onCloseAndNavigate,
+  containerMode,
+  onVialAssigned,
+}: Props) {
   const { printLabel, target: printTarget } = usePrintLabel()
   const subSamples = vials.map(v => v.sub)
   const subCount = subSamples.length
@@ -94,6 +104,7 @@ export function VialDetailsTab({ vials, orderNumber, onCloseAndNavigate, contain
                   <th className="px-3 py-2 w-16">Vial</th>
                   <th className="px-3 py-2">Sample ID</th>
                   <th className="px-3 py-2 w-24">Role</th>
+                  <th className="px-3 py-2 w-64">Priority</th>
                   <th className="px-3 py-2 w-28">Photo</th>
                   <th className="px-3 py-2 w-44">Received</th>
                   <th className="px-3 py-2 w-20">By</th>
@@ -119,6 +130,18 @@ export function VialDetailsTab({ vials, orderNumber, onCloseAndNavigate, contain
                         unassignedLabel="Unassigned"
                         makeTitle={l => `Assigned to ${l}`}
                         className="inline-block"
+                      />
+                    </td>
+                    {/* Vial-level priority: SubSample.id is the lims_samples
+                        pk the assign writes against (same convention as the
+                        sub-sample page's header control). */}
+                    <td className="px-3 py-2">
+                      <SamplePriorityRow
+                        level="vial"
+                        registryPk={s.id}
+                        explicitKey={s.priority_key ?? null}
+                        effective={s.priority}
+                        onAssigned={onVialAssigned}
                       />
                     </td>
                     <td className="px-3 py-2">
