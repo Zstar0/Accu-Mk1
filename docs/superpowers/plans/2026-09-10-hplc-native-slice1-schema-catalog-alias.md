@@ -4,7 +4,7 @@
 
 **Goal:** Land the dark, behaviour-neutral Mk1 foundation for native-born HPLC samples: `peptide_id`/`slot` on analysis rows with slot-aware uniqueness, the five native HPLC services + the `hplc-purity-identity` profile + their spec rows seeded at boot, and every hardcoded `hplcpurity_identity` "primary" site accepting the new key as an alias.
 
-**Architecture:** Additive columns via the existing guarded raw-SQL boot migration list; five partial unique indexes on `lims_analyses` widened with `COALESCE(slot, 0)` (DROP+CREATE pairs, last-boot-wins precedent); a new idempotent boot seeder `catalog/hplc_native_seed.py` modelled on `service_spec_seed.py`; alias awareness as a single shared constant `HPLC_PRIMARY_KEYS` consumed by the demand/registry/seeder/FE sites. Nothing in this slice changes runtime behaviour for any existing order: no order carries the new key until the WordPress `profile_key` is set (later slice), and `slot` stays NULL on every existing row (`COALESCE(slot,0)` keeps legacy uniqueness byte-identical).
+**Architecture:** Additive columns via the existing guarded raw-SQL boot migration list; five partial unique indexes on `lims_analyses` widened with `COALESCE(slot, 0)`, each inside one atomic guarded `DO $$` block (no standalone DROP — final-review Finding 1: a standalone DROP followed by a swallow-able CREATE briefly loses uniqueness enforcement, so the DROP and CREATE commit together or not at all, guarded to be a no-op once already widened); a new idempotent boot seeder `catalog/hplc_native_seed.py` modelled on `service_spec_seed.py`, seeding the `hplc-purity-identity` profile **inactive** (final-review Finding 2 — activating it is an explicit flip-runbook step, not a boot-time default) and skipping any service whose keyword already exists under a different origin (Finding 3); alias awareness as a single shared constant `HPLC_PRIMARY_KEYS` consumed by the demand/registry/seeder/FE sites. Nothing in this slice changes runtime behaviour for any existing order: no order carries the new key until the WordPress `profile_key` is set (later slice), and `slot` stays NULL on every existing row (`COALESCE(slot,0)` keeps legacy uniqueness byte-identical).
 
 **Tech Stack:** Python 3.12 / FastAPI / SQLAlchemy 2 (backend), Postgres (prod, live-DB tests via `SessionLocal`), sqlite in-memory for unit tests, pytest; TypeScript + vitest (frontend). Backend tests: `cd backend && pytest`. Frontend: `npm run check:all` (npm only, never pnpm).
 
@@ -177,7 +177,7 @@ git commit -m "feat(lims): peptide_id + slot on lims_analyses (HPLC-native M1)" 
 
 ---
 
-### Task 2: Slot-aware root unique indexes (five DROP+CREATE pairs)
+### Task 2: Slot-aware root unique indexes (five atomic guarded `DO $$` widen blocks)
 
 **Files:**
 - Modify: `backend/database.py` (`_run_migrations()` list, append after Task 1's statements)
@@ -186,7 +186,7 @@ git commit -m "feat(lims): peptide_id + slot on lims_analyses (HPLC-native M1)" 
 **Interfaces:**
 - Produces: the five indexes `uq_lims_analyses_sub_service_root`, `uq_lims_analyses_sub_service_id_root`, `uq_lims_analyses_parent_service_root`, `uq_lims_analyses_parent_service_id_root`, `uq_lims_analyses_parent_service_ordered` now keyed with a trailing `COALESCE(slot, 0)` column. Names unchanged, so `IDENTITY_INDEXES` / `verify_identity_indexes()` in `database.py` need no edit.
 
-Why DROP+CREATE: `CREATE UNIQUE INDEX IF NOT EXISTS` is a no-op when the old-shaped index exists. The repo precedent is `database.py:1135-1142` (the provenance-aware widen). Because `_run_migrations` runs top-to-bottom every boot, the LAST definition in the list wins; the earlier CREATE statements for these names stay in place (history) and are immediately superseded.
+Why one atomic `DO $$` block per index, not a standalone DROP+CREATE pair (final-review Finding 1, shipped this way): `CREATE UNIQUE INDEX IF NOT EXISTS` is a no-op when the old-shaped index exists, so widening still needs a drop first — but `_run_migrations` swallows a failing CREATE as `migration_skipped`, and a standalone DROP that already committed would then leave the index (and its uniqueness guarantee) briefly or permanently missing. Each of the five sits in ONE `DO $$ ... END $$` block instead: a Postgres DO block runs in a single transaction, so a failing CREATE rolls the DROP back with it. Each block is also guarded (`IF EXISTS ... AND indexdef NOT LIKE '%COALESCE%'`) so it becomes a no-op once the index is already widened — the guard compares on Postgres's normalized `indexdef` text, not the literal `COALESCE(slot, ...)` source, since Postgres renders it as `COALESCE((slot)::integer, 0)`. Three pre-slice standalone DROP+CREATE pairs for these same two index names (added by earlier, unrelated tasks) were converted to the same guarded idiom for the same reason: once slot data exists, their old unwidened CREATE fails on real duplicate rows.
 
 - [ ] **Step 1: Write the failing tests**
 
