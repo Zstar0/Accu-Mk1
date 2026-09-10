@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.18.1 — 2026-09-10
+
 ### Fixed
 - **The sample-scope `verify` catalog edge now gates on verified-OR-published, like `publish` and `submit` already did.** It was the only edge the 2026-08-23 widening missed, and that gap is the whole `no_edge:publish` residual class found while flipping status authority: a legacy family's line that SENAITE had already published surfaces in `native_parent_line_states` as `published` (Mk1 holds only a `senaite_mirror` shadow row for it), so a strict `verified` list refused `verify` on 12 fully-finished samples — BW-0095/0096/0097/0098/0100/0105, PB-0278, PB-0294, P-1615, P-1616, P-2635, P-2636 — which then refused `publish` from `to_be_verified` with `no_edge` and stranded there indefinitely. Widening is strictly permissive: it can only allow transitions that were previously refused. Fresh databases get the value from the seed; existing ones are covered by a guarded boot `UPDATE` whose `LIKE` test cannot match an already-widened value, so it is idempotent — the same fresh-vs-existing split the publish widening used. Applied to production by hand at the flip; this brings the code back in line. All 12 then walked `verify → verified → publish → published` with no badge movement, because their status column already read `published` and only the engine was behind.
 
