@@ -74,7 +74,8 @@ function eventToLevel(event: string): EventLevel {
     // sample-priority spec §3.4: priority_audit lines are derived at read
     // time from the audit table. Accent (not dim) — a priority change is a
     // deliberate operator action, same weight as role_assigned.
-    case 'priority_changed':  return 'accent'
+    case 'priority_changed':
+      return 'accent'
     default:                  return 'dim'
   }
 }
@@ -373,8 +374,13 @@ export function SampleActivityLog({ open, onClose, sampleId }: Props) {
                     {isPriority ? (
                       <span
                         data-testid="priority-audit-marker"
+                        // The row is a hand-built monospace column
+                        // (ts, 2sp, one-char glyph, 2sp, text) and the detail
+                        // line below indents to ps-[21ch]. Constrain the lucide
+                        // marker to a single character cell so priority rows
+                        // keep the same offset as every other row.
                         className={cn(
-                          'inline-flex align-text-bottom',
+                          'inline-flex w-[1ch] justify-center align-text-bottom',
                           levelColor[level]
                         )}
                       >
