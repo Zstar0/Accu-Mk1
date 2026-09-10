@@ -393,7 +393,7 @@ import pytest
 from priority.resolver import PriorityInfo, resolve
 
 FIXTURE = Path(__file__).parent / "fixtures" / "priority_cases.json"
-DATA = json.loads(FIXTURE.read_text())
+DATA = json.loads(FIXTURE.read_text(encoding="utf-8"))
 PRIOS = {p["key"]: PriorityInfo(**p) for p in DATA["priorities"]}
 
 
