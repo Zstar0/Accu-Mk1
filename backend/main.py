@@ -10669,6 +10669,15 @@ _REPORTS_SOURCE_CODES_SQL = (
     " WHERE status = 'published' AND parent_generation_id IS NULL"
 )
 
+# Report-side counts are deliberately UNFILTERED: they report what is physically
+# in the table. The banner compares them against the primary-only source counts,
+# so a mismatch is the signal that the table holds rows it should not (orphans,
+# listed below it on the page) and that Re-sync has work to do. Filtering these
+# would hide exactly the condition the page exists to surface.
+_REPORTS_TABLE_ROWS_SQL = "SELECT count(*) FROM published_coa_results"
+
+_REPORTS_TABLE_CODES_SQL = "SELECT count(DISTINCT verification_code) FROM published_coa_results"
+
 _REPORTS_MISSING_CODES_SQL = """
     SELECT verification_code FROM coa_generations
     WHERE status = 'published' AND parent_generation_id IS NULL AND coa_data IS NOT NULL
@@ -10727,9 +10736,9 @@ async def reports_sync_status(
                 source_codes = cur.fetchone()[0]
 
                 # Report table
-                cur.execute("SELECT count(*) FROM published_coa_results")
+                cur.execute(_REPORTS_TABLE_ROWS_SQL)
                 report_rows = cur.fetchone()[0]
-                cur.execute("SELECT count(DISTINCT verification_code) FROM published_coa_results")
+                cur.execute(_REPORTS_TABLE_CODES_SQL)
                 report_codes = cur.fetchone()[0]
 
                 # Missing: in source but not in report table

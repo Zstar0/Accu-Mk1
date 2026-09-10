@@ -112,3 +112,17 @@ def test_source_counts_exclude_additional_coas(db):
     """The banner compares these against the report table; children must not inflate them."""
     assert db.execute(main_module._REPORTS_SOURCE_COUNT_SQL).fetchone()[0] == 2
     assert db.execute(main_module._REPORTS_SOURCE_CODES_SQL).fetchone()[0] == 2
+
+
+def test_report_side_counts_are_physical_table_contents(db):
+    """Report-side counts must NOT be filtered to primaries.
+
+    The banner compares them against the primary-only source counts, so the
+    mismatch is the signal that the table holds rows it should not — which is
+    the condition this page exists to surface. Filtering here would render the
+    page permanently, misleadingly green. Fixture holds ACOA-IN, PRIM-OK and
+    PRIM-SUPERSEDED, i.e. 3 rows against a source set of 2 primaries.
+    """
+    assert db.execute(main_module._REPORTS_TABLE_ROWS_SQL).fetchone()[0] == 3
+    assert db.execute(main_module._REPORTS_TABLE_CODES_SQL).fetchone()[0] == 3
+    assert db.execute(main_module._REPORTS_SOURCE_CODES_SQL).fetchone()[0] == 2
