@@ -554,6 +554,11 @@ def _run_migrations():
         "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS sla_snapshot_at TIMESTAMP",
         # Backfill the legacy per-sample table into lims_samples.priority_key.
         # 'normal' = inherit (NULL). One audit row per backfilled sample.
+        # ONCE per row, not once per boot: _run_migrations() runs on every
+        # start, so without the audit-row guard on the UPDATE a user who
+        # cleared a backfilled priority back to inherit would have it
+        # resurrected at the next restart. The guard works because the UPDATE
+        # is ordered BEFORE the audit INSERT that marks the row as done.
         """
         UPDATE lims_samples s
            SET priority_key = sp.priority
@@ -561,6 +566,9 @@ def _run_migrations():
          WHERE sp.sample_uid = s.external_lims_uid
            AND sp.priority IN ('high', 'expedited')
            AND s.priority_key IS NULL
+           AND NOT EXISTS (
+                SELECT 1 FROM priority_audit a
+                 WHERE a.level = 'sample' AND a.entity_id = s.id::text AND a.source = 'migration')
         """,
         """
         INSERT INTO priority_audit (level, entity_id, old_key, new_key, source, note)
@@ -583,6 +591,9 @@ def _run_migrations():
          WHERE sp.sample_uid = v.external_lims_uid
            AND sp.priority IN ('high', 'expedited')
            AND v.priority_key IS NULL
+           AND NOT EXISTS (
+                SELECT 1 FROM priority_audit a
+                 WHERE a.level = 'vial' AND a.entity_id = v.id::text AND a.source = 'migration')
         """,
         """
         INSERT INTO priority_audit (level, entity_id, old_key, new_key, source, note)

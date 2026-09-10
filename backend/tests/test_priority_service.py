@@ -151,3 +151,7 @@ def test_legacy_priority_string_clamps_by_rank():
         Effective("backburner", -10, "sample", "1")) == "normal"
     assert service.legacy_priority_string(
         Effective("default", 0, "default", None)) == "normal"
+    # A re-ranked default is still "nothing explicit" -- source_level wins
+    # over rank here, or every untouched sample would render as High.
+    assert service.legacy_priority_string(
+        Effective("default", 30, "default", None)) == "normal"

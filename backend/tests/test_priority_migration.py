@@ -103,6 +103,22 @@ def test_vial_keyed_sample_priorities_backfill_into_lims_sub_samples():
                 "SELECT count(*) FROM priority_audit WHERE level = 'vial' "
                 "AND entity_id = :id AND source = 'migration'"
             ), {"id": str(vial_pk)}).scalar() == 1
+
+        # Backfilled ONCE, not once per boot: a user clearing the backfilled
+        # priority back to inherit must survive the next restart's migration
+        # pass (the UPDATE is guarded on the migration audit row).
+        with engine.begin() as c:
+            c.execute(text("UPDATE lims_sub_samples SET priority_key = NULL WHERE id = :id"),
+                      {"id": vial_pk})
+        _run_migrations()
+        with engine.connect() as c:
+            assert c.execute(text(
+                "SELECT priority_key FROM lims_sub_samples WHERE id = :id"
+            ), {"id": vial_pk}).scalar() is None
+            assert c.execute(text(
+                "SELECT count(*) FROM priority_audit WHERE level = 'vial' "
+                "AND entity_id = :id AND source = 'migration'"
+            ), {"id": str(vial_pk)}).scalar() == 1
     finally:
         with engine.begin() as c:
             if vial_pk is not None:

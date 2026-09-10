@@ -133,6 +133,12 @@ def legacy_priority_string(eff: Effective) -> str:
     `priority_effective` / `priority` carry the REAL key — this narrowing is
     confined to the legacy string.
     """
+    if eff.source_level == "default":
+        # Nothing explicit anywhere in the chain: "no priority" is 'normal' in
+        # the legacy vocabulary regardless of how the default row is ranked --
+        # an admin who re-ranks 'default' upward must not turn every untouched
+        # sample into a High in the legacy field.
+        return "normal"
     if eff.rank >= 20:
         return "expedited"
     if eff.rank > 0:
