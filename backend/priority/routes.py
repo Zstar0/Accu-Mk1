@@ -12,7 +12,10 @@ from sqlalchemy.orm import Session
 
 from auth import get_current_user
 from database import get_db
-from models import CustomerPriority, LimsOrder, Priority, SlaPriorityTier, SlaTier
+from models import (
+    CustomerPriority, LimsOrder, LimsSample, LimsSubSample, Priority, SlaPriorityTier,
+    SlaTier, User,
+)
 from priority import service
 from priority.schemas import (
     KEY_MAX, AssignIn, AssignOut, BulkAssignIn, CustomerPriorityOut, CustomerSeenOut,
@@ -27,9 +30,27 @@ def _global_tier_ids(db: Session) -> dict[str, int]:
     return {r.priority: r.sla_tier_id for r in rows}
 
 
-def _out(p: Priority, tiers: dict[str, int]) -> PriorityOut:
+def _explicit_counts(db: Session) -> dict[str, int]:
+    """Explicit assignments per priority key across every level.
+
+    Four GROUPed queries for the whole catalog, never one per row. NULL is
+    "inherit", not an assignment, so it is filtered out rather than counted
+    into a None bucket.
+    """
+    counts: dict[str, int] = {}
+    for col in (CustomerPriority.priority_key, LimsOrder.priority_key,
+                LimsSample.priority_key, LimsSubSample.priority_key):
+        for key, n in db.execute(select(col, func.count()).where(col.is_not(None)).group_by(col)):
+            counts[key] = counts.get(key, 0) + n
+    return counts
+
+
+def _out(p: Priority, tiers: dict[str, int], counts: dict[str, int] | None = None) -> PriorityOut:
+    # `counts` is supplied by the list route only: a single-row response would
+    # otherwise pay four aggregate scans to report a number nothing renders.
     return PriorityOut(key=p.key, name=p.name, rank=p.rank, icon=p.icon, color=p.color, pulse=p.pulse,
-                       is_default=p.is_default, is_active=p.is_active, sla_tier_id=tiers.get(p.key))
+                       is_default=p.is_default, is_active=p.is_active, sla_tier_id=tiers.get(p.key),
+                       explicit_count=(counts or {}).get(p.key, 0))
 
 
 def _get(db: Session, key: str) -> Priority:
@@ -57,8 +78,9 @@ def _set_global_tier(db: Session, key: str, tier_id: int | None) -> None:
 @router.get("", response_model=list[PriorityOut])
 def list_priorities(db: Session = Depends(get_db), _=Depends(get_current_user)):
     tiers = _global_tier_ids(db)
+    counts = _explicit_counts(db)
     rows = db.execute(select(Priority).order_by(Priority.rank.desc(), Priority.name)).scalars().all()
-    return [_out(p, tiers) for p in rows]
+    return [_out(p, tiers, counts) for p in rows]
 
 
 @router.post("", response_model=PriorityOut, status_code=status.HTTP_201_CREATED)
@@ -134,11 +156,20 @@ def list_customer_priorities(db: Session = Depends(get_db), _=Depends(get_curren
         for o in db.execute(select(LimsOrder).where(LimsOrder.customer_user_id.in_(ids))
                             .order_by(LimsOrder.wp_created_at.desc().nullslast())).scalars():
             latest.setdefault(o.customer_user_id, o)
+    # Who last touched each row, resolved in ONE query over the ids present.
+    user_ids = {r.updated_by for r in rows if r.updated_by is not None}
+    names: dict[int, str] = {}
+    if user_ids:
+        for uid, first, last, email in db.execute(
+                select(User.id, User.first_name, User.last_name, User.email).where(User.id.in_(user_ids))):
+            full = " ".join(x for x in (first, last) if x)
+            names[uid] = full or email
     return [CustomerPriorityOut(
         wp_customer_user_id=r.wp_customer_user_id, priority_key=r.priority_key, note=r.note,
         updated_at=r.updated_at.isoformat() if r.updated_at else None,
         customer_name=getattr(latest.get(r.wp_customer_user_id), "customer_name", None),
         customer_email=getattr(latest.get(r.wp_customer_user_id), "customer_email", None),
+        updated_by_name=names.get(r.updated_by) if r.updated_by is not None else None,
     ) for r in rows]
 
 

@@ -1,6 +1,8 @@
 """API tests for /priorities. Self-restoring: deletes rows it created."""
 import types
 import uuid
+from contextlib import contextmanager
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -202,3 +204,143 @@ def test_bulk_assign_then_clear_round_trips_through_customers(_cleanup, _cleanup
     assert r.status_code == 200, r.text
     assert r.json()["old_key"] == key and r.json()["new_key"] is None
     assert cid not in {x["wp_customer_user_id"] for x in client.get("/priorities/customers").json()}
+
+
+# --------------------------------------------------------------------------
+# Final review: explicit assignment counts (B1) and customer updated-by (B2).
+# --------------------------------------------------------------------------
+
+
+@contextmanager
+def _temp_sample():
+    """Seed one throwaway lims_samples row on the dev Postgres and remove it.
+
+    Same shape as `test_priority_embed.temp_sample`, trimmed to what the count
+    tests need (no vial). Teardown clears the row's priority_key first so the
+    `priorities.key` FK can never block a later DELETE of a temp priority.
+    """
+    tag = uuid.uuid4().hex[:8]
+    sid = f"PB-C{tag}".upper()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    pk = None
+    try:
+        with engine.begin() as c:
+            pk = c.execute(text(
+                "INSERT INTO lims_samples (sample_id, external_lims_uid, status, "
+                "last_synced_at) VALUES (:sid, :uid, 'sample_received', :now) RETURNING id"
+            ), {"sid": sid, "uid": f"mk1cnt-{tag}", "now": now}).scalar()
+        yield {"pk": pk, "sample_id": sid}
+    finally:
+        with engine.begin() as c:
+            if pk is not None:
+                c.execute(text("DELETE FROM priority_audit WHERE level = 'sample' AND entity_id = :i"),
+                          {"i": str(pk)})
+                c.execute(text("DELETE FROM lims_samples WHERE id = :pk"), {"pk": pk})
+
+
+def _listed(key: str) -> dict:
+    return next(p for p in client.get("/priorities").json() if p["key"] == key)
+
+
+def test_list_reports_explicit_assignment_counts_per_key(_cleanup):
+    key = _mk(_cleanup, "Count")
+    # A brand-new priority is assigned nowhere.
+    assert _listed(key)["explicit_count"] == 0
+    with _temp_sample() as s:
+        r = client.put("/priorities/assign",
+                       json={"level": "sample", "id": str(s["pk"]), "priority_key": key})
+        assert r.status_code == 200, r.text
+        assert _listed(key)["explicit_count"] == 1
+
+        r = client.put("/priorities/assign",
+                       json={"level": "sample", "id": str(s["pk"]), "priority_key": None})
+        assert r.status_code == 200, r.text
+        assert _listed(key)["explicit_count"] == 0
+
+
+def test_explicit_count_is_four_grouped_queries_not_one_per_row():
+    """Guards the N+1 the count could easily have become: the whole catalog
+    costs four aggregates regardless of how many priorities exist."""
+    from priority.routes import _explicit_counts
+    from database import SessionLocal
+
+    db = SessionLocal()
+    seen: list[str] = []
+    try:
+        raw = db.execute
+
+        def spy(stmt, *a, **kw):
+            seen.append(str(stmt))
+            return raw(stmt, *a, **kw)
+
+        db.execute = spy  # type: ignore[method-assign]
+        _explicit_counts(db)
+    finally:
+        db.close()
+    assert len(seen) == 4, seen
+    assert all("count(" in q.lower() and "group by" in q.lower() for q in seen), seen
+
+
+@pytest.fixture
+def _temp_user():
+    """A real users row, so updated_by resolves to a name rather than None."""
+    ids: list[int] = []
+
+    def make(first, last, email=None):
+        email = email or f"prio-{uuid.uuid4().hex[:8]}@test.local"
+        with engine.begin() as c:
+            uid = c.execute(text(
+                "INSERT INTO users (email, hashed_password, role, is_active, created_at, "
+                "first_name, last_name) VALUES (:e, 'x', 'standard', true, :now, :f, :l) "
+                "RETURNING id"
+            ), {"e": email, "now": datetime.now(timezone.utc).replace(tzinfo=None),
+                "f": first, "l": last}).scalar()
+        ids.append(uid)
+        return uid, email
+
+    yield make
+    with engine.begin() as c:
+        for uid in ids:
+            c.execute(text("DELETE FROM priority_audit WHERE user_id = :i"), {"i": uid})
+            c.execute(text("DELETE FROM users WHERE id = :i"), {"i": uid})
+
+
+def test_customers_carry_the_resolved_updated_by_name(_cleanup, _cleanup_customers, _temp_user):
+    key = _mk(_cleanup, "Who")
+    uid, _email = _temp_user("Ada", "Lovelace")
+    cid = 999003
+    _cleanup_customers.append(cid)
+    app.dependency_overrides[auth.get_current_user] = lambda: types.SimpleNamespace(id=uid, username="ada")
+    try:
+        r = client.put("/priorities/assign",
+                       json={"level": "customer", "id": str(cid), "priority_key": key})
+        assert r.status_code == 200, r.text
+    finally:
+        app.dependency_overrides[auth.get_current_user] = lambda: {"id": 0, "username": "test"}
+    row = next(x for x in client.get("/priorities/customers").json() if x["wp_customer_user_id"] == cid)
+    assert row["updated_by_name"] == "Ada Lovelace"
+
+
+def test_updated_by_name_falls_back_to_email_then_none(_cleanup, _cleanup_customers, _temp_user):
+    key = _mk(_cleanup, "Anon")
+    uid, email = _temp_user(None, None)
+    cid = 999004
+    _cleanup_customers.append(cid)
+    app.dependency_overrides[auth.get_current_user] = lambda: types.SimpleNamespace(id=uid, username="x")
+    try:
+        assert client.put("/priorities/assign", json={
+            "level": "customer", "id": str(cid), "priority_key": key}).status_code == 200
+    finally:
+        app.dependency_overrides[auth.get_current_user] = lambda: {"id": 0, "username": "test"}
+    row = next(x for x in client.get("/priorities/customers").json() if x["wp_customer_user_id"] == cid)
+    assert row["updated_by_name"] == email
+
+    # The module's own auth override is a DICT, so routes' getattr(user, "id")
+    # misses and updated_by is written NULL - the field must then be null, not
+    # an invented "user 0".
+    cid2 = 999005
+    _cleanup_customers.append(cid2)
+    assert client.put("/priorities/assign", json={
+        "level": "customer", "id": str(cid2), "priority_key": key}).status_code == 200
+    row2 = next(x for x in client.get("/priorities/customers").json() if x["wp_customer_user_id"] == cid2)
+    assert "updated_by_name" in row2 and row2["updated_by_name"] is None

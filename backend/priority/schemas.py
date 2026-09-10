@@ -52,6 +52,10 @@ class PriorityOut(BaseModel):
     is_default: bool
     is_active: bool
     sla_tier_id: Optional[int] = None
+    # How many rows anywhere carry this key EXPLICITLY (customer/order/sample/
+    # vial). Drives the "N assigned" hint and the deactivation confirm; the
+    # list route fills it, single-row responses leave the 0 default.
+    explicit_count: int = 0
 
 
 class PriorityCreate(BaseModel):
@@ -125,6 +129,7 @@ class CustomerPriorityOut(BaseModel):
     updated_at: Optional[str]
     customer_name: Optional[str]
     customer_email: Optional[str]
+    updated_by_name: Optional[str] = None
 
 
 class CustomerSeenOut(BaseModel):
