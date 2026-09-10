@@ -542,6 +542,20 @@ export function PrioritySelect({ level, id, explicitKey, effective, compact = fa
   const effName = priorityByKey(all, effective?.key)?.name ?? 'Default'
   const inheritLabel = effective && effective.source_level !== 'default'
     ? `Inherit (${priorityTooltip(effName, effective)})` : 'Inherit (Default)'
+  // Every active priority is listed, the default included: setting Default
+  // explicitly at a lower level deliberately overrides a higher level's value
+  // (spec fixture case 8).
+  const options = (active ?? []).map(p => ({ key: p.key, label: p.name }))
+  // An explicitly-set priority that has since been deactivated (or pruned)
+  // still has to be an option, or the controlled value matches no item and the
+  // trigger renders blank.
+  if (active && explicitKey && !active.some(p => p.key === explicitKey)) {
+    const stored = priorityByKey(all, explicitKey)
+    options.push({
+      key: explicitKey,
+      label: stored ? `${stored.name} (inactive)` : `${explicitKey} (unknown)`,
+    })
+  }
   return (
     <Select
       value={explicitKey ?? INHERIT}
@@ -553,8 +567,8 @@ export function PrioritySelect({ level, id, explicitKey, effective, compact = fa
       </SelectTrigger>
       <SelectContent>
         <SelectItem value={INHERIT}>{inheritLabel}</SelectItem>
-        {(active ?? []).filter(p => !p.is_default || explicitKey === p.key || true).map(p => (
-          <SelectItem key={p.key} value={p.key}>{p.name}</SelectItem>
+        {options.map(o => (
+          <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>
         ))}
       </SelectContent>
     </Select>

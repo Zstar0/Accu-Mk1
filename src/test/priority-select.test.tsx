@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 
@@ -14,6 +20,17 @@ vi.mock('@/lib/api-priorities', () => ({
       pulse: false,
       is_default: false,
       is_active: true,
+      sla_tier_id: null,
+    },
+    {
+      key: 'rush',
+      name: 'Rush',
+      rank: 20,
+      icon: 'flame',
+      color: 'red',
+      pulse: true,
+      is_default: false,
+      is_active: false,
       sla_tier_id: null,
     },
     {
@@ -93,6 +110,8 @@ describe('PrioritySelect', () => {
     )
     const trigger = await screen.findByRole('combobox', { name: 'Priority' })
     await waitFor(() => expect(trigger).toHaveTextContent('High'))
+    // The explicit value wins the trigger: no inherit label leaks through.
+    expect(trigger).not.toHaveTextContent(/Inherit/)
     fireEvent.click(trigger)
     fireEvent.click(await screen.findByRole('option', { name: /^Inherit/ }))
     await waitFor(() =>
@@ -102,5 +121,29 @@ describe('PrioritySelect', () => {
         priority_key: null,
       })
     )
+  })
+
+  it('keeps a deactivated explicit priority visible and selectable', async () => {
+    wrap(
+      <PrioritySelect
+        level="sample"
+        id="42"
+        explicitKey="rush"
+        effective={{
+          key: 'rush',
+          rank: 20,
+          source_level: 'sample',
+          source_id: '42',
+        }}
+      />
+    )
+    const trigger = await screen.findByRole('combobox', { name: 'Priority' })
+    await waitFor(() => expect(trigger).toHaveTextContent('Rush (inactive)'))
+    fireEvent.click(trigger)
+    const list = within(await screen.findByRole('listbox'))
+    expect(
+      list.getAllByRole('option', { name: 'Rush (inactive)' })
+    ).toHaveLength(1)
+    expect(list.getByRole('option', { name: 'High' })).toBeInTheDocument()
   })
 })
