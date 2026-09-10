@@ -125,7 +125,12 @@ def test_priority_failure_does_not_fail_the_upsert(client, db_session):
     r = _post(client, _body(priority="expedited"))
     assert r.status_code == 200, r.text
     assert r.json()["upserted"] == 1
-    assert db_session.query(LimsOrder).filter_by(order_number="WP-7001").one() is not None
+    # The assignment itself already landed (assign mutates and flushes before
+    # it refreshes the snapshot) -- only the snapshot is lost, which is the
+    # right half to lose.
+    row = db_session.query(LimsOrder).filter_by(order_number="WP-7001").one()
+    assert (row.priority_key, row.priority_source) == ("expedited", "order-payload")
+    assert db_session.query(LimsSample).filter_by(sample_id="PB-7001").one().sla_priority_key is None
 
 
 # ── clock-event snapshots ─────────────────────────────────────────────
