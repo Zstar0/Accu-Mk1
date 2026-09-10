@@ -10335,6 +10335,11 @@ class SlaPerfGatingFamilyOut(BaseModel):
     gated: int
     gated_late: int
     gated_late_pct: float
+    # Under min_timed_for_family timed samples: the page dims the row, marks it
+    # "too few" and drops the red threshold, and it cannot be named as the
+    # leading department. MUST stay declared -- response_model silently strips
+    # anything it does not list.
+    thin: bool
 
 
 class SlaPerfGatingOut(BaseModel):
@@ -10349,6 +10354,7 @@ class SlaPerfGatingOut(BaseModel):
     wait_n: int
     wait_over_day: int
     min_late_for_trend: int
+    min_timed_for_family: int
 
 
 class SlaPerfRiskBucketOut(BaseModel):
