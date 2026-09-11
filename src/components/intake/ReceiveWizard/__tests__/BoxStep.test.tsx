@@ -526,4 +526,52 @@ describe('BoxStep — capacity-driven boxing', () => {
       expect(addBoxButton).toBeDisabled()
     })
   })
+
+  describe('zero-vial roles earn no column (2026-09-01 ruling)', () => {
+    it('hides boxable role columns the order has no vials of', async () => {
+      // Only hplc vials: the other boxable roles (endo, ster, xtra) must not
+      // paint empty lanes — with the full catalog the grid overflowed.
+      setupBackend([vial('P-101', 'hplc')])
+      renderBoxStep()
+
+      expect(await screen.findAllByText('HPLC')).not.toHaveLength(0)
+      await screen.findByText(`Unboxed (${ORDER})`)
+      expect(screen.queryByText('Endotoxin')).not.toBeInTheDocument()
+      expect(screen.queryByText('Sterility')).not.toBeInTheDocument()
+      expect(screen.queryByText('Extras')).not.toBeInTheDocument()
+      // Exactly one lane → exactly one "+ Add box".
+      expect(screen.getAllByRole('button', { name: '+ Add box' })).toHaveLength(1)
+    })
+
+    it('keeps a zero-vial role\'s column when it already holds a box', async () => {
+      // An endo box exists (empty) but the order has no endo vials: the
+      // stored box must stay reachable — same stored-reality-wins invariant
+      // as the boxable-flipped-off union.
+      const { boxesState } = setupBackend([vial('P-101', 'hplc')])
+      boxesState.push({
+        id: 12, order_key: ORDER, box_number: 2, role: 'endo',
+        label_code: 'BOX-1042-2', vial_count: 0, printed_at: null,
+        created_at: null, stored_at: null,
+      })
+      renderBoxStep()
+
+      expect(await screen.findByText('Endotoxin')).toBeInTheDocument()
+      expect(await screen.findByText('BOX-1042-2')).toBeInTheDocument()
+    })
+
+    it('a lane appears as soon as the order has a vial of that role, boxed or not', async () => {
+      // A boxed ster vial (no unboxed remainder): the lane must still render —
+      // presence is judged on ALL the order's vials, not just unboxed ones.
+      const { boxesState } = setupBackend([vial('P-101', 'hplc'), vial('P-102', 'ster', 5)])
+      boxesState.push({
+        id: 5, order_key: ORDER, box_number: 1, role: 'ster',
+        label_code: 'BOX-1042-1', vial_count: 1, printed_at: null,
+        created_at: null, stored_at: null,
+      })
+      renderBoxStep()
+
+      expect(await screen.findAllByText('Sterility')).not.toHaveLength(0)
+      expect(await screen.findAllByText('HPLC')).not.toHaveLength(0)
+    })
+  })
 })
