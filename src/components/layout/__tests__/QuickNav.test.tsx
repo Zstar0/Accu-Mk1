@@ -48,8 +48,8 @@ describe('QuickNav', () => {
     expect(uiState.navigateToCustomers).toHaveBeenCalled()
     expect(uiState.setSearchAndResetPage).toHaveBeenCalledWith('lab@acme.test')
     // order matters: the list-search term is set AFTER the navigator resets slots
-    const navOrder = uiState.navigateToCustomers.mock.invocationCallOrder[0]!
-    const setOrder = uiState.setSearchAndResetPage.mock.invocationCallOrder[0]!
+    const navOrder = uiState.navigateToCustomers.mock.invocationCallOrder[0] ?? Number.NaN
+    const setOrder = uiState.setSearchAndResetPage.mock.invocationCallOrder[0] ?? Number.NaN
     expect(navOrder).toBeLessThan(setOrder)
   })
 
