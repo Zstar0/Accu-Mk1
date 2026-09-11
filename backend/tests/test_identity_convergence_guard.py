@@ -46,6 +46,7 @@ SWEPT_FILES = (
     "lims_analyses/service.py",
     "lims_analyses/seeder.py",
     "lims_analyses/parent_mirror.py",
+    "lims_analyses/hplc_native.py",
     "workflow/observer.py",
     "coa/source_resolver.py",
     "coa/native_sections.py",
@@ -196,6 +197,12 @@ PERMANENT: dict[tuple[str, str, str], tuple[int, str]] = {
         "The `else` arm of the duplicate guard's _ident_clause ternary; the mk1 "
         "arm keys on the service FK. Senaite services keep keyword identity.",
     ),
+    # --- Catalog constants are the only handle at seed time ---
+    ("lims_analyses/hplc_native.py", "native_hplc_services", "AnalysisService"): (
+        1,
+        "catalog constants are the only handle at seed time; the keyword is "
+        "the datum",
+    ),
     # --- Catalog resolves: a keyword STRING is the input contract ---
     ("lims_analyses/service.py", "_find_active_parent_row", "AnalysisService"): (
         1,
@@ -323,6 +330,7 @@ PER_FILE_FLOOR = {
     # select_services_for_role/AnalysisService (PERMANENT).
     "lims_analyses/seeder.py": 1,
     "lims_analyses/parent_mirror.py": 1,
+    "lims_analyses/hplc_native.py": 1,
     "workflow/observer.py": 1,
     "coa/source_resolver.py": 2,
     "main.py": 7,
