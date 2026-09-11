@@ -110,6 +110,7 @@ def test_senaite_born_parent_still_uses_the_mirror(db, monkeypatch):
     seeder.seed_analyses_for_vial(db, sub_sample=v, role="hplc", wp_services={"hplcpurity_identity": True},
                                   parent_sample_id=p.sample_id, commit=False)
     assert seen["parent"] == "P-0141"
+    assert seen["kw_type"] is tuple
 
 
 def test_native_born_without_parent_sample_id_does_not_raise(db):
