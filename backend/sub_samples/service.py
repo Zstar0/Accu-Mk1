@@ -234,9 +234,12 @@ def _quarantine_collision(db: Session, existing: LimsSample,
     if row is None:
         row = _create_sample_row(db, quarantine_id, meta)
         row.quarantined = True
+        native_note = (
+            " (native-born row)" if existing.external_lims_system == "mk1" else ""
+        )
         row.quarantine_reason = (
             f"identity collision: signal for {existing.sample_id} carried uid "
-            f"{senaite_uid}; stored uid {existing.external_lims_uid}"
+            f"{senaite_uid}; stored uid {existing.external_lims_uid}{native_note}"
         )
         db.flush()
     log.error(
@@ -298,8 +301,10 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
     writer.
 
     SENAITE-attached form: sample_id = the fresh P-xxxx id. SENAITE-free form
-    (future native lines): sample_id None -> the minted native id becomes the
-    sample_id and external_lims_system = "mk1".
+    (native-born lines, HPLC-native M3): sample_id None -> mint_customer_sample_id
+    mints the customer-facing P-/PB- id (sample_type-keyed counters, Task 1)
+    and that becomes row.sample_id; the internal native_id (aP-xxxx) is still
+    derived from it. external_lims_system = "mk1", external_lims_uid = None.
 
     Idempotent: keyed on sample_id; native_id minted exactly once; a repeat
     signal refreshes fields but never re-mints and never regresses status,
@@ -308,14 +313,17 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
     until a line goes native, and a signal can never un-receive a sample).
 
     Retry contract (SENAITE-free form): callers MUST retry with the returned
-    sample_id (the native id echoed back). A retry with sample_id=None mints
-    a brand-new sample by design — there is no natural key to dedupe on; the
-    IS-side Idempotency-Key becomes meaningful only when a later slice stores
-    it. An echoed-id retry without a senaite_uid preserves the row's native
-    identity (external_lims_system stays "mk1"); if a later signal DOES carry
-    a senaite_uid, the attach wins only when the stored uid is NULL or
-    agrees; a disagreeing uid is an identity collision — the adopt is
-    refused and the incoming order parks on a quarantine row (S8 guard)."""
+    sample_id (the minted customer-facing id echoed back). A retry with
+    sample_id=None mints a brand-new sample by design — there is no natural
+    key to dedupe on; the IS-side Idempotency-Key becomes meaningful only
+    when a later slice stores it. An echoed-id retry without a senaite_uid
+    preserves the row's native identity (external_lims_system stays "mk1").
+
+    Adoption guard (spec 2026-09-10 F3): native identity is FINAL. A signal
+    carrying a senaite_uid against an existing row whose stored uid
+    disagrees, OR against an existing native-born ("mk1") row at all, is an
+    identity collision, never an attach — the adopt is refused and the
+    incoming order parks on a quarantine row (S8 guard)."""
     meta = dict(meta)
     meta.setdefault("review_state", "sample_due")
     # Normalize unconditionally: the trusted senaite_uid PARAM must always
@@ -338,6 +346,12 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
     if existing:
         if (senaite_uid and existing.external_lims_uid
                 and existing.external_lims_uid != senaite_uid):
+            return _quarantine_collision(db, existing, senaite_uid, meta)
+        # Adoption guard (spec 2026-09-10 F3): a native-born row has no uid to
+        # disagree with, so the old guard let a SENAITE AR minted under the
+        # same P- id (legacy retest / transfer after the flip) be ADOPTED onto
+        # another customer's native sample. Native identity is final.
+        if senaite_uid and existing.external_lims_system == "mk1":
             return _quarantine_collision(db, existing, senaite_uid, meta)
         prior_status = existing.status
         prior_uid = existing.external_lims_uid
@@ -367,17 +381,19 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
         apply_signal_priority(db, existing, meta)
         return existing
 
+    sample_type_title = (meta.get("getSampleTypeTitle") or meta.get("SampleTypeTitle"))
+    born_native = not sample_id
+    if born_native:
+        from sub_samples.native_id import mint_customer_sample_id
+        sample_id = mint_customer_sample_id(db, sample_type_title)
     native_id_value = mint_native_id(
-        db,
-        senaite_sample_id=sample_id,
-        sample_type_title=(meta.get("getSampleTypeTitle")
-                           or meta.get("SampleTypeTitle")),
+        db, senaite_sample_id=sample_id, sample_type_title=sample_type_title,
     )
-    row = _create_sample_row(db, sample_id or native_id_value, meta)
+    row = _create_sample_row(db, sample_id, meta)
     if meta.get("VendorName"):
         row.vendor_name = str(meta["VendorName"])[:200]
     row.native_id = native_id_value
-    if not sample_id:
+    if born_native:
         row.external_lims_uid = None
         row.external_lims_system = "mk1"
     db.flush()
@@ -495,20 +511,26 @@ def _merge_coa_meta(existing_coa_meta: Optional[str], meta: dict) -> dict:
     return out
 
 
-_EMPTY_SLOT = {"name": None, "declared_quantity": None}
+_EMPTY_SLOT = {"name": None, "declared_quantity": None, "peptide_id": None}
 
 
 def _parse_analyte_slots(meta: dict) -> list[dict]:
-    """Analyte slots 1-8 as POSITIONAL {name, declared_quantity} pairs:
-    list index + 1 == SENAITE slot number. An empty slot below the last
-    occupied one is kept as a {"name": None, "declared_quantity": None}
-    placeholder so the position-keyed readers (registry details
-    slot_number, the COA name resolver, coa.sample_meta, the inbox overlay)
-    keep SENAITE's slot numbers after a middle slot is cleared -- PB-0469
-    (2026-09-08): compacting slot 2 away re-labelled BPC-157/TB500 as
-    Analyte 2/3 against the slot-3/4 results, on the parent table and on
-    the COA wire alike. Trailing empties are trimmed; all-empty -> [].
-    IS writes up to 8 slots; the Mk1 UI shows 4."""
+    """Analyte slots 1-8 as POSITIONAL {name, declared_quantity, peptide_id}
+    pairs: list index + 1 == SENAITE slot number. An empty slot below the
+    last occupied one is kept as an _EMPTY_SLOT placeholder so the
+    position-keyed readers (registry details slot_number, the COA name
+    resolver, coa.sample_meta, the inbox overlay) keep SENAITE's slot
+    numbers after a middle slot is cleared -- PB-0469 (2026-09-08):
+    compacting slot 2 away re-labelled BPC-157/TB500 as Analyte 2/3 against
+    the slot-3/4 results, on the parent table and on the COA wire alike.
+    Trailing empties are trimmed; all-empty -> []. IS writes up to 8 slots;
+    the Mk1 UI shows 4.
+
+    `peptide_id` (HPLC-native M3): the native-born signal's
+    Analyte{i}PeptideId, when present -- the catalog peptide id the
+    native-born intake path resolves against, independent of the SENAITE
+    fuzzy-match. None when the signal doesn't carry one (SENAITE-attached
+    form)."""
     slots: list[dict] = []
     for i in range(1, 9):
         name = _extract_label(meta.get(f"Analyte{i}Peptide"))
@@ -516,9 +538,15 @@ def _parse_analyte_slots(meta: dict) -> list[dict]:
             slots.append(dict(_EMPTY_SLOT))
             continue
         qty = meta.get(f"Analyte{i}DeclaredQuantity")
+        pid_raw = meta.get(f"Analyte{i}PeptideId")
+        try:
+            pid = int(pid_raw) if pid_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            pid = None
         slots.append({
             "name": str(name).strip(),
             "declared_quantity": str(qty) if qty not in (None, "") else None,
+            "peptide_id": pid,
         })
     return _trim_trailing_empty_slots(slots)
 
@@ -585,7 +613,7 @@ def _apply_senaite_fields_to_row(db: Session, row: "LimsSample", fields: dict) -
             m = _ANALYTE_KEY_RE.match(key)
             idx, kind = int(m.group(1)) - 1, m.group(2)
             while len(slots) <= idx:
-                slots.append({"name": None, "declared_quantity": None})
+                slots.append(dict(_EMPTY_SLOT))
             if kind == "Peptide":
                 slots[idx]["name"] = str(value).strip() if value else None
             else:

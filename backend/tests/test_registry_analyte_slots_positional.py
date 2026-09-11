@@ -38,7 +38,7 @@ def test_parse_keeps_an_empty_slot_below_the_last_occupied_one():
         "BPC-157 - Identity (HPLC)",
         "TB500 (17-23 Fragment) - Identity (HPLC)",
     ]
-    assert slots[1] == {"name": None, "declared_quantity": None}
+    assert slots[1] == {"name": None, "declared_quantity": None, "peptide_id": None}
     assert slots[0]["declared_quantity"] == "50.00"
     assert slots[3]["declared_quantity"] == "10.00"
 
@@ -47,7 +47,9 @@ def test_parse_trims_trailing_empty_slots():
     from sub_samples.service import _parse_analyte_slots
 
     meta = {"Analyte1Peptide": "X", "Analyte2Peptide": None, "Analyte5Peptide": ""}
-    assert _parse_analyte_slots(meta) == [{"name": "X", "declared_quantity": None}]
+    assert _parse_analyte_slots(meta) == [
+        {"name": "X", "declared_quantity": None, "peptide_id": None}
+    ]
 
 
 def test_parse_all_empty_is_an_empty_list():

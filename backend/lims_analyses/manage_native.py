@@ -216,16 +216,17 @@ def _seed_members_on_vial(db: Session, *, vial: LimsSubSample, members: list[Ana
     catalog path there."""
     from lims_analyses.seeder import _seed_rows_from_services
     live = db.execute(
-        select(LimsAnalysis.keyword, LimsAnalysis.analysis_service_id).where(
+        select(LimsAnalysis.keyword, LimsAnalysis.analysis_service_id, LimsAnalysis.slot).where(
             LimsAnalysis.lims_sub_sample_pk == vial.id,
             LimsAnalysis.review_state.notin_(DEAD_STATES),
         )
     ).all()
-    existing_kw = {kw for kw, _sid in live}
+    existing_kw = {(kw, slot or 0) for kw, _sid, slot in live}
     # S3 integration: the shared row builder dedupes on the UNION of live
-    # keyword AND live service id (drift-proof identity) — build both sets
-    # the same way seed_analyses_for_vial does.
-    existing_service_ids = {sid for _kw, sid in live if sid is not None}
+    # keyword AND live service id (drift-proof identity), slot-aware since
+    # HPLC-native slice 1 widened the root indexes — build both sets the
+    # same way seed_analyses_for_vial does.
+    existing_service_ids = {(sid, slot or 0) for _kw, sid, slot in live if sid is not None}
     rows = _seed_rows_from_services(
         db, sub_sample=vial, services=members, existing_kw=existing_kw,
         existing_service_ids=existing_service_ids,

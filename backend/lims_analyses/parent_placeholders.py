@@ -23,6 +23,10 @@ what lets promote stay completely untouched.
 """
 from __future__ import annotations
 
+import logging
+
+log = logging.getLogger(__name__)
+
 PROVENANCE_ORDERED = "ordered"
 
 
@@ -54,45 +58,60 @@ def seed_parent_placeholders(
     """
     from models import LimsAnalysis
     from coa.native_sections import _ordered_native_profiles
+    from lims_analyses.hplc_native import (AGGREGATES, TRIO, is_native_born,
+                                           resolve_slot_peptides, title_for_slot)
     from lims_analyses.service import record_placeholder_created
+
+    reason_action = reason
 
     stats = {"created": 0, "existing": 0, "skipped": 0, "created_ids": []}
     profiles = _ordered_native_profiles(db, services or {}, package,
                                         require_archetype=False)
+
+    native_slots = None
+    if is_native_born(parent):
+        native_slots = resolve_slot_peptides(db, parent)
+        if not native_slots:
+            log.error("registry.native_placeholder_no_analyte_slots sample_id=%s", parent.sample_id)
+
+    def _mint(svc, *, slot, peptide_id, title, reason):
+        exists = (
+            db.query(LimsAnalysis)
+            .filter_by(lims_sample_pk=parent.id, analysis_service_id=svc.id,
+                       provenance=PROVENANCE_ORDERED, slot=slot)
+            .filter(LimsAnalysis.review_state.notin_(("rejected", "retracted")))
+            .first()
+        )
+        if exists is not None:
+            stats["existing"] += 1
+            return
+        row = LimsAnalysis(
+            lims_sample_pk=parent.id, lims_sub_sample_pk=None,
+            analysis_service_id=svc.id, keyword=svc.keyword, title=title,
+            result_value=None, review_state="unassigned",
+            provenance=PROVENANCE_ORDERED, created_by_user_id=created_by_user_id,
+            slot=slot, peptide_id=peptide_id, reportable_reason=reason,
+        )
+        db.add(row)
+        db.flush()
+        if reason_action:
+            record_placeholder_created(db, row, reason=reason_action, user_id=created_by_user_id)
+        stats["created"] += 1
+        stats["created_ids"].append(row.id)
 
     for prof in profiles:
         for svc in prof.analysis_services:
             if (getattr(svc, "origin", None) or "") != "mk1":
                 stats["skipped"] += 1
                 continue
-            exists = (
-                db.query(LimsAnalysis)
-                .filter_by(
-                    lims_sample_pk=parent.id,
-                    analysis_service_id=svc.id,
-                    provenance=PROVENANCE_ORDERED,
-                )
-                .filter(LimsAnalysis.review_state.notin_(("rejected", "retracted")))
-                .first()
-            )
-            if exists is not None:
-                stats["existing"] += 1
+            if native_slots is not None and svc.keyword in TRIO:
+                for res in native_slots:
+                    reason = f"analyte_{res.reason}: {res.raw_name}" if res.reason else None
+                    title = title_for_slot(svc.keyword, res)
+                    _mint(svc, slot=res.slot, peptide_id=res.peptide_id, title=title, reason=reason)
                 continue
-            row = LimsAnalysis(
-                lims_sample_pk=parent.id,
-                lims_sub_sample_pk=None,
-                analysis_service_id=svc.id,
-                keyword=svc.keyword,
-                title=svc.title,
-                result_value=None,
-                review_state="unassigned",
-                provenance=PROVENANCE_ORDERED,
-                created_by_user_id=created_by_user_id,
-            )
-            db.add(row)
-            db.flush()
-            if reason:
-                record_placeholder_created(db, row, reason=reason, user_id=created_by_user_id)
-            stats["created"] += 1
-            stats["created_ids"].append(row.id)
+            if native_slots is not None and svc.keyword in AGGREGATES and len(native_slots) < 2:
+                stats["skipped"] += 1
+                continue
+            _mint(svc, slot=None, peptide_id=None, title=svc.title, reason=None)
     return stats

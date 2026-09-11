@@ -288,6 +288,14 @@ def test_root_index_widen_guard_is_idempotent_and_preserves_oid():
         s.close()
 
 
+def test_boot_migration_seeds_customer_counters():
+    stmts = _captured()
+    seed = [s for s in stmts if "lims_native_id_sequences" in s and "NOT EXISTS" in s]
+    assert len(seed) == 2, [s[:80] for s in seed]
+    assert any("'P', 5000" in s for s in seed)
+    assert any("'PB', 1000" in s for s in seed)
+
+
 def _svc(db, keyword="HPLC-PURITY"):
     from models import AnalysisService
     svc = AnalysisService(title=keyword, keyword=keyword, origin="mk1")

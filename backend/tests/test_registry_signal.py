@@ -7,13 +7,18 @@ from datetime import datetime
 from unittest.mock import patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 from database import Base
 from models import LimsSample, LimsNativeIdSequence, LimsSampleRemark
 
 
 @pytest.fixture
 def db():
-    engine = create_engine("sqlite:///:memory:")
+    # StaticPool + check_same_thread=False: TestClient (used by the S2S
+    # endpoint tests below) runs requests off a threadpool, and a plain
+    # sqlite:///:memory: engine 500s there ("created in thread X, used in Y").
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
+                           poolclass=StaticPool)
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     s = Session()
@@ -106,15 +111,19 @@ def test_signal_does_not_clobber_existing_status(db):
 
 
 def test_signal_senaite_free_form(db):
+    _seed_customer_counters(db)
     row = upsert_sample_from_signal(db, sample_id=None, senaite_uid=None,
                                     meta=_signal_meta(uid=None))
     assert row.native_id == "aP-0001"
-    assert row.sample_id == "aP-0001"          # native id IS the id (1F on-ramp)
+    # HPLC-native M3: sample_id is the minted customer-facing P-/PB- id;
+    # native_id (aP-xxxx) stays the internal id derived from it.
+    assert row.sample_id == "P-5000"
     assert row.external_lims_uid is None
     assert row.external_lims_system == "mk1"
 
 
 def test_senaite_free_retry_with_echoed_id_stays_native(db):
+    _seed_customer_counters(db)
     first = upsert_sample_from_signal(db, sample_id=None, senaite_uid=None,
                                       meta=_signal_meta(uid=None))
     retry = upsert_sample_from_signal(db, sample_id=first.sample_id,
@@ -123,18 +132,6 @@ def test_senaite_free_retry_with_echoed_id_stays_native(db):
     assert retry.native_id == first.native_id          # never re-minted
     assert retry.external_lims_system == "mk1"          # identity preserved
     assert retry.external_lims_uid is None
-
-
-def test_native_row_later_attached_to_senaite_keeps_uid(db):
-    """If a signal DOES carry a senaite uid for a previously-native row,
-    the attach wins (forward path for a line coming back onto SENAITE)."""
-    first = upsert_sample_from_signal(db, sample_id=None, senaite_uid=None,
-                                      meta=_signal_meta(uid=None))
-    attached = upsert_sample_from_signal(db, sample_id=first.sample_id,
-                                         senaite_uid="LATE_UID",
-                                         meta=_signal_meta(uid="LATE_UID"))
-    assert attached.external_lims_uid == "LATE_UID"
-    assert attached.external_lims_system == "senaite"
 
 
 def test_resignal_does_not_regress_enriched_row(db):
@@ -152,6 +149,7 @@ def test_resignal_does_not_regress_enriched_row(db):
 
 def test_senaite_free_retry_still_stays_native(db):
     """The generalized restore must not break the native echo-id contract."""
+    _seed_customer_counters(db)
     first = upsert_sample_from_signal(db, sample_id=None, senaite_uid=None,
                                       meta=_signal_meta(uid=None))
     retry = upsert_sample_from_signal(db, sample_id=first.sample_id,
@@ -322,6 +320,135 @@ def test_customer_note_falls_back_when_the_order_number_is_missing(db):
     assert _note_contents(db, row) == ["Customer note: No order ref on this one"]
 
 
+def _seed_customer_counters(db):
+    db.add(LimsNativeIdSequence(prefix="P", next_value=5000))
+    db.add(LimsNativeIdSequence(prefix="PB", next_value=1000))
+    db.commit()
+
+
+def test_senaite_free_signal_mints_customer_facing_id(db):
+    _seed_customer_counters(db)
+    row = upsert_sample_from_signal(db, sample_id=None, senaite_uid=None,
+                                    meta=_signal_meta(uid=None, SampleTypeTitle="Peptide"))
+    assert row.sample_id == "P-5000"
+    assert row.native_id == "aP-0001"
+    assert row.external_lims_system == "mk1" and row.external_lims_uid is None
+
+
+def test_senaite_free_blend_signal_uses_pb_prefix(db):
+    _seed_customer_counters(db)
+    # _signal_meta's default "getSampleTypeTitle" wins over "SampleTypeTitle"
+    # in upsert_sample_from_signal's own precedence
+    # (meta.get("getSampleTypeTitle") or meta.get("SampleTypeTitle")), so the
+    # override has to land on the getter-index key to actually take effect.
+    row = upsert_sample_from_signal(db, sample_id=None, senaite_uid=None,
+                                    meta=_signal_meta(uid=None, getSampleTypeTitle="Peptide Blend"))
+    assert row.sample_id == "PB-1000"
+
+
+def test_senaite_free_signal_without_seeded_counter_raises(db):
+    with pytest.raises(ValueError, match="not seeded"):
+        upsert_sample_from_signal(db, sample_id=None, senaite_uid=None,
+                                  meta=_signal_meta(uid=None, SampleTypeTitle="Peptide"))
+
+
+def test_native_row_never_adopts_a_senaite_uid(db):
+    """Spec ruling (F3): after the flip SENAITE keeps minting P- ids for legacy
+    retests/transfers; a later signal for an EXISTING native row carrying a
+    senaite_uid is an identity collision, not an attach."""
+    _seed_customer_counters(db)
+    native = upsert_sample_from_signal(db, sample_id=None, senaite_uid=None,
+                                       meta=_signal_meta(uid=None, SampleTypeTitle="Peptide"))
+    result = upsert_sample_from_signal(db, sample_id=native.sample_id,
+                                       senaite_uid="LATE_UID",
+                                       meta=_signal_meta(uid="LATE_UID"))
+    db.refresh(native)
+    assert native.external_lims_system == "mk1" and native.external_lims_uid is None
+    assert result.id != native.id and result.quarantined is True
+    assert result.sample_id.startswith(native.sample_id)
+
+
+def test_signal_analyte_peptide_ids_land_in_slots(db):
+    _seed_customer_counters(db)
+    meta = _signal_meta(uid=None, SampleTypeTitle="Peptide Blend")
+    meta.update({"Analyte1Peptide": "BPC-157 - Identity (HPLC)", "Analyte1PeptideId": 7,
+                 "Analyte2Peptide": "TB-500 - Identity (HPLC)", "Analyte2PeptideId": "12"})
+    row = upsert_sample_from_signal(db, sample_id=None, senaite_uid=None, meta=meta)
+    slots = json.loads(row.analytes)
+    assert slots[0]["peptide_id"] == 7 and slots[1]["peptide_id"] == 12
+    assert slots[0]["name"] == "BPC-157 - Identity (HPLC)"
+
+
+def test_signal_without_peptide_ids_keeps_slot_shape(db):
+    row = upsert_sample_from_signal(db, "P-2001", "AR_UID_1",
+                                    _signal_meta(Analyte1Peptide="BPC-157 - Identity (HPLC)"))
+    slots = json.loads(row.analytes)
+    assert slots[0].get("peptide_id") is None
+    assert set(slots[0]) == {"name", "declared_quantity", "peptide_id"}
+
+
+# ── Idempotency ledger on /s2s/lims-samples (2026-09-10, M3) ───────────────
+
+@pytest.fixture(autouse=True)
+def _cleanup_s2s_get_db_override():
+    """_client() below overrides app.dependency_overrides[get_db] with this
+    module's short-lived sqlite session; pop it after every test so a later
+    test file's plain TestClient(app) doesn't inherit a closed session."""
+    yield
+    from database import get_db
+    from main import app
+    app.dependency_overrides.pop(get_db, None)
+
+
+def _client(db):
+    """TestClient wired to the sqlite `db` fixture session via the SAME
+    get_db dependency object the S2S route uses, with the internal service
+    token set. Mirrors tests/test_analyte_slot_guards.py's override idiom."""
+    from database import get_db
+    from main import app
+
+    def _override_get_db():
+        yield db
+
+    app.dependency_overrides[get_db] = _override_get_db
+    from fastapi.testclient import TestClient
+    return TestClient(app)
+
+
+def test_s2s_signal_replay_with_same_idempotency_key_does_not_remint(db, monkeypatch):
+    monkeypatch.setenv("ACCUMK1_INTERNAL_SERVICE_TOKEN", "tok")
+    _seed_customer_counters(db)
+    client = _client(db)
+    body = {"sample_id": None, "senaite_uid": None, "meta": _signal_meta(uid=None, SampleTypeTitle="Peptide")}
+    h = {"X-Service-Token": "tok", "Idempotency-Key": "registry-3267-1"}
+    r1 = client.post("/s2s/lims-samples", json=body, headers=h)
+    r2 = client.post("/s2s/lims-samples", json=body, headers=h)
+    assert r1.status_code == 200 and r2.status_code == 200
+    assert r1.json() == r2.json() == {"sample_id": "P-5000", "native_id": "aP-0001"}
+    assert db.query(LimsSample).filter(LimsSample.sample_id.like("P-%")).count() == 1
+
+
+def test_s2s_signal_without_idempotency_key_still_works(db, monkeypatch):
+    """Old IS never sent the header on this route; keep accepting."""
+    monkeypatch.setenv("ACCUMK1_INTERNAL_SERVICE_TOKEN", "tok")
+    _seed_customer_counters(db)
+    client = _client(db)
+    body = {"sample_id": None, "senaite_uid": None, "meta": _signal_meta(uid=None, SampleTypeTitle="Peptide")}
+    r = client.post("/s2s/lims-samples", json=body, headers={"X-Service-Token": "tok"})
+    assert r.status_code == 200 and r.json()["sample_id"] == "P-5000"
+
+
+def test_s2s_signal_key_is_scoped_per_sample_not_global(db, monkeypatch):
+    monkeypatch.setenv("ACCUMK1_INTERNAL_SERVICE_TOKEN", "tok")
+    _seed_customer_counters(db)
+    client = _client(db)
+    mk = lambda n: {"sample_id": None, "senaite_uid": None,
+                    "meta": _signal_meta(uid=None, SampleTypeTitle="Peptide")}
+    r1 = client.post("/s2s/lims-samples", json=mk(1), headers={"X-Service-Token": "tok", "Idempotency-Key": "registry-1-1"})
+    r2 = client.post("/s2s/lims-samples", json=mk(2), headers={"X-Service-Token": "tok", "Idempotency-Key": "registry-1-2"})
+    assert {r1.json()["sample_id"], r2.json()["sample_id"]} == {"P-5000", "P-5001"}
+
+
 # ── Order priority at registration (2026-09-10) ─────────────────────────────
 
 def _prio(db, uid):
@@ -374,6 +501,10 @@ def test_signal_priority_never_downgrades_a_manual_override(db):
 
 def test_signal_priority_skipped_without_uid(db):
     from sub_samples.service import upsert_sample_from_signal
+    # slice-2 contract: SENAITE-free registration mints a customer-facing
+    # P-/PB- id and requires the counters to be seeded (native_id.py raises
+    # otherwise) -- adapted from master, which predates that requirement.
+    _seed_customer_counters(db)
     meta = _signal_meta()
     meta["Priority"] = "expedited"
     row = upsert_sample_from_signal(db, None, None, meta)   # SENAITE-free registration
