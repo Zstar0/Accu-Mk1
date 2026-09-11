@@ -206,6 +206,20 @@ def load_effective_for_uids(db: Session, uids: Iterable[str]) -> dict[str, Effec
     return out
 
 
+def order_number_variants(n: Optional[str]) -> set[str]:
+    """Integration Service payloads carry the bare WooCommerce number ("3008");
+    lims_orders stores the WordPress form ("WP-3008"). Every order lookup
+    keyed by a caller-supplied number accepts either and matches both
+    (2026-09-11: no explorer order ever carried a priority, and assigning one
+    from Order Status raised 'order not found', because the stamp looked up
+    the bare string)."""
+    n = (n or "").strip()
+    if not n:
+        return set()
+    bare = n[3:] if n.upper().startswith("WP-") else n
+    return {n, bare, f"WP-{bare}"}
+
+
 def order_priority_fields(db: Session, order_numbers: Iterable[str]) -> dict[str, dict]:
     """{order_number: {priority_key, priority_source, effective_priority}} for
     the order-list/detail payloads. Order rows resolve through the order →
@@ -215,11 +229,17 @@ def order_priority_fields(db: Session, order_numbers: Iterable[str]) -> dict[str
     if not wanted:
         return {}
     prios = priority_map(db)
+    lookup: set[str] = set()
+    for n in wanted:
+        lookup |= order_number_variants(n)
     orders = db.execute(
         # order_number is NOT unique: assign() picks the LOWEST id on duplicates,
         # so this payload must agree — order by id and keep the first seen.
-        select(LimsOrder).where(LimsOrder.order_number.in_(wanted)).order_by(LimsOrder.id)
+        select(LimsOrder).where(LimsOrder.order_number.in_(sorted(lookup))).order_by(LimsOrder.id)
     ).scalars().all()
+    first_by_number: dict[str, LimsOrder] = {}
+    for o in orders:
+        first_by_number.setdefault(o.order_number, o)
     cust_ids = {o.customer_user_id for o in orders if o.customer_user_id is not None}
     customers: dict[int, CustomerPriority] = {}
     if cust_ids:
@@ -228,7 +248,13 @@ def order_priority_fields(db: Session, order_numbers: Iterable[str]) -> dict[str
         ).scalars():
             customers[c.wp_customer_user_id] = c
     out: dict[str, dict] = {}
-    for o in orders:
+    # Keyed by the CALLER'S string (bare or WP-), so the stamp can join back
+    # onto the payload it was asked about.
+    for requested in wanted:
+        o = next((first_by_number[v] for v in (requested, *sorted(order_number_variants(requested)))
+                  if v in first_by_number), None)
+        if o is None:
+            continue
         cust = customers.get(o.customer_user_id) if o.customer_user_id is not None else None
         try:
             eff = resolve(
@@ -245,7 +271,7 @@ def order_priority_fields(db: Session, order_numbers: Iterable[str]) -> dict[str
             # No default priority configured — read paths degrade, never 500.
             logger.warning("order priority skipped: no default priority configured")
             return {}
-        out.setdefault(o.order_number, {
+        out.setdefault(requested, {
             "priority_key": o.priority_key,
             "priority_source": o.priority_source,
             "effective_priority": eff.as_dict(),
@@ -311,7 +337,7 @@ def assign(
         # scalar_one_or_none() would raise MultipleResultsFound; take the
         # lowest id deterministically instead.
         order = db.execute(
-            select(LimsOrder).where(LimsOrder.order_number == entity_id)
+            select(LimsOrder).where(LimsOrder.order_number.in_(sorted(order_number_variants(entity_id))))
             .order_by(LimsOrder.id).limit(1)
         ).scalars().first()
         if order is None:

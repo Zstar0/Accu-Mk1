@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- Order priority never reached the explorer order payloads (Receive page By-order rows, Order Status order rows) and assigning a priority at order level from Order Status failed with "order not found": the Integration Service hands out bare order numbers ("3008") while the registry stores "WP-3008". Every order lookup keyed by a caller-supplied number now accepts either form.
+
 ## v1.20.0 — 2026-09-11
 
 ### Added
