@@ -105,3 +105,9 @@ coab SENAITE creds optional · IS `SenaiteConfig`/`SenaiteAdapterDep` routes aud
 
 ## Open rulings still owed (defaults applied above)
 R-a counter seed values (P-5000/PB-1000) · R-b transfers of native samples 409 · R-c blends excluded from WP dropdown · R-d unknown-peptide native order = warn-and-create · R-e legacy Replace/Clear 409 on native-born (relabel only).
+
+## Addenda from slice-2 final review (2026-09-11) — requirements for M5/M6/M7, must land before the flip
+- **Slot-keyed parent read surfaces (M6).** `lims_analyses/service.py` `services_with_live_canonical` (placeholder suppression) and `_overlay_live_vial_state` (`live_state_by_service`) key on `analysis_service_id` alone; with per-slot native rows, slot 1's canonical row suppresses slot 2's outstanding placeholder and slot 2 renders as slot 1's state. Both keys become `(analysis_service_id, slot or 0)`.
+- **`peptide_id` invalidation contract (M6 relabel).** `resolve_slot_peptides` trusts a stored slot `peptide_id` first. Any writer of a slot's `name` must null `peptide_id` (or the resolver must verify the stored id still folds to the label) — otherwise a relabel re-seeds the previous peptide (the P-1611 class through the fast path).
+- **Unresolved rows are NOT gated yet.** Slice 2 seeds `peptide_id NULL` + `reportable_reason` but leaves `reportable=True`; the prep bridge (M5) must never match a NULL-peptide row and the COA shim (M7) must exclude/blocks on them. **Handler question:** should unresolved rows be seeded `reportable=False` instead? (default until ruled: keep True, gate in M5/M7.)
+- Registry idempotency ledger (`lims_registry_signal_keys`) is check-then-act; two truly simultaneous same-key posts would both mint and the second commit 500s on the PK — theoretical at current volumes, noted.
