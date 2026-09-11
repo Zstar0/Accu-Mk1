@@ -1,6 +1,13 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowDown, ArrowUp, Loader2, Plus, Search } from 'lucide-react'
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  Loader2,
+  Plus,
+  Search,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
@@ -47,6 +54,7 @@ const COLORS: PriorityColor[] = [
   'zinc',
 ]
 const NONE = '__none__'
+type CustomerSortKey = 'customer' | 'priority' | 'note' | 'updated'
 
 function PaneSpinner() {
   return (
@@ -374,6 +382,32 @@ function CustomerPrioritiesSection({ priorities }: { priorities: Priority[] }) {
   const rowsQuery = useCustomerPriorities()
   const rows = rowsQuery.data ?? []
   const assign = useAssignPriority()
+  const [sort, setSort] = useState<{
+    key: CustomerSortKey
+    dir: 'asc' | 'desc'
+  }>({
+    key: 'updated',
+    dir: 'desc',
+  })
+  const rankOf = (key: string) => priorities.find(p => p.key === key)?.rank ?? 0
+  const sortedRows = [...rows].sort((a, b) => {
+    const cmp =
+      sort.key === 'customer'
+        ? (a.customer_name ?? String(a.wp_customer_user_id)).localeCompare(
+            b.customer_name ?? String(b.wp_customer_user_id)
+          )
+        : sort.key === 'priority'
+          ? rankOf(a.priority_key) - rankOf(b.priority_key)
+          : sort.key === 'note'
+            ? (a.note ?? '').localeCompare(b.note ?? '')
+            : (a.updated_at ?? '').localeCompare(b.updated_at ?? '')
+    return sort.dir === 'asc' ? cmp : -cmp
+  })
+  const toggleSort = (key: CustomerSortKey) =>
+    setSort(s => ({
+      key,
+      dir: s.key === key && s.dir === 'asc' ? 'desc' : 'asc',
+    }))
   const [q, setQ] = useState('')
   const [found, setFound] = useState<CustomerSeen[]>([])
   const search = async () => setFound(await getCustomersSeen(q))
@@ -457,23 +491,54 @@ function CustomerPrioritiesSection({ priorities }: { priorities: Priority[] }) {
         <table className="mt-4 w-full text-sm">
           <thead className="text-xs uppercase text-muted-foreground">
             <tr>
-              <th className="text-start">
-                {t('preferences.prioritiesPane.columns.customer')}
-              </th>
-              <th className="text-start">
-                {t('preferences.prioritiesPane.columns.priority')}
-              </th>
-              <th className="text-start">
-                {t('preferences.prioritiesPane.columns.note')}
-              </th>
-              <th className="text-start">
-                {t('preferences.prioritiesPane.columns.updated')}
-              </th>
+              {(
+                [
+                  [
+                    'customer',
+                    t('preferences.prioritiesPane.columns.customer'),
+                  ],
+                  [
+                    'priority',
+                    t('preferences.prioritiesPane.columns.priority'),
+                  ],
+                  ['note', t('preferences.prioritiesPane.columns.note')],
+                  ['updated', t('preferences.prioritiesPane.columns.updated')],
+                ] as const
+              ).map(([key, label]) => (
+                <th
+                  key={key}
+                  className="text-start"
+                  aria-sort={
+                    sort.key === key
+                      ? sort.dir === 'asc'
+                        ? 'ascending'
+                        : 'descending'
+                      : 'none'
+                  }
+                >
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 uppercase hover:text-foreground"
+                    onClick={() => toggleSort(key)}
+                  >
+                    {label}
+                    {sort.key === key ? (
+                      sort.dir === 'asc' ? (
+                        <ArrowUp size={12} />
+                      ) : (
+                        <ArrowDown size={12} />
+                      )
+                    ) : (
+                      <ArrowUpDown size={12} className="opacity-40" />
+                    )}
+                  </button>
+                </th>
+              ))}
               <th />
             </tr>
           </thead>
           <tbody>
-            {rows.map(r => (
+            {sortedRows.map(r => (
               <tr key={r.wp_customer_user_id} className="border-t">
                 <td className="py-1">
                   {r.customer_name ?? r.wp_customer_user_id}{' '}

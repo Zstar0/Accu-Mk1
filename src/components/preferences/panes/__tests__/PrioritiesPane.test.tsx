@@ -128,6 +128,43 @@ const wrap = (ui: ReactNode) => {
 }
 
 describe('PrioritiesPane', () => {
+  it('sorts the customer table by a clicked column header', async () => {
+    vi.mocked(getCustomerPriorities).mockResolvedValueOnce([
+      {
+        wp_customer_user_id: 1,
+        priority_key: 'default',
+        note: null,
+        updated_at: '2026-09-01T00:00:00Z',
+        customer_name: 'Zeta Labs',
+        customer_email: 'z@x.test',
+        updated_by_name: null,
+      },
+      {
+        wp_customer_user_id: 2,
+        priority_key: 'expedited',
+        note: null,
+        updated_at: '2026-09-02T00:00:00Z',
+        customer_name: 'Alpha Bio',
+        customer_email: 'a@x.test',
+        updated_by_name: null,
+      },
+    ])
+    wrap(<PrioritiesPane />)
+    const header = await screen.findByRole('button', { name: /^Priority$/i })
+    const names = () =>
+      screen
+        .getAllByRole('row')
+        .slice(1)
+        .map(r => r.textContent ?? '')
+    expect(names()[0]).toContain('Alpha Bio') // default: updated desc
+    fireEvent.click(header) // priority asc → default (rank 0) first
+    expect(names()[0]).toContain('Zeta Labs')
+    fireEvent.click(header) // priority desc → expedited first
+    expect(names()[0]).toContain('Alpha Bio')
+    expect(
+      screen.getByRole('columnheader', { name: /Priority/i })
+    ).toHaveAttribute('aria-sort', 'descending')
+  })
   it('lists priorities by rank with their SLA tier and toggles pulse through PATCH', async () => {
     wrap(<PrioritiesPane />)
     const rows = await screen.findAllByTestId('priority-row')
