@@ -1,12 +1,28 @@
 import { useMemo, useState } from 'react'
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, Flag, Loader2, XCircle } from 'lucide-react'
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
+import {
+  ChevronDown,
+  ChevronRight,
+  Flag,
+  Loader2,
+  PauseCircle,
+  PlayCircle,
+  XCircle,
+} from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getReadyToPublish } from '@/lib/api'
 import type { ReadyRow, ReadySla } from '@/lib/api'
+import { changeStatus } from '@/lib/flags-api'
+import { useCreateFlag } from '@/hooks/use-flags'
 import { formatMinutes } from '@/lib/sla-format'
 import { useUIStore } from '@/store/ui-store'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -19,6 +35,7 @@ import {
   linesText,
   matchesQuery,
   REASON_LABEL,
+  splitHeld,
 } from './ready-to-publish-utils'
 
 // ─── Formatting ──────────────────────────────────────────────────────────────
@@ -34,9 +51,15 @@ const SLA_DOT: Record<ReadySla['color'], string> = {
   green: 'bg-emerald-500/70',
 }
 
+const REPORT_KEY = ['reports', 'ready-to-publish'] as const
+
+function toDate(iso: string): Date {
+  return new Date(iso.endsWith('Z') || iso.includes('+') ? iso : `${iso}Z`)
+}
+
 function fmtDate(iso: string | null): string {
   if (!iso) return '—'
-  const d = new Date(iso.endsWith('Z') || iso.includes('+') ? iso : `${iso}Z`)
+  const d = toDate(iso)
   if (Number.isNaN(d.getTime())) return iso
   return d.toLocaleDateString(undefined, {
     month: 'short',
@@ -47,8 +70,7 @@ function fmtDate(iso: string | null): string {
 
 function fmtAge(iso: string | null): string {
   if (!iso) return '—'
-  const d = new Date(iso.endsWith('Z') || iso.includes('+') ? iso : `${iso}Z`)
-  const mins = Math.max(0, (Date.now() - d.getTime()) / 60000)
+  const mins = Math.max(0, (Date.now() - toDate(iso).getTime()) / 60000)
   return formatMinutes(mins)
 }
 
@@ -133,21 +155,35 @@ function ReasonBadges({ row }: { row: ReadyRow }) {
   )
 }
 
+interface RowActions {
+  onOpen: (id: string) => void
+  /** Undefined when no "On Hold" flag type exists yet. */
+  onHold?: (row: ReadyRow) => void
+  onRelease?: (row: ReadyRow) => void
+  busyId?: string | null
+}
+
 function SampleLine({
   row,
   indent,
-  onOpen,
+  actions,
 }: {
   row: ReadyRow
   indent: boolean
-  onOpen: (id: string) => void
+  actions: RowActions
 }) {
+  const held = row.hold !== null
+  const busy = actions.busyId === row.sample_id
   return (
     <tr
-      className="border-b border-border/40 hover:bg-muted/30 cursor-pointer"
+      className={cn(
+        'border-b border-border/40 hover:bg-muted/30 cursor-pointer',
+        held && 'opacity-80'
+      )}
       data-testid="rtp-row"
       data-sample-id={row.sample_id}
-      onClick={() => onOpen(row.sample_id)}
+      data-held={held ? 'true' : undefined}
+      onClick={() => actions.onOpen(row.sample_id)}
     >
       <td className={cn('py-1.5 pr-2 align-top', indent ? 'pl-8' : 'pl-3')}>
         <div className="font-mono text-sm text-primary">{row.sample_id}</div>
@@ -182,7 +218,25 @@ function SampleLine({
         </div>
       </td>
       <td className="py-1.5 pr-2 align-top">
-        <ReasonBadges row={row} />
+        {held && row.hold ? (
+          <div className="text-xs">
+            <Badge
+              variant="outline"
+              className="text-[10px] gap-1"
+              style={{ borderColor: row.hold.color, color: row.hold.color }}
+              data-testid="rtp-hold"
+            >
+              <PauseCircle className="h-2.5 w-2.5" />
+              {row.hold.label}
+            </Badge>
+            <div className="text-muted-foreground mt-0.5">
+              {row.hold.title || 'No reason given'}
+              {row.hold.since ? ` · since ${fmtDate(row.hold.since)}` : ''}
+            </div>
+          </div>
+        ) : (
+          <ReasonBadges row={row} />
+        )}
       </td>
       <td className="py-1.5 pr-2 align-top text-xs tabular-nums whitespace-nowrap">
         {fmtDate(row.received_at)}
@@ -190,8 +244,60 @@ function SampleLine({
           {fmtAge(row.received_at)} ago
         </div>
       </td>
-      <td className="py-1.5 pr-3 align-top text-right">
+      <td className="py-1.5 pr-2 align-top text-right">
         <SlaCell sla={row.sla} />
+      </td>
+      <td className="py-1.5 pr-3 align-top text-right whitespace-nowrap">
+        {held ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6 px-2 text-[11px]"
+            disabled={!actions.onRelease || busy}
+            onClick={e => {
+              e.stopPropagation()
+              actions.onRelease?.(row)
+            }}
+            data-testid="rtp-release"
+          >
+            {busy ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <PlayCircle className="h-3 w-3" />
+            )}
+            Release
+          </Button>
+        ) : (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-2 text-[11px]"
+                  disabled={!actions.onHold || busy}
+                  onClick={e => {
+                    e.stopPropagation()
+                    actions.onHold?.(row)
+                  }}
+                  data-testid="rtp-hold-btn"
+                >
+                  {busy ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <PauseCircle className="h-3 w-3" />
+                  )}
+                  Hold
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="left" className="text-xs">
+              {actions.onHold
+                ? 'Raise an On Hold flag on this sample and park it below.'
+                : 'Create an "On Hold" flag type in Settings → Flags first.'}
+            </TooltipContent>
+          </Tooltip>
+        )}
       </td>
     </tr>
   )
@@ -204,25 +310,70 @@ export function ReadyToPublishReport() {
   const [hideTestOrders, setHideTestOrders] = useState(true)
   const [query, setQuery] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
+  const [showHeld, setShowHeld] = useState(false)
+  const [busyId, setBusyId] = useState<string | null>(null)
   const navigateToSample = useUIStore(state => state.navigateToSample)
+  const qc = useQueryClient()
 
   const { data, isLoading, isFetching, error } = useQuery({
-    queryKey: [
-      'reports',
-      'ready-to-publish',
-      { includeTestOrders: !hideTestOrders },
-    ],
+    queryKey: [...REPORT_KEY, { includeTestOrders: !hideTestOrders }],
     queryFn: () => getReadyToPublish({ includeTestOrders: !hideTestOrders }),
     staleTime: 30_000,
     refetchInterval: 60_000,
     placeholderData: keepPreviousData,
   })
 
-  const rows = useMemo(
+  const holdSlug = useMemo(
+    () => data?.flag_types.find(t => t.kind === 'hold')?.slug ?? null,
+    [data]
+  )
+
+  const createFlag = useCreateFlag()
+  const releaseHold = useMutation({
+    mutationFn: (flagId: number) => changeStatus(flagId, 'resolved'),
+  })
+
+  const refresh = () => qc.invalidateQueries({ queryKey: REPORT_KEY })
+
+  const onHold = holdSlug
+    ? async (row: ReadyRow) => {
+        const reason = window.prompt(
+          `Put ${row.sample_id} on hold — reason (shown on this page):`,
+          ''
+        )
+        if (reason === null) return
+        setBusyId(row.sample_id)
+        try {
+          await createFlag.mutateAsync({
+            entity_type: 'sample',
+            entity_id: row.sample_id,
+            type: holdSlug,
+            title: reason.trim() || 'On hold',
+          })
+          await refresh()
+        } finally {
+          setBusyId(null)
+        }
+      }
+    : undefined
+
+  const onRelease = async (row: ReadyRow) => {
+    if (!row.hold) return
+    setBusyId(row.sample_id)
+    try {
+      await releaseHold.mutateAsync(row.hold.flag_id)
+      await refresh()
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const filtered = useMemo(
     () => (data?.rows ?? []).filter(r => matchesQuery(r, query)),
     [data, query]
   )
-  const groups = useMemo(() => groupByOrder(rows), [rows])
+  const { live, held } = useMemo(() => splitHeld(filtered), [filtered])
+  const groups = useMemo(() => groupByOrder(live), [live])
 
   const toggle = (order: string) =>
     setCollapsed(prev => {
@@ -233,6 +384,28 @@ export function ReadyToPublishReport() {
     })
 
   const totals = data?.totals
+  const actions: RowActions = {
+    onOpen: navigateToSample,
+    onHold,
+    onRelease,
+    busyId,
+  }
+
+  const header = (
+    <thead className="bg-muted/40 text-[11px] uppercase tracking-wide text-muted-foreground">
+      <tr>
+        <th className="text-left py-2 pl-3 pr-2 font-medium">
+          {groupByOrderOn ? 'Order / Sample' : 'Sample'}
+        </th>
+        <th className="text-left py-2 pr-2 font-medium">Analytes</th>
+        <th className="text-left py-2 pr-2 font-medium">Status · Lines</th>
+        <th className="text-left py-2 pr-2 font-medium">Why</th>
+        <th className="text-left py-2 pr-2 font-medium">Received</th>
+        <th className="text-right py-2 pr-2 font-medium">SLA</th>
+        <th className="py-2 pr-3" />
+      </tr>
+    </thead>
+  )
 
   return (
     <div className="flex flex-col gap-4 p-4 h-full overflow-auto">
@@ -241,7 +414,8 @@ export function ReadyToPublishReport() {
           <h1 className="text-lg font-semibold">Ready to Publish</h1>
           <p className="text-xs text-muted-foreground">
             Samples with every line verified, or flagged Ready for Publish /
-            Ready for Partial Publish. Most critical first.
+            Ready for Partial Publish. Most critical first. An open On Hold flag
+            parks a sample below.
           </p>
         </div>
         <div className="flex items-center gap-4 text-xs">
@@ -285,6 +459,11 @@ export function ReadyToPublishReport() {
           >
             {totals.breached} SLA breached
           </Badge>
+          {totals.held > 0 && (
+            <Badge variant="outline" className="text-muted-foreground">
+              {totals.held} on hold
+            </Badge>
+          )}
         </div>
       )}
 
@@ -307,53 +486,76 @@ export function ReadyToPublishReport() {
         </div>
       )}
 
-      {data && rows.length === 0 && (
+      {data && live.length === 0 && (
         <div className="text-sm text-muted-foreground py-8 text-center">
           Nothing is waiting to be published.
         </div>
       )}
 
-      {rows.length > 0 && (
+      {live.length > 0 && (
         <div className="rounded-md border border-border/60 overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-muted/40 text-[11px] uppercase tracking-wide text-muted-foreground">
-              <tr>
-                <th className="text-left py-2 pl-3 pr-2 font-medium">
-                  {groupByOrderOn ? 'Order / Sample' : 'Sample'}
-                </th>
-                <th className="text-left py-2 pr-2 font-medium">Analytes</th>
-                <th className="text-left py-2 pr-2 font-medium">
-                  Status · Lines
-                </th>
-                <th className="text-left py-2 pr-2 font-medium">Why</th>
-                <th className="text-left py-2 pr-2 font-medium">Received</th>
-                <th className="text-right py-2 pr-3 font-medium">SLA</th>
-              </tr>
-            </thead>
+            {header}
             <tbody>
               {groupByOrderOn
-                ? groups.map(g => {
-                    const isCollapsed = collapsed.has(g.order)
-                    return (
-                      <GroupRows
-                        key={g.order}
-                        group={g}
-                        collapsed={isCollapsed}
-                        onToggle={() => toggle(g.order)}
-                        onOpen={navigateToSample}
-                      />
-                    )
-                  })
-                : rows.map(r => (
+                ? groups.map(g => (
+                    <GroupRows
+                      key={g.order}
+                      group={g}
+                      collapsed={collapsed.has(g.order)}
+                      onToggle={() => toggle(g.order)}
+                      actions={actions}
+                    />
+                  ))
+                : live.map(r => (
                     <SampleLine
                       key={r.sample_id}
                       row={r}
                       indent={false}
-                      onOpen={navigateToSample}
+                      actions={actions}
                     />
                   ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {held.length > 0 && (
+        <div className="rounded-md border border-border/40">
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 px-3 py-2 text-xs text-muted-foreground hover:text-foreground"
+            onClick={() => setShowHeld(v => !v)}
+            data-testid="rtp-held-toggle"
+          >
+            {showHeld ? (
+              <ChevronDown className="h-3.5 w-3.5" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5" />
+            )}
+            <PauseCircle className="h-3.5 w-3.5" />
+            On hold ({held.length})
+            <span className="ml-auto text-[11px]">
+              Release resolves the On Hold flag and the sample returns above.
+            </span>
+          </button>
+          {showHeld && (
+            <div className="overflow-x-auto border-t border-border/40">
+              <table className="w-full text-sm">
+                {header}
+                <tbody>
+                  {held.map(r => (
+                    <SampleLine
+                      key={r.sample_id}
+                      row={r}
+                      indent={false}
+                      actions={actions}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -364,12 +566,12 @@ function GroupRows({
   group,
   collapsed,
   onToggle,
-  onOpen,
+  actions,
 }: {
   group: ReturnType<typeof groupByOrder>[number]
   collapsed: boolean
   onToggle: () => void
-  onOpen: (id: string) => void
+  actions: RowActions
 }) {
   return (
     <>
@@ -401,7 +603,7 @@ function GroupRows({
         <td className="py-2 pr-2 text-xs tabular-nums whitespace-nowrap text-muted-foreground">
           Created {fmtDate(group.created_at)}
         </td>
-        <td className="py-2 pr-3 text-right">
+        <td className="py-2 pr-2 text-right">
           {group.worst && (
             <span
               className={cn(
@@ -417,10 +619,11 @@ function GroupRows({
             </span>
           )}
         </td>
+        <td className="py-2 pr-3" />
       </tr>
       {!collapsed &&
         group.rows.map(r => (
-          <SampleLine key={r.sample_id} row={r} indent onOpen={onOpen} />
+          <SampleLine key={r.sample_id} row={r} indent actions={actions} />
         ))}
     </>
   )

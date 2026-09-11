@@ -8215,6 +8215,16 @@ export interface ReadySla {
   color: 'red' | 'amber' | 'green'
 }
 
+export interface ReadyHold {
+  flag_id: number
+  type: string
+  label: string
+  color: string
+  status: string
+  title: string
+  since: string | null
+}
+
 export interface ReadyRow {
   sample_id: string
   status: string
@@ -8230,6 +8240,8 @@ export interface ReadyRow {
   lines: { total: number; verified: number; pending: string[] }
   priority: string
   sla: ReadySla | null
+  /** Open "On Hold" flag → parked in the page's On-hold section. */
+  hold: ReadyHold | null
 }
 
 export interface ReadyToPublishReport {
@@ -8242,6 +8254,7 @@ export interface ReadyToPublishReport {
     flag_ready: number
     flag_partial: number
     breached: number
+    held: number
   }
   flag_types: { slug: string; label: string; color: string; kind: string }[]
 }

@@ -3,6 +3,7 @@ from datetime import datetime, time
 
 from ready_to_publish import (
     ALL_VERIFIED,
+    HOLD,
     READY_FULL,
     READY_PARTIAL,
     FlagIn,
@@ -12,6 +13,8 @@ from ready_to_publish import (
     TierIn,
     build_ready_rows,
     classify_lines,
+    resolve_flag_kinds,
+    resolve_hold_flag_slugs,
     resolve_ready_flag_kinds,
     sla_color,
     sort_rows,
@@ -185,3 +188,53 @@ def test_sort_most_critical_first():
         "green-expedited", "green-old", "green-late",
         "nosla",
     ]
+
+
+# ── On Hold ─────────────────────────────────────────────────────────────────
+
+HOLD_T = FlagTypeIn(slug="new_type_7", label="On Hold", color="#64748b")
+
+
+def build_h(samples, line_states, flags):
+    return build_ready_rows(
+        samples=samples, line_states_by_pk=line_states, flags=flags,
+        flag_types=(READY_T, PARTIAL_T, HOLD_T), priorities={}, services_of={},
+        tiers=(STANDARD,), groups=(), schedule=SCHEDULE, holidays=frozenset(), now=NOW,
+    )
+
+
+def test_hold_flag_type_matched_by_label_only():
+    assert resolve_hold_flag_slugs([HOLD_T, READY_T, FlagTypeIn(slug="x", label="on-hold")]) == {"new_type_7", "x"}
+    assert resolve_flag_kinds([HOLD_T, READY_T]) == {"new_type_3": READY_FULL, "new_type_7": HOLD}
+
+
+def test_open_hold_flag_parks_row_without_dropping_it():
+    flags = [FlagIn(id=77, sample_id="P-1", type_slug="new_type_7", status="open",
+                    title="Customer paying invoice", created_at=datetime(2026, 9, 9, 12, 0))]
+    rows = build_h([sample(1, "P-1")], {1: {"HPLC-PUR": "verified"}}, flags)
+    assert rows[0]["reasons"] == [ALL_VERIFIED]
+    assert rows[0]["hold"] == {
+        "flag_id": 77, "type": "new_type_7", "label": "On Hold", "color": "#64748b",
+        "status": "open", "title": "Customer paying invoice", "since": "2026-09-09T12:00:00",
+    }
+
+
+def test_resolved_hold_does_not_park_and_blocked_counts_as_open():
+    flags = [
+        FlagIn(id=1, sample_id="P-1", type_slug="new_type_7", status="resolved", title="old"),
+        FlagIn(id=2, sample_id="P-2", type_slug="new_type_7", status="blocked", title="stuck"),
+    ]
+    rows = build_h([sample(1, "P-1"), sample(2, "P-2")],
+                   {1: {"HPLC-PUR": "verified"}, 2: {"HPLC-PUR": "verified"}}, flags)
+    by = {r["sample_id"]: r for r in rows}
+    assert by["P-1"]["hold"] is None
+    assert by["P-2"]["hold"]["title"] == "stuck"
+
+
+def test_hold_alone_does_not_qualify_a_sample():
+    flags = [FlagIn(id=1, sample_id="P-1", type_slug="new_type_7", status="open", title="hold")]
+    assert build_h([sample(1, "P-1")], {1: {"HPLC-PUR": "to_be_verified"}}, flags) == []
+
+
+def test_unheld_rows_have_hold_none():
+    assert build_h([sample(1, "P-1")], {1: {"HPLC-PUR": "verified"}}, [])[0]["hold"] is None

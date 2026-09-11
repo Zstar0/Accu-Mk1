@@ -24,6 +24,7 @@ SCHEDULE = BusinessSchedule(open_time=time(9, 0), close_time=time(17, 0), timezo
 STANDARD = TierIn(id=1, name="Standard", target_minutes=1440, is_default=True)
 READY_T = FlagTypeIn(slug="new_type_3", label="Ready for Publish", color="#088000")
 PARTIAL_T = FlagTypeIn(slug="new_type_4", label="Ready for Partial Publish", color="#7e8f00")
+HOLD_T = FlagTypeIn(slug="new_type_7", label="On Hold", color="#64748b")
 
 
 def _inputs(samples, line_states, flags=()):
@@ -31,7 +32,7 @@ def _inputs(samples, line_states, flags=()):
         "samples": list(samples),
         "line_states_by_pk": dict(line_states),
         "flags": list(flags),
-        "flag_types": [READY_T, PARTIAL_T],
+        "flag_types": [READY_T, PARTIAL_T, HOLD_T],
         "priorities": {},
         "services_of": {},
         "tiers": [STANDARD],
@@ -80,8 +81,9 @@ def test_rows_sorted_and_totals(monkeypatch):
     assert by_id["P-3"]["flags"][0]["label"] == "Ready for Partial Publish"
     assert by_id["P-1"]["analytes"] == ["BPC-157"]
     assert body["totals"] == {"rows": 3, "orders": 2, "all_verified": 2, "flag_ready": 0,
-                              "flag_partial": 1, "breached": 2}
-    assert [ft["kind"] for ft in body["flag_types"]] == ["flag_ready", "flag_partial"]
+                              "flag_partial": 1, "breached": 2, "held": 0}
+    assert [ft["kind"] for ft in body["flag_types"]] == ["flag_ready", "flag_partial", "hold"]
+    assert all(row["hold"] is None for row in body["rows"])
     assert body["generated_at"].endswith("Z")
 
 
@@ -103,3 +105,18 @@ def test_loader_failure_is_503(monkeypatch):
     monkeypatch.setattr(main_module, "_load_ready_to_publish_inputs", _boom)
     r = client.get("/reports/ready-to-publish")
     assert r.status_code == 503 and "db down" in r.json()["detail"]
+
+
+def test_held_rows_are_returned_but_left_out_of_totals(monkeypatch):
+    _use(monkeypatch, _inputs(
+        [_sample(1, "P-1"), _sample(2, "P-2")],
+        {1: {"HPLC-PUR": "verified"}, 2: {"HPLC-PUR": "verified"}},
+        flags=[FlagIn(id=9, sample_id="P-2", type_slug="new_type_7", status="open", title="Customer paying")],
+    ))
+    body = client.get("/reports/ready-to-publish").json()
+    by_id = {row["sample_id"]: row for row in body["rows"]}
+    assert by_id["P-2"]["hold"]["title"] == "Customer paying"
+    assert by_id["P-2"]["hold"]["label"] == "On Hold"
+    assert by_id["P-1"]["hold"] is None
+    assert body["totals"]["rows"] == 1 and body["totals"]["held"] == 1
+    assert body["totals"]["breached"] == 1  # only P-1 counts

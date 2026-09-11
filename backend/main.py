@@ -10700,6 +10700,16 @@ class ReadySlaOut(BaseModel):
     color: str
 
 
+class ReadyHoldOut(BaseModel):
+    flag_id: int
+    type: str
+    label: str
+    color: str
+    status: str
+    title: str
+    since: Optional[str] = None
+
+
 class ReadyRowOut(BaseModel):
     sample_id: str
     status: str
@@ -10715,6 +10725,8 @@ class ReadyRowOut(BaseModel):
     lines: ReadyLinesOut
     priority: str
     sla: Optional[ReadySlaOut] = None
+    # Open "On Hold" flag → parked in the page's On-hold section; None = live.
+    hold: Optional[ReadyHoldOut] = None
 
 
 class ReadyFlagTypeOut(BaseModel):
@@ -10753,28 +10765,32 @@ def _load_ready_to_publish_inputs(db: Session) -> dict:
     from lims_analyses.service import native_parent_line_states
     from models import LimsAnalysis
     from ready_to_publish import (
+        HOLD,
         OPEN_FLAG_STATUSES,
         FlagIn as RtpFlagIn,
         FlagTypeIn as RtpFlagTypeIn,
         GroupIn as RtpGroupIn,
         SampleIn as RtpSampleIn,
         TierIn as RtpTierIn,
-        resolve_ready_flag_kinds,
+        resolve_flag_kinds,
     )
 
     flag_types = [
         RtpFlagTypeIn(slug=ft.slug, label=ft.label, color=ft.color or "")
         for ft in db.execute(select(FlagType).where(FlagType.is_active.is_(True))).scalars().all()
     ]
-    ready_kinds = resolve_ready_flag_kinds(flag_types)
+    # Ready types ADMIT a sample; the On Hold type only parks one. Both are
+    # fetched here so the engine sees every open flag it reacts to.
+    flag_kinds = resolve_flag_kinds(flag_types)
+    ready_kinds = {slug for slug, kind in flag_kinds.items() if kind != HOLD}
 
-    # Open Ready flags: direct entity plus multi-entity links, sample-typed only.
+    # Open flags: direct entity plus multi-entity links, sample-typed only.
     flags: list[RtpFlagIn] = []
     flagged_sample_ids: set[str] = set()
-    if ready_kinds:
+    if flag_kinds:
         open_flags = db.execute(
             select(FlagFlag).where(
-                FlagFlag.type.in_(list(ready_kinds)),
+                FlagFlag.type.in_(list(flag_kinds)),
                 FlagFlag.status.in_(list(OPEN_FLAG_STATUSES)),
             )
         ).scalars().all()
@@ -10793,7 +10809,8 @@ def _load_ready_to_publish_inputs(db: Session) -> dict:
                 targets.append(f.entity_id)
             targets.extend(links.get(f.id, []))
             for sid in dict.fromkeys(targets):
-                flagged_sample_ids.add(sid)
+                if f.type in ready_kinds:
+                    flagged_sample_ids.add(sid)
                 flags.append(RtpFlagIn(id=f.id, sample_id=sid, type_slug=f.type, status=f.status,
                                        title=f.title or "", created_at=f.created_at))
 
@@ -10902,6 +10919,8 @@ def reports_ready_to_publish(
 ):
     """Samples ready to publish: every live parent line verified, or an open
     "Ready for Publish" / "Ready for Partial Publish" flag on the sample.
+    A row with an open "On Hold" flag is returned with ``hold`` set (the
+    page parks it) and is left out of ``totals`` except ``totals.held``.
 
     Rows are returned most-critical-first (SLA red → amber → green → none,
     then least time remaining, then priority, then oldest received); the
@@ -10912,7 +10931,7 @@ def reports_ready_to_publish(
     ``include_test_orders=true``. Plain ``def`` on purpose: the DB work is
     synchronous and runs in the threadpool.
     """
-    from ready_to_publish import build_ready_rows, resolve_ready_flag_kinds, sort_rows
+    from ready_to_publish import build_ready_rows, resolve_flag_kinds, sort_rows
 
     try:
         inputs = _load_ready_to_publish_inputs(db)
@@ -10923,14 +10942,16 @@ def reports_ready_to_publish(
     rows = sort_rows(build_ready_rows(
         **inputs, now=now_utc.replace(tzinfo=None), excluded_sample_ids=excluded,
     ))
-    kinds = resolve_ready_flag_kinds(inputs["flag_types"])
+    kinds = resolve_flag_kinds(inputs["flag_types"])
+    live = [r for r in rows if r["hold"] is None]
     totals = {
-        "rows": len(rows),
-        "orders": len({r["order"] for r in rows}),
-        "all_verified": sum(1 for r in rows if "all_verified" in r["reasons"]),
-        "flag_ready": sum(1 for r in rows if "flag_ready" in r["reasons"]),
-        "flag_partial": sum(1 for r in rows if "flag_partial" in r["reasons"]),
-        "breached": sum(1 for r in rows if r["sla"] and r["sla"]["breached"]),
+        "rows": len(live),
+        "orders": len({r["order"] for r in live}),
+        "all_verified": sum(1 for r in live if "all_verified" in r["reasons"]),
+        "flag_ready": sum(1 for r in live if "flag_ready" in r["reasons"]),
+        "flag_partial": sum(1 for r in live if "flag_partial" in r["reasons"]),
+        "breached": sum(1 for r in live if r["sla"] and r["sla"]["breached"]),
+        "held": len(rows) - len(live),
     }
     return {
         "generated_at": now_utc.isoformat().replace("+00:00", "Z"),

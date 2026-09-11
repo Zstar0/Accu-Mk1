@@ -5,6 +5,7 @@ import {
   linesText,
   matchesQuery,
   reasonText,
+  splitHeld,
   worstColor,
 } from '@/components/reports/ready-to-publish-utils'
 
@@ -23,6 +24,7 @@ function row(over: Partial<ReadyRow> & { sample_id: string }): ReadyRow {
     lines: { total: 1, verified: 1, pending: [] },
     priority: 'normal',
     sla: null,
+    hold: null,
     ...over,
   }
 }
@@ -112,5 +114,27 @@ describe('text helpers', () => {
     expect(matchesQuery(r, '1986')).toBe(true)
     expect(matchesQuery(r, 'acme.test')).toBe(true)
     expect(matchesQuery(r, 'nope')).toBe(false)
+  })
+})
+
+describe('splitHeld', () => {
+  it('parks rows with an open hold and keeps order in both halves', () => {
+    const hold = {
+      flag_id: 1,
+      type: 'new_type_7',
+      label: 'On Hold',
+      color: '#64748b',
+      status: 'open',
+      title: 'Customer paying',
+      since: '2026-09-09T12:00:00',
+    }
+    const { live, held } = splitHeld([
+      row({ sample_id: 'P-1' }),
+      row({ sample_id: 'P-2', hold }),
+      row({ sample_id: 'P-3' }),
+      row({ sample_id: 'P-4', hold }),
+    ])
+    expect(live.map(r => r.sample_id)).toEqual(['P-1', 'P-3'])
+    expect(held.map(r => r.sample_id)).toEqual(['P-2', 'P-4'])
   })
 })

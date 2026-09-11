@@ -99,3 +99,15 @@ export function matchesQuery(row: ReadyRow, query: string): boolean {
   ]
   return hay.some(h => h.toLowerCase().includes(q))
 }
+
+/** Split rows into the live table and the parked On-hold section. Order is
+ *  preserved in both halves. */
+export function splitHeld(rows: ReadyRow[]): {
+  live: ReadyRow[]
+  held: ReadyRow[]
+} {
+  const live: ReadyRow[] = []
+  const held: ReadyRow[] = []
+  for (const r of rows) (r.hold ? held : live).push(r)
+  return { live, held }
+}

@@ -32,10 +32,11 @@ from typing import Iterable, Mapping, Optional
 from sla_engine import BusinessSchedule, compute_business_minutes, resolve_sla_tier, sla_status_dict
 
 LIVE_LINE_STATES = frozenset({"verified", "published"})
-OPEN_FLAG_STATUSES = frozenset({"open", "in_progress"})
+OPEN_FLAG_STATUSES = frozenset({"open", "in_progress", "blocked"})
 READY_FULL = "flag_ready"
 READY_PARTIAL = "flag_partial"
 ALL_VERIFIED = "all_verified"
+HOLD = "hold"
 
 # Slug → kind (prod rows as of 2026-09-10); label fallback handles a re-seeded
 # or renamed type. Keys are compared case-insensitively on the label side.
@@ -44,6 +45,10 @@ _READY_LABELS: Mapping[str, str] = {
     "ready for publish": READY_FULL,
     "ready for partial publish": READY_PARTIAL,
 }
+# "On Hold" (Handler-created flag type, 2026-09-10) parks a qualifying row in
+# the page's On-hold section without dropping it. Label-matched only: the
+# slug is generated at creation time.
+_HOLD_LABELS = frozenset({"on hold", "on-hold", "hold", "onhold"})
 
 _PRIORITY_RANK = {"expedited": 0, "high": 1, "normal": 2}
 _COLOR_RANK = {"red": 0, "amber": 1, "green": 2, None: 3}
@@ -108,6 +113,20 @@ def resolve_ready_flag_kinds(flag_types: Iterable[FlagTypeIn]) -> dict[str, str]
     return out
 
 
+def resolve_hold_flag_slugs(flag_types: Iterable[FlagTypeIn]) -> set[str]:
+    """Slugs of the "On Hold" flag type(s), matched by label."""
+    return {ft.slug for ft in flag_types if (ft.label or "").strip().lower() in _HOLD_LABELS}
+
+
+def resolve_flag_kinds(flag_types: Iterable[FlagTypeIn]) -> dict[str, str]:
+    """{type_slug: READY_FULL | READY_PARTIAL | HOLD} — every flag type the
+    report reacts to (what the loader should fetch open flags for)."""
+    kinds = resolve_ready_flag_kinds(flag_types)
+    for slug in resolve_hold_flag_slugs(flag_types):
+        kinds.setdefault(slug, HOLD)
+    return kinds
+
+
 def classify_lines(line_states: Mapping[str, str]) -> str:
     """'all_verified' | 'pending' | 'no_lines' for one sample's live line map."""
     if not line_states:
@@ -163,12 +182,20 @@ def build_ready_rows(
     """Qualifying rows, unsorted (see :func:`sort_rows`)."""
     types = {ft.slug: ft for ft in flag_types}
     ready_kind = resolve_ready_flag_kinds(types.values())
+    hold_slugs = resolve_hold_flag_slugs(types.values())
 
     ready_flags_by_sample: dict[str, list[FlagIn]] = {}
+    hold_flag_by_sample: dict[str, FlagIn] = {}
     for f in flags:
-        if f.status not in OPEN_FLAG_STATUSES or f.type_slug not in ready_kind:
+        if f.status not in OPEN_FLAG_STATUSES:
             continue
-        ready_flags_by_sample.setdefault(f.sample_id, []).append(f)
+        if f.type_slug in ready_kind:
+            ready_flags_by_sample.setdefault(f.sample_id, []).append(f)
+        elif f.type_slug in hold_slugs:
+            # Oldest open hold is "the" reason; all of them are open anyway.
+            cur = hold_flag_by_sample.get(f.sample_id)
+            if cur is None or f.id < cur.id:
+                hold_flag_by_sample[f.sample_id] = f
 
     tier_by_id = {t.id: t for t in tiers}
     default_tier = next((t for t in tier_by_id.values() if t.is_default), None)
@@ -221,6 +248,7 @@ def build_ready_rows(
                 }
 
         pending = sorted(k for k, v in line_states.items() if v not in LIVE_LINE_STATES)
+        hold = hold_flag_by_sample.get(s.sample_id)
         rows.append({
             "sample_id": s.sample_id,
             "status": s.status or "",
@@ -251,6 +279,17 @@ def build_ready_rows(
             },
             "priority": priorities.get(s.external_uid or "", "normal") if s.external_uid else "normal",
             "sla": sla,
+            # Parked, not dropped: the page shows held rows in their own
+            # section with the flag title as the reason; totals skip them.
+            "hold": None if hold is None else {
+                "flag_id": hold.id,
+                "type": hold.type_slug,
+                "label": types[hold.type_slug].label,
+                "color": types[hold.type_slug].color,
+                "status": hold.status,
+                "title": hold.title,
+                "since": hold.created_at.isoformat() if hold.created_at else None,
+            },
         })
     return rows
 
