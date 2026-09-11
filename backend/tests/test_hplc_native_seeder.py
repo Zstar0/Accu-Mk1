@@ -97,20 +97,26 @@ def test_native_born_seed_is_idempotent_on_rerun(db):
 
 def test_senaite_born_parent_still_uses_the_mirror(db, monkeypatch):
     from lims_analyses import seeder
+    from lims_analyses.service import create_analysis
     _catalog(db)
     seen = {}
     def fake_mirror(db_, *, sub_sample, parent_sample_id, existing_kw, existing_service_ids, **k):
         seen["parent"] = parent_sample_id
         seen["kw_type"] = type(next(iter(existing_kw))) if existing_kw else None
+        seen["kw"] = set(existing_kw)
         return []
     monkeypatch.setattr(seeder, "mirror_parent_hplc_analyses", fake_mirror)
     p = _parent(db, system="senaite", sample_id="P-0141",
                 analytes=[{"name": "BPC-157 - Identity (HPLC)", "declared_quantity": None}])
     v = _vial(db, p)
+    purity_svc = db.query(AnalysisService).filter_by(keyword="HPLC-PURITY").one()
+    create_analysis(db, host_kind="sub_sample", host_pk=v.id,
+                    analysis_service_id=purity_svc.id, keyword="HPLC-PURITY", title="t", commit=False)
     seeder.seed_analyses_for_vial(db, sub_sample=v, role="hplc", wp_services={"hplcpurity_identity": True},
                                   parent_sample_id=p.sample_id, commit=False)
     assert seen["parent"] == "P-0141"
     assert seen["kw_type"] is tuple
+    assert ("HPLC-PURITY", 0) in seen["kw"]
 
 
 def test_native_born_without_parent_sample_id_does_not_raise(db):
