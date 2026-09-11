@@ -161,6 +161,16 @@ def init_db():
             seed_vial_roles(_db)
     except Exception as e:  # never block startup
         log.warning("catalog_vial_roles_seed_skipped err=%s", e)
+    # HPLC-native family (spec 2026-09-10, M2): five generic services + the
+    # hplc-purity-identity profile + wildcard specs. Before service_spec_seed
+    # for symmetry; after vial roles (role 'hplc' is a system role and already
+    # exists, but keep the order explicit).
+    try:
+        from catalog.hplc_native_seed import seed_hplc_native_catalog
+        with SessionLocal() as _db:
+            seed_hplc_native_catalog(_db)
+    except Exception as e:  # never block startup
+        log.warning("catalog_hplc_native_seed_skipped err=%s", e)
     try:
         from catalog.service_spec_seed import seed_service_specs
         with SessionLocal() as _db:
@@ -866,22 +876,62 @@ def _run_migrations():
         # senaite-writeback: retracted/rejected parent rows must not block
         # re-promotion — "retract the parent row, then re-promote" is the
         # documented undo. Rebuild the parent-tier root index with a state
-        # exclusion (drop+create is idempotent as a pair).
+        # exclusion.
         # native-manage-analyses: retracted/rejected vial rows must not block
         # re-adding the same service (mirrors the parent-tier index fix).
-        "DROP INDEX IF EXISTS uq_lims_analyses_sub_service_root",
+        # hplc-native-slice1 Finding 1 fix: this pair used to be an
+        # unconditional standalone DROP + CREATE, re-run every boot ("idempotent
+        # as a pair"). That stopped being true once M1 slot data existed: two
+        # rows can now share (host, keyword) differing only by slot, so the
+        # unwidened CREATE below fails on real data (migration_skipped), and
+        # the DROP that already committed leaves uniqueness unenforced until
+        # the widened DO $$ block further down recreates it. Guarded exactly
+        # like that later block so this pair becomes a no-op once the index
+        # is already widened, instead of rebuilding (and briefly dropping) it
+        # on every single boot.
         """
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_sub_service_root
-            ON lims_analyses (lims_sub_sample_pk, keyword)
-            WHERE retest_of_id IS NULL AND lims_sub_sample_pk IS NOT NULL
-              AND review_state NOT IN ('retracted', 'rejected')
+        DO $$ BEGIN
+          IF EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_sub_service_root'
+              AND indexdef NOT LIKE '%COALESCE%'
+          ) THEN
+            EXECUTE 'DROP INDEX uq_lims_analyses_sub_service_root';
+          END IF;
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_sub_service_root'
+          ) THEN
+            EXECUTE $idx$
+              CREATE UNIQUE INDEX uq_lims_analyses_sub_service_root
+                ON lims_analyses (lims_sub_sample_pk, keyword)
+                WHERE retest_of_id IS NULL AND lims_sub_sample_pk IS NOT NULL
+                  AND review_state NOT IN ('retracted', 'rejected')
+            $idx$;
+          END IF;
+        END $$
         """,
-        "DROP INDEX IF EXISTS uq_lims_analyses_parent_service_root",
         """
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_parent_service_root
-            ON lims_analyses (lims_sample_pk, keyword)
-            WHERE retest_of_id IS NULL AND lims_sample_pk IS NOT NULL
-              AND review_state NOT IN ('retracted', 'rejected')
+        DO $$ BEGIN
+          IF EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_parent_service_root'
+              AND indexdef NOT LIKE '%COALESCE%'
+          ) THEN
+            EXECUTE 'DROP INDEX uq_lims_analyses_parent_service_root';
+          END IF;
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_parent_service_root'
+          ) THEN
+            EXECUTE $idx$
+              CREATE UNIQUE INDEX uq_lims_analyses_parent_service_root
+                ON lims_analyses (lims_sample_pk, keyword)
+                WHERE retest_of_id IS NULL AND lims_sample_pk IS NOT NULL
+                  AND review_state NOT IN ('retracted', 'rejected')
+            $idx$;
+          END IF;
+        END $$
         """,
         # Sub-sample 'promoted' workflow state. Re-create the review_state CHECK
         # to allow 'promoted', then backfill: sub-samples promoted under the old
@@ -1282,13 +1332,32 @@ def _run_migrations():
         # Make the parent-tier root index provenance-aware: a shadow mirror
         # row must never occupy the canonical slot, so 'canonical' rows and
         # 'shadow' rows can coexist for the same (parent, keyword).
-        "DROP INDEX IF EXISTS uq_lims_analyses_parent_service_root",
+        # hplc-native-slice1 Finding 1 fix: guarded like the sibling pair
+        # above and the widened DO $$ block further down — see that block's
+        # comment for why an unconditional DROP+CREATE here is unsafe once
+        # slot data exists.
         """
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_analyses_parent_service_root
-            ON lims_analyses (lims_sample_pk, keyword)
-            WHERE retest_of_id IS NULL AND lims_sample_pk IS NOT NULL
-              AND review_state NOT IN ('retracted', 'rejected')
-              AND provenance = 'canonical'
+        DO $$ BEGIN
+          IF EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_parent_service_root'
+              AND indexdef NOT LIKE '%COALESCE%'
+          ) THEN
+            EXECUTE 'DROP INDEX uq_lims_analyses_parent_service_root';
+          END IF;
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_parent_service_root'
+          ) THEN
+            EXECUTE $idx$
+              CREATE UNIQUE INDEX uq_lims_analyses_parent_service_root
+                ON lims_analyses (lims_sample_pk, keyword)
+                WHERE retest_of_id IS NULL AND lims_sample_pk IS NOT NULL
+                  AND review_state NOT IN ('retracted', 'rejected')
+                  AND provenance = 'canonical'
+            $idx$;
+          END IF;
+        END $$
         """,
         # parent-analysis-native-mirror Task 3: fail-loud backstop for the
         # shadow mirror's own "live row" invariant. At most one non-retested
@@ -2152,6 +2221,159 @@ def _run_migrations():
         "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS senaite_analysis_uid VARCHAR(50)",
         "CREATE INDEX IF NOT EXISTS ix_lims_analyses_senaite_analysis_uid "
         "ON lims_analyses (senaite_analysis_uid)",
+        # --- HPLC-native slice 1 (spec 2026-09-10, M1) ---
+        # peptide_id + slot on analysis rows. Additive, nullable, no backfill:
+        # NULL on every legacy row by contract. CHECK uses the union-preserve
+        # idiom (guarded DO block) so re-boots are no-ops.
+        "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS peptide_id INTEGER "
+        "REFERENCES peptides(id) ON DELETE SET NULL",
+        "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS slot SMALLINT",
+        """
+        DO $$ BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint
+            WHERE conname = 'ck_lims_analyses_slot_range'
+              AND conrelid = 'lims_analyses'::regclass
+          ) THEN
+            ALTER TABLE lims_analyses ADD CONSTRAINT ck_lims_analyses_slot_range
+              CHECK (slot IS NULL OR (slot BETWEEN 1 AND 8));
+          END IF;
+        END $$
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_lims_analyses_peptide_id "
+        "ON lims_analyses (peptide_id)",
+        # Slot-aware root uniqueness (spec 2026-09-10, M1). A blend holds N
+        # rows of the SAME generic service (HPLC-PURITY x slots 1..N) on one
+        # vial and on one parent, so every "one live root row per (host,
+        # service)" index gains COALESCE(slot, 0). Legacy rows (slot NULL)
+        # compare as 0 — exactly as unique as before; a widened index is
+        # strictly looser so the CREATE cannot fail on existing data.
+        # ATOMIC widen: each index gets ONE guarded DO $$ block (not a
+        # standalone DROP followed by a standalone CREATE) — Postgres runs a
+        # DO block in a single transaction, so if the CREATE fails the DROP
+        # rolls back with it. A standalone DROP that succeeds followed by a
+        # CREATE that _run_migrations swallows as migration_skipped would
+        # otherwise silently delete the identity-uniqueness guarantee
+        # (test_identity_indexes.py::test_migration_list_contains_both_statements
+        # pins "no standalone DROP" for exactly this reason). The IF EXISTS /
+        # IF NOT EXISTS guards make re-running this block on every boot a
+        # no-op once the index is already widened. Guard predicate matches
+        # on indexdef NOT LIKE '%COALESCE%' (not '%COALESCE(slot%'): Postgres
+        # normalizes the stored indexdef to COALESCE((slot)::integer, 0), so
+        # a literal '%COALESCE(slot%' substring never matches a widened
+        # index and the guard would fire (drop + rebuild) on every boot.
+        """
+        DO $$ BEGIN
+          IF EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_sub_service_root'
+              AND indexdef NOT LIKE '%COALESCE%'
+          ) THEN
+            EXECUTE 'DROP INDEX uq_lims_analyses_sub_service_root';
+          END IF;
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_sub_service_root'
+          ) THEN
+            EXECUTE $idx$
+              CREATE UNIQUE INDEX uq_lims_analyses_sub_service_root
+                ON lims_analyses (lims_sub_sample_pk, keyword, COALESCE(slot, 0))
+                WHERE retest_of_id IS NULL AND lims_sub_sample_pk IS NOT NULL
+                  AND review_state NOT IN ('retracted', 'rejected')
+            $idx$;
+          END IF;
+        END $$
+        """,
+        """
+        DO $$ BEGIN
+          IF EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_sub_service_id_root'
+              AND indexdef NOT LIKE '%COALESCE%'
+          ) THEN
+            EXECUTE 'DROP INDEX uq_lims_analyses_sub_service_id_root';
+          END IF;
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_sub_service_id_root'
+          ) THEN
+            EXECUTE $idx$
+              CREATE UNIQUE INDEX uq_lims_analyses_sub_service_id_root
+                ON lims_analyses (lims_sub_sample_pk, analysis_service_id, COALESCE(slot, 0))
+                WHERE retest_of_id IS NULL AND lims_sub_sample_pk IS NOT NULL
+                  AND review_state NOT IN ('retracted', 'rejected')
+            $idx$;
+          END IF;
+        END $$
+        """,
+        """
+        DO $$ BEGIN
+          IF EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_parent_service_root'
+              AND indexdef NOT LIKE '%COALESCE%'
+          ) THEN
+            EXECUTE 'DROP INDEX uq_lims_analyses_parent_service_root';
+          END IF;
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_parent_service_root'
+          ) THEN
+            EXECUTE $idx$
+              CREATE UNIQUE INDEX uq_lims_analyses_parent_service_root
+                ON lims_analyses (lims_sample_pk, keyword, COALESCE(slot, 0))
+                WHERE retest_of_id IS NULL AND lims_sample_pk IS NOT NULL
+                  AND review_state NOT IN ('retracted', 'rejected')
+                  AND provenance = 'canonical'
+            $idx$;
+          END IF;
+        END $$
+        """,
+        """
+        DO $$ BEGIN
+          IF EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_parent_service_id_root'
+              AND indexdef NOT LIKE '%COALESCE%'
+          ) THEN
+            EXECUTE 'DROP INDEX uq_lims_analyses_parent_service_id_root';
+          END IF;
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_parent_service_id_root'
+          ) THEN
+            EXECUTE $idx$
+              CREATE UNIQUE INDEX uq_lims_analyses_parent_service_id_root
+                ON lims_analyses (lims_sample_pk, analysis_service_id, COALESCE(slot, 0))
+                WHERE retest_of_id IS NULL AND lims_sample_pk IS NOT NULL
+                  AND review_state NOT IN ('retracted', 'rejected')
+                  AND provenance = 'canonical'
+            $idx$;
+          END IF;
+        END $$
+        """,
+        """
+        DO $$ BEGIN
+          IF EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_parent_service_ordered'
+              AND indexdef NOT LIKE '%COALESCE%'
+          ) THEN
+            EXECUTE 'DROP INDEX uq_lims_analyses_parent_service_ordered';
+          END IF;
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'lims_analyses' AND indexname = 'uq_lims_analyses_parent_service_ordered'
+          ) THEN
+            EXECUTE $idx$
+              CREATE UNIQUE INDEX uq_lims_analyses_parent_service_ordered
+                ON lims_analyses (lims_sample_pk, analysis_service_id, COALESCE(slot, 0))
+                WHERE provenance = 'ordered' AND lims_sample_pk IS NOT NULL
+                  AND review_state NOT IN ('retracted', 'rejected')
+            $idx$;
+          END IF;
+        END $$
+        """,
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

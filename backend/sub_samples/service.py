@@ -1486,11 +1486,13 @@ def derive_variance_demand(services: dict) -> dict:
     normalization as the entitlement endpoint (counts int-filtered >= 2,
     so the target is always >= 1 when purchased).
 
-    The hplc bucket is BW-aware — it reads hplcpurity_identity OR bac_water_panel
-    (mirroring derive_base_demand), since both produce chromatography vials and
+    The hplc bucket is BW-aware — it reads either HPLC primary key (legacy
+    `hplcpurity_identity` or native `hplc-purity-identity`, see catalog/hplc_keys.py)
+    OR bac_water_panel (mirroring derive_base_demand), since both produce chromatography vials and
     are mutually exclusive per order. (Handler decision 2026-06-17.)"""
+    from catalog.hplc_keys import hplc_primary_count
     entitlement = normalize_variance_entitlement({"variance": (services or {}).get("variance")})
-    hplc_total = max(entitlement.get("hplcpurity_identity", 0), entitlement.get("bac_water_panel", 0))
+    hplc_total = max(hplc_primary_count(entitlement), entitlement.get("bac_water_panel", 0))
     return {
         "hplc": max(0, hplc_total - 1),
         "endo": max(0, entitlement.get("endotoxin", 0) - 1),
@@ -1531,7 +1533,8 @@ def derive_base_demand(services: dict, db=None, snapshot: Optional[dict] = None)
     not as the expected steady-state noise it would otherwise be for every
     post-registration legacy-bucket purchase.
     """
-    hplc = bool(services.get("hplcpurity_identity") or services.get("bac_water_panel"))
+    from catalog.hplc_keys import hplc_primary_selected
+    hplc = hplc_primary_selected(services) or bool(services.get("bac_water_panel"))
     endo = bool(services.get("endotoxin"))
     ster = bool(services.get("sterility_pcr"))
     legacy = {
@@ -1577,7 +1580,8 @@ def derive_base_demand(services: dict, db=None, snapshot: Optional[dict] = None)
 def derive_demand(services: dict, db=None, snapshot: Optional[dict] = None) -> dict:
     """Translate WP services dict to CORE vial demand per bucket.
 
-    HPLC is satisfied by either `hplcpurity_identity` or `bac_water_panel` —
+    HPLC is satisfied by either HPLC primary key (legacy `hplcpurity_identity`
+    or native `hplc-purity-identity`, see catalog/hplc_keys.py) OR `bac_water_panel` —
     both result in chromatography vials. No legacy bucket needs more than
     one vial (ruling 2026-08-05: PCR and USP<71> are separately sold
     products, one vial each).

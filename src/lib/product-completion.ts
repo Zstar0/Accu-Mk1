@@ -115,10 +115,13 @@ export function analysisFamily(
 }
 
 /** HPLC single-component package keys — each one's category is the hplc
- *  family (plus any keywords a dev-seeded catalog maps to them directly). */
+ *  family (plus any keywords a dev-seeded catalog maps to them directly).
+ *  'hplc-purity-identity' is the native profile key (spec 2026-09-10); it
+ *  and the legacy 'hplcpurity_identity' both mean the HPLC primary. */
 const HPLC_PACKAGE_KEYS = new Set([
   'core',
   'hplcpurity_identity',
+  'hplc-purity-identity',
   'bac_water_panel',
 ])
 

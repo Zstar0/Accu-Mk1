@@ -7,7 +7,7 @@ from datetime import datetime, time, date, timezone
 from decimal import Decimal
 from typing import Optional, List
 import uuid
-from sqlalchemy import String, Text, Float, Integer, BigInteger, Boolean, DateTime, Time, Date, ForeignKey, JSON, Column, Table, UniqueConstraint, CheckConstraint, Index, Numeric, text, func
+from sqlalchemy import String, Text, Float, Integer, SmallInteger, BigInteger, Boolean, DateTime, Time, Date, ForeignKey, JSON, Column, Table, UniqueConstraint, CheckConstraint, Index, Numeric, text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -2043,6 +2043,16 @@ class LimsAnalysis(Base):
         Boolean, nullable=False, default=True, server_default="true"
     )
     reportable_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # HPLC-native (spec 2026-09-10, shape B): the analyte this row measures
+    # and its 1-based position in lims_samples.analytes. NULL on every
+    # non-HPLC row and on every legacy (SENAITE-mirror) row. The row's
+    # `title` is STAMPED per row ("BPC-157 - Purity (HPLC)") by the native
+    # seeder — never derived from the generic service title.
+    peptide_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("peptides.id", ondelete="SET NULL"), nullable=True
+    )
+    slot: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
 
     # SENAITE phase-out (parent analysis mirror): provenance discriminates a
     # promoted/native 'canonical' row from a SENAITE 'shadow' mirror row, and

@@ -42,6 +42,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from catalog.departments import ANALYTICAL_DEPARTMENT, department_id_by_name
+from catalog.hplc_keys import HPLC_PRIMARY_KEYS
 from lims_analyses import service as la_service
 from models import (
     AnalysisProfile,
@@ -76,8 +77,9 @@ _PARENT_BENCH_ONLY_KEYWORDS = frozenset({
 # facing service categories no longer get an entry here: they resolve
 # directly from Analysis Profile membership (fulfillment_dim='role') via
 # _catalog_members_for_role. This map is never extended for new roles.
+# hplc: both primary keys (legacy + native profile key) — see catalog/hplc_keys.py
 ROLE_TO_WP_KEYS: Dict[str, Set[str]] = {
-    "hplc": {"hplcpurity_identity", "bac_water_panel"},
+    "hplc": set(HPLC_PRIMARY_KEYS) | {"bac_water_panel"},
     "endo": {"endotoxin"},
     "ster": {"sterility_pcr"},
     "xtra": set(),  # XTRA vials seed nothing; see scope decision #1
