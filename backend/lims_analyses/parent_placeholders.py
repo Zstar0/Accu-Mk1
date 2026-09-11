@@ -23,6 +23,10 @@ what lets promote stay completely untouched.
 """
 from __future__ import annotations
 
+import logging
+
+log = logging.getLogger(__name__)
+
 PROVENANCE_ORDERED = "ordered"
 
 
@@ -54,8 +58,8 @@ def seed_parent_placeholders(
     """
     from models import LimsAnalysis
     from coa.native_sections import _ordered_native_profiles
-    from lims_analyses.hplc_native import (AGGREGATES, TRIO, identity_title, is_native_born,
-                                           purity_title, quantity_title, resolve_slot_peptides)
+    from lims_analyses.hplc_native import (AGGREGATES, TRIO, is_native_born,
+                                           resolve_slot_peptides, title_for_slot)
     from lims_analyses.service import record_placeholder_created
 
     reason_action = reason
@@ -67,6 +71,8 @@ def seed_parent_placeholders(
     native_slots = None
     if is_native_born(parent):
         native_slots = resolve_slot_peptides(db, parent)
+        if not native_slots:
+            log.error("registry.native_placeholder_no_analyte_slots sample_id=%s", parent.sample_id)
 
     def _mint(svc, *, slot, peptide_id, title, reason):
         exists = (
@@ -99,12 +105,9 @@ def seed_parent_placeholders(
                 stats["skipped"] += 1
                 continue
             if native_slots is not None and svc.keyword in TRIO:
-                titler = {"HPLC-IDENTITY": identity_title, "HPLC-PURITY": purity_title,
-                          "HPLC-QUANTITY": quantity_title}[svc.keyword]
                 for res in native_slots:
                     reason = f"analyte_{res.reason}: {res.raw_name}" if res.reason else None
-                    title = (titler(res.display_name) if res.peptide_id
-                             else (res.raw_name if svc.keyword == "HPLC-IDENTITY" else titler(res.display_name)))
+                    title = title_for_slot(svc.keyword, res)
                     _mint(svc, slot=res.slot, peptide_id=res.peptide_id, title=title, reason=reason)
                 continue
             if native_slots is not None and svc.keyword in AGGREGATES and len(native_slots) < 2:

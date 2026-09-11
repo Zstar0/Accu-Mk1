@@ -192,6 +192,17 @@ def test_seed_is_idempotent_via_slot_aware_keys(db):
     assert ("HPLC-PURITY", 1) in keys
 
 
+def test_seed_logs_error_and_skips_when_no_occupied_slots(db, caplog):
+    from lims_analyses.hplc_native import seed_native_hplc_rows
+    _catalog(db); _peptides(db)
+    p = _native_parent(db, [])
+    v = _vial(db, p)
+    rows = seed_native_hplc_rows(db, sub_sample=v, parent=p, existing_keys=set(),
+                                 existing_service_ids=set(), created_by_user_id=None, commit=False)
+    assert rows == []
+    assert any("seeder.native_hplc.no_analyte_slots" in r.message for r in caplog.records)
+
+
 def test_seed_refuses_when_catalog_incomplete(db):
     from lims_analyses.hplc_native import seed_native_hplc_rows
     _peptides(db)

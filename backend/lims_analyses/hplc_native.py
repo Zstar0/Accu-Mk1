@@ -14,9 +14,10 @@ IS once WordPress carries Mk1 ids) → exact fold of the label (identity suffix
 stripped) against peptides.name / abbreviation → hplc_aliases / display_aliases.
 Zero matches or 2+ distinct matches never guess: the rows are still seeded,
 with peptide_id NULL and reportable_reason 'analyte_unresolved|ambiguous: …'
-(Handler ruling 2026-09-10) so the bench sees the slot, the prep bridge never
-routes a result onto it, and the COA stays blocked until relabel_native_slot
-(slice 3) fixes the id.
+(Handler ruling 2026-09-10) so the bench sees the slot. `reportable` itself
+stays True here (Handler ruling pending) -- gating these rows out of the prep
+bridge (M5), out of the COA wire (M7), and restamping them via
+relabel_native_slot (M6) are named follow-up requirements, not yet built.
 """
 from __future__ import annotations
 
@@ -146,6 +147,18 @@ def _title_for(kw: str, name: str) -> str:
     return {KW_IDENTITY: identity_title, KW_PURITY: purity_title, KW_QUANTITY: quantity_title}[kw](name)
 
 
+def title_for_slot(kw: str, res: "SlotResolution") -> str:
+    """The single per-row title rule, shared by seed_native_hplc_rows and
+    parent_placeholders.seed_parent_placeholders so the trio and its
+    placeholder never drift apart: the peptide's canonical name when
+    resolved; for an unresolved identity row, the raw label as stored
+    (already title-form from the IS) since the bench must show what the
+    customer typed and relabel_native_slot restamps it later."""
+    if kw == KW_IDENTITY and not res.peptide_id:
+        return res.raw_name
+    return _title_for(kw, res.display_name)
+
+
 def seed_native_hplc_rows(
     db: Session, *, sub_sample: LimsSubSample, parent: LimsSample,
     existing_keys: set, existing_service_ids: set,
@@ -161,6 +174,9 @@ def seed_native_hplc_rows(
     if not services:
         return []
     slots = resolve_slot_peptides(db, parent)
+    if not slots:
+        log.error("seeder.native_hplc.no_analyte_slots sample_id=%s", sub_sample.sample_id)
+        return []
     inserted: list[LimsAnalysis] = []
 
     def _mint(kw: str, *, slot: Optional[int], peptide_id: Optional[int],
@@ -186,12 +202,8 @@ def seed_native_hplc_rows(
         if res.reason:
             log.warning("seeder.native_hplc.unresolved_slot sub=%s slot=%s raw=%r reason=%s",
                         sub_sample.sample_id, res.slot, res.raw_name, res.reason)
-        # Title: the peptide's canonical name when resolved; the raw label as
-        # stored (already title-form from the IS) when not — the bench must show
-        # what the customer typed, and the relabel action restamps it later.
         for kw in TRIO:
-            title = _title_for(kw, res.display_name) if res.peptide_id else (
-                res.raw_name if kw == KW_IDENTITY else _title_for(kw, res.display_name))
+            title = title_for_slot(kw, res)
             _mint(kw, slot=res.slot, peptide_id=res.peptide_id, title=title, reason=reason)
 
     if len(slots) > 1:

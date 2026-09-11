@@ -87,6 +87,15 @@ def test_native_unresolved_slot_placeholder_has_null_peptide_and_reason(db):
     assert all(r.peptide_id is None and r.reportable_reason.startswith("analyte_unresolved") for r in rows)
 
 
+def test_native_parent_no_occupied_slots_logs_error_and_mints_nothing(db, caplog):
+    _seed(db)
+    p = _parent(db, system="mk1", sample_id="P-5002", analytes=[])
+    stats = seed_parent_placeholders(db, parent=p, services=SERVICES)
+    assert stats["created"] == 0
+    assert len(_rows(db, p)) == 0
+    assert any("registry.native_placeholder_no_analyte_slots" in r.message for r in caplog.records)
+
+
 def test_senaite_born_parent_unchanged_slot_null_one_per_service(db):
     """Legacy behaviour: a SENAITE-born parent ordering the native profile
     (only possible after the WP flip in an edge case) still gets one row per
