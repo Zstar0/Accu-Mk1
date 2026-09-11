@@ -445,15 +445,17 @@ def mirror_parent_hplc_analyses(
     Fail-hard: a SENAITE read error propagates (the caller aborts rather than
     seed a partial analyte set).
 
-    `existing_kw` / `existing_service_ids` are the caller-built sets of
+    `existing_kw` / `existing_service_ids` are the caller-built SLOT-AWARE
+    tuple sets ((keyword, slot or 0) / (service_id, slot or 0)) of
     already-seeded identities for this vial (see seed_analyses_for_vial); a
-    candidate matching EITHER is skipped, mirroring the two live root indexes
-    on (lims_sub_sample_pk, keyword) and (lims_sub_sample_pk,
-    analysis_service_id). The id leg is what skips a native service whose
-    stored keyword has drifted from its catalog keyword — the translation
-    below resolves candidates through the CATALOG (PUR_<X>/QTY_<X> by
-    peptide_id), so it hands back exactly the catalog keyword a drifted row no
-    longer carries.
+    candidate matching EITHER (compared at slot 0 — the mirror never writes a
+    slot) is skipped, mirroring the two live root indexes on
+    (lims_sub_sample_pk, keyword, COALESCE(slot, 0)) and
+    (lims_sub_sample_pk, analysis_service_id, COALESCE(slot, 0)). The id leg
+    is what skips a native service whose stored keyword has drifted from its
+    catalog keyword — the translation below resolves candidates through the
+    CATALOG (PUR_<X>/QTY_<X> by peptide_id), so it hands back exactly the
+    catalog keyword a drifted row no longer carries.
     """
     # Late import + module-attribute reference so monkeypatching
     # sub_samples.senaite.fetch_parent_analysis_keywords takes effect in tests.
@@ -540,7 +542,7 @@ def mirror_parent_hplc_analyses(
             continue
         if svc.keyword in _PARENT_BENCH_ONLY_KEYWORDS:  # parent-bench entry only
             continue
-        if svc.id in existing_service_ids or svc.keyword in existing_kw:
+        if (svc.id, 0) in existing_service_ids or (svc.keyword, 0) in existing_kw:
             continue
         row = la_service.create_analysis(
             db,
@@ -553,8 +555,8 @@ def mirror_parent_hplc_analyses(
             commit=commit,
         )
         inserted.append(row)
-        existing_kw.add(svc.keyword)
-        existing_service_ids.add(svc.id)
+        existing_kw.add((svc.keyword, 0))
+        existing_service_ids.add((svc.id, 0))
         log.info(
             "seeder.mirror.seeded sub=%s analysis_id=%s keyword=%s",
             sub_sample.sample_id, row.id, svc.keyword,
@@ -584,7 +586,7 @@ def _seed_rows_from_services(
     the id is what catches a native service whose stored keyword drifted."""
     inserted: List[LimsAnalysis] = []
     for svc in services:
-        if svc.id in existing_service_ids or svc.keyword in existing_kw:
+        if (svc.id, 0) in existing_service_ids or (svc.keyword, 0) in existing_kw:
             continue
         row = la_service.create_analysis(
             db,
@@ -597,8 +599,8 @@ def _seed_rows_from_services(
             commit=commit,
         )
         inserted.append(row)
-        existing_kw.add(svc.keyword)
-        existing_service_ids.add(svc.id)
+        existing_kw.add((svc.keyword, 0))
+        existing_service_ids.add((svc.id, 0))
         log.info(
             "seeder.%s sub=%s analysis_id=%s keyword=%s",
             log_event, sub_sample.sample_id, row.id, svc.keyword,
@@ -676,7 +678,10 @@ def seed_analyses_for_vial(
     HPLC vials MIRROR the parent's Analytics analyte set — see
     mirror_parent_hplc_analyses. This requires `parent_sample_id`; omitting it
     for an HPLC vial is a programming error (raises ValueError). The SENAITE
-    read inside the mirror is fail-hard and propagates on error.
+    read inside the mirror is fail-hard and propagates on error. A
+    native-born parent (external_lims_system == 'mk1') has no SENAITE AR to
+    mirror — see hplc_native.seed_native_hplc_rows — and never requires
+    parent_sample_id (the parent is resolved off the vial itself).
 
     endo/ster vials seed their fixed single-keyword ROLE_TO_KEYWORDS whitelist
     (unchanged). xtra vials seed nothing. Any other role (a catalog role —
@@ -715,31 +720,47 @@ def seed_analyses_for_vial(
     # row with a NULL service FK still contributes its keyword (an inner join
     # would have dropped it out of existing_kw and re-seeded it).
     existing = db.execute(
-        select(LimsAnalysis.keyword, LimsAnalysis.analysis_service_id).where(
+        select(LimsAnalysis.keyword, LimsAnalysis.analysis_service_id, LimsAnalysis.slot).where(
             LimsAnalysis.lims_sub_sample_pk == sub_sample.id,
             LimsAnalysis.review_state.notin_(["rejected", "retracted"]),
         )
     ).all()
-    existing_kw = {kw for kw, _sid in existing}
-    existing_service_ids = {sid for _kw, sid in existing if sid is not None}
+    # Slot-aware since HPLC-native slice 1 widened the root indexes to
+    # (…, COALESCE(slot, 0)): a blend holds N rows of the SAME generic service
+    # on one vial. Legacy rows carry slot NULL and compare as 0 — the tuple
+    # form is byte-identical to the old string/int sets for them.
+    existing_kw = {(kw, slot or 0) for kw, _sid, slot in existing}
+    existing_service_ids = {(sid, slot or 0) for _kw, sid, slot in existing if sid is not None}
 
-    # ── HPLC: mirror the parent's Analytics analyte set ──────────────────────
+    # ── HPLC ──────────────────────────────────────────────────────────────────
     if role == "hplc":
-        if not parent_sample_id:
-            raise ValueError(
-                "seed_analyses_for_vial(role='hplc') requires parent_sample_id"
+        from lims_analyses.hplc_native import is_native_born, seed_native_hplc_rows
+        parent = sub_sample.parent_sample if sub_sample.parent_sample_pk else None
+        if parent is not None and is_native_born(parent):
+            # Native-born (spec 2026-09-10 M4): no SENAITE AR to mirror — the
+            # trio per analyte slot comes from lims_samples.analytes.
+            inserted = seed_native_hplc_rows(
+                db, sub_sample=sub_sample, parent=parent,
+                existing_keys=existing_kw, existing_service_ids=existing_service_ids,
+                created_by_user_id=created_by_user_id, commit=commit,
             )
-        inserted = mirror_parent_hplc_analyses(
-            db,
-            sub_sample=sub_sample,
-            parent_sample_id=parent_sample_id,
-            existing_kw=existing_kw,
-            existing_service_ids=existing_service_ids,
-            created_by_user_id=created_by_user_id,
-            commit=commit,
-        )
-        # Rider custody edges seed too (mirror mutates existing_kw/ids as it
-        # inserts, so the dedupe composes).
+        else:
+            # SENAITE-born: mirror the parent's Analytics analyte set (unchanged).
+            if not parent_sample_id:
+                raise ValueError(
+                    "seed_analyses_for_vial(role='hplc') requires parent_sample_id"
+                )
+            inserted = mirror_parent_hplc_analyses(
+                db,
+                sub_sample=sub_sample,
+                parent_sample_id=parent_sample_id,
+                existing_kw=existing_kw,
+                existing_service_ids=existing_service_ids,
+                created_by_user_id=created_by_user_id,
+                commit=commit,
+            )
+        # Rider custody edges seed too (either branch mutates existing_kw/ids
+        # as it inserts, so the dedupe composes).
         inserted.extend(_seed_rider_members(
             db,
             sub_sample=sub_sample,
