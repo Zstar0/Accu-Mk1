@@ -20,7 +20,9 @@ either side, and `.keyword.in_(...)` / `.notin_(...)` / `.not_in(...)` calls.
 Projections (`select(X.keyword)`), `.order_by(X.keyword)`, dict/set
 construction and audit-detail payloads are NOT identity decisions and are
 deliberately out of scope -- see test_matcher_ignores_projections_and_payloads,
-which pins that boundary against a synthetic source.
+which pins that boundary against a synthetic source. Tuple/list operands are
+descended one level so slot-aware `(X.keyword, slot)` membership keys stay
+classified.
 
 Keys are `(relative_path, enclosing_function, compared_attribute_owner)` --
 never line numbers, which rot on every edit above them. The owner component
@@ -328,9 +330,15 @@ PER_FILE_FLOOR = {
 
 
 def _keyword_attr_owner(node: ast.AST) -> str | None:
-    """`LimsAnalysis.keyword` -> 'LimsAnalysis'; anything else -> None."""
+    """`LimsAnalysis.keyword` -> 'LimsAnalysis'. A tuple/list operand
+    (`(svc.keyword, 0)`, a slot-aware membership key) reports the owner of its
+    first `.keyword` element, same as a bare attribute. Anything else -> None."""
     if isinstance(node, ast.Attribute) and node.attr == "keyword":
         return ast.unparse(node.value)
+    if isinstance(node, (ast.Tuple, ast.List)):
+        for elt in node.elts:
+            if isinstance(elt, ast.Attribute) and elt.attr == "keyword":
+                return ast.unparse(elt.value)
     return None
 
 
@@ -584,6 +592,11 @@ def test_per_file_floor():
         ("def f():\n    q(LimsAnalysis.keyword.in_(kws))\n", 1),
         ("def f():\n    q(LimsAnalysis.keyword.notin_(kws))\n", 1),
         ("def f():\n    q(LimsAnalysis.keyword.not_in(kws))\n", 1),
+        # --- slot-aware tuple/list membership keys: MATCHED (descend one level) ---
+        ("def f():\n    if (svc.keyword, 0) in existing_kw:\n        pass\n", 1),
+        ("def f():\n    if [svc.keyword, slot] == other:\n        pass\n", 1),
+        # tuple with no .keyword element: NOT matched
+        ("def f():\n    if (svc.id, 0) in existing_ids:\n        pass\n", 0),
         # --- projections / ordering / payloads: NOT matched ---
         ("def f():\n    q(select(AnalysisService.keyword, X.title))\n", 0),
         ("def f():\n    q(stmt.order_by(LimsAnalysis.keyword, LimsAnalysis.id))\n", 0),
@@ -607,3 +620,17 @@ def test_matcher_ignores_projections_and_payloads(snippet, expected):
     )
     for (rel, func, _owner), _ln, _text in hits:
         assert (rel, func) == ("<probe>", "f")
+
+
+def test_matcher_tuple_operand_owner_is_the_keyword_elements_value():
+    """`(svc.keyword, 0) in existing_kw` -- a slot-aware membership key, the
+    exact shape Task 6 introduced in seeder.py -- must report owner 'svc', not
+    go unmatched. A tuple with no `.keyword` element must still report None."""
+    snippet = "def f():\n    if (svc.keyword, 0) in existing_kw:\n        pass\n"
+    hits = _collect_from_source(snippet, "<probe>", "<probe>")
+    assert len(hits) == 1
+    (_rel, _func, owner), _ln, _text = hits[0]
+    assert owner == "svc"
+
+    no_keyword = "def f():\n    if (svc.id, 0) in existing_ids:\n        pass\n"
+    assert _collect_from_source(no_keyword, "<probe>", "<probe>") == []
