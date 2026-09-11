@@ -935,6 +935,26 @@ export function OrderStatusPage() {
   const [envName, setEnvName] = useState(() => getActiveEnvironmentName())
   const [orderFilters, setOrderFilters] =
     useState<OrderFilters>(loadOrderFilters)
+  // Header quick nav (2026-09-11): a navigator may hand us an Order ID.
+  // Consume-once; every other text axis is cleared so the one order is what
+  // shows. Re-runs on navigationKey so a second hand-off while mounted works.
+  const navigationKey = useUIStore(state => state.navigationKey)
+  useEffect(() => {
+    const prefill = useUIStore.getState().consumeOrderStatusPrefill()
+    if (!prefill) return
+    setOrderFilters(prev => {
+      const next = {
+        ...prev,
+        orderIdFilter: prefill.orderId,
+        sampleIdFilter: '',
+        emailFilter: '',
+        analyteFilter: '',
+        lotFilter: '',
+      }
+      saveOrderFilters(next)
+      return next
+    })
+  }, [navigationKey])
 
   const updateFilters = (partial: Partial<OrderFilters>) => {
     setOrderFilters(prev => {

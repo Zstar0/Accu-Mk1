@@ -8,6 +8,7 @@ engine in ready_to_publish.py, which has its own tests.
 from datetime import datetime, time
 from unittest.mock import MagicMock
 
+import pytest
 from fastapi.testclient import TestClient
 
 import main as main_module
@@ -18,6 +19,16 @@ from ready_to_publish import FlagIn, FlagTypeIn, SampleIn, TierIn
 from sla_engine import BusinessSchedule
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _clear_report_cache():
+    """The route reads through a 60 s process cache (2026-09-11); each test
+    wants its own patched inputs to be what is served."""
+    import ready_to_publish_cache
+    ready_to_publish_cache.invalidate()
+    yield
+    ready_to_publish_cache.invalidate()
 
 SCHEDULE = BusinessSchedule(open_time=time(9, 0), close_time=time(17, 0), timezone="America/Los_Angeles",
                             working_days=frozenset({0, 1, 2, 3, 4}))

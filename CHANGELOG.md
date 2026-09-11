@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+- **Header quick nav.** The "Accu-Mk1" label in the top bar is replaced by three Enter-to-go boxes styled like the Worksheets pill — Sample ID (sample details), Customer Email (customer list, pre-filtered), Order ID (Order Status with only the Order ID filter set) — and a Ready to Publish button carrying two count chips: red = every line verified, green = Ready for Partial Publish. The same chips sit on the Ready to Publish entry in the sidebar.
+- `GET /reports/ready-to-publish/summary` (totals only) for the chips. Both it and the full report read through a 60 s process cache that is cleared on every publish, so polling from every open window costs one report build per minute at most.
+
+### Fixed
+- Ready to Publish report ignores rejected / retracted / cancelled lines the way the workflow engine does. A sample with one rejected extra analyte (PB-0474 and six others on prod) never appeared before.
+
 ## v1.19.2 — 2026-09-11
 
 ### Fixed

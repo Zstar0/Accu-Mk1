@@ -41,6 +41,7 @@ import {
   type ActiveSubSection,
 } from '@/store/ui-store'
 import { useWizardStore } from '@/store/wizard-store'
+import { ReadyToPublishChips } from './QuickNav'
 import { useAuthStore } from '@/store/auth-store'
 import { logout } from '@/lib/auth-api'
 
@@ -279,6 +280,11 @@ export function AppSidebar() {
                                       }}
                                     >
                                       <span>{subItem.label}</span>
+                                      {subItem.id === 'ready-to-publish' && (
+                                        <span className="ml-auto flex items-center gap-1">
+                                          <ReadyToPublishChips />
+                                        </span>
+                                      )}
                                     </button>
                                   </SidebarMenuSubButton>
                                 </SidebarMenuSubItem>

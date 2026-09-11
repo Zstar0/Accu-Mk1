@@ -11067,6 +11067,35 @@ def reports_ready_to_publish(
     ``include_test_orders=true``. Plain ``def`` on purpose: the DB work is
     synchronous and runs in the threadpool.
     """
+    import ready_to_publish_cache
+    return ready_to_publish_cache.get_or_build(
+        include_test_orders, lambda: _build_ready_to_publish_payload(db, include_test_orders))
+
+
+class ReadyToPublishSummaryOut(BaseModel):
+    generated_at: str
+    totals: dict[str, int]
+
+
+@app.get("/reports/ready-to-publish/summary", response_model=ReadyToPublishSummaryOut)
+def reports_ready_to_publish_summary(
+    include_test_orders: bool = Query(False),
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """The report's ``totals`` block only, for the header/sidebar count chip.
+    Reads through the same 60 s process cache as the full report (cleared on
+    every publish), so a chip polling from every open browser costs one
+    report build per minute at most, not one per client."""
+    import ready_to_publish_cache
+    payload = ready_to_publish_cache.get_or_build(
+        include_test_orders, lambda: _build_ready_to_publish_payload(db, include_test_orders))
+    return {"generated_at": payload["generated_at"], "totals": payload["totals"]}
+
+
+def _build_ready_to_publish_payload(db: Session, include_test_orders: bool) -> dict:
+    """Uncached report build — the body ``reports_ready_to_publish`` had
+    before the cache (2026-09-11); the cache module owns TTL/invalidation."""
     from ready_to_publish import build_ready_rows, resolve_flag_kinds, sort_rows
 
     try:
@@ -18201,6 +18230,14 @@ def _after_publish_native(db, *, sample_id: str, pre_publish_status, actor_user_
     the user's direct intent, so it runs synchronously (ledger + engine), and a
     SENAITE publish that did not read back as 'published' becomes a retry row.
     Flush + commit here; never raises (publish already succeeded on IS)."""
+    # The Ready to Publish count chip reads a 60 s cache; a publish is the one
+    # event that must never lag (Handler ruling 2026-09-11). Clear it on every
+    # outcome — the sample is off the report whichever way SENAITE answered.
+    try:
+        import ready_to_publish_cache
+        ready_to_publish_cache.invalidate()
+    except Exception:  # noqa: BLE001 -- never let the chip touch the publish
+        logger.exception("ready-to-publish cache invalidate failed %s", sample_id)
     try:
         from workflow.engine import drive_sample_touchpoint
         from workflow.sample_log import record_sample_transition

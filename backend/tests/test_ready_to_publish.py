@@ -62,6 +62,19 @@ def test_classify_lines():
     assert classify_lines({}) == "no_lines"
     assert classify_lines({"HPLC-PUR": "verified", "ENDO-LAL": "published"}) == ALL_VERIFIED
     assert classify_lines({"HPLC-PUR": "verified", "ENDO-LAL": "to_be_verified"}) == "pending"
+    # Dead lines are not the sample's any more (engine rule): PB-0474 shape.
+    assert classify_lines({"HPLC-PUR": "verified", "ANALYTE-4-PUR": "rejected",
+                           "ID_TB500BETA4": "retracted"}) == ALL_VERIFIED
+    assert classify_lines({"ANALYTE-4-PUR": "rejected"}) == "no_lines"
+    assert classify_lines({"HPLC-PUR": "to_be_verified", "X": "cancelled"}) == "pending"
+
+
+def test_dead_lines_do_not_block_or_count():
+    rows = build([sample(1, "PB-0474")],
+                 {1: {"HPLC-PUR": "verified", "ANALYTE-4-PUR": "rejected", "ANALYTE-4-QTY": "rejected"}})
+    assert [r["sample_id"] for r in rows] == ["PB-0474"]
+    assert rows[0]["reasons"] == [ALL_VERIFIED]
+    assert rows[0]["lines"] == {"total": 1, "verified": 1, "pending": []}
 
 
 def test_strip_identity_suffix():
