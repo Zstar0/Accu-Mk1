@@ -265,6 +265,30 @@ def test_assign_through_uid_target_sets_effective(db_session):
     assert service.legacy_priority_string(by_uid["uid-8001"]) == "normal"
 
 
+def test_order_priority_fields_accepts_bare_is_numbers(db_session):
+    """The IS hands the explorer bare numbers; lims_orders stores WP-. The
+    stamp must resolve either form and key the result by what was asked."""
+    from models import CustomerPriority
+    service.invalidate_priority_cache()
+    _seed(db_session)
+    db_session.add(CustomerPriority(wp_customer_user_id=42, priority_key="expedited"))
+    db_session.flush()
+    fields = service.order_priority_fields(db_session, ["8001", "WP-8001", "9999"])
+    assert set(fields) == {"8001", "WP-8001"}
+    assert fields["8001"]["effective_priority"]["key"] == "expedited"
+    assert fields["8001"]["effective_priority"]["source_level"] == "customer"
+    assert fields["WP-8001"] == fields["8001"]
+
+
+def test_assign_order_accepts_bare_is_number(db_session):
+    service.invalidate_priority_cache()
+    _seed(db_session)
+    service.assign(db_session, level="order", entity_id="8001",
+                   priority_key="high", user_id=None, source="ui")
+    order = db_session.query(LimsOrder).filter_by(order_number="WP-8001").one()
+    assert order.priority_key == "high"
+
+
 def test_inbox_priority_inherits_from_order(db_session):
     """The inbox no longer copies order priority into sample_priorities — the
     row's effective value resolves through lims_orders.priority_key."""
