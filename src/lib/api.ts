@@ -8306,6 +8306,29 @@ export interface ReadyToPublishReport {
   flag_types: { slug: string; label: string; color: string; kind: string }[]
 }
 
+export interface ReadyToPublishSummary {
+  generated_at: string
+  totals: ReadyToPublishReport['totals']
+}
+
+/** Totals only, for the header/sidebar count chips. Served from the
+ *  backend's 60 s report cache (cleared on every publish), so polling it from
+ *  every open window costs one report build per minute at most. */
+export async function getReadyToPublishSummary(
+  query: { includeTestOrders?: boolean } = {}
+): Promise<ReadyToPublishSummary> {
+  const qs = new URLSearchParams()
+  if (query.includeTestOrders) qs.set('include_test_orders', 'true')
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  const response = await fetch(
+    `${API_BASE_URL()}/reports/ready-to-publish/summary${suffix}`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok)
+    throw new Error(`Ready to publish summary failed: ${response.status}`)
+  return response.json()
+}
+
 export async function getReadyToPublish(
   query: { includeTestOrders?: boolean } = {}
 ): Promise<ReadyToPublishReport> {

@@ -109,6 +109,11 @@ interface UIState {
   customerListPage: number
   customerSearchTerm: string
   hideTestAccounts: boolean
+  /** Consume-once filter hand-off for the Order Status page (header quick
+   *  nav, 2026-09-11). The page keeps its filters in localStorage with no
+   *  store slot, so a navigator sets this and the page applies + clears it
+   *  on arrival. */
+  orderStatusPrefill: { orderId: string } | null
   // Customer detail page — Phase 30
   customerDetailTab: 'orders' | 'dashboard'
   // UX revision: four independent search slots, AND-combined server-side.
@@ -144,6 +149,10 @@ interface UIState {
   navigateToPeptideRequest: (requestId: string) => void
   navigateToCustomer: (id: number) => void
   navigateToCustomers: () => void
+  /** Order Status with ONLY the Order ID text filter set (other text axes
+   *  cleared by the page so the result is unambiguous). */
+    navigateToOrderStatus: (orderId: string) => void
+  consumeOrderStatusPrefill: () => { orderId: string } | null
   setCustomerListPage: (page: number) => void
   setHideTestAccounts: (hide: boolean) => void
   setSearchAndResetPage: (term: string) => void
@@ -231,7 +240,7 @@ interface UIState {
 
 export const useUIStore = create<UIState>()(
   devtools(
-    set => ({
+    (set, get) => ({
       leftSidebarVisible: true,
       rightSidebarVisible: true,
       commandPaletteOpen: false,
@@ -251,6 +260,7 @@ export const useUIStore = create<UIState>()(
       customerListPage: 0,
       customerSearchTerm: '',
       hideTestAccounts: true,
+      orderStatusPrefill: null,
       customerDetailTab: 'orders',
       customerOrderSearch: {
         order_number: '',
@@ -424,6 +434,24 @@ export const useUIStore = create<UIState>()(
           undefined,
           'navigateToPeptideRequest'
         ),
+
+      navigateToOrderStatus: orderId =>
+        set(
+          state => ({
+            activeSection: 'accumark-tools',
+            activeSubSection: 'order-status',
+            orderStatusPrefill: { orderId },
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'navigateToOrderStatus'
+        ),
+
+      consumeOrderStatusPrefill: () => {
+        const prefill = get().orderStatusPrefill
+        if (prefill) set({ orderStatusPrefill: null }, undefined, 'consumeOrderStatusPrefill')
+        return prefill
+      },
 
       navigateToCustomer: id =>
         set(

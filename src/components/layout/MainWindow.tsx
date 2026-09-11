@@ -27,6 +27,7 @@ import { ClipboardList } from 'lucide-react'
 import { useWorksheetDrawer } from '@/hooks/use-worksheet-drawer'
 import { useUIStore } from '@/store/ui-store'
 import { FlagsHeaderButton } from '@/components/flags/FlagsHeaderButton'
+import { QuickNav } from './QuickNav'
 import { FlagsFlyout } from '@/components/flags/FlagsFlyout'
 import { useFlagStreamGlue } from '@/components/flags/use-flag-stream-glue'
 
@@ -168,7 +169,7 @@ export function MainWindow() {
             <header className="flex h-10 shrink-0 items-center gap-2 border-b px-4">
               <SidebarTrigger className="-ml-1" />
               <Separator orientation="vertical" className="mr-2 h-4" />
-              <span className="text-sm text-muted-foreground">Accu-Mk1</span>
+              <QuickNav />
               <div className="ml-auto flex items-center gap-2">
                 <WorksheetHeaderButton />
                 <FlagsHeaderButton />

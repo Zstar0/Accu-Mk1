@@ -935,6 +935,43 @@ export function OrderStatusPage() {
   const [envName, setEnvName] = useState(() => getActiveEnvironmentName())
   const [orderFilters, setOrderFilters] =
     useState<OrderFilters>(loadOrderFilters)
+  // Header quick nav (2026-09-11): a navigator may hand us an Order ID via
+  // the store's consume-once prefill. Mount case: the initializer above
+  // already ran, so apply it here from the store snapshot. Already-mounted
+  // case: the store subscription (an external system) fires when a new
+  // prefill lands. Every other text axis is cleared so the one order shows.
+  useEffect(() => {
+    const apply = (prefill: { orderId: string } | null) => {
+      if (!prefill) return
+      setOrderFilters(prev => {
+        const next = {
+          ...prev,
+          orderIdFilter: prefill.orderId,
+          sampleIdFilter: '',
+          emailFilter: '',
+          analyteFilter: '',
+          lotFilter: '',
+        }
+        saveOrderFilters(next)
+        return next
+      })
+    }
+    const unsubscribe = useUIStore.subscribe((state, prev) => {
+      if (state.orderStatusPrefill && state.orderStatusPrefill !== prev.orderStatusPrefill) {
+        apply(useUIStore.getState().consumeOrderStatusPrefill())
+      }
+    })
+    // Deferred so the mount-time apply is not a synchronous setState in the
+    // effect body (react-hooks/set-state-in-effect).
+    const pending = useUIStore.getState().orderStatusPrefill
+    const timer = pending
+      ? setTimeout(() => apply(useUIStore.getState().consumeOrderStatusPrefill()), 0)
+      : undefined
+    return () => {
+      unsubscribe()
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }, [])
 
   const updateFilters = (partial: Partial<OrderFilters>) => {
     setOrderFilters(prev => {

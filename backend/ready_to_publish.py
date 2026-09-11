@@ -32,6 +32,12 @@ from typing import Iterable, Mapping, Optional
 from sla_engine import BusinessSchedule, compute_business_minutes, resolve_sla_tier, sla_status_dict
 
 LIVE_LINE_STATES = frozenset({"verified", "published"})
+# A rejected / retracted / cancelled line is not part of the sample any more:
+# the workflow engine drops these before deciding the sample is verified
+# (workflow.engine._EXCLUDED_LINE_STATES), and the lock map still lists them.
+# The report must apply the same rule or a sample with one rejected extra
+# analyte (PB-0474 and six others on prod, 2026-09-11) never appears.
+DEAD_LINE_STATES = frozenset({"retracted", "rejected", "cancelled"})
 OPEN_FLAG_STATUSES = frozenset({"open", "in_progress", "blocked"})
 READY_FULL = "flag_ready"
 READY_PARTIAL = "flag_partial"
@@ -131,11 +137,19 @@ def resolve_flag_kinds(flag_types: Iterable[FlagTypeIn]) -> dict[str, str]:
     return kinds
 
 
+def live_lines(line_states: Mapping[str, str]) -> dict[str, str]:
+    """The lock map minus dead lines — what the engine and this report grade."""
+    return {k: v for k, v in line_states.items() if v not in DEAD_LINE_STATES}
+
+
 def classify_lines(line_states: Mapping[str, str]) -> str:
-    """'all_verified' | 'pending' | 'no_lines' for one sample's live line map."""
-    if not line_states:
+    """'all_verified' | 'pending' | 'no_lines' for one sample's live line map.
+    Dead lines (rejected/retracted/cancelled) are ignored, matching the
+    engine; a map with ONLY dead lines is 'no_lines'."""
+    live = live_lines(line_states)
+    if not live:
         return "no_lines"
-    if all(s in LIVE_LINE_STATES for s in line_states.values()):
+    if all(s in LIVE_LINE_STATES for s in live.values()):
         return ALL_VERIFIED
     return "pending"
 
@@ -252,7 +266,8 @@ def build_ready_rows(
                     "color": sla_color(status, tier),
                 }
 
-        pending = sorted(k for k, v in line_states.items() if v not in LIVE_LINE_STATES)
+        live = live_lines(line_states)
+        pending = sorted(k for k, v in live.items() if v not in LIVE_LINE_STATES)
         hold = hold_flag_by_sample.get(s.sample_id)
         rows.append({
             "sample_id": s.sample_id,
@@ -278,8 +293,8 @@ def build_ready_rows(
                 for f in sorted(sample_flags, key=lambda f: f.id)
             ],
             "lines": {
-                "total": len(line_states),
-                "verified": sum(1 for v in line_states.values() if v in LIVE_LINE_STATES),
+                "total": len(live),
+                "verified": sum(1 for v in live.values() if v in LIVE_LINE_STATES),
                 "pending": pending,
             },
             "priority": priorities.get(s.external_uid or "", "normal") if s.external_uid else "normal",
