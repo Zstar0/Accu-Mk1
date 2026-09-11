@@ -387,6 +387,7 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
                 so the glyph and its source update without a remount. */}
             <div className="flex w-64 shrink-0 flex-col gap-0.5">
               <SamplePriorityRow
+                loading={details.loading}
                 registryPk={d?.registry_pk}
                 explicitKey={d?.explicit_priority_key ?? null}
                 effective={d?.priority}

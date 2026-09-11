@@ -28,13 +28,17 @@ export function SamplePriorityRow({
   /** Forwarded to the select. Omitted keeps PrioritySelect's bare 'Priority'. */
   ariaLabel?: string
   onAssigned?: () => void
+  /** Details still loading: show a quiet placeholder, never the no-record hint. */
+  loading?: boolean
 }) {
   return (
     <div className="flex items-center justify-between gap-3 py-1">
       <span className="text-[11px] text-muted-foreground">Priority</span>
       <span className="flex items-center gap-2">
         <PriorityGlyph priority={effective} size="row" />
-        {registryPk ? (
+        {loading && !registryPk ? (
+          <span className="text-xs text-muted-foreground">…</span>
+        ) : registryPk ? (
           <PrioritySelect
             level={level}
             id={String(registryPk)}
@@ -47,7 +51,7 @@ export function SamplePriorityRow({
           />
         ) : (
           <span className="text-xs text-muted-foreground">
-            Set priority after receive
+            No registry record for this sample yet
           </span>
         )}
       </span>

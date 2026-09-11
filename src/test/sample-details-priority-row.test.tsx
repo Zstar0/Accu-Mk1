@@ -61,6 +61,8 @@ describe('SamplePriorityRow', () => {
         />
       </QueryClientProvider>
     )
-    expect(screen.getByText('Set priority after receive')).toBeInTheDocument()
+    expect(
+      screen.getByText('No registry record for this sample yet')
+    ).toBeInTheDocument()
   })
 })
