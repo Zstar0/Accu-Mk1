@@ -1480,6 +1480,19 @@ class LimsNativeIdSequence(Base):
     next_value: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
+class LimsRegistrySignalKey(Base):
+    """Idempotency ledger for POST /s2s/lims-samples (spec 2026-09-10, M3).
+    The IS sends `Idempotency-Key: registry-{order_id}-{sample_number}`; a
+    sample_id-less (native-born) signal has no natural key, so without this a
+    Mk1-committed-but-IS-timed-out retry minted a SECOND sample. Rows are
+    write-once; replay returns the stored sample."""
+    __tablename__ = "lims_registry_signal_keys"
+
+    idempotency_key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    sample_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class LimsSubSampleAttachment(Base):
     """An extra sample image attached to a vial (beyond the check-in photo,
     which lives on lims_sub_samples.photo_external_uid). Bytes are stored in

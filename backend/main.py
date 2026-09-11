@@ -22820,6 +22820,7 @@ def s2s_upsert_lims_sample(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _: None = Depends(require_internal_service_token),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ):
     """Server-to-server registry upsert, called by the Integration Service
     immediately after it creates a SENAITE AR (or, for future SENAITE-free
@@ -22838,9 +22839,25 @@ def s2s_upsert_lims_sample(
     `external_lims_uid`: the IS adapter documents `senaite_uid` as optional
     ("Mk1 fills uid via its reconcile later") and `fetch_parent_analyses`
     keys on the SAMPLE ID, so a uid gate would silently skip a real AR.
+
+    Optional `Idempotency-Key` header (IS sends `registry-{order_id}-{n}`):
+    a sample_id-less signal has no natural key, so a Mk1-committed-but-IS-
+    timed-out retry used to mint a second sample. On a known key we return
+    the stored sample and schedule no background tasks; a new key is
+    recorded (via `LimsRegistrySignalKey`) only after a successful upsert.
     """
     from sub_samples.service import upsert_sample_from_signal
+    from models import LimsRegistrySignalKey, LimsSample
+    if idempotency_key:
+        seen = db.get(LimsRegistrySignalKey, idempotency_key)
+        if seen is not None:
+            prior = db.query(LimsSample).filter_by(sample_id=seen.sample_id).one_or_none()
+            if prior is not None:
+                logger.info("registry.signal_replayed key=%s sample_id=%s", idempotency_key, prior.sample_id)
+                return RegistrySampleSignalResponse(sample_id=prior.sample_id, native_id=prior.native_id)
     row = upsert_sample_from_signal(db, req.sample_id, req.senaite_uid, req.meta)
+    if idempotency_key:
+        db.merge(LimsRegistrySignalKey(idempotency_key=idempotency_key, sample_id=row.sample_id))
     db.commit()
     if row.external_lims_system != "mk1":
         background_tasks.add_task(_shadow_analyses_at_registration_bg, row.sample_id)

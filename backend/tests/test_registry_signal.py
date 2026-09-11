@@ -7,13 +7,18 @@ from datetime import datetime
 from unittest.mock import patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 from database import Base
 from models import LimsSample, LimsNativeIdSequence, LimsSampleRemark
 
 
 @pytest.fixture
 def db():
-    engine = create_engine("sqlite:///:memory:")
+    # StaticPool + check_same_thread=False: TestClient (used by the S2S
+    # endpoint tests below) runs requests off a threadpool, and a plain
+    # sqlite:///:memory: engine 500s there ("created in thread X, used in Y").
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
+                           poolclass=StaticPool)
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     s = Session()
@@ -380,3 +385,65 @@ def test_signal_without_peptide_ids_keeps_slot_shape(db):
     slots = json.loads(row.analytes)
     assert slots[0].get("peptide_id") is None
     assert set(slots[0]) == {"name", "declared_quantity", "peptide_id"}
+
+
+# ── Idempotency ledger on /s2s/lims-samples (2026-09-10, M3) ───────────────
+
+@pytest.fixture(autouse=True)
+def _cleanup_s2s_get_db_override():
+    """_client() below overrides app.dependency_overrides[get_db] with this
+    module's short-lived sqlite session; pop it after every test so a later
+    test file's plain TestClient(app) doesn't inherit a closed session."""
+    yield
+    from database import get_db
+    from main import app
+    app.dependency_overrides.pop(get_db, None)
+
+
+def _client(db):
+    """TestClient wired to the sqlite `db` fixture session via the SAME
+    get_db dependency object the S2S route uses, with the internal service
+    token set. Mirrors tests/test_analyte_slot_guards.py's override idiom."""
+    from database import get_db
+    from main import app
+
+    def _override_get_db():
+        yield db
+
+    app.dependency_overrides[get_db] = _override_get_db
+    from fastapi.testclient import TestClient
+    return TestClient(app)
+
+
+def test_s2s_signal_replay_with_same_idempotency_key_does_not_remint(db, monkeypatch):
+    monkeypatch.setenv("ACCUMK1_INTERNAL_SERVICE_TOKEN", "tok")
+    _seed_customer_counters(db)
+    client = _client(db)
+    body = {"sample_id": None, "senaite_uid": None, "meta": _signal_meta(uid=None, SampleTypeTitle="Peptide")}
+    h = {"X-Service-Token": "tok", "Idempotency-Key": "registry-3267-1"}
+    r1 = client.post("/s2s/lims-samples", json=body, headers=h)
+    r2 = client.post("/s2s/lims-samples", json=body, headers=h)
+    assert r1.status_code == 200 and r2.status_code == 200
+    assert r1.json() == r2.json() == {"sample_id": "P-5000", "native_id": "aP-0001"}
+    assert db.query(LimsSample).filter(LimsSample.sample_id.like("P-%")).count() == 1
+
+
+def test_s2s_signal_without_idempotency_key_still_works(db, monkeypatch):
+    """Old IS never sent the header on this route; keep accepting."""
+    monkeypatch.setenv("ACCUMK1_INTERNAL_SERVICE_TOKEN", "tok")
+    _seed_customer_counters(db)
+    client = _client(db)
+    body = {"sample_id": None, "senaite_uid": None, "meta": _signal_meta(uid=None, SampleTypeTitle="Peptide")}
+    r = client.post("/s2s/lims-samples", json=body, headers={"X-Service-Token": "tok"})
+    assert r.status_code == 200 and r.json()["sample_id"] == "P-5000"
+
+
+def test_s2s_signal_key_is_scoped_per_sample_not_global(db, monkeypatch):
+    monkeypatch.setenv("ACCUMK1_INTERNAL_SERVICE_TOKEN", "tok")
+    _seed_customer_counters(db)
+    client = _client(db)
+    mk = lambda n: {"sample_id": None, "senaite_uid": None,
+                    "meta": _signal_meta(uid=None, SampleTypeTitle="Peptide")}
+    r1 = client.post("/s2s/lims-samples", json=mk(1), headers={"X-Service-Token": "tok", "Idempotency-Key": "registry-1-1"})
+    r2 = client.post("/s2s/lims-samples", json=mk(2), headers={"X-Service-Token": "tok", "Idempotency-Key": "registry-1-2"})
+    assert {r1.json()["sample_id"], r2.json()["sample_id"]} == {"P-5000", "P-5001"}
