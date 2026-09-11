@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.19.1 — 2026-09-11
+
+### Fixed
+- Receive page: the By sample list rows show the priority glyph (the order rows already did). (#188)
+
 ## v1.19.0 — 2026-09-11
 
 ### Added
