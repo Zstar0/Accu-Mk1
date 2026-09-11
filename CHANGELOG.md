@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- Stranded-sample check: a sample with no `date_received` (received on the SENAITE side, never re-read through a senaite-touching fetch) now falls back to its registration time for the scan window instead of being skipped entirely. P-2605 sat with `status=verified` / `native_status=published` for a day without a flag.
+
 ## v1.19.1 — 2026-09-11
 
 ### Fixed
