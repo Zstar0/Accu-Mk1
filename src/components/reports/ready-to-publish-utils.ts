@@ -111,3 +111,68 @@ export function splitHeld(rows: ReadyRow[]): {
   for (const r of rows) (r.hold ? held : live).push(r)
   return { live, held }
 }
+
+// ─── Column sorting ──────────────────────────────────────────────────────────
+
+export type ReadySortKey =
+  | 'sample'
+  | 'analytes'
+  | 'status'
+  | 'why'
+  | 'received'
+  | 'sla'
+export interface ReadySort {
+  key: ReadySortKey
+  dir: 'asc' | 'desc'
+}
+
+const REASON_RANK: Record<ReadyReason, number> = {
+  all_verified: 0,
+  flag_ready: 1,
+  flag_partial: 2,
+}
+
+/** Sortable scalar for one column. Nulls sort last in either direction. */
+function sortValue(row: ReadyRow, key: ReadySortKey): string | number | null {
+  switch (key) {
+    case 'sample':
+      return `${row.order}\u0000${row.sample_id}`
+    case 'analytes':
+      return row.analytes.join(', ').toLowerCase() || null
+    case 'status':
+      // Fraction verified, then the status word — "3/4" sorts under "4/4".
+      return row.lines.total
+        ? row.lines.verified / row.lines.total
+        : row.status === 'verified'
+          ? 1
+          : 0
+    case 'why':
+      return row.reasons.length
+        ? Math.min(...row.reasons.map(r => REASON_RANK[r] ?? 9))
+        : null
+    case 'received':
+      return row.received_at ?? null
+    case 'sla':
+      // Least time left first; breached rows are the most negative.
+      return row.sla ? row.sla.remaining_minutes : null
+  }
+}
+
+/** Stable sort by a column. `null` sort = the backend's "most critical first". */
+export function sortRows(rows: ReadyRow[], sort: ReadySort | null): ReadyRow[] {
+  if (!sort) return rows
+  const sign = sort.dir === 'asc' ? 1 : -1
+  return rows
+    .map((row, i) => ({ row, i, v: sortValue(row, sort.key) }))
+    .sort((a, b) => {
+      if (a.v === null && b.v === null) return a.i - b.i
+      if (a.v === null) return 1
+      if (b.v === null) return -1
+      const cmp =
+        typeof a.v === 'number' && typeof b.v === 'number'
+          ? a.v - b.v
+          : String(a.v).localeCompare(String(b.v))
+      return cmp !== 0 ? sign * cmp : a.i - b.i
+    })
+    .map(x => x.row)
+}

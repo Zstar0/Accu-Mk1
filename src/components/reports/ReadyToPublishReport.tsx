@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react'
 import {
   keepPreviousData,
   useMutation,
@@ -35,7 +36,10 @@ import {
   linesText,
   matchesQuery,
   REASON_LABEL,
+  sortRows,
   splitHeld,
+  type ReadySort,
+  type ReadySortKey,
 } from './ready-to-publish-utils'
 
 // ─── Formatting ──────────────────────────────────────────────────────────────
@@ -311,6 +315,16 @@ export function ReadyToPublishReport() {
   const [query, setQuery] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
   const [showHeld, setShowHeld] = useState(false)
+  // null = the backend's "most critical first"; a header click sorts that column.
+  const [sort, setSort] = useState<ReadySort | null>(null)
+  const toggleSort = (key: ReadySortKey) =>
+    setSort(s =>
+      s?.key !== key
+        ? { key, dir: 'asc' }
+        : s.dir === 'asc'
+          ? { key, dir: 'desc' }
+          : null
+    )
   const [busyId, setBusyId] = useState<string | null>(null)
   const navigateToSample = useUIStore(state => state.navigateToSample)
   const qc = useQueryClient()
@@ -372,7 +386,8 @@ export function ReadyToPublishReport() {
     () => (data?.rows ?? []).filter(r => matchesQuery(r, query)),
     [data, query]
   )
-  const { live, held } = useMemo(() => splitHeld(filtered), [filtered])
+  const sorted = useMemo(() => sortRows(filtered, sort), [filtered, sort])
+  const { live, held } = useMemo(() => splitHeld(sorted), [sorted])
   const groups = useMemo(() => groupByOrder(live), [live])
 
   const toggle = (order: string) =>
@@ -394,14 +409,54 @@ export function ReadyToPublishReport() {
   const header = (
     <thead className="bg-muted/40 text-[11px] uppercase tracking-wide text-muted-foreground">
       <tr>
-        <th className="text-left py-2 pl-3 pr-2 font-medium">
-          {groupByOrderOn ? 'Order / Sample' : 'Sample'}
-        </th>
-        <th className="text-left py-2 pr-2 font-medium">Analytes</th>
-        <th className="text-left py-2 pr-2 font-medium">Status · Lines</th>
-        <th className="text-left py-2 pr-2 font-medium">Why</th>
-        <th className="text-left py-2 pr-2 font-medium">Received</th>
-        <th className="text-right py-2 pr-2 font-medium">SLA</th>
+        {(
+          [
+            [
+              'sample',
+              groupByOrderOn ? 'Order / Sample' : 'Sample',
+              'text-left pl-3',
+            ],
+            ['analytes', 'Analytes', 'text-left'],
+            ['status', 'Status · Lines', 'text-left'],
+            ['why', 'Why', 'text-left'],
+            ['received', 'Received', 'text-left'],
+            ['sla', 'SLA', 'text-right'],
+          ] as const
+        ).map(([key, label, align]) => (
+          <th
+            key={key}
+            className={`${align} py-2 pr-2 font-medium`}
+            aria-sort={
+              sort?.key === key
+                ? sort.dir === 'asc'
+                  ? 'ascending'
+                  : 'descending'
+                : 'none'
+            }
+          >
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 uppercase hover:text-foreground"
+              title={
+                sort?.key === key
+                  ? 'Click again to flip; a third click restores most-critical-first'
+                  : `Sort by ${label}`
+              }
+              onClick={() => toggleSort(key)}
+            >
+              {label}
+              {sort?.key === key ? (
+                sort.dir === 'asc' ? (
+                  <ArrowUp className="h-3 w-3" />
+                ) : (
+                  <ArrowDown className="h-3 w-3" />
+                )
+              ) : (
+                <ArrowUpDown className="h-3 w-3 opacity-40" />
+              )}
+            </button>
+          </th>
+        ))}
         <th className="py-2 pr-3" />
       </tr>
     </thead>
