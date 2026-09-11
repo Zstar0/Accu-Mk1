@@ -95,7 +95,7 @@
   "preferences.sla.amberThreshold": "Amber at",
   "preferences.sla.percentRemaining": "% remaining",
 
-  "preferences.prioritiesPane.title": "Priorities",
+  "preferences.prioritiesPane.title": "Priority levels",
   "preferences.prioritiesPane.description": "Manage sample priorities, their glyph, and the SLA tier each maps to. Default follows the analysis profile or service group tier.",
   "preferences.prioritiesPane.pulse": "Pulse",
   "preferences.prioritiesPane.followProfile": "Follow profile / group tier",

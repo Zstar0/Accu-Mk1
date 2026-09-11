@@ -68,15 +68,18 @@ export function PriorityGlyph({
   size = 'row',
   showLabel = false,
   className,
+  preview = false,
 }: {
   priority: EffectivePriority | null | undefined
   size?: keyof typeof SIZE
   showLabel?: boolean
+  /** Editor preview: render the default priority's glyph too (lists never do). */
+  preview?: boolean
   className?: string
 }) {
   const { data: list } = usePriorities()
   const def = priorityByKey(list, priority?.key)
-  if (!priority || !def || def.is_default) return null
+  if (!priority || !def || (def.is_default && !preview)) return null
   const Icon = ICONS[def.icon] ?? Minus
   const tip = priorityTooltip(def.name, priority)
   const tinted = size !== 'row'

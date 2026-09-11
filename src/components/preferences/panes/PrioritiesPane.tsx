@@ -123,168 +123,171 @@ export function PrioritiesPane() {
               data-testid="priority-row"
               className="grid grid-cols-[28px_1fr_auto] items-center gap-3 px-3 py-2"
             >
-              <PriorityGlyph
-                priority={{
-                  key: p.key,
-                  rank: p.rank,
-                  source_level: 'sample',
-                  source_id: null,
-                }}
-                size="card"
-              />
-              <div className="flex flex-wrap items-center gap-2">
-                {/* Row identity: the name as it reads today. The input beside
-                    it renames on blur — the glyph is null for the default
-                    priority, so this is the row's only stable label. */}
-                <span className="w-28 truncate text-sm font-medium">
-                  {p.name}
-                </span>
-                <Input
-                  // Keyed on the server-side name: whenever the true name
-                  // changes the input remounts on it, so an uncontrolled
-                  // defaultValue can never drift from what the row is called.
-                  key={`${p.key}:${p.name}`}
-                  defaultValue={p.name}
-                  aria-label={t('preferences.prioritiesPane.aria.name', {
-                    name: p.name,
-                  })}
-                  className="h-8 w-44"
-                  onBlur={e => {
-                    const el = e.target
-                    const next = el.value.trim()
-                    // A blank field is not a rename; put the real name back
-                    // rather than leaving the row looking nameless.
-                    if (!next) {
-                      el.value = p.name
-                      return
-                    }
-                    if (next === p.name) return
-                    // A rejected rename leaves the catalog (and therefore the
-                    // remount key) unchanged, so the field has to be restored
-                    // by hand or it keeps showing a name the server refused.
-                    m.patch.mutate(
-                      { key: p.key, body: { name: next } },
-                      {
-                        onError: () => {
-                          el.value = p.name
-                        },
-                      }
-                    )
+              <div className="flex h-7 w-7 items-center justify-center">
+                <PriorityGlyph
+                  priority={{
+                    key: p.key,
+                    rank: p.rank,
+                    source_level: 'unknown',
+                    source_id: null,
                   }}
+                  size="card"
+                  preview
                 />
-                <span className="font-mono text-xs text-muted-foreground">
-                  rank {p.rank}
-                </span>
-                {/* How much this row is actually in use — the number the
+              </div>
+              <div className="flex min-w-0 flex-col gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input
+                    // Keyed on the server-side name: whenever the true name
+                    // changes the input remounts on it, so an uncontrolled
+                    // defaultValue can never drift from what the row is called.
+                    key={`${p.key}:${p.name}`}
+                    defaultValue={p.name}
+                    aria-label={t('preferences.prioritiesPane.aria.name', {
+                      name: p.name,
+                    })}
+                    className="h-8 w-44"
+                    onBlur={e => {
+                      const el = e.target
+                      const next = el.value.trim()
+                      // A blank field is not a rename; put the real name back
+                      // rather than leaving the row looking nameless.
+                      if (!next) {
+                        el.value = p.name
+                        return
+                      }
+                      if (next === p.name) return
+                      // A rejected rename leaves the catalog (and therefore the
+                      // remount key) unchanged, so the field has to be restored
+                      // by hand or it keeps showing a name the server refused.
+                      m.patch.mutate(
+                        { key: p.key, body: { name: next } },
+                        {
+                          onError: () => {
+                            el.value = p.name
+                          },
+                        }
+                      )
+                    }}
+                  />
+                  <span className="font-mono text-xs text-muted-foreground">
+                    rank {p.rank}
+                  </span>
+                  {/* How much this row is actually in use — the number the
                     deactivation confirm below quotes back. */}
-                <span className="text-xs text-muted-foreground">
-                  {t('preferences.prioritiesPane.assignedCount', {
-                    count: p.explicit_count,
-                  })}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label={t('preferences.prioritiesPane.aria.moveUp', {
-                    name: p.name,
-                  })}
-                  disabled={i === 0}
-                  onClick={() => swapRank(i, i - 1)}
-                >
-                  <ArrowUp size={14} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label={t('preferences.prioritiesPane.aria.moveDown', {
-                    name: p.name,
-                  })}
-                  disabled={i === sorted.length - 1}
-                  onClick={() => swapRank(i, i + 1)}
-                >
-                  <ArrowDown size={14} />
-                </Button>
-                <Select
-                  value={p.icon}
-                  onValueChange={v => patch(p.key, { icon: v as PriorityIcon })}
-                >
-                  <SelectTrigger
-                    className="h-8 w-40"
-                    aria-label={t('preferences.prioritiesPane.aria.icon', {
+                  <span className="text-xs text-muted-foreground">
+                    {t('preferences.prioritiesPane.assignedCount', {
+                      count: p.explicit_count,
+                    })}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={t('preferences.prioritiesPane.aria.moveUp', {
                       name: p.name,
                     })}
+                    disabled={i === 0}
+                    onClick={() => swapRank(i, i - 1)}
                   >
-                    {/* Explicit children: a closed Radix Select has no mounted
+                    <ArrowUp size={14} />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={t('preferences.prioritiesPane.aria.moveDown', {
+                      name: p.name,
+                    })}
+                    disabled={i === sorted.length - 1}
+                    onClick={() => swapRank(i, i + 1)}
+                  >
+                    <ArrowDown size={14} />
+                  </Button>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Select
+                    value={p.icon}
+                    onValueChange={v =>
+                      patch(p.key, { icon: v as PriorityIcon })
+                    }
+                  >
+                    <SelectTrigger
+                      className="h-8 w-40"
+                      aria-label={t('preferences.prioritiesPane.aria.icon', {
+                        name: p.name,
+                      })}
+                    >
+                      {/* Explicit children: a closed Radix Select has no mounted
                         item to portal its label from. */}
-                    <SelectValue>{p.icon}</SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {ICONS.map(ic => (
-                      <SelectItem key={ic} value={ic}>
-                        {ic}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Select
-                  value={p.color}
-                  onValueChange={v =>
-                    patch(p.key, { color: v as PriorityColor })
-                  }
-                >
-                  <SelectTrigger
-                    className="h-8 w-28"
-                    aria-label={t('preferences.prioritiesPane.aria.color', {
-                      name: p.name,
-                    })}
+                      <SelectValue>{p.icon}</SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ICONS.map(ic => (
+                        <SelectItem key={ic} value={ic}>
+                          {ic}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select
+                    value={p.color}
+                    onValueChange={v =>
+                      patch(p.key, { color: v as PriorityColor })
+                    }
                   >
-                    <SelectValue>{p.color}</SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {COLORS.map(c => (
-                      <SelectItem key={c} value={c}>
-                        {c}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <label className="flex items-center gap-1 text-xs">
-                  <Switch
-                    checked={p.pulse}
-                    aria-label={t('preferences.prioritiesPane.aria.pulse', {
-                      name: p.name,
-                    })}
-                    onCheckedChange={v => patch(p.key, { pulse: v })}
-                  />{' '}
-                  {t('preferences.prioritiesPane.pulse')}
-                </label>
-                <Select
-                  value={p.sla_tier_id == null ? NONE : String(p.sla_tier_id)}
-                  onValueChange={v =>
-                    patch(p.key, {
-                      sla_tier_id: v === NONE ? null : Number(v),
-                    })
-                  }
-                >
-                  <SelectTrigger
-                    className="h-8 w-52"
-                    aria-label={t('preferences.prioritiesPane.aria.slaTier', {
-                      name: p.name,
-                    })}
+                    <SelectTrigger
+                      className="h-8 w-28"
+                      aria-label={t('preferences.prioritiesPane.aria.color', {
+                        name: p.name,
+                      })}
+                    >
+                      <SelectValue>{p.color}</SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {COLORS.map(c => (
+                        <SelectItem key={c} value={c}>
+                          {c}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <label className="flex items-center gap-1 text-xs">
+                    <Switch
+                      checked={p.pulse}
+                      aria-label={t('preferences.prioritiesPane.aria.pulse', {
+                        name: p.name,
+                      })}
+                      onCheckedChange={v => patch(p.key, { pulse: v })}
+                    />{' '}
+                    {t('preferences.prioritiesPane.pulse')}
+                  </label>
+                  <Select
+                    value={p.sla_tier_id == null ? NONE : String(p.sla_tier_id)}
+                    onValueChange={v =>
+                      patch(p.key, {
+                        sla_tier_id: v === NONE ? null : Number(v),
+                      })
+                    }
                   >
-                    <SelectValue>{tierName(p.sla_tier_id)}</SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={NONE}>
-                      {t('preferences.prioritiesPane.followProfile')}
-                    </SelectItem>
-                    {tiers.map(tier => (
-                      <SelectItem key={tier.id} value={String(tier.id)}>
-                        {tier.name}
+                    <SelectTrigger
+                      className="h-8 w-52"
+                      aria-label={t('preferences.prioritiesPane.aria.slaTier', {
+                        name: p.name,
+                      })}
+                    >
+                      <SelectValue>{tierName(p.sla_tier_id)}</SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={NONE}>
+                        {t('preferences.prioritiesPane.followProfile')}
                       </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                      {tiers.map(tier => (
+                        <SelectItem key={tier.id} value={String(tier.id)}>
+                          {tier.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
               <div className="flex items-center gap-3 text-xs">
                 <label className="flex items-center gap-1">

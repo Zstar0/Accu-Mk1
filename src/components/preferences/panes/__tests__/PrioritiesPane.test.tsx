@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import {
+  render,
+  screen,
+  within,
+  fireEvent,
+  waitFor,
+} from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import type * as ApiModule from '@/lib/api'
@@ -125,7 +131,9 @@ describe('PrioritiesPane', () => {
   it('lists priorities by rank with their SLA tier and toggles pulse through PATCH', async () => {
     wrap(<PrioritiesPane />)
     const rows = await screen.findAllByTestId('priority-row')
-    expect(rows[0]).toHaveTextContent('Expedited')
+    expect(
+      within(rows[0] as HTMLElement).getByDisplayValue('Expedited')
+    ).toBeInTheDocument()
     expect(rows[0]).toHaveTextContent('Fast')
     fireEvent.click(screen.getByRole('switch', { name: 'Pulse Expedited' }))
     await waitFor(() =>
@@ -139,7 +147,7 @@ describe('PrioritiesPane', () => {
     // Section headings, the customer block and the table headers all resolve
     // through locales/en.json.
     expect(
-      screen.getAllByRole('heading', { name: 'Priorities' }).length
+      screen.getAllByRole('heading', { name: 'Priority levels' }).length
     ).toBeGreaterThan(0)
     expect(screen.getByText('Customer priorities')).toBeInTheDocument()
     expect(screen.getAllByText('Pulse').length).toBeGreaterThan(0)

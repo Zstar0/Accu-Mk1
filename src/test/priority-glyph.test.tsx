@@ -49,6 +49,23 @@ const wrap = (ui: ReactNode) => {
 }
 
 describe('PriorityGlyph', () => {
+  it('preview mode renders the default priority glyph for the editor', async () => {
+    wrap(
+      <PriorityGlyph
+        priority={{
+          key: 'default',
+          rank: 0,
+          source_level: 'default',
+          source_id: null,
+        }}
+        size="card"
+        preview
+      />
+    )
+    expect(
+      await screen.findByRole('img', { name: 'Default' })
+    ).toBeInTheDocument()
+  })
   it('renders nothing for the default priority', async () => {
     wrap(
       <>
