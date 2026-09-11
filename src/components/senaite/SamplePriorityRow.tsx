@@ -20,6 +20,7 @@ export function SamplePriorityRow({
   level = 'sample',
   ariaLabel,
   onAssigned,
+  loading = false,
 }: {
   registryPk: number | null | undefined
   explicitKey: string | null
