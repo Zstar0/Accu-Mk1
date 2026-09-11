@@ -4,14 +4,15 @@
 
 import { getApiBaseUrl } from './config'
 import { getAuthToken } from '@/store/auth-store'
+import type { EffectivePriority } from '@/lib/api-priorities'
 
 // Helper to get current API base URL (called dynamically)
-const API_BASE_URL = () => getApiBaseUrl()
+export const API_BASE_URL = () => getApiBaseUrl()
 
 /**
  * Get headers with JWT Bearer token for authenticated requests.
  */
-function getBearerHeaders(contentType?: string): HeadersInit {
+export function getBearerHeaders(contentType?: string): HeadersInit {
   const token = getAuthToken()
   const headers: HeadersInit = {}
   if (token) {
@@ -827,6 +828,14 @@ export interface ExplorerOrder {
   updated_at: string
   completed_at: string | null
   wp_order_status: string | null
+  /** Order-level priority (sample-priority spec §5), joined from the Mk1
+   *  registry by order_number. `priority_key` is the order's OWN explicit key
+   *  (null = inherit from the customer), `priority_source` says who set it and
+   *  `effective_priority` is the resolved order → customer chain. All three are
+   *  null/absent when the order has no lims_orders row yet. */
+  priority_key?: string | null
+  priority_source?: string | null
+  effective_priority?: EffectivePriority | null
 }
 
 /**
@@ -1821,6 +1830,37 @@ export async function clearAnalyteSlot(
   return response.json()
 }
 
+export interface CancelSamplePreview {
+  status: string
+  from_status: string
+  cancelled_rows: number[]
+  released_worksheets: number[]
+  published_coa_still_live: boolean
+  dry_run: true
+}
+export interface CancelSampleResult extends Omit<CancelSamplePreview, 'dry_run'> { dry_run: false }
+
+export async function cancelSample(
+  sampleId: string,
+  body: { reason: string; confirm?: boolean; dryRun?: boolean },
+): Promise<CancelSamplePreview | CancelSampleResult> {
+  const response = await fetch(`${API_BASE_URL()}/api/samples/${encodeURIComponent(sampleId)}/cancel`, {
+    method: 'POST',
+    headers: getBearerHeaders('application/json'),
+    body: JSON.stringify({ reason: body.reason, confirm: body.confirm ?? false, dry_run: body.dryRun ?? false }),
+  })
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    const err = new Error(
+      typeof payload?.detail === 'string' ? payload.detail : `Cancel failed: ${response.status}`,
+    ) as Error & { status?: number; detail?: unknown }
+    err.status = response.status
+    err.detail = payload?.detail
+    throw err
+  }
+  return response.json()
+}
+
 export interface ReplaceAnalyteResult {
   success: boolean
   field_updated: string
@@ -1959,7 +1999,7 @@ export interface SampleCOAActionResponse {
   warning?: string | null
 }
 
-async function extractErrorMessage(response: Response, fallback: string): Promise<string> {
+export async function extractErrorMessage(response: Response, fallback: string): Promise<string> {
   try {
     const body = await response.json()
     const detail = body?.detail ?? body?.message ?? fallback
@@ -4166,6 +4206,14 @@ export interface SenaiteLookupResult {
   read_source?: 'mk1'
   /** True when a 'mk1' read fell back because no registry record exists yet. */
   registry_missing?: boolean
+  /** Resolved effective priority for this sample (sample-priority spec §5) —
+   *  the SLA input. Null for a SENAITE-only sample with no registry row. */
+  priority?: EffectivePriority | null
+  /** lims_samples.id — the registry pk the priority controls write against.
+   *  Null when the sample has no registry row. */
+  registry_pk?: number | null
+  /** The sample's OWN explicit priority key (null = inherit up the chain). */
+  explicit_priority_key?: string | null
 }
 
 export interface SenaiteStatusResponse {
@@ -4711,6 +4759,9 @@ export interface SenaiteSample {
   // sample has none, which is every sample ordered before the note was
   // persisted natively.
   customer_note?: string | null
+  /** Resolved effective priority for the row (sample-priority spec §5).
+   *  Absent/null on SENAITE-sourced lists and rows without a registry record. */
+  priority?: EffectivePriority | null
 }
 
 export interface SenaiteSamplesResponse {
@@ -5404,7 +5455,10 @@ export interface SlaTierUpdate {
 
 export interface SlaPriorityTier {
   id: number
-  priority: InboxPriority
+  /** Priority KEY from the priorities catalog (sample-priority spec) — any
+   *  admin-defined key, not just the three legacy literals. The catalog's
+   *  default key never has a row (sparsity contract). */
+  priority: string
   sla_tier_id: number
   // Multi-tier follow-on: null = global override for this priority; an integer
   // scopes the override to a single service group. Precedence on the resolver:
@@ -5447,8 +5501,12 @@ export async function getSlaPriorityTiers(): Promise<SlaPriorityTier[]> {
   return response.json()
 }
 
+// `priority` is an admin-defined priority key from the priorities catalog
+// (sample-priority spec, Task 5) — interpolated into the URL here and carried
+// on SlaPriorityTier.priority, which the client-side resolver keys its
+// override maps by.
 export async function setSlaPriorityTier(
-  priority: InboxPriority,
+  priority: string,
   slaTierId: number,
   serviceGroupId?: number | null,
 ): Promise<SlaPriorityTier> {
@@ -5464,8 +5522,9 @@ export async function setSlaPriorityTier(
   return response.json()
 }
 
+// See setSlaPriorityTier: `priority` is any catalog priority key.
 export async function deleteSlaPriorityTier(
-  priority: InboxPriority,
+  priority: string,
   serviceGroupId?: number | null,
 ): Promise<void> {
   // Without serviceGroupId, deletes the global (NULL group) override; with it,
@@ -5596,6 +5655,12 @@ export interface SamplePriorityLookupItem {
   priority: InboxPriority
 }
 
+/**
+ * @deprecated Reads `sample_priorities`, a table nothing writes any more.
+ * Effective priority now travels inline on the row (`priority` /
+ * `priority_effective`). No SLA consumer calls this; kept for one release and
+ * removed with the endpoint.
+ */
 export async function samplePrioritiesLookup(
   sampleUids: string[]
 ): Promise<SamplePriorityLookupItem[]> {
@@ -5625,7 +5690,8 @@ export async function getSenaiteAnalysts(): Promise<SenaiteAnalyst[]> {
 
 // ─── Inbox Types ─────────────────────────────────────────────────────────────
 
-export type InboxPriority = 'normal' | 'high' | 'expedited'
+/** @deprecated Priority keys are data now (see api-priorities.ts). Kept as a string alias for one release. */
+export type InboxPriority = string
 
 // Widened to string (spec 4, Task 10 — catalog-driven worksheet-inbox lanes):
 // was 'hplc' | 'microbiology'. A lane key is now any GET /worksheets/inbox/
@@ -5682,6 +5748,14 @@ export interface InboxVialItem {
    *  back-compat with a pre-1.8.5 backend; consumers fall back to
    *  [assignment_role]. */
   role_tags?: string[]
+  /** Resolved effective priority (sample-priority spec §5) — the SLA input.
+   *  The legacy `priority` string above is a rank-CLAMPED compatibility value
+   *  for one release; read this instead. */
+  priority_effective?: EffectivePriority | null
+  /** lims_sub_samples.id — the native vial pk `PUT /priorities/assign`
+   *  (level 'vial') writes against. Null/absent for parent rows and for any
+   *  row with no native vial; those are skipped when bulk-assigning. */
+  sub_sample_pk?: number | null
 }
 
 export interface InboxResponse {
@@ -5764,18 +5838,6 @@ export async function getInboxSamples(opts: GetInboxOptions = {}): Promise<Inbox
   })
   if (!response.ok) throw new Error(`Inbox fetch failed: ${response.status}`)
   return response.json()
-}
-
-export async function updateInboxPriority(sampleUid: string, priority: InboxPriority): Promise<void> {
-  // sample_uid travels in the BODY, not the path: Mk1-native UIDs are
-  // `mk1://<hex>` and a slash-bearing UID in a path segment gets mangled by the
-  // nginx proxy (encoded `://` -> decoded + slash-merged -> wrong route -> 404).
-  const response = await fetch(`${API_BASE_URL()}/worksheets/inbox/priority`, {
-    method: 'PUT',
-    headers: getBearerHeaders('application/json'),
-    body: JSON.stringify({ sample_uid: sampleUid, priority }),
-  })
-  if (!response.ok) throw new Error(`Priority update failed: ${response.status}`)
 }
 
 export async function getWorksheetUsers(): Promise<WorksheetUser[]> {
@@ -6267,6 +6329,202 @@ export async function getThroughput(query: ThroughputQuery = {}): Promise<Throug
   return response.json()
 }
 
+// ─── SLA Performance ─────────────────────────────────────────────────────────
+
+/** On-time summary for a set of delivered samples. Times are business hours. */
+export interface SlaPerfStats {
+  n: number
+  ontime: number
+  late: number
+  rate: number // % of delivered that met target
+  med: number
+  p75: number
+  p90: number
+  max: number
+}
+
+/** One receipt-month cohort. Open work counts against `rate_received`, which is
+ *  why that number and `rate_delivered` differ — the gap is survivorship bias. */
+export interface SlaPerfMonth {
+  m: string // YYYY-MM
+  label: string // "Jul 2026"
+  received: number
+  delivered: number
+  open: number
+  ontime: number
+  late: number
+  open_late: number
+  rate_delivered: number
+  rate_received: number
+  med: number
+  p90: number
+}
+
+export interface SlaPerfCurvePoint {
+  bh: number // upper edge of the bin, in business hours
+  n: number
+  cum_pct: number
+}
+
+export interface SlaPerfCurve {
+  all: SlaPerfCurvePoint[]
+  recent: SlaPerfCurvePoint[] // last 90 days
+  recent_n: number
+  within_target: number // % of the recent window delivered inside target
+}
+
+export interface SlaPerfStageMonth {
+  m: string
+  label: string
+  n: number
+  bench: number // receipt -> last verification
+  lag: number // last verification -> COA published
+}
+
+export interface SlaPerfStages {
+  n: number
+  coverage: number // % of delivered samples with a verified timestamp
+  bench_med: number
+  bench_p90: number
+  lag_med: number
+  lag_p90: number
+  lag_share: number // publishing lag as a % of total elapsed
+  lag_over_day: number
+  by_month: SlaPerfStageMonth[]
+}
+
+export interface SlaPerfGatingFamily {
+  k: string // 'hplc' | 'ster' | 'endo' | 'bacw' | 'hm'
+  name: string
+  department: string | null
+  n: number
+  med: number // receipt -> this family verified
+  p90: number
+  over_target: number
+  over_pct: number
+  gated: number // times it finished last
+  gated_late: number // times it finished last on a LATE sample
+  gated_late_pct: number
+  thin: boolean // too few timed samples for the percentages to mean anything
+}
+
+/** One publication month of the gating cut. Family keys are data, not schema:
+ *  `ster`, `ster_n`, `ster_gate`, `ster_gate_late` and so on. */
+export interface SlaPerfGatingMonth {
+  m: string
+  label: string
+  n: number
+  late_total: number
+  wait: number | null
+  [key: string]: string | number | null
+}
+
+export interface SlaPerfGating {
+  mixed: number // delivered samples carrying two or more families
+  late_mixed: number
+  families: SlaPerfGatingFamily[]
+  trend: SlaPerfGatingMonth[]
+  wait_med: number // business hours waiting on micro after HPLC is done
+  wait_p90: number
+  wait_n: number
+  wait_over_day: number
+  min_late_for_trend: number
+  min_timed_for_family: number
+}
+
+export interface SlaPerfOpenRow {
+  sid: string
+  client: string | null
+  order: string
+  status: string
+  received: string
+  bh: number
+  over: number // business hours past target; negative means time left
+  families: string[]
+}
+
+export interface SlaPerfAtRisk {
+  total: number
+  late: number
+  buckets: { label: string; n: number }[]
+  status: Record<string, number>
+  rows: SlaPerfOpenRow[]
+}
+
+export interface SlaPerfTarget {
+  name: string
+  bh: number
+  samples: number
+}
+
+export interface SlaPerfFilters {
+  client: string | null
+  order: string | null
+  departments: string[]
+  families: string[]
+}
+
+export interface SlaPerfFacets {
+  clients: { name: string; samples: number }[]
+  departments: { key: string; name: string; samples: number }[]
+  families: {
+    key: string
+    name: string
+    department: string | null
+    samples: number
+  }[]
+}
+
+export interface SlaPerfReport {
+  start: string
+  today: string
+  tz: string
+  generated_at: string
+  target_bh: number
+  targets: SlaPerfTarget[]
+  totals: { samples: number; delivered: number; open: number; cancelled: number }
+  overall: SlaPerfStats
+  kpi: { last30: SlaPerfStats; prev30: SlaPerfStats }
+  months: SlaPerfMonth[]
+  curve: SlaPerfCurve
+  stages: SlaPerfStages
+  gating: SlaPerfGating
+  at_risk: SlaPerfAtRisk
+  filters: SlaPerfFilters
+  facets: SlaPerfFacets
+  cache: { stale: boolean; age_seconds: number }
+  notes: Record<string, unknown>
+}
+
+export interface SlaPerfQuery {
+  includeTestOrders?: boolean
+  client?: string
+  order?: string
+  departments?: string[]
+  families?: string[]
+}
+
+export async function getSlaPerformance(
+  query: SlaPerfQuery = {}
+): Promise<SlaPerfReport> {
+  const qs = new URLSearchParams()
+  if (query.includeTestOrders) qs.set('include_test_orders', 'true')
+  const client = query.client?.trim()
+  if (client) qs.set('client', client)
+  const order = query.order?.trim()
+  if (order) qs.set('order', order)
+  for (const d of query.departments ?? []) qs.append('department', d)
+  for (const f of query.families ?? []) qs.append('family', f)
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  const response = await fetch(
+    `${API_BASE_URL()}/reports/sla-performance${suffix}`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok)
+    throw new Error(`SLA performance failed: ${response.status}`)
+  return response.json()
+}
+
 // ─── Sample Activity Timeline ────────────────────────────────────────────────
 
 export interface SampleActivityEvent {
@@ -6275,6 +6533,12 @@ export interface SampleActivityEvent {
   label: string
   details: Record<string, unknown>
   source: string
+  /** priority_audit lines (sample-priority spec §3.4) carry the same text as
+   *  `label` here, plus the operator's free-text note and the acting user. */
+  description?: string | null
+  type?: string | null
+  note?: string | null
+  user_id?: number | null
 }
 
 export interface SampleActivityResponse {
@@ -6507,6 +6771,12 @@ export interface SubSample {
    *  the named sibling anchor and carries no analyses of its own. Only the
    *  list endpoint populates it. */
   material_for?: string | null
+  /** Resolved effective priority for the vial (sample-priority spec §5) —
+   *  the vial → sample → order → customer chain. Null when unresolved. */
+  priority?: EffectivePriority | null
+  /** The vial's OWN explicit priority key (null = inherit up the chain).
+   *  Binds the vial-level PrioritySelect on the sub-sample page. */
+  priority_key?: string | null
 }
 
 export interface ParentSampleSummary {
@@ -7303,6 +7573,9 @@ export interface LimsBox {
     parent_sample_id: string | null
     assignment_role: string | null
     vial_sequence: number
+    /** Resolved effective priority for the vial (sample-priority spec §5).
+     *  Null when unresolvable; absent on pre-priority responses. */
+    priority?: EffectivePriority | null
   }[]
 }
 
@@ -7962,5 +8235,111 @@ export async function mintCaptureToken(args: {
   )
   if (!response.ok)
     throw new Error(`mintCaptureToken failed: ${response.status}`)
+  return response.json()
+}
+
+// ─── Ready to Publish report ───────────────────────────────────────────────
+
+export type ReadyReason = 'all_verified' | 'flag_ready' | 'flag_partial'
+
+export interface ReadyFlag {
+  id: number
+  type: string
+  kind: 'flag_ready' | 'flag_partial'
+  label: string
+  color: string
+  status: string
+  title: string
+}
+
+export interface ReadySla {
+  tier: string
+  target_minutes: number
+  business_hours_only: boolean
+  elapsed_minutes: number
+  remaining_minutes: number
+  breached: boolean
+  color: 'red' | 'amber' | 'green'
+}
+
+export interface ReadyHold {
+  flag_id: number
+  type: string
+  label: string
+  color: string
+  status: string
+  title: string
+  since: string | null
+}
+
+export interface ReadyRow {
+  sample_id: string
+  status: string
+  client: string | null
+  order: string
+  email: string | null
+  created_at: string | null
+  received_at: string | null
+  lot: string | null
+  analytes: string[]
+  reasons: ReadyReason[]
+  flags: ReadyFlag[]
+  lines: { total: number; verified: number; pending: string[] }
+  priority: string
+  sla: ReadySla | null
+  /** Open "On Hold" flag → parked in the page's On-hold section. */
+  hold: ReadyHold | null
+}
+
+export interface ReadyToPublishReport {
+  generated_at: string
+  rows: ReadyRow[]
+  totals: {
+    rows: number
+    orders: number
+    all_verified: number
+    flag_ready: number
+    flag_partial: number
+    breached: number
+    held: number
+  }
+  flag_types: { slug: string; label: string; color: string; kind: string }[]
+}
+
+export interface ReadyToPublishSummary {
+  generated_at: string
+  totals: ReadyToPublishReport['totals']
+}
+
+/** Totals only, for the header/sidebar count chips. Served from the
+ *  backend's 60 s report cache (cleared on every publish), so polling it from
+ *  every open window costs one report build per minute at most. */
+export async function getReadyToPublishSummary(
+  query: { includeTestOrders?: boolean } = {}
+): Promise<ReadyToPublishSummary> {
+  const qs = new URLSearchParams()
+  if (query.includeTestOrders) qs.set('include_test_orders', 'true')
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  const response = await fetch(
+    `${API_BASE_URL()}/reports/ready-to-publish/summary${suffix}`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok)
+    throw new Error(`Ready to publish summary failed: ${response.status}`)
+  return response.json()
+}
+
+export async function getReadyToPublish(
+  query: { includeTestOrders?: boolean } = {}
+): Promise<ReadyToPublishReport> {
+  const qs = new URLSearchParams()
+  if (query.includeTestOrders) qs.set('include_test_orders', 'true')
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  const response = await fetch(
+    `${API_BASE_URL()}/reports/ready-to-publish${suffix}`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok)
+    throw new Error(`Ready to publish failed: ${response.status}`)
   return response.json()
 }

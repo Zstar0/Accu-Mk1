@@ -3,14 +3,15 @@ import { GripVertical, Layers } from 'lucide-react'
 import { useUIStore } from '@/store/ui-store'
 import { AgingTimer } from '@/components/hplc/AgingTimer'
 import { InboxVialCard } from '@/components/hplc/InboxVialCard'
+import { PriorityGlyph } from '@/components/common/PriorityGlyph'
 import {
   familyDateReceived,
   familyDragItems,
+  familyPriorityRank,
   type FamilyDragData,
   type VialFamily,
 } from '@/lib/inbox-families'
 import { cn } from '@/lib/utils'
-import type { InboxPriority } from '@/lib/api'
 import type { SlaSubjectSnapshot } from '@/services/sla-subjects'
 
 interface InboxFamilyGroupProps {
@@ -18,7 +19,6 @@ interface InboxFamilyGroupProps {
   /** True when this family has ≥1 variance-assigned sub-sample — prefixes the
    *  header sample id with a Layers icon so the whole job reads as variance. */
   hasVarianceSubs?: boolean
-  onPriorityChange: (sampleUid: string, priority: InboxPriority) => void
   /** SLA column passthrough — forwarded verbatim to each vial card. */
   slaByKey?: Map<string, SlaSubjectSnapshot>
   slaLoading?: boolean
@@ -32,7 +32,6 @@ interface InboxFamilyGroupProps {
 export function InboxFamilyGroup({
   family,
   hasVarianceSubs,
-  onPriorityChange,
   slaByKey,
   slaLoading,
   slaError,
@@ -49,6 +48,12 @@ export function InboxFamilyGroup({
 
   const client = family.vials[0]?.client_id
   const title = family.vials[0]?.title
+  // The family header shows the SAME priority the family is ordered by — its
+  // most urgent vial's, by catalog rank.
+  const rank = familyPriorityRank(family.vials)
+  const headline =
+    family.vials.find(v => (v.priority_effective?.rank ?? 0) === rank)
+      ?.priority_effective ?? null
 
   return (
     <div
@@ -68,7 +73,8 @@ export function InboxFamilyGroup({
         >
           <GripVertical className="h-4 w-4" />
         </button>
-        <span className="inline-flex items-center gap-1">
+        <span className="inline-flex items-center gap-1.5">
+          <PriorityGlyph priority={headline} size="row" />
           {hasVarianceSubs && (
             <Layers
               className="h-3 w-3 text-sky-500 shrink-0"
@@ -108,7 +114,6 @@ export function InboxFamilyGroup({
             key={v.uid}
             vial={v}
             groupedWithPrevious={false}
-            onPriorityChange={onPriorityChange}
             slaByKey={slaByKey}
             slaLoading={slaLoading}
             slaError={slaError}

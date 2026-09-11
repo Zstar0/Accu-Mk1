@@ -2,7 +2,6 @@ import { useMemo } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import {
   fetchSlaStatuses,
-  type InboxPriority,
   type SenaiteLookupResult,
   type SlaStatus,
   type SlaStatusRequestItem,
@@ -23,7 +22,6 @@ import {
 } from '@/lib/sla-resolution'
 import { useAnalysisServices } from '@/services/analysis-services'
 import { useAnalysisProfiles } from '@/services/analysis-profiles'
-import { useSamplePriorities } from '@/services/sample-priorities'
 import { useServiceGroups } from '@/services/service-groups'
 import { useSlaTiers, useSlaPriorityTiers } from '@/services/sla'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
@@ -37,10 +35,11 @@ export interface SampleSlaResult {
    *  Single-group samples have an array of length 1; consumers that still
    *  render a single row can index [0]. */
   snapshots: SampleSlaSnapshot[]
-  /** Resolved priority that fed the per-group tier resolution. Useful for the
-   *  breakdown tooltip's "Priority: normal/expedited" line. Priority is
-   *  per-sample (not per-group) so it stays at the top level. */
-  priority: InboxPriority | null
+  /** Resolved effective priority KEY that fed the per-group tier resolution
+   *  (`lookup.priority?.key`, `'default'` when the sample has none). Useful for
+   *  the breakdown tooltip's "Priority: ..." line. Priority is per-sample (not
+   *  per-group) so it stays at the top level. */
+  priority: string | null
   /** True when this sample is published — the renderer switches from
    *  countdown text ("Xh left") to historical text ("took Xh / Met / Missed
    *  by Yh"). Driven by lookup.review_state === 'published'. */
@@ -62,8 +61,8 @@ export interface SampleSlaResult {
  * `business_hours_only`.
  *
  * Shares the same primitives as `useOrderSlaStatuses` (tiers, priority
- * overrides, service groups, analysis services, sample priorities) so the
- * underlying 5 cached queries are hit at most once per page load. Skips the
+ * overrides, service groups, analysis services, analysis profiles) so the
+ * underlying cached queries are hit at most once per page load. Skips the
  * `/sla/status` round-trip entirely if the sample isn't received yet.
  * Published samples flow through — each batch item gets a `now_override` so
  * the server returns a frozen-in-time elapsed = (published_date - received_at)
@@ -91,10 +90,6 @@ export function useSampleSla(
   const publishedDate = isPublished
     ? lookup?.published_coa?.published_date ?? null
     : null
-  const sampleUid = applicable && lookup ? lookup.sample_uid : ''
-  // useSamplePriorities skips empty arrays internally (enabled: false).
-  const prioritiesQuery = useSamplePriorities(sampleUid ? [sampleUid] : [])
-
   /** Per-group resolution for THIS one sample. Flattened to an array of
    *  {groupKey, groupName, tier, reason} entries so batchItems and
    *  snapshots both consume the same iteration. */
@@ -121,12 +116,10 @@ export function useSampleSla(
     const globalPriorityToTier = buildGlobalPriorityToTierMap(priorityRows, tiersById)
     const perGroupPriorityToTier = buildPerGroupPriorityToTierMap(priorityRows, tiersById)
     const groupNameById = new Map(groups.map(g => [g.id, g.name]))
-    const prioByUid = new Map<string, InboxPriority>()
-    for (const row of prioritiesQuery.data ?? []) {
-      prioByUid.set(row.sample_uid, row.priority)
-    }
-    const priority: InboxPriority =
-      (lookup.sample_uid && prioByUid.get(lookup.sample_uid)) || 'normal'
+    // Effective priority travels inline on the lookup row now — no uid→priority
+    // side lookup. `'default'` is the sparsity sentinel: it never has an
+    // override row, so it falls through to the group/default steps.
+    const priority = lookup.priority?.key ?? 'default'
 
     const byGroup = resolveSampleTiersByGroup(
       { analyses: lookup.analyses, priority },
@@ -167,17 +160,12 @@ export function useSampleSla(
     servicesQuery.data,
     profilesQuery.data,
     prioOverridesQuery.data,
-    prioritiesQuery.data,
   ])
 
-  const resolvedPriority = useMemo<InboxPriority | null>(() => {
+  const resolvedPriority = useMemo<string | null>(() => {
     if (!applicable || !lookup) return null
-    const prioByUid = new Map<string, InboxPriority>()
-    for (const row of prioritiesQuery.data ?? []) {
-      prioByUid.set(row.sample_uid, row.priority)
-    }
-    return (lookup.sample_uid && prioByUid.get(lookup.sample_uid)) || 'normal'
-  }, [applicable, lookup, prioritiesQuery.data])
+    return lookup.priority?.key ?? 'default'
+  }, [applicable, lookup])
 
   /** Composite key `${sample_uid}|${groupKey}` — same scheme as
    *  useOrderSlaStatuses so the backend `/sla/status` response is unambiguous
@@ -243,7 +231,6 @@ export function useSampleSla(
       servicesQuery.isLoading ||
       profilesQuery.isLoading ||
       prioOverridesQuery.isLoading ||
-      prioritiesQuery.isLoading ||
       (batchItems.length > 0 && statusQuery.isLoading)
     const isError =
       tiersQuery.isError ||
@@ -251,7 +238,6 @@ export function useSampleSla(
       servicesQuery.isError ||
       profilesQuery.isError ||
       prioOverridesQuery.isError ||
-      prioritiesQuery.isError ||
       statusQuery.isError
 
     const statusByKey = new Map<string, SlaStatus>()
@@ -273,7 +259,7 @@ export function useSampleSla(
           color,
           tier: g.tier,
           reason: g.reason,
-          priority: resolvedPriority ?? 'normal',
+          priority: resolvedPriority ?? 'default',
           receivedAt: lookup?.date_received ?? null,
         })
       }
@@ -304,8 +290,6 @@ export function useSampleSla(
     profilesQuery.isError,
     prioOverridesQuery.isLoading,
     prioOverridesQuery.isError,
-    prioritiesQuery.isLoading,
-    prioritiesQuery.isError,
     batchItems.length,
   ])
 }

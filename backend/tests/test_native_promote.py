@@ -1,7 +1,9 @@
 """Native (origin='mk1') promote: no SENAITE write-back, ID-keyed identity.
 
-The SENAITE-origin path must stay byte-identical: write-back still runs and
-still rolls the whole promote back on failure (fail-closed).
+The SENAITE-origin path still RUNS the write-back — that is the distinction
+this file pins — but since the 2026-09-10 Mk1-writes-first ruling a failure
+there no longer rolls the promote back. Accu-Mk1 is the canonical tier; the
+write-back is a tee.
 
 Fixture idiom copied from test_analysis_service_routes.py's `route_client`
 (StaticPool in-memory SQLite + get_db/get_current_user dependency overrides,
@@ -143,27 +145,47 @@ def test_native_promote_request_keyword_is_advisory_only(client, db_session):
     assert parent_body["result_unit"] == "ppm"         # service-derived, caller sent none
 
 
-def test_senaite_origin_promote_still_fail_closed(client, db_session):
-    """origin='senaite' path unchanged: write-back failure -> 502 AND the
-    parent row is rolled back (not committed)."""
+def test_senaite_origin_promote_survives_writeback_failure(client, db_session):
+    """origin='senaite' still tees to SENAITE, but a write-back failure no
+    longer takes the promotion with it.
+
+    CONTRACT CHANGE, Handler ruling 2026-09-10 (Accu-Mk1 writes first). This
+    previously asserted 502 + rollback. That order is precisely what stranded
+    P-2553 and P-2606 when the half that failed was the Mk1 commit: SENAITE
+    ended up ahead, Mk1 had no promotion, and the lock map — reading that
+    mirror — hid the Promote verb, leaving no UI path out. What still matters
+    here, and is asserted, is that a senaite-origin service DOES attempt the
+    write-back, unlike the mk1-origin path above.
+    """
     svc = _mk_service(db_session, keyword="STER-XYZ", origin="senaite")
     parent, rows = _mk_parent_and_vial_rows(db_session, svc)
     db_session.commit()
+
+    calls = []
+
+    def _boom(parent_sample_id, keyword, result_value, remark):
+        calls.append(keyword)
+        raise SenaiteWritebackError("boom")
+
     with patch(
         "lims_analyses.routes.senaite_writeback.writeback_promotion",
-        side_effect=SenaiteWritebackError("boom"),
+        side_effect=_boom,
     ):
         resp = client.post("/api/lims-analyses/promote", json={
             "keyword": "STER-XYZ", "result_value": "ND",
             "sources": [{"analysis_id": rows[0].id, "contribution_kind": "chosen"}],
         })
-    assert resp.status_code == 502
+    assert resp.status_code == 201, resp.text
+    assert calls == ["STER-XYZ"], "senaite-origin must still tee to SENAITE"
+
     from models import LimsAnalysis
+    db_session.expire_all()
     parents = db_session.query(LimsAnalysis).filter(
         LimsAnalysis.lims_sample_pk == parent.id,
         LimsAnalysis.lims_sub_sample_pk.is_(None),
     ).all()
-    assert parents == []  # rolled back
+    assert len(parents) == 1, "the Mk1 promotion must stand"
+    assert parents[0].review_state == "parent_to_verify"
 
 
 def test_native_source_validation_is_id_based(client, db_session):

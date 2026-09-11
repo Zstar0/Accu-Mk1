@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  familyPriorityRank,
   groupInboxFamilies,
   familyDragItems,
   familyDateReceived,
@@ -47,14 +48,83 @@ describe('groupInboxFamilies', () => {
   })
 
   it('a mixed-priority family stays together, ranked by its most urgent vial', () => {
+    // Ordering reads the CATALOG RANK off `priority_effective`, not the legacy
+    // string. Parent ids are chosen so alphabetical tie-break would give the
+    // opposite order — only the rank can produce the expected one.
+    const eff = (key: string, rank: number) => ({
+      key,
+      rank,
+      source_level: 'vial' as const,
+      source_id: null,
+    })
     const fams = groupInboxFamilies([
-      vial({ uid: 'a1', parent_sample_id: 'P-0A', sample_id: 'P-0A-S01', priority: 'normal' }),
-      vial({ uid: 'b1', parent_sample_id: 'P-0B', sample_id: 'P-0B-S01', priority: 'high' }),
-      vial({ uid: 'a2', parent_sample_id: 'P-0A', sample_id: 'P-0A-S02', vial_sequence: 2, priority: 'expedited' }),
+      vial({
+        uid: 'b1',
+        parent_sample_id: 'P-0B',
+        sample_id: 'P-0B-S01',
+        priority_effective: eff('default', 0),
+      }),
+      vial({
+        uid: 'a1',
+        parent_sample_id: 'P-0A',
+        sample_id: 'P-0A-S01',
+        priority_effective: eff('high', 10),
+      }),
+      vial({
+        uid: 'b2',
+        parent_sample_id: 'P-0B',
+        sample_id: 'P-0B-S02',
+        vial_sequence: 2,
+        priority_effective: eff('expedited', 20),
+      }),
     ])
-    // P-0A ranks expedited (its best vial) and so sorts before P-0B (high)
-    expect(fams.map(f => f.parentSampleId)).toEqual(['P-0A', 'P-0B'])
+    // P-0B ranks 20 (its most urgent vial) and so sorts before P-0A (10).
+    expect(fams.map(f => f.parentSampleId)).toEqual(['P-0B', 'P-0A'])
     expect(fams[0]!.vials).toHaveLength(2)
+  })
+
+  it('a below-default family sorts AFTER a default one and keeps its negative rank', () => {
+    // An admin-created priority may rank BELOW the catalog default. Parent ids
+    // are chosen so the alphabetical tie-break gives the OPPOSITE order — the
+    // assertion can only pass if the negative rank survives (a Math.max(0, ...)
+    // clamp makes both families rank 0 and yields ['P-0A', 'P-0B']).
+    const low = {
+      key: 'low',
+      rank: -10,
+      source_level: 'vial' as const,
+      source_id: null,
+    }
+    const lowVials = [
+      vial({
+        uid: 'a1',
+        parent_sample_id: 'P-0A',
+        sample_id: 'P-0A-S01',
+        priority_effective: low,
+      }),
+      vial({
+        uid: 'a2',
+        parent_sample_id: 'P-0A',
+        sample_id: 'P-0A-S02',
+        vial_sequence: 2,
+        priority_effective: low,
+      }),
+    ]
+    const defaultVials = [
+      vial({
+        uid: 'b1',
+        parent_sample_id: 'P-0B',
+        sample_id: 'P-0B-S01',
+        priority_effective: {
+          key: 'default',
+          rank: 0,
+          source_level: 'default' as const,
+          source_id: null,
+        },
+      }),
+    ]
+    expect(familyPriorityRank(lowVials)).toBe(-10)
+    const fams = groupInboxFamilies([...lowVials, ...defaultVials])
+    expect(fams.map(f => f.parentSampleId)).toEqual(['P-0B', 'P-0A'])
   })
 
   it('equal-priority families sort by parent id', () => {

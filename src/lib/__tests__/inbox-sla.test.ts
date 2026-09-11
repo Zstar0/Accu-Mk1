@@ -109,12 +109,35 @@ test('buildInboxSlaSubjects: one subject per (vial, department); unowned departm
     },
     {
       key: inboxVialSlaKey('u2', 3),
-      priority: 'normal',
+      // Legacy 'normal' maps onto the 'default' sparsity sentinel.
+      priority: 'default',
       groupId: null,
       receivedAt: '2026-08-24T12:12:00Z',
       keywords: ['KW-C'],
     },
   ])
+})
+
+test('buildInboxSlaSubjects: inline priority_effective wins over the legacy string', () => {
+  const subjects = buildInboxSlaSubjects(
+    [
+      vial({
+        uid: 'u4',
+        // Rank-clamped compatibility value on the wire...
+        priority: 'expedited',
+        // ...the effective key is what SLA must resolve by.
+        priority_effective: {
+          key: 'rush',
+          rank: 90,
+          source_level: 'order',
+          source_id: '7',
+        },
+        analyses: [analysis(1, 'KW-A')],
+      }),
+    ],
+    new Map([[1, 1]])
+  )
+  expect(subjects[0]?.priority).toBe('rush')
 })
 
 test('buildInboxSlaSubjects: vials without a received date are skipped', () => {

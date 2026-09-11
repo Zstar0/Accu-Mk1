@@ -212,6 +212,35 @@ def _find_edge(db: Session, from_slug: str, verb: str,
     return (row[0], row[1]) if row else None
 
 
+def _write_status_if_authoritative(db: Session, sample: LimsSample, to_slug: str, *,
+                                   verb: str, actor_user_id: Optional[int],
+                                   from_status: Optional[str]) -> bool:
+    """mk1 authority (spec §4.1): the engine is the writer of
+    lims_samples.status. Only catalog slugs are ever written; a foreign slug
+    logs and leaves the column alone. Ledger row source='mk1' (never
+    deduped). senaite authority: no-op.
+
+    from_status is the engine's own pre-advance native state (`frm` in
+    execute_verb), NOT sample.status — on the receive path,
+    heal_sample_status writes sample.status before the engine runs, so
+    sample.status would already equal to_slug and produce a self-loop
+    ledger row."""
+    from workflow.authority import sample_status_authority
+    from workflow.catalog import sample_state_slugs
+    from workflow.sample_log import record_sample_transition
+    if sample_status_authority(db) != "mk1":
+        return False
+    if to_slug not in sample_state_slugs(db):
+        log.warning("workflow.status_write_refused sample=%s slug=%r not in catalog",
+                    sample.sample_id, to_slug)
+        return False
+    sample.status = to_slug
+    record_sample_transition(db, sample_id=sample.sample_id, to_status=to_slug,
+                             source="mk1", verb=verb, from_status=from_status,
+                             actor_user_id=actor_user_id)
+    return True
+
+
 def execute_verb(db: Session, sample: LimsSample, verb: str, *, trigger: str,
                  actor_user_id: Optional[int] = None,
                  attested: Optional[dict] = None,
@@ -239,6 +268,8 @@ def execute_verb(db: Session, sample: LimsSample, verb: str, *, trigger: str,
                        outcomes=outcomes, actor_user_id=actor_user_id)
     frm = sample.native_status
     sample.native_status = to_slug
+    _write_status_if_authoritative(db, sample, to_slug, verb=verb,
+                                   actor_user_id=actor_user_id, from_status=frm)
     db.flush()
     return _record(db, sample, trigger=trigger, verb=verb, from_status=frm,
                    to_status=to_slug, outcome="advanced",
@@ -251,8 +282,8 @@ def evaluate_cascades(db: Session, sample: LimsSample, *, trigger: str,
                       ) -> list[LimsWorkflowShadowEvaluation]:
     """Fire auto_fire edges out of native_status until none applies
     (cap CASCADE_CAP). Only edges whose requirements are ALL met fire —
-    refusals are NOT recorded here (cascade probing is speculative; recording
-    every probe would spam the trajectory). Flush-only."""
+    the refusal that STOPS the run is recorded once (spec §6.1); probes
+    that had nothing to fire record nothing. Flush-only."""
     if sample.native_status is None:
         return []
     from sqlalchemy.orm import aliased
@@ -270,8 +301,9 @@ def evaluate_cascades(db: Session, sample: LimsSample, *, trigger: str,
                       LimsWorkflowTransition.id)
         ).scalars().all()
         advanced = None
+        first_refusal = None   # (verb, outcomes) of the first unmet candidate
         for edge in candidates:
-            met, _outc = evaluate_requirements(
+            met, outc = evaluate_requirements(
                 db, sample, edge.requirements or [],
                 actor_user_id=actor_user_id)
             if met:
@@ -279,7 +311,18 @@ def evaluate_cascades(db: Session, sample: LimsSample, *, trigger: str,
                     db, sample, edge.verb, trigger=trigger,
                     actor_user_id=actor_user_id)
                 break
+            if first_refusal is None:
+                first_refusal = (edge.verb, outc)
         if advanced is None or advanced.outcome != "advanced":
+            # Spec §6.1: record WHY the cascade stopped (once per run; the
+            # _record delta-dedup keeps repeats from spamming the trajectory).
+            # No candidates at all = nothing to fire = record nothing.
+            if advanced is None and first_refusal is not None:
+                _record(db, sample, trigger=trigger, verb=first_refusal[0],
+                        from_status=sample.native_status,
+                        to_status=sample.native_status,
+                        outcome="requirements_unmet", requirements_met=False,
+                        outcomes=first_refusal[1], actor_user_id=actor_user_id)
             break
         fired.append(advanced)
     return fired
@@ -341,8 +384,11 @@ def run_cascades_bg(sample_pk: int, actor_user_id: Optional[int]) -> None:
         # impact.
         sample = db.get(LimsSample, sample_pk, with_for_update=True)
         if sample is not None:
-            evaluate_cascades(db, sample, trigger="analysis_cascade",
-                              actor_user_id=actor_user_id)
+            fired = evaluate_cascades(db, sample, trigger="analysis_cascade",
+                                      actor_user_id=actor_user_id)
+            db.commit()
+            # Spec §5: prove each SENAITE-representable advance; refusals queue.
+            tee_advances(db, sample, fired)
             db.commit()
     except Exception:
         log.exception("sbs.run_cascades_bg failed (never-raise)")
@@ -351,3 +397,19 @@ def run_cascades_bg(sample_pk: int, actor_user_id: Optional[int]) -> None:
     finally:
         if db is not None:
             db.close()
+
+
+_TEE_TO_STATES = frozenset({"verified", "published", "cancelled"})
+
+
+def tee_advances(db: Session, sample: LimsSample, fired: list) -> None:
+    """Spec §5: tee each native advance SENAITE can represent (verify /
+    publish / cancel), prove it by read-back, queue refusals. Never raises."""
+    from workflow import senaite_tee
+    for ev in fired:
+        if ev.to_status in _TEE_TO_STATES and ev.verb in senaite_tee.EXPECTED_AR_STATES:
+            try:
+                senaite_tee.tee_now(db, sample, ev.verb)
+            except Exception:
+                log.exception("senaite tee failed (never-raise) sample=%s verb=%s",
+                              sample.sample_id, ev.verb)

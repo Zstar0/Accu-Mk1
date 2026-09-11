@@ -50,6 +50,15 @@ from throughput import (
     build_throughput,
     lab_day as throughput_lab_day,
 )
+from sla_engine import BusinessSchedule as SlaBusinessSchedule  # noqa: E402
+from sla_perf import (  # noqa: E402
+    AnalysisIn as SlaPerfAnalysisIn,
+    CoaIn as SlaPerfCoaIn,
+    GroupIn as SlaPerfGroupIn,
+    SampleIn as SlaPerfSampleIn,
+    TierIn as SlaPerfTierIn,
+    build_sla_performance,
+)
 from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment, MethodAttachment, method_services, LimsOrder
 from catalog.change_log import apply_and_log, log_create, log_delete, log_members
 from auth import (
@@ -111,6 +120,8 @@ from flags.routes import router as flags_router
 from slack_notify.routes import router as slack_prefs_router
 from slack_notify.interactions import router as slack_interactions_router
 from workflow.routes import router as workflow_router
+from priority.routes import router as priority_router
+from workflow.cancel_routes import router as cancel_router
 from conformance.routes import router as conformance_router
 
 import logging
@@ -464,6 +475,34 @@ async def lifespan(app: FastAPI):
     from flags import watches as _flag_watches
     _flag_scheduler.register("flag_watch_poller", interval=_timedelta(minutes=2),
                              fn=_flag_watches._watch_poll_job)
+    # Sample-status authority flip (2026-09-09 spec §5): drain SENAITE tee
+    # refusals. Runs in BOTH authority modes — the silent-200 class is
+    # SENAITE's defect regardless of who owns the badge.
+    from workflow import senaite_tee as _senaite_tee
+
+    def _tee_retry_job(now):
+        db = _SessionLocal()
+        try:
+            _senaite_tee.run_retries(db, now=now)
+            db.commit()
+        finally:
+            db.close()
+    _flag_scheduler.register("senaite_tee_retry", interval=_timedelta(minutes=5),
+                             fn=_tee_retry_job)
+    # Sample-status authority flip (2026-09-09 spec §6.2): stranded-sample
+    # detector. Detection, not sweeping — this job never advances a status;
+    # its only writes are flags (Handler ruling).
+    from workflow import stranded as _stranded
+
+    def _stranded_job(now):
+        db = _SessionLocal()
+        try:
+            _stranded.run_check(db, now=now)
+            db.commit()
+        finally:
+            db.close()
+    _flag_scheduler.register("workflow_stranded_check", interval=_timedelta(minutes=15),
+                             fn=_stranded_job)
     _flag_scheduler.start()
     # Seed default settings and admin user
     from database import SessionLocal
@@ -544,6 +583,8 @@ app.include_router(flags_router)
 app.include_router(slack_prefs_router)
 app.include_router(slack_interactions_router)
 app.include_router(workflow_router)
+app.include_router(priority_router)
+app.include_router(cancel_router)
 app.include_router(conformance_router)
 
 # --- Endpoints ---
@@ -1603,6 +1644,102 @@ async def get_sample_activity(
                 "label": label,
                 "details": event_details,
                 "source": "lims_sub_sample_events",
+            })
+
+    # --- Mk1 DB: priority_audit (priority changes at any level) ------------
+    # The log is derived at read time (spec §3.4) — no per-sample copy of the
+    # audit exists. Sample- and vial-level rows key off the native pks; an
+    # order-level change is shown on every sample of that order.
+    # Customer-level rows are included too (spec §2.7), narrowed to the one
+    # customer who owns this sample's order — a customer change that alters
+    # this sample's effective value belongs in its history.
+    from models import Priority, PriorityAudit
+    priority_names = {p.key: p.name for p in db.execute(select(Priority)).scalars()}
+    audit_sample = None if direct_sub is not None else parent
+    audit_customer_label = None
+    if direct_sub is not None:
+        audit_vial_ids = [str(direct_sub.id)]
+        audit_sample = db.get(LimsSample, direct_sub.parent_sample_pk)
+    else:
+        audit_vial_ids = [str(s.id) for s in family_subs]
+    if audit_sample is not None or audit_vial_ids:
+        clauses = []
+        if audit_sample is not None:
+            clauses.append(
+                (PriorityAudit.level == "sample")
+                & (PriorityAudit.entity_id == str(audit_sample.id))
+            )
+            if audit_sample.client_order_number:
+                clauses.append(
+                    (PriorityAudit.level == "order")
+                    & (PriorityAudit.entity_id == audit_sample.client_order_number)
+                )
+                # lims_orders.order_number is indexed, not unique — lowest id.
+                audit_order = db.execute(
+                    select(LimsOrder)
+                    .where(LimsOrder.order_number == audit_sample.client_order_number)
+                    .order_by(LimsOrder.id).limit(1)
+                ).scalars().first()
+                cust_id = getattr(audit_order, "customer_user_id", None)
+                if cust_id is not None:
+                    audit_customer_label = audit_order.customer_name or str(cust_id)
+                    clauses.append(
+                        (PriorityAudit.level == "customer")
+                        & (PriorityAudit.entity_id == str(cust_id))
+                    )
+        if audit_vial_ids:
+            clauses.append(
+                (PriorityAudit.level == "vial")
+                & (PriorityAudit.entity_id.in_(audit_vial_ids))
+            )
+        audit_rows = db.execute(
+            select(PriorityAudit).where(or_(*clauses)).order_by(PriorityAudit.at)
+        ).scalars().all()
+        # One batched actor lookup for the whole block — the sibling sources
+        # above resolve per row because they iterate one vial at a time.
+        actor_ids = {a.user_id for a in audit_rows if a.user_id}
+        actor_by_id: dict[int, str] = {}
+        if actor_ids:
+            for u in db.execute(select(User).where(User.id.in_(actor_ids))).scalars():
+                actor_by_id[u.id] = (
+                    " ".join(p for p in (u.first_name, u.last_name) if p).strip()
+                    or u.email
+                )
+        for a in audit_rows:
+            old = priority_names.get(a.old_key, a.old_key) if a.old_key else "Inherit"
+            new = priority_names.get(a.new_key, a.new_key) if a.new_key else "Inherit"
+            where = {
+                "sample": "",
+                "vial": f" (vial {a.entity_id})",
+                "order": f" via order {a.entity_id}",
+                "customer": f" via customer {audit_customer_label or a.entity_id}",
+            }.get(a.level, "")
+            actor = actor_by_id.get(a.user_id) if a.user_id else None
+            line = f"Priority: {old} → {new}{where}"
+            if actor:
+                line = f"{line} ({actor})"
+            events.append({
+                "timestamp": a.at.isoformat() if a.at else None,
+                "event": "priority_changed",
+                # `label` is the key every other source in this endpoint uses;
+                # `description` is the key the priority timeline reads. Same
+                # text — one line, two renderers.
+                "label": line,
+                "description": line,
+                "type": "priority",
+                "details": {
+                    "level": a.level,
+                    "entity_id": a.entity_id,
+                    "old_key": a.old_key,
+                    "new_key": a.new_key,
+                    "source": a.source,
+                    "note": a.note,
+                    "user_id": a.user_id,
+                    "by": actor,
+                },
+                "user_id": a.user_id,
+                "note": a.note,
+                "source": "priority_audit",
             })
 
     # Sort all events reverse-chronological, nulls last
@@ -2867,9 +3004,10 @@ _RESERVED_LEGACY_ROLES = {"hplc", "endo", "ster"}
 
 # ─── SLA tier schemas (sub-project A, revised to tiers) ───
 
-# Priority tiers mirror SamplePriority/WorksheetItem.priority. Validated here at
-# the API edge — the DB columns are unconstrained VARCHAR.
-SlaPriority = Literal["normal", "high", "expedited"]
+# Priority keys are user-managed rows in the `priorities` table, so the API edge
+# can no longer enforce a fixed Literal. The tier routes validate the path
+# parameter against priority_map(db) instead; the DB columns stay VARCHAR.
+SlaPriority = str
 
 
 class SlaTierCreate(BaseModel):
@@ -9195,6 +9333,15 @@ class ExplorerOrderResponse(BaseModel):
     updated_at: datetime
     completed_at: Optional[datetime] = None
     wp_order_status: Optional[str] = None
+    # Order-level priority (spec §5), joined from the Mk1 registry by
+    # order_number. `priority_key` is the order's OWN explicit key (None =
+    # inherit from the customer), `priority_source` says who set it, and
+    # `effective_priority` is the resolved {key, rank, source_level, source_id}
+    # for the order → customer chain. All three are None when the order has no
+    # lims_orders row yet (registry sync lags the IS).
+    priority_key: Optional[str] = None
+    priority_source: Optional[str] = None
+    effective_priority: Optional[dict] = None
 
 
 class ExplorerIngestionResponse(BaseModel):
@@ -9336,6 +9483,24 @@ def get_explorer_status(_current_user=Depends(get_current_user)):
         return ExplorerConnectionStatus(connected=False, error=str(e))
 
 
+def _stamp_order_priorities(db: Session, orders):
+    """Join the Mk1 order-priority columns onto IS order payloads (spec §5).
+
+    ONE resolve for the page (order → customer chain). The IS is the authority
+    for the order itself; priority lives only in Mk1, so it is stamped here
+    rather than asked of the IS. Orders with no lims_orders row keep None.
+    """
+    if not isinstance(orders, list) or not orders:
+        return orders
+    from priority.service import order_priority_fields
+    numbers = [o.get("order_number") for o in orders if isinstance(o, dict)]
+    fields = order_priority_fields(db, [n for n in numbers if n])
+    for o in orders:
+        if isinstance(o, dict):
+            o.update(fields.get(o.get("order_number"), {}))
+    return orders
+
+
 @app.get("/explorer/orders", response_model=list[ExplorerOrderResponse])
 async def get_explorer_orders(
     search: Optional[str] = None,
@@ -9353,6 +9518,7 @@ async def get_explorer_orders(
     search_lot: Optional[str] = None,
     sort: Optional[str] = None,
     _current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """
     Get orders from Integration Service database.
@@ -9415,7 +9581,7 @@ async def get_explorer_orders(
             async with _httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=15.0) as client:
                 resp = await client.get(url, params=params, headers={"X-API-Key": api_key})
                 resp.raise_for_status()
-                return resp.json()
+                return _stamp_order_priorities(db, resp.json())
         except _httpx.HTTPStatusError as e:
             raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
         except Exception as e:
@@ -9426,7 +9592,7 @@ async def get_explorer_orders(
         # Convert UUID to string for JSON serialization
         for order in orders:
             order['id'] = str(order['id'])
-        return orders
+        return _stamp_order_priorities(db, orders)
     except Exception as e:
         raise HTTPException(
             status_code=503,
@@ -9496,8 +9662,15 @@ async def get_explorer_customer(customer_id: int, _current_user=Depends(get_curr
 
 
 @app.get("/explorer/orders/{order_id}", response_model=ExplorerOrderResponse)
-async def get_explorer_order(order_id: str, _current_user=Depends(get_current_user)):
-    """Get a single order by WordPress order ID from Integration Service."""
+async def get_explorer_order(
+    order_id: str,
+    _current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get a single order by WordPress order ID from Integration Service.
+
+    The Mk1 order-priority columns are stamped on (spec §5) — see
+    _stamp_order_priorities."""
     import httpx as _httpx
     url = f"{os.environ.get('INTEGRATION_SERVICE_URL', 'http://host.docker.internal:8000')}/explorer/orders/{order_id}"
     api_key = os.environ.get("ACCU_MK1_API_KEY", "")
@@ -9507,7 +9680,7 @@ async def get_explorer_order(order_id: str, _current_user=Depends(get_current_us
             if resp.status_code == 404:
                 raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
             resp.raise_for_status()
-            return resp.json()
+            return _stamp_order_priorities(db, [resp.json()])[0]
     except HTTPException:
         raise
     except Exception as e:
@@ -9754,16 +9927,46 @@ class CheckInRecord(BaseModel):
     is_test_order: bool = False  # sample belongs to a TEST_EMAILS order (see inbox)
 
 
+# Internal / test CLIENT titles (lims_samples.client_title, case-insensitive).
+# The e-mail rule below only reaches samples that came through a WordPress
+# order; internal samples registered straight into the LIMS carry no order
+# and no billing e-mail, so they are recognised by client instead
+# (Handler 2026-09-10: "Valence Internal 2" is the internal test client).
+TEST_CLIENT_TITLES = frozenset({"valence internal 2"})
+
+
+def _test_client_sample_ids(db: Session) -> set[str]:
+    """Sample IDs whose lims_samples.client_title is an internal/test client."""
+    if not TEST_CLIENT_TITLES:
+        return set()
+    return {
+        sid for (sid,) in db.execute(
+            select(LimsSample.sample_id).where(
+                func.lower(LimsSample.client_title).in_(sorted(TEST_CLIENT_TITLES))
+            )
+        ).all()
+    }
+
+
 def _test_order_senaite_ids() -> set[str]:
-    """SENAITE sample IDs that belong to a test order (billing email in TEST_EMAILS).
+    """Sample IDs that belong to a test order (billing email in TEST_EMAILS)
+    or to an internal/test client (client_title in TEST_CLIENT_TITLES).
 
     Mirrors the /worksheets/inbox test-order definition: read order_submissions
     from the integration DB, map each order's sample_results → senaite_id, and
-    flag those whose payload.billing.email is a known test email. Returns an
-    empty set on any failure (graceful degradation — nothing flagged as test).
+    flag those whose payload.billing.email is a known test email. Then adds
+    every Mk1 sample registered under a test client (no order needed). Each
+    leg degrades to an empty set on failure — nothing flagged as test.
     """
     TEST_EMAILS = {"forrestp@outlook.com", "forrest@valenceanalytical.com"}
     test_ids: set[str] = set()
+
+    try:
+        from database import SessionLocal
+        with SessionLocal() as _db:
+            test_ids |= _test_client_sample_ids(_db)
+    except Exception:
+        pass
 
     def _as_dict(val):
         if isinstance(val, dict):
@@ -10252,6 +10455,763 @@ def reports_throughput(
     return report
 
 
+class SlaPerfStatsOut(BaseModel):
+    n: int
+    ontime: int
+    late: int
+    rate: float
+    med: float
+    p75: float
+    p90: float
+    max: float
+
+
+class SlaPerfKpiOut(BaseModel):
+    last30: SlaPerfStatsOut
+    prev30: SlaPerfStatsOut
+
+
+class SlaPerfTargetOut(BaseModel):
+    name: str
+    bh: float
+    samples: int
+
+
+class SlaPerfTotalsOut(BaseModel):
+    samples: int
+    delivered: int
+    open: int
+    cancelled: int
+
+
+class SlaPerfMonthOut(BaseModel):
+    m: str
+    label: str
+    received: int
+    delivered: int
+    open: int
+    ontime: int
+    late: int
+    open_late: int
+    rate_delivered: float
+    rate_received: float
+    med: float
+    p90: float
+
+
+class SlaPerfCurvePointOut(BaseModel):
+    bh: int
+    n: int
+    cum_pct: float
+
+
+class SlaPerfCurveOut(BaseModel):
+    all: list[SlaPerfCurvePointOut]
+    recent: list[SlaPerfCurvePointOut]
+    recent_n: int
+    within_target: float
+
+
+class SlaPerfStageMonthOut(BaseModel):
+    m: str
+    label: str
+    n: int
+    bench: float
+    lag: float
+
+
+class SlaPerfStagesOut(BaseModel):
+    n: int
+    coverage: float
+    bench_med: float
+    bench_p90: float
+    lag_med: float
+    lag_p90: float
+    lag_share: float
+    lag_over_day: int
+    by_month: list[SlaPerfStageMonthOut]
+
+
+class SlaPerfGatingFamilyOut(BaseModel):
+    k: str
+    name: str
+    department: Optional[str] = None
+    n: int
+    med: float
+    p90: float
+    over_target: int
+    over_pct: float
+    gated: int
+    gated_late: int
+    gated_late_pct: float
+    # Under min_timed_for_family timed samples: the page dims the row, marks it
+    # "too few" and drops the red threshold, and it cannot be named as the
+    # leading department. MUST stay declared -- response_model silently strips
+    # anything it does not list.
+    thin: bool
+
+
+class SlaPerfGatingOut(BaseModel):
+    mixed: int
+    late_mixed: int
+    families: list[SlaPerfGatingFamilyOut]
+    # One dict per publication month: label, n, late_total, per-family medians and
+    # gate counts. Free-form because the family keys are data, not schema.
+    trend: list[dict]
+    wait_med: float
+    wait_p90: float
+    wait_n: int
+    wait_over_day: int
+    min_late_for_trend: int
+    min_timed_for_family: int
+
+
+class SlaPerfRiskBucketOut(BaseModel):
+    label: str
+    n: int
+
+
+class SlaPerfOpenRowOut(BaseModel):
+    sid: str
+    client: Optional[str] = None
+    order: str
+    status: str
+    received: str
+    bh: float
+    over: float
+    families: list[str]
+
+
+class SlaPerfAtRiskOut(BaseModel):
+    total: int
+    late: int
+    buckets: list[SlaPerfRiskBucketOut]
+    status: dict[str, int]
+    rows: list[SlaPerfOpenRowOut]
+
+
+class SlaPerfFiltersOut(BaseModel):
+    client: Optional[str] = None
+    order: Optional[str] = None
+    departments: list[str]
+    families: list[str]
+
+
+class SlaPerfClientFacet(BaseModel):
+    name: str
+    samples: int
+
+
+class SlaPerfDepartmentFacet(BaseModel):
+    key: str
+    name: str
+    samples: int
+
+
+class SlaPerfFamilyFacet(BaseModel):
+    key: str
+    name: str
+    department: Optional[str] = None
+    samples: int
+
+
+class SlaPerfFacetsOut(BaseModel):
+    clients: list[SlaPerfClientFacet]
+    departments: list[SlaPerfDepartmentFacet]
+    families: list[SlaPerfFamilyFacet]
+
+
+class SlaPerfCacheOut(BaseModel):
+    stale: bool
+    age_seconds: int
+
+
+class SlaPerfReportOut(BaseModel):
+    start: str
+    today: str
+    tz: str
+    generated_at: str
+    target_bh: float
+    targets: list[SlaPerfTargetOut]
+    totals: SlaPerfTotalsOut
+    overall: SlaPerfStatsOut
+    kpi: SlaPerfKpiOut
+    months: list[SlaPerfMonthOut]
+    curve: SlaPerfCurveOut
+    stages: SlaPerfStagesOut
+    gating: SlaPerfGatingOut
+    at_risk: SlaPerfAtRiskOut
+    filters: SlaPerfFiltersOut
+    facets: SlaPerfFacetsOut
+    cache: SlaPerfCacheOut
+    notes: dict
+
+
+SlaPerfDepartmentKey = Literal["analytical", "microbiology", "heavy_metals"]
+SlaPerfFamilyKey = Literal["hplc", "ster", "endo", "bacw", "hm", "other"]
+
+# Row cache, same shape and reasoning as the throughput one: the fetch dominates
+# (Integration Service coa_generations plus the test-order scan), the engine is
+# ~ms, so filters are applied per request on cached rows. Separate cache because
+# this report needs verified_at, service ids and the SLA tier wiring, none of
+# which the throughput loader fetches.
+_SLA_PERF_CACHE_TTL_SECONDS = 60
+_sla_perf_rows_cache: dict = {}
+_sla_perf_rows_lock = _threading.Lock()
+
+
+def _sla_perf_rows(db: Session) -> tuple[dict, bool]:
+    """Return ``(rows, stale)``; refreshes once per TTL window.
+
+    A failed refresh with a warm cache serves the cached rows with
+    ``stale=True``; a cold cache raises the sibling reports' 503.
+    """
+    import time as _time
+
+    now = _time.monotonic()
+    cached = _sla_perf_rows_cache
+    if cached and now - cached["at"] < _SLA_PERF_CACHE_TTL_SECONDS:
+        return cached, False
+    with _sla_perf_rows_lock:
+        cached = _sla_perf_rows_cache
+        if cached and now - cached["at"] < _SLA_PERF_CACHE_TTL_SECONDS:
+            return cached, False
+        try:
+            coas = [
+                SlaPerfCoaIn(sample_id=c.sample_id, published_at=c.published_at, is_primary=c.is_primary)
+                for c in _fetch_throughput_coas()
+            ]
+            inputs = _load_sla_perf_inputs(db)
+            test_ids = frozenset(_test_order_senaite_ids())
+        except Exception as e:
+            if cached:
+                return cached, True
+            raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
+        _sla_perf_rows_cache.clear()
+        _sla_perf_rows_cache.update({"at": now, "coas": coas, "inputs": inputs, "test_ids": test_ids})
+        return _sla_perf_rows_cache, False
+
+
+def _load_sla_perf_inputs(db: Session) -> dict:
+    """Fetch the Mk1-side rows the SLA performance engine needs.
+
+    Returns the keyword arguments for ``sla_perf.build_sla_performance`` except
+    ``coas`` (Integration Service), ``now`` and the filter arguments. The
+    business schedule comes from the same ``business_hours_config`` row the SLA
+    column reads, so the report cannot drift from the app's own clock.
+    """
+    from models import LimsAnalysis
+
+    cfg = db.get(BusinessHoursConfig, 1)
+    tz = (cfg.timezone if cfg and cfg.timezone else "America/Los_Angeles")
+    working_days = frozenset(cfg.working_days) if cfg and cfg.working_days else frozenset({0, 1, 2, 3, 4})
+    schedule = SlaBusinessSchedule(
+        open_time=(cfg.open_time if cfg else time(9, 0)),
+        close_time=(cfg.close_time if cfg else time(17, 0)),
+        timezone=tz,
+        working_days=working_days,
+    )
+    holidays = frozenset(r[0] for r in db.execute(select(LabHoliday.holiday_date)).all())
+
+    # One day of slack: date_received is naive UTC while the series boundary is a
+    # lab-timezone day, and the engine re-applies the exact boundary anyway.
+    window_start = datetime.combine(THROUGHPUT_SERIES_START - date.resolution, time.min)
+    samples = [
+        SlaPerfSampleIn(pk=pk, sample_id=sid, date_received=received, status=status_,
+                        client=client_title, order=order_no)
+        for pk, sid, received, status_, client_title, order_no in db.execute(
+            select(
+                LimsSample.id,
+                LimsSample.sample_id,
+                LimsSample.date_received,
+                LimsSample.status,
+                LimsSample.client_title,
+                LimsSample.client_order_number,
+            ).where(LimsSample.date_received.is_not(None), LimsSample.date_received >= window_start)
+        ).all()
+    ]
+    # verified_at only exists on canonical rows, so the engine de-duplicates on
+    # (sample, keyword) keeping the latest — a shadow row must not erase it.
+    analyses = [
+        SlaPerfAnalysisIn(sample_pk=pk, keyword=kw, category=cat, verified_at=verified, service_id=svc)
+        for pk, kw, cat, verified, svc in db.execute(
+            select(
+                LimsAnalysis.lims_sample_pk,
+                LimsAnalysis.keyword,
+                AnalysisService.category,
+                LimsAnalysis.verified_at,
+                LimsAnalysis.analysis_service_id,
+            )
+            .join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id, isouter=True)
+            .where(LimsAnalysis.lims_sample_pk.is_not(None), LimsAnalysis.keyword.is_not(None))
+        ).all()
+    ]
+    tiers = [
+        SlaPerfTierIn(id=tid, name=name, target_minutes=target, is_default=bool(is_default))
+        for tid, name, target, is_default in db.execute(
+            select(SlaTier.id, SlaTier.name, SlaTier.target_minutes, SlaTier.is_default)
+        ).all()
+    ]
+    members: dict[int, set] = {}
+    for gid, svc_id in db.execute(
+        select(service_group_members.c.service_group_id, service_group_members.c.analysis_service_id)
+    ).all():
+        members.setdefault(gid, set()).add(svc_id)
+    groups = [
+        SlaPerfGroupIn(id=gid, name=name, sla_tier_id=tier_id,
+                       service_ids=frozenset(members.get(gid, set())))
+        for gid, name, tier_id in db.execute(
+            select(ServiceGroup.id, ServiceGroup.name, ServiceGroup.sla_tier_id)
+        ).all()
+    ]
+    return {
+        "samples": samples,
+        "analyses": analyses,
+        "tiers": tiers,
+        "groups": groups,
+        "schedule": schedule,
+        "holidays": holidays,
+    }
+
+
+@app.get("/reports/sla-performance", response_model=SlaPerfReportOut)
+def reports_sla_performance(
+    include_test_orders: bool = Query(False),
+    client: Optional[str] = Query(None, description="Exact customer (client_title), case-insensitive"),
+    order: Optional[str] = Query(None, description="Substring of client_order_number"),
+    department: list[SlaPerfDepartmentKey] = Query(default=[]),
+    family: list[SlaPerfFamilyKey] = Query(default=[]),
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """SLA performance: receipt to first primary COA against the configured
+    target, from Feb 2026 to today.
+
+    Companion to ``/reports/throughput`` — that one counts the work arriving,
+    this one measures what came back out and whether it was on time. Everything
+    is aggregated SERVER-side (cohorts, the delivery curve, stage split, the
+    department gating cut and the at-risk board), because the gating cut alone
+    needs a verified timestamp per (sample, family) and shipping those rows to
+    the browser would be far more expensive than the ~ms the engine costs.
+
+    Elapsed time and tier precedence come from ``sla_engine`` — the same
+    functions the SLA column uses — so the report and the app cannot disagree.
+    Test orders are excluded unless ``include_test_orders=true``.
+    ``client`` / ``order`` / ``department`` / ``family`` scope the report
+    server-side against a 60-second row cache; the response carries ``facets``
+    for the filter controls and ``filters`` echoing what was applied. Plain
+    ``def`` on purpose: the DB work is synchronous and runs in the threadpool.
+    """
+    import time as _time
+
+    rows, stale = _sla_perf_rows(db)
+    excluded = frozenset() if include_test_orders else rows["test_ids"]
+    now_utc = datetime.now(timezone.utc)
+    report = build_sla_performance(
+        **rows["inputs"],
+        coas=rows["coas"],
+        now=now_utc.replace(tzinfo=None),
+        excluded_sample_ids=excluded,
+        client=client,
+        order=order,
+        departments=list(department),
+        families=list(family),
+    )
+    report["cache"] = {"stale": stale, "age_seconds": int(max(0.0, _time.monotonic() - rows["at"]))}
+    report["generated_at"] = now_utc.isoformat().replace("+00:00", "Z")
+    return report
+
+
+# ── Ready to Publish report ─────────────────────────────────────────
+
+class ReadyFlagOut(BaseModel):
+    id: int
+    type: str
+    kind: str
+    label: str
+    color: str
+    status: str
+    title: str
+
+
+class ReadyLinesOut(BaseModel):
+    total: int
+    verified: int
+    pending: list[str]
+
+
+class ReadySlaOut(BaseModel):
+    tier: str
+    target_minutes: int
+    business_hours_only: bool = True
+    elapsed_minutes: float
+    remaining_minutes: float
+    breached: bool
+    color: str
+
+
+class ReadyHoldOut(BaseModel):
+    flag_id: int
+    type: str
+    label: str
+    color: str
+    status: str
+    title: str
+    since: Optional[str] = None
+
+
+class ReadyRowOut(BaseModel):
+    sample_id: str
+    status: str
+    client: Optional[str] = None
+    order: str
+    email: Optional[str] = None
+    created_at: Optional[str] = None
+    received_at: Optional[str] = None
+    lot: Optional[str] = None
+    analytes: list[str]
+    reasons: list[str]
+    flags: list[ReadyFlagOut]
+    lines: ReadyLinesOut
+    priority: str
+    sla: Optional[ReadySlaOut] = None
+    # Open "On Hold" flag → parked in the page's On-hold section; None = live.
+    hold: Optional[ReadyHoldOut] = None
+
+
+class ReadyFlagTypeOut(BaseModel):
+    slug: str
+    label: str
+    color: str
+    kind: str
+
+
+class ReadyToPublishOut(BaseModel):
+    generated_at: str
+    rows: list[ReadyRowOut]
+    totals: dict[str, int]
+    flag_types: list[ReadyFlagTypeOut]
+
+
+# Terminal statuses end eligibility unless an open Ready flag says otherwise
+# (see the loader); the second set can never hold a verified parent line, so
+# their line map is skipped unless the sample is flagged.
+_RTP_TERMINAL_STATUSES = frozenset({"published", "cancelled", "invalid", "rejected"})
+_RTP_NO_LINES_STATUSES = frozenset({"sample_due", "scheduled_sampling", "registered"})
+
+
+def _load_ready_to_publish_inputs(db: Session) -> dict:
+    """Fetch everything ``ready_to_publish.build_ready_rows`` needs.
+
+    Line states come from ``native_parent_line_states`` per candidate — the
+    same lock map the sample page reads — computed only for samples that can
+    hold a verified line (received or beyond) or that carry a Ready flag, so
+    the 200-odd ``sample_due`` rows cost nothing. The SLA inputs (schedule,
+    holidays, tiers, groups) are loaded the way ``_load_sla_perf_inputs``
+    loads them; tiers additionally carry ``amber_threshold_percent`` so the
+    colour matches the SLA column.
+    """
+    from flags.models import FlagEntityLink, FlagFlag
+    from lims_analyses.service import native_parent_line_states
+    from models import LimsAnalysis
+    from ready_to_publish import (
+        HOLD,
+        OPEN_FLAG_STATUSES,
+        FlagIn as RtpFlagIn,
+        FlagTypeIn as RtpFlagTypeIn,
+        GroupIn as RtpGroupIn,
+        SampleIn as RtpSampleIn,
+        TierIn as RtpTierIn,
+        resolve_flag_kinds,
+    )
+
+    flag_types = [
+        RtpFlagTypeIn(slug=ft.slug, label=ft.label, color=ft.color or "")
+        for ft in db.execute(select(FlagType).where(FlagType.is_active.is_(True))).scalars().all()
+    ]
+    # Ready types ADMIT a sample; the On Hold type only parks one. Both are
+    # fetched here so the engine sees every open flag it reacts to.
+    flag_kinds = resolve_flag_kinds(flag_types)
+    ready_kinds = {slug for slug, kind in flag_kinds.items() if kind != HOLD}
+
+    # Open flags: direct entity plus multi-entity links, sample-typed only.
+    flags: list[RtpFlagIn] = []
+    flagged_sample_ids: set[str] = set()
+    if flag_kinds:
+        open_flags = db.execute(
+            select(FlagFlag).where(
+                FlagFlag.type.in_(list(flag_kinds)),
+                FlagFlag.status.in_(list(OPEN_FLAG_STATUSES)),
+            )
+        ).scalars().all()
+        flag_ids = [f.id for f in open_flags]
+        links: dict[int, list[str]] = {}
+        if flag_ids:
+            for fid, etype, eid in db.execute(
+                select(FlagEntityLink.flag_id, FlagEntityLink.entity_type, FlagEntityLink.entity_id)
+                .where(FlagEntityLink.flag_id.in_(flag_ids))
+            ).all():
+                if etype == "sample" and eid:
+                    links.setdefault(fid, []).append(eid)
+        for f in open_flags:
+            targets: list[str] = []
+            if f.entity_type == "sample" and f.entity_id:
+                targets.append(f.entity_id)
+            targets.extend(links.get(f.id, []))
+            for sid in dict.fromkeys(targets):
+                if f.type in ready_kinds:
+                    flagged_sample_ids.add(sid)
+                flags.append(RtpFlagIn(id=f.id, sample_id=sid, type_slug=f.type, status=f.status,
+                                       title=f.title or "", created_at=f.created_at))
+
+    # A terminal status (published/cancelled) normally ends the sample's
+    # eligibility — but an OPEN Ready flag is an explicit human signal that a
+    # publish is still owed (prod P-2432: primary published, "Ready for
+    # Partial Publish" open while USP 71 finishes), so flagged samples are
+    # admitted regardless of status.
+    status_ok = LimsSample.status.not_in(list(_RTP_TERMINAL_STATUSES)) | LimsSample.status.is_(None)
+    if flagged_sample_ids:
+        status_ok = status_ok | LimsSample.sample_id.in_(sorted(flagged_sample_ids))
+    sample_rows = db.execute(
+        select(LimsSample).where(status_ok, ~LimsSample.sample_id.like("aP-%"))
+    ).scalars().all()
+
+    samples: list[RtpSampleIn] = []
+    line_states_by_pk: dict[int, dict] = {}
+    candidate_pks: list[int] = []
+    for s in sample_rows:
+        status = s.status or ""
+        can_have_lines = status not in _RTP_NO_LINES_STATUSES
+        if not can_have_lines and s.sample_id not in flagged_sample_ids:
+            continue
+        try:
+            analyte_names = tuple(
+                str((e or {}).get("name") or "")
+                for e in (json.loads(s.analytes) if s.analytes else [])
+                if isinstance(e, dict)
+            )
+        except (ValueError, TypeError):
+            analyte_names = ()
+        samples.append(RtpSampleIn(
+            pk=s.id, sample_id=s.sample_id, status=status, client=s.client_title,
+            order=s.client_order_number, email=s.contact_email,
+            created_at=s.date_created or s.created_at, date_received=s.date_received,
+            lot=s.client_lot, analytes=analyte_names, external_uid=s.external_lims_uid,
+        ))
+        candidate_pks.append(s.id)
+        if can_have_lines:
+            line_states_by_pk[s.id] = native_parent_line_states(db, s.sample_id)
+
+    services_of: dict[int, set] = {}
+    if candidate_pks:
+        for pk, svc in db.execute(
+            select(LimsAnalysis.lims_sample_pk, LimsAnalysis.analysis_service_id)
+            .where(LimsAnalysis.lims_sample_pk.in_(candidate_pks),
+                   LimsAnalysis.analysis_service_id.is_not(None))
+        ).all():
+            services_of.setdefault(pk, set()).add(svc)
+
+    uids = [s.external_uid for s in samples if s.external_uid]
+    priorities: dict[str, str] = {}
+    if uids:
+        priorities = {
+            uid: prio for uid, prio in db.execute(
+                select(SamplePriority.sample_uid, SamplePriority.priority)
+                .where(SamplePriority.sample_uid.in_(uids))
+            ).all()
+        }
+
+    tiers = [
+        RtpTierIn(id=t.id, name=t.name, target_minutes=t.target_minutes, is_default=bool(t.is_default),
+                  business_hours_only=bool(t.business_hours_only),
+                  amber_threshold_percent=int(getattr(t, "amber_threshold_percent", 25) or 25))
+        for t in db.execute(select(SlaTier)).scalars().all()
+    ]
+    members: dict[int, set] = {}
+    for gid, svc_id in db.execute(
+        select(service_group_members.c.service_group_id, service_group_members.c.analysis_service_id)
+    ).all():
+        members.setdefault(gid, set()).add(svc_id)
+    groups = [
+        RtpGroupIn(id=gid, name=name, sla_tier_id=tier_id, service_ids=frozenset(members.get(gid, set())))
+        for gid, name, tier_id in db.execute(
+            select(ServiceGroup.id, ServiceGroup.name, ServiceGroup.sla_tier_id)
+        ).all()
+    ]
+
+    cfg = db.get(BusinessHoursConfig, 1)
+    schedule = SlaBusinessSchedule(
+        open_time=(cfg.open_time if cfg else time(9, 0)),
+        close_time=(cfg.close_time if cfg else time(17, 0)),
+        timezone=(cfg.timezone if cfg and cfg.timezone else "America/Los_Angeles"),
+        working_days=frozenset(cfg.working_days) if cfg and cfg.working_days else frozenset({0, 1, 2, 3, 4}),
+    )
+    holidays = frozenset(r[0] for r in db.execute(select(LabHoliday.holiday_date)).all())
+
+    return {
+        "samples": samples,
+        "line_states_by_pk": line_states_by_pk,
+        "flags": flags,
+        "flag_types": flag_types,
+        "priorities": priorities,
+        "services_of": services_of,
+        "tiers": tiers,
+        "groups": groups,
+        "schedule": schedule,
+        "holidays": holidays,
+    }
+
+
+@app.get("/reports/ready-to-publish", response_model=ReadyToPublishOut)
+def reports_ready_to_publish(
+    include_test_orders: bool = Query(False),
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Samples ready to publish: every live parent line verified, or an open
+    "Ready for Publish" / "Ready for Partial Publish" flag on the sample.
+    A row with an open "On Hold" flag is returned with ``hold`` set (the
+    page parks it) and is left out of ``totals`` except ``totals.held``.
+
+    Rows are returned most-critical-first (SLA red → amber → green → none,
+    then least time remaining, then priority, then oldest received); the
+    browser groups by order and never re-sorts across groups. SLA and colour
+    come from ``sla_engine`` with the tier's own amber threshold, so the
+    column here and the one on Order Status cannot disagree. Test orders
+    (billing e-mail in TEST_EMAILS) are excluded unless
+    ``include_test_orders=true``. Plain ``def`` on purpose: the DB work is
+    synchronous and runs in the threadpool.
+    """
+    import ready_to_publish_cache
+    return ready_to_publish_cache.get_or_build(
+        include_test_orders, lambda: _build_ready_to_publish_payload(db, include_test_orders))
+
+
+class ReadyToPublishSummaryOut(BaseModel):
+    generated_at: str
+    totals: dict[str, int]
+
+
+@app.get("/reports/ready-to-publish/summary", response_model=ReadyToPublishSummaryOut)
+def reports_ready_to_publish_summary(
+    include_test_orders: bool = Query(False),
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """The report's ``totals`` block only, for the header/sidebar count chip.
+    Reads through the same 60 s process cache as the full report (cleared on
+    every publish), so a chip polling from every open browser costs one
+    report build per minute at most, not one per client."""
+    import ready_to_publish_cache
+    payload = ready_to_publish_cache.get_or_build(
+        include_test_orders, lambda: _build_ready_to_publish_payload(db, include_test_orders))
+    return {"generated_at": payload["generated_at"], "totals": payload["totals"]}
+
+
+def _build_ready_to_publish_payload(db: Session, include_test_orders: bool) -> dict:
+    """Uncached report build — the body ``reports_ready_to_publish`` had
+    before the cache (2026-09-11); the cache module owns TTL/invalidation."""
+    from ready_to_publish import build_ready_rows, resolve_flag_kinds, sort_rows
+
+    try:
+        inputs = _load_ready_to_publish_inputs(db)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Reports database error: {e}")
+    excluded = frozenset() if include_test_orders else frozenset(_test_order_senaite_ids())
+    now_utc = datetime.now(timezone.utc)
+    rows = sort_rows(build_ready_rows(
+        **inputs, now=now_utc.replace(tzinfo=None), excluded_sample_ids=excluded,
+    ))
+    kinds = resolve_flag_kinds(inputs["flag_types"])
+    live = [r for r in rows if r["hold"] is None]
+    totals = {
+        "rows": len(live),
+        "orders": len({r["order"] for r in live}),
+        "all_verified": sum(1 for r in live if "all_verified" in r["reasons"]),
+        "flag_ready": sum(1 for r in live if "flag_ready" in r["reasons"]),
+        "flag_partial": sum(1 for r in live if "flag_partial" in r["reasons"]),
+        "breached": sum(1 for r in live if r["sla"] and r["sla"]["breached"]),
+        "held": len(rows) - len(live),
+    }
+    return {
+        "generated_at": now_utc.isoformat().replace("+00:00", "Z"),
+        "rows": rows,
+        "totals": totals,
+        "flag_types": [
+            {"slug": ft.slug, "label": ft.label, "color": ft.color, "kind": kinds[ft.slug]}
+            for ft in inputs["flag_types"] if ft.slug in kinds
+        ],
+    }
+
+
+# ── Reports read-model: source-set SQL ─────────────────────────────
+# `published_coa_results` mirrors published PRIMARY COAs only — one row per
+# analyte per LAB RESULT, which is the grain every reader assumes.
+#
+# Additional COAs (children: `parent_generation_id IS NOT NULL`) are the same
+# lab result reissued under another brand. They carry no extra lab workload, and
+# every one of them sits on a sample that already has a published primary COA.
+# Because a child mints its OWN verification_code, the readers' dedupe
+# (`DISTINCT ON (verification_code)` in /reports/dashboard) cannot collapse it,
+# and /reports/purity-trend does not dedupe at all — so admitting children would
+# double-count dashboard totals and put a duplicate point on every trend chart.
+# Handler ruling 2026-09-10: ACOAs are copies and must never count.
+#
+# The `parent_generation_id IS NULL` predicate below is what enforces that.
+# Extracted into constants so the grain is stated once and can be exercised
+# directly in tests (backend/tests/test_api_reports_sync_grain.py).
+_REPORTS_SOURCE_COUNT_SQL = (
+    "SELECT count(*) FROM coa_generations"
+    " WHERE status = 'published' AND parent_generation_id IS NULL"
+)
+
+_REPORTS_SOURCE_CODES_SQL = (
+    "SELECT count(DISTINCT verification_code) FROM coa_generations"
+    " WHERE status = 'published' AND parent_generation_id IS NULL"
+)
+
+# Report-side counts are deliberately UNFILTERED: they report what is physically
+# in the table. The banner compares them against the primary-only source counts,
+# so a mismatch is the signal that the table holds rows it should not (orphans,
+# listed below it on the page) and that Re-sync has work to do. Filtering these
+# would hide exactly the condition the page exists to surface.
+_REPORTS_TABLE_ROWS_SQL = "SELECT count(*) FROM published_coa_results"
+
+_REPORTS_TABLE_CODES_SQL = "SELECT count(DISTINCT verification_code) FROM published_coa_results"
+
+_REPORTS_MISSING_CODES_SQL = """
+    SELECT verification_code FROM coa_generations
+    WHERE status = 'published' AND parent_generation_id IS NULL AND coa_data IS NOT NULL
+      AND verification_code NOT IN (SELECT DISTINCT verification_code FROM published_coa_results)
+"""
+
+# Orphaned = present in the read model but not a published primary. This covers
+# both superseded generations and any additional-COA rows left behind by the
+# 2026-04 creation backfill, which predates this grain rule.
+_REPORTS_ORPHANED_CODES_SQL = """
+    SELECT DISTINCT verification_code FROM published_coa_results
+    WHERE verification_code NOT IN (
+        SELECT verification_code FROM coa_generations
+        WHERE status = 'published' AND parent_generation_id IS NULL
+    )
+"""
+
+_REPORTS_DELETE_ORPHANS_SQL = """
+    DELETE FROM published_coa_results
+    WHERE verification_code NOT IN (
+        SELECT verification_code FROM coa_generations
+        WHERE status = 'published' AND parent_generation_id IS NULL
+    )
+"""
+
+_REPORTS_MISSING_ROWS_SQL = """
+    SELECT id, sample_id, verification_code, coa_data, published_at, created_at
+    FROM coa_generations
+    WHERE status = 'published' AND parent_generation_id IS NULL AND coa_data IS NOT NULL
+      AND verification_code NOT IN (SELECT DISTINCT verification_code FROM published_coa_results)
+"""
+
+
 class ReportsSyncStatus(BaseModel):
     source_published: int
     source_verification_codes: int
@@ -10271,32 +11231,23 @@ async def reports_sync_status(
         with get_integration_db() as conn:
             with conn.cursor() as cur:
                 # Source: coa_generations
-                cur.execute("SELECT count(*) FROM coa_generations WHERE status = 'published'")
+                cur.execute(_REPORTS_SOURCE_COUNT_SQL)
                 source_published = cur.fetchone()[0]
-                cur.execute("SELECT count(DISTINCT verification_code) FROM coa_generations WHERE status = 'published'")
+                cur.execute(_REPORTS_SOURCE_CODES_SQL)
                 source_codes = cur.fetchone()[0]
 
                 # Report table
-                cur.execute("SELECT count(*) FROM published_coa_results")
+                cur.execute(_REPORTS_TABLE_ROWS_SQL)
                 report_rows = cur.fetchone()[0]
-                cur.execute("SELECT count(DISTINCT verification_code) FROM published_coa_results")
+                cur.execute(_REPORTS_TABLE_CODES_SQL)
                 report_codes = cur.fetchone()[0]
 
                 # Missing: in source but not in report table
-                cur.execute("""
-                    SELECT verification_code FROM coa_generations
-                    WHERE status = 'published' AND coa_data IS NOT NULL
-                      AND verification_code NOT IN (SELECT DISTINCT verification_code FROM published_coa_results)
-                """)
+                cur.execute(_REPORTS_MISSING_CODES_SQL)
                 missing = [r[0] for r in cur.fetchall()]
 
                 # Orphaned: in report table but no longer published in source
-                cur.execute("""
-                    SELECT DISTINCT verification_code FROM published_coa_results
-                    WHERE verification_code NOT IN (
-                        SELECT verification_code FROM coa_generations WHERE status = 'published'
-                    )
-                """)
+                cur.execute(_REPORTS_ORPHANED_CODES_SQL)
                 orphaned = [r[0] for r in cur.fetchall()]
 
                 return ReportsSyncStatus(
@@ -10324,21 +11275,11 @@ async def reports_resync(
         with get_integration_db() as conn:
             with conn.cursor() as cur:
                 # Remove orphaned rows
-                cur.execute("""
-                    DELETE FROM published_coa_results
-                    WHERE verification_code NOT IN (
-                        SELECT verification_code FROM coa_generations WHERE status = 'published'
-                    )
-                """)
+                cur.execute(_REPORTS_DELETE_ORPHANS_SQL)
                 removed = cur.rowcount
 
                 # Find missing codes
-                cur.execute("""
-                    SELECT id, sample_id, verification_code, coa_data, published_at, created_at
-                    FROM coa_generations
-                    WHERE status = 'published' AND coa_data IS NOT NULL
-                      AND verification_code NOT IN (SELECT DISTINCT verification_code FROM published_coa_results)
-                """)
+                cur.execute(_REPORTS_MISSING_ROWS_SQL)
                 missing_rows = cur.fetchall()
 
                 def _parse_float(val):
@@ -12885,6 +13826,17 @@ async def publish_sample_coa(
             _logger.warning("delivered_at stamp failed for %s", sample_id, exc_info=True)
 
     # 3 & 4. Write verification code and transition SENAITE workflow — guaranteed
+    #
+    # Authority flip (spec §4.4/§5): whatever SENAITE does here — accept,
+    # silently refuse, or fail transport-wise — the NATIVE publish still has
+    # to run, because the COA is already live on IS/WordPress. So the block
+    # below no longer raises out of the function: it records SENAITE's last
+    # known state and defers its HTTPException, and the unconditional
+    # `_after_publish_native` call after it commits the native verb (and the
+    # retry row) before the deferred error is re-raised. The user-facing
+    # responses are byte-identical; only the ordering changed.
+    _senaite_actual_state = ""
+    _deferred_error: Optional[HTTPException] = None
     if senaite_uid:
         try:
             async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
@@ -12952,6 +13904,7 @@ async def publish_sample_coa(
                 #     transition is accepted and the COA is live.
                 items = transition_resp.json().get("items", [])
                 actual_state = items[0].get("review_state", "") if items else ""
+                _senaite_actual_state = actual_state
                 accepted_states = {
                     "published",
                     "to_be_verified",
@@ -12973,6 +13926,7 @@ async def publish_sample_coa(
                         verify_items = verify_resp.json().get("items", [])
                         if verify_items:
                             actual_state = verify_items[0].get("review_state", "")
+                    _senaite_actual_state = actual_state
                     if actual_state in pre_publish_states:
                         warning = (
                             f"Warning: Sample should not typically be published "
@@ -13011,23 +13965,29 @@ async def publish_sample_coa(
                     await run_in_threadpool(
                         _mark_shadows_published_bg, sample_id=sample_id
                     )
-                    # Task 3: native sample-transition log (own session,
-                    # never-fail — see _record_sample_transition_bg).
-                    await run_in_threadpool(
-                        _record_sample_transition_bg,
-                        sample_id=sample_id, verb="publish", to_status="published",
-                        from_status=_pre_publish_status,
-                        source="mk1",
-                        actor_user_id=getattr(current_user, "id", None),
-                    )
-        except HTTPException:
-            raise
+        except HTTPException as e:
+            _deferred_error = e
         except Exception as e:
             # COA is published in our system — surface SENAITE failure clearly
-            raise HTTPException(
+            _deferred_error = HTTPException(
                 status_code=502,
                 detail=f"COA published in system but SENAITE transition failed: {e}",
             )
+
+    # Authority flip (spec §4.4/§5): the native publish verb is the user's own
+    # intent, so it runs on EVERY SENAITE outcome — including the two 502
+    # paths above and a sample with no `senaite_uid` at all. A SENAITE state
+    # that never read back as 'published' becomes a `publish` retry row inside
+    # the helper. It flushes, commits and never raises.
+    from fastapi.concurrency import run_in_threadpool as _rit
+    await _rit(
+        _after_publish_native, db,
+        sample_id=sample_id, pre_publish_status=_pre_publish_status,
+        actor_user_id=getattr(current_user, "id", None),
+        senaite_actual_state=_senaite_actual_state,
+    )
+    if _deferred_error is not None:
+        raise _deferred_error
 
     return SampleCOAActionResponse(
         success=True,
@@ -14509,11 +15469,11 @@ def _attach_prep_sla(db: Session, rows: "list[dict]") -> None:
     }
     priority_by_uid: dict = {}
     if uids:
+        # Effective priority (spec section 5), legacy vocabulary - one resolve.
+        from priority.service import legacy_priority_string, load_effective_for_uids
         priority_by_uid = {
-            p.sample_uid: p.priority
-            for p in db.execute(
-                select(SamplePriority).where(SamplePriority.sample_uid.in_(uids))
-            ).scalars()
+            uid: legacy_priority_string(eff)
+            for uid, eff in load_effective_for_uids(db, uids).items()
         }
 
     # Live analysis keywords + owning department per vial — same live-row
@@ -15164,6 +16124,37 @@ async def get_senaite_raw_fields(
 
 # ── Senaite lookup cache (shared across all users) ─────────────────
 _senaite_lookup_cache: dict[str, tuple[float, SenaiteLookupResult]] = {}  # id → (timestamp, result)
+
+
+def _attach_sample_priority(
+    db: Session,
+    result: SenaiteLookupResult,
+    row: Optional[LimsSample],
+    sample_id: Optional[str] = None,
+) -> None:
+    """Stamp the sample-priority controls (spec §5) onto a details payload.
+
+    `row` is the already-loaded lims_samples row when the caller has one;
+    otherwise pass sample_id and it is looked up. All three fields stay None
+    for a SENAITE-only sample (no registry row) — the frontend renders the
+    picker read-only in that case. One resolve, never per field.
+    """
+    from priority.service import load_effective_safe
+    if row is None and sample_id:
+        row = db.execute(
+            select(LimsSample).where(LimsSample.sample_id == sample_id)
+        ).scalar_one_or_none()
+    if row is None:
+        result.registry_pk = None
+        result.explicit_priority_key = None
+        result.priority = None
+        return
+    result.registry_pk = row.id
+    result.explicit_priority_key = row.priority_key
+    _eff_map = load_effective_safe(db, sample_pks=[row.id])[0].get(row.id)
+    result.priority = _eff_map.as_dict() if _eff_map else None
+
+
 _SENAITE_LOOKUP_TTL = 15 * 60  # 15 minutes
 
 
@@ -15211,6 +16202,9 @@ async def lookup_senaite_sample(
         if cached:
             ts, result = cached
             if _time.time() - ts < _SENAITE_LOOKUP_TTL:
+                # Priority is mutable Mk1 state, not a SENAITE artifact — the
+                # cached copy would render a stale chip on the details page.
+                _attach_sample_priority(db, result, None, sample_id=id)
                 return result
 
     try:
@@ -15823,6 +16817,9 @@ async def lookup_senaite_sample(
             senaite_url=_senaite_path(item),
             cached_at=now_iso,
         )
+        # Sample-priority controls (spec §5) — native-only; a SENAITE sample
+        # with no registry row keeps all three fields None.
+        _attach_sample_priority(db, result, _logi)
         _senaite_lookup_cache[id] = (_time.time(), result)
         return result
 
@@ -16106,6 +17103,10 @@ class SenaiteSampleItem(BaseModel):
     # (see registry_list.fetch_customer_notes). None when the sample has none,
     # which is every sample ordered before the note was persisted natively.
     customer_note: Optional[str] = None
+    # Effective priority {key, rank, source_level, source_id} — spec §5 inline
+    # shape, resolved once per page by the REGISTRY list. The pure-SENAITE list
+    # has no native pks to resolve from and leaves it None.
+    priority: Optional[dict] = None
 
 
 class SenaiteSamplesResponse(BaseModel):
@@ -16493,6 +17494,37 @@ async def receive_senaite_sample(
     )
 
 
+def _sla_snapshot_after_touchpoint(db, sample_row) -> int:
+    """Write the SLA clock snapshot for `sample_row` after a workflow
+    touchpoint (Task 9, spec section 3.5): the receive and publish events are where
+    the promise is recorded, so reports never re-grade history against a later
+    mapping. No `only_in_flight` -- a publish must be recorded too.
+
+    Fail-open by design: `snapshot.refresh` raises (NoResultFound) when no
+    default SlaTier row exists and (ValueError) when no default priority is
+    configured, and a half-configured install must never block a receive or a
+    publish. Both raise before any column is mutated, so there is no partial
+    snapshot to clean up. Returns the number of samples snapshotted (0 on
+    failure) so callers can gate their commit on it.
+
+    CALL GATE (fix round 1): callers must invoke this ONLY when the touchpoint
+    actually transitioned. `sla_snapshot_at` is re-stamped unconditionally by
+    `snapshot.refresh`, so calling it on a deduped replay -- a COA republish
+    re-entering the transition hook, say -- would move the recorded promise to
+    today's mapping and re-grade history, exactly what recording the snapshot
+    at the clock event is meant to prevent. `_record_sample_transition_bg`
+    gates on `wrote_log or wrote_engine`; `_receive_native_phase` is reached
+    only on a real (non-`already`) check-in, so its call needs no flag.
+    """
+    try:
+        from priority.snapshot import refresh as _sla_snapshot
+        return _sla_snapshot(db, [sample_row.id])
+    except Exception as snap_err:  # noqa: BLE001 -- clock snapshot is advisory
+        logger.warning("priority.sla_snapshot_failed sample_id=%s err=%s",
+                       getattr(sample_row, "sample_id", None), snap_err)
+        return 0
+
+
 def _receive_native_phase(
     *,
     sample_id: str,
@@ -16566,13 +17598,17 @@ def _receive_native_phase(
         already = row.status not in pre_received
         if not already:
             from_status = row.status or "sample_due"
-            record_sample_transition(
-                db, sample_id=row.sample_id, to_status="sample_received",
-                source="mk1", verb="receive",
-                from_status=from_status,
-                actor_user_id=user_id,
-            )
-            heal_sample_status(db, row.sample_id, "sample_received")
+            from workflow.authority import sample_status_authority
+            engine_owns_ledger = sample_status_authority(db) == "mk1"
+            # mk1 authority: the engine (execute_verb) is the single ledger writer (spec §4.1)
+            if not engine_owns_ledger:
+                record_sample_transition(
+                    db, sample_id=row.sample_id, to_status="sample_received",
+                    source="mk1", verb="receive",
+                    from_status=from_status,
+                    actor_user_id=user_id,
+                )
+            heal_sample_status(db, row.sample_id, "sample_received", source="mk1")
             if row.date_received is None:
                 row.date_received = datetime.utcnow()
             # Engine touchpoint (PB-0486 finding, 2026-08-28): this phase
@@ -16585,6 +17621,7 @@ def _receive_native_phase(
                 db, row.sample_id, "receive",
                 from_status=from_status, actor_user_id=user_id,
             )
+            _sla_snapshot_after_touchpoint(db, row)
             steps.append("received_native")
 
         db.commit()
@@ -17329,12 +18366,63 @@ def _arm_native_status_at_registration_bg(sample_id: str) -> None:
             db.close()
 
 
+def _after_publish_native(db, *, sample_id: str, pre_publish_status, actor_user_id,
+                          senaite_actual_state: str) -> None:
+    """Sample-status authority flip (spec §4.4 / §5): the native publish verb is
+    the user's direct intent, so it runs synchronously (ledger + engine), and a
+    SENAITE publish that did not read back as 'published' becomes a retry row.
+    Flush + commit here; never raises (publish already succeeded on IS)."""
+    # The Ready to Publish count chip reads a 60 s cache; a publish is the one
+    # event that must never lag (Handler ruling 2026-09-11). Clear it on every
+    # outcome — the sample is off the report whichever way SENAITE answered.
+    try:
+        import ready_to_publish_cache
+        ready_to_publish_cache.invalidate()
+    except Exception:  # noqa: BLE001 -- never let the chip touch the publish
+        logger.exception("ready-to-publish cache invalidate failed %s", sample_id)
+    try:
+        from workflow.engine import drive_sample_touchpoint
+        from workflow.sample_log import record_sample_transition
+        from workflow import senaite_tee
+        from workflow.authority import sample_status_authority
+        engine_owns_ledger = sample_status_authority(db) == "mk1"
+        # mk1 authority: the engine (execute_verb) is the single ledger writer (spec §4.1)
+        if not engine_owns_ledger:
+            record_sample_transition(db, sample_id=sample_id, verb="publish",
+                                     to_status="published", from_status=pre_publish_status,
+                                     source="mk1", actor_user_id=actor_user_id)
+        # The publish touchpoint is the attester the engine's `coa_published`
+        # requirement kind needs (engine._eval_one reads `attested`); without
+        # it the verified -> published edge is requirements_unmet.
+        drive_sample_touchpoint(db, sample_id, "publish", from_status=pre_publish_status,
+                                actor_user_id=actor_user_id,
+                                attested={"coa_published": True})
+        if senaite_actual_state != "published":
+            row = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)
+                             ).scalar_one_or_none()
+            # Native-born sample with no SENAITE AR: nothing to tee, so no retry
+            # row (the job could never complete it and would end in a false
+            # `senaite_tee_gave_up` stranding). Same rule as tee_now's 'skipped'.
+            if row is not None and (row.external_lims_uid or "").strip():
+                senaite_tee.enqueue_retry(
+                    db, row, "publish",
+                    error=f"publish route read-back {senaite_actual_state!r}")
+            elif row is not None:
+                logger.info("after-publish native: %s has no SENAITE uid — nothing to tee",
+                            sample_id)
+        db.commit()
+    except Exception:
+        logger.exception("after-publish native step failed (never-raise) %s", sample_id)
+        db.rollback()
+
+
 def _record_sample_transition_bg(**kwargs) -> None:
     """Best-effort native sample-transition log write (Task 3) on its own
-    short-lived session — never holds the request `db` across the SENAITE
-    HTTP calls at the two call sites (publish, receive). Never raises: a
-    log-write failure must never fail or delay-fail the endpoint it's
-    scheduled from.
+    short-lived session. No production callers since the publish route moved
+    to `_after_publish_native` (2026-09-09); kept for the touchpoint tests and
+    as the bg chokepoint contract — never holds the request `db` across the
+    SENAITE HTTP calls at a call site, and never raises: a log-write failure
+    must never fail or delay-fail the endpoint it's scheduled from.
 
     `SessionLocal()` and the recorder import live INSIDE the try, same
     hardening rationale as `_mirror_parent_analysis_bg`: `db` starts as None
@@ -17344,8 +18432,14 @@ def _record_sample_transition_bg(**kwargs) -> None:
     try:
         from database import SessionLocal
         from workflow.sample_log import heal_sample_status, record_sample_transition
+        from workflow.authority import sample_status_authority
         db = SessionLocal()
-        wrote_log = record_sample_transition(db, **kwargs)
+        engine_owns_ledger = sample_status_authority(db) == "mk1"
+        # mk1 authority: the engine (execute_verb) is the single ledger writer (spec §4.1)
+        if engine_owns_ledger:
+            wrote_log = False
+        else:
+            wrote_log = record_sample_transition(db, **kwargs)
         # 2026-07-14 inbox-desync RC1: ALSO heal lims_samples.status here.
         # The log row alone leaves the registry column stale, and the IS
         # event sync can't fix it later — its dup guard sees this mk1 row as
@@ -17353,7 +18447,8 @@ def _record_sample_transition_bg(**kwargs) -> None:
         # inserts. Healing is whitelist-gated + idempotent, and runs even
         # when the recorder deduped (the status may still be behind).
         wrote_status = heal_sample_status(
-            db, kwargs["sample_id"], kwargs["to_status"]
+            db, kwargs["sample_id"], kwargs["to_status"],
+            source=kwargs.get("source", "senaite"),
         )
         # Read-flip UAT catch (P-0143): date_received was only ever written
         # from SENAITE metadata during a senaite-touching fetch
@@ -17364,6 +18459,7 @@ def _record_sample_transition_bg(**kwargs) -> None:
         # within a second of SENAITE's own DateReceived. NULL-gated: never
         # overwrites a SENAITE-sourced value.
         wrote_received = False
+        _row = None
         if kwargs.get("verb") == "receive":
             _row = db.execute(select(LimsSample).where(
                 LimsSample.sample_id == kwargs["sample_id"]
@@ -17378,6 +18474,7 @@ def _record_sample_transition_bg(**kwargs) -> None:
         # receive page's native phase drives the identical path (PB-0486
         # finding, 2026-08-28).
         wrote_engine = False
+        wrote_snapshot = False
         _verb = kwargs.get("verb")
         if _verb in ("receive", "publish"):
             from workflow.engine import drive_sample_touchpoint
@@ -17388,7 +18485,21 @@ def _record_sample_transition_bg(**kwargs) -> None:
                 attested={"coa_published": True}
                 if _verb == "publish" else None,
             )
-        if wrote_log or wrote_status or wrote_received or wrote_engine:
+            # Clock-event SLA snapshot (Task 9). Gated on a REAL transition
+            # (fix round 1): this hook is re-entered on a COA republish, where
+            # the recorder dedupes and the engine is a no-op. `refresh`
+            # re-stamps `sla_snapshot_at` unconditionally, so snapshotting a
+            # deduped replay would move the recorded promise to today's mapping
+            # and re-grade history. Own flag in the commit gate below too:
+            # `refresh` only flushes, so a snapshot taken when nothing else
+            # wrote would otherwise never commit.
+            if wrote_log or wrote_engine:
+                _snap_row = _row if _row is not None else db.execute(select(LimsSample).where(
+                    LimsSample.sample_id == kwargs["sample_id"]
+                )).scalar_one_or_none()
+                if _snap_row is not None:
+                    wrote_snapshot = bool(_sla_snapshot_after_touchpoint(db, _snap_row))
+        if wrote_log or wrote_status or wrote_received or wrote_engine or wrote_snapshot:
             db.commit()
     except Exception as log_err:  # noqa: BLE001
         if db is not None:
@@ -19437,6 +20548,10 @@ async def set_sla_priority_tier(
     service_group_id to upsert the global override; supply it to scope the
     override to a single service group.
     """
+    from priority.service import priority_map
+    if priority not in priority_map(db):
+        raise HTTPException(status_code=422, detail=f"unknown priority {priority!r}")
+
     if not db.get(SlaTier, data.sla_tier_id):
         raise HTTPException(404, f"SLA tier {data.sla_tier_id} not found")
     if data.service_group_id is not None and not db.get(
@@ -19490,6 +20605,10 @@ async def delete_sla_priority_tier(
     Without `service_group_id`, removes the global (NULL group) override.
     With `service_group_id`, removes the override scoped to that group only.
     """
+    from priority.service import priority_map
+    if priority not in priority_map(db):
+        raise HTTPException(status_code=422, detail=f"unknown priority {priority!r}")
+
     q = select(SlaPriorityTier).where(SlaPriorityTier.priority == priority)
     if service_group_id is None:
         q = q.where(SlaPriorityTier.service_group_id.is_(None))
@@ -19753,7 +20872,16 @@ class InboxVialItem(BaseModel):
     client_order_number: Optional[str] = None
     date_received: Optional[str] = None
     review_state: str
+    # Legacy vocabulary ("normal" | "high" | "expedited"), kept for one release
+    # and now DERIVED from the effective priority (default → "normal") rather
+    # than read from sample_priorities.
     priority: str = "normal"
+    # The real shape: {key, rank, source_level, source_id} — spec §5.
+    priority_effective: Optional[dict] = None
+    # lims_sub_samples.id — the native vial pk the priority controls write
+    # against (PUT /priorities/assign level='vial'). None for parent rows and
+    # for any row with no native vial; the UI skips those when bulk-assigning.
+    sub_sample_pk: Optional[int] = None
     analyses: list[InboxAnalysisItem] = []
     assignment_summary: str = ""  # e.g., "1/1 assigned" — vial-level
     # Every role whose WORK is on this vial: the vial's own assignment_role
@@ -19984,8 +21112,6 @@ def _build_native_vial_inbox_items(
     hide_prepped: bool,
     prepped_sub_pks: set,
     prepped_senaite_ids: set,
-    priority_map: dict,
-    order_priority: Optional[str],
     assignment_map: dict,
     keyword_to_peptide: dict,
     container_mode: bool = True,
@@ -20004,12 +21130,12 @@ def _build_native_vial_inbox_items(
     external_lims_uid (mk1://…) — already what worksheet_analyst.stamp_for_item
     resolves and unique per vial.
 
-    Order-level priority persists to sample_priorities exactly like step 4b
-    does for parents, so the worksheet add endpoints (which read
-    SamplePriority by uid) see it too.
+    Priority is NOT resolved here: the caller stamps every emitted row from one
+    batched load_effective over the whole page (spec §5). The old copy-from-
+    order write into sample_priorities is gone — order priority now reaches the
+    vial through the resolver chain (lims_orders.priority_key), not a copy.
     """
     out: list[InboxVialItem] = []
-    priorities_dirty = False
     for sub in native_subs:
         uid = sub.external_lims_uid
         role = sub.assignment_role
@@ -20029,19 +21155,6 @@ def _build_native_vial_inbox_items(
         if not analyses:
             continue
         analyses.sort(key=lambda a: (a.group_name.lower(), a.title.lower()))
-
-        prio = priority_map.get(uid)
-        if prio is None and order_priority in ("high", "expedited"):
-            existing = db.execute(
-                select(SamplePriority).where(SamplePriority.sample_uid == uid)
-            ).scalar_one_or_none()
-            if existing is None:
-                db.add(SamplePriority(sample_uid=uid, priority=order_priority))
-                priorities_dirty = True
-            elif existing.priority == "normal":
-                existing.priority = order_priority
-                priorities_dirty = True
-            prio = order_priority
 
         unique_groups = {a.group_id for a in analyses}
         assigned_count = 0
@@ -20077,13 +21190,11 @@ def _build_native_vial_inbox_items(
             client_order_number=parent_item.get("getClientOrderNumber") or parent_item.get("ClientOrderNumber") or None,
             date_received=date_received,
             review_state=str(parent_item.get("review_state", "sample_received")),
-            priority=prio or "normal",
             assignment_summary=summary,
             analyses=analyses,
             role_tags=_inbox_role_tags(db, sub.id, role),
+            sub_sample_pk=sub.id,
         ))
-    if priorities_dirty:
-        db.commit()
     return out
 
 
@@ -20218,10 +21329,10 @@ async def get_worksheets_inbox(
 
     senaite_items = senaite_data.get("items", [])
 
-    # Step 1b: Filter to only samples linked to tracked orders in integration DB
-    # Also build senaite_id → order priority map for auto-priority
+    # Step 1b: Filter to only samples linked to tracked orders in integration DB.
+    # (Order-level priority is NOT copied out of the order payload any more —
+    # it reaches each row through the resolver chain; spec §4.)
     TEST_EMAILS = ["forrestp@outlook.com", "forrest@valenceanalytical.com"]
-    order_priority_map: dict[str, str] = {}  # senaite_id → priority from order payload
     try:
         from integration_db import get_integration_db
         from psycopg2.extras import RealDictCursor
@@ -20239,16 +21350,11 @@ async def get_worksheets_inbox(
                         email = (billing.get("email") or "").lower() if isinstance(billing, dict) else ""
                         if email in TEST_EMAILS:
                             continue
-                    # Extract order-level priority (sent by WP, optional)
-                    order_priority = payload.get("priority")
                     sr = row["sample_results"]
                     if isinstance(sr, dict):
                         for entry in sr.values():
                             if isinstance(entry, dict) and entry.get("senaite_id"):
-                                sid = entry["senaite_id"]
-                                linked_senaite_ids.add(sid)
-                                if order_priority and order_priority in ("high", "expedited"):
-                                    order_priority_map[sid] = order_priority
+                                linked_senaite_ids.add(entry["senaite_id"])
         # Extend with sub-samples of any linked parent. Sub-samples are created
         # post-order by the Receive Wizard and never appear in order_submissions,
         # so without this step they'd be dropped from the inbox entirely. One
@@ -20367,33 +21473,10 @@ async def get_worksheets_inbox(
     # no Department.is_default analogue exists and none is added (S2 ruling).
     default_department = (0, "Other", "gray")
 
-    # Step 4: Load local priorities for these samples
+    # Step 4: uids for the page. Priority is no longer read from
+    # sample_priorities here (nor copied from the order payload): every emitted
+    # row is stamped from ONE load_effective at the end of the builder.
     uids = [str(it.get("uid", "")) for it in filtered_items if it.get("uid")]
-    priority_rows = db.execute(
-        select(SamplePriority).where(SamplePriority.sample_uid.in_(uids))
-    ).scalars().all()
-    priority_map: dict[str, str] = {row.sample_uid: row.priority for row in priority_rows}
-
-    # Step 4b: Apply order-level priority for samples without a manual override
-    # WP can send priority on the order payload — auto-set for samples still at "normal"
-    for it in filtered_items:
-        uid = str(it.get("uid", ""))
-        senaite_id = str(it.get("id", ""))
-        if uid and senaite_id and uid not in priority_map and senaite_id in order_priority_map:
-            order_prio = order_priority_map[senaite_id]
-            # Persist so it shows up immediately and survives page reloads
-            existing = db.execute(
-                select(SamplePriority).where(SamplePriority.sample_uid == uid)
-            ).scalar_one_or_none()
-            if not existing:
-                db.add(SamplePriority(sample_uid=uid, priority=order_prio))
-                priority_map[uid] = order_prio
-            # If existing and still "normal", upgrade to order priority
-            elif existing.priority == "normal":
-                existing.priority = order_prio
-                priority_map[uid] = order_prio
-    if order_priority_map:
-        db.commit()
 
     # Step 4c: Load vial metadata (assignment_role, parent linkage, vial_sequence)
     # per item.uid. Parents come from lims_samples; sub-samples from lims_sub_samples.
@@ -20598,8 +21681,6 @@ async def get_worksheets_inbox(
                 hide_prepped=hide_prepped,
                 prepped_sub_pks=prepped_sub_pks,
                 prepped_senaite_ids=prepped_senaite_ids,
-                priority_map=priority_map,
-                order_priority=order_priority_map.get(sample_id),
                 assignment_map=assignment_map,
                 keyword_to_peptide=keyword_to_peptide,
                 container_mode=bool(vial_meta.get("container_mode")),
@@ -20781,7 +21862,6 @@ async def get_worksheets_inbox(
                 client_order_number=it.get("getClientOrderNumber") or it.get("ClientOrderNumber") or None,
                 date_received=it.get("getDateReceived") or it.get("DateReceived") or None,
                 review_state=str(it.get("review_state", "")),
-                priority=priority_map.get(uid, "normal"),
                 assignment_summary=summary,
                 analyses=flat_analyses,
                 role_tags=_inbox_role_tags(
@@ -20791,6 +21871,11 @@ async def get_worksheets_inbox(
                      else None),
                     vial_role,
                 ),
+                sub_sample_pk=(
+                    vial_meta.get("sub_sample_pk")
+                    if vial_meta is not None and not vial_meta.get("is_parent")
+                    else None
+                ),
             )
         )
 
@@ -20798,6 +21883,18 @@ async def get_worksheets_inbox(
     # by parent_sample_id (so same-family vials are adjacent), then is_parent first,
     # then vial_sequence ascending within the family.
     result_items.sort(key=lambda v: (v.parent_sample_id, not v.is_parent, v.vial_sequence))
+
+    # Effective priority for every emitted row — ONE resolve for the page
+    # (spec §5). `priority` keeps the legacy string vocabulary for one release
+    # so the current frontend keeps working; `priority_effective` carries the
+    # real shape. Rows with no native row keep the "normal" default.
+    from priority.service import legacy_priority_string, load_effective_for_uids
+    eff_by_uid = load_effective_for_uids(db, [v.uid for v in result_items])
+    for v in result_items:
+        eff = eff_by_uid.get(v.uid)
+        if eff is not None:
+            v.priority = legacy_priority_string(eff)
+            v.priority_effective = eff.as_dict()
 
     return InboxResponse(items=result_items, total=len(result_items), filter_role=role)
 
@@ -20835,33 +21932,52 @@ async def get_worksheets_inbox_lanes(
     ]
 
 
+def _assign_inbox_priority(db: Session, uid: str, incoming: str,
+                           current_user, source: str) -> dict:
+    """Shared body of the two legacy inbox priority PUTs.
+
+    They no longer write sample_priorities: the uid is mapped to its native
+    row (vial first, then sample — see priority.service.priority_target_for_uid)
+    and the change goes through service.assign, which writes the level column,
+    the audit row and the SLA snapshot. The legacy "normal" means *inherit*
+    now, so it clears the explicit key rather than pinning a value.
+    """
+    from priority.service import assign, priority_target_for_uid
+    valid_priorities = {"normal", "high", "expedited"}
+    if incoming not in valid_priorities:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid priority '{incoming}'. Must be one of: {', '.join(sorted(valid_priorities))}",
+        )
+    target = priority_target_for_uid(db, uid)
+    if target is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No native sample or vial for uid {uid!r}",
+        )
+    level, entity_id = target
+    try:
+        assign(
+            db, level=level, entity_id=entity_id,
+            priority_key=None if incoming == "normal" else incoming,
+            user_id=getattr(current_user, "id", None), source=source,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    db.commit()
+    return {"sample_uid": uid, "priority": incoming, "level": level, "entity_id": entity_id}
+
+
 @app.put("/worksheets/inbox/{sample_uid}/priority")
 async def update_inbox_priority(
     sample_uid: str,
     data: PriorityUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
-    """Upsert priority for a received sample. Persists in sample_priorities table."""
-    valid_priorities = {"normal", "high", "expedited"}
-    if data.priority not in valid_priorities:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid priority '{data.priority}'. Must be one of: {', '.join(sorted(valid_priorities))}",
-        )
-
-    existing = db.execute(
-        select(SamplePriority).where(SamplePriority.sample_uid == sample_uid)
-    ).scalar_one_or_none()
-
-    if existing:
-        existing.priority = data.priority
-        existing.updated_at = datetime.utcnow()
-    else:
-        db.add(SamplePriority(sample_uid=sample_uid, priority=data.priority))
-
-    db.commit()
-    return {"sample_uid": sample_uid, "priority": data.priority}
+    """Set the priority of one inbox row. Routes through priority.service.assign
+    (spec §5) — sample_priorities is no longer written."""
+    return _assign_inbox_priority(db, sample_uid, data.priority, current_user, "ui")
 
 
 class InboxPriorityUpdate(BaseModel):
@@ -20873,32 +21989,17 @@ class InboxPriorityUpdate(BaseModel):
 async def update_inbox_priority_by_body(
     data: InboxPriorityUpdate,
     db: Session = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
-    """Upsert priority for a received sample; sample_uid travels in the body.
+    """Set the priority of one inbox row; sample_uid travels in the body.
 
     Body-based sibling of /worksheets/inbox/{sample_uid}/priority. Native
     `mk1://<hex>` UIDs can't ride in a path segment — the nginx proxy mangles
     the slashes into extra path segments -> 404 (see remove_worksheet_item_by_id).
+    Those uids are VIAL uids, which is why the shared helper resolves the vial
+    level first. Routes through priority.service.assign (spec §5).
     """
-    valid_priorities = {"normal", "high", "expedited"}
-    if data.priority not in valid_priorities:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid priority '{data.priority}'. Must be one of: {', '.join(sorted(valid_priorities))}",
-        )
-
-    existing = db.execute(
-        select(SamplePriority).where(SamplePriority.sample_uid == data.sample_uid)
-    ).scalar_one_or_none()
-    if existing:
-        existing.priority = data.priority
-        existing.updated_at = datetime.utcnow()
-    else:
-        db.add(SamplePriority(sample_uid=data.sample_uid, priority=data.priority))
-
-    db.commit()
-    return {"sample_uid": data.sample_uid, "priority": data.priority}
+    return _assign_inbox_priority(db, data.sample_uid, data.priority, current_user, "ui")
 
 
 # ── D2: bulk per-sample priority lookup ────────────────────────────────────
@@ -20967,24 +22068,35 @@ async def bulk_update_inbox(
     if not data.sample_uids:
         raise HTTPException(status_code=400, detail="sample_uids must not be empty")
 
-    # Upsert priorities
+    # Priority: one assign() per uid (spec §5) — sample_priorities is no longer
+    # written. Fail-closed on an unmapped uid: a partially applied bulk change
+    # would leave the operator with no signal about which rows moved.
     if data.priority is not None:
+        from priority.service import assign, priority_target_for_uid
         valid_priorities = {"normal", "high", "expedited"}
         if data.priority not in valid_priorities:
             raise HTTPException(
                 status_code=400,
                 detail=f"Invalid priority '{data.priority}'. Must be one of: {', '.join(sorted(valid_priorities))}",
             )
-        existing_priorities = db.execute(
-            select(SamplePriority).where(SamplePriority.sample_uid.in_(data.sample_uids))
-        ).scalars().all()
-        existing_map = {row.sample_uid: row for row in existing_priorities}
-        for uid in data.sample_uids:
-            if uid in existing_map:
-                existing_map[uid].priority = data.priority
-                existing_map[uid].updated_at = datetime.utcnow()
-            else:
-                db.add(SamplePriority(sample_uid=uid, priority=data.priority))
+        targets = {uid: priority_target_for_uid(db, uid) for uid in data.sample_uids}
+        unmapped = sorted(uid for uid, t in targets.items() if t is None)
+        if unmapped:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No native sample or vial for uid(s): {', '.join(unmapped)}",
+            )
+        for uid, (level, entity_id) in targets.items():
+            try:
+                assign(
+                    db, level=level, entity_id=entity_id,
+                    priority_key=None if data.priority == "normal" else data.priority,
+                    user_id=getattr(_current_user, "id", None), source="bulk",
+                )
+            except ValueError as e:
+                # Same 400 the single-uid routes give (e.g. a key that was
+                # deactivated between page load and click) — never a 500.
+                raise HTTPException(status_code=400, detail=str(e))
 
     # Upsert analyst/instrument per bench scope as staging worksheet_items
     if data.analyst_id is not None or data.instrument_uid is not None:
@@ -21113,11 +22225,13 @@ async def create_worksheet(
             },
         )
 
-    # Load priorities for these samples
-    priority_rows = db.execute(
-        select(SamplePriority).where(SamplePriority.sample_uid.in_(data.sample_uids))
-    ).scalars().all()
-    priority_map: dict[str, str] = {row.sample_uid: row.priority for row in priority_rows}
+    # Load priorities for these samples — effective value (spec §5), rendered
+    # in the legacy worksheet vocabulary. One resolve for the whole batch.
+    from priority.service import legacy_priority_string, load_effective_for_uids
+    priority_map: dict[str, str] = {
+        uid: legacy_priority_string(eff)
+        for uid, eff in load_effective_for_uids(db, data.sample_uids).items()
+    }
 
     # Load sample IDs from any existing pre-assignment worksheet_items
     existing_items = db.execute(
@@ -21737,11 +22851,10 @@ async def add_group_to_worksheet(
     )
     staging_item = staging_items[0] if staging_items else None
 
-    # Look up actual priority from sample_priorities
-    sample_priority = db.execute(
-        select(SamplePriority).where(SamplePriority.sample_uid == data.sample_uid)
-    ).scalar_one_or_none()
-    priority = sample_priority.priority if sample_priority else "normal"
+    # Effective priority (spec §5) in the legacy worksheet vocabulary.
+    from priority.service import legacy_priority_string, load_effective_for_uids
+    _eff = load_effective_for_uids(db, [data.sample_uid]).get(data.sample_uid)
+    priority = legacy_priority_string(_eff) if _eff else "normal"
 
     # If worksheet has an assigned analyst, use that (overrides card's tech)
     analyst_id = ws.assigned_analyst_id
@@ -21831,11 +22944,10 @@ async def create_worksheet_from_drop(
     db.add(ws)
     db.flush()
 
-    # Look up actual priority from sample_priorities
-    sample_priority = db.execute(
-        select(SamplePriority).where(SamplePriority.sample_uid == data.sample_uid)
-    ).scalar_one_or_none()
-    priority = sample_priority.priority if sample_priority else "normal"
+    # Effective priority (spec §5) in the legacy worksheet vocabulary.
+    from priority.service import legacy_priority_string, load_effective_for_uids
+    _eff = load_effective_for_uids(db, [data.sample_uid]).get(data.sample_uid)
+    priority = legacy_priority_string(_eff) if _eff else "normal"
 
     # Pick up staging pre-assignments — all rows in scope are consumed, lowest
     # id donates. Mirrors add_group_to_worksheet.
@@ -22650,6 +23762,10 @@ class S2SOrderUpsert(BaseModel):
     wp_created_at: Optional[datetime] = None
     wp_paid_at: Optional[datetime] = None
     samples: list[S2SOrderSampleStamp] = []
+    # Priority feature (Task 9, 2026-09-09-sample-priority-design section 6): the
+    # WordPress order's priority key. Applied on CREATE only -- a later push
+    # must never stomp a priority a human has since set in Mk1.
+    priority: Optional[str] = None
 
 
 class S2SOrdersUpsertRequest(BaseModel):
@@ -22678,6 +23794,29 @@ def s2s_upsert_orders(
         if row is None:
             row = LimsOrder(wp_order_id=o.wp_order_id, order_number=o.order_number)
             db.add(row)
+            # CREATE ONLY (Task 9): map the payload's priority onto the order
+            # with source 'order-payload' + an audit row. `assign` selects the
+            # order by order_number, so the insert must be flushed first.
+            # Unknown keys are logged and ignored -- a WordPress typo or a
+            # priority an admin has since deleted must not 500 the push.
+            # Fail-open like the placeholder-seed phase below: `assign`
+            # refreshes the SLA snapshot, which raises when no default SlaTier
+            # is configured, and an order stamp may never be lost to that.
+            if o.priority:
+                db.flush()
+                try:
+                    from priority.service import assign, priority_map
+                    if o.priority in priority_map(db):
+                        assign(db, level="order", entity_id=row.order_number,
+                               priority_key=o.priority, user_id=None,
+                               source="order-payload", note="from order payload")
+                    else:
+                        logger.warning(
+                            "registry.order_upsert_unknown_priority order_number=%s priority=%r",
+                            o.order_number, o.priority)
+                except Exception as prio_err:  # noqa: BLE001 -- never fail the upsert
+                    logger.warning("registry.order_upsert_priority_failed order_number=%s err=%s",
+                                   o.order_number, prio_err)
         row.order_number = o.order_number
         row.status = o.status
         if o.customer is not None:
@@ -23519,6 +24658,14 @@ async def list_samples_from_registry(
     ).scalars().all()
     # One grouped remark query for the page — never per row.
     items = registry_rows_to_list(rows, fetch_customer_notes(db, rows))
+    # Effective priority: ONE batched resolve for the page. registry_rows_to_list
+    # emits one dict per row, in order, so rows carry the native pks.
+    from priority.service import load_effective_safe
+    _by_sample, _ = load_effective_safe(db, sample_pks=[r.id for r in rows])
+    for _it, _row in zip(items, rows):
+        _eff = _by_sample.get(_row.id)
+        if _eff is not None:
+            _it["priority"] = _eff.as_dict()
     # Verification codes: overlay the ACTIVE code from the IS DB (one batched
     # query per page). The stored lims_samples copy goes stale when a COA is
     # regenerated (IS-side mutation the registry never sees); on IS-DB failure

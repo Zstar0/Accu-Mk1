@@ -46,6 +46,7 @@ import {
   type OrderGroup,
 } from '@/lib/inbox-orders'
 import { OrderListRow } from '@/components/intake/OrderListRow'
+import { PriorityGlyph } from '@/components/common/PriorityGlyph'
 import { TrackingLink } from '@/components/intake/TrackingLink'
 import { CustomerNoteCell } from '@/components/intake/CustomerNoteCell'
 import { getOrderBoxLabelSummaries } from '@/lib/api'
@@ -271,9 +272,7 @@ export function ReceiveSample() {
   const filteredSamples = showTestSamples
     ? dueSamples
     : dueSamples.filter(
-        s =>
-          !s.client_id ||
-          !TEST_CONTACTS.includes(s.client_id.toLowerCase())
+        s => !s.client_id || !TEST_CONTACTS.includes(s.client_id.toLowerCase())
       )
 
   const sortedSamples = sortColumn
@@ -324,11 +323,7 @@ export function ReceiveSample() {
   // per-row: ~50 concurrent per-row summary calls under HTTP/2 exhausted the
   // backend DB pool and took login down with it (prod brownout 2026-07-09).
   const expectedVialsKeys = Array.from(
-    new Set(
-      enriched
-        .map(g => g.orderKey)
-        .filter((k): k is string => k != null)
-    )
+    new Set(enriched.map(g => g.orderKey).filter((k): k is string => k != null))
   )
     .sort()
     .slice(0, 100) // backend cap per request
@@ -342,9 +337,7 @@ export function ReceiveSample() {
   // ONE batched registry-orders query for the ship-from address shown in each
   // expanded order row — mirrors the expected-vials batch above. Never per-row.
   const orderNumbers = Array.from(
-    new Set(
-      enriched.map(g => g.orderKey).filter((k): k is string => k != null)
-    )
+    new Set(enriched.map(g => g.orderKey).filter((k): k is string => k != null))
   ).sort()
   const registryOrdersQ = useQuery({
     queryKey: ['registry-orders', orderNumbers.join(',')],
@@ -853,7 +846,10 @@ export function ReceiveSample() {
                         }}
                       >
                         <TableCell className="font-mono text-sm">
-                          {s.id}
+                          <span className="inline-flex items-center gap-1.5">
+                            <PriorityGlyph priority={s.priority} size="row" />
+                            {s.id}
+                          </span>
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">
                           {s.client_order_number ?? '—'}

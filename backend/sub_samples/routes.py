@@ -115,6 +115,7 @@ def _serialize(sub) -> SubSampleResponse:
         assignment_kind=sub.assignment_kind,
         external_lims_uid=sub.external_lims_uid,
         box_id=sub.box_id,
+        priority_key=getattr(sub, "priority_key", None),
     )
 
 
@@ -371,6 +372,14 @@ def list_sub_samples(
     # Material-vial annotation (analytical_vials pooling): derived per list
     # call, never stored — see _annotate_material_vials.
     _annotate_material_vials(db, items=items, subs=subs)
+    # Effective priority (spec §5): ONE batched resolve for the page — the
+    # loader walks vial → sample → order → customer internally.
+    from priority.service import load_effective_safe
+    _, by_vial = load_effective_safe(db, sub_sample_pks=[s.id for s in subs])
+    for item, s in zip(items, subs):
+        eff = by_vial.get(s.id)
+        if eff is not None:
+            item.priority = eff.as_dict()
     return SubSampleListResponse(
         parent=ParentSampleSummary(
             sample_id=parent.sample_id,

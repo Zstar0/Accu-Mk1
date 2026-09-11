@@ -11,6 +11,8 @@ import {
   parseGlobalReadSource,
   COA_SOURCE_KEY,
   parseCoaGenerationSource,
+  SAMPLE_STATUS_KEY,
+  parseSampleStatusAuthority,
   type PageKey,
   type ReadSource,
 } from '@/lib/read-source'
@@ -47,6 +49,7 @@ export function DataSourcePane() {
   })
   const [isDirty, setIsDirty] = useState(false)
   const [coaSource, setCoaSource] = useState<ReadSource>('senaite')
+  const [statusAuthority, setStatusAuthority] = useState<ReadSource>('senaite')
 
   // Fetch settings from backend
   const {
@@ -73,6 +76,7 @@ export function DataSourcePane() {
       worksheets_inbox: globalMap.worksheets_inbox ?? 'senaite',
     })
     setCoaSource(parseCoaGenerationSource(settingsMap.get(READ_SOURCE_SETTING_KEY)))
+    setStatusAuthority(parseSampleStatusAuthority(settingsMap.get(READ_SOURCE_SETTING_KEY)))
     setIsDirty(false)
   }
 
@@ -81,7 +85,7 @@ export function DataSourcePane() {
     mutationFn: () =>
       updateSetting(
         READ_SOURCE_SETTING_KEY,
-        JSON.stringify({ ...sourceByPage, [COA_SOURCE_KEY]: coaSource })
+        JSON.stringify({ ...sourceByPage, [COA_SOURCE_KEY]: coaSource, [SAMPLE_STATUS_KEY]: statusAuthority })
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings'] })
@@ -181,6 +185,35 @@ export function DataSourcePane() {
           Where COABuilder sources legacy-family result rows (core HPLC,
           endotoxin, sterility, bac water) at generation time. No per-user
           override — this is what the backend actually does.
+        </p>
+        {!isAdmin && (
+          <p className="text-xs text-muted-foreground">Only admins can change this.</p>
+        )}
+      </SettingsSection>
+
+      <SettingsSection title="Sample status authority">
+        <div className="flex items-center gap-0.5 rounded border p-0.5 w-fit">
+          {(['senaite', 'mk1'] as const).map(source => (
+            <button
+              key={source}
+              type="button"
+              disabled={!isAdmin}
+              aria-label={`Sample status authority: ${source === 'mk1' ? 'Accu-Mk1' : 'SENAITE'}`}
+              aria-pressed={statusAuthority === source}
+              onClick={() => { setStatusAuthority(source); setIsDirty(true) }}
+              className={cn(
+                'px-2 py-1 text-xs font-mono rounded disabled:opacity-50 disabled:cursor-not-allowed',
+                statusAuthority === source
+                  ? 'bg-emerald-600/30 text-emerald-400'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              {source === 'mk1' ? 'Accu-Mk1' : 'SENAITE'}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Who writes a sample's status. SENAITE: the badge mirrors SENAITE's review state (today). Accu-Mk1: the workflow engine writes it from the catalog and SENAITE follows. Flip only when the stranded-sample check has been clean for 48 h.
         </p>
         {!isAdmin && (
           <p className="text-xs text-muted-foreground">Only admins can change this.</p>

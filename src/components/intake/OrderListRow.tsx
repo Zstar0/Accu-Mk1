@@ -15,6 +15,7 @@ import { TrackingLink } from '@/components/intake/TrackingLink'
 import { CustomerNoteCell } from '@/components/intake/CustomerNoteCell'
 import type { OrderBoxLabelSummary, RegistryOrder } from '@/lib/api'
 import { RaiseFlagButton } from '@/components/flags/RaiseFlagButton'
+import { PriorityGlyph } from '@/components/common/PriorityGlyph'
 
 interface OrderListRowProps {
   group: EnrichedOrderGroup
@@ -158,8 +159,11 @@ export function OrderListRow({
       </td>
       <td className="py-3 px-3 whitespace-nowrap align-top">
         <div className="flex flex-col gap-0.5">
-          <span className="font-mono text-sm font-semibold">
-            {group.orderLabel}
+          <span className="inline-flex items-center gap-1.5">
+            <PriorityGlyph priority={order?.effective_priority} size="row" />
+            <span className="font-mono text-sm font-semibold">
+              {group.orderLabel}
+            </span>
           </span>
           <span className="text-xs text-muted-foreground">
             {group.samples.length} sample

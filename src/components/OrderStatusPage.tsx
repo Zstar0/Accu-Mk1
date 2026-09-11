@@ -23,6 +23,7 @@ import {
 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
+import { labelFor, useWorkflowStatesStore } from '@/lib/workflow-states-store'
 import {
   getExplorerStatus,
   getExplorerOrders,
@@ -38,6 +39,8 @@ import {
   API_PROFILE_CHANGED_EVENT,
 } from '@/lib/api-profiles'
 import { useUIStore } from '@/store/ui-store'
+import { PriorityGlyph } from '@/components/common/PriorityGlyph'
+import { PrioritySelect } from '@/components/common/PrioritySelect'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -265,7 +268,8 @@ function sampleStateLabel(state: string | null): string {
     rejected: 'Rejected',
     cancelled: 'Cancelled',
   }
-  return map[s] ?? state ?? 'Unknown'
+  // Catalog first (spec 2026-09-09 §7.2), then this map, then the raw value.
+  return labelFor(s, map[s] ?? state ?? 'Unknown')
 }
 
 function KanbanSampleCard({
@@ -515,6 +519,10 @@ function KanbanView({
   keywordFamilies?: Map<string, string>
   onToggleCollapse: (key: string) => void
 }) {
+  // Own client: the order-priority control lives in this child, and the
+  // explorer orders query it has to refresh is keyed under ['explorer', ...].
+  const queryClient = useQueryClient()
+
   // Determine which columns to show — all if no filter, else just the active one
   const visibleCols =
     activeStates.length > 0
@@ -712,6 +720,27 @@ function KanbanView({
                 }}
                 variant="pill"
               />
+              {/* Order-level priority: effective glyph (order → customer
+                  chain, resolved server-side) plus the explicit control.
+                  The explorer orders query key starts with 'explorer', which
+                  useAssignPriority's invalidation predicate cannot see, so the
+                  refresh is wired explicitly here. */}
+              <PriorityGlyph
+                priority={order.effective_priority}
+                size="header"
+              />
+              <PrioritySelect
+                level="order"
+                id={order.order_number}
+                explicitKey={order.priority_key ?? null}
+                effective={order.effective_priority}
+                compact
+                className="w-48"
+                ariaLabel={`Priority for order ${order.order_number}`}
+                onAssigned={() =>
+                  queryClient.invalidateQueries({ queryKey: ['explorer'] })
+                }
+              />
               {email && (
                 <span className="text-xs text-muted-foreground">{email}</span>
               )}
@@ -899,10 +928,50 @@ function saveOrderFilters(f: OrderFilters) {
 // --- Main component ---
 
 export function OrderStatusPage() {
+  // sampleStateLabel() reads the catalog through the store's non-hook
+  // accessor, so subscribe here to re-render the page once it loads.
+  useWorkflowStatesStore(s => s.states)
   const [showAll, setShowAll] = useState(false)
   const [envName, setEnvName] = useState(() => getActiveEnvironmentName())
   const [orderFilters, setOrderFilters] =
     useState<OrderFilters>(loadOrderFilters)
+  // Header quick nav (2026-09-11): a navigator may hand us an Order ID via
+  // the store's consume-once prefill. Mount case: the initializer above
+  // already ran, so apply it here from the store snapshot. Already-mounted
+  // case: the store subscription (an external system) fires when a new
+  // prefill lands. Every other text axis is cleared so the one order shows.
+  useEffect(() => {
+    const apply = (prefill: { orderId: string } | null) => {
+      if (!prefill) return
+      setOrderFilters(prev => {
+        const next = {
+          ...prev,
+          orderIdFilter: prefill.orderId,
+          sampleIdFilter: '',
+          emailFilter: '',
+          analyteFilter: '',
+          lotFilter: '',
+        }
+        saveOrderFilters(next)
+        return next
+      })
+    }
+    const unsubscribe = useUIStore.subscribe((state, prev) => {
+      if (state.orderStatusPrefill && state.orderStatusPrefill !== prev.orderStatusPrefill) {
+        apply(useUIStore.getState().consumeOrderStatusPrefill())
+      }
+    })
+    // Deferred so the mount-time apply is not a synchronous setState in the
+    // effect body (react-hooks/set-state-in-effect).
+    const pending = useUIStore.getState().orderStatusPrefill
+    const timer = pending
+      ? setTimeout(() => apply(useUIStore.getState().consumeOrderStatusPrefill()), 0)
+      : undefined
+    return () => {
+      unsubscribe()
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }, [])
 
   const updateFilters = (partial: Partial<OrderFilters>) => {
     setOrderFilters(prev => {
@@ -1786,6 +1855,7 @@ export function OrderStatusPage() {
                           sampleSlaStatusesMap={
                             orderSla.sampleStatusesBySampleId
                           }
+                          showPriorityControl
                         />
                       ))}
                     </tbody>

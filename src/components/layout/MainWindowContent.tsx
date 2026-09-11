@@ -25,6 +25,8 @@ import { ReportsDashboard } from '@/components/reports/ReportsDashboard'
 import { ReportsSyncDebug } from '@/components/reports/ReportsSyncDebug'
 import { CheckInTimesReport } from '@/components/reports/CheckInTimesReport'
 import { ThroughputReport } from '@/components/reports/ThroughputReport'
+import { ReadyToPublishReport } from '@/components/reports/ReadyToPublishReport'
+import { SlaPerformanceReport } from '@/components/reports/SlaPerformanceReport'
 import { TurnaroundReport } from '@/components/reports/TurnaroundReport'
 import { PeptideRequestsList } from '@/pages/PeptideRequestsList'
 import { PeptideRequestDetail } from '@/pages/PeptideRequestDetail'
@@ -67,7 +69,8 @@ export function MainWindowContent({
           return <AnalysisServicesPage />
         if (activeSubSection === 'service-groups') return <ServiceGroupsPage />
         if (activeSubSection === 'departments') return <DepartmentsPage />
-        if (activeSubSection === 'analysis-profiles') return <AnalysisProfilesPage />
+        if (activeSubSection === 'analysis-profiles')
+          return <AnalysisProfilesPage />
         if (activeSubSection === 'vial-roles') return <VialRolesPage />
         return <InstrumentsPage />
       case 'hplc-analysis':
@@ -78,6 +81,10 @@ export function MainWindowContent({
         if (activeSubSection === 'sync-debug') return <ReportsSyncDebug />
         if (activeSubSection === 'checkin-times') return <CheckInTimesReport />
         if (activeSubSection === 'throughput') return <ThroughputReport />
+        if (activeSubSection === 'ready-to-publish')
+          return <ReadyToPublishReport />
+        if (activeSubSection === 'sla-performance')
+          return <SlaPerformanceReport />
         if (activeSubSection === 'bottlenecks') return <TurnaroundReport />
         return <ReportsDashboard />
       case 'accumark-tools':

@@ -25,6 +25,35 @@ vi.mock('@/components/intake/OrderReceiveSession', () => ({
   ),
 }))
 
+vi.mock('@/lib/api-priorities', () => ({
+  getPriorities: vi.fn(async () => [
+    {
+      key: 'expedited',
+      name: 'Expedited',
+      rank: 20,
+      icon: 'chevrons-up',
+      color: 'red',
+      pulse: true,
+      is_default: false,
+      is_active: true,
+      sla_tier_id: null,
+      explicit_count: 0,
+    },
+    {
+      key: 'default',
+      name: 'Default',
+      rank: 0,
+      icon: 'minus',
+      color: 'zinc',
+      pulse: false,
+      is_default: true,
+      is_active: true,
+      sla_tier_id: null,
+      explicit_count: 0,
+    },
+  ]),
+}))
+
 vi.mock('@/lib/api', async importOriginal => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
@@ -36,6 +65,12 @@ vi.mock('@/lib/api', async importOriginal => {
         {
           uid: 'u1',
           id: 'P-1',
+          priority: {
+            key: 'expedited',
+            rank: 20,
+            source_level: 'customer',
+            source_id: '77',
+          },
           client_order_number: 'WP-1042',
           client_id: 'acme',
           sample_type: 'Peptide',
@@ -166,9 +201,7 @@ describe('ReceiveSample — order selection + combine', () => {
     await waitFor(() =>
       expect(screen.getByTestId('session')).toBeInTheDocument()
     )
-    const ids = screen
-      .getAllByTestId('session-sample')
-      .map(n => n.textContent)
+    const ids = screen.getAllByTestId('session-sample').map(n => n.textContent)
     expect(ids).toContain('P-1')
     expect(ids).toContain('P-2')
     expect(ids).not.toContain('P-3')
@@ -184,9 +217,7 @@ describe('ReceiveSample — order selection + combine', () => {
     await waitFor(() =>
       expect(screen.getByTestId('session')).toBeInTheDocument()
     )
-    const ids = screen
-      .getAllByTestId('session-sample')
-      .map(n => n.textContent)
+    const ids = screen.getAllByTestId('session-sample').map(n => n.textContent)
     expect(ids).toEqual(['P-3'])
   })
 
@@ -214,9 +245,7 @@ describe('ReceiveSample — multi-order check-in flag gating', () => {
     await waitFor(() =>
       expect(screen.getAllByTestId('order-list-row').length).toBeGreaterThan(0)
     )
-    expect(
-      screen.queryByRole('checkbox', { name: /^Select / })
-    ).toBeNull()
+    expect(screen.queryByRole('checkbox', { name: /^Select / })).toBeNull()
     expect(screen.queryByText('Process together')).toBeNull()
   })
 
@@ -230,9 +259,7 @@ describe('ReceiveSample — multi-order check-in flag gating', () => {
     await waitFor(() =>
       expect(screen.getAllByTestId('order-list-row').length).toBeGreaterThan(0)
     )
-    expect(
-      screen.queryByRole('checkbox', { name: /^Select / })
-    ).toBeNull()
+    expect(screen.queryByRole('checkbox', { name: /^Select / })).toBeNull()
     expect(screen.queryByText('Process together')).toBeNull()
   })
 
@@ -376,9 +403,7 @@ describe('ReceiveSample — search axes + sort + expand', () => {
   it('expand shows sample id, analytes, lot and declared qty', async () => {
     renderRich()
     await screen.findByText('WP-2001')
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Expand WP-2001' })
-    )
+    fireEvent.click(screen.getByRole('button', { name: 'Expand WP-2001' }))
     const detail = screen.getByTestId('order-detail-row')
     expect(detail.textContent).toContain('P-10')
     expect(detail.textContent).toContain('BPC-157 - Identity (HPLC)')
@@ -472,5 +497,34 @@ describe('ReceiveSample — column headers are not duplicated', () => {
     fireEvent.click(screen.getByRole('button', { name: 'By sample' }))
     expect(screen.getAllByText('Tracking')).toHaveLength(1)
     expect(screen.getAllByText('Customer Note')).toHaveLength(1)
+  })
+  it('shows the priority glyph on a sample row in the By sample view', async () => {
+    // This suite's beforeEach re-mocks the list without a priority; give P-1 one.
+    vi.mocked(getRegistrySamples).mockResolvedValue({
+      items: [
+        {
+          uid: 'u1',
+          id: 'P-1',
+          client_order_number: 'WP-1042',
+          client_id: 'acme',
+          sample_type: 'Peptide',
+          review_state: 'sample_due',
+          date_sampled: null,
+          customer_note: null,
+          priority: {
+            key: 'expedited',
+            rank: 20,
+            source_level: 'customer',
+            source_id: '77',
+          },
+        },
+      ],
+      total: 1,
+    } as never)
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'By sample' }))
+    expect(
+      await screen.findByRole('img', { name: 'Expedited via customer (77)' })
+    ).toBeInTheDocument()
   })
 })

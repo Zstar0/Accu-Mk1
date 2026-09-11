@@ -31,6 +31,8 @@ _BUILTINS = [
     ("feature_request", "Feature Request", "#ec4899", "issue", False, 6),
     # S8 adoption guard: external-counter identity collisions (2026-08-11).
     ("identity_collision", "Identity Collision", "#e5484d", "issue", True, 7),
+    # Sample-status authority flip (2026-09-09 spec §6.2): stranded samples.
+    ("workflow_stranded", "Workflow Stranded", "#f59e0b", "issue", False, 8),
 ]
 
 

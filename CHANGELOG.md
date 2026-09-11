@@ -2,6 +2,88 @@
 
 ## Unreleased
 
+## v1.20.1 — 2026-09-11
+
+### Fixed
+- Order priority never reached the explorer order payloads (Receive page By-order rows, Order Status order rows) and assigning a priority at order level from Order Status failed with "order not found": the Integration Service hands out bare order numbers ("3008") while the registry stores "WP-3008". Every order lookup keyed by a caller-supplied number now accepts either form.
+
+## v1.20.0 — 2026-09-11
+
+### Added
+- **Header quick nav.** The "Accu-Mk1" label in the top bar is replaced by three Enter-to-go boxes styled like the Worksheets pill — Sample ID (sample details), Customer Email (customer list, pre-filtered), Order ID (Order Status with only the Order ID filter set) — and a Ready to Publish button carrying two count chips: red = every line verified, green = Ready for Partial Publish. The same chips sit on the Ready to Publish entry in the sidebar.
+- `GET /reports/ready-to-publish/summary` (totals only) for the chips. Both it and the full report read through a 60 s process cache that is cleared on every publish, so polling from every open window costs one report build per minute at most.
+
+### Fixed
+- Ready to Publish report ignores rejected / retracted / cancelled lines the way the workflow engine does. A sample with one rejected extra analyte (PB-0474 and six others on prod) never appeared before.
+
+## v1.19.2 — 2026-09-11
+
+### Fixed
+- Stranded-sample check: a sample with no `date_received` (received on the SENAITE side, never re-read through a senaite-touching fetch) now falls back to its registration time for the scan window instead of being skipped entirely. P-2605 sat with `status=verified` / `native_status=published` for a day without a flag.
+- `date_received` is stamped from the IS receive event when Mk1 has no value for it (SENAITE-side receives: auto check-in, SENAITE UI). Existing rows with a `receive` ledger row and no date are backfilled once on boot from the earliest receive event.
+
+## v1.19.1 — 2026-09-11
+
+### Fixed
+- Receive page: the By sample list rows show the priority glyph (the order rows already did). (#188)
+
+## v1.19.0 — 2026-09-11
+
+### Added
+- **Sample priority** (#186). Priorities are data: a managed list (name, rank, icon, color, pulse, active, default) under Settings → Priorities, each optionally mapped to an SLA tier (the per-service-group exceptions on the SLA pane follow the list). Explicit priority at customer, order, sample and vial level, resolved most-specific-first (`NULL` = inherit) by one resolver on the backend and a fixture-validated mirror on the frontend; every list row, the details payload, explorer orders and inbox items carry the effective priority inline, so no surface makes a second request. Set it from the sample and sub-sample pages, the order status page, the receive wizard (sample panel, vial tab) and the order-receive session; bulk/single from the inbox card. A compact glyph (bare on rows, tinted on cards/headers, nothing for Default) marks samples on the samples table, sample cards, order rows, vial board, inbox (families ordered by rank), worksheets and active boxes. Every change writes `priority_audit` and shows in the sample activity log with the actor; SLA snapshots are recorded at receive and at the first real publish so reports grade against what was promised. The WordPress order payload's priority lands on the order at create. Legacy `sample_priorities` rows (sample- and vial-keyed) are backfilled once on first boot; the table and the `/sample-priorities/lookup` route are retired in a follow-up release. Spec `docs/superpowers/specs/2026-09-09-sample-priority-design.md`.
+- **Ready to Publish report** (#187) under Reports: samples with every line verified or flagged Ready for Publish / Ready for Partial Publish, most critical first, grouped by order, with On Hold flags parking a row below. Column headers sort (sample, analytes, status, why, received, SLA; third click restores most-critical-first) and the SLA cell hovers the shared SLA breakdown card used on Order Status (the report's SLA block now carries the tier's business-hours flag).
+
+### Changed
+- SLA tier resolution in the frontend is keyed by the effective priority key from the row shape instead of the SENAITE-uid priority lookup; `InboxPriority` is a plain string alias for one release. `PUT/DELETE /sla-priority-tiers/{priority}` validate against the priorities table.
+
+### Deploy notes
+- Full Mk1 deploy (one VERSION tags both images); the priority migration runs on backend boot. Prod `sla_priority_tiers` is empty and `sample_priorities` holds 6 legacy rows to backfill. Map no priority to an SLA tier until this release is live everywhere.
+
+## v1.18.3 — 2026-09-10
+
+### Fixed
+- **Accu-Mk1 now owns the identity CONFORMS verdict on the COA wire.** P-1986 (HGH) rendered its identity DOES NOT CONFORM on the certificate although the stored result was a pass. In mk1 mode COABuilder derives the expected name from the registry analyte slot title — `lims_samples.analytes`, the check-in copy of the SENAITE service title, `"Somatropin - Identity (HPLC)"` — and does a `startswith` against the raw result the prep bridge wrote, which is the catalog peptide name `"HGH (Somatropin)"`. Two Mk1 catalog fields that disagree (service 264 vs peptide 235) made a conforming identity unsatisfiable, and nothing read SENAITE to get there. The new `coa/identity_verdict.py` evaluates the stored value with the existing identity rule against the linked peptide name, the service's legacy `peptide_name`, and the service-title prefix (fail tokens win), and `legacy_rows` emits the literal **`Conforms`** token when it passes — the same vocabulary the HPLC native-born design writes for native identity rows and one COABuilder's matcher already accepts. On a pass COABuilder prints the slot display name, never the raw string, so certificate text is unchanged; non-conforming, free-text and blank values ride raw and keep failing exactly as before. Measured against every production identity row (8,552): the only rows whose verdict changes are P-1986's three. Variance replicates and per-vial figures are deliberately untouched — their identity cell is customer-visible on the variance matrix. (#185)
+
+## v1.18.2 — 2026-09-10
+
+### Fixed
+- **The Reports sync-debug source set is now published PRIMARY COAs only.** `published_coa_results` is a read model at lab-result grain — one row per analyte per published primary COA — but `/reports/sync-status` and `/reports/resync` never encoded that grain, treating every published generation as owed a row. In production that meant a permanent "Tables are out of sync" banner listing **2869 missing codes, every one of them an Additional COA and not a single primary** (primaries were 2811/2811, i.e. 100% covered; additionals 188/3057). An ACOA is the same lab result reissued under another brand, carries no extra lab workload, and all 1115 ACOA samples already have a published primary — so the far more serious half was the **"Re-sync Now" button**, which used the same naive query and would have inserted all 2869 rows. Because a child mints its own `verification_code`, `/reports/dashboard`'s `DISTINCT ON (verification_code)` cannot collapse a copy and `/reports/purity-trend` does not dedupe at all: pressing it would have inflated `total_coas` 3018 → ~5868, double-counted conforming/non-conforming for 1115 samples, and put a duplicate point on every trend chart. The source set now filters `parent_generation_id IS NULL`, and orphans are redefined as report rows that are not a published primary — which also catches the 188 additional-COA rows left behind by the table's 2026-04 creation backfill. Report-side counts stay deliberately unfiltered (physical table contents) so the banner's mismatch still surfaces "the table holds rows it should not"; that decision is pinned by a test. Verified read-only against production Postgres: missing 2869 → 0, orphans 19 → 207 (342 rows). Handler ruling 2026-09-10. Corollary: the Integration Service write path is now **correct as-is** — `_populate_reporting_table` is never called for children, and the unwired ACOA publish path is the desired behaviour, not a bug to fix later.
+
+### Changed
+- The sync-debug page states the grain in its own copy, and **Re-sync now asks for confirmation**, showing how many primaries it will backfill and how many orphaned codes it will delete — the purge is 342 rows, not the 19 it was before this change.
+
+## v1.18.1 — 2026-09-10
+
+### Fixed
+- **The sample-scope `verify` catalog edge now gates on verified-OR-published, like `publish` and `submit` already did.** It was the only edge the 2026-08-23 widening missed, and that gap is the whole `no_edge:publish` residual class found while flipping status authority: a legacy family's line that SENAITE had already published surfaces in `native_parent_line_states` as `published` (Mk1 holds only a `senaite_mirror` shadow row for it), so a strict `verified` list refused `verify` on 12 fully-finished samples — BW-0095/0096/0097/0098/0100/0105, PB-0278, PB-0294, P-1615, P-1616, P-2635, P-2636 — which then refused `publish` from `to_be_verified` with `no_edge` and stranded there indefinitely. Widening is strictly permissive: it can only allow transitions that were previously refused. Fresh databases get the value from the seed; existing ones are covered by a guarded boot `UPDATE` whose `LIKE` test cannot match an already-widened value, so it is idempotent — the same fresh-vs-existing split the publish widening used. Applied to production by hand at the flip; this brings the code back in line. All 12 then walked `verify → verified → publish → published` with no badge movement, because their status column already read `published` and only the engine was behind.
+
+## v1.18.0 — 2026-09-10
+
+### Changed
+- **Promote writes Accu-Mk1 first** (Handler ruling 2026-09-10). `POST /api/lims-analyses/promote` used to write and verify the SENAITE analysis line and only then commit the Mk1 rows, failing closed with a 502 if SENAITE refused. That order dated from when SENAITE was the source of truth; post read-independence the canonical rows are what Sample Details and the COA wire actually read, so it put the mirror ahead of the source of truth — and when the half that failed was the Mk1 commit, the family was left with a verified SENAITE line, no Mk1 promotion, and (because the lock map reads that mirror) no Promote verb in the UI either. Both P-2553 and P-2606 landed in that state and needed `promote_to_parent` replayed by hand against production. Promote now commits the Mk1 promotion **before** SENAITE is contacted, then tees the write-back. A write-back failure leaves the promotion standing, logs `senaite_promote_writeback_failed`, and records the same event on the parent so the lagging mirror is visible in the activity feed rather than only in a log line that rotates. Unchanged: `origin='mk1'` services still skip the write-back entirely, a locked SENAITE line still diverges deliberately and records `senaite_line_diverged`, and a Mk1 commit failure still fails the request — but now with nothing written to SENAITE and so nothing to reconcile. Contract change: promote no longer returns 502 when SENAITE is unreachable; the two tests that pinned the old behaviour were rewritten deliberately, not repaired.
+
+## v1.17.0 — 2026-09-09
+
+### Added
+- **Sample-status authority switch** (`Settings → Data Source → Sample status authority`): under `Accu-Mk1` the workflow engine writes the sample's status from the catalog and SENAITE follows; the SENAITE-sourced mirrors (registry heal, IS event stream, sub-sample parent refresh) stop writing it. Default stays `SENAITE`. Spec `docs/superpowers/specs/2026-09-09-sample-status-authority-flip-design.md`.
+- **SENAITE tee with read-back and retry**: verify / publish / cancel are teed to SENAITE, proven by re-reading the AR (SENAITE answers 200 to refused transitions), and refusals are queued in `lims_senaite_tee_retries` for the `senaite_tee_retry` job (5 min; backoff 5 → 720 min; gives up after 8 attempts). A refused publish issues `verify` first (the PB-0462 "stuck To Verify" class). **Cancel is Mk1-owned**: once Accu-Mk1 cancels a sample its state is authoritative and SENAITE is not kept in sync — the tee fires one best-effort attempt, and any other outcome (SENAITE allows cancel only before any analysis is assigned; transport failures count too) is recorded `senaite_only` and never queued, so a deliberate cancellation cannot age into a stranded flag. The shadow summary reports `senaite_lagging`.
+- **Stranded-sample detector** (`workflow_stranded_check`, 15 min, read-only): raises one `Workflow Stranded` flag per sample whose verified lines are ahead of its status, whose publish ledger has no matching status, whose native and mirror disagree under Mk1 authority, or whose SENAITE tee gave up; resolves the flag when the condition clears. Cascade refusals are now recorded with their first unmet requirement. No scheduled converge: divergences are surfaced, not swept.
+- **Cancel sample** from any state: `POST /api/samples/{id}/cancel` (dry-run preview, reason, confirm; 409 already cancelled / no edge, 412 preview-or-requirements) plus the sample page's "Cancel sample…" action with a typed confirm. Pending analysis rows are cancelled (new analysis-tier `cancel` verb, `cancelled` state) and released from their worksheets; finished rows stay as history; a published COA stays live and the dialog says so. Catalog `cancel` edges seeded from every sample state.
+- **Catalog is the source of truth for status vocabulary**: the status writers accept any active catalog state (Settings → Workflow), badges take their label from the catalog with the hardcoded map as fallback, and a seeded partial-publish pathway (`sample_received → waiting_for_addon_results` on `publish`, back to `to_be_verified` on `submit`) keeps the add-on-pending badge meaningful.
+
+### Fixed
+- Sample details: a vial row is no longer locked out of **Promote** when the parent's SENAITE line is verified but Mk1 never recorded the promotion. `native_parent_line_states` falls back to the shadow row's mirror state for any keyword the canonical tier has never held, which is what keeps genuinely legacy families locked — but it also locked families whose promote had landed in SENAITE and been lost on the Mk1 side, leaving the lab a "Ready to Promote" row with a padlock, no verbs, and a `lockVarianceSet` 409 behind it (P-2553, P-2606). The fallback now stands down for any keyword whose family still holds a vial row that `promote_to_parent` would accept as a source, which is its own `to_be_verified` precondition. Promote already accepted these — it diverges over a locked SENAITE line and records `senaite_line_diverged` (1.12.1) — so this only stops the UI hiding a verb the backend would have honoured. Families with no vial rows, with finished vial rows, with unresulted rows, or whose only rows are superseded (`retested=True`) keep the lock exactly as before; measured against production, the change unlocks nothing that is currently locked (129 shadow-fallback locks, all retained) and only ever applies to a family that gets into this state from here on.
+
+## v1.16.3 — 2026-09-09
+
+### Fixed
+- **SLA Performance: `thin` and `min_timed_for_family` reached the browser.** Both were dropped by FastAPI's `response_model` in 1.16.2 — `SlaPerfGatingFamilyOut` and `SlaPerfGatingOut` never declared them, and Pydantic ignores extras on input, so nothing raised at any layer. The department table therefore rendered heavy metals (5 timed samples) with no "too few" marker and its over-target percentage reddened, and the headline sentence could name it as the gating department: exactly the misreading the flag exists to prevent. Regression guard `test_response_model_declares_every_key_the_engine_emits` walks the *engine's* output against the real response models and fails on any undeclared key at any depth — walking the route's response instead passes vacuously, because a stripped key is already absent from it. (#181)
+
+## v1.16.2 — 2026-09-09
+
+### Added
+- **SLA Performance report** (`GET /reports/sla-performance`, [SlaPerformanceReport.tsx](src/components/reports/SlaPerformanceReport.tsx)) under Reports → SLA Performance. Companion to Lab Throughput: that one counts the work arriving, this one measures what came back out and whether it met target. Receipt-month cohorts that count still-open work against the rate (the delivery-month view drops it and flatters the lab), a delivery curve against the target line, **which department finished last on late samples** — the gating cut, per (sample, family) `max(verified_at)` — the bench-versus-publishing stage split, and an at-risk board of open work by business hours remaining. Filters for customer, order, department and family, with facets computed before scoping, backed by a 60-second per-process row cache like the sibling report. Elapsed time and tier precedence come from `sla_engine` (`compute_business_minutes`, `resolve_sla_tier`) and family classification from `throughput.classify_keyword`, so the report cannot drift from the app or from its sibling. Target resolves per sample, so the numbers follow the day a service group is given its own tier. Pure engine in `backend/sla_perf.py`.
+
 ## v1.16.1 — 2026-09-09
 
 ### Added

@@ -98,12 +98,19 @@ def _heal_status(db: Session, sample_pk: int, new_status: str,
         (worksheet_assigned -> 'analyzing') that are NOT review_states;
         writing them poisons a column every read surface compares against
         SENAITE vocabulary. The transition LOG still records the raw event —
-        only the status-column write is gated.
+        only the status-column write is gated. The vocabulary comes from the
+        LIVE catalog (spec §7.1), the same operand `heal_sample_status` reads,
+        so a state added in the Settings -> Workflow pane heals too.
 
     Heal failure never breaks the sync loop (same contract as the recorder)."""
-    from workflow.sample_log import SAMPLE_REVIEW_STATE_WHITELIST
+    from workflow.sample_log import _LEGACY_MIRROR_EXTRA
     try:
-        if new_status not in SAMPLE_REVIEW_STATE_WHITELIST:
+        from workflow.authority import sample_status_authority
+        from workflow.catalog import sample_state_slugs
+        if sample_status_authority(db) == "mk1":
+            stats["skipped_authority"] = stats.get("skipped_authority", 0) + 1
+            return
+        if new_status not in (sample_state_slugs(db) | _LEGACY_MIRROR_EXTRA):
             return
         sample = db.get(LimsSample, sample_pk)
         if sample is None or not new_status or sample.status == new_status:
@@ -116,6 +123,31 @@ def _heal_status(db: Session, sample_pk: int, new_status: str,
         stats["healed"] += 1
     except Exception as e:
         logger.warning("workflow.is_sync_heal_failed sample_pk=%s err=%s",
+                       sample_pk, e)
+        stats["errors"] += 1
+
+
+def _stamp_date_received(db: Session, sample_pk: int, ev: dict,
+                         occurred: Optional[datetime], stats: dict) -> None:
+    """A receive event is the only record Mk1 gets of a SENAITE-side receive
+    (auto check-in, SENAITE UI): the Mk1 receive verb stamps date_received
+    itself and a senaite-touching fetch copies SENAITE's DateReceived, but a
+    sample received outside both paths kept NULL forever (P-2605, P-2632,
+    PB-0494 — 2026-09-11) and dropped out of every date_received window
+    (stranded scan, throughput reports). NULL-gated: never overwrites a
+    value from SENAITE or the Mk1 verb; independent of status authority
+    because it is a fact about the sample, not a status write. Runs for dup
+    events too — a replayed receive can still repair a NULL."""
+    try:
+        if ev.get("transition") != "receive" or occurred is None:
+            return
+        sample = db.get(LimsSample, sample_pk)
+        if sample is None or sample.date_received is not None:
+            return
+        sample.date_received = occurred
+        stats["date_received_stamped"] = stats.get("date_received_stamped", 0) + 1
+    except Exception as e:
+        logger.warning("workflow.is_sync_date_received_failed sample_pk=%s err=%s",
                        sample_pk, e)
         stats["errors"] += 1
 
@@ -194,6 +226,7 @@ def sync_once(db_factory: Callable[[], Session], *, batch_size: int = 500,
                     is_event_id=ev["event_id"] or f"synth:{ev['id']}",
                 )
                 stats["inserted" if inserted else "dup"] += 1
+                _stamp_date_received(db, sample_pk, ev, occurred, stats)
                 if inserted:
                     # Events arrive created_at ASC, so a multi-event batch
                     # for one sample lands on the newest status.

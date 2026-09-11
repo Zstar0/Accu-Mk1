@@ -21,7 +21,7 @@ def test_states_set_is_complete():
     assert STATES == {
         "unassigned", "assigned", "to_be_verified", "parent_to_verify",
         "verified", "published", "promoted", "variance_verified",
-        "rejected", "retracted",
+        "rejected", "retracted", "cancelled",
     }
 
 
@@ -36,7 +36,7 @@ def test_terminal_states():
 def test_transition_kinds_set():
     assert TRANSITION_KINDS == {
         "assign", "submit", "verify", "retract", "reject",
-        "retest", "publish", "reset", "auto", "variance_verify",
+        "retest", "publish", "reset", "auto", "variance_verify", "cancel",
     }
 
 
@@ -143,11 +143,11 @@ def test_unknown_kind_raises():
 
 
 def test_allowed_kinds_from_unassigned():
-    assert allowed_kinds("unassigned") == {"assign", "submit", "reject"}
+    assert allowed_kinds("unassigned") == {"assign", "submit", "reject", "cancel"}
 
 
 def test_allowed_kinds_from_to_be_verified():
-    assert allowed_kinds("to_be_verified") == {"submit", "verify", "variance_verify", "retract", "reject"}
+    assert allowed_kinds("to_be_verified") == {"submit", "verify", "variance_verify", "retract", "reject", "cancel"}
 
 
 def test_allowed_kinds_from_verified():
@@ -233,14 +233,14 @@ def test_allowed_kinds_filtered_by_tier():
     # sign-off path for replicate sets. 'submit' is allowed as an in-place
     # result correction (self-edge) before the vial is promoted/variance-verified.
     assert allowed_kinds("to_be_verified", tier=TIER_VIAL) == {
-        "submit", "retract", "reject", "variance_verify",
+        "submit", "retract", "reject", "variance_verify", "cancel",
     }
     # 'verify' is now a real parent-tier kind (native second sign-off), so it
     # shows up here too — this is the raw (kind-only) tier matrix intersected
     # with to_be_verified's state-machine-legal kinds; it does not imply a
     # to_be_verified row is ever actually parent-tier (tier_of() never maps
     # to_be_verified to TIER_PARENT — see test_tier_of_parent_attached_in_run_states_is_vial).
-    assert allowed_kinds("to_be_verified", tier=TIER_PARENT) == {"retract", "verify"}
+    assert allowed_kinds("to_be_verified", tier=TIER_PARENT) == {"retract", "verify", "cancel"}
 
 
 def test_unknown_tier_raises():

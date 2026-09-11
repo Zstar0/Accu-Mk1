@@ -3,7 +3,6 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import {
   fetchSlaStatuses,
   type ExplorerOrder,
-  type InboxPriority,
   type SenaiteLookupResult,
   type SlaStatus,
   type SlaStatusRequestItem,
@@ -28,7 +27,6 @@ import {
 } from '@/lib/sla-resolution'
 import { useAnalysisServices } from '@/services/analysis-services'
 import { useAnalysisProfiles } from '@/services/analysis-profiles'
-import { useSamplePriorities } from '@/services/sample-priorities'
 import { useServiceGroups } from '@/services/service-groups'
 import { useSlaTiers, useSlaPriorityTiers } from '@/services/sla'
 
@@ -47,9 +45,10 @@ export interface SampleSlaSnapshot {
   /** Diagnostic — explains which precedence rule (priority/group/default) won
    *  and is consumed by the breakdown tooltip. */
   reason: SampleSlaReason
-  /** Resolved priority that fed the tier resolution. Useful for the
-   *  "Priority: normal/expedited" line in the breakdown tooltip. */
-  priority: InboxPriority
+  /** Resolved effective priority KEY that fed the tier resolution
+   *  (`'default'` when the sample has none). Feeds the "Priority: ..." line in
+   *  the breakdown tooltip. */
+  priority: string
   /** SLA clock start (received_at) — surfaced as the "Received: ..." first
    *  field in the breakdown tooltip. Read off the sample's lookup. */
   receivedAt?: string | null
@@ -71,8 +70,8 @@ export interface OrderSlaResult {
  * Composite hook: per-order SLA verdict + per-sample-per-group snapshots for
  * the explorer.
  *
- * Wraps 5 cached queries (tiers, priority overrides, service groups, analysis
- * services, sample priorities) and runs ONE batched `/sla/status` POST keyed
+ * Wraps the cached catalog queries (tiers, priority overrides, service groups,
+ * analysis services, analysis profiles) and runs ONE batched `/sla/status` POST keyed
  * by a stable hash of the resolved batch items (so re-renders with logically
  * identical inputs hit cache). Aggregation is `useMemo`, NOT another `useQuery`
  * (advisor sharpening #4).
@@ -124,13 +123,6 @@ export function useOrderSlaStatuses(
     return out
   }, [orders, sampleLookupMap])
 
-  const sampleUids = useMemo(
-    () => liveLookups.map(l => l.lookup.sample_uid).filter((u): u is string => Boolean(u)),
-    [liveLookups]
-  )
-
-  const prioritiesQuery = useSamplePriorities(sampleUids)
-
   /** Flattened per-sample-per-group resolution. One entry per (sample, group)
    *  bucket produced by `resolveSampleTiersByGroup`. Samples whose analyses
    *  span multiple groups appear N times here. */
@@ -149,10 +141,6 @@ export function useOrderSlaStatuses(
     const globalPriorityToTier = buildGlobalPriorityToTierMap(priorityRows, tiersById)
     const perGroupPriorityToTier = buildPerGroupPriorityToTierMap(priorityRows, tiersById)
     const groupNameById = new Map(groups.map(g => [g.id, g.name]))
-    const prioByUid = new Map<string, InboxPriority>()
-    for (const row of prioritiesQuery.data ?? []) {
-      prioByUid.set(row.sample_uid, row.priority)
-    }
 
     const out: {
       senaiteId: string
@@ -160,12 +148,13 @@ export function useOrderSlaStatuses(
       groupKey: GroupKey
       groupName?: string
       tier: SlaTier | null
-      priority: InboxPriority
+      priority: string
       reason: SampleSlaReason
     }[] = []
     for (const { senaiteId, lookup } of liveLookups) {
-      const priority: InboxPriority =
-        (lookup.sample_uid && prioByUid.get(lookup.sample_uid)) || 'normal'
+      // Effective priority rides inline on each sample's lookup row now.
+      // `'default'` is the sparsity sentinel — never an override-map key.
+      const priority = lookup.priority?.key ?? 'default'
       const byGroup = resolveSampleTiersByGroup(
         { analyses: lookup.analyses, priority },
         keywordToServiceId,
@@ -213,7 +202,6 @@ export function useOrderSlaStatuses(
     servicesQuery.data,
     profilesQuery.data,
     prioOverridesQuery.data,
-    prioritiesQuery.data,
   ])
 
   /** Composite key `${sample_uid}|${groupKey}` so the `/sla/status` response
@@ -370,7 +358,6 @@ export function useOrderSlaStatuses(
         servicesQuery.isLoading ||
         profilesQuery.isLoading ||
         prioOverridesQuery.isLoading ||
-        prioritiesQuery.isLoading ||
         (batchItems.length > 0 && statusQuery.isLoading),
       isError:
         tiersQuery.isError ||
@@ -378,7 +365,6 @@ export function useOrderSlaStatuses(
         servicesQuery.isError ||
         profilesQuery.isError ||
         prioOverridesQuery.isError ||
-        prioritiesQuery.isError ||
         statusQuery.isError,
     }
   }, [
@@ -398,8 +384,6 @@ export function useOrderSlaStatuses(
     profilesQuery.isError,
     prioOverridesQuery.isLoading,
     prioOverridesQuery.isError,
-    prioritiesQuery.isLoading,
-    prioritiesQuery.isError,
     batchItems.length,
   ])
 

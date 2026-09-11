@@ -489,6 +489,156 @@ def _run_migrations():
         "ALTER TABLE sla_priority_tiers ADD CONSTRAINT sla_priority_tiers_pkey PRIMARY KEY (id)",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_sla_priority_global ON sla_priority_tiers (priority) WHERE service_group_id IS NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_sla_priority_per_group ON sla_priority_tiers (priority, service_group_id) WHERE service_group_id IS NOT NULL",
+        # ── Sample priority (spec 2026-09-09-sample-priority-design) ──
+        """
+        CREATE TABLE IF NOT EXISTS priorities (
+            id         SERIAL PRIMARY KEY,
+            key        VARCHAR(40) NOT NULL UNIQUE,
+            name       VARCHAR(100) NOT NULL,
+            rank       INTEGER NOT NULL DEFAULT 0,
+            icon       VARCHAR(30) NOT NULL DEFAULT 'minus',
+            color      VARCHAR(20) NOT NULL DEFAULT 'zinc',
+            pulse      BOOLEAN NOT NULL DEFAULT FALSE,
+            is_default BOOLEAN NOT NULL DEFAULT FALSE,
+            is_active  BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_priorities_single_default ON priorities (is_default) WHERE is_default",
+        # Seed the three legacy literals. `normal` becomes `default`. Idempotent.
+        """
+        INSERT INTO priorities (key, name, rank, icon, color, pulse, is_default, is_active)
+        SELECT * FROM (VALUES
+            ('default',   'Default',   0,  'minus',       'zinc',  FALSE, TRUE,  TRUE),
+            ('high',      'High',      10, 'chevron-up',  'amber', FALSE, FALSE, TRUE),
+            ('expedited', 'Expedited', 20, 'chevrons-up', 'red',   TRUE,  FALSE, TRUE)
+        ) AS v(key, name, rank, icon, color, pulse, is_default, is_active)
+        WHERE NOT EXISTS (SELECT 1 FROM priorities)
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS customer_priorities (
+            wp_customer_user_id INTEGER PRIMARY KEY,
+            priority_key VARCHAR(40) NOT NULL REFERENCES priorities(key) ON DELETE RESTRICT,
+            note         TEXT,
+            updated_by   INTEGER,
+            updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS priority_audit (
+            id        SERIAL PRIMARY KEY,
+            at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            user_id   INTEGER,
+            level     VARCHAR(10) NOT NULL,
+            entity_id VARCHAR(100) NOT NULL,
+            old_key   VARCHAR(40),
+            new_key   VARCHAR(40),
+            source    VARCHAR(20) NOT NULL DEFAULT 'ui',
+            note      TEXT
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_priority_audit_entity ON priority_audit (level, entity_id)",
+        "CREATE INDEX IF NOT EXISTS ix_priority_audit_at ON priority_audit (at)",
+        "ALTER TABLE lims_orders ADD COLUMN IF NOT EXISTS priority_key VARCHAR(40) REFERENCES priorities(key) ON DELETE SET NULL",
+        "ALTER TABLE lims_orders ADD COLUMN IF NOT EXISTS priority_source VARCHAR(20)",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS priority_key VARCHAR(40) REFERENCES priorities(key) ON DELETE SET NULL",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS sla_priority_key VARCHAR(40)",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS sla_priority_source VARCHAR(10)",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS sla_target_minutes INTEGER",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS sla_snapshot_at TIMESTAMP",
+        "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS priority_key VARCHAR(40) REFERENCES priorities(key) ON DELETE SET NULL",
+        "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS sla_priority_key VARCHAR(40)",
+        "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS sla_priority_source VARCHAR(10)",
+        "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS sla_target_minutes INTEGER",
+        "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS sla_snapshot_at TIMESTAMP",
+        # date_received backfill (2026-09-11): a sample received on the SENAITE
+        # side (auto check-in / SENAITE UI) has a 'receive' ledger row but no
+        # date_received unless a senaite-touching fetch later copied it. The
+        # event sync now stamps it live; this repairs the rows already
+        # affected. NULL-gated so it is naturally once-only and never touches
+        # a value SENAITE or the Mk1 receive verb wrote.
+        """
+        UPDATE lims_samples s
+           SET date_received = t.first_received
+          FROM (SELECT lims_sample_pk, MIN(occurred_at) AS first_received
+                  FROM lims_sample_transitions
+                 WHERE verb = 'receive'
+                 GROUP BY lims_sample_pk) t
+         WHERE t.lims_sample_pk = s.id
+           AND s.date_received IS NULL
+        """,
+        # Backfill the legacy per-sample table into lims_samples.priority_key.
+        # 'normal' = inherit (NULL). One audit row per backfilled sample.
+        # ONCE per row, not once per boot: _run_migrations() runs on every
+        # start, so without the audit-row guard on the UPDATE a user who
+        # cleared a backfilled priority back to inherit would have it
+        # resurrected at the next restart. The guard works because the UPDATE
+        # is ordered BEFORE the audit INSERT that marks the row as done.
+        """
+        UPDATE lims_samples s
+           SET priority_key = sp.priority
+          FROM sample_priorities sp
+         WHERE sp.sample_uid = s.external_lims_uid
+           AND sp.priority IN ('high', 'expedited')
+           AND s.priority_key IS NULL
+           AND NOT EXISTS (
+                SELECT 1 FROM priority_audit a
+                 WHERE a.level = 'sample' AND a.entity_id = s.id::text AND a.source = 'migration')
+        """,
+        """
+        INSERT INTO priority_audit (level, entity_id, old_key, new_key, source, note)
+        SELECT 'sample', s.id::text, NULL, sp.priority, 'migration', 'backfill from sample_priorities'
+          FROM sample_priorities sp
+          JOIN lims_samples s ON s.external_lims_uid = sp.sample_uid
+         WHERE sp.priority IN ('high', 'expedited')
+           AND NOT EXISTS (
+                SELECT 1 FROM priority_audit a
+                 WHERE a.level = 'sample' AND a.entity_id = s.id::text AND a.source = 'migration')
+        """,
+        # Same backfill at the VIAL level. The retired inbox writes keyed
+        # sample_priorities by the row's own uid, and the native inbox rows are
+        # VIALS (mk1:// uids live on lims_sub_samples, never on lims_samples) —
+        # without this those rows would silently revert to the default at deploy.
+        """
+        UPDATE lims_sub_samples v
+           SET priority_key = sp.priority
+          FROM sample_priorities sp
+         WHERE sp.sample_uid = v.external_lims_uid
+           AND sp.priority IN ('high', 'expedited')
+           AND v.priority_key IS NULL
+           AND NOT EXISTS (
+                SELECT 1 FROM priority_audit a
+                 WHERE a.level = 'vial' AND a.entity_id = v.id::text AND a.source = 'migration')
+        """,
+        """
+        INSERT INTO priority_audit (level, entity_id, old_key, new_key, source, note)
+        SELECT 'vial', v.id::text, NULL, sp.priority, 'migration', 'backfill from sample_priorities'
+          FROM sample_priorities sp
+          JOIN lims_sub_samples v ON v.external_lims_uid = sp.sample_uid
+         WHERE sp.priority IN ('high', 'expedited')
+           AND NOT EXISTS (
+                SELECT 1 FROM priority_audit a
+                 WHERE a.level = 'vial' AND a.entity_id = v.id::text AND a.source = 'migration')
+        """,
+        # FK from the sparse SLA override map to the priorities table. Only
+        # after every existing value is a known key (the seed guarantees the
+        # three legacy literals; 'normal' never had a row by the sparsity contract).
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints
+                            WHERE table_name = 'sla_priority_tiers'
+                              AND constraint_name = 'fk_sla_priority_tiers_priority')
+               AND NOT EXISTS (SELECT 1 FROM sla_priority_tiers t
+                                LEFT JOIN priorities p ON p.key = t.priority
+                               WHERE p.key IS NULL) THEN
+                ALTER TABLE sla_priority_tiers
+                    ADD CONSTRAINT fk_sla_priority_tiers_priority
+                    FOREIGN KEY (priority) REFERENCES priorities(key) ON DELETE CASCADE;
+            END IF;
+        END $$
+        """,
         # ── Business-hours SLA calendar (sub-project B) ──
         """
         CREATE TABLE IF NOT EXISTS business_hours_config (
@@ -805,6 +955,16 @@ def _run_migrations():
                 ('assign','submit','verify','retract','reject',
                  'retest','publish','reset','auto','variance_verify','observed'))
         """,
+        # Native cancel (2026-09-09 sample-status-authority-flip Task 11):
+        # pending analysis-tier rows die with the sample. Drop+recreate the
+        # transition-kind CHECK with 'cancel' added (idempotent).
+        "ALTER TABLE lims_analysis_transitions DROP CONSTRAINT IF EXISTS lims_analysis_transitions_transition_kind_check",
+        """
+        ALTER TABLE lims_analysis_transitions ADD CONSTRAINT lims_analysis_transitions_transition_kind_check
+            CHECK (transition_kind IN
+                ('assign','submit','verify','retract','reject',
+                 'retest','publish','reset','auto','variance_verify','observed','cancel'))
+        """,
         # Variance addon: lab-side override until WP variance addon ships.
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS variance_override TEXT",
         # --- Registry dual-write slice 1: the complete sample record ---
@@ -965,6 +1125,12 @@ def _run_migrations():
         SELECT 'identity_collision', 'Identity Collision', '#e5484d', 'issue', TRUE, TRUE, 7, '[]'::jsonb, TRUE
         WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='identity_collision')
         """,
+        # Sample-status authority flip (2026-09-09 spec §6.2): stranded samples.
+        """
+        INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
+        SELECT 'workflow_stranded', 'Workflow Stranded', '#f59e0b', 'issue', FALSE, TRUE, 8, '[]'::jsonb, TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='workflow_stranded')
+        """,
         # Extend the NAMED status CHECK to admit 'blocked' (Plan 5). A dedicated
         # DROP+ADD statement — NOT an edit to the IF-NOT-EXISTS flag_flags create
         # (which never re-runs once the table exists). Postgres-only; on the
@@ -1094,6 +1260,23 @@ def _run_migrations():
                 'unassigned', 'assigned', 'to_be_verified', 'verified',
                 'published', 'rejected', 'retracted', 'promoted',
                 'variance_verified', 'senaite_mirror', 'parent_to_verify'
+            ))
+        """,
+        # Native cancel (2026-09-09 sample-status-authority-flip Task 11):
+        # pending analysis-tier rows (vial-tier unassigned/assigned/
+        # to_be_verified, parent-tier parent_to_verify) can be cancelled when
+        # the sample dies; verified/promoted/variance-verified/published rows
+        # never do. Drop+recreate the review_state CHECK with 'cancelled'
+        # added (idempotent; this pair sits after every prior review_state
+        # CHECK pair so last-boot-wins yields the extended list).
+        "ALTER TABLE lims_analyses DROP CONSTRAINT IF EXISTS lims_analyses_review_state_check",
+        """
+        ALTER TABLE lims_analyses ADD CONSTRAINT lims_analyses_review_state_check
+            CHECK (review_state IN (
+                'unassigned', 'assigned', 'to_be_verified', 'verified',
+                'published', 'rejected', 'retracted', 'promoted',
+                'variance_verified', 'senaite_mirror', 'parent_to_verify',
+                'cancelled'
             ))
         """,
         # Make the parent-tier root index provenance-aware: a shadow mirror
@@ -1292,6 +1475,25 @@ def _run_migrations():
         "ON lims_workflow_shadow_evaluations (lims_sample_pk, evaluated_at)",
         "CREATE INDEX IF NOT EXISTS ix_shadow_evals_nonadvanced "
         "ON lims_workflow_shadow_evaluations (outcome) WHERE outcome != 'advanced'",
+        # ── Sample-status authority flip (2026-09-09 spec §3.2) — additive.
+        """
+        CREATE TABLE IF NOT EXISTS lims_senaite_tee_retries (
+            id               SERIAL PRIMARY KEY,
+            lims_sample_pk   INTEGER NOT NULL REFERENCES lims_samples(id) ON DELETE CASCADE,
+            verb             TEXT NOT NULL,
+            expected_state   TEXT NOT NULL,
+            attempts         INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at  TIMESTAMPTZ NOT NULL,
+            last_error       TEXT,
+            status           TEXT NOT NULL DEFAULT 'pending',
+            created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_senaite_tee_retries_due "
+        "ON lims_senaite_tee_retries (next_attempt_at) WHERE status = 'pending'",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_senaite_tee_retries_pending "
+        "ON lims_senaite_tee_retries (lims_sample_pk, verb) WHERE status = 'pending'",
         # Catalog data (spec §8 decision 3): cascade-eligible builtin edges +
         # the publish edge's attested requirement. Guarded → idempotent.
         "UPDATE lims_workflow_transitions SET auto_fire = TRUE "
@@ -1345,6 +1547,19 @@ def _run_migrations():
         "replace(requirements::text, '\"value\": \"verified\"', "
         "'\"value\": \"verified,published\"')::jsonb "
         "WHERE entity_scope='sample' AND verb='publish' AND is_builtin "
+        "AND requirements::text LIKE '%\"value\": \"verified\"%'",
+        # Verify gate widened the same way (2026-09-09): the 2026-08-23
+        # widening above covered publish but NOT verify, so a sample whose
+        # lines SENAITE had already published could never satisfy verify
+        # ('published' is not in a strict 'verified' list), stuck at
+        # to_be_verified, and then refused publish with no_edge — the 12
+        # `no_edge:publish` residuals found at the authority flip. Same
+        # idempotent LIKE guard: an already-widened 'verified,published'
+        # value cannot match (the comma breaks the closing-quote match).
+        "UPDATE lims_workflow_transitions SET requirements = "
+        "replace(requirements::text, '\"value\": \"verified\"', "
+        "'\"value\": \"verified,published\"')::jsonb "
+        "WHERE entity_scope='sample' AND verb='verify' AND is_builtin "
         "AND requirements::text LIKE '%\"value\": \"verified\"%'",
         # waiting_for_addon_results → published publish edge (burn-in finding
         # 2026-08-23, stuck_behind bucket): the state was seeded with NO

@@ -364,6 +364,7 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
         if existing.native_id is None:
             existing.native_id = mint_native_id(db, senaite_sample_id=existing.sample_id)
         db.flush()
+        apply_signal_priority(db, existing, meta)
         return existing
 
     native_id_value = mint_native_id(
@@ -383,7 +384,48 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
     # After the flush — the remark's FK needs row.id.
     _record_customer_order_note(db, row, meta)
     db.flush()
+    apply_signal_priority(db, row, meta)
     return row
+
+
+_SIGNAL_PRIORITIES = ("high", "expedited")
+
+
+def apply_signal_priority(db: Session, row: LimsSample, meta: dict) -> Optional[str]:
+    """Stamp the order's priority on the sample the moment it is registered.
+
+    The WordPress order can carry a priority (normal / high / expedited);
+    the Integration Service forwards it as ``meta["Priority"]``. Until now
+    it only reached ``sample_priorities`` when the Worksheets Inbox happened
+    to render the received sample, so the SLA header, the sample page and
+    every report saw "normal" until then. This mirrors the inbox rule
+    exactly: create the row, or upgrade one still at ``normal`` — never
+    downgrade a manual high/expedited, and a normal/absent signal changes
+    nothing. Keyed by the sample's uid like every other priority reader;
+    a row without a uid yet (SENAITE-free registration) is skipped and the
+    inbox fallback still applies later.
+
+    Returns the priority written, or None when nothing changed.
+    """
+    raw = meta.get("Priority")
+    if raw is None:
+        raw = meta.get("priority")
+    prio = str(raw or "").strip().lower()
+    if prio not in _SIGNAL_PRIORITIES or not row.external_lims_uid:
+        return None
+    from models import SamplePriority
+
+    existing = db.execute(
+        select(SamplePriority).where(SamplePriority.sample_uid == row.external_lims_uid)
+    ).scalar_one_or_none()
+    if existing is None:
+        db.add(SamplePriority(sample_uid=row.external_lims_uid, priority=prio))
+    elif existing.priority == "normal":
+        existing.priority = prio
+    else:
+        return None
+    db.flush()
+    return prio
 
 
 def _extract_uid(value):
@@ -630,6 +672,20 @@ def _refresh_parent_from_senaite(db: Session, parent: LimsSample) -> None:
     prior_uid = parent.external_lims_uid
     prior_system = parent.external_lims_system
     _populate_basic_info(parent, meta)
+    # Authority flip (spec §4.2): under mk1 authority the engine owns this
+    # column, so the gate restores the pre-fetch status here rather than
+    # touching _populate_basic_info's unconditional write (that helper is
+    # shared with the row-creation and signal-upsert paths, which stay
+    # SENAITE-sourced). SENAITE's own review_state is still LOGGED — as a
+    # `reconcile` row at the bottom of this function, keyed off the captured
+    # `senaite_state` rather than the restored column, because that log is
+    # the ONLY place a SENAITE-UI transition after the flip becomes visible
+    # (and what spec §10's rollback sweep reads).
+    from workflow.authority import sample_status_authority
+    senaite_state = meta.get("review_state")
+    mk1_authority = sample_status_authority(db) == "mk1"
+    if mk1_authority:
+        parent.status = old_status
     if not incoming_uid and prior_uid:
         # Malformed/partial fetch response: restore identity instead of
         # letting _populate_basic_info NULL it (same prior-identity-restore
@@ -641,11 +697,30 @@ def _refresh_parent_from_senaite(db: Session, parent: LimsSample) -> None:
             parent.sample_id,
         )
     db.flush()
-    if parent.status != old_status:
+    if mk1_authority:
+        # the column was restored above, so compare SENAITE's state directly.
+        # A persistently diverged sample would otherwise re-log on EVERY page
+        # view (the column never converges to SENAITE's state under mk1), so
+        # log only when SENAITE's state differs from the last reconcile row.
+        logged_to = senaite_state
+        should_log = bool(senaite_state) and senaite_state != old_status
+        if should_log:
+            from sqlalchemy import select as _select
+            from models import LimsSampleTransition as _LST
+            last_reconcile = db.execute(
+                _select(_LST.to_status).where(
+                    _LST.lims_sample_pk == parent.id, _LST.source == "reconcile"
+                ).order_by(_LST.id.desc()).limit(1)
+            ).scalar_one_or_none()
+            should_log = last_reconcile != senaite_state
+    else:
+        logged_to = parent.status
+        should_log = parent.status != old_status
+    if should_log:
         from workflow.sample_log import record_sample_transition
         try:
             record_sample_transition(
-                db, sample_id=parent.sample_id, to_status=parent.status,
+                db, sample_id=parent.sample_id, to_status=logged_to,
                 from_status=old_status, source="reconcile", occurred_at=None,
             )
         except Exception as e:
@@ -2790,14 +2865,14 @@ def board_vials(
         ).all():
             ws_by_uid[uid] = BoardWorksheetOut(id=ws.id, title=ws.title, status=ws.status)
 
-    # Query 5: priorities keyed on the parent's external uid; missing = normal.
+    # Query 5: effective priority (spec §5) keyed on the parent's external uid,
+    # rendered in the board's legacy vocabulary; missing = normal.
     priority_by_uid = {}
     if parent_uids:
+        from priority.service import legacy_priority_string, load_effective_for_uids
         priority_by_uid = {
-            row.sample_uid: row.priority
-            for row in db.execute(
-                select(SamplePriority).where(SamplePriority.sample_uid.in_(parent_uids))
-            ).scalars()
+            uid: legacy_priority_string(eff)
+            for uid, eff in load_effective_for_uids(db, parent_uids).items()
         }
 
     # Query 2: ALL current vial-tier analyses for the included vials.

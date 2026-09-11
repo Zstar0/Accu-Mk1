@@ -205,9 +205,6 @@ describe('useAnalysisSlaMap', () => {
   })
 
   it('forwards isPublished and priority from useSampleSla', async () => {
-    samplePrioritiesLookupMock.mockResolvedValue([
-      { sample_uid: 'uid-PB-001', priority: 'expedited' },
-    ])
     fetchSlaStatusesMock.mockResolvedValue([
       {
         key: 'uid-PB-001|100',
@@ -215,6 +212,13 @@ describe('useAnalysisSlaMap', () => {
       },
     ])
     const lookup = makeLookup({
+      // Effective priority rides inline on the row now (sample-priority spec).
+      priority: {
+        key: 'expedited',
+        rank: 80,
+        source_level: 'sample',
+        source_id: '1',
+      },
       review_state: 'published',
       // @ts-expect-error -- partial shape for test
       published_coa: { published_date: '2026-01-01T19:00:00' },

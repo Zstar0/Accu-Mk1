@@ -3,7 +3,7 @@ SQLAlchemy models for Accu-Mk1 database.
 Uses SQLAlchemy 2.0 style with mapped_column.
 """
 
-from datetime import datetime, time, date
+from datetime import datetime, time, date, timezone
 from decimal import Decimal
 from typing import Optional, List
 import uuid
@@ -1174,6 +1174,15 @@ class LimsSample(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     sample_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     external_lims_uid: Mapped[Optional[str]] = mapped_column(String(100), index=True)
+    # Explicit priority at this level (NULL = inherit). Spec §3.3.
+    priority_key: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("priorities.key", ondelete="SET NULL"), nullable=True
+    )
+    # SLA snapshot at the clock events (receive / in-flight change / completion). Spec §3.5.
+    sla_priority_key: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    sla_priority_source: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    sla_target_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    sla_snapshot_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     external_lims_system: Mapped[Optional[str]] = mapped_column(String(50), default="senaite")
     client_id: Mapped[Optional[str]] = mapped_column(String(100))
     client_uid: Mapped[Optional[str]] = mapped_column(String(100))
@@ -1314,6 +1323,12 @@ class LimsOrder(Base):
     customer_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     customer_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     customer_email: Mapped[Optional[str]] = mapped_column(String(254), nullable=True)
+    # Order-level explicit priority (NULL = inherit from customer). Source
+    # records whether the UI or the WordPress order payload set it.
+    priority_key: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("priorities.key", ondelete="SET NULL"), nullable=True
+    )
+    priority_source: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     billing: Mapped[Optional[dict]] = mapped_column(
         JSONB().with_variant(JSON(), "sqlite"), nullable=True
     )
@@ -1423,6 +1438,15 @@ class LimsSubSample(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     parent_sample_pk: Mapped[int] = mapped_column(Integer, ForeignKey("lims_samples.id", ondelete="CASCADE"))
     external_lims_uid: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    # Explicit priority at this level (NULL = inherit). Spec §3.3.
+    priority_key: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("priorities.key", ondelete="SET NULL"), nullable=True
+    )
+    # SLA snapshot at the clock events (receive / in-flight change / completion). Spec §3.5.
+    sla_priority_key: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    sla_priority_source: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    sla_target_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    sla_snapshot_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     sample_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     vial_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     received_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -1714,6 +1738,75 @@ class SlaPriorityTier(Base):
             f"<SlaPriorityTier(id={self.id}, priority='{self.priority}', "
             f"service_group_id={self.service_group_id}, sla_tier_id={self.sla_tier_id})>"
         )
+
+
+PRIORITY_ICONS = ("chevrons-up", "chevron-up", "minus", "chevron-down", "chevrons-down", "flame")
+PRIORITY_COLORS = ("red", "amber", "emerald", "sky", "violet", "zinc")
+PRIORITY_LEVELS = ("customer", "order", "sample", "vial")
+PRIORITY_SOURCES = ("ui", "order-payload", "migration", "bulk")
+
+
+class Priority(Base):
+    """A managed sample priority (spec 2026-09-09-sample-priority-design §3.1).
+
+    `key` is an immutable slug referenced by sla_priority_tiers.priority and by
+    every level's priority_key column. Exactly one row is the default (partial
+    unique index uq_priorities_single_default). Rows are deactivated, never
+    deleted; an inactive key resolves as "inherit".
+    """
+
+    __tablename__ = "priorities"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    rank: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    icon: Mapped[str] = mapped_column(String(30), nullable=False, default="minus")
+    color: Mapped[str] = mapped_column(String(20), nullable=False, default="zinc")
+    pulse: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<Priority(key='{self.key}', rank={self.rank}, active={self.is_active})>"
+
+
+class CustomerPriority(Base):
+    """Customer-level explicit priority keyed by the WordPress customer user id
+    (lims_orders.customer_user_id). Mk1 is the authority (spec §2 decision 3)."""
+
+    __tablename__ = "customer_priorities"
+
+    wp_customer_user_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    priority_key: Mapped[str] = mapped_column(
+        ForeignKey("priorities.key", ondelete="RESTRICT"), nullable=False
+    )
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    updated_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class PriorityAudit(Base):
+    """One row per priority change at any level (spec §3.4). The sample
+    activity log derives its priority lines from this table at read time."""
+
+    __tablename__ = "priority_audit"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    level: Mapped[str] = mapped_column(String(10), nullable=False)
+    entity_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    old_key: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    new_key: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="ui")
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class BusinessHoursConfig(Base):
@@ -2152,11 +2245,13 @@ class LimsWorkflowShadowEvaluation(Base):
                'registration' (2026-07-27: first-touch arming at the
                registry-signal creation hook — see `workflow.engine.
                arm_native_status` and `main._arm_native_status_at_
-               registration_bg`; always paired with outcome='seeded')
+               registration_bg`; always paired with outcome='seeded') |
+               'cancel' (2026-09-09: POST /api/samples/{id}/cancel)
     """
     __tablename__ = "lims_workflow_shadow_evaluations"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     lims_sample_pk: Mapped[int] = mapped_column(
         Integer, ForeignKey("lims_samples.id", ondelete="CASCADE"), nullable=False)
     evaluated_at: Mapped[datetime] = mapped_column(
@@ -2171,6 +2266,29 @@ class LimsWorkflowShadowEvaluation(Base):
         JSONB().with_variant(JSON(), "sqlite"), nullable=False, default=list)
     actor_user_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("users.id"), nullable=True)
+
+
+TEE_STATUSES = ("pending", "done", "gave_up", "senaite_only")
+
+
+class LimsSenaiteTeeRetry(Base):
+    """One queued SENAITE transition that failed its read-back (spec §3.2).
+    Vocabulary in code (TEE_STATUSES), not a CHECK. Drained by
+    workflow.senaite_tee.run_retries on the flags scheduler."""
+    __tablename__ = "lims_senaite_tee_retries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    lims_sample_pk: Mapped[int] = mapped_column(
+        Integer, ForeignKey("lims_samples.id", ondelete="CASCADE"), nullable=False, index=True)
+    verb: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_state: Mapped[str] = mapped_column(Text, nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+                                                 onupdate=lambda: datetime.now(timezone.utc))
 
 
 class LimsSubSampleEvent(Base):
