@@ -552,6 +552,22 @@ def _run_migrations():
         "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS sla_priority_source VARCHAR(10)",
         "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS sla_target_minutes INTEGER",
         "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS sla_snapshot_at TIMESTAMP",
+        # date_received backfill (2026-09-11): a sample received on the SENAITE
+        # side (auto check-in / SENAITE UI) has a 'receive' ledger row but no
+        # date_received unless a senaite-touching fetch later copied it. The
+        # event sync now stamps it live; this repairs the rows already
+        # affected. NULL-gated so it is naturally once-only and never touches
+        # a value SENAITE or the Mk1 receive verb wrote.
+        """
+        UPDATE lims_samples s
+           SET date_received = t.first_received
+          FROM (SELECT lims_sample_pk, MIN(occurred_at) AS first_received
+                  FROM lims_sample_transitions
+                 WHERE verb = 'receive'
+                 GROUP BY lims_sample_pk) t
+         WHERE t.lims_sample_pk = s.id
+           AND s.date_received IS NULL
+        """,
         # Backfill the legacy per-sample table into lims_samples.priority_key.
         # 'normal' = inherit (NULL). One audit row per backfilled sample.
         # ONCE per row, not once per boot: _run_migrations() runs on every

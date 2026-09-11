@@ -127,6 +127,31 @@ def _heal_status(db: Session, sample_pk: int, new_status: str,
         stats["errors"] += 1
 
 
+def _stamp_date_received(db: Session, sample_pk: int, ev: dict,
+                         occurred: Optional[datetime], stats: dict) -> None:
+    """A receive event is the only record Mk1 gets of a SENAITE-side receive
+    (auto check-in, SENAITE UI): the Mk1 receive verb stamps date_received
+    itself and a senaite-touching fetch copies SENAITE's DateReceived, but a
+    sample received outside both paths kept NULL forever (P-2605, P-2632,
+    PB-0494 — 2026-09-11) and dropped out of every date_received window
+    (stranded scan, throughput reports). NULL-gated: never overwrites a
+    value from SENAITE or the Mk1 verb; independent of status authority
+    because it is a fact about the sample, not a status write. Runs for dup
+    events too — a replayed receive can still repair a NULL."""
+    try:
+        if ev.get("transition") != "receive" or occurred is None:
+            return
+        sample = db.get(LimsSample, sample_pk)
+        if sample is None or sample.date_received is not None:
+            return
+        sample.date_received = occurred
+        stats["date_received_stamped"] = stats.get("date_received_stamped", 0) + 1
+    except Exception as e:
+        logger.warning("workflow.is_sync_date_received_failed sample_pk=%s err=%s",
+                       sample_pk, e)
+        stats["errors"] += 1
+
+
 def sync_once(db_factory: Callable[[], Session], *, batch_size: int = 500,
               overlap_minutes: int = 10) -> dict:
     """One incremental pull: read the cursor, fetch IS events since
@@ -201,6 +226,7 @@ def sync_once(db_factory: Callable[[], Session], *, batch_size: int = 500,
                     is_event_id=ev["event_id"] or f"synth:{ev['id']}",
                 )
                 stats["inserted" if inserted else "dup"] += 1
+                _stamp_date_received(db, sample_pk, ev, occurred, stats)
                 if inserted:
                     # Events arrive created_at ASC, so a multi-event batch
                     # for one sample lands on the newest status.

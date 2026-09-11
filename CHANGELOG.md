@@ -4,6 +4,7 @@
 
 ### Fixed
 - Stranded-sample check: a sample with no `date_received` (received on the SENAITE side, never re-read through a senaite-touching fetch) now falls back to its registration time for the scan window instead of being skipped entirely. P-2605 sat with `status=verified` / `native_status=published` for a day without a flag.
+- `date_received` is stamped from the IS receive event when Mk1 has no value for it (SENAITE-side receives: auto check-in, SENAITE UI). Existing rows with a `receive` ledger row and no date are backfilled once on boot from the earliest receive event.
 
 ## v1.19.1 — 2026-09-11
 
