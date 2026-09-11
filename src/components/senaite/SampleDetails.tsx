@@ -201,6 +201,7 @@ import {
 import type { VialAssignment } from '@/lib/vial-assignment'
 import { vialLabel, vialPosition, vialTotal } from '@/lib/vial-label'
 import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
+import { SamplePriorityControl } from '@/components/senaite/SamplePriorityControl'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { useVialRoles } from '@/services/vial-roles'
 import { useDepartments } from '@/services/departments'
@@ -5306,6 +5307,15 @@ export function SampleDetails() {
               the sticky band so the actions are available while scrolling. */}
           <div className="w-full flex items-end justify-between gap-3">
             <div className="text-xs text-muted-foreground pl-[3.75rem] shrink-0">
+              {/* Priority — editable in every lifecycle state (2026-09-10);
+                  it used to be reachable only from the received-samples
+                  inbox. Sits above the SLA lines, which need a receipt. */}
+              <div className="flex items-center gap-2 mb-0.5">
+                <span className="text-[11px] uppercase tracking-wide text-muted-foreground/70">
+                  Priority
+                </span>
+                <SamplePriorityControl sampleUid={data.sample_uid} />
+              </div>
               {/* SLA — stacked one indicator per line so multi-tier samples
                 don't run a long inline string. */}
               <SampleHeaderSla lookup={data} />

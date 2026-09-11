@@ -364,6 +364,7 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
         if existing.native_id is None:
             existing.native_id = mint_native_id(db, senaite_sample_id=existing.sample_id)
         db.flush()
+        apply_signal_priority(db, existing, meta)
         return existing
 
     native_id_value = mint_native_id(
@@ -383,7 +384,48 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
     # After the flush — the remark's FK needs row.id.
     _record_customer_order_note(db, row, meta)
     db.flush()
+    apply_signal_priority(db, row, meta)
     return row
+
+
+_SIGNAL_PRIORITIES = ("high", "expedited")
+
+
+def apply_signal_priority(db: Session, row: LimsSample, meta: dict) -> Optional[str]:
+    """Stamp the order's priority on the sample the moment it is registered.
+
+    The WordPress order can carry a priority (normal / high / expedited);
+    the Integration Service forwards it as ``meta["Priority"]``. Until now
+    it only reached ``sample_priorities`` when the Worksheets Inbox happened
+    to render the received sample, so the SLA header, the sample page and
+    every report saw "normal" until then. This mirrors the inbox rule
+    exactly: create the row, or upgrade one still at ``normal`` — never
+    downgrade a manual high/expedited, and a normal/absent signal changes
+    nothing. Keyed by the sample's uid like every other priority reader;
+    a row without a uid yet (SENAITE-free registration) is skipped and the
+    inbox fallback still applies later.
+
+    Returns the priority written, or None when nothing changed.
+    """
+    raw = meta.get("Priority")
+    if raw is None:
+        raw = meta.get("priority")
+    prio = str(raw or "").strip().lower()
+    if prio not in _SIGNAL_PRIORITIES or not row.external_lims_uid:
+        return None
+    from models import SamplePriority
+
+    existing = db.execute(
+        select(SamplePriority).where(SamplePriority.sample_uid == row.external_lims_uid)
+    ).scalar_one_or_none()
+    if existing is None:
+        db.add(SamplePriority(sample_uid=row.external_lims_uid, priority=prio))
+    elif existing.priority == "normal":
+        existing.priority = prio
+    else:
+        return None
+    db.flush()
+    return prio
 
 
 def _extract_uid(value):
