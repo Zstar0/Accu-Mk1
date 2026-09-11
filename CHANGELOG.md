@@ -4,6 +4,7 @@
 
 ### Added
 - **HPLC-native foundation** (slice 1 of the native-born HPLC program, spec `docs/superpowers/specs/2026-09-10-hplc-native-born-design.md`): `lims_analyses.peptide_id` + `slot` (nullable, additive) with slot-aware root unique indexes; boot seed of the five native HPLC services, the `hplc-purity-identity` profile (seeded **inactive** — activating it is an explicit flip-runbook step, keeping it out of the Manage Analyses picker until then) and their wildcard specs; `hplc-purity-identity` accepted as the HPLC primary key alongside `hplcpurity_identity` in demand, seeding, verification and product-completion. Dark: no order carries the new key until the WordPress `profile_key` is set.
+- HPLC-native slice 2 (spec `docs/superpowers/specs/2026-09-10-hplc-native-born-design.md`, M3+M4): a registry signal with no SENAITE id now mints a customer-facing `P-`/`PB-` sample from counters seeded at 5000/1000 (guarded boot migration) and never adopts a later SENAITE uid (identity collision → quarantine); `POST /s2s/lims-samples` honors `Idempotency-Key`; `GET /s2s/peptides` ships the Mk1 peptide list to the Integration Service; `Analyte{i}PeptideId` on the signal lands in `lims_samples.analytes`; HPLC vials of native-born parents seed the generic native trio per analyte slot (unresolved names ⇒ `peptide_id NULL` + `analyte_unresolved` reason, never a guess) with the two blend aggregates for blends; parent placeholders are minted per slot. SENAITE-born samples are untouched.
 
 ## v1.18.2 — 2026-09-10
 
