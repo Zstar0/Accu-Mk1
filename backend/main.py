@@ -1618,6 +1618,21 @@ async def get_sample_activity(
             elif se.event == "native_resync":
                 label = (f"Re-synced from order — {d.get('placeholders_created', 0)} placeholders, "
                          f"{d.get('edges_created', 0)} edges, {d.get('vial_rows_created', 0)} vial analyses")
+            elif se.event == "customer_sample_edit":
+                bits = []
+                if d.get("type_to"):
+                    bits.append(f"{d.get('type_from') or '—'} → {d['type_to']}")
+                if d.get("analytes_to") is not None:
+                    bits.append("analytes: " + (", ".join(d["analytes_to"]) or "none"))
+                if d.get("declared_total_to"):
+                    bits.append(
+                        f"declared total {d.get('declared_total_from') or '—'} → {d['declared_total_to']} mg"
+                    )
+                if d.get("name_to"):
+                    bits.append(f"name \"{d.get('name_from') or ''}\" → \"{d['name_to']}\"")
+                if d.get("branding_to"):
+                    bits.append(f"branding \"{d.get('branding_from') or ''}\" → \"{d['branding_to']}\"")
+                label = "Customer edit (portal)" + (" — " + "; ".join(bits) if bits else "")
             else:
                 label = se.event
 
@@ -18112,6 +18127,133 @@ def _shadow_analyses_at_registration_bg(sample_id: str) -> None:
             db.close()
 
 
+_IDENTITY_SUFFIX = " - Identity (HPLC)"
+
+
+def _analyte_activity_labels(raw: Any) -> list[str]:
+    """Readable analyte list for the Activity log: ``BPC-157 (5 mg)``.
+
+    The registry stores service-title form (``BPC-157 - Identity (HPLC)``),
+    which is right for identity matching and noise in a history feed.
+    """
+    try:
+        slots = json.loads(raw) if isinstance(raw, str) else (raw or [])
+    except (TypeError, ValueError):
+        return []
+    out: list[str] = []
+    for slot in slots or []:
+        name = (slot or {}).get("name")
+        if not name:
+            continue
+        if name.endswith(_IDENTITY_SUFFIX):
+            name = name[: -len(_IDENTITY_SUFFIX)]
+        qty = (slot or {}).get("declared_quantity")
+        out.append(f"{name} ({qty} mg)" if qty else str(name))
+    return out
+
+
+def _coa_company(raw: Any) -> Optional[str]:
+    """Company name out of a coa_meta blob, for the branding half of the log."""
+    try:
+        meta = json.loads(raw) if isinstance(raw, str) else (raw or {})
+    except (TypeError, ValueError):
+        return None
+    return (meta or {}).get("CoaCompanyName")
+
+
+def _record_customer_sample_edit(db: Session, row: "LimsSample", before: dict) -> bool:
+    """Put a pre-receipt customer edit on the sample's Activity log.
+
+    Until now the only record of these edits was the WooCommerce order note,
+    which the bench never sees (Handler, arcitest UAT 2026-09-10). Parent-hosted
+    on ``lims_sample_pk`` like the other sample-level events; ``user_id`` stays
+    None because the actor is a WordPress customer, not an Mk1 user.
+
+    Returns True when an event was written — an idempotent re-push that changes
+    nothing must not litter the log.
+    """
+    from models import LimsSubSampleEvent
+
+    details: dict[str, Any] = {"source": "customer_portal"}
+    changed = False
+    if row.sample_type_title != before["sample_type_title"]:
+        details["type_from"] = before["sample_type_title"]
+        details["type_to"] = row.sample_type_title
+        changed = True
+    if row.analytes != before["analytes"]:
+        details["analytes_from"] = _analyte_activity_labels(before["analytes"])
+        details["analytes_to"] = _analyte_activity_labels(row.analytes)
+        changed = True
+    if row.declared_total_quantity != before["declared_total_quantity"]:
+        details["declared_total_from"] = before["declared_total_quantity"]
+        details["declared_total_to"] = row.declared_total_quantity
+        changed = True
+    if row.client_sample_id != before["client_sample_id"]:
+        details["name_from"] = before["client_sample_id"]
+        details["name_to"] = row.client_sample_id
+        changed = True
+    if row.coa_meta != before["coa_meta"]:
+        details["branding_from"] = _coa_company(before["coa_meta"])
+        details["branding_to"] = _coa_company(row.coa_meta)
+        changed = True
+    if not changed:
+        return False
+    db.add(LimsSubSampleEvent(
+        lims_sample_pk=row.id, event="customer_sample_edit", details=details,
+    ))
+    return True
+
+
+def _resync_shadow_analyses_after_field_edit_bg(sample_id: str) -> None:
+    """A pre-receipt conversion rewrites the AR's whole service set in SENAITE
+    (profile swap, then identity swap), but the field mirror carries only
+    scalars and the analyte slots — the shadow analysis LINES stayed frozen at
+    whatever the sample was registered with. arcitest UAT 2026-09-10: SENAITE
+    17 lines, registry 5, one of them a ghost.
+
+    Re-runs the registration-time shadow sync and prunes what SENAITE dropped
+    (see ``resync_and_prune_parent_shadows`` for the narrow pruning rule).
+    Re-checks the pre-received gate on its OWN session: this runs after the
+    response, and a sample that got received in between must be left alone.
+
+    Same hardening as ``_shadow_analyses_at_registration_bg``: own short-lived
+    session, one SENAITE call, never raises — a SENAITE outage must not cost
+    the edit that already committed. The rider/backfill heals later.
+    """
+    db = None
+    try:
+        from database import SessionLocal
+        from lims_analyses.parent_mirror import resync_and_prune_parent_shadows
+        from sub_samples import senaite as _senaite
+        from sub_samples.service import _PRE_RECEIVED_STATES
+        items = _senaite.fetch_parent_analyses(sample_id)
+        db = SessionLocal()
+        row = db.execute(
+            select(LimsSample).where(LimsSample.sample_id == sample_id)
+        ).scalar_one_or_none()
+        if row is None or row.status not in _PRE_RECEIVED_STATES:
+            return
+        stats = resync_and_prune_parent_shadows(
+            db, sample_id=sample_id, sample_pk=row.id, items=items,
+        )
+        db.commit()
+        logger.info(
+            "registry.field_edit_shadow_resync sample_id=%s created=%s updated=%s skipped=%s pruned=%s",
+            sample_id, stats["created"], stats["updated"], stats["skipped"], stats["pruned"],
+        )
+    except Exception as resync_err:  # noqa: BLE001
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        logger.warning("registry.field_edit_shadow_resync_failed sample_id=%s err=%s",
+                       sample_id, resync_err)
+    finally:
+        if db is not None:
+            db.close()
+
+
 def _native_placeholders_at_registration_bg(sample_id: str) -> None:
     """Native sibling of _shadow_analyses_at_registration_bg: mint pending
     parent-tier rows for every ORDERED native analysis service, then stamp
@@ -23533,6 +23675,7 @@ class RegistryFieldMirrorResponse(BaseModel):
 @app.post("/s2s/lims-samples/fields", response_model=RegistryFieldMirrorResponse)
 def s2s_mirror_lims_sample_fields(
     req: RegistryFieldMirror,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _: None = Depends(require_internal_service_token),
 ):
@@ -23545,6 +23688,9 @@ def s2s_mirror_lims_sample_fields(
     locked: list[str] = []
     missing: list[str] = []
     _ANALYTE_KEY = re.compile(r"^Analyte[1-8]Peptide$")
+    # A conversion sends both; either alone still means the AR's service set
+    # may have moved, so re-mirror rather than guess.
+    _SERVICE_SET_KEYS = ("SampleType", "SampleTypeTitle")
     for item in req.samples:
         sid = item.get("sample_id") or ""
         fields = item.get("fields") or {}
@@ -23555,12 +23701,24 @@ def s2s_mirror_lims_sample_fields(
         if row.status not in _PRE_RECEIVED_STATES:
             locked.append(sid)
             continue
+        before = {
+            "sample_type_title": row.sample_type_title,
+            "analytes": row.analytes,
+            "declared_total_quantity": row.declared_total_quantity,
+            "client_sample_id": row.client_sample_id,
+            "coa_meta": row.coa_meta,
+        }
         _apply_senaite_fields_to_row(db, row, fields)
-        if any(_ANALYTE_KEY.match(k) for k in fields):
+        touched_analytes = any(_ANALYTE_KEY.match(k) for k in fields)
+        if touched_analytes:
             n = db.query(SampleAnalyteAlias).filter(
                 SampleAnalyteAlias.senaite_sample_id == sid).delete()
             if n:
                 logger.info("field_mirror_alias_cleanup sample_id=%s deleted=%s", sid, n)
+        _record_customer_sample_edit(db, row, before)
+        if touched_analytes or any(k in fields for k in _SERVICE_SET_KEYS):
+            # After the response: IS must never wait on a SENAITE round trip.
+            background_tasks.add_task(_resync_shadow_analyses_after_field_edit_bg, sid)
         updated.append(sid)
     db.commit()
     return RegistryFieldMirrorResponse(updated=updated, locked=locked, missing=missing)

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v1.21.0 — 2026-09-11
+
+### Added
+- **Customer portal sample edits reach the registry (Slice B.1).** `/s2s/lims-samples/fields` mirrors `SampleType` + `SampleTypeTitle`, so a customer converting a sample between Single Peptide and Peptide Blend from the WordPress order page lands on the right COA layout (`sample_type_title` feeds COABuilder's layout choice).
+- Every accepted pre-receipt customer edit is written to the sample's Activity feed as `customer_sample_edit` — test type, analytes, declared total, sample name and branding, before and after. Until now the only record was a WooCommerce order note the bench never sees. An idempotent re-push writes nothing.
+
+### Fixed
+- Shadow analysis lines are re-synced from SENAITE after a pre-receipt edit, and lines SENAITE no longer has are pruned. A conversion replaces the AR's whole service set, but the field mirror carried only scalars and the analyte slots, so the registry kept lines the sample no longer had (arcitest UAT: SENAITE 17 lines against a registry showing 5, one of them dead). Pruning is shadow-provenance only, never runs on an empty SENAITE result, and re-checks the pre-received gate on its own session.
+
 ## v1.20.1 — 2026-09-11
 
 ### Fixed
