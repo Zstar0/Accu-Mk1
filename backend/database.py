@@ -2224,6 +2224,20 @@ def _run_migrations():
           END IF;
         END $$
         """,
+        # HPLC-native slice 2 (spec 2026-09-10, M3): customer-facing native id
+        # counters, seeded ONCE above SENAITE's prod max (Handler ruling
+        # 2026-09-10: P-5000 / PB-1000). Guarded — never resets an existing
+        # counter. The aP/aPB internal counters are untouched.
+        """
+        INSERT INTO lims_native_id_sequences (prefix, next_value)
+        SELECT 'P', 5000
+        WHERE NOT EXISTS (SELECT 1 FROM lims_native_id_sequences WHERE prefix = 'P')
+        """,
+        """
+        INSERT INTO lims_native_id_sequences (prefix, next_value)
+        SELECT 'PB', 1000
+        WHERE NOT EXISTS (SELECT 1 FROM lims_native_id_sequences WHERE prefix = 'PB')
+        """,
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
