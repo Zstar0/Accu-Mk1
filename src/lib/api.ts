@@ -8209,6 +8209,7 @@ export interface ReadyFlag {
 export interface ReadySla {
   tier: string
   target_minutes: number
+  business_hours_only: boolean
   elapsed_minutes: number
   remaining_minutes: number
   breached: boolean

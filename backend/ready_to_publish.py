@@ -93,6 +93,10 @@ class TierIn:
     target_minutes: int
     is_default: bool
     amber_threshold_percent: int = 25
+    # The engine clocks elapsed time in business hours; the flag is surfaced so the
+    # frontend's shared SLA breakdown card can label the target the same way the
+    # Order Status page does.
+    business_hours_only: bool = True
 
 
 @dataclass(frozen=True)
@@ -241,6 +245,7 @@ def build_ready_rows(
                 sla = {
                     "tier": tier.name,
                     "target_minutes": tier.target_minutes,
+                    "business_hours_only": tier.business_hours_only,
                     "elapsed_minutes": round(status["elapsed_minutes"], 1),
                     "remaining_minutes": round(status["remaining_minutes"], 1),
                     "breached": status["breached"],

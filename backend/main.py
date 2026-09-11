@@ -10694,6 +10694,7 @@ class ReadyLinesOut(BaseModel):
 class ReadySlaOut(BaseModel):
     tier: str
     target_minutes: int
+    business_hours_only: bool = True
     elapsed_minutes: float
     remaining_minutes: float
     breached: bool
@@ -10873,6 +10874,7 @@ def _load_ready_to_publish_inputs(db: Session) -> dict:
 
     tiers = [
         RtpTierIn(id=t.id, name=t.name, target_minutes=t.target_minutes, is_default=bool(t.is_default),
+                  business_hours_only=bool(t.business_hours_only),
                   amber_threshold_percent=int(getattr(t, "amber_threshold_percent", 25) or 25))
         for t in db.execute(select(SlaTier)).scalars().all()
     ]

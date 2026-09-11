@@ -26,6 +26,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { SlaBreakdownTooltip } from '@/components/explorer/SlaBreakdownTooltip'
+import type { InboxPriority, SlaTier } from '@/lib/api'
 import {
   Tooltip,
   TooltipContent,
@@ -84,7 +86,25 @@ function statusLabel(status: string): string {
 
 // ─── Cells ───────────────────────────────────────────────────────────────────
 
-function SlaCell({ sla }: { sla: ReadySla | null }) {
+/** The report's SLA block reshaped into the shared breakdown card's inputs.
+ *  The report has no client-side resolver snapshot, so `reason` is null; the
+ *  card still shows received, tier, target, elapsed and remaining exactly as
+ *  the Order Status page does (memory: feedback_sla_hover_breakdown_everywhere). */
+function tierFromSla(sla: ReadySla): SlaTier {
+  return {
+    id: 0,
+    name: sla.tier,
+    target_minutes: sla.target_minutes,
+    business_hours_only: sla.business_hours_only,
+    is_default: false,
+    amber_threshold_percent: 0,
+    created_at: '',
+    updated_at: '',
+  }
+}
+
+export function SlaCell({ row }: { row: ReadyRow }) {
+  const sla = row.sla
   if (!sla) {
     return (
       <span className="text-xs text-muted-foreground/50">Awaiting sample</span>
@@ -110,10 +130,19 @@ function SlaCell({ sla }: { sla: ReadySla | null }) {
           {text}
         </span>
       </TooltipTrigger>
-      <TooltipContent side="left" className="text-xs">
-        <div className="font-medium">{sla.tier}</div>
-        <div>Target {formatMinutes(sla.target_minutes)} business time</div>
-        <div>Elapsed {formatMinutes(sla.elapsed_minutes)}</div>
+      <TooltipContent side="left" className="p-0 max-w-md">
+        <SlaBreakdownTooltip
+          tier={tierFromSla(sla)}
+          status={{
+            target_minutes: sla.target_minutes,
+            elapsed_minutes: sla.elapsed_minutes,
+            remaining_minutes: sla.remaining_minutes,
+            breached: sla.breached,
+          }}
+          reason={null}
+          priority={row.priority as InboxPriority}
+          receivedAt={row.received_at}
+        />
       </TooltipContent>
     </Tooltip>
   )
@@ -249,7 +278,7 @@ function SampleLine({
         </div>
       </td>
       <td className="py-1.5 pr-2 align-top text-right">
-        <SlaCell sla={row.sla} />
+        <SlaCell row={row} />
       </td>
       <td className="py-1.5 pr-3 align-top text-right whitespace-nowrap">
         {held ? (
