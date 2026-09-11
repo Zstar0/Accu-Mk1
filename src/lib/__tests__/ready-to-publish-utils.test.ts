@@ -34,6 +34,7 @@ function sla(color: 'red' | 'amber' | 'green', breached = color === 'red') {
   return {
     tier: 'Standard',
     target_minutes: 1440,
+    business_hours_only: true,
     elapsed_minutes: 100,
     remaining_minutes: 1340,
     breached,
@@ -150,6 +151,7 @@ describe('sortRows', () => {
     sla: {
       tier: 'Std',
       target_minutes: 100,
+      business_hours_only: true,
       elapsed_minutes: 150,
       remaining_minutes: -50,
       breached: true,
@@ -165,6 +167,7 @@ describe('sortRows', () => {
     sla: {
       tier: 'Std',
       target_minutes: 100,
+      business_hours_only: true,
       elapsed_minutes: 20,
       remaining_minutes: 80,
       breached: false,

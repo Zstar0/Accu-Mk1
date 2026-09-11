@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { ReadyRow } from '@/lib/api'
 import { SlaCell } from '@/components/reports/ReadyToPublishReport'
+import { formatMinutes } from '@/lib/sla-format'
 
 const row: ReadyRow = {
   sample_id: 'P-1',
@@ -43,6 +44,9 @@ describe('Ready to Publish SlaCell', () => {
     fireEvent.focus(trigger)
     const card = await screen.findAllByText(/Standard/)
     expect(card.length).toBeGreaterThan(0)
-    expect((await screen.findAllByText(/Received/)).length).toBeGreaterThan(0)
+    // Target comes through the shared card's own formatter.
+    expect(
+      (await screen.findAllByText(new RegExp(formatMinutes(2880)))).length
+    ).toBeGreaterThan(0)
   })
 })
