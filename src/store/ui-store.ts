@@ -54,6 +54,7 @@ export type AccuMarkToolsSubSection =
 export type ReportsSubSection =
   | 'dashboard'
   | 'checkin-times'
+  | 'ready-to-publish'
   | 'throughput'
   | 'sla-performance'
   | 'bottlenecks'
