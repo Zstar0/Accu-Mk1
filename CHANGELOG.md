@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## v1.19.0 — 2026-09-11
+
+### Added
+- **Sample priority** (#186). Priorities are data: a managed list (name, rank, icon, color, pulse, active, default) under Settings → Priorities, each optionally mapped to an SLA tier (the per-service-group exceptions on the SLA pane follow the list). Explicit priority at customer, order, sample and vial level, resolved most-specific-first (`NULL` = inherit) by one resolver on the backend and a fixture-validated mirror on the frontend; every list row, the details payload, explorer orders and inbox items carry the effective priority inline, so no surface makes a second request. Set it from the sample and sub-sample pages, the order status page, the receive wizard (sample panel, vial tab) and the order-receive session; bulk/single from the inbox card. A compact glyph (bare on rows, tinted on cards/headers, nothing for Default) marks samples on the samples table, sample cards, order rows, vial board, inbox (families ordered by rank), worksheets and active boxes. Every change writes `priority_audit` and shows in the sample activity log with the actor; SLA snapshots are recorded at receive and at the first real publish so reports grade against what was promised. The WordPress order payload's priority lands on the order at create. Legacy `sample_priorities` rows (sample- and vial-keyed) are backfilled once on first boot; the table and the `/sample-priorities/lookup` route are retired in a follow-up release. Spec `docs/superpowers/specs/2026-09-09-sample-priority-design.md`.
+- **Ready to Publish report** (#187) under Reports: samples with every line verified or flagged Ready for Publish / Ready for Partial Publish, most critical first, grouped by order, with On Hold flags parking a row below. Column headers sort (sample, analytes, status, why, received, SLA; third click restores most-critical-first) and the SLA cell hovers the shared SLA breakdown card used on Order Status (the report's SLA block now carries the tier's business-hours flag).
+
+### Changed
+- SLA tier resolution in the frontend is keyed by the effective priority key from the row shape instead of the SENAITE-uid priority lookup; `InboxPriority` is a plain string alias for one release. `PUT/DELETE /sla-priority-tiers/{priority}` validate against the priorities table.
+
+### Deploy notes
+- Full Mk1 deploy (one VERSION tags both images); the priority migration runs on backend boot. Prod `sla_priority_tiers` is empty and `sample_priorities` holds 6 legacy rows to backfill. Map no priority to an SLA tier until this release is live everywhere.
+
 ## v1.18.3 — 2026-09-10
 
 ### Fixed
