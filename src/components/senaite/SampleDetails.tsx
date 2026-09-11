@@ -201,7 +201,7 @@ import {
 import type { VialAssignment } from '@/lib/vial-assignment'
 import { vialLabel, vialPosition, vialTotal } from '@/lib/vial-label'
 import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
-import { SamplePriorityControl } from '@/components/senaite/SamplePriorityControl'
+import { PrioritySelect } from '@/components/common/PrioritySelect'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { useVialRoles } from '@/services/vial-roles'
 import { useDepartments } from '@/services/departments'
@@ -5335,7 +5335,23 @@ export function SampleDetails() {
                 <span className="text-[11px] uppercase tracking-wide text-muted-foreground/70">
                   Priority
                 </span>
-                <SamplePriorityControl sampleUid={data.sample_uid} />
+                <PriorityGlyph priority={data.priority} size="row" />
+                {data.registry_pk ? (
+                  <PrioritySelect
+                    level="sample"
+                    id={String(data.registry_pk)}
+                    explicitKey={data.explicit_priority_key ?? null}
+                    effective={data.priority}
+                    compact
+                    className="w-56"
+                    ariaLabel={`Priority for ${sampleId}`}
+                    onAssigned={() => refreshSample(sampleId)}
+                  />
+                ) : (
+                  <span className="text-[11px] text-muted-foreground">
+                    No registry record for this sample yet
+                  </span>
+                )}
               </div>
               {/* SLA — stacked one indicator per line so multi-tier samples
                 don't run a long inline string. */}
@@ -5631,17 +5647,6 @@ export function SampleDetails() {
                     label="Date Received"
                     value={formatDate(data.date_received)}
                     sourceGlyph={fieldGlyph('date_received', 'Date Received')}
-                  />
-                  {/* Sample-level priority. registry_pk is present only once
-                      the sample has a lims_samples row (i.e. after receive);
-                      without it there is nothing to write against, so the row
-                      degrades to glyph + hint. */}
-                  <SamplePriorityRow
-                    registryPk={data.registry_pk}
-                    explicitKey={data.explicit_priority_key ?? null}
-                    effective={data.priority}
-                    ariaLabel={`Priority for ${sampleId}`}
-                    onAssigned={() => refreshSample(sampleId)}
                   />
                 </div>
               </SectionHeader>
@@ -7021,7 +7026,9 @@ export function SampleDetails() {
             : undefined
         }
         onParentBulkRetest={
-          parentRegistryRetestActive ? mainParentRetest.requestRetest : undefined
+          parentRegistryRetestActive
+            ? mainParentRetest.requestRetest
+            : undefined
         }
         promotionsByKeyword={
           parentSampleId === null ? promotionsByKeyword : undefined
