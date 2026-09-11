@@ -489,6 +489,140 @@ def _run_migrations():
         "ALTER TABLE sla_priority_tiers ADD CONSTRAINT sla_priority_tiers_pkey PRIMARY KEY (id)",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_sla_priority_global ON sla_priority_tiers (priority) WHERE service_group_id IS NULL",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_sla_priority_per_group ON sla_priority_tiers (priority, service_group_id) WHERE service_group_id IS NOT NULL",
+        # ── Sample priority (spec 2026-09-09-sample-priority-design) ──
+        """
+        CREATE TABLE IF NOT EXISTS priorities (
+            id         SERIAL PRIMARY KEY,
+            key        VARCHAR(40) NOT NULL UNIQUE,
+            name       VARCHAR(100) NOT NULL,
+            rank       INTEGER NOT NULL DEFAULT 0,
+            icon       VARCHAR(30) NOT NULL DEFAULT 'minus',
+            color      VARCHAR(20) NOT NULL DEFAULT 'zinc',
+            pulse      BOOLEAN NOT NULL DEFAULT FALSE,
+            is_default BOOLEAN NOT NULL DEFAULT FALSE,
+            is_active  BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_priorities_single_default ON priorities (is_default) WHERE is_default",
+        # Seed the three legacy literals. `normal` becomes `default`. Idempotent.
+        """
+        INSERT INTO priorities (key, name, rank, icon, color, pulse, is_default, is_active)
+        SELECT * FROM (VALUES
+            ('default',   'Default',   0,  'minus',       'zinc',  FALSE, TRUE,  TRUE),
+            ('high',      'High',      10, 'chevron-up',  'amber', FALSE, FALSE, TRUE),
+            ('expedited', 'Expedited', 20, 'chevrons-up', 'red',   TRUE,  FALSE, TRUE)
+        ) AS v(key, name, rank, icon, color, pulse, is_default, is_active)
+        WHERE NOT EXISTS (SELECT 1 FROM priorities)
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS customer_priorities (
+            wp_customer_user_id INTEGER PRIMARY KEY,
+            priority_key VARCHAR(40) NOT NULL REFERENCES priorities(key) ON DELETE RESTRICT,
+            note         TEXT,
+            updated_by   INTEGER,
+            updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS priority_audit (
+            id        SERIAL PRIMARY KEY,
+            at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            user_id   INTEGER,
+            level     VARCHAR(10) NOT NULL,
+            entity_id VARCHAR(100) NOT NULL,
+            old_key   VARCHAR(40),
+            new_key   VARCHAR(40),
+            source    VARCHAR(20) NOT NULL DEFAULT 'ui',
+            note      TEXT
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_priority_audit_entity ON priority_audit (level, entity_id)",
+        "CREATE INDEX IF NOT EXISTS ix_priority_audit_at ON priority_audit (at)",
+        "ALTER TABLE lims_orders ADD COLUMN IF NOT EXISTS priority_key VARCHAR(40) REFERENCES priorities(key) ON DELETE SET NULL",
+        "ALTER TABLE lims_orders ADD COLUMN IF NOT EXISTS priority_source VARCHAR(20)",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS priority_key VARCHAR(40) REFERENCES priorities(key) ON DELETE SET NULL",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS sla_priority_key VARCHAR(40)",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS sla_priority_source VARCHAR(10)",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS sla_target_minutes INTEGER",
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS sla_snapshot_at TIMESTAMP",
+        "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS priority_key VARCHAR(40) REFERENCES priorities(key) ON DELETE SET NULL",
+        "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS sla_priority_key VARCHAR(40)",
+        "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS sla_priority_source VARCHAR(10)",
+        "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS sla_target_minutes INTEGER",
+        "ALTER TABLE lims_sub_samples ADD COLUMN IF NOT EXISTS sla_snapshot_at TIMESTAMP",
+        # Backfill the legacy per-sample table into lims_samples.priority_key.
+        # 'normal' = inherit (NULL). One audit row per backfilled sample.
+        # ONCE per row, not once per boot: _run_migrations() runs on every
+        # start, so without the audit-row guard on the UPDATE a user who
+        # cleared a backfilled priority back to inherit would have it
+        # resurrected at the next restart. The guard works because the UPDATE
+        # is ordered BEFORE the audit INSERT that marks the row as done.
+        """
+        UPDATE lims_samples s
+           SET priority_key = sp.priority
+          FROM sample_priorities sp
+         WHERE sp.sample_uid = s.external_lims_uid
+           AND sp.priority IN ('high', 'expedited')
+           AND s.priority_key IS NULL
+           AND NOT EXISTS (
+                SELECT 1 FROM priority_audit a
+                 WHERE a.level = 'sample' AND a.entity_id = s.id::text AND a.source = 'migration')
+        """,
+        """
+        INSERT INTO priority_audit (level, entity_id, old_key, new_key, source, note)
+        SELECT 'sample', s.id::text, NULL, sp.priority, 'migration', 'backfill from sample_priorities'
+          FROM sample_priorities sp
+          JOIN lims_samples s ON s.external_lims_uid = sp.sample_uid
+         WHERE sp.priority IN ('high', 'expedited')
+           AND NOT EXISTS (
+                SELECT 1 FROM priority_audit a
+                 WHERE a.level = 'sample' AND a.entity_id = s.id::text AND a.source = 'migration')
+        """,
+        # Same backfill at the VIAL level. The retired inbox writes keyed
+        # sample_priorities by the row's own uid, and the native inbox rows are
+        # VIALS (mk1:// uids live on lims_sub_samples, never on lims_samples) —
+        # without this those rows would silently revert to the default at deploy.
+        """
+        UPDATE lims_sub_samples v
+           SET priority_key = sp.priority
+          FROM sample_priorities sp
+         WHERE sp.sample_uid = v.external_lims_uid
+           AND sp.priority IN ('high', 'expedited')
+           AND v.priority_key IS NULL
+           AND NOT EXISTS (
+                SELECT 1 FROM priority_audit a
+                 WHERE a.level = 'vial' AND a.entity_id = v.id::text AND a.source = 'migration')
+        """,
+        """
+        INSERT INTO priority_audit (level, entity_id, old_key, new_key, source, note)
+        SELECT 'vial', v.id::text, NULL, sp.priority, 'migration', 'backfill from sample_priorities'
+          FROM sample_priorities sp
+          JOIN lims_sub_samples v ON v.external_lims_uid = sp.sample_uid
+         WHERE sp.priority IN ('high', 'expedited')
+           AND NOT EXISTS (
+                SELECT 1 FROM priority_audit a
+                 WHERE a.level = 'vial' AND a.entity_id = v.id::text AND a.source = 'migration')
+        """,
+        # FK from the sparse SLA override map to the priorities table. Only
+        # after every existing value is a known key (the seed guarantees the
+        # three legacy literals; 'normal' never had a row by the sparsity contract).
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints
+                            WHERE table_name = 'sla_priority_tiers'
+                              AND constraint_name = 'fk_sla_priority_tiers_priority')
+               AND NOT EXISTS (SELECT 1 FROM sla_priority_tiers t
+                                LEFT JOIN priorities p ON p.key = t.priority
+                               WHERE p.key IS NULL) THEN
+                ALTER TABLE sla_priority_tiers
+                    ADD CONSTRAINT fk_sla_priority_tiers_priority
+                    FOREIGN KEY (priority) REFERENCES priorities(key) ON DELETE CASCADE;
+            END IF;
+        END $$
+        """,
         # ── Business-hours SLA calendar (sub-project B) ──
         """
         CREATE TABLE IF NOT EXISTS business_hours_config (

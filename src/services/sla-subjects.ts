@@ -2,7 +2,6 @@ import { useMemo } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import {
   fetchSlaStatuses,
-  type InboxPriority,
   type SlaStatus,
   type SlaStatusRequestItem,
   type SlaTier,
@@ -26,7 +25,9 @@ import { useSlaTiers, useSlaPriorityTiers } from '@/services/sla'
 export interface SlaSubject {
   /** Stable unique id — used as the /sla/status batch key and the React key. */
   key: string
-  priority: InboxPriority
+  /** Effective priority KEY (from the row's inline priority). `'default'` is
+   *  the sparsity sentinel — it never has an override row. */
+  priority: string
   /** Service group; null → default-tier fallback. */
   groupId: number | null
   /** SLA clock start. Null → subject is non-applicable (no indicator). */
@@ -46,7 +47,7 @@ export interface SlaSubjectSnapshot {
   status: SlaStatus
   color: SlaColor
   tier: SlaTier
-  priority: InboxPriority
+  priority: string
   groupId: number | null
   groupName?: string
   isFrozen: boolean
@@ -75,7 +76,7 @@ export interface SlaSubjectsResult {
 function resolveSubjectTier(
   subject: SlaSubject,
   groupIdToTier: Map<number, SlaTier>,
-  globalPriorityToTier: Map<InboxPriority, SlaTier>,
+  globalPriorityToTier: Map<string, SlaTier>,
   perGroupPriorityToTier: Map<string, SlaTier>,
   defaultTier: SlaTier | null,
   keywordToServiceId: Map<string, number> | null,

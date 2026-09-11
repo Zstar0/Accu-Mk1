@@ -37,11 +37,12 @@ def vial_count(db: Session, box_id: int) -> int:
 
 
 def vials_for_boxes(db: Session, box_ids: List[int]) -> dict:
-    """Map box_id -> [{sample_id, parent_sample_id, assignment_role, vial_sequence}] for the given boxes."""
+    """Map box_id -> [{sample_id, parent_sample_id, assignment_role, vial_sequence, priority}] for the given boxes."""
     if not box_ids:
         return {}
     rows = db.execute(
         select(
+            LimsSubSample.id,
             LimsSubSample.box_id,
             LimsSubSample.sample_id,
             LimsSubSample.assignment_role,
@@ -52,13 +53,20 @@ def vials_for_boxes(db: Session, box_ids: List[int]) -> dict:
         .where(LimsSubSample.box_id.in_(box_ids))
         .order_by(LimsSubSample.sample_id)
     ).all()
+    # ONE batched resolve for the whole page (spec §5) — never per vial. The
+    # _safe wrapper degrades to "no priority known" rather than 500ing the
+    # boxing list on a half-migrated catalog.
+    from priority.service import load_effective_safe
+    _, eff_by_vial = load_effective_safe(db, sub_sample_pks=[r.id for r in rows])
     out: dict = {}
     for r in rows:
+        eff = eff_by_vial.get(r.id)
         out.setdefault(r.box_id, []).append({
             "sample_id": r.sample_id,
             "parent_sample_id": r.parent_sample_id,
             "assignment_role": r.assignment_role,
             "vial_sequence": r.vial_sequence,
+            "priority": eff.as_dict() if eff is not None else None,
         })
     return out
 

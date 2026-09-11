@@ -8,6 +8,8 @@ new row reuses a priority that already existed. Tracking IDs is unambiguous.
 Run in container:
     docker exec accu-mk1-backend sh -c 'cd /app && python -m pytest tests/test_api_sla_priority_tiers.py -q'
 """
+import uuid
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
@@ -15,6 +17,7 @@ from sqlalchemy import text
 import auth
 from database import engine
 from main import app
+from priority.service import invalidate_priority_cache
 
 app.dependency_overrides[auth.get_current_user] = lambda: {"id": 0, "username": "test"}
 client = TestClient(app)
@@ -215,3 +218,32 @@ def test_service_group_cascade_deletes_per_group_rows():
         c.execute(text("DELETE FROM service_groups WHERE id = :g"), {"g": gid})
     rows = {(x["priority"], x["service_group_id"]) for x in client.get("/sla-priority-tiers").json()}
     assert ("expedited", gid) not in rows
+
+
+def test_priority_tier_accepts_table_keys_and_rejects_unknown():
+    """Tier-route validation comes from the `priorities` table, not a Literal.
+
+    A key created at runtime via POST /priorities must be accepted; a key that
+    is not in the table must still be rejected with 422. Self-restoring: the
+    temp priority's tier rows, audit rows and the priorities row are removed
+    here (the autouse fixture only tracks sla_priority_tiers ids), and the
+    priority_map cache is invalidated so the deleted key cannot leak into a
+    later test in a full-suite run.
+    """
+    tier = _default_tier_id()
+    created = client.post("/priorities", json={"name": f"Rush {uuid.uuid4().hex[:8]}"})
+    assert created.status_code == 201, created.text
+    key = created.json()["key"]
+    try:
+        r = client.put(f"/sla-priority-tiers/{key}", json={"sla_tier_id": tier})
+        assert r.status_code == 200, r.text
+        r = client.put("/sla-priority-tiers/not-a-priority", json={"sla_tier_id": tier})
+        assert r.status_code == 422, r.text
+    finally:
+        with engine.begin() as c:
+            c.execute(text("DELETE FROM sla_priority_tiers WHERE priority = :k"), {"k": key})
+            c.execute(
+                text("DELETE FROM priority_audit WHERE old_key = :k OR new_key = :k"), {"k": key}
+            )
+            c.execute(text("DELETE FROM priorities WHERE key = :k"), {"k": key})
+        invalidate_priority_cache()

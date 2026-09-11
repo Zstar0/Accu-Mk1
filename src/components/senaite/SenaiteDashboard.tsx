@@ -23,6 +23,7 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { RoleBadge } from '@/components/shared/RoleBadge'
+import { PriorityGlyph } from '@/components/common/PriorityGlyph'
 import { HighlightMatch } from '@/components/explorer/helpers'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -487,7 +488,8 @@ function SampleTable({
               onClick={() => onSelectSample?.(s.id)}
             >
               <TableCell className="font-mono text-sm">
-                <span className="inline-flex items-center gap-1">
+                <span className="inline-flex items-center gap-1.5">
+                  <PriorityGlyph priority={s.priority} size="row" />
                   {parentShowsVariance(agg) && (
                     <Layers className="h-3 w-3 text-sky-500 shrink-0" aria-label="Has variance testing" />
                   )}
@@ -626,6 +628,10 @@ function SampleTable({
                               <span className={`font-mono inline-flex items-center gap-1 ${
                                 subIsVarianceMember(sub) ? 'text-sky-600 dark:text-sky-400' : ''
                               }`}>
+                                <PriorityGlyph
+                                  priority={sub.priority}
+                                  size="row"
+                                />
                                 {subIsVarianceMember(sub) && <Layers className="h-3 w-3 shrink-0" aria-hidden="true" />}
                                 {sub.sample_id}
                               </span>

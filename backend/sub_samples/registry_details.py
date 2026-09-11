@@ -54,6 +54,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from models import LimsParentAttachment, LimsSample, LimsSampleRemark, User
+from priority.service import load_effective_safe
 from sub_samples.lookup_models import (
     RegistrySampleReadResult,
     SenaiteAnalysis,
@@ -96,6 +97,9 @@ _MK1_FIELD_SOURCES: dict[str, str] = {
     "published_coa": "senaite",   # SENAITE-era artifact — see module docstring
     "senaite_url": "unavailable",  # not constructible from stored fields
     "cached_at": "mk1",
+    "registry_pk": "mk1",
+    "explicit_priority_key": "mk1",
+    "priority": "mk1",
 }
 
 
@@ -353,4 +357,9 @@ def build_native_details(db: Session, sample_id: str) -> RegistrySampleReadResul
         read_source="mk1",
         registry_missing=False,
         field_sources=field_sources,
+        # Sample-priority controls (spec §5) — one resolve for this sample.
+        registry_pk=row.id,
+        explicit_priority_key=row.priority_key,
+        priority=(lambda e: e.as_dict() if e else None)(
+            load_effective_safe(db, sample_pks=[row.id])[0].get(row.id)),
     )

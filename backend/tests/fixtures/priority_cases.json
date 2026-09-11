@@ -1,0 +1,19 @@
+{
+  "priorities": [
+    {"key": "default", "rank": 0, "is_active": true, "is_default": true},
+    {"key": "high", "rank": 10, "is_active": true, "is_default": false},
+    {"key": "expedited", "rank": 20, "is_active": true, "is_default": false},
+    {"key": "low", "rank": -10, "is_active": true, "is_default": false},
+    {"key": "retired", "rank": 30, "is_active": false, "is_default": false}
+  ],
+  "cases": [
+    {"name": "all inherit → default", "explicit": {}, "expect": {"key": "default", "rank": 0, "source_level": "default"}},
+    {"name": "customer only", "explicit": {"customer": "high"}, "expect": {"key": "high", "rank": 10, "source_level": "customer"}},
+    {"name": "order beats customer", "explicit": {"customer": "high", "order": "expedited"}, "expect": {"key": "expedited", "rank": 20, "source_level": "order"}},
+    {"name": "sample lowers order", "explicit": {"order": "expedited", "sample": "low"}, "expect": {"key": "low", "rank": -10, "source_level": "sample"}},
+    {"name": "vial beats everything", "explicit": {"customer": "expedited", "order": "expedited", "sample": "expedited", "vial": "high"}, "expect": {"key": "high", "rank": 10, "source_level": "vial"}},
+    {"name": "inactive key is inherit", "explicit": {"sample": "retired", "order": "high"}, "expect": {"key": "high", "rank": 10, "source_level": "order"}},
+    {"name": "unknown key is inherit", "explicit": {"sample": "nope"}, "expect": {"key": "default", "rank": 0, "source_level": "default"}},
+    {"name": "explicit default at sample wins over order", "explicit": {"order": "expedited", "sample": "default"}, "expect": {"key": "default", "rank": 0, "source_level": "sample"}}
+  ]
+}

@@ -31,7 +31,8 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { PriorityBadge } from '@/components/hplc/PriorityBadge'
+import { PriorityGlyph } from '@/components/common/PriorityGlyph'
+import { legacyEffectivePriority, legacyToKey } from '@/lib/inbox-sla'
 import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
 import {
   useSlaForSubjects,
@@ -39,7 +40,6 @@ import {
   type SlaSubjectSnapshot,
 } from '@/services/sla-subjects'
 import { isPrepStarted as itemPrepStarted } from '@/lib/worksheet-scope-key'
-import type { InboxPriority } from '@/lib/api'
 import {
   SERVICE_GROUP_COLORS,
   type ServiceGroupColor,
@@ -112,7 +112,7 @@ export function WorksheetDrawerItems({
       : null
     return items.map(item => ({
       key: String(item.id),
-      priority: (item.priority as InboxPriority) || 'normal',
+      priority: legacyToKey(item.priority),
       groupId: item.service_group_id,
       receivedAt: item.date_received ?? item.added_at,
       completedAt: worksheetCompletedAt,
@@ -362,7 +362,10 @@ function SortableItemRow({
 
       {/* Priority */}
       <div className="w-[70px] shrink-0">
-        <PriorityBadge priority={item.priority as InboxPriority} />
+        <PriorityGlyph
+          priority={legacyEffectivePriority(item.priority)}
+          size="row"
+        />
       </div>
 
       {/* Peptide — compact list of peptide names */}

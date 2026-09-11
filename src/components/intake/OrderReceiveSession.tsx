@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { ReceiveWizard } from '@/components/intake/ReceiveWizard/ReceiveWizard'
 import { useParentSampleDetails } from '@/components/intake/ReceiveWizard/useParentSampleDetails'
+import { SamplePriorityRow } from '@/components/senaite/SamplePriorityRow'
 import {
   getSenaiteSamples,
   listSubSamples,
@@ -379,6 +380,29 @@ export function OrderReceiveSession({ orders, onClose, initialPhase }: Props) {
               value={analytes}
               className="max-w-[28rem]"
             />
+            {/* Sample-level priority (sample-priority spec §2.9). The embedded
+                wizard runs with `hideSampleInfo`, so its SampleInfoPanel row
+                is not on screen — this strip is the session's summary panel
+                and owns the control. `refresh` re-reads the lookup in place
+                so the glyph and its source update without a remount. */}
+            <div className="flex w-64 shrink-0 flex-col gap-0.5">
+              <SamplePriorityRow
+                loading={details.loading}
+                registryPk={d?.registry_pk}
+                explicitKey={d?.explicit_priority_key ?? null}
+                effective={d?.priority}
+                onAssigned={details.refresh}
+              />
+              {details.refreshError ? (
+                <span
+                  className="text-[11px] text-muted-foreground"
+                  title={details.refreshError}
+                >
+                  Couldn&rsquo;t refresh sample info — the values shown may be
+                  out of date.
+                </span>
+              ) : null}
+            </div>
           </div>
         </header>
 

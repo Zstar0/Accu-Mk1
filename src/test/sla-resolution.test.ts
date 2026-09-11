@@ -926,6 +926,20 @@ describe('buildGlobalPriorityToTierMap', () => {
     expect(m.get('expedited')).toBe(t)
     expect(m.size).toBe(1)
   })
+
+  it('a custom priority key resolves through the global map', () => {
+    const std = tier(1, 'Std', 2880, 20, true)
+    const fast = tier(2, 'Fast', 240)
+    const tiersById = new Map<number, SlaTier>([
+      [std.id, std],
+      [fast.id, fast],
+    ])
+    const global = buildGlobalPriorityToTierMap(
+      [priorityRow(9, 'rush', fast.id, null)],
+      tiersById
+    )
+    expect(global.get('rush')?.id).toBe(fast.id)
+  })
 })
 
 describe('buildPerGroupPriorityToTierMap', () => {

@@ -14,6 +14,7 @@ import { getWordpressUrl } from '@/lib/api-profiles'
 import { invalidateBoxCaches } from '@/lib/box-cache'
 import { groupSamplesByOrder } from '@/lib/inbox-orders'
 import { useUIStore } from '@/store/ui-store'
+import { PriorityGlyph } from '@/components/common/PriorityGlyph'
 import { useVialRoles } from '@/services/vial-roles'
 import { useDepartments } from '@/services/departments'
 import { ROLE_COLOR_BADGE, ROLE_COLOR_TEXT, roleColorForCode, roleFullLabel } from '@/lib/role-display'
@@ -276,13 +277,16 @@ export function ActiveBoxesPage() {
                       >
                         <td className="py-1.5 pr-2" />
                         <td className="py-1.5 pr-4">
-                          <button
-                            type="button"
-                            onClick={() => useUIStore.getState().navigateToSample(v.sample_id)}
-                            className="font-mono hover:underline"
-                          >
-                            {v.sample_id}
-                          </button>
+                          <span className="inline-flex items-center gap-1.5">
+                            <PriorityGlyph priority={v.priority} size="row" />
+                            <button
+                              type="button"
+                              onClick={() => useUIStore.getState().navigateToSample(v.sample_id)}
+                              className="font-mono hover:underline"
+                            >
+                              {v.sample_id}
+                            </button>
+                          </span>
                           {v.parent_sample_id && !v.sample_id.startsWith(v.parent_sample_id) && (
                             <span className="ml-2 text-xs text-muted-foreground">
                               ↳ {v.parent_sample_id}

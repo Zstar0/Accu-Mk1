@@ -16,14 +16,6 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Callable, Mapping, Optional, TypeVar
 from zoneinfo import ZoneInfo
 
-# Valid priority tiers (mirror SamplePriority/WorksheetItem.priority). Callers
-# normally pass a concrete priority, defaulting to 'normal' when a sample has no
-# explicit SamplePriority override; None means "no priority info" and bypasses
-# the map entirely. Dict-key lookup is case-sensitive: always use the lowercase
-# canonical form here AND in the D2 TS resolver — 'Normal' != 'normal'.
-# The Pydantic Literal on the API edge enforces this for stored rows.
-PRIORITIES = ("normal", "high", "expedited")
-
 # T is the SLA tier type, returned as-is — resolve_sla_tier is a passthrough and
 # never reads tier attributes; attribute access is the caller's responsibility.
 T = TypeVar("T")

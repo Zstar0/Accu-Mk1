@@ -1,11 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   getInboxSamples,
-  updateInboxPriority,
   bulkUpdateInbox,
   createWorksheet,
-  type InboxResponse,
-  type InboxPriority,
   type InboxRole,
 } from '@/lib/api'
 import { toast } from 'sonner'
@@ -42,41 +39,6 @@ export function useInboxSamples(params: InboxKeyParams & { enabled?: boolean }) 
     enabled,
     refetchInterval: 30_000, // 30s polling per D-04
     staleTime: 0, // always fresh -- live queue
-  })
-}
-
-export function usePriorityMutation() {
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: ({ sampleUid, priority }: { sampleUid: string; priority: InboxPriority }) =>
-      updateInboxPriority(sampleUid, priority),
-    onMutate: async ({ sampleUid, priority }) => {
-      await queryClient.cancelQueries({ queryKey: ['inbox-samples'] })
-      // Optimistically update all inbox query variants (any hideTestOrders value)
-      const allQueries = queryClient.getQueriesData<InboxResponse>({ queryKey: ['inbox-samples'] })
-      const previousMap = new Map(allQueries)
-      for (const [key] of allQueries) {
-        queryClient.setQueryData<InboxResponse>(key, old => {
-          if (!old) return old
-          return {
-            ...old,
-            items: old.items.map(s =>
-              s.uid === sampleUid ? { ...s, priority } : s
-            ),
-          }
-        })
-      }
-      return { previousMap }
-    },
-    onError: (_err, _vars, context) => {
-      if (context?.previousMap) {
-        for (const [key, data] of context.previousMap) {
-          queryClient.setQueryData(key, data)
-        }
-      }
-      toast.error('Failed to update priority')
-    },
   })
 }
 

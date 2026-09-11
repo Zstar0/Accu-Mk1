@@ -2858,14 +2858,14 @@ def board_vials(
         ).all():
             ws_by_uid[uid] = BoardWorksheetOut(id=ws.id, title=ws.title, status=ws.status)
 
-    # Query 5: priorities keyed on the parent's external uid; missing = normal.
+    # Query 5: effective priority (spec §5) keyed on the parent's external uid,
+    # rendered in the board's legacy vocabulary; missing = normal.
     priority_by_uid = {}
     if parent_uids:
+        from priority.service import legacy_priority_string, load_effective_for_uids
         priority_by_uid = {
-            row.sample_uid: row.priority
-            for row in db.execute(
-                select(SamplePriority).where(SamplePriority.sample_uid.in_(parent_uids))
-            ).scalars()
+            uid: legacy_priority_string(eff)
+            for uid, eff in load_effective_for_uids(db, parent_uids).items()
         }
 
     # Query 2: ALL current vial-tier analyses for the included vials.

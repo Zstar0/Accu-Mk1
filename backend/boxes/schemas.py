@@ -17,6 +17,10 @@ class BoxVial(BaseModel):
     parent_sample_id: Optional[str] = None
     assignment_role: Optional[str] = None
     vial_sequence: int
+    # Resolved effective priority — {key, rank, source_level, source_id} per
+    # spec §5, so the Boxing list draws the same glyph as every other vial
+    # surface. None when unresolvable (half-migrated priorities catalog).
+    priority: Optional[dict] = None
 
 
 class BoxResponse(BaseModel):

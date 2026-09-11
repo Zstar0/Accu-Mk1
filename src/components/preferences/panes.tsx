@@ -13,6 +13,7 @@ import {
   Database,
   DatabaseZap,
   Timer,
+  ArrowUpNarrowWide,
   CalendarClock,
   Flag,
   ClipboardCheck,
@@ -26,6 +27,7 @@ import { DataPipelinePane } from './panes/DataPipelinePane'
 import { DataSourcePane } from './panes/DataSourcePane'
 import { AdvancedPane } from './panes/AdvancedPane'
 import { SlaPane } from './panes/SlaPane'
+import { PrioritiesPane } from './panes/PrioritiesPane'
 import { BusinessHoursPane } from './panes/BusinessHoursPane'
 import { FlagsPane } from './panes/FlagsPane'
 import { CheckInPane } from './panes/CheckInPane'
@@ -37,6 +39,7 @@ export type PreferencePane =
   | 'dataPipeline'
   | 'dataSource'
   | 'sla'
+  | 'priorities'
   | 'businessHours'
   | 'flags'
   | 'checkIn'
@@ -56,6 +59,11 @@ export const navigationItems: readonly NavigationItem[] = [
   { id: 'dataSource', labelKey: 'preferences.dataSource', icon: DatabaseZap },
   { id: 'sla', labelKey: 'preferences.sla', icon: Timer },
   {
+    id: 'priorities',
+    labelKey: 'preferences.priorities',
+    icon: ArrowUpNarrowWide,
+  },
+  {
     id: 'businessHours',
     labelKey: 'preferences.businessHours',
     icon: CalendarClock,
@@ -72,6 +80,7 @@ export const PANE_COMPONENTS: Record<PreferencePane, ComponentType> = {
   dataPipeline: DataPipelinePane,
   dataSource: DataSourcePane,
   sla: SlaPane,
+  priorities: PrioritiesPane,
   businessHours: BusinessHoursPane,
   flags: FlagsPane,
   checkIn: CheckInPane,

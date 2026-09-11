@@ -4,6 +4,8 @@ import { cn } from '@/lib/utils'
 import { useUIStore } from '@/store/ui-store'
 import { parseReceivedAtMs, formatAge } from '@/components/hplc/AgingTimer'
 import type { BoardVial } from '@/lib/api'
+import { PriorityGlyph } from '@/components/common/PriorityGlyph'
+import { legacyEffectivePriority } from '@/lib/inbox-sla'
 import {
   VIAL_STAGE_COLUMNS,
   stageCounts,
@@ -276,6 +278,10 @@ function VialCard({
       )}
     >
       <div className="flex items-center gap-1.5 min-w-0">
+        <PriorityGlyph
+          priority={legacyEffectivePriority(vial.parent.priority)}
+          size="card"
+        />
         <span className="font-mono text-[11px] font-semibold truncate">
           {vial.sample_id}
         </span>
@@ -287,17 +293,6 @@ function VialCard({
         >
           {roleShort(vial.assignment_role)}
         </span>
-        {vial.parent.priority !== 'normal' && (
-          <span
-            title={vial.parent.priority}
-            className={cn(
-              'h-1.5 w-1.5 rounded-full shrink-0',
-              vial.parent.priority === 'expedited'
-                ? 'bg-red-400 animate-pulse'
-                : 'bg-amber-400'
-            )}
-          />
-        )}
         <span
           className={cn(
             'ml-auto inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold tabular-nums leading-none shrink-0',

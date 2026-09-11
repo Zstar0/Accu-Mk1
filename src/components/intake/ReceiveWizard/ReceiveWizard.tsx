@@ -245,6 +245,8 @@ export function ReceiveWizard({
       parentDetails={parentDetails.details}
       parentDetailsLoading={parentDetails.loading}
       parentDetailsError={parentDetails.error}
+      parentDetailsRefreshError={parentDetails.refreshError}
+      onPriorityAssigned={parentDetails.refresh}
     />
   )
 
@@ -350,6 +352,7 @@ export function ReceiveWizard({
         orderNumber={parentDetails.details?.client_order_number ?? null}
         onCloseAndNavigate={closeAndNavigate}
         containerMode={wiz.containerMode}
+        onVialAssigned={() => void wiz.refresh()}
       />
     )
   }
@@ -429,6 +432,7 @@ export function ReceiveWizard({
       <WizardHeader
         parentSampleId={parent.sample_id}
         receivedCount={receivedCount}
+        priority={parentDetails.details?.priority}
       />
       {phaseTabs}
       <div

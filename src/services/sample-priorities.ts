@@ -32,6 +32,12 @@ export const samplePrioritiesQueryKeys = {
   lookup: (hash: string) => ['sample-priorities', 'lookup', hash] as const,
 }
 
+/**
+ * @deprecated The SLA services read the effective priority key inline off each
+ * row (`priority` / `priority_effective`) since the sample-priority spec; this
+ * hook has no consumers left and goes away with `samplePrioritiesLookup` and
+ * the `/sample-priorities/lookup` endpoint.
+ */
 export function useSamplePriorities(uids: string[]) {
   const normalized = normalizeUids(uids)
   const hash = normalized.join('|')

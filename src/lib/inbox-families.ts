@@ -18,10 +18,16 @@ export interface FamilyDragData {
   items: DragData[]
 }
 
-const PRIORITY_ORDER: Record<string, number> = { expedited: 0, high: 1, normal: 2 }
-
-function familyPriorityRank(vials: InboxVialItem[]): number {
-  return Math.min(...vials.map(v => PRIORITY_ORDER[v.priority] ?? 2))
+/** A family sorts by its MOST URGENT vial: the max catalog rank across its
+ *  vials (higher rank = more urgent), read off the resolved
+ *  `priority_effective` the row carries. Rows with no resolved priority read
+ *  as the catalog default's 0. Ranks BELOW the default (negative) are kept —
+ *  clamping them to 0 would sort a de-prioritised family level with a default
+ *  one and leave the header glyph with no vial to read. */
+export function familyPriorityRank(vials: InboxVialItem[]): number {
+  return vials.length
+    ? Math.max(...vials.map(v => v.priority_effective?.rank ?? 0))
+    : 0
 }
 
 /** Group vials by parent_sample_id and sort for rendering: families ordered
@@ -48,7 +54,7 @@ export function groupInboxFamilies(vials: InboxVialItem[]): VialFamily[] {
   families.sort((a, b) => {
     const ra = familyPriorityRank(a.vials)
     const rb = familyPriorityRank(b.vials)
-    if (ra !== rb) return ra - rb
+    if (ra !== rb) return rb - ra
     return a.parentSampleId.localeCompare(b.parentSampleId)
   })
   return families
