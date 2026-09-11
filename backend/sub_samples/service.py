@@ -378,6 +378,7 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
         if existing.native_id is None:
             existing.native_id = mint_native_id(db, senaite_sample_id=existing.sample_id)
         db.flush()
+        apply_signal_priority(db, existing, meta)
         return existing
 
     sample_type_title = (meta.get("getSampleTypeTitle") or meta.get("SampleTypeTitle"))
@@ -399,7 +400,48 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
     # After the flush — the remark's FK needs row.id.
     _record_customer_order_note(db, row, meta)
     db.flush()
+    apply_signal_priority(db, row, meta)
     return row
+
+
+_SIGNAL_PRIORITIES = ("high", "expedited")
+
+
+def apply_signal_priority(db: Session, row: LimsSample, meta: dict) -> Optional[str]:
+    """Stamp the order's priority on the sample the moment it is registered.
+
+    The WordPress order can carry a priority (normal / high / expedited);
+    the Integration Service forwards it as ``meta["Priority"]``. Until now
+    it only reached ``sample_priorities`` when the Worksheets Inbox happened
+    to render the received sample, so the SLA header, the sample page and
+    every report saw "normal" until then. This mirrors the inbox rule
+    exactly: create the row, or upgrade one still at ``normal`` — never
+    downgrade a manual high/expedited, and a normal/absent signal changes
+    nothing. Keyed by the sample's uid like every other priority reader;
+    a row without a uid yet (SENAITE-free registration) is skipped and the
+    inbox fallback still applies later.
+
+    Returns the priority written, or None when nothing changed.
+    """
+    raw = meta.get("Priority")
+    if raw is None:
+        raw = meta.get("priority")
+    prio = str(raw or "").strip().lower()
+    if prio not in _SIGNAL_PRIORITIES or not row.external_lims_uid:
+        return None
+    from models import SamplePriority
+
+    existing = db.execute(
+        select(SamplePriority).where(SamplePriority.sample_uid == row.external_lims_uid)
+    ).scalar_one_or_none()
+    if existing is None:
+        db.add(SamplePriority(sample_uid=row.external_lims_uid, priority=prio))
+    elif existing.priority == "normal":
+        existing.priority = prio
+    else:
+        return None
+    db.flush()
+    return prio
 
 
 def _extract_uid(value):
@@ -529,6 +571,11 @@ _FIELD_MIRROR_SCALARS = {
     "DeclaredTotalQuantity": "declared_total_quantity",
     "VerificationCode": "verification_code",
     "CompanyLogoUrl": "company_logo_url",
+    # Slice B.1 (customer Single↔Blend conversion): IS pushes the AR's new
+    # SampleType uid + title. sample_type_title feeds coa/sample_meta.py
+    # (COABuilder's SampleTypeTitle = COA layout), so it must follow.
+    "SampleType": "sample_type",
+    "SampleTypeTitle": "sample_type_title",
 }
 _ANALYTE_KEY_RE = re.compile(r"^Analyte([1-8])(Peptide|DeclaredQuantity)$")
 
@@ -544,6 +591,8 @@ def _apply_senaite_fields_to_row(db: Session, row: "LimsSample", fields: dict) -
     for senaite_key, column in _FIELD_MIRROR_SCALARS.items():
         if senaite_key in fields:
             v = fields[senaite_key]
+            if senaite_key == "SampleType" and isinstance(v, dict):
+                v = _extract_uid(v)  # SENAITE reference form {uid,title,...}
             setattr(row, column, str(v) if v not in (None, "") else None)
 
     coa_updates = {k: v for k, v in fields.items() if k in _COA_META_FIELDS}
@@ -2848,14 +2897,14 @@ def board_vials(
         ).all():
             ws_by_uid[uid] = BoardWorksheetOut(id=ws.id, title=ws.title, status=ws.status)
 
-    # Query 5: priorities keyed on the parent's external uid; missing = normal.
+    # Query 5: effective priority (spec §5) keyed on the parent's external uid,
+    # rendered in the board's legacy vocabulary; missing = normal.
     priority_by_uid = {}
     if parent_uids:
+        from priority.service import legacy_priority_string, load_effective_for_uids
         priority_by_uid = {
-            row.sample_uid: row.priority
-            for row in db.execute(
-                select(SamplePriority).where(SamplePriority.sample_uid.in_(parent_uids))
-            ).scalars()
+            uid: legacy_priority_string(eff)
+            for uid, eff in load_effective_for_uids(db, parent_uids).items()
         }
 
     # Query 2: ALL current vial-tier analyses for the included vials.

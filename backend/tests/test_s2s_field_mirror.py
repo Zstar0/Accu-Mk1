@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 
 from main import app
 from database import get_db, Base
-from models import LimsSample, SampleAnalyteAlias
+from models import LimsAnalysis, LimsSample, LimsSubSampleEvent, SampleAnalyteAlias
 
 SVC_TOKEN = "test-svc-token"
 HDR = {"X-Service-Token": SVC_TOKEN}
@@ -227,3 +227,209 @@ def test_mixed_batch_scopes_updates_locks_and_alias_cleanup_independently(client
     assert received_aliases[0].alias == "Received Alias"
     received_row = db_session.query(LimsSample).filter_by(sample_id="P-8501").one()
     assert json.loads(received_row.coa_meta)["CoaCompanyName"] == "OldCo"  # locked -> unchanged
+
+
+# 9. sample-type mirror (Slice B.1): SampleType uid + SampleTypeTitle land in
+#    their columns; nothing else on the row moves; a dict-shaped SampleType
+#    (SENAITE reference form) is coerced to its uid.
+def test_sample_type_fields_mirror_to_columns(client, db_session):
+    db_session.add(LimsSample(
+        sample_id="P-8300", status="sample_due",
+        sample_type="uid-single", sample_type_title="Peptide",
+        analytes=json.dumps([{"name": "BPC-157", "declared_quantity": "5"}]),
+    ))
+    db_session.commit()
+    body = {"samples": [{"sample_id": "P-8300", "fields": {
+        "SampleType": "uid-blend", "SampleTypeTitle": "Peptide Blend",
+    }}]}
+    with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}):
+        r = client.post(URL, json=body, headers=HDR)
+    assert r.status_code == 200
+    assert r.json()["updated"] == ["P-8300"]
+    row = db_session.query(LimsSample).filter_by(sample_id="P-8300").one()
+    assert row.sample_type == "uid-blend"
+    assert row.sample_type_title == "Peptide Blend"
+    assert json.loads(row.analytes) == [{"name": "BPC-157", "declared_quantity": "5"}]  # untouched
+
+
+def test_sample_type_dict_form_is_coerced_to_uid(client, db_session):
+    db_session.add(LimsSample(sample_id="P-8301", status="sample_due", sample_type="uid-single"))
+    db_session.commit()
+    body = {"samples": [{"sample_id": "P-8301", "fields": {
+        "SampleType": {"uid": "uid-blend", "title": "Peptide Blend"},
+    }}]}
+    with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}):
+        r = client.post(URL, json=body, headers=HDR)
+    assert r.status_code == 200
+    row = db_session.query(LimsSample).filter_by(sample_id="P-8301").one()
+    assert row.sample_type == "uid-blend"
+
+
+# =============================================================================
+# Slice B.1 follow-up (Handler, arcitest UAT 2026-09-10)
+#
+# A pre-receipt conversion REPLACES the AR's service set in SENAITE (profile
+# swap + identity swap), but this endpoint only mirrors scalars and the analyte
+# slot JSON. The shadow analysis LINES stayed frozen at whatever the sample was
+# registered with: SENAITE 17 lines vs registry 5, one of them (HPLC-PUR) a
+# ghost. And the edit left no trace on the sample's Activity log at all — the
+# only record was a WooCommerce order note the bench never sees.
+# =============================================================================
+
+
+def _line(keyword):
+    """Minimal analysis item in the NORMALISED shape select_current_lines()
+    reads — fetch_parent_analyses() maps SENAITE's getKeyword to `keyword`."""
+    return {"keyword": keyword, "uid": "uid-" + keyword, "review_state": "registered"}
+
+
+def test_analyte_push_schedules_the_shadow_resync(client, db_session):
+    db_session.add(LimsSample(sample_id="P-9001", status="sample_due"))
+    db_session.commit()
+    body = {"samples": [{"sample_id": "P-9001", "fields": {
+        "SampleTypeTitle": "Peptide Blend", "Analyte1Peptide": "KPV - Identity (HPLC)",
+    }}]}
+    with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}), \
+         patch("main._resync_shadow_analyses_after_field_edit_bg") as bg:
+        r = client.post(URL, json=body, headers=HDR)
+    assert r.status_code == 200
+    assert r.json()["updated"] == ["P-9001"]
+    bg.assert_called_once_with("P-9001")
+
+
+def test_branding_only_push_does_not_schedule_a_resync(client, db_session):
+    """Branding never changes the AR's service set — no SENAITE round trip."""
+    db_session.add(LimsSample(sample_id="P-9002", status="sample_due"))
+    db_session.commit()
+    body = {"samples": [{"sample_id": "P-9002", "fields": {"CoaCompanyName": "NewCo"}}]}
+    with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}), \
+         patch("main._resync_shadow_analyses_after_field_edit_bg") as bg:
+        r = client.post(URL, json=body, headers=HDR)
+    assert r.status_code == 200
+    bg.assert_not_called()
+
+
+def test_locked_row_neither_resyncs_nor_logs(client, db_session):
+    db_session.add(LimsSample(sample_id="P-9003", status="sample_received"))
+    db_session.commit()
+    body = {"samples": [{"sample_id": "P-9003", "fields": {"Analyte1Peptide": "KPV - Identity (HPLC)"}}]}
+    with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}), \
+         patch("main._resync_shadow_analyses_after_field_edit_bg") as bg:
+        r = client.post(URL, json=body, headers=HDR)
+    assert r.json()["locked"] == ["P-9003"]
+    bg.assert_not_called()
+    assert db_session.query(LimsSubSampleEvent).count() == 0
+
+
+def test_edit_writes_a_customer_edit_activity_event(client, db_session):
+    db_session.add(LimsSample(
+        sample_id="P-9004", status="sample_due", sample_type_title="Peptide",
+        client_sample_id="BPC-157", declared_total_quantity="5",
+        analytes=json.dumps([{"name": "BPC-157 - Identity (HPLC)", "declared_quantity": "5"}]),
+    ))
+    db_session.commit()
+    row_pk = db_session.query(LimsSample).filter_by(sample_id="P-9004").one().id
+
+    body = {"samples": [{"sample_id": "P-9004", "fields": {
+        "SampleTypeTitle": "Peptide Blend",
+        "Analyte1Peptide": "KPV - Identity (HPLC)", "Analyte1DeclaredQuantity": "1",
+        "Analyte2Peptide": "GHK-Cu - Identity (HPLC)", "Analyte2DeclaredQuantity": "2",
+        "DeclaredTotalQuantity": "3",
+    }}]}
+    with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}), \
+         patch("main._resync_shadow_analyses_after_field_edit_bg"):
+        r = client.post(URL, json=body, headers=HDR)
+    assert r.status_code == 200
+
+    ev = db_session.query(LimsSubSampleEvent).filter_by(lims_sample_pk=row_pk).one()
+    assert ev.event == "customer_sample_edit"
+    assert ev.user_id is None, "the actor is a WordPress customer, not an Mk1 user"
+    d = ev.details
+    assert d["source"] == "customer_portal"
+    assert d["type_from"] == "Peptide" and d["type_to"] == "Peptide Blend"
+    assert d["declared_total_from"] == "5" and d["declared_total_to"] == "3"
+    # Readable analyte names, not the raw slot JSON, and no service suffix.
+    assert d["analytes_from"] == ["BPC-157 (5 mg)"]
+    assert d["analytes_to"] == ["KPV (1 mg)", "GHK-Cu (2 mg)"]
+
+
+def test_no_op_push_writes_no_event(client, db_session):
+    """Re-sending identical values must not litter the Activity log."""
+    db_session.add(LimsSample(sample_id="P-9005", status="sample_due", client_sample_id="Same"))
+    db_session.commit()
+    body = {"samples": [{"sample_id": "P-9005", "fields": {"ClientSampleID": "Same"}}]}
+    with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}), \
+         patch("main._resync_shadow_analyses_after_field_edit_bg"):
+        r = client.post(URL, json=body, headers=HDR)
+    assert r.status_code == 200
+    assert db_session.query(LimsSubSampleEvent).count() == 0
+
+
+# ── the prune itself ─────────────────────────────────────────────────────
+# sync_parent_shadows_from_items only UPSERTS (correct for the event-driven
+# hooks it was built for). These cover the pruning half; the "creates the
+# missing lines" half is already covered by the registration-sync tests, and
+# needs catalog rows this bare fixture has no reason to carry.
+
+# analysis_service_id is NOT NULL; the id itself is irrelevant to pruning and
+# SQLite does not enforce the FK, so a stable synthetic id keeps these focused.
+def _shadow(pk, keyword, service_id=1):
+    return LimsAnalysis(lims_sample_pk=pk, keyword=keyword, title=keyword,
+                        analysis_service_id=service_id,
+                        review_state="senaite_mirror", provenance="shadow")
+
+
+def test_prune_drops_shadow_lines_senaite_no_longer_has(db_session):
+    from lims_analyses.parent_mirror import resync_and_prune_parent_shadows
+    db_session.add(LimsSample(sample_id="P-9010", status="sample_due"))
+    db_session.commit()
+    pk = db_session.query(LimsSample).filter_by(sample_id="P-9010").one().id
+    db_session.add_all([_shadow(pk, "HPLC-PUR"), _shadow(pk, "PEPT-Total"), _shadow(pk, "ID_BPC157")])
+    db_session.commit()
+
+    stats = resync_and_prune_parent_shadows(
+        db_session, sample_id="P-9010", sample_pk=pk,
+        items=[_line("PEPT-Total"), _line("ID_BPC157"), _line("BLEND-PUR")],
+    )
+    db_session.commit()
+
+    assert stats["pruned"] == 1, "only the ghost goes"
+    left = sorted(k for (k,) in db_session.query(LimsAnalysis.keyword).filter_by(lims_sample_pk=pk))
+    assert left == ["ID_BPC157", "PEPT-Total"]
+
+
+def test_prune_never_runs_on_an_empty_senaite_result(db_session):
+    """A SENAITE hiccup that returns nothing must not wipe the registry."""
+    from lims_analyses.parent_mirror import resync_and_prune_parent_shadows
+    db_session.add(LimsSample(sample_id="P-9011", status="sample_due"))
+    db_session.commit()
+    pk = db_session.query(LimsSample).filter_by(sample_id="P-9011").one().id
+    db_session.add_all([_shadow(pk, "HPLC-PUR"), _shadow(pk, "PEPT-Total")])
+    db_session.commit()
+
+    stats = resync_and_prune_parent_shadows(db_session, sample_id="P-9011", sample_pk=pk, items=[])
+    db_session.commit()
+
+    assert stats["pruned"] == 0
+    assert db_session.query(LimsAnalysis).filter_by(lims_sample_pk=pk).count() == 2
+
+
+def test_prune_leaves_non_shadow_rows_alone(db_session):
+    """Native/real analyses are not ours to delete, whatever SENAITE says."""
+    from lims_analyses.parent_mirror import resync_and_prune_parent_shadows
+    db_session.add(LimsSample(sample_id="P-9012", status="sample_due"))
+    db_session.commit()
+    pk = db_session.query(LimsSample).filter_by(sample_id="P-9012").one().id
+    native = LimsAnalysis(lims_sample_pk=pk, keyword="MOISTURE", title="Moisture",
+                          analysis_service_id=2,
+                          review_state="pending", provenance="native")
+    db_session.add_all([native, _shadow(pk, "HPLC-PUR")])
+    db_session.commit()
+
+    stats = resync_and_prune_parent_shadows(
+        db_session, sample_id="P-9012", sample_pk=pk, items=[_line("PEPT-Total")])
+    db_session.commit()
+
+    assert stats["pruned"] == 1
+    left = sorted(k for (k,) in db_session.query(LimsAnalysis.keyword).filter_by(lims_sample_pk=pk))
+    assert left == ["MOISTURE"]

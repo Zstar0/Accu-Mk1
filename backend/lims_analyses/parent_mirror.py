@@ -220,6 +220,46 @@ def select_current_lines(items: list[dict]) -> dict[str, dict]:
     return selected
 
 
+def resync_and_prune_parent_shadows(db: Session, *, sample_id: str, sample_pk: int,
+                                   items: list[dict]) -> dict:
+    """Re-mirror a parent's shadow lines from SENAITE AND drop the ones SENAITE
+    no longer has.
+
+    ``sync_parent_shadows_from_items`` only upserts, which is right for the
+    event-driven hooks it was built for. A pre-receipt customer edit is a
+    different shape: converting a sample between Single and Blend REPLACES the
+    AR's service set, so lines the sample used to carry (HPLC-PUR on the way to
+    a blend) are gone and would otherwise linger as ghosts — arcitest UAT
+    2026-09-10 found SENAITE holding 17 lines against a registry showing 5, one
+    of them dead.
+
+    Pruning is deliberately narrow, and Handler-ruled 2026-09-10:
+      * ``shadow`` provenance only — a native or real analysis is never ours to
+        delete, whatever SENAITE says;
+      * only keywords absent from SENAITE's CURRENT set;
+      * and the caller gates on the sample still being pre-received, so a line
+        carrying results can never be pruned (results cannot exist yet).
+
+    An EMPTY ``items`` prunes nothing: a SENAITE hiccup that returns no lines
+    must not wipe the registry. Caller commits.
+    """
+    stats = dict(sync_parent_shadows_from_items(db, sample_id=sample_id, items=items))
+    stats["pruned"] = 0
+    live = set(select_current_lines(items).keys())
+    if not live:
+        return stats
+    stats["pruned"] = (
+        db.query(LimsAnalysis)
+        .filter(
+            LimsAnalysis.lims_sample_pk == sample_pk,
+            LimsAnalysis.provenance == "shadow",
+            LimsAnalysis.keyword.notin_(live),
+        )
+        .delete(synchronize_session=False)
+    )
+    return stats
+
+
 def sync_parent_shadows_from_items(db: Session, *, sample_id: str,
                                    items: list[dict]) -> dict[str, int]:
     """Upsert a shadow row for every CURRENT line in `items`. Returns

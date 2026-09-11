@@ -164,6 +164,64 @@ describe('useSampleSla', () => {
     expect(fetchSlaStatusesMock).not.toHaveBeenCalled()
   })
 
+  it("takes the row's inline effective priority key and applies its global override", async () => {
+    // Custom catalog key — proves the override map is keyed by the priority KEY
+    // read off the lookup row, not by the retired uid→priority lookup.
+    getSlaTiersMock.mockResolvedValue([
+      {
+        id: 1,
+        name: 'default',
+        target_minutes: 1440,
+        business_hours_only: false,
+        is_default: true,
+        amber_threshold_percent: 80,
+      },
+      {
+        id: 2,
+        name: 'Rush 4h',
+        target_minutes: 240,
+        business_hours_only: false,
+        is_default: false,
+        amber_threshold_percent: 80,
+      },
+    ])
+    getSlaPriorityTiersMock.mockResolvedValue([
+      { id: 9, priority: 'rush', sla_tier_id: 2, service_group_id: null },
+    ])
+    fetchSlaStatusesMock.mockResolvedValue([
+      {
+        key: 'uid-PB-001|no-group',
+        status: {
+          target_minutes: 240,
+          elapsed_minutes: 120,
+          remaining_minutes: 120,
+          breached: false,
+        },
+      },
+    ])
+    const lookup = makeLookup({
+      priority: {
+        key: 'rush',
+        rank: 90,
+        source_level: 'order',
+        source_id: '7',
+      },
+      // One (unmapped) analysis so the resolver actually runs — the
+      // zero-analyses path short-circuits to the default tier.
+      analyses: [{ keyword: 'orphan_kw' } as never],
+    })
+    const { result } = renderHook(() => useSampleSla(lookup), { wrapper })
+    await waitFor(() => {
+      expect(result.current.snapshots.length).toBe(1)
+    })
+    const snapshot = result.current.snapshots[0]
+    expect(result.current.priority).toBe('rush')
+    expect(snapshot?.priority).toBe('rush')
+    expect(snapshot?.tier.name).toBe('Rush 4h')
+    expect(snapshot?.reason.tierSource).toBe('priority')
+    expect(snapshot?.reason.priorityUsed).toBe('rush')
+  })
+
   it('returns a single default-tier snapshot for a received sample with no analyses', async () => {
     fetchSlaStatusesMock.mockResolvedValue([
       {
@@ -186,7 +244,8 @@ describe('useSampleSla', () => {
     expect(snapshot?.groupKey).toBe('no-group')
     // No services/groups configured → tier from default.
     expect(snapshot?.reason.tierSource).toBe('default')
-    expect(result.current.priority).toBe('normal')
+    // No inline priority on the lookup → the 'default' sparsity sentinel.
+    expect(result.current.priority).toBe('default')
     // Status mapped → color computable.
     expect(snapshot?.color).toBeDefined()
     // Round-trip happened once.

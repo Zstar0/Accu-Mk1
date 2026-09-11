@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import React from 'react'
 import type * as ApiModule from '@/lib/api'
+import type * as PriorityApiModule from '@/lib/api-priorities'
 
 const updateSlaTierMock = vi.fn().mockResolvedValue({})
 const setSlaPriorityTierMock = vi.fn().mockResolvedValue({})
@@ -40,6 +41,23 @@ vi.mock('@/lib/api', async () => {
     ) => setSlaPriorityTierMock(priority, slaTierId, serviceGroupId),
     deleteSlaPriorityTier: (priority: string, serviceGroupId?: number | null) =>
       deleteSlaPriorityTierMock(priority, serviceGroupId),
+  }
+})
+
+// SlaPane now drives its override blocks off the priorities catalog
+// (useActivePriorities) instead of a hardcoded ['high','expedited'] pair, so
+// the catalog has to be mocked for the blocks to render at all.
+vi.mock('@/lib/api-priorities', async () => {
+  const actual =
+    await vi.importActual<typeof PriorityApiModule>('@/lib/api-priorities')
+  return {
+    ...actual,
+    getPriorities: () =>
+      Promise.resolve([
+        { key: 'normal', name: 'Normal', rank: 0, icon: 'minus', color: 'zinc', pulse: false, is_default: true, is_active: true, sla_tier_id: null },
+        { key: 'high', name: 'High', rank: 10, icon: 'chevron-up', color: 'amber', pulse: false, is_default: false, is_active: true, sla_tier_id: null },
+        { key: 'expedited', name: 'Expedited', rank: 20, icon: 'chevrons-up', color: 'red', pulse: true, is_default: false, is_active: true, sla_tier_id: null },
+      ]),
   }
 })
 

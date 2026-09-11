@@ -41,6 +41,11 @@ interface MockAuthState {
 const authState: MockAuthState = {
   user: { role: 'user', email: 'lab@example.com' },
 }
+const rtpCounts = { ready: 0, partial: 0 }
+vi.mock('@/hooks/use-ready-to-publish-count', () => ({
+  useReadyToPublishCount: () => rtpCounts,
+}))
+
 vi.mock('@/store/auth-store', () => {
   const useAuthStore = <T,>(selector: (s: MockAuthState) => T): T =>
     selector(authState)
@@ -97,6 +102,21 @@ describe('AppSidebar — Customers entry (Phase 29-03)', () => {
       'sidebar-expanded-sections',
       JSON.stringify({ 'accumark-tools': true })
     )
+  })
+
+  it('Ready to Publish sub-item carries the red/green count chips', () => {
+    localStorage.setItem(
+      'sidebar-expanded-sections',
+      JSON.stringify({ 'accumark-tools': true, reports: true })
+    )
+    rtpCounts.ready = 3
+    rtpCounts.partial = 1
+    renderSidebar()
+    const btn = screen.getByRole('button', { name: /Ready to Publish/ })
+    expect(btn).toHaveTextContent('3')
+    expect(btn).toHaveTextContent('1')
+    rtpCounts.ready = 0
+    rtpCounts.partial = 0
   })
 
   it('renders the Customers sub-item under AccuMark Tools', () => {

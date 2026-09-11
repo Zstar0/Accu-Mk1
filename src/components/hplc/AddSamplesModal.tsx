@@ -9,13 +9,15 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { PriorityBadge } from '@/components/hplc/PriorityBadge'
+import { PriorityGlyph } from '@/components/common/PriorityGlyph'
+import { legacyEffectivePriority } from '@/lib/inbox-sla'
 import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
 import { SERVICE_GROUP_COLORS } from '@/lib/service-group-colors'
 import { getInboxSamples } from '@/lib/api'
 import { useEffectiveReadSource } from '@/lib/read-source'
 import { itemScopeKey } from '@/lib/worksheet-scope-key'
-import type { WorksheetListItem, InboxPriority, AddToWorksheetPayload } from '@/lib/api'
+import type { WorksheetListItem, AddToWorksheetPayload } from '@/lib/api'
+import type { EffectivePriority } from '@/lib/api-priorities'
 
 interface AddSamplesModalProps {
   open: boolean
@@ -28,7 +30,9 @@ interface AddSamplesModalProps {
 interface FlatInboxItem {
   sample_uid: string
   sample_id: string
-  priority: InboxPriority
+  /** Resolved effective priority for the vial; falls back to the legacy
+   *  string translation when the row predates `priority_effective`. */
+  priority: EffectivePriority
   /** From the inbox's `group_id`, which is a DEPARTMENT id (S2). */
   department_id: number
   group_name: string
@@ -80,7 +84,8 @@ export function AddSamplesModal({
       flatItems.push({
         sample_uid: vial.uid,
         sample_id: vial.sample_id,
-        priority: vial.priority,
+        priority:
+          vial.priority_effective ?? legacyEffectivePriority(vial.priority),
         department_id: departmentId,
         group_name: slot.name,
         group_color: slot.color,
@@ -169,7 +174,7 @@ function AddSampleCard({ item, onAdd }: AddSampleCardProps) {
       <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-semibold flex-shrink-0 ${colorClass}`}>
         {item.group_name}
       </span>
-      <PriorityBadge priority={item.priority} />
+      <PriorityGlyph priority={item.priority} size="row" />
     </button>
   )
 }

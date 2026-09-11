@@ -6,6 +6,57 @@
 - **HPLC-native foundation** (slice 1 of the native-born HPLC program, spec `docs/superpowers/specs/2026-09-10-hplc-native-born-design.md`): `lims_analyses.peptide_id` + `slot` (nullable, additive) with slot-aware root unique indexes; boot seed of the five native HPLC services, the `hplc-purity-identity` profile (seeded **inactive** — activating it is an explicit flip-runbook step, keeping it out of the Manage Analyses picker until then) and their wildcard specs; `hplc-purity-identity` accepted as the HPLC primary key alongside `hplcpurity_identity` in demand, seeding, verification and product-completion. Dark: no order carries the new key until the WordPress `profile_key` is set.
 - HPLC-native slice 2 (spec `docs/superpowers/specs/2026-09-10-hplc-native-born-design.md`, M3+M4): a registry signal with no SENAITE id now mints a customer-facing `P-`/`PB-` sample from counters seeded at 5000/1000 (guarded boot migration) and never adopts a later SENAITE uid (identity collision → quarantine); `POST /s2s/lims-samples` honors `Idempotency-Key`; `GET /s2s/peptides` ships the Mk1 peptide list to the Integration Service; `Analyte{i}PeptideId` on the signal lands in `lims_samples.analytes`; HPLC vials of native-born parents seed the generic native trio per analyte slot (unresolved names ⇒ `peptide_id NULL` + `analyte_unresolved` reason, never a guess) with the two blend aggregates for blends; parent placeholders are minted per slot. SENAITE-born samples are untouched.
 
+## v1.21.0 — 2026-09-11
+
+### Added
+- **Customer portal sample edits reach the registry (Slice B.1).** `/s2s/lims-samples/fields` mirrors `SampleType` + `SampleTypeTitle`, so a customer converting a sample between Single Peptide and Peptide Blend from the WordPress order page lands on the right COA layout (`sample_type_title` feeds COABuilder's layout choice).
+- Every accepted pre-receipt customer edit is written to the sample's Activity feed as `customer_sample_edit` — test type, analytes, declared total, sample name and branding, before and after. Until now the only record was a WooCommerce order note the bench never sees. An idempotent re-push writes nothing.
+
+### Fixed
+- Shadow analysis lines are re-synced from SENAITE after a pre-receipt edit, and lines SENAITE no longer has are pruned. A conversion replaces the AR's whole service set, but the field mirror carried only scalars and the analyte slots, so the registry kept lines the sample no longer had (arcitest UAT: SENAITE 17 lines against a registry showing 5, one of them dead). Pruning is shadow-provenance only, never runs on an empty SENAITE result, and re-checks the pre-received gate on its own session.
+
+## v1.20.1 — 2026-09-11
+
+### Fixed
+- Order priority never reached the explorer order payloads (Receive page By-order rows, Order Status order rows) and assigning a priority at order level from Order Status failed with "order not found": the Integration Service hands out bare order numbers ("3008") while the registry stores "WP-3008". Every order lookup keyed by a caller-supplied number now accepts either form.
+
+## v1.20.0 — 2026-09-11
+
+### Added
+- **Header quick nav.** The "Accu-Mk1" label in the top bar is replaced by three Enter-to-go boxes styled like the Worksheets pill — Sample ID (sample details), Customer Email (customer list, pre-filtered), Order ID (Order Status with only the Order ID filter set) — and a Ready to Publish button carrying two count chips: red = every line verified, green = Ready for Partial Publish. The same chips sit on the Ready to Publish entry in the sidebar.
+- `GET /reports/ready-to-publish/summary` (totals only) for the chips. Both it and the full report read through a 60 s process cache that is cleared on every publish, so polling from every open window costs one report build per minute at most.
+
+### Fixed
+- Ready to Publish report ignores rejected / retracted / cancelled lines the way the workflow engine does. A sample with one rejected extra analyte (PB-0474 and six others on prod) never appeared before.
+
+## v1.19.2 — 2026-09-11
+
+### Fixed
+- Stranded-sample check: a sample with no `date_received` (received on the SENAITE side, never re-read through a senaite-touching fetch) now falls back to its registration time for the scan window instead of being skipped entirely. P-2605 sat with `status=verified` / `native_status=published` for a day without a flag.
+- `date_received` is stamped from the IS receive event when Mk1 has no value for it (SENAITE-side receives: auto check-in, SENAITE UI). Existing rows with a `receive` ledger row and no date are backfilled once on boot from the earliest receive event.
+
+## v1.19.1 — 2026-09-11
+
+### Fixed
+- Receive page: the By sample list rows show the priority glyph (the order rows already did). (#188)
+
+## v1.19.0 — 2026-09-11
+
+### Added
+- **Sample priority** (#186). Priorities are data: a managed list (name, rank, icon, color, pulse, active, default) under Settings → Priorities, each optionally mapped to an SLA tier (the per-service-group exceptions on the SLA pane follow the list). Explicit priority at customer, order, sample and vial level, resolved most-specific-first (`NULL` = inherit) by one resolver on the backend and a fixture-validated mirror on the frontend; every list row, the details payload, explorer orders and inbox items carry the effective priority inline, so no surface makes a second request. Set it from the sample and sub-sample pages, the order status page, the receive wizard (sample panel, vial tab) and the order-receive session; bulk/single from the inbox card. A compact glyph (bare on rows, tinted on cards/headers, nothing for Default) marks samples on the samples table, sample cards, order rows, vial board, inbox (families ordered by rank), worksheets and active boxes. Every change writes `priority_audit` and shows in the sample activity log with the actor; SLA snapshots are recorded at receive and at the first real publish so reports grade against what was promised. The WordPress order payload's priority lands on the order at create. Legacy `sample_priorities` rows (sample- and vial-keyed) are backfilled once on first boot; the table and the `/sample-priorities/lookup` route are retired in a follow-up release. Spec `docs/superpowers/specs/2026-09-09-sample-priority-design.md`.
+- **Ready to Publish report** (#187) under Reports: samples with every line verified or flagged Ready for Publish / Ready for Partial Publish, most critical first, grouped by order, with On Hold flags parking a row below. Column headers sort (sample, analytes, status, why, received, SLA; third click restores most-critical-first) and the SLA cell hovers the shared SLA breakdown card used on Order Status (the report's SLA block now carries the tier's business-hours flag).
+
+### Changed
+- SLA tier resolution in the frontend is keyed by the effective priority key from the row shape instead of the SENAITE-uid priority lookup; `InboxPriority` is a plain string alias for one release. `PUT/DELETE /sla-priority-tiers/{priority}` validate against the priorities table.
+
+### Deploy notes
+- Full Mk1 deploy (one VERSION tags both images); the priority migration runs on backend boot. Prod `sla_priority_tiers` is empty and `sample_priorities` holds 6 legacy rows to backfill. Map no priority to an SLA tier until this release is live everywhere.
+
+## v1.18.3 — 2026-09-10
+
+### Fixed
+- **Accu-Mk1 now owns the identity CONFORMS verdict on the COA wire.** P-1986 (HGH) rendered its identity DOES NOT CONFORM on the certificate although the stored result was a pass. In mk1 mode COABuilder derives the expected name from the registry analyte slot title — `lims_samples.analytes`, the check-in copy of the SENAITE service title, `"Somatropin - Identity (HPLC)"` — and does a `startswith` against the raw result the prep bridge wrote, which is the catalog peptide name `"HGH (Somatropin)"`. Two Mk1 catalog fields that disagree (service 264 vs peptide 235) made a conforming identity unsatisfiable, and nothing read SENAITE to get there. The new `coa/identity_verdict.py` evaluates the stored value with the existing identity rule against the linked peptide name, the service's legacy `peptide_name`, and the service-title prefix (fail tokens win), and `legacy_rows` emits the literal **`Conforms`** token when it passes — the same vocabulary the HPLC native-born design writes for native identity rows and one COABuilder's matcher already accepts. On a pass COABuilder prints the slot display name, never the raw string, so certificate text is unchanged; non-conforming, free-text and blank values ride raw and keep failing exactly as before. Measured against every production identity row (8,552): the only rows whose verdict changes are P-1986's three. Variance replicates and per-vial figures are deliberately untouched — their identity cell is customer-visible on the variance matrix. (#185)
+
 ## v1.18.2 — 2026-09-10
 
 ### Fixed

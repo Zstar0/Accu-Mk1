@@ -1,11 +1,17 @@
 import { useEffect, useState } from 'react'
 import { HelpCircle } from 'lucide-react'
 import { getVialDemand, type VialDemandResponse } from '@/lib/api'
+import { PriorityGlyph } from '@/components/common/PriorityGlyph'
+import type { EffectivePriority } from '@/lib/api-priorities'
 import { cn } from '@/lib/utils'
 
 interface Props {
   parentSampleId: string
   receivedCount: number
+  /** Resolved effective priority of the parent sample, from the wizard's
+   *  lookup (sample-priority spec §5). Optional: callers without the lookup
+   *  simply render no glyph. */
+  priority?: EffectivePriority | null
 }
 
 // Path is served by Vite from `public/guides/` — the build script
@@ -47,7 +53,11 @@ function demandBreakdown(d: VialDemandResponse): string {
   return parts.join(' · ')
 }
 
-export function WizardHeader({ parentSampleId, receivedCount }: Props) {
+export function WizardHeader({
+  parentSampleId,
+  receivedCount,
+  priority,
+}: Props) {
   const [demand, setDemand] = useState<VialDemandResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -72,6 +82,10 @@ export function WizardHeader({ parentSampleId, receivedCount }: Props) {
 
   return (
     <header className="flex items-center justify-between gap-4 px-6 py-3 border-b bg-muted/10">
+      {/* Mounted only when a priority is present: PriorityGlyph reads the
+          priority catalog through react-query, and the header is also
+          rendered by callers with no QueryClientProvider. */}
+      {priority && <PriorityGlyph priority={priority} size="header" />}
       <div className="flex flex-col gap-0.5 min-w-0">
         <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
           Expected vials

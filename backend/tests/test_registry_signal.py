@@ -447,3 +447,67 @@ def test_s2s_signal_key_is_scoped_per_sample_not_global(db, monkeypatch):
     r1 = client.post("/s2s/lims-samples", json=mk(1), headers={"X-Service-Token": "tok", "Idempotency-Key": "registry-1-1"})
     r2 = client.post("/s2s/lims-samples", json=mk(2), headers={"X-Service-Token": "tok", "Idempotency-Key": "registry-1-2"})
     assert {r1.json()["sample_id"], r2.json()["sample_id"]} == {"P-5000", "P-5001"}
+
+
+# ── Order priority at registration (2026-09-10) ─────────────────────────────
+
+def _prio(db, uid):
+    from models import SamplePriority
+    row = db.query(SamplePriority).filter_by(sample_uid=uid).one_or_none()
+    return row.priority if row else None
+
+
+def test_signal_priority_stamped_at_creation(db):
+    from sub_samples.service import upsert_sample_from_signal
+    meta = _signal_meta()
+    meta["Priority"] = "expedited"
+    row = upsert_sample_from_signal(db, "P-2001", "AR_UID_1", meta)
+    assert row.external_lims_uid == "AR_UID_1"
+    assert _prio(db, "AR_UID_1") == "expedited"
+
+
+def test_signal_priority_is_case_insensitive_and_accepts_lowercase_key(db):
+    from sub_samples.service import upsert_sample_from_signal
+    meta = _signal_meta()
+    meta["priority"] = "High"
+    upsert_sample_from_signal(db, "P-2001", "AR_UID_1", meta)
+    assert _prio(db, "AR_UID_1") == "high"
+
+
+def test_signal_priority_normal_or_absent_writes_nothing(db):
+    from sub_samples.service import upsert_sample_from_signal
+    upsert_sample_from_signal(db, "P-2001", "AR_UID_1", _signal_meta())
+    assert _prio(db, "AR_UID_1") is None
+    meta = _signal_meta()
+    meta["Priority"] = "normal"
+    upsert_sample_from_signal(db, "P-2001", "AR_UID_1", meta)
+    assert _prio(db, "AR_UID_1") is None
+
+
+def test_signal_priority_never_downgrades_a_manual_override(db):
+    from models import SamplePriority
+    from sub_samples.service import upsert_sample_from_signal
+    db.add(SamplePriority(sample_uid="AR_UID_1", priority="high"))
+    db.flush()
+    meta = _signal_meta()
+    meta["Priority"] = "expedited"
+    upsert_sample_from_signal(db, "P-2001", "AR_UID_1", meta)
+    assert _prio(db, "AR_UID_1") == "high"          # manual wins
+    db.query(SamplePriority).filter_by(sample_uid="AR_UID_1").one().priority = "normal"
+    db.flush()
+    upsert_sample_from_signal(db, "P-2001", "AR_UID_1", meta)
+    assert _prio(db, "AR_UID_1") == "expedited"     # normal is upgraded on replay
+
+
+def test_signal_priority_skipped_without_uid(db):
+    from sub_samples.service import upsert_sample_from_signal
+    # slice-2 contract: SENAITE-free registration mints a customer-facing
+    # P-/PB- id and requires the counters to be seeded (native_id.py raises
+    # otherwise) -- adapted from master, which predates that requirement.
+    _seed_customer_counters(db)
+    meta = _signal_meta()
+    meta["Priority"] = "expedited"
+    row = upsert_sample_from_signal(db, None, None, meta)   # SENAITE-free registration
+    assert row.external_lims_uid is None
+    from models import SamplePriority
+    assert db.query(SamplePriority).count() == 0

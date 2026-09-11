@@ -1,8 +1,16 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import React from 'react'
 import { VialBoardKanban } from '@/components/vial-board/VialBoardKanban'
 import { DEFAULT_VIAL_BOARD_FILTERS } from '@/lib/vial-board'
 import type { BoardVial } from '@/lib/api'
+
+// The cards' PriorityGlyph reads the priority catalog through react-query.
+function wrapper({ children }: { children: React.ReactNode }) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+}
 
 const navigateToSample = vi.fn()
 vi.mock('@/store/ui-store', () => ({
@@ -63,7 +71,7 @@ describe('VialBoardKanban', () => {
         },
       ],
     })
-    render(<VialBoardKanban {...baseProps} vials={[v]} />)
+    render(<VialBoardKanban {...baseProps} vials={[v]} />, { wrapper })
     expect(screen.getAllByText('PB-0463-S02')).toHaveLength(2)
   })
 
@@ -93,7 +101,8 @@ describe('VialBoardKanban', () => {
         vials={[v]}
         collapsedCols={['rejected']}
         onToggleCollapse={onToggleCollapse}
-      />
+      />,
+      { wrapper }
     )
     // Card renders once (assigned) — the rejected copy is collapsed away.
     expect(screen.getAllByText('PB-0463-S02')).toHaveLength(1)
@@ -113,7 +122,7 @@ describe('VialBoardKanban', () => {
         },
       ],
     })
-    render(<VialBoardKanban {...baseProps} vials={[v]} />)
+    render(<VialBoardKanban {...baseProps} vials={[v]} />, { wrapper })
     fireEvent.click(screen.getByText('PB-0463-S02'))
     expect(navigateToSample).toHaveBeenCalledWith('PB-0463')
   })
@@ -130,7 +139,9 @@ describe('VialBoardKanban', () => {
         },
       ],
     })
-    render(<VialBoardKanban {...baseProps} vials={[v]} showAnalyses={true} />)
+    render(<VialBoardKanban {...baseProps} vials={[v]} showAnalyses={true} />, {
+      wrapper,
+    })
     expect(screen.getByText('Endotoxin USP<85>')).toBeInTheDocument()
   })
 
@@ -187,7 +198,8 @@ describe('VialBoardKanban', () => {
         vials={[v1, v2]}
         groupBySample={true}
         collapsedCols={['rejected']}
-      />
+      />,
+      { wrapper }
     )
     const laneHeaders = screen.getAllByText(/^(PB-0463|AB-0001)$/)
     expect(laneHeaders.map(el => el.textContent)).toEqual([

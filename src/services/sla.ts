@@ -1,10 +1,18 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
-  getSlaTiers, createSlaTier, updateSlaTier, deleteSlaTier,
-  getSlaPriorityTiers, setSlaPriorityTier, deleteSlaPriorityTier,
-  type SlaTier, type SlaTierCreate, type SlaTierUpdate, type InboxPriority,
+  getSlaTiers,
+  createSlaTier,
+  updateSlaTier,
+  deleteSlaTier,
+  getSlaPriorityTiers,
+  setSlaPriorityTier,
+  deleteSlaPriorityTier,
+  type SlaTier,
+  type SlaTierCreate,
+  type SlaTierUpdate,
 } from '@/lib/api'
+import { priorityQueryKeys } from '@/services/priority-keys'
 
 export const slaQueryKeys = {
   tiers: ['sla', 'tiers'] as const,
@@ -12,18 +20,29 @@ export const slaQueryKeys = {
 }
 
 export function useSlaTiers() {
-  return useQuery({ queryKey: slaQueryKeys.tiers, queryFn: getSlaTiers, staleTime: 1000 * 60 * 5 })
+  return useQuery({
+    queryKey: slaQueryKeys.tiers,
+    queryFn: getSlaTiers,
+    staleTime: 1000 * 60 * 5,
+  })
 }
 
 export function useSlaPriorityTiers() {
-  return useQuery({ queryKey: slaQueryKeys.priorityTiers, queryFn: getSlaPriorityTiers, staleTime: 1000 * 60 * 5 })
+  return useQuery({
+    queryKey: slaQueryKeys.priorityTiers,
+    queryFn: getSlaPriorityTiers,
+    staleTime: 1000 * 60 * 5,
+  })
 }
 
 export function useCreateSlaTier() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (data: SlaTierCreate) => createSlaTier(data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: slaQueryKeys.tiers }); toast.success('SLA tier created') },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: slaQueryKeys.tiers })
+      toast.success('SLA tier created')
+    },
     onError: (e: Error) => toast.error(e.message),
   })
 }
@@ -31,8 +50,12 @@ export function useCreateSlaTier() {
 export function useUpdateSlaTier() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, data }: { id: number; data: SlaTierUpdate }) => updateSlaTier(id, data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: slaQueryKeys.tiers }); toast.success('SLA tier saved') },
+    mutationFn: ({ id, data }: { id: number; data: SlaTierUpdate }) =>
+      updateSlaTier(id, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: slaQueryKeys.tiers })
+      toast.success('SLA tier saved')
+    },
     onError: (e: Error) => toast.error(e.message),
   })
 }
@@ -41,7 +64,10 @@ export function useDeleteSlaTier() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (id: number) => deleteSlaTier(id),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: slaQueryKeys.tiers }); toast.success('SLA tier deleted') },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: slaQueryKeys.tiers })
+      toast.success('SLA tier deleted')
+    },
     onError: (e: Error) => toast.error(e.message),
   })
 }
@@ -58,11 +84,18 @@ export function useSetPriorityTier() {
       slaTierId,
       serviceGroupId,
     }: {
-      priority: InboxPriority
+      // Any priority key from the catalog (Task 5), not just the legacy trio.
+      priority: string
       slaTierId: number
       serviceGroupId?: number | null
     }) => setSlaPriorityTier(priority, slaTierId, serviceGroupId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: slaQueryKeys.priorityTiers }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: slaQueryKeys.priorityTiers })
+      // `Priority.sla_tier_id` is derived from the same DB row this writes,
+      // and the catalog query is cached for 5 minutes - without this the
+      // Priorities pane keeps showing the tier it had before this edit.
+      qc.invalidateQueries({ queryKey: priorityQueryKeys.all })
+    },
     onError: (e: Error) => toast.error(e.message),
   })
 }
@@ -76,10 +109,16 @@ export function useDeletePriorityTier() {
       priority,
       serviceGroupId,
     }: {
-      priority: InboxPriority
+      priority: string
       serviceGroupId?: number | null
     }) => deleteSlaPriorityTier(priority, serviceGroupId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: slaQueryKeys.priorityTiers }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: slaQueryKeys.priorityTiers })
+      // `Priority.sla_tier_id` is derived from the same DB row this writes,
+      // and the catalog query is cached for 5 minutes - without this the
+      // Priorities pane keeps showing the tier it had before this edit.
+      qc.invalidateQueries({ queryKey: priorityQueryKeys.all })
+    },
     onError: (e: Error) => toast.error(e.message),
   })
 }

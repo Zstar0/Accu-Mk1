@@ -21,12 +21,29 @@ from models import (
     LimsAnalysis,
     LimsSample,
     LimsSubSample,
-    SamplePriority,
+    Priority,
     User,
     VialRole,
     Worksheet,
     WorksheetItem,
 )
+
+@pytest.fixture
+def db_seeded_priorities(db):
+    """conftest/create_all builds the schema without the seeded `priorities`
+    rows, and priority_map is process-cached — seed and invalidate."""
+    from priority import service as priority_service
+    db.add_all([
+        Priority(key="default", name="Default", rank=0, icon="minus",
+                 color="zinc", pulse=False, is_default=True, is_active=True),
+        Priority(key="expedited", name="Expedited", rank=20, icon="chevrons-up",
+                 color="red", pulse=True, is_default=False, is_active=True),
+    ])
+    db.commit()
+    priority_service.invalidate_priority_cache()
+    yield db
+    priority_service.invalidate_priority_cache()
+
 
 DEPT_ANALYTICAL = 101
 DEPT_MICRO = 102
@@ -316,10 +333,13 @@ def test_analyst_names_follow_display_rule(client, db):
     assert by_id[None] is None
 
 
-def test_priority_from_sample_priorities_default_normal(client, db):
+def test_priority_from_effective_chain_default_normal(db_seeded_priorities, client, db):
+    """Task 8: the board reads the EFFECTIVE priority (lims_samples.priority_key
+    through the resolver), not the retired sample_priorities copy. The default
+    priority still renders as the legacy "normal"."""
     p_hi = _parent(db, sid="PB-9104", uid="uid-PB-9104")
     p_norm = _parent(db, sid="PB-9105")
-    db.add(SamplePriority(sample_uid="uid-PB-9104", priority="expedited"))
+    p_hi.priority_key = "expedited"
     for p in (p_hi, p_norm):
         v = _vial(db, parent=p)
         _analysis(db, vial=v, state="unassigned")

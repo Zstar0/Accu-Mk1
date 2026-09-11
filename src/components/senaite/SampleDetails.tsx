@@ -201,6 +201,7 @@ import {
 import type { VialAssignment } from '@/lib/vial-assignment'
 import { vialLabel, vialPosition, vialTotal } from '@/lib/vial-label'
 import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
+import { PrioritySelect } from '@/components/common/PrioritySelect'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { useVialRoles } from '@/services/vial-roles'
 import { useDepartments } from '@/services/departments'
@@ -210,6 +211,8 @@ import { SampleActivityLog } from '@/components/senaite/SampleActivityLog'
 import { SampleRegistryDebug } from '@/components/senaite/SampleRegistryDebug'
 import { ReadSourceBanner } from '@/components/senaite/ReadSourceBanner'
 import { ReadSourceControls } from '@/components/senaite/ReadSourceControls'
+import { SamplePriorityRow } from '@/components/senaite/SamplePriorityRow'
+import { PriorityGlyph } from '@/components/common/PriorityGlyph'
 import {
   OrderedProducts,
   useOrderedProducts,
@@ -5028,6 +5031,10 @@ export function SampleDetails() {
                     {data.sample_type}
                   </Badge>
                 )}
+                {/* Effective priority for this sample — resolved server-side
+                    up the sample → order → customer chain. Renders nothing
+                    when the effective priority is the default. */}
+                <PriorityGlyph priority={data.priority} size="header" />
                 {/* Read-source indicator + tri-state override — parent-only.
                     The override only affects parent basic-info reads (see
                     resolveSampleData: sub-sample fetches are hardcoded to
@@ -5121,6 +5128,21 @@ export function SampleDetails() {
                       <RoleHeaderBadge role={currentAssignment} />
                     </>
                   )}
+                </div>
+              )}
+              {/* Vial-level priority control — sub-sample pages hide the main
+                  grid (parent-level sections), so the header is the only host.
+                  meVial is this vial's row in the parent's sub-samples list;
+                  its pk is the registry write target. */}
+              {!isParent && meVial && (
+                <div className="mt-1 max-w-[20rem]">
+                  <SamplePriorityRow
+                    level="vial"
+                    registryPk={meVial.id}
+                    explicitKey={meVial.priority_key ?? null}
+                    effective={meVial.priority}
+                    onAssigned={() => refreshSample(sampleId)}
+                  />
                 </div>
               )}
               <div className="text-xs text-muted-foreground mt-0.5">
@@ -5306,6 +5328,31 @@ export function SampleDetails() {
               the sticky band so the actions are available while scrolling. */}
           <div className="w-full flex items-end justify-between gap-3">
             <div className="text-xs text-muted-foreground pl-[3.75rem] shrink-0">
+              {/* Priority — editable in every lifecycle state (2026-09-10);
+                  it used to be reachable only from the received-samples
+                  inbox. Sits above the SLA lines, which need a receipt. */}
+              <div className="flex items-center gap-2 mb-0.5">
+                <span className="text-[11px] uppercase tracking-wide text-muted-foreground/70">
+                  Priority
+                </span>
+                <PriorityGlyph priority={data.priority} size="row" />
+                {data.registry_pk ? (
+                  <PrioritySelect
+                    level="sample"
+                    id={String(data.registry_pk)}
+                    explicitKey={data.explicit_priority_key ?? null}
+                    effective={data.priority}
+                    compact
+                    className="w-56"
+                    ariaLabel={`Priority for ${sampleId}`}
+                    onAssigned={() => refreshSample(sampleId)}
+                  />
+                ) : (
+                  <span className="text-[11px] text-muted-foreground">
+                    No registry record for this sample yet
+                  </span>
+                )}
+              </div>
               {/* SLA — stacked one indicator per line so multi-tier samples
                 don't run a long inline string. */}
               <SampleHeaderSla lookup={data} />
@@ -6979,7 +7026,9 @@ export function SampleDetails() {
             : undefined
         }
         onParentBulkRetest={
-          parentRegistryRetestActive ? mainParentRetest.requestRetest : undefined
+          parentRegistryRetestActive
+            ? mainParentRetest.requestRetest
+            : undefined
         }
         promotionsByKeyword={
           parentSampleId === null ? promotionsByKeyword : undefined

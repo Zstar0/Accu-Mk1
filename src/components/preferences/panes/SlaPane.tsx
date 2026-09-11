@@ -15,9 +15,8 @@ import {
   useDeleteSlaTier, useSetPriorityTier, useDeletePriorityTier,
 } from '@/services/sla'
 import { useServiceGroups } from '@/services/service-groups'
-import type { InboxPriority, ServiceGroup, SlaTier } from '@/lib/api'
-
-const OVERRIDABLE: ('high' | 'expedited')[] = ['high', 'expedited']
+import { useActivePriorities } from '@/services/priorities'
+import type { ServiceGroup, SlaTier } from '@/lib/api'
 
 function minutesToHM(m: number) {
   return { hours: Math.floor(m / 60), minutes: m % 60 }
@@ -29,6 +28,9 @@ export function SlaPane() {
   const tiersQuery = useSlaTiers()
   const prioQuery = useSlaPriorityTiers()
   const groupsQuery = useServiceGroups()
+  // Overridable priorities are the active, non-default ones from the catalog
+  // (Task 5) — the hardcoded ['high','expedited'] pair is gone.
+  const prioritiesQuery = useActivePriorities()
   const createTier = useCreateSlaTier()
   const updateTier = useUpdateSlaTier()
   const deleteTier = useDeleteSlaTier()
@@ -37,18 +39,19 @@ export function SlaPane() {
 
   const tiers = tiersQuery.data ?? []
   const groups = groupsQuery.data ?? []
+  const overridable = (prioritiesQuery.data ?? []).filter(p => !p.is_default)
   const sorted = [...tiers].sort((a, b) => Number(b.is_default) - Number(a.is_default) || a.name.localeCompare(b.name))
   // Multi-tier reshape: build a per-(priority, group_id-or-NULL) lookup so the
   // UI can render one row per global+group override the lab has configured.
   // Key composition: `${priority}|${group_id ?? 'global'}` — matches the
   // backend partial-unique-index split between NULL-group (global) and
   // non-NULL-group rows.
-  const overrideKey = (priority: InboxPriority, groupId: number | null) =>
+  const overrideKey = (priority: string, groupId: number | null) =>
     `${priority}|${groupId ?? 'global'}`
   const overrideTierByKey = new Map(
     (prioQuery.data ?? []).map(p => [overrideKey(p.priority, p.service_group_id), p.sla_tier_id])
   )
-  const groupsWithOverrideByPriority = new Map<InboxPriority, Set<number>>()
+  const groupsWithOverrideByPriority = new Map<string, Set<number>>()
   for (const row of prioQuery.data ?? []) {
     if (row.service_group_id == null) continue
     const set = groupsWithOverrideByPriority.get(row.priority) ?? new Set<number>()
@@ -56,7 +59,12 @@ export function SlaPane() {
     groupsWithOverrideByPriority.set(row.priority, set)
   }
 
-  if (tiersQuery.isLoading || prioQuery.isLoading || groupsQuery.isLoading) {
+  if (
+    tiersQuery.isLoading ||
+    prioQuery.isLoading ||
+    groupsQuery.isLoading ||
+    prioritiesQuery.isLoading
+  ) {
     return (
       <div className="flex items-center justify-center py-8">
         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -99,10 +107,11 @@ export function SlaPane() {
       <SettingsSection title={t('preferences.sla.priorityOverrides')}>
         <p className="text-sm text-muted-foreground">{t('preferences.sla.priorityOverridesDescription')}</p>
         <div className="space-y-6">
-          {OVERRIDABLE.map(priority => (
+          {overridable.map(({ key: priority, name: label }) => (
             <PriorityOverrideGroup
               key={priority}
               priority={priority}
+              label={label}
               tiers={tiers}
               groups={groups}
               globalTierId={overrideTierByKey.get(overrideKey(priority, null))}
@@ -128,11 +137,14 @@ export function SlaPane() {
  *     group is still un-overridden for this priority.
  */
 function PriorityOverrideGroup({
-  priority, tiers, groups, globalTierId, perGroupRows,
+  priority, label, tiers, groups, globalTierId, perGroupRows,
   alreadyOverriddenGroupIds, readOnly,
   onSetTier, onDelete,
 }: {
-  priority: 'high' | 'expedited'
+  // Catalog priority key; `label` is its display name (both from
+  // useActivePriorities). data-testids stay keyed on the key.
+  priority: string
+  label: string
   tiers: SlaTier[]
   groups: ServiceGroup[]
   globalTierId: number | undefined
@@ -165,7 +177,7 @@ function PriorityOverrideGroup({
 
   return (
     <div data-testid={`sla-priority-block-${priority}`} className="space-y-2 rounded-md border bg-card/30 px-3 py-2">
-      <span className="text-sm font-medium capitalize">{priority}</span>
+      <span className="text-sm font-medium">{label}</span>
       <div className="space-y-1.5">
         {/* Global ("All groups") row — NULL service_group_id */}
         <div className="flex items-center gap-3">
