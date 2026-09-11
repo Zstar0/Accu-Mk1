@@ -41,6 +41,7 @@ import {
   type ActiveSubSection,
 } from '@/store/ui-store'
 import { useWizardStore } from '@/store/wizard-store'
+import { ReadyToPublishChips } from './QuickNav'
 import { useAuthStore } from '@/store/auth-store'
 import { logout } from '@/lib/auth-api'
 
@@ -120,6 +121,7 @@ const navItems: NavItem[] = [
     subItems: [
       { id: 'dashboard', label: 'Dashboard' },
       { id: 'checkin-times', label: 'Check-In Times' },
+      { id: 'ready-to-publish', label: 'Ready to Publish' },
       { id: 'throughput', label: 'Lab Throughput' },
       { id: 'sla-performance', label: 'SLA Performance' },
       { id: 'bottlenecks', label: 'Bottlenecks' },
@@ -278,6 +280,11 @@ export function AppSidebar() {
                                       }}
                                     >
                                       <span>{subItem.label}</span>
+                                      {subItem.id === 'ready-to-publish' && (
+                                        <span className="ml-auto flex items-center gap-1">
+                                          <ReadyToPublishChips />
+                                        </span>
+                                      )}
                                     </button>
                                   </SidebarMenuSubButton>
                                 </SidebarMenuSubItem>

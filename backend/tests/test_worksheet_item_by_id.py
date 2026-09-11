@@ -140,9 +140,36 @@ def test_reassign_by_id_target_not_open_returns_404(client, db):
 
 # ── inbox priority by body (native uid can't ride in the path) ────────────────
 
-def test_inbox_priority_by_body_native_uid_upserts(client, db):
-    from models import SamplePriority
+def _seed_native_vial(db, uid=NATIVE_UID):
+    """A native vial for `uid` + the seeded priorities rows (create_all seeds
+    none). Task 8: the route maps the uid to this row and assigns on it."""
+    from models import LimsSample, LimsSubSample, Priority, SlaTier
+    from priority import service as priority_service
 
+    db.add_all([
+        Priority(key="default", name="Default", rank=0, icon="minus",
+                 color="zinc", pulse=False, is_default=True, is_active=True),
+        Priority(key="high", name="High", rank=10, icon="chevron-up",
+                 color="amber", pulse=False, is_default=False, is_active=True),
+    ])
+    db.add(SlaTier(name="Standard", target_minutes=2880, is_default=True))
+    parent = LimsSample(sample_id="P-7001", external_lims_uid="uid-p-7001")
+    db.add(parent)
+    db.flush()
+    vial = LimsSubSample(parent_sample_pk=parent.id, sample_id="P-7001-S01",
+                         external_lims_uid=uid, vial_sequence=1)
+    db.add(vial)
+    db.commit()
+    priority_service.invalidate_priority_cache()
+    return vial
+
+
+def test_inbox_priority_by_body_native_uid_assigns_on_the_vial(client, db):
+    """Task 8: the route no longer writes sample_priorities — it maps the
+    native uid to its VIAL row and goes through priority.service.assign."""
+    from models import PriorityAudit, SamplePriority
+
+    vial = _seed_native_vial(db)
     resp = client.put(
         "/worksheets/inbox/priority",
         json={"sample_uid": NATIVE_UID, "priority": "high"},
@@ -151,8 +178,32 @@ def test_inbox_priority_by_body_native_uid_upserts(client, db):
     assert resp.status_code == 200, resp.text
     assert resp.json()["priority"] == "high"
     assert resp.json()["sample_uid"] == NATIVE_UID
-    row = db.query(SamplePriority).filter_by(sample_uid=NATIVE_UID).first()
-    assert row is not None and row.priority == "high"
+    assert resp.json()["level"] == "vial"
+    db.expire_all()
+    assert db.get(type(vial), vial.id).priority_key == "high"
+    assert db.query(SamplePriority).filter_by(sample_uid=NATIVE_UID).first() is None
+    audit = db.query(PriorityAudit).filter_by(level="vial").one()
+    assert audit.new_key == "high" and audit.entity_id == str(vial.id)
+
+
+def test_inbox_priority_by_body_normal_clears_to_inherit(client, db):
+    vial = _seed_native_vial(db)
+    client.put("/worksheets/inbox/priority",
+               json={"sample_uid": NATIVE_UID, "priority": "high"})
+    resp = client.put("/worksheets/inbox/priority",
+                      json={"sample_uid": NATIVE_UID, "priority": "normal"})
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    assert db.get(type(vial), vial.id).priority_key is None
+
+
+def test_inbox_priority_by_body_unknown_uid_404s(client, db):
+    _seed_native_vial(db)
+    resp = client.put(
+        "/worksheets/inbox/priority",
+        json={"sample_uid": "mk1://not-a-real-vial", "priority": "high"},
+    )
+    assert resp.status_code == 404
 
 
 def test_inbox_priority_by_body_rejects_invalid(client, db):

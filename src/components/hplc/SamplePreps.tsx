@@ -43,7 +43,7 @@ import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
 import { useSlaForSubjects, type SlaSubject } from '@/services/sla-subjects'
 import { useServiceGroups } from '@/services/service-groups'
 import { departmentToGroupId } from '@/lib/inbox-sla'
-import type { InboxPriority } from '@/lib/api'
+import { legacyToKey } from '@/lib/inbox-sla'
 import { SamplePrepHplcFlyout } from './SamplePrepHplcFlyout'
 import { SharePointBrowser } from './SharePointBrowser'
 import { LocalHplcFolderPicker } from './LocalHplcFolderPicker'
@@ -263,7 +263,7 @@ export function SamplePreps() {
         .filter(p => p.sla?.received_at)
         .map(p => ({
           key: String(p.id),
-          priority: (p.sla?.priority as InboxPriority) || 'normal',
+          priority: legacyToKey(p.sla?.priority),
           groupId:
             p.sla?.department_id != null
               ? (deptToGroup.get(p.sla.department_id) ?? null)

@@ -96,6 +96,22 @@ def test_native_mirror_disagree_only_in_mk1_mode(db_session):
     assert [s.condition for s in find_stranded(db_session, now=NOW)] == ["native_mirror_disagree"]
 
 
+def test_null_date_received_falls_back_to_created_at(db_session):
+    """P-2605 (2026-09-11): received on the SENAITE side, so date_received
+    stayed NULL; native_status advanced ahead of the mirrored status across
+    the authority flip and the scan never saw the row."""
+    from workflow.stranded import find_stranded
+    _base(db_session, authority="mk1")
+    db_session.add(LimsSample(sample_id="P-ST-NULL", status="verified", native_status="published",
+                              date_received=None, created_at=datetime(2026, 8, 31, 16, 57)))
+    # Same shape but registered before the window: still out of scope.
+    db_session.add(LimsSample(sample_id="P-ST-OLD", status="verified", native_status="published",
+                              date_received=None, created_at=datetime(2026, 1, 1)))
+    db_session.flush()
+    found = find_stranded(db_session, now=NOW)
+    assert [(s.sample.sample_id, s.condition) for s in found] == [("P-ST-NULL", "native_mirror_disagree")]
+
+
 def test_gave_up_tee_is_stranded(db_session):
     from workflow.stranded import find_stranded
     _base(db_session)

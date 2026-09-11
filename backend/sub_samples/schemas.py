@@ -47,6 +47,13 @@ class SubSampleResponse(BaseModel):
     # profile caps analytical vials, this vial has zero live analyses, and
     # the named sibling holds the anchor slot. None everywhere else.
     material_for: Optional[str] = None
+    # Sample-priority (spec §5): the vial's OWN explicit key — None means
+    # "inherit" (the common case). `priority` is the resolved effective value
+    # {key, rank, source_level, source_id}, populated by the LIST endpoint via
+    # one batched load_effective; single-item responses leave it None (same
+    # convention as box_label / received_by).
+    priority_key: Optional[str] = None
+    priority: Optional[dict] = None
 
     class Config:
         from_attributes = True

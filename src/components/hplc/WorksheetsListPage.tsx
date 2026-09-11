@@ -20,10 +20,12 @@ import {
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
-import { PriorityBadge } from '@/components/hplc/PriorityBadge'
+import { PriorityGlyph } from '@/components/common/PriorityGlyph'
 import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
 import { useSlaForSubjects, type SlaSubject, type SlaSubjectSnapshot } from '@/services/sla-subjects'
-import { listWorksheets, type InboxPriority } from '@/lib/api'
+import { listWorksheets } from '@/lib/api'
+import { legacyEffectivePriority, legacyToKey } from '@/lib/inbox-sla'
+import { priorityByKey, usePriorities } from '@/services/priorities'
 import { worksheetMatchesSampleQuery } from '@/components/hplc/worksheet-sample-filter'
 import { getUserDirectory } from '@/lib/auth-api'
 import { displayName, resolveUserName } from '@/lib/user-display'
@@ -56,6 +58,9 @@ export default function WorksheetsListPage() {
   const [statusFilter, setStatusFilter] = useState<string>('open')
   const [analystFilter, setAnalystFilter] = useState<string>('all')
   const [sampleQuery, setSampleQuery] = useState('')
+
+  // Priority catalog — drives the per-worksheet breakdown's ordering.
+  const { data: catalog } = usePriorities()
 
   const { data: worksheets = [], isLoading, isError } = useQuery({
     queryKey: ['worksheets-list', statusFilter === 'all' ? undefined : statusFilter],
@@ -97,7 +102,7 @@ export default function WorksheetsListPage() {
   const slaSubjects: SlaSubject[] = worksheets.flatMap(ws =>
     ws.items.map(item => ({
       key: `${ws.id}:${item.id}`,
-      priority: (item.priority as InboxPriority) || 'normal',
+      priority: legacyToKey(item.priority),
       groupId: item.service_group_id,
       receivedAt: item.date_received ?? item.added_at,
       completedAt: ws.completed_at,
@@ -125,9 +130,11 @@ export default function WorksheetsListPage() {
     .flatMap(w => w.items)
     .filter(i => i.prep_status === 'complete').length
 
+  // Above-default items. Worksheet items still carry the LEGACY priority
+  // string on the wire, so the catalog key is derived, not read.
   const highPriorityCount = worksheets
     .flatMap(w => w.items)
-    .filter(i => i.priority === 'high' || i.priority === 'expedited').length
+    .filter(i => legacyToKey(i.priority) !== 'default').length
 
   // Seed "now" once at mount so the average-age KPI is a pure derivation of
   // worksheet data (avoids react-hooks/purity flagging Date.now() in render).
@@ -314,15 +321,21 @@ export default function WorksheetsListPage() {
                   </TableRow>
                 ) : (
                   filteredWorksheets.map(ws => {
-                    // Compute priority breakdown
+                    // Priority breakdown, keyed on the catalog and ordered by
+                    // catalog RANK (most urgent first). The default key is
+                    // dropped — its glyph renders nothing by design.
                     const priorityCounts: Record<string, number> = {}
                     for (const item of ws.items) {
-                      priorityCounts[item.priority] = (priorityCounts[item.priority] ?? 0) + 1
+                      const k = legacyToKey(item.priority)
+                      priorityCounts[k] = (priorityCounts[k] ?? 0) + 1
                     }
-                    const priorityOrder: InboxPriority[] = ['normal', 'high', 'expedited']
-                    const activePriorities = priorityOrder.filter(
-                      p => (priorityCounts[p] ?? 0) > 0,
-                    )
+                    const activePriorities = Object.keys(priorityCounts)
+                      .filter(k => !priorityByKey(catalog, k)?.is_default)
+                      .sort(
+                        (a, b) =>
+                          (priorityByKey(catalog, b)?.rank ?? 0) -
+                          (priorityByKey(catalog, a)?.rank ?? 0)
+                      )
 
                     return (
                       <TableRow
@@ -359,7 +372,10 @@ export default function WorksheetsListPage() {
                             <div className="flex items-center gap-1.5 flex-wrap">
                               {activePriorities.map(p => (
                                 <span key={p} className="flex items-center gap-0.5">
-                                  <PriorityBadge priority={p} />
+                                  <PriorityGlyph
+                                    priority={legacyEffectivePriority(p)}
+                                    size="row"
+                                  />
                                   <span className="text-xs text-muted-foreground">
                                     x{priorityCounts[p]}
                                   </span>
