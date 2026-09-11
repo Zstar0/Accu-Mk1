@@ -22796,6 +22796,47 @@ def s2s_catalog_service_keys(
     return {"keys": keys, "generated_at": generated_at}
 
 
+class S2SPeptide(BaseModel):
+    id: int
+    name: str
+    abbreviation: str
+    is_blend: bool = False
+    active: bool = True
+    analyte_class: str = "peptide"
+    display_aliases: Optional[list[str]] = None
+    hplc_aliases: Optional[list[str]] = None
+
+
+class S2SPeptideList(BaseModel):
+    peptides: list[S2SPeptide]
+    generated_at: str
+
+
+@app.get("/s2s/peptides", response_model=S2SPeptideList)
+def s2s_peptides(
+    db: Session = Depends(get_db),
+    _: None = Depends(require_internal_service_token),
+):
+    """Mk1 peptide catalog for the Integration Service (spec 2026-09-10,
+    M3/IS-6): the WordPress analyte dropdown and Analyte{i}PeptideId on the
+    registry signal come from HERE, not from SENAITE's service titles. Ships
+    every peptide, active or not, on purpose (same rule as
+    /s2s/catalog/service-keys): the IS decides what is sellable. Read-only,
+    no pagination (low hundreds of rows). Every declared field is listed
+    explicitly because response_model silently drops undeclared keys."""
+    from models import Peptide
+    rows = db.query(Peptide).order_by(Peptide.name).all()
+    return S2SPeptideList(
+        peptides=[S2SPeptide(
+            id=p.id, name=p.name, abbreviation=p.abbreviation,
+            is_blend=bool(p.is_blend), active=bool(p.active),
+            analyte_class=p.analyte_class or "peptide",
+            display_aliases=p.display_aliases, hplc_aliases=p.hplc_aliases,
+        ) for p in rows],
+        generated_at=datetime.utcnow().isoformat() + "Z",
+    )
+
+
 # ── Registry creation signal (integration-service bridge) ────────────
 # Called server-to-server by integration-service immediately after it creates
 # a SENAITE AR (dual-write slice 1, 2026-07-06 spec). Idempotent upsert into
