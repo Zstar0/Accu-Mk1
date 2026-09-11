@@ -123,7 +123,9 @@ def test_fresh_event_inserts_and_advances_cursor(db):
         stats = is_event_stream.sync_once(SessionLocal)
 
     fetch.assert_called_once()
-    assert stats == {"fetched": 1, "inserted": 1, "dup": 0, "no_sample": 0, "healed": 0, "errors": 0}
+    # The seeded sample has no date_received, so the receive event stamps it.
+    assert stats == {"fetched": 1, "inserted": 1, "dup": 0, "no_sample": 0, "healed": 0, "errors": 0,
+                     "date_received_stamped": 1}
 
     row = db.query(LimsSampleTransition).filter_by(lims_sample_pk=sample.id).one()
     assert row.source == "senaite"
@@ -280,7 +282,8 @@ def test_per_event_error_is_isolated_and_cursor_still_advances(db):
     assert recorder.call_count == 3
     # healed=1: the first insert heals sample_due -> sample_received; the
     # third inserts but the status is already current (no second heal).
-    assert stats == {"fetched": 3, "inserted": 2, "dup": 0, "no_sample": 0, "healed": 1, "errors": 1}
+    assert stats == {"fetched": 3, "inserted": 2, "dup": 0, "no_sample": 0, "healed": 1, "errors": 1,
+                     "date_received_stamped": 1}
 
     cursor = _get_cursor(db)
     assert cursor is not None
@@ -373,6 +376,40 @@ def test_inserted_event_heals_status(db):
     assert stats["healed"] == 1
     db.expire_all()
     assert db.get(LimsSample, sample.id).status == "to_be_verified"
+
+
+def test_receive_event_stamps_null_date_received(db):
+    """P-2605 (2026-09-11): a SENAITE-side receive left date_received NULL
+    for good. The event's own occurred_at is the stamp; an existing value
+    is never overwritten."""
+    sample = _seed_sample(db, "DR1", status="sample_due")
+    sample.date_received = None
+    sample.last_synced_at = datetime.utcnow() - timedelta(hours=1)
+    db.commit()
+    _seed_cursor(db)
+    created_at = datetime.now(timezone.utc)
+    event = _fake_event(
+        sample_id=sample.sample_id, transition="receive",
+        new_status="sample_received", event_id="TEST-WST5-EVT-DR1",
+        created_at=created_at, event_timestamp=int(created_at.timestamp()),
+        ev_id="uuid-dr1",
+    )
+    with patch.object(is_event_stream, "_fetch_events", return_value=[event]):
+        stats = is_event_stream.sync_once(SessionLocal)
+    assert stats["inserted"] == 1
+    assert stats["date_received_stamped"] == 1
+    db.expire_all()
+    stamped = db.get(LimsSample, sample.id).date_received
+    assert stamped is not None
+    assert abs((stamped - created_at.replace(tzinfo=None)).total_seconds()) < 2
+
+    # Replay: dup, and the stamp is left alone.
+    with patch.object(is_event_stream, "_fetch_events", return_value=[event]):
+        stats2 = is_event_stream.sync_once(SessionLocal)
+    assert stats2["dup"] == 1
+    assert stats2.get("date_received_stamped", 0) == 0
+    db.expire_all()
+    assert db.get(LimsSample, sample.id).date_received == stamped
 
 
 def test_dup_event_does_not_heal(db):

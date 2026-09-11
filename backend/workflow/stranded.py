@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from flags import catalog as flag_catalog
@@ -51,8 +51,16 @@ def _recent_samples(db: Session, since_days: int,
     if base.tzinfo is not None:
         base = base.astimezone(timezone.utc).replace(tzinfo=None)
     cutoff = base - timedelta(days=since_days)
+    # `date_received` is NULL for a sample that was received on the SENAITE
+    # side and never re-read through a senaite-touching fetch (P-2605,
+    # 2026-09-11: native_status advanced ahead of the mirrored status across
+    # the authority flip and sat invisible to this scan for a day). Such a
+    # row falls back to its registration time so it stays inside the window.
     return db.execute(
-        select(LimsSample).where(LimsSample.date_received >= cutoff)
+        select(LimsSample).where(or_(
+            LimsSample.date_received >= cutoff,
+            and_(LimsSample.date_received.is_(None), LimsSample.created_at >= cutoff),
+        ))
     ).scalars().all()
 
 
