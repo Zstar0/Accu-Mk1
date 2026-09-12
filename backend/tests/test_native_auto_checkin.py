@@ -106,6 +106,28 @@ def test_happy_path_copies_image_and_remark(db):
     }
 
 
+def test_flush_pending_relays_called_after_successful_phase(db):
+    _mk_sample(db, sample_id="P-ORIG6", status="sample_received",
+              date_received=datetime(2026, 9, 1))
+    _mk_sample(db, sample_id="P-NEW6", retest_of="P-ORIG6")
+
+    with _patch_storage(_FakeStorage(photo=None)), \
+         patch("main._receive_native_phase") as phase, \
+         patch("sub_samples.native_checkin.flush_pending_relays") as flush:
+        phase.return_value = {"ok": True, "steps": []}
+        native_auto_checkin("P-NEW6")
+
+    flush.assert_called_once_with()
+
+
+def test_flush_pending_relays_not_called_when_phase_skipped(db):
+    with patch("sub_samples.native_checkin.flush_pending_relays") as flush:
+        result = native_auto_checkin("P-MISSING6")
+
+    assert result == {"ok": False, "skipped": "new_row_missing"}
+    flush.assert_not_called()
+
+
 def test_remark_falls_back_to_newest_authored_when_none_in_window(db):
     received_at = datetime(2026, 9, 1, 12, 0, 0)
     original = _mk_sample(db, sample_id="P-ORIG2", status="sample_received",

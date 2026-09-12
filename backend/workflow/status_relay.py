@@ -165,9 +165,20 @@ def relay_native_status(db: Session, *, sample_id: str, transition: str) -> str:
             return "failed"
 
         status = response.get("status") if isinstance(response, dict) else None
-        outcome = "sent" if status == "ok" else (status or "sent")
+        if status in ("ok", "duplicate"):
+            outcome = "sent" if status == "ok" else "duplicate"
+            db.add(LimsSubSampleEvent(
+                lims_sample_pk=sample.id, event="native_status_relayed",
+                details={"transition": transition, "event_id": body["event_id"],
+                        "response": response},
+                user_id=None,
+            ))
+            db.commit()
+            return outcome
+
+        outcome = status or "failed"
         db.add(LimsSubSampleEvent(
-            lims_sample_pk=sample.id, event="native_status_relayed",
+            lims_sample_pk=sample.id, event="native_status_relay_failed",
             details={"transition": transition, "event_id": body["event_id"],
                     "response": response},
             user_id=None,

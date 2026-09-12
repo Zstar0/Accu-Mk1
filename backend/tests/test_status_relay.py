@@ -140,6 +140,17 @@ def test_is_duplicate_response(db_session):
     assert result == "duplicate"
 
 
+def test_no_order_found_response_records_failed_event(db_session):
+    sample = _native(db_session)
+    with patch("httpx.Client.post", return_value=_Resp({"status": "no_order_found"})):
+        result = relay_native_status(db_session, sample_id=sample.sample_id,
+                                     transition="receive")
+    assert result == "no_order_found"
+    ev = db_session.execute(select(LimsSubSampleEvent)).scalars().one()
+    assert ev.event == "native_status_relay_failed"
+    assert ev.details["response"] == {"status": "no_order_found"}
+
+
 def test_httpx_error_records_failed_event_no_raise(db_session):
     sample = _native(db_session)
     with patch("httpx.Client.post", side_effect=OSError("connection refused")):

@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from lims_analyses.hplc_native import is_native_born
 from models import LimsParentAttachment, LimsSample, LimsSampleRemark, LimsSubSampleEvent
 from sub_samples.photo_storage import PhotoNotFoundError, get_storage
+from workflow.status_relay import flush_pending_relays
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +76,15 @@ def native_auto_checkin(sample_id: str) -> dict:
             remarks=remark,
             user_id=None,
         )
+
+        # M8 flush point: the phase above queued a status relay to IS via
+        # the engine writer. Same never-raise shape as main.py's other
+        # flush points (e.g. _after_publish_native).
+        try:
+            flush_pending_relays()
+        except Exception:
+            log.exception("status_relay.flush_failed after native_auto_checkin "
+                          "(never-raise) sample_id=%s", sample_id)
 
         db.add(LimsSubSampleEvent(
             lims_sample_pk=new_row.id,
