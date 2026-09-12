@@ -62,8 +62,10 @@ def cleanup(db):
     _wipe(db)
 
 
-def _seed_sample(db, suffix: str, status: str = "sample_due") -> LimsSample:
-    row = LimsSample(sample_id=f"TEST-WST5-{suffix}", sample_type="x", status=status)
+def _seed_sample(db, suffix: str, status: str = "sample_due",
+                 external_lims_system: str = "senaite") -> LimsSample:
+    row = LimsSample(sample_id=f"TEST-WST5-{suffix}", sample_type="x", status=status,
+                     external_lims_system=external_lims_system)
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -125,7 +127,7 @@ def test_fresh_event_inserts_and_advances_cursor(db):
     fetch.assert_called_once()
     # The seeded sample has no date_received, so the receive event stamps it.
     assert stats == {"fetched": 1, "inserted": 1, "dup": 0, "no_sample": 0, "healed": 0, "errors": 0,
-                     "date_received_stamped": 1}
+                     "native_skipped": 0, "date_received_stamped": 1}
 
     row = db.query(LimsSampleTransition).filter_by(lims_sample_pk=sample.id).one()
     assert row.source == "senaite"
@@ -161,7 +163,8 @@ def test_resynced_event_id_counts_as_dup(db):
     with patch.object(is_event_stream, "_fetch_events", return_value=[event]):
         second = is_event_stream.sync_once(SessionLocal)
 
-    assert second == {"fetched": 1, "inserted": 0, "dup": 1, "no_sample": 0, "healed": 0, "errors": 0}
+    assert second == {"fetched": 1, "inserted": 0, "dup": 1, "no_sample": 0, "healed": 0, "errors": 0,
+                      "native_skipped": 0}
     count = db.query(LimsSampleTransition).filter_by(lims_sample_pk=sample.id).count()
     assert count == 1
 
@@ -192,7 +195,8 @@ def test_event_within_mk1_window_counts_as_dup(db):
     with patch.object(is_event_stream, "_fetch_events", return_value=[event]):
         stats = is_event_stream.sync_once(SessionLocal)
 
-    assert stats == {"fetched": 1, "inserted": 0, "dup": 1, "no_sample": 0, "healed": 0, "errors": 0}
+    assert stats == {"fetched": 1, "inserted": 0, "dup": 1, "no_sample": 0, "healed": 0, "errors": 0,
+                     "native_skipped": 0}
     rows = db.query(LimsSampleTransition).filter_by(lims_sample_pk=sample.id).all()
     assert len(rows) == 1
     assert rows[0].source == "mk1"
@@ -216,7 +220,8 @@ def test_unknown_sample_counts_as_no_sample_but_advances_cursor(db):
     with patch.object(is_event_stream, "_fetch_events", return_value=[event]):
         stats = is_event_stream.sync_once(SessionLocal)
 
-    assert stats == {"fetched": 1, "inserted": 0, "dup": 0, "no_sample": 1, "healed": 0, "errors": 0}
+    assert stats == {"fetched": 1, "inserted": 0, "dup": 0, "no_sample": 1, "healed": 0, "errors": 0,
+                     "native_skipped": 0}
     scoped_count = db.query(LimsSampleTransition).filter(
         LimsSampleTransition.lims_sample_pk.in_(
             select(LimsSample.id).where(LimsSample.sample_id.like("TEST-WST5-%"))
@@ -246,7 +251,8 @@ def test_fetch_failure_counts_error_and_does_not_move_cursor(db):
         stats = is_event_stream.sync_once(SessionLocal)
 
     fetch.assert_called_once()
-    assert stats == {"fetched": 0, "inserted": 0, "dup": 0, "no_sample": 0, "healed": 0, "errors": 1}
+    assert stats == {"fetched": 0, "inserted": 0, "dup": 0, "no_sample": 0, "healed": 0, "errors": 1,
+                     "native_skipped": 0}
 
     cursor = _get_cursor(db)
     assert cursor is not None
@@ -283,7 +289,7 @@ def test_per_event_error_is_isolated_and_cursor_still_advances(db):
     # healed=1: the first insert heals sample_due -> sample_received; the
     # third inserts but the status is already current (no second heal).
     assert stats == {"fetched": 3, "inserted": 2, "dup": 0, "no_sample": 0, "healed": 1, "errors": 1,
-                     "date_received_stamped": 1}
+                     "native_skipped": 0, "date_received_stamped": 1}
 
     cursor = _get_cursor(db)
     assert cursor is not None
@@ -306,7 +312,7 @@ def test_empty_batch_is_a_noop(db):
 
     fetch.assert_called_once()
     assert stats == {"fetched": 0, "inserted": 0, "dup": 0, "no_sample": 0,
-                     "healed": 0, "errors": 0}
+                     "healed": 0, "errors": 0, "native_skipped": 0}
     cursor = _get_cursor(db)
     assert cursor is not None
     assert cursor.cursor_created_at == seeded_at
@@ -329,7 +335,7 @@ def test_cold_start_initializes_cursor_to_now_without_fetching(db):
     after = datetime.now(timezone.utc)
     fetch.assert_not_called()
     assert stats == {"fetched": 0, "inserted": 0, "dup": 0, "no_sample": 0,
-                     "healed": 0, "errors": 0}
+                     "healed": 0, "errors": 0, "native_skipped": 0}
 
     cursor = _get_cursor(db)
     assert cursor is not None
@@ -468,3 +474,33 @@ def test_stale_event_does_not_regress_fresher_reconcile(db):
     assert stats["healed"] == 0
     db.expire_all()
     assert db.get(LimsSample, sample.id).status == "verified"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# native-born guard (HPLC slice 6 M8 Task 4): the SENAITE event stream is a
+# legacy-only retirement precursor — a native-born (mk1-authoritative) sample
+# must never have its status/transitions written from it.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_native_born_sample_event_is_skipped_not_inserted(db):
+    sample = _seed_sample(db, "NATIVE", external_lims_system="mk1")
+    _seed_cursor(db)
+    created_at = datetime.now(timezone.utc)
+    event = _fake_event(
+        sample_id=sample.sample_id, transition="receive",
+        new_status="sample_received", event_id="TEST-WST5-EVT-NATIVE",
+        created_at=created_at, ev_id="uuid-native",
+    )
+
+    with patch.object(is_event_stream, "_fetch_events", return_value=[event]) as fetch:
+        stats = is_event_stream.sync_once(SessionLocal)
+
+    fetch.assert_called_once()
+    assert stats == {"fetched": 1, "inserted": 0, "dup": 0, "no_sample": 0,
+                     "healed": 0, "errors": 0, "native_skipped": 1}
+
+    count = db.query(LimsSampleTransition).filter_by(lims_sample_pk=sample.id).count()
+    assert count == 0
+    db.expire_all()
+    assert db.get(LimsSample, sample.id).status == "sample_due"

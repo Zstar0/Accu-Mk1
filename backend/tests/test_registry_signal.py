@@ -511,3 +511,97 @@ def test_signal_priority_skipped_without_uid(db):
     assert row.external_lims_uid is None
     from models import SamplePriority
     assert db.query(SamplePriority).count() == 0
+
+
+# ── HPLC-native slice 6 (M8): retest_of_sample_id from meta RetestOfSampleId
+
+def test_signal_stores_retest_of_sample_id(db, monkeypatch):
+    monkeypatch.setenv("ACCUMK1_INTERNAL_SERVICE_TOKEN", "tok")
+    client = _client(db)
+    body = {"sample_id": "P-6001", "senaite_uid": "AR_UID_6001",
+            "meta": _signal_meta(RetestOfSampleId="P-5000")}
+    r = client.post("/s2s/lims-samples", json=body, headers={"X-Service-Token": "tok"})
+    assert r.status_code == 200
+    row = db.query(LimsSample).filter_by(sample_id="P-6001").one()
+    assert row.retest_of_sample_id == "P-5000"
+
+
+def test_signal_without_retest_of_sample_id_leaves_it_none(db, monkeypatch):
+    monkeypatch.setenv("ACCUMK1_INTERNAL_SERVICE_TOKEN", "tok")
+    client = _client(db)
+    body = {"sample_id": "P-6002", "senaite_uid": "AR_UID_6002", "meta": _signal_meta()}
+    r = client.post("/s2s/lims-samples", json=body, headers={"X-Service-Token": "tok"})
+    assert r.status_code == 200
+    row = db.query(LimsSample).filter_by(sample_id="P-6002").one()
+    assert row.retest_of_sample_id is None
+
+
+def test_second_signal_without_key_keeps_prior_retest_of_sample_id(db, monkeypatch):
+    monkeypatch.setenv("ACCUMK1_INTERNAL_SERVICE_TOKEN", "tok")
+    client = _client(db)
+    body1 = {"sample_id": "P-6003", "senaite_uid": "AR_UID_6003",
+             "meta": _signal_meta(RetestOfSampleId="P-5000")}
+    r1 = client.post("/s2s/lims-samples", json=body1, headers={"X-Service-Token": "tok"})
+    assert r1.status_code == 200
+    body2 = {"sample_id": "P-6003", "senaite_uid": "AR_UID_6003",
+             "meta": _signal_meta(ClientSampleID="CS-9")}   # no RetestOfSampleId key
+    r2 = client.post("/s2s/lims-samples", json=body2, headers={"X-Service-Token": "tok"})
+    assert r2.status_code == 200
+    row = db.query(LimsSample).filter_by(sample_id="P-6003").one()
+    assert row.retest_of_sample_id == "P-5000"          # not cleared by the replay
+
+
+# ── HPLC-native slice 6 (M8, Task 3): route schedules native_auto_checkin
+# only when AutoCheckin + native-born (mk1) + retest_of_sample_id all hold.
+# external_lims_system == "mk1" only for the SENAITE-free (sample_id=None)
+# branch of upsert_sample_from_signal, so these signals omit sample_id.
+
+def test_signal_with_autocheckin_and_retest_schedules_bg_task(db, monkeypatch):
+    monkeypatch.setenv("ACCUMK1_INTERNAL_SERVICE_TOKEN", "tok")
+    _seed_customer_counters(db)
+    client = _client(db)
+    body = {"sample_id": None, "senaite_uid": None,
+            "meta": _signal_meta(uid=None, SampleTypeTitle="Peptide",
+                                 RetestOfSampleId="P-5000", AutoCheckin=True)}
+    with patch("main._native_auto_checkin_bg") as bg:
+        r = client.post("/s2s/lims-samples", json=body, headers={"X-Service-Token": "tok"})
+    assert r.status_code == 200
+    bg.assert_called_once_with(r.json()["sample_id"])
+
+
+def test_signal_without_autocheckin_does_not_schedule_bg_task(db, monkeypatch):
+    monkeypatch.setenv("ACCUMK1_INTERNAL_SERVICE_TOKEN", "tok")
+    _seed_customer_counters(db)
+    client = _client(db)
+    body = {"sample_id": None, "senaite_uid": None,
+            "meta": _signal_meta(uid=None, SampleTypeTitle="Peptide",
+                                 RetestOfSampleId="P-5000")}
+    with patch("main._native_auto_checkin_bg") as bg:
+        r = client.post("/s2s/lims-samples", json=body, headers={"X-Service-Token": "tok"})
+    assert r.status_code == 200
+    bg.assert_not_called()
+
+
+def test_signal_with_autocheckin_but_no_retest_of_sample_id_does_not_schedule(db, monkeypatch):
+    monkeypatch.setenv("ACCUMK1_INTERNAL_SERVICE_TOKEN", "tok")
+    _seed_customer_counters(db)
+    client = _client(db)
+    body = {"sample_id": None, "senaite_uid": None,
+            "meta": _signal_meta(uid=None, SampleTypeTitle="Peptide", AutoCheckin=True)}
+    with patch("main._native_auto_checkin_bg") as bg:
+        r = client.post("/s2s/lims-samples", json=body, headers={"X-Service-Token": "tok"})
+    assert r.status_code == 200
+    bg.assert_not_called()
+
+
+def test_signal_with_autocheckin_and_retest_but_senaite_attached_does_not_schedule(db, monkeypatch):
+    """external_lims_system stays 'senaite' when a sample_id is supplied —
+    the route must gate on that, not just AutoCheckin + retest_of_sample_id."""
+    monkeypatch.setenv("ACCUMK1_INTERNAL_SERVICE_TOKEN", "tok")
+    client = _client(db)
+    body = {"sample_id": "P-6004", "senaite_uid": "AR_UID_6004",
+            "meta": _signal_meta(RetestOfSampleId="P-5000", AutoCheckin=True)}
+    with patch("main._native_auto_checkin_bg") as bg:
+        r = client.post("/s2s/lims-samples", json=body, headers={"X-Service-Token": "tok"})
+    assert r.status_code == 200
+    bg.assert_not_called()

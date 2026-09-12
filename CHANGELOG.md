@@ -31,6 +31,13 @@
 - FE: parent retest requests carry `slot`; the Analytes card gets a Relabel dialog for native-born slots.
 - Behaviour-neutral for SENAITE-born samples throughout.
 
+### HPLC native-born — slice 6 (M8)
+- Native status relay Mk1→IS on receive/verify/publish: `workflow/status_relay.py`, hooked into the single mk1-authority sample-status writer (`workflow/engine.py::_write_status_if_authoritative`); stable per-transition `event_id`s so a re-send de-duplicates on the IS side; never raises; records `native_status_relayed` / `native_status_relay_failed` events.
+- `lims_samples.retest_of_sample_id` populated from registry-signal meta `RetestOfSampleId`.
+- Native retest auto check-in (`native_auto_checkin`, triggered by meta `AutoCheckin`): copies the original native-born sample's receive photo and receive-time remark, then runs the native receive on the retest row.
+- Native-born guards added to the remaining SENAITE-uid-keyed paths: attachment capture falls back to `sample_id` when the uid lookup misses; the SENAITE refresh (and its debug-refresh route) no-op for native-born rows; the IS event-stream puller and the parity script skip native-born samples.
+- Behaviour-neutral for SENAITE-born samples throughout.
+
 ## v1.21.0 — 2026-09-11
 
 ### Added

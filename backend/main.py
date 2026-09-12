@@ -6689,6 +6689,7 @@ async def upload_chromatogram_to_senaite(
                 kind="chromatogram", source_sample_id=None,
                 user_id=getattr(current_user, "id", None),
                 render_in_report=False, attachment_type="HPLC Graph",
+                sample_id=analysis.sample_id_label,
             )
 
     except HTTPException:
@@ -17477,6 +17478,16 @@ async def receive_senaite_sample(
             senaite_response={"steps_done": []},
         )
 
+    # M8 flush point: a native receive queued a status relay to IS
+    # (workflow.engine._write_status_if_authoritative, via drive_sample_
+    # touchpoint above) — drain it now the native phase has committed.
+    # Never raises; runs off the event loop like the phase itself.
+    try:
+        from workflow.status_relay import flush_pending_relays
+        await run_in_threadpool(flush_pending_relays)
+    except Exception:
+        logger.exception("status_relay.flush_failed after receive (never-raise)")
+
     steps_done = list(native["steps"])
 
     if native["senaite_born"] and SENAITE_URL is not None:
@@ -18384,6 +18395,22 @@ def _arm_native_status_at_registration_bg(sample_id: str) -> None:
             db.close()
 
 
+def _native_auto_checkin_bg(sample_id: str) -> None:
+    """Retest auto check-in (2026-09-12, HPLC native slice 6 M8): scheduled
+    by the S2S upsert route when a retest signal carries `AutoCheckin` for a
+    native-born, already-received original. Own module (native_checkin.py)
+    so it can be unit-tested against sqlite; this is just the never-raise bg
+    wrapper matching the other `_..._bg` helpers in this file."""
+    try:
+        from sub_samples.native_checkin import native_auto_checkin
+        result = native_auto_checkin(sample_id)
+        logger.info("native_auto_checkin.done sample_id=%s result=%s",
+                    sample_id, result)
+    except Exception as e:  # noqa: BLE001 — never raise off a bg task
+        logger.warning("native_auto_checkin.bg_failed sample_id=%s err=%s",
+                       sample_id, e)
+
+
 def _after_publish_native(db, *, sample_id: str, pre_publish_status, actor_user_id,
                           senaite_actual_state: str) -> None:
     """Sample-status authority flip (spec §4.4 / §5): the native publish verb is
@@ -18432,6 +18459,15 @@ def _after_publish_native(db, *, sample_id: str, pre_publish_status, actor_user_
     except Exception:
         logger.exception("after-publish native step failed (never-raise) %s", sample_id)
         db.rollback()
+    # M8 flush point: publish queued a status relay to IS above (engine's
+    # drive_sample_touchpoint -> _write_status_if_authoritative). This
+    # function already runs off the event loop (threadpool), so drain
+    # synchronously; never raises.
+    try:
+        from workflow.status_relay import flush_pending_relays
+        flush_pending_relays()
+    except Exception:
+        logger.exception("status_relay.flush_failed after publish (never-raise) %s", sample_id)
 
 
 def _record_sample_transition_bg(**kwargs) -> None:
@@ -18572,6 +18608,7 @@ def _capture_parent_attachment_bg(
     content_type: str, kind: str, source_sample_id: Optional[str],
     user_id: Optional[int], render_in_report: bool = True,
     attachment_type: Optional[str] = None,
+    sample_id: Optional[str] = None,
 ) -> None:
     """Best-effort native parent-attachment capture + frozen S3 snapshot
     (read-flip spec §7, Layer 3 Task 3) on its own short-lived session —
@@ -18599,6 +18636,12 @@ def _capture_parent_attachment_bg(
     `SessionLocal()` and the storage/model imports live INSIDE the try, same
     hardening rationale as `_mirror_parent_analysis_bg`: `db` starts as None
     so `finally` can guard `db.close()` if construction itself failed.
+
+    `sample_id` (native-born guard, HPLC slice 6 M8 Task 4): a native-born
+    row has no SENAITE uid, so `sample_uid` is a synthetic `mk1://...`
+    placeholder that never matches `external_lims_uid`. When the uid lookup
+    misses and a caller-known `sample_id` was passed, fall back to
+    `LimsSample.sample_id == sample_id` before giving up.
     """
     db = None
     try:
@@ -18614,6 +18657,11 @@ def _capture_parent_attachment_bg(
             select(LimsSample).where(
                 LimsSample.external_lims_uid == sample_uid)
         ).scalar_one_or_none()
+        if row is None and sample_id:
+            row = db.execute(
+                select(LimsSample).where(
+                    LimsSample.sample_id == sample_id)
+            ).scalar_one_or_none()
         if row is None:
             logger.warning(
                 "parent_attachment.capture_failed uid=%s "
@@ -23655,6 +23703,12 @@ def s2s_upsert_lims_sample(
     # SENAITE-attached and SENAITE-free rows — unrelated to (and never
     # gated on) the SENAITE analyses shadow-sync scheduled above.
     background_tasks.add_task(_arm_native_status_at_registration_bg, row.sample_id)
+    # Retest auto check-in (2026-09-12, M8): a retest signal for a native-born,
+    # already-received original never needs the customer to redo the vial
+    # photo/remark — copy them and run the native receive phase.
+    if (req.meta.get("AutoCheckin") in (True, "true", "1")
+            and row.external_lims_system == "mk1" and row.retest_of_sample_id):
+        background_tasks.add_task(_native_auto_checkin_bg, row.sample_id)
     return RegistrySampleSignalResponse(sample_id=row.sample_id, native_id=row.native_id)
 
 
@@ -24350,7 +24404,14 @@ def refresh_sample_registry_debug(
     row = db.execute(
         select(LimsSample).where(LimsSample.sample_id == sample_id)
     ).scalar_one_or_none()
-    if row is not None:
+    if row is not None and (row.external_lims_system or "senaite") == "mk1":
+        # Native-born guard (HPLC slice 6 M8 Task 4): no SENAITE record to
+        # reconcile against. _refresh_parent_from_senaite already no-ops for
+        # these rows, but skip the call here too so no SENAITE-shaped work
+        # is even scheduled; load.external_lims_system == "mk1" in the
+        # returned payload already tells the caller why nothing refreshed.
+        logger.info("registry_debug.refresh.native_born_no_senaite sample=%s", sample_id)
+    elif row is not None:
         try:
             _refresh_parent_from_senaite(db, row)
             db.commit()

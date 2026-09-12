@@ -954,19 +954,32 @@ def print_summary(report: dict) -> None:
 
 # ─── Fetch modes (I/O; not exercised by the unit tests) ────────────────────
 
-def resolve_sample_ids(db_factory, *, samples: Optional[str], limit: Optional[int]) -> list[str]:
-    if samples:
-        return [s.strip() for s in samples.split(",") if s.strip()]
+def resolve_sample_ids(db_factory, *, samples: Optional[str], limit: Optional[int]) -> tuple[list[str], int]:
+    """Returns (sample_ids, native_skipped) — native-born rows
+    (external_lims_system == "mk1", HPLC slice 6 M8 Task 4) have no SENAITE
+    side to compare against, so they're excluded here rather than left to
+    fail the fetch."""
     from sqlalchemy import select
     from models import LimsSample
     db = db_factory()
     try:
-        rows = db.execute(
-            select(LimsSample.sample_id).order_by(LimsSample.id.desc()).limit(limit)
-        ).all()
+        if samples:
+            requested = [s.strip() for s in samples.split(",") if s.strip()]
+            rows = db.execute(
+                select(LimsSample.sample_id, LimsSample.external_lims_system)
+                .where(LimsSample.sample_id.in_(requested))
+            ).all()
+        else:
+            rows = db.execute(
+                select(LimsSample.sample_id, LimsSample.external_lims_system)
+                .order_by(LimsSample.id.desc()).limit(limit)
+            ).all()
     finally:
         db.close()
-    return [r.sample_id for r in rows]
+    native_ids = {r.sample_id for r in rows if r.external_lims_system == "mk1"}
+    ordered = requested if samples else [r.sample_id for r in rows]
+    ids = [sid for sid in ordered if sid not in native_ids]
+    return ids, len(native_ids)
 
 
 def fetch_pair_http(sample_id: str, *, base_url: str, token: str) -> tuple[dict, dict]:
@@ -1037,6 +1050,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
     fetch_errors: list[dict] = []
+    native_skipped = 0
     if args.fixtures:
         pairs = _load_fixture_pairs(args.fixtures)
     else:
@@ -1046,7 +1060,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             ap.error("specify exactly one of --base-url or --in-process")
 
         from database import SessionLocal
-        sample_ids = resolve_sample_ids(SessionLocal, samples=args.samples, limit=args.limit)
+        sample_ids, native_skipped = resolve_sample_ids(
+            SessionLocal, samples=args.samples, limit=args.limit)
 
         token = None
         if args.base_url:
@@ -1072,6 +1087,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     report = build_report(pairs, fetch_errors=fetch_errors)
     print_summary(report)
+    if native_skipped:
+        print(f"  native_skipped={native_skipped} (mk1-authoritative rows "
+              f"excluded -- no SENAITE side to compare)")
 
     if args.out:
         with open(args.out, "w") as f:

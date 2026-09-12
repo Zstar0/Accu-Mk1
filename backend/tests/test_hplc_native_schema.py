@@ -370,3 +370,23 @@ def test_retest_child_inherits_peptide_id_and_slot(db_session):
                      result_value="98.5", reason="t")
     child = apply_transition(db_session, analysis_id=row.id, kind="retest", reason="t")
     assert (child.slot, child.peptide_id) == (3, None)
+
+
+# ── HPLC-native slice 6 (M8): retest_of_sample_id column ───────────────────
+
+def test_lims_sample_has_retest_of_sample_id_column(db_session):
+    cols = {c["name"] for c in inspect(db_session.get_bind()).get_columns("lims_samples")}
+    assert "retest_of_sample_id" in cols
+
+
+def test_retest_of_sample_id_default_null(db_session):
+    from models import LimsSample
+    row = LimsSample(sample_id="P-9001")
+    assert row.retest_of_sample_id is None
+
+
+def test_boot_migrations_add_retest_of_sample_id_as_last_statement():
+    stmts = _captured()
+    assert stmts[-1] == (
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS retest_of_sample_id TEXT"
+    )

@@ -142,6 +142,12 @@ def _populate_basic_info(row: LimsSample, meta: dict) -> None:
     row.company_logo_url = meta.get("CompanyLogoUrl")
     row.coa_meta = json.dumps(_merge_coa_meta(row.coa_meta, meta))
     row.last_synced_at = datetime.utcnow()
+    # HPLC-native slice 6 (M8): signal-owned, keep-prior on replays that
+    # don't carry the key (mirrors the VendorName gate below in
+    # upsert_sample_from_signal) — a later signal without RetestOfSampleId
+    # must never clear a value this row already has.
+    if meta.get("RetestOfSampleId"):
+        row.retest_of_sample_id = str(meta["RetestOfSampleId"])
 
 
 def _create_sample_row(db: Session, parent_sample_id: str, meta: dict) -> LimsSample:
@@ -687,7 +693,14 @@ def _refresh_parent_from_senaite(db: Session, parent: LimsSample) -> None:
     whole refresh (fail closed) and raises an identity_collision flag. A
     fetch missing `uid` entirely never NULLs a stored uid either — that
     would silently prime the NULL-adopt rule to rebind the row to ANY
-    future uid on the next refresh."""
+    future uid on the next refresh.
+
+    Native-born guard (HPLC slice 6 M8 Task 4): a native-born row has no
+    SENAITE record to refresh from — skip before any SENAITE call."""
+    if (parent.external_lims_system or "senaite") == "mk1":
+        log.info(
+            "refresh_parent.native_born_skip sample=%s", parent.sample_id)
+        return
     old_status = parent.status
     meta = senaite.fetch_parent_metadata(parent.sample_id)
     incoming_uid = meta.get("uid")

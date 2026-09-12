@@ -20,8 +20,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from models import (LimsAnalysis, LimsSample, LimsSampleTransition,
-                    LimsWorkflowShadowEvaluation, LimsWorkflowState,
-                    LimsWorkflowTransition)
+                    LimsSubSampleEvent, LimsWorkflowShadowEvaluation,
+                    LimsWorkflowState, LimsWorkflowTransition)
 
 log = logging.getLogger(__name__)
 
@@ -238,7 +238,32 @@ def _write_status_if_authoritative(db: Session, sample: LimsSample, to_slug: str
     record_sample_transition(db, sample_id=sample.sample_id, to_status=to_slug,
                              source="mk1", verb=verb, from_status=from_status,
                              actor_user_id=actor_user_id)
+    _queue_native_status_relay(db, sample, to_slug)
     return True
+
+
+def _queue_native_status_relay(db: Session, sample: LimsSample, to_slug: str) -> None:
+    """M8: native-born samples relay receive/verify/publish to Integration
+    Service. Intent is recorded HERE, in the same transaction as the status
+    write (flush-only — the caller commits); the HTTP call itself happens
+    later, out of band, at a flush point (status_relay.flush_pending_relays).
+    SENAITE-born samples: no event, no queue entry — byte-identical to
+    pre-M8 behaviour. Never raises."""
+    try:
+        from lims_analyses.hplc_native import is_native_born
+        from workflow.status_relay import RELAYED_SLUGS, queue_relay
+        if not is_native_born(sample) or to_slug not in RELAYED_SLUGS:
+            return
+        transition = RELAYED_SLUGS[to_slug]
+        db.add(LimsSubSampleEvent(
+            lims_sample_pk=sample.id, event="native_status_relay_pending",
+            details={"transition": transition}, user_id=None,
+        ))
+        db.flush()
+        queue_relay(sample.sample_id, transition)
+    except Exception:
+        log.exception("status_relay.queue_failed (never-raise) sample=%s to_slug=%s",
+                      sample.sample_id, to_slug)
 
 
 def execute_verb(db: Session, sample: LimsSample, verb: str, *, trigger: str,
@@ -397,6 +422,14 @@ def run_cascades_bg(sample_pk: int, actor_user_id: Optional[int]) -> None:
     finally:
         if db is not None:
             db.close()
+    # M8 flush point: verify (and any other RELAYED_SLUGS edge) reaches the
+    # engine via this cascade run — drain what _write_status_if_authoritative
+    # queued, after our own commit/close above. Never raises.
+    try:
+        from workflow.status_relay import flush_pending_relays
+        flush_pending_relays()
+    except Exception:
+        log.exception("status_relay.flush_failed in run_cascades_bg (never-raise)")
 
 
 _TEE_TO_STATES = frozenset({"verified", "published", "cancelled"})
