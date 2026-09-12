@@ -134,7 +134,11 @@ def test_native_blend_page1_parity(db, monkeypatch):
     _promote(db, _row(rows, KW_QUANTITY, 1), "4", "mg")
     _promote(db, _row(rows, KW_QUANTITY, 2), "1", "mg")
     from lims_analyses.hplc_native import KW_BLEND_PURITY, KW_BLEND_TOTAL
-    _promote(db, _row(rows, KW_BLEND_PURITY, None), "97.6", "%")
+    # Submitted BLEND-PUR (50) is a value the mass-weighted recompute below
+    # (97.6) cannot produce — proving the engine ignores the submitted
+    # aggregate and recalculates, not merely that its output happens to
+    # match a coincidentally-equal submitted value (F5).
+    _promote(db, _row(rows, KW_BLEND_PURITY, None), "50", "%")
     _promote(db, _row(rows, KW_BLEND_TOTAL, None), "5", "mg")
 
     _patch_wire_document(monkeypatch)
