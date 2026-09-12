@@ -122,3 +122,25 @@ def test_parent_retest_with_slot_unpromotes_only_that_slot(db):
     assert parents[0].review_state == "verified"
     assert parents[1].review_state == "retracted"
     assert len(new_ids) == 1 and db.get(LimsAnalysis, new_ids[0]).retest_of_id == pur2.id
+
+
+def test_parent_retest_without_slot_on_single_slot_native_sample(db):
+    # Final-review finding #7: a native *single*-peptide sample's retest
+    # omits `slot` entirely (mirrors what an FE caller with no slot to send
+    # would do). _find_active_parent_row's _by_service fallback is a
+    # one-row set on a single-slot sample, so this must resolve exactly like
+    # the with-slot multi-slot case above and un-promote that one row.
+    parent, services, peps, vial_rows = native_family(db, sample_id="PB-1105", slots=[("BPC-157", "BPC157")])
+    rows = next(iter(vial_rows.values()))
+    pur1, = _purity_rows(rows)
+    _submit_verify(db, pur1, "98.1")
+    p1, _ = promote_to_parent(db, keyword=KW_PURITY, result_value="98.1", result_unit="%", method_id=None,
+                              instrument_id=None, sources=[{"analysis_id": pur1.id, "contribution_kind": "chosen"}],
+                              user_id=1, commit=False)
+    apply_transition(db, analysis_id=p1.id, kind="verify", user_id=1, commit=False)
+    db.commit()
+    new_ids, state = parent_retest(db, sample_id="PB-1105", keyword=KW_PURITY, user_id=1, reason="t",
+                                   analysis_service_id=services[KW_PURITY].id)
+    db.refresh(p1)
+    assert p1.review_state == "retracted"
+    assert len(new_ids) == 1 and db.get(LimsAnalysis, new_ids[0]).retest_of_id == pur1.id
