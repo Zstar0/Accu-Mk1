@@ -29,6 +29,12 @@ describe('isIdentityAnalysis', () => {
     expect(isIdentityAnalysis({ keyword: 'HPLC-PUR', title: 'Peptide Purity (HPLC)' })).toBe(false)
     expect(isIdentityAnalysis({ keyword: 'ENDO-LAL', title: 'Endotoxin' })).toBe(false)
   })
+  it('recognises the native HPLC-IDENTITY keyword even with a bare (unresolved) title', () => {
+    expect(isIdentityAnalysis(an({ keyword: 'HPLC-IDENTITY', title: 'Mystery Peptide' }))).toBe(true)
+  })
+  it('does not treat native purity as identity', () => {
+    expect(isIdentityAnalysis(an({ keyword: 'HPLC-PURITY', title: 'BPC-157 - Purity (HPLC)' }))).toBe(false)
+  })
 })
 
 describe('buildVialAssignmentMap', () => {
