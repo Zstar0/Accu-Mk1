@@ -228,3 +228,20 @@ def seed_native_hplc_rows(
         for kw in AGGREGATES:
             _mint(kw, slot=None, peptide_id=None, title=services[kw].title, reason=None)
     return inserted
+
+
+def slot_key(row) -> tuple:
+    """(analysis_service_id, slot or 0) — the ONE identity key for parent-tier
+    collapse/overlay/lookup. Legacy rows have slot NULL → (sid, 0): identical
+    to keying on service id alone (spec 2026-09-10 M6 addendum)."""
+    return (row.analysis_service_id, row.slot or 0)
+
+
+def kw_slot_key(row) -> tuple:
+    return ((row.keyword or ""), row.slot or 0)
+
+
+def slot_clause(slot: Optional[int]):
+    """SQL twin of slot_key's second element."""
+    from sqlalchemy import func
+    return func.coalesce(LimsAnalysis.slot, 0) == (slot or 0)

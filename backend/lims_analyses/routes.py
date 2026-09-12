@@ -318,6 +318,7 @@ def parent_retest(
             user_id=getattr(current_user, "id", None),
             reason=req.reason,
             analysis_service_id=req.analysis_service_id,
+            slot=req.slot,
         )
         return ParentRetestResponse(new_row_ids=new_ids, parent_review_state=state)
     except Exception as e:

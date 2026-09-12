@@ -892,6 +892,9 @@ def promote_to_parent(
                     f"source {sid} has analysis_service_id={row.analysis_service_id}, "
                     f"expected {first_source_svc.id} (native promote is service-keyed)"
                 )
+            first_source_row = source_rows[source_ids[0]]
+            if (row.slot or 0) != (first_source_row.slot or 0):
+                raise BadRequestError("sources span multiple slots")
         elif row.keyword != keyword:
             raise BadRequestError(
                 f"source {sid} has keyword={row.keyword!r}, "
@@ -941,7 +944,10 @@ def promote_to_parent(
         # Native identity comes from the catalog service, not the request
         # string or the (possibly drifted) source row label.
         eff_parent_keyword = first_source_svc.keyword
-        eff_title = first_source_svc.title
+        # Native-born per-slot rows carry a STAMPED title ("BPC-157 - Purity
+        # (HPLC)"); slot-less native rows (endo, PCR, aggregates) keep the
+        # service title.
+        eff_title = first_source.title if first_source.slot is not None else first_source_svc.title
         if result_unit is None:
             result_unit = first_source_svc.unit
 
@@ -980,8 +986,13 @@ def promote_to_parent(
     if all(source_rows[sid].retest_of_id is not None for sid in source_ids):
         # Native services key identity on the service FK (see is_native above);
         # a keyword-string match would miss a drifted label on the old row.
+        # Slot-aware (M6): a native blend keys on (service, slot) so two
+        # parent rows for the same service (one per slot) supersede
+        # independently — COALESCE(slot,0) keeps legacy/slot-less rows
+        # (slot NULL) matching exactly as before.
+        from lims_analyses.hplc_native import slot_clause
         _ident_clause = (
-            LimsAnalysis.analysis_service_id == eff_service_id
+            and_(LimsAnalysis.analysis_service_id == eff_service_id, slot_clause(first_source.slot))
             if is_native
             else LimsAnalysis.keyword == eff_parent_keyword
         )
@@ -1048,6 +1059,8 @@ def promote_to_parent(
         instrument_id=instrument_id,
         analyst_user_id=user_id,
         created_by_user_id=user_id,
+        peptide_id=first_source.peptide_id,
+        slot=first_source.slot,
     )
     db.add(parent_row)
     db.flush()
@@ -1939,6 +1952,7 @@ def _find_active_parent_row(
     keyword: str,
     analysis_service_id: Optional[int] = None,
     allow_native_rescue: bool = True,
+    slot: Optional[int] = None,
 ) -> Optional[LimsAnalysis]:
     """Resolve the one active canonical parent-tier row a retest lineage hangs
     off. Shared by cascade_parent_retest_to_sources and parent_retest so the
@@ -1993,6 +2007,7 @@ def _find_active_parent_row(
     canonical row actually promoted — a real (not cosmetic) correctness gap.
     """
     from models import AnalysisService
+    from lims_analyses.hplc_native import slot_clause
 
     base = (
         LimsAnalysis.lims_sample_pk == parent_sample_pk,
@@ -2007,8 +2022,23 @@ def _find_active_parent_row(
             select(LimsAnalysis).where(*base, ident)
         ).scalars().first()
 
+    def _by_service(service_id):
+        # Slot-aware (M6): a caller holding a slot resolves that ONE row
+        # directly. Without a slot, a multi-slot native blend parent has
+        # more than one live row for this service — refuse to guess which
+        # one the caller means (controller ruling) rather than returning
+        # .first() nondeterministically. Legacy/slot-less rows are exactly
+        # one row (or none) either way, so this is byte-identical for them.
+        ident = LimsAnalysis.analysis_service_id == service_id
+        if slot is not None:
+            return _first(and_(ident, slot_clause(slot)))
+        rows = db.execute(select(LimsAnalysis).where(*base, ident)).scalars().all()
+        if len({r.slot or 0 for r in rows}) > 1:
+            return None
+        return rows[0] if rows else None
+
     if analysis_service_id is not None:
-        return _first(LimsAnalysis.analysis_service_id == analysis_service_id)
+        return _by_service(analysis_service_id)
 
     row = _first(LimsAnalysis.keyword == keyword)
     if row is not None or not allow_native_rescue:
@@ -2022,7 +2052,7 @@ def _find_active_parent_row(
     ).scalars().first()
     if native_svc is None:
         return None
-    return _first(LimsAnalysis.analysis_service_id == native_svc.id)
+    return _by_service(native_svc.id)
 
 
 def cascade_parent_retest_to_sources(
@@ -2034,6 +2064,7 @@ def cascade_parent_retest_to_sources(
     source_reason: str = "cascaded from parent SENAITE retest",
     analysis_service_id: Optional[int] = None,
     allow_native_rescue: bool = True,
+    slot: Optional[int] = None,
 ) -> list[int]:
     """When a PARENT-tier analysis is retested (via SENAITE), cascade the retest
     down to each source vial-tier analysis that was promoted into that parent.
@@ -2073,6 +2104,7 @@ def cascade_parent_retest_to_sources(
         keyword=keyword,
         analysis_service_id=analysis_service_id,
         allow_native_rescue=allow_native_rescue,
+        slot=slot,
     )
     if parent_analysis is None:
         return []
@@ -2153,6 +2185,7 @@ def parent_retest(
     user_id: Optional[int],
     reason: Optional[str] = None,
     analysis_service_id: Optional[int] = None,
+    slot: Optional[int] = None,
 ) -> tuple[list[int], Optional[str]]:
     """Native origination of a parent-tier retest: validate, then run the
     existing cascade (retest promoted sources + un-promote the verified or
@@ -2187,6 +2220,7 @@ def parent_retest(
         parent_sample_pk=parent.id,
         keyword=keyword,
         analysis_service_id=analysis_service_id,
+        slot=slot,
     )
     if active is None:
         # Name the identity that was actually used, not always the keyword —
@@ -2227,6 +2261,7 @@ def parent_retest(
         user_id=user_id,
         source_reason=reason or "retested from parent (native)",
         analysis_service_id=active.analysis_service_id,
+        slot=active.slot,
     )
     db.refresh(active)
 
