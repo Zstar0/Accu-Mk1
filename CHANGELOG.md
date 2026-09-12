@@ -13,6 +13,17 @@
 - Throughput report and FE HPLC/identity classifiers recognise the native keywords.
 - Behaviour-neutral for SENAITE-born samples (all new branches keyed on native keywords / row-level peptide_id).
 
+### HPLC native-born — slice 4 (M6)
+- Promote is slot-aware: the native identity rule keys on `(analysis_service_id, COALESCE(slot,0))`, and the minted parent row inherits the vial row's `peptide_id`/`slot`/stamped title.
+- Supersession and parent-retest lookup never guess across slots — `ParentRetestRequest.slot` threads through the route, cascade and `_find_active_parent_row`; a multi-slot native parent without a slot returns "no parent row" rather than picking one.
+- Parent read surfaces (placeholder suppression, live-vial-state overlay) key on `(analysis_service_id, slot)` instead of service alone, so slot 2's outstanding placeholder no longer renders slot 1's state.
+- Removal classification, pristine delete, and the reject cascade are slot-aware for native-born parents; the SENAITE-driven reject cascade stays keyword-only (legacy-only by construction).
+- New `relabel_native_slot` + `POST /api/lims-analyses/parent/{sample_id}/native-slots/{slot}/relabel`, pristine slots only. Legacy Replace/Clear now 409 (`native_born_use_relabel`) on native-born parents; relabel is the only path.
+- Renaming a slot nulls its stored `peptide_id` (never re-seeds the previous peptide from a stale id); the S2S customer-edit mirror restamps native placeholders the same way.
+- Publish skips the SENAITE AR lookup entirely for native-born samples; the registry read surface now exposes `external_lims_system`.
+- FE: parent retest requests carry `slot`; the Analytes card gets a Relabel dialog for native-born slots.
+- Behaviour-neutral for SENAITE-born samples throughout.
+
 ## v1.21.0 — 2026-09-11
 
 ### Added
