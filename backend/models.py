@@ -1194,6 +1194,9 @@ class LimsSample(Base):
     date_sampled: Mapped[Optional[datetime]] = mapped_column(DateTime)
     date_received: Mapped[Optional[datetime]] = mapped_column(DateTime)
     is_retest: Mapped[bool] = mapped_column(Boolean, default=False)
+    # HPLC-native slice 6 (M8): sample_id of the original Mk1 row this row is
+    # a retest of, from registry signal meta RetestOfSampleId. Nullable.
+    retest_of_sample_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     assignment_role: Mapped[str] = mapped_column(String(8), nullable=False, server_default="hplc")
     # TRUE = parent is a pure report depository (container-mode families,
     # 2026-06-10-container-parent-design.md): every physical vial is a

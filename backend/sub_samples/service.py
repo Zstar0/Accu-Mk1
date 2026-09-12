@@ -142,6 +142,12 @@ def _populate_basic_info(row: LimsSample, meta: dict) -> None:
     row.company_logo_url = meta.get("CompanyLogoUrl")
     row.coa_meta = json.dumps(_merge_coa_meta(row.coa_meta, meta))
     row.last_synced_at = datetime.utcnow()
+    # HPLC-native slice 6 (M8): signal-owned, keep-prior on replays that
+    # don't carry the key (mirrors the VendorName gate below in
+    # upsert_sample_from_signal) — a later signal without RetestOfSampleId
+    # must never clear a value this row already has.
+    if meta.get("RetestOfSampleId"):
+        row.retest_of_sample_id = str(meta["RetestOfSampleId"])
 
 
 def _create_sample_row(db: Session, parent_sample_id: str, meta: dict) -> LimsSample:
