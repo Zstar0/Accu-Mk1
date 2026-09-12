@@ -1785,12 +1785,17 @@ def list_parent_analyses_senaite_shape(
     rows = [
         r for r in rows
         if r.provenance == "canonical"
-        # shadow: hidden once the canonical tier EVER held the (keyword, slot)
-        or (r.provenance == "shadow" and kw_slot_key(r) not in canonical_ever)
+        # shadow: hidden once the canonical tier EVER held the (keyword, slot).
+        # Written as an inline tuple (not kw_slot_key(r)) deliberately -- the
+        # identity-convergence guard's AST sweep only recognizes a literal
+        # keyword-attribute compare/membership, and this is the ruled
+        # PERMANENT site (P-0143) it must keep counting.
+        or (r.provenance == "shadow" and (r.keyword, r.slot or 0) not in canonical_ever)
         # ordered placeholders: live-canonical collapse only -- a retracted
         # canonical must NOT hide the demand marker (pinned by
-        # test_retracted_canonical_does_not_suppress_placeholder)
-        or (r.provenance != "shadow" and kw_slot_key(r) not in live_canonical_kw_keys)
+        # test_retracted_canonical_does_not_suppress_placeholder). Same
+        # inline-tuple note as above applies here.
+        or (r.provenance != "shadow" and (r.keyword, r.slot or 0) not in live_canonical_kw_keys)
     ]
 
     shaped = _serialize_senaite_shape_rows(db, rows)

@@ -264,18 +264,25 @@ PERMANENT: dict[tuple[str, str, str], tuple[int, str]] = {
         "would disagree with what the cascade then does.",
     ),
     # --- Cross-provenance collapse ---
-    # RETIRED 2026-09-12 (M6 slice 4 Task 2, superseding the PERMANENT ruling
-    # below): list_parent_analyses_senaite_shape's two `r.keyword` compares
-    # widened to `kw_slot_key(r)` -- (keyword, slot or 0) -- so a canonical
-    # row for one slot of a native-born blend never collapses its sibling
-    # slot's shadow/placeholder counterpart sharing the same keyword (spec
-    # 2026-09-10 M6 addendum). The P-0143 ruling itself is UNCHANGED (keyword,
-    # not service id, remains the collapse key -- see the retired entry's
-    # text in git history for the full ruling); only the AST *shape* changed
-    # from a bare attribute compare to a helper-function call the matcher
-    # doesn't parse as a keyword-identity comparison, so the site legitimately
-    # drops out of this sweep rather than needing reclassification. Do not
-    # re-add this key: hits will always be empty now.
+    ("lims_analyses/service.py", "list_parent_analyses_senaite_shape", "r"): (
+        2,
+        "P-0143 cross-provenance keyword collapse. Keyword -- NOT service id -- is "
+        "the collapse key on purpose: the mirror resolves duplicate-keyword "
+        "services to the lowest id, so canonical and shadow can legitimately "
+        "hold different service ids for the same logical line. Converting this "
+        "regresses the double-render. Two legs since 2026-09-08 (PB-0469): shadow "
+        "rows collapse on every keyword the canonical tier EVER held (retracted/"
+        "rejected included -- SENAITE cannot retract its verified line, so the "
+        "mirror would resurface the withdrawn value on the table and the COA "
+        "wire); ordered placeholders collapse on LIVE canonical keywords only. "
+        "2026-09-12 (M6 slice 4 Task 2): the key widened to (keyword, slot or 0) "
+        "so the same ruling now also spans a native-born blend's per-slot lines. "
+        "Written as an inline tuple `(r.keyword, r.slot or 0)` at both comparison "
+        "sites -- not a call to the kw_slot_key helper -- deliberately, so this "
+        "AST sweep keeps seeing and counting the site (kw_slot_key is still used "
+        "for the set-builder projections feeding these comparisons, which are "
+        "not identity-comparison sites themselves).",
+    ),
     # --- keyword is the DATUM, not the key ---
     ("lims_analyses/service.py", "parent_retest", "active"): (
         1,
