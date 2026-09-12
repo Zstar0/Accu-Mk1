@@ -274,7 +274,14 @@ PERMANENT: dict[tuple[str, str, str], tuple[int, str]] = {
         "rows collapse on every keyword the canonical tier EVER held (retracted/"
         "rejected included -- SENAITE cannot retract its verified line, so the "
         "mirror would resurface the withdrawn value on the table and the COA "
-        "wire); ordered placeholders collapse on LIVE canonical keywords only.",
+        "wire); ordered placeholders collapse on LIVE canonical keywords only. "
+        "2026-09-12 (M6 slice 4 Task 2): the key widened to (keyword, slot or 0) "
+        "so the same ruling now also spans a native-born blend's per-slot lines. "
+        "Written as an inline tuple `(r.keyword, r.slot or 0)` at both comparison "
+        "sites -- not a call to the kw_slot_key helper -- deliberately, so this "
+        "AST sweep keeps seeing and counting the site (kw_slot_key is still used "
+        "for the set-builder projections feeding these comparisons, which are "
+        "not identity-comparison sites themselves).",
     ),
     # --- keyword is the DATUM, not the key ---
     ("lims_analyses/service.py", "parent_retest", "active"): (

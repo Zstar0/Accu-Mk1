@@ -324,6 +324,8 @@ class ParentRetestRequest(BaseModel):
     # row (keyword is ignored for the match); keyword stays the compatibility
     # alias and remains the only thing today's FE sends.
     analysis_service_id: Optional[int] = None
+    # native-born per-slot rows: identifies which slot's parent row (spec 2026-09-10 M6)
+    slot: Optional[int] = None
     reason: Optional[str] = None
 
 
@@ -337,6 +339,22 @@ class ParentRetestResponse(BaseModel):
 
 class SourceRetestRequest(BaseModel):
     reason: Optional[str] = None
+
+
+# ── M6: native slot relabel (the only sanctioned way to change a native-born
+# slot's peptide) ──────────────────────────────────────────────────────────
+
+
+class RelabelNativeSlotRequest(BaseModel):
+    new_peptide_id: int
+    reason: Optional[str] = None
+
+
+class RelabelNativeSlotResponse(BaseModel):
+    slot: int
+    old_peptide_id: Optional[int] = None
+    new_peptide_id: int
+    restamped: int
 
 
 class SourceRetestResponse(BaseModel):

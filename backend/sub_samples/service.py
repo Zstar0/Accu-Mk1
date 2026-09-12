@@ -615,7 +615,16 @@ def _apply_senaite_fields_to_row(db: Session, row: "LimsSample", fields: dict) -
             while len(slots) <= idx:
                 slots.append(dict(_EMPTY_SLOT))
             if kind == "Peptide":
-                slots[idx]["name"] = str(value).strip() if value else None
+                new_name = str(value).strip() if value else None
+                old_name = (slots[idx].get("name") or "").strip()
+                if "peptide_id" in slots[idx] and (new_name or "").casefold() != old_name.casefold():
+                    # Rename invalidates the stored peptide link (spec 2026-09-10
+                    # M6 addendum): resolve_slot_peptides trusts a stored id first,
+                    # so a stale id would re-seed the previous peptide. Legacy
+                    # slot dicts that never carried a peptide_id key (pre-M4)
+                    # are left as-is — nothing to invalidate.
+                    slots[idx]["peptide_id"] = None
+                slots[idx]["name"] = new_name
             else:
                 slots[idx]["declared_quantity"] = str(value) if value not in (None, "") else None
         # Positional list (see _parse_analyte_slots): a cleared middle slot

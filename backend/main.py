@@ -12140,6 +12140,7 @@ async def replace_analyte(
     """
     from sqlalchemy import select as _select
     from models import AnalysisService, LimsSample, Peptide, SampleAnalyteAlias
+    from lims_analyses.hplc_native import is_native_born
     from lims_analyses.service import (
         peptide_has_full_service_set,
         classify_slot_replacement_impact,
@@ -12148,6 +12149,11 @@ async def replace_analyte(
         BadRequestError as _BadRequestError,
         NotFoundError as _NotFoundError,
     )
+
+    _row = db.execute(_select(LimsSample).where(LimsSample.sample_id == sample_id)).scalar_one_or_none()
+    if _row is not None and is_native_born(_row):
+        raise HTTPException(409, detail={"code": "native_born_use_relabel",
+                                         "message": "Native-born sample: use Relabel on the Analytes card"})
 
     if slot < 1 or slot > 4:
         raise HTTPException(400, "slot must be between 1 and 4")
@@ -12401,6 +12407,7 @@ async def clear_analyte(
     """
     from sqlalchemy import select as _select
     from models import AnalysisService, LimsSample, Peptide, SampleAnalyteAlias
+    from lims_analyses.hplc_native import is_native_born
     from lims_analyses.service import (
         classify_slot_replacement_impact,
         clear_analyte_slot,
@@ -12411,6 +12418,12 @@ async def clear_analyte(
     from sub_samples import senaite as _senaite_slots
     import logging as _logging
     _clr_logger = _logging.getLogger(__name__)
+
+    _row = db.execute(_select(LimsSample).where(LimsSample.sample_id == sample_id)).scalar_one_or_none()
+    if _row is not None and is_native_born(_row):
+        raise HTTPException(409, detail={"code": "native_born_use_relabel",
+                                         "message": "Native-born sample: use Relabel on the Analytes card"})
+
     if slot < 1 or slot > 4:
         raise HTTPException(400, "slot must be between 1 and 4")
     try:
@@ -13740,9 +13753,16 @@ async def publish_sample_coa(
             ),
         )
 
-    # 2. Resolve SENAITE UID upfront so we fail before touching integration service state
+    # 2. Resolve SENAITE UID upfront so we fail before touching integration service state.
+    # Native-born samples (external_lims_system == "mk1") have no SENAITE AR at
+    # all — skip the search entirely instead of 404ing against SENAITE for a
+    # sample it never had (HPLC native slice 4 M6).
+    _registry_row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    _native_born = _registry_row is not None and _registry_row.external_lims_system == "mk1"
     senaite_uid: str | None = None
-    if SENAITE_URL:
+    if SENAITE_URL and not _native_born:
         try:
             async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
                 timeout=httpx.Timeout(15.0, connect=5.0),
@@ -13768,9 +13788,7 @@ async def publish_sample_coa(
     # generated COA, so capture it HERE and send to IS, which forwards it to the
     # WP COA email + order-page Lab Remarks button. publish-coa is parent-only
     # (sub-samples are rejected above), so the parent row carries the remark.
-    _parent_row = db.execute(
-        select(LimsSample).where(LimsSample.sample_id == sample_id)
-    ).scalar_one_or_none()
+    _parent_row = _registry_row
     # Snapshot the pre-publish status NOW, before any commit below can expire
     # `_parent_row` (expire_on_commit=True). The transition-log hook at the
     # bottom of this function passes `from_status` as a run_in_threadpool
@@ -23741,7 +23759,10 @@ def s2s_mirror_lims_sample_fields(
     edits). Idempotent; only mirrors the keys present in `fields`. Lock
     criterion mirrors the receive inbox / shipping route: only pre-received
     rows accept edits."""
-    from sub_samples.service import _PRE_RECEIVED_STATES, _apply_senaite_fields_to_row
+    from sub_samples.service import _ANALYTE_KEY_RE, _PRE_RECEIVED_STATES, _apply_senaite_fields_to_row
+    from lims_analyses.hplc_native import (
+        SlotResolution, is_native_born, resolve_slot_peptides, restamp_native_slot_rows,
+    )
     updated: list[str] = []
     locked: list[str] = []
     missing: list[str] = []
@@ -23767,6 +23788,30 @@ def s2s_mirror_lims_sample_fields(
             "coa_meta": row.coa_meta,
         }
         _apply_senaite_fields_to_row(db, row, fields)
+        if is_native_born(row) and any(_ANALYTE_KEY_RE.match(k) for k in fields):
+            # Native-born: the only rows that exist pre-receipt are per-slot
+            # ordered placeholders — restamp them from the re-resolved slots
+            # so a customer rename never leaves a stale peptide/title behind
+            # (spec M6 addendum).
+            resolved = resolve_slot_peptides(db, row)
+            for res in resolved:
+                restamp_native_slot_rows(db, parent=row, slot=res.slot, res=res)
+            # Controller ruling: a request that BLANKS an Analyte{N}Peptide
+            # slot (name now empty) leaves nothing for resolve_slot_peptides
+            # to return -- restamp that slot's pristine rows to peptide_id
+            # None / reportable_reason "analyte_cleared" so they don't keep
+            # reporting the old peptide. Titles are left as-is (guarded in
+            # restamp_native_slot_rows).
+            occupied_slots = {res.slot for res in resolved}
+            cleared_idx = {
+                int(m.group(1))
+                for k in fields
+                if (m := _ANALYTE_KEY_RE.match(k)) and m.group(2) == "Peptide"
+            } - occupied_slots
+            for idx in cleared_idx:
+                restamp_native_slot_rows(
+                    db, parent=row, slot=idx, res=SlotResolution(idx, "", "", None, "cleared")
+                )
         touched_analytes = any(_ANALYTE_KEY.match(k) for k in fields)
         if touched_analytes:
             n = db.query(SampleAnalyteAlias).filter(

@@ -380,9 +380,34 @@ describe('NativeParentAnalysesCard', () => {
     await userEvent.click(screen.getByRole('button', { name: /^retest$/i }))
 
     await waitFor(() => expect(parentRetestAnalysis).toHaveBeenCalledTimes(1))
-    expect(parentRetestAnalysis).toHaveBeenCalledWith('P-0120', 'HM')
+    // Legacy (SENAITE-born) target: no numeric slot, so the body carries
+    // neither analysis_service_id nor slot (final-review finding #8).
+    expect(parentRetestAnalysis).toHaveBeenCalledWith('P-0120', 'HM', undefined, undefined)
     await waitFor(() => expect(staleSpy).toHaveBeenCalled())
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY] })
+  })
+
+  it('retest passes analysis_service_id + slot through when the target row carries them', async () => {
+    const promos = new Map([['HM', promo('HM', ['P-0120-S01'])]])
+    vi.mocked(parentRetestAnalysis).mockResolvedValue({ new_row_ids: [101], parent_review_state: null })
+    renderCard(
+      [shapedRow({
+        uid: 'mk1:9', keyword: 'HM', title: 'Heavy Metals', review_state: 'verified',
+        analysis_service_id: 42, slot: 2,
+      })],
+      promos
+    )
+    await screen.findByText('Heavy Metals')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Analysis actions' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Retest' }))
+    await userEvent.click(screen.getByRole('button', { name: /^retest$/i }))
+
+    await waitFor(() => expect(parentRetestAnalysis).toHaveBeenCalledTimes(1))
+    expect(parentRetestAnalysis).toHaveBeenCalledWith('P-0120', 'HM', undefined, {
+      analysis_service_id: 42,
+      slot: 2,
+    })
   })
 
   it('retest confirm fails closed with no promotion record', async () => {

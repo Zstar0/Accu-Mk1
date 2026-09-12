@@ -32,13 +32,16 @@ export function useParentRetestFlow({
   const [confirm, setConfirm] = useState<ParentRetestConfirmState | null>(null)
   const [retestPending, setRetestPending] = useState(false)
 
-  const requestRetest = (targets: SenaiteAnalysis[]) => {
-    const keywords = targets.map(a => a.keyword).filter((k): k is string => !!k)
+  const [targets, setTargets] = useState<SenaiteAnalysis[]>([])
+
+  const requestRetest = (newTargets: SenaiteAnalysis[]) => {
+    const keywords = newTargets.map(a => a.keyword).filter((k): k is string => !!k)
+    setTargets(newTargets)
     setConfirm({
-      titles: targets.map(a => a.title),
+      titles: newTargets.map(a => a.title),
       keywords,
       impact: buildBulkParentRetestImpact(keywords, promotionsByKeyword),
-      publishedTitles: targets
+      publishedTitles: newTargets
         .filter(a => a.review_state === 'published')
         .map(a => a.title),
     })
@@ -49,8 +52,20 @@ export function useParentRetestFlow({
     setRetestPending(true)
     try {
       let retested = 0
-      for (const keyword of confirm.keywords) {
-        const resp = await parentRetestAnalysis(sampleId, keyword)
+      for (const target of targets) {
+        if (!target.keyword) continue
+        // Native per-slot rows carry a numeric `slot`; only those need
+        // analysis_service_id + slot on the wire so the backend can
+        // disambiguate the slot. Legacy (SENAITE-born) targets keep the
+        // original {keyword} / {keyword, reason} body untouched.
+        const resp = await parentRetestAnalysis(
+          sampleId,
+          target.keyword,
+          undefined,
+          typeof target.slot === 'number'
+            ? { analysis_service_id: target.analysis_service_id, slot: target.slot }
+            : undefined
+        )
         retested += resp.new_row_ids.length
       }
       if (retested > 0) {
