@@ -242,7 +242,10 @@ TRUNCATE_LEN = 500
 # RegistrySampleReadResult-only scaffolding fields never appear in the
 # senaite payload at all -- they describe the mk1 response's OWN provenance,
 # not sample data, so they are not parity subjects.
-_META_ONLY_FIELDS = frozenset({"read_source", "registry_missing", "field_sources"})
+_META_ONLY_FIELDS = frozenset({
+    "read_source", "registry_missing", "field_sources",
+    "external_lims_system",  # registry-only attribute, no SENAITE twin
+})
 # Fields with bespoke list/dict comparators below (everything else is
 # compared as an opaque scalar value).
 LIST_COMPARATOR_FIELDS = frozenset({"analytes", "coa", "remarks", "analyses", "attachments"})
