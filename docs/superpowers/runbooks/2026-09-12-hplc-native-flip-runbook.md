@@ -6,9 +6,9 @@ Spec: `docs/superpowers/specs/2026-09-10-hplc-native-born-design.md` §Flip runb
 | # | Repo / branch | PRs | Notes |
 |---|---|---|---|
 | 1 | Accu-Mk1 `feat/hplc-native-slice1…6` | #192 ← #193 ← #195 ← #196 ← #197 ← #198 | one image; boot migrations: `lims_analyses.peptide_id/slot`, widened unique indexes, `lims_native_id_sequences` P=5000/PB=1000, `lims_registry_signal_keys`, `lims_samples.retest_of_sample_id` |
-| 2 | COABuilder `feat/native-wire-golden-optional-senaite` | (open) | no behaviour change in mk1 mode; SENAITE creds become optional |
-| 3 | Integration Service `feat/hplc-native-routing` → `feat/hplc-native-relay-peptides` | (open, stacked) | env: `ACCUMK1_BASE_URL` + `ACCUMK1_INTERNAL_SERVICE_TOKEN` now REQUIRED; new `LIMS_NATIVE_ROUTING_DISABLED` (unset), `PEPTIDE_LIST_SOURCE` (senaite) |
-| 4 | wpstar `feat/hplc-primary-alias-set` | (open) | pure key logic; no CSS/markup (no WPSTAR_VERSION buster) |
+| 2 | COABuilder `feat/native-wire-golden-optional-senaite` | ValenceAnalytical/coabuilder#21 | no behaviour change in mk1 mode; SENAITE creds become optional |
+| 3 | Integration Service `feat/hplc-native-routing` → `feat/hplc-native-relay-peptides` | ValenceAnalytical/accumark-integration-service#37 ← #38 | env: `ACCUMK1_BASE_URL` + `ACCUMK1_INTERNAL_SERVICE_TOKEN` now REQUIRED; new `LIMS_NATIVE_ROUTING_DISABLED` (unset), `PEPTIDE_LIST_SOURCE` (senaite) |
+| 4 | wpstar `feat/hplc-primary-alias-set` | Zstar0/accumarklabs#79 | pure key logic; no CSS/markup (no WPSTAR_VERSION buster) |
 | 5 | accumark-stack PRs #2→#3→#4 | (open) | devbox only |
 
 Deploy with the `accumark-deploy` skill in the order Mk1 → COABuilder → IS → wpstar (no JWT rotation). Merge the whole chain only when the Handler lifts the no-merge ruling; the devbox rehearsal (step 1) happens on the stacked branches.
@@ -34,6 +34,7 @@ SELECT value FROM settings WHERE key='registry_read_source';   -- every key mk1,
 -- indexes widened
 SELECT indexname FROM pg_indexes WHERE tablename='lims_analyses' AND indexdef LIKE '%COALESCE%';   -- 5 root indexes
 ```
+- IS: relay contract + registry meta keys are in IS `Docs/NATIVE_SAMPLE_CONTRACT.md`; a relay `no_order_found` records NO event (Mk1 retries), `duplicate` is idempotent.
 - IS: `GET /s2s/catalog/service-keys` (from IS, service token) lists `hplc-purity-identity`; IS admin registry refresh shows it; IS env has `ACCUMK1_BASE_URL` + token (never print).
 - Regen a wire doc for one recent legacy sample → zero `HPLC-*` rows (the shim only fires for native-born).
 - COABuilder `/version` ≥ the C1 release; Mk1's vendored conformance mirror refresh ticket status (parity was proven on the real engine in C1).
