@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 
 from models import AnalysisService, HPLCAnalysis, LimsAnalysis, LimsSample, LimsSubSample, Peptide
 from lims_analyses.hplc_native import (
-    native_category, TRIO, KW_PURITY, KW_QUANTITY, KW_BLEND_PURITY, KW_BLEND_TOTAL,
+    native_category, is_native_born, TRIO, KW_PURITY, KW_QUANTITY, KW_BLEND_PURITY, KW_BLEND_TOTAL,
 )
 from lims_analyses.service import apply_transition
 from lims_analyses.state_machine import RESULT_PENDING_STATES
@@ -502,11 +502,24 @@ def bridge_prep_result_to_vial(
         ).scalars()
     }
 
-    # Native-born vial = any live native trio keyword on it. Routing is then
-    # by LimsAnalysis.peptide_id only (spec 2026-09-10 M5); the per-substance
-    # / ANALYTE-slot / generic legacy tiers are never consulted, and no SENAITE
-    # slot lookup happens (native vials have no ANALYTE-N rows).
-    native = bool(live_keywords & set(TRIO))
+    # Native-born vial = any live native trio keyword on it AND the vial's
+    # parent sample was itself born in Mk1 (I-1, final review 2026-09-12): a
+    # stray native-keyword row added via the legacy add-analysis path
+    # (lims_analyses/service.py add_analysis_to_vial, peptide_id=None) on a
+    # SENAITE-born vial must not flip the whole vial to native routing and
+    # silently stop legacy bridging. Routing is then by LimsAnalysis.peptide_id
+    # only (spec 2026-09-10 M5); the per-substance / ANALYTE-slot / generic
+    # legacy tiers are never consulted, and no SENAITE slot lookup happens
+    # (native vials have no ANALYTE-N rows). Parent is fetched lazily (one
+    # query) only when a native keyword is actually present; `sub`/`parent`
+    # are reused below for slot resolution rather than re-fetched.
+    sub: Optional[LimsSubSample] = None
+    parent: Optional[LimsSample] = None
+    has_native_keyword = bool(live_keywords & set(TRIO))
+    if has_native_keyword:
+        sub = db.get(LimsSubSample, lims_sub_sample_pk)
+        parent = db.get(LimsSample, sub.parent_sample_pk) if sub else None
+    native = has_native_keyword and is_native_born(parent)
     native_peptide_id = peptide.id if (native and peptide is not None) else None
 
     # Bucket candidate rows by result category. Identity rows are NOT filtered
@@ -526,8 +539,9 @@ def bridge_prep_result_to_vial(
     )
     slot: Optional[int] = None
     if needs_slot:
-        sub = db.get(LimsSubSample, lims_sub_sample_pk)
-        parent = db.get(LimsSample, sub.parent_sample_pk) if sub else None
+        if sub is None:
+            sub = db.get(LimsSubSample, lims_sub_sample_pk)
+            parent = db.get(LimsSample, sub.parent_sample_pk) if sub else None
         parent_sample_id = parent.sample_id if parent else None
         slot = _resolve_slot(db, parent_sample_id=parent_sample_id, peptide=peptide)
         if slot is None:
