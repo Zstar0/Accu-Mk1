@@ -12140,6 +12140,7 @@ async def replace_analyte(
     """
     from sqlalchemy import select as _select
     from models import AnalysisService, LimsSample, Peptide, SampleAnalyteAlias
+    from lims_analyses.hplc_native import is_native_born
     from lims_analyses.service import (
         peptide_has_full_service_set,
         classify_slot_replacement_impact,
@@ -12148,6 +12149,11 @@ async def replace_analyte(
         BadRequestError as _BadRequestError,
         NotFoundError as _NotFoundError,
     )
+
+    _row = db.execute(_select(LimsSample).where(LimsSample.sample_id == sample_id)).scalar_one_or_none()
+    if _row is not None and is_native_born(_row):
+        raise HTTPException(409, detail={"code": "native_born_use_relabel",
+                                         "message": "Native-born sample: use Relabel on the Analytes card"})
 
     if slot < 1 or slot > 4:
         raise HTTPException(400, "slot must be between 1 and 4")
@@ -12401,6 +12407,7 @@ async def clear_analyte(
     """
     from sqlalchemy import select as _select
     from models import AnalysisService, LimsSample, Peptide, SampleAnalyteAlias
+    from lims_analyses.hplc_native import is_native_born
     from lims_analyses.service import (
         classify_slot_replacement_impact,
         clear_analyte_slot,
@@ -12411,6 +12418,12 @@ async def clear_analyte(
     from sub_samples import senaite as _senaite_slots
     import logging as _logging
     _clr_logger = _logging.getLogger(__name__)
+
+    _row = db.execute(_select(LimsSample).where(LimsSample.sample_id == sample_id)).scalar_one_or_none()
+    if _row is not None and is_native_born(_row):
+        raise HTTPException(409, detail={"code": "native_born_use_relabel",
+                                         "message": "Native-born sample: use Relabel on the Analytes card"})
+
     if slot < 1 or slot > 4:
         raise HTTPException(400, "slot must be between 1 and 4")
     try:
@@ -23746,7 +23759,8 @@ def s2s_mirror_lims_sample_fields(
     edits). Idempotent; only mirrors the keys present in `fields`. Lock
     criterion mirrors the receive inbox / shipping route: only pre-received
     rows accept edits."""
-    from sub_samples.service import _PRE_RECEIVED_STATES, _apply_senaite_fields_to_row
+    from sub_samples.service import _ANALYTE_KEY_RE, _PRE_RECEIVED_STATES, _apply_senaite_fields_to_row
+    from lims_analyses.hplc_native import is_native_born, resolve_slot_peptides, restamp_native_slot_rows
     updated: list[str] = []
     locked: list[str] = []
     missing: list[str] = []
@@ -23772,6 +23786,13 @@ def s2s_mirror_lims_sample_fields(
             "coa_meta": row.coa_meta,
         }
         _apply_senaite_fields_to_row(db, row, fields)
+        if is_native_born(row) and any(_ANALYTE_KEY_RE.match(k) for k in fields):
+            # Native-born: the only rows that exist pre-receipt are per-slot
+            # ordered placeholders — restamp them from the re-resolved slots
+            # so a customer rename never leaves a stale peptide/title behind
+            # (spec M6 addendum).
+            for res in resolve_slot_peptides(db, row):
+                restamp_native_slot_rows(db, parent=row, slot=res.slot, res=res)
         touched_analytes = any(_ANALYTE_KEY.match(k) for k in fields)
         if touched_analytes:
             n = db.query(SampleAnalyteAlias).filter(

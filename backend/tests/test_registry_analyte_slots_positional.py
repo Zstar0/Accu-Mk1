@@ -142,3 +142,18 @@ def test_mirror_blank_of_every_slot_clears_the_list(db_session):
     apply_senaite_fields_to_row(db_session, "U-SLOTS-3", {"Analyte1Peptide": ""})
     assert row.analytes is None
     assert row.peptide_name is None
+
+
+def test_mirror_rename_nulls_stale_peptide_id(db_session):
+    from sub_samples.service import apply_senaite_fields_to_row
+
+    row = LimsSample(sample_id="PB-SLOTS-PID", external_lims_uid="U-SLOTS-PID",
+                     analytes=json.dumps([{"name": "BPC-157", "declared_quantity": "1", "peptide_id": 11},
+                                          {"name": "TB-500", "declared_quantity": "2", "peptide_id": 22}]))
+    db_session.add(row); db_session.flush()
+    apply_senaite_fields_to_row(db_session, "U-SLOTS-PID", {"Analyte2Peptide": "GHK-Cu"})
+    assert json.loads(row.analytes)[1] == {"name": "GHK-Cu", "declared_quantity": "2", "peptide_id": None}
+    assert json.loads(row.analytes)[0]["peptide_id"] == 11
+    # same name (case/space-insensitive) keeps the id
+    apply_senaite_fields_to_row(db_session, "U-SLOTS-PID", {"Analyte1Peptide": " bpc-157 "})
+    assert json.loads(row.analytes)[0]["peptide_id"] == 11

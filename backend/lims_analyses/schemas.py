@@ -341,6 +341,22 @@ class SourceRetestRequest(BaseModel):
     reason: Optional[str] = None
 
 
+# ── M6: native slot relabel (the only sanctioned way to change a native-born
+# slot's peptide) ──────────────────────────────────────────────────────────
+
+
+class RelabelNativeSlotRequest(BaseModel):
+    new_peptide_id: int
+    reason: Optional[str] = None
+
+
+class RelabelNativeSlotResponse(BaseModel):
+    slot: int
+    old_peptide_id: Optional[int] = None
+    new_peptide_id: int
+    restamped: int
+
+
 class SourceRetestResponse(BaseModel):
     new_row_id: int
     parent_unverified: bool

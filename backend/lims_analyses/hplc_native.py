@@ -245,3 +245,116 @@ def slot_clause(slot: Optional[int]):
     """SQL twin of slot_key's second element."""
     from sqlalchemy import func
     return func.coalesce(LimsAnalysis.slot, 0) == (slot or 0)
+
+
+# ─── M6: relabel_native_slot ──────────────────────────────────────────────────
+#
+# The only sanctioned way to change a native-born sample's slot peptide
+# (spec 2026-09-10 M6). A slot may be relabeled only while every row it
+# touches — parent-tier + every family vial — is still pristine (no result,
+# no retest, no promotion link): anything else means the bench has already
+# acted on the old identity and the slot must go through retest instead.
+
+
+class NativeSlotLockedError(Exception):
+    """409: the slot cannot be relabeled right now. `code` distinguishes the
+    reason (native_slot_locked / peptide_not_found / duplicate_peptide) for
+    the FE without parsing the message."""
+    def __init__(self, msg, code="native_slot_locked"):
+        super().__init__(msg)
+        self.code = code
+
+
+class NativeSlotNotFoundError(Exception):
+    code = "native_slot_not_found"
+
+
+_PRISTINE_STATES = ("unassigned", "assigned")
+
+
+def slot_rows(db: Session, parent: LimsSample, slot: int) -> list[LimsAnalysis]:
+    """Every live row for (parent, slot): parent-tier + all family vials, any
+    keyword in TRIO. Retracted/rejected rows are dead and never block."""
+    return db.execute(
+        select(LimsAnalysis)
+        .outerjoin(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
+        .where(
+            (LimsAnalysis.lims_sample_pk == parent.id) | (LimsSubSample.parent_sample_pk == parent.id),
+            LimsAnalysis.slot == slot,
+            LimsAnalysis.review_state.notin_(("retracted", "rejected")),
+        )
+    ).scalars().all()
+
+
+def is_slot_pristine(db: Session, rows: list[LimsAnalysis]) -> bool:
+    """True iff every row is still untouched: no result, still in an
+    unassigned/assigned review_state, never retested, not itself a retest,
+    and not linked as a promotion source."""
+    from models import LimsAnalysisPromotion
+    if any(r.review_state not in _PRISTINE_STATES or r.result_value is not None
+           or r.retested or r.retest_of_id is not None for r in rows):
+        return False
+    ids = [r.id for r in rows]
+    if not ids:
+        return True
+    linked = db.execute(select(LimsAnalysisPromotion.id).where(
+        LimsAnalysisPromotion.source_analysis_id.in_(ids))).first()
+    return linked is None
+
+
+def restamp_native_slot_rows(db: Session, *, parent: LimsSample, slot: int, res: "SlotResolution") -> int:
+    """Restamp peptide_id/title/reportable_reason on every PRISTINE row of the
+    slot from `res`. Worked rows are left alone — restamping a row that
+    already carries a result would silently relabel history. Returns the
+    count of rows touched."""
+    n = 0
+    for r in slot_rows(db, parent, slot):
+        if r.review_state not in _PRISTINE_STATES or r.result_value is not None:
+            continue
+        r.peptide_id = res.peptide_id
+        r.title = title_for_slot(r.keyword, res)
+        r.reportable_reason = f"analyte_{res.reason}: {res.raw_name}" if res.reason else None
+        n += 1
+    db.flush()
+    return n
+
+
+def relabel_native_slot(db: Session, *, parent: LimsSample, slot: int, new_peptide_id: int,
+                        user_id: Optional[int], reason: Optional[str] = None, commit: bool = True) -> dict:
+    """The ONLY sanctioned way to change a native-born slot's peptide (spec
+    M6). Raises NativeSlotLockedError (409) unless the sample is native-born,
+    every row of the slot is pristine, and the peptide is active and not
+    already on another slot; NativeSlotNotFoundError (404) when the slot is
+    empty. Rewrites analytes[slot-1] (name + peptide_id; declared_quantity is
+    kept), restamps every pristine row, and logs a native_slot_relabeled
+    event."""
+    from models import LimsSubSampleEvent
+    if not is_native_born(parent):
+        raise NativeSlotLockedError("not a native-born sample", code="native_slot_locked")
+    slots = _parse_slots(parent)
+    if slot < 1 or slot > len(slots) or not (slots[slot - 1] or {}).get("name"):
+        raise NativeSlotNotFoundError(f"slot {slot} is empty on {parent.sample_id}")
+    pep = db.get(Peptide, new_peptide_id)
+    if pep is None or not pep.active:
+        raise NativeSlotLockedError("peptide not found or inactive", code="peptide_not_found")
+    for i, s in enumerate(slots, start=1):
+        if i != slot and isinstance(s, dict) and s.get("peptide_id") == new_peptide_id:
+            raise NativeSlotLockedError(f"{pep.name} already occupies slot {i}", code="duplicate_peptide")
+    rows = slot_rows(db, parent, slot)
+    if not is_slot_pristine(db, rows):
+        raise NativeSlotLockedError(f"slot {slot} has bench activity — retest/retract first")
+    old = slots[slot - 1]
+    old_pid = old.get("peptide_id")
+    slots[slot - 1] = {"name": pep.name, "declared_quantity": old.get("declared_quantity"), "peptide_id": pep.id}
+    parent.analytes = json.dumps(slots)
+    if slot == 1:
+        parent.peptide_name = pep.name
+    res = SlotResolution(slot, pep.name, pep.name, pep.id, None)
+    n = restamp_native_slot_rows(db, parent=parent, slot=slot, res=res)
+    db.add(LimsSubSampleEvent(lims_sample_pk=parent.id, event="native_slot_relabeled",
+                              details={"slot": slot, "old_peptide_id": old_pid, "new_peptide_id": pep.id,
+                                       "old_name": old.get("name"), "new_name": pep.name,
+                                       "restamped": n, "reason": reason}, user_id=user_id))
+    if commit:
+        db.commit()
+    return {"slot": slot, "old_peptide_id": old_pid, "new_peptide_id": pep.id, "restamped": n}
