@@ -1,5 +1,7 @@
 """_fetch_mk1_results_for_host attributes native identity rows to the row's
 own peptide (COALESCE) so the variance-set verdict agrees with the COA."""
+import json
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -35,8 +37,8 @@ def test_native_identity_conforms_via_row_peptide(db):
                         peptide_id=pep.id, slot=1))
     db.flush()
     out = _fetch_mk1_results_for_host(db, host_kind="sub_sample", host_pk=sub.id)
-    assert out["HPLC-IDENTITY"]["conforms"] is True
-    assert out["HPLC-IDENTITY"]["kind"] == "categorical"
+    assert out["ANALYTE-1-ID"]["conforms"] is True
+    assert out["ANALYTE-1-ID"]["kind"] == "categorical"
 
 
 def test_native_identity_does_not_conform(db):
@@ -54,7 +56,7 @@ def test_native_identity_does_not_conform(db):
                         peptide_id=pep.id, slot=1))
     db.flush()
     out = _fetch_mk1_results_for_host(db, host_kind="sub_sample", host_pk=sub.id)
-    assert out["HPLC-IDENTITY"]["conforms"] is False
+    assert out["ANALYTE-1-ID"]["conforms"] is False
 
 
 def test_native_identity_name_value_conforms_via_coalesced_row_peptide(db):
@@ -78,7 +80,7 @@ def test_native_identity_name_value_conforms_via_coalesced_row_peptide(db):
                         peptide_id=pep.id, slot=1))
     db.flush()
     out = _fetch_mk1_results_for_host(db, host_kind="sub_sample", host_pk=sub.id)
-    assert out["HPLC-IDENTITY"]["conforms"] is True
+    assert out["ANALYTE-1-ID"]["conforms"] is True
 
 
 def test_native_identity_name_value_without_row_peptide_does_not_conform(db):
@@ -100,4 +102,36 @@ def test_native_identity_name_value_without_row_peptide_does_not_conform(db):
                         peptide_id=None, slot=1))
     db.flush()
     out = _fetch_mk1_results_for_host(db, host_kind="sub_sample", host_pk=sub.id)
-    assert out["HPLC-IDENTITY"]["conforms"] is False
+    assert out["ANALYTE-1-ID"]["conforms"] is False
+
+
+def test_native_blend_results_do_not_collide(db):
+    """A native blend's two occupied slots share the generic HPLC-PURITY
+    keyword -- without the per-slot wire_keyword re-key, slot 2's result
+    would overwrite slot 1's under one raw-keyword dict key (Task 4)."""
+    pep1 = Peptide(name="BPC-157", abbreviation="BPC157", active=True)
+    pep2 = Peptide(name="TB-500", abbreviation="TB500", active=True)
+    svc = AnalysisService(title="HPLC Purity", keyword="HPLC-PURITY", origin="mk1")
+    parent = LimsSample(sample_id="P-5300", external_lims_system="mk1", external_lims_uid=None,
+                        sample_type_title="Peptide")
+    db.add_all([pep1, pep2, svc, parent]); db.flush()
+    parent.analytes = json.dumps([
+        {"name": pep1.name, "peptide_id": pep1.id},
+        {"name": pep2.name, "peptide_id": pep2.id},
+    ])
+    sub = LimsSubSample(parent_sample_pk=parent.id, sample_id="P-5300-S01",
+                        external_lims_uid="mk1://p5300v1", vial_sequence=1)
+    db.add(sub); db.flush()
+    db.add(LimsAnalysis(lims_sub_sample_pk=sub.id, analysis_service_id=svc.id,
+                        keyword="HPLC-PURITY", title="BPC-157 - Purity (HPLC)",
+                        result_value="98", review_state="to_be_verified",
+                        peptide_id=pep1.id, slot=1))
+    db.add(LimsAnalysis(lims_sub_sample_pk=sub.id, analysis_service_id=svc.id,
+                        keyword="HPLC-PURITY", title="TB-500 - Purity (HPLC)",
+                        result_value="96", review_state="to_be_verified",
+                        peptide_id=pep2.id, slot=2))
+    db.flush()
+    out = _fetch_mk1_results_for_host(db, host_kind="sub_sample", host_pk=sub.id)
+    assert out["ANALYTE-1-PUR"]["value"] == "98"
+    assert out["ANALYTE-2-PUR"]["value"] == "96"
+    assert "HPLC-PURITY" not in out

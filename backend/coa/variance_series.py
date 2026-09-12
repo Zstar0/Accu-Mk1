@@ -21,8 +21,11 @@ from typing import Optional
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from lims_analyses.hplc_native import native_category
+from coa.hplc_shim import slot_wires, wire_keyword
+from lims_analyses.hplc_native import AGGREGATES, TRIO, native_category
 from models import AnalysisService, LimsAnalysis, LimsSubSample, Peptide
+
+_NATIVE_KWS = frozenset(TRIO + AGGREGATES)
 
 # Live result states + variance sign-off (mirrors source_resolver, plus the
 # variance_verified terminal state replicates land in).
@@ -332,7 +335,14 @@ def build_variance_analyte_series(db: Session, parent) -> dict:
     results_table row + baked spec. Values are per-vial current results
     (retested=False) in vial-sequence order; COABuilder prepends its own parent
     figure. Generic and analyte-agnostic — no peptide attribution, no
-    purity/quantity/identity categories."""
+    purity/quantity/identity categories.
+
+    Native-born rows carry a shared generic keyword (HPLC-PURITY etc.) across
+    every occupied slot, so a raw keyword key would collapse an N-slot blend's
+    per-peptide series into one. coa.hplc_shim.wire_keyword re-keys those rows
+    per slot (ANALYTE-{n}-PUR/QTY for a blend, HPLC-PUR/PEPT-Total for a single
+    peptide) so they land in the same legacy vocabulary COABuilder already
+    understands; legacy rows keep their raw keyword unchanged."""
     subs = db.execute(
         select(LimsSubSample).where(
             LimsSubSample.parent_sample_pk == parent.id,
@@ -345,6 +355,7 @@ def build_variance_analyte_series(db: Session, parent) -> dict:
     ).scalars().all()
     if not subs:
         return {}
+    n_slots = len(slot_wires(db, parent))
     out: dict[str, dict] = {}
     for sub in subs:
         rows = db.execute(
@@ -367,7 +378,11 @@ def build_variance_analyte_series(db: Session, parent) -> dict:
             .order_by(LimsAnalysis.keyword)
         ).all()
         for la, svc in rows:
-            kw = (la.keyword or svc.keyword or "").strip()
+            raw_kw = (la.keyword or "").strip()
+            if svc.origin == "mk1" and raw_kw.upper() in _NATIVE_KWS:
+                kw = wire_keyword(raw_kw, la.slot, n_slots)
+            else:
+                kw = raw_kw or (svc.keyword or "").strip()
             if not kw:
                 continue
             # Unit locked from the first vial seen for this keyword

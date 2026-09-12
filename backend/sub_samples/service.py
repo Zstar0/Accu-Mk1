@@ -2507,10 +2507,17 @@ def _fetch_mk1_results_for_host(
       - superseded rows: vial hosts select the current row (retested=False);
         sample hosts keep the parent-tier canonical row (retest_of_id IS NULL,
         updated in place via promotion — same convention as source_resolver).
+
+    Native-born rows share a generic keyword (HPLC-PURITY etc.) across every
+    occupied slot, so a raw keyword key would collide an N-slot blend's vial
+    results into one entry. coa.hplc_shim.wire_keyword re-keys those rows per
+    slot (same vocabulary the COA series uses) once the parent's slot count is
+    known; legacy rows keep their raw keyword unchanged.
     """
     from models import LimsAnalysis, LimsAnalysisPromotion, AnalysisService, Peptide
     from sub_samples.variance import identity_conforms
-    from coa.variance_series import _category
+    from coa.variance_series import _category, _NATIVE_KWS
+    from coa.hplc_shim import slot_wires, wire_keyword
 
     base = (
         select(LimsAnalysis, AnalysisService, Peptide)
@@ -2546,6 +2553,19 @@ def _fetch_mk1_results_for_host(
         )
     else:
         return {}
+
+    # Native rows need the parent's occupied-slot count to re-key per slot
+    # (wire_keyword) — resolve it here, one query, before the result loop.
+    if host_kind == "sample":
+        parent = db.execute(select(LimsSample).where(LimsSample.id == host_pk)).scalar_one_or_none()
+    else:
+        parent = db.execute(
+            select(LimsSample)
+            .join(LimsSubSample, LimsSubSample.parent_sample_pk == LimsSample.id)
+            .where(LimsSubSample.id == host_pk)
+        ).scalar_one_or_none()
+    n_slots = len(slot_wires(db, parent)) if parent is not None else 0
+
     triples = db.execute(stmt).all()
     if not triples:
         return {}
@@ -2598,7 +2618,12 @@ def _fetch_mk1_results_for_host(
                 peptide_name=pep.name if pep is not None else None,
                 result_options=options,
             )
-        out[r.keyword] = entry
+        raw_kw = (r.keyword or "").strip()
+        if svc is not None and svc.origin == "mk1" and raw_kw.upper() in _NATIVE_KWS:
+            key = wire_keyword(raw_kw, r.slot, n_slots)
+        else:
+            key = raw_kw
+        out[key] = entry
     return out
 
 
