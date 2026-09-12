@@ -27,6 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from models import AnalysisService, HPLCAnalysis, LimsAnalysis, LimsSample, LimsSubSample, Peptide
+from lims_analyses.hplc_native import native_category
 from lims_analyses.service import apply_transition
 from lims_analyses.state_machine import RESULT_PENDING_STATES
 
@@ -66,6 +67,9 @@ def _category(keyword: Optional[str]) -> Optional[str]:
     # HPLC-ID — never as ANALYTE-N-IDENT — so that form is not a categorized/
     # bridged shape. Its absence here is deliberate, not a gap.
     kw = (keyword or "").upper()
+    native = native_category(kw)
+    if native is not None:
+        return native
     if kw == "HPLC-PUR" or kw.startswith("PUR_") or _ANALYTE_PUR.match(kw):
         return "purity"
     if kw == "HPLC-ID" or kw.startswith("ID_"):

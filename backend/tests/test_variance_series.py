@@ -452,3 +452,13 @@ def test_series_falls_back_to_peptide_name_without_identity_row(db):
     db.commit()
     out = build_variance_replicates(db, parent)
     assert set(out) == {"TB500 (Thymosin Beta 4)"}
+
+
+def test_category_learns_native_trio_and_ignores_aggregates():
+    from coa.variance_series import _category
+    assert _category("HPLC-PURITY") == "purity"
+    assert _category("HPLC-QUANTITY") == "quantity"
+    assert _category("HPLC-IDENTITY") == "identity"
+    assert _category("HPLC-BLEND-PURITY") is None
+    assert _category("HPLC-BLEND-TOTAL") is None
+    assert _category("PEPT-Total") == "quantity"   # legacy single-peptide quantity unchanged

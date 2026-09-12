@@ -33,7 +33,8 @@ def is_identity_keyword(keyword: Optional[str]) -> bool:
     """Mirror of lims_analyses.prep_bridge._category's identity arm — kept
     local so the COA wire never imports the prep bridge."""
     kw = (keyword or "").upper()
-    return kw == "HPLC-ID" or kw.startswith("ID_")
+    from lims_analyses.hplc_native import native_category
+    return native_category(kw) == "identity" or kw == "HPLC-ID" or kw.startswith("ID_")
 
 
 def _title_name(title: Optional[str]) -> Optional[str]:

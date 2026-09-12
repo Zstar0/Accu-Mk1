@@ -38,7 +38,11 @@ SERIES_START = date(2026, 2, 1)
 NOTES = {"jan_excluded": True, "vials_from": "2026-06", "bench_from": "2026-03"}
 
 HPLC_CATEGORIES = frozenset({"HPLC", "Peptide Identity", "Peptide Analysis"})
-HPLC_KEYWORDS = frozenset({"HPLC-PUR", "PEPT-Total", "HPLC-ID", "BLEND-PUR"})
+HPLC_KEYWORDS = frozenset({
+    "HPLC-PUR", "PEPT-Total", "HPLC-ID", "BLEND-PUR",
+    # HPLC native-born trio + aggregates (spec 2026-09-10)
+    "HPLC-IDENTITY", "HPLC-PURITY", "HPLC-QUANTITY", "HPLC-BLEND-PURITY", "HPLC-BLEND-TOTAL",
+})
 HPLC_PREFIXES = ("ID_", "ANALYTE-", "PUR_", "QTY_")
 BACW_KEYWORDS = frozenset({"Benzyl_Alcohol_Assay", "PH-DETERM", "FILL-NET-CONTENT"})
 # Legacy SENAITE keyword + the catalog-arc forms live in prod since 2026-09-01.

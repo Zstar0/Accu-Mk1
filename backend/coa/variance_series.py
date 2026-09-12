@@ -21,6 +21,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from lims_analyses.hplc_native import native_category
 from models import AnalysisService, LimsAnalysis, LimsSubSample, Peptide
 
 # Live result states + variance sign-off (mirrors source_resolver, plus the
@@ -50,6 +51,9 @@ def _category(keyword: Optional[str]) -> Optional[str]:
     routing behavior on the shared function.
     """
     kw = (keyword or "").upper()
+    native = native_category(kw)
+    if native is not None:
+        return native
     if kw == "HPLC-PUR" or kw.startswith("PUR_") or _ANALYTE_PUR.match(kw):
         return "purity"
     if kw == "PEPT-TOTAL" or kw.startswith("QTY_") or _ANALYTE_QTY.match(kw):

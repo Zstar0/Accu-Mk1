@@ -58,6 +58,8 @@ def test_identity_keyword_classifier():
     assert not is_identity_keyword("HPLC-PUR")
     assert not is_identity_keyword("PEPT-Total")
     assert not is_identity_keyword(None)
+    assert is_identity_keyword("HPLC-IDENTITY")
+    assert not is_identity_keyword("HPLC-PURITY")
 
 
 def test_candidate_names_order_and_dedupe(db, p1986):
