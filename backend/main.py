@@ -17477,6 +17477,16 @@ async def receive_senaite_sample(
             senaite_response={"steps_done": []},
         )
 
+    # M8 flush point: a native receive queued a status relay to IS
+    # (workflow.engine._write_status_if_authoritative, via drive_sample_
+    # touchpoint above) — drain it now the native phase has committed.
+    # Never raises; runs off the event loop like the phase itself.
+    try:
+        from workflow.status_relay import flush_pending_relays
+        await run_in_threadpool(flush_pending_relays)
+    except Exception:
+        logger.exception("status_relay.flush_failed after receive (never-raise)")
+
     steps_done = list(native["steps"])
 
     if native["senaite_born"] and SENAITE_URL is not None:
@@ -18432,6 +18442,15 @@ def _after_publish_native(db, *, sample_id: str, pre_publish_status, actor_user_
     except Exception:
         logger.exception("after-publish native step failed (never-raise) %s", sample_id)
         db.rollback()
+    # M8 flush point: publish queued a status relay to IS above (engine's
+    # drive_sample_touchpoint -> _write_status_if_authoritative). This
+    # function already runs off the event loop (threadpool), so drain
+    # synchronously; never raises.
+    try:
+        from workflow.status_relay import flush_pending_relays
+        flush_pending_relays()
+    except Exception:
+        logger.exception("status_relay.flush_failed after publish (never-raise) %s", sample_id)
 
 
 def _record_sample_transition_bg(**kwargs) -> None:
