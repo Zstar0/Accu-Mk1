@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 # MUST stay identical to coabuilder src/coabuilder_core/logic.py:5
@@ -102,15 +102,19 @@ def sample_peptide_id(db: Session, parent_pk: int) -> Optional[int]:
     'ordered' placeholders and 'shadow' SENAITE mirror rows — stays IN the
     anchor query; over-filtering would return None for samples whose anchor
     is in fact knowable, which is exactly the coarsening R4 wants avoided
-    when it isn't necessary."""
+    when it isn't necessary. The join is always the `AnalysisService.peptide_id`
+    FK, COALESCEd behind the row's own `LimsAnalysis.peptide_id` for
+    native-born rows (spec 2026-09-10) — never a name string."""
     from models import AnalysisService, LimsAnalysis, LimsSubSample
 
+    anchor = func.coalesce(LimsAnalysis.peptide_id, AnalysisService.peptide_id)
     ids = db.execute(
-        select(AnalysisService.peptide_id)
+        select(anchor)
+        .select_from(AnalysisService)
         .join(LimsAnalysis, LimsAnalysis.analysis_service_id == AnalysisService.id)
         .outerjoin(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
         .where(
-            AnalysisService.peptide_id.is_not(None),
+            anchor.is_not(None),
             LimsAnalysis.review_state != "retracted",
             (LimsAnalysis.lims_sample_pk == parent_pk)
             | (LimsSubSample.parent_sample_pk == parent_pk),

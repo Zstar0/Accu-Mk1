@@ -210,3 +210,21 @@ def test_seed_refuses_when_catalog_incomplete(db):
     v = _vial(db, p)
     assert seed_native_hplc_rows(db, sub_sample=v, parent=p, existing_keys=set(),
                                  existing_service_ids=set(), created_by_user_id=None, commit=False) == []
+
+
+from lims_analyses.hplc_native import native_category, KW_IDENTITY, KW_PURITY, KW_QUANTITY, KW_BLEND_PURITY, KW_BLEND_TOTAL
+
+
+def test_native_category_trio_and_aggregates():
+    assert native_category(KW_IDENTITY) == "identity"
+    assert native_category(KW_PURITY) == "purity"
+    assert native_category(KW_QUANTITY) == "quantity"
+    assert native_category("hplc-purity") == "purity"          # case-insensitive
+    # Aggregates are not a bridged/stamped category (mirrors legacy BLEND-PUR /
+    # PEPT-Total handling: owned by bridge_blend_aggregates, never a direct target).
+    assert native_category(KW_BLEND_PURITY) is None
+    assert native_category(KW_BLEND_TOTAL) is None
+    # Legacy keywords are NOT this helper's business.
+    assert native_category("HPLC-PUR") is None
+    assert native_category("ID_BPC157") is None
+    assert native_category(None) is None

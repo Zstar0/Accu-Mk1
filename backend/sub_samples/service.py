@@ -2506,7 +2506,9 @@ def _fetch_mk1_results_for_host(
     base = (
         select(LimsAnalysis, AnalysisService, Peptide)
         .outerjoin(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
-        .outerjoin(Peptide, Peptide.id == AnalysisService.peptide_id)
+        # Native-born rows carry peptide_id on the ROW (generic service has
+        # none); legacy rows carry it on the per-substance service.
+        .outerjoin(Peptide, Peptide.id == func.coalesce(LimsAnalysis.peptide_id, AnalysisService.peptide_id))
     )
     if host_kind == "sample":
         stmt = base.where(

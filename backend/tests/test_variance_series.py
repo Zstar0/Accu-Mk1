@@ -9,7 +9,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from database import Base
-from coa.variance_series import build_variance_replicates
+from coa.variance_series import build_variance_replicates, build_vial_figures
 from models import (
     AnalysisService,
     LimsAnalysis,
@@ -452,3 +452,58 @@ def test_series_falls_back_to_peptide_name_without_identity_row(db):
     db.commit()
     out = build_variance_replicates(db, parent)
     assert set(out) == {"TB500 (Thymosin Beta 4)"}
+
+
+def test_category_learns_native_trio_and_ignores_aggregates():
+    from coa.variance_series import _category
+    assert _category("HPLC-PURITY") == "purity"
+    assert _category("HPLC-QUANTITY") == "quantity"
+    assert _category("HPLC-IDENTITY") == "identity"
+    assert _category("HPLC-BLEND-PURITY") is None
+    assert _category("HPLC-BLEND-TOTAL") is None
+    assert _category("PEPT-Total") == "quantity"   # legacy single-peptide quantity unchanged
+
+
+def _native_row(db, sub, svc, value, *, peptide_id, slot, title, state="variance_verified"):
+    db.add(LimsAnalysis(
+        lims_sub_sample_pk=sub.id, analysis_service_id=svc.id,
+        keyword=svc.keyword, title=title, result_value=value,
+        result_unit="mg" if svc.keyword == "HPLC-QUANTITY" else None,
+        review_state=state, reportable=True, peptide_id=peptide_id, slot=slot,
+    ))
+    db.flush()
+
+
+@pytest.fixture
+def native_world(db):
+    """Native-born single-peptide parent with core + 2 variance vials on the generic trio."""
+    pep = Peptide(name="BPC-157", abbreviation="BPC157", active=True)
+    db.add(pep); db.flush()
+    pur = _svc(db, "HPLC-PURITY"); qty = _svc(db, "HPLC-QUANTITY"); idn = _svc(db, "HPLC-IDENTITY")
+    pur.variance_capable = True; qty.variance_capable = True; db.flush()
+    parent = LimsSample(sample_id="P-5100", external_lims_system="mk1", external_lims_uid=None,
+                        sample_type_title="Peptide", container_mode=True)
+    db.add(parent); db.flush()
+    for seq, kind in ((1, "core"), (2, "variance"), (3, "variance")):
+        sub = LimsSubSample(parent_sample_pk=parent.id, sample_id=f"P-5100-S0{seq}",
+                            external_lims_uid=f"mk1://p5100v{seq}", vial_sequence=seq,
+                            assignment_kind=kind, in_variance_set=True)
+        db.add(sub); db.flush()
+        _native_row(db, sub, pur, f"9{seq}", peptide_id=pep.id, slot=1, title="BPC-157 - Purity (HPLC)")
+        _native_row(db, sub, qty, f"{seq}.5", peptide_id=pep.id, slot=1, title="BPC-157 - Quantity (HPLC)")
+        _native_row(db, sub, idn, "Conforms", peptide_id=pep.id, slot=1, title="BPC-157 - Identity (HPLC)")
+    return parent
+
+
+def test_native_rows_attribute_to_their_own_peptide(native_world, db):
+    out = build_variance_replicates(db, native_world)
+    assert list(out) == ["BPC-157"]                       # keyed by the stamped identity title
+    recs = out["BPC-157"]
+    assert [r["vial_sequence"] for r in recs] == [1, 2, 3]
+    assert recs[1]["PURITY"].startswith("92") and "QUANTITY" in recs[1] and recs[1]["IDENTITY"]
+
+
+def test_native_vial_figures_carry_peptide(native_world, db):
+    sub = db.execute(select(LimsSubSample).where(LimsSubSample.vial_sequence == 2)).scalar_one()
+    fig = build_vial_figures(db, sub)
+    assert fig and "BPC-157" in fig

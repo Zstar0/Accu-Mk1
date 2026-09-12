@@ -88,7 +88,7 @@ const DEAD_STATES = new Set(['retracted', 'rejected'])
  *  keyword ID_*, or a per-peptide title ending in "Identity (HPLC)". */
 export function isIdentityAnalysis(a: { keyword?: string | null; title?: string | null }): boolean {
   const kw = (a.keyword ?? '').toUpperCase()
-  if (kw === 'HPLC-ID' || kw.startsWith('ID_')) return true
+  if (kw === 'HPLC-ID' || kw === 'HPLC-IDENTITY' || kw.startsWith('ID_')) return true
   return /\bidentity\s*\(hplc\)/i.test(a.title ?? '')
 }
 

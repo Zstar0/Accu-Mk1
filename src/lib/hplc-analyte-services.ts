@@ -8,16 +8,18 @@
 // Aggregate/generic HPLC analyte services (exact keywords from the catalog).
 // Listed explicitly rather than wildcarding HPLC-*/BLEND-* so a future non-
 // analyte HPLC/blend service isn't hidden by accident.
-const IDENTITY_EXACT = new Set(['HPLC-ID', 'BLEND-IDENT'])
-const PURITY_EXACT = new Set(['HPLC-PUR', 'BLEND-PUR'])
-const QUANTITY_EXACT = new Set(['PEPT-TOTAL'])
+const IDENTITY_EXACT = new Set(['HPLC-ID', 'BLEND-IDENT', 'HPLC-IDENTITY'])
+const PURITY_EXACT = new Set(['HPLC-PUR', 'BLEND-PUR', 'HPLC-PURITY', 'HPLC-BLEND-PURITY'])
+const QUANTITY_EXACT = new Set(['PEPT-TOTAL', 'HPLC-QUANTITY', 'HPLC-BLEND-TOTAL'])
 
 const PER_ANALYTE = /^ANALYTE-[1-4]-(IDENT|PUR|QTY)$/
 
 /** True for the HPLC analyte-measurement family: identity (ID_*, HPLC-ID,
- *  BLEND-IDENT, ANALYTE-N-IDENT), purity (PUR_*, HPLC-PUR, BLEND-PUR,
- *  ANALYTE-N-PUR) and quantity (QTY_*, PEPT-Total, ANALYTE-N-QTY). Micro
- *  (ENDO-*, STER-*, PCR-*), moisture (KF) and everything else → false. */
+ *  BLEND-IDENT, HPLC-IDENTITY, ANALYTE-N-IDENT), purity (PUR_*, HPLC-PUR, BLEND-PUR,
+ *  HPLC-PURITY, HPLC-BLEND-PURITY, ANALYTE-N-PUR) and quantity (QTY_*, PEPT-Total,
+ *  HPLC-QUANTITY, HPLC-BLEND-TOTAL, ANALYTE-N-QTY). Includes native-born trio
+ *  HPLC-IDENTITY/PURITY/QUANTITY + HPLC-BLEND-PURITY/TOTAL (spec 2026-09-10).
+ *  Micro (ENDO-*, STER-*, PCR-*), moisture (KF) and everything else → false. */
 export function isHplcAnalyteService(keyword: string | null | undefined): boolean {
   if (!keyword) return false
   const k = keyword.toUpperCase()

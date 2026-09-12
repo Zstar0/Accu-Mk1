@@ -44,6 +44,24 @@ TRIO = (KW_IDENTITY, KW_PURITY, KW_QUANTITY)
 AGGREGATES = (KW_BLEND_PURITY, KW_BLEND_TOTAL)
 assert set(TRIO + AGGREGATES) == {kw for kw, *_ in HPLC_NATIVE_SERVICES}
 
+_NATIVE_CATEGORY = {
+    KW_IDENTITY: "identity",
+    KW_PURITY: "purity",
+    KW_QUANTITY: "quantity",
+}
+
+
+def native_category(keyword: Optional[str]) -> Optional[str]:
+    """Result category of a NATIVE trio keyword; None for everything else.
+
+    The single source every `_category` mirror (prep_bridge, coa.variance_series,
+    coa.identity_verdict) consults first, so the three cannot drift on the
+    native keywords. Aggregates (HPLC-BLEND-*) are deliberately None: like
+    legacy BLEND-PUR / PEPT-Total they are owned by bridge_blend_aggregates
+    and are never a direct bridge/stamp target nor a per-peptide series row.
+    """
+    return _NATIVE_CATEGORY.get((keyword or "").upper())
+
 # Same rule sub_samples/senaite.py uses to strip SENAITE's identity-service
 # title form ("BPC-157 - Identity (HPLC)") back to the bare label.
 _IDENTITY_SUFFIX_RE = re.compile(r"\s*-\s*identity\s*\(hplc\)\s*$", re.I)
