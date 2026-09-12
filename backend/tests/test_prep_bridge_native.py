@@ -240,3 +240,73 @@ def test_native_rerun_does_not_touch_already_bridged_rows(db_session):
     assert bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=b, peptide=pep, user_id=1) == []
     db.refresh(pur)
     assert pur.result_value == "98.5"
+
+
+def _fill(db, row, value):
+    row.result_value = value
+    row.review_state = "to_be_verified"
+    db.flush()
+
+
+def test_native_blend_aggregates_wait_for_every_slot(db_session):
+    db = db_session
+    services = _catalog(db)
+    bpc = _peptide(db, "BPC-157", "BPC157")
+    tb = _peptide(db, "TB-500", "TB500")
+    _, vial = _native_vial(db, sample_id="PB-1002", sample_type="Peptide Blend")
+    _, pur1, qty1 = _trio(db, vial, services, slot=1, peptide=bpc, name="BPC-157")
+    _, pur2, qty2 = _trio(db, vial, services, slot=2, peptide=tb, name="TB-500")
+    bp, bt = _aggregates(db, vial, services)
+    _fill(db, pur1, "98"); _fill(db, qty1, "4")
+    assert bridge_blend_aggregates(db, lims_sub_sample_pk=vial.id, user_id=1) == []   # slot 2 pending
+    _fill(db, pur2, "96"); _fill(db, qty2, "1")
+    written = bridge_blend_aggregates(db, lims_sub_sample_pk=vial.id, user_id=1)
+    assert set(written) == {bp.id, bt.id}
+    db.refresh(bp); db.refresh(bt)
+    assert bt.result_value == "5"                       # 4 + 1
+    assert bp.result_value == "97.6"                    # (4*98 + 1*96) / 5
+    assert bp.review_state == "to_be_verified"
+
+
+def test_native_blend_aggregates_idempotent(db_session):
+    db = db_session
+    services = _catalog(db)
+    bpc = _peptide(db, "BPC-157", "BPC157")
+    tb = _peptide(db, "TB-500", "TB500")
+    _, vial = _native_vial(db, sample_id="PB-1003", sample_type="Peptide Blend")
+    _, pur1, qty1 = _trio(db, vial, services, slot=1, peptide=bpc, name="BPC-157")
+    _, pur2, qty2 = _trio(db, vial, services, slot=2, peptide=tb, name="TB-500")
+    _aggregates(db, vial, services)
+    for r, v in ((pur1, "98"), (qty1, "4"), (pur2, "96"), (qty2, "1")):
+        _fill(db, r, v)
+    assert len(bridge_blend_aggregates(db, lims_sub_sample_pk=vial.id, user_id=1)) == 2
+    assert bridge_blend_aggregates(db, lims_sub_sample_pk=vial.id, user_id=1) == []
+
+
+def test_native_single_vial_has_no_aggregates(db_session):
+    db = db_session
+    services = _catalog(db)
+    pep = _peptide(db, "BPC-157", "BPC157")
+    _, vial = _native_vial(db)
+    _, pur, qty = _trio(db, vial, services, slot=1, peptide=pep, name="BPC-157")
+    _fill(db, pur, "98"); _fill(db, qty, "4")
+    assert bridge_blend_aggregates(db, lims_sub_sample_pk=vial.id, user_id=1) == []
+
+
+def test_native_blend_end_to_end_via_process_hplc_order(db_session):
+    """Two Process-HPLC runs (one per slot) then aggregates — the main.py
+    /hplc/analyze call order: bridge_prep_result_to_vial, then bridge_blend_aggregates."""
+    db = db_session
+    services = _catalog(db)
+    bpc = _peptide(db, "BPC-157", "BPC157")
+    tb = _peptide(db, "TB-500", "TB500")
+    _, vial = _native_vial(db, sample_id="PB-1004", sample_type="Peptide Blend")
+    _trio(db, vial, services, slot=1, peptide=bpc, name="BPC-157")
+    _trio(db, vial, services, slot=2, peptide=tb, name="TB-500")
+    bp, bt = _aggregates(db, vial, services)
+    a1 = _hplc(db, bpc, purity=98.0, conforms=True, qty=4.0)
+    bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a1, peptide=bpc, user_id=1)
+    assert bridge_blend_aggregates(db, lims_sub_sample_pk=vial.id, user_id=1) == []
+    a2 = _hplc(db, tb, purity=96.0, conforms=True, qty=1.0)
+    bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a2, peptide=tb, user_id=1)
+    assert set(bridge_blend_aggregates(db, lims_sub_sample_pk=vial.id, user_id=1)) == {bp.id, bt.id}

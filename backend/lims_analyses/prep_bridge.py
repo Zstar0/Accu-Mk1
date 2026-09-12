@@ -27,7 +27,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from models import AnalysisService, HPLCAnalysis, LimsAnalysis, LimsSample, LimsSubSample, Peptide
-from lims_analyses.hplc_native import native_category, TRIO
+from lims_analyses.hplc_native import (
+    native_category, TRIO, KW_PURITY, KW_QUANTITY, KW_BLEND_PURITY, KW_BLEND_TOTAL,
+)
 from lims_analyses.service import apply_transition
 from lims_analyses.state_machine import RESULT_PENDING_STATES
 
@@ -163,6 +165,8 @@ def _pick_target(category: str, candidates: list[LimsAnalysis], *, slot: Optiona
         # Native-born vial: the ONLY tier is (keyword in TRIO, row.peptide_id ==
         # prep peptide). A NULL-peptide row (analyte_unresolved) never matches;
         # 0 or 2+ matches never guess; legacy tiers are never consulted.
+        # Relies on the caller passing only result-pending candidates (already-
+        # bridged rows must be filtered out before `candidates` reaches here).
         if native_peptide_id is None:
             return None
         m = [
@@ -266,6 +270,55 @@ def bridge_blend_aggregates(
             LimsAnalysis.lims_sub_sample_pk == lims_sub_sample_pk,
         )
     ).scalars().all()
+
+    # ---- Native-born blend (spec 2026-09-10 M5): aggregates keyed on the
+    # HPLC-BLEND-PURITY row; components are the per-slot HPLC-PURITY /
+    # HPLC-QUANTITY rows paired by `slot`. Same completeness + formulas as
+    # the legacy branch below; only the pairing key differs.
+    by_kw: dict[str, list[LimsAnalysis]] = {}
+    for r in rows:
+        by_kw.setdefault((r.keyword or "").upper(), []).append(r)
+    native_bp = by_kw.get(KW_BLEND_PURITY, [])
+    if native_bp:
+        if len(native_bp) != 1:
+            logger.warning("prep_bridge: %d %s rows on vial=%s — skipping aggregates",
+                           len(native_bp), KW_BLEND_PURITY, lims_sub_sample_pk)
+            return []
+        blend_pur = native_bp[0]
+        blend_total = next(iter(by_kw.get(KW_BLEND_TOTAL, [])), None)
+        comps: dict[int, dict[str, Optional[float]]] = {}
+        comp_rows: list[LimsAnalysis] = []
+        for r in by_kw.get(KW_PURITY, []) + by_kw.get(KW_QUANTITY, []):
+            if r.slot is None:
+                continue
+            comp_rows.append(r)
+            key = "pur" if (r.keyword or "").upper() == KW_PURITY else "qty"
+            comps.setdefault(r.slot, {})[key] = _parse_float(r.result_value)
+        if not comp_rows or any(r.review_state in RESULT_PENDING_STATES for r in comp_rows):
+            return []
+        total_qty = sum(c["qty"] for c in comps.values() if c.get("qty") is not None)
+        weighted = sum(
+            c["qty"] * c["pur"]
+            for c in comps.values()
+            if c.get("qty") is not None and c.get("pur") is not None
+        )
+        written: list[int] = []
+        if blend_total is not None and blend_total.review_state in RESULT_PENDING_STATES:
+            val = _fmt_num(total_qty)
+            if val is not None:
+                apply_transition(db, analysis_id=blend_total.id, kind="submit", result_value=val,
+                                 reason="auto: blend total quantity (Σ component quantity)",
+                                 user_id=user_id, processed_by_user_id=user_id)
+                written.append(blend_total.id)
+        if blend_pur.review_state in RESULT_PENDING_STATES and total_qty > 0:
+            val = _fmt_num(weighted / total_qty)
+            if val is not None:
+                apply_transition(db, analysis_id=blend_pur.id, kind="submit", result_value=val,
+                                 reason="auto: blend purity (mass-weighted component mean)",
+                                 user_id=user_id, processed_by_user_id=user_id)
+                written.append(blend_pur.id)
+        return written
+    # ---- Legacy (SENAITE-born) blend below: unchanged.
 
     blend_pur = next((r for r in rows if (r.keyword or "").upper() == "BLEND-PUR"), None)
     pept_total = next((r for r in rows if (r.keyword or "").upper() == "PEPT-TOTAL"), None)
