@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- Variance COA silently rendered as a plain certificate when the sample's identity service has no peptide link (`analysis_services.peptide_id` NULL — P-2627 on `ID_HGHSomatropin`, flag 2957). The per-vial series and per-vial COA figures named a vial only through the linked `Peptide` row, so every row was dropped, the primary shipped without the variance page and no Regular child was emitted. Identity rows are now named by their service title prefix ("HGH (Somatropin)" from "HGH (Somatropin) - Identity (HPLC)") when the service is unlinked — the same key COABuilder derives — so the series survives a catalog row the reconciler could not link (15 such `ID_` services exist on prod).
+
 ## v1.21.0 — 2026-09-11
 
 ### Added

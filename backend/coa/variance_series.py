@@ -112,6 +112,27 @@ def _key_for(pep, keys: dict) -> Optional[str]:
     return keys.get(pep.id) or pep.name
 
 
+def _unlinked_identity_name(la, svc, pep) -> Optional[str]:
+    """Series key for an identity row whose service has NO peptide link
+    (analysis_services.peptide_id NULL). COABuilder keys the series by this
+    same title prefix, so the Peptide row is not needed to name the vial.
+    Regression P-2627: ID_HGHSomatropin (svc 272) was minted with peptide_id
+    and peptide_name NULL, the reconciler never linked it, every row joined
+    to Peptide=None and the series came back {} — plain COA, no log line."""
+    if pep is not None or _category(la.keyword) != "identity":
+        return None
+    return _identity_title_name(getattr(svc, "title", None)) or _identity_title_name(la.title)
+
+
+def _vial_names(rows) -> tuple[dict, set]:
+    """(series keys, the set of names this vial measures) — linked peptides
+    plus any unlinked identity service named by its title prefix."""
+    keys = _series_keys(rows)
+    names = {_key_for(pep, keys) for la, svc, pep in rows if pep is not None}
+    names |= {n for n in (_unlinked_identity_name(*r) for r in rows) if n}
+    return keys, names
+
+
 # Real per-analyte MASS units a parent quantity row may carry. mg/mL — the
 # PEPT-Total blend *concentration* — is deliberately excluded: the variance
 # per-vial series reports each analyte's measured mass, so a single-peptide
@@ -199,8 +220,9 @@ def build_variance_replicates(db: Session, parent) -> dict:
         # rows are too). Generic services (HPLC-PUR, PEPT-Total, HPLC-ID) carry
         # no peptide_id, so they can only be attributed when the vial measures a
         # single peptide — which is the production single-peptide case.
-        keys = _series_keys(rows)
-        vial_peptides = {_key_for(pep, keys) for la, svc, pep in rows if pep is not None}
+        # An identity row whose SERVICE has no peptide link is named by its title
+        # prefix (P-2627) — same key COABuilder derives.
+        keys, vial_peptides = _vial_names(rows)
         sole_peptide = next(iter(vial_peptides)) if len(vial_peptides) == 1 else None
 
         # Group this vial's rows by peptide → record.
@@ -213,7 +235,7 @@ def build_variance_replicates(db: Session, parent) -> dict:
             # Peptide-specific row → its own peptide; generic row → the vial's
             # sole peptide (skip a generic row on a multi-peptide vial, where it
             # can't be disambiguated).
-            pname = _key_for(pep, keys) if pep is not None else sole_peptide
+            pname = _key_for(pep, keys) if pep is not None else (_unlinked_identity_name(la, svc, pep) or sole_peptide)
             if pname is None:
                 continue
             rec = per_peptide.setdefault(pname, {"vial_sequence": sub.vial_sequence})
@@ -248,8 +270,7 @@ def build_vial_figures(db: Session, sub: LimsSubSample, qty_unit: str = "mg") ->
             LimsAnalysis.result_value != "",
         )
     ).all()
-    keys = _series_keys(rows)
-    vial_peptides = {_key_for(pep, keys) for la, svc, pep in rows if pep is not None}
+    keys, vial_peptides = _vial_names(rows)
     sole_peptide = next(iter(vial_peptides)) if len(vial_peptides) == 1 else None
     per_peptide: dict[str, dict] = {}
     for la, svc, pep in rows:
@@ -257,7 +278,7 @@ def build_vial_figures(db: Session, sub: LimsSubSample, qty_unit: str = "mg") ->
         key = _CATEGORY_TO_KEY.get(category or "")
         if not key:
             continue
-        pname = _key_for(pep, keys) if pep is not None else sole_peptide
+        pname = _key_for(pep, keys) if pep is not None else (_unlinked_identity_name(la, svc, pep) or sole_peptide)
         if pname is None:
             continue
         rec = per_peptide.setdefault(pname, {})

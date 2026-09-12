@@ -452,3 +452,64 @@ def test_series_falls_back_to_peptide_name_without_identity_row(db):
     db.commit()
     out = build_variance_replicates(db, parent)
     assert set(out) == {"TB500 (Thymosin Beta 4)"}
+
+
+# ─── Unlinked identity service (analysis_services.peptide_id NULL) ──────────────
+# Regression P-2627 (2026-09-11, flag 2957 "COA does not show variance testing"):
+# the sample's rows all resolved to ID_HGHSomatropin (service 272), a catalog row
+# with peptide_id NULL and peptide_name NULL, so the reconciler never linked it
+# and the Peptide outer-join came back None for every row. build_variance_replicates
+# needs at least one peptide-linked row to name the vial, so it returned {} and
+# the primary COA rendered as a plain certificate — no variance page, no Regular
+# child, no log line. COABuilder keys the series by the identity title prefix
+# ("HGH (Somatropin)"), which is fully available without the Peptide row.
+
+
+@pytest.fixture
+def p2627_world(db):
+    """Unlinked identity service + generic purity/quantity, core (promoted) +
+    one variance vial (variance_verified). No Peptide row is linked anywhere."""
+    def svc(title, keyword):
+        s = AnalysisService(title=title, keyword=keyword, peptide_id=None)
+        db.add(s); db.flush()
+        return s
+    pur = svc("Peptide Purity (HPLC)", "HPLC-PUR")
+    qty = svc("Peptide Total Quantity", "PEPT-Total")
+    idsvc = svc("HGH (Somatropin) - Identity (HPLC)", "ID_HGHSomatropin")
+    parent = LimsSample(sample_id="P-2627", external_lims_uid="uid-p2627", container_mode=True)
+    db.add(parent); db.flush()
+    subs = {}
+    for seq, kind, state in ((1, "core", "promoted"), (2, "variance", "variance_verified")):
+        sub = LimsSubSample(
+            parent_sample_pk=parent.id, external_lims_uid=f"mk1://p2627-{seq}",
+            sample_id=f"P-2627-S{seq:02d}", vial_sequence=seq,
+            assignment_role="hplc", assignment_kind=kind,
+        )
+        db.add(sub); db.flush()
+        subs[seq] = sub
+        for s, val in ((pur, "0"), (qty, "0"), (idsvc, "Does_Not_Conform")):
+            db.add(LimsAnalysis(
+                lims_sub_sample_pk=sub.id, analysis_service_id=s.id,
+                keyword=s.keyword, title=s.title, result_value=val,
+                review_state=state, reportable=True,
+            ))
+        db.flush()
+    db.commit()
+    return parent, subs
+
+
+def test_unlinked_identity_service_still_names_the_series(p2627_world, db):
+    parent, _ = p2627_world
+    out = build_variance_replicates(db, parent)
+    assert list(out) == ["HGH (Somatropin)"], out
+    recs = out["HGH (Somatropin)"]
+    assert [r["vial_sequence"] for r in recs] == [1, 2]
+    for r in recs:
+        assert r["PURITY"] == "0%" and r["QUANTITY"] == "0 mg" and r["IDENTITY"] == "Does_Not_Conform"
+
+
+def test_unlinked_identity_service_still_names_vial_figures(p2627_world, db):
+    from coa.variance_series import build_vial_figures
+    _, subs = p2627_world
+    figs = build_vial_figures(db, subs[2])
+    assert figs == {"HGH (Somatropin)": {"PURITY": "0%", "QUANTITY": "0 mg", "IDENTITY": "Does_Not_Conform"}}
