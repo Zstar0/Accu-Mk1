@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections import deque
 from datetime import datetime
 from typing import Optional
 
@@ -54,11 +55,13 @@ RELAYED_SLUGS = {
     "published": "publish",
 }
 
-# ponytail: module-level in-process list — a single Mk1 worker process only.
+# ponytail: module-level in-process queue — a single Mk1 worker process only.
 # Fine for today's single-uvicorn-worker deploy; upgrade to a real queue
 # (DB-backed outbox or broker) if Mk1 ever runs multiple worker processes,
 # since a flush point in worker A would never drain a queue point in worker B.
-pending_relays: list[tuple[str, str]] = []
+# deque (not list): two receives can flush concurrently from different
+# threadpool threads, and `popleft()` is what keeps the drain race-safe.
+pending_relays: deque[tuple[str, str]] = deque()
 
 
 def queue_relay(sample_id: str, transition: str) -> None:
@@ -67,10 +70,19 @@ def queue_relay(sample_id: str, transition: str) -> None:
 
 def flush_pending_relays() -> list[str]:
     """Drain `pending_relays`, relaying each in its own session. Never
-    raises — a relay failure becomes a "failed" outcome, not an exception."""
+    raises — a relay failure becomes a "failed" outcome, not an exception.
+
+    Two flush points can run concurrently (e.g. two receives in different
+    threadpool threads), so the truthiness check and the pop are not atomic
+    across threads — `popleft()` inside the try (not the `while` condition)
+    is what makes an empty-queue race a clean early exit instead of an
+    IndexError."""
     outcomes: list[str] = []
-    while pending_relays:
-        sample_id, transition = pending_relays.pop(0)
+    while True:
+        try:
+            sample_id, transition = pending_relays.popleft()
+        except IndexError:
+            break
         try:
             from database import SessionLocal
             db = SessionLocal()
@@ -97,6 +109,8 @@ def event_id_for(db: Session, sample: LimsSample, transition: str) -> str:
 
 
 def build_relay_body(db: Session, sample: LimsSample, transition: str) -> dict:
+    # occurred_at is the flush-time UTC wall clock, not the ledger row's own
+    # occurred_at — the relay may run well after the transition was written.
     return {
         "transition": transition,
         "event_id": event_id_for(db, sample, transition),

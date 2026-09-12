@@ -159,7 +159,7 @@ def test_engine_hook_queues_for_native_under_mk1_authority(db_session):
             db_session, sample, "verified", verb="verify",
             actor_user_id=None, from_status="to_be_verified")
     assert wrote is True
-    assert status_relay.pending_relays == [(sample.sample_id, "verify")]
+    assert list(status_relay.pending_relays) == [(sample.sample_id, "verify")]
     ev = db_session.execute(select(LimsSubSampleEvent)).scalars().one()
     assert ev.event == "native_status_relay_pending"
     assert ev.details == {"transition": "verify"}
@@ -173,7 +173,7 @@ def test_engine_hook_nothing_for_legacy_sample(db_session):
             db_session, sample, "verified", verb="verify",
             actor_user_id=None, from_status="to_be_verified")
     assert wrote is True
-    assert status_relay.pending_relays == []
+    assert list(status_relay.pending_relays) == []
     assert db_session.execute(select(LimsSubSampleEvent)).scalars().all() == []
 
 
@@ -189,4 +189,35 @@ def test_flush_pending_relays_drains_queue(db_session, monkeypatch):
     with patch("httpx.Client.post", return_value=_Resp({"status": "ok"})):
         outcomes = flush_pending_relays()
     assert outcomes == ["sent"]
-    assert status_relay.pending_relays == []
+    assert list(status_relay.pending_relays) == []
+
+
+class _RacyQueue:
+    """Stands in for the module's deque: the first popleft() raises
+    IndexError as if a concurrent flush already emptied the real queue
+    between the caller's truthiness check (there is none now — the fix
+    removed it) and its own pop — proving flush_pending_relays() treats
+    an empty-queue race as a clean exit, not a crash."""
+
+    def __init__(self, items):
+        self._items = list(items)
+        self._first_call = True
+
+    def popleft(self):
+        if self._first_call:
+            self._first_call = False
+            raise IndexError("simulated concurrent drain")
+        if not self._items:
+            raise IndexError("pop from an empty deque")
+        return self._items.pop(0)
+
+
+def test_flush_pending_relays_never_raises_on_concurrent_drain(monkeypatch):
+    """Fix round 1: two flush_pending_relays() calls in different threadpool
+    threads can both attempt to pop the same queue — with a plain list this
+    raced `while pending_relays:` against `.pop(0)` and could raise
+    IndexError. `popleft()` inside the try (not a truthiness check outside
+    it) must turn that race into a clean early exit."""
+    monkeypatch.setattr(status_relay, "pending_relays", _RacyQueue([]))
+    outcomes = flush_pending_relays()
+    assert outcomes == []
