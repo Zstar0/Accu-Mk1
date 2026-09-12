@@ -39,6 +39,7 @@ import httpx
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from httpx_shared import HTTPX_SSL_CONTEXT
 from models import LimsSample, LimsSampleTransition, LimsSubSampleEvent
 
 log = logging.getLogger(__name__)
@@ -123,7 +124,7 @@ def post_relay(sample_id: str, body: dict) -> dict:
     """Sync POST (threadpool/bg-session safe), 10s timeout. Raises on
     transport error or non-2xx — callers translate that into "failed"."""
     url = f"{INTEGRATION_SERVICE_URL}/explorer/samples/{sample_id}/status"
-    with httpx.Client(timeout=10.0) as client:
+    with httpx.Client(timeout=10.0, verify=HTTPX_SSL_CONTEXT) as client:
         resp = client.post(url, json=body,
                            headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY})
         resp.raise_for_status()
