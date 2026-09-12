@@ -427,12 +427,13 @@ def remove_parent_native_analysis(db: Session, *, parent: LimsSample, analysis_i
         apply_transition, delete_pristine_analysis, force_retract_analysis,
         soft_reject_parent_placeholder,
     )
+    from lims_analyses.hplc_native import slot_clause
     row = _placeholder_row(db, parent, analysis_id)
     service_id = row.analysis_service_id
     canonical_live = db.execute(select(LimsAnalysis.id).where(
         LimsAnalysis.lims_sample_pk == parent.id, LimsAnalysis.lims_sub_sample_pk.is_(None),
         LimsAnalysis.analysis_service_id == service_id, LimsAnalysis.provenance == "canonical",
-        LimsAnalysis.review_state.notin_(DEAD_STATES))).first()
+        LimsAnalysis.review_state.notin_(DEAD_STATES), slot_clause(row.slot))).first()
     if canonical_live is not None:
         raise PromotedResultExistsError(
             f"{row.keyword} has a promoted result on {parent.sample_id}; use retest/retract")

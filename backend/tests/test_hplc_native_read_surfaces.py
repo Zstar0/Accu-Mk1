@@ -90,6 +90,28 @@ def test_remove_slot2_placeholder_leaves_slot1_vial_rows(db):
     assert db.get(LimsAnalysis, pur2_id) is None                   # slot 2 pristine row deleted
 
 
+def test_remove_slot2_placeholder_not_blocked_by_slot1_canonical(db):
+    # Final-review finding #2: the canonical_live 409 guard in
+    # remove_parent_native_analysis was keyed on analysis_service_id alone,
+    # so a promoted slot-1 canonical row falsely blocked removing slot 2's
+    # still-pristine placeholder. Guard must be slot-scoped.
+    from lims_analyses.manage_native import remove_parent_native_analysis
+    from models import LimsAnalysis
+    from sqlalchemy import select
+    parent, services, pur1, pur2 = _two_slot_family(db, "PB-1303")
+    apply_transition(db, analysis_id=pur1.id, kind="submit", result_value="98", user_id=1, commit=False)
+    promote_to_parent(db, keyword=KW_PURITY, result_value="98", result_unit="%", method_id=None, instrument_id=None,
+                      sources=[{"analysis_id": pur1.id, "contribution_kind": "chosen"}], user_id=1, commit=False)
+    db.commit()
+    ph2 = db.execute(select(LimsAnalysis).where(LimsAnalysis.lims_sample_pk == parent.id,
+                                                LimsAnalysis.keyword == KW_PURITY, LimsAnalysis.slot == 2)).scalar_one()
+    pur2_id = pur2.id
+    # Must not raise PromotedResultExistsError -- slot 1's canonical row is a
+    # different slot and must not block slot 2's removal.
+    remove_parent_native_analysis(db, parent=parent, analysis_id=ph2.id, confirm=False, user_id=1)
+    assert db.get(LimsAnalysis, pur2_id) is None
+
+
 def test_delete_pristine_requires_slot_on_multislot_vial(db):
     from lims_analyses.service import delete_pristine_analysis, BadRequestError
     parent, services, pur1, pur2 = _two_slot_family(db, "PB-1302")
