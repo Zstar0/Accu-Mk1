@@ -306,7 +306,8 @@ def _placeholder_row(db: Session, parent: LimsSample, analysis_id: int) -> LimsA
     return row
 
 
-def _classify_vial_rows(db: Session, parent: LimsSample, service_id: int) -> dict:
+def _classify_vial_rows(db: Session, parent: LimsSample, service_id: int,
+                        slot: Optional[int] = None) -> dict:
     """Vial-tier rows for `service_id` on the parent's vials, bucketed like
     service.classify_removal_impact but keyed by SERVICE ID (S3-aligned):
     pristine (unassigned, no result, not retested, not a retest child — a
@@ -342,17 +343,19 @@ def _classify_vial_rows(db: Session, parent: LimsSample, service_id: int) -> dic
     means the whole lineage is rejected via apply_transition, never deleted,
     and the pristine loop never touches a keyword with a live retest child."""
     from models import LimsAnalysisPromotion
+    from lims_analyses.hplc_native import slot_clause
     vials = {v.id: v for v in _vials_of(db, parent)}
     out = {"pristine": [], "worked_unverified": [], "blocked": []}
     if not vials:
         return out
-    rows = db.execute(
-        select(LimsAnalysis).where(
-            LimsAnalysis.lims_sub_sample_pk.in_(list(vials)),
-            LimsAnalysis.analysis_service_id == service_id,
-            LimsAnalysis.review_state.notin_(DEAD_STATES),
-        )
-    ).scalars().all()
+    clauses = [
+        LimsAnalysis.lims_sub_sample_pk.in_(list(vials)),
+        LimsAnalysis.analysis_service_id == service_id,
+        LimsAnalysis.review_state.notin_(DEAD_STATES),
+    ]
+    if slot is not None:
+        clauses.append(slot_clause(slot))
+    rows = db.execute(select(LimsAnalysis).where(*clauses)).scalars().all()
     # One join query: source_analysis_id -> [parent review_state, ...] for
     # every link (live or dead) touching these rows. Avoids N+1.
     links_by_source: dict[int, list[str]] = {}
@@ -434,7 +437,7 @@ def remove_parent_native_analysis(db: Session, *, parent: LimsSample, analysis_i
         raise PromotedResultExistsError(
             f"{row.keyword} has a promoted result on {parent.sample_id}; use retest/retract")
 
-    impact = _classify_vial_rows(db, parent, service_id)
+    impact = _classify_vial_rows(db, parent, service_id, slot=row.slot)
     if impact["blocked"]:
         raise PromotedResultExistsError(
             f"{row.keyword} has verified/promoted vial rows on {parent.sample_id}")
@@ -445,7 +448,8 @@ def remove_parent_native_analysis(db: Session, *, parent: LimsSample, analysis_i
     deleted = 0
     for e in impact["pristine"]:
         vial = next(v for v in vials.values() if v.sample_id == e["sample_id"])
-        delete_pristine_analysis(db, sub_sample_pk=vial.id, keyword=e["keyword"], user_id=user_id)
+        delete_pristine_analysis(db, sub_sample_pk=vial.id, keyword=e["keyword"], user_id=user_id,
+                                 slot=row.slot)
         deleted += 1
     rejected = 0
     for e in impact["worked_unverified"]:

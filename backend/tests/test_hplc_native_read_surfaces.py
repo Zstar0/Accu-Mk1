@@ -74,3 +74,27 @@ def test_overlay_is_slot_scoped(db):
     shaped = list_native_parent_analyses_senaite_shape(db, "PB-1203")
     by_slot = {r.slot: r.review_state for r in shaped if r.keyword == KW_PURITY}
     assert by_slot[1] == "to_be_verified" and by_slot[2] == "unassigned"
+
+
+def test_remove_slot2_placeholder_leaves_slot1_vial_rows(db):
+    from lims_analyses.manage_native import remove_parent_native_analysis
+    from models import LimsAnalysis
+    from sqlalchemy import select
+    parent, services, pur1, pur2 = _two_slot_family(db, "PB-1301")
+    ph2 = db.execute(select(LimsAnalysis).where(LimsAnalysis.lims_sample_pk == parent.id,
+                                                LimsAnalysis.keyword == KW_PURITY, LimsAnalysis.slot == 2)).scalar_one()
+    pur1_id, pur2_id = pur1.id, pur2.id
+    remove_parent_native_analysis(db, parent=parent, analysis_id=ph2.id, confirm=False, user_id=1)
+    pur1_after = db.get(LimsAnalysis, pur1_id)
+    assert pur1_after is not None and pur1_after.review_state == "unassigned"  # slot 1 untouched
+    assert db.get(LimsAnalysis, pur2_id) is None                   # slot 2 pristine row deleted
+
+
+def test_delete_pristine_requires_slot_on_multislot_vial(db):
+    from lims_analyses.service import delete_pristine_analysis, BadRequestError
+    parent, services, pur1, pur2 = _two_slot_family(db, "PB-1302")
+    with pytest.raises(BadRequestError):
+        delete_pristine_analysis(db, sub_sample_pk=pur1.lims_sub_sample_pk, keyword=KW_PURITY, user_id=1)
+    delete_pristine_analysis(db, sub_sample_pk=pur1.lims_sub_sample_pk, keyword=KW_PURITY, user_id=1, slot=1)
+    db.refresh(pur2)
+    assert pur2.review_state == "unassigned"

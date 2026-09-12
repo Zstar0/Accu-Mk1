@@ -2625,6 +2625,7 @@ def cascade_parent_reject_to_vials(
     parent_sample_id: str,
     keyword: str,
     user_id: Optional[int],
+    slot: Optional[int] = None,
 ) -> list[int]:
     """When a PARENT analysis is rejected (via SENAITE — service removed from
     the offering), cascade the reject to the UNPOPULATED vial-tier mirror rows
@@ -2659,15 +2660,20 @@ def cascade_parent_reject_to_vials(
     # LimsAnalysis.lims_sub_sample_pk) — shadow rows are always parent-tier
     # only (lims_sub_sample_pk IS NULL, per parent_mirror.py), so they can
     # never satisfy this join regardless of review_state. Safe by construction.
+    from lims_analyses.hplc_native import slot_clause
+
+    clauses = [
+        LimsSubSample.parent_sample_pk == parent_sample.id,
+        LimsAnalysis.keyword.in_(candidate_kws),
+        LimsAnalysis.review_state.in_(("unassigned", "assigned")),
+        LimsAnalysis.result_value.is_(None),
+    ]
+    if slot is not None:
+        clauses.append(slot_clause(slot))
     targets = db.execute(
         select(LimsAnalysis)
         .join(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
-        .where(
-            LimsSubSample.parent_sample_pk == parent_sample.id,
-            LimsAnalysis.keyword.in_(candidate_kws),
-            LimsAnalysis.review_state.in_(("unassigned", "assigned")),
-            LimsAnalysis.result_value.is_(None),
-        )
+        .where(*clauses)
     ).scalars().all()
 
     rejected_ids: list[int] = []
@@ -3405,6 +3411,7 @@ def delete_pristine_analysis(
     keyword: Optional[str] = None,
     user_id: Optional[int],
     analysis_service_id: Optional[int] = None,
+    slot: Optional[int] = None,
 ) -> None:
     """Hard-delete a pristine (mistake-correction) analysis from a native vial.
 
@@ -3425,6 +3432,7 @@ def delete_pristine_analysis(
         retested flag, or promotion link) — instruct caller to retract instead.
     """
     from models import LimsAnalysisPromotion
+    from lims_analyses.hplc_native import slot_clause
 
     if (analysis_service_id is None) == (keyword is None):
         raise BadRequestError(
@@ -3439,14 +3447,20 @@ def delete_pristine_analysis(
         _ident = LimsAnalysis.keyword == keyword
         _named = f"keyword={keyword!r}"
 
-    row = db.execute(
-        select(LimsAnalysis).where(
-            LimsAnalysis.lims_sub_sample_pk == sub_sample_pk,
-            _ident,
-            LimsAnalysis.retest_of_id.is_(None),
-            LimsAnalysis.review_state.notin_(["retracted", "rejected"]),
+    clauses = [
+        LimsAnalysis.lims_sub_sample_pk == sub_sample_pk,
+        _ident,
+        LimsAnalysis.retest_of_id.is_(None),
+        LimsAnalysis.review_state.notin_(["retracted", "rejected"]),
+    ]
+    if slot is not None:
+        clauses.append(slot_clause(slot))
+    rows = db.execute(select(LimsAnalysis).where(*clauses)).scalars().all()
+    if slot is None and len({(r.slot or 0) for r in rows}) > 1:
+        raise BadRequestError(
+            f"multiple slots match {_named} on sub_sample_pk={sub_sample_pk} — pass slot"
         )
-    ).scalar_one_or_none()
+    row = rows[0] if rows else None
     if row is None:
         raise NotFoundError(
             f"no active lims_analysis with {_named} on sub_sample_pk={sub_sample_pk}"
