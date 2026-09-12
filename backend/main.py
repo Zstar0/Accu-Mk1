@@ -6689,6 +6689,7 @@ async def upload_chromatogram_to_senaite(
                 kind="chromatogram", source_sample_id=None,
                 user_id=getattr(current_user, "id", None),
                 render_in_report=False, attachment_type="HPLC Graph",
+                sample_id=analysis.sample_id_label,
             )
 
     except HTTPException:
@@ -18607,6 +18608,7 @@ def _capture_parent_attachment_bg(
     content_type: str, kind: str, source_sample_id: Optional[str],
     user_id: Optional[int], render_in_report: bool = True,
     attachment_type: Optional[str] = None,
+    sample_id: Optional[str] = None,
 ) -> None:
     """Best-effort native parent-attachment capture + frozen S3 snapshot
     (read-flip spec §7, Layer 3 Task 3) on its own short-lived session —
@@ -18634,6 +18636,12 @@ def _capture_parent_attachment_bg(
     `SessionLocal()` and the storage/model imports live INSIDE the try, same
     hardening rationale as `_mirror_parent_analysis_bg`: `db` starts as None
     so `finally` can guard `db.close()` if construction itself failed.
+
+    `sample_id` (native-born guard, HPLC slice 6 M8 Task 4): a native-born
+    row has no SENAITE uid, so `sample_uid` is a synthetic `mk1://...`
+    placeholder that never matches `external_lims_uid`. When the uid lookup
+    misses and a caller-known `sample_id` was passed, fall back to
+    `LimsSample.sample_id == sample_id` before giving up.
     """
     db = None
     try:
@@ -18649,6 +18657,11 @@ def _capture_parent_attachment_bg(
             select(LimsSample).where(
                 LimsSample.external_lims_uid == sample_uid)
         ).scalar_one_or_none()
+        if row is None and sample_id:
+            row = db.execute(
+                select(LimsSample).where(
+                    LimsSample.sample_id == sample_id)
+            ).scalar_one_or_none()
         if row is None:
             logger.warning(
                 "parent_attachment.capture_failed uid=%s "
@@ -24391,7 +24404,14 @@ def refresh_sample_registry_debug(
     row = db.execute(
         select(LimsSample).where(LimsSample.sample_id == sample_id)
     ).scalar_one_or_none()
-    if row is not None:
+    if row is not None and (row.external_lims_system or "senaite") == "mk1":
+        # Native-born guard (HPLC slice 6 M8 Task 4): no SENAITE record to
+        # reconcile against. _refresh_parent_from_senaite already no-ops for
+        # these rows, but skip the call here too so no SENAITE-shaped work
+        # is even scheduled; load.external_lims_system == "mk1" in the
+        # returned payload already tells the caller why nothing refreshed.
+        logger.info("registry_debug.refresh.native_born_no_senaite sample=%s", sample_id)
+    elif row is not None:
         try:
             _refresh_parent_from_senaite(db, row)
             db.commit()

@@ -693,7 +693,14 @@ def _refresh_parent_from_senaite(db: Session, parent: LimsSample) -> None:
     whole refresh (fail closed) and raises an identity_collision flag. A
     fetch missing `uid` entirely never NULLs a stored uid either — that
     would silently prime the NULL-adopt rule to rebind the row to ANY
-    future uid on the next refresh."""
+    future uid on the next refresh.
+
+    Native-born guard (HPLC slice 6 M8 Task 4): a native-born row has no
+    SENAITE record to refresh from — skip before any SENAITE call."""
+    if (parent.external_lims_system or "senaite") == "mk1":
+        log.info(
+            "refresh_parent.native_born_skip sample=%s", parent.sample_id)
+        return
     old_status = parent.status
     meta = senaite.fetch_parent_metadata(parent.sample_id)
     incoming_uid = meta.get("uid")
