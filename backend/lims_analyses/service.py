@@ -1149,6 +1149,7 @@ def list_native_parent_analyses(db: Session, sample_id: str) -> list:
     """
     from models import AnalysisService, LimsSample
     from lims_analyses.schemas import NativeParentAnalysisRow
+    from lims_analyses.hplc_native import slot_key
 
     parent = db.execute(
         select(LimsSample).where(LimsSample.sample_id == sample_id)
@@ -1177,14 +1178,18 @@ def list_native_parent_analyses(db: Session, sample_id: str) -> list:
     # for the same service id. order_by(id.desc()) + first-seen-wins mirrors
     # _eligible_parent_row's resolve-to-newest posture rather than depending
     # on an invariant this function doesn't own.
-    seen_service_ids: set[int] = set()
+    # Dedup key is slot-aware: (analysis_service_id, slot or 0), so a
+    # native-born blend's two peptide slots on the same service are never
+    # collapsed into a single "current" row (spec 2026-09-10 M6 addendum).
+    seen: set[tuple] = set()
     deduped: list = []
     for analysis in rows:
-        if analysis.analysis_service_id in seen_service_ids:
+        k = slot_key(analysis)
+        if k in seen:
             continue
-        seen_service_ids.add(analysis.analysis_service_id)
+        seen.add(k)
         deduped.append(analysis)
-    deduped.sort(key=lambda a: a.keyword)
+    deduped.sort(key=lambda a: (a.keyword, a.slot or 0))
 
     return [NativeParentAnalysisRow.model_validate(a) for a in deduped]
 
@@ -1207,6 +1212,7 @@ def _overlay_live_vial_state(db: Session, parent_pk: int, shaped: list) -> None:
     disagree between the two surfaces.
     """
     from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
+    from lims_analyses.hplc_native import slot_key
     from models import LimsSubSample
 
     ordered_service_ids = {
@@ -1216,6 +1222,11 @@ def _overlay_live_vial_state(db: Session, parent_pk: int, shaped: list) -> None:
     if not ordered_service_ids:
         return
 
+    # The vial query still filters by service id only (an IN filter on slot
+    # too would need the same slot-or-0 coalescing as slot_clause; service id
+    # is cheap and merely widens the candidate set) -- the slot-aware overlay
+    # match happens below, keyed by slot_key, so a wrong-slot vial row can
+    # never overlay a placeholder it doesn't belong to.
     vial_rows = db.execute(
         select(LimsAnalysis)
         .join(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
@@ -1229,18 +1240,20 @@ def _overlay_live_vial_state(db: Session, parent_pk: int, shaped: list) -> None:
     _PROGRESS_RANK = {
         "unassigned": 0, "assigned": 1, "to_be_verified": 2, "verified": 3,
     }
-    live_state_by_service: dict[int, str] = {}
+    # Keyed by slot_key (service id, slot or 0) rather than service id alone,
+    # so a two-slot blend's per-slot vial progress overlays only its own
+    # placeholder slot instead of bleeding into its sibling's.
+    live_state_by_key: dict[tuple, str] = {}
     for vr in vial_rows:
+        key = slot_key(vr)
         rank = _PROGRESS_RANK.get(vr.review_state, -1)
-        best = _PROGRESS_RANK.get(
-            live_state_by_service.get(vr.analysis_service_id, ""), -1
-        )
+        best = _PROGRESS_RANK.get(live_state_by_key.get(key, ""), -1)
         if rank > best:
-            live_state_by_service[vr.analysis_service_id] = vr.review_state
+            live_state_by_key[key] = vr.review_state
     for shaped_row in shaped:
-        if (shaped_row.provenance == PROVENANCE_ORDERED
-                and shaped_row.analysis_service_id in live_state_by_service):
-            shaped_row.review_state = live_state_by_service[shaped_row.analysis_service_id]
+        key = slot_key(shaped_row)
+        if shaped_row.provenance == PROVENANCE_ORDERED and key in live_state_by_key:
+            shaped_row.review_state = live_state_by_key[key]
 
 
 # Legacy family classifier (profile sections rule 2): SENAITE-era keywords
@@ -1351,6 +1364,7 @@ def list_native_parent_analyses_senaite_shape(
     """
     from models import AnalysisService, LimsSample
     from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
+    from lims_analyses.hplc_native import slot_key
 
     parent = db.execute(
         select(LimsSample).where(LimsSample.sample_id == sample_id)
@@ -1390,13 +1404,18 @@ def list_native_parent_analyses_senaite_shape(
     # remove. Mirrors the live-only collapse in
     # list_parent_analyses_senaite_shape (shadow-vs-canonical). Do not
     # "simplify" this back to "any canonical" — that was tried and is wrong.
-    services_with_live_canonical = {
-        r.analysis_service_id for r in fetched
+    # Keyed by slot_key (service id, slot or 0), not service id alone, so a
+    # canonical row for one slot of a native-born blend suppresses only that
+    # slot's placeholder — its sibling slot's demand marker must stay visible
+    # (spec 2026-09-10 M6 addendum; legacy rows have slot NULL -> 0, identical
+    # to the old service-id-only behaviour).
+    live_canonical_keys = {
+        slot_key(r) for r in fetched
         if r.provenance == "canonical" and r.review_state not in ("retracted", "rejected")
     }
     rows = [
         r for r in fetched
-        if r.provenance == "canonical" or r.analysis_service_id not in services_with_live_canonical
+        if r.provenance == "canonical" or slot_key(r) not in live_canonical_keys
     ]
 
     shaped = _serialize_senaite_shape_rows(db, rows)
@@ -1672,6 +1691,7 @@ def list_parent_analyses_senaite_shape(
         return []
 
     from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
+    from lims_analyses.hplc_native import slot_key, kw_slot_key
 
     rows = list(db.execute(
         select(LimsAnalysis).where(
@@ -1715,17 +1735,19 @@ def list_parent_analyses_senaite_shape(
 
     # Canonical-wins placeholder suppression (mirrors the native card feed):
     # a service with a LIVE canonical row has been delivered — its
-    # placeholder drops. Keyed by service id (placeholders always share the
-    # service row they were minted from). Retracted canonicals are already
+    # placeholder drops. Keyed by slot_key (service id, slot or 0), not
+    # service id alone, so one slot of a native-born blend being delivered
+    # never suppresses its sibling slot's still-outstanding placeholder
+    # (spec 2026-09-10 M6 addendum). Retracted canonicals are already
     # excluded from `rows` by the query, so a thrown-away result correctly
     # leaves the placeholder visible: the test is outstanding again.
-    delivered_service_ids = {
-        r.analysis_service_id for r in rows if r.provenance == "canonical"
+    delivered_keys = {
+        slot_key(r) for r in rows if r.provenance == "canonical"
     }
     rows = [
         r for r in rows
         if r.provenance != PROVENANCE_ORDERED
-        or r.analysis_service_id not in delivered_service_ids
+        or slot_key(r) not in delivered_keys
     ]
 
     # Cross-provenance keyword collapse (UAT catch, P-0143 promote flow):
@@ -1747,23 +1769,28 @@ def list_parent_analyses_senaite_shape(
     # the withdrawn value on this table or on the COA wire (legacy_rows
     # delegates row selection here). Same rule native_parent_line_states
     # applies: the canonical tier owns any keyword it ever held.
-    live_canonical_keywords = {r.keyword for r in rows if r.provenance == "canonical"}
-    canonical_ever = set(db.execute(
-        select(LimsAnalysis.keyword).where(
+    #
+    # Collapse key is now (keyword, slot or 0) via kw_slot_key, not keyword
+    # alone, so a canonical row minted for one slot of a native-born blend
+    # collapses only its own slot's shadow/placeholder counterpart, never a
+    # sibling slot sharing the same keyword (spec 2026-09-10 M6 addendum).
+    live_canonical_kw_keys = {kw_slot_key(r) for r in rows if r.provenance == "canonical"}
+    canonical_ever = {(kw, slot or 0) for kw, slot in db.execute(
+        select(LimsAnalysis.keyword, LimsAnalysis.slot).where(
             LimsAnalysis.lims_sample_pk == parent.id,
             LimsAnalysis.lims_sub_sample_pk.is_(None),
             LimsAnalysis.provenance == "canonical",
         ).distinct()
-    ).scalars().all()) | live_canonical_keywords
+    ).all()} | live_canonical_kw_keys
     rows = [
         r for r in rows
         if r.provenance == "canonical"
-        # shadow: hidden once the canonical tier EVER held the keyword
-        or (r.provenance == "shadow" and r.keyword not in canonical_ever)
+        # shadow: hidden once the canonical tier EVER held the (keyword, slot)
+        or (r.provenance == "shadow" and kw_slot_key(r) not in canonical_ever)
         # ordered placeholders: live-canonical collapse only -- a retracted
         # canonical must NOT hide the demand marker (pinned by
         # test_retracted_canonical_does_not_suppress_placeholder)
-        or (r.provenance != "shadow" and r.keyword not in live_canonical_keywords)
+        or (r.provenance != "shadow" and kw_slot_key(r) not in live_canonical_kw_keys)
     ]
 
     shaped = _serialize_senaite_shape_rows(db, rows)
