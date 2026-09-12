@@ -13,6 +13,13 @@
 - Throughput report and FE HPLC/identity classifiers recognise the native keywords.
 - Behaviour-neutral for SENAITE-born samples (all new branches keyed on native keywords / row-level peptide_id).
 
+### HPLC native-born — slice 5 (M7)
+- `coa/hplc_shim` maps native HPLC rows to the legacy wire vocabulary (`ANALYTE-{slot}-ID/PUR/QTY`, `HPLC-PUR`, `PEPT-Total`, `BLEND-PUR`) so the COA path never sees a bare native keyword.
+- `legacy_rows` admits native rows and aborts on an unresolved slot rather than emitting a guessed identity.
+- `sample_meta` analyte titles for native-born rows derive from the same shim helper as `legacy_rows`, so Title and `Analyte{N}Peptide` never diverge (the P-1611 class).
+- COA variance analyte series, variance-set results, and the mk1 source resolver are now keyed per slot for native rows; the shadow reader excludes native HPLC rows from its candidate map.
+- Parity tests exercise the vendored engine end to end for both single-peptide and blend native samples. COABuilder is untouched. Behaviour-neutral for SENAITE-born samples.
+
 ### HPLC native-born — slice 4 (M6)
 - Promote is slot-aware: the native identity rule keys on `(analysis_service_id, COALESCE(slot,0))`, and the minted parent row inherits the vial row's `peptide_id`/`slot`/stamped title.
 - Supersession and parent-retest lookup never guess across slots — `ParentRetestRequest.slot` threads through the route, cascade and `_find_active_parent_row`; a multi-slot native parent without a slot returns "no parent row" rather than picking one.

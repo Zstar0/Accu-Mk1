@@ -22,10 +22,20 @@ permanently 'rejected' (A7 remove-analysis cascade) elsewhere in the app —
 those must not reach the COA wire. Filtered BEFORE the zero-row check so an
 all-skip-state sample hits the existing fail-closed empty abort.
 
+Native-born HPLC rows (service_origin == 'mk1', keyword in the HPLC
+trio/aggregates) also ride this wire: coa/hplc_shim.py maps their
+slot-generic keywords/titles into the same legacy vocabulary the engine
+reads, keyed by the parent's resolved analyte slots. An unresolved slot
+(no catalog peptide) aborts generation rather than shipping a blank title.
+
 Spec: docs/superpowers/specs/2026-08-26-coa-legacy-rows-mk1-source-design.md
 """
+from coa.hplc_shim import (
+    UnresolvedNativeSlotError, is_native_hplc_row, slot_wires, wire_keyword, wire_title,
+)
 from coa.identity_verdict import identity_wire_result
 from coa.native_sections import NativeSectionsError
+from lims_analyses.hplc_native import TRIO
 
 # Twin contract: src/coabuilder_core/legacy_rows.py + tests/
 # test_legacy_rows_contract.py in the coabuilder repo pin the same tuple.
@@ -54,7 +64,7 @@ def build_legacy_rows(db, parent) -> list[dict]:
             raise NativeSectionsError(
                 f"legacy rows: analysis {r.uid} on {parent.sample_id} has "
                 f"unresolvable service origin — aborting")
-    legacy = [r for r in shaped if r.service_origin == "senaite"]
+    legacy = [r for r in shaped if r.service_origin == "senaite" or is_native_hplc_row(r)]
     # review_state=None aborts producer-side (consumer requires a string;
     # same treatment as the missing-keyword abort below) — checked before
     # the skip-state filter so a None can't silently pass as "not in
@@ -73,9 +83,44 @@ def build_legacy_rows(db, parent) -> list[dict]:
             f"legacy rows: no legacy-family analyses found for "
             f"{parent.sample_id} — refusing to assemble an empty results "
             f"table (mirror gap?)")
+    # {} for SENAITE-born parents (slot_wires short-circuits there).
+    wires = {w.slot: w for w in slot_wires(db, parent)}
+    n_slots = len(wires)
+    if n_slots > 1:
+        rowed_slots = {
+            r.slot for r in legacy
+            if is_native_hplc_row(r) and (r.keyword or "").upper() in TRIO
+        }
+        empty_slots = sorted(set(wires) - rowed_slots)
+        if empty_slots:
+            raise NativeSectionsError(
+                f"legacy rows: {parent.sample_id} registry slot "
+                f"{empty_slots[0]} has no analysis rows — remove it via "
+                f"relabel/Manage Analyses before COA")
     rows = []
     for r in legacy:
-        if not (r.keyword or "").strip():
+        keyword, title = r.keyword, r.title
+        if is_native_hplc_row(r):
+            if (r.keyword or "").upper() in TRIO:
+                wire = wires.get(r.slot)
+                if wire is None:
+                    raise NativeSectionsError(
+                        f"legacy rows: {parent.sample_id} row {r.uid} (slot {r.slot}) "
+                        f"has no registry analyte slot — registry/rows drift")
+                if r.peptide_id is None or wire.peptide_id is None:
+                    raise UnresolvedNativeSlotError(
+                        sample_id=parent.sample_id, slot=r.slot, raw_name=wire.display_name)
+                if r.peptide_id != wire.peptide_id:
+                    raise NativeSectionsError(
+                        f"legacy rows: {parent.sample_id} slot {r.slot} — "
+                        f"row peptide_id {r.peptide_id} != registry peptide_id "
+                        f"{wire.peptide_id} — registry/rows peptide drift — "
+                        f"relabel before COA")
+                keyword = wire_keyword(r.keyword, r.slot, n_slots)
+                title = wire_title(r.keyword, r.title, wire)
+            else:
+                keyword = wire_keyword(r.keyword, None, n_slots)
+        if not (keyword or "").strip():
             raise NativeSectionsError(
                 f"legacy rows: analysis {r.uid} on {parent.sample_id} has no "
                 f"keyword — aborting")
@@ -83,15 +128,17 @@ def build_legacy_rows(db, parent) -> list[dict]:
         # A conforming value rides as the literal "Conforms" token so
         # COABuilder never re-derives conformance from the slot-title vs
         # peptide-name pair (P-1986 class); everything else rides raw.
+        # identity_wire_result keeps receiving the ROW keyword (e.g.
+        # HPLC-IDENTITY) so is_identity_keyword still recognises it.
         wire_result = identity_wire_result(
             db, keyword=r.keyword, result=r.result,
             analysis_service_id=getattr(r, "analysis_service_id", None),
         )
         rows.append({
             "uid": r.uid,
-            "Keyword": r.keyword,
-            "Title": r.title,
-            "ServiceTitle": r.title,
+            "Keyword": keyword,
+            "Title": title,
+            "ServiceTitle": title,
             "Result": wire_result,
             "Unit": r.unit,
             "review_state": r.review_state,

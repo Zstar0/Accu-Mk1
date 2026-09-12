@@ -112,13 +112,18 @@ def _parse_slots(parent: LimsSample) -> list[dict]:
 
 def resolve_slot_peptides(db: Session, parent: LimsSample) -> list[SlotResolution]:
     """One SlotResolution per OCCUPIED slot (placeholders with name None are
-    skipped but keep their neighbours' slot numbers). Only active peptides
-    resolve; a retired peptide is 'unresolved' on purpose."""
-    peptides = db.execute(select(Peptide).where(Peptide.active == True)).scalars().all()  # noqa: E712
-    by_id = {p.id: p for p in peptides}
+    skipped but keep their neighbours' slot numbers). A stored `peptide_id`
+    resolves against ALL peptides (active or not) — a slot already bound to
+    a peptide must keep resolving after that peptide is retired, or every
+    published native COA that used it bricks on regen (F2). Only ACTIVE
+    peptides participate in name/abbreviation/alias folding — a retired
+    peptide should not be re-matched by a bare label."""
+    all_peptides = db.execute(select(Peptide)).scalars().all()
+    by_id = {p.id: p for p in all_peptides}
+    active_peptides = [p for p in all_peptides if p.active]
     by_exact: dict[str, set[int]] = {}
     by_alias: dict[str, set[int]] = {}
-    for p in peptides:
+    for p in active_peptides:
         by_exact.setdefault(_fold(p.name), set()).add(p.id)
         by_exact.setdefault(_fold(p.abbreviation), set()).add(p.id)
         for alias in (p.hplc_aliases or []) + (p.display_aliases or []):

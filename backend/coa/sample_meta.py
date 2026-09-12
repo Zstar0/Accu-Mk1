@@ -38,14 +38,26 @@ def _coa_meta(parent) -> dict:
         return {}
 
 
-def _analyte_slots(parent) -> dict:
+def _analyte_slots(db, parent) -> dict:
     """{'Analyte1Peptide': name, ...} for the first 4 list entries with a
     name. `lims_samples.analytes` is a JSON LIST of
     {"name": str|None, "declared_quantity": str|None}, slot = list position
     (1-based) == SENAITE slot number; an empty middle slot is a name-less
     placeholder and is skipped here (models.py; written by
     sub_samples.service._parse_analyte_slots). Mirrors
-    sub_samples.registry_inbox._analyte_slot_fields."""
+    sub_samples.registry_inbox._analyte_slot_fields.
+
+    Native-born parents (spec M7): the title comes from
+    coa.hplc_shim.slot_wires instead of the stored (possibly stale/raw)
+    label, so it is byte-identical to the Title legacy_rows puts on the
+    identity row — the engine's Title == Analyte{N}Peptide match depends on
+    it. An unresolved slot still falls through to its raw label here; the
+    abort for that case belongs to legacy_rows, which runs in the same
+    build_coa_wire_document call."""
+    from coa.hplc_shim import slot_wires
+    wires = slot_wires(db, parent)
+    if wires:
+        return {f"Analyte{w.slot}Peptide": w.identity_title for w in wires if w.slot <= 4}
     try:
         parsed = json.loads(parent.analytes) if parent.analytes else []
     except (ValueError, TypeError):
@@ -187,7 +199,7 @@ def build_sample_meta(db, parent) -> dict:
         "CompanyLogoUrl": _resolve_wp_url(parent.company_logo_url) or "",
         "ChromatographBackgroundUrl": _resolve_wp_url(cm.get("ChromatographBackgroundUrl")) or None,
     }
-    meta.update(_analyte_slots(parent))
+    meta.update(_analyte_slots(db, parent))
 
     attachments = []
     for role, row in (("sample_image", image_row),

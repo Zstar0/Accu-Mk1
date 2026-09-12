@@ -4,12 +4,14 @@ record carrying its own PURITY/QUANTITY/IDENTITY (whatever it measured).
 Parent NOT included (COABuilder prepends its own figure)."""
 from __future__ import annotations
 
+import json
+
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from database import Base
-from coa.variance_series import build_variance_replicates, build_vial_figures
+from coa.variance_series import build_variance_analyte_series, build_variance_replicates, build_vial_figures
 from models import (
     AnalysisService,
     LimsAnalysis,
@@ -30,8 +32,8 @@ def db():
         s.close()
 
 
-def _svc(db, keyword, peptide_id=None):
-    svc = AnalysisService(title=keyword, keyword=keyword, peptide_id=peptide_id)
+def _svc(db, keyword, peptide_id=None, origin="senaite"):
+    svc = AnalysisService(title=keyword, keyword=keyword, peptide_id=peptide_id, origin=origin)
     db.add(svc)
     db.flush()
     return svc
@@ -479,10 +481,12 @@ def native_world(db):
     """Native-born single-peptide parent with core + 2 variance vials on the generic trio."""
     pep = Peptide(name="BPC-157", abbreviation="BPC157", active=True)
     db.add(pep); db.flush()
-    pur = _svc(db, "HPLC-PURITY"); qty = _svc(db, "HPLC-QUANTITY"); idn = _svc(db, "HPLC-IDENTITY")
+    pur = _svc(db, "HPLC-PURITY", origin="mk1"); qty = _svc(db, "HPLC-QUANTITY", origin="mk1")
+    idn = _svc(db, "HPLC-IDENTITY", origin="mk1")
     pur.variance_capable = True; qty.variance_capable = True; db.flush()
     parent = LimsSample(sample_id="P-5100", external_lims_system="mk1", external_lims_uid=None,
-                        sample_type_title="Peptide", container_mode=True)
+                        sample_type_title="Peptide", container_mode=True,
+                        analytes=json.dumps([{"name": pep.name, "peptide_id": pep.id}]))
     db.add(parent); db.flush()
     for seq, kind in ((1, "core"), (2, "variance"), (3, "variance")):
         sub = LimsSubSample(parent_sample_pk=parent.id, sample_id=f"P-5100-S0{seq}",
@@ -507,3 +511,44 @@ def test_native_vial_figures_carry_peptide(native_world, db):
     sub = db.execute(select(LimsSubSample).where(LimsSubSample.vial_sequence == 2)).scalar_one()
     fig = build_vial_figures(db, sub)
     assert fig and "BPC-157" in fig
+
+
+@pytest.fixture
+def native_blend_world(db):
+    """Native-born TWO-peptide blend parent (slots 1/2), 2 variance vials on
+    the generic trio -- both slots share the same generic HPLC-PURITY /
+    HPLC-QUANTITY service, so the COA series must re-key per slot to avoid
+    collision (Task 4)."""
+    pep1 = Peptide(name="BPC-157", abbreviation="BPC157", active=True)
+    pep2 = Peptide(name="TB-500", abbreviation="TB500", active=True)
+    db.add_all([pep1, pep2]); db.flush()
+    pur = _svc(db, "HPLC-PURITY", origin="mk1"); qty = _svc(db, "HPLC-QUANTITY", origin="mk1")
+    pur.variance_capable = True; qty.variance_capable = True; db.flush()
+    parent = LimsSample(sample_id="P-5300", external_lims_system="mk1", external_lims_uid=None,
+                        sample_type_title="Peptide", container_mode=True,
+                        analytes=json.dumps([
+                            {"name": pep1.name, "peptide_id": pep1.id},
+                            {"name": pep2.name, "peptide_id": pep2.id},
+                        ]))
+    db.add(parent); db.flush()
+    for seq in (2, 3):
+        sub = LimsSubSample(parent_sample_pk=parent.id, sample_id=f"P-5300-S0{seq}",
+                            external_lims_uid=f"mk1://p5300v{seq}", vial_sequence=seq,
+                            assignment_kind="variance", in_variance_set=True)
+        db.add(sub); db.flush()
+        _native_row(db, sub, pur, f"9{seq}", peptide_id=pep1.id, slot=1, title="BPC-157 - Purity (HPLC)")
+        _native_row(db, sub, qty, f"{seq}.5", peptide_id=pep1.id, slot=1, title="BPC-157 - Quantity (HPLC)")
+        _native_row(db, sub, pur, f"8{seq}", peptide_id=pep2.id, slot=2, title="TB-500 - Purity (HPLC)")
+        _native_row(db, sub, qty, f"{seq}.7", peptide_id=pep2.id, slot=2, title="TB-500 - Quantity (HPLC)")
+    return parent
+
+
+def test_native_blend_analyte_series_keyed_per_slot(native_blend_world, db):
+    out = build_variance_analyte_series(db, native_blend_world)
+    assert set(out) >= {"ANALYTE-1-PUR", "ANALYTE-2-PUR", "ANALYTE-1-QTY", "ANALYTE-2-QTY"}
+    assert len(out["ANALYTE-1-PUR"]["values"]) == 2 and len(out["ANALYTE-2-PUR"]["values"]) == 2
+
+
+def test_native_single_analyte_series_uses_single_keys(native_world, db):
+    out = build_variance_analyte_series(db, native_world)
+    assert set(out) == {"HPLC-PUR", "PEPT-Total"}

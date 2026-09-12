@@ -283,7 +283,7 @@ def _resolve_mk1_parent_tier(
     row at promote time; reading them again would re-introduce the Phase 1
     multi-candidate decision the two-tier model eliminates.
     """
-    from models import LimsAnalysis
+    from models import AnalysisService, LimsAnalysis
 
     rows = db.execute(
         select(LimsAnalysis).where(
@@ -301,8 +301,36 @@ def _resolve_mk1_parent_tier(
         )
     ).scalars().all()
 
+    # M7 COA shim: native-born HPLC rows carry a slot-generic stored keyword
+    # (e.g. every slot's purity row is 'HPLC-PURITY') — decisions keyed by
+    # that bare keyword would silently collapse a blend's per-slot rows onto
+    # one another. Key native rows by their per-slot wire keyword instead
+    # (coa/hplc_shim.wire_keyword), computed once per parent so the >1-slot
+    # vs single-peptide wire vocabulary split (HPLC-PUR vs ANALYTE-N-PUR)
+    # matches what legacy_rows.py emits on the wire. Legacy (senaite-origin)
+    # rows are untouched — bare keyword, byte-identical to pre-M7.
+    from coa.hplc_shim import slot_wires, wire_keyword
+    from lims_analyses.hplc_native import AGGREGATES, TRIO
+
+    _native_kws = frozenset(TRIO + AGGREGATES)
+    svc_ids = {r.analysis_service_id for r in rows if r.analysis_service_id is not None}
+    origins: Dict[int, Optional[str]] = {}
+    if svc_ids:
+        origins = dict(
+            db.execute(
+                select(AnalysisService.id, AnalysisService.origin)
+                .where(AnalysisService.id.in_(svc_ids))
+            ).all()
+        )
+    n_slots = len(slot_wires(db, parent))
+
     decisions: Dict[str, SourceDecision] = {}
     for r in rows:
+        is_native = (
+            origins.get(r.analysis_service_id) == "mk1"
+            and (r.keyword or "").upper() in _native_kws
+        )
+        key = wire_keyword(r.keyword, r.slot, n_slots) if is_native else r.keyword
         uid = f"mk1:{r.id}"
         candidate = CandidateInfo(
             source_sample_id=parent.sample_id,
@@ -314,8 +342,8 @@ def _resolve_mk1_parent_tier(
             in_variance_set=False,
             is_parent_ar=True,
         )
-        decisions[r.keyword] = SourceDecision(
-            analyte_keyword=r.keyword,
+        decisions[key] = SourceDecision(
+            analyte_keyword=key,
             mode="auto",
             chosen=ResolvedSource(
                 source_sample_id=parent.sample_id,
@@ -386,7 +414,30 @@ def _pin_row_identity_matches(db: Session, row, analyte_keyword: str) -> bool:
         )
         .order_by(AnalysisService.id)
     ).scalars().first()
-    return native_svc is not None and native_svc.id == row.analysis_service_id
+    if native_svc is not None and native_svc.id == row.analysis_service_id:
+        return True
+
+    # Leg 3 (M7 COA shim) — native HPLC wire-keyword resolve. A native row's
+    # stored keyword is slot-generic; its identity on the wire is the
+    # per-slot wire_keyword (coa/hplc_shim.wire_keyword), e.g. row keyword
+    # 'HPLC-PURITY' slot 2 of a 2-slot blend identifies as 'ANALYTE-2-PUR'.
+    # `row.slot` is NULL on every non-HPLC / legacy row (see LimsAnalysis.slot
+    # docstring), so this leg is inert for anything but a native HPLC row.
+    if row.slot is not None:
+        from coa.hplc_shim import slot_wires, wire_keyword
+
+        parent = db.execute(
+            select(LimsSample).where(LimsSample.id == row.lims_sample_pk)
+        ).scalar_one_or_none()
+        if parent is not None:
+            n_slots = len(slot_wires(db, parent))
+            if n_slots:
+                try:
+                    if wire_keyword(row.keyword, row.slot, n_slots) == analyte_keyword:
+                        return True
+                except ValueError:
+                    pass
+    return False
 
 
 def _apply_pin_override(
