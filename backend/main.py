@@ -23760,7 +23760,9 @@ def s2s_mirror_lims_sample_fields(
     criterion mirrors the receive inbox / shipping route: only pre-received
     rows accept edits."""
     from sub_samples.service import _ANALYTE_KEY_RE, _PRE_RECEIVED_STATES, _apply_senaite_fields_to_row
-    from lims_analyses.hplc_native import is_native_born, resolve_slot_peptides, restamp_native_slot_rows
+    from lims_analyses.hplc_native import (
+        SlotResolution, is_native_born, resolve_slot_peptides, restamp_native_slot_rows,
+    )
     updated: list[str] = []
     locked: list[str] = []
     missing: list[str] = []
@@ -23791,8 +23793,25 @@ def s2s_mirror_lims_sample_fields(
             # ordered placeholders — restamp them from the re-resolved slots
             # so a customer rename never leaves a stale peptide/title behind
             # (spec M6 addendum).
-            for res in resolve_slot_peptides(db, row):
+            resolved = resolve_slot_peptides(db, row)
+            for res in resolved:
                 restamp_native_slot_rows(db, parent=row, slot=res.slot, res=res)
+            # Controller ruling: a request that BLANKS an Analyte{N}Peptide
+            # slot (name now empty) leaves nothing for resolve_slot_peptides
+            # to return -- restamp that slot's pristine rows to peptide_id
+            # None / reportable_reason "analyte_cleared" so they don't keep
+            # reporting the old peptide. Titles are left as-is (guarded in
+            # restamp_native_slot_rows).
+            occupied_slots = {res.slot for res in resolved}
+            cleared_idx = {
+                int(m.group(1))
+                for k in fields
+                if (m := _ANALYTE_KEY_RE.match(k)) and m.group(2) == "Peptide"
+            } - occupied_slots
+            for idx in cleared_idx:
+                restamp_native_slot_rows(
+                    db, parent=row, slot=idx, res=SlotResolution(idx, "", "", None, "cleared")
+                )
         touched_analytes = any(_ANALYTE_KEY.match(k) for k in fields)
         if touched_analytes:
             n = db.query(SampleAnalyteAlias).filter(

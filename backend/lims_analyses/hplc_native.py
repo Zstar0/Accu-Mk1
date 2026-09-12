@@ -312,8 +312,14 @@ def restamp_native_slot_rows(db: Session, *, parent: LimsSample, slot: int, res:
         if r.review_state not in _PRISTINE_STATES or r.result_value is not None:
             continue
         r.peptide_id = res.peptide_id
-        r.title = title_for_slot(r.keyword, res)
-        r.reportable_reason = f"analyte_{res.reason}: {res.raw_name}" if res.reason else None
+        if res.reason == "cleared":
+            # Analyte blanked out from under the row: leave the title as-is
+            # (nothing to rename to) and stamp a plain reason, no ": {raw}"
+            # suffix since there is no raw label left to show.
+            r.reportable_reason = "analyte_cleared"
+        else:
+            r.title = title_for_slot(r.keyword, res)
+            r.reportable_reason = f"analyte_{res.reason}: {res.raw_name}" if res.reason else None
         n += 1
     db.flush()
     return n
