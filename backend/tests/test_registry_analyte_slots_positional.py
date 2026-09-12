@@ -58,7 +58,7 @@ def test_parse_all_empty_is_an_empty_list():
     assert _parse_analyte_slots({"Analyte2Peptide": "", "Analyte3Peptide": None}) == []
 
 
-def test_positional_consumers_keep_the_senaite_slot_numbers():
+def test_positional_consumers_keep_the_senaite_slot_numbers(db_session):
     """The three ``Analyte{N}``-by-position readers all see slots 1, 3, 4 --
     never 1, 2, 3 -- for a blend whose slot 2 was cleared."""
     from coa.sample_meta import _analyte_slots
@@ -75,7 +75,10 @@ def test_positional_consumers_keep_the_senaite_slot_numbers():
     class _Parent:
         analytes = raw
 
-    assert set(_analyte_slots(_Parent())) == {
+    # SENAITE-born stand-in (no external_lims_system attr -> is_native_born
+    # is False), so slot_wires(db_session, ...) returns [] and _analyte_slots
+    # falls through to the raw-label path unchanged.
+    assert set(_analyte_slots(db_session, _Parent())) == {
         "Analyte1Peptide", "Analyte3Peptide", "Analyte4Peptide",
     }
     assert [a.slot_number for a in analytes_from_registry_json(raw)] == [1, 3, 4]
