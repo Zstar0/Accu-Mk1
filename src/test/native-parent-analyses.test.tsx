@@ -380,10 +380,9 @@ describe('NativeParentAnalysesCard', () => {
     await userEvent.click(screen.getByRole('button', { name: /^retest$/i }))
 
     await waitFor(() => expect(parentRetestAnalysis).toHaveBeenCalledTimes(1))
-    expect(parentRetestAnalysis).toHaveBeenCalledWith('P-0120', 'HM', undefined, {
-      analysis_service_id: undefined,
-      slot: undefined,
-    })
+    // Legacy (SENAITE-born) target: no numeric slot, so the body carries
+    // neither analysis_service_id nor slot (final-review finding #8).
+    expect(parentRetestAnalysis).toHaveBeenCalledWith('P-0120', 'HM', undefined, undefined)
     await waitFor(() => expect(staleSpy).toHaveBeenCalled())
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY] })
   })

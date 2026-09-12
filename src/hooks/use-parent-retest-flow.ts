@@ -54,10 +54,18 @@ export function useParentRetestFlow({
       let retested = 0
       for (const target of targets) {
         if (!target.keyword) continue
-        const resp = await parentRetestAnalysis(sampleId, target.keyword, undefined, {
-          analysis_service_id: target.analysis_service_id,
-          slot: target.slot,
-        })
+        // Native per-slot rows carry a numeric `slot`; only those need
+        // analysis_service_id + slot on the wire so the backend can
+        // disambiguate the slot. Legacy (SENAITE-born) targets keep the
+        // original {keyword} / {keyword, reason} body untouched.
+        const resp = await parentRetestAnalysis(
+          sampleId,
+          target.keyword,
+          undefined,
+          typeof target.slot === 'number'
+            ? { analysis_service_id: target.analysis_service_id, slot: target.slot }
+            : undefined
+        )
         retested += resp.new_row_ids.length
       }
       if (retested > 0) {
