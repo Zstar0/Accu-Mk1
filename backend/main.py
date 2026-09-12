@@ -18394,6 +18394,22 @@ def _arm_native_status_at_registration_bg(sample_id: str) -> None:
             db.close()
 
 
+def _native_auto_checkin_bg(sample_id: str) -> None:
+    """Retest auto check-in (2026-09-12, HPLC native slice 6 M8): scheduled
+    by the S2S upsert route when a retest signal carries `AutoCheckin` for a
+    native-born, already-received original. Own module (native_checkin.py)
+    so it can be unit-tested against sqlite; this is just the never-raise bg
+    wrapper matching the other `_..._bg` helpers in this file."""
+    try:
+        from sub_samples.native_checkin import native_auto_checkin
+        result = native_auto_checkin(sample_id)
+        logger.info("native_auto_checkin.done sample_id=%s result=%s",
+                    sample_id, result)
+    except Exception as e:  # noqa: BLE001 — never raise off a bg task
+        logger.warning("native_auto_checkin.bg_failed sample_id=%s err=%s",
+                       sample_id, e)
+
+
 def _after_publish_native(db, *, sample_id: str, pre_publish_status, actor_user_id,
                           senaite_actual_state: str) -> None:
     """Sample-status authority flip (spec §4.4 / §5): the native publish verb is
@@ -23674,6 +23690,12 @@ def s2s_upsert_lims_sample(
     # SENAITE-attached and SENAITE-free rows — unrelated to (and never
     # gated on) the SENAITE analyses shadow-sync scheduled above.
     background_tasks.add_task(_arm_native_status_at_registration_bg, row.sample_id)
+    # Retest auto check-in (2026-09-12, M8): a retest signal for a native-born,
+    # already-received original never needs the customer to redo the vial
+    # photo/remark — copy them and run the native receive phase.
+    if (req.meta.get("AutoCheckin") in (True, "true", "1")
+            and row.external_lims_system == "mk1" and row.retest_of_sample_id):
+        background_tasks.add_task(_native_auto_checkin_bg, row.sample_id)
     return RegistrySampleSignalResponse(sample_id=row.sample_id, native_id=row.native_id)
 
 

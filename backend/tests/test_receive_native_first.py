@@ -311,3 +311,83 @@ def test_photo_storage_failure_fails_atomically(db):
     assert row.status == "sample_due"        # nothing half-applied
     assert row.date_received is None
     assert transitions == [] and remarks == [] and atts == []
+
+
+# ── M8 Task 3: native_auto_checkin exercised through the REAL
+# _receive_native_phase (unit tests in test_native_auto_checkin.py patch
+# that phase out; this is the one live-DB pass proving the real photo
+# fetch -> save_photo round trip and remark copy actually receive the row).
+
+class _FakeRoundTripStorage(_FakePhotoStorage):
+    """save_photo + fetch_photo back each other via an in-memory dict, so a
+    photo copied off the original can be read back for the new row."""
+    def __init__(self):
+        super().__init__()
+        self._by_key: dict[str, bytes] = {}
+
+    def save_photo(self, sample_id, photo_bytes, filename):
+        key = super().save_photo(sample_id, photo_bytes, filename)
+        self._by_key[key] = photo_bytes
+        return key
+
+    def fetch_photo(self, key: str) -> bytes:
+        return self._by_key[key]
+
+
+def test_native_auto_checkin_real_phase_copies_photo_and_remark(db):
+    from datetime import datetime
+    from models import LimsSubSampleEvent
+    from sub_samples.native_checkin import native_auto_checkin
+
+    orig_id = PFX + "ORIG"
+    new_id = PFX + "NEW"
+    orig = LimsSample(sample_id=orig_id, external_lims_uid="mk1://rnf-orig",
+                      external_lims_system="mk1", sample_type="x",
+                      status="sample_received",
+                      date_received=datetime(2026, 9, 1, 12, 0, 0))
+    db.add(orig)
+    db.commit()
+    db.refresh(orig)
+
+    fake = _FakeRoundTripStorage()
+    prev = get_storage()
+    set_storage_for_tests(fake)
+    try:
+        key = fake.save_photo(orig_id, b"orig-photo-bytes", "orig.png")
+        db.add(LimsParentAttachment(
+            lims_sample_pk=orig.id, kind="receive_image", filename="orig.png",
+            content_type="image/png", storage="s3", storage_key=key,
+        ))
+        db.add(LimsSampleRemark(
+            lims_sample_pk=orig.id, content="arrived cold", author_user_id=1,
+            created_at=orig.date_received,
+        ))
+        db.commit()
+
+        new_row = LimsSample(sample_id=new_id, external_lims_system="mk1",
+                             sample_type="x", status="sample_due",
+                             retest_of_sample_id=orig_id)
+        db.add(new_row)
+        db.commit()
+
+        with patch("workflow.authority.sample_status_authority", return_value="mk1"):
+            result = native_auto_checkin(new_id)
+    finally:
+        set_storage_for_tests(prev)
+
+    assert result["ok"] is True
+    assert result["copied_image"] is True
+    assert result["copied_remark"] is True
+
+    row, _, remarks, atts = _native_state(db, sample_id=new_id)
+    assert row.status == "sample_received" and row.date_received is not None
+    assert any(r.content == "arrived cold" for r in remarks)
+    assert any(a.kind == "receive_image" and a.storage == "s3" for a in atts)
+    events = db.execute(
+        select(LimsSubSampleEvent).where(LimsSubSampleEvent.lims_sample_pk == row.id)
+    ).scalars().all()
+    checkin_events = [e for e in events if e.event == "native_auto_checkin"]
+    assert len(checkin_events) == 1
+    assert checkin_events[0].details["original"] == orig_id
+    assert checkin_events[0].details["copied_image"] is True
+    assert checkin_events[0].details["copied_remark"] is True
