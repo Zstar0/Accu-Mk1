@@ -4155,6 +4155,10 @@ export interface SenaiteAnalysis {
   profile_section_key?: string | null
   profile_section_label?: string | null
   profile_section_sort?: number | null
+  /** Task 6: native-born row's occupied analyte slot (mk1 origin only). */
+  slot?: number | null
+  /** Task 6: native-born row's peptide id (mk1 origin only). */
+  peptide_id?: number | null
 }
 
 export interface SenaiteAttachment {
@@ -4214,6 +4218,10 @@ export interface SenaiteLookupResult {
   registry_pk?: number | null
   /** The sample's OWN explicit priority key (null = inherit up the chain). */
   explicit_priority_key?: string | null
+  /** Task 5: which LIMS owns this sample's canonical record — 'mk1' = native-
+   *  born (Analytes card switches to Relabel-only mode); 'senaite' = legacy.
+   *  Null when unresolved. */
+  external_lims_system?: string | null
 }
 
 export interface SenaiteStatusResponse {
@@ -7193,14 +7201,19 @@ export async function vialSourceRetest(
 export async function parentRetestAnalysis(
   sampleId: string,
   keyword: string,
-  reason?: string
+  reason?: string,
+  opts?: { analysis_service_id?: number | null; slot?: number | null }
 ): Promise<ParentRetestResponse> {
+  const body: Record<string, unknown> = { keyword }
+  if (reason) body.reason = reason
+  if (opts?.analysis_service_id != null) body.analysis_service_id = opts.analysis_service_id
+  if (opts?.slot != null) body.slot = opts.slot
   const response = await fetch(
     `${API_BASE_URL()}/api/lims-analyses/parent/${encodeURIComponent(sampleId)}/retest`,
     {
       method: 'POST',
       headers: getBearerHeaders('application/json'),
-      body: JSON.stringify(reason ? { keyword, reason } : { keyword }),
+      body: JSON.stringify(body),
     }
   )
   if (!response.ok) {
@@ -7209,6 +7222,45 @@ export async function parentRetestAnalysis(
     throw new Error(
       (typeof detail === 'string' ? detail : detail?.message) ||
         `parentRetestAnalysis failed: ${response.status}`
+    )
+  }
+  return response.json()
+}
+
+export interface RelabelNativeSlotResponse {
+  slot: number
+  old_peptide_id: number | null
+  new_peptide_id: number
+  restamped: boolean
+}
+
+/** Task 6: relabel a native-born (mk1 origin) sample's occupied analyte
+ *  slot — the native-mode sibling of replaceAnalyte (SENAITE-only). 409s
+ *  with a `{code, message}` detail when the slot is locked, the target
+ *  peptide already occupies another slot, or the peptide id doesn't exist;
+ *  404 when the slot itself isn't found. */
+export async function relabelNativeSlot(
+  sampleId: string,
+  slot: number,
+  newPeptideId: number,
+  reason?: string
+): Promise<RelabelNativeSlotResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/lims-analyses/parent/${encodeURIComponent(sampleId)}/native-slots/${slot}/relabel`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(
+        reason ? { new_peptide_id: newPeptideId, reason } : { new_peptide_id: newPeptideId }
+      ),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    const detail = err?.detail
+    throw new Error(
+      (typeof detail === 'string' ? detail : detail?.message) ||
+        `relabelNativeSlot failed: ${response.status}`
     )
   }
   return response.json()

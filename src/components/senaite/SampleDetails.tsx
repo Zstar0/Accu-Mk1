@@ -179,6 +179,7 @@ import {
 } from '@/components/senaite/AnalysisTable'
 import { RemovalConfirmModal } from '@/components/senaite/RemovalConfirmModal'
 import { ReplaceAnalyteDialog } from '@/components/senaite/ReplaceAnalyteDialog'
+import { RelabelNativeSlotDialog } from '@/components/senaite/RelabelNativeSlotDialog'
 import { ClearAnalyteDialog } from '@/components/senaite/ClearAnalyteDialog'
 import { CancelSampleDialog } from './CancelSampleDialog'
 import { isHplcAnalyteService } from '@/lib/hplc-analyte-services'
@@ -3759,6 +3760,12 @@ export function SampleDetails() {
     peptideId: number | null
     peptideName: string
   } | null>(null)
+  // Relabel-native-slot dialog (mk1 origin only) — native sibling of Replace.
+  const [relabelSlot, setRelabelSlot] = useState<{
+    slot: number
+    oldPeptideId: number | null
+    oldPeptideName: string
+  } | null>(null)
   // Cancel-sample dialog (customer withdrew) — header action.
   const [cancelOpen, setCancelOpen] = useState(false)
   // Task 10: promoted-source (vial-side) retest warning — sub-sample pages
@@ -6188,6 +6195,7 @@ export function SampleDetails() {
                       const approvedAliases =
                         matchedPeptide?.display_aliases ?? []
                       const currentAlias = sampleAliases.get(slot) ?? ''
+                      const isNativeBorn = data.external_lims_system === 'mk1'
                       const handleAliasChange = async (next: string) => {
                         try {
                           if (!next) {
@@ -6228,63 +6236,86 @@ export function SampleDetails() {
                                 Analyte {slot}
                               </span>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setReplaceSlot({
-                                  slot,
-                                  oldPeptideId:
-                                    analyte.matched_peptide_id ?? null,
-                                  oldPeptideName: displayName,
-                                })
-                              }
-                              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-primary transition-colors"
-                              title="Replace this analyte's peptide (wrong-variant correction)"
-                            >
-                              <RefreshCw size={11} aria-hidden="true" />
-                              Replace
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setClearSlot({
-                                  slot,
-                                  peptideId: analyte.matched_peptide_id ?? null,
-                                  peptideName: displayName,
-                                })
-                              }
-                              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-destructive transition-colors"
-                              title="Clear this analyte slot (the blend has one analyte fewer)"
-                            >
-                              <Eraser size={11} aria-hidden="true" />
-                              Clear
-                            </button>
+                            {isNativeBorn ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setRelabelSlot({
+                                    slot,
+                                    oldPeptideId:
+                                      analyte.matched_peptide_id ?? null,
+                                    oldPeptideName: displayName,
+                                  })
+                                }
+                                className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-primary transition-colors"
+                                title="Relabel this analyte's peptide"
+                              >
+                                <RefreshCw size={11} aria-hidden="true" />
+                                Relabel
+                              </button>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setReplaceSlot({
+                                      slot,
+                                      oldPeptideId:
+                                        analyte.matched_peptide_id ?? null,
+                                      oldPeptideName: displayName,
+                                    })
+                                  }
+                                  className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-primary transition-colors"
+                                  title="Replace this analyte's peptide (wrong-variant correction)"
+                                >
+                                  <RefreshCw size={11} aria-hidden="true" />
+                                  Replace
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setClearSlot({
+                                      slot,
+                                      peptideId: analyte.matched_peptide_id ?? null,
+                                      peptideName: displayName,
+                                    })
+                                  }
+                                  className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-destructive transition-colors"
+                                  title="Clear this analyte slot (the blend has one analyte fewer)"
+                                >
+                                  <Eraser size={11} aria-hidden="true" />
+                                  Clear
+                                </button>
+                              </>
+                            )}
                           </div>
                           <div className="[&>div]:border-0 [&>div]:py-1">
-                            <EditableDataRow
-                              label="Peptide"
-                              value={displayName}
-                              readOnly={subSamples.length > 0}
-                              readOnlyHint="Locked once vials exist — use Replace or Clear so vial rows and the identity service follow the change"
-                              senaiteField={`Analyte${slot}Peptide`}
-                              sampleUid={data.sample_uid ?? ''}
-                              onSaved={v =>
-                                setData(prev => {
-                                  if (!prev) return prev
-                                  const updated = prev.analytes.map(a =>
-                                    a.slot_number === slot
-                                      ? {
-                                          ...a,
-                                          matched_peptide_name:
-                                            (v as string) ??
-                                            a.matched_peptide_name,
-                                        }
-                                      : a
-                                  )
-                                  return { ...prev, analytes: updated }
-                                })
-                              }
-                            />
+                            {!isNativeBorn && (
+                              <EditableDataRow
+                                label="Peptide"
+                                value={displayName}
+                                readOnly={subSamples.length > 0}
+                                readOnlyHint="Locked once vials exist — use Replace or Clear so vial rows and the identity service follow the change"
+                                senaiteField={`Analyte${slot}Peptide`}
+                                sampleUid={data.sample_uid ?? ''}
+                                onSaved={v =>
+                                  setData(prev => {
+                                    if (!prev) return prev
+                                    const updated = prev.analytes.map(a =>
+                                      a.slot_number === slot
+                                        ? {
+                                            ...a,
+                                            matched_peptide_name:
+                                              (v as string) ??
+                                              a.matched_peptide_name,
+                                          }
+                                        : a
+                                    )
+                                    return { ...prev, analytes: updated }
+                                  })
+                                }
+                              />
+                            )}
                             <EditableDataRow
                               label="Declared Qty"
                               value={analyte.declared_quantity}
@@ -7002,6 +7033,17 @@ export function SampleDetails() {
           peptideName={clearSlot.peptideName}
           onClose={() => setClearSlot(null)}
           onCleared={() => refreshSample(data.sample_id)}
+        />
+      )}
+      {relabelSlot && data && (
+        <RelabelNativeSlotDialog
+          open
+          sampleId={data.sample_id}
+          slot={relabelSlot.slot}
+          oldPeptideId={relabelSlot.oldPeptideId}
+          oldPeptideName={relabelSlot.oldPeptideName}
+          onClose={() => setRelabelSlot(null)}
+          onDone={() => refreshSample(data.sample_id)}
         />
       )}
       <CancelSampleDialog
