@@ -15,6 +15,7 @@ def _shaped(**over):
         uid="mk1:144", keyword="HPLC-PUR", title="Peptide Purity (HPLC)",
         result="12", unit="%", review_state="published",
         captured="2026-08-25T04:26:00+00:00", service_origin="senaite",
+        peptide_id=None, slot=None, analysis_service_id=None,
     )
     base.update(over)
     return SimpleNamespace(**base)
@@ -167,3 +168,98 @@ def test_identity_verdict_wired_end_to_end_for_p1986_shape(monkeypatch):
     ])
     rows = build_legacy_rows(None, _PARENT)
     assert [r["Result"] for r in rows] == ["HGH (Somatropin)", "Conforms"]
+
+
+# --- Native-born HPLC rows ride the wire in the shim vocabulary ---
+
+def _native_parent(**over):
+    base = dict(sample_id="P-5001", external_lims_system="mk1")
+    base.update(over)
+    return SimpleNamespace(**base)
+
+
+def _wires(*names):
+    from coa.hplc_shim import SlotWire
+    return [SlotWire(i, n, 100 + i, None) for i, n in enumerate(names, start=1)]
+
+
+def test_native_single_rows_ride_in_legacy_vocabulary(monkeypatch):
+    monkeypatch.setattr(lr, "_shaped_rows", lambda db, sid: [
+        _shaped(uid="mk1:1", keyword="HPLC-IDENTITY", title="BPC-157 - Identity (HPLC)", result="Conforms",
+                unit=None, service_origin="mk1", peptide_id=101, slot=1, analysis_service_id=901),
+        _shaped(uid="mk1:2", keyword="HPLC-PURITY", title="BPC-157 - Purity (HPLC)", result="98.5",
+                unit="%", service_origin="mk1", peptide_id=101, slot=1, analysis_service_id=902),
+        _shaped(uid="mk1:3", keyword="HPLC-QUANTITY", title="BPC-157 - Quantity (HPLC)", result="4.9",
+                unit="mg", service_origin="mk1", peptide_id=101, slot=1, analysis_service_id=903),
+    ])
+    monkeypatch.setattr(lr, "slot_wires", lambda db, parent: _wires("BPC-157"))
+    rows = build_legacy_rows(None, _native_parent())
+    assert [(r["Keyword"], r["Title"], r["Result"], r["Unit"]) for r in rows] == [
+        ("ANALYTE-1-ID", "BPC-157 - Identity (HPLC)", "Conforms", None),
+        ("HPLC-PUR", "BPC-157 - Purity (HPLC)", "98.5", "%"),
+        ("PEPT-Total", "BPC-157 - Quantity (HPLC)", "4.9", "mg"),
+    ]
+    assert all(set(r.keys()) == set(FIELD_CONTRACT) for r in rows)
+    assert all(r["Title"] == r["ServiceTitle"] for r in rows)
+
+
+def test_native_blend_rows_are_per_slot_and_aggregates_map(monkeypatch):
+    monkeypatch.setattr(lr, "_shaped_rows", lambda db, sid: [
+        _shaped(uid="mk1:1", keyword="HPLC-PURITY", title="x", result="98", unit="%", service_origin="mk1",
+                peptide_id=101, slot=1, analysis_service_id=902),
+        _shaped(uid="mk1:2", keyword="HPLC-PURITY", title="x", result="96", unit="%", service_origin="mk1",
+                peptide_id=102, slot=2, analysis_service_id=902),
+        _shaped(uid="mk1:3", keyword="HPLC-BLEND-PURITY", title="HPLC Blend Purity (mass-weighted)", result="97.6",
+                unit="%", service_origin="mk1", peptide_id=None, slot=None, analysis_service_id=904),
+        _shaped(uid="mk1:4", keyword="HPLC-BLEND-TOTAL", title="HPLC Blend Total Quantity", result="5",
+                unit="mg", service_origin="mk1", peptide_id=None, slot=None, analysis_service_id=905),
+    ])
+    monkeypatch.setattr(lr, "slot_wires", lambda db, parent: _wires("BPC-157", "TB-500"))
+    rows = build_legacy_rows(None, _native_parent(sample_id="PB-1001"))
+    assert [(r["Keyword"], r["Title"]) for r in rows] == [
+        ("ANALYTE-1-PUR", "BPC-157 - Purity (HPLC)"),
+        ("ANALYTE-2-PUR", "TB-500 - Purity (HPLC)"),
+        ("BLEND-PUR", "HPLC Blend Purity (mass-weighted)"),
+        ("PEPT-Total", "HPLC Blend Total Quantity"),
+    ]
+    assert len({r["Keyword"] for r in rows}) == 4     # no keyword collision on the wire
+
+
+def test_native_title_comes_from_slot_wires_not_row_title(monkeypatch):
+    """The engine compares Title to Analyte{N}Peptide; both must come from slot_wires."""
+    monkeypatch.setattr(lr, "_shaped_rows", lambda db, sid: [
+        _shaped(uid="mk1:1", keyword="HPLC-IDENTITY", title="bpc157 - Identity (HPLC)", result="Conforms",
+                unit=None, service_origin="mk1", peptide_id=101, slot=1, analysis_service_id=901)])
+    monkeypatch.setattr(lr, "slot_wires", lambda db, parent: _wires("BPC-157"))
+    assert build_legacy_rows(None, _native_parent())[0]["Title"] == "BPC-157 - Identity (HPLC)"
+
+
+def test_native_unresolved_slot_aborts(monkeypatch):
+    from coa.hplc_shim import SlotWire, UnresolvedNativeSlotError
+    monkeypatch.setattr(lr, "_shaped_rows", lambda db, sid: [
+        _shaped(uid="mk1:1", keyword="HPLC-PURITY", title="Mystery - Purity (HPLC)", result="98", unit="%",
+                service_origin="mk1", peptide_id=None, slot=1, analysis_service_id=902)])
+    monkeypatch.setattr(lr, "slot_wires", lambda db, parent: [SlotWire(1, "Mystery", None, "unresolved")])
+    with pytest.raises(UnresolvedNativeSlotError) as ei:
+        build_legacy_rows(None, _native_parent())
+    assert "slot 1" in ei.value.detail
+
+
+def test_native_row_without_wire_slot_aborts(monkeypatch):
+    """A trio row whose slot has no entry in slot_wires (registry/rows drift) aborts loudly."""
+    monkeypatch.setattr(lr, "_shaped_rows", lambda db, sid: [
+        _shaped(uid="mk1:1", keyword="HPLC-PURITY", title="x", result="98", unit="%", service_origin="mk1",
+                peptide_id=101, slot=3, analysis_service_id=902)])
+    monkeypatch.setattr(lr, "slot_wires", lambda db, parent: _wires("BPC-157"))
+    with pytest.raises(NativeSectionsError):
+        build_legacy_rows(None, _native_parent())
+
+
+def test_other_mk1_families_still_filtered_on_native_parent(monkeypatch):
+    monkeypatch.setattr(lr, "_shaped_rows", lambda db, sid: [
+        _shaped(uid="mk1:1", keyword="HPLC-PURITY", title="x", result="98", unit="%", service_origin="mk1",
+                peptide_id=101, slot=1, analysis_service_id=902),
+        _shaped(uid="mk1:200", keyword="STERILITY-USP71", service_origin="mk1"),
+    ])
+    monkeypatch.setattr(lr, "slot_wires", lambda db, parent: _wires("BPC-157"))
+    assert [r["Keyword"] for r in build_legacy_rows(None, _native_parent())] == ["HPLC-PUR"]
