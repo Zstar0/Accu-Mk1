@@ -7231,7 +7231,7 @@ export interface RelabelNativeSlotResponse {
   slot: number
   old_peptide_id: number | null
   new_peptide_id: number
-  restamped: boolean
+  restamped: number
 }
 
 /** Task 6: relabel a native-born (mk1 origin) sample's occupied analyte

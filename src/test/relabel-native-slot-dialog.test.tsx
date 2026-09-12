@@ -11,14 +11,13 @@ window.HTMLElement.prototype.scrollIntoView = vi.fn()
 
 vi.mock('@/lib/api', () => ({
   getPeptides: vi.fn(),
-  getPeptidesWithServiceSet: vi.fn(),
   relabelNativeSlot: vi.fn(),
 }))
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }))
 
-import { getPeptides, getPeptidesWithServiceSet, relabelNativeSlot } from '@/lib/api'
+import { getPeptides, relabelNativeSlot } from '@/lib/api'
 import { toast } from 'sonner'
 import { RelabelNativeSlotDialog } from '@/components/senaite/RelabelNativeSlotDialog'
 
@@ -46,31 +45,28 @@ describe('RelabelNativeSlotDialog', () => {
   beforeEach(() => {
     vi.mocked(getPeptides).mockResolvedValue([
       pep(1, 'TP500'),                      // current (excluded)
-      pep(2, 'TB500 (Thymosin Beta 4)'),    // eligible
-      pep(3, 'Obscure Variant'),            // ineligible (no services)
+      pep(2, 'TB500 (Thymosin Beta 4)'),    // has a legacy service set
+      pep(3, 'Obscure Variant'),            // no legacy service set — still selectable
     ])
-    vi.mocked(getPeptidesWithServiceSet).mockResolvedValue([2])
     vi.mocked(relabelNativeSlot).mockReset()
   })
 
-  it('offers eligible peptides, disables ineligible, and posts the chosen id to the relabel route', async () => {
+  it('lists all active catalog peptides (including one without a legacy service set) and posts the chosen id to the relabel route', async () => {
     vi.mocked(relabelNativeSlot).mockResolvedValue({
-      slot: 2, old_peptide_id: 1, new_peptide_id: 2, restamped: true,
+      slot: 2, old_peptide_id: 1, new_peptide_id: 3, restamped: 1,
     })
     const { onDone } = renderDialog()
 
-    const eligible = await screen.findByRole('button', { name: /TB500 \(Thymosin Beta 4\)/ })
-    const ineligible = screen.getByRole('button', { name: /Obscure Variant/ })
-    expect(ineligible).toBeDisabled()
-    expect(screen.getByText(/no services/i)).toBeInTheDocument()
+    const withoutLegacySet = await screen.findByRole('button', { name: /Obscure Variant/ })
+    expect(withoutLegacySet).not.toBeDisabled()
     // current peptide is excluded from the list
     expect(screen.queryByRole('button', { name: /^TP500/ })).not.toBeInTheDocument()
 
-    await userEvent.click(eligible)
+    await userEvent.click(withoutLegacySet)
     await userEvent.click(screen.getByRole('button', { name: /^Relabel$/ }))
 
     await waitFor(() =>
-      expect(relabelNativeSlot).toHaveBeenCalledWith('P-0120', 2, 2, undefined)
+      expect(relabelNativeSlot).toHaveBeenCalledWith('P-0120', 2, 3, undefined)
     )
     await waitFor(() => expect(onDone).toHaveBeenCalled())
   })

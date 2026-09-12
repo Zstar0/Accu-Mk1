@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Search, Check, AlertCircle } from 'lucide-react'
+import { Search, Check } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   Dialog,
@@ -13,7 +13,6 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import {
   getPeptides,
-  getPeptidesWithServiceSet,
   relabelNativeSlot,
 } from '@/lib/api'
 
@@ -50,27 +49,20 @@ export function RelabelNativeSlotDialog({
   const [reason, setReason] = useState('')
   const [pending, setPending] = useState(false)
 
-  const { data: peptides = [] } = useQuery({
+  const { data: peptides = [], isLoading } = useQuery({
     queryKey: ['peptides'],
     queryFn: () => getPeptides(),
     staleTime: 5 * 60 * 1000,
     enabled: open,
   })
-  const { data: eligibleIds = [] } = useQuery({
-    queryKey: ['peptides-with-service-set'],
-    queryFn: getPeptidesWithServiceSet,
-    staleTime: 5 * 60 * 1000,
-    enabled: open,
-  })
-  const eligible = useMemo(() => new Set(eligibleIds), [eligibleIds])
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase()
     return peptides
       .filter(p => p.active && !p.is_blend && p.id !== oldPeptideId)
       .filter(p => !q || p.name.toLowerCase().includes(q) || p.abbreviation.toLowerCase().includes(q))
-      .sort((a, b) => Number(eligible.has(b.id)) - Number(eligible.has(a.id)) || a.name.localeCompare(b.name))
-  }, [peptides, search, oldPeptideId, eligible])
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }, [peptides, search, oldPeptideId])
 
   function reset() {
     setSearch('')
@@ -124,33 +116,27 @@ export function RelabelNativeSlotDialog({
 
         <div className="max-h-72 overflow-y-auto space-y-0.5 -mx-1 px-1">
           {rows.map(p => {
-            const ok = eligible.has(p.id)
             const selected = p.id === selectedId
             return (
               <button
                 key={p.id}
                 type="button"
-                disabled={!ok}
                 onClick={() => setSelectedId(p.id)}
                 className={cn(
-                  'w-full flex items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors',
+                  'w-full flex items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors hover:bg-muted/60 cursor-pointer',
                   selected ? 'bg-primary/10 border border-primary/40' : 'border border-transparent',
-                  ok ? 'hover:bg-muted/60 cursor-pointer' : 'opacity-50 cursor-not-allowed',
                 )}
               >
                 <span className="truncate">{p.name}</span>
-                {ok
-                  ? (selected && <Check size={14} className="text-primary shrink-0" />)
-                  : (
-                    <span className="flex items-center gap-1 text-[10px] text-muted-foreground shrink-0">
-                      <AlertCircle size={11} /> no services
-                    </span>
-                  )}
+                {selected && <Check size={14} className="text-primary shrink-0" />}
               </button>
             )
           })}
-          {rows.length === 0 && (
+          {!isLoading && rows.length === 0 && (
             <p className="text-xs text-muted-foreground px-2 py-3">No matching peptides.</p>
+          )}
+          {isLoading && (
+            <p className="text-xs text-muted-foreground px-2 py-3">Loading peptides…</p>
           )}
         </div>
 
