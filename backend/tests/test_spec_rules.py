@@ -326,3 +326,36 @@ def test_informational_resolves_by_tier_like_any_row(db_session):
     assert resolve_spec(db_session, svc.id, "Peptide", peptide_id=pep.id).rule_kind == "range"
     # ...and without an anchor the wildcard informational is the answer.
     assert resolve_spec(db_session, svc.id, "Peptide").rule_kind == "informational"
+
+
+def test_sample_peptide_id_anchors_on_native_row_peptide(db_session):
+    """Native trio rows carry peptide_id on the ROW; the generic service has none."""
+    from models import LimsAnalysis
+    from sqlalchemy import select
+    peptide = _mk_peptide(db_session, "BPC157")
+    generic = _mk_service(db_session, keyword="HPLC-IDENTITY")        # peptide_id=None
+    parent = _mk_family(db_session, "P-ANCHOR-NATIVE", parent_analyses=[generic])
+    row = db_session.execute(
+        select(LimsAnalysis).where(LimsAnalysis.lims_sample_pk == parent.id)
+    ).scalar_one()
+    row.peptide_id = peptide.id
+    row.slot = 1
+    db_session.flush()
+    assert sample_peptide_id(db_session, parent.id) == peptide.id
+
+
+def test_sample_peptide_id_native_blend_returns_none(db_session):
+    from models import LimsAnalysis
+    from sqlalchemy import select
+    p1 = _mk_peptide(db_session, "BPC157")
+    p2 = _mk_peptide(db_session, "TB500")
+    generic1 = _mk_service(db_session, keyword="HPLC-IDENTITY")
+    generic2 = _mk_service(db_session, keyword="HPLC-PURITY")
+    parent = _mk_family(db_session, "PB-ANCHOR-NATIVE", parent_analyses=[generic1, generic2])
+    rows = db_session.execute(
+        select(LimsAnalysis).where(LimsAnalysis.lims_sample_pk == parent.id)
+    ).scalars().all()
+    rows[0].peptide_id, rows[0].slot = p1.id, 1
+    rows[1].peptide_id, rows[1].slot = p2.id, 2
+    db_session.flush()
+    assert sample_peptide_id(db_session, parent.id) is None

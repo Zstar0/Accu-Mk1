@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from lims_analyses.hplc_native import native_category
@@ -183,7 +183,9 @@ def build_variance_replicates(db: Session, parent) -> dict:
         rows = db.execute(
             select(LimsAnalysis, AnalysisService, Peptide)
             .join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
-            .outerjoin(Peptide, Peptide.id == AnalysisService.peptide_id)
+            # Native-born rows carry peptide_id on the ROW (generic service has
+            # none); legacy rows carry it on the per-substance service.
+            .outerjoin(Peptide, Peptide.id == func.coalesce(LimsAnalysis.peptide_id, AnalysisService.peptide_id))
             .where(
                 LimsAnalysis.lims_sub_sample_pk == sub.id,
                 LimsAnalysis.review_state.in_(_VIAL_COA_STATES),  # _SERIES_STATES + 'promoted'
@@ -203,6 +205,8 @@ def build_variance_replicates(db: Session, parent) -> dict:
         # rows are too). Generic services (HPLC-PUR, PEPT-Total, HPLC-ID) carry
         # no peptide_id, so they can only be attributed when the vial measures a
         # single peptide — which is the production single-peptide case.
+        # Native-born rows are peptide-specific via `LimsAnalysis.peptide_id`
+        # (COALESCEd into `pep` above).
         keys = _series_keys(rows)
         vial_peptides = {_key_for(pep, keys) for la, svc, pep in rows if pep is not None}
         sole_peptide = next(iter(vial_peptides)) if len(vial_peptides) == 1 else None
@@ -242,7 +246,9 @@ def build_vial_figures(db: Session, sub: LimsSubSample, qty_unit: str = "mg") ->
     rows = db.execute(
         select(LimsAnalysis, AnalysisService, Peptide)
         .join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
-        .outerjoin(Peptide, Peptide.id == AnalysisService.peptide_id)
+        # Native-born rows carry peptide_id on the ROW (generic service has
+        # none); legacy rows carry it on the per-substance service.
+        .outerjoin(Peptide, Peptide.id == func.coalesce(LimsAnalysis.peptide_id, AnalysisService.peptide_id))
         .where(
             LimsAnalysis.lims_sub_sample_pk == sub.id,
             LimsAnalysis.review_state.in_(_VIAL_COA_STATES),
