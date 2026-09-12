@@ -337,3 +337,78 @@ def test_rebridge_prep_on_native_vial(db_session):
         ids = rebridge_prep(db, prep_id=77, user_id=1)
 
     assert set(ids) == {idr.id, pur.id, qty.id}
+
+
+# ── I-1 (final review 2026-09-12): native detection requires a native-born
+# parent, not just a live native keyword on the vial ───────────────────────
+
+
+def test_stray_native_keyword_on_senaite_vial_still_bridges_legacy(db_session):
+    """A SENAITE-born vial (parent.external_lims_system absent/'senaite',
+    uid set) carrying legacy PUR_/QTY_/ID_ rows plus ONE stray HPLC-PURITY
+    row (peptide_id None -- the shape lims_analyses/service.py::
+    add_analysis_to_vial can create today) must still bridge the legacy rows
+    exactly like tests/test_prep_bridge.py::test_routes_to_per_substance_by_peptide,
+    and the stray row must stay untouched. Before the fix, the live native
+    keyword alone flipped `native` True and stopped all legacy bridging."""
+    db = db_session
+    pep = _peptide(db, "BPC-157", "BPC157")
+    parent = LimsSample(sample_id="P-9001", external_lims_uid="UID-P-9001")
+    db.add(parent)
+    db.flush()
+    vial = LimsSubSample(parent_sample_pk=parent.id, external_lims_uid="UID-P-9001-S01",
+                         sample_id="P-9001-S01", vial_sequence=0)
+    db.add(vial)
+    db.flush()
+
+    db.add_all([
+        AnalysisService(keyword="PUR_BPC157", peptide_id=pep.id, title="BPC-157 - Purity"),
+        AnalysisService(keyword="QTY_BPC157", peptide_id=pep.id, title="BPC-157 - Quantity"),
+    ])
+    db.flush()
+
+    pur = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                          analysis_service_id=200, keyword="PUR_BPC157", title="BPC-157 - Purity")
+    qty = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                          analysis_service_id=201, keyword="QTY_BPC157", title="BPC-157 - Quantity")
+    idr = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                          analysis_service_id=30, keyword="ID_BPC157", title="BPC-157 - Identity (HPLC)")
+    stray = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                            analysis_service_id=999, keyword=KW_PURITY, title="Purity (HPLC)")
+
+    a = _hplc(db, pep, purity=98.5, conforms=True, qty=4.2)
+    ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
+
+    assert set(ids) == {pur.id, qty.id, idr.id}
+    db.refresh(pur); db.refresh(qty); db.refresh(idr); db.refresh(stray)
+    assert pur.result_value == "98.5" and pur.review_state == "to_be_verified"
+    assert qty.result_value == "4.2"
+    assert idr.result_value == "BPC-157"   # legacy identity value, not native's "Conforms"
+    assert stray.review_state == "unassigned" and stray.result_value is None
+
+
+# ── M-5: intra-slot partial-fill (purity done, quantity still pending) ─────
+
+
+def test_native_blend_aggregates_wait_for_intra_slot_quantity(db_session):
+    """Whole-slot incompleteness is covered by
+    test_native_blend_aggregates_wait_for_every_slot; this covers the finer
+    grain -- slot 1 fully filled (purity AND quantity), slot 2 purity filled
+    but its quantity still pending -- aggregates must still withhold."""
+    db = db_session
+    services = _catalog(db)
+    bpc = _peptide(db, "BPC-157", "BPC157")
+    tb = _peptide(db, "TB-500", "TB500")
+    _, vial = _native_vial(db, sample_id="PB-1005", sample_type="Peptide Blend")
+    _, pur1, qty1 = _trio(db, vial, services, slot=1, peptide=bpc, name="BPC-157")
+    _, pur2, qty2 = _trio(db, vial, services, slot=2, peptide=tb, name="TB-500")
+    bp, bt = _aggregates(db, vial, services)
+    _fill(db, pur1, "98"); _fill(db, qty1, "4")
+    _fill(db, pur2, "96")   # slot 2 purity done, quantity still pending
+    assert bridge_blend_aggregates(db, lims_sub_sample_pk=vial.id, user_id=1) == []
+    _fill(db, qty2, "1")
+    written = bridge_blend_aggregates(db, lims_sub_sample_pk=vial.id, user_id=1)
+    assert set(written) == {bp.id, bt.id}
+    db.refresh(bp); db.refresh(bt)
+    assert bt.result_value == "5"
+    assert bp.result_value == "97.6"
