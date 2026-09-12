@@ -43,7 +43,11 @@ class UnresolvedNativeSlotError(NativeSectionsError):
 def slot_wires(db, parent) -> list[SlotWire]:
     if not is_native_born(parent):
         return []
-    return [SlotWire(r.slot, r.display_name, r.peptide_id, r.reason) for r in resolve_slot_peptides(db, parent)]
+    wires = [SlotWire(r.slot, r.display_name, r.peptide_id, r.reason) for r in resolve_slot_peptides(db, parent)]
+    if len(wires) > 4:
+        raise NativeSectionsError(
+            "COABuilder page 1 renders at most 4 analyte slots")
+    return wires
 
 
 def is_native_hplc_row(row) -> bool:

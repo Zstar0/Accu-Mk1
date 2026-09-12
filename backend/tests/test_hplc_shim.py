@@ -75,3 +75,14 @@ def test_unresolved_error_is_a_native_sections_error():
     e = UnresolvedNativeSlotError(sample_id="P-5001", slot=2, raw_name="Mystery")
     assert isinstance(e, NativeSectionsError)
     assert "P-5001" in e.detail and "slot 2" in e.detail and "Mystery" in e.detail
+
+
+def test_slot_wires_aborts_over_four_slots(db):
+    """F4: COABuilder page 1 renders at most 4 analyte slots — a 5-slot native
+    parent must abort rather than silently truncate."""
+    parent, services, peps, _ = native_family(
+        db, sample_id="PB-1502",
+        slots=[("BPC-157", "BPC157"), ("TB-500", "TB500"), ("GHRP-2", "GHRP2"),
+               ("GHRP-6", "GHRP6"), ("Ipamorelin", "IPAM")])
+    with pytest.raises(NativeSectionsError):
+        slot_wires(db, parent)
