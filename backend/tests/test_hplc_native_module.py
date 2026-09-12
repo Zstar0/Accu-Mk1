@@ -228,3 +228,18 @@ def test_native_category_trio_and_aggregates():
     assert native_category("HPLC-PUR") is None
     assert native_category("ID_BPC157") is None
     assert native_category(None) is None
+
+
+def test_resolve_stored_id_survives_peptide_retirement(db):
+    """F2: a slot already bound to a peptide_id must keep resolving after that
+    peptide is retired (active=False) — only the name/alias fold is active-gated,
+    or every published native COA using it bricks on regen when the row still
+    carries the stored id."""
+    from lims_analyses.hplc_native import resolve_slot_peptides
+    retired = Peptide(name="Retired", abbreviation="RET", active=False)
+    db.add(retired); db.flush()
+    p = _native_parent(db, [
+        {"name": "Retired - Identity (HPLC)", "declared_quantity": None, "peptide_id": retired.id},
+    ])
+    res = resolve_slot_peptides(db, p)
+    assert (res[0].peptide_id, res[0].reason) == (retired.id, None)
