@@ -109,6 +109,95 @@ def test_pin_row_identity_matches_native_wire_keyword(db):
     assert _pin_row_identity_matches(db, p1, KW_PURITY) is True
 
 
+def _run(coro):
+    # asyncio.run (not get_event_loop().run_until_complete) — matches
+    # tests/test_shadow_reader.py's rationale: order-independent even if
+    # pytest-asyncio tests elsewhere in the session already consumed the
+    # default event loop.
+    import asyncio
+    return asyncio.run(coro)
+
+
+def test_resolve_sources_blend_no_phantom_bare_keyword(db):
+    """Fix round 1 (Critical): end-to-end through resolve_sources with the
+    real ShadowAnalysesReader. Before the shadow_reader filter, the reader
+    surfaced both native purity rows under the bare 'HPLC-PURITY' keyword
+    (in addition to mk1_decisions' ANALYTE-{n}-PUR keys), producing a
+    phantom needs_decision block on every native blend COA."""
+    from coa.block_summary import has_blocking_unresolved
+    from coa.shadow_reader import ShadowAnalysesReader
+    from coa.source_resolver import resolve_sources
+
+    parent, services, peps, vial_rows = native_family(
+        db, sample_id="PB-9201", slots=[("BPC-157", "BPC157"), ("TB-500", "TB500")]
+    )
+    rows = next(iter(vial_rows.values()))
+    pur1, pur2 = _rows_by_kw(rows, KW_PURITY)
+    _submit_verify_promote(db, pur1, "98.1")
+    _submit_verify_promote(db, pur2, "96.2")
+    db.commit()
+
+    result = _run(resolve_sources(parent.sample_id, db, ShadowAnalysesReader(db)))
+    keys = {d.analyte_keyword for d in result.decisions}
+
+    assert "ANALYTE-1-PUR" in keys and "ANALYTE-2-PUR" in keys
+    assert "HPLC-PURITY" not in keys
+    assert has_blocking_unresolved(result, micro_keywords=set()) is False
+
+
+def test_resolve_sources_single_peptide_no_duplicate(db):
+    from coa.shadow_reader import ShadowAnalysesReader
+    from coa.source_resolver import resolve_sources
+
+    parent, services, peps, vial_rows = native_family(
+        db, sample_id="PB-9202", slots=[("BPC-157", "BPC157")]
+    )
+    rows = next(iter(vial_rows.values()))
+    (pur,) = _rows_by_kw(rows, KW_PURITY)
+    (qty,) = _rows_by_kw(rows, KW_QUANTITY)
+    (ident,) = _rows_by_kw(rows, KW_IDENTITY)
+    _submit_verify_promote(db, pur, "99.0")
+    _submit_verify_promote(db, qty, "5.1", unit="mg")
+    _submit_verify_promote(db, ident, "Pass", unit=None)
+    db.commit()
+
+    result = _run(resolve_sources(parent.sample_id, db, ShadowAnalysesReader(db)))
+    keys = [d.analyte_keyword for d in result.decisions]
+
+    assert set(keys) == {"HPLC-PUR", "PEPT-Total", "ANALYTE-1-ID"}
+    assert len(keys) == len(set(keys))  # no spurious duplicate entries
+    assert "HPLC-PURITY" not in keys
+
+
+def test_resolve_sources_senaite_born_parent_unaffected(db):
+    """SENAITE-origin parent-tier row (not native HPLC): the shadow_reader
+    filter must be a no-op — decisions stay keyed by the bare stored
+    keyword, identical to pre-M7 behavior."""
+    from models import AnalysisService, LimsSample, LimsAnalysis
+    from coa.shadow_reader import ShadowAnalysesReader
+    from coa.source_resolver import resolve_sources
+
+    svc = AnalysisService(title="Endotoxin (LAL)", keyword="ENDO-LAL", origin="senaite")
+    db.add(svc); db.flush()
+    parent = LimsSample(sample_id="BW-9203", external_lims_system="senaite",
+                        external_lims_uid="uid-BW-9203", sample_type_title="Bacteriostatic Water")
+    db.add(parent); db.flush()
+    row = LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=svc.id, keyword="ENDO-LAL",
+        title="Endotoxin (LAL)", result_value="0.05", result_unit="EU/mL",
+        review_state="verified", reportable=True, provenance="canonical",
+    )
+    db.add(row); db.flush(); db.commit()
+
+    result = _run(resolve_sources(parent.sample_id, db, ShadowAnalysesReader(db)))
+
+    assert len(result.decisions) == 1
+    d = result.decisions[0]
+    assert d.analyte_keyword == "ENDO-LAL"
+    assert d.chosen.value == "0.05"
+    assert d.blocked is None
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-q"]))
