@@ -263,3 +263,30 @@ def test_other_mk1_families_still_filtered_on_native_parent(monkeypatch):
     ])
     monkeypatch.setattr(lr, "slot_wires", lambda db, parent: _wires("BPC-157"))
     assert [r["Keyword"] for r in build_legacy_rows(None, _native_parent())] == ["HPLC-PUR"]
+
+
+def test_native_registry_peptide_drift_aborts(monkeypatch):
+    """F1: row peptide_id != registry (slot_wires) peptide_id — relabel drift, never
+    silently ride the registry's title over the row's verdict (P-1611/P-1500 class)."""
+    monkeypatch.setattr(lr, "_shaped_rows", lambda db, sid: [
+        _shaped(uid="mk1:1", keyword="HPLC-IDENTITY", title="Old - Identity (HPLC)", result="Conforms",
+                unit=None, service_origin="mk1", peptide_id=101, slot=1, analysis_service_id=901)])
+    from coa.hplc_shim import SlotWire
+    monkeypatch.setattr(lr, "slot_wires", lambda db, parent: [SlotWire(1, "New", 102, None)])
+    with pytest.raises(NativeSectionsError) as ei:
+        build_legacy_rows(None, _native_parent())
+    msg = str(ei.value)
+    assert "101" in msg and "102" in msg and "slot 1" in msg
+
+
+def test_native_registry_slot_without_rows_aborts(monkeypatch):
+    """F3: a blend with a registry slot (2) that has no admitted trio rows aborts —
+    the drift guard must run both directions."""
+    monkeypatch.setattr(lr, "_shaped_rows", lambda db, sid: [
+        _shaped(uid="mk1:1", keyword="HPLC-PURITY", title="x", result="98", unit="%", service_origin="mk1",
+                peptide_id=101, slot=1, analysis_service_id=902),
+    ])
+    monkeypatch.setattr(lr, "slot_wires", lambda db, parent: _wires("BPC-157", "TB-500"))
+    with pytest.raises(NativeSectionsError) as ei:
+        build_legacy_rows(None, _native_parent(sample_id="PB-1002"))
+    assert "slot 2" in str(ei.value) or "registry slot 2" in str(ei.value)

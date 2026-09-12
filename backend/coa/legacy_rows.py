@@ -86,6 +86,17 @@ def build_legacy_rows(db, parent) -> list[dict]:
     # {} for SENAITE-born parents (slot_wires short-circuits there).
     wires = {w.slot: w for w in slot_wires(db, parent)}
     n_slots = len(wires)
+    if n_slots > 1:
+        rowed_slots = {
+            r.slot for r in legacy
+            if is_native_hplc_row(r) and (r.keyword or "").upper() in TRIO
+        }
+        empty_slots = sorted(set(wires) - rowed_slots)
+        if empty_slots:
+            raise NativeSectionsError(
+                f"legacy rows: {parent.sample_id} registry slot "
+                f"{empty_slots[0]} has no analysis rows — remove it via "
+                f"relabel/Manage Analyses before COA")
     rows = []
     for r in legacy:
         keyword, title = r.keyword, r.title
@@ -99,6 +110,12 @@ def build_legacy_rows(db, parent) -> list[dict]:
                 if r.peptide_id is None or wire.peptide_id is None:
                     raise UnresolvedNativeSlotError(
                         sample_id=parent.sample_id, slot=r.slot, raw_name=wire.display_name)
+                if r.peptide_id != wire.peptide_id:
+                    raise NativeSectionsError(
+                        f"legacy rows: {parent.sample_id} slot {r.slot} — "
+                        f"row peptide_id {r.peptide_id} != registry peptide_id "
+                        f"{wire.peptide_id} — registry/rows peptide drift — "
+                        f"relabel before COA")
                 keyword = wire_keyword(r.keyword, r.slot, n_slots)
                 title = wire_title(r.keyword, r.title, wire)
             else:
