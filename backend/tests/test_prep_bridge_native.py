@@ -15,6 +15,7 @@ from lims_analyses.hplc_native import (
 )
 from lims_analyses.prep_bridge import (
     _category, bridge_prep_result_to_vial, bridge_blend_aggregates, stamp_prep_assignment,
+    rebridge_prep,
 )
 
 
@@ -310,3 +311,29 @@ def test_native_blend_end_to_end_via_process_hplc_order(db_session):
     a2 = _hplc(db, tb, purity=96.0, conforms=True, qty=1.0)
     bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a2, peptide=tb, user_id=1)
     assert set(bridge_blend_aggregates(db, lims_sub_sample_pk=vial.id, user_id=1)) == {bp.id, bt.id}
+
+
+# ── rebridge_prep (flyout Auto-fill re-run) on a native vial ────────────────
+
+
+def test_rebridge_prep_on_native_vial(db_session):
+    """Flyout Auto-fill: rebridge_prep loads the prep via mk1_db.get_sample_prep
+    and the linked HPLCAnalysis (via sample_prep_id, same as the legacy path in
+    tests/test_prep_bridge.py::_hplc_for_prep) then derives peptide from
+    HPLCAnalysis.peptide_id — no native-specific branch needed."""
+    from unittest.mock import patch
+
+    db = db_session
+    services = _catalog(db)
+    pep = _peptide(db, "BPC-157", "BPC157")
+    _, vial = _native_vial(db)
+    idr, pur, qty = _trio(db, vial, services, slot=1, peptide=pep, name="BPC-157")
+    a = _hplc(db, pep, purity=98.5, conforms=True, qty=4.2)
+    a.sample_prep_id = 77
+    db.flush()
+
+    with patch("mk1_db.get_sample_prep",
+               return_value={"id": 77, "lims_sub_sample_pk": vial.id}):
+        ids = rebridge_prep(db, prep_id=77, user_id=1)
+
+    assert set(ids) == {idr.id, pur.id, qty.id}
