@@ -149,3 +149,8 @@ class RegistrySampleReadResult(SenaiteLookupResult):
     read_source: str = "mk1"
     registry_missing: bool = False
     field_sources: dict[str, str] = {}
+    # LimsSample.external_lims_system passthrough (native-born gate, HPLC
+    # slice 4 M6) — lets the frontend tell a native-born sample ("mk1") apart
+    # from a SENAITE-born one without re-deriving it from field_sources.
+    # None on the registry_missing path (no row to read it from).
+    external_lims_system: Optional[str] = None

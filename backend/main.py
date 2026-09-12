@@ -13740,9 +13740,16 @@ async def publish_sample_coa(
             ),
         )
 
-    # 2. Resolve SENAITE UID upfront so we fail before touching integration service state
+    # 2. Resolve SENAITE UID upfront so we fail before touching integration service state.
+    # Native-born samples (external_lims_system == "mk1") have no SENAITE AR at
+    # all — skip the search entirely instead of 404ing against SENAITE for a
+    # sample it never had (HPLC native slice 4 M6).
+    _registry_row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    _native_born = _registry_row is not None and _registry_row.external_lims_system == "mk1"
     senaite_uid: str | None = None
-    if SENAITE_URL:
+    if SENAITE_URL and not _native_born:
         try:
             async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
                 timeout=httpx.Timeout(15.0, connect=5.0),
@@ -13768,9 +13775,7 @@ async def publish_sample_coa(
     # generated COA, so capture it HERE and send to IS, which forwards it to the
     # WP COA email + order-page Lab Remarks button. publish-coa is parent-only
     # (sub-samples are rejected above), so the parent row carries the remark.
-    _parent_row = db.execute(
-        select(LimsSample).where(LimsSample.sample_id == sample_id)
-    ).scalar_one_or_none()
+    _parent_row = _registry_row
     # Snapshot the pre-publish status NOW, before any commit below can expire
     # `_parent_row` (expire_on_commit=True). The transition-log hook at the
     # bottom of this function passes `from_status` as a run_in_threadpool
