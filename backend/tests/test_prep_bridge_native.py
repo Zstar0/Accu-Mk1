@@ -122,3 +122,121 @@ def test_stamp_prep_assignment_reaches_native_trio_rows(db_session):
     assert set(changed) == {idr.id, pur.id, qty.id}
     db.refresh(pur)
     assert pur.instrument_id == 7 and pur.method_id == 3
+
+
+def test_native_single_routes_trio_by_peptide_id(db_session):
+    db = db_session
+    services = _catalog(db)
+    pep = _peptide(db, "BPC-157", "BPC157")
+    _, vial = _native_vial(db)
+    idr, pur, qty = _trio(db, vial, services, slot=1, peptide=pep, name="BPC-157")
+    a = _hplc(db, pep, purity=98.5, conforms=True, qty=4.2, instrument_id=9)
+    ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
+    assert set(ids) == {idr.id, pur.id, qty.id}
+    for r in (idr, pur, qty):
+        db.refresh(r)
+    assert pur.result_value == "98.5" and pur.review_state == "to_be_verified"
+    assert qty.result_value == "4.2"
+    assert idr.result_value == "Conforms"          # literal token, NOT the peptide name (ruling 2026-09-10)
+    assert pur.instrument_id == 9
+
+
+def test_native_identity_fail_writes_does_not_conform(db_session):
+    db = db_session
+    services = _catalog(db)
+    pep = _peptide(db, "BPC-157", "BPC157")
+    _, vial = _native_vial(db)
+    idr, _, _ = _trio(db, vial, services, slot=1, peptide=pep, name="BPC-157")
+    a = _hplc(db, pep, conforms=False)
+    bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
+    db.refresh(idr)
+    assert idr.result_value == "Does Not Conform"
+
+
+def test_native_identity_unknown_is_skipped(db_session):
+    db = db_session
+    services = _catalog(db)
+    pep = _peptide(db, "BPC-157", "BPC157")
+    _, vial = _native_vial(db)
+    idr, pur, _ = _trio(db, vial, services, slot=1, peptide=pep, name="BPC-157")
+    a = _hplc(db, pep, purity=97.0, conforms=None)
+    ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
+    assert ids == [pur.id]
+    db.refresh(idr)
+    assert idr.review_state == "unassigned" and idr.result_value is None
+
+
+def test_native_blend_routes_only_the_matching_slot(db_session):
+    db = db_session
+    services = _catalog(db)
+    bpc = _peptide(db, "BPC-157", "BPC157")
+    tb = _peptide(db, "TB-500", "TB500")
+    _, vial = _native_vial(db, sample_id="PB-1001", sample_type="Peptide Blend")
+    id1, pur1, qty1 = _trio(db, vial, services, slot=1, peptide=bpc, name="BPC-157")
+    id2, pur2, qty2 = _trio(db, vial, services, slot=2, peptide=tb, name="TB-500")
+    _aggregates(db, vial, services)
+    a = _hplc(db, tb, purity=96.1, conforms=True, qty=2.0)
+    ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=tb, user_id=1)
+    assert set(ids) == {id2.id, pur2.id, qty2.id}
+    db.refresh(pur1); db.refresh(id1)
+    assert pur1.review_state == "unassigned" and id1.review_state == "unassigned"
+
+
+def test_native_unresolved_slot_never_matches(db_session):
+    """peptide_id NULL (analyte_unresolved) rows are never a bridge target — even
+    when they are the only rows in the category (spec addendum: never guess)."""
+    db = db_session
+    services = _catalog(db)
+    pep = _peptide(db, "BPC-157", "BPC157")
+    _, vial = _native_vial(db)
+    idr, pur, qty = _trio(db, vial, services, slot=1, peptide=None, name="Mystery Peptide")
+    a = _hplc(db, pep, purity=99.0, conforms=True, qty=1.0)
+    ids = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
+    assert ids == []
+    db.refresh(pur)
+    assert pur.review_state == "unassigned"
+
+
+def test_native_duplicate_slot_rows_are_ambiguous(db_session):
+    """Two pending HPLC-PURITY rows for the same peptide (should be impossible
+    under the widened unique index, but sqlite has no index here) → skip, never guess."""
+    db = db_session
+    services = _catalog(db)
+    pep = _peptide(db, "BPC-157", "BPC157")
+    _, vial = _native_vial(db)
+    _trio(db, vial, services, slot=1, peptide=pep, name="BPC-157")
+    _trio(db, vial, services, slot=2, peptide=pep, name="BPC-157")
+    a = _hplc(db, pep, purity=99.0, conforms=True, qty=1.0)
+    assert bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1) == []
+
+
+def test_native_vial_never_falls_through_to_legacy_generic(db_session):
+    """A stray legacy HPLC-PUR row on a native vial must not be written by a
+    peptide whose native row is absent — native vials use the native tier only."""
+    db = db_session
+    services = _catalog(db)
+    bpc = _peptide(db, "BPC-157", "BPC157")
+    other = _peptide(db, "GHK-Cu", "GHKCU")
+    _, vial = _native_vial(db)
+    _trio(db, vial, services, slot=1, peptide=bpc, name="BPC-157")
+    stray = create_analysis(db, host_kind="sub_sample", host_pk=vial.id,
+                            analysis_service_id=999, keyword="HPLC-PUR", title="Purity (HPLC)")
+    a = _hplc(db, other, purity=90.0, conforms=True, qty=1.0)
+    assert bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=other, user_id=1) == []
+    db.refresh(stray)
+    assert stray.review_state == "unassigned"
+
+
+def test_native_rerun_does_not_touch_already_bridged_rows(db_session):
+    db = db_session
+    services = _catalog(db)
+    pep = _peptide(db, "BPC-157", "BPC157")
+    _, vial = _native_vial(db)
+    idr, pur, qty = _trio(db, vial, services, slot=1, peptide=pep, name="BPC-157")
+    a = _hplc(db, pep, purity=98.5, conforms=True, qty=4.2)
+    first = bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=a, peptide=pep, user_id=1)
+    assert len(first) == 3
+    b = _hplc(db, pep, purity=50.0, conforms=False, qty=9.9)
+    assert bridge_prep_result_to_vial(db, lims_sub_sample_pk=vial.id, analysis=b, peptide=pep, user_id=1) == []
+    db.refresh(pur)
+    assert pur.result_value == "98.5"

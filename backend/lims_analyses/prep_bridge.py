@@ -27,7 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from models import AnalysisService, HPLCAnalysis, LimsAnalysis, LimsSample, LimsSubSample, Peptide
-from lims_analyses.hplc_native import native_category
+from lims_analyses.hplc_native import native_category, TRIO
 from lims_analyses.service import apply_transition
 from lims_analyses.state_machine import RESULT_PENDING_STATES
 
@@ -113,7 +113,8 @@ def _fmt_num(v: Optional[float]) -> Optional[str]:
     return f"{v:.3f}".rstrip("0").rstrip(".")
 
 
-def _result_for(category: str, analysis: HPLCAnalysis, peptide: Optional[Peptide]) -> Optional[str]:
+def _result_for(category: str, analysis: HPLCAnalysis, peptide: Optional[Peptide],
+                *, native: bool = False) -> Optional[str]:
     if category == "purity":
         return _fmt_num(analysis.purity_percent)
     if category == "quantity":
@@ -121,6 +122,11 @@ def _result_for(category: str, analysis: HPLCAnalysis, peptide: Optional[Peptide
     if category == "identity":
         if analysis.identity_conforms is None:
             return None
+        if native:
+            # Native-born rows carry the literal verdict (Handler ruling
+            # 2026-09-10); spec row is `equals "Conforms"` and COABuilder's
+            # _identity_matches already accepts the token.
+            return "Conforms" if analysis.identity_conforms else "Does Not Conform"
         if analysis.identity_conforms:
             # Conforming identity result_value is the peptide name (matches the
             # live ID_* convention, e.g. ID_BPC157 -> "BPC-157").
@@ -131,7 +137,8 @@ def _result_for(category: str, analysis: HPLCAnalysis, peptide: Optional[Peptide
 
 def _pick_target(category: str, candidates: list[LimsAnalysis], *, slot: Optional[int],
                  peptide_kw: Optional[str], id_kw: Optional[str] = None,
-                 pep_token: str = "") -> Optional[LimsAnalysis]:
+                 pep_token: str = "", native: bool = False,
+                 native_peptide_id: Optional[int] = None) -> Optional[LimsAnalysis]:
     """Choose the single target row for a category, or None if ambiguous/empty.
 
     Identity routing, in order:
@@ -152,6 +159,17 @@ def _pick_target(category: str, candidates: list[LimsAnalysis], *, slot: Optiona
       2. legacy per-analyte ANALYTE-{slot}-* rows (route by SENAITE-resolved slot).
       3. legacy generic row (HPLC-PUR, or a single QTY_* row) — exactly one.
     """
+    if native:
+        # Native-born vial: the ONLY tier is (keyword in TRIO, row.peptide_id ==
+        # prep peptide). A NULL-peptide row (analyte_unresolved) never matches;
+        # 0 or 2+ matches never guess; legacy tiers are never consulted.
+        if native_peptide_id is None:
+            return None
+        m = [
+            r for r in candidates
+            if (r.keyword or "").upper() in TRIO and r.peptide_id == native_peptide_id
+        ]
+        return m[0] if len(m) == 1 else None
     if category == "identity":
         specific = [r for r in candidates if (r.keyword or "").upper().startswith("ID_")]
         if id_kw:
@@ -431,6 +449,13 @@ def bridge_prep_result_to_vial(
         ).scalars()
     }
 
+    # Native-born vial = any live native trio keyword on it. Routing is then
+    # by LimsAnalysis.peptide_id only (spec 2026-09-10 M5); the per-substance
+    # / ANALYTE-slot / generic legacy tiers are never consulted, and no SENAITE
+    # slot lookup happens (native vials have no ANALYTE-N rows).
+    native = bool(live_keywords & set(TRIO))
+    native_peptide_id = peptide.id if (native and peptide is not None) else None
+
     # Bucket candidate rows by result category. Identity rows are NOT filtered
     # here by token; _pick_target selects the right ID_<X> row per-peptide
     # (catalog id_kw primary, token fallback), which is what disambiguates blends.
@@ -461,14 +486,19 @@ def bridge_prep_result_to_vial(
 
     # Per-substance keywords for THIS prep's peptide (catalog lookup, no SENAITE).
     # Primary routing target — selects the peptide's own PUR_<X>/QTY_<X> row.
-    pur_kw = _peptide_service_keyword(db, peptide=peptide, prefix="PUR_")
-    qty_kw = _peptide_service_keyword(db, peptide=peptide, prefix="QTY_")
-    id_kw = _peptide_service_keyword(db, peptide=peptide, prefix="ID_")
+    # Native vials never consult these (peptide_id routing only) — skip the
+    # three pointless catalog queries.
+    if native:
+        pur_kw = qty_kw = id_kw = None
+    else:
+        pur_kw = _peptide_service_keyword(db, peptide=peptide, prefix="PUR_")
+        qty_kw = _peptide_service_keyword(db, peptide=peptide, prefix="QTY_")
+        id_kw = _peptide_service_keyword(db, peptide=peptide, prefix="ID_")
 
     submitted: list[int] = []
     for category, candidates in by_category.items():
         peptide_kw = pur_kw if category == "purity" else (qty_kw if category == "quantity" else None)
-        if peptide_kw and peptide_kw.upper() in live_keywords and not any(
+        if not native and peptide_kw and peptide_kw.upper() in live_keywords and not any(
             (c.keyword or "").upper() == peptide_kw.upper() for c in candidates
         ):
             logger.info(
@@ -478,14 +508,15 @@ def bridge_prep_result_to_vial(
             )
             continue
         row = _pick_target(category, candidates, slot=slot, peptide_kw=peptide_kw,
-                           id_kw=id_kw, pep_token=pep_token)
+                           id_kw=id_kw, pep_token=pep_token,
+                           native=native, native_peptide_id=native_peptide_id)
         if row is None:
             logger.warning(
                 "prep_bridge: ambiguous/unresolved %s match for vial=%s (%d candidates) — skipping",
                 category, lims_sub_sample_pk, len(candidates),
             )
             continue
-        value = _result_for(category, analysis, peptide)
+        value = _result_for(category, analysis, peptide, native=native)
         if value is None:
             continue
         # Instrument from the HPLC run; method is not carried on HPLCAnalysis
@@ -523,6 +554,7 @@ def bridge_prep_result_to_vial(
                 LimsAnalysis.lims_sub_sample_pk == lims_sub_sample_pk)
         ).all()
     ]
+    # Native-born vials carry no PEPT-Total (quantity is per-slot HPLC-QUANTITY); total_row is None there by construction.
     is_blend = "BLEND-PUR" in all_kws
     component_qty_keys = {_component_key(k, "QTY") for k in all_kws} - {None}
     if not is_blend and len(component_qty_keys) <= 1:
