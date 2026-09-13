@@ -448,3 +448,78 @@ def test_bg_chokepoint_mk1_ledger_from_status_is_prior_state(
     assert (receive_rows[0].from_status, receive_rows[0].to_status,
             receive_rows[0].source) == ("sample_due", "sample_received", "mk1")
     assert not [t for t in rows if t.from_status == t.to_status], "self-loop ledger row"
+
+
+# ─── Verb re-run after cascades (BW-0094 / PB-0172, 2026-09-12) ─────────────
+# A sample whose parent lines were verified through the SENAITE proxy never
+# had its engine driven, so native_status lagged. The publish touchpoint then
+# started from the stale state: from sample_received it took the partial-
+# publish edge (-> waiting_for_addon_results), from to_be_verified it found
+# no edge at all. The cascades caught the state up to `verified` and the
+# touchpoint returned without re-trying the verb, leaving a published COA on
+# a `verified` sample. The touchpoint must re-run the verb once after the
+# cascades move the state.
+
+
+@pytest.fixture
+def tp_lagging_publish(db):
+    """Real seeded catalog; one canonical parent line already verified; the
+    sample's native_status lags at sample_received."""
+    from models import AnalysisService, LimsAnalysis, LimsSenaiteTeeRetry
+    from workflow.seeds import seed_workflow_catalog
+    seed_workflow_catalog(db); db.commit()
+    svc = db.execute(select(AnalysisService).where(
+        AnalysisService.keyword.isnot(None))).scalars().first()
+    if svc is None:
+        pytest.skip("no analysis_services row available")
+    row = LimsSample(sample_id="TEST-TP-0006", status="sample_received",
+                     native_status="sample_received")
+    db.add(row); db.flush()
+    line = LimsAnalysis(lims_sample_pk=row.id, analysis_service_id=svc.id,
+                        keyword=svc.keyword, title=svc.title or svc.keyword,
+                        result_value="1", review_state="verified",
+                        reportable=True, provenance="canonical")
+    db.add(line); db.flush(); db.commit()
+    yield row
+    db.rollback()
+    db.execute(delete(LimsSenaiteTeeRetry).where(
+        LimsSenaiteTeeRetry.lims_sample_pk == row.id))
+    db.execute(delete(LimsWorkflowShadowEvaluation).where(
+        LimsWorkflowShadowEvaluation.lims_sample_pk == row.id))
+    db.execute(delete(LimsSampleTransition).where(
+        LimsSampleTransition.lims_sample_pk == row.id))
+    db.execute(delete(LimsAnalysis).where(LimsAnalysis.id == line.id))
+    db.execute(delete(LimsSample).where(LimsSample.id == row.id))
+    db.commit()
+
+
+def _publish_touchpoint(db, row):
+    from workflow.engine import drive_sample_touchpoint
+    ok = drive_sample_touchpoint(
+        db, row.sample_id, "publish", from_status=row.native_status,
+        actor_user_id=None, attested={"coa_published": True})
+    db.commit()
+    assert ok
+    db.expire_all()
+    return db.get(LimsSample, row.id)
+
+
+def test_publish_touchpoint_from_sample_received_lands_on_published(db, tp_lagging_publish):
+    """BW-0094 shape: partial-publish edge, then submit/verify cascades, then
+    the publish must run again from `verified`."""
+    fresh = _publish_touchpoint(db, tp_lagging_publish)
+    assert fresh.native_status == "published"
+    verbs = [e.verb for e in db.execute(select(LimsWorkflowShadowEvaluation).where(
+        LimsWorkflowShadowEvaluation.lims_sample_pk == fresh.id
+    ).order_by(LimsWorkflowShadowEvaluation.id)).scalars().all() if e.outcome == "advanced"]
+    assert verbs == ["publish", "submit", "verify", "publish"], verbs
+
+
+def test_publish_touchpoint_from_to_be_verified_lands_on_published(db, tp_lagging_publish):
+    """PB-0172 shape: no publish edge out of to_be_verified, the verify
+    cascade catches up, then the publish must run again."""
+    tp_lagging_publish.native_status = "to_be_verified"
+    tp_lagging_publish.status = "to_be_verified"
+    db.commit()
+    fresh = _publish_touchpoint(db, tp_lagging_publish)
+    assert fresh.native_status == "published"

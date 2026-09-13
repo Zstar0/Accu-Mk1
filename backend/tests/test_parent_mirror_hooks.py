@@ -1001,3 +1001,47 @@ def test_publish_no_mirror_when_partial_publish_deferred(db, seed_parent_and_ser
     assert r.status_code == 200, r.text
     assert r.json()["success"] is True
     assert calls == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Proxy verify drives the sample engine (BW-0094, 2026-09-12)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_transition_verify_through_proxy_advances_sample_engine(db, seed_parent_and_service):
+    """A SENAITE-backed line verified through the proxy must move the SAMPLE
+    the way a native verify does: the mirror row reads verified, then the
+    engine's auto-fire cascades run (sample_received -> to_be_verified ->
+    verified). BW-0094 sat at sample_received through 19 days of proxy work
+    because this route mirrored the line and never touched the engine."""
+    from models import LimsSampleTransition, LimsWorkflowShadowEvaluation
+    from workflow.seeds import seed_workflow_catalog
+    seed_workflow_catalog(db); db.commit()
+    parent, svc = seed_parent_and_service
+    parent.status = "sample_received"
+    parent.native_status = "sample_received"
+    db.commit()
+    proxy = _mock_senaite_update(
+        review_state="verified", keyword=svc.keyword, get_request_id=parent.sample_id,
+    )
+    try:
+        with patch.object(main, "SENAITE_URL", "http://senaite.test"):
+            r = _client().post(
+                "/wizard/senaite/analyses/UID-1/transition", json={"transition": "verify"}
+            )
+        assert r.status_code == 200 and r.json()["success"] is True
+        db.expire_all()
+        fresh = db.get(LimsSample, parent.id)
+        assert fresh.native_status == "verified"
+        advanced = [e.verb for e in db.execute(select(LimsWorkflowShadowEvaluation).where(
+            LimsWorkflowShadowEvaluation.lims_sample_pk == parent.id
+        ).order_by(LimsWorkflowShadowEvaluation.id)).scalars().all() if e.outcome == "advanced"]
+        assert advanced == ["submit", "verify"], advanced
+    finally:
+        proxy.stop()
+        db.rollback()
+        db.execute(delete(LimsWorkflowShadowEvaluation).where(
+            LimsWorkflowShadowEvaluation.lims_sample_pk == parent.id))
+        db.execute(delete(LimsSampleTransition).where(
+            LimsSampleTransition.lims_sample_pk == parent.id))
+        db.commit()
