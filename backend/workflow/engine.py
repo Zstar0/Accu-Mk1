@@ -361,8 +361,19 @@ def drive_sample_touchpoint(db: Session, sample_id: str, verb: str, *,
                               trigger=verb, actor_user_id=actor_user_id)
         execute_verb(db, row, verb, trigger=verb,
                      actor_user_id=actor_user_id, attested=attested)
-        evaluate_cascades(db, row, trigger=verb,
-                          actor_user_id=actor_user_id)
+        fired = evaluate_cascades(db, row, trigger=verb,
+                                  actor_user_id=actor_user_id)
+        # Re-run the verb once when the cascades moved the state and the
+        # verb has an edge out of the NEW state. A sample whose engine state
+        # lagged its lines (results verified through the SENAITE proxy, which
+        # never drove the engine) otherwise takes the wrong edge or none:
+        # BW-0094's publish from sample_received hopped to
+        # waiting_for_addon_results, the cascades caught up to verified, and
+        # the publish was never re-tried (published COA on a verified sample;
+        # PB-0172 same from to_be_verified via no_edge).
+        if fired and _find_edge(db, row.native_status, verb) is not None:
+            execute_verb(db, row, verb, trigger=verb,
+                         actor_user_id=actor_user_id, attested=attested)
         return True
     except Exception:
         log.exception("sbs touchpoint failed (never-raise)")

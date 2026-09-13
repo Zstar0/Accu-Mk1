@@ -19123,6 +19123,21 @@ async def transition_analysis(
                     is_retest=_is_retest,
                     senaite_analysis_uid=item.get("uid"),
                 )
+                # Drive the SAMPLE engine the way the native analysis routes do
+                # (lims_analyses.routes._schedule_sbs_cascade). This proxy used to
+                # update only the mirror row, so a line verified here never
+                # re-derived the sample's native_status: BW-0094 sat at
+                # sample_received through 19 days of proxy work and its publish
+                # then ran from that stale state. Runs AFTER the mirror commit so
+                # the cascade reads the new line state; own session, never raises.
+                _parent_pk = db.execute(
+                    select(LimsSample.id).where(LimsSample.sample_id == _sid)
+                ).scalar_one_or_none()
+                if _parent_pk is not None:
+                    from workflow.engine import run_cascades_bg
+                    await run_in_threadpool(
+                        run_cascades_bg, _parent_pk, getattr(current_user, "id", None),
+                    )
 
             return AnalysisResultResponse(
                 success=True,
