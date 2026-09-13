@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.21.1 — 2026-09-13
+
 ### Fixed
 - **Samples worked through the SENAITE proxy no longer strand at `verified` with a published COA.** Verifying a SENAITE-backed line from the sample page (`POST /wizard/senaite/analyses/{uid}/transition`) updated the mirror row and stopped, so the sample's engine state never re-derived (BW-0094 sat at `sample_received` through 19 days of proxy work). The route now drives the same engine cascade the native analysis routes do after a successful transition.
 - The sample touchpoint re-runs its verb once after the cascades move the state. A publish from a lagging state used to take the partial-publish edge (`sample_received` → `waiting_for_addon_results`) or find no edge (`to_be_verified`), let the cascades catch up to `verified`, and never try the publish again — leaving a published primary on a `verified` sample (BW-0094, PB-0172, and the five "Limbo" samples repaired by hand on 2026-09-12).
