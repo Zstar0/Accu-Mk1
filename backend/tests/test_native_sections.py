@@ -728,7 +728,8 @@ def test_wire_carries_loq_and_display_fields(db_session, monkeypatch):
 
 
 def test_censoring_boundary(db_session, monkeypatch):
-    """result == loq is NOT censored; below is; above is not."""
+    """result == loq IS censored (at-or-below the LOQ prints "< LOQ",
+    ruling 2026-09-14); below is; above is not."""
     from decimal import Decimal
     from models import AnalysisServiceSpec, LimsAnalysis, LimsSample
     prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
@@ -753,7 +754,7 @@ def test_censoring_boundary(db_session, monkeypatch):
         return p
 
     doc = build_native_sections(db_session, _parent("P-8001", "0.5"))
-    assert doc["sections"][0]["rows"][0]["result_display"] is None
+    assert doc["sections"][0]["rows"][0]["result_display"] == "< LOQ"
 
     doc = build_native_sections(db_session, _parent("P-8002", "0.51"))
     assert doc["sections"][0]["rows"][0]["result_display"] is None
