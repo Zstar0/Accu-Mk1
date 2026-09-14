@@ -135,6 +135,64 @@ def test_fully_resolved_parent_never_gets_a_flag(db):
     assert _open_flags(db, parent) == []
 
 
+def test_human_question_flag_does_not_suppress_the_automated_one(db):
+    """Finding 3 (final review, 2026-09-14): dedupe on (sample, type, open)
+    alone let a human's pre-existing `question` flag silently swallow the
+    automated unresolved-analyte flag (D5 regression), and the resolve
+    query would then target the human's flag instead. Both predicates now
+    also require created_by == 0 (_SystemActor)."""
+    _setup(db)
+    parent, _bpc = _blend_parent(db, "PB-9005", slot2_name="Mystery-Peptide")
+    human_flag = FlagFlag(entity_type="sample", entity_id=str(parent.id),
+                          kind="issue", type=UNRESOLVED_FLAG_TYPE, status="open",
+                          title="human-opened question, unrelated", created_by=1)
+    db.add(human_flag); db.flush()
+
+    seed_parent_placeholders(db, parent=parent, services={HPLC_NATIVE_PROFILE_KEY: True})
+
+    flags = db.execute(select(FlagFlag).where(
+        FlagFlag.entity_type == "sample", FlagFlag.entity_id == str(parent.id),
+        FlagFlag.type == UNRESOLVED_FLAG_TYPE, FlagFlag.status == "open",
+    )).scalars().all()
+    assert len(flags) == 2
+    automated = [f for f in flags if f.created_by == 0]
+    assert len(automated) == 1
+    assert automated[0].title == "PB-9005: analyte unresolved — Mystery-Peptide (slot 2)"
+
+    # relabel resolves only the automated flag, never the human's
+    ghk = Peptide(name="GHK-Cu", abbreviation="GHKCU", active=True)
+    db.add(ghk); db.flush()
+    relabel_native_slot(db, parent=parent, slot=2, new_peptide_id=ghk.id, user_id=1, commit=False)
+
+    human_flag = db.get(FlagFlag, human_flag.id)
+    assert human_flag.status == "open"
+    automated_flag = db.get(FlagFlag, automated[0].id)
+    assert automated_flag.status == "resolved"
+
+
+def test_flush_listener_survives_a_deleted_pending_row(db):
+    """Finding 5 (final review, 2026-09-14): flags/service.py's
+    after_flush_postexec listener is session-wide (runs on every flush in
+    the process, not just flags writes). A stale flag_pending_events entry
+    whose FlagEvent row was deleted/expunged must not raise out of an
+    unrelated later flush."""
+    _setup(db)
+    flag = FlagFlag(entity_type="sample", entity_id="999", kind="issue",
+                    type=UNRESOLVED_FLAG_TYPE, status="open", title="t", created_by=0)
+    db.add(flag); db.flush()
+    ev = FlagEvent(flag_id=flag.id, actor_id=0, event_type="raised")
+    db.add(ev); db.flush()
+    db.info["flag_pending_events"] = [(ev, {"event_id": None})]
+
+    db.delete(ev)
+    db.flush()  # ev is now 'deleted'; listener must skip it, not raise
+
+    # a subsequent, unrelated flush must also not raise
+    other = Peptide(name="ZZ-Unrelated", abbreviation="ZZUNRL", active=True)
+    db.add(other)
+    db.flush()
+
+
 def test_flag_type_is_a_seeded_type(db):
     _setup(db)
     from flags.types_service import get_type_by_slug

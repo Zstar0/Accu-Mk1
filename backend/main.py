@@ -16227,14 +16227,14 @@ async def get_senaite_raw_fields(
     diagnostic route (grep of src/lib/api.ts finds none), so the marker dict
     is the lazy, sufficient shape here.
     """
-    if SENAITE_URL is None:
-        raise HTTPException(status_code=503, detail="SENAITE not configured")
     sample_id = sample_id.strip().upper()
     row = db.execute(
         select(LimsSample).where(LimsSample.sample_id == sample_id)
     ).scalar_one_or_none()
     if row is not None and row.external_lims_system == "mk1":
         return {"native_born": True}
+    if SENAITE_URL is None:
+        raise HTTPException(status_code=503, detail="SENAITE not configured")
     data = await _fetch_senaite_sample(sample_id)
     if data.get("count", 0) == 0:
         raise HTTPException(status_code=404, detail=f"Sample {sample_id} not found")
@@ -16317,9 +16317,6 @@ async def lookup_senaite_sample(
         503 if SENAITE is not configured or is unreachable/timed out.
         404 if the sample ID does not exist in SENAITE.
     """
-    if SENAITE_URL is None:
-        raise HTTPException(status_code=503, detail="SENAITE not configured")
-
     # SENAITE sample IDs are always uppercase (e.g. PB-0056) — normalize
     id = id.strip().upper()
 
@@ -16327,6 +16324,9 @@ async def lookup_senaite_sample(
     # SENAITE AR) are registry-authoritative — serve them from the same
     # builder the mk1 read-source route uses, BEFORE any SENAITE HTTP or
     # cache lookup, regardless of what read-source the caller defaulted to.
+    # Hoisted above the SENAITE_URL gate (finding 4, 2026-09-14): a native-born
+    # row must resolve even when SENAITE is disconnected/unconfigured — only
+    # a SENAITE-born lookup needs SENAITE_URL at all.
     # This is the same row the SENAITE-born path below loads as `_logi` for
     # its logistics merge — reused here for the native-born gate check.
     # No caching here either: the mk1 route (/registry/sample/{id}/details)
@@ -16340,6 +16340,9 @@ async def lookup_senaite_sample(
         result = build_native_details(db, id)
         _enrich_analytes_with_peptide_match(db, result.analytes)
         return result
+
+    if SENAITE_URL is None:
+        raise HTTPException(status_code=503, detail="SENAITE not configured")
 
     # Check server-side cache (skipped when no_cache=true)
     import time as _time

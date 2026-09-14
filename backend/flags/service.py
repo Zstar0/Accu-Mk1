@@ -30,10 +30,22 @@ _ATTACHMENT_TOKEN = re.compile(r"\{attachment:(\d+)\}")
 def _stamp_pending_flag_event_ids(session, _ctx) -> None:
     """Fill `event_id` on staged events as soon as their FlagEvent row has an
     id (post-flush). Lets the after_commit listener below emit without touching
-    expired row attributes."""
-    for row, event_ in session.info.get("flag_pending_events", []):
-        if event_.get("event_id") is None and row.id is not None:
-            event_["event_id"] = row.id
+    expired row attributes.
+
+    Session-wide listener (finding 5, 2026-09-14): runs on EVERY flush in the
+    process, including ones with nothing to do with flags. A stale entry
+    whose FlagEvent row was since expunged/deleted must never raise out of
+    an unrelated flush — skip detached rows and swallow any access error."""
+    from sqlalchemy import inspect as _sa_inspect
+    try:
+        for row, event_ in session.info.get("flag_pending_events", []):
+            state = _sa_inspect(row)
+            if state.detached or state.deleted:
+                continue
+            if event_.get("event_id") is None and row.id is not None:
+                event_["event_id"] = row.id
+    except Exception:
+        log.exception("flags.stamp_pending_event_ids_failed")
 
 
 @event.listens_for(Session, "after_commit")

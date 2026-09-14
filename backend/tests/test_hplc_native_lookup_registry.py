@@ -65,9 +65,10 @@ def _mock_senaite_http_empty():
 
 
 def _senaite_env():
-    """Context managers that make the route think SENAITE is configured
-    (the SENAITE_URL is None guard runs before the native-born gate on both
-    routes, so this must be patched even for native-born assertions)."""
+    """Context managers that make the route think SENAITE is configured.
+    Only needed for SENAITE-born assertions now — the native-born gate on
+    both routes runs BEFORE the SENAITE_URL is None check (finding 4,
+    2026-09-14), so a native-born lookup no longer needs this."""
     return (
         patch.object(main, "SENAITE_URL", "http://senaite.test"),
         patch.object(main, "SENAITE_USER", "u"),
@@ -149,6 +150,31 @@ def test_senaite_born_lookup_unchanged(client):
     fetch_mock.assert_called_once()
 
 
+def test_native_born_lookup_200_when_senaite_disconnected(client):
+    """Finding 4 (final review, 2026-09-14): after a SENAITE disconnect
+    (SENAITE_URL unset), a native-born lookup must still resolve from the
+    registry — the 503 belongs only to the SENAITE-born path."""
+    db = client._Session()
+    parent, *_ = native_family(db, sample_id="PB-9006", slots=[("BPC-157", "BPC157")])
+    db.commit()
+    sample_id = parent.sample_id
+    db.close()
+
+    fetch_mock = AsyncMock(side_effect=AssertionError("SENAITE fetch must not be called for a native-born sample"))
+    with patch.object(main, "SENAITE_URL", None), patch.object(main, "_fetch_senaite_sample", fetch_mock):
+        r = client.get("/wizard/senaite/lookup", params={"id": sample_id})
+
+    assert r.status_code == 200, r.text
+    assert r.json()["external_lims_system"] == "mk1"
+    fetch_mock.assert_not_called()
+
+
+def test_senaite_born_lookup_still_503_when_senaite_disconnected(client):
+    with patch.object(main, "SENAITE_URL", None):
+        r = client.get("/wizard/senaite/lookup", params={"id": "PB-9007"})
+    assert r.status_code == 503
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # /wizard/senaite/raw-fields/{sample_id}
 # ═══════════════════════════════════════════════════════════════════════════
@@ -184,3 +210,27 @@ def test_senaite_born_raw_fields_unchanged(client):
     assert body["id"] == sample_id
     assert body["SampleType"] == "Peptide"
     fetch_mock.assert_called_once()
+
+
+def test_native_born_raw_fields_200_when_senaite_disconnected(client):
+    """Finding 4 mirror: the raw-fields route's registry gate must also
+    precede the SENAITE_URL is None 503."""
+    db = client._Session()
+    parent, *_ = native_family(db, sample_id="PB-9008", slots=[("BPC-157", "BPC157")])
+    db.commit()
+    sample_id = parent.sample_id
+    db.close()
+
+    fetch_mock = AsyncMock(side_effect=AssertionError("SENAITE fetch must not be called for a native-born sample"))
+    with patch.object(main, "SENAITE_URL", None), patch.object(main, "_fetch_senaite_sample", fetch_mock):
+        r = client.get(f"/wizard/senaite/raw-fields/{sample_id}")
+
+    assert r.status_code == 200, r.text
+    assert r.json() == {"native_born": True}
+    fetch_mock.assert_not_called()
+
+
+def test_senaite_born_raw_fields_still_503_when_senaite_disconnected(client):
+    with patch.object(main, "SENAITE_URL", None):
+        r = client.get("/wizard/senaite/raw-fields/PB-9009")
+    assert r.status_code == 503

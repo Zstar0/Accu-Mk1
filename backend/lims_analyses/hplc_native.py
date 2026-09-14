@@ -185,6 +185,11 @@ def flag_unresolved_slots(db: Session, parent: LimsSample, results: list[SlotRes
             FlagFlag.entity_id == str(parent.id),
             FlagFlag.type == UNRESOLVED_FLAG_TYPE,
             FlagFlag.status == "open",
+            # Automated-only discriminator (finding 3, 2026-09-14): a human
+            # question flag must not suppress the automated one, and the
+            # resolve query below must never touch a human's flag.
+            # _SystemActor.id == 0 -> create_flag stamps created_by=0.
+            FlagFlag.created_by == 0,
         )).scalars().first()
         if existing is not None:
             return
@@ -222,6 +227,7 @@ def resolve_unresolved_flag_if_clean(db: Session, parent: LimsSample, *, commit:
             FlagFlag.entity_id == str(parent.id),
             FlagFlag.type == UNRESOLVED_FLAG_TYPE,
             FlagFlag.status == "open",
+            FlagFlag.created_by == 0,  # automated-only — see flag_unresolved_slots
         )).scalars().first()
         if flag is None:
             return
