@@ -28,9 +28,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sqlalchemy import select  # noqa: E402
+from sqlalchemy import select
 
-from models import LimsParentAttachment, LimsSubSample  # noqa: E402
+from models import LimsParentAttachment, LimsSubSample
 
 _PUSH_FILENAME = re.compile(r"^chromatogram_(.+)\.csv$")
 
