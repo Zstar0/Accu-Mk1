@@ -21,7 +21,7 @@ _SAMPLE_META = {"source": "mk1", "SampleID": "P-0161", "attachments": []}
 def _patch(monkeypatch, source):
     monkeypatch.setattr(wd, "build_native_sections", lambda db, p: dict(_NATIVE_DOC))
     monkeypatch.setattr(wd, "build_legacy_rows", lambda db, p: list(_ROWS))
-    monkeypatch.setattr(wd, "build_sample_meta", lambda db, p: dict(_SAMPLE_META))
+    monkeypatch.setattr(wd, "build_sample_meta", lambda db, p, vial=None: dict(_SAMPLE_META))
     monkeypatch.setattr(wd, "coa_generation_source", lambda db: source)
 
 

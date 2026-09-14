@@ -502,7 +502,7 @@ def test_upload_filename_truncated_to_255(db, seed_parent, fake_storage):
 
 
 def test_chromatogram_push_captures_native_row(
-        db, seed_parent, seed_hplc_analysis, fake_storage):
+        db, seed_parent, seed_vial, seed_hplc_analysis, fake_storage):
     proxy, _mock_instance = _mock_attachment_upload_flow(
         attachment_type="HPLC Graph")
     try:
@@ -543,7 +543,9 @@ def test_chromatogram_push_captures_native_row(
     assert row.content_type == "text/csv"
     assert row.storage == "s3"
     assert row.storage_key == f"fake-key/{TEST_PARENT_SAMPLE_ID}/{expected_filename}"
-    assert row.source_sub_sample_pk is None
+    # Lineage (P-2627, 2026-09-14): the analysis' sample_id_label IS the vial
+    # id, so the row is stamped with that vial — per-vial COAs read only it.
+    assert row.source_sub_sample_pk == seed_vial.id
     assert row.senaite_attachment_uid is None
     assert row.created_by_user_id == 1
 
