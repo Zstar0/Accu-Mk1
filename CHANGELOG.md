@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v1.21.4 — 2026-09-14
+
+### Added
+- **Ready to Publish shows a "Partially Published" chip** on rows whose primary COA is already out while add-on lines are still pending (workflow state `waiting_for_addon_results`). The hover says whether the add-on results are still pending or are in and a second publish is owed. The row's status badge now reads the workflow catalog label for the state instead of the raw slug (#206).
+
+### Fixed
+- Ready to Publish: the Why column had drifted away from Status · Lines since 1.21.2 because the lines sub-line printed every pending keyword and the long native keywords widened the auto-layout column. The sub-line is now bounded, with the full text on hover (#206).
+
 ## v1.21.3 — 2026-09-14
 
 ### Changed
