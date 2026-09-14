@@ -17,6 +17,7 @@ Deploy with the `accumark-deploy` skill in the order Mk1 → COABuilder → IS �
 Mount Mk1 slice 6, IS slice B, coab C1, wpstar WP-0 on one stack (see the stack handoff doc for `mount`/env gaps; IS→Mk1 wiring is in stack PR #2). Then run the golden matrix from the spec §Verification, collecting per case: Mk1 rows, wire doc, coab PDF p1/p2 + `data_sources`, AccuVerify JSON, WP order page, IS `sample_status_events`, SENAITE search = 0.
 - single peptide · 3-peptide blend (alias case) · single + endo85 + PCR · variance n=3 · retest of a native original with AutoCheckin · relabel on native-born · identity FAIL · unresolved analyte (expect COA abort + relabel) · rollback drill (clear `profile_key` mid-window; legacy order lands; native finishes; no adoption) · regression: one Bac Water order and one legacy in-flight sample unchanged.
 Exit criteria: every case green; the pre-flip watch queries (step 7) empty.
+**Run 2026-09-14 on `priority`: 10/10 green** (case 3 after replicating prod's native endo/PCR catalog onto the stack). Defects fixed in Mk1 slice 7 (native chromatogram/attachment routes, unresolved-analyte flag, native-born lookup served from the registry).
 
 ## 2. Pre-flip probes (prod, read-only)
 ```sql
@@ -34,6 +35,8 @@ SELECT value FROM settings WHERE key='registry_read_source';   -- every key mk1,
 -- indexes widened
 SELECT indexname FROM pg_indexes WHERE tablename='lims_analyses' AND indexdef LIKE '%COALESCE%';   -- 5 root indexes
 ```
+- **Endo/PCR must already be native (they are in prod since 09-01):** WP Endotoxin row `profile_key=endotoxin-usp85-lal`, PCR row `profile_key=rapid-sterility-pcr`, both `bundle_member=1`; Mk1 profiles 9 + 10 active; IS registry lists both. A native HPLC order that still carries the LEGACY endo/PCR keys is rejected at checkout by design (`hplc-purity-identity cannot be combined with SENAITE-only service(s)`), so never clear the endo/PCR keys while HPLC is flipped. Rehearsal 09-14 hit this on a pre-09-01 stack golden.
+- Mk1 env has `MK1_PUBLIC_BASE_URL` (prod: present, verified 09-14; stacks: accumark-stack PR #7) — without it every native COA aborts `sample_meta: MK1_PUBLIC_BASE_URL is not configured`.
 - IS: relay contract + registry meta keys are in IS `Docs/NATIVE_SAMPLE_CONTRACT.md`; a relay `no_order_found` records NO event (Mk1 retries), `duplicate` is idempotent.
 - IS: `GET /s2s/catalog/service-keys` (from IS, service token) lists `hplc-purity-identity`; IS admin registry refresh shows it; IS env has `ACCUMK1_BASE_URL` + token (never print).
 - Regen a wire doc for one recent legacy sample → zero `HPLC-*` rows (the shim only fires for native-born).
