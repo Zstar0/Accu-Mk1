@@ -3,7 +3,7 @@
 ## Unreleased
 
 ### Changed
-- **A native-section result reported at the LOQ now prints "< LOQ".** The COA wire censored only results strictly below the spec's LOQ, so an Endotoxin USP85 result entered as 2.50 against an LOQ of 2.5 printed the number. At-or-below now prints "< LOQ" on the PDF and the digital COA; the verdict still evaluates the raw number (#TBD).
+- **A native-section result reported at the LOQ now prints "< LOQ".** The COA wire censored only results strictly below the spec's LOQ, so an Endotoxin USP85 result entered as 2.50 against an LOQ of 2.5 printed the number. At-or-below now prints "< LOQ" on the PDF and the digital COA; the verdict still evaluates the raw number (#209).
 
 ## v1.21.6 — 2026-09-14
 
