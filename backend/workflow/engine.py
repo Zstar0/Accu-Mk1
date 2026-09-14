@@ -39,13 +39,25 @@ def _live_parent_line_states(db: Session, sample: LimsSample) -> dict[str, str]:
     """{keyword: effective_state} for the sample's LIVE parent-tier lines.
     Canonical rows win per keyword over shadow mirrors (read-flip collapse
     rule); shadow rows contribute mirror_review_state. Exception states and
-    retest-superseded canonical rows are excluded."""
+    retest-superseded canonical rows are excluded.
+
+    Live 'ordered' placeholders (parent_placeholders.py: native demand not
+    yet promoted) fill any keyword still absent with their pending state
+    (RULED 2026-09-14, Option B). Same rule as the Ready-to-Publish map
+    (lims_analyses.service.native_parent_line_states, PR #202), so the
+    engine can no longer cascade a sample to 'verified' while a paid-for
+    native line is still on its vial (P-2739 / WP-7322). No COA is gated by
+    this: the publish touchpoint from sample_received takes the partial
+    edge to waiting_for_addon_results, and the add-on's later promotion
+    cascades the sample forward."""
+    from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
     rows = db.execute(select(LimsAnalysis).where(
         LimsAnalysis.lims_sample_pk == sample.id,
         LimsAnalysis.lims_sub_sample_pk.is_(None),
     )).scalars().all()
     out: dict[str, str] = {}
     shadow: dict[str, str] = {}
+    ordered: dict[str, str] = {}
     for r in rows:
         if r.provenance == "canonical":
             if r.retested or r.review_state in _EXCLUDED_LINE_STATES:
@@ -63,7 +75,13 @@ def _live_parent_line_states(db: Session, sample: LimsSample) -> dict[str, str]:
             if not st or st in _EXCLUDED_LINE_STATES:
                 continue
             shadow[r.keyword] = st
+        elif r.provenance == PROVENANCE_ORDERED:
+            if r.retested or r.review_state in _EXCLUDED_LINE_STATES:
+                continue
+            ordered[r.keyword] = r.review_state
     for kw, st in shadow.items():
+        out.setdefault(kw, st)
+    for kw, st in ordered.items():
         out.setdefault(kw, st)
     return out
 

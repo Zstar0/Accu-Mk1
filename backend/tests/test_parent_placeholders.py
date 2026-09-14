@@ -526,32 +526,44 @@ def test_coa_sections_are_byte_identical_with_and_without_placeholders(
     assert build_native_sections(db, parent_sample) == before
 
 
-def test_workflow_engine_ignores_placeholders(db, parent_sample, usp71_profile,
-                                              verified_parent_row):
-    """workflow/engine.py branches if-canonical/elif-shadow with no else, so
-    an 'ordered' row must contribute nothing to sample-scope state gates.
-
-    The brief names this helper `_parent_line_states`; that name does not
-    exist. The real function, found by reading workflow/engine.py:38 (the
-    one containing the if-canonical/elif-shadow loop the brief describes),
-    is `_live_parent_line_states`.
-
-    `_EXCLUDED_LINE_STATES` (engine.py:28) is {'retracted', 'rejected',
-    'cancelled'} — 'verified' is not in it — so `verified_parent_row` makes
-    `before` a genuinely non-empty {'STER-USP71': 'verified'}, not `{} == {}`
-    (which the placeholder-loop's missing else-branch would trivially pass
-    regardless of whether provenance filtering worked at all). Both the
-    canonical row and the placeholder share the SAME keyword
-    ('STER-USP71') and `out` is keyed by keyword — so this additionally pins
-    that seeding a same-keyword placeholder does not clobber the canonical
-    row's entry in the dict, not just that an empty dict stays empty."""
+def test_workflow_engine_counts_live_placeholders(db, parent_sample, usp71_profile):
+    """Option B (RULED 2026-09-14): a live 'ordered' placeholder is
+    outstanding native demand and gates the sample-scope
+    all_analyses_in_state requirements exactly like the Ready-to-Publish map
+    (PR #202). Before this, the engine cascaded a sample to 'verified' while
+    its PCR sterility line was still on a vial (P-2739 / WP-7322, 34 such
+    samples on prod at the time of the ruling)."""
     from workflow.engine import _live_parent_line_states
 
-    before = _live_parent_line_states(db, parent_sample)
-    assert before == {"STER-USP71": "verified"}
+    assert _live_parent_line_states(db, parent_sample) == {}
     seed_parent_placeholders(db, parent=parent_sample, services={"sterility_usp71": True})
     db.commit()
-    assert _live_parent_line_states(db, parent_sample) == before
+    assert _live_parent_line_states(db, parent_sample) == {"STER-USP71": "unassigned"}
+
+
+def test_workflow_engine_canonical_wins_over_placeholder(db, parent_sample, usp71_profile,
+                                                         verified_parent_row):
+    """A delivered service keeps the canonical row's state; the never-retired
+    placeholder must not clobber it (same canonical-wins rule as the parent
+    table and the lock map)."""
+    from workflow.engine import _live_parent_line_states
+
+    seed_parent_placeholders(db, parent=parent_sample, services={"sterility_usp71": True})
+    db.commit()
+    assert _live_parent_line_states(db, parent_sample) == {"STER-USP71": "verified"}
+
+
+def test_workflow_engine_skips_rejected_placeholder(db, parent_sample, usp71_profile):
+    """A soft-removed (rejected) placeholder is not demand and must not hold
+    the sample."""
+    from workflow.engine import _live_parent_line_states
+
+    seed_parent_placeholders(db, parent=parent_sample, services={"sterility_usp71": True})
+    db.commit()
+    ph = db.query(LimsAnalysis).filter_by(provenance=PROVENANCE_ORDERED).one()
+    ph.review_state = "rejected"
+    db.commit()
+    assert _live_parent_line_states(db, parent_sample) == {}
 
 
 def test_native_lock_map_reports_placeholder_as_pending(db, parent_sample, usp71_profile):

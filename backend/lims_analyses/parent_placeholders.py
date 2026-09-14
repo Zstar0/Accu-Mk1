@@ -13,9 +13,13 @@ never got that first row. This module mints it under a THIRD provenance.
 Why a third value and not 'shadow':
   - 'shadow' means "mirrored from SENAITE" and carries `mirror_review_state`;
     an origin='mk1' row in that namespace is a contradiction.
-  - workflow/engine.py branches `if canonical / elif shadow` with NO else,
-    so an unknown provenance is silently ignored — the sample-scope state
-    gates are unperturbed BY CONSTRUCTION rather than by accident.
+  - workflow/engine.py originally branched `if canonical / elif shadow`
+    with NO else, so placeholders left the sample-scope state gates
+    unperturbed by construction. RULED 2026-09-14 (Option B): a LIVE
+    placeholder now counts as a pending line in both the engine map and the
+    Ready-to-Publish map (PR #202), so a sample cannot read 'verified' while
+    paid-for native demand is still on its vial. Soft-remove (rejected)
+    withdraws the demand.
 
 Why never 'canonical': that is the slot `promote_to_parent` inserts into
 (uq_lims_analyses_parent_service_root). Keeping placeholders out of it is
