@@ -158,7 +158,8 @@ def resolve_slot_peptides(db: Session, parent: LimsSample) -> list[SlotResolutio
     return out
 
 
-def flag_unresolved_slots(db: Session, parent: LimsSample, results: list[SlotResolution]) -> None:
+def flag_unresolved_slots(db: Session, parent: LimsSample, results: list[SlotResolution],
+                          *, commit: bool = True) -> None:
     """One open flag per sample for any slot(s) whose analyte name didn't
     resolve to a peptide at seed time (Handler ruling 4). Both seed sites
     (this module's vial seed and parent_placeholders' registration seed)
@@ -166,9 +167,12 @@ def flag_unresolved_slots(db: Session, parent: LimsSample, results: list[SlotRes
     seeder loses the race) must not duplicate. `_SystemActor` / dedupe-query
     pattern copied from sub_samples/service.py::_flag_identity_collision.
 
-    NOTE flags.service.create_flag COMMITS the session — call only after all
-    row work for this seed pass is flushed. Failures logged, never raised:
-    seeding must not fail because the flag machinery does."""
+    `commit` must mirror the caller's own seed `commit` flag: a caller with
+    commit=False (e.g. `set_assignment_role`'s atomic "seed then one commit"
+    contract, sub_samples/service.py:~2367) needs the flag row to be part of
+    ITS transaction, not committed early underneath it — flags.service.create_flag
+    now takes the same additive `commit` kwarg for exactly this. Failures
+    logged, never raised: seeding must not fail because the flag machinery does."""
     unresolved = [r for r in results if r.reason]
     if not unresolved:
         return
@@ -192,14 +196,19 @@ def flag_unresolved_slots(db: Session, parent: LimsSample, results: list[SlotRes
             event_details={"automated": True,
                            "slots": [r.slot for r in unresolved],
                            "raw": [r.raw_name for r in unresolved]},
+            commit=commit,
         )
     except Exception as e:
         log.error("hplc_native.unresolved_flag_failed sample_id=%s err=%s", parent.sample_id, e)
 
 
-def resolve_unresolved_flag_if_clean(db: Session, parent: LimsSample) -> None:
+def resolve_unresolved_flag_if_clean(db: Session, parent: LimsSample, *, commit: bool = True) -> None:
     """Auto-resolve the open unresolved-analyte flag once every slot on the
-    sample resolves — called from relabel_native_slot after a restamp.
+    sample resolves — called from relabel_native_slot, inside its own
+    commit block (after the event is added, before its `if commit: db.commit()`),
+    so `commit` here must mirror relabel_native_slot's `commit` param: a
+    commit=False caller must see the resolution pending in the SAME
+    transaction as the restamp + event, not committed early underneath it.
     Resolve-path pattern copied from workflow/stranded.py's run_check.
     Failures logged, never raised."""
     try:
@@ -216,7 +225,8 @@ def resolve_unresolved_flag_if_clean(db: Session, parent: LimsSample) -> None:
         )).scalars().first()
         if flag is None:
             return
-        flags_service.change_status(db, user=_SystemActor(), flag_id=flag.id, to_status="resolved")
+        flags_service.change_status(db, user=_SystemActor(), flag_id=flag.id,
+                                    to_status="resolved", commit=commit)
     except Exception as e:
         log.error("hplc_native.unresolved_flag_resolve_failed sample_id=%s err=%s", parent.sample_id, e)
 
@@ -303,7 +313,7 @@ def seed_native_hplc_rows(
     if len(slots) > 1:
         for kw in AGGREGATES:
             _mint(kw, slot=None, peptide_id=None, title=services[kw].title, reason=None)
-    flag_unresolved_slots(db, parent, slots)
+    flag_unresolved_slots(db, parent, slots, commit=commit)
     return inserted
 
 
@@ -434,11 +444,11 @@ def relabel_native_slot(db: Session, *, parent: LimsSample, slot: int, new_pepti
         parent.peptide_name = pep.name
     res = SlotResolution(slot, pep.name, pep.name, pep.id, None)
     n = restamp_native_slot_rows(db, parent=parent, slot=slot, res=res)
-    resolve_unresolved_flag_if_clean(db, parent)
     db.add(LimsSubSampleEvent(lims_sample_pk=parent.id, event="native_slot_relabeled",
                               details={"slot": slot, "old_peptide_id": old_pid, "new_peptide_id": pep.id,
                                        "old_name": old.get("name"), "new_name": pep.name,
                                        "restamped": n, "reason": reason}, user_id=user_id))
+    resolve_unresolved_flag_if_clean(db, parent, commit=commit)
     if commit:
         db.commit()
     return {"slot": slot, "old_peptide_id": old_pid, "new_peptide_id": pep.id, "restamped": n}

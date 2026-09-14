@@ -67,13 +67,24 @@ def _audit(db, flag, actor_id, event_type, *, from_value=None, to_value=None, de
     }))
 
 
-def _commit_and_emit(db):
+def _commit_and_emit(db, *, commit: bool = True):
     """Flush to populate row ids, commit, then emit staged events in order.
 
     event_id is read after flush (ids populated) but before commit (rows not yet
     expired) so the post-commit emit needs no per-event reload. Emit is strictly
     post-commit: a rollback never reaches the sink.
+
+    `commit=False` (additive; every existing caller keeps the default) flushes
+    only, leaving the row(s) and the staged events pending in `db.info` for the
+    CALLER's own commit — for a caller that must stay inside a larger atomic
+    transaction (e.g. `seed_native_hplc_rows(commit=False)`). Events for that
+    write are emitted only once some later `commit=True` call in the same
+    session pops and flushes the accumulated pending list — never before an
+    actual commit, matching the docstring above.
     """
+    if not commit:
+        db.flush()
+        return
     pending = db.info.pop("flag_pending_events", [])
     db.flush()                       # populate FlagEvent.id on every staged row
     for row, event in pending:
@@ -85,7 +96,7 @@ def _commit_and_emit(db):
 
 def create_flag(db: Session, *, user, entity_type, entity_id, type, title,
                 assignee_id=None, first_comment=None, due_at=None,
-                event_details=None) -> FlagFlag:
+                event_details=None, commit: bool = True) -> FlagFlag:
     # A NULL anchor = a general task (spec §5). entity_id without an entity_type
     # is malformed. A present entity_type is either a registered code entity
     # (sample/worksheet — carries an entity_id) or a virtual item kind
@@ -135,7 +146,7 @@ def create_flag(db: Session, *, user, entity_type, entity_id, type, title,
     if first_comment:
         db.add(FlagComment(flag_id=flag.id, author_id=actor_id, body=first_comment))
         _audit(db, flag, actor_id, "commented")
-    _commit_and_emit(db)
+    _commit_and_emit(db, commit=commit)
     db.refresh(flag)
     return flag
 
@@ -741,7 +752,7 @@ def list_flag_links(db: Session, flag_id: int) -> list[FlagLink]:
         .order_by(FlagLink.created_at.asc())).scalars().all())
 
 
-def change_status(db: Session, *, user, flag_id, to_status) -> FlagFlag:
+def change_status(db: Session, *, user, flag_id, to_status, commit: bool = True) -> FlagFlag:
     from flags.errors import ConflictError
     flag = get_flag(db, flag_id)
     if not permissions.can(user, "change_status", flag):
@@ -759,7 +770,7 @@ def change_status(db: Session, *, user, flag_id, to_status) -> FlagFlag:
         flag.resolved_at = None
         flag.resolved_by = None
     _audit(db, flag, actor_id, "status_changed", from_value=from_status, to_value=to_status)
-    _commit_and_emit(db)
+    _commit_and_emit(db, commit=commit)
     db.refresh(flag)
     return flag
 

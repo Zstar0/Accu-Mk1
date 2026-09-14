@@ -116,5 +116,9 @@ def seed_parent_placeholders(
                 continue
             _mint(svc, slot=None, peptide_id=None, title=svc.title, reason=None)
     if native_slots:
-        flag_unresolved_slots(db, parent, native_slots)
+        # This function never commits (docstring / seed_parent_from_services'
+        # "does NOT commit — the caller owns the transaction") — the flag
+        # write must honour that too, same as seed_native_hplc_rows' commit
+        # threading, or it would commit the caller's placeholder rows early.
+        flag_unresolved_slots(db, parent, native_slots, commit=False)
     return stats

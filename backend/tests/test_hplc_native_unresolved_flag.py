@@ -21,7 +21,7 @@ from lims_analyses.hplc_native import (
     seed_native_hplc_rows,
 )
 from lims_analyses.parent_placeholders import seed_parent_placeholders
-from models import LimsSample, LimsSubSample, Peptide
+from models import LimsSample, LimsSubSample, LimsSubSampleEvent, Peptide
 from tests.hplc_native_family import native_catalog
 
 
@@ -139,3 +139,67 @@ def test_flag_type_is_a_seeded_type(db):
     _setup(db)
     from flags.types_service import get_type_by_slug
     assert get_type_by_slug(db, UNRESOLVED_FLAG_TYPE) is not None
+
+
+def test_seed_commit_false_leaves_flag_pending_until_callers_own_commit(db):
+    """Fix round 1 / Finding 1: seed_native_hplc_rows(commit=False) (the
+    set_assignment_role atomic contract, sub_samples/service.py:~2367) must
+    not force a commit underneath the caller. The flag row is flushed and
+    visible in this transaction, but a db.rollback() with no intervening
+    commit removes it entirely — proof no commit happened."""
+    _setup(db)
+    parent, _bpc = _blend_parent(db, "PB-9010", slot2_name="Mystery-Peptide")
+    parent_id = parent.id
+    vial = LimsSubSample(parent_sample_pk=parent_id, sample_id="PB-9010-S01",
+                         external_lims_uid="uid-PB-9010-S01", vial_sequence=1)
+    db.add(vial); db.flush()
+    seed_native_hplc_rows(db, sub_sample=vial, parent=parent, existing_keys=set(),
+                          existing_service_ids=set(), created_by_user_id=None, commit=False)
+
+    def _open_flags_for(pid):
+        return db.execute(select(FlagFlag).where(
+            FlagFlag.entity_type == "sample", FlagFlag.entity_id == str(pid),
+            FlagFlag.type == UNRESOLVED_FLAG_TYPE, FlagFlag.status == "open",
+        )).scalars().all()
+
+    assert len(_open_flags_for(parent_id)) == 1  # flushed, visible pre-commit
+    db.rollback()
+    assert _open_flags_for(parent_id) == []      # never committed -> gone
+
+
+def test_relabel_commit_false_leaves_event_and_resolution_pending(db):
+    """Fix round 1 / Finding 2: relabel_native_slot(commit=False) must leave
+    the native_slot_relabeled event AND the flag resolution inside its own
+    (not-yet-taken) commit, alongside the restamp — a rollback undoes all
+    three together, proving none of them committed early on their own."""
+    _setup(db)
+    parent, _bpc = _blend_parent(db, "PB-9011", slot2_name="Mystery-Peptide")
+    vial = LimsSubSample(parent_sample_pk=parent.id, sample_id="PB-9011-S01",
+                         external_lims_uid="uid-PB-9011-S01", vial_sequence=1)
+    db.add(vial); db.flush()
+    seed_native_hplc_rows(db, sub_sample=vial, parent=parent, existing_keys=set(),
+                          existing_service_ids=set(), created_by_user_id=None, commit=True)
+    db.commit()  # committed baseline: one open flag + the seeded rows
+    parent_id = parent.id
+
+    ghk = Peptide(name="GHK-Cu", abbreviation="GHKCU", active=True)
+    db.add(ghk); db.flush()
+    relabel_native_slot(db, parent=parent, slot=2, new_peptide_id=ghk.id, user_id=1, commit=False)
+
+    def _events():
+        return db.execute(select(LimsSubSampleEvent).where(
+            LimsSubSampleEvent.lims_sample_pk == parent_id,
+            LimsSubSampleEvent.event == "native_slot_relabeled")).scalars().all()
+
+    def _flag():
+        return db.execute(select(FlagFlag).where(
+            FlagFlag.entity_type == "sample", FlagFlag.entity_id == str(parent_id),
+            FlagFlag.type == UNRESOLVED_FLAG_TYPE)).scalars().one()
+
+    # visible pre-commit within the still-open transaction
+    assert len(_events()) == 1
+    assert _flag().status == "resolved"
+
+    db.rollback()
+    assert _events() == []              # event never committed -> gone
+    assert _flag().status == "open"     # resolution never committed -> reverted
