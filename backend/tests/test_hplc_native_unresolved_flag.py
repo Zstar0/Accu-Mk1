@@ -343,3 +343,31 @@ def test_relabel_commit_true_emits_the_resolved_event_once(monkeypatch):
         db.execute(text("DELETE FROM peptides WHERE name LIKE 'ZZTEST-%'"))
         db.commit()
         db.close()
+
+def test_bare_commit_after_commit_false_seed_emits_once_via_listener(db, monkeypatch):
+    """Fix round 3: a commit=False caller whose OUTER code does a bare db.commit()
+    (placeholder seed under seed_parent_from_services, main.py) still reaches the
+    sink exactly once, via the session-wide after_commit listener; no per-caller
+    emit_pending_events wiring needed."""
+    from flags import seams
+    received = []
+
+    class _Sink:
+        def emit(self, e):
+            received.append(e)
+
+    monkeypatch.setattr(seams, "EVENT_SINK", _Sink())
+    _setup(db)
+    parent, _bpc = _blend_parent(db, "PB-9013", slot2_name="Mystery-Peptide")
+    vial = LimsSubSample(parent_sample_pk=parent.id, sample_id="PB-9013-S01",
+                         external_lims_uid="uid-PB-9013-S01", vial_sequence=1)
+    db.add(vial); db.flush()
+    seed_native_hplc_rows(db, sub_sample=vial, parent=parent, existing_keys=set(),
+                          existing_service_ids=set(), created_by_user_id=None, commit=False)
+    assert received == []
+    db.commit()
+    assert len(received) == 1 and received[0]["event_type"] == "raised"
+    assert received[0]["event_id"] is not None
+    assert "flag_pending_events" not in db.info
+    db.commit()
+    assert len(received) == 1

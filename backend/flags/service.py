@@ -26,6 +26,27 @@ MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 _ATTACHMENT_TOKEN = re.compile(r"\{attachment:(\d+)\}")
 
 
+@event.listens_for(Session, "after_flush_postexec")
+def _stamp_pending_flag_event_ids(session, _ctx) -> None:
+    """Fill `event_id` on staged events as soon as their FlagEvent row has an
+    id (post-flush). Lets the after_commit listener below emit without touching
+    expired row attributes."""
+    for row, event_ in session.info.get("flag_pending_events", []):
+        if event_.get("event_id") is None and row.id is not None:
+            event_["event_id"] = row.id
+
+
+@event.listens_for(Session, "after_commit")
+def _emit_pending_flag_events_on_commit(session) -> None:
+    """Root-cause twin of the rollback listener: ANY real commit on ANY session
+    emits whatever flag events are still staged, so a commit=False
+    create_flag/change_status caller (seed_native_hplc_rows, the placeholder
+    seed under seed_parent_from_services, relabel) never has to remember to
+    call emit_pending_events after its own db.commit(). _commit_and_emit pops
+    the queue itself, so nothing is ever emitted twice. Never raises."""
+    emit_pending_events(session)
+
+
 @event.listens_for(Session, "after_rollback")
 def _clear_pending_flag_events_on_rollback(session) -> None:
     """`db.info` lives on the Session, not the transaction, so it survives a
