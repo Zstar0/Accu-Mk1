@@ -236,6 +236,50 @@ def test_chromatogram_native_on_senaite_born_row_409s(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Fix round 1, finding 2: chromatogram-native must cross-check `sample_id`
+# against the analysis's own sample_id_label instead of trusting it blind —
+# otherwise one analysis's chromatogram can be attached to an unrelated
+# native parent just by passing a different sample_id.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_chromatogram_native_mismatched_sample_id_409s(
+    db, native_parent, native_hplc_analysis, senaite_parent, fake_storage,
+):
+    # senaite_parent is a real, different LimsSample row — not the analysis's
+    # own sample_id_label (native_parent.sample_id) — so this must be
+    # rejected before any write, regardless of what senaite_parent even is.
+    r = _client_as_user().post(
+        f"/hplc/analyses/{native_hplc_analysis.id}/chromatogram-native",
+        params={"sample_id": senaite_parent.sample_id},
+    )
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == "chromatogram_sample_mismatch"
+    assert fake_storage.calls == []
+
+    row = db.execute(select(LimsSample).where(
+        LimsSample.sample_id == native_parent.sample_id)).scalar_one()
+    atts = db.execute(select(LimsParentAttachment).where(
+        LimsParentAttachment.lims_sample_pk == row.id)).scalars().all()
+    assert atts == []
+
+
+def test_chromatogram_native_omitted_sample_id_resolves_from_analysis(
+    db, native_parent, native_hplc_analysis, fake_storage,
+):
+    r = _client_as_user().post(
+        f"/hplc/analyses/{native_hplc_analysis.id}/chromatogram-native",
+    )
+    assert r.status_code == 200, r.text
+
+    row = db.execute(select(LimsSample).where(
+        LimsSample.sample_id == native_parent.sample_id)).scalar_one()
+    atts = db.execute(select(LimsParentAttachment).where(
+        LimsParentAttachment.lims_sample_pk == row.id)).scalars().all()
+    assert len(atts) == 1
+    assert atts[0].kind == "chromatogram"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # (c) native manual-attachment route
 # ═══════════════════════════════════════════════════════════════════════════
 

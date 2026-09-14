@@ -6738,7 +6738,10 @@ async def upload_chromatogram_to_senaite(
 @app.post("/hplc/analyses/{analysis_id}/chromatogram-native")
 async def upload_chromatogram_native(
     analysis_id: int,
-    sample_id: str = Query(..., description="Native lims_samples.sample_id to attach the chromatogram to"),
+    sample_id: str | None = Query(
+        None, description="Native lims_samples.sample_id to attach the chromatogram to "
+                          "— must match the analysis's own sample_id_label when given; "
+                          "omit to resolve it from the analysis"),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -6747,6 +6750,14 @@ async def upload_chromatogram_native(
     CSV straight to `lims_parent_attachments` via `write_parent_attachment`
     — no SENAITE hop, no bg thread, fail-loud. Same CSV builder, same
     `kind`/`attachment_type`/`render_in_report` as the SENAITE twin sends.
+
+    Fix round 1, finding 2: `sample_id` used to be trusted blind, so a
+    caller could attach one analysis's chromatogram to an unrelated native
+    parent. `analysis.sample_id_label` is this endpoint's own lineage
+    (same field `upload_chromatogram_to_senaite` and `_lims_sample_for_attachment`
+    already treat as the analysis's owning sample) — a `sample_id` that
+    disagrees with it is rejected before any write; omitting it resolves
+    straight from the analysis.
     """
     analysis = db.execute(
         select(HPLCAnalysis).where(HPLCAnalysis.id == analysis_id)
@@ -6754,15 +6765,19 @@ async def upload_chromatogram_native(
     if not analysis:
         raise HTTPException(404, f"HPLC Analysis {analysis_id} not found")
 
+    if sample_id and sample_id != analysis.sample_id_label:
+        raise HTTPException(409, detail="chromatogram_sample_mismatch")
+    resolved_sample_id = sample_id or analysis.sample_id_label
+
     chrom = analysis.chromatogram_data
     if not chrom or not chrom.get("times") or not chrom.get("signals"):
         raise HTTPException(400, "No chromatogram data stored on this analysis")
 
     row = db.execute(
-        select(LimsSample).where(LimsSample.sample_id == sample_id)
+        select(LimsSample).where(LimsSample.sample_id == resolved_sample_id)
     ).scalar_one_or_none()
     if row is None:
-        raise HTTPException(404, f"Sample {sample_id} not found")
+        raise HTTPException(404, f"Sample {resolved_sample_id} not found")
     if (row.external_lims_system or "senaite") != "mk1":
         raise HTTPException(409, detail="senaite_born_use_senaite_route")
 
@@ -6782,7 +6797,7 @@ async def upload_chromatogram_native(
 
     return {
         "success": True,
-        "message": f"Chromatogram CSV attached for {sample_id}",
+        "message": f"Chromatogram CSV attached for {resolved_sample_id}",
         "filename": filename,
         "size_bytes": len(csv_bytes),
     }
