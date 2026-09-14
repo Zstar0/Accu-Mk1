@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.21.5 — 2026-09-14
+
 ### Fixed
 - **Per-vial COAs now embed their own vial's chromatogram, never a sibling's.** The vial certificate read whichever chromatogram was newest on the parent, so on a two-vial variance lot where only S02's trace had been pushed, vial 1's COA printed vial 2's chromatogram (P-2627). The chromatogram push now records which vial the HPLC analysis belongs to (`source_sub_sample_pk`, from the analysis' sample label), and a vial COA reads only the row linked to its vial — with no linked row the vial COA is refused with "No chromatogram is linked to vial P-2627-S01 — push it from the vial's HPLC analysis, or upload the CSV with that vial selected as the source." The other vials still generate; the parent COA is untouched. Historical push rows are stamped by `scripts/backfill_chromatogram_source_vial.py` (dry-run by default, `--apply` to write), matched by our own push filename against the same parent's vials only (#207).
 - **The parent COA prefers the core vial's chromatogram.** When a chromatogram row is linked to the promoted core HPLC vial it is used; otherwise the newest row on the parent is used as before, so nothing that generates today stops generating. The rule that picked the row is logged (#207).
