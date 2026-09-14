@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.21.2 — 2026-09-14
+
+### Fixed
+- **Ready to Publish no longer badges a sample "All lines verified" while a native add-on is still on its vial.** The report grades the same line map the sample page's lock gate reads, and that map only saw promoted (`canonical`) and SENAITE-mirrored (`shadow`) rows. A paid-for native test that has not been promoted yet lives on an `ordered` placeholder, which the map ignored, so WP-7322 / P-2739 read 4/4 verified with its Rapid Sterility Screening (PCR) line still assigned on vial 3. Live placeholders now count as pending lines (#202). The vial lock gate is unchanged: it keys on `verified` only.
+
 ## v1.21.1 — 2026-09-13
 
 ### Fixed
