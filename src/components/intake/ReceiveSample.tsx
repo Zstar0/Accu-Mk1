@@ -112,7 +112,7 @@ const STATE_LABELS: Record<string, { label: string; className: string }> = {
     className: 'bg-blue-900 text-blue-300',
   },
   waiting_for_addon_results: {
-    label: 'Waiting Addon',
+    label: 'Partially Published',
     className: 'bg-indigo-900 text-indigo-300',
   },
   ready_for_review: {

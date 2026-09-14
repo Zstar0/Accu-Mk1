@@ -80,9 +80,9 @@ const TABS: Tab[] = [
   },
   {
     id: 'waiting_for_addon',
-    label: 'Waiting for Addon',
+    label: 'Partially Published',
     reviewState: 'waiting_for_addon_results',
-    description: 'Awaiting add-on test results',
+    description: 'Primary COA published; awaiting add-on results',
   },
   {
     id: 'ready_for_review',
