@@ -27,6 +27,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { SlaBreakdownTooltip } from '@/components/explorer/SlaBreakdownTooltip'
+import { STATE_LABELS } from '@/components/senaite/senaite-utils'
+import { useStateLabel } from '@/lib/workflow-states-store'
 import type { InboxPriority, SlaTier } from '@/lib/api'
 import {
   Tooltip,
@@ -83,6 +85,9 @@ function fmtAge(iso: string | null): string {
 function statusLabel(status: string): string {
   return status.replace(/_/g, ' ')
 }
+
+/** The partial-publish state: primary COA out, add-on lines pending. */
+const PARTIAL_STATE = 'waiting_for_addon_results'
 
 // ─── Cells ───────────────────────────────────────────────────────────────────
 
@@ -148,9 +153,31 @@ export function SlaCell({ row }: { row: ReadyRow }) {
   )
 }
 
-function ReasonBadges({ row }: { row: ReadyRow }) {
+export function ReasonBadges({ row }: { row: ReadyRow }) {
+  const partialLabel = useStateLabel(
+    PARTIAL_STATE,
+    STATE_LABELS[PARTIAL_STATE]?.label ?? 'Partially Published'
+  )
   return (
     <span className="inline-flex flex-wrap gap-1">
+      {row.status === PARTIAL_STATE && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge
+              variant="outline"
+              className="text-[10px] border-indigo-400/40 text-indigo-300"
+              data-testid="rtp-partial"
+            >
+              {partialLabel}
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="text-xs">
+            {row.lines.pending.length
+              ? 'Primary COA is out; add-on results still pending.'
+              : 'Primary COA is out and the add-on results are in. Publish again to regenerate.'}
+          </TooltipContent>
+        </Tooltip>
+      )}
       {row.reasons.includes('all_verified') && (
         <Badge
           variant="outline"
@@ -207,6 +234,10 @@ function SampleLine({
 }) {
   const held = row.hold !== null
   const busy = actions.busyId === row.sample_id
+  const statusText = useStateLabel(
+    row.status,
+    STATE_LABELS[row.status]?.label ?? statusLabel(row.status)
+  )
   return (
     <tr
       className={cn(
@@ -241,10 +272,12 @@ function SampleLine({
       </td>
       <td className="py-1.5 pr-2 align-top">
         <Badge variant="secondary" className="text-[10px] capitalize">
-          {statusLabel(row.status)}
+          {statusText}
         </Badge>
+        {/* Bounded so a long pending list (native keywords since 1.21.2) cannot
+            widen this auto-layout column and push Why away; full text on hover. */}
         <div
-          className="text-[11px] text-muted-foreground mt-0.5"
+          className="text-[11px] text-muted-foreground mt-0.5 max-w-56 truncate"
           title={linesText(row.lines)}
         >
           {linesText(row.lines)}
