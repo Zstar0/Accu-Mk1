@@ -16199,14 +16199,27 @@ async def get_senaite_status(_current_user=Depends(get_current_user)):
 async def get_senaite_raw_fields(
     sample_id: str,
     _current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),  # noqa: B008 — house pattern, every other route in this file does the same
 ):
     """
     Return the raw SENAITE API fields for a sample — useful for diagnosing what
     Analyte1Peptide, SampleType, Profiles, etc. actually contain.
+
+    Native-born samples (lims_samples.external_lims_system == "mk1") have no
+    SENAITE AnalysisRequest — there are no raw SENAITE fields to diagnose, so
+    this short-circuits with a marker instead of making a doomed SENAITE
+    call (task 1b, 2026-09-14). No FE caller depends on the shape of this
+    diagnostic route (grep of src/lib/api.ts finds none), so the marker dict
+    is the lazy, sufficient shape here.
     """
     if SENAITE_URL is None:
         raise HTTPException(status_code=503, detail="SENAITE not configured")
     sample_id = sample_id.strip().upper()
+    row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if row is not None and row.external_lims_system == "mk1":
+        return {"native_born": True}
     data = await _fetch_senaite_sample(sample_id)
     if data.get("count", 0) == 0:
         raise HTTPException(status_code=404, detail=f"Sample {sample_id} not found")
@@ -16268,7 +16281,7 @@ async def clear_senaite_lookup_cache(
     return {"cleared": count}
 
 
-@app.get("/wizard/senaite/lookup", response_model=SenaiteLookupResult)
+@app.get("/wizard/senaite/lookup", response_model=RegistrySampleReadResult | SenaiteLookupResult)
 async def lookup_senaite_sample(
     id: str,
     no_cache: bool = True,
@@ -16294,6 +16307,24 @@ async def lookup_senaite_sample(
 
     # SENAITE sample IDs are always uppercase (e.g. PB-0056) — normalize
     id = id.strip().upper()
+
+    # Native-born samples (lims_samples.external_lims_system == "mk1", no
+    # SENAITE AR) are registry-authoritative — serve them from the same
+    # builder the mk1 read-source route uses, BEFORE any SENAITE HTTP or
+    # cache lookup, regardless of what read-source the caller defaulted to.
+    # This is the same row the SENAITE-born path below loads as `_logi` for
+    # its logistics merge — reused here for the native-born gate check.
+    # No caching here either: the mk1 route (/registry/sample/{id}/details)
+    # never populates _senaite_lookup_cache, so this branch matches that
+    # cache semantics exactly (task 1b, 2026-09-14).
+    _row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == id)
+    ).scalar_one_or_none()
+    if _row is not None and _row.external_lims_system == "mk1":
+        from sub_samples.registry_details import build_native_details
+        result = build_native_details(db, id)
+        _enrich_analytes_with_peptide_match(db, result.analytes)
+        return result
 
     # Check server-side cache (skipped when no_cache=true)
     import time as _time
