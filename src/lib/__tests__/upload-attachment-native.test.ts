@@ -8,14 +8,19 @@ describe('uploadChromatogramNative', () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({ success: true, message: 'ok', filename: 'x.csv', size_bytes: 12 }),
+      json: async () => ({
+        success: true,
+        message: 'ok',
+        filename: 'x.csv',
+        size_bytes: 12,
+      }),
     })
     vi.stubGlobal('fetch', fetchMock)
 
     const result = await uploadChromatogramNative(42, 'aP-0001')
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [url, init] = fetchMock.mock.calls[0]!
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toContain('/hplc/analyses/42/chromatogram-native')
     expect(url).toContain('sample_id=aP-0001')
     expect(init.method).toBe('POST')
@@ -32,7 +37,7 @@ describe('uploadChromatogramNative', () => {
 
     await uploadChromatogramNative(1, 'aP-0001')
 
-    const [url] = fetchMock.mock.calls[0]!
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(String(url)).not.toContain('chromatogram-to-senaite')
   })
 
@@ -61,11 +66,19 @@ describe('uploadNativeAttachment', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    const file = new File([new Uint8Array([1, 2, 3])], 'vial.png', { type: 'image/png' })
-    await uploadNativeAttachment('aP-0001', file, 'Sample Image', 'vial_image', 'aP-0001-V1')
+    const file = new File([new Uint8Array([1, 2, 3])], 'vial.png', {
+      type: 'image/png',
+    })
+    await uploadNativeAttachment(
+      'aP-0001',
+      file,
+      'Sample Image',
+      'vial_image',
+      'aP-0001-V1'
+    )
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [url, init] = fetchMock.mock.calls[0]!
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toContain('/wizard/samples/aP-0001/attachments')
     expect(String(url)).not.toContain('/wizard/senaite/')
     const body = init.body as FormData
@@ -82,10 +95,12 @@ describe('uploadNativeAttachment', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    const file = new File([new Uint8Array([1, 2, 3])], 'vial.png', { type: 'image/png' })
+    const file = new File([new Uint8Array([1, 2, 3])], 'vial.png', {
+      type: 'image/png',
+    })
     await uploadNativeAttachment('aP-0001', file, 'HPLC Graph')
 
-    const body = fetchMock.mock.calls[0]![1]!.body as FormData
+    const body = (fetchMock.mock.calls[0]?.[1]?.body ?? null) as FormData
     expect(body.has('native_kind')).toBe(false)
     expect(body.has('source_sample_id')).toBe(false)
   })
