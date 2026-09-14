@@ -205,7 +205,10 @@ def _result_display(spec, result) -> Optional[str]:
         return None
     if not math.isfinite(value):
         return None
-    return "< LOQ" if value < float(spec.loq) else None
+    # At-or-below the LOQ prints "< LOQ" (Handler ruling 2026-09-14: a result
+    # reported AT the LOQ is the reporting floor, not a quantified figure —
+    # Endotoxin USP85 2.50 vs LOQ 2.5). The verdict still uses the raw number.
+    return "< LOQ" if value <= float(spec.loq) else None
 
 
 def build_native_sections(db: Session, parent) -> dict:
