@@ -3,18 +3,11 @@
 ## Unreleased
 
 ### Fixed
-- **Per-vial COAs now embed their own vial's chromatogram, never a sibling's.** The vial certificate read whichever chromatogram was newest on the parent, so on a two-vial variance lot where only S02's trace had been pushed, vial 1's COA printed vial 2's chromatogram (P-2627). The chromatogram push now records which vial the HPLC analysis belongs to (`source_sub_sample_pk`, from the analysis' sample label), and a vial COA reads only the row linked to its vial — with no linked row the vial COA is refused with "No chromatogram is linked to vial P-2627-S01 — push it from the vial's HPLC analysis, or upload the CSV with that vial selected as the source." The other vials still generate; the parent COA is untouched. Historical push rows are stamped by `scripts/backfill_chromatogram_source_vial.py` (dry-run by default, `--apply` to write), matched by our own push filename against the same parent's vials only (#TBD).
-- **The parent COA prefers the core vial's chromatogram.** When a chromatogram row is linked to the promoted core HPLC vial it is used; otherwise the newest row on the parent is used as before, so nothing that generates today stops generating. The rule that picked the row is logged (#TBD).
+- **Per-vial COAs now embed their own vial's chromatogram, never a sibling's.** The vial certificate read whichever chromatogram was newest on the parent, so on a two-vial variance lot where only S02's trace had been pushed, vial 1's COA printed vial 2's chromatogram (P-2627). The chromatogram push now records which vial the HPLC analysis belongs to (`source_sub_sample_pk`, from the analysis' sample label), and a vial COA reads only the row linked to its vial — with no linked row the vial COA is refused with "No chromatogram is linked to vial P-2627-S01 — push it from the vial's HPLC analysis, or upload the CSV with that vial selected as the source." The other vials still generate; the parent COA is untouched. Historical push rows are stamped by `scripts/backfill_chromatogram_source_vial.py` (dry-run by default, `--apply` to write), matched by our own push filename against the same parent's vials only (#207).
+- **The parent COA prefers the core vial's chromatogram.** When a chromatogram row is linked to the promoted core HPLC vial it is used; otherwise the newest row on the parent is used as before, so nothing that generates today stops generating. The rule that picked the row is logged (#207).
 
 ### Added
-- **Variance lots get their per-vial COAs automatically after the primary COA.** The same per-vial generation the "Generate vial COAs" action performs now runs best-effort right after the primary COA on a sample with a variance vial set; vials that already have a live child are skipped, and a failure never affects the primary. The manual action remains for retries (#TBD).
-## v1.21.4 — 2026-09-14
-
-### Added
-- **Ready to Publish shows a "Partially Published" chip** on rows whose primary COA is already out while add-on lines are still pending (workflow state `waiting_for_addon_results`). The hover says whether the add-on results are still pending or are in and a second publish is owed. The row's status badge now reads the workflow catalog label for the state instead of the raw slug (#206).
-
-### Fixed
-- Ready to Publish: the Why column had drifted away from Status · Lines since 1.21.2 because the lines sub-line printed every pending keyword and the long native keywords widened the auto-layout column. The sub-line is now bounded, with the full text on hover (#206).
+- **Variance lots get their per-vial COAs automatically after the primary COA.** The same per-vial generation the "Generate vial COAs" action performs now runs best-effort right after the primary COA on a sample with a variance vial set; vials that already have a live child are skipped, and a failure never affects the primary. The manual action remains for retries (#207).
 
 ## v1.21.3 — 2026-09-14
 
