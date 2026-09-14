@@ -14101,6 +14101,17 @@ async def regen_primary_coa(
         select(LimsSample).where(LimsSample.sample_id == sample_id)
     ).scalar_one_or_none()
     if _regen_parent is not None:
+        # Customer remarks — MUST mirror generate_sample_coa. COA Builder's
+        # lab-remarks gate refuses a non-conforming certificate with no
+        # remarks, so a regen that omits them 422s on every failing sample
+        # (P-2627, 2026-09-14). include_lab_remarks is ALWAYS sent; the text
+        # only when the lab chose to include it.
+        _include_remarks = bool(_regen_parent.customer_remarks_include)
+        alias_body["include_lab_remarks"] = _include_remarks
+        _remarks_text = (_regen_parent.customer_remarks or "").strip()
+        if _include_remarks and _remarks_text:
+            alias_body["lab_remarks"] = _remarks_text
+
         from coa.variance_series import process_variance_fields
         alias_body.update(process_variance_fields(db, _regen_parent))
 

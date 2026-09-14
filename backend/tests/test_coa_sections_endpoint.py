@@ -363,3 +363,38 @@ def test_s2s_coa_sections_unchanged_in_senaite_mode(client, db_session, monkeypa
         resp = client.get("/samples/P-9002/coa-sections", headers=SVC_TOKEN_HEADER)
     assert resp.status_code == 200
     assert "legacy_rows" not in resp.json()
+
+
+# ── regen_primary_coa forwards customer remarks (P-2627, 2026-09-14) ──
+# COA Builder's lab-remarks gate refuses a non-conforming certificate that
+# carries no customer remarks. generate_sample_coa always sends
+# include_lab_remarks (+ lab_remarks); regen_primary_coa never did, so
+# Regen & Republish 422'd on every failing sample.
+
+
+def test_regen_primary_coa_forwards_customer_remarks(db_session, monkeypatch):
+    from models import LimsSample
+    db_session.add(LimsSample(sample_id="P-REGEN-3", customer_remarks="  ran twice, OOS  ",
+                              customer_remarks_include=True))
+    db_session.commit()
+    captured = {}
+    monkeypatch.setattr(main, "COA_BUILDER_URL", "http://coabuilder.test")
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda *a, **k: _FakeRegenClient(captured, {}))
+    with patch("coa.wire_document.build_native_sections", return_value={"sample_id": "P-REGEN-3", "ordered_profiles": [], "sections": []}):
+        asyncio.run(main.regen_primary_coa(sample_id="P-REGEN-3", db=db_session, current_user=None))
+    assert captured["body"]["include_lab_remarks"] is True
+    assert captured["body"]["lab_remarks"] == "ran twice, OOS"
+
+
+def test_regen_primary_coa_omits_remarks_text_when_not_included(db_session, monkeypatch):
+    from models import LimsSample
+    db_session.add(LimsSample(sample_id="P-REGEN-4", customer_remarks="private note",
+                              customer_remarks_include=False))
+    db_session.commit()
+    captured = {}
+    monkeypatch.setattr(main, "COA_BUILDER_URL", "http://coabuilder.test")
+    monkeypatch.setattr(main.httpx, "AsyncClient", lambda *a, **k: _FakeRegenClient(captured, {}))
+    with patch("coa.wire_document.build_native_sections", return_value={"sample_id": "P-REGEN-4", "ordered_profiles": [], "sections": []}):
+        asyncio.run(main.regen_primary_coa(sample_id="P-REGEN-4", db=db_session, current_user=None))
+    assert captured["body"]["include_lab_remarks"] is False
+    assert "lab_remarks" not in captured["body"]
