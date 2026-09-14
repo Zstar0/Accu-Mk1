@@ -6711,7 +6711,7 @@ export function SampleDetails() {
                   Only offered when at least one vial has an Mk1-stored
                   primary (legacy vial photos already live on this AR). */}
             {parentSampleId === null &&
-              data.sample_uid &&
+              (data.external_lims_system === 'mk1' || data.sample_uid) &&
               ((subData?.sub_samples.some(v =>
                 v.photo_external_uid?.startsWith('mk1://')
               ) ??

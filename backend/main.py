@@ -6765,9 +6765,24 @@ async def upload_chromatogram_native(
     if not analysis:
         raise HTTPException(404, f"HPLC Analysis {analysis_id} not found")
 
-    if sample_id and sample_id != analysis.sample_id_label:
+    # The bench stamps `sample_id_label` with the VIAL id (P-5008-S01) — the
+    # parent id only on legacy/manual rows — so resolve the owning parent
+    # through lims_sub_samples first, then lims_samples. A caller-supplied
+    # `sample_id` (the FE passes the PARENT id) must name that owner.
+    label = analysis.sample_id_label
+    owner_id = label
+    vial = db.execute(
+        select(LimsSubSample).where(LimsSubSample.sample_id == label)
+    ).scalar_one_or_none()
+    if vial is not None:
+        owner = db.execute(
+            select(LimsSample).where(LimsSample.id == vial.parent_sample_pk)
+        ).scalar_one_or_none()
+        if owner is not None:
+            owner_id = owner.sample_id
+    if sample_id and sample_id != owner_id:
         raise HTTPException(409, detail="chromatogram_sample_mismatch")
-    resolved_sample_id = sample_id or analysis.sample_id_label
+    resolved_sample_id = owner_id
 
     chrom = analysis.chromatogram_data
     if not chrom or not chrom.get("times") or not chrom.get("signals"):

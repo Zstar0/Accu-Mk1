@@ -402,3 +402,21 @@ def test_native_attachment_upload_storage_error_returns_500_no_row(db, native_pa
     atts = db.execute(select(LimsParentAttachment).where(
         LimsParentAttachment.lims_sample_pk == row.id)).scalars().all()
     assert atts == []
+
+def test_chromatogram_native_vial_label_resolves_to_parent(
+    db, native_parent, native_hplc_analysis, fake_storage,
+):
+    """Production shape: the bench stamps sample_id_label with the VIAL id while
+    the FE passes the PARENT id — must resolve through the vial, not 409."""
+    vial = db.execute(select(LimsSubSample).where(
+        LimsSubSample.parent_sample_pk == native_parent.id)).scalars().first()
+    assert vial is not None
+    native_hplc_analysis.sample_id_label = vial.sample_id
+    db.commit()
+    r = _client_as_user().post(f"/hplc/analyses/{native_hplc_analysis.id}/chromatogram-native",
+                    params={"sample_id": native_parent.sample_id})
+    assert r.status_code == 200, r.text
+    rows = db.execute(select(LimsParentAttachment).where(
+        LimsParentAttachment.lims_sample_pk == native_parent.id,
+        LimsParentAttachment.kind == "chromatogram")).scalars().all()
+    assert len(rows) == 1
