@@ -1585,6 +1585,15 @@ def _run_migrations():
         "AND NOT EXISTS (SELECT 1 FROM lims_workflow_transitions t "
         "WHERE t.entity_scope='sample' AND t.from_state_id=fs.id "
         "AND t.verb='publish')",
+        # --- "Partially Published" relabel (RULED 2026-09-14) ---
+        # waiting_for_addon_results has always meant "primary COA out, add-on
+        # lines pending". The seed is insert-if-missing, so without this the
+        # prod row keeps its original label. Guarded on the old label so a
+        # label the Handler edited in Settings -> Workflow is never overwritten.
+        "UPDATE lims_workflow_states SET label='Partially Published', "
+        "description='Primary COA published; add-on lines still pending.' "
+        "WHERE entity_scope='sample' AND slug='waiting_for_addon_results' "
+        "AND label='Waiting for Add-on Results'",
         # --- Packaging fan-out + QR phone capture ---
         # lims_capture_tokens must exist before the FK-ALTER below runs (same
         # pattern as lims_boxes/sla_tiers above): migrations run BEFORE

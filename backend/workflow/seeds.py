@@ -9,7 +9,7 @@ SEED_STATES = [
     ("sample", "sample_due", "Due", "active", 20, "Expected at the lab; not yet received."),
     ("sample", "sample_received", "Received", "active", 30, "Checked in at the lab."),
     ("sample", "ready_for_initial_review", "Ready for Initial Review", "active", 40, "Custom Accumark state."),
-    ("sample", "waiting_for_addon_results", "Waiting for Add-on Results", "active", 50, "Custom Accumark state."),
+    ("sample", "waiting_for_addon_results", "Partially Published", "active", 50, "Primary COA published; add-on lines still pending."),
     ("sample", "to_be_verified", "To Be Verified", "active", 60, "All results submitted; awaiting review."),
     ("sample", "verified", "Verified", "active", 70, "Results verified by the lab."),
     ("sample", "published", "Published", "terminal", 80, "COA published to the customer."),

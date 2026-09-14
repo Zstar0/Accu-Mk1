@@ -122,7 +122,7 @@ export function SampleStateBadge({ state }: { state: string | null }) {
     verified: { variant: 'default', label: 'Verified' },
     published: { variant: 'default', label: 'Published' },
     sample_due: { variant: 'outline', label: 'Sample Due' },
-    waiting_for_addon_results: { variant: 'secondary', label: 'Waiting Addon' },
+    waiting_for_addon_results: { variant: 'secondary', label: 'Partially Published' },
     ready_for_review: { variant: 'default', label: 'Ready for Review' },
     registered: { variant: 'outline', label: 'Registered' },
     sample_registered: { variant: 'outline', label: 'Registered' },

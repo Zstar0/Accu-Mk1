@@ -128,7 +128,7 @@ const KANBAN_COLUMNS: KanbanCol[] = [
   { key: 'to_verify', label: 'To Verify', countKey: 'to_verify' },
   {
     key: 'waiting_for_addon',
-    label: 'Waiting Addon',
+    label: 'Partially Published',
     countKey: 'waiting_for_addon',
   },
   {
@@ -260,7 +260,7 @@ function sampleStateLabel(state: string | null): string {
     verified: 'Verified',
     published: 'Published',
     sample_due: 'Sample Due',
-    waiting_for_addon_results: 'Waiting Addon',
+    waiting_for_addon_results: 'Partially Published',
     ready_for_review: 'Ready for Review',
     registered: 'Registered',
     sample_registered: 'Registered',
@@ -820,9 +820,9 @@ const ANALYSIS_STATE_BUTTONS = [
   },
   {
     key: 'waiting_for_addon',
-    label: 'Waiting Addon',
+    label: 'Partially Published',
     tooltip:
-      'Initial analyses verified, waiting for outsourced/addon test results to come back',
+      'Primary COA published; add-on test results still pending',
   },
   {
     key: 'ready_for_review',
