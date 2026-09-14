@@ -14,11 +14,14 @@ coabuilder src/coabuilder_core/sample_meta.py and pinned by
 test_sample_meta_contract.py in BOTH repos. Move together.
 """
 import json
+import logging
 import os
 
 from sqlalchemy import select
 
 from coa.native_sections import NativeSectionsError
+
+log = logging.getLogger(__name__)
 
 SAMPLE_META_SCALARS = (
     "SampleID", "SampleTypeTitle", "ClientSampleID", "DateReceived",
@@ -60,9 +63,13 @@ def _analyte_slots(parent) -> dict:
     return out
 
 
-def _newest(db, parent_pk: int, *, chromatogram: bool):
+def _newest(db, parent_pk: int, *, chromatogram: bool, source_sub_pks=None):
+    """Newest eligible row; `source_sub_pks` (chromatogram only) narrows to
+    rows linked to those vials via `source_sub_sample_pk`."""
     from models import LimsParentAttachment as A
     q = select(A).where(A.lims_sample_pk == parent_pk, A.storage == "s3")
+    if source_sub_pks is not None:
+        q = q.where(A.source_sub_sample_pk.in_(list(source_sub_pks)))
     if chromatogram:
         # kind='chromatogram' = the HPLC-prep push / Select-Vial flow. The
         # attachment_type arm (BW-0106, 2026-08-31) admits CSVs attached
@@ -82,6 +89,52 @@ def _newest(db, parent_pk: int, *, chromatogram: bool):
             (A.kind == "receive_image") | (A.attachment_type == "Sample Image"),
         )
     return db.execute(q.order_by(A.id.desc()).limit(1)).scalar_one_or_none()
+
+
+def select_chromatogram_row(db, parent, *, vial=None):
+    """The chromatogram row the certificate embeds (P-2627, 2026-09-14).
+
+    Per-vial COA (`vial` given): ONLY a row linked to that vial
+    (`source_sub_sample_pk`); none -> NativeSectionsError. Never a sibling's
+    trace — vial 1's COA once printed vial 2's chromatogram because the
+    parent's newest row was the only rule.
+
+    Parent COA (`vial=None`): newest row linked to a CORE HPLC vial
+    (assignment_role='hplc', assignment_kind='core'); when nothing is linked
+    (pre-backfill rows, single-vial history) fall back to the newest
+    chromatogram on the parent, exactly as before. May return None — a
+    missing parent chromatogram is not fatal here (micro-only samples).
+    """
+    from models import LimsSubSample
+    if vial is not None:
+        row = _newest(db, parent.id, chromatogram=True, source_sub_pks=[vial.id])
+        if row is None:
+            raise NativeSectionsError(
+                f"No chromatogram is linked to vial {vial.sample_id} — push it "
+                f"from the vial's HPLC analysis, or upload the CSV with that "
+                f"vial selected as the source.")
+        log.info("sample_meta: %s chromatogram row %s picked by vial-linked "
+                 "rule (vial %s)", parent.sample_id, row.id, vial.sample_id)
+        return row
+    core_ids = db.execute(
+        select(LimsSubSample.id).where(
+            LimsSubSample.parent_sample_pk == parent.id,
+            LimsSubSample.assignment_role == "hplc",
+            LimsSubSample.assignment_kind == "core",
+        )
+    ).scalars().all()
+    if core_ids:
+        row = _newest(db, parent.id, chromatogram=True, source_sub_pks=core_ids)
+        if row is not None:
+            log.info("sample_meta: %s chromatogram row %s picked by core-vial "
+                     "rule (vial pk %s)", parent.sample_id, row.id,
+                     row.source_sub_sample_pk)
+            return row
+    row = _newest(db, parent.id, chromatogram=True)
+    if row is not None:
+        log.info("sample_meta: %s chromatogram row %s picked by newest rule "
+                 "(no core-vial-linked row)", parent.sample_id, row.id)
+    return row
 
 
 def _guard_unhonourable_reportable_flags(db, parent) -> None:
@@ -121,14 +174,16 @@ def _guard_unhonourable_reportable_flags(db, parent) -> None:
         )
 
 
-def build_sample_meta(db, parent) -> dict:
+def build_sample_meta(db, parent, *, vial=None) -> dict:
     """Assemble the sample_meta wire block (spec §2). Fail-closed (R1): no
     SENAITE fallback -- a missing MK1_PUBLIC_BASE_URL, an empty
     sample_type_title, or no eligible native sample-image row all abort
     with NativeSectionsError (Ruling R-13 for the image case). A missing
     chromatogram is NOT fatal here -- micro-only samples legitimately have
     none; the generate-flow attachments gate is what enforces the
-    per-sample chromatogram requirement.
+    per-sample chromatogram requirement. `vial` (a LimsSubSample, per-vial
+    COAs) makes the chromatogram selection vial-strict — see
+    select_chromatogram_row.
 
     MK1_PUBLIC_BASE_URL mints the absolute S2S attachment URLs coab
     downloads. PREFERRED value: an origin coab reaches DIRECTLY --
@@ -191,7 +246,7 @@ def build_sample_meta(db, parent) -> dict:
 
     attachments = []
     for role, row in (("sample_image", image_row),
-                      ("chromatogram_csv", _newest(db, parent.id, chromatogram=True))):
+                      ("chromatogram_csv", select_chromatogram_row(db, parent, vial=vial))):
         if row is not None:
             attachments.append({
                 "role": role,

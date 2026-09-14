@@ -6679,14 +6679,19 @@ async def upload_chromatogram_to_senaite(
             # AR uid here (SelectVialChromatogramDialog), not a vial uid.
             # attachment_type/render_in_report mirror exactly what the
             # SENAITE form POST above just sent ("HPLC Graph" /
-            # RenderInReport=False). source_sample_id=None — lineage here is
-            # the HPLC analysis, not a vial; out of scope for this capture.
+            # RenderInReport=False). source_sample_id = the analysis'
+            # sample_id_label when it is a vial id ("P-2627-S01"): the vial
+            # is the lineage per-vial COAs read (P-2627, 2026-09-14); a bare
+            # parent label leaves it NULL. The helper checks the vial
+            # belongs to this parent.
             from fastapi.concurrency import run_in_threadpool
+            _label = analysis.sample_id_label or ""
             await run_in_threadpool(
                 _capture_parent_attachment_bg,
                 sample_uid=sample_uid, file_bytes=csv_bytes,
                 filename=filename, content_type="text/csv",
-                kind="chromatogram", source_sample_id=None,
+                kind="chromatogram",
+                source_sample_id=_label if re.search(r"-S\d{2,}$", _label) else None,
                 user_id=getattr(current_user, "id", None),
                 render_in_report=False, attachment_type="HPLC Graph",
             )
@@ -13499,6 +13504,7 @@ async def generate_sample_coa(
     # just-created primary (best-effort; the helper no-ops for non-variance).
     if not is_sub:
         await _maybe_emit_regular_coa_child(db, sample_id, _parent_row, data)
+        await _maybe_emit_vial_coas(db, sample_id, _parent_row, data)
 
     # Build a meaningful message from the COA Builder response
     warnings = data.get("warnings", [])
@@ -13572,6 +13578,116 @@ async def generate_sample_coa(
         message=message,
         verification_code=verification_code,
     )
+
+
+async def _generate_vial_coas_loop(db, parent, vials, parent_generation_id, existing,
+                                   *, include_remarks, lab_remarks):
+    """One COABuilder /process per reportable HPLC vial not already in
+    `existing`. Returns (generated, skipped, errors). Shared by the
+    generate-vial-coas route and the post-primary auto-run for variance lots.
+
+    Seam 4: vial COAs follow the coa_generation toggle for their BASE row
+    sourcing via a legacy-only document (vial certs never render native
+    sections). The document is built PER VIAL so its chromatogram is the
+    row linked to that vial (P-2627, 2026-09-14) — a vial with no linked
+    row fails closed as an error entry and never borrows a sibling's trace;
+    the other vials still generate.
+    """
+    import logging as _logging
+    _logger = _logging.getLogger(__name__)
+    from coa.native_sections import NativeSectionsError
+    from coa.wire_document import build_vial_wire_document, warn_if_source_ignored
+    sample_id = parent.sample_id
+    subs_by_seq = {
+        s.vial_sequence: s for s in db.execute(
+            select(LimsSubSample).where(
+                LimsSubSample.parent_sample_pk == parent.id,
+                LimsSubSample.assignment_role == "hplc",
+            ).order_by(LimsSubSample.id)
+        ).scalars().all()
+    }
+    generated: list[dict] = []
+    skipped: list[int] = []
+    errors: list[dict] = []
+    async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=120.0) as client:
+        for vial_seq, figs in vials:
+            if vial_seq in existing:
+                skipped.append(vial_seq)
+                continue
+            try:
+                _vial_doc = build_vial_wire_document(db, parent, subs_by_seq.get(vial_seq))
+            except NativeSectionsError as e:
+                errors.append({"vial_sequence": vial_seq, "error": f"COA aborted — {e.detail}"})
+                _logger.warning("vial COA aborted for %s vial %s: %s", sample_id, vial_seq, e.detail)
+                continue
+            vbody: dict = {
+                "vial_figures": figs,
+                "parent_generation_id": parent_generation_id,
+                "vial_sequence": vial_seq,
+                "include_lab_remarks": bool(include_remarks),
+            }
+            if include_remarks and lab_remarks:
+                vbody["lab_remarks"] = lab_remarks
+            if _vial_doc is not None:
+                vbody["native_sections"] = _vial_doc
+            try:
+                resp = await client.post(f"{COA_BUILDER_URL}/process/{sample_id}", json=vbody)
+                resp.raise_for_status()
+                data = resp.json()
+                warn_if_source_ignored(_vial_doc, data, sample_id)
+                generated.append({
+                    "vial_sequence": vial_seq,
+                    "verification_code": data.get("verification_code"),
+                    "generation_id": data.get("generation_id"),
+                })
+            except httpx.HTTPStatusError as e:
+                try:
+                    detail = e.response.json().get("detail", str(e.response.status_code))
+                except Exception:
+                    detail = str(e.response.status_code)
+                errors.append({"vial_sequence": vial_seq, "error": detail})
+                _logger.warning("vial COA gen failed for %s vial %s: %s", sample_id, vial_seq, detail)
+            except Exception as e:  # noqa: BLE001 — one vial failing must not abort the rest
+                errors.append({"vial_sequence": vial_seq, "error": str(e)})
+                _logger.warning("vial COA gen error for %s vial %s: %s", sample_id, vial_seq, e)
+    return generated, skipped, errors
+
+
+async def _maybe_emit_vial_coas(db, sample_id, parent_row, primary_data):
+    """Variance lot: after the primary COA, auto-run the per-vial COAs the
+    generate-vial-coas route would produce (2026-09-14). Best-effort — never
+    fails the primary; idempotent via fetch_existing_vial_sequences; no-op
+    for non-variance samples. The route remains the manual/retry path."""
+    import logging as _logging
+    _logger = _logging.getLogger(__name__)
+    try:
+        if not COA_BUILDER_URL or parent_row is None:
+            return
+        from coa.variance_series import (
+            build_variance_replicates,
+            list_hplc_vials_with_figures,
+        )
+        if not build_variance_replicates(db, parent_row):
+            return
+        primary_gen_id = primary_data.get("generation_id")
+        if not primary_gen_id:
+            _logger.warning("auto vial COAs skipped for %s: no primary generation_id", sample_id)
+            return
+        vials = list_hplc_vials_with_figures(db, parent_row)
+        if not vials:
+            return
+        from integration_db import fetch_existing_vial_sequences
+        existing = fetch_existing_vial_sequences(str(primary_gen_id))
+        include_remarks = bool(parent_row.customer_remarks_include)
+        lab_remarks = (parent_row.customer_remarks or "").strip() if include_remarks else ""
+        generated, skipped, errors = await _generate_vial_coas_loop(
+            db, parent_row, vials, str(primary_gen_id), existing,
+            include_remarks=include_remarks, lab_remarks=lab_remarks,
+        )
+        _logger.info("auto vial COAs for %s: generated=%s skipped=%s errors=%s",
+                     sample_id, [g["vial_sequence"] for g in generated], skipped, errors)
+    except Exception as e:  # noqa: BLE001 — must never fail the primary
+        _logger.warning("auto vial COAs failed for %s: %s", sample_id, e)
 
 
 class GenerateVialCOAsRequest(BaseModel):
@@ -13653,54 +13769,10 @@ async def generate_vial_coas(
         if include_remarks and not lab_remarks:
             lab_remarks = (parent.customer_remarks or "").strip()
 
-    # Seam 4: vial COAs follow the coa_generation toggle for their BASE row
-    # sourcing, via a legacy-only document (vial certs never render native
-    # sections). Fail-closed: an assembly error aborts the whole run.
-    from coa.native_sections import NativeSectionsError
-    from coa.wire_document import build_vial_wire_document, warn_if_source_ignored
-    try:
-        _vial_doc = build_vial_wire_document(db, parent)
-    except NativeSectionsError as e:
-        return _resp(False, f"COA aborted — {e.detail}")
-
-    generated: list[dict] = []
-    skipped: list[int] = []
-    errors: list[dict] = []
-    async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=120.0) as client:
-        for vial_seq, figs in vials:
-            if vial_seq in existing:
-                skipped.append(vial_seq)
-                continue
-            vbody: dict = {
-                "vial_figures": figs,
-                "parent_generation_id": parent_generation_id,
-                "vial_sequence": vial_seq,
-                "include_lab_remarks": bool(include_remarks),
-            }
-            if include_remarks and lab_remarks:
-                vbody["lab_remarks"] = lab_remarks
-            if _vial_doc is not None:
-                vbody["native_sections"] = _vial_doc
-            try:
-                resp = await client.post(f"{COA_BUILDER_URL}/process/{sample_id}", json=vbody)
-                resp.raise_for_status()
-                data = resp.json()
-                warn_if_source_ignored(_vial_doc, data, sample_id)
-                generated.append({
-                    "vial_sequence": vial_seq,
-                    "verification_code": data.get("verification_code"),
-                    "generation_id": data.get("generation_id"),
-                })
-            except httpx.HTTPStatusError as e:
-                try:
-                    detail = e.response.json().get("detail", str(e.response.status_code))
-                except Exception:
-                    detail = str(e.response.status_code)
-                errors.append({"vial_sequence": vial_seq, "error": detail})
-                _logger.warning("vial COA gen failed for %s vial %s: %s", sample_id, vial_seq, detail)
-            except Exception as e:  # noqa: BLE001 — one vial failing must not abort the rest
-                errors.append({"vial_sequence": vial_seq, "error": str(e)})
-                _logger.warning("vial COA gen error for %s vial %s: %s", sample_id, vial_seq, e)
+    generated, skipped, errors = await _generate_vial_coas_loop(
+        db, parent, vials, parent_generation_id, existing,
+        include_remarks=include_remarks, lab_remarks=lab_remarks,
+    )
 
     g, s, f = len(generated), len(skipped), len(errors)
     parts = [f"Generated {g} per-vial COA(s)"]
@@ -18566,8 +18638,8 @@ def _capture_parent_attachment_bg(
     source_sample_id, attachment_type), receive_senaite_sample's step-1 image
     upload (kind='receive_image', source_sample_id=None,
     attachment_type='Sample Image', hardcoded), and
-    upload_chromatogram_to_senaite (kind='chromatogram', source_sample_id=None
-    — lineage is the analysis, not a vial — attachment_type='HPLC Graph',
+    upload_chromatogram_to_senaite (kind='chromatogram', source_sample_id=the
+    analysis' vial label or None — attachment_type='HPLC Graph',
     render_in_report=False, all hardcoded to match what that endpoint sends
     SENAITE). `kind` is clamped to the allowed set here rather than trusted
     from the caller, since the upload endpoint's native_kind is user-supplied.

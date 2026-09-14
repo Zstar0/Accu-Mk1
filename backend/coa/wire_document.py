@@ -33,12 +33,13 @@ def build_coa_wire_document(db, parent) -> dict:
     return doc
 
 
-def build_vial_wire_document(db, parent):
+def build_vial_wire_document(db, parent, vial=None):
     """Legacy-only document for per-vial COA bodies, or None in senaite mode.
 
     Vial certificates have never rendered native sections and must not start
     now — only their base row sourcing follows the toggle, so sections stay
-    empty on purpose.
+    empty on purpose. `vial` (LimsSubSample) pins the chromatogram to that
+    vial's linked row — fail-closed, never a sibling's trace (P-2627).
     """
     if coa_generation_source(db) != "mk1":
         return None
@@ -47,7 +48,7 @@ def build_vial_wire_document(db, parent):
         "ordered_profiles": [],
         "sections": [],
         "legacy_rows": _legacy_block(db, parent),
-        "sample_meta": build_sample_meta(db, parent),
+        "sample_meta": build_sample_meta(db, parent, vial=vial),
     }
 
 
