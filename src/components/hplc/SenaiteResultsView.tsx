@@ -19,6 +19,7 @@ import {
   transitionAnalysis,
   updateSamplePrep,
   uploadChromatogramToSenaite,
+  uploadChromatogramNative,
   renderChromatogramImage,
   refetchChromatogram,
   type SamplePrep,
@@ -505,7 +506,11 @@ export function SenaiteResultsView({ prep, results: hplcResults, onBack, onCompl
     if (successCount > 0 && senaiteData?.sample_uid) {
       const firstHplcResult = hplcResults[0]
       if (firstHplcResult?.id) {
-        uploadChromatogramToSenaite(firstHplcResult.id, senaiteData.sample_uid)
+        const upload =
+          senaiteData.external_lims_system === 'mk1'
+            ? uploadChromatogramNative(firstHplcResult.id, senaiteData.sample_id)
+            : uploadChromatogramToSenaite(firstHplcResult.id, senaiteData.sample_uid)
+        upload
           .then(r => { if (r.success) toast.success('Chromatogram CSV uploaded to SENAITE') })
           .catch(() => { /* best-effort — don't block the user */ })
       }

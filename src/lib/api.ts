@@ -4446,6 +4446,46 @@ export async function uploadChromatogramToSenaite(
   return response.json()
 }
 
+/** Native-born twin of uploadChromatogramToSenaite — no SENAITE hop. */
+export async function uploadChromatogramNative(
+  analysisId: number,
+  sampleId: string
+): Promise<{ success: boolean; message: string; filename?: string; size_bytes?: number }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/analyses/${analysisId}/chromatogram-native?sample_id=${encodeURIComponent(sampleId)}`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Chromatogram upload failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+/** Native-born twin of uploadSenaiteAttachment — no SENAITE hop. */
+export async function uploadNativeAttachment(
+  sampleId: string,
+  file: File,
+  attachmentType: SenaiteAttachmentType,
+  nativeKind?: string,
+  sourceSampleId?: string
+): Promise<SenaiteUploadAttachmentResponse> {
+  const form = new FormData()
+  form.append('file', file, file.name)
+  form.append('attachment_type', attachmentType)
+  if (nativeKind) form.append('native_kind', nativeKind)
+  if (sourceSampleId) form.append('source_sample_id', sourceSampleId)
+
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/samples/${encodeURIComponent(sampleId)}/attachments`,
+    { method: 'POST', headers: getBearerHeaders(), body: form }
+  )
+  if (!response.ok) {
+    throw new Error(`Upload failed: ${response.status}`)
+  }
+  return response.json() as Promise<SenaiteUploadAttachmentResponse>
+}
+
 export interface SenaiteFieldUpdateResponse {
   success: boolean
   message: string

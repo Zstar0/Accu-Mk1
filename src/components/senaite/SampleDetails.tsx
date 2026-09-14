@@ -66,6 +66,7 @@ import {
   fetchSenaiteAttachmentUrl,
   fetchSenaiteAttachmentText,
   uploadSenaiteAttachment,
+  uploadNativeAttachment,
   fetchSenaiteReportUrl,
   getExplorerCOAGenerations,
   getExplorerCOASignedUrl,
@@ -120,6 +121,7 @@ import {
   getSenaiteSamples,
   listSubSampleChromatograms,
   uploadChromatogramToSenaite,
+  uploadChromatogramNative,
   type SubSampleChromatogram,
   listPackagingPhotos,
   fetchPackagingPhotoUrl,
@@ -1697,9 +1699,13 @@ const isRenderable = (a: SenaiteAttachment) =>
 
 function AddAttachmentForm({
   sampleUid,
+  sampleId,
+  isNativeBorn,
   onUploaded,
 }: {
   sampleUid: string
+  sampleId: string
+  isNativeBorn: boolean
   onUploaded: () => void
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -1712,11 +1718,9 @@ function AddAttachmentForm({
     if (!file) return
     setIsUploading(true)
     try {
-      const result = await uploadSenaiteAttachment(
-        sampleUid,
-        file,
-        attachmentType
-      )
+      const result = isNativeBorn
+        ? await uploadNativeAttachment(sampleId, file, attachmentType)
+        : await uploadSenaiteAttachment(sampleUid, file, attachmentType)
       if (result.success) {
         toast.success('Attachment uploaded')
         setFile(null)
@@ -2382,6 +2386,7 @@ function SelectVialImageDialog({
   onOpenChange,
   parentSampleId,
   parentSampleUid,
+  isNativeBorn,
   vials,
   containerMode,
   onAttached,
@@ -2390,6 +2395,7 @@ function SelectVialImageDialog({
   onOpenChange: (open: boolean) => void
   parentSampleId: string
   parentSampleUid: string
+  isNativeBorn: boolean
   vials: SubSample[]
   containerMode: boolean
   onAttached: () => void
@@ -2413,13 +2419,21 @@ function SelectVialImageDialog({
       const file = new File([blob], `${vial.sample_id}-vial-photo${ext}`, {
         type: blob.type || 'image/jpeg',
       })
-      const result = await uploadSenaiteAttachment(
-        parentSampleUid,
-        file,
-        'Sample Image',
-        'vial_image',
-        vial.sample_id
-      )
+      const result = isNativeBorn
+        ? await uploadNativeAttachment(
+            parentSampleId,
+            file,
+            'Sample Image',
+            'vial_image',
+            vial.sample_id
+          )
+        : await uploadSenaiteAttachment(
+            parentSampleUid,
+            file,
+            'Sample Image',
+            'vial_image',
+            vial.sample_id
+          )
       if (!result.success) throw new Error(result.message)
       // Seed the parent's photo cache with the exact bytes so the header
       // thumb updates instantly — the SENAITE attachment listing has a
@@ -2523,6 +2537,7 @@ function SelectVialChromatogramDialog({
   onOpenChange,
   parentSampleId,
   parentSampleUid,
+  isNativeBorn,
   chromatograms,
   containerMode,
   onAttached,
@@ -2531,6 +2546,7 @@ function SelectVialChromatogramDialog({
   onOpenChange: (open: boolean) => void
   parentSampleId: string
   parentSampleUid: string
+  isNativeBorn: boolean
   chromatograms: SubSampleChromatogram[]
   containerMode: boolean
   onAttached: () => void
@@ -2540,10 +2556,9 @@ function SelectVialChromatogramDialog({
   const handleSelect = async (c: SubSampleChromatogram) => {
     setAttachingId(c.analysis_id)
     try {
-      const result = await uploadChromatogramToSenaite(
-        c.analysis_id,
-        parentSampleUid
-      )
+      const result = isNativeBorn
+        ? await uploadChromatogramNative(c.analysis_id, parentSampleId)
+        : await uploadChromatogramToSenaite(c.analysis_id, parentSampleUid)
       if (!result.success) throw new Error(result.message)
       toast.success(
         `${c.vial_sample_id} chromatogram attached to ${parentSampleId}`
@@ -6661,12 +6676,16 @@ export function SampleDetails() {
                   )}
                 </div>
               ))}
-            {/* SENAITE upload form — not for Mk1-native vials, whose
-                  "sample_uid" is an mk1:// provenance marker, not a SENAITE
-                  UID (the upload would 502). They use AddVialImageForm above. */}
-            {data.sample_uid && !data.sample_uid.startsWith('mk1://') && (
+            {/* Attachment upload form. Native-born parents post through the
+                  native route (uploadNativeAttachment); SENAITE-born parents
+                  keep uploadSenaiteAttachment. Mk1-native VIALS still use
+                  AddVialImageForm above (their "sample_uid" is an mk1://
+                  provenance marker, not a SENAITE UID). */}
+            {data.sample_uid && (data.external_lims_system === 'mk1' || !data.sample_uid.startsWith('mk1://')) && (
               <AddAttachmentForm
                 sampleUid={data.sample_uid}
+                sampleId={data.sample_id}
+                isNativeBorn={data.external_lims_system === 'mk1'}
                 onUploaded={() => fetchSample(data.sample_id)}
               />
             )}
@@ -7192,6 +7211,7 @@ export function SampleDetails() {
           onOpenChange={setSelectVialImageOpen}
           parentSampleId={data.sample_id}
           parentSampleUid={data.sample_uid}
+          isNativeBorn={data.external_lims_system === 'mk1'}
           vials={subData?.sub_samples ?? []}
           containerMode={subData?.parent.container_mode ?? false}
           onAttached={() => {
@@ -7211,6 +7231,7 @@ export function SampleDetails() {
           onOpenChange={setSelectVialChromOpen}
           parentSampleId={data.sample_id}
           parentSampleUid={data.sample_uid}
+          isNativeBorn={data.external_lims_system === 'mk1'}
           chromatograms={vialChromatograms}
           containerMode={subData?.parent.container_mode ?? false}
           onAttached={() => refreshSample(data.sample_id)}
