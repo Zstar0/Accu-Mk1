@@ -554,6 +554,33 @@ def test_workflow_engine_ignores_placeholders(db, parent_sample, usp71_profile,
     assert _live_parent_line_states(db, parent_sample) == before
 
 
+def test_native_lock_map_reports_placeholder_as_pending(db, parent_sample, usp71_profile):
+    """Ready-to-Publish grades ``native_parent_line_states`` (the FE lock
+    map). A live 'ordered' placeholder is outstanding demand, so it must read
+    as its own pending state — otherwise the report calls a sample "all
+    lines verified" while a paid-for native test has not been promoted yet
+    (P-2739, PCR sterility still on its vial, 2026-09-14). Harmless to the
+    FE gate, which locks on 'verified' only."""
+    from lims_analyses.service import native_parent_line_states
+
+    assert native_parent_line_states(db, parent_sample.sample_id) == {}
+    seed_parent_placeholders(db, parent=parent_sample, services={"sterility_usp71": True})
+    db.commit()
+    assert native_parent_line_states(db, parent_sample.sample_id) == {"STER-USP71": "unassigned"}
+
+
+def test_native_lock_map_live_canonical_wins_over_placeholder(db, parent_sample, usp71_profile,
+                                                             verified_parent_row):
+    """Delivered service: the canonical row's state owns the keyword and the
+    never-retired placeholder must not clobber it (the parent table's
+    canonical-wins rule)."""
+    from lims_analyses.service import native_parent_line_states
+
+    seed_parent_placeholders(db, parent=parent_sample, services={"sterility_usp71": True})
+    db.commit()
+    assert native_parent_line_states(db, parent_sample.sample_id) == {"STER-USP71": "verified"}
+
+
 # ── Manage-analyses slice: re-add after soft remove + audited reason ─────────
 
 
