@@ -4462,6 +4462,24 @@ export async function uploadChromatogramNative(
   return response.json()
 }
 
+/** Decision for where a chromatogram CSV push should go. Native-born
+ *  parents (`external_lims_system === 'mk1'`) always use the native route —
+ *  their `sample_uid` is null, so this must be checked BEFORE falling back
+ *  to `sample_uid`. Legacy SENAITE-born parents need a real `sample_uid`. */
+export type ChromatogramUploadTarget =
+  | { kind: 'native' }
+  | { kind: 'senaite'; sampleUid: string }
+  | null
+
+export function chooseChromatogramUpload(data: {
+  external_lims_system?: string | null
+  sample_uid: string | null
+}): ChromatogramUploadTarget {
+  if (data.external_lims_system === 'mk1') return { kind: 'native' }
+  if (data.sample_uid) return { kind: 'senaite', sampleUid: data.sample_uid }
+  return null
+}
+
 /** Native-born twin of uploadSenaiteAttachment — no SENAITE hop. */
 export async function uploadNativeAttachment(
   sampleId: string,

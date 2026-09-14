@@ -20,6 +20,7 @@ import {
   updateSamplePrep,
   uploadChromatogramToSenaite,
   uploadChromatogramNative,
+  chooseChromatogramUpload,
   renderChromatogramImage,
   refetchChromatogram,
   type SamplePrep,
@@ -503,13 +504,14 @@ export function SenaiteResultsView({ prep, results: hplcResults, onBack, onCompl
     }
 
     // Upload chromatogram image to SENAITE (best-effort, non-blocking)
-    if (successCount > 0 && senaiteData?.sample_uid) {
+    if (successCount > 0 && senaiteData) {
       const firstHplcResult = hplcResults[0]
-      if (firstHplcResult?.id) {
+      const target = chooseChromatogramUpload(senaiteData)
+      if (firstHplcResult?.id && target) {
         const upload =
-          senaiteData.external_lims_system === 'mk1'
+          target.kind === 'native'
             ? uploadChromatogramNative(firstHplcResult.id, senaiteData.sample_id)
-            : uploadChromatogramToSenaite(firstHplcResult.id, senaiteData.sample_uid)
+            : uploadChromatogramToSenaite(firstHplcResult.id, target.sampleUid)
         upload
           .then(r => { if (r.success) toast.success('Chromatogram CSV uploaded to SENAITE') })
           .catch(() => { /* best-effort — don't block the user */ })
