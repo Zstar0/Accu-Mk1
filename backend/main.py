@@ -6585,6 +6585,25 @@ async def refetch_chromatogram_data(
     }
 
 
+def _lims_sample_for_attachment(db, *, sample_uid: str | None,
+                                sample_id: str | None):
+    """Same uid-then-sample_id resolution `_capture_parent_attachment_bg`
+    uses (HPLC slice 6 M8 Task 4), reused up front by the legacy SENAITE
+    attachment routes to gate a native-born row onto the native routes
+    BEFORE any SENAITE HTTP call. Returns None on a miss — callers decide
+    what that means (SENAITE routes: proceed; native routes: 404)."""
+    row = None
+    if sample_uid:
+        row = db.execute(
+            select(LimsSample).where(LimsSample.external_lims_uid == sample_uid)
+        ).scalar_one_or_none()
+    if row is None and sample_id:
+        row = db.execute(
+            select(LimsSample).where(LimsSample.sample_id == sample_id)
+        ).scalar_one_or_none()
+    return row
+
+
 @app.post("/hplc/analyses/{analysis_id}/chromatogram-to-senaite")
 async def upload_chromatogram_to_senaite(
     analysis_id: int,
@@ -6607,6 +6626,15 @@ async def upload_chromatogram_to_senaite(
     chrom = analysis.chromatogram_data
     if not chrom or not chrom.get("times") or not chrom.get("signals"):
         raise HTTPException(400, "No chromatogram data stored on this analysis")
+
+    # Native-born guard (Task 1, slice 7): a native-born parent has no real
+    # SENAITE AR to attach to — send it to the native route BEFORE any
+    # SENAITE HTTP call. Same uid-then-sample_id resolution the bg capture
+    # below already uses for this exact endpoint.
+    _target = _lims_sample_for_attachment(
+        db, sample_uid=sample_uid, sample_id=analysis.sample_id_label)
+    if _target is not None and (_target.external_lims_system or "senaite") == "mk1":
+        raise HTTPException(409, detail="native_born_use_native_route")
 
     # Step 1: Build CSV from chromatogram data (shared builder — backend/
     # hplc_csv.py — so a Task-6 historical backfill produces byte-identical
@@ -6702,6 +6730,59 @@ async def upload_chromatogram_to_senaite(
     return {
         "success": True,
         "message": f"Chromatogram CSV uploaded to SENAITE for {analysis.sample_id_label}",
+        "filename": filename,
+        "size_bytes": len(csv_bytes),
+    }
+
+
+@app.post("/hplc/analyses/{analysis_id}/chromatogram-native")
+async def upload_chromatogram_native(
+    analysis_id: int,
+    sample_id: str = Query(..., description="Native lims_samples.sample_id to attach the chromatogram to"),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Native twin of `upload_chromatogram_to_senaite` (Task 1, slice 7): a
+    native-born parent has no SENAITE AR, so this writes the chromatogram
+    CSV straight to `lims_parent_attachments` via `write_parent_attachment`
+    — no SENAITE hop, no bg thread, fail-loud. Same CSV builder, same
+    `kind`/`attachment_type`/`render_in_report` as the SENAITE twin sends.
+    """
+    analysis = db.execute(
+        select(HPLCAnalysis).where(HPLCAnalysis.id == analysis_id)
+    ).scalar_one_or_none()
+    if not analysis:
+        raise HTTPException(404, f"HPLC Analysis {analysis_id} not found")
+
+    chrom = analysis.chromatogram_data
+    if not chrom or not chrom.get("times") or not chrom.get("signals"):
+        raise HTTPException(400, "No chromatogram data stored on this analysis")
+
+    row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(404, f"Sample {sample_id} not found")
+    if (row.external_lims_system or "senaite") != "mk1":
+        raise HTTPException(409, detail="senaite_born_use_senaite_route")
+
+    csv_bytes = build_chromatogram_csv(analysis)
+    filename = f"chromatogram_{analysis.sample_id_label}.csv"
+    try:
+        write_parent_attachment(
+            db, row, file_bytes=csv_bytes, filename=filename,
+            content_type="text/csv", kind="chromatogram",
+            source_sample_id=None, user_id=getattr(current_user, "id", None),
+            render_in_report=False, attachment_type="HPLC Graph",
+        )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Failed to store chromatogram attachment: {e}")
+
+    return {
+        "success": True,
+        "message": f"Chromatogram CSV attached for {sample_id}",
         "filename": filename,
         "size_bytes": len(csv_bytes),
     }
@@ -16980,6 +17061,7 @@ async def upload_senaite_attachment(
     attachment_type: str = Form(...),  # "HPLC Graph" or "Sample Image"
     native_kind: str = Form("manual"),
     source_sample_id: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """Upload a file attachment to a SENAITE sample.
@@ -16988,6 +17070,12 @@ async def upload_senaite_attachment(
     the intake wizard image upload. The attachment_type name is matched against
     the options rendered in the sample page HTML to resolve its UID.
     """
+    # Native-born guard (Task 1, slice 7): route a native-born row to the
+    # native twin BEFORE any SENAITE HTTP call.
+    _target = _lims_sample_for_attachment(db, sample_uid=sample_uid, sample_id=None)
+    if _target is not None and (_target.external_lims_system or "senaite") == "mk1":
+        raise HTTPException(409, detail="native_born_use_native_route")
+
     if SENAITE_URL is None:
         return SenaiteUploadAttachmentResponse(success=False, message="SENAITE not configured")
 
@@ -17084,6 +17172,54 @@ async def upload_senaite_attachment(
     except Exception as e:
         print(f"[WARN] Failed to upload attachment to sample {sample_uid}: {e}")
         return SenaiteUploadAttachmentResponse(success=False, message=str(e))
+
+
+@app.post(
+    "/wizard/samples/{sample_id}/attachments",
+    response_model=SenaiteUploadAttachmentResponse,
+)
+async def upload_native_attachment(
+    sample_id: str,
+    file: UploadFile,
+    attachment_type: str = Form(...),  # "HPLC Graph" or "Sample Image"
+    native_kind: str = Form("manual"),
+    source_sample_id: str | None = Form(None),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Native twin of `upload_senaite_attachment` (Task 1, slice 7): a
+    native-born parent has no SENAITE AR, so this writes straight to
+    `lims_parent_attachments` via `write_parent_attachment` — no SENAITE
+    hop, fail-loud. Same form fields as the SENAITE twin;
+    `render_in_report=True` matches its manual-attachment default (only the
+    chromatogram writer passes False).
+    """
+    row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(404, f"Sample {sample_id} not found")
+    if (row.external_lims_system or "senaite") != "mk1":
+        raise HTTPException(409, detail="senaite_born_use_senaite_route")
+
+    file_bytes = await file.read()
+    filename = file.filename or "attachment"
+    content_type = file.content_type or "application/octet-stream"
+
+    try:
+        write_parent_attachment(
+            db, row, file_bytes=file_bytes, filename=filename,
+            content_type=content_type, kind=native_kind,
+            source_sample_id=source_sample_id,
+            user_id=getattr(current_user, "id", None),
+            render_in_report=True, attachment_type=attachment_type,
+        )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Failed to store attachment: {e}")
+
+    return SenaiteUploadAttachmentResponse(success=True, message="Attachment uploaded")
 
 
 class SenaiteAnalyteDetail(BaseModel):
@@ -18338,10 +18474,23 @@ def _native_placeholders_at_registration_bg(sample_id: str) -> None:
                 db.rollback()
             except Exception:
                 pass
-        logger.warning(
-            "registry.native_placeholder_seed_failed sample_id=%s err=%s",
-            sample_id, seed_err,
-        )
+        # D3 (2026-09-14 rehearsal): this fallback races the primary seed
+        # (order upsert) for every sample but the last of a multi-sample
+        # order (see module docstring above) — losing that race raises
+        # IntegrityError on uq_lims_analyses_parent_service_ordered, which
+        # is the seed already having happened, not a failure. Log it at
+        # info under a distinct reason instead of warning as a real error.
+        if isinstance(seed_err, IntegrityError) or "already" in str(seed_err).lower():
+            logger.info(
+                "registry.native_placeholder_seed_skipped sample_id=%s "
+                "reason=race_lost_to_primary_seed err=%s",
+                sample_id, seed_err,
+            )
+        else:
+            logger.warning(
+                "registry.native_placeholder_seed_failed sample_id=%s err=%s",
+                sample_id, seed_err,
+            )
     finally:
         if db is not None:
             db.close()
@@ -18603,6 +18752,69 @@ def _observe_parent_analyses_bg(sample_id: str, observed: list[dict]) -> None:
             db.close()
 
 
+def write_parent_attachment(
+    db, row, *, file_bytes: bytes, filename: str, content_type: str,
+    kind: str, source_sample_id: str | None, user_id: int | None,
+    render_in_report: bool = True, attachment_type: str | None = None,
+) -> LimsParentAttachment:
+    """Synchronous, fail-loud parent-attachment writer (Task 1, slice 7):
+    extracted from `_capture_parent_attachment_bg`'s body so the new native
+    attachment routes can call it directly on the request session — no
+    best-effort swallowing, no bg thread. `_capture_parent_attachment_bg`
+    now delegates here inside its own try/except, so its never-raises
+    contract is unchanged.
+
+    Resolves `kind` against the same allowed set, truncates `filename` to
+    the VARCHAR(255) column width, resolves `source_sample_id` to a vial PK
+    scoped to `row` (logs and drops it on a miss or cross-parent mismatch —
+    never raises for that), saves `file_bytes` to storage under `row`'s own
+    sample_id, and adds (but does not commit) the `LimsParentAttachment`
+    row. Raises on any failure (storage, DB) — the caller decides whether
+    that's best-effort (bg wrapper) or fail-loud (native routes) and owns
+    the commit/rollback.
+    """
+    from sub_samples.photo_storage import get_storage
+    resolved_kind = kind if kind in (
+        "vial_image", "packaging_image", "receive_image",
+        "chromatogram", "manual",
+    ) else "manual"
+    filename = filename[:255]  # column is VARCHAR(255) — guard both writers
+    source_pk = None
+    if source_sample_id:
+        sub = db.execute(
+            select(LimsSubSample).where(
+                LimsSubSample.sample_id == source_sample_id)
+        ).scalar_one_or_none()
+        if sub is None:
+            logger.warning(
+                "parent_attachment.source_unresolvable sample_id=%s "
+                "source_sample_id=%s", row.sample_id, source_sample_id)
+        elif sub.parent_sample_pk != row.id:
+            logger.warning(
+                "parent_attachment.source_lineage_mismatch sample_id=%s "
+                "source_sample_id=%s vial_parent_pk=%s row_id=%s",
+                row.sample_id, source_sample_id, sub.parent_sample_pk,
+                row.id)
+        else:
+            source_pk = sub.id
+    key = get_storage().save_photo(row.sample_id, file_bytes, filename)
+    attachment = LimsParentAttachment(
+        lims_sample_pk=row.id,
+        kind=resolved_kind,
+        source_sub_sample_pk=source_pk,
+        filename=filename,
+        content_type=content_type,
+        storage="s3",
+        storage_key=key,
+        render_in_report=render_in_report,
+        attachment_type=attachment_type,
+        created_by_user_id=user_id,
+    )
+    db.add(attachment)
+    db.flush()
+    return attachment
+
+
 def _capture_parent_attachment_bg(
     *, sample_uid: str, file_bytes: bytes, filename: str,
     content_type: str, kind: str, source_sample_id: Optional[str],
@@ -18614,7 +18826,9 @@ def _capture_parent_attachment_bg(
     (read-flip spec §7, Layer 3 Task 3) on its own short-lived session —
     never holds the request session across the SENAITE HTTP call. Never
     raises: a capture failure must never fail or delay-fail the endpoint
-    it's scheduled from.
+    it's scheduled from. The row write itself is `write_parent_attachment`
+    (Task 1, slice 7) — this wrapper only resolves the target row and
+    guards the call with try/except/commit.
 
     Shared by three call sites: upload_senaite_attachment (kind/source_sample_id
     /attachment_type come from user-controlled form fields — native_kind,
@@ -18646,12 +18860,6 @@ def _capture_parent_attachment_bg(
     db = None
     try:
         from database import SessionLocal
-        from sub_samples.photo_storage import get_storage
-        resolved_kind = kind if kind in (
-            "vial_image", "packaging_image", "receive_image",
-            "chromatogram", "manual",
-        ) else "manual"
-        filename = filename[:255]  # column is VARCHAR(255) — guard both writers
         db = SessionLocal()
         row = db.execute(
             select(LimsSample).where(
@@ -18667,37 +18875,12 @@ def _capture_parent_attachment_bg(
                 "parent_attachment.capture_failed uid=%s "
                 "err=no-registry-row", sample_uid)
             return
-        source_pk = None
-        if source_sample_id:
-            sub = db.execute(
-                select(LimsSubSample).where(
-                    LimsSubSample.sample_id == source_sample_id)
-            ).scalar_one_or_none()
-            if sub is None:
-                logger.warning(
-                    "parent_attachment.source_unresolvable uid=%s "
-                    "source_sample_id=%s", sample_uid, source_sample_id)
-            elif sub.parent_sample_pk != row.id:
-                logger.warning(
-                    "parent_attachment.source_lineage_mismatch uid=%s "
-                    "source_sample_id=%s vial_parent_pk=%s row_id=%s",
-                    sample_uid, source_sample_id, sub.parent_sample_pk,
-                    row.id)
-            else:
-                source_pk = sub.id
-        key = get_storage().save_photo(row.sample_id, file_bytes, filename)
-        db.add(LimsParentAttachment(
-            lims_sample_pk=row.id,
-            kind=resolved_kind,
-            source_sub_sample_pk=source_pk,
-            filename=filename,
-            content_type=content_type,
-            storage="s3",
-            storage_key=key,
-            render_in_report=render_in_report,
-            attachment_type=attachment_type,
-            created_by_user_id=user_id,
-        ))
+        write_parent_attachment(
+            db, row, file_bytes=file_bytes, filename=filename,
+            content_type=content_type, kind=kind,
+            source_sample_id=source_sample_id, user_id=user_id,
+            render_in_report=render_in_report, attachment_type=attachment_type,
+        )
         db.commit()
     except Exception as cap_err:  # noqa: BLE001
         if db is not None:
