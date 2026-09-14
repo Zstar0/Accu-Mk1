@@ -2384,6 +2384,13 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
                 commit=False,
             )
         db.commit()
+        # The seed above may have staged a flags event (e.g. the
+        # unresolved-analyte flag, lims_analyses/hplc_native.py) with
+        # commit=False so it landed in THIS commit rather than an early one
+        # of its own (see flags/service.py::create_flag's commit kwarg) —
+        # now that the row is really persisted, let the sink see it.
+        from flags import service as flags_service
+        flags_service.emit_pending_events(db)
         return {"sample_id": sample_id, "assignment_role": role}
 
     parent = db.execute(

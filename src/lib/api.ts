@@ -4446,6 +4446,64 @@ export async function uploadChromatogramToSenaite(
   return response.json()
 }
 
+/** Native-born twin of uploadChromatogramToSenaite — no SENAITE hop. */
+export async function uploadChromatogramNative(
+  analysisId: number,
+  sampleId: string
+): Promise<{ success: boolean; message: string; filename?: string; size_bytes?: number }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/analyses/${analysisId}/chromatogram-native?sample_id=${encodeURIComponent(sampleId)}`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Chromatogram upload failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+/** Decision for where a chromatogram CSV push should go. Native-born
+ *  parents (`external_lims_system === 'mk1'`) always use the native route —
+ *  their `sample_uid` is null, so this must be checked BEFORE falling back
+ *  to `sample_uid`. Legacy SENAITE-born parents need a real `sample_uid`. */
+export type ChromatogramUploadTarget =
+  | { kind: 'native' }
+  | { kind: 'senaite'; sampleUid: string }
+  | null
+
+export function chooseChromatogramUpload(data: {
+  external_lims_system?: string | null
+  sample_uid: string | null
+}): ChromatogramUploadTarget {
+  if (data.external_lims_system === 'mk1') return { kind: 'native' }
+  if (data.sample_uid) return { kind: 'senaite', sampleUid: data.sample_uid }
+  return null
+}
+
+/** Native-born twin of uploadSenaiteAttachment — no SENAITE hop. */
+export async function uploadNativeAttachment(
+  sampleId: string,
+  file: File,
+  attachmentType: SenaiteAttachmentType,
+  nativeKind?: string,
+  sourceSampleId?: string
+): Promise<SenaiteUploadAttachmentResponse> {
+  const form = new FormData()
+  form.append('file', file, file.name)
+  form.append('attachment_type', attachmentType)
+  if (nativeKind) form.append('native_kind', nativeKind)
+  if (sourceSampleId) form.append('source_sample_id', sourceSampleId)
+
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/samples/${encodeURIComponent(sampleId)}/attachments`,
+    { method: 'POST', headers: getBearerHeaders(), body: form }
+  )
+  if (!response.ok) {
+    throw new Error(`Upload failed: ${response.status}`)
+  }
+  return response.json() as Promise<SenaiteUploadAttachmentResponse>
+}
+
 export interface SenaiteFieldUpdateResponse {
   success: boolean
   message: string
