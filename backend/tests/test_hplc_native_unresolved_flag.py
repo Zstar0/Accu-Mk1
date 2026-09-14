@@ -203,3 +203,143 @@ def test_relabel_commit_false_leaves_event_and_resolution_pending(db):
     db.rollback()
     assert _events() == []              # event never committed -> gone
     assert _flag().status == "open"     # resolution never committed -> reverted
+
+
+def test_commit_false_seed_never_auto_emits_and_rollback_clears_pending(db):
+    """Fix round 2: a commit=False caller that never commits emits nothing —
+    and if it rolls back instead, the after_rollback listener
+    (flags/service.py) clears the staged event so a later, unrelated
+    emit_pending_events call in the same session can't re-emit it."""
+    _setup(db)
+    parent, _bpc = _blend_parent(db, "PB-9012", slot2_name="Mystery-Peptide")
+    vial = LimsSubSample(parent_sample_pk=parent.id, sample_id="PB-9012-S01",
+                         external_lims_uid="uid-PB-9012-S01", vial_sequence=1)
+    db.add(vial); db.flush()
+    seed_native_hplc_rows(db, sub_sample=vial, parent=parent, existing_keys=set(),
+                          existing_service_ids=set(), created_by_user_id=None, commit=False)
+    assert db.info.get("flag_pending_events")  # staged, never auto-emitted
+
+    from flags import service as flags_service
+    db.rollback()
+    assert flags_service.emit_pending_events(db) == 0
+    assert "flag_pending_events" not in db.info
+
+
+def test_set_assignment_role_emits_the_unresolved_flag_event_after_its_commit(monkeypatch):
+    """Fix round 2 / coordinator finding: set_assignment_role seeds with
+    commit=False (sub_samples/service.py's atomic "seed then one commit"
+    unit, ~2367-2387) so the flag write must not commit — or emit — early.
+    After the function's single db.commit(), it now calls
+    flags_service.emit_pending_events(db) itself; this proves the sink sees
+    the "raised" event exactly once. Live dev Postgres (ZZTEST- prefix,
+    matching tests/test_assignment_kind.py's convention), explicit cleanup."""
+    from sqlalchemy import text
+
+    import sub_samples.service as sub_service
+    from database import SessionLocal
+    from flags import seams as flag_seams
+    from flags.types_service import seed_builtins as seed_flag_types
+
+    class _Sink:
+        def __init__(self):
+            self.events = []
+
+        def emit(self, event):
+            self.events.append(event)
+
+    db = SessionLocal()
+    try:
+        seed_flag_types(db)
+        flag_seams.register_mk1_entities()
+        bpc = Peptide(name="ZZTEST-BPC-FR2", abbreviation="ZZBPCFR2", active=True)
+        db.add(bpc); db.flush()
+        analytes = [
+            {"name": "ZZTEST-BPC-FR2", "declared_quantity": None, "peptide_id": bpc.id},
+            {"name": "ZZTEST-Mystery-FR2", "declared_quantity": None, "peptide_id": None},
+        ]
+        parent = LimsSample(sample_id="ZZTEST-FR2-001", external_lims_system="mk1",
+                            sample_type_title="Peptide Blend", analytes=json.dumps(analytes))
+        db.add(parent); db.flush()
+        db.add(LimsSubSample(parent_sample_pk=parent.id, sample_id="ZZTEST-FR2-001-S01",
+                             external_lims_uid="zz-fr2-001-s01", vial_sequence=1))
+        db.commit()
+
+        sink = _Sink()
+        monkeypatch.setattr(flag_seams, "EVENT_SINK", sink)
+        sub_service.set_assignment_role(db, "ZZTEST-FR2-001-S01", "hplc", user_id=1, wp_services={"hplcpurity_identity": True})
+
+        raised = [e for e in sink.events
+                 if e["event_type"] == "raised" and e["details"].get("type") == UNRESOLVED_FLAG_TYPE]
+        assert len(raised) == 1
+    finally:
+        db.rollback()
+        db.execute(text("DELETE FROM flag_events WHERE flag_id IN "
+                        "(SELECT id FROM flag_flags WHERE entity_id IN "
+                        "(SELECT id::text FROM lims_samples WHERE sample_id LIKE 'ZZTEST-FR2-%'))"))
+        db.execute(text("DELETE FROM flag_flags WHERE entity_id IN "
+                        "(SELECT id::text FROM lims_samples WHERE sample_id LIKE 'ZZTEST-FR2-%')"))
+        db.execute(text("DELETE FROM lims_analyses WHERE lims_sub_sample_pk IN "
+                        "(SELECT id FROM lims_sub_samples WHERE sample_id LIKE 'ZZTEST-FR2-%')"))
+        db.execute(text("DELETE FROM lims_sub_samples WHERE sample_id LIKE 'ZZTEST-FR2-%'"))
+        db.execute(text("DELETE FROM lims_samples WHERE sample_id LIKE 'ZZTEST-FR2-%'"))
+        db.execute(text("DELETE FROM peptides WHERE name LIKE 'ZZTEST-%'"))
+        db.commit()
+        db.close()
+
+
+def test_relabel_commit_true_emits_the_resolved_event_once(monkeypatch):
+    """relabel_native_slot(commit=True) resolves the flag inside its own
+    commit (round 1) and now emits the "resolved" event right after that
+    commit (round 2). Live dev Postgres, ZZTEST- prefix, explicit cleanup."""
+    from sqlalchemy import text
+
+    from database import SessionLocal
+    from flags import seams as flag_seams
+    from flags.types_service import seed_builtins as seed_flag_types
+
+    class _Sink:
+        def __init__(self):
+            self.events = []
+
+        def emit(self, event):
+            self.events.append(event)
+
+    db = SessionLocal()
+    try:
+        seed_flag_types(db)
+        flag_seams.register_mk1_entities()
+        bpc = Peptide(name="ZZTEST-BPC-FR2B", abbreviation="ZZBPCFR2B", active=True)
+        db.add(bpc); db.flush()
+        analytes = [{"name": "ZZTEST-Mystery-FR2B", "declared_quantity": None, "peptide_id": None}]
+        parent = LimsSample(sample_id="ZZTEST-FR2B-001", external_lims_system="mk1",
+                            sample_type_title="Peptide", analytes=json.dumps(analytes))
+        db.add(parent); db.flush()
+        vial = LimsSubSample(parent_sample_pk=parent.id, sample_id="ZZTEST-FR2B-001-S01",
+                             external_lims_uid="zz-fr2b-001-s01", vial_sequence=1)
+        db.add(vial); db.flush()
+        seed_native_hplc_rows(db, sub_sample=vial, parent=parent, existing_keys=set(),
+                              existing_service_ids=set(), created_by_user_id=None, commit=True)
+        db.commit()
+        assert len(_open_flags(db, parent)) == 1
+
+        sink = _Sink()
+        monkeypatch.setattr(flag_seams, "EVENT_SINK", sink)
+        relabel_native_slot(db, parent=parent, slot=1, new_peptide_id=bpc.id, user_id=1, commit=True)
+
+        resolved = [e for e in sink.events
+                   if e["event_type"] == "status_changed" and e["to_value"] == "resolved"]
+        assert len(resolved) == 1
+    finally:
+        db.rollback()
+        db.execute(text("DELETE FROM flag_events WHERE flag_id IN "
+                        "(SELECT id FROM flag_flags WHERE entity_id IN "
+                        "(SELECT id::text FROM lims_samples WHERE sample_id LIKE 'ZZTEST-FR2B-%'))"))
+        db.execute(text("DELETE FROM flag_flags WHERE entity_id IN "
+                        "(SELECT id::text FROM lims_samples WHERE sample_id LIKE 'ZZTEST-FR2B-%')"))
+        db.execute(text("DELETE FROM lims_analyses WHERE lims_sub_sample_pk IN "
+                        "(SELECT id FROM lims_sub_samples WHERE sample_id LIKE 'ZZTEST-FR2B-%')"))
+        db.execute(text("DELETE FROM lims_sub_samples WHERE sample_id LIKE 'ZZTEST-FR2B-%'"))
+        db.execute(text("DELETE FROM lims_samples WHERE sample_id LIKE 'ZZTEST-FR2B-%'"))
+        db.execute(text("DELETE FROM peptides WHERE name LIKE 'ZZTEST-%'"))
+        db.commit()
+        db.close()

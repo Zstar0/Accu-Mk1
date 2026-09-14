@@ -448,7 +448,17 @@ def relabel_native_slot(db: Session, *, parent: LimsSample, slot: int, new_pepti
                               details={"slot": slot, "old_peptide_id": old_pid, "new_peptide_id": pep.id,
                                        "old_name": old.get("name"), "new_name": pep.name,
                                        "restamped": n, "reason": reason}, user_id=user_id))
-    resolve_unresolved_flag_if_clean(db, parent, commit=commit)
+    # Always flush-only here (never this call's own commit=True): the restamp,
+    # the event just added above, and the flag resolution must land in ONE
+    # commit — this function's own `if commit: db.commit()` below, which then
+    # emits whatever flags events got staged. Threading relabel's `commit`
+    # straight into resolve_unresolved_flag_if_clean would let a commit=True
+    # call commit (and emit) the flag resolution mid-function, before the
+    # event add above is itself committed — the exact ordering bug fix round 1
+    # fixed once already; keeping the commit point singular avoids re-opening it.
+    resolve_unresolved_flag_if_clean(db, parent, commit=False)
     if commit:
         db.commit()
+        from flags import service as flags_service
+        flags_service.emit_pending_events(db)
     return {"slot": slot, "old_peptide_id": old_pid, "new_peptide_id": pep.id, "restamped": n}
