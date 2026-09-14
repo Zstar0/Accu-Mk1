@@ -58,8 +58,9 @@ def seed_parent_placeholders(
     """
     from models import LimsAnalysis
     from coa.native_sections import _ordered_native_profiles
-    from lims_analyses.hplc_native import (AGGREGATES, TRIO, is_native_born,
-                                           resolve_slot_peptides, title_for_slot)
+    from lims_analyses.hplc_native import (AGGREGATES, TRIO, flag_unresolved_slots,
+                                           is_native_born, resolve_slot_peptides,
+                                           title_for_slot)
     from lims_analyses.service import record_placeholder_created
 
     reason_action = reason
@@ -114,4 +115,6 @@ def seed_parent_placeholders(
                 stats["skipped"] += 1
                 continue
             _mint(svc, slot=None, peptide_id=None, title=svc.title, reason=None)
+    if native_slots:
+        flag_unresolved_slots(db, parent, native_slots)
     return stats

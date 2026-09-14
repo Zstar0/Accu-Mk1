@@ -42,6 +42,14 @@ KW_BLEND_PURITY = "HPLC-BLEND-PURITY"
 KW_BLEND_TOTAL = "HPLC-BLEND-TOTAL"
 TRIO = (KW_IDENTITY, KW_PURITY, KW_QUANTITY)
 AGGREGATES = (KW_BLEND_PURITY, KW_BLEND_TOTAL)
+
+# Handler ruling 4 (2026-09-14): an analyte name that doesn't resolve to a
+# peptide at registration gets a flag, not just the silent reportable_reason.
+# No dedicated data-quality flag type is seeded (flags/types_service.py
+# _BUILTINS) and none is minted at runtime (plan constraint) — "question" is
+# the closest generic, non-domain-specific built-in (issue, non-blocking):
+# an unresolved analyte is exactly that, a question someone needs to answer.
+UNRESOLVED_FLAG_TYPE = "question"
 assert set(TRIO + AGGREGATES) == {kw for kw, *_ in HPLC_NATIVE_SERVICES}
 
 _NATIVE_CATEGORY = {
@@ -150,6 +158,69 @@ def resolve_slot_peptides(db: Session, parent: LimsSample) -> list[SlotResolutio
     return out
 
 
+def flag_unresolved_slots(db: Session, parent: LimsSample, results: list[SlotResolution]) -> None:
+    """One open flag per sample for any slot(s) whose analyte name didn't
+    resolve to a peptide at seed time (Handler ruling 4). Both seed sites
+    (this module's vial seed and parent_placeholders' registration seed)
+    call this, so dedupe on (sample, type, open) — the second call (whichever
+    seeder loses the race) must not duplicate. `_SystemActor` / dedupe-query
+    pattern copied from sub_samples/service.py::_flag_identity_collision.
+
+    NOTE flags.service.create_flag COMMITS the session — call only after all
+    row work for this seed pass is flushed. Failures logged, never raised:
+    seeding must not fail because the flag machinery does."""
+    unresolved = [r for r in results if r.reason]
+    if not unresolved:
+        return
+    try:
+        from flags import service as flags_service
+        from flags.models import FlagFlag
+        from sub_samples.service import _SystemActor
+        existing = db.execute(select(FlagFlag).where(
+            FlagFlag.entity_type == "sample",
+            FlagFlag.entity_id == str(parent.id),
+            FlagFlag.type == UNRESOLVED_FLAG_TYPE,
+            FlagFlag.status == "open",
+        )).scalars().first()
+        if existing is not None:
+            return
+        parts = ", ".join(f"{r.raw_name} (slot {r.slot})" for r in unresolved)
+        flags_service.create_flag(
+            db, user=_SystemActor(), entity_type="sample", entity_id=str(parent.id),
+            type=UNRESOLVED_FLAG_TYPE,
+            title=f"{parent.sample_id}: analyte unresolved — {parts}",
+            event_details={"automated": True,
+                           "slots": [r.slot for r in unresolved],
+                           "raw": [r.raw_name for r in unresolved]},
+        )
+    except Exception as e:
+        log.error("hplc_native.unresolved_flag_failed sample_id=%s err=%s", parent.sample_id, e)
+
+
+def resolve_unresolved_flag_if_clean(db: Session, parent: LimsSample) -> None:
+    """Auto-resolve the open unresolved-analyte flag once every slot on the
+    sample resolves — called from relabel_native_slot after a restamp.
+    Resolve-path pattern copied from workflow/stranded.py's run_check.
+    Failures logged, never raised."""
+    try:
+        if any(r.reason for r in resolve_slot_peptides(db, parent)):
+            return
+        from flags import service as flags_service
+        from flags.models import FlagFlag
+        from sub_samples.service import _SystemActor
+        flag = db.execute(select(FlagFlag).where(
+            FlagFlag.entity_type == "sample",
+            FlagFlag.entity_id == str(parent.id),
+            FlagFlag.type == UNRESOLVED_FLAG_TYPE,
+            FlagFlag.status == "open",
+        )).scalars().first()
+        if flag is None:
+            return
+        flags_service.change_status(db, user=_SystemActor(), flag_id=flag.id, to_status="resolved")
+    except Exception as e:
+        log.error("hplc_native.unresolved_flag_resolve_failed sample_id=%s err=%s", parent.sample_id, e)
+
+
 def native_hplc_services(db: Session) -> dict[str, AnalysisService]:
     """The five origin=mk1 services by keyword. Fail-closed: if any is
     missing (seed skipped, collision at boot) return {} and log ERROR so the
@@ -232,6 +303,7 @@ def seed_native_hplc_rows(
     if len(slots) > 1:
         for kw in AGGREGATES:
             _mint(kw, slot=None, peptide_id=None, title=services[kw].title, reason=None)
+    flag_unresolved_slots(db, parent, slots)
     return inserted
 
 
@@ -362,6 +434,7 @@ def relabel_native_slot(db: Session, *, parent: LimsSample, slot: int, new_pepti
         parent.peptide_name = pep.name
     res = SlotResolution(slot, pep.name, pep.name, pep.id, None)
     n = restamp_native_slot_rows(db, parent=parent, slot=slot, res=res)
+    resolve_unresolved_flag_if_clean(db, parent)
     db.add(LimsSubSampleEvent(lims_sample_pk=parent.id, event="native_slot_relabeled",
                               details={"slot": slot, "old_peptide_id": old_pid, "new_peptide_id": pep.id,
                                        "old_name": old.get("name"), "new_name": pep.name,
