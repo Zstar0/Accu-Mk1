@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v1.21.3 — 2026-09-14
+
+### Changed
+- **A sample can no longer read Verified while a paid-for native test is still on its vial.** The workflow engine's line map skipped `ordered` placeholders (pre-promotion native demand) by construction, so the submit and verify cascades ignored them: 34 samples sat at Verified with PCR sterility or endotoxin still assigned, and a primary COA published from there landed at Published instead of Waiting for Add-on Results, leaving the add-on's own publish with no edge. Live placeholders now count as pending lines, the same rule the Ready to Publish map adopted in 1.21.2 (#203). No COA is gated: publishing the primary COA from Received takes the partial edge, and the add-on's promotion cascades the sample forward. Samples already at Verified do not move; their next publish is refused until the add-on lands.
+- **"Waiting Addon" is now "Partially Published"** on the Order Status filter and tooltip, sample badges, the Receive page, the explorer and the sample dashboard, and in the workflow catalog. Same state, same slug (#204).
+
 ## v1.21.2 — 2026-09-14
 
 ### Fixed
