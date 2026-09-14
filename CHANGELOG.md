@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- **Regen & Republish works again on non-conforming samples.** The regen route never forwarded the sample's customer remarks to COA Builder, whose lab-remarks gate refuses a failing certificate without them, so every regen of a non-conforming sample was rejected with "Non-conforming COA requires customer remarks" even when the remarks were already on the sample (P-2627). The route now sends `include_lab_remarks` and the remarks text exactly as the first generate does (#208).
+
 ## v1.21.5 — 2026-09-14
 
 ### Fixed
