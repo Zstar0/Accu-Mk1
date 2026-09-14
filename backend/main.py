@@ -13663,7 +13663,10 @@ async def _maybe_emit_vial_coas(db, sample_id, parent_row, primary_data):
     try:
         if not COA_BUILDER_URL or parent_row is None:
             return
-        from coa.variance_series import build_variance_replicates, list_hplc_vials_with_figures
+        from coa.variance_series import (
+            build_variance_replicates,
+            list_hplc_vials_with_figures,
+        )
         if not build_variance_replicates(db, parent_row):
             return
         primary_gen_id = primary_data.get("generation_id")
