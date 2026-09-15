@@ -87,7 +87,7 @@ def create_category(db: Session, *, name: str, code_prefix: str,
     prefix = _clean_prefix(code_prefix)
     dup = db.execute(select(DocumentCategory.id).where(
         or_(func.lower(DocumentCategory.name) == name.lower(),
-            DocumentCategory.code_prefix == prefix))).scalar_one_or_none()
+            DocumentCategory.code_prefix == prefix)).limit(1)).scalar_one_or_none()
     if dup is not None:
         raise ConflictError("a category with that name or prefix already exists")
     cat = DocumentCategory(name=name, code_prefix=prefix, description=description,

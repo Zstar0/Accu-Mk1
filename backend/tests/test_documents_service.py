@@ -113,3 +113,11 @@ def test_mint_code_skips_numbers_already_taken(db):
                     content_sha256="0" * 64))
     db.commit()
     assert service.mint_code(db, "ART") == "ART-0002"
+
+
+def test_create_category_conflict_when_name_and_prefix_hit_different_rows(db):
+    from documents import service
+    from documents.errors import ConflictError
+    # name matches "Artifact", prefix matches "SOP" — two distinct rows
+    with pytest.raises(ConflictError):
+        service.create_category(db, name="artifact", code_prefix="sop")
