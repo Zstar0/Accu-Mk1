@@ -481,3 +481,18 @@ def test_latest_for_update_emits_no_outer_join_on_postgres(db):
     assert "LEFT OUTER JOIN" not in locked, locked
     # the unlocked path keeps its eager join
     assert "LEFT OUTER JOIN" in plain
+
+
+def test_cross_prefix_push_is_rejected_even_when_bytes_are_identical(db):
+    """The prefix guard must run before the identical-bytes branch. That branch
+    commits a title change, so checking it first let a push this guard exists to
+    reject still mutate the row whenever the content happened to match."""
+    from documents import service
+    from documents.errors import BadRequestError
+    doc, _ = service.create_document(db, title="keep me", html=HTML, category=_art(db))
+    sop = service.resolve_category(db, category="SOP")
+    with pytest.raises(BadRequestError):
+        service.create_document(db, title="clobbered", html=HTML, category=sop,
+                                code=doc.code)
+    db.refresh(doc)
+    assert doc.title == "keep me"

@@ -263,6 +263,14 @@ def create_document(db: Session, *, title: str, html, category: Optional[Documen
         latest = _latest(db, code, for_update=True)  # serialize same-code pushes
 
     if latest is not None:
+        if category is not None and category.code_prefix != code.split("-", 1)[0]:
+            # Mirrors the new-code check below: the code was minted from a prefix and
+            # never changes, so a revision push cannot refile it under another one.
+            # Checked before the identical-bytes branch below, which commits a title
+            # change: otherwise a push this guard is meant to reject still mutates the
+            # row whenever the bytes happen to match.
+            raise BadRequestError(
+                f"code prefix must be {category.code_prefix} for category {category.name}")
         if latest.content_sha256 == sha:
             latest.title = title
             if description is not None:
@@ -270,11 +278,6 @@ def create_document(db: Session, *, title: str, html, category: Optional[Documen
             db.commit()
             db.refresh(latest)
             return latest, False
-        if category is not None and category.code_prefix != code.split("-", 1)[0]:
-            # Mirrors the new-code check below: the code was minted from a prefix and
-            # never changes, so a revision push cannot refile it under another one.
-            raise BadRequestError(
-                f"code prefix must be {category.code_prefix} for category {category.name}")
         cat = category if category is not None else latest.category
         revision = latest.revision + 1
         supersedes_id = latest.id
