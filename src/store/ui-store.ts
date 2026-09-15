@@ -73,6 +73,7 @@ export type SettingsSubSection =
   | 'priorities'
   | 'businessHours'
   | 'flags'
+  | 'documents'
   | 'checkIn'
   | 'workflow'
   | 'advanced'

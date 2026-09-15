@@ -219,6 +219,7 @@
   "preferences.workflow.kind.field_present": "Field present",
   "preferences.workflow.kind.role_at_least": "Role at least",
   "preferences.workflow.kind.manual": "Manual",
+  "preferences.documents": "Documents",
   "preferences.flags": "Flags",
   "preferences.flags.types": "Flag Types",
   "preferences.flags.typesDescription": "Types offered when raising a flag. Recolor, scope to entities, or deactivate. Existing flags keep a deactivated type's color.",
