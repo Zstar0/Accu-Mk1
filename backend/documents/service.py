@@ -224,7 +224,8 @@ def _activate(db: Session, doc: Document) -> None:
     doc.status = "active"
     doc.activated_at = now
     if doc.effective_date is None:
-        doc.effective_date = now.date()
+        # Local business date (repo convention, 5 call sites); now stays UTC for timestamps.
+        doc.effective_date = date.today()
     db.flush()
 
 
