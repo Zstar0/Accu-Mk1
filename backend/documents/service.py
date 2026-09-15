@@ -181,3 +181,207 @@ def mint_code(db: Session, prefix: str) -> str:
     counter.next_number = n + 1
     db.flush()
     return code
+
+
+# --- documents ---------------------------------------------------------------------
+
+def validate_html(html) -> bytes:
+    """UTF-8 bytes of an HTML document: <= MAX_BYTES, first non-blank byte '<'."""
+    data = html.encode("utf-8") if isinstance(html, str) else bytes(html or b"")
+    if len(data) > MAX_BYTES:
+        raise BadRequestError(f"content exceeds {MAX_BYTES} bytes")
+    head = data.lstrip(b"\xef\xbb\xbf \t\r\n")[:1]
+    if head != b"<":
+        raise BadRequestError("content must be an HTML document")
+    return data
+
+
+def _clean_code(code: str) -> str:
+    code = (code or "").strip().upper()
+    if not CODE_RE.match(code) or len(code) > 30:
+        raise BadRequestError("code must look like ART-0012 (uppercase letters/digits, one dash after the prefix)")
+    return code
+
+
+def _latest(db: Session, code: str) -> Optional[Document]:
+    return db.execute(select(Document).where(Document.code == code)
+                      .order_by(Document.revision.desc()).limit(1)).scalars().first()
+
+
+def _activate(db: Session, doc: Document) -> None:
+    """Lockstep (mirrors main.py activate_method R-P3-2): retire EVERY other
+    active row of this code, then activate self. No commit here."""
+    if doc.status != "draft":
+        raise ConflictError(f"only drafts activate (this revision is {doc.status})")
+    now = datetime.utcnow()
+    stale = db.execute(select(Document).where(
+        Document.code == doc.code, Document.status == "active",
+        Document.id != doc.id)).scalars().all()
+    for row in stale:
+        row.status = "retired"
+        row.retired_at = now
+    db.flush()  # clears the partial unique index before self goes active
+    doc.status = "active"
+    doc.activated_at = now
+    if doc.effective_date is None:
+        doc.effective_date = now.date()
+    db.flush()
+
+
+def create_document(db: Session, *, title: str, html, category: Optional[DocumentCategory],
+                    description: Optional[str] = None, code: Optional[str] = None,
+                    author: Optional[str] = None, source_session: Optional[str] = None,
+                    effective_date: Optional[date] = None, activate: bool = True,
+                    user_id: Optional[int] = None) -> tuple[Document, bool]:
+    """Create revision 1 of a new code, or the next revision of an existing one.
+    Identical bytes on an existing code => metadata patch, no new row (§5.5)."""
+    title = (title or "").strip()
+    if not title:
+        raise BadRequestError("title is required")
+    data = validate_html(html)
+    sha = hashlib.sha256(data).hexdigest()
+
+    latest = None
+    if code:
+        code = _clean_code(code)
+        latest = _latest(db, code)
+
+    if latest is not None:
+        if latest.content_sha256 == sha:
+            latest.title = title
+            if description is not None:
+                latest.description = description
+            db.commit()
+            db.refresh(latest)
+            return latest, False
+        cat = category if category is not None else latest.category
+        revision = latest.revision + 1
+        supersedes_id = latest.id
+    else:
+        if category is None:
+            raise BadRequestError("category is required for a new document")
+        cat = category
+        if code:
+            if code.split("-", 1)[0] != cat.code_prefix:
+                raise BadRequestError(
+                    f"code prefix must be {cat.code_prefix} for category {cat.name}")
+        else:
+            code = mint_code(db, cat.code_prefix)
+        revision = 1
+        supersedes_id = None
+
+    key = get_storage().save(code, revision, data)
+    doc = Document(code=code, revision=revision, title=title, description=description,
+                   category_id=cat.id, status="draft", effective_date=effective_date,
+                   supersedes_id=supersedes_id, author=author, source_session=source_session,
+                   created_by_user_id=user_id, storage_key=key, size_bytes=len(data),
+                   content_sha256=sha)
+    db.add(doc)
+    db.flush()
+    if activate:
+        _activate(db, doc)
+    db.commit()
+    db.refresh(doc)
+    return doc, True
+
+
+def get_document(db: Session, doc_id: int) -> Document:
+    doc = db.get(Document, doc_id)
+    if doc is None:
+        raise NotFoundError(f"document {doc_id} not found")
+    return doc
+
+
+def get_revisions(db: Session, code: str) -> list[Document]:
+    return db.execute(select(Document).where(Document.code == code)
+                      .order_by(Document.revision)).scalars().all()
+
+
+def revision_count(db: Session, code: str) -> int:
+    return db.execute(select(func.count(Document.id))
+                      .where(Document.code == code)).scalar_one()
+
+
+def activate_document(db: Session, doc_id: int) -> Document:
+    doc = get_document(db, doc_id)
+    _activate(db, doc)
+    db.commit()
+    db.refresh(doc)
+    return doc
+
+
+def retire_document(db: Session, doc_id: int) -> Document:
+    doc = get_document(db, doc_id)
+    if doc.status != "active":
+        raise ConflictError(f"only active revisions retire (this revision is {doc.status})")
+    doc.status = "retired"
+    doc.retired_at = datetime.utcnow()
+    db.commit()
+    db.refresh(doc)
+    return doc
+
+
+def patch_document(db: Session, doc_id: int, **fields) -> Document:
+    """Metadata only (§5.1 PATCH). Never bumps revision, never touches content."""
+    doc = get_document(db, doc_id)
+    allowed = {"title", "description", "category_id", "effective_date"}
+    unknown = set(fields) - allowed
+    if unknown:
+        raise BadRequestError(f"cannot patch {sorted(unknown)}")
+    if "title" in fields:
+        title = (fields["title"] or "").strip()
+        if not title:
+            raise BadRequestError("title is required")
+        doc.title = title
+    if "description" in fields:
+        doc.description = fields["description"]
+    if "category_id" in fields and fields["category_id"] is not None:
+        doc.category_id = get_category(db, int(fields["category_id"])).id
+    if "effective_date" in fields:
+        doc.effective_date = fields["effective_date"]
+    db.commit()
+    db.refresh(doc)
+    return doc
+
+
+def list_documents(db: Session, *, q: Optional[str] = None, category_id: Optional[int] = None,
+                   statuses=("draft", "active"), sort: str = "updated_at",
+                   page: int = 1, page_size: int = 50) -> tuple[list[tuple[Document, int]], int]:
+    """Latest revision per code, then filtered. Returns ([(doc, revision_count)], total)."""
+    if sort not in SORTS:
+        raise BadRequestError(f"sort must be one of {SORTS}")
+    bad = set(statuses or ()) - set(STATUSES)
+    if bad:
+        raise BadRequestError(f"unknown status {sorted(bad)}")
+    page = max(1, int(page))
+    page_size = max(1, min(200, int(page_size)))
+
+    latest = (select(Document.code.label("code"),
+                     func.max(Document.revision).label("rev"),
+                     func.count(Document.id).label("n"))
+              .group_by(Document.code).subquery())
+    stmt = (select(Document, latest.c.n)
+            .join(latest, and_(Document.code == latest.c.code,
+                               Document.revision == latest.c.rev)))
+    if statuses:
+        stmt = stmt.where(Document.status.in_(tuple(statuses)))
+    if category_id is not None:
+        stmt = stmt.where(Document.category_id == category_id)
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        stmt = stmt.where(or_(Document.code.ilike(like), Document.title.ilike(like),
+                              Document.description.ilike(like)))
+    total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar_one()
+    order = {
+        "updated_at": (Document.updated_at.desc(), Document.id.desc()),
+        "title": (func.lower(Document.title).asc(), Document.id.asc()),
+        "code": (Document.code.asc(),),
+        "effective_date": (Document.effective_date.desc(), Document.id.desc()),
+    }[sort]
+    rows = db.execute(stmt.order_by(*order)
+                      .offset((page - 1) * page_size).limit(page_size)).all()
+    return [(doc, int(n)) for doc, n in rows], int(total)
+
+
+def read_content(doc: Document) -> bytes:
+    return get_storage().fetch(doc.storage_key)
