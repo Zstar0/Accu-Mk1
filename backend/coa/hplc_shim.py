@@ -9,6 +9,7 @@ native parent-tier row to the legacy keyword + title the engine expects.
 Both legacy_rows (row Title) and sample_meta (Analyte{N}Peptide) derive from
 slot_wires() so the two strings the engine compares cannot drift.
 """
+import logging
 from dataclasses import dataclass
 from typing import Optional
 
@@ -17,6 +18,8 @@ from lims_analyses.hplc_native import (
     AGGREGATES, KW_BLEND_PURITY, KW_BLEND_TOTAL, KW_IDENTITY, KW_PURITY, KW_QUANTITY, TRIO,
     identity_title, is_native_born, purity_title, quantity_title, resolve_slot_peptides,
 )
+
+log = logging.getLogger(__name__)
 
 _NATIVE_KWS = frozenset(TRIO + AGGREGATES)
 
@@ -65,15 +68,22 @@ def native_hplc_service_archetypes(db, parent) -> dict | None:
     on this sample (require_archetype=False — archetype is a rendering
     concern, not a visibility one; see native_sections._ordered_native_profiles).
 
-    Returns None (not {}) when ownership could not be resolved at all (the
-    IS order lookup failed, or db/parent lack what it needs) — distinct from
-    a successful lookup that simply found no owner for a given service.
-    coa/legacy_rows.py treats None as "can't tell, admit unchanged" and a
-    resolved-but-absent service as "no legacy_hplc owner, exclude": a real
-    primary-COA build already fail-closes on this same IS lookup one layer
-    up (native_sections Rule 1), so tolerating an unresolvable lookup here
-    is not new risk — it only keeps this module's own unit tests (which
-    construct rows without wiring catalog/IS data) working unchanged.
+    A service_id ABSENT from the returned mapping — whether because the
+    lookup came back empty (no linked order, `fetch_sample_services` 404s to
+    None), the owning profile is inactive so `_lab_added_profile_keys` never
+    widens to it, or the resolver failed outright — must be treated by every
+    caller as UNRESOLVED, i.e. "can't tell", not "no legacy_hplc owner". A
+    resolved mapping's PRESENT keys are the only ones an admit/exclude
+    decision may be made from (coa/legacy_rows.py's `_rides_page_one`
+    follows this: `service_id not in mapping` admits unchanged). None itself
+    is returned only when the lookup could not run at all (db/parent lack
+    what it needs); it is interchangeable with an empty/partial dict for
+    every caller's purposes — the distinction is documentation, not a
+    branch any caller needs to take differently. Tolerating an unresolved
+    sample here is not new risk: a real primary-COA build already
+    fail-closes on this same IS lookup one layer up (native_sections Rule
+    1); this function's job is only to route rows that DO resolve, and to
+    leave everything else exactly as slice 7 behaved.
     """
     from coa.native_sections import _lab_added_profile_keys, _ordered_native_profiles
     from sub_samples.service import fetch_sample_services
@@ -96,6 +106,15 @@ def native_hplc_service_archetypes(db, parent) -> dict | None:
     mapping: dict = {}
     for prof in profiles:
         for svc in prof.analysis_services:
+            if svc.id in mapping and mapping[svc.id] != prof.coa_archetype:
+                log.warning(
+                    "hplc_shim.service_archetype_disagreement sample=%s "
+                    "service_id=%s first_archetype=%s conflicting_profile=%s "
+                    "conflicting_archetype=%s — keeping the first (services "
+                    "order) owner",
+                    parent.sample_id, svc.id, mapping[svc.id], prof.key, prof.coa_archetype,
+                )
+                continue
             mapping.setdefault(svc.id, prof.coa_archetype)
     return mapping
 

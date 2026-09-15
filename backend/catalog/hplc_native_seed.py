@@ -219,6 +219,8 @@ def seed_hplc_native_catalog(db: Session) -> dict[str, int]:
     if any(report.values()):
         log.info("catalog.hplc_native_seed %s", report)
     return report
+
+
 def upgrade_hplc_native_catalog(db: Session) -> dict[str, int]:
     """Guarded one-shot boot upgrade (slice 8): two rows minted by an OLDER
     build of seed_hplc_native_catalog get the slice-8 shape retrofitted onto

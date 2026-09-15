@@ -70,21 +70,35 @@ def build_legacy_rows(db, parent) -> list[dict]:
     # coa_archetype == legacy_hplc — limit_table/NULL route it to
     # native_sections (or nowhere) instead. Resolved once per build, and
     # only when a native row is actually present, so SENAITE-born parents
-    # pay no extra IS lookup (requirement: byte-identical). archetype_by_
-    # service is None when ownership couldn't be resolved at all (no IS
-    # order / lookup failed) — that is "can't tell", not "no owner", so
-    # such rows admit unchanged (see native_hplc_service_archetypes).
+    # pay no extra IS lookup (requirement: byte-identical). A service_id
+    # ABSENT from archetype_by_service (empty/partial resolved mapping, or
+    # a None mapping when the lookup couldn't run at all — a 404 "no
+    # order", an inactive/lab-added-only profile, or a hard failure are all
+    # the same "can't tell" case to this gate) admits unchanged — that is
+    # slice 7's behaviour, and it must never become a new abort surface.
+    # Only a service the mapping actually RESOLVED to something other than
+    # legacy_hplc is excluded. See native_hplc_service_archetypes.
     archetype_by_service = (
         native_hplc_service_archetypes(db, parent)
         if any(is_native_hplc_row(r) for r in shaped) else {}
-    )
+    ) or {}
 
     def _rides_page_one(r) -> bool:
         if not is_native_hplc_row(r):
             return False
-        if archetype_by_service is None:
+        service_id = getattr(r, "analysis_service_id", None)
+        if service_id is None or service_id not in archetype_by_service:
             return True
-        return archetype_by_service.get(getattr(r, "analysis_service_id", None)) == LEGACY_HPLC_ARCHETYPE
+        return archetype_by_service[service_id] == LEGACY_HPLC_ARCHETYPE
+
+    # Computed on `shaped` (pre-skip-state-filter), not the post-filter
+    # `legacy` list below: a legacy_hplc blend whose trio rows are ALL
+    # rejected/retracted (e.g. the HM-partial-panel remove workflow) still
+    # counts as "a native row was admitted" for the empty_slots guard below
+    # — the trio existing-but-filtered must still abort as a broken/removed
+    # slot, not silently skip the guard because none of it survived
+    # SKIP_STATES.
+    admitted_native = any(_rides_page_one(r) for r in shaped)
 
     legacy = [r for r in shaped if r.service_origin == "senaite" or _rides_page_one(r)]
     # review_state=None aborts producer-side (consumer requires a string;
@@ -106,12 +120,13 @@ def build_legacy_rows(db, parent) -> list[dict]:
             f"{parent.sample_id} — refusing to assemble an empty results "
             f"table (mirror gap?)")
     # {} for SENAITE-born parents (slot_wires short-circuits there) AND for
-    # a native-born parent whose HPLC trio didn't ride page 1 (archetype !=
-    # legacy_hplc, or unresolved) — slot_wires alone doesn't know about the
-    # archetype gate, so without this guard a limit_table/NULL blend would
-    # hit the empty_slots abort below despite build_legacy_rows correctly
-    # emitting zero native rows for it (slice 8).
-    admitted_native = any(is_native_hplc_row(r) for r in legacy)
+    # a native-born parent whose HPLC trio didn't ride page 1 at all
+    # (archetype != legacy_hplc, or unresolved) — slot_wires alone doesn't
+    # know about the archetype gate, so without this guard a limit_table/
+    # NULL blend would hit the empty_slots abort below despite
+    # build_legacy_rows correctly emitting zero native rows for it (slice
+    # 8). admitted_native is computed above, pre-skip-state-filter, so an
+    # all-rejected/retracted legacy_hplc blend still aborts here as before.
     wires = {w.slot: w for w in slot_wires(db, parent)} if admitted_native else {}
     n_slots = len(wires)
     if n_slots > 1:
