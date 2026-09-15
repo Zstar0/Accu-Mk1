@@ -68,15 +68,23 @@ class FilesystemDocumentStorage:
             raise DocumentStorageError("save: empty content")
         key = _rel_key(code, revision)
         path = self._safe(key)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        except OSError as e:
+            raise DocumentStorageError(f"write failed for {key!r}: {e}") from e
         return key
 
     def fetch(self, key: str) -> bytes:
         path = self._safe(key)
-        if not path.exists():
+        if path.is_dir():
+            raise DocumentStorageError(f"key names a directory: {key!r}")
+        if not path.is_file():
             raise DocumentNotFound(key)
-        return path.read_bytes()
+        try:
+            return path.read_bytes()
+        except OSError as e:
+            raise DocumentStorageError(f"read failed for {key!r}: {e}") from e
 
     def _safe(self, key: str) -> Path:
         _check_key(key)
@@ -101,7 +109,11 @@ class S3DocumentStorage:
     def save(self, code: str, revision: int, data: bytes) -> str:
         if not data:
             raise DocumentStorageError("save: empty content")
-        return self._s3.save_photo(code, data, f"r{revision}.html")
+        try:
+            return self._s3.save_photo(code, data, f"r{revision}.html")
+        except Exception as e:  # PhotoStorageError, ClientError, credentials, ...
+            raise DocumentStorageError(
+                f"save failed for {code!r} r{revision}: {e}") from e
 
     def fetch(self, key: str) -> bytes:
         from sub_samples.photo_storage import PhotoNotFoundError
@@ -110,6 +122,8 @@ class S3DocumentStorage:
             return self._s3.fetch_photo(key)
         except PhotoNotFoundError as e:
             raise DocumentNotFound(str(e)) from e
+        except Exception as e:  # AccessDenied, NoSuchBucket, throttling, creds, ...
+            raise DocumentStorageError(f"fetch failed for {key!r}: {e}") from e
 
 
 _storage: Optional[DocumentStorage] = None

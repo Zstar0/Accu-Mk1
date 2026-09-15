@@ -9,8 +9,8 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import (Boolean, Date, DateTime, ForeignKey, Index, Integer, String,
-                        Text, UniqueConstraint, text)
+from sqlalchemy import (Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index,
+                        Integer, String, Text, UniqueConstraint, text)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -52,6 +52,8 @@ class Document(Base):
     __tablename__ = "documents"
     __table_args__ = (
         UniqueConstraint("code", "revision", name="uq_documents_code_revision"),
+        CheckConstraint("status IN ('draft','active','retired')",
+                        name="ck_documents_status"),
         Index("uq_documents_code_active", "code", unique=True,
               postgresql_where=text("status = 'active'"),
               sqlite_where=text("status = 'active'")),

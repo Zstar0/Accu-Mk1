@@ -81,3 +81,54 @@ def test_filesystem_refuses_traversal(tmp_path):
         st.fetch("../etc/passwd")
     with pytest.raises(DocumentStorageError):
         st.save("ART-0001", 1, b"")
+
+
+def test_s3_storage_wraps_failures(monkeypatch, tmp_path):
+    # Point the photo-storage default at tmp_path in case this test is the first
+    # to import the module (it builds a Filesystem default at import time).
+    monkeypatch.setenv("MK1_PHOTO_STORAGE_DIR", str(tmp_path))
+    import sub_samples.photo_storage as ps
+    from documents.storage import (DocumentNotFound, DocumentStorageError,
+                                   S3DocumentStorage)
+
+    class _StubS3:
+        def __init__(self, prefix=None, **kw):
+            pass
+
+        def fetch_photo(self, key):
+            if key == "missing":
+                raise ps.PhotoNotFoundError(key)
+            raise RuntimeError("boom")
+
+        def save_photo(self, sample_id, data, filename):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(ps, "S3PhotoStorage", _StubS3)
+    st = S3DocumentStorage()
+    with pytest.raises(DocumentNotFound):
+        st.fetch("missing")
+    with pytest.raises(DocumentStorageError):
+        st.fetch("x")
+    with pytest.raises(DocumentStorageError):
+        st.save("ART-0001", 1, b"<x>")
+
+
+def test_filesystem_fetch_rejects_directory_key(tmp_path):
+    from documents.storage import DocumentStorageError, FilesystemDocumentStorage
+    st = FilesystemDocumentStorage(root=str(tmp_path))
+    st.save("ART-0001", 1, b"<x>")
+    with pytest.raises(DocumentStorageError):
+        st.fetch("ART-0001")
+    assert st.fetch("ART-0001/r1.html") == b"<x>"
+
+
+def test_status_check_constraint():
+    from sqlalchemy.exc import IntegrityError
+    from documents.models import DocumentCategory
+    s = sessionmaker(bind=_engine())()
+    cat = DocumentCategory(name="Artifact", code_prefix="ART")
+    s.add(cat)
+    s.flush()
+    s.add(_row(cat.id, 1, "published"))
+    with pytest.raises(IntegrityError):
+        s.commit()
