@@ -1,7 +1,9 @@
 """Business rules for the documents library (spec §3, §5).
 
 Routes are thin; everything that can be unit-tested against SQLite lives here.
-Callers commit through these functions; nothing here is left half-flushed.
+Callers commit through these functions; nothing here is left half-flushed. The
+one exception is mint_code(), which flushes without committing and holds the
+per-prefix counter row lock for the caller's transaction to close.
 """
 from __future__ import annotations
 
@@ -10,7 +12,7 @@ import re
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from documents.errors import BadRequestError, ConflictError, NotFoundError
@@ -108,7 +110,7 @@ def update_category(db: Session, category_id: int, **fields) -> DocumentCategory
         name = _clean_name(fields["name"])
         dup = db.execute(select(DocumentCategory.id).where(
             func.lower(DocumentCategory.name) == name.lower(),
-            DocumentCategory.id != cat.id)).scalar_one_or_none()
+            DocumentCategory.id != cat.id).limit(1)).scalar_one_or_none()
         if dup is not None:
             raise ConflictError("a category with that name already exists")
         cat.name = name
@@ -135,15 +137,19 @@ def delete_category(db: Session, category_id: int) -> None:
 
 def resolve_category(db: Session, *, category: Optional[str] = None,
                      category_id: Optional[int] = None) -> DocumentCategory:
-    """Accepts an id, a code prefix, or a name (case-insensitive). Inactive
-    categories cannot be chosen for new documents."""
+    """Accepts an id, a code prefix, or a name (case-insensitive). A key can hit
+    two rows (one by prefix, another by name), so precedence is explicit: exact
+    code_prefix wins, then lowest id. Inactive categories cannot be chosen for
+    new documents."""
     if category_id is not None:
         cat = get_category(db, category_id)
     elif category:
         key = category.strip()
         cat = db.execute(select(DocumentCategory).where(
             or_(DocumentCategory.code_prefix == key.upper(),
-                func.lower(DocumentCategory.name) == key.lower()))).scalars().first()
+                func.lower(DocumentCategory.name) == key.lower()))
+            .order_by(case((DocumentCategory.code_prefix == key.upper(), 0), else_=1),
+                      DocumentCategory.id)).scalars().first()
         if cat is None:
             raise NotFoundError(f"category {category!r} not found")
     else:

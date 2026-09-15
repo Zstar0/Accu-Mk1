@@ -36,6 +36,7 @@ def test_seed_is_idempotent(db):
     service.seed_categories(db)
     service.seed_categories(db)
     assert _prefixes(db) == [("Artifact", "ART", 0), ("SOP", "SOP", 0)]
+    assert [c.sort_order for c, _ in service.list_categories(db)] == [0, 1]
 
 
 def test_create_category_normalizes_prefix(db):
@@ -44,7 +45,7 @@ def test_create_category_normalizes_prefix(db):
     assert (cat.name, cat.code_prefix, cat.active) == ("Validation", "VAL", True)
 
 
-@pytest.mark.parametrize("prefix", ["", "a", "TOO-LONG-PREFIX", "ab c", "A/B"])
+@pytest.mark.parametrize("prefix", ["", "a", "TOO-LONG-PREFIX", "ab c", "A/B", "ABCDEFGHIJK"])
 def test_create_category_rejects_bad_prefix(db, prefix):
     from documents import service
     from documents.errors import BadRequestError
@@ -121,3 +122,54 @@ def test_create_category_conflict_when_name_and_prefix_hit_different_rows(db):
     # name matches "Artifact", prefix matches "SOP" — two distinct rows
     with pytest.raises(ConflictError):
         service.create_category(db, name="artifact", code_prefix="sop")
+
+
+def test_resolve_category_prefers_exact_prefix_over_name(db):
+    from documents import service
+    # "ART" is now both the seeded Artifact's prefix and this category's name.
+    service.create_category(db, name="ART", code_prefix="XYZ")
+    assert service.resolve_category(db, category="ART").code_prefix == "ART"
+    assert service.resolve_category(db, category="xyz").name == "ART"
+    # Precedence must not ride on insertion order: re-mint Artifact so the
+    # name-matching row is now the LOWER id. Lowest-id-wins would answer "XYZ".
+    service.delete_category(db, service.resolve_category(db, category="Artifact").id)
+    remade = service.create_category(db, name="Artifact", code_prefix="ART")
+    assert remade.id > service.resolve_category(db, category="xyz").id
+    assert service.resolve_category(db, category="ART").code_prefix == "ART"
+
+
+def test_delete_category_refused_when_referenced_by_document(db):
+    from documents import service
+    from documents.errors import ConflictError
+    from documents.models import Document
+    cat = service.create_category(db, name="Temp", code_prefix="TMP")
+    db.add(Document(code="TMP-0001", revision=1, title="held", category_id=cat.id,
+                    status="draft", storage_key="TMP-0001/r1.html", size_bytes=1,
+                    content_sha256="0" * 64))
+    db.commit()
+    with pytest.raises(ConflictError):
+        service.delete_category(db, cat.id)
+
+
+def test_update_category_rejects_unknown_field(db):
+    from documents import service
+    from documents.errors import BadRequestError
+    art = service.resolve_category(db, category="ART")
+    with pytest.raises(BadRequestError):
+        service.update_category(db, art.id, code_prefix="ZZZ")
+    with pytest.raises(BadRequestError):
+        service.update_category(db, art.id, bogus=1)
+
+
+def test_list_categories_counts_distinct_codes(db):
+    from documents import service
+    from documents.models import Document
+    art = service.resolve_category(db, category="ART")
+    for rev in (1, 2):
+        db.add(Document(code="ART-0001", revision=rev, title=f"rev {rev}",
+                        category_id=art.id, status="draft",
+                        storage_key=f"ART-0001/r{rev}.html", size_bytes=1,
+                        content_sha256="0" * 64))
+    db.commit()
+    counts = {c.name: n for c, n in service.list_categories(db)}
+    assert counts["Artifact"] == 1
