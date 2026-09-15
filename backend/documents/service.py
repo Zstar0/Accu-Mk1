@@ -203,9 +203,19 @@ def _clean_code(code: str) -> str:
     return code
 
 
-def _latest(db: Session, code: str) -> Optional[Document]:
-    return db.execute(select(Document).where(Document.code == code)
-                      .order_by(Document.revision.desc()).limit(1)).scalars().first()
+def _latest(db: Session, code: str, for_update: bool = False) -> Optional[Document]:
+    """Highest revision of a code. for_update row-locks it so two concurrent
+    pushes to the same code cannot both read revision N, both compute N+1, and
+    both write the SAME deterministic storage key {code}/r{N+1}.html — the loser's
+    bytes would replace the winner's while the winner's row commits with a
+    content_sha256 that no longer matches its blob. The (code, revision) unique
+    constraint catches the duplicate row, but only AFTER the blob is overwritten.
+    Postgres honours FOR UPDATE; SQLite ignores it and is single-writer anyway."""
+    stmt = (select(Document).where(Document.code == code)
+            .order_by(Document.revision.desc()).limit(1))
+    if for_update:
+        stmt = stmt.with_for_update()
+    return db.execute(stmt).scalars().first()
 
 
 def _activate(db: Session, doc: Document) -> None:
@@ -245,7 +255,7 @@ def create_document(db: Session, *, title: str, html, category: Optional[Documen
     latest = None
     if code:
         code = _clean_code(code)
-        latest = _latest(db, code)
+        latest = _latest(db, code, for_update=True)  # serialize same-code pushes
 
     if latest is not None:
         if latest.content_sha256 == sha:
@@ -323,21 +333,29 @@ def retire_document(db: Session, doc_id: int) -> Document:
 
 
 def patch_document(db: Session, doc_id: int, **fields) -> Document:
-    """Metadata only (§5.1 PATCH). Never bumps revision, never touches content."""
+    """Metadata only (§5.1 PATCH). Never bumps revision, never touches content.
+    Every field is validated BEFORE any attribute is assigned: a half-applied
+    patch would leave the row dirty in the session, and the next autoflush would
+    persist it even though the caller saw an exception."""
     doc = get_document(db, doc_id)
     allowed = {"title", "description", "category_id", "effective_date"}
     unknown = set(fields) - allowed
     if unknown:
         raise BadRequestError(f"cannot patch {sorted(unknown)}")
+    title = None
     if "title" in fields:
         title = (fields["title"] or "").strip()
         if not title:
             raise BadRequestError("title is required")
+    category_id = None
+    if "category_id" in fields and fields["category_id"] is not None:
+        category_id = get_category(db, int(fields["category_id"])).id
+    if title is not None:
         doc.title = title
     if "description" in fields:
         doc.description = fields["description"]
-    if "category_id" in fields and fields["category_id"] is not None:
-        doc.category_id = get_category(db, int(fields["category_id"])).id
+    if category_id is not None:
+        doc.category_id = category_id
     if "effective_date" in fields:
         doc.effective_date = fields["effective_date"]
     db.commit()

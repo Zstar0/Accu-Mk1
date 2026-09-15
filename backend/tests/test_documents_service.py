@@ -357,3 +357,51 @@ def test_get_document_not_found(db):
     from documents.errors import NotFoundError
     with pytest.raises(NotFoundError):
         service.get_document(db, 12345)
+
+
+def test_create_accepts_exactly_max_bytes(db):
+    from documents import service
+    html = "<html>" + ("x" * (service.MAX_BYTES - len("<html></html>"))) + "</html>"
+    assert len(html.encode()) == service.MAX_BYTES
+    doc, _ = service.create_document(db, title="max", html=html, category=_art(db))
+    assert doc.size_bytes == service.MAX_BYTES
+
+
+def test_list_rejects_bad_sort_and_status(db):
+    from documents import service
+    from documents.errors import BadRequestError
+    with pytest.raises(BadRequestError):
+        service.list_documents(db, sort="bogus")
+    with pytest.raises(BadRequestError):
+        service.list_documents(db, statuses=("bogus",))
+
+
+def test_list_clamps_paging(db):
+    from documents import service
+    art = _art(db)
+    for i in range(3):
+        service.create_document(db, title=f"doc {i}", html=HTML + f"<!--{i}-->", category=art)
+    rows, total = service.list_documents(db, page=0, page_size=999)
+    assert total == 3 and len(rows) == 3  # page clamped to 1, page_size to 200
+    rows, total = service.list_documents(db, page=1, page_size=0)
+    assert total == 3 and len(rows) == 1  # page_size clamped up to 1
+
+
+def test_patch_clears_description_and_validates_before_mutating(db):
+    from documents import service
+    from documents.errors import NotFoundError
+    doc, _ = service.create_document(db, title="v1", html=HTML, category=_art(db),
+                                     description="d")
+    doc = service.patch_document(db, doc.id, description=None)
+    assert doc.description is None
+    with pytest.raises(NotFoundError):
+        service.patch_document(db, doc.id, title="changed", category_id=9999)
+    db.refresh(doc)
+    assert doc.title == "v1"  # the failed patch left nothing behind to autoflush
+
+
+def test_latest_for_update_is_a_no_op_on_sqlite(db):
+    from documents import service
+    doc, _ = service.create_document(db, title="v1", html=HTML, category=_art(db))
+    locked = service._latest(db, doc.code, for_update=True)
+    assert locked is not None and locked.id == service._latest(db, doc.code).id
