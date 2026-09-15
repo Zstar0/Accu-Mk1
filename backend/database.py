@@ -122,6 +122,13 @@ def init_db():
     # Run column migrations before create_all so ORM mappings match the DB schema
     _run_migrations()
     Base.metadata.create_all(bind=engine)
+    # Documents library: seed the Artifact/SOP categories (spec 2026-09-15 §3.1).
+    try:
+        from documents.service import seed_categories
+        with SessionLocal() as _s:
+            seed_categories(_s)
+    except Exception as e:  # never block startup
+        log.warning("documents_category_seed_skipped err=%s", e)
     # S6b: per-substance PUR_/QTY_ derivation — moved out of _run_migrations
     # into an on-demand reconciler (same statements, now with a report).
     # MUST run before backfill_departments so freshly minted rows get their
