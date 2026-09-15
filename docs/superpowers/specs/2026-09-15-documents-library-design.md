@@ -255,3 +255,17 @@ Publish skill: a self-check `demo()` that wraps a fragment, inlines the theme on
 2. **Alembic adoption** — baseline autogenerate against prod, drift reconciliation, stamp prod/stacks/golden, swap the boot step. Own sign-off and rollback plan.
 3. Admin upload from the UI, and content editing, if ever wanted.
 4. Content full-text search.
+
+## 13. Amendments during implementation (2026-09-15)
+
+Recorded from the implementation ledger; each supersedes the earlier text above.
+
+- §3.2/§5.4 `effective_date` defaults to the **local business date** (`date.today()`) on activation; `activated_at`/`retired_at` stay UTC.
+- §4 storage keys are content-addressed: `{code}/r{revision}-{sha256[:12]}.html` (filesystem/in-memory); S3 objects are `{code}/{uuid}.bin` under the `documents/` prefix. Keys are opaque handles; only `documents.storage_key` resolves them.
+- §4/§11 the filesystem backend is its own class, rooted at `MK1_DOCUMENTS_DIR` if set, else `<MK1_PHOTO_STORAGE_DIR or /app/data>/documents` so stack and prod containers keep the bytes on the mounted volume. No new env var is required.
+- §5.1 list semantics are **filter-first**: the latest revision per code among rows matching the status filter; `revision_count` is unfiltered.
+- §5.1 `PATCH category_id` is rejected (400) when the category's prefix differs from the code's prefix; `POST` on an existing code rejects a cross-prefix category the same way. In practice a document's category cannot change.
+- §5 `IntegrityError` maps to 409.
+- §8.3 there is **no "Open in window"** action: a top-level `blob:` URL is same-origin with Mk1 and would let document scripts reach localStorage. Download remains.
+- §8.2 sort is a select control, not table headers. §6 the publish script does not auto-derive the session id; agents pass `--session`.
+- §7 the theme does not inject a Google Fonts link; documents that want the faces carry their own `<link>` (artifact fragments already do), and the fallback stacks apply otherwise.
