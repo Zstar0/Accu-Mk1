@@ -55,6 +55,7 @@ export type ReportsSubSection =
   | 'dashboard'
   | 'checkin-times'
   | 'ready-to-publish'
+  | 'documents'
   | 'throughput'
   | 'sla-performance'
   | 'bottlenecks'
@@ -106,6 +107,10 @@ interface UIState {
   methodsTargetId: number | null
   peptideRequestTargetId: string | null
   customerDetailTargetId: number | null
+  // Documents library viewer target (#reports/documents?id=N). Sticky like
+  // customerDetailTargetId; generic navigateTo clears it so the sidebar
+  // entry always lands on the list.
+  documentViewerTargetId: number | null
   customerListPage: number
   customerSearchTerm: string
   hideTestAccounts: boolean
@@ -148,10 +153,12 @@ interface UIState {
   navigateToMethod: (methodId: number) => void
   navigateToPeptideRequest: (requestId: string) => void
   navigateToCustomer: (id: number) => void
+  navigateToDocument: (id: number) => void
+  clearDocumentViewer: () => void
   navigateToCustomers: () => void
   /** Order Status with ONLY the Order ID text filter set (other text axes
    *  cleared by the page so the result is unambiguous). */
-    navigateToOrderStatus: (orderId: string) => void
+  navigateToOrderStatus: (orderId: string) => void
   consumeOrderStatusPrefill: () => { orderId: string } | null
   setCustomerListPage: (page: number) => void
   setHideTestAccounts: (hide: boolean) => void
@@ -257,6 +264,7 @@ export const useUIStore = create<UIState>()(
       methodsTargetId: null,
       peptideRequestTargetId: null,
       customerDetailTargetId: null,
+      documentViewerTargetId: null,
       customerListPage: 0,
       customerSearchTerm: '',
       hideTestAccounts: true,
@@ -345,6 +353,7 @@ export const useUIStore = create<UIState>()(
           state => ({
             activeSection: section,
             activeSubSection: subSection,
+            documentViewerTargetId: null,
             navigationKey: state.navigationKey + 1,
           }),
           undefined,
@@ -399,6 +408,21 @@ export const useUIStore = create<UIState>()(
           'navigateToBoxes'
         ),
 
+      navigateToDocument: id =>
+        set(
+          state => ({
+            activeSection: 'reports',
+            activeSubSection: 'documents',
+            documentViewerTargetId: id,
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'navigateToDocument'
+        ),
+
+      clearDocumentViewer: () =>
+        set({ documentViewerTargetId: null }, undefined, 'clearDocumentViewer'),
+
       navigateToSamplePrep: prepId =>
         set(
           state => ({
@@ -449,7 +473,12 @@ export const useUIStore = create<UIState>()(
 
       consumeOrderStatusPrefill: () => {
         const prefill = get().orderStatusPrefill
-        if (prefill) set({ orderStatusPrefill: null }, undefined, 'consumeOrderStatusPrefill')
+        if (prefill)
+          set(
+            { orderStatusPrefill: null },
+            undefined,
+            'consumeOrderStatusPrefill'
+          )
         return prefill
       },
 

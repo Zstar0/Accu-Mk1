@@ -13,6 +13,7 @@
  *  - accumark-tools/order-explorer → orderExplorerTargetOrderId
  *  - accumark-tools/customer-detail → customerDetailTargetId
  *  - lims/peptide-config            → peptideConfigTargetId
+ *  - reports/documents              → documentViewerTargetId
  */
 
 import { useEffect } from 'react'
@@ -104,6 +105,12 @@ function applyNavToStore(nav: ParsedNav) {
     store.navigateToPeptide(Number(targetId))
   } else if (subSection === 'worksheet-detail' && targetId) {
     store.openWorksheetDrawer(Number(targetId))
+  } else if (
+    subSection === 'documents' &&
+    targetId &&
+    !Number.isNaN(Number(targetId))
+  ) {
+    store.navigateToDocument(Number(targetId))
   } else {
     store.navigateTo(section, subSection)
   }
@@ -133,6 +140,7 @@ function buildHash(state: {
   orderExplorerTargetOrderId: string | null
   customerDetailTargetId: number | null
   peptideConfigTargetId: number | null
+  documentViewerTargetId: number | null
 }): string {
   let hash = `#${state.activeSection}/${state.activeSubSection}`
 
@@ -157,6 +165,11 @@ function buildHash(state: {
     state.peptideConfigTargetId != null
   ) {
     hash += `?id=${encodeURIComponent(String(state.peptideConfigTargetId))}`
+  } else if (
+    state.activeSubSection === 'documents' &&
+    state.documentViewerTargetId != null
+  ) {
+    hash += `?id=${encodeURIComponent(String(state.documentViewerTargetId))}`
   }
 
   return hash
@@ -188,7 +201,8 @@ export function useHashNavigation() {
         state.sampleDetailsTargetId !== prev.sampleDetailsTargetId ||
         state.orderExplorerTargetOrderId !== prev.orderExplorerTargetOrderId ||
         state.customerDetailTargetId !== prev.customerDetailTargetId ||
-        state.peptideConfigTargetId !== prev.peptideConfigTargetId
+        state.peptideConfigTargetId !== prev.peptideConfigTargetId ||
+        state.documentViewerTargetId !== prev.documentViewerTargetId
       ) {
         const newHash = buildHash(state)
         if (window.location.hash !== newHash) {

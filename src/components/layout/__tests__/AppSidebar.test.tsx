@@ -189,4 +189,37 @@ describe('AppSidebar — Customers entry (Phase 29-03)', () => {
     const customersBtn = screen.getByRole('button', { name: 'Customers' })
     expect(customersBtn.getAttribute('data-active')).not.toBe('true')
   })
+
+  it('orders Reports sub-items with Documents after Ready to Publish', () => {
+    localStorage.setItem(
+      'sidebar-expanded-sections',
+      JSON.stringify({ 'accumark-tools': true, reports: true })
+    )
+    renderSidebar()
+    const anchor = screen.getByRole('button', { name: /Ready to Publish/ })
+    const subMenu = anchor.closest('[data-sidebar="menu-sub"]')
+    if (!subMenu) throw new Error('Reports sub-menu not found in DOM')
+    const labels = Array.from(
+      subMenu.querySelectorAll('[data-sidebar="menu-sub-button"]')
+    ).map(el => el.textContent?.replace(/\d+/g, '').trim() ?? '')
+    expect(labels).toEqual([
+      'Dashboard',
+      'Check-In Times',
+      'Ready to Publish',
+      'Documents',
+      'Lab Throughput',
+      'SLA Performance',
+      'Bottlenecks',
+    ])
+  })
+
+  it('clicking Documents dispatches navigateTo("reports", "documents")', () => {
+    localStorage.setItem(
+      'sidebar-expanded-sections',
+      JSON.stringify({ 'accumark-tools': true, reports: true })
+    )
+    renderSidebar()
+    fireEvent.click(screen.getByRole('button', { name: 'Documents' }))
+    expect(uiState.navigateTo).toHaveBeenCalledWith('reports', 'documents')
+  })
 })
