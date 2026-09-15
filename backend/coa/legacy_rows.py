@@ -31,7 +31,8 @@ reads, keyed by the parent's resolved analyte slots. An unresolved slot
 Spec: docs/superpowers/specs/2026-08-26-coa-legacy-rows-mk1-source-design.md
 """
 from coa.hplc_shim import (
-    UnresolvedNativeSlotError, is_native_hplc_row, slot_wires, wire_keyword, wire_title,
+    LEGACY_HPLC_ARCHETYPE, UnresolvedNativeSlotError, is_native_hplc_row,
+    native_hplc_service_archetypes, slot_wires, wire_keyword, wire_title,
 )
 from coa.identity_verdict import identity_wire_result
 from coa.native_sections import NativeSectionsError
@@ -64,7 +65,28 @@ def build_legacy_rows(db, parent) -> list[dict]:
             raise NativeSectionsError(
                 f"legacy rows: analysis {r.uid} on {parent.sample_id} has "
                 f"unresolvable service origin — aborting")
-    legacy = [r for r in shaped if r.service_origin == "senaite" or is_native_hplc_row(r)]
+    # Slice 8: a native TRIO/aggregate row rides page 1 only when the
+    # profile that owns its service on THIS sample has
+    # coa_archetype == legacy_hplc — limit_table/NULL route it to
+    # native_sections (or nowhere) instead. Resolved once per build, and
+    # only when a native row is actually present, so SENAITE-born parents
+    # pay no extra IS lookup (requirement: byte-identical). archetype_by_
+    # service is None when ownership couldn't be resolved at all (no IS
+    # order / lookup failed) — that is "can't tell", not "no owner", so
+    # such rows admit unchanged (see native_hplc_service_archetypes).
+    archetype_by_service = (
+        native_hplc_service_archetypes(db, parent)
+        if any(is_native_hplc_row(r) for r in shaped) else {}
+    )
+
+    def _rides_page_one(r) -> bool:
+        if not is_native_hplc_row(r):
+            return False
+        if archetype_by_service is None:
+            return True
+        return archetype_by_service.get(getattr(r, "analysis_service_id", None)) == LEGACY_HPLC_ARCHETYPE
+
+    legacy = [r for r in shaped if r.service_origin == "senaite" or _rides_page_one(r)]
     # review_state=None aborts producer-side (consumer requires a string;
     # same treatment as the missing-keyword abort below) — checked before
     # the skip-state filter so a None can't silently pass as "not in
@@ -83,8 +105,14 @@ def build_legacy_rows(db, parent) -> list[dict]:
             f"legacy rows: no legacy-family analyses found for "
             f"{parent.sample_id} — refusing to assemble an empty results "
             f"table (mirror gap?)")
-    # {} for SENAITE-born parents (slot_wires short-circuits there).
-    wires = {w.slot: w for w in slot_wires(db, parent)}
+    # {} for SENAITE-born parents (slot_wires short-circuits there) AND for
+    # a native-born parent whose HPLC trio didn't ride page 1 (archetype !=
+    # legacy_hplc, or unresolved) — slot_wires alone doesn't know about the
+    # archetype gate, so without this guard a limit_table/NULL blend would
+    # hit the empty_slots abort below despite build_legacy_rows correctly
+    # emitting zero native rows for it (slice 8).
+    admitted_native = any(is_native_hplc_row(r) for r in legacy)
+    wires = {w.slot: w for w in slot_wires(db, parent)} if admitted_native else {}
     n_slots = len(wires)
     if n_slots > 1:
         rowed_slots = {

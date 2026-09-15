@@ -60,6 +60,58 @@ def is_native_hplc_row(row) -> bool:
             and (getattr(row, "keyword", "") or "").upper() in _NATIVE_KWS)
 
 
+def native_hplc_service_archetypes(db, parent) -> dict | None:
+    """{analysis_service_id: coa_archetype} for every native profile ordered
+    on this sample (require_archetype=False — archetype is a rendering
+    concern, not a visibility one; see native_sections._ordered_native_profiles).
+
+    Returns None (not {}) when ownership could not be resolved at all (the
+    IS order lookup failed, or db/parent lack what it needs) — distinct from
+    a successful lookup that simply found no owner for a given service.
+    coa/legacy_rows.py treats None as "can't tell, admit unchanged" and a
+    resolved-but-absent service as "no legacy_hplc owner, exclude": a real
+    primary-COA build already fail-closes on this same IS lookup one layer
+    up (native_sections Rule 1), so tolerating an unresolvable lookup here
+    is not new risk — it only keeps this module's own unit tests (which
+    construct rows without wiring catalog/IS data) working unchanged.
+    """
+    from coa.native_sections import _lab_added_profile_keys, _ordered_native_profiles
+    from sub_samples.service import fetch_sample_services
+
+    if getattr(parent, "id", None) is None:
+        # A real ORM LimsSample always has a pk; a SimpleNamespace/test
+        # double built without one is a signal this isn't a resolvable
+        # sample — skip the (network) lookup entirely rather than guess.
+        return None
+    try:
+        raw = fetch_sample_services(parent.sample_id)
+        services = dict(((raw or {}).get("services")) or {})
+        for key in _lab_added_profile_keys(db, parent.id):
+            if not services.get(key):
+                services[key] = True
+        profiles = _ordered_native_profiles(
+            db, services, (raw or {}).get("package"), require_archetype=False)
+    except Exception:  # noqa: BLE001 — an unresolvable lookup is "can't tell", not fatal
+        return None
+    mapping: dict = {}
+    for prof in profiles:
+        for svc in prof.analysis_services:
+            mapping.setdefault(svc.id, prof.coa_archetype)
+    return mapping
+
+
+def native_hplc_profile_archetype(db, parent, row) -> str | None:
+    """Owning native profile's coa_archetype for a single native HPLC row.
+    Convenience wrapper over native_hplc_service_archetypes for one-off
+    callers; coa/legacy_rows.py resolves the whole sample once per build
+    (see native_hplc_service_archetypes) rather than calling this per row."""
+    service_id = getattr(row, "analysis_service_id", None)
+    if service_id is None:
+        return None
+    archetypes = native_hplc_service_archetypes(db, parent)
+    return None if archetypes is None else archetypes.get(service_id)
+
+
 def wire_keyword(keyword: str, slot: Optional[int], n_slots: int) -> str:
     kw = (keyword or "").upper()
     if kw == KW_IDENTITY:
