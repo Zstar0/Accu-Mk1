@@ -285,6 +285,21 @@ def test_activate_and_retire_lockstep(db):
     assert r2.status == "retired" and r2.retired_at is not None
 
 
+def test_repush_rejects_category_with_other_prefix(db):
+    """The revision path must agree with the new-code path: a cross-prefix category
+    is refused BEFORE the blob write, so neither a revision nor an orphan blob."""
+    from documents import service, storage
+    from documents.errors import BadRequestError
+    doc, _ = service.create_document(db, title="v1", html=HTML, category=_art(db))
+    sop = service.resolve_category(db, category="SOP")
+    blobs = len(storage.get_storage().blobs)
+    with pytest.raises(BadRequestError):
+        service.create_document(db, title="v2", html=HTML + "<!--2-->", code=doc.code,
+                                category=sop)
+    assert service.revision_count(db, doc.code) == 1
+    assert len(storage.get_storage().blobs) == blobs
+
+
 def test_patch_metadata_only(db):
     from datetime import date
     from documents import service
