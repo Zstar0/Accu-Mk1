@@ -118,6 +118,7 @@ def init_db():
     # Import models to register them with Base
     import models  # noqa: F401
     import flags.models  # noqa: F401  (register flag_* tables on Base)
+    import documents.models  # noqa: F401  (register documents tables on Base)
     # Run column migrations before create_all so ORM mappings match the DB schema
     _run_migrations()
     Base.metadata.create_all(bind=engine)
