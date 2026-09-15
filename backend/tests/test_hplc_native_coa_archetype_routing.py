@@ -22,7 +22,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 import coa.legacy_rows as lr
-from coa.hplc_shim import LEGACY_HPLC_ARCHETYPE, SlotWire, native_hplc_service_archetypes
+from coa.hplc_shim import (
+    LEGACY_HPLC_ARCHETYPE,
+    SlotWire,
+    native_hplc_service_archetypes,
+)
 from coa.legacy_rows import build_legacy_rows
 from coa.native_sections import NativeSectionsError, build_native_sections
 from database import Base
@@ -194,9 +198,8 @@ def _row(rows, keyword, slot):
 def test_legacy_hplc_profile_excluded_from_native_sections(db, monkeypatch):
     """(a) legacy_hplc — seed default (T1) — is treated like NULL by
     native_sections: no page-2 section, not listed in ordered_profiles."""
-    from lims_analyses.hplc_native import KW_IDENTITY
     from tests.hplc_native_family import native_family
-    parent, services, peps, vial_rows = native_family(db, sample_id="PB-8101", slots=[("BPC-157", "BPC157")])
+    parent, _services, _peps, _vial_rows = native_family(db, sample_id="PB-8101", slots=[("BPC-157", "BPC157")])
     assert _profile(db).coa_archetype == LEGACY_HPLC_ARCHETYPE  # T1's seed default
     _order_lookup(monkeypatch)
     doc = build_native_sections(db, parent)
@@ -207,7 +210,7 @@ def test_legacy_hplc_profile_excluded_from_native_sections(db, monkeypatch):
 def test_null_archetype_excluded_from_native_sections(db, monkeypatch):
     """(c) NULL — explicit admin state, same treatment as legacy_hplc."""
     from tests.hplc_native_family import native_family
-    parent, services, peps, vial_rows = native_family(db, sample_id="PB-8102", slots=[("BPC-157", "BPC157")])
+    parent, _services, _peps, _vial_rows = native_family(db, sample_id="PB-8102", slots=[("BPC-157", "BPC157")])
     prof = _profile(db)
     prof.coa_archetype = None
     db.flush()
@@ -227,10 +230,14 @@ def test_limit_table_profile_builds_page2_section(db, monkeypatch):
     `equals "Conforms"` string rule, purity a `range` floor, quantity/
     blend-total `informational`."""
     from lims_analyses.hplc_native import (
-        KW_BLEND_PURITY, KW_BLEND_TOTAL, KW_IDENTITY, KW_PURITY, KW_QUANTITY,
+        KW_BLEND_PURITY,
+        KW_BLEND_TOTAL,
+        KW_IDENTITY,
+        KW_PURITY,
+        KW_QUANTITY,
     )
     from tests.hplc_native_family import native_family
-    parent, services, peps, vial_rows = native_family(
+    parent, _services, _peps, vial_rows = native_family(
         db, sample_id="PB-8103", slots=[("BPC-157", "BPC157"), ("TB-500", "TB500")])
     prof = _profile(db)
     prof.coa_archetype = "limit_table"
@@ -280,10 +287,14 @@ def test_identity_does_not_conform_on_limit_table_section(db, monkeypatch):
     """Same equals-rule code path as PCR's `equals "Not Detected"` — a
     failing identity value verdicts False, not an abort."""
     from lims_analyses.hplc_native import (
-        KW_BLEND_PURITY, KW_BLEND_TOTAL, KW_IDENTITY, KW_PURITY, KW_QUANTITY,
+        KW_BLEND_PURITY,
+        KW_BLEND_TOTAL,
+        KW_IDENTITY,
+        KW_PURITY,
+        KW_QUANTITY,
     )
     from tests.hplc_native_family import native_family
-    parent, services, peps, vial_rows = native_family(
+    parent, _services, _peps, vial_rows = native_family(
         db, sample_id="PB-8104", slots=[("BPC-157", "BPC157"), ("TB-500", "TB500")])
     prof = _profile(db)
     prof.coa_archetype = "limit_table"
@@ -320,7 +331,7 @@ def _shim_order_lookup(monkeypatch, services=None, package=None):
 def test_service_archetypes_owned_legacy_hplc(db, monkeypatch):
     from catalog.hplc_native_seed import HPLC_NATIVE_PROFILE_KEY
     from tests.hplc_native_family import native_family
-    parent, services, peps, vial_rows = native_family(db, sample_id="PB-8301", slots=[("BPC-157", "BPC157")])
+    parent, services, _peps, _vial_rows = native_family(db, sample_id="PB-8301", slots=[("BPC-157", "BPC157")])
     _shim_order_lookup(monkeypatch, services={HPLC_NATIVE_PROFILE_KEY: True})
     mapping = native_hplc_service_archetypes(db, parent)
     assert mapping is not None
@@ -330,7 +341,7 @@ def test_service_archetypes_owned_legacy_hplc(db, monkeypatch):
 def test_service_archetypes_owned_null_archetype(db, monkeypatch):
     from catalog.hplc_native_seed import HPLC_NATIVE_PROFILE_KEY
     from tests.hplc_native_family import native_family
-    parent, services, peps, vial_rows = native_family(db, sample_id="PB-8302", slots=[("BPC-157", "BPC157")])
+    parent, services, _peps, _vial_rows = native_family(db, sample_id="PB-8302", slots=[("BPC-157", "BPC157")])
     prof = _profile(db)
     prof.coa_archetype = None
     db.flush()
@@ -348,7 +359,7 @@ def test_service_archetypes_unowned_service_absent_from_mapping(db, monkeypatch)
     doesn't have it either. The service must be ABSENT from the mapping
     (unresolved), not present with a None/other value."""
     from tests.hplc_native_family import native_family
-    parent, services, peps, vial_rows = native_family(db, sample_id="PB-8303", slots=[("BPC-157", "BPC157")])
+    parent, services, _peps, _vial_rows = native_family(db, sample_id="PB-8303", slots=[("BPC-157", "BPC157")])
     prof = _profile(db)
     prof.active = False
     db.flush()
@@ -365,7 +376,7 @@ def test_service_archetypes_no_linked_order_resolves_empty_not_none(db, monkeypa
     downstream (coa/legacy_rows.py) both admit unchanged today, but the
     distinction is what a future stricter caller would need."""
     from tests.hplc_native_family import native_family
-    parent, services, peps, vial_rows = native_family(db, sample_id="PB-8304", slots=[("BPC-157", "BPC157")])
+    parent, services, _peps, _vial_rows = native_family(db, sample_id="PB-8304", slots=[("BPC-157", "BPC157")])
     prof = _profile(db)
     prof.active = False  # neutralise the lab-added-placeholder fallback
     db.flush()
@@ -379,7 +390,7 @@ def test_service_archetypes_lookup_failure_returns_none(db, monkeypatch):
     """A hard failure (network error, misconfigured IS env) returns None —
     distinct from the resolved-but-empty {} above."""
     from tests.hplc_native_family import native_family
-    parent, services, peps, vial_rows = native_family(db, sample_id="PB-8305", slots=[("BPC-157", "BPC157")])
+    parent, _services, _peps, _vial_rows = native_family(db, sample_id="PB-8305", slots=[("BPC-157", "BPC157")])
 
     def _boom(sample_id):
         raise RuntimeError("IS unreachable")
