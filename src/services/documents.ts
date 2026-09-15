@@ -106,7 +106,10 @@ export function useUpdateDocumentCategory() {
   return useMutation({
     mutationFn: ({ id, data }: { id: number; data: DocumentCategoryUpdate }) =>
       updateDocumentCategory(id, data),
-    onSuccess: () => invalidateCategories(qc),
+    onSuccess: () => {
+      invalidateCategories(qc)
+      toast.success('Category updated')
+    },
     onError: (e: Error) => toast.error(e.message),
   })
 }
@@ -119,9 +122,15 @@ export function useDeleteDocumentCategory() {
       invalidateCategories(qc)
       toast.success('Category deleted')
     },
-    // 409 = still referenced; the pane explains and offers Deactivate instead.
+    // 409 = still referenced. The pane hides Delete at a non-zero count, but the
+    // list can be stale, so say what happened instead of failing silently.
     onError: (e: Error) => {
-      if (/failed: 409/.test(e.message)) return
+      if (/failed: 409/.test(e.message)) {
+        toast.error(
+          'Category is still referenced by documents; deactivate it instead'
+        )
+        return
+      }
       toast.error(e.message)
     },
   })

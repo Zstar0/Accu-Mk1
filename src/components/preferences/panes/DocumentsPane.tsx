@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Loader2, Plus } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -17,6 +18,7 @@ import type { DocumentCategory } from '@/lib/api-documents'
 /** Managed document categories (spec §3.1, §8.4). Read-only with a notice
  *  for non-admins, matching the other settings panes. */
 export function DocumentsPane() {
+  const { t } = useTranslation()
   const isAdmin = useAuthStore(state => state.user?.role === 'admin')
   const categories = useDocumentCategories(false)
 
@@ -30,7 +32,7 @@ export function DocumentsPane() {
   if (categories.isError || !categories.data) {
     return (
       <p className="text-sm text-destructive">
-        Could not load document categories.
+        {t('preferences.documents.loadError')}
       </p>
     )
   }
@@ -39,14 +41,12 @@ export function DocumentsPane() {
     <div className="space-y-8">
       {!isAdmin && (
         <p className="text-sm text-muted-foreground">
-          Only administrators can change document categories.
+          {t('preferences.documents.readOnly')}
         </p>
       )}
-      <SettingsSection title="Document categories">
+      <SettingsSection title={t('preferences.documents.sectionTitle')}>
         <p className="text-sm text-muted-foreground">
-          Every published document belongs to one category. The prefix becomes
-          the start of its code (ART-0012) and cannot change once a document
-          uses it.
+          {t('preferences.documents.sectionHint')}
         </p>
         <div className="divide-y rounded-md border">
           {categories.data.map(c => (
@@ -66,6 +66,7 @@ function CategoryRow({
   category: DocumentCategory
   readOnly: boolean
 }) {
+  const { t } = useTranslation()
   const [name, setName] = useState(category.name)
   const [description, setDescription] = useState(category.description ?? '')
   const update = useUpdateDocumentCategory()
@@ -90,17 +91,20 @@ function CategoryRow({
         value={description}
         onChange={e => setDescription(e.target.value)}
         disabled={readOnly}
-        placeholder="Description"
+        placeholder={t('preferences.documents.descriptionPlaceholder')}
         className="h-8 text-xs"
         aria-label={`${category.code_prefix} description`}
       />
       <div className="flex items-center gap-2">
         <Badge variant={category.active ? 'default' : 'outline'}>
-          {category.active ? 'Active' : 'Inactive'}
+          {category.active
+            ? t('preferences.documents.active')
+            : t('preferences.documents.inactive')}
         </Badge>
         <span className="w-16 text-right text-xs text-muted-foreground tabular-nums">
-          {category.document_count} doc
-          {category.document_count === 1 ? '' : 's'}
+          {t('preferences.documents.docCount', {
+            count: category.document_count,
+          })}
         </span>
         {!readOnly && (
           <>
@@ -118,7 +122,7 @@ function CategoryRow({
                 })
               }
             >
-              Save
+              {t('preferences.documents.save')}
             </Button>
             <Button
               size="sm"
@@ -131,7 +135,9 @@ function CategoryRow({
                 })
               }
             >
-              {category.active ? 'Deactivate' : 'Activate'}
+              {category.active
+                ? t('preferences.documents.deactivate')
+                : t('preferences.documents.activate')}
             </Button>
             {category.document_count === 0 && (
               <Button
@@ -141,7 +147,7 @@ function CategoryRow({
                 disabled={remove.isPending}
                 onClick={() => remove.mutate(category.id)}
               >
-                Delete
+                {t('preferences.documents.delete')}
               </Button>
             )}
           </>
@@ -152,6 +158,7 @@ function CategoryRow({
 }
 
 function NewCategoryForm() {
+  const { t } = useTranslation()
   const [name, setName] = useState('')
   const [prefix, setPrefix] = useState('')
   const [description, setDescription] = useState('')
@@ -160,35 +167,55 @@ function NewCategoryForm() {
     name.trim().length > 0 && /^[A-Za-z0-9]{2,10}$/.test(prefix.trim())
 
   return (
-    <div className="grid grid-cols-[90px_1fr_1fr_auto] items-end gap-3 rounded-md border border-dashed px-3 py-3">
+    <form
+      className="grid grid-cols-[90px_1fr_1fr_auto] items-end gap-3 rounded-md border border-dashed px-3 py-3"
+      onSubmit={e => {
+        e.preventDefault()
+        if (!valid || create.isPending) return
+        create.mutate(
+          {
+            name: name.trim(),
+            code_prefix: prefix.trim(),
+            description: description.trim() || null,
+          },
+          {
+            onSuccess: () => {
+              setName('')
+              setPrefix('')
+              setDescription('')
+            },
+          }
+        )
+      }}
+    >
       <div className="grid gap-1">
         <Label htmlFor="doc-cat-new-prefix" className="text-xs">
-          Prefix
+          {t('preferences.documents.newPrefix')}
         </Label>
         <Input
           id="doc-cat-new-prefix"
           value={prefix}
           onChange={e => setPrefix(e.target.value.toUpperCase())}
-          placeholder="VAL"
+          placeholder={t('preferences.documents.newPrefixPlaceholder')}
           maxLength={10}
           className="h-8 font-mono text-xs"
         />
       </div>
       <div className="grid gap-1">
         <Label htmlFor="doc-cat-new-name" className="text-xs">
-          Name
+          {t('preferences.documents.newName')}
         </Label>
         <Input
           id="doc-cat-new-name"
           value={name}
           onChange={e => setName(e.target.value)}
-          placeholder="Validation"
+          placeholder={t('preferences.documents.newNamePlaceholder')}
           className="h-8 text-xs"
         />
       </div>
       <div className="grid gap-1">
         <Label htmlFor="doc-cat-new-desc" className="text-xs">
-          Description
+          {t('preferences.documents.newDescription')}
         </Label>
         <Input
           id="doc-cat-new-desc"
@@ -197,29 +224,10 @@ function NewCategoryForm() {
           className="h-8 text-xs"
         />
       </div>
-      <Button
-        size="sm"
-        disabled={!valid || create.isPending}
-        onClick={() =>
-          create.mutate(
-            {
-              name: name.trim(),
-              code_prefix: prefix.trim(),
-              description: description.trim() || null,
-            },
-            {
-              onSuccess: () => {
-                setName('')
-                setPrefix('')
-                setDescription('')
-              },
-            }
-          )
-        }
-      >
+      <Button type="submit" size="sm" disabled={!valid || create.isPending}>
         <Plus className="mr-1 h-4 w-4" />
-        Add
+        {t('preferences.documents.add')}
       </Button>
-    </div>
+    </form>
   )
 }
