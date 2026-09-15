@@ -13,7 +13,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from sqlalchemy import and_, case, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, lazyload
 
 from documents.errors import BadRequestError, ConflictError, NotFoundError
 from documents.models import Document, DocumentCategory, DocumentCodeCounter
@@ -209,11 +209,17 @@ def _latest(db: Session, code: str, for_update: bool = False) -> Optional[Docume
     would write a row the (code, revision) unique constraint then rejects, after it
     had already spent the blob write. Storage keys carry the content hash, so
     neither push can clobber the other's bytes even if the lock is a no-op.
-    Postgres honours FOR UPDATE; SQLite ignores it and is single-writer anyway."""
+    Postgres honours FOR UPDATE; SQLite ignores it and is single-writer anyway.
+
+    Document.category is lazy="joined", so a plain select emits a LEFT OUTER JOIN and
+    Postgres then refuses the lock outright ("FOR UPDATE cannot be applied to the
+    nullable side of an outer join"). SQLite drops FOR UPDATE silently, so this only
+    ever surfaced on a real database. Drop the eager join on the locking path; the
+    caller touches latest.category at most once, which lazy-loads it."""
     stmt = (select(Document).where(Document.code == code)
             .order_by(Document.revision.desc()).limit(1))
     if for_update:
-        stmt = stmt.with_for_update()
+        stmt = stmt.options(lazyload(Document.category)).with_for_update()
     return db.execute(stmt).scalars().first()
 
 

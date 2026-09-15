@@ -454,3 +454,30 @@ def test_latest_for_update_is_a_no_op_on_sqlite(db):
     doc, _ = service.create_document(db, title="v1", html=HTML, category=_art(db))
     locked = service._latest(db, doc.code, for_update=True)
     assert locked is not None and locked.id == service._latest(db, doc.code).id
+
+
+def test_latest_for_update_emits_no_outer_join_on_postgres(db):
+    """Regression: Document.category is lazy="joined", so a plain select(Document)
+    left-joins document_categories. Postgres then rejects the lock with
+    "FOR UPDATE cannot be applied to the nullable side of an outer join" and every
+    revision push 500s. SQLite ignores FOR UPDATE entirely, so only compiling what
+    _latest actually builds, against the real dialect, catches it."""
+    from sqlalchemy.dialects import postgresql
+
+    from documents import service
+
+    seen = []
+    real_execute = db.execute
+    db.execute = lambda stmt, *a, **kw: (seen.append(stmt), real_execute(stmt, *a, **kw))[1]
+    try:
+        service._latest(db, "ART-0001", for_update=True)
+        locked = str(seen[-1].compile(dialect=postgresql.dialect()))
+        service._latest(db, "ART-0001")
+        plain = str(seen[-1].compile(dialect=postgresql.dialect()))
+    finally:
+        db.execute = real_execute
+
+    assert "FOR UPDATE" in locked
+    assert "LEFT OUTER JOIN" not in locked, locked
+    # the unlocked path keeps its eager join
+    assert "LEFT OUTER JOIN" in plain
