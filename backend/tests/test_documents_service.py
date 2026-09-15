@@ -289,12 +289,12 @@ def test_patch_metadata_only(db):
     from datetime import date
     from documents import service
     from documents.errors import BadRequestError, NotFoundError
-    doc, _ = service.create_document(db, title="v1", html=HTML, category=_art(db))
-    sop = service.resolve_category(db, category="SOP")
+    art = _art(db)
+    doc, _ = service.create_document(db, title="v1", html=HTML, category=art)
     doc = service.patch_document(db, doc.id, title="new", description=None,
-                                 category_id=sop.id, effective_date=date(2026, 1, 2))
+                                 category_id=art.id, effective_date=date(2026, 1, 2))
     assert (doc.title, doc.description, doc.category_id, doc.effective_date) == \
-        ("new", None, sop.id, date(2026, 1, 2))
+        ("new", None, art.id, date(2026, 1, 2))
     assert doc.revision == 1
     with pytest.raises(BadRequestError):
         service.patch_document(db, doc.id, title="   ")
@@ -304,6 +304,22 @@ def test_patch_metadata_only(db):
         service.patch_document(db, doc.id, category_id=9999)
     with pytest.raises(NotFoundError):
         service.patch_document(db, 9999, title="x")
+
+
+def test_patch_rejects_category_with_other_prefix(db):
+    """A code is minted from its category's prefix; PATCH must not move ART-0001
+    under SOP and orphan the code from the category it claims to live in."""
+    from documents import service
+    from documents.errors import BadRequestError
+    art = _art(db)
+    sop = service.resolve_category(db, category="SOP")
+    doc, _ = service.create_document(db, title="v1", html=HTML, category=art)
+    with pytest.raises(BadRequestError):
+        service.patch_document(db, doc.id, category_id=sop.id)
+    db.refresh(doc)
+    assert doc.category_id == art.id
+    same = service.patch_document(db, doc.id, category_id=art.id)  # same prefix: allowed
+    assert same.category_id == art.id
 
 
 def test_delete_category_refused_when_referenced(db):
@@ -321,7 +337,7 @@ def test_list_latest_revision_per_code_with_filters(db):
     a, _ = service.create_document(db, title="Alpha audit", html=HTML, category=art,
                                    description="first")
     service.create_document(db, title="Alpha audit v2", html=HTML + "<!--2-->", category=None,
-                            code=a.code)
+                            code=a.code, activate=False)  # a: r1 active, r2 draft
     b, _ = service.create_document(db, title="Bravo SOP", html=HTML, category=sop, activate=False)
     c, _ = service.create_document(db, title="Charlie", html=HTML, category=art)
     service.retire_document(db, c.id)
@@ -330,6 +346,12 @@ def test_list_latest_revision_per_code_with_filters(db):
     assert total == 2
     assert [(d.code, d.revision, n) for d, n in rows] == [(b.code, 1, 1), (a.code, 2, 2)] or \
            [(d.code, d.revision, n) for d, n in rows] == [(a.code, 2, 2), (b.code, 1, 1)]
+
+    # Filter-first: the latest revision AMONG rows matching the status filter, not
+    # "latest overall, then filter" (which hid a entirely behind its draft r2).
+    rows, total = service.list_documents(db, statuses=("active",))
+    assert total == 1
+    assert [(d.code, d.revision, n) for d, n in rows] == [(a.code, 1, 2)]  # count unfiltered
 
     rows, total = service.list_documents(db, statuses=("retired",))
     assert total == 1 and rows[0][0].code == c.code
@@ -347,6 +369,18 @@ def test_list_latest_revision_per_code_with_filters(db):
 
     rows, total = service.list_documents(db, statuses=STATUSES_ALL, page=2, page_size=2)
     assert total == 3 and len(rows) == 1
+
+
+def test_list_retired_filter_sees_older_retired_revision(db):
+    """r1 retired by r2's activation: a retired-only listing surfaces r1, and still
+    reports the UNFILTERED revision count for the code."""
+    from documents import service
+    d, _ = service.create_document(db, title="Delta", html=HTML, category=_art(db))
+    service.create_document(db, title="Delta v2", html=HTML + "<!--2-->", category=None,
+                            code=d.code)  # activates r2, retires r1
+    rows, total = service.list_documents(db, statuses=("retired",))
+    assert total == 1
+    assert [(x.code, x.revision, x.status, n) for x, n in rows] == [(d.code, 1, "retired", 2)]
 
 
 STATUSES_ALL = ("draft", "active", "retired")

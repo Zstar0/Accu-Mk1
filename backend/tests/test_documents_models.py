@@ -1,5 +1,6 @@
 """Documents library — tables, constraints, blob storage (spec §3, §4)."""
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -68,10 +69,16 @@ def test_storage_roundtrips(tmp_path):
                                    InMemoryDocumentStorage)
     for st in (InMemoryDocumentStorage(), FilesystemDocumentStorage(root=str(tmp_path))):
         key = st.save("ART-0001", 1, b"<html>x</html>")
-        assert key == "ART-0001/r1.html"
+        assert re.fullmatch(r"ART-0001/r1-[0-9a-f]{12}\.html", key), key
+        assert st.fetch(key) == b"<html>x</html>"
+        # Same (code, revision), different bytes => different key. Two concurrent
+        # pushes racing revision N+1 cannot overwrite each other's blob.
+        other = st.save("ART-0001", 1, b"<html>y</html>")
+        assert other != key
+        assert st.fetch(other) == b"<html>y</html>"
         assert st.fetch(key) == b"<html>x</html>"
         with pytest.raises(DocumentNotFound):
-            st.fetch("ART-0001/r9.html")
+            st.fetch("ART-0001/r9-000000000000.html")
 
 
 def test_filesystem_refuses_traversal(tmp_path):
@@ -81,6 +88,17 @@ def test_filesystem_refuses_traversal(tmp_path):
         st.fetch("../etc/passwd")
     with pytest.raises(DocumentStorageError):
         st.save("ART-0001", 1, b"")
+
+
+def test_filesystem_root_defaults_under_photo_dir(monkeypatch, tmp_path):
+    """Blobs must land inside a volume the stacks actually mount (the vial-photo
+    one), or they vanish on every container recreate. MK1_DOCUMENTS_DIR overrides."""
+    from documents.storage import FilesystemDocumentStorage
+    monkeypatch.delenv("MK1_DOCUMENTS_DIR", raising=False)
+    monkeypatch.setenv("MK1_PHOTO_STORAGE_DIR", str(tmp_path))
+    assert FilesystemDocumentStorage().root == tmp_path / "documents"
+    monkeypatch.setenv("MK1_DOCUMENTS_DIR", str(tmp_path / "x"))
+    assert FilesystemDocumentStorage().root == tmp_path / "x"
 
 
 def test_s3_storage_wraps_failures(monkeypatch, tmp_path):
@@ -116,10 +134,10 @@ def test_s3_storage_wraps_failures(monkeypatch, tmp_path):
 def test_filesystem_fetch_rejects_directory_key(tmp_path):
     from documents.storage import DocumentStorageError, FilesystemDocumentStorage
     st = FilesystemDocumentStorage(root=str(tmp_path))
-    st.save("ART-0001", 1, b"<x>")
+    key = st.save("ART-0001", 1, b"<x>")
     with pytest.raises(DocumentStorageError):
         st.fetch("ART-0001")
-    assert st.fetch("ART-0001/r1.html") == b"<x>"
+    assert st.fetch(key) == b"<x>"
 
 
 def test_status_check_constraint():

@@ -6,6 +6,7 @@ with its own key prefix). Only the relative key is stored in documents.storage_k
 """
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 from typing import Optional, Protocol
@@ -27,8 +28,17 @@ class DocumentStorage(Protocol):
         """Read bytes by key; raise DocumentNotFound if missing."""
 
 
-def _rel_key(code: str, revision: int) -> str:
-    return f"{code}/r{revision}.html"
+def _blob_name(revision: int, data: bytes) -> str:
+    """r{revision}-{sha12}.html. The content hash is what makes the key unique:
+    two pushes that both compute revision N+1 for one code write different blobs,
+    so the loser's bytes can never replace the winner's (the (code, revision)
+    unique constraint still rejects the losing ROW, after the blob is safely its
+    own object)."""
+    return f"r{revision}-{hashlib.sha256(data).hexdigest()[:12]}.html"
+
+
+def _rel_key(code: str, revision: int, data: bytes) -> str:
+    return f"{code}/{_blob_name(revision, data)}"
 
 
 def _check_key(key: str) -> None:
@@ -37,7 +47,7 @@ def _check_key(key: str) -> None:
 
 
 class InMemoryDocumentStorage:
-    """Test double. Keys and bytes live in `blobs`."""
+    """Test double. Keys ({code}/r{revision}-{sha12}.html) and bytes live in `blobs`."""
 
     def __init__(self) -> None:
         self.blobs: dict[str, bytes] = {}
@@ -45,7 +55,7 @@ class InMemoryDocumentStorage:
     def save(self, code: str, revision: int, data: bytes) -> str:
         if not data:
             raise DocumentStorageError("save: empty content")
-        key = _rel_key(code, revision)
+        key = _rel_key(code, revision, data)
         self.blobs[key] = data
         return key
 
@@ -57,16 +67,28 @@ class InMemoryDocumentStorage:
 
 
 class FilesystemDocumentStorage:
-    """Dev default. {root}/{code}/r{revision}.html; root = MK1_DOCUMENTS_DIR."""
+    """Dev default. {root}/{code}/r{revision}-{sha12}.html.
+
+    Root = MK1_DOCUMENTS_DIR when set, else {MK1_PHOTO_STORAGE_DIR or /app/data}
+    /documents. The fallback sits inside the vial-photo volume because that is the
+    only blob volume the stacks mount; a root of its own would live on the
+    container filesystem and vanish on the next recreate."""
 
     def __init__(self, root: Optional[str] = None) -> None:
-        self.root = Path(root or os.environ.get("MK1_DOCUMENTS_DIR", "/data/documents"))
-        self.root.mkdir(parents=True, exist_ok=True)
+        if root is None:
+            root = os.environ.get("MK1_DOCUMENTS_DIR") or str(
+                Path(os.environ.get("MK1_PHOTO_STORAGE_DIR") or "/app/data") / "documents")
+        self.root = Path(root)
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise DocumentStorageError(
+                f"cannot create documents root {self.root}: {e}") from e
 
     def save(self, code: str, revision: int, data: bytes) -> str:
         if not data:
             raise DocumentStorageError("save: empty content")
-        key = _rel_key(code, revision)
+        key = _rel_key(code, revision, data)
         path = self._safe(key)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -110,7 +132,7 @@ class S3DocumentStorage:
         if not data:
             raise DocumentStorageError("save: empty content")
         try:
-            return self._s3.save_photo(code, data, f"r{revision}.html")
+            return self._s3.save_photo(code, data, _blob_name(revision, data))
         except Exception as e:  # PhotoStorageError, ClientError, credentials, ...
             raise DocumentStorageError(
                 f"save failed for {code!r} r{revision}: {e}") from e

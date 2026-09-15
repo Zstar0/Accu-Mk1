@@ -204,12 +204,11 @@ def _clean_code(code: str) -> str:
 
 
 def _latest(db: Session, code: str, for_update: bool = False) -> Optional[Document]:
-    """Highest revision of a code. for_update row-locks it so two concurrent
-    pushes to the same code cannot both read revision N, both compute N+1, and
-    both write the SAME deterministic storage key {code}/r{N+1}.html — the loser's
-    bytes would replace the winner's while the winner's row commits with a
-    content_sha256 that no longer matches its blob. The (code, revision) unique
-    constraint catches the duplicate row, but only AFTER the blob is overwritten.
+    """Highest revision of a code. for_update row-locks it so two concurrent pushes
+    to the same code cannot both read revision N and both compute N+1: the loser
+    would write a row the (code, revision) unique constraint then rejects, after it
+    had already spent the blob write. Storage keys carry the content hash, so
+    neither push can clobber the other's bytes even if the lock is a no-op.
     Postgres honours FOR UPDATE; SQLite ignores it and is single-writer anyway."""
     stmt = (select(Document).where(Document.code == code)
             .order_by(Document.revision.desc()).limit(1))
@@ -349,7 +348,14 @@ def patch_document(db: Session, doc_id: int, **fields) -> Document:
             raise BadRequestError("title is required")
     category_id = None
     if "category_id" in fields and fields["category_id"] is not None:
-        category_id = get_category(db, int(fields["category_id"])).id
+        cat = get_category(db, int(fields["category_id"]))
+        code_prefix = doc.code.split("-", 1)[0]
+        if cat.code_prefix != code_prefix:
+            # The code was minted from its category's prefix and never changes;
+            # a cross-prefix move would leave ART-0001 filed under SOP.
+            raise BadRequestError(
+                f"category prefix must be {code_prefix} for code {doc.code}")
+        category_id = cat.id
     if title is not None:
         doc.title = title
     if "description" in fields:
@@ -366,7 +372,13 @@ def patch_document(db: Session, doc_id: int, **fields) -> Document:
 def list_documents(db: Session, *, q: Optional[str] = None, category_id: Optional[int] = None,
                    statuses=("draft", "active"), sort: str = "updated_at",
                    page: int = 1, page_size: int = 50) -> tuple[list[tuple[Document, int]], int]:
-    """Latest revision per code, then filtered. Returns ([(doc, revision_count)], total)."""
+    """Latest revision per code AMONG the rows matching `statuses`, then the other
+    filters. Filter-first matters: a code whose newest revision is a draft still
+    surfaces its active revision under statuses=("active",), and a retired-only
+    listing surfaces the revision that a later activation retired. revision_count
+    stays the UNFILTERED number of revisions for that code (its own subquery — the
+    latest-revision one is status-filtered and would undercount).
+    Returns ([(doc, revision_count)], total)."""
     if sort not in SORTS:
         raise BadRequestError(f"sort must be one of {SORTS}")
     bad = set(statuses or ()) - set(STATUSES)
@@ -375,15 +387,16 @@ def list_documents(db: Session, *, q: Optional[str] = None, category_id: Optiona
     page = max(1, int(page))
     page_size = max(1, min(200, int(page_size)))
 
-    latest = (select(Document.code.label("code"),
-                     func.max(Document.revision).label("rev"),
-                     func.count(Document.id).label("n"))
-              .group_by(Document.code).subquery())
-    stmt = (select(Document, latest.c.n)
-            .join(latest, and_(Document.code == latest.c.code,
-                               Document.revision == latest.c.rev)))
+    latest = select(Document.code.label("code"), func.max(Document.revision).label("rev"))
     if statuses:
-        stmt = stmt.where(Document.status.in_(tuple(statuses)))
+        latest = latest.where(Document.status.in_(tuple(statuses)))
+    latest = latest.group_by(Document.code).subquery()
+    counts = (select(Document.code.label("code"), func.count(Document.id).label("n"))
+              .group_by(Document.code).subquery())
+    stmt = (select(Document, counts.c.n)
+            .join(latest, and_(Document.code == latest.c.code,
+                               Document.revision == latest.c.rev))
+            .join(counts, Document.code == counts.c.code))
     if category_id is not None:
         stmt = stmt.where(Document.category_id == category_id)
     if q and q.strip():

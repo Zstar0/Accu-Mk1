@@ -6,6 +6,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from auth import get_current_user, require_admin, require_internal_service_token
@@ -49,6 +50,11 @@ def _http(e: Exception) -> HTTPException:
         return HTTPException(status_code=400, detail=str(e))
     if isinstance(e, HTTPException):
         return e
+    if isinstance(e, IntegrityError):
+        # Lost race on a unique constraint (two pushes computing the same
+        # (code, revision), duplicate category name). Retryable, not a 500.
+        logger.warning("documents integrity conflict: %s", e)
+        return HTTPException(status_code=409, detail="conflicting write; retry")
     logger.exception("unhandled documents error")
     return HTTPException(status_code=500, detail="internal error")
 

@@ -128,6 +128,16 @@ def test_writer_dependency_unit_matrix(client):
     assert who.id == adm.id
 
 
+def test_http_maps_integrity_error_to_409():
+    """A lost (code, revision) unique race is a conflict the caller can retry, not
+    an opaque 500."""
+    from sqlalchemy.exc import IntegrityError
+    from documents.routes import _http
+    e = _http(IntegrityError("stmt", {}, Exception("dup")))
+    assert e.status_code == 409
+    assert "retry" in e.detail
+
+
 # --- documents ---------------------------------------------------------------------------
 
 def test_publish_read_content_and_list(client):
