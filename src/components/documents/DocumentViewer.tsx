@@ -1,11 +1,5 @@
-import { useMemo, useState } from 'react'
-import {
-  ArrowLeft,
-  Download,
-  ExternalLink,
-  Loader2,
-  Pencil,
-} from 'lucide-react'
+import { useMemo, useState, useSyncExternalStore } from 'react'
+import { ArrowLeft, Download, Loader2, Pencil } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -33,8 +27,26 @@ import { RetitleDialog } from '@/components/documents/RetitleDialog'
  * `sandbox="allow-scripts"` (no allow-same-origin) gives the document an
  * opaque origin: its scripts run but cannot reach Mk1's session, storage,
  * cookies, or the API. Content is fetched with the normal bearer call, so no
- * token ever lands in a URL.
+ * token ever lands in a URL. There is deliberately no "open in window": a
+ * top-level blob: URL is same-origin with Mk1 and would let document scripts
+ * reach localStorage.
  */
+
+/** Live `prefers-color-scheme` so the frame re-stamps when the OS flips while
+ *  Mk1 is on 'system'. Server snapshot is `false` — nothing renders this on a
+ *  server, it just keeps useSyncExternalStore honest. */
+function usePrefersDark(): boolean {
+  return useSyncExternalStore(
+    cb => {
+      const mq = window.matchMedia('(prefers-color-scheme: dark)')
+      mq.addEventListener('change', cb)
+      return () => mq.removeEventListener('change', cb)
+    },
+    () => window.matchMedia('(prefers-color-scheme: dark)').matches,
+    () => false
+  )
+}
+
 export function DocumentViewer({ id }: { id: number }) {
   const clear = useUIStore(s => s.clearDocumentViewer)
   const navigateToDocument = useUIStore(s => s.navigateToDocument)
@@ -45,24 +57,11 @@ export function DocumentViewer({ id }: { id: number }) {
   const detail = useDocument(id)
   const content = useDocumentContent(id)
 
-  const mode = resolveDocTheme(
-    theme,
-    typeof window !== 'undefined' &&
-      window.matchMedia('(prefers-color-scheme: dark)').matches
-  )
+  const mode = resolveDocTheme(theme, usePrefersDark())
   const srcDoc = useMemo(
     () => (content.data ? stampDocumentTheme(content.data, mode) : ''),
     [content.data, mode]
   )
-
-  const openInWindow = () => {
-    if (!content.data) return
-    const url = URL.createObjectURL(
-      new Blob([content.data], { type: 'text/html' })
-    )
-    window.open(url, '_blank')
-    setTimeout(() => URL.revokeObjectURL(url), 60_000)
-  }
 
   const download = () => {
     if (!content.data || !detail.data) return
@@ -135,15 +134,6 @@ export function DocumentViewer({ id }: { id: number }) {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={openInWindow}
-                disabled={!content.data}
-              >
-                <ExternalLink className="mr-1 h-4 w-4" />
-                Open
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
                 onClick={download}
                 disabled={!content.data}
               >
@@ -173,10 +163,14 @@ export function DocumentViewer({ id }: { id: number }) {
       )}
 
       {content.isLoading || detail.isLoading ? (
-        <div className="flex flex-1 items-center justify-center">
+        <div
+          role="status"
+          aria-label="Loading document"
+          className="flex flex-1 items-center justify-center"
+        >
           <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
         </div>
-      ) : (
+      ) : content.error ? null : (
         <iframe
           title={doc?.title ?? `Document ${id}`}
           sandbox="allow-scripts"
