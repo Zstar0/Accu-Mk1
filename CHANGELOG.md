@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.21.8 — 2026-09-14
+
 ### Fixed
 - **A COA can be issued when one metal in a Heavy Metals panel could not be run.** Remove that metal from the sample in Manage Analyses, as for any test the lab withdraws; the certificate then prints the remaining metals and the skip is logged (`native_section_member_withdrawn`). Previously the native-sections rule that refuses a half-filled section treated the removed metal as still missing and blocked generation with "has no eligible result". A metal that is merely pending, under retest, or never seeded still blocks, and that message now says what to do: enter and verify it, or remove it from the sample in Manage Analyses.
 
