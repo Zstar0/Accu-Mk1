@@ -20,6 +20,11 @@ from lims_analyses.hplc_native import (
 
 _NATIVE_KWS = frozenset(TRIO + AGGREGATES)
 
+# Slice 8: the ONLY legal COA archetype value that routes native HPLC rows
+# through this shim (owned here per plan; imported by the seed, legacy_rows,
+# native_sections, and the main.py route).
+LEGACY_HPLC_ARCHETYPE = "legacy_hplc"
+
 
 @dataclass(frozen=True)
 class SlotWire:
