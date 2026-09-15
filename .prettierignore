@@ -21,3 +21,6 @@ src/lib/bindings.ts
 
 # Logs
 *.log
+
+# Published document theme (byte-identical to the spec appendix)
+src/docs-theme/

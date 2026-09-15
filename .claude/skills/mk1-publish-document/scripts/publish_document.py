@@ -95,6 +95,7 @@ def self_test() -> None:
     assert inline_theme(themed, "/* accumark-docs v1 */ body{}").count("accumark-docs v1") == 1, "inlined twice"
     assert find_secrets("key AKIAABCDEFGHIJKLMNOP here") == ["aws access key"]
     assert find_secrets("Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123") == ["bearer token"]
+    assert find_secrets("<p>password: hunter2</p>") == ["password assignment"]
     assert find_secrets(themed) == []
     print("self-test ok")
 
@@ -135,14 +136,26 @@ def main(argv=None) -> int:
         print(f"theme not found: {theme_path} (pass --theme)", file=sys.stderr)
         return 3
 
-    html = inline_theme(wrap_fragment(src.read_text(encoding="utf-8")),
-                        theme_path.read_text(encoding="utf-8"))
+    # Scan the SOURCE page, never the themed result: a future theme edit that happened to
+    # look secret-shaped would otherwise block every publish.
+    try:
+        page = wrap_fragment(src.read_text(encoding="utf-8"))
+    except UnicodeDecodeError:
+        print(f"not valid UTF-8: {src}", file=sys.stderr)
+        return 3
 
-    found = find_secrets(html)
+    found = find_secrets(page)
     if found and not args.allow_secrets:
         print("refusing to publish: secret-shaped content found (" + ", ".join(found) +
               "). Pass --allow-secrets only after a human has checked it.", file=sys.stderr)
         return 2
+
+    try:
+        css = theme_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        print(f"not valid UTF-8: {theme_path}", file=sys.stderr)
+        return 3
+    html = inline_theme(page, css)
 
     payload = {
         "title": args.title, "html": html, "category": args.category,
@@ -169,6 +182,9 @@ def main(argv=None) -> int:
         return 1
     except urllib.error.URLError as e:
         print(f"publish failed: {e.reason}", file=sys.stderr)
+        return 1
+    except (TimeoutError, OSError, json.JSONDecodeError) as e:
+        print(f"publish failed: {type(e).__name__}: {e}", file=sys.stderr)
         return 1
     print(f"{doc['code']} r{doc['revision']} id={doc['id']} status={doc['status']}"
           f"  open: #reports/documents?id={doc['id']}")
