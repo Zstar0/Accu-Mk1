@@ -2957,11 +2957,14 @@ class RideHostsRequest(BaseModel):
 _RIDE_HOST_FORBIDDEN = {"endo", "ster", "xtra"}
 
 
-# Only legal non-NULL coa_archetype today. NULL = profile is not reported on
-# the certificate (a legitimate internal-only test); validated at the route
-# edge rather than a DB CHECK constraint so a second archetype is a one-line
-# addition here.
-COA_ARCHETYPES = {"limit_table"}
+# Only legal non-NULL coa_archetype values today. NULL = profile is not
+# reported on the certificate (a legitimate internal-only test); validated at
+# the route edge rather than a DB CHECK constraint so a new archetype is a
+# one-line addition here. legacy_hplc is owned by coa/hplc_shim.py (slice 8)
+# so the seed, legacy_rows, native_sections and this route share one literal.
+from coa.hplc_shim import LEGACY_HPLC_ARCHETYPE
+
+COA_ARCHETYPES = {"limit_table", LEGACY_HPLC_ARCHETYPE}
 
 # S9 Task 2: the POST/PATCH route guard that reserved hplc/endo/ster for the
 # five legacy-key profiles retired WITH Task 1's flip (its only justification

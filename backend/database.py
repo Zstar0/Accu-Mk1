@@ -171,6 +171,15 @@ def init_db():
             seed_hplc_native_catalog(_db)
     except Exception as e:  # never block startup
         log.warning("catalog_hplc_native_seed_skipped err=%s", e)
+    # Slice 8 guarded one-shot: retrofits coa_archetype/result_options onto
+    # rows minted by an OLDER build of the seed above; no-op on a fresh
+    # install (the seed already writes the slice-8 shape directly).
+    try:
+        from catalog.hplc_native_seed import upgrade_hplc_native_catalog
+        with SessionLocal() as _db:
+            upgrade_hplc_native_catalog(_db)
+    except Exception as e:  # never block startup
+        log.warning("catalog_hplc_native_catalog_upgrade_skipped err=%s", e)
     try:
         from catalog.service_spec_seed import seed_service_specs
         with SessionLocal() as _db:
