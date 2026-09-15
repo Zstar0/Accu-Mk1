@@ -9,6 +9,7 @@ native parent-tier row to the legacy keyword + title the engine expects.
 Both legacy_rows (row Title) and sample_meta (Analyte{N}Peptide) derive from
 slot_wires() so the two strings the engine compares cannot drift.
 """
+import logging
 from dataclasses import dataclass
 from typing import Optional
 
@@ -18,7 +19,14 @@ from lims_analyses.hplc_native import (
     identity_title, is_native_born, purity_title, quantity_title, resolve_slot_peptides,
 )
 
+log = logging.getLogger(__name__)
+
 _NATIVE_KWS = frozenset(TRIO + AGGREGATES)
+
+# Slice 8: the ONLY legal COA archetype value that routes native HPLC rows
+# through this shim (owned here per plan; imported by the seed, legacy_rows,
+# native_sections, and the main.py route).
+LEGACY_HPLC_ARCHETYPE = "legacy_hplc"
 
 
 @dataclass(frozen=True)
@@ -53,6 +61,74 @@ def slot_wires(db, parent) -> list[SlotWire]:
 def is_native_hplc_row(row) -> bool:
     return (getattr(row, "service_origin", None) == "mk1"
             and (getattr(row, "keyword", "") or "").upper() in _NATIVE_KWS)
+
+
+def native_hplc_service_archetypes(db, parent) -> dict | None:
+    """{analysis_service_id: coa_archetype} for every native profile ordered
+    on this sample (require_archetype=False — archetype is a rendering
+    concern, not a visibility one; see native_sections._ordered_native_profiles).
+
+    A service_id ABSENT from the returned mapping — whether because the
+    lookup came back empty (no linked order, `fetch_sample_services` 404s to
+    None), the owning profile is inactive so `_lab_added_profile_keys` never
+    widens to it, or the resolver failed outright — must be treated by every
+    caller as UNRESOLVED, i.e. "can't tell", not "no legacy_hplc owner". A
+    resolved mapping's PRESENT keys are the only ones an admit/exclude
+    decision may be made from (coa/legacy_rows.py's `_rides_page_one`
+    follows this: `service_id not in mapping` admits unchanged). None itself
+    is returned only when the lookup could not run at all (db/parent lack
+    what it needs); it is interchangeable with an empty/partial dict for
+    every caller's purposes — the distinction is documentation, not a
+    branch any caller needs to take differently. Tolerating an unresolved
+    sample here is not new risk: a real primary-COA build already
+    fail-closes on this same IS lookup one layer up (native_sections Rule
+    1); this function's job is only to route rows that DO resolve, and to
+    leave everything else exactly as slice 7 behaved.
+    """
+    from coa.native_sections import _lab_added_profile_keys, _ordered_native_profiles
+    from sub_samples.service import fetch_sample_services
+
+    if getattr(parent, "id", None) is None:
+        # A real ORM LimsSample always has a pk; a SimpleNamespace/test
+        # double built without one is a signal this isn't a resolvable
+        # sample — skip the (network) lookup entirely rather than guess.
+        return None
+    try:
+        raw = fetch_sample_services(parent.sample_id)
+        services = dict(((raw or {}).get("services")) or {})
+        for key in _lab_added_profile_keys(db, parent.id):
+            if not services.get(key):
+                services[key] = True
+        profiles = _ordered_native_profiles(
+            db, services, (raw or {}).get("package"), require_archetype=False)
+    except Exception:  # noqa: BLE001 — an unresolvable lookup is "can't tell", not fatal
+        return None
+    mapping: dict = {}
+    for prof in profiles:
+        for svc in prof.analysis_services:
+            if svc.id in mapping and mapping[svc.id] != prof.coa_archetype:
+                log.warning(
+                    "hplc_shim.service_archetype_disagreement sample=%s "
+                    "service_id=%s first_archetype=%s conflicting_profile=%s "
+                    "conflicting_archetype=%s — keeping the first (services "
+                    "order) owner",
+                    parent.sample_id, svc.id, mapping[svc.id], prof.key, prof.coa_archetype,
+                )
+                continue
+            mapping.setdefault(svc.id, prof.coa_archetype)
+    return mapping
+
+
+def native_hplc_profile_archetype(db, parent, row) -> str | None:
+    """Owning native profile's coa_archetype for a single native HPLC row.
+    Convenience wrapper over native_hplc_service_archetypes for one-off
+    callers; coa/legacy_rows.py resolves the whole sample once per build
+    (see native_hplc_service_archetypes) rather than calling this per row."""
+    service_id = getattr(row, "analysis_service_id", None)
+    if service_id is None:
+        return None
+    archetypes = native_hplc_service_archetypes(db, parent)
+    return None if archetypes is None else archetypes.get(service_id)
 
 
 def wire_keyword(keyword: str, slot: Optional[int], n_slots: int) -> str:

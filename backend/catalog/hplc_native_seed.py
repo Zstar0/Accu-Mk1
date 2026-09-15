@@ -60,13 +60,23 @@ HPLC_NATIVE_PROFILE_KEY = "hplc-purity-identity"
 HPLC_NATIVE_PROFILE_NAME = "HPLC Purity + Identity"
 
 # keyword, title, unit, result_type, variance_capable — ORDER = member sort_order
+# Slice 8: HPLC-IDENTITY is a select (Conforms / Does Not Conform) — the PCR
+# STERILITY-PCR precedent — not free text, so the spec's `equals "Conforms"`
+# rule can't be satisfied by a mistyped peptide name (Handler P-5007).
 HPLC_NATIVE_SERVICES: tuple[tuple[str, str, str | None, str, bool], ...] = (
-    ("HPLC-IDENTITY", "HPLC Identity", None, "string", False),
+    ("HPLC-IDENTITY", "HPLC Identity", None, "select", False),
     ("HPLC-PURITY", "HPLC Purity", "%", "numeric", True),
     ("HPLC-QUANTITY", "HPLC Quantity", "mg", "numeric", True),
     ("HPLC-BLEND-PURITY", "HPLC Blend Purity (mass-weighted)", "%", "numeric", False),
     ("HPLC-BLEND-TOTAL", "HPLC Blend Total Quantity", "mg", "numeric", False),
 )
+
+# result_options for HPLC-IDENTITY: label == value, like STERILITY-PCR's
+# Not Detected / Detected pair.
+HPLC_IDENTITY_OPTIONS: list[dict[str, str]] = [
+    {"value": "Conforms", "label": "Conforms"},
+    {"value": "Does Not Conform", "label": "Does Not Conform"},
+]
 
 # keyword -> (rule_kind, min, max, equals, unit, display_override)
 # Handler rulings 2026-09-10: purity >= 98 % wildcard; quantity report-only
@@ -85,16 +95,17 @@ HPLC_NATIVE_SPECS = {
 # "analysis_service" / "analysis_profile" -- and PUT
 # /analysis-profiles/{id}/members ~19191 logs the membership write under
 # entity_type "profile_members", field "member_ids".
-_SERVICE_LOG_FIELDS = ("title", "keyword", "unit", "result_type", "origin",
-                       "department_id", "variance_capable", "category")
+_SERVICE_LOG_FIELDS = ("title", "keyword", "unit", "result_type", "result_options",
+                       "origin", "department_id", "variance_capable", "category")
 _PROFILE_LOG_FIELDS = ("key", "name", "is_addon", "vials_required",
-                       "fulfillment_role", "fulfillment_dim", "active")
+                       "fulfillment_role", "fulfillment_dim", "active", "coa_archetype")
 
 
 def seed_hplc_native_catalog(db: Session) -> dict[str, int]:
     from catalog.change_log import log_create, log_members
     from catalog.departments import department_id_by_name
     from catalog.service_spec_audit import record_spec_change
+    from coa.hplc_shim import LEGACY_HPLC_ARCHETYPE
     from models import (AnalysisProfile, AnalysisService, AnalysisServiceSpec,
                         analysis_profile_members)
 
@@ -133,6 +144,7 @@ def seed_hplc_native_catalog(db: Session) -> dict[str, int]:
                 continue
             svc = AnalysisService(
                 title=title, keyword=keyword, unit=unit, result_type=result_type,
+                result_options=(HPLC_IDENTITY_OPTIONS if keyword == "HPLC-IDENTITY" else None),
                 category="HPLC", origin="mk1", department_id=dept_id,
                 variance_capable=variance_capable, active=True,
             )
@@ -168,7 +180,7 @@ def seed_hplc_native_catalog(db: Session) -> dict[str, int]:
             key=HPLC_NATIVE_PROFILE_KEY, name=HPLC_NATIVE_PROFILE_NAME,
             is_addon=False, vials_required=1, fulfillment_role="hplc",
             fulfillment_dim="role", sort_order=0, active=False,
-            coa_archetype=None,
+            coa_archetype=LEGACY_HPLC_ARCHETYPE,
         )
         db.add(prof)
         db.flush()
@@ -206,4 +218,52 @@ def seed_hplc_native_catalog(db: Session) -> dict[str, int]:
     db.commit()
     if any(report.values()):
         log.info("catalog.hplc_native_seed %s", report)
+    return report
+
+
+def upgrade_hplc_native_catalog(db: Session) -> dict[str, int]:
+    """Guarded one-shot boot upgrade (slice 8): two rows minted by an OLDER
+    build of seed_hplc_native_catalog get the slice-8 shape retrofitted onto
+    them. Idempotent and additive, mirroring the seed itself:
+      * hplc-purity-identity.coa_archetype NULL -> legacy_hplc, ONLY when it
+        is still NULL (an admin who already set it to limit_table, or any
+        other value, is left alone — never overwritten);
+      * HPLC-IDENTITY.result_type 'string' with NULL/empty result_options ->
+        'select' + HPLC_IDENTITY_OPTIONS, ONLY in that exact seeded state (a
+        service already carrying options, or a different result_type, is
+        left alone).
+    Each change is one catalog_change_log row via change_log.apply_and_log
+    (same 'update' action / actor idiom as every other admin catalog write).
+    A fresh install seeds the slice-8 shape directly, so this is a no-op
+    there and only matters when boot order runs the OLD seed body first.
+    """
+    from catalog.change_log import apply_and_log
+    from coa.hplc_shim import LEGACY_HPLC_ARCHETYPE
+    from models import AnalysisProfile, AnalysisService
+
+    report = {"profile": 0, "service": 0}
+
+    prof = db.query(AnalysisProfile).filter_by(key=HPLC_NATIVE_PROFILE_KEY).one_or_none()
+    if prof is not None and prof.coa_archetype is None:
+        changed = apply_and_log(
+            db, prof, {"coa_archetype": LEGACY_HPLC_ARCHETYPE},
+            entity_type="profile", entity_pk=prof.id, user_id=None,
+        )
+        if changed:
+            report["profile"] = 1
+
+    svc = (db.query(AnalysisService)
+           .filter(AnalysisService.keyword == "HPLC-IDENTITY", AnalysisService.origin == "mk1")
+           .one_or_none())
+    if svc is not None and svc.result_type == "string" and not svc.result_options:
+        changed = apply_and_log(
+            db, svc, {"result_type": "select", "result_options": HPLC_IDENTITY_OPTIONS},
+            entity_type="service", entity_pk=svc.id, user_id=None,
+        )
+        if changed:
+            report["service"] = 1
+
+    db.commit()
+    if any(report.values()):
+        log.info("catalog.hplc_native_catalog_upgrade %s", report)
     return report

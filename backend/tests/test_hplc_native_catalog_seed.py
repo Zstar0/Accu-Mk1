@@ -42,7 +42,13 @@ def test_seed_creates_five_mk1_services_in_analytical(db_session):
             rows["HPLC-PURITY"].variance_capable) == ("%", "numeric", True)
     assert (rows["HPLC-QUANTITY"].unit, rows["HPLC-QUANTITY"].variance_capable) == ("mg", True)
     assert (rows["HPLC-IDENTITY"].unit, rows["HPLC-IDENTITY"].result_type,
-            rows["HPLC-IDENTITY"].variance_capable) == (None, "string", False)
+            rows["HPLC-IDENTITY"].variance_capable) == (None, "select", False)
+    # Slice 8: identity is a Conforms/Does Not Conform select, not free text
+    # (Handler P-5007 stored a peptide name where the spec expects "Conforms").
+    assert rows["HPLC-IDENTITY"].result_options == [
+        {"value": "Conforms", "label": "Conforms"},
+        {"value": "Does Not Conform", "label": "Does Not Conform"},
+    ]
 
 
 def test_seed_creates_profile_with_ordered_members(db_session):
@@ -52,9 +58,11 @@ def test_seed_creates_profile_with_ordered_members(db_session):
     from models import AnalysisProfile
     seed_hplc_native_catalog(db_session)
     prof = db_session.query(AnalysisProfile).filter_by(key=HPLC_NATIVE_PROFILE_KEY).one()
+    # Slice 8: coa_archetype is seeded legacy_hplc (not NULL) so the trio
+    # routes to the COA page-1 shim from first boot.
     assert (prof.is_addon, prof.vials_required, prof.fulfillment_role,
             prof.fulfillment_dim, prof.coa_archetype, prof.active) == (
-        False, 1, "hplc", "role", None, False)
+        False, 1, "hplc", "role", "legacy_hplc", False)
     assert [s.keyword for s in prof.analysis_services] == list(KEYWORDS)
 
 
