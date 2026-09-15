@@ -24,10 +24,12 @@ import {
 } from '@/components/documents/documents-utils'
 import { DocumentViewer } from '@/components/documents/DocumentViewer'
 
+const PAGE_SIZE = 50
+
 type StatusFilter = 'live' | 'active' | 'draft' | 'retired' | 'all'
 
 const STATUS_FILTERS: Record<StatusFilter, DocumentStatus[]> = {
-  live: DEFAULT_STATUSES,
+  live: [...DEFAULT_STATUSES],
   active: ['active'],
   draft: ['draft'],
   retired: ['retired'],
@@ -80,7 +82,7 @@ function DocumentsList() {
       statuses: STATUS_FILTERS[statusFilter],
       sort,
       page,
-      pageSize: 50,
+      pageSize: PAGE_SIZE,
     }),
     [q, categoryId, statusFilter, sort, page]
   )
@@ -176,8 +178,9 @@ function DocumentsList() {
     []
   )
 
+  const items = data?.items ?? []
   const total = data?.total ?? 0
-  const pages = Math.max(1, Math.ceil(total / 50))
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   return (
     <div className="flex h-full flex-col gap-3 p-4">
@@ -247,7 +250,13 @@ function DocumentsList() {
             <SelectItem value="all">All</SelectItem>
           </SelectContent>
         </Select>
-        <Select value={sort} onValueChange={v => setSort(v as DocumentSort)}>
+        <Select
+          value={sort}
+          onValueChange={v => {
+            setSort(v as DocumentSort)
+            setPage(1)
+          }}
+        >
           <SelectTrigger id="documents-sort" className="h-8 w-[150px] text-xs">
             <SelectValue />
           </SelectTrigger>
@@ -263,17 +272,15 @@ function DocumentsList() {
         </span>
       </div>
 
-      {error && (
+      {error ? (
         <p className="text-sm text-destructive">
           Could not load documents: {error.message}
         </p>
-      )}
-
-      {isLoading ? (
+      ) : isLoading ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
         </div>
-      ) : (data?.items.length ?? 0) === 0 ? (
+      ) : items.length === 0 ? (
         <div className="flex flex-col items-center gap-2 py-16 text-center text-muted-foreground">
           <FileText className="h-8 w-8" />
           <p className="text-sm">No documents match.</p>
@@ -287,14 +294,14 @@ function DocumentsList() {
         <div className="min-h-0 flex-1 overflow-auto">
           <DataTable
             columns={columns}
-            data={data?.items ?? []}
+            data={items}
             onRowClick={row => navigateToDocument(row.id)}
             getRowId={row => String(row.id)}
           />
         </div>
       )}
 
-      {pages > 1 && (
+      {!error && items.length > 0 && pages > 1 && (
         <div className="flex items-center justify-end gap-2 text-xs">
           <Button
             variant="outline"

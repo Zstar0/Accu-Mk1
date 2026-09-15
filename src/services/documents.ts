@@ -25,9 +25,11 @@ import type { DocumentListParams } from '@/components/documents/documents-utils'
 
 export const documentKeys = {
   all: ['documents'] as const,
+  lists: ['documents', 'list'] as const,
   list: (params: DocumentListParams) => ['documents', 'list', params] as const,
   detail: (id: number) => ['documents', 'detail', id] as const,
   content: (id: number) => ['documents', 'content', id] as const,
+  allCategories: ['documents', 'categories'] as const,
   categories: (activeOnly: boolean) =>
     ['documents', 'categories', activeOnly] as const,
 }
@@ -63,8 +65,11 @@ export function usePatchDocument() {
   return useMutation({
     mutationFn: ({ id, data }: { id: number; data: DocumentPatch }) =>
       patchDocument(id, data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: documentKeys.all })
+    // Lists and this document's detail only — content is immutable per
+    // revision, so refetching it on a metadata patch is pure waste.
+    onSuccess: (_updated, { id }) => {
+      qc.invalidateQueries({ queryKey: documentKeys.lists })
+      qc.invalidateQueries({ queryKey: documentKeys.detail(id) })
       toast.success('Document updated')
     },
     onError: (e: Error) => toast.error(e.message),
@@ -80,8 +85,8 @@ export function useDocumentCategories(activeOnly = false) {
 }
 
 function invalidateCategories(qc: ReturnType<typeof useQueryClient>) {
-  qc.invalidateQueries({ queryKey: ['documents', 'categories'] })
-  qc.invalidateQueries({ queryKey: ['documents', 'list'] })
+  qc.invalidateQueries({ queryKey: documentKeys.allCategories })
+  qc.invalidateQueries({ queryKey: documentKeys.lists })
 }
 
 export function useCreateDocumentCategory() {
