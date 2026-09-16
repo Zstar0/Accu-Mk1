@@ -190,6 +190,9 @@ def build_ready_rows(
     flag_types: Iterable[FlagTypeIn],
     priorities: Mapping[str, str],
     services_of: Mapping[int, set],
+    # uid -> resolved {key, rank, source_level, source_id}; drives the row's
+    # PriorityGlyph. `priorities` stays the legacy string for sort_key.
+    effective_priorities: Optional[Mapping[str, dict]] = None,
     tiers: Iterable[TierIn],
     groups: Iterable[GroupIn],
     schedule: Optional[BusinessSchedule],
@@ -298,6 +301,9 @@ def build_ready_rows(
                 "pending": pending,
             },
             "priority": priorities.get(s.external_uid or "", "normal") if s.external_uid else "normal",
+            "effective_priority": (
+                (effective_priorities or {}).get(s.external_uid) if s.external_uid else None
+            ),
             "sla": sla,
             # Parked, not dropped: the page shows held rows in their own
             # section with the flag title as the reason; totals skip them.

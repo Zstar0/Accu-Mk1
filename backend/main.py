@@ -10892,6 +10892,9 @@ class ReadyHoldOut(BaseModel):
     since: Optional[str] = None
 
 
+from priority.schemas import EffectiveOut as _PriorityEffectiveOut
+
+
 class ReadyRowOut(BaseModel):
     sample_id: str
     status: str
@@ -10906,6 +10909,9 @@ class ReadyRowOut(BaseModel):
     flags: list[ReadyFlagOut]
     lines: ReadyLinesOut
     priority: str
+    # Resolved priority (customer → order → sample → vial) for the row's
+    # PriorityGlyph; `priority` above is the legacy sort string.
+    effective_priority: Optional[_PriorityEffectiveOut] = None
     sla: Optional[ReadySlaOut] = None
     # Open "On Hold" flag → parked in the page's On-hold section; None = live.
     hold: Optional[ReadyHoldOut] = None
@@ -11043,15 +11049,16 @@ def _load_ready_to_publish_inputs(db: Session) -> dict:
         ).all():
             services_of.setdefault(pk, set()).add(svc)
 
+    # Effective priority from the modern resolver (customer → order → sample →
+    # vial chain). The legacy `sample_priorities` table this read used to hit
+    # is only written at SENAITE ingest, so it disagreed with every other page
+    # once anyone set a priority in Mk1. `priorities` keeps the legacy
+    # three-value string for sort_key; `effective_priorities` feeds the glyph.
+    from priority.service import legacy_priority_string, load_effective_for_uids
     uids = [s.external_uid for s in samples if s.external_uid]
-    priorities: dict[str, str] = {}
-    if uids:
-        priorities = {
-            uid: prio for uid, prio in db.execute(
-                select(SamplePriority.sample_uid, SamplePriority.priority)
-                .where(SamplePriority.sample_uid.in_(uids))
-            ).all()
-        }
+    effective = load_effective_for_uids(db, uids) if uids else {}
+    priorities: dict[str, str] = {u: legacy_priority_string(e) for u, e in effective.items()}
+    effective_priorities: dict[str, dict] = {u: e.as_dict() for u, e in effective.items()}
 
     tiers = [
         RtpTierIn(id=t.id, name=t.name, target_minutes=t.target_minutes, is_default=bool(t.is_default),
@@ -11086,6 +11093,7 @@ def _load_ready_to_publish_inputs(db: Session) -> dict:
         "flags": flags,
         "flag_types": flag_types,
         "priorities": priorities,
+        "effective_priorities": effective_priorities,
         "services_of": services_of,
         "tiers": tiers,
         "groups": groups,
