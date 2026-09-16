@@ -4442,6 +4442,8 @@ export interface SenaiteFieldUpdateResponse {
   success: boolean
   message: string
   updated_fields: string[] | null
+  /** Set when the edit landed in Mk1 only (SENAITE locked the field). */
+  warning?: string | null
 }
 
 export async function updateSenaiteSampleFields(

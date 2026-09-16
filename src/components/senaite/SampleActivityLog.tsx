@@ -76,6 +76,9 @@ function eventToLevel(event: string): EventLevel {
     // deliberate operator action, same weight as role_assigned.
     case 'priority_changed':
       return 'accent'
+    // Basic-info field edits through the generic field editor (who changed
+    // what; `senaite: 'locked'` when SENAITE refused and Mk1 kept the edit).
+    case 'sample_field_updated': return 'accent'
     default:                  return 'dim'
   }
 }
@@ -118,6 +121,7 @@ export function eventIcon(event: string): string {
     case 'analysis_removed':    return '−'
     case 'result_entered':      return '■' // ■
     case 'analysis_amended':    return '✎' // ✎
+    case 'sample_field_updated': return '✎' // ✎
     default:                    return '\u2022' // •
   }
 }
@@ -166,9 +170,12 @@ function DetailLine({
     case 'coa_generated':
     case 'coa_published':
     case 'coa_superseded':
-      // verification code rendered inline on the main line, not here
+      // verification code rendered inline on the main line, not here; `by`
+      // is overlaid by the backend from Mk1's own generate/publish events.
+      if (d.by) parts.push(<span key="u">by <UserTag email={d.by as string} directory={directory} /></span>)
       break
     case 'status_change': {
+      if (d.by) parts.push(<span key="u">by <UserTag email={d.by as string} directory={directory} /></span>)
       if (d.wp_notified) parts.push('wp_notified=true')
       break
     }

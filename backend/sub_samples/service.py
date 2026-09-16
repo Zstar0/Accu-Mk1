@@ -114,7 +114,10 @@ def _populate_basic_info(row: LimsSample, meta: dict) -> None:
     row.client_uid = _extract_uid(meta.get("ClientUID") or meta.get("Client"))
     row.contact_uid = _extract_uid(meta.get("ContactUID") or meta.get("Contact"))
     row.sample_type = _extract_uid(meta.get("SampleType"))
-    row.client_sample_id = meta.get("ClientSampleID")
+    # Mk1 owns ClientSampleID once SENAITE has locked it (the edit landed in
+    # Mk1 only); SENAITE's copy is frozen and stale from that point.
+    if not row.client_sample_id_locked_in_senaite:
+        row.client_sample_id = meta.get("ClientSampleID")
     row.peptide_name = _extract_label(meta.get("Analyte1Peptide"))
     row.date_received = _parse_senaite_date(meta.get("DateReceived"))
     row.date_sampled = _parse_senaite_date(meta.get("DateSampled"))

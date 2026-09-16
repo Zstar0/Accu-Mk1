@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+- **Client Sample ID can be changed after a sample is verified or (partially) published.** SENAITE locks the field once the AR leaves the editable states and answered every save with 401 "Not allowed to set the field 'ClientSampleID'" (PB-0553). Accu-Mk1 is already the read source for this field, so the edit is now saved in Mk1 when SENAITE refuses it — the row is flagged (`client_sample_id_locked_in_senaite`) so the five-minute SENAITE refresh never overwrites it with SENAITE's frozen copy, and the toast says the change lives in Accu-Mk1 only. A plain 401 (bad credentials) or a lock on any other field still fails as before.
+
+### Changed
+- **The activity log now says who did it.** Every basic-info edit made through the field editor (Client Sample ID, Client Lot, COA branding fields, analyte slots) is logged as `sample_field_updated` with the old and new value, the user, and whether SENAITE accepted the write or Mk1 kept it. "COA vN generated" / "COA vN published" rows are stamped with the user who clicked Generate, Regen or Publish (including per-vial COAs), and "Status → …" rows carry the user from Mk1's own transition ledger when Mk1 initiated the transition. Prep-session start/complete lines still have no actor — that table never recorded one.
+
 ## v1.21.8 — 2026-09-14
 
 ### Fixed
