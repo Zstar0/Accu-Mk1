@@ -521,3 +521,52 @@ def test_updated_by_tracks_the_last_in_place_change(db):
         service.patch_document(db, doc.id, title="   ", updated_by="someone@else.com")
     db.rollback()
     assert service.get_document(db, doc.id).updated_by == "forrest@valenceanalytical.com"
+
+
+def test_delete_is_draft_only_and_target_must_match(db):
+    """Controlled documents retire; delete exists only to discard a draft.
+    The code/revision match-check is the guard that makes a wrong id from an
+    agent fail closed instead of destroying a real document."""
+    from documents import service
+    from documents.errors import BadRequestError, ConflictError, NotFoundError
+    art = _art(db)
+
+    # An active revision refuses: retire is the answer for anything in force.
+    live, _ = service.create_document(db, title="live", html=HTML, category=art)
+    assert live.status == "active"
+    with pytest.raises(ConflictError):
+        service.delete_document(db, live.id, expect_code=live.code,
+                                expect_revision=live.revision)
+
+    # A draft deletes.
+    draft, _ = service.create_document(db, title="draft", html=HTML + "<!--d-->",
+                                       category=art, activate=False)
+    assert draft.status == "draft"
+    draft_id, code, rev = draft.id, draft.code, draft.revision
+
+    # ...but not when the caller names the wrong target.
+    with pytest.raises(BadRequestError):
+        service.delete_document(db, draft_id, expect_code=code, expect_revision=rev + 99)
+    with pytest.raises(BadRequestError):
+        service.delete_document(db, draft_id, expect_code="ZZZ-9999", expect_revision=rev)
+    assert service.get_document(db, draft_id).id == draft_id  # still there
+
+    out = service.delete_document(db, draft_id, expect_code=code, expect_revision=rev)
+    assert out["deleted"] is True and out["code"] == code
+    with pytest.raises(NotFoundError):
+        service.get_document(db, draft_id)
+
+
+def test_delete_refuses_a_revision_that_something_supersedes(db):
+    """r1 is pointed at by r2.supersedes_id. Deleting r1 would leave r2's chain
+    dangling, so it is refused even though r1 is no longer active."""
+    from documents import service
+    from documents.errors import ConflictError
+    art = _art(db)
+    r1, _ = service.create_document(db, title="v1", html=HTML, category=art)
+    r2, _ = service.create_document(db, title="v2", html=HTML + "<!--2-->",
+                                    code=r1.code, category=art)
+    db.refresh(r1)
+    assert r2.supersedes_id == r1.id and r1.status == "retired"
+    with pytest.raises(ConflictError):
+        service.delete_document(db, r1.id, expect_code=r1.code, expect_revision=r1.revision)

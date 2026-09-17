@@ -27,6 +27,10 @@ class DocumentStorage(Protocol):
     def fetch(self, key: str) -> bytes:
         """Read bytes by key; raise DocumentNotFound if missing."""
 
+    def delete(self, key: str) -> None:
+        """Remove bytes by key. Already-gone is success, not an error: delete
+        runs after the row is gone, so a retry must not wedge on a missing blob."""
+
 
 def _blob_name(revision: int, data: bytes) -> str:
     """r{revision}-{sha12}.html. The content hash is what makes the key unique:
@@ -64,6 +68,10 @@ class InMemoryDocumentStorage:
         if key not in self.blobs:
             raise DocumentNotFound(key)
         return self.blobs[key]
+
+    def delete(self, key: str) -> None:
+        _check_key(key)
+        self.blobs.pop(key, None)
 
 
 class FilesystemDocumentStorage:
@@ -108,6 +116,13 @@ class FilesystemDocumentStorage:
         except OSError as e:
             raise DocumentStorageError(f"read failed for {key!r}: {e}") from e
 
+    def delete(self, key: str) -> None:
+        path = self._safe(key)
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as e:
+            raise DocumentStorageError(f"delete failed for {key!r}: {e}") from e
+
     def _safe(self, key: str) -> Path:
         _check_key(key)
         resolved = (self.root / key).resolve()
@@ -146,6 +161,16 @@ class S3DocumentStorage:
             raise DocumentNotFound(str(e)) from e
         except Exception as e:  # AccessDenied, NoSuchBucket, throttling, creds, ...
             raise DocumentStorageError(f"fetch failed for {key!r}: {e}") from e
+
+    def delete(self, key: str) -> None:
+        from sub_samples.photo_storage import PhotoNotFoundError
+        _check_key(key)
+        try:
+            self._s3.delete_photo(key)
+        except PhotoNotFoundError:
+            return  # already gone
+        except Exception as e:
+            raise DocumentStorageError(f"delete failed for {key!r}: {e}") from e
 
 
 _storage: Optional[DocumentStorage] = None

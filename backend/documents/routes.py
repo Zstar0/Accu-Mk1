@@ -212,6 +212,22 @@ def activate_document(doc_id: int, db: Session = Depends(get_db),
     return _doc_out(doc, n)
 
 
+@router.delete("/documents/{doc_id}")
+def delete_document(doc_id: int,
+                    code: str = Query(..., description="must match the target's code"),
+                    revision: int = Query(..., description="must match the target's revision"),
+                    db: Session = Depends(get_db),
+                    writer=Depends(require_document_writer)):
+    """Discard ONE draft revision. Anything in force is retired, not deleted.
+    `code` and `revision` are a required match-check: an agent that guessed the
+    id wrong fails closed here instead of destroying a real document."""
+    try:
+        return service.delete_document(db, doc_id, expect_code=code,
+                                       expect_revision=revision)
+    except Exception as e:
+        raise _http(e)
+
+
 @router.post("/documents/{doc_id}/retire", response_model=DocumentOut)
 def retire_document(doc_id: int, db: Session = Depends(get_db),
                     writer=Depends(require_document_writer)):

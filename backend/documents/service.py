@@ -8,6 +8,7 @@ per-prefix counter row lock for the caller's transaction to close.
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from datetime import date, datetime
 from typing import Optional
@@ -344,6 +345,46 @@ def retire_document(db: Session, doc_id: int) -> Document:
     db.commit()
     db.refresh(doc)
     return doc
+
+
+def delete_document(db: Session, doc_id: int, *, expect_code: str,
+                    expect_revision: int) -> dict:
+    """Hard-delete ONE draft revision. Controlled documents are retired, not
+    deleted: `retire_document` is the answer for anything in force. This exists
+    only to discard a draft that was never published.
+
+    `expect_code`/`expect_revision` must match the target. The caller is usually
+    an agent, and an id it guessed wrong would otherwise delete a real document;
+    naming the code and revision makes a wrong target fail closed.
+    """
+    doc = get_document(db, doc_id)
+    if (doc.code, doc.revision) != (expect_code, expect_revision):
+        raise BadRequestError(
+            f"target mismatch: id={doc_id} is {doc.code} r{doc.revision}, "
+            f"caller named {expect_code} r{expect_revision}")
+    if doc.status != "draft":
+        raise ConflictError(
+            f"only draft revisions delete (this one is {doc.status}); "
+            f"retire it instead to keep the lineage")
+    # A revision this one supersedes would be orphaned by the delete: its
+    # successor row would vanish and leave the chain pointing at nothing.
+    dependent = db.execute(
+        select(Document.id).where(Document.supersedes_id == doc.id).limit(1)
+    ).scalar_one_or_none()
+    if dependent is not None:
+        raise ConflictError(
+            f"revision {doc.id} is superseded by {dependent}; retire instead")
+    key, code, revision = doc.storage_key, doc.code, doc.revision
+    db.delete(doc)
+    db.commit()
+    # Row first, bytes second. A failed blob delete leaves an inert orphan;
+    # the reverse would leave a live row pointing at content that is gone.
+    try:
+        get_storage().delete(key)
+    except Exception as e:
+        logging.getLogger(__name__).warning(
+            "documents blob orphaned key=%s err=%s", key, e)
+    return {"deleted": True, "code": code, "revision": revision}
 
 
 def patch_document(db: Session, doc_id: int, **fields) -> Document:
