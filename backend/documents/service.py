@@ -261,7 +261,8 @@ def create_document(db: Session, *, title: str, html, category: Optional[Documen
                     description: Optional[str] = None, code: Optional[str] = None,
                     author: Optional[str] = None, source_session: Optional[str] = None,
                     effective_date: Optional[date] = None, activate: bool = True,
-                    user_id: Optional[int] = None) -> tuple[Document, bool]:
+                    user_id: Optional[int] = None,
+                    co_author: Optional[str] = None) -> tuple[Document, bool]:
     """Create revision 1 of a new code, or the next revision of an existing one.
     Identical bytes on an existing code => metadata patch, no new row (§5.5)."""
     title = (title or "").strip()
@@ -329,6 +330,7 @@ def create_document(db: Session, *, title: str, html, category: Optional[Documen
     doc = Document(code=code, revision=revision, title=title, description=description,
                    category_id=cat.id, status="draft", effective_date=effective_date,
                    supersedes_id=supersedes_id, author=author, updated_by=author,
+                   co_author=co_author,
                    source_session=source_session,
                    created_by_user_id=user_id, storage_key=key, size_bytes=len(data),
                    content_sha256=sha)

@@ -2175,6 +2175,8 @@ def _run_migrations():
         "client_sample_id_locked_in_senaite BOOLEAN NOT NULL DEFAULT FALSE",
         # Documents library: actor on the in-place metadata patch path.
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS updated_by VARCHAR(200)",
+        # Documents library: the agent that authored a revision (from its scoped token).
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS co_author VARCHAR(100)",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

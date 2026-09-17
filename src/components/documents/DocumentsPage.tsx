@@ -161,6 +161,7 @@ function DocumentsList() {
         cell: ({ row }) => (
           <span className="truncate text-muted-foreground">
             {row.original.author ?? '—'}
+            {row.original.co_author ? ` + ${row.original.co_author}` : ''}
           </span>
         ),
       },

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added
+- **Per-agent document tokens, and a co-author on every agent-written revision.** Agents (Jarvis, TARS, Claude Code) now publish to the documents library with their own token from `MK1_DOCUMENT_AGENT_TOKENS` (`jarvis:<token>,tars:<token>`, tokens of 32+ characters) instead of the internal service token. The internal token also opens the order and sample service endpoints, so it must not sit on a bot host; an agent token opens the documents API and nothing else. The token, not the request body, names the agent: a revision written through one records that agent as `co_author` (shown as "by Forrest Parker with jarvis" in the viewer and in the Author column), and a metadata edit records "<who> via <agent>". Agent tokens can create, revise, retitle, activate and archive; they cannot delete a draft or manage categories (403), which enforces on the server what the bot tooling already assumed. Admin logins and the internal service token behave exactly as before. Every agent write is logged as `documents.agent_write`. New column `documents.co_author`.
+
 ## v1.22.0 - 2026-09-17
 
 ### Added
