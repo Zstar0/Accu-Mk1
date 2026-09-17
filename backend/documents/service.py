@@ -240,9 +240,21 @@ def _activate(db: Session, doc: Document) -> None:
     doc.status = "active"
     doc.activated_at = now
     if doc.effective_date is None:
-        # Local business date (repo convention, 5 call sites); now stays UTC for timestamps.
-        doc.effective_date = date.today()
+        # The lab's calendar day, not the container's. date.today() looks local but
+        # the container runs UTC, so an evening publish stamped tomorrow. Same
+        # BusinessHoursConfig + lab_day the SLA and throughput reports use.
+        doc.effective_date = _lab_today(db)
     db.flush()
+
+
+def _lab_today(db: Session) -> date:
+    """Today on the lab's clock. Falls back to America/Los_Angeles exactly as the
+    reports do when the config row is missing."""
+    from models import BusinessHoursConfig
+    from throughput import lab_day
+    cfg = db.get(BusinessHoursConfig, 1)
+    tz = (cfg.timezone if cfg and cfg.timezone else "America/Los_Angeles")
+    return lab_day(datetime.utcnow(), tz)
 
 
 def create_document(db: Session, *, title: str, html, category: Optional[DocumentCategory],
@@ -291,6 +303,24 @@ def create_document(db: Session, *, title: str, html, category: Optional[Documen
                 raise BadRequestError(
                     f"code prefix must be {cat.code_prefix} for category {cat.name}")
         else:
+            existing = db.execute(
+                select(Document.code, Document.revision)
+                .where(Document.content_sha256 == sha,
+                       Document.category_id == cat.id)
+                .order_by(Document.id).limit(1)
+            ).first()
+            if existing is not None:
+                # Without this a retry mints a SECOND controlled document holding
+                # identical content, which is how ART-0002 was born. Dedupe on an
+                # existing code lives in the `if code:` branch above; here the
+                # caller has to say which document it meant.
+                # Scoped to the category on purpose: an SOP and an artifact that
+                # share bytes are different controlled documents, and the code
+                # prefix a category fixes is what makes them different.
+                raise ConflictError(
+                    f"this content is already published as {existing[0]} "
+                    f"r{existing[1]}; pass code={existing[0]} to publish it as a new "
+                    f"revision, or change the content to mint a new document")
             code = mint_code(db, cat.code_prefix)
         revision = 1
         supersedes_id = None

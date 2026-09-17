@@ -353,8 +353,12 @@ def test_list_latest_revision_per_code_with_filters(db):
                                    description="first")
     service.create_document(db, title="Alpha audit v2", html=HTML + "<!--2-->", category=None,
                             code=a.code, activate=False)  # a: r1 active, r2 draft
-    b, _ = service.create_document(db, title="Bravo SOP", html=HTML, category=sop, activate=False)
-    c, _ = service.create_document(db, title="Charlie", html=HTML, category=art)
+    # Distinct bytes per document: identical content in the SAME category is a
+    # republish and now has to name its code, so a shared fixture body would be
+    # testing the dedupe guard rather than the listing.
+    b, _ = service.create_document(db, title="Bravo SOP", html=HTML + "<!--b-->",
+                                   category=sop, activate=False)
+    c, _ = service.create_document(db, title="Charlie", html=HTML + "<!--c-->", category=art)
     service.retire_document(db, c.id)
 
     rows, total = service.list_documents(db)
@@ -570,3 +574,70 @@ def test_delete_refuses_a_revision_that_something_supersedes(db):
     assert r2.supersedes_id == r1.id and r1.status == "retired"
     with pytest.raises(ConflictError):
         service.delete_document(db, r1.id, expect_code=r1.code, expect_revision=r1.revision)
+
+
+def test_bare_republish_of_existing_content_must_name_its_code(db):
+    """Handler ruling 2026-09-17. Publishing without a code always minted a new
+    code, so a retry silently created a second controlled document holding the
+    same bytes. That is how ART-0002 was born on the devbox."""
+    from documents import service
+    from documents.errors import ConflictError
+    art = _art(db)
+    first, created = service.create_document(db, title="Audit", html=HTML, category=art)
+    assert created is True
+
+    with pytest.raises(ConflictError, match=first.code):
+        service.create_document(db, title="Audit again", html=HTML, category=art)
+
+    # Naming the code is the supported way: that is a revision, not a duplicate.
+    r2, created = service.create_document(db, title="Audit r2", html=HTML + "<!--2-->",
+                                          code=first.code, category=art)
+    assert created is True and r2.revision == 2
+
+
+def test_the_republish_guard_is_scoped_to_the_category(db):
+    """An SOP and an artifact that happen to share bytes are different controlled
+    documents. The category fixes the code prefix, and that is what makes them
+    different, so the guard must not reach across it."""
+    from documents import service
+    art = _art(db)
+    sop = service.resolve_category(db, category="SOP")
+    a, _ = service.create_document(db, title="Same bytes, an artifact", html=HTML,
+                                   category=art)
+    b, created = service.create_document(db, title="Same bytes, an SOP", html=HTML,
+                                         category=sop)
+    assert created is True
+    assert a.code.startswith("ART-") and b.code.startswith("SOP-")
+
+
+def test_effective_date_uses_the_lab_clock_not_the_container_clock(db):
+    """The container runs UTC, so date.today() stamped an evening publish with
+    tomorrow. The date now comes from BusinessHoursConfig.timezone, the same
+    source the SLA and throughput reports use."""
+    from documents import service
+    from models import BusinessHoursConfig
+    from datetime import time as _time
+
+    # Two zones 25 hours apart: at any instant their calendar dates differ, so a
+    # config that is genuinely consulted cannot return the same day for both.
+    def _today_with(tz):
+        row = db.get(BusinessHoursConfig, 1)
+        if row is None:
+            row = BusinessHoursConfig(id=1, open_time=_time(9, 0), close_time=_time(17, 0),
+                                      timezone=tz, working_days=[0, 1, 2, 3, 4])
+            db.add(row)
+        else:
+            row.timezone = tz
+        db.flush()
+        return service._lab_today(db)
+
+    assert _today_with("Pacific/Kiritimati") != _today_with("Pacific/Midway")
+
+    # No config row: falls back to the lab's home zone, as the reports do.
+    row = db.get(BusinessHoursConfig, 1)
+    if row is not None:
+        db.delete(row)
+        db.flush()
+    from throughput import lab_day
+    from datetime import datetime as _dt
+    assert service._lab_today(db) == lab_day(_dt.utcnow(), "America/Los_Angeles")
