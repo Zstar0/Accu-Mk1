@@ -56,6 +56,9 @@ from sla_engine import BusinessSchedule, resolve_sla_tier
 logger = logging.getLogger(__name__)
 
 SUGGEST_HOURS = (50.0, 70.0)
+# The SLA window the 50 to 70 hour rule was written against (the 3-day tier).
+# Other tiers get the same SHARE of their own window.
+SUGGEST_WINDOW_HOURS = 72.0
 QUIET_START = time(22, 0)   # lab time
 QUIET_END = time(5, 0)
 # Schedule must be this far out: covers the insert-then-regenerate window
@@ -203,16 +206,23 @@ def push_out_of_quiet(at_naive_utc: datetime, schedule: BusinessSchedule,
 
 # ── SLA deadline for ONE sample ──────────────────────────────────────────────
 
-def sla_deadline(db: Session, sample: LimsSample, schedule: Optional[BusinessSchedule] = None,
-                 holidays: Optional[frozenset] = None) -> Optional[datetime]:
-    """When this sample's SLA runs out (naive UTC), or None without a received
-    date or a tier. Tier precedence mirrors sla_engine.resolve_sla_tier: a
-    global priority override for the sample's effective priority, else the
-    tightest tier among its grouped services (the Ready to Publish rule), else
-    the default tier.
+def resolve_tier(db: Session, sample: LimsSample) -> Optional[SlaTier]:
+    """The SLA tier that governs the NEXT publish of this sample.
+
+    Candidates are the tier of every service group the sample's services sit
+    in, plus the default tier when any service is ungrouped (prod: every HPLC
+    service is ungrouped, so an HPLC + USP71 sample has both the 3-day default
+    and the 14-day USP71 tier in play).
+
+    * Nothing delivered yet: the TIGHTEST candidate. The first (possibly
+      partial) COA is the fast work and owes the fast deadline.
+    * A COA already went out (a `coa_published` event exists): the LOOSEST.
+      What remains is by construction the slow group (USP 71 sterility), and
+      judging it against the 3-day tier would call every such sample late.
+
+    A global priority override for the sample's effective priority beats both
+    (sla_engine.resolve_sla_tier precedence).
     """
-    if sample.date_received is None:
-        return None
     tiers = {t.id: t for t in db.execute(select(SlaTier)).scalars().all()}
     default_tier = next((t for t in tiers.values() if t.is_default), None)
 
@@ -221,16 +231,24 @@ def sla_deadline(db: Session, sample: LimsSample, schedule: Optional[BusinessSch
         .where(LimsAnalysis.lims_sample_pk == sample.id,
                LimsAnalysis.analysis_service_id.is_not(None))
     ).scalars().all())
-    group_tier = None
+    cands: list[SlaTier] = []
+    grouped: set = set()
     if svc_ids:
-        tier_ids = db.execute(
-            select(ServiceGroup.sla_tier_id)
-            .join(service_group_members, service_group_members.c.service_group_id == ServiceGroup.id)
+        for svc_id, tier_id in db.execute(
+            select(service_group_members.c.analysis_service_id, ServiceGroup.sla_tier_id)
+            .join(ServiceGroup, service_group_members.c.service_group_id == ServiceGroup.id)
             .where(service_group_members.c.analysis_service_id.in_(svc_ids),
                    ServiceGroup.sla_tier_id.is_not(None))
-        ).scalars().all()
-        cands = [tiers[t] for t in tier_ids if t in tiers]
-        group_tier = min(cands, key=lambda t: t.target_minutes) if cands else None
+        ).all():
+            if tier_id in tiers:
+                grouped.add(svc_id)
+                cands.append(tiers[tier_id])
+    if default_tier is not None and (not svc_ids or svc_ids - grouped):
+        cands.append(default_tier)
+    group_tier = None
+    if cands:
+        delivered = _published_since(db, sample.id, datetime.min)
+        group_tier = (max if delivered else min)(cands, key=lambda t: t.target_minutes)
 
     # ponytail: global priority rows only; per-group priority rows are the
     # frontend resolver's refinement and can be added here if a group-scoped
@@ -249,7 +267,17 @@ def sla_deadline(db: Session, sample: LimsSample, schedule: Optional[BusinessSch
         e = eff.get(sample.id)
         priority = e.key if e is not None else None
 
-    tier = resolve_sla_tier(priority_map, group_tier, priority, default_tier)
+    return resolve_sla_tier(priority_map, group_tier, priority, default_tier)
+
+
+def sla_deadline(db: Session, sample: LimsSample, schedule: Optional[BusinessSchedule] = None,
+                 holidays: Optional[frozenset] = None, tier: Optional[SlaTier] = None
+                 ) -> Optional[datetime]:
+    """When this sample's SLA runs out (naive UTC), or None without a received
+    date or a tier."""
+    if sample.date_received is None:
+        return None
+    tier = tier or resolve_tier(db, sample)
     if tier is None:
         return None
     if tier.business_hours_only:
@@ -259,21 +287,43 @@ def sla_deadline(db: Session, sample: LimsSample, schedule: Optional[BusinessSch
     return sample.date_received + timedelta(minutes=tier.target_minutes)
 
 
-def suggest(db: Session, sample: LimsSample, *, now: datetime, rng=random
-            ) -> tuple[datetime, Optional[datetime], bool]:
-    """(suggested_at, sla_deadline, clamped), all naive UTC.
+def sla_window_hours(tier: Optional[SlaTier], schedule: BusinessSchedule) -> float:
+    """The tier's target as open-day CLOCK hours, the unit the suggestion is
+    ruled in. A business-hours tier counts only open..close each day, so its
+    minutes stretch by 24 / business-day length: 1440 min at 8 h/day = 72 h,
+    USP71's 6720 min = 336 h (14 days). No tier: the 72 h the rule was written
+    against."""
+    if tier is None or tier.target_minutes <= 0:
+        return SUGGEST_WINDOW_HOURS
+    hours = tier.target_minutes / 60.0
+    if tier.business_hours_only:
+        day = (datetime.combine(date.min, schedule.close_time)
+               - datetime.combine(date.min, schedule.open_time)).total_seconds() / 3600.0
+        if day > 0:
+            hours *= 24.0 / day
+    return hours
 
-    received + rng.uniform(50, 70) open-day hours, clamped to SLA_MARGIN before
-    the deadline (clamped=True when that bit), floored at now + 1h when the
-    sample is already late, then pushed out of the quiet window.
+
+def suggest(db: Session, sample: LimsSample, *, now: datetime, rng=random
+            ) -> tuple[datetime, Optional[datetime], bool, Optional[SlaTier]]:
+    """(suggested_at, sla_deadline, clamped, tier), datetimes naive UTC.
+
+    received + rng.uniform(50, 70) open-day hours on the 72 h tier, the same
+    share of the window on any other tier (USP71: about 9.7 to 13.6 days),
+    clamped to SLA_MARGIN before the deadline (clamped=True when that bit),
+    floored at now + 1h when the sample is already late, then pushed out of
+    the quiet window.
     """
     schedule = lab_schedule(db)
     holidays = lab_holidays(db)
     is_holiday = holidays.__contains__
-    deadline = sla_deadline(db, sample, schedule, holidays)
+    tier = resolve_tier(db, sample)
+    deadline = sla_deadline(db, sample, schedule, holidays, tier)
     clamped = False
     if sample.date_received is not None:
-        cand = add_open_day_hours(sample.date_received, rng.uniform(*SUGGEST_HOURS), schedule, is_holiday)
+        share = rng.uniform(*SUGGEST_HOURS) / SUGGEST_WINDOW_HOURS
+        cand = add_open_day_hours(sample.date_received, share * sla_window_hours(tier, schedule),
+                                  schedule, is_holiday)
     else:
         cand = now + timedelta(hours=1)
     if deadline is not None and cand > deadline - SLA_MARGIN:
@@ -285,7 +335,7 @@ def suggest(db: Session, sample: LimsSample, *, now: datetime, rng=random
     # Floored past the deadline (the sample is already late): say so.
     if deadline is not None and cand > deadline:
         clamped = True
-    return cand, deadline, clamped
+    return cand, deadline, clamped, tier
 
 
 # ── rows ─────────────────────────────────────────────────────────────────────
@@ -324,6 +374,39 @@ def active_by_sample(db: Session) -> dict[str, dict]:
     ).scalars().all():
         out[row.sample_id] = serialize(row)
     return out
+
+
+def list_rows(db: Session, *, include_history: bool = False, limit: int = 300) -> list[dict]:
+    """Rows for the Scheduled Publishes page: what is going to fire (soonest
+    first), then failed, then (with history) what already settled, newest
+    first. Each row carries the sample's client / order / received date and
+    who scheduled it."""
+    q = select(LimsScheduledPublish, LimsSample, User).outerjoin(
+        LimsSample, LimsSample.sample_id == LimsScheduledPublish.sample_id
+    ).outerjoin(User, User.id == LimsScheduledPublish.created_by_user_id)
+    if not include_history:
+        q = q.where(LimsScheduledPublish.status.in_(ACTIVE_STATUSES))
+    out = []
+    # Newest first under the cap, so a long history never crowds out live rows.
+    q = q.order_by(LimsScheduledPublish.id.desc()).limit(max(1, min(limit, 1000)))
+    for row, sample, user in db.execute(q).all():
+        name = " ".join(p for p in ((user.first_name or ""), (user.last_name or "")) if p) if user else ""
+        out.append({
+            **serialize(row),
+            "cancelled_at": iso_z(row.cancelled_at),
+            "client": sample.client_title if sample else None,
+            "order": sample.client_order_number if sample else None,
+            "received_at": iso_z(sample.date_received) if sample else None,
+            "sample_status": sample.status if sample else None,
+            "created_by": (name or user.email) if user else None,
+        })
+    rank = {"firing": 0, "pending": 1, "failed": 2}
+
+    def key(r: dict):
+        live = r["status"] in rank
+        # Live rows soonest first; settled rows newest first.
+        return (rank.get(r["status"], 3), r["scheduled_at"] if live else "", -r["id"])
+    return sorted(out, key=key)
 
 
 def process_override(db: Session, sample_id: str) -> dict:

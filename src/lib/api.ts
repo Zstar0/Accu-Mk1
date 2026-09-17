@@ -2105,6 +2105,8 @@ export interface ScheduledPublishState {
   schedule: ScheduledPublish | null
   suggested_at: string
   sla_deadline: string | null
+  /** Tier the deadline came from ("Standard", "USP71"). */
+  sla_tier?: string | null
   /** The SLA clamp moved the suggestion, or the sample is already late. */
   suggestion_clamped: boolean
   lab_timezone: string
@@ -2149,6 +2151,39 @@ export async function cancelScheduledPublish(
     headers: getBearerHeaders(),
   })
   if (!response.ok) throw new Error(await extractErrorMessage(response, `Cancel scheduled publish failed: ${response.status}`))
+  return response.json()
+}
+
+/** A scheduled publish plus the sample context the list page shows. */
+export interface ScheduledPublishRow extends ScheduledPublish {
+  cancelled_at: string | null
+  client: string | null
+  order: string | null
+  received_at: string | null
+  sample_status: string | null
+  /** Display name (or e-mail) of whoever scheduled it. */
+  created_by: string | null
+}
+
+export interface ScheduledPublishList {
+  generated_at: string
+  lab_timezone: string
+  rows: ScheduledPublishRow[]
+  totals: Record<ScheduledPublish['status'], number>
+}
+
+/** Every scheduled publish: firing, pending (soonest first), failed; with
+ *  `includeHistory` the published and cancelled ones too. */
+export async function getScheduledPublishes(
+  query: { includeHistory?: boolean } = {}
+): Promise<ScheduledPublishList> {
+  const suffix = query.includeHistory ? '?include_history=true' : ''
+  const response = await fetch(
+    `${API_BASE_URL()}/reports/scheduled-publishes${suffix}`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok)
+    throw new Error(`Scheduled publishes failed: ${response.status}`)
   return response.json()
 }
 

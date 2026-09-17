@@ -256,3 +256,27 @@ def test_ready_to_publish_parks_scheduled_rows(monkeypatch):
     # pending parked; failed stays live and counted.
     assert body["totals"]["rows"] == 2 and body["totals"]["scheduled"] == 1 and body["totals"]["held"] == 0
     assert client.get("/reports/ready-to-publish/summary").json()["totals"]["scheduled"] == 1
+
+
+# ── the Scheduled Publishes page ────────────────────────────────────────────
+
+def test_list_route_shows_live_rows_and_history_on_request(api, factory):
+    assert client.get("/reports/scheduled-publishes").json()["rows"] == []
+    client.post(PATH, json={"scheduled_at": future()})
+    client.post(PATH, json={"scheduled_at": future(72)})          # reschedule: first row cancelled
+    body = client.get("/reports/scheduled-publishes").json()
+    assert [r["status"] for r in body["rows"]] == ["pending"]
+    assert body["rows"][0]["sample_id"] == "P-1" and body["rows"][0]["sample_status"] == "verified"
+    assert body["totals"]["pending"] == 1 and body["totals"]["cancelled"] == 0
+    assert body["lab_timezone"] == "America/Los_Angeles" and body["generated_at"].endswith("Z")
+    hist = client.get("/reports/scheduled-publishes?include_history=true").json()
+    assert [r["status"] for r in hist["rows"]] == ["pending", "cancelled"]
+    assert hist["rows"][1]["cancelled_at"].endswith("Z")
+    assert hist["totals"] == {"pending": 1, "firing": 0, "failed": 0, "published": 0, "cancelled": 1}
+    # The trash action is the per-sample DELETE; the row then leaves the live list.
+    assert client.delete(PATH).status_code == 200
+    assert client.get("/reports/scheduled-publishes").json()["rows"] == []
+
+
+def test_state_names_the_sla_tier(api):
+    assert client.get(PATH).json()["sla_tier"] == "Standard"

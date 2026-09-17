@@ -14184,6 +14184,9 @@ class ScheduledPublishStateOut(BaseModel):
     schedule: Optional[ScheduledPublishOut] = None
     suggested_at: str
     sla_deadline: Optional[str] = None
+    # Name of the tier the deadline came from ("Standard", "USP71"), for the
+    # dialog's SLA line.
+    sla_tier: Optional[str] = None
     # True when the SLA clamp moved the suggestion, or the sample is already
     # past its deadline (the dialog shows a warning either way).
     suggestion_clamped: bool
@@ -14211,14 +14214,56 @@ def get_sample_scheduled_publish(
     if sample is None:
         raise HTTPException(status_code=404, detail=f"Sample {sample_id} not found")
     row = _sp.active_for(db, sample_id)
-    suggested, deadline, clamped = _sp.suggest(db, sample, now=datetime.utcnow())
+    suggested, deadline, clamped, tier = _sp.suggest(db, sample, now=datetime.utcnow())
     return ScheduledPublishStateOut(
         schedule=_sp.serialize(row) if row is not None else None,
         suggested_at=_sp.iso_z(suggested),
         sla_deadline=_sp.iso_z(deadline),
+        sla_tier=tier.name if tier is not None else None,
         suggestion_clamped=clamped,
         lab_timezone=_sp.lab_tz(db),
     )
+
+
+class ScheduledPublishRowOut(ScheduledPublishOut):
+    """A scheduled publish plus the sample context the list page shows."""
+    cancelled_at: Optional[str] = None
+    client: Optional[str] = None
+    order: Optional[str] = None
+    received_at: Optional[str] = None
+    sample_status: Optional[str] = None
+    created_by: Optional[str] = None
+
+
+class ScheduledPublishListOut(BaseModel):
+    generated_at: str
+    lab_timezone: str
+    rows: list[ScheduledPublishRowOut]
+    totals: dict[str, int]
+
+
+@app.get("/reports/scheduled-publishes", response_model=ScheduledPublishListOut)
+def reports_scheduled_publishes(
+    include_history: bool = Query(False),
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Every scheduled publish: firing, then pending soonest first, then
+    failed; with ``include_history`` the settled rows too (published /
+    cancelled, newest first). Removing one is the per-sample DELETE above
+    (a pending row's draft is regenerated with today's date). Plain ``def``:
+    synchronous DB work, runs in the threadpool."""
+    import scheduled_publish as _sp
+    rows = _sp.list_rows(db, include_history=include_history)
+    totals = {s: 0 for s in ("pending", "firing", "failed", "published", "cancelled")}
+    for r in rows:
+        totals[r["status"]] = totals.get(r["status"], 0) + 1
+    return {
+        "generated_at": _sp.iso_z(datetime.utcnow()),
+        "lab_timezone": _sp.lab_tz(db),
+        "rows": rows,
+        "totals": totals,
+    }
 
 
 @app.post(_SCHEDULED_PUBLISH_PATH, response_model=SchedulePublishResultOut)

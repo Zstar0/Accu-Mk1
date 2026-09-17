@@ -171,6 +171,7 @@ function ScheduleForm({
               className={cn(pastSla ? 'text-red-400' : 'text-muted-foreground')}
             >
               SLA deadline: {fmtWhen(state.sla_deadline)}
+              {state.sla_tier ? ` (${state.sla_tier} tier)` : ''}
               {pastSla ? ' · this time is AFTER the deadline' : ''}
             </div>
           )}
@@ -188,8 +189,9 @@ function ScheduleForm({
             </div>
           )}
           <div className="text-muted-foreground">
-            No publishing between 10pm and 5am lab time. The suggestion is 50 to
-            70 hours after receipt, skipping closed days.
+            No publishing between 10pm and 5am lab time. The suggestion lands
+            late in the SLA window (50 to 70 hours after receipt on the 3-day
+            tier, the same share of a longer tier), skipping closed days.
           </div>
         </div>
       </div>

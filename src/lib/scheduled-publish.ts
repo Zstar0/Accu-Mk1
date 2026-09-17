@@ -8,6 +8,7 @@
  * `labDate` only previews it.
  */
 import type { ScheduledPublish } from '@/lib/api'
+import { formatMinutes } from '@/lib/sla-format'
 
 function pad(n: number): string {
   return String(n).padStart(2, '0')
@@ -60,4 +61,13 @@ export function isParkedSchedule(
   s: ScheduledPublish | null | undefined
 ): boolean {
   return !!s && (s.status === 'pending' || s.status === 'firing')
+}
+
+/** "in 1d 4h" / "due" for a pending row, measured against the server's
+ *  `generated_at` so the render stays pure. */
+export function untilText(scheduledAt: string, generatedAt: string): string {
+  const mins =
+    (new Date(scheduledAt).getTime() - new Date(generatedAt).getTime()) / 60000
+  if (Number.isNaN(mins)) return ''
+  return mins <= 0 ? 'due' : `in ${formatMinutes(mins)}`
 }

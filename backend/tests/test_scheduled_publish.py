@@ -20,8 +20,9 @@ from sqlalchemy.pool import StaticPool
 
 import scheduled_publish as sp
 from models import (
-    BusinessHoursConfig, LabHoliday, LimsSample, LimsScheduledPublish, LimsSubSampleEvent,
-    Priority, SlaPriorityTier, SlaTier, User, FlagType,
+    BusinessHoursConfig, LabHoliday, LimsAnalysis, LimsSample, LimsScheduledPublish,
+    LimsSubSampleEvent, Priority, ServiceGroup, SlaPriorityTier, SlaTier, User, FlagType,
+    service_group_members,
 )
 from sla_engine import BusinessSchedule, compute_business_minutes
 
@@ -195,7 +196,7 @@ def test_suggest_lands_50_to_70_open_day_hours_out(session_factory):
     s = add_sample(db, received=la(2026, 9, 17, 14, 0))  # Thursday
     lo, hi = datetime(2026, 9, 21, 16, 0, tzinfo=LA), datetime(2026, 9, 22, 12, 0, tzinfo=LA)
     for seed in range(40):
-        at, deadline, clamped = sp.suggest(db, s, now=la(2026, 9, 17, 15, 0), rng=random.Random(seed))
+        at, deadline, clamped, _tier = sp.suggest(db, s, now=la(2026, 9, 17, 15, 0), rng=random.Random(seed))
         local = to_la(at)
         assert lo <= local <= hi, local
         assert local.weekday() < 5
@@ -210,7 +211,7 @@ def test_suggest_skips_a_lab_holiday(session_factory):
     db.add(LabHoliday(holiday_date=date(2026, 9, 21), name="Test day", source="custom"))
     db.commit()
     s = add_sample(db, received=la(2026, 9, 17, 14, 0))
-    at, deadline, _ = sp.suggest(db, s, now=la(2026, 9, 17, 15, 0), rng=random.Random(3))
+    at, deadline, _, _tier = sp.suggest(db, s, now=la(2026, 9, 17, 15, 0), rng=random.Random(3))
     assert to_la(at).date() >= date(2026, 9, 22)
     assert to_la(deadline) == datetime(2026, 9, 23, 14, 0, tzinfo=LA)
     db.close()
@@ -223,14 +224,14 @@ def test_suggest_is_never_past_the_sla(session_factory):
     for i in range(200):
         received = la(2026, 9, 1, 0, 0) + timedelta(minutes=rng.randint(0, 60 * 24 * 21))
         s = add_sample(db, sample_id=f"P-{i}", received=received)
-        at, deadline, _ = sp.suggest(db, s, now=received, rng=random.Random(i))
+        at, deadline, _, _tier = sp.suggest(db, s, now=received, rng=random.Random(i))
         assert compute_business_minutes(received, at, SCHEDULE, NO_HOLIDAY) <= 1440, (received, at)
         assert at <= deadline
         assert not sp.in_quiet_window(at, "America/Los_Angeles")
     db.close()
 
 
-def test_suggest_clamps_to_an_expedited_priority_tier(session_factory):
+def test_expedited_priority_tier_scales_the_suggestion_into_its_own_window(session_factory):
     db = session_factory()
     db.add(SlaTier(id=2, name="Rush", target_minutes=480, business_hours_only=True))
     db.add(SlaPriorityTier(priority="expedited", sla_tier_id=2, service_group_id=None))
@@ -238,14 +239,29 @@ def test_suggest_clamps_to_an_expedited_priority_tier(session_factory):
     from priority.service import invalidate_priority_cache
     invalidate_priority_cache()
     s = add_sample(db, received=la(2026, 9, 14, 10, 0), priority_key="expedited")  # Mon 10:00
-    at, deadline, clamped = sp.suggest(db, s, now=la(2026, 9, 14, 10, 30), rng=random.Random(0))
-    assert clamped
-    assert to_la(deadline) == datetime(2026, 9, 15, 10, 0, tzinfo=LA)  # 8 bh later
-    assert to_la(at) == datetime(2026, 9, 15, 9, 0, tzinfo=LA)
+    for seed in range(20):
+        at, deadline, _, tier = sp.suggest(db, s, now=la(2026, 9, 14, 10, 30), rng=random.Random(seed))
+        assert tier.name == "Rush"
+        assert to_la(deadline) == datetime(2026, 9, 15, 10, 0, tzinfo=LA)      # 8 bh later
+        # 50/72 .. 70/72 of a 24 h window, never past deadline minus the margin.
+        assert la(2026, 9, 15, 2, 0) <= at <= deadline - sp.SLA_MARGIN, to_la(at)
     # A normal sample keeps the default tier.
     n = add_sample(db, sample_id="P-2", received=la(2026, 9, 14, 10, 0))
-    _, d2, c2 = sp.suggest(db, n, now=la(2026, 9, 14, 10, 30), rng=random.Random(0))
-    assert not c2 and to_la(d2) == datetime(2026, 9, 17, 10, 0, tzinfo=LA)
+    _, d2, _, t2 = sp.suggest(db, n, now=la(2026, 9, 14, 10, 30), rng=random.Random(0))
+    assert t2.name == "Standard" and to_la(d2) == datetime(2026, 9, 17, 10, 0, tzinfo=LA)
+    invalidate_priority_cache()
+    db.close()
+
+
+def test_early_morning_receipt_is_clamped_inside_the_sla(session_factory):
+    """Received 07:00: 24 bh ends Wed 17:00, while +70 clock hours is Thu
+    05:00. The clamp is what keeps the suggestion inside the SLA."""
+    db = session_factory()
+    s = add_sample(db, received=la(2026, 9, 14, 7, 0))                          # Monday 07:00
+    top = SimpleNamespace(uniform=lambda a, b: b)                               # always the 70 h end
+    at, deadline, clamped, _ = sp.suggest(db, s, now=la(2026, 9, 14, 8, 0), rng=top)
+    assert to_la(deadline) == datetime(2026, 9, 16, 17, 0, tzinfo=LA)
+    assert clamped and to_la(at) == datetime(2026, 9, 16, 16, 0, tzinfo=LA)
     db.close()
 
 
@@ -253,7 +269,7 @@ def test_suggest_floors_at_now_when_already_late(session_factory):
     db = session_factory()
     s = add_sample(db, received=la(2026, 9, 1, 10, 0))
     now = la(2026, 9, 17, 10, 0)
-    at, _, clamped = sp.suggest(db, s, now=now, rng=random.Random(0))
+    at, _, clamped, _tier = sp.suggest(db, s, now=now, rng=random.Random(0))
     assert clamped and at == now + timedelta(hours=1)
     db.close()
 
@@ -418,4 +434,94 @@ def test_active_by_sample_serializes_with_z_timestamps(session_factory):
     assert out["P-1"]["status"] == "pending"
     assert out["P-1"]["scheduled_at"] == "2026-09-19T17:00:00Z"
     assert out["P-1"]["pdf_date"] == "09/19/2026"
+    db.close()
+
+
+# ── tiers beyond the 3-day default (USP 71 = 14 working days) ───────────────
+
+def _usp71(db):
+    """The prod shape once USP71 is attached: a 6720-minute tier on a group
+    holding the USP 71 service (id 91). HPLC services (id 10) stay ungrouped,
+    exactly like prod's Core HPLC group with zero members."""
+    db.add(SlaTier(id=3, name="USP71", target_minutes=6720, business_hours_only=True))
+    db.add(ServiceGroup(id=5, name="Sterility USP71", sla_tier_id=3))
+    db.flush()
+    db.execute(service_group_members.insert().values(service_group_id=5, analysis_service_id=91))
+    db.commit()
+
+
+def _line(db, sample, service_id, keyword):
+    db.add(LimsAnalysis(lims_sample_pk=sample.id, analysis_service_id=service_id,
+                        keyword=keyword, title=keyword))
+    db.commit()
+
+
+def test_usp71_only_sample_gets_the_14_day_window(session_factory):
+    db = session_factory()
+    _usp71(db)
+    s = add_sample(db, received=la(2026, 9, 14, 10, 0))          # Monday
+    _line(db, s, 91, "STERILITY-USP71")
+    for seed in range(25):
+        at, deadline, clamped, tier = sp.suggest(db, s, now=la(2026, 9, 14, 11, 0), rng=random.Random(seed))
+        assert tier.name == "USP71"
+        assert to_la(deadline) == datetime(2026, 10, 2, 10, 0, tzinfo=LA)   # 14 working days
+        local = to_la(at)
+        # 50/72 .. 70/72 of 336 open-day hours = 9.7 .. 13.6 working days out.
+        assert datetime(2026, 9, 25, 10, 0, tzinfo=LA) <= local <= datetime(2026, 10, 2, 9, 0, tzinfo=LA), local
+        assert at <= deadline and not sp.in_quiet_window(at, "America/Los_Angeles")
+    db.close()
+
+
+def test_mixed_sample_owes_the_fast_tier_first_and_the_slow_tier_after_a_publish(session_factory):
+    db = session_factory()
+    _usp71(db)
+    s = add_sample(db, received=la(2026, 9, 14, 10, 0))
+    _line(db, s, 10, "HPLC-PUR")            # ungrouped -> default tier is in play
+    _line(db, s, 91, "STERILITY-USP71")
+    assert sp.resolve_tier(db, s).name == "Standard"
+    assert to_la(sp.sla_deadline(db, s)) == datetime(2026, 9, 17, 10, 0, tzinfo=LA)
+    # The partial COA goes out; what remains is the USP 71 result.
+    db.add(LimsSubSampleEvent(lims_sample_pk=s.id, event="coa_published", details={}, user_id=2))
+    db.commit()
+    assert sp.resolve_tier(db, s).name == "USP71"
+    assert to_la(sp.sla_deadline(db, s)) == datetime(2026, 10, 2, 10, 0, tzinfo=LA)
+    # No lines at all: the default tier.
+    bare = add_sample(db, sample_id="P-9", received=la(2026, 9, 14, 10, 0))
+    assert sp.resolve_tier(db, bare).name == "Standard"
+    db.close()
+
+
+def test_sla_window_hours(session_factory):
+    db = session_factory()
+    std = db.get(SlaTier, 1)
+    assert sp.sla_window_hours(std, SCHEDULE) == 72.0                       # 1440 bh-min at 8 h/day
+    assert sp.sla_window_hours(SlaTier(target_minutes=6720, business_hours_only=True), SCHEDULE) == 336.0
+    assert sp.sla_window_hours(SlaTier(target_minutes=4320, business_hours_only=False), SCHEDULE) == 72.0
+    assert sp.sla_window_hours(None, SCHEDULE) == 72.0
+    db.close()
+
+
+# ── the list page ───────────────────────────────────────────────────────────
+
+def test_list_rows_orders_live_first_and_joins_sample_and_user(session_factory):
+    db = session_factory()
+    u = db.get(User, 2); u.first_name, u.last_name = "Dana", "Tech"
+    add_sample(db, sample_id="P-1", client_title="Acme", client_order_number="7001")
+    add_sample(db, sample_id="P-2")
+    add_sample(db, sample_id="P-3")
+    add_row(db, sample_id="P-1", scheduled_at=la(2026, 9, 21, 10, 0))                 # pending, later
+    add_row(db, sample_id="P-2", scheduled_at=la(2026, 9, 19, 10, 0))                 # pending, sooner
+    add_row(db, sample_id="P-3", status="failed")
+    add_row(db, sample_id="P-3", status="published", scheduled_at=la(2026, 9, 10, 10, 0))
+    add_row(db, sample_id="GONE-1", status="firing", by=None)                          # no registry row
+    live = sp.list_rows(db)
+    assert [(r["sample_id"], r["status"]) for r in live] == [
+        ("GONE-1", "firing"), ("P-2", "pending"), ("P-1", "pending"), ("P-3", "failed")]
+    p1 = next(r for r in live if r["sample_id"] == "P-1")
+    assert (p1["client"], p1["order"], p1["created_by"]) == ("Acme", "7001", "Dana Tech")
+    assert p1["received_at"].endswith("Z") and p1["scheduled_at"] == "2026-09-21T17:00:00Z"
+    gone = live[0]
+    assert gone["client"] is None and gone["created_by"] is None
+    full = sp.list_rows(db, include_history=True)
+    assert [r["status"] for r in full] == ["firing", "pending", "pending", "failed", "published"]
     db.close()
