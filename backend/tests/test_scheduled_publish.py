@@ -20,7 +20,8 @@ from sqlalchemy.pool import StaticPool
 
 import scheduled_publish as sp
 from models import (
-    AnalysisProfile, BusinessHoursConfig, LabHoliday, LimsAnalysis, LimsSample, LimsScheduledPublish,
+    AnalysisProfile, BusinessHoursConfig, LabHoliday, LimsAnalysis, LimsSample, LimsSampleTransition,
+    LimsScheduledPublish,
     LimsSubSampleEvent, Priority, ServiceGroup, SlaPriorityTier, SlaTier, User, FlagType,
     analysis_profile_members, service_group_members,
 )
@@ -490,6 +491,16 @@ def test_mixed_sample_owes_the_fast_tier_first_and_the_slow_tier_after_a_publish
     db.commit()
     assert sp.resolve_tier(db, s).name == "USP71"
     assert to_la(sp.sla_deadline(db, s)) == datetime(2026, 10, 2, 10, 0, tzinfo=LA)
+    # A partial COA from BEFORE the coa_published event existed (prod: P-2777,
+    # published 09-15, event rows start 09-17) is only in the publish ledger.
+    older = add_sample(db, sample_id="P-2777", received=la(2026, 9, 14, 10, 0))
+    _line(db, older, 10, "HPLC-PUR")
+    _line(db, older, 279, "BACTERIA")
+    assert sp.resolve_tier(db, older).name == "Standard"
+    db.add(LimsSampleTransition(lims_sample_pk=older.id, verb="publish", to_status="published",
+                                source="senaite", occurred_at=la(2026, 9, 15, 3, 47)))
+    db.commit()
+    assert sp.resolve_tier(db, older).name == "USP71"
     # No lines at all: the default tier.
     bare = add_sample(db, sample_id="P-9", received=la(2026, 9, 14, 10, 0))
     assert sp.resolve_tier(db, bare).name == "Standard"

@@ -44,6 +44,7 @@ from models import (
     LabHoliday,
     LimsAnalysis,
     LimsSample,
+    LimsSampleTransition,
     LimsScheduledPublish,
     LimsSubSampleEvent,
     ServiceGroup,
@@ -276,7 +277,7 @@ def resolve_tier(db: Session, sample: LimsSample) -> Optional[SlaTier]:
         cands.append(default_tier)
     group_tier = None
     if cands:
-        delivered = _published_since(db, sample.id, datetime.min)
+        delivered = _ever_delivered(db, sample.id)
         group_tier = (max if delivered else min)(cands, key=lambda t: t.target_minutes)
 
     # ponytail: global priority rows only; per-group priority rows are the
@@ -503,6 +504,28 @@ def _published_since(db: Session, sample_pk: int, since: datetime) -> bool:
         .where(LimsSubSampleEvent.lims_sample_pk == sample_pk,
                LimsSubSampleEvent.event == "coa_published",
                LimsSubSampleEvent.created_at >= since)
+        .limit(1)
+    ).scalar_one_or_none() is not None
+
+
+def _ever_delivered(db: Session, sample_pk: int) -> bool:
+    """Has ANY COA gone out for this sample, at any time? Used to pick the
+    tier (loosest once something is delivered), never to guard a fire.
+
+    Either signal is enough. The `coa_published` event only exists from
+    1.21.9 (first prod rows 2026-09-17), so alone it would call a sample
+    partially published on 09-15 (P-2777) undelivered and judge its USP 71
+    final against the 3-day tier. The `publish` row in the sample ledger has
+    the history: July 2026 on, from Mk1's route and the SENAITE event sync.
+    The fire-time guard stays on `_published_since` on purpose: it asks about
+    a publish SINCE this schedule was created, which the event answers
+    exactly."""
+    if _published_since(db, sample_pk, datetime.min):
+        return True
+    return db.execute(
+        select(LimsSampleTransition.id)
+        .where(LimsSampleTransition.lims_sample_pk == sample_pk,
+               LimsSampleTransition.verb == "publish")
         .limit(1)
     ).scalar_one_or_none() is not None
 
