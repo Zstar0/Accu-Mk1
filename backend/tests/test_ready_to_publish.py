@@ -77,6 +77,23 @@ def test_dead_lines_do_not_block_or_count():
     assert rows[0]["lines"] == {"total": 1, "verified": 1, "pending": []}
 
 
+def test_effective_priority_rides_the_row_by_uid():
+    """The PriorityGlyph reads the resolved priority (modern resolver, keyed
+    by external uid); `priority` stays the legacy string for sort_key."""
+    eff = {"key": "rush", "rank": 30, "source_level": "order", "source_id": "WP-1"}
+    rows = build([sample(1, "PB-0553", external_uid="U1"), sample(2, "PB-0554", external_uid="U2")],
+                 {1: {"HPLC-PUR": "verified"}, 2: {"HPLC-PUR": "verified"}},
+                 priorities={"U1": "expedited"}, effective_priorities={"U1": eff})
+    by_id = {r["sample_id"]: r for r in rows}
+    assert by_id["PB-0553"]["effective_priority"] == eff
+    assert by_id["PB-0553"]["priority"] == "expedited"
+    assert by_id["PB-0554"]["effective_priority"] is None
+    assert by_id["PB-0554"]["priority"] == "normal"
+    # Omitting the input (older callers) still builds rows.
+    assert build([sample(1, "PB-0553", external_uid="U1")], {1: {"HPLC-PUR": "verified"}})[0][
+        "effective_priority"] is None
+
+
 def test_strip_identity_suffix():
     assert strip_identity_suffix("Somatropin - Identity (HPLC)") == "Somatropin"
     assert strip_identity_suffix("BPC-157") == "BPC-157"

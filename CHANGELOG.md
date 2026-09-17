@@ -5,6 +5,15 @@
 ### Added
 - **Documents library.** Reports → Documents lists controlled documents published by agents (artifacts, SOPs), with search, category and status filters, a sandboxed in-app viewer, revision history, download, and admin retitle. Documents carry a code (ART-0012 / SOP-0003), a revision, draft/active/retired status and an effective date, following the Methods lifecycle; a new revision retires the previous active one and content is never rewritten. Settings → Documents manages categories. Agents publish with the `mk1-publish-document` skill over the existing service token (`POST /api/documents`). New tables `document_categories`, `documents`, `document_code_counters`; HTML bytes live in the vial-photo blob store under `documents/`. Spec: `docs/superpowers/specs/2026-09-15-documents-library-design.md`.
 
+## v1.21.9 — 2026-09-16
+
+### Fixed
+- **Client Sample ID can be changed after a sample is verified or (partially) published.** SENAITE locks the field once the AR leaves the editable states and answered every save with 401 "Not allowed to set the field 'ClientSampleID'" (PB-0553). Accu-Mk1 is already the read source for this field, so the edit is now saved in Mk1 when SENAITE refuses it — the row is flagged (`client_sample_id_locked_in_senaite`) so the five-minute SENAITE refresh never overwrites it with SENAITE's frozen copy, and the toast says the change lives in Accu-Mk1 only. A plain 401 (bad credentials) or a lock on any other field still fails as before.
+
+### Changed
+- **Ready to Publish rows show the sample's priority glyph and a Flags column.** The glyph is the same one the samples list and inbox use and reads the resolved priority (customer → order → sample → vial); the page previously printed a text tag from the legacy ingest-time priority table, which stopped agreeing with the rest of the app once priorities were set in Mk1. The new Flags column shows every open flag on the sample, coloured by the dominant type, and clicking it opens the flags flyout.
+- **The activity log now says who did it.** Every basic-info edit made through the field editor (Client Sample ID, Client Lot, COA branding fields, analyte slots) is logged as `sample_field_updated` with the old and new value, the user, and whether SENAITE accepted the write or Mk1 kept it. "COA vN generated" / "COA vN published" rows are stamped with the user who clicked Generate, Regen or Publish (including per-vial COAs), and "Status → …" rows carry the user from Mk1's own transition ledger when Mk1 initiated the transition. Prep-session start/complete lines still have no actor — that table never recorded one.
+
 ## v1.21.8 — 2026-09-14
 
 ### Fixed

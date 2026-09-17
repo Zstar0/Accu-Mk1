@@ -4442,6 +4442,8 @@ export interface SenaiteFieldUpdateResponse {
   success: boolean
   message: string
   updated_fields: string[] | null
+  /** Set when the edit landed in Mk1 only (SENAITE locked the field). */
+  warning?: string | null
 }
 
 export async function updateSenaiteSampleFields(
@@ -8285,7 +8287,9 @@ export interface ReadyRow {
   reasons: ReadyReason[]
   flags: ReadyFlag[]
   lines: { total: number; verified: number; pending: string[] }
+  /** Legacy 'normal' | 'high' | 'expedited' (sort only); the glyph reads `effective_priority`. */
   priority: string
+  effective_priority?: EffectivePriority | null
   sla: ReadySla | null
   /** Open "On Hold" flag → parked in the page's On-hold section. */
   hold: ReadyHold | null

@@ -84,6 +84,7 @@ export function EditableField({
     onSaved?.(newValue)
 
     try {
+      let warning: string | null | undefined
       if (onSave) {
         await onSave(newValue)
       } else {
@@ -93,8 +94,9 @@ export function EditableField({
         if (!result.success) {
           throw new Error(result.message)
         }
+        warning = result.warning
       }
-      toast.success(`${label} updated`)
+      toast.success(`${label} updated`, warning ? { description: warning } : undefined)
       setEditing(false)
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error'

@@ -1191,6 +1191,14 @@ class LimsSample(Base):
     status: Mapped[Optional[str]] = mapped_column(String(50))
     peptide_name: Mapped[Optional[str]] = mapped_column(String(200))
     client_sample_id: Mapped[Optional[str]] = mapped_column(String(200))
+    # TRUE once SENAITE refused a ClientSampleID write because the AR's
+    # workflow state locks the field (verified/published — 401 "Not allowed to
+    # set the field"). From then on Mk1 owns the value: the edit landed here
+    # only, and _populate_basic_info must never overwrite it with SENAITE's
+    # frozen copy (PB-0553, 2026-09-16).
+    client_sample_id_locked_in_senaite: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
     date_sampled: Mapped[Optional[datetime]] = mapped_column(DateTime)
     date_received: Mapped[Optional[datetime]] = mapped_column(DateTime)
     is_retest: Mapped[bool] = mapped_column(Boolean, default=False)

@@ -1591,6 +1591,10 @@ async def get_sample_activity(
                 LimsSubSampleEvent.lims_sample_pk == parent.id
             )
         ).scalars().all()
+        # (event, verification_code) -> actor email, from the actor-only rows
+        # Mk1 writes at generate/publish time (the timeline line itself comes
+        # from the Integration DB, which has no actor column).
+        coa_actors: dict = {}
         for se in parent_events:
             actor_email = None
             if se.user_id:
@@ -1635,6 +1639,16 @@ async def get_sample_activity(
                 if d.get("branding_to"):
                     bits.append(f"branding \"{d.get('branding_from') or ''}\" → \"{d['branding_to']}\"")
                 label = "Customer edit (portal)" + (" — " + "; ".join(bits) if bits else "")
+            elif se.event == "sample_field_updated":
+                label = (
+                    f"{d.get('label') or d.get('field')}: "
+                    f"\"{d.get('from') or ''}\" → \"{d.get('to') or ''}\""
+                )
+                if d.get("senaite") == "locked":
+                    label += " (SENAITE locked — saved in Mk1 only)"
+            elif se.event in ("coa_generated", "coa_published"):
+                coa_actors[(se.event, d.get("verification_code"))] = actor_email
+                continue
             else:
                 label = se.event
 
@@ -1647,6 +1661,19 @@ async def get_sample_activity(
                 "details": event_details,
                 "source": "lims_sub_sample_events",
             })
+
+        # Actors for the Integration-DB rows: COA rows from the actor-only
+        # events above, status rows from Mk1's own transition ledger.
+        from models import LimsSampleTransition
+        transitions = [
+            (t.to_status, t.occurred_at, email)
+            for t, email in db.execute(
+                select(LimsSampleTransition, User.email)
+                .join(User, User.id == LimsSampleTransition.actor_user_id)
+                .where(LimsSampleTransition.lims_sample_pk == parent.id)
+            ).all()
+        ]
+        _overlay_mk1_actors(events, coa_actors, transitions)
 
     # --- Mk1 DB: priority_audit (priority changes at any level) ------------
     # The log is derived at read time (spec §3.4) — no per-sample copy of the
@@ -10867,6 +10894,9 @@ class ReadyHoldOut(BaseModel):
     since: Optional[str] = None
 
 
+from priority.schemas import EffectiveOut as _PriorityEffectiveOut
+
+
 class ReadyRowOut(BaseModel):
     sample_id: str
     status: str
@@ -10881,6 +10911,9 @@ class ReadyRowOut(BaseModel):
     flags: list[ReadyFlagOut]
     lines: ReadyLinesOut
     priority: str
+    # Resolved priority (customer → order → sample → vial) for the row's
+    # PriorityGlyph; `priority` above is the legacy sort string.
+    effective_priority: Optional[_PriorityEffectiveOut] = None
     sla: Optional[ReadySlaOut] = None
     # Open "On Hold" flag → parked in the page's On-hold section; None = live.
     hold: Optional[ReadyHoldOut] = None
@@ -11018,15 +11051,16 @@ def _load_ready_to_publish_inputs(db: Session) -> dict:
         ).all():
             services_of.setdefault(pk, set()).add(svc)
 
+    # Effective priority from the modern resolver (customer → order → sample →
+    # vial chain). The legacy `sample_priorities` table this read used to hit
+    # is only written at SENAITE ingest, so it disagreed with every other page
+    # once anyone set a priority in Mk1. `priorities` keeps the legacy
+    # three-value string for sort_key; `effective_priorities` feeds the glyph.
+    from priority.service import legacy_priority_string, load_effective_for_uids
     uids = [s.external_uid for s in samples if s.external_uid]
-    priorities: dict[str, str] = {}
-    if uids:
-        priorities = {
-            uid: prio for uid, prio in db.execute(
-                select(SamplePriority.sample_uid, SamplePriority.priority)
-                .where(SamplePriority.sample_uid.in_(uids))
-            ).all()
-        }
+    effective = load_effective_for_uids(db, uids) if uids else {}
+    priorities: dict[str, str] = {u: legacy_priority_string(e) for u, e in effective.items()}
+    effective_priorities: dict[str, dict] = {u: e.as_dict() for u, e in effective.items()}
 
     tiers = [
         RtpTierIn(id=t.id, name=t.name, target_minutes=t.target_minutes, is_default=bool(t.is_default),
@@ -11061,6 +11095,7 @@ def _load_ready_to_publish_inputs(db: Session) -> dict:
         "flags": flags,
         "flag_types": flag_types,
         "priorities": priorities,
+        "effective_priorities": effective_priorities,
         "services_of": services_of,
         "tiers": tiers,
         "groups": groups,
@@ -13506,7 +13541,8 @@ async def generate_sample_coa(
     # just-created primary (best-effort; the helper no-ops for non-variance).
     if not is_sub:
         await _maybe_emit_regular_coa_child(db, sample_id, _parent_row, data)
-        await _maybe_emit_vial_coas(db, sample_id, _parent_row, data)
+        await _maybe_emit_vial_coas(db, sample_id, _parent_row, data,
+                                    user_id=getattr(current_user, "id", None))
 
     # Build a meaningful message from the COA Builder response
     warnings = data.get("warnings", [])
@@ -13575,6 +13611,13 @@ async def generate_sample_coa(
     # the generated sections as if that's all that's on it. The deferral is
     # still logged by build_native_sections and still rides the wire's
     # deferred_sections key (COA Builder's completeness-rule exemption).
+    # Who generated it: coa_generations (IS) has no actor column; the activity
+    # log overlays this onto its "COA vN generated" row.
+    _record_parent_event(
+        db, sample_id, "coa_generated",
+        {"verification_code": verification_code, "generation_number": generation_number},
+        getattr(current_user, "id", None), commit=True,
+    )
     return SampleCOAActionResponse(
         success=True,
         message=message,
@@ -13583,7 +13626,7 @@ async def generate_sample_coa(
 
 
 async def _generate_vial_coas_loop(db, parent, vials, parent_generation_id, existing,
-                                   *, include_remarks, lab_remarks):
+                                   *, include_remarks, lab_remarks, user_id=None):
     """One COABuilder /process per reportable HPLC vial not already in
     `existing`. Returns (generated, skipped, errors). Shared by the
     generate-vial-coas route and the post-primary auto-run for variance lots.
@@ -13642,6 +13685,12 @@ async def _generate_vial_coas_loop(db, parent, vials, parent_generation_id, exis
                     "verification_code": data.get("verification_code"),
                     "generation_id": data.get("generation_id"),
                 })
+                _record_parent_event(
+                    db, parent.sample_id, "coa_generated",
+                    {"verification_code": data.get("verification_code"),
+                     "vial_sequence": vial_seq},
+                    user_id, commit=True,
+                )
             except httpx.HTTPStatusError as e:
                 try:
                     detail = e.response.json().get("detail", str(e.response.status_code))
@@ -13655,7 +13704,7 @@ async def _generate_vial_coas_loop(db, parent, vials, parent_generation_id, exis
     return generated, skipped, errors
 
 
-async def _maybe_emit_vial_coas(db, sample_id, parent_row, primary_data):
+async def _maybe_emit_vial_coas(db, sample_id, parent_row, primary_data, user_id=None):
     """Variance lot: after the primary COA, auto-run the per-vial COAs the
     generate-vial-coas route would produce (2026-09-14). Best-effort — never
     fails the primary; idempotent via fetch_existing_vial_sequences; no-op
@@ -13685,6 +13734,7 @@ async def _maybe_emit_vial_coas(db, sample_id, parent_row, primary_data):
         generated, skipped, errors = await _generate_vial_coas_loop(
             db, parent_row, vials, str(primary_gen_id), existing,
             include_remarks=include_remarks, lab_remarks=lab_remarks,
+            user_id=user_id,
         )
         _logger.info("auto vial COAs for %s: generated=%s skipped=%s errors=%s",
                      sample_id, [g["vial_sequence"] for g in generated], skipped, errors)
@@ -13774,6 +13824,7 @@ async def generate_vial_coas(
     generated, skipped, errors = await _generate_vial_coas_loop(
         db, parent, vials, parent_generation_id, existing,
         include_remarks=include_remarks, lab_remarks=lab_remarks,
+        user_id=getattr(current_user, "id", None),
     )
 
     g, s, f = len(generated), len(skipped), len(errors)
@@ -14059,6 +14110,7 @@ async def publish_sample_coa(
         sample_id=sample_id, pre_publish_status=_pre_publish_status,
         actor_user_id=getattr(current_user, "id", None),
         senaite_actual_state=_senaite_actual_state,
+        verification_code=verification_code,
     )
     if _deferred_error is not None:
         raise _deferred_error
@@ -14168,6 +14220,12 @@ async def regen_primary_coa(
             success=False,
             message="Primary regenerated but no verification code returned",
         )
+    _record_parent_event(
+        db, sample_id, "coa_generated",
+        {"verification_code": verification_code,
+         "generation_number": data.get("generation_number")},
+        getattr(current_user, "id", None), commit=True,
+    )
 
     # 2. Attach new PDF to SENAITE (best-effort — the generation already has a PDF in S3)
     if SENAITE_URL and pdf_base64:
@@ -17889,6 +17947,102 @@ class SenaiteFieldUpdateResponse(BaseModel):
     success: bool
     message: str
     updated_fields: Optional[list] = None
+    # Set when the edit landed in Mk1 only (SENAITE locked the field).
+    warning: Optional[str] = None
+
+
+# Fields Mk1 owns outright once SENAITE's workflow has locked them
+# (verified/published AR): the edit is accepted locally instead of failing.
+# Mk1 is already the read source for these in mk1 read mode (PB-0553).
+_MK1_OWNED_WHEN_SENAITE_LOCKED = frozenset({"ClientSampleID"})
+_SENAITE_FIELD_LOCK_MARKER = "Not allowed to set the field"
+
+
+def _senaite_field_locked(err: httpx.HTTPStatusError) -> bool:
+    """SENAITE answers 401 + this message when the AR's workflow state has
+    revoked the field's write permission. A plain 401 (bad credentials)
+    carries no such message and must NOT be treated as a lock."""
+    try:
+        return (
+            err.response.status_code == 401
+            and _SENAITE_FIELD_LOCK_MARKER in (err.response.text or "")
+        )
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _senaite_field_label(key: str) -> str:
+    """'ClientSampleID' -> 'Client Sample ID' for the activity line."""
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ", key)
+
+
+def _record_parent_event(db: Session, sample_id: str, event: str,
+                         details: dict, user_id, *, commit: bool = False) -> bool:
+    """Append one parent-hosted `lims_sub_sample_events` row (Task 7's
+    polymorphic host) so the activity log can say WHO did it — the
+    Integration-DB coa_generations / sample_status_events rows carry no actor.
+    `sample_id` may be a parent or a vial id (a vial's event lands on its
+    parent). Returns False (never raises) when there is no registry row or the
+    write fails: an audit row must never fail the action it records."""
+    try:
+        from models import LimsSubSampleEvent
+        pk = db.execute(
+            select(LimsSample.id).where(LimsSample.sample_id == sample_id)
+        ).scalar_one_or_none()
+        if pk is None:
+            pk = db.execute(
+                select(LimsSubSample.parent_sample_pk)
+                .where(LimsSubSample.sample_id == sample_id)
+            ).scalar_one_or_none()
+        if pk is None:
+            return False
+        db.add(LimsSubSampleEvent(lims_sample_pk=pk, event=event,
+                                  details=details, user_id=user_id))
+        db.commit() if commit else db.flush()
+        return True
+    except Exception:  # noqa: BLE001
+        logger.warning("sample_event.write_failed sample_id=%s event=%s",
+                       sample_id, event, exc_info=True)
+        if commit:
+            try:
+                db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+        return False
+
+
+def _overlay_mk1_actors(events: list, coa_actors: dict, transitions: list) -> None:
+    """Stamp `details.by` onto Integration-DB activity rows from what Mk1
+    recorded: coa_* rows match on (event, verification_code); status_change
+    rows match a Mk1 transition on to_status, nearest within 15 minutes (the
+    IS row is written from the SENAITE webhook seconds after our verb).
+    `transitions` is [(to_status, occurred_at naive-UTC, email)]. In place."""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+    def _naive_utc(dt):
+        return dt.astimezone(_tz.utc).replace(tzinfo=None) if dt.tzinfo else dt
+
+    window = _td(minutes=15)
+    for ev in events:
+        d = ev.get("details") or {}
+        if ev.get("source") == "coa_generations":
+            email = coa_actors.get((ev.get("event"), d.get("verification_code")))
+            if email:
+                d["by"] = email
+        elif ev.get("source") == "sample_status_events" and ev.get("timestamp"):
+            at = _naive_utc(_dt.fromisoformat(ev["timestamp"]))
+            best = min(
+                (
+                    (abs(occurred - at), email)
+                    for to_status, occurred, email in transitions
+                    if email and to_status == d.get("new_status")
+                    and abs(occurred - at) <= window
+                ),
+                default=None,
+            )
+            if best:
+                d["by"] = best[1]
+        ev["details"] = d
 
 
 @app.post(
@@ -18030,6 +18184,7 @@ async def update_senaite_sample_fields(
             # If SENAITE returns 400 (e.g. isDecimal validator rejects
             # unicode strings in Python 2), fall back to form-encoded
             # which sends Python 2 str values that pass the validator.
+            senaite_locked = False
             try:
                 resp = await client.post(update_url, json=senaite_fields)
                 resp.raise_for_status()
@@ -18040,23 +18195,80 @@ async def update_senaite_sample_fields(
                         update_url, data=senaite_fields
                     )
                     resp.raise_for_status()
+                elif (
+                    _senaite_field_locked(json_err)
+                    and set(req.fields) <= _MK1_OWNED_WHEN_SENAITE_LOCKED
+                ):
+                    # PB-0553 (2026-09-16): SENAITE locks ClientSampleID once
+                    # the AR is verified/published, but Mk1 is the read source
+                    # for it, so the edit lands here only — and stays: the
+                    # refresh guard in _populate_basic_info honours the flag.
+                    senaite_locked = True
                 else:
                     raise
 
             # Dual-write mirror (registry slice 1): reflect the accepted
-            # SENAITE edit onto the local registry row. Best-effort — a
-            # mirror problem must never fail the user's edit.
+            # SENAITE edit onto the local registry row, and log who changed
+            # what (`sample_field_updated`, parent-hosted). Best-effort when
+            # SENAITE took the write — a mirror problem must never fail the
+            # user's edit. When SENAITE locked the field the mirror IS the
+            # write, so that path fails closed instead.
+            mirrored = False
             try:
-                from sub_samples.service import apply_senaite_fields_to_row
-                if apply_senaite_fields_to_row(db, uid, req.fields):
+                from models import LimsSubSampleEvent
+                from sub_samples.service import (
+                    _FIELD_MIRROR_SCALARS, apply_senaite_fields_to_row,
+                )
+                row = db.execute(
+                    select(LimsSample).where(LimsSample.external_lims_uid == uid)
+                ).scalar_one_or_none()
+                if row is not None:
+                    previous = {
+                        k: getattr(row, col)
+                        for k, col in _FIELD_MIRROR_SCALARS.items()
+                        if k in req.fields
+                    }
+                    mirrored = apply_senaite_fields_to_row(db, uid, req.fields)
+                    if senaite_locked:
+                        row.client_sample_id_locked_in_senaite = True
+                    for k, v in req.fields.items():
+                        db.add(LimsSubSampleEvent(
+                            lims_sample_pk=row.id,
+                            event="sample_field_updated",
+                            details={
+                                "field": k,
+                                "label": _senaite_field_label(k),
+                                "from": previous.get(k),
+                                "to": str(v) if v not in (None, "") else None,
+                                "senaite": "locked" if senaite_locked else "accepted",
+                            },
+                            user_id=getattr(current_user, "id", None),
+                        ))
                     db.commit()
             except Exception as mirror_err:
                 try:
                     db.rollback()
                 except Exception:
                     pass
+                if senaite_locked:
+                    return SenaiteFieldUpdateResponse(
+                        success=False,
+                        message=(
+                            "SENAITE has locked this field and the Mk1 save "
+                            f"failed: {mirror_err}"
+                        ),
+                    )
                 logger.warning(
                     "registry.field_mirror_failed uid=%s err=%s", uid, mirror_err
+                )
+            if senaite_locked and not mirrored:
+                return SenaiteFieldUpdateResponse(
+                    success=False,
+                    message=(
+                        "SENAITE has locked this field (sample verified/"
+                        f"published) and there is no Mk1 registry row for uid "
+                        f"{uid} to save it on"
+                    ),
                 )
 
             updated_fields = (
@@ -18066,6 +18278,11 @@ async def update_senaite_sample_fields(
                 success=True,
                 message=f"Updated {len(updated_fields)} field(s)",
                 updated_fields=updated_fields,
+                warning=(
+                    "SENAITE has locked this field (sample verified/published), "
+                    "so the change is saved in Accu-Mk1 only."
+                    if senaite_locked else None
+                ),
             )
 
     except httpx.TimeoutException:
@@ -18452,7 +18669,8 @@ def _arm_native_status_at_registration_bg(sample_id: str) -> None:
 
 
 def _after_publish_native(db, *, sample_id: str, pre_publish_status, actor_user_id,
-                          senaite_actual_state: str) -> None:
+                          senaite_actual_state: str,
+                          verification_code: str | None = None) -> None:
     """Sample-status authority flip (spec §4.4 / §5): the native publish verb is
     the user's direct intent, so it runs synchronously (ledger + engine), and a
     SENAITE publish that did not read back as 'published' becomes a retry row.
@@ -18482,6 +18700,9 @@ def _after_publish_native(db, *, sample_id: str, pre_publish_status, actor_user_
         drive_sample_touchpoint(db, sample_id, "publish", from_status=pre_publish_status,
                                 actor_user_id=actor_user_id,
                                 attested={"coa_published": True})
+        # Who published it (actor overlay for the IS "COA vN published" row).
+        _record_parent_event(db, sample_id, "coa_published",
+                             {"verification_code": verification_code}, actor_user_id)
         if senaite_actual_state != "published":
             row = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)
                              ).scalar_one_or_none()

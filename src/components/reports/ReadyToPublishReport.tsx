@@ -26,6 +26,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { PriorityGlyph } from '@/components/common/PriorityGlyph'
+import { FlagIndicator } from '@/components/flags/FlagIndicator'
 import { SlaBreakdownTooltip } from '@/components/explorer/SlaBreakdownTooltip'
 import { STATE_LABELS } from '@/components/senaite/senaite-utils'
 import { useStateLabel } from '@/lib/workflow-states-store'
@@ -250,17 +252,17 @@ function SampleLine({
       onClick={() => actions.onOpen(row.sample_id)}
     >
       <td className={cn('py-1.5 pr-2 align-top', indent ? 'pl-8' : 'pl-3')}>
-        <div className="font-mono text-sm text-primary">{row.sample_id}</div>
+        <div className="font-mono text-sm text-primary inline-flex items-center gap-1.5">
+          {row.sample_id}
+          {/* Same glyph as the samples list / inbox; renders nothing on the
+              default priority. */}
+          <PriorityGlyph priority={row.effective_priority} size="row" />
+        </div>
         <div className="text-[11px] text-muted-foreground">
           {!indent && (
             <span className="mr-2 tabular-nums">Order {row.order || '—'}</span>
           )}
           {row.lot ? `Lot ${row.lot}` : 'No lot'}
-          {row.priority !== 'normal' && (
-            <span className="ml-2 uppercase tracking-wide text-amber-400">
-              {row.priority}
-            </span>
-          )}
         </div>
       </td>
       <td className="py-1.5 pr-2 align-top text-xs">
@@ -312,6 +314,11 @@ function SampleLine({
       </td>
       <td className="py-1.5 pr-2 align-top text-right">
         <SlaCell row={row} />
+      </td>
+      <td className="py-1.5 pr-2 align-top" data-testid="rtp-flags">
+        {/* All open flags on the sample, coloured by the dominant type; click
+            opens the flags flyout (the indicator stops row-click propagation). */}
+        <FlagIndicator scope={{ kind: 'sample', sampleId: row.sample_id }} />
       </td>
       <td className="py-1.5 pr-3 align-top text-right whitespace-nowrap">
         {held ? (
@@ -519,6 +526,7 @@ export function ReadyToPublishReport() {
             </button>
           </th>
         ))}
+        <th className="text-left py-2 pr-2 font-medium">Flags</th>
         <th className="py-2 pr-3" />
       </tr>
     </thead>
@@ -736,6 +744,7 @@ function GroupRows({
             </span>
           )}
         </td>
+        <td className="py-2 pr-2" />
         <td className="py-2 pr-3" />
       </tr>
       {!collapsed &&

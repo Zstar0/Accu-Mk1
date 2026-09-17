@@ -2169,6 +2169,10 @@ def _run_migrations():
         "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS senaite_analysis_uid VARCHAR(50)",
         "CREATE INDEX IF NOT EXISTS ix_lims_analyses_senaite_analysis_uid "
         "ON lims_analyses (senaite_analysis_uid)",
+        # ClientSampleID edits accepted by Mk1 after SENAITE locked the field
+        # (PB-0553): the refresh must not overwrite them. See models.LimsSample.
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS "
+        "client_sample_id_locked_in_senaite BOOLEAN NOT NULL DEFAULT FALSE",
         # Documents library: actor on the in-place metadata patch path.
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS updated_by VARCHAR(200)",
     ]
