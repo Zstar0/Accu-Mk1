@@ -10967,6 +10967,35 @@ _RTP_TERMINAL_STATUSES = frozenset({"published", "cancelled", "invalid", "reject
 _RTP_NO_LINES_STATUSES = frozenset({"sample_due", "scheduled_sampling", "registered"})
 
 
+def _delivered_sample_pks(db: Session, sample_pks) -> frozenset:
+    """Parent sample pks that have already had a COA published.
+
+    Two signals, either is enough:
+    * a ``publish`` row in the sample ledger (``lims_sample_transitions``):
+      the one with HISTORY, written since July 2026 by Mk1's publish route and
+      by the SENAITE event sync alike, so it also sees a partial COA that went
+      out before the event below existed (prod: P-2777, published 09-15);
+    * a parent ``coa_published`` event: written by every Mk1 publish path, but
+      only since 1.21.9 (first rows 2026-09-17), and the only signal for a
+      partial publish the workflow engine declined to ledger.
+    """
+    pks = list(sample_pks)
+    if not pks:
+        return frozenset()
+    from models import LimsSampleTransition, LimsSubSampleEvent
+    ledger = db.execute(
+        select(LimsSampleTransition.lims_sample_pk)
+        .where(LimsSampleTransition.lims_sample_pk.in_(pks),
+               LimsSampleTransition.verb == "publish")
+    ).scalars().all()
+    events = db.execute(
+        select(LimsSubSampleEvent.lims_sample_pk)
+        .where(LimsSubSampleEvent.lims_sample_pk.in_(pks),
+               LimsSubSampleEvent.event == "coa_published")
+    ).scalars().all()
+    return frozenset(ledger) | frozenset(events)
+
+
 def _load_ready_to_publish_inputs(db: Session) -> dict:
     """Fetch everything ``ready_to_publish.build_ready_rows`` needs.
 
@@ -11079,17 +11108,9 @@ def _load_ready_to_publish_inputs(db: Session) -> dict:
         ).all():
             services_of.setdefault(pk, set()).add(svc)
 
-    # Samples that already had a COA go out (every Mk1 publish path writes a
-    # parent `coa_published` event): their row owes the LOOSEST tier, because
-    # what is left is the slow work (a USP 71 final is not late on day 4).
-    delivered_pks: frozenset = frozenset()
-    if candidate_pks:
-        from models import LimsSubSampleEvent
-        delivered_pks = frozenset(db.execute(
-            select(LimsSubSampleEvent.lims_sample_pk)
-            .where(LimsSubSampleEvent.lims_sample_pk.in_(candidate_pks),
-                   LimsSubSampleEvent.event == "coa_published")
-        ).scalars().all())
+    # Samples that already had a COA go out owe the LOOSEST tier, because what
+    # is left is the slow work (a USP 71 final is not late on day 4).
+    delivered_pks = _delivered_sample_pks(db, candidate_pks)
 
     # Effective priority from the modern resolver (customer → order → sample →
     # vial chain). The legacy `sample_priorities` table this read used to hit

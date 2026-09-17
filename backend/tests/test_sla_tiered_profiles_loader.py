@@ -9,7 +9,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import main
-from models import AnalysisProfile, SlaTier, analysis_profile_members
+from models import (
+    AnalysisProfile, LimsSample, LimsSampleTransition, LimsSubSampleEvent, SlaTier,
+    analysis_profile_members,
+)
 
 
 @pytest.fixture
@@ -41,3 +44,22 @@ def test_a_tiered_profile_with_no_members_is_harmless(db):
     db.commit()
     rows = {r[0]: r for r in main._load_tiered_profiles(db)}
     assert rows[11] == (11, "Empty", 3, frozenset())
+
+
+def test_delivered_reads_the_publish_ledger_and_the_coa_published_event(db):
+    """The ledger has the history (a partial COA from before 1.21.9 wrote no
+    event); the event covers a partial publish the engine declined to ledger."""
+    from datetime import datetime
+    for pk, sid in ((1, "P-2777"), (2, "P-NEW"), (3, "P-OPEN"), (4, "P-RECV")):
+        db.add(LimsSample(id=pk, sample_id=sid, status="verified"))
+    db.flush()
+    db.add(LimsSampleTransition(lims_sample_pk=1, verb="publish", to_status="published",
+                                source="senaite", occurred_at=datetime(2026, 9, 15, 3, 47)))
+    db.add(LimsSubSampleEvent(lims_sample_pk=2, event="coa_published", details={}))
+    db.add(LimsSampleTransition(lims_sample_pk=4, verb="receive", to_status="sample_received",
+                                source="mk1", occurred_at=datetime(2026, 9, 10, 18, 56)))
+    db.add(LimsSubSampleEvent(lims_sample_pk=4, event="coa_generated", details={}))
+    db.commit()
+    assert main._delivered_sample_pks(db, [1, 2, 3, 4]) == frozenset({1, 2})
+    assert main._delivered_sample_pks(db, []) == frozenset()
+    assert main._delivered_sample_pks(db, [3]) == frozenset()
