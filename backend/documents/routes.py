@@ -72,6 +72,7 @@ def _doc_out(doc: Document, revision_count: int) -> DocumentOut:
         category_name=doc.category.name, category_prefix=doc.category.code_prefix,
         status=doc.status, effective_date=doc.effective_date, activated_at=doc.activated_at,
         retired_at=doc.retired_at, supersedes_id=doc.supersedes_id, author=doc.author,
+        updated_by=doc.updated_by,
         source_session=doc.source_session, created_by_user_id=doc.created_by_user_id,
         content_type=doc.content_type, size_bytes=doc.size_bytes,
         content_sha256=doc.content_sha256, created_at=doc.created_at,
@@ -189,7 +190,11 @@ def create_document(req: DocumentCreate, response: Response, db: Session = Depen
 def patch_document(doc_id: int, req: DocumentPatch, db: Session = Depends(get_db),
                    writer=Depends(require_document_writer)):
     try:
-        doc = service.patch_document(db, doc_id, **req.model_dump(exclude_unset=True))
+        patch = req.model_dump(exclude_unset=True)
+        # A logged-in admin is named by their login, never by the request body.
+        if writer is not None:
+            patch["updated_by"] = writer.email
+        doc = service.patch_document(db, doc_id, **patch)
         n = service.revision_count(db, doc.code)
     except Exception as e:
         raise _http(e)

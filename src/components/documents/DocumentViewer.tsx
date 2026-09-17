@@ -105,9 +105,12 @@ export function DocumentViewer({ id }: { id: number }) {
             </Badge>
             <Badge variant="outline">{doc.category_name}</Badge>
             <span className="text-xs text-muted-foreground">
-              effective {formatDocDate(doc.effective_date)} ·{' '}
+              effective {formatDocDate(doc.effective_date)} · by{' '}
               {doc.author ?? 'unknown author'} · updated{' '}
               {formatDocDate(doc.updated_at)}
+              {doc.updated_by && doc.updated_by !== doc.author
+                ? ` by ${doc.updated_by}`
+                : ''}
             </span>
             <div className="ml-auto flex items-center gap-2">
               {doc.revisions.length > 1 && (

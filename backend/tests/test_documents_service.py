@@ -496,3 +496,28 @@ def test_cross_prefix_push_is_rejected_even_when_bytes_are_identical(db):
                                 code=doc.code)
     db.refresh(doc)
     assert doc.title == "keep me"
+
+
+def test_updated_by_tracks_the_last_in_place_change(db):
+    """A new revision is a NEW ROW carrying its own author, so updated_by only
+    ever moves on a metadata patch. It must also survive a rejected patch
+    unchanged: assigning it above the validation block would persist the actor
+    of a change that never happened."""
+    from documents import service
+    from documents.errors import BadRequestError
+    art = _art(db)
+    doc, _ = service.create_document(db, title="v1", html=HTML, category=art,
+                                     author="Forrest Parker")
+    # A fresh row is never null: its last toucher is its author.
+    assert doc.updated_by == "Forrest Parker"
+
+    doc = service.patch_document(db, doc.id, title="retitled",
+                                 updated_by="forrest@valenceanalytical.com")
+    assert doc.updated_by == "forrest@valenceanalytical.com"
+    assert doc.author == "Forrest Parker"  # author is the creator, unchanged
+
+    # A patch that fails validation must not record an actor.
+    with pytest.raises(BadRequestError):
+        service.patch_document(db, doc.id, title="   ", updated_by="someone@else.com")
+    db.rollback()
+    assert service.get_document(db, doc.id).updated_by == "forrest@valenceanalytical.com"

@@ -25,3 +25,4 @@ One script, stdlib only: `scripts/publish_document.py`.
 - The script refuses to publish if the page contains obviously secret-shaped strings (AWS/Stripe/GitHub/Slack tokens, private-key blocks, bearer tokens, `password=`). It is a speed bump, not a control — DB URLs with inline passwords and bare hex tokens are not caught; read the page before publishing.
 - The theme (`src/docs-theme/accumark-docs.css`) is inlined once; a page that already carries an `accumark-docs` marker is left as is.
 - Session id: pass `--session` with the current Claude Code session id (it is the folder name inside the scratchpad path) so the library records provenance.
+- Author: pass `--author` with the name of the PERSON who asked for the document, not the agent. It is what the list and the document header show. The agent's identity is already captured by `--session`.

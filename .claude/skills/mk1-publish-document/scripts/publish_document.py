@@ -3,7 +3,7 @@
 
 Usage:
   publish_document.py PAGE.html --title T --category ART [--description D]
-      [--code ART-0012] [--author "Claude Code"] [--session ID] [--draft]
+      [--code ART-0012] [--author "Forrest Parker"] [--session ID] [--draft]
       [--effective YYYY-MM-DD] [--theme PATH] [--base-url URL]
       [--allow-secrets] [--dry-run]
   publish_document.py --self-test
@@ -107,7 +107,9 @@ def main(argv=None) -> int:
     p.add_argument("--category", help="category code prefix or name, e.g. ART or SOP")
     p.add_argument("--description")
     p.add_argument("--code", help="existing code => publishes the next revision")
-    p.add_argument("--author", default="Claude Code")
+    p.add_argument("--author", default=os.environ.get("MK1_DOC_AUTHOR"),
+                   help="the person who instructed this document "
+                        "(not the agent; provenance goes in --session)")
     p.add_argument("--session", default=os.environ.get("MK1_DOC_SESSION"),
                    help="provenance: the Claude Code session id")
     p.add_argument("--draft", action="store_true", help="publish as draft (activate=false)")

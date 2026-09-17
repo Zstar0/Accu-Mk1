@@ -36,6 +36,7 @@ export interface DocumentRow {
   retired_at: string | null
   supersedes_id: number | null
   author: string | null
+  updated_by: string | null
   source_session: string | null
   created_by_user_id: number | null
   content_type: string

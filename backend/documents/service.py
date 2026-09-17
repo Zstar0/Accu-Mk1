@@ -297,7 +297,8 @@ def create_document(db: Session, *, title: str, html, category: Optional[Documen
     key = get_storage().save(code, revision, data)
     doc = Document(code=code, revision=revision, title=title, description=description,
                    category_id=cat.id, status="draft", effective_date=effective_date,
-                   supersedes_id=supersedes_id, author=author, source_session=source_session,
+                   supersedes_id=supersedes_id, author=author, updated_by=author,
+                   source_session=source_session,
                    created_by_user_id=user_id, storage_key=key, size_bytes=len(data),
                    content_sha256=sha)
     db.add(doc)
@@ -351,6 +352,7 @@ def patch_document(db: Session, doc_id: int, **fields) -> Document:
     patch would leave the row dirty in the session, and the next autoflush would
     persist it even though the caller saw an exception."""
     doc = get_document(db, doc_id)
+    updated_by = fields.pop("updated_by", None)
     allowed = {"title", "description", "category_id", "effective_date"}
     unknown = set(fields) - allowed
     if unknown:
@@ -378,6 +380,8 @@ def patch_document(db: Session, doc_id: int, **fields) -> Document:
         doc.category_id = category_id
     if "effective_date" in fields:
         doc.effective_date = fields["effective_date"]
+    if updated_by:
+        doc.updated_by = updated_by
     db.commit()
     db.refresh(doc)
     return doc

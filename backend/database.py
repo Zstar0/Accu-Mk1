@@ -2169,6 +2169,8 @@ def _run_migrations():
         "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS senaite_analysis_uid VARCHAR(50)",
         "CREATE INDEX IF NOT EXISTS ix_lims_analyses_senaite_analysis_uid "
         "ON lims_analyses (senaite_analysis_uid)",
+        # Documents library: actor on the in-place metadata patch path.
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS updated_by VARCHAR(200)",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

@@ -155,6 +155,16 @@ function DocumentsList() {
         ),
       },
       {
+        accessorKey: 'author',
+        header: 'Author',
+        size: 140,
+        cell: ({ row }) => (
+          <span className="truncate text-muted-foreground">
+            {row.original.author ?? '—'}
+          </span>
+        ),
+      },
+      {
         accessorKey: 'updated_at',
         header: 'Updated',
         size: 100,

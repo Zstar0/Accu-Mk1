@@ -50,6 +50,7 @@ class DocumentOut(BaseModel):
     retired_at: Optional[datetime] = None
     supersedes_id: Optional[int] = None
     author: Optional[str] = None
+    updated_by: Optional[str] = None
     source_session: Optional[str] = None
     created_by_user_id: Optional[int] = None
     content_type: str
@@ -89,3 +90,4 @@ class DocumentPatch(BaseModel):
     description: Optional[str] = None
     category_id: Optional[int] = None
     effective_date: Optional[date] = None
+    updated_by: Optional[str] = None

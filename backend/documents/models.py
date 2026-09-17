@@ -76,6 +76,9 @@ class Document(Base):
     supersedes_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("documents.id", ondelete="SET NULL"), nullable=True)
     author: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    # Who last changed this row IN PLACE (PATCH). A revision push makes a new
+    # row carrying its own author, so this only ever moves on a metadata patch.
+    updated_by: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     source_session: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     created_by_user_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
