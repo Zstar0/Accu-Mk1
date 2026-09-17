@@ -55,6 +55,7 @@ from sla_perf import (  # noqa: E402
     AnalysisIn as SlaPerfAnalysisIn,
     CoaIn as SlaPerfCoaIn,
     GroupIn as SlaPerfGroupIn,
+    ProfileIn as SlaPerfProfileIn,
     SampleIn as SlaPerfSampleIn,
     TierIn as SlaPerfTierIn,
     build_sla_performance,
@@ -10726,6 +10727,30 @@ def _sla_perf_rows(db: Session) -> tuple[dict, bool]:
         return _sla_perf_rows_cache, False
 
 
+def _load_tiered_profiles(db: Session) -> list[tuple[int, str, int, frozenset]]:
+    """(id, name, sla_tier_id, service_ids) for every ACTIVE analysis profile
+    that carries an SLA tier. The lab hangs its SLAs off profiles ("Sterility
+    USP 71" -> USP71), and a profile tier beats a service-group tier; both
+    report engines take these through ``sla_engine.tier_by_service``. Inactive
+    profiles are skipped: a retired profile must not keep driving a deadline
+    (same rule as the frontend's buildServiceToProfileTierMap)."""
+    from models import AnalysisProfile, analysis_profile_members
+
+    members: dict[int, set] = {}
+    for pid, svc_id in db.execute(
+        select(analysis_profile_members.c.analysis_profile_id,
+               analysis_profile_members.c.analysis_service_id)
+    ).all():
+        members.setdefault(pid, set()).add(svc_id)
+    return [
+        (pid, name, tier_id, frozenset(members.get(pid, set())))
+        for pid, name, tier_id in db.execute(
+            select(AnalysisProfile.id, AnalysisProfile.name, AnalysisProfile.sla_tier_id)
+            .where(AnalysisProfile.active.is_(True), AnalysisProfile.sla_tier_id.is_not(None))
+        ).all()
+    ]
+
+
 def _load_sla_perf_inputs(db: Session) -> dict:
     """Fetch the Mk1-side rows the SLA performance engine needs.
 
@@ -10802,6 +10827,8 @@ def _load_sla_perf_inputs(db: Session) -> dict:
         "samples": samples,
         "analyses": analyses,
         "tiers": tiers,
+        "profiles": [SlaPerfProfileIn(id=pid, name=name, sla_tier_id=tier_id, service_ids=svc)
+                     for pid, name, tier_id, svc in _load_tiered_profiles(db)],
         "groups": groups,
         "schedule": schedule,
         "holidays": holidays,
@@ -10960,6 +10987,7 @@ def _load_ready_to_publish_inputs(db: Session) -> dict:
         FlagIn as RtpFlagIn,
         FlagTypeIn as RtpFlagTypeIn,
         GroupIn as RtpGroupIn,
+        ProfileIn as RtpProfileIn,
         SampleIn as RtpSampleIn,
         TierIn as RtpTierIn,
         resolve_flag_kinds,
@@ -11051,6 +11079,18 @@ def _load_ready_to_publish_inputs(db: Session) -> dict:
         ).all():
             services_of.setdefault(pk, set()).add(svc)
 
+    # Samples that already had a COA go out (every Mk1 publish path writes a
+    # parent `coa_published` event): their row owes the LOOSEST tier, because
+    # what is left is the slow work (a USP 71 final is not late on day 4).
+    delivered_pks: frozenset = frozenset()
+    if candidate_pks:
+        from models import LimsSubSampleEvent
+        delivered_pks = frozenset(db.execute(
+            select(LimsSubSampleEvent.lims_sample_pk)
+            .where(LimsSubSampleEvent.lims_sample_pk.in_(candidate_pks),
+                   LimsSubSampleEvent.event == "coa_published")
+        ).scalars().all())
+
     # Effective priority from the modern resolver (customer → order → sample →
     # vial chain). The legacy `sample_priorities` table this read used to hit
     # is only written at SENAITE ingest, so it disagreed with every other page
@@ -11098,6 +11138,9 @@ def _load_ready_to_publish_inputs(db: Session) -> dict:
         "effective_priorities": effective_priorities,
         "services_of": services_of,
         "tiers": tiers,
+        "profiles": [RtpProfileIn(id=pid, name=name, sla_tier_id=tier_id, service_ids=svc)
+                     for pid, name, tier_id, svc in _load_tiered_profiles(db)],
+        "delivered_pks": delivered_pks,
         "groups": groups,
         "schedule": schedule,
         "holidays": holidays,
