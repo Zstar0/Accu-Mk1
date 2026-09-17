@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.21.9 — 2026-09-16
+
 ### Fixed
 - **Client Sample ID can be changed after a sample is verified or (partially) published.** SENAITE locks the field once the AR leaves the editable states and answered every save with 401 "Not allowed to set the field 'ClientSampleID'" (PB-0553). Accu-Mk1 is already the read source for this field, so the edit is now saved in Mk1 when SENAITE refuses it — the row is flagged (`client_sample_id_locked_in_senaite`) so the five-minute SENAITE refresh never overwrites it with SENAITE's frozen copy, and the toast says the change lives in Accu-Mk1 only. A plain 401 (bad credentials) or a lock on any other field still fails as before.
 
