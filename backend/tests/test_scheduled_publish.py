@@ -20,9 +20,9 @@ from sqlalchemy.pool import StaticPool
 
 import scheduled_publish as sp
 from models import (
-    BusinessHoursConfig, LabHoliday, LimsAnalysis, LimsSample, LimsScheduledPublish,
+    AnalysisProfile, BusinessHoursConfig, LabHoliday, LimsAnalysis, LimsSample, LimsScheduledPublish,
     LimsSubSampleEvent, Priority, ServiceGroup, SlaPriorityTier, SlaTier, User, FlagType,
-    service_group_members,
+    analysis_profile_members, service_group_members,
 )
 from sla_engine import BusinessSchedule, compute_business_minutes
 
@@ -440,13 +440,17 @@ def test_active_by_sample_serializes_with_z_timestamps(session_factory):
 # ── tiers beyond the 3-day default (USP 71 = 14 working days) ───────────────
 
 def _usp71(db):
-    """The prod shape once USP71 is attached: a 6720-minute tier on a group
-    holding the USP 71 service (id 91). HPLC services (id 10) stay ungrouped,
-    exactly like prod's Core HPLC group with zero members."""
+    """The PROD shape (read 2026-09-17): the 6720-minute USP71 tier hangs off
+    the "Sterility USP 71" ANALYSIS PROFILE, whose services BACTERIA (279) and
+    FUNGI (280) sit in NO service group. HPLC services (id 10) carry no
+    profile tier and no group, so they fall to the default."""
     db.add(SlaTier(id=3, name="USP71", target_minutes=6720, business_hours_only=True))
-    db.add(ServiceGroup(id=5, name="Sterility USP71", sla_tier_id=3))
+    db.add(AnalysisProfile(id=8, key="sterility_usp71", name="Sterility USP 71", is_addon=True,
+                           sla_tier_id=3))
     db.flush()
-    db.execute(service_group_members.insert().values(service_group_id=5, analysis_service_id=91))
+    for svc in (279, 280):
+        db.execute(analysis_profile_members.insert().values(
+            analysis_profile_id=8, analysis_service_id=svc, sort_order=0))
     db.commit()
 
 
@@ -460,7 +464,8 @@ def test_usp71_only_sample_gets_the_14_day_window(session_factory):
     db = session_factory()
     _usp71(db)
     s = add_sample(db, received=la(2026, 9, 14, 10, 0))          # Monday
-    _line(db, s, 91, "STERILITY-USP71")
+    _line(db, s, 279, "BACTERIA")
+    _line(db, s, 280, "FUNGI")
     for seed in range(25):
         at, deadline, clamped, tier = sp.suggest(db, s, now=la(2026, 9, 14, 11, 0), rng=random.Random(seed))
         assert tier.name == "USP71"
@@ -476,8 +481,8 @@ def test_mixed_sample_owes_the_fast_tier_first_and_the_slow_tier_after_a_publish
     db = session_factory()
     _usp71(db)
     s = add_sample(db, received=la(2026, 9, 14, 10, 0))
-    _line(db, s, 10, "HPLC-PUR")            # ungrouped -> default tier is in play
-    _line(db, s, 91, "STERILITY-USP71")
+    _line(db, s, 10, "HPLC-PUR")            # no profile tier, no group -> default
+    _line(db, s, 279, "BACTERIA")
     assert sp.resolve_tier(db, s).name == "Standard"
     assert to_la(sp.sla_deadline(db, s)) == datetime(2026, 9, 17, 10, 0, tzinfo=LA)
     # The partial COA goes out; what remains is the USP 71 result.
@@ -488,6 +493,31 @@ def test_mixed_sample_owes_the_fast_tier_first_and_the_slow_tier_after_a_publish
     # No lines at all: the default tier.
     bare = add_sample(db, sample_id="P-9", received=la(2026, 9, 14, 10, 0))
     assert sp.resolve_tier(db, bare).name == "Standard"
+    db.close()
+
+
+def test_profile_tier_beats_group_tier_and_inactive_profiles_are_ignored(session_factory):
+    db = session_factory()
+    db.add(SlaTier(id=2, name="Microbiology", target_minutes=1440, business_hours_only=True))
+    db.add(SlaTier(id=3, name="USP71", target_minutes=6720, business_hours_only=True))
+    db.add(SlaTier(id=4, name="GroupTier", target_minutes=2880, business_hours_only=True))
+    # Service 50 is in a group (2880) AND in an active tiered profile (6720).
+    db.add(ServiceGroup(id=6, name="Sterility", sla_tier_id=4))
+    db.add(AnalysisProfile(id=8, key="usp71", name="Sterility USP 71", is_addon=True, sla_tier_id=3))
+    # Service 60 is only in a RETIRED tiered profile: must not drive the SLA.
+    db.add(AnalysisProfile(id=9, key="old", name="Retired", is_addon=True, sla_tier_id=3, active=False))
+    db.flush()
+    db.execute(service_group_members.insert().values(service_group_id=6, analysis_service_id=50))
+    db.execute(service_group_members.insert().values(service_group_id=6, analysis_service_id=70))
+    db.execute(analysis_profile_members.insert().values(analysis_profile_id=8, analysis_service_id=50, sort_order=0))
+    db.execute(analysis_profile_members.insert().values(analysis_profile_id=9, analysis_service_id=60, sort_order=0))
+    db.commit()
+    a = add_sample(db, sample_id="P-A"); _line(db, a, 50, "BACTERIA")
+    assert sp.resolve_tier(db, a).name == "USP71"           # profile beats the group's 2880
+    b = add_sample(db, sample_id="P-B"); _line(db, b, 60, "OLD")
+    assert sp.resolve_tier(db, b).name == "Standard"        # retired profile ignored -> default
+    c = add_sample(db, sample_id="P-C"); _line(db, c, 70, "GROUPED")
+    assert sp.resolve_tier(db, c).name == "GroupTier"       # no profile tier -> the group's
     db.close()
 
 

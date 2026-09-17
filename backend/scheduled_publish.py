@@ -39,6 +39,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from models import (
+    AnalysisProfile,
     BusinessHoursConfig,
     LabHoliday,
     LimsAnalysis,
@@ -49,6 +50,7 @@ from models import (
     SlaPriorityTier,
     SlaTier,
     User,
+    analysis_profile_members,
     service_group_members,
 )
 from sla_engine import BusinessSchedule, resolve_sla_tier
@@ -209,19 +211,28 @@ def push_out_of_quiet(at_naive_utc: datetime, schedule: BusinessSchedule,
 def resolve_tier(db: Session, sample: LimsSample) -> Optional[SlaTier]:
     """The SLA tier that governs the NEXT publish of this sample.
 
-    Candidates are the tier of every service group the sample's services sit
-    in, plus the default tier when any service is ungrouped (prod: every HPLC
-    service is ungrouped, so an HPLC + USP71 sample has both the 3-day default
-    and the 14-day USP71 tier in play).
+    Each of the sample's services resolves to ONE tier, in the precedence the
+    lab configures SLAs with (Handler 2026-09-17: tiers hang off ANALYSIS
+    PROFILES, not service groups; mirrors src/lib/sla-resolution.ts):
+      1. the tightest tiered ACTIVE analysis profile the service belongs to
+         (prod: "Sterility USP 71" -> USP71 6720 min, "Endotoxin USP85 LAL"
+         -> Microbiology 1440 min);
+      2. else the tightest tier of a service group it sits in;
+      3. else the default tier (prod: every HPLC service lands here).
+    The profile step applies whether or not the service is in a group. Prod's
+    USP 71 services (BACTERIA, FUNGI) are in no group; gating on group
+    membership, as the frontend's per-group resolver does, would silently
+    judge every USP 71 sample against the 3-day tier.
 
-    * Nothing delivered yet: the TIGHTEST candidate. The first (possibly
-      partial) COA is the fast work and owes the fast deadline.
+    Across the sample's services:
+    * Nothing delivered yet: the TIGHTEST tier. The first (possibly partial)
+      COA is the fast work and owes the fast deadline.
     * A COA already went out (a `coa_published` event exists): the LOOSEST.
-      What remains is by construction the slow group (USP 71 sterility), and
+      What remains is by construction the slow work (USP 71 sterility), and
       judging it against the 3-day tier would call every such sample late.
 
-    A global priority override for the sample's effective priority beats both
-    (sla_engine.resolve_sla_tier precedence).
+    A global priority override for the sample's effective priority beats all
+    of it (sla_engine.resolve_sla_tier precedence).
     """
     tiers = {t.id: t for t in db.execute(select(SlaTier)).scalars().all()}
     default_tier = next((t for t in tiers.values() if t.is_default), None)
@@ -231,19 +242,37 @@ def resolve_tier(db: Session, sample: LimsSample) -> Optional[SlaTier]:
         .where(LimsAnalysis.lims_sample_pk == sample.id,
                LimsAnalysis.analysis_service_id.is_not(None))
     ).scalars().all())
-    cands: list[SlaTier] = []
-    grouped: set = set()
+
+    def tightest_by_service(rows) -> dict:
+        out: dict = {}
+        for svc_id, tier_id in rows:
+            t = tiers.get(tier_id)
+            if t is not None and (svc_id not in out or t.target_minutes < out[svc_id].target_minutes):
+                out[svc_id] = t
+        return out
+
+    by_profile: dict = {}
+    by_group: dict = {}
     if svc_ids:
-        for svc_id, tier_id in db.execute(
+        by_profile = tightest_by_service(db.execute(
+            select(analysis_profile_members.c.analysis_service_id, AnalysisProfile.sla_tier_id)
+            .join(AnalysisProfile, analysis_profile_members.c.analysis_profile_id == AnalysisProfile.id)
+            .where(analysis_profile_members.c.analysis_service_id.in_(svc_ids),
+                   AnalysisProfile.active.is_(True),
+                   AnalysisProfile.sla_tier_id.is_not(None))
+        ).all())
+        by_group = tightest_by_service(db.execute(
             select(service_group_members.c.analysis_service_id, ServiceGroup.sla_tier_id)
             .join(ServiceGroup, service_group_members.c.service_group_id == ServiceGroup.id)
             .where(service_group_members.c.analysis_service_id.in_(svc_ids),
                    ServiceGroup.sla_tier_id.is_not(None))
-        ).all():
-            if tier_id in tiers:
-                grouped.add(svc_id)
-                cands.append(tiers[tier_id])
-    if default_tier is not None and (not svc_ids or svc_ids - grouped):
+        ).all())
+    cands: list[SlaTier] = []
+    for svc_id in svc_ids:
+        t = by_profile.get(svc_id) or by_group.get(svc_id) or default_tier
+        if t is not None:
+            cands.append(t)
+    if not svc_ids and default_tier is not None:
         cands.append(default_tier)
     group_tier = None
     if cands:
