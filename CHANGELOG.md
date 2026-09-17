@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.22.0 - 2026-09-17
+
 ### Added
 - **Documents library.** Reports → Documents lists controlled documents published by agents (artifacts, SOPs), with search, category and status filters, a sandboxed in-app viewer, revision history, download, and admin retitle. Documents carry a code (ART-0012 / SOP-0003), a revision, draft/active/retired status and an effective date, following the Methods lifecycle; a new revision retires the previous active one and content is never rewritten. Settings → Documents manages categories. Agents publish with the `mk1-publish-document` skill over the existing service token (`POST /api/documents`). New tables `document_categories`, `documents`, `document_code_counters`; HTML bytes live in the vial-photo blob store, under `documents/` inside the photo prefix (`MK1_DOCUMENTS_S3_PREFIX` overrides). Spec: `docs/superpowers/specs/2026-09-15-documents-library-design.md`.
 
