@@ -118,9 +118,17 @@ def init_db():
     # Import models to register them with Base
     import models  # noqa: F401
     import flags.models  # noqa: F401  (register flag_* tables on Base)
+    import documents.models  # noqa: F401  (register documents tables on Base)
     # Run column migrations before create_all so ORM mappings match the DB schema
     _run_migrations()
     Base.metadata.create_all(bind=engine)
+    # Documents library: seed the Artifact/SOP categories (spec 2026-09-15 §3.1).
+    try:
+        from documents.service import seed_categories
+        with SessionLocal() as _s:
+            seed_categories(_s)
+    except Exception as e:  # never block startup
+        log.warning("documents_category_seed_skipped err=%s", e)
     # S6b: per-substance PUR_/QTY_ derivation — moved out of _run_migrations
     # into an on-demand reconciler (same statements, now with a report).
     # MUST run before backfill_departments so freshly minted rows get their
@@ -2165,6 +2173,8 @@ def _run_migrations():
         # (PB-0553): the refresh must not overwrite them. See models.LimsSample.
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS "
         "client_sample_id_locked_in_senaite BOOLEAN NOT NULL DEFAULT FALSE",
+        # Documents library: actor on the in-place metadata patch path.
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS updated_by VARCHAR(200)",
         # ── Scheduled COA publish (2026-09-17). Full CREATE here (migrations
         # run BEFORE create_all and the partial index needs the table); the
         # ORM twin is models.LimsScheduledPublish.
