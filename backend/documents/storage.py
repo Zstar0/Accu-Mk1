@@ -133,15 +133,29 @@ class FilesystemDocumentStorage:
         return resolved
 
 
+def _s3_prefix() -> str:
+    """Default to documents/ NESTED UNDER the vial-photo prefix, not beside it.
+    Prod's IAM key is scoped to the photo prefix, so a top-level documents/ is
+    AccessDenied there while sub-sample-photos/documents/ is allowed (probed
+    from the prod backend 2026-09-17). MK1_DOCUMENTS_S3_PREFIX still overrides."""
+    explicit = os.environ.get("MK1_DOCUMENTS_S3_PREFIX")
+    if explicit:
+        return explicit
+    photo = os.environ.get("MK1_PHOTO_S3_PREFIX", "sub-sample-photos/")
+    if photo and not photo.endswith("/"):
+        photo += "/"
+    return f"{photo}documents/"
+
+
 class S3DocumentStorage:
-    """Prod. Objects at {MK1_DOCUMENTS_S3_PREFIX}{code}/{uuid}.bin in the vial-photo
-    bucket (S3PhotoStorage maps unknown extensions to .bin; the DB row carries the
-    real content type, so the object name never matters)."""
+    """Prod. Objects at {prefix}{code}/{uuid}.bin in the vial-photo bucket
+    (S3PhotoStorage maps unknown extensions to .bin; the DB row carries the real
+    content type, so the object name never matters). Prefix: see _s3_prefix."""
 
     def __init__(self) -> None:
         from sub_samples.photo_storage import S3PhotoStorage
         self._s3 = S3PhotoStorage(
-            prefix=os.environ.get("MK1_DOCUMENTS_S3_PREFIX", "documents/"))
+            prefix=_s3_prefix())
 
     def save(self, code: str, revision: int, data: bytes) -> str:
         if not data:

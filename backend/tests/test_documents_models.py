@@ -131,6 +131,19 @@ def test_s3_storage_wraps_failures(monkeypatch, tmp_path):
         st.save("ART-0001", 1, b"<x>")
 
 
+def test_s3_prefix_nests_under_the_photo_prefix(monkeypatch):
+    """Prod's IAM key is scoped to the photo prefix: a top-level documents/ was
+    AccessDenied there, so the default has to live inside it."""
+    from documents.storage import _s3_prefix
+    monkeypatch.delenv("MK1_DOCUMENTS_S3_PREFIX", raising=False)
+    monkeypatch.delenv("MK1_PHOTO_S3_PREFIX", raising=False)
+    assert _s3_prefix() == "sub-sample-photos/documents/"
+    monkeypatch.setenv("MK1_PHOTO_S3_PREFIX", "stack-photos")  # no trailing slash
+    assert _s3_prefix() == "stack-photos/documents/"
+    monkeypatch.setenv("MK1_DOCUMENTS_S3_PREFIX", "elsewhere/")
+    assert _s3_prefix() == "elsewhere/"
+
+
 def test_filesystem_fetch_rejects_directory_key(tmp_path):
     from documents.storage import DocumentStorageError, FilesystemDocumentStorage
     st = FilesystemDocumentStorage(root=str(tmp_path))
