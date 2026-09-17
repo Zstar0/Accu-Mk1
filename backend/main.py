@@ -13888,6 +13888,24 @@ async def generate_vial_coas(
     }
 
 
+def _refuse_while_publish_scheduled(db: Session, sample_id: str) -> None:
+    """409 while a publish is parked for the sample (backend/scheduled_publish.py).
+    Its newest draft carries the scheduled, future Published Date, and IS
+    publishes the newest draft, so a direct publish would ship a post-dated
+    certificate. The scheduler's own row is `firing` when it calls the publish
+    route, so the job passes. Sample Details cancels first (that regenerates
+    with today's date); this covers every other caller."""
+    import scheduled_publish as _scheduled_publish
+    if _scheduled_publish.has_pending(db, sample_id):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "A publish is scheduled for this sample and its draft carries the scheduled date. "
+                "Cancel the schedule first (the draft is regenerated with today's date), then publish."
+            ),
+        )
+
+
 @app.post("/wizard/senaite/samples/{sample_id}/publish-coa")
 async def publish_sample_coa(
     sample_id: str,
@@ -13912,6 +13930,7 @@ async def publish_sample_coa(
                 "Publish the parent sample's COA instead."
             ),
         )
+    _refuse_while_publish_scheduled(db, sample_id)
 
     # 2. Resolve SENAITE UID upfront so we fail before touching integration service state
     senaite_uid: str | None = None
@@ -14387,6 +14406,9 @@ async def regen_primary_coa(
     with skip_additional_coas=true so existing additional COAs keep their
     codes untouched, then publishes the new primary.
     """
+    # Before anything is generated: a refusal at the publish step would leave
+    # a today-dated draft for the scheduled fire to ship.
+    _refuse_while_publish_scheduled(db, sample_id)
     if not COA_BUILDER_URL:
         return SampleCOAActionResponse(
             success=False,

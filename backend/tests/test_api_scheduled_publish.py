@@ -211,6 +211,31 @@ def test_manual_publish_hook_cancels_the_schedule(api, factory):
     assert rows(factory)[0].last_error == "published manually"
 
 
+def test_publish_routes_409_while_a_publish_is_pending(api, factory):
+    """A pending schedule's draft carries the scheduled (future) Published
+    Date, so only the job may publish it. Stack-proven 2026-09-17: a raw
+    publish-coa call shipped a certificate dated five days ahead."""
+    client.post(PATH, json={"scheduled_at": future()})
+    api["calls"].clear()
+    for route in ("publish-coa", "regen-primary-coa"):
+        r = client.post(f"/wizard/senaite/samples/P-1/{route}")
+        assert r.status_code == 409, f"{route}: {r.status_code} {r.text}"
+        assert "scheduled" in r.json()["detail"]
+    assert api["calls"] == []                           # regen refused BEFORE generating
+    assert [x.status for x in rows(factory)] == ["pending"]
+
+
+@pytest.mark.parametrize("status", ["firing", "failed", "cancelled", "published"])
+def test_only_a_pending_row_blocks_a_publish(factory, status):
+    # `firing` is the job's own row: the job must be able to publish it.
+    db = factory()
+    db.add(LimsScheduledPublish(sample_id="P-1", scheduled_at=datetime.utcnow(), pdf_date="01/01/2030",
+                                status=status, created_by_user_id=1))
+    db.commit()
+    assert sp.has_pending(db, "P-1") is False
+    db.close()
+
+
 # ── Ready to Publish parking ────────────────────────────────────────────────
 
 SCHEDULE = BusinessSchedule(open_time=time(9, 0), close_time=time(17, 0), timezone="America/Los_Angeles",

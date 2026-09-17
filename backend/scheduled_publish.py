@@ -394,6 +394,19 @@ def active_for(db: Session, sample_id: str) -> Optional[LimsScheduledPublish]:
     ).scalars().first()
 
 
+def has_pending(db: Session, sample_id: str) -> bool:
+    """A publish is parked for this sample, so its newest draft carries the
+    scheduled (future) Published Date and only the job may publish it. The
+    job's own row is `firing` by the time it publishes, so it never trips
+    this. Cancelling regenerates the draft with today's date."""
+    return db.execute(
+        select(LimsScheduledPublish.id)
+        .where(LimsScheduledPublish.sample_id == sample_id,
+               LimsScheduledPublish.status == "pending")
+        .limit(1)
+    ).scalar_one_or_none() is not None
+
+
 def active_by_sample(db: Session) -> dict[str, dict]:
     """{sample_id: serialized row} for every active row (Ready to Publish)."""
     out: dict[str, dict] = {}
