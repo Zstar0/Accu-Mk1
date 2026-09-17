@@ -130,7 +130,7 @@ describe('splitHeld', () => {
       title: 'Customer paying',
       since: '2026-09-09T12:00:00',
     }
-    const { live, held } = splitHeld([
+    const { live, held, scheduled } = splitHeld([
       row({ sample_id: 'P-1' }),
       row({ sample_id: 'P-2', hold }),
       row({ sample_id: 'P-3' }),
@@ -138,6 +138,40 @@ describe('splitHeld', () => {
     ])
     expect(live.map(r => r.sample_id)).toEqual(['P-1', 'P-3'])
     expect(held.map(r => r.sample_id)).toEqual(['P-2', 'P-4'])
+    expect(scheduled).toEqual([])
+  })
+
+  it('parks pending scheduled publishes, keeps failed ones live, hold wins', () => {
+    const sched = (status: 'pending' | 'firing' | 'failed') => ({
+      id: 1,
+      sample_id: 'x',
+      scheduled_at: '2026-09-19T17:00:00Z',
+      pdf_date: '09/19/2026',
+      status,
+      created_by_user_id: 1,
+      created_at: '2026-09-17T22:00:00Z',
+      fired_at: null,
+      last_error: null,
+    })
+    const hold = {
+      flag_id: 1,
+      type: 'new_type_7',
+      label: 'On Hold',
+      color: '#64748b',
+      status: 'open',
+      title: 'x',
+      since: null,
+    }
+    const { live, held, scheduled } = splitHeld([
+      row({ sample_id: 'P-1', scheduled: sched('pending') }),
+      row({ sample_id: 'P-2', scheduled: sched('failed') }),
+      row({ sample_id: 'P-3', scheduled: sched('firing') }),
+      row({ sample_id: 'P-4', scheduled: sched('pending'), hold }),
+      row({ sample_id: 'P-5' }),
+    ])
+    expect(scheduled.map(r => r.sample_id)).toEqual(['P-1', 'P-3'])
+    expect(held.map(r => r.sample_id)).toEqual(['P-4'])
+    expect(live.map(r => r.sample_id)).toEqual(['P-2', 'P-5'])
   })
 })
 

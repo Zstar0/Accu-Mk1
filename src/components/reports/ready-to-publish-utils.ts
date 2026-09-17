@@ -8,6 +8,7 @@
  * a group keep their server order. Nothing here re-sorts.
  */
 import type { ReadyReason, ReadyRow, ReadySla } from '@/lib/api'
+import { isParkedSchedule } from '@/lib/scheduled-publish'
 
 export interface ReadyOrderGroup {
   order: string
@@ -100,16 +101,23 @@ export function matchesQuery(row: ReadyRow, query: string): boolean {
   return hay.some(h => h.toLowerCase().includes(q))
 }
 
-/** Split rows into the live table and the parked On-hold section. Order is
- *  preserved in both halves. */
+/** Split rows into the live table and the two parked sections (On hold,
+ *  Scheduled). Hold wins when both apply; a FAILED schedule stays live.
+ *  Order is preserved in every part. */
 export function splitHeld(rows: ReadyRow[]): {
   live: ReadyRow[]
   held: ReadyRow[]
+  scheduled: ReadyRow[]
 } {
   const live: ReadyRow[] = []
   const held: ReadyRow[] = []
-  for (const r of rows) (r.hold ? held : live).push(r)
-  return { live, held }
+  const scheduled: ReadyRow[] = []
+  for (const r of rows) {
+    if (r.hold) held.push(r)
+    else if (isParkedSchedule(r.scheduled)) scheduled.push(r)
+    else live.push(r)
+  }
+  return { live, held, scheduled }
 }
 
 // ─── Column sorting ──────────────────────────────────────────────────────────

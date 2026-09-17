@@ -2085,6 +2085,73 @@ export async function publishSenaiteCOA(
   return response.json()
 }
 
+// ── Scheduled publish (2026-09-17) ───────────────────────────────────────────
+
+/** One lims_scheduled_publishes row. Timestamps are ISO UTC with a Z. */
+export interface ScheduledPublish {
+  id: number
+  sample_id: string
+  scheduled_at: string
+  /** MM/DD/YYYY lab-local date the draft was regenerated with. */
+  pdf_date: string
+  status: 'pending' | 'firing' | 'published' | 'failed' | 'cancelled'
+  created_by_user_id: number | null
+  created_at: string
+  fired_at: string | null
+  last_error: string | null
+}
+
+export interface ScheduledPublishState {
+  schedule: ScheduledPublish | null
+  suggested_at: string
+  sla_deadline: string | null
+  /** The SLA clamp moved the suggestion, or the sample is already late. */
+  suggestion_clamped: boolean
+  lab_timezone: string
+}
+
+export interface SchedulePublishResult extends SampleCOAActionResponse {
+  schedule?: ScheduledPublish | null
+}
+
+function scheduledPublishUrl(sampleId: string): string {
+  return `${API_BASE_URL()}/wizard/senaite/samples/${encodeURIComponent(sampleId)}/scheduled-publish`
+}
+
+export async function getScheduledPublish(
+  sampleId: string
+): Promise<ScheduledPublishState> {
+  const response = await fetch(scheduledPublishUrl(sampleId), { headers: getBearerHeaders() })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, `Scheduled publish lookup failed: ${response.status}`))
+  return response.json()
+}
+
+/** Regenerates the draft with the scheduled date and parks the publish. `scheduledAt` is ISO UTC. */
+export async function schedulePublish(
+  sampleId: string,
+  scheduledAt: string
+): Promise<SchedulePublishResult> {
+  const response = await fetch(scheduledPublishUrl(sampleId), {
+    method: 'POST',
+    headers: { ...getBearerHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scheduled_at: scheduledAt }),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, `Schedule publish failed: ${response.status}`))
+  return response.json()
+}
+
+/** Cancels a pending schedule (the draft is regenerated with today's date) or dismisses a failed one. */
+export async function cancelScheduledPublish(
+  sampleId: string
+): Promise<SchedulePublishResult> {
+  const response = await fetch(scheduledPublishUrl(sampleId), {
+    method: 'DELETE',
+    headers: getBearerHeaders(),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, `Cancel scheduled publish failed: ${response.status}`))
+  return response.json()
+}
+
 export async function regenPrimaryCOA(
   sampleId: string
 ): Promise<SampleCOAActionResponse> {
@@ -8293,6 +8360,9 @@ export interface ReadyRow {
   sla: ReadySla | null
   /** Open "On Hold" flag → parked in the page's On-hold section. */
   hold: ReadyHold | null
+  /** Scheduled publish: pending/firing rows are parked in the Scheduled
+   *  section; a failed one stays live with a red badge. */
+  scheduled?: ScheduledPublish | null
 }
 
 export interface ReadyToPublishReport {
@@ -8306,6 +8376,7 @@ export interface ReadyToPublishReport {
     flag_partial: number
     breached: number
     held: number
+    scheduled?: number
   }
   flag_types: { slug: string; label: string; color: string; kind: string }[]
 }

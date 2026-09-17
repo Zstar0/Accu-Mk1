@@ -503,6 +503,15 @@ async def lifespan(app: FastAPI):
             db.close()
     _flag_scheduler.register("workflow_stranded_check", interval=_timedelta(minutes=15),
                              fn=_stranded_job)
+    # Scheduled COA publish (2026-09-17): fires due rows through the SAME
+    # publish route the button calls. Every minute; the quiet window and the
+    # per-tick cap live in the module.
+    import scheduled_publish as _scheduled_publish
+
+    async def _scheduled_publish_job(now):
+        await _scheduled_publish.run_due(_SessionLocal, publish_sample_coa, now=now)
+    _flag_scheduler.register("scheduled_publish", interval=_timedelta(minutes=1),
+                             fn=_scheduled_publish_job, jitter=0.0)
     _flag_scheduler.start()
     # Seed default settings and admin user
     from database import SessionLocal
@@ -10895,6 +10904,19 @@ class ReadyHoldOut(BaseModel):
 from priority.schemas import EffectiveOut as _PriorityEffectiveOut
 
 
+class ScheduledPublishOut(BaseModel):
+    """One lims_scheduled_publishes row (scheduled_publish.serialize)."""
+    id: int
+    sample_id: str
+    scheduled_at: str
+    pdf_date: str
+    status: str
+    created_by_user_id: Optional[int] = None
+    created_at: str
+    fired_at: Optional[str] = None
+    last_error: Optional[str] = None
+
+
 class ReadyRowOut(BaseModel):
     sample_id: str
     status: str
@@ -10915,6 +10937,9 @@ class ReadyRowOut(BaseModel):
     sla: Optional[ReadySlaOut] = None
     # Open "On Hold" flag → parked in the page's On-hold section; None = live.
     hold: Optional[ReadyHoldOut] = None
+    # Scheduled publish: pending/firing rows are parked in the page's
+    # Scheduled section; a failed row stays live with a red badge.
+    scheduled: Optional[ScheduledPublishOut] = None
 
 
 class ReadyFlagTypeOut(BaseModel):
@@ -11087,6 +11112,8 @@ def _load_ready_to_publish_inputs(db: Session) -> dict:
     )
     holidays = frozenset(r[0] for r in db.execute(select(LabHoliday.holiday_date)).all())
 
+    import scheduled_publish as _scheduled_publish
+
     return {
         "samples": samples,
         "line_states_by_pk": line_states_by_pk,
@@ -11099,6 +11126,7 @@ def _load_ready_to_publish_inputs(db: Session) -> dict:
         "groups": groups,
         "schedule": schedule,
         "holidays": holidays,
+        "scheduled": _scheduled_publish.active_by_sample(db),
     }
 
 
@@ -11163,7 +11191,14 @@ def _build_ready_to_publish_payload(db: Session, include_test_orders: bool) -> d
         **inputs, now=now_utc.replace(tzinfo=None), excluded_sample_ids=excluded,
     ))
     kinds = resolve_flag_kinds(inputs["flag_types"])
-    live = [r for r in rows if r["hold"] is None]
+    # Parked rows leave every total but their own: On Hold (hold wins) and a
+    # pending/firing scheduled publish. A FAILED schedule stays live.
+    from scheduled_publish import PARKED_STATUSES as _PARKED
+
+    def _scheduled(r: dict) -> bool:
+        s = r.get("scheduled")
+        return r["hold"] is None and bool(s) and s["status"] in _PARKED
+    live = [r for r in rows if r["hold"] is None and not _scheduled(r)]
     totals = {
         "rows": len(live),
         "orders": len({r["order"] for r in live}),
@@ -11171,7 +11206,8 @@ def _build_ready_to_publish_payload(db: Session, include_test_orders: bool) -> d
         "flag_ready": sum(1 for r in live if "flag_ready" in r["reasons"]),
         "flag_partial": sum(1 for r in live if "flag_partial" in r["reasons"]),
         "breached": sum(1 for r in live if r["sla"] and r["sla"]["breached"]),
-        "held": len(rows) - len(live),
+        "held": sum(1 for r in rows if r["hold"] is not None),
+        "scheduled": sum(1 for r in rows if _scheduled(r)),
     }
     return {
         "generated_at": now_utc.isoformat().replace("+00:00", "Z"),
@@ -13146,6 +13182,8 @@ async def _maybe_emit_regular_coa_child(db, sample_id, parent_row, primary_data)
     alias_map = _load_sample_aliases(db, sample_id)
     if alias_map:
         body["analyte_display_names"] = {str(k): v for k, v in alias_map.items()}
+    import scheduled_publish as _scheduled_publish
+    body.update(_scheduled_publish.process_override(db, sample_id))
     include_remarks = bool(parent_row.customer_remarks_include)
     body["include_lab_remarks"] = include_remarks
     if include_remarks and (parent_row.customer_remarks or "").strip():
@@ -13427,6 +13465,11 @@ async def generate_sample_coa(
     alias_map = _load_sample_aliases(db, sample_id)
     if alias_map:
         alias_body["analyte_display_names"] = {str(k): v for k, v in alias_map.items()}
+    # Scheduled publish pending: the draft prints the scheduled date (IS
+    # publishes the NEWEST draft, so a manual regenerate must carry it too).
+    if not is_sub:
+        import scheduled_publish as _scheduled_publish
+        alias_body.update(_scheduled_publish.process_override(db, sample_id))
 
     # Variance replicate series (parent's assignment_kind='variance' vials).
     # Raw per-vial values; COABuilder prepends its own parent figure and renders
@@ -13652,6 +13695,10 @@ async def _generate_vial_coas_loop(db, parent, vials, parent_generation_id, exis
     generated: list[dict] = []
     skipped: list[int] = []
     errors: list[dict] = []
+    # Scheduled publish pending: vial COAs print the same scheduled date as
+    # the primary they ride on.
+    import scheduled_publish as _scheduled_publish
+    _vial_date_override = _scheduled_publish.process_override(db, sample_id)
     async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=120.0) as client:
         for vial_seq, figs in vials:
             if vial_seq in existing:
@@ -13673,6 +13720,7 @@ async def _generate_vial_coas_loop(db, parent, vials, parent_generation_id, exis
                 vbody["lab_remarks"] = lab_remarks
             if _vial_doc is not None:
                 vbody["native_sections"] = _vial_doc
+            vbody.update(_vial_date_override)
             try:
                 resp = await client.post(f"{COA_BUILDER_URL}/process/{sample_id}", json=vbody)
                 resp.raise_for_status()
@@ -14118,6 +14166,163 @@ async def publish_sample_coa(
         message=data.get("message", "COA published"),
         verification_code=verification_code,
         warning=warning,
+    )
+
+
+# ── Scheduled publish (2026-09-17) ────────────────────────────────────
+# Park a finished COA and publish it later, on the normal turnaround cadence.
+# Rows + job + time math live in backend/scheduled_publish.py; these routes
+# are the thin edges. `ScheduledPublishOut` is declared with the Ready to
+# Publish models above (the report embeds the same shape per row).
+
+class SchedulePublishIn(BaseModel):
+    # Offset-aware; the browser sends ISO UTC. A naive value is a 422.
+    scheduled_at: datetime
+
+
+class ScheduledPublishStateOut(BaseModel):
+    schedule: Optional[ScheduledPublishOut] = None
+    suggested_at: str
+    sla_deadline: Optional[str] = None
+    # True when the SLA clamp moved the suggestion, or the sample is already
+    # past its deadline (the dialog shows a warning either way).
+    suggestion_clamped: bool
+    lab_timezone: str
+
+
+class SchedulePublishResultOut(SampleCOAActionResponse):
+    schedule: Optional[ScheduledPublishOut] = None
+
+
+_SCHEDULED_PUBLISH_PATH = "/wizard/senaite/samples/{sample_id}/scheduled-publish"
+
+
+@app.get(_SCHEDULED_PUBLISH_PATH, response_model=ScheduledPublishStateOut)
+def get_sample_scheduled_publish(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """The sample's active schedule (pending / firing / last failed) plus a
+    fresh suggestion for the dialog. The suggestion is random inside its
+    window, so two GETs differ; the stored row is the truth."""
+    import scheduled_publish as _sp
+    sample = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)).scalar_one_or_none()
+    if sample is None:
+        raise HTTPException(status_code=404, detail=f"Sample {sample_id} not found")
+    row = _sp.active_for(db, sample_id)
+    suggested, deadline, clamped = _sp.suggest(db, sample, now=datetime.utcnow())
+    return ScheduledPublishStateOut(
+        schedule=_sp.serialize(row) if row is not None else None,
+        suggested_at=_sp.iso_z(suggested),
+        sla_deadline=_sp.iso_z(deadline),
+        suggestion_clamped=clamped,
+        lab_timezone=_sp.lab_tz(db),
+    )
+
+
+@app.post(_SCHEDULED_PUBLISH_PATH, response_model=SchedulePublishResultOut)
+async def schedule_sample_publish(
+    sample_id: str,
+    body: SchedulePublishIn,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Schedule the publish: store the pending row FIRST (generate reads it),
+    then regenerate the draft so its Published Date is the scheduled lab
+    date. A generate failure (preflight 422, COA Builder down) removes the
+    row again and surfaces the error unchanged."""
+    import scheduled_publish as _sp
+    if re.search(r"-S\d{2}$", sample_id):
+        raise HTTPException(status_code=403, detail="Only a parent sample's COA can be scheduled.")
+    sample = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)).scalar_one_or_none()
+    if sample is None:
+        raise HTTPException(status_code=404, detail=f"Sample {sample_id} not found")
+    try:
+        at = _sp.to_naive_utc(body.scheduled_at)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    now = datetime.utcnow()
+    if at < now + _sp.MIN_LEAD:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Pick a time at least {int(_sp.MIN_LEAD.total_seconds() // 60)} minutes out "
+                   f"(the draft is regenerated first). To publish now, use Publish Accumark COA.",
+        )
+    tz = _sp.lab_tz(db)
+    if _sp.in_quiet_window(at, tz):
+        raise HTTPException(
+            status_code=422,
+            detail=f"No publishing between {_sp.QUIET_START:%H:%M} and {_sp.QUIET_END:%H:%M} lab time ({tz}).",
+        )
+    try:
+        _sp.create_pending(db, sample_id, at, _sp.pdf_date(at, tz), getattr(current_user, "id", None), now=now)
+    except _sp.PublishInProgress:
+        raise HTTPException(status_code=409, detail="A scheduled publish is firing right now; try again in a minute.")
+
+    def _undo(reason: str) -> None:
+        try:
+            _sp.cancel_active(db, sample_id, getattr(current_user, "id", None), reason=reason)
+        except Exception:  # noqa: BLE001
+            logger.exception("scheduled publish undo failed %s", sample_id)
+
+    try:
+        result = await generate_sample_coa(sample_id=sample_id, db=db, current_user=current_user)
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        _undo("regeneration failed")
+        raise
+    if not result.success:
+        _undo("regeneration failed")
+        return SchedulePublishResultOut(success=False, message=result.message)
+    import ready_to_publish_cache
+    ready_to_publish_cache.invalidate()
+    row = _sp.active_for(db, sample_id)
+    return SchedulePublishResultOut(
+        success=True,
+        message=f"Draft regenerated with Published Date {_sp.pdf_date(at, tz)}; publish scheduled.",
+        verification_code=result.verification_code,
+        warning=result.warning,
+        schedule=_sp.serialize(row) if row is not None else None,
+    )
+
+
+@app.delete(_SCHEDULED_PUBLISH_PATH, response_model=SchedulePublishResultOut)
+async def cancel_sample_scheduled_publish(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Cancel a pending schedule (and regenerate the draft with today's date,
+    so a future-dated certificate can never ship by a later manual publish)
+    or dismiss a failed one (no regenerate: nothing about the draft changed)."""
+    import scheduled_publish as _sp
+    row = _sp.active_for(db, sample_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="No scheduled publish for this sample.")
+    if row.status == "firing":
+        raise HTTPException(status_code=409, detail="This publish is firing right now and cannot be cancelled.")
+    was_pending = row.status == "pending"
+    _sp.cancel_active(db, sample_id, getattr(current_user, "id", None), reason="cancelled by user")
+    import ready_to_publish_cache
+    ready_to_publish_cache.invalidate()
+    if not was_pending:
+        return SchedulePublishResultOut(success=True, message="Failed scheduled publish dismissed.")
+    result = await generate_sample_coa(sample_id=sample_id, db=db, current_user=current_user)
+    if not result.success:
+        return SchedulePublishResultOut(
+            success=False,
+            message=f"Schedule cancelled, but the draft still carries the scheduled date: {result.message} "
+                    f"Regenerate the COA before publishing.",
+        )
+    return SchedulePublishResultOut(
+        success=True,
+        message="Schedule cancelled; draft regenerated with today's date.",
+        verification_code=result.verification_code,
+        warning=result.warning,
     )
 
 
@@ -18681,6 +18886,14 @@ def _after_publish_native(db, *, sample_id: str, pre_publish_status, actor_user_
         ready_to_publish_cache.invalidate()
     except Exception:  # noqa: BLE001 -- never let the chip touch the publish
         logger.exception("ready-to-publish cache invalidate failed %s", sample_id)
+    # A manual publish retires any pending or failed scheduled publish for the
+    # sample. The job's own row is `firing`, which this never touches.
+    try:
+        import scheduled_publish as _scheduled_publish
+        _scheduled_publish.cancel_active(db, sample_id, actor_user_id, reason="published manually")
+    except Exception:  # noqa: BLE001 -- never let the schedule touch the publish
+        logger.exception("scheduled publish cancel failed %s", sample_id)
+        db.rollback()
     try:
         from workflow.engine import drive_sample_touchpoint
         from workflow.sample_log import record_sample_transition

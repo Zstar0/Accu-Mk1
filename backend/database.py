@@ -2165,6 +2165,35 @@ def _run_migrations():
         # (PB-0553): the refresh must not overwrite them. See models.LimsSample.
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS "
         "client_sample_id_locked_in_senaite BOOLEAN NOT NULL DEFAULT FALSE",
+        # ── Scheduled COA publish (2026-09-17). Full CREATE here (migrations
+        # run BEFORE create_all and the partial index needs the table); the
+        # ORM twin is models.LimsScheduledPublish.
+        """
+        CREATE TABLE IF NOT EXISTS lims_scheduled_publishes (
+            id                   SERIAL PRIMARY KEY,
+            sample_id            VARCHAR(100) NOT NULL,
+            scheduled_at         TIMESTAMP NOT NULL,
+            pdf_date             VARCHAR(10) NOT NULL,
+            status               VARCHAR(12) NOT NULL DEFAULT 'pending'
+                                 CHECK (status IN ('pending','firing','published','failed','cancelled')),
+            created_by_user_id   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            created_at           TIMESTAMP NOT NULL DEFAULT NOW(),
+            fired_at             TIMESTAMP,
+            last_error           TEXT,
+            cancelled_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            cancelled_at         TIMESTAMP
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_lims_scheduled_publishes_sample_id "
+        "ON lims_scheduled_publishes (sample_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_scheduled_publishes_pending "
+        "ON lims_scheduled_publishes (sample_id) WHERE status = 'pending'",
+        # Flag type raised by the scheduled-publish job when a fire fails.
+        """
+        INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
+        SELECT 'scheduled_publish_failed', 'Scheduled Publish Failed', '#e5484d', 'issue', FALSE, TRUE, 9, '[]'::jsonb, TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='scheduled_publish_failed')
+        """,
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

@@ -199,6 +199,10 @@ def build_ready_rows(
     holidays: frozenset,
     now: datetime,
     excluded_sample_ids: frozenset = frozenset(),
+    # sample_id -> serialized lims_scheduled_publishes row (scheduled_publish
+    # .active_by_sample). Rides the row as `scheduled`; the payload builder
+    # parks pending/firing ones the way it parks `hold`.
+    scheduled: Optional[Mapping[str, dict]] = None,
 ) -> list[dict]:
     """Qualifying rows, unsorted (see :func:`sort_rows`)."""
     types = {ft.slug: ft for ft in flag_types}
@@ -316,6 +320,7 @@ def build_ready_rows(
                 "title": hold.title,
                 "since": hold.created_at.isoformat() if hold.created_at else None,
             },
+            "scheduled": (scheduled or {}).get(s.sample_id),
         })
     return rows
 
