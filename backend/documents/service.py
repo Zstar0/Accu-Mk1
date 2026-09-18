@@ -11,6 +11,8 @@ import hashlib
 import logging
 import re
 from datetime import date, datetime
+from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
 from sqlalchemy import and_, case, func, or_, select
@@ -186,14 +188,52 @@ def mint_code(db: Session, prefix: str) -> str:
 
 # --- documents ---------------------------------------------------------------------
 
+
+# --- house theme ------------------------------------------------------------------------
+# Applied HERE, not by clients, so every writer (publish skill, labmanager MCP, admin) gets
+# the same look. Inlined, never linked: revisions are snapshots and must not change when the
+# theme file changes later (spec §7). Prepended as the FIRST <style> in <head> so a page that
+# carries its own CSS (artifact pages do) still wins on every rule it sets.
+THEME_PATH = Path(__file__).with_name("accumark-docs.css")
+THEME_MARKER_RE = re.compile(r"/\*\s*accumark-docs v\d+")
+FONTS_HOST = "fonts.googleapis.com"
+FONTS_LINK = ('<link rel="stylesheet" href="https://fonts.googleapis.com/css2'
+              '?family=Archivo:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600'
+              '&family=IBM+Plex+Mono:wght@400;500&display=swap">')
+
+
+@lru_cache(maxsize=1)
+def theme_css() -> str:
+    return THEME_PATH.read_text(encoding="utf-8")
+
+
+def inline_theme(html: str) -> str:
+    """Return html with the house theme inlined once. No-op when a marker is present.
+    Adds the Google Fonts link when the document carries none, so the theme's faces
+    resolve inside the viewer frame (fallback stacks apply offline)."""
+    if THEME_MARKER_RE.search(html):
+        return html
+    block = f"<style>\n{theme_css()}\n</style>\n"
+    if FONTS_HOST not in html:
+        block = FONTS_LINK + "\n" + block
+    m = re.search(r"<head\b[^>]*>", html, re.IGNORECASE)
+    if m:
+        i = m.end()
+        return html[:i] + "\n" + block + html[i:]
+    m = re.search(r"<html\b[^>]*>", html, re.IGNORECASE)
+    i = m.end() if m else 0
+    return html[:i] + "\n<head>\n" + block + "</head>\n" + html[i:]
+
+
 def validate_html(html) -> bytes:
-    """UTF-8 bytes of an HTML document: <= MAX_BYTES, first non-blank byte '<'."""
-    data = html.encode("utf-8") if isinstance(html, str) else bytes(html or b"")
+    """UTF-8 bytes of a THEMED HTML document: first non-blank byte '<', theme inlined
+    once, <= MAX_BYTES after theming (the stored bytes are what the limit protects)."""
+    text = html if isinstance(html, str) else bytes(html or b"").decode("utf-8", "replace")
+    if text.lstrip("\ufeff \t\r\n")[:1] != "<":
+        raise BadRequestError("content must be an HTML document")
+    data = inline_theme(text).encode("utf-8")
     if len(data) > MAX_BYTES:
         raise BadRequestError(f"content exceeds {MAX_BYTES} bytes")
-    head = data.lstrip(b"\xef\xbb\xbf \t\r\n")[:1]
-    if head != b"<":
-        raise BadRequestError("content must be an HTML document")
     return data
 
 
