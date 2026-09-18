@@ -109,3 +109,15 @@ describe('buildEndoCsv', () => {
     )
   })
 })
+
+describe('buildEndoCsv: spreadsheet safety', () => {
+  it('neutralises cells that would run as formulas in Excel', () => {
+    const csv = buildEndoCsv(
+      doc([row(1, { identity: '=HYPERLINK("http://x")', order: '+7539' })])
+    )
+    const line = csv.trimEnd().split('\r\n')[1] ?? ''
+    expect(line).toContain('"\'=HYPERLINK(""http://x"")"')
+    expect(line).toContain('"\'+7539"')
+    expect(line).not.toContain(',=HYPERLINK')
+  })
+})

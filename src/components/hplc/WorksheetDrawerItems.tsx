@@ -45,7 +45,13 @@ import {
   type ServiceGroupColor,
 } from '@/lib/service-group-colors'
 import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
-import type { WorksheetListItem, Instrument } from '@/lib/api'
+import type {
+  WorksheetListItem,
+  Instrument,
+  WorksheetItemPatch,
+} from '@/lib/api'
+import { isEndoWorksheetItem } from '@/lib/endo-worksheet'
+import { EndoPrepLine } from './EndoPrepLine'
 
 /** Extract unique peptide names from analyses — compact display for worksheet */
 function getPeptideNames(
@@ -79,14 +85,7 @@ interface WorksheetDrawerItemsProps {
     limsSubSamplePk: number | null
   }) => void
   instruments: Instrument[]
-  onUpdateItem: (
-    itemId: number,
-    data: {
-      instrument_uid?: string
-      prep_status?: string
-      instrument_id?: number | null
-    }
-  ) => void
+  onUpdateItem: (itemId: number, data: WorksheetItemPatch) => void
   onReorder: (itemIds: number[]) => void
 }
 
@@ -244,14 +243,7 @@ interface SortableItemRowProps {
     instrumentUid: string | null
     limsSubSamplePk: number | null
   }) => void
-  onUpdateItem: (
-    itemId: number,
-    data: {
-      instrument_uid?: string
-      prep_status?: string
-      instrument_id?: number | null
-    }
-  ) => void
+  onUpdateItem: (itemId: number, data: WorksheetItemPatch) => void
 }
 
 function SortableItemRow({
@@ -308,11 +300,13 @@ function SortableItemRow({
   const groupColorClass = SERVICE_GROUP_COLORS[colorKey]
   const peptideNames = getPeptideNames(item.analyses)
 
+  const isEndo = isEndoWorksheetItem(item)
+
   return (
     <div
       ref={setNodeRef}
       style={style}
-      className="group/item flex items-start gap-2 px-4 py-2.5 hover:bg-muted/50 transition-colors border-b border-border/40"
+      className="group/item flex flex-wrap items-start gap-2 px-4 py-2.5 hover:bg-muted/50 transition-colors border-b border-border/40"
     >
       {/* Drag handle */}
       {!isCompleted && (
@@ -548,6 +542,19 @@ function SortableItemRow({
             </button>
           ))}
       </div>
+
+      {/* Endotoxin bench line: wraps under the row (basis-full) with received,
+          due, the weight/volume overrides and the figures to pipette
+          (spec 2026-09-18-endo-worksheet-design). */}
+      {isEndo && (
+        <div className="basis-full">
+          <EndoPrepLine
+            item={item}
+            isCompleted={isCompleted}
+            onUpdate={data => onUpdateItem(item.id, data)}
+          />
+        </div>
+      )}
     </div>
   )
 }

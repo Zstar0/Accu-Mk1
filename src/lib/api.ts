@@ -5935,6 +5935,17 @@ export interface WorksheetListItem {
       method: string | null
     }[]
     prep_status: string
+    /** Endotoxin bench prep overrides (spec 2026-09-18-endo-worksheet-design);
+     *  null = use the computed value. */
+    prep_weight_mg?: number | null
+    prep_volume_ml?: number | null
+    prep_dilution_factor?: number | null
+    /** Parent-sample facts the endo bench computes from; null when the item
+     *  has no resolvable parent. */
+    declared_weight_mg?: number | null
+    sample_type?: string | null
+    client_order_number?: string | null
+    sample_identity?: string | null
   }[]
 }
 
@@ -6053,10 +6064,21 @@ export async function reassignWorksheetItem(
   return response.json()
 }
 
+/** PATCH body for a worksheet item. Omitted = untouched; an explicit null on
+ *  instrument_id or a prep_* override clears it. */
+export interface WorksheetItemPatch {
+  instrument_uid?: string
+  prep_status?: string
+  instrument_id?: number | null
+  prep_weight_mg?: number | null
+  prep_volume_ml?: number | null
+  prep_dilution_factor?: number | null
+}
+
 export async function updateWorksheetItem(
   worksheetId: number,
   itemId: number,
-  data: { instrument_uid?: string; prep_status?: string; instrument_id?: number | null }
+  data: WorksheetItemPatch
 ): Promise<{ status: string; item_id: number }> {
   const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}/items/${itemId}`, {
     method: 'PATCH',

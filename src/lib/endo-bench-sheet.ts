@@ -358,8 +358,15 @@ const CSV_COLUMNS: [string, (r: EndoSheetRow) => string][] = [
   ['Dilution', r => (r.dilution ? String(r.dilution) : '')],
 ]
 
+/**
+ * Quote when needed, and defuse a cell a spreadsheet would run as a formula
+ * (=, +, -, @ or a control character first): a leading apostrophe keeps it as
+ * text in Excel and Sheets, and such cells are always quoted.
+ */
 function csvField(v: string): string {
-  return /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v
+  const defused = /^[=+\-@\t\r]/.test(v) ? `'${v}` : v
+  const mustQuote = defused !== v || /[",\r\n]/.test(defused)
+  return mustQuote ? `"${defused.replace(/"/g, '""')}"` : defused
 }
 
 /** One row per sample in the given order, CRLF line endings (Excel-safe). */

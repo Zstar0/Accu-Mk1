@@ -339,7 +339,8 @@ def run_backfill(db: Session, runs: list[dict], *, apply: bool, today: date) -> 
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    # __doc__ is None when the script is piped through `python -` (the prod recipe).
+    ap = argparse.ArgumentParser(description=(__doc__ or "Backfill endotoxin worksheets").splitlines()[0])
     ap.add_argument("path", help="endotoxin-data.json from tools-dennis/tools/endotoxin-log")
     ap.add_argument("--apply", action="store_true",
                     help="write the worksheets; without it this is a dry-run report")

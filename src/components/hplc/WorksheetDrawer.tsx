@@ -33,6 +33,7 @@ import type { HplcMethod, Instrument } from '@/lib/api'
 import { prepStartedKey } from '@/lib/worksheet-scope-key'
 import WorksheetDrawerHeader from './WorksheetDrawerHeader'
 import WorksheetDrawerItems from './WorksheetDrawerItems'
+import { EndoWorksheetActions } from './EndoWorksheetActions'
 import AddSamplesModal from './AddSamplesModal'
 
 export function WorksheetDrawer() {
@@ -262,6 +263,10 @@ export function WorksheetDrawer() {
                   >
                     Add Samples
                   </Button>
+                  <EndoWorksheetActions
+                    worksheet={activeWorksheet}
+                    users={users}
+                  />
                   <div className="flex-1" />
                   <AlertDialog>
                     <AlertDialogTrigger asChild>
@@ -290,10 +295,15 @@ export function WorksheetDrawer() {
                   </AlertDialog>
                 </div>
               ) : (
-                <div className="px-4 py-2 border-b">
+                <div className="px-4 py-2 border-b flex items-center gap-2">
                   <span className="text-xs text-muted-foreground">
                     View only — worksheet is completed
                   </span>
+                  <div className="flex-1" />
+                  <EndoWorksheetActions
+                    worksheet={activeWorksheet}
+                    users={users}
+                  />
                 </div>
               )}
 
