@@ -1,5 +1,27 @@
 # Endotoxin worksheet (Worksheets 2.0, endo first): design
 
+## Data the worksheet records for reporting (added 2026-09-18)
+
+The bench is paper-first: print, work the run, key it in afterwards. So tick times are
+ENTRY times, good to the day, not to the minute. The honest run-level clock is
+`printed_at` (left for the bench) to `completed_at`.
+
+| Question | Source | State |
+|---|---|---|
+| Rows prepped / run per tech per day | `worksheet_items.made_by_user_id`, `ran_by_user_id` (+ `_at`) | new, server-stamped |
+| Results entered per tech | `lims_analyses.analyst_user_id`; `lims_analysis_transitions` (`submit`, user, `occurred_at`) | existing; analyst coverage rises as worksheets are used |
+| Runs per instrument, retest rate per instrument | `lims_analyses.instrument_id`, `method_id`, `retested` | was 0 of 1,288 endo analyses on prod (30 days to 2026-09-18); now stamped by the MCS tick |
+| Queue wait | `date_received` to `worksheet_items.added_at` | existing |
+| Staging time | `worksheets.created_at` to `printed_at` | new |
+| Bench time per run | `printed_at` to `completed_at` | new |
+| Review lag | `lims_analyses.submitted_at` to `verified_at` | existing |
+| On time vs SLA | `/sla/status` `due_at` | existing; computed live, so a tier change rewrites history |
+| Declared-data quality | `prep_weight_mg` / `prep_volume_ml` overrides | existing on this branch |
+
+Not captured anywhere yet: reagent / cartridge lot numbers, and instrument capacity
+(needed to turn runs into utilisation). PCR and HPLC worksheets should reuse the same
+columns: `made_*`, `ran_*`, `printed_*` are bench-generic on purpose.
+
 Written 2026-09-18 from Dennis's `tools-dennis/tools/endotoxin-log` (in daily use since
 2026-09-01) and a read-only probe of prod Mk1 the same night. The Handler's framing: what
 Dennis built is Worksheets 2.0 for Accu-Mk1, starting with endotoxin; PCR and HPLC follow,
