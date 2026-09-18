@@ -229,3 +229,21 @@ def test_bench_log_lists_endo_only_worksheets_with_tick_counts(client, db):
     assert rows[0]["made_count"] == 1
     assert rows[0]["ran_count"] == 0
     assert client.get("/worksheets/bench-log?kind=nope").status_code == 400
+
+
+def test_bench_log_counts_legacy_parent_items_by_their_endo_keyword(client, db):
+    # Legacy "<order> E" worksheets hold bare P-XXXX ids with no vial row; the
+    # screen calls them endo from the analysis keyword, so the log must too.
+    ws, _ = _seed(db, vial=False)
+    item = db.query(WorksheetItem).filter(WorksheetItem.worksheet_id == ws.id).one()
+    item.analyses_json = json.dumps([{"title": "Endotoxin", "keyword": "ENDO-LAL"}])
+    # Same shape, but HPLC work: must stay out of the endo log.
+    hplc = Worksheet(title="HPLC run", status="open")
+    db.add(hplc)
+    db.flush()
+    db.add(WorksheetItem(worksheet_id=hplc.id, sample_uid="SEN-h", sample_id="P-0002",
+                         analyses_json=json.dumps([{"title": "Purity", "keyword": "PURITY"}])))
+    db.commit()
+
+    rows = client.get("/worksheets/bench-log?kind=endo").json()
+    assert [r["id"] for r in rows] == [ws.id]

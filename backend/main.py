@@ -35,7 +35,7 @@ from fastapi import BackgroundTasks, FastAPI, Body, Depends, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field, validator, PrivateAttr
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import select, desc, delete, update, func, extract, and_, or_, case
+from sqlalchemy import select, desc, delete, update, func, extract, and_, or_
 from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
@@ -23031,9 +23031,37 @@ def list_worksheets(
     return _serialize_worksheets(db, worksheets)
 
 
-# Bench kinds the run log can list, by the vial roles that make them up
-# (src/lib/worksheet-kind.ts is the FE twin).
-_BENCH_LOG_ROLES = {"endo": ("endo", "endo85")}
+# Which bench a worksheet item belongs to. A faithful port of
+# src/lib/worksheet-kind.ts (benchKindForItem): the vial's catalog role wins;
+# an item with no mapped role (a bare parent id on a legacy "<order> E"
+# worksheet has no lims_sub_samples row at all) falls back to the first
+# analysis keyword that names a bench. Keep the two in step.
+_ROLE_BENCH_KIND = {
+    "endo": "endo", "endo85": "endo", "pcr": "pcr", "ster": "sterility",
+    "usp71": "sterility", "hm": "hm", "hplc": "hplc", "fentanyl": "hplc",
+}
+_KEYWORD_BENCH_KIND = (
+    (re.compile(r"ENDO", re.I), "endo"),
+    (re.compile(r"PCR", re.I), "pcr"),
+    (re.compile(r"USP71|STERILITY[_-]USP", re.I), "sterility"),
+    (re.compile(r"PURITY|IDENTITY|^ID_|^HPLC", re.I), "hplc"),
+)
+
+
+def _bench_kind_for_item(role: Optional[str], analyses_json: Optional[str]) -> Optional[str]:
+    by_role = _ROLE_BENCH_KIND.get(role or "")
+    if by_role:
+        return by_role
+    try:
+        analyses = json.loads(analyses_json) if analyses_json else []
+    except ValueError:
+        analyses = []
+    for a in analyses if isinstance(analyses, list) else []:
+        keyword = (a.get("keyword") if isinstance(a, dict) else None) or ""
+        for pattern, kind in _KEYWORD_BENCH_KIND:
+            if pattern.search(keyword):
+                return kind
+    return None
 
 
 @app.get("/worksheets/bench-log")
@@ -23044,49 +23072,56 @@ def worksheet_bench_log(
     _current_user=Depends(get_current_user),
 ):
     """Run log for one bench kind: the newest worksheets whose items are ALL
-    vials of that kind, as lean summaries (no items). The full-history
-    /worksheets fetch is far too heavy for a side rail (4.2MB on prod,
-    2026-08-27). Registered before /worksheets/{worksheet_id} so the literal
-    path wins.
+    of that kind, as lean summaries (no items). The full-history /worksheets
+    fetch is far too heavy for a side rail (4.2MB on prod, 2026-08-27).
+    Registered before /worksheets/{worksheet_id} so the literal path wins.
     """
-    roles = _BENCH_LOG_ROLES.get(kind)
-    if not roles:
+    if kind not in set(_ROLE_BENCH_KIND.values()):
         raise HTTPException(400, "Unknown bench kind")
-    of_kind = case((LimsSubSample.assignment_role.in_(roles), 1), else_=0)
-    rows = db.execute(
+    limit = min(max(limit, 1), 200)
+    # ponytail: kind is decided in Python (the keyword fallback reads JSON), so
+    # only the newest 500 worksheets are scanned. Store a kind column on
+    # worksheets if a bench's history ever needs to reach further back.
+    worksheets = db.execute(
         select(
-            Worksheet.id,
-            Worksheet.title,
-            Worksheet.status,
-            Worksheet.created_at,
-            Worksheet.completed_at,
-            Worksheet.assigned_analyst_id,
-            func.count(WorksheetItem.id).label("item_count"),
-            func.count(WorksheetItem.made_at).label("made_count"),
-            func.count(WorksheetItem.ran_at).label("ran_count"),
+            Worksheet.id, Worksheet.title, Worksheet.status, Worksheet.created_at,
+            Worksheet.completed_at, Worksheet.assigned_analyst_id,
         )
-        .join(WorksheetItem, WorksheetItem.worksheet_id == Worksheet.id)
-        .outerjoin(LimsSubSample, LimsSubSample.sample_id == WorksheetItem.sample_id)
         .where(Worksheet.status != "staging")
-        .group_by(Worksheet.id)
-        .having(func.count(WorksheetItem.id) == func.sum(of_kind))
         .order_by(Worksheet.created_at.desc())
-        .limit(min(max(limit, 1), 200))
+        .limit(500)
     ).all()
-    return [
-        {
-            "id": r.id,
-            "title": r.title,
-            "status": r.status,
-            "created_at": (r.created_at.isoformat() + "Z") if r.created_at else None,
-            "completed_at": (r.completed_at.isoformat() + "Z") if r.completed_at else None,
-            "assigned_analyst": r.assigned_analyst_id,
-            "item_count": r.item_count,
-            "made_count": r.made_count,
-            "ran_count": r.ran_count,
-        }
-        for r in rows
-    ]
+    item_rows = db.execute(
+        select(
+            WorksheetItem.worksheet_id, LimsSubSample.assignment_role,
+            WorksheetItem.analyses_json, WorksheetItem.made_at, WorksheetItem.ran_at,
+        )
+        .outerjoin(LimsSubSample, LimsSubSample.sample_id == WorksheetItem.sample_id)
+        .where(WorksheetItem.worksheet_id.in_([w.id for w in worksheets]))
+    ).all() if worksheets else []
+    by_ws: dict[int, list] = {}
+    for r in item_rows:
+        by_ws.setdefault(r.worksheet_id, []).append(r)
+
+    out = []
+    for w in worksheets:
+        rows = by_ws.get(w.id, [])
+        if not rows or any(_bench_kind_for_item(r.assignment_role, r.analyses_json) != kind for r in rows):
+            continue
+        out.append({
+            "id": w.id,
+            "title": w.title,
+            "status": w.status,
+            "created_at": (w.created_at.isoformat() + "Z") if w.created_at else None,
+            "completed_at": (w.completed_at.isoformat() + "Z") if w.completed_at else None,
+            "assigned_analyst": w.assigned_analyst_id,
+            "item_count": len(rows),
+            "made_count": sum(1 for r in rows if r.made_at),
+            "ran_count": sum(1 for r in rows if r.ran_at),
+        })
+        if len(out) >= limit:
+            break
+    return out
 
 
 @app.get("/worksheets/{worksheet_id}")
