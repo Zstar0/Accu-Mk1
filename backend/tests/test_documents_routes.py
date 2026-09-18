@@ -12,7 +12,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-HTML = "<!doctype html><html><head><title>t</title></head><body><p>hi</p></body></html>"
+# Carries the theme marker so the server leaves the bytes alone (theming has its own tests).
+HTML = "<!doctype html><html><head><title>t</title><style>/* accumark-docs v1 */</style></head><body><p>hi</p></body></html>"
 SVC = {"X-Service-Token": "test-token"}
 SVC_ENV = {"ACCUMK1_INTERNAL_SERVICE_TOKEN": "test-token"}
 
@@ -225,3 +226,109 @@ def test_categories_crud_and_delete_guard(client):
     _publish(client)
     assert client.delete(f"/api/document-categories/{art}").status_code == 409
     assert client.get("/api/document-categories").json()[0]["document_count"] == 1
+
+
+# --- per-agent scoped tokens ------------------------------------------------------------
+# The internal service token also unlocks /s2s/orders/upsert, /s2s/lims-samples and a dozen
+# more. It must never sit on a bot host, so agents get their own documents-only tokens, and
+# the token (not the request body) names the agent.
+
+JARVIS = "j" * 40
+TARS = "t" * 40
+AGENT_ENV = {"MK1_DOCUMENT_AGENT_TOKENS": f"jarvis:{JARVIS}, tars:{TARS}",
+             "ACCUMK1_INTERNAL_SERVICE_TOKEN": "test-token"}
+
+
+def _agent(tok):
+    return {"X-Service-Token": tok}
+
+
+def test_agent_token_publishes_and_the_token_names_the_co_author(client):
+    with patch.dict(os.environ, AGENT_ENV):
+        r = _publish(client, headers=_agent(JARVIS), author="Forrest Parker")
+        assert r.status_code == 201, r.text
+        assert r.json()["author"] == "Forrest Parker"
+        assert r.json()["co_author"] == "jarvis"
+        r2 = _publish(client, headers=_agent(TARS), title="Other", html=HTML + "<!--2-->")
+        assert r2.json()["co_author"] == "tars"
+
+
+def test_the_request_body_cannot_choose_the_co_author(client):
+    with patch.dict(os.environ, AGENT_ENV):
+        r = _publish(client, headers=_agent(JARVIS), co_author="tars")
+        assert r.json()["co_author"] == "jarvis"
+
+
+def test_internal_token_still_works_and_has_no_co_author(client):
+    with patch.dict(os.environ, AGENT_ENV):
+        r = _publish(client, headers=SVC)
+        assert r.status_code == 201
+        assert r.json()["co_author"] is None
+
+
+def test_agent_token_is_documents_only(client):
+    """The whole point: it must open nothing the internal token opens."""
+    with patch.dict(os.environ, AGENT_ENV):
+        assert client.get("/s2s/catalog/service-keys", headers=_agent(JARVIS)).status_code == 401
+        assert client.get("/peptide-requests", headers=_agent(JARVIS)).status_code == 401
+
+
+def test_agents_cannot_delete_or_manage_categories(client):
+    """Handler ruling: bots archive, never delete. Enforced here, not only by
+    which tools the MCP happens to register."""
+    with patch.dict(os.environ, AGENT_ENV):
+        d = _publish(client, headers=_agent(JARVIS), activate=False).json()
+        url = f"/api/documents/{d['id']}?code={d['code']}&revision={d['revision']}"
+        assert client.delete(url, headers=_agent(JARVIS)).status_code == 403
+        assert client.post("/api/document-categories", headers=_agent(JARVIS),
+                           json={"name": "X", "code_prefix": "XX"}).status_code == 403
+        # ...while archiving is allowed, and the internal token can still delete
+        assert client.delete(url, headers=SVC).status_code == 200
+        a = _publish(client, headers=_agent(JARVIS), title="Live", html=HTML + "<!--3-->").json()
+        assert client.post(f"/api/documents/{a['id']}/retire",
+                           headers=_agent(JARVIS)).json()["status"] == "retired"
+
+
+def test_agent_patch_records_who_and_through_which_agent(client):
+    with patch.dict(os.environ, AGENT_ENV):
+        d = _publish(client, headers=_agent(JARVIS)).json()
+        r = client.patch(f"/api/documents/{d['id']}", headers=_agent(TARS),
+                         json={"title": "Renamed", "updated_by": "Forrest Parker"})
+        assert r.json()["updated_by"] == "Forrest Parker via tars"
+        r = client.patch(f"/api/documents/{d['id']}", headers=_agent(TARS),
+                         json={"title": "Again"})
+        assert r.json()["updated_by"] == "tars"
+
+
+@pytest.mark.parametrize("env_value", [
+    "jarvis:short",                 # too short to be a real secret
+    "JARVIS!:" + "x" * 40,          # bad agent name
+    "no-colon-here",
+    "",
+])
+def test_malformed_agent_entries_open_nothing(client, env_value):
+    env = {"MK1_DOCUMENT_AGENT_TOKENS": env_value,
+           "ACCUMK1_INTERNAL_SERVICE_TOKEN": "test-token"}
+    with patch.dict(os.environ, env):
+        for tok in ("short", "x" * 40, "no-colon-here"):
+            assert _publish(client, headers=_agent(tok)).status_code == 401
+
+
+def test_unknown_token_is_401_with_agents_configured(client):
+    with patch.dict(os.environ, AGENT_ENV):
+        assert _publish(client, headers=_agent("z" * 40)).status_code == 401
+
+
+def test_a_revision_may_omit_title_over_http(client):
+    """The 422 the MCP hit on 2026-09-18 came from the request schema, so the
+    proof has to go through the route, not just the service."""
+    with patch.dict(os.environ, SVC_ENV):
+        first = _publish(client, headers=SVC, title="Waste Disposal", description="d1").json()
+        r = client.post("/api/documents", headers=SVC,
+                        json={"code": first["code"], "html": HTML + "<!--2-->", "author": "Forrest"})
+        assert r.status_code == 201, r.text
+        assert (r.json()["revision"], r.json()["title"], r.json()["description"]) == (2, "Waste Disposal", "d1")
+        # a NEW document without a title is still refused
+        r = client.post("/api/documents", headers=SVC, json={"html": HTML + "<!--3-->", "category": "ART"})
+        assert r.status_code == 400 and "title is required" in r.text
+

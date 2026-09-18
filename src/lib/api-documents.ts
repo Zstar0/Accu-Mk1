@@ -37,6 +37,8 @@ export interface DocumentRow {
   supersedes_id: number | null
   author: string | null
   updated_by: string | null
+  /** The agent that authored this revision, set server-side from its token. */
+  co_author: string | null
   source_session: string | null
   created_by_user_id: number | null
   content_type: string

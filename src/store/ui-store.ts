@@ -55,6 +55,7 @@ export type ReportsSubSection =
   | 'dashboard'
   | 'checkin-times'
   | 'ready-to-publish'
+  | 'scheduled-publishes'
   | 'documents'
   | 'throughput'
   | 'sla-performance'

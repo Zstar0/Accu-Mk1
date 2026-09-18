@@ -76,6 +76,9 @@ class Document(Base):
     supersedes_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("documents.id", ondelete="SET NULL"), nullable=True)
     author: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    # The AGENT that authored this revision, set from its scoped token and never
+    # from the request body. NULL for admin and internal-service writes.
+    co_author: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     # Who last changed this row IN PLACE (PATCH). A revision push makes a new
     # row carrying its own author, so this only ever moves on a metadata patch.
     updated_by: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)

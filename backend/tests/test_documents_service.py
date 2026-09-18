@@ -177,7 +177,9 @@ def test_list_categories_counts_distinct_codes(db):
 
 # --- documents -------------------------------------------------------------------
 
-HTML = "<!doctype html><html><head><title>t</title></head><body><p>hi</p></body></html>"
+# Carries the theme marker so the server leaves the bytes alone (theming has its own tests).
+MARK = "<style>/* accumark-docs v1 */</style>"
+HTML = "<!doctype html><html><head><title>t</title><style>/* accumark-docs v1 */</style></head><body><p>hi</p></body></html>"
 
 
 def _art(db):
@@ -414,7 +416,8 @@ def test_get_document_not_found(db):
 
 def test_create_accepts_exactly_max_bytes(db):
     from documents import service
-    html = "<html>" + ("x" * (service.MAX_BYTES - len("<html></html>"))) + "</html>"
+    pre = "<html><head>" + MARK + "</head>"
+    html = pre + ("x" * (service.MAX_BYTES - len(pre + "</html>"))) + "</html>"
     assert len(html.encode()) == service.MAX_BYTES
     doc, _ = service.create_document(db, title="max", html=html, category=_art(db))
     assert doc.size_bytes == service.MAX_BYTES
@@ -641,3 +644,78 @@ def test_effective_date_uses_the_lab_clock_not_the_container_clock(db):
     from throughput import lab_day
     from datetime import datetime as _dt
     assert service._lab_today(db) == lab_day(_dt.utcnow(), "America/Los_Angeles")
+
+
+# --- house theme is applied by the server ------------------------------------------------
+# Found live 2026-09-17: a bot-authored SOP arrived with its own grayscale CSS because only the
+# Claude Code publish skill inlined the theme. The server owns it now, for every writer.
+
+PLAIN = "<!doctype html><html><head><title>t</title><style>.x{color:red}</style></head><body><p>hi</p></body></html>"
+
+
+def test_theme_file_ships_with_the_package():
+    from documents import service
+    assert service.THEME_PATH.is_file()
+    assert service.THEME_MARKER_RE.search(service.theme_css())
+
+
+def test_create_inlines_the_theme_once_before_the_page_css(db):
+    from documents import service
+    doc, _ = service.create_document(db, title="t", html=PLAIN, category=_art(db))
+    out = service.read_content(doc).decode()
+    assert out.count("accumark-docs v1") == 1
+    assert out.index("accumark-docs v1") < out.index(".x{color:red}"), "page CSS must come after the theme so it wins"
+    assert "fonts.googleapis.com" in out, "fonts link added when the page has none"
+    assert doc.size_bytes == len(out.encode())
+
+
+def test_create_leaves_a_themed_document_alone(db):
+    from documents import service
+    themed = HTML.replace("<title>t</title>", '<title>t</title><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo">')
+    doc, _ = service.create_document(db, title="t", html=themed, category=_art(db))
+    out = service.read_content(doc).decode()
+    assert out == themed, "marker present: not re-themed, fonts link not duplicated"
+
+
+def test_theme_is_inlined_even_without_a_head(db):
+    from documents import service
+    doc, _ = service.create_document(db, title="t", html="<html><body><p>x</p></body></html>", category=_art(db))
+    out = service.read_content(doc).decode()
+    assert out.count("accumark-docs v1") == 1 and "<head>" in out
+
+
+def test_size_limit_applies_to_the_stored_bytes_after_theming(db):
+    from documents import service
+    from documents.errors import BadRequestError
+    just_under = "<html>" + ("x" * (service.MAX_BYTES - 20)) + "</html>"
+    with pytest.raises(BadRequestError, match="exceeds"):
+        service.create_document(db, title="t", html=just_under, category=_art(db))
+
+
+# --- a revision inherits title and description when omitted -----------------------------
+# Found 2026-09-18: the labmanager MCP omits title on revise ("the backend carries it
+# forward"), and the backend answered 422. Now it does carry it forward.
+
+def test_revision_inherits_title_and_description_when_omitted(db):
+    from documents import service
+    first, _ = service.create_document(db, title="Waste Disposal", html=HTML, category=_art(db),
+                                       description="How waste leaves the lab")
+    nxt, created = service.create_document(db, title=None, html=HTML + "<!--2-->", code=first.code,
+                                           category=None)
+    assert created and nxt.revision == 2
+    assert (nxt.title, nxt.description) == ("Waste Disposal", "How waste leaves the lab")
+
+
+def test_revision_still_takes_a_new_title_and_description_when_sent(db):
+    from documents import service
+    first, _ = service.create_document(db, title="Old", html=HTML, category=_art(db), description="d1")
+    nxt, _ = service.create_document(db, title="New", html=HTML + "<!--2-->", code=first.code,
+                                     category=None, description="d2")
+    assert (nxt.title, nxt.description) == ("New", "d2")
+
+
+def test_a_new_document_still_requires_a_title(db):
+    from documents import service
+    from documents.errors import BadRequestError
+    with pytest.raises(BadRequestError, match="title is required"):
+        service.create_document(db, title="", html=HTML, category=_art(db))

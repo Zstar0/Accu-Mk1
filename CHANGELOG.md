@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Fixed
+- **A partially published sample no longer raises a "stranded" flag.** Publishing a COA while sterility, endotoxin or the heavy metals are still outstanding parks the sample at `waiting_for_addon_results`, or leaves it at `to_be_verified` when the last result is already in and only needs verifying. Both are designed resting places with their own catalog edges, but the stranded-sample detector read any publish as "this sample is finished" and flagged every one of them. It now flags only a sample whose status column disagrees with Accu-Mk1's own workflow engine, which is the real fault it was written to catch (a published sample whose badge never moved, the P-2605 shape). Measured against production before the change: all 20 open `published_in_ledger_not_status` flags were partial publishes, so the board drops from 55 open flags to 35 with no other sample affected.
+
+## v1.22.3 - 2026-09-18
+
+### Fixed
+- **A document revision no longer has to restate its title.** `POST /api/documents` with a `code` and no `title` answered 422, so an agent asked to "revise SOP-0001 with this content" had to know and repeat the title. A revision now inherits the title and the description of the revision it supersedes when they are omitted; sending them still overrides. A new document still requires a title.
+
+## v1.22.2 - 2026-09-18
+
+### Changed
+- **The documents library applies the house theme itself.** The `accumark-docs` stylesheet used to be inlined by the Claude Code publish script before upload, so a document created any other way (the labmanager MCP, an admin) arrived unstyled or with whatever CSS its author invented; the first bot-authored SOP (SOP-0001) came in with its own grayscale sheet. Mk1 now inlines the theme when a document is created, as the first `<style>` in `<head>` so a page's own CSS still wins, and adds the Google Fonts link when the page has none. A document that already carries the `accumark-docs` marker is left byte for byte as sent, so existing revisions and artifact pages are unaffected. The canonical file moved to `backend/documents/accumark-docs.css` so the backend image ships it; the publish skill no longer inlines. The size limit now applies to the stored (themed) bytes.
+
+## v1.22.1 - 2026-09-17
+
+### Added
+- **Per-agent document tokens, and a co-author on every agent-written revision.** Agents (Jarvis, TARS, Claude Code) now publish to the documents library with their own token from `MK1_DOCUMENT_AGENT_TOKENS` (`jarvis:<token>,tars:<token>`, tokens of 32+ characters) instead of the internal service token. The internal token also opens the order and sample service endpoints, so it must not sit on a bot host; an agent token opens the documents API and nothing else. The token, not the request body, names the agent: a revision written through one records that agent as `co_author` (shown as "by Forrest Parker with jarvis" in the viewer and in the Author column), and a metadata edit records "<who> via <agent>". Agent tokens can create, revise, retitle, activate and archive; they cannot delete a draft or manage categories (403), which enforces on the server what the bot tooling already assumed. Admin logins and the internal service token behave exactly as before. Every agent write is logged as `documents.agent_write`. New column `documents.co_author`.
+
 ## v1.22.0 - 2026-09-17
 
 ### Added

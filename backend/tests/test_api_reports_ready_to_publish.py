@@ -92,7 +92,7 @@ def test_rows_sorted_and_totals(monkeypatch):
     assert by_id["P-3"]["flags"][0]["label"] == "Ready for Partial Publish"
     assert by_id["P-1"]["analytes"] == ["BPC-157"]
     assert body["totals"] == {"rows": 3, "orders": 2, "all_verified": 2, "flag_ready": 0,
-                              "flag_partial": 1, "breached": 2, "held": 0}
+                              "flag_partial": 1, "breached": 2, "held": 0, "scheduled": 0}
     assert [ft["kind"] for ft in body["flag_types"]] == ["flag_ready", "flag_partial", "hold"]
     assert all(row["hold"] is None for row in body["rows"])
     assert body["generated_at"].endswith("Z")
