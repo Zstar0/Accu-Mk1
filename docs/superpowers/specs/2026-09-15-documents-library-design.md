@@ -173,7 +173,7 @@ Session id: default from the scratchpad path when run inside Claude Code (`…/c
 
 ## 7. Theme: `accumark-docs.css`
 
-Canonical file: `src/docs-theme/accumark-docs.css` in the Mk1 repo, versioned by a header comment `/* accumark-docs v1 */`. It is **inlined into documents at publish time** (by the publish skill and by the SOP conversion skill) — never linked — because:
+Canonical file: `backend/documents/accumark-docs.css` in the Mk1 repo, versioned by a header comment `/* accumark-docs v1 */`. It is **inlined into documents by the server at create time** (`documents.service.inline_theme`, so every writer gets it: the publish skill, the labmanager MCP, an admin), never linked, because:
 
 - claude.ai artifacts cannot load external stylesheets (CSP), and I want the same file to render identically on claude.ai, in Mk1, and from disk;
 - a document must not change appearance when Mk1's theme file changes later; revisions are snapshots.
@@ -268,4 +268,4 @@ Recorded from the implementation ledger; each supersedes the earlier text above.
 - §5 `IntegrityError` maps to 409.
 - §8.3 there is **no "Open in window"** action: a top-level `blob:` URL is same-origin with Mk1 and would let document scripts reach localStorage. Download remains.
 - §8.2 sort is a select control, not table headers. §6 the publish script does not auto-derive the session id; agents pass `--session`.
-- §7 the theme does not inject a Google Fonts link; documents that want the faces carry their own `<link>` (artifact fragments already do), and the fallback stacks apply otherwise.
+- §7 the server adds the Google Fonts `<link>` when a document carries none (2026-09-18: bot-authored documents never did, so they fell back to system fonts); a document that already links fonts is left alone.

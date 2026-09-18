@@ -2204,6 +2204,8 @@ def _run_migrations():
         SELECT 'scheduled_publish_failed', 'Scheduled Publish Failed', '#e5484d', 'issue', FALSE, TRUE, 9, '[]'::jsonb, TRUE
         WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='scheduled_publish_failed')
         """,
+        # Documents library: the agent that authored a revision (from its scoped token).
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS co_author VARCHAR(100)",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent

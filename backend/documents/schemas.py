@@ -51,6 +51,7 @@ class DocumentOut(BaseModel):
     supersedes_id: Optional[int] = None
     author: Optional[str] = None
     updated_by: Optional[str] = None
+    co_author: Optional[str] = None
     source_session: Optional[str] = None
     created_by_user_id: Optional[int] = None
     content_type: str
@@ -73,7 +74,7 @@ class DocumentListOut(BaseModel):
 
 
 class DocumentCreate(BaseModel):
-    title: str
+    title: Optional[str] = None       # required for a new code; a revision inherits
     html: str
     category: Optional[str] = None       # code prefix or name
     category_id: Optional[int] = None

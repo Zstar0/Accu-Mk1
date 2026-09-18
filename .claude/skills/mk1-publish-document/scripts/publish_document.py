@@ -4,7 +4,7 @@
 Usage:
   publish_document.py PAGE.html --title T --category ART [--description D]
       [--code ART-0012] [--author "Forrest Parker"] [--session ID] [--draft]
-      [--effective YYYY-MM-DD] [--theme PATH] [--base-url URL]
+      [--effective YYYY-MM-DD] [--base-url URL]
       [--allow-secrets] [--dry-run]
   publish_document.py --self-test
 
@@ -23,8 +23,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-THEME_MARKER_RE = re.compile(r"/\*\s*accumark-docs v\d+")
-DEFAULT_THEME = Path(__file__).resolve().parents[4] / "src" / "docs-theme" / "accumark-docs.css"
+# The house theme is inlined by the SERVER at create time (documents.service.inline_theme),
+# so this script sends the page as written. Canonical file: backend/documents/accumark-docs.css.
 
 # (label, pattern). Labels are printed; matched VALUES never are.
 SECRET_PATTERNS = [
@@ -57,20 +57,6 @@ def wrap_fragment(html: str) -> str:
             f"{title}\n</head>\n<body>\n{html}\n</body>\n</html>\n")
 
 
-def inline_theme(html: str, css: str) -> str:
-    """Prepend the theme as the FIRST <style> in <head> so the document's own
-    styles (later in source order) win. No-op when a marker is already present."""
-    if THEME_MARKER_RE.search(html):
-        return html
-    block = f"<style>\n{css}\n</style>\n"
-    m = re.search(r"<head\b[^>]*>", html, re.IGNORECASE)
-    if m:
-        i = m.end()
-        return html[:i] + "\n" + block + html[i:]
-    m = re.search(r"<html\b[^>]*>", html, re.IGNORECASE)
-    i = m.end() if m else 0
-    return html[:i] + "\n<head>\n" + block + "</head>\n" + html[i:]
-
 
 def post_document(base_url: str, token: str, payload: dict) -> dict:
     req = urllib.request.Request(
@@ -89,14 +75,10 @@ def self_test() -> None:
     assert doc.startswith("<!doctype html>") and "<title>T</title>" in head, doc
     assert "<p>hi</p>" in doc.split("<body>")[1]
     assert wrap_fragment(doc) == doc, "full documents are left alone"
-    themed = inline_theme(doc, "/* accumark-docs v1 */ body{}")
-    assert themed.count("accumark-docs v1") == 1
-    assert themed.index("accumark-docs v1") < themed.index("<style>.x{}"), "theme must precede page CSS"
-    assert inline_theme(themed, "/* accumark-docs v1 */ body{}").count("accumark-docs v1") == 1, "inlined twice"
     assert find_secrets("key AKIAABCDEFGHIJKLMNOP here") == ["aws access key"]
     assert find_secrets("Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123") == ["bearer token"]
     assert find_secrets("<p>password: hunter2</p>") == ["password assignment"]
-    assert find_secrets(themed) == []
+    assert find_secrets(doc) == []
     print("self-test ok")
 
 
@@ -114,7 +96,6 @@ def main(argv=None) -> int:
                    help="provenance: the Claude Code session id")
     p.add_argument("--draft", action="store_true", help="publish as draft (activate=false)")
     p.add_argument("--effective", help="effective date YYYY-MM-DD")
-    p.add_argument("--theme", default=str(DEFAULT_THEME))
     p.add_argument("--base-url", default=os.environ.get("MK1_API_BASE_URL"))
     p.add_argument("--allow-secrets", action="store_true")
     p.add_argument("--dry-run", action="store_true", help="print the payload summary, do not POST")
@@ -133,13 +114,6 @@ def main(argv=None) -> int:
     if not src.is_file():
         print(f"no such file: {src}", file=sys.stderr)
         return 3
-    theme_path = Path(args.theme)
-    if not theme_path.is_file():
-        print(f"theme not found: {theme_path} (pass --theme)", file=sys.stderr)
-        return 3
-
-    # Scan the SOURCE page, never the themed result: a future theme edit that happened to
-    # look secret-shaped would otherwise block every publish.
     try:
         page = wrap_fragment(src.read_text(encoding="utf-8"))
     except UnicodeDecodeError:
@@ -152,12 +126,7 @@ def main(argv=None) -> int:
               "). Pass --allow-secrets only after a human has checked it.", file=sys.stderr)
         return 2
 
-    try:
-        css = theme_path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        print(f"not valid UTF-8: {theme_path}", file=sys.stderr)
-        return 3
-    html = inline_theme(page, css)
+    html = page
 
     payload = {
         "title": args.title, "html": html, "category": args.category,
