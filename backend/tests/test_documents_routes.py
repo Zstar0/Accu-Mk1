@@ -12,7 +12,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-HTML = "<!doctype html><html><head><title>t</title></head><body><p>hi</p></body></html>"
+# Carries the theme marker so the server leaves the bytes alone (theming has its own tests).
+HTML = "<!doctype html><html><head><title>t</title><style>/* accumark-docs v1 */</style></head><body><p>hi</p></body></html>"
 SVC = {"X-Service-Token": "test-token"}
 SVC_ENV = {"ACCUMK1_INTERNAL_SERVICE_TOKEN": "test-token"}
 
