@@ -286,6 +286,10 @@ def _run_migrations():
         # Phase 17: Worksheet item SENAITE received date + prep status
         "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS date_received TIMESTAMP",
         "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_status VARCHAR(20) DEFAULT 'ready'",
+        # Endotoxin bench prep overrides (2026-09-18, spec endo-worksheet-design)
+        "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_weight_mg FLOAT",
+        "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_volume_ml FLOAT",
+        "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_dilution_factor FLOAT",
         # Phase 15: AnalysisService peptide link
         "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS peptide_id INTEGER REFERENCES peptides(id) ON DELETE SET NULL",
         # Phase 17: Worksheet completion tracking

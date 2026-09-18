@@ -1094,6 +1094,19 @@ class WorksheetItem(Base):
     prep_status: Mapped[str] = mapped_column(String(20), default="ready", nullable=False, server_default="ready")
     date_received: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # SENAITE sample received date
     added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # Endotoxin bench prep (2026-09-18, ported from Dennis's endotoxin-log; spec
+    # docs/superpowers/specs/2026-09-18-endo-worksheet-design.md). All three are
+    # analyst OVERRIDES; NULL means "use the computed value":
+    #   prep_weight_mg        weight actually prepped, when it differs from the
+    #                         parent's declared quantity
+    #   prep_volume_ml        reconstitution volume, when it differs from
+    #                         MIN(10, 1 + FLOOR(mg / 50))
+    #   prep_dilution_factor  bacteriostatic-water dilution, when not 20x
+    # Derived figures (vial conc, sample uL, LAL uL, due date) are never stored;
+    # src/lib/endo-prep.ts computes them from these plus the parent's declared weight.
+    prep_weight_mg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    prep_volume_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    prep_dilution_factor: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     def __repr__(self) -> str:
         return f"<WorksheetItem(id={self.id}, worksheet_id={self.worksheet_id}, sample_uid='{self.sample_uid}')>"
