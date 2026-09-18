@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Any, Callable, Mapping, Optional, TypeVar
+from typing import Any, Callable, Iterable, Mapping, Optional, TypeVar
 from zoneinfo import ZoneInfo
 
 # T is the SLA tier type, returned as-is — resolve_sla_tier is a passthrough and
@@ -148,3 +148,56 @@ def compute_sla_status(
         return None
     elapsed_minutes = (now - received_at).total_seconds() / 60.0
     return sla_status_dict(target_minutes, elapsed_minutes)
+
+
+def tier_by_service(
+    profile_tiers: Iterable[tuple[T, Iterable[int]]],
+    group_tiers: Iterable[tuple[T, Iterable[int]]],
+) -> dict[int, T]:
+    """analysis_service id -> the tier that service owes.
+
+    Each argument is ``(tier, service_ids)`` pairs: one per tiered ACTIVE
+    analysis profile, one per tiered service group. A profile tier beats a
+    group tier (the lab configures SLAs on analysis profiles; same precedence
+    as src/lib/sla-resolution.ts), and within a level the tightest
+    ``target_minutes`` wins. A service in neither is absent from the map and
+    falls to the default tier in :func:`sample_tier`.
+
+    Unlike :func:`resolve_sla_tier` this READS ``tier.target_minutes``.
+    """
+    def tightest(pairs: Iterable[tuple[T, Iterable[int]]]) -> dict[int, T]:
+        out: dict[int, T] = {}
+        for tier, service_ids in pairs:
+            for sid in service_ids:
+                cur = out.get(sid)
+                if cur is None or tier.target_minutes < cur.target_minutes:  # type: ignore[attr-defined]
+                    out[sid] = tier
+        return out
+
+    by_service = tightest(group_tiers)
+    by_service.update(tightest(profile_tiers))
+    return by_service
+
+
+def sample_tier(
+    service_ids: Iterable[int],
+    by_service: Mapping[int, T],
+    default_tier: Optional[T],
+    *,
+    loosest: bool = False,
+) -> Optional[T]:
+    """One tier for a sample from its services' own tiers.
+
+    Every service resolves to ``by_service[sid]`` or, when it has no profile
+    or group tier, the default. The sample then takes the TIGHTEST of those
+    (the first COA out is the fast work and owes the fast deadline) or, with
+    ``loosest=True``, the LOOSEST (a COA already went out, so what remains is
+    the slow work: USP 71 sterility against the 3-day tier would read late on
+    every sample). A sample with no services takes the default.
+    """
+    tiers = [by_service.get(sid) or default_tier for sid in service_ids]
+    tiers = [t for t in tiers if t is not None]
+    if not tiers:
+        return default_tier
+    pick = max if loosest else min
+    return pick(tiers, key=lambda t: t.target_minutes)  # type: ignore[attr-defined]

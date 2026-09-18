@@ -3,9 +3,12 @@ import type { SenaiteLookupResult } from '@/lib/api'
 import {
   buildKeywordToServiceIdMap,
   buildServiceIdToGroupIdMap,
+  buildServiceToProfileTierMap,
   NO_GROUP_KEY,
+  profileBucketKey,
   type GroupKey,
 } from '@/lib/sla-resolution'
+import { useAnalysisProfiles } from '@/services/analysis-profiles'
 import { useAnalysisServices } from '@/services/analysis-services'
 import { useServiceGroups } from '@/services/service-groups'
 import { useSlaTiers } from '@/services/sla'
@@ -32,9 +35,12 @@ export interface AnalysisSlaMapResult {
  * to expose a flat `Map<keyword, snapshot>` that table rows can read in O(1).
  *
  * Resolution: analysis.keyword → service.id → group.id → snapshot whose
- * `groupKey === group_id`. Unmapped keywords (no service match or service has
- * no group) fall through to the NO_GROUP_KEY snapshot (default-tier bucket)
- * when a default tier is configured; otherwise produce no entry.
+ * `groupKey === group_id`. An UNGROUPED service on a tiered profile may have
+ * its own `profile:<id>` snapshot (see resolveSampleTiersByGroup); when that
+ * snapshot exists the row reads it, so a USP 71 line shows the 14-day clock
+ * rather than the default. Otherwise unmapped keywords (no service match or
+ * service has no group) fall through to the NO_GROUP_KEY snapshot
+ * (default-tier bucket) when a default tier is configured, else no entry.
  */
 export function useAnalysisSlaMap(
   lookup: SenaiteLookupResult | null | undefined
@@ -43,6 +49,7 @@ export function useAnalysisSlaMap(
   const servicesQuery = useAnalysisServices()
   const groupsQuery = useServiceGroups()
   const tiersQuery = useSlaTiers()
+  const profilesQuery = useAnalysisProfiles()
 
   const byKeyword = useMemo(() => {
     const out = new Map<string, SampleSlaSnapshot>()
@@ -53,6 +60,10 @@ export function useAnalysisSlaMap(
     const tiersById = new Map(tiers.map(t => [t.id, t]))
     const keywordToServiceId = buildKeywordToServiceIdMap(services)
     const serviceIdToGroupId = buildServiceIdToGroupIdMap(groups, tiersById)
+    const serviceIdToProfileTier = buildServiceToProfileTierMap(
+      profilesQuery.data ?? [],
+      tiersById
+    )
     const snapshotByGroupKey = new Map<GroupKey, SampleSlaSnapshot>()
     for (const snap of sampleSla.snapshots) {
       snapshotByGroupKey.set(snap.groupKey, snap)
@@ -63,7 +74,17 @@ export function useAnalysisSlaMap(
       const serviceId = keywordToServiceId.get(kw)
       const groupId = serviceId !== undefined ? serviceIdToGroupId.get(serviceId) : undefined
       const groupKey: GroupKey = groupId ?? NO_GROUP_KEY
-      const snap = snapshotByGroupKey.get(groupKey)
+      // The resolver only splits a per-profile bucket off when it decides to
+      // (ungrouped, clock differs, no global override), so ask whether the
+      // snapshot EXISTS rather than re-deriving that decision here.
+      const profileId =
+        groupId == null && serviceId !== undefined
+          ? serviceIdToProfileTier.get(serviceId)?.profileId
+          : undefined
+      const snap =
+        (profileId != null
+          ? snapshotByGroupKey.get(profileBucketKey(profileId))
+          : undefined) ?? snapshotByGroupKey.get(groupKey)
       if (snap) out.set(kw, snap)
     }
     return out
@@ -73,6 +94,7 @@ export function useAnalysisSlaMap(
     servicesQuery.data,
     groupsQuery.data,
     tiersQuery.data,
+    profilesQuery.data,
   ])
 
   // Mirror the byKeyword gate (and useSampleSla's `applicable` guard): when

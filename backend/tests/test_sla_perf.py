@@ -7,6 +7,7 @@ from sla_perf import (
     AnalysisIn,
     CoaIn,
     GroupIn,
+    ProfileIn,
     SampleIn,
     TierIn,
     build_sla_performance,
@@ -146,27 +147,98 @@ def test_a_sample_with_no_tiered_service_takes_the_default_tier():
     assert out["targets"] == [{"name": "Standard", "bh": 24.0, "samples": 1}]
 
 
-def test_a_sample_touching_a_tiered_group_takes_that_groups_tier():
+def test_a_sample_whose_every_service_is_tiered_takes_that_tier():
     micro = GroupIn(id=2, name="Microbiology", sla_tier_id=3, service_ids=frozenset({91}))
     out = build(samples=[sample(1, "P-1", datetime(2026, 7, 6, 16, 0))],
-                analyses=[hplc(1), ster(1)],
+                analyses=[ster(1)],
                 coas=[coa("P-1", datetime(2026, 7, 7, 20, 0))],
                 groups=[CORE_GROUP, micro])
     assert out["targets"] == [{"name": "USP71", "bh": 112.0, "samples": 1}]
 
 
-def test_a_longer_group_target_keeps_a_slow_sample_inside_its_sla():
-    """The USP71 wiring gap made visible: 40 bh is late at 24, on time at 112."""
+def test_a_mixed_sample_owes_its_tightest_tier_because_the_clock_stops_at_the_first_coa():
+    """HPLC (no tier -> default 24 bh) + a 112 bh service. The first primary COA
+    is the early partial one carrying the fast work (prod 2026-09-17: P-2432,
+    P-2492, P-2777), so the sample is judged at 24 bh. Supersedes the September
+    "touching a tiered group takes that group's tier" reading, which would have
+    waved every late mixed sample through the day USP71 started resolving."""
+    micro = GroupIn(id=2, name="Microbiology", sla_tier_id=3, service_ids=frozenset({91}))
+    s = sample(1, "P-1", datetime(2026, 7, 6, 16, 0))
+    out = build(samples=[s], analyses=[hplc(1), ster(1)],
+                coas=[coa("P-1", datetime(2026, 7, 13, 0, 0))],     # 40 business hours
+                groups=[CORE_GROUP, micro])
+    assert out["targets"] == [{"name": "Standard", "bh": 24.0, "samples": 1}]
+    assert out["months"][0]["late"] == 1
+
+
+def test_a_longer_target_keeps_a_slow_only_sample_inside_its_sla():
+    """40 bh is late at 24 and on time at 112, for a sample that is ALL slow work."""
     s = sample(1, "P-1", datetime(2026, 7, 6, 16, 0))
     coas = [coa("P-1", datetime(2026, 7, 13, 0, 0))]  # 40 business hours
-    untiered = build(samples=[s], analyses=[hplc(1), ster(1)], coas=coas,
+    untiered = build(samples=[s], analyses=[ster(1)], coas=coas,
                      groups=[CORE_GROUP, GroupIn(id=2, name="Microbiology", sla_tier_id=2,
                                                  service_ids=frozenset({91}))])
     assert untiered["months"][0]["late"] == 1
-    tiered = build(samples=[s], analyses=[hplc(1), ster(1)], coas=coas,
+    tiered = build(samples=[s], analyses=[ster(1)], coas=coas,
                    groups=[CORE_GROUP, GroupIn(id=2, name="Microbiology", sla_tier_id=3,
                                                service_ids=frozenset({91}))])
     assert tiered["months"][0]["late"] == 0
+
+
+# ── profile tiers (where the lab actually hangs its SLAs) ───────────────────
+# Prod shape, read 2026-09-17: "Sterility USP 71" -> USP71 on BACTERIA (279) and
+# FUNGI (280); "Endotoxin USP85 LAL" -> Microbiology on 281. None of the three
+# services sits in any service group.
+USP71_PROFILE = ProfileIn(id=8, name="Sterility USP 71", sla_tier_id=3, service_ids=frozenset({279, 280}))
+ENDO_PROFILE = ProfileIn(id=9, name="Endotoxin USP85 LAL", sla_tier_id=2, service_ids=frozenset({281}))
+
+
+def bacteria(pk, verified=None):
+    return AnalysisIn(sample_pk=pk, keyword="BACTERIA", category="Sterility",
+                      verified_at=verified, service_id=279)
+
+
+def test_a_usp71_only_sample_takes_the_profile_tier_even_though_its_services_are_ungrouped():
+    out = build(samples=[sample(1, "BW-1", datetime(2026, 7, 6, 16, 0))], analyses=[bacteria(1)],
+                coas=[coa("BW-1", datetime(2026, 7, 13, 0, 0))],     # 40 bh
+                profiles=[USP71_PROFILE, ENDO_PROFILE])
+    assert out["targets"] == [{"name": "USP71", "bh": 112.0, "samples": 1}]
+    assert out["months"][0]["late"] == 0
+
+
+def test_a_mixed_usp71_sample_is_still_judged_on_its_first_coa_at_24_bh():
+    out = build(samples=[sample(1, "P-2777", datetime(2026, 7, 6, 16, 0))],
+                analyses=[hplc(1), bacteria(1)],
+                coas=[coa("P-2777", datetime(2026, 7, 13, 0, 0))],   # first COA at 40 bh
+                profiles=[USP71_PROFILE, ENDO_PROFILE])
+    assert out["targets"] == [{"name": "Standard", "bh": 24.0, "samples": 1}]
+    assert out["months"][0]["late"] == 1
+
+
+def test_a_profile_tier_beats_the_group_tier_on_the_same_service():
+    group = GroupIn(id=2, name="Microbiology", sla_tier_id=2, service_ids=frozenset({279}))
+    out = build(samples=[sample(1, "BW-1", datetime(2026, 7, 6, 16, 0))], analyses=[bacteria(1)],
+                coas=[coa("BW-1", datetime(2026, 7, 13, 0, 0))],
+                groups=[CORE_GROUP, group], profiles=[USP71_PROFILE])
+    assert out["targets"][0]["name"] == "USP71"
+
+
+def test_each_family_is_timed_against_its_own_tier_not_the_samples():
+    """Sterility verified at 40 bh is over the sample's 24 bh but inside USP71's 112."""
+    s = sample(1, "P-1", datetime(2026, 7, 6, 16, 0))
+    out = build(samples=[s],
+                analyses=[hplc(1, verified=datetime(2026, 7, 7, 18, 0)),          # 10 bh
+                          bacteria(1, verified=datetime(2026, 7, 13, 0, 0))],     # 40 bh
+                coas=[coa("P-1", datetime(2026, 7, 13, 0, 0))],
+                profiles=[USP71_PROFILE])
+    fams = {f["k"]: f for f in out["gating"]["families"]}
+    assert fams["ster"]["over_target"] == 0          # 40 bh vs 112
+    assert fams["hplc"]["over_target"] == 0          # 10 bh vs 24
+    without = build(samples=[s],
+                    analyses=[hplc(1, verified=datetime(2026, 7, 7, 18, 0)),
+                              bacteria(1, verified=datetime(2026, 7, 13, 0, 0))],
+                    coas=[coa("P-1", datetime(2026, 7, 13, 0, 0))])
+    assert {f["k"]: f for f in without["gating"]["families"]}["ster"]["over_target"] == 1
 
 
 # ── receipt cohorts ─────────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ from ready_to_publish import (
     FlagIn,
     FlagTypeIn,
     GroupIn,
+    ProfileIn,
     SampleIn,
     TierIn,
     build_ready_rows,
@@ -269,6 +270,40 @@ def test_hold_alone_does_not_qualify_a_sample():
 def test_unheld_rows_have_hold_none():
     assert build_h([sample(1, "P-1")], {1: {"HPLC-PUR": "verified"}}, [])[0]["hold"] is None
 
+
+# ── profile tiers (where the lab actually hangs its SLAs) ───────────────────
+# Prod shape, read 2026-09-17: "Sterility USP 71" -> USP71 on services 279/280,
+# which sit in NO service group. HPLC services (10) carry no tier at all.
+USP71_PROFILE = ProfileIn(id=8, name="Sterility USP 71", sla_tier_id=3, service_ids=frozenset({279, 280}))
+VERIFIED = {"HPLC-PUR": "verified"}
+
+
+def test_usp71_only_sample_takes_the_profile_tier_without_any_service_group():
+    rows = build([sample(1, "BW-1")], {1: VERIFIED}, services_of={1: {279, 280}}, profiles=(USP71_PROFILE,))
+    assert rows[0]["sla"]["tier"] == "USP71" and rows[0]["sla"]["target_minutes"] == 6720
+
+
+def test_mixed_sample_owes_the_fast_tier_until_a_coa_has_gone_out():
+    kw = dict(services_of={1: {10, 279}}, profiles=(USP71_PROFILE,))
+    before = build([sample(1, "P-2777")], {1: VERIFIED}, **kw)
+    assert before[0]["sla"]["tier"] == "Standard"          # first COA: the 3-day work
+    after = build([sample(1, "P-2777")], {1: VERIFIED}, delivered_pks=frozenset({1}), **kw)
+    assert after[0]["sla"]["tier"] == "USP71"              # what is left is the 14-day work
+    assert after[0]["sla"]["breached"] is False
+
+
+def test_a_profile_tier_beats_a_group_tier_on_the_same_service():
+    group = GroupIn(id=2, name="Microbiology", sla_tier_id=1, service_ids=frozenset({279}))
+    rows = build([sample(1, "BW-1")], {1: VERIFIED}, services_of={1: {279}},
+                 groups=(group,), profiles=(USP71_PROFILE,))
+    assert rows[0]["sla"]["tier"] == "USP71"
+
+
+def test_no_profiles_passed_is_the_old_group_or_default_behaviour():
+    rows = build([sample(1, "P-1")], {1: VERIFIED}, services_of={1: {91}}, groups=(MICRO,))
+    assert rows[0]["sla"]["tier"] == "USP71"               # every service in the tiered group
+    rows = build([sample(1, "P-1")], {1: VERIFIED}, services_of={1: {10}})
+    assert rows[0]["sla"]["tier"] == "Standard"
 
 def test_scheduled_publish_rides_the_row_and_coexists_with_hold():
     sched = {"P-1": {"id": 7, "status": "pending", "scheduled_at": "2026-09-19T17:00:00Z", "pdf_date": "09/19/2026"}}
