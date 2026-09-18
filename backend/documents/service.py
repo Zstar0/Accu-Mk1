@@ -306,8 +306,6 @@ def create_document(db: Session, *, title: str, html, category: Optional[Documen
     """Create revision 1 of a new code, or the next revision of an existing one.
     Identical bytes on an existing code => metadata patch, no new row (§5.5)."""
     title = (title or "").strip()
-    if not title:
-        raise BadRequestError("title is required")
     data = validate_html(html)
     sha = hashlib.sha256(data).hexdigest()
 
@@ -317,6 +315,12 @@ def create_document(db: Session, *, title: str, html, category: Optional[Documen
         latest = _latest(db, code, for_update=True)  # serialize same-code pushes
 
     if latest is not None:
+        # A revision push may omit title and description: "revise SOP-0001 with this
+        # content" should not have to restate them. Omitted = inherit from the
+        # revision being superseded; sending them still overrides.
+        title = title or latest.title
+        if description is None:
+            description = latest.description
         if category is not None and category.code_prefix != code.split("-", 1)[0]:
             # Mirrors the new-code check below: the code was minted from a prefix and
             # never changes, so a revision push cannot refile it under another one.
@@ -336,6 +340,8 @@ def create_document(db: Session, *, title: str, html, category: Optional[Documen
         revision = latest.revision + 1
         supersedes_id = latest.id
     else:
+        if not title:
+            raise BadRequestError("title is required for a new document")
         if category is None:
             raise BadRequestError("category is required for a new document")
         cat = category

@@ -690,3 +690,32 @@ def test_size_limit_applies_to_the_stored_bytes_after_theming(db):
     just_under = "<html>" + ("x" * (service.MAX_BYTES - 20)) + "</html>"
     with pytest.raises(BadRequestError, match="exceeds"):
         service.create_document(db, title="t", html=just_under, category=_art(db))
+
+
+# --- a revision inherits title and description when omitted -----------------------------
+# Found 2026-09-18: the labmanager MCP omits title on revise ("the backend carries it
+# forward"), and the backend answered 422. Now it does carry it forward.
+
+def test_revision_inherits_title_and_description_when_omitted(db):
+    from documents import service
+    first, _ = service.create_document(db, title="Waste Disposal", html=HTML, category=_art(db),
+                                       description="How waste leaves the lab")
+    nxt, created = service.create_document(db, title=None, html=HTML + "<!--2-->", code=first.code,
+                                           category=None)
+    assert created and nxt.revision == 2
+    assert (nxt.title, nxt.description) == ("Waste Disposal", "How waste leaves the lab")
+
+
+def test_revision_still_takes_a_new_title_and_description_when_sent(db):
+    from documents import service
+    first, _ = service.create_document(db, title="Old", html=HTML, category=_art(db), description="d1")
+    nxt, _ = service.create_document(db, title="New", html=HTML + "<!--2-->", code=first.code,
+                                     category=None, description="d2")
+    assert (nxt.title, nxt.description) == ("New", "d2")
+
+
+def test_a_new_document_still_requires_a_title(db):
+    from documents import service
+    from documents.errors import BadRequestError
+    with pytest.raises(BadRequestError, match="title is required"):
+        service.create_document(db, title="", html=HTML, category=_art(db))
