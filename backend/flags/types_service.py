@@ -33,6 +33,8 @@ _BUILTINS = [
     ("identity_collision", "Identity Collision", "#e5484d", "issue", True, 7),
     # Sample-status authority flip (2026-09-09 spec §6.2): stranded samples.
     ("workflow_stranded", "Workflow Stranded", "#f59e0b", "issue", False, 8),
+    # Scheduled COA publish (2026-09-17): a due publish that did not go out.
+    ("scheduled_publish_failed", "Scheduled Publish Failed", "#e5484d", "issue", False, 9),
 ]
 
 

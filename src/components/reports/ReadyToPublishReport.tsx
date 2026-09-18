@@ -7,6 +7,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import {
+  CalendarClock,
   ChevronDown,
   ChevronRight,
   Flag,
@@ -15,6 +16,7 @@ import {
   PlayCircle,
   XCircle,
 } from 'lucide-react'
+import { fmtWhen, isParkedSchedule } from '@/lib/scheduled-publish'
 import { cn } from '@/lib/utils'
 import { getReadyToPublish } from '@/lib/api'
 import type { ReadyRow, ReadySla } from '@/lib/api'
@@ -302,8 +304,43 @@ function SampleLine({
               {row.hold.since ? ` · since ${fmtDate(row.hold.since)}` : ''}
             </div>
           </div>
+        ) : isParkedSchedule(row.scheduled) && row.scheduled ? (
+          <div className="text-xs">
+            <Badge
+              variant="outline"
+              className="text-[10px] gap-1 border-sky-500/50 text-sky-400"
+              data-testid="rtp-scheduled"
+            >
+              <CalendarClock className="h-2.5 w-2.5" />
+              {row.scheduled.status === 'firing'
+                ? 'Publishing now'
+                : `Publishes ${fmtWhen(row.scheduled.scheduled_at)}`}
+            </Badge>
+            <div className="text-muted-foreground mt-0.5">
+              COA date {row.scheduled.pdf_date}
+            </div>
+          </div>
         ) : (
-          <ReasonBadges row={row} />
+          <>
+            {row.scheduled?.status === 'failed' && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge
+                    variant="outline"
+                    className="text-[10px] gap-1 border-red-500/50 text-red-400 mb-0.5"
+                    data-testid="rtp-scheduled-failed"
+                  >
+                    <CalendarClock className="h-2.5 w-2.5" />
+                    Scheduled publish failed
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-xs text-xs">
+                  {row.scheduled.last_error ?? 'No error recorded'}
+                </TooltipContent>
+              </Tooltip>
+            )}
+            <ReasonBadges row={row} />
+          </>
         )}
       </td>
       <td className="py-1.5 pr-2 align-top text-xs tabular-nums whitespace-nowrap">
@@ -384,6 +421,7 @@ export function ReadyToPublishReport() {
   const [query, setQuery] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
   const [showHeld, setShowHeld] = useState(false)
+  const [showScheduled, setShowScheduled] = useState(false)
   // null = the backend's "most critical first"; a header click sorts that column.
   const [sort, setSort] = useState<ReadySort | null>(null)
   const toggleSort = (key: ReadySortKey) =>
@@ -456,7 +494,7 @@ export function ReadyToPublishReport() {
     [data, query]
   )
   const sorted = useMemo(() => sortRows(filtered, sort), [filtered, sort])
-  const { live, held } = useMemo(() => splitHeld(sorted), [sorted])
+  const { live, held, scheduled } = useMemo(() => splitHeld(sorted), [sorted])
   const groups = useMemo(() => groupByOrder(live), [live])
 
   const toggle = (order: string) =>
@@ -589,6 +627,15 @@ export function ReadyToPublishReport() {
               {totals.held} on hold
             </Badge>
           )}
+          {(totals.scheduled ?? 0) > 0 && (
+            <Badge
+              variant="outline"
+              className="border-sky-500/40 text-sky-400"
+              data-testid="rtp-total-scheduled"
+            >
+              {totals.scheduled} scheduled
+            </Badge>
+          )}
         </div>
       )}
 
@@ -670,6 +717,46 @@ export function ReadyToPublishReport() {
                 {header}
                 <tbody>
                   {held.map(r => (
+                    <SampleLine
+                      key={r.sample_id}
+                      row={r}
+                      indent={false}
+                      actions={actions}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {scheduled.length > 0 && (
+        <div className="rounded-md border border-border/40">
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 px-3 py-2 text-xs text-muted-foreground hover:text-foreground"
+            onClick={() => setShowScheduled(v => !v)}
+            data-testid="rtp-scheduled-toggle"
+          >
+            {showScheduled ? (
+              <ChevronDown className="h-3.5 w-3.5" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5" />
+            )}
+            <CalendarClock className="h-3.5 w-3.5" />
+            Scheduled ({scheduled.length})
+            <span className="ml-auto text-[11px]">
+              Publishes automatically at the scheduled time; open the sample to
+              reschedule or cancel.
+            </span>
+          </button>
+          {showScheduled && (
+            <div className="overflow-x-auto border-t border-border/40">
+              <table className="w-full text-sm">
+                {header}
+                <tbody>
+                  {scheduled.map(r => (
                     <SampleLine
                       key={r.sample_id}
                       row={r}

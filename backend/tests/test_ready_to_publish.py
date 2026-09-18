@@ -225,11 +225,11 @@ def test_sort_most_critical_first():
 HOLD_T = FlagTypeIn(slug="new_type_7", label="On Hold", color="#64748b")
 
 
-def build_h(samples, line_states, flags):
+def build_h(samples, line_states, flags, **kw):
     return build_ready_rows(
         samples=samples, line_states_by_pk=line_states, flags=flags,
         flag_types=(READY_T, PARTIAL_T, HOLD_T), priorities={}, services_of={},
-        tiers=(STANDARD,), groups=(), schedule=SCHEDULE, holidays=frozenset(), now=NOW,
+        tiers=(STANDARD,), groups=(), schedule=SCHEDULE, holidays=frozenset(), now=NOW, **kw,
     )
 
 
@@ -268,3 +268,15 @@ def test_hold_alone_does_not_qualify_a_sample():
 
 def test_unheld_rows_have_hold_none():
     assert build_h([sample(1, "P-1")], {1: {"HPLC-PUR": "verified"}}, [])[0]["hold"] is None
+
+
+def test_scheduled_publish_rides_the_row_and_coexists_with_hold():
+    sched = {"P-1": {"id": 7, "status": "pending", "scheduled_at": "2026-09-19T17:00:00Z", "pdf_date": "09/19/2026"}}
+    flags = [FlagIn(id=1, sample_id="P-1", type_slug="new_type_7", status="open", title="hold")]
+    rows = build_h([sample(1, "P-1"), sample(2, "P-2")],
+                   {1: {"HPLC-PUR": "verified"}, 2: {"HPLC-PUR": "verified"}}, flags, scheduled=sched)
+    by = {r["sample_id"]: r for r in rows}
+    assert by["P-1"]["scheduled"] == sched["P-1"] and by["P-1"]["hold"]["title"] == "hold"
+    assert by["P-2"]["scheduled"] is None
+    # Callers that do not pass the mapping get None, not a KeyError.
+    assert build([sample(1, "P-1")], {1: {"HPLC-PUR": "verified"}})[0]["scheduled"] is None
