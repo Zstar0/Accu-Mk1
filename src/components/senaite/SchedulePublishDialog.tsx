@@ -34,8 +34,6 @@ import {
 } from '@/lib/scheduled-publish'
 import { cn } from '@/lib/utils'
 
-const MIN_LEAD_MS = 30 * 60 * 1000
-
 export function SchedulePublishDialog({
   open,
   onOpenChange,
@@ -115,10 +113,6 @@ function ScheduleForm({
   onClose: () => void
 }) {
   const [value, setValue] = useState(() => toLocalInputValue(seed))
-  // Lead-time check runs in the submit handler (the clock is impure in
-  // render); the backend enforces the same rule with a 422.
-  const [tooSoon, setTooSoon] = useState(false)
-
   const iso = localInputToIso(value)
   const tz = state.lab_timezone
   const coaDate = iso ? labDate(iso, tz) : ''
@@ -131,13 +125,10 @@ function ScheduleForm({
     new Date(state.suggested_at).getTime() >
       new Date(state.sla_deadline).getTime()
 
+  // The minimum lead is the backend's (env-tunable, 30 min in prod, 1 on a
+  // dev stack); its 422 comes back through the toast.
   const submit = () => {
-    if (!iso) return
-    if (new Date(iso).getTime() < Date.now() + MIN_LEAD_MS) {
-      setTooSoon(true)
-      return
-    }
-    onSubmit(iso)
+    if (iso) onSubmit(iso)
   }
 
   return (
@@ -150,10 +141,7 @@ function ScheduleForm({
           <input
             type="datetime-local"
             value={value}
-            onChange={e => {
-              setValue(e.target.value)
-              setTooSoon(false)
-            }}
+            onChange={e => setValue(e.target.value)}
             disabled={busy}
             className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
             data-testid="schedule-publish-input"
@@ -182,12 +170,6 @@ function ScheduleForm({
                 : 'Suggestion pulled in to stay inside the SLA.'}
             </div>
           )}
-          {tooSoon && (
-            <div className="text-red-400">
-              Pick a time at least 30 minutes out. To publish now, use Publish
-              Accumark COA.
-            </div>
-          )}
           <div className="text-muted-foreground">
             No publishing between 10pm and 5am lab time. The suggestion lands
             late in the SLA window (50 to 70 hours after receipt on the 3-day
@@ -202,7 +184,7 @@ function ScheduleForm({
         </Button>
         <Button
           size="sm"
-          disabled={busy || !iso || tooSoon}
+          disabled={busy || !iso}
           onClick={submit}
           data-testid="schedule-publish-submit"
         >

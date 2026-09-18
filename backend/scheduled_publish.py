@@ -30,6 +30,7 @@ edges (pdf date, quiet window, suggestion walk).
 from __future__ import annotations
 
 import logging
+import os
 import random
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Callable, Optional
@@ -65,8 +66,9 @@ SUGGEST_WINDOW_HOURS = 72.0
 QUIET_START = time(22, 0)   # lab time
 QUIET_END = time(5, 0)
 # Schedule must be this far out: covers the insert-then-regenerate window
-# (variance lots take minutes per vial COA).
-MIN_LEAD = timedelta(minutes=30)
+# (variance lots take minutes per vial COA). Env-tunable so a dev stack can
+# schedule a minute out (accumark-stack sets 1); prod keeps the 30 default.
+MIN_LEAD = timedelta(minutes=int(os.environ.get("SCHEDULED_PUBLISH_MIN_LEAD_MINUTES", "30")))
 # The publish runs on the scheduler's event loop; a 05:00 backlog drains a
 # few per minute rather than starving the other jobs.
 MAX_PER_TICK = 5

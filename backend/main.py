@@ -14310,9 +14310,10 @@ async def schedule_sample_publish(
         raise HTTPException(status_code=422, detail=str(e))
     now = datetime.utcnow()
     if at < now + _sp.MIN_LEAD:
+        lead = int(_sp.MIN_LEAD.total_seconds() // 60)
         raise HTTPException(
             status_code=422,
-            detail=f"Pick a time at least {int(_sp.MIN_LEAD.total_seconds() // 60)} minutes out "
+            detail=f"Pick a time at least {lead} minute{'s' if lead != 1 else ''} out "
                    f"(the draft is regenerated first). To publish now, use Publish Accumark COA.",
         )
     tz = _sp.lab_tz(db)
