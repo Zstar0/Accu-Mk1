@@ -1,13 +1,8 @@
-import { useState, useMemo } from 'react'
+import { useMemo } from 'react'
 import { useUIStore } from '@/store/ui-store'
-import { X, MoveRight, ClipboardX, GripVertical } from 'lucide-react'
+import { X, ClipboardX, GripVertical } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 // Badge import kept for potential future use
-import {
-  Popover,
-  PopoverTrigger,
-  PopoverContent,
-} from '@/components/ui/popover'
 import {
   Select,
   SelectContent,
@@ -32,7 +27,7 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { PriorityGlyph } from '@/components/common/PriorityGlyph'
-import { legacyEffectivePriority, legacyToKey } from '@/lib/inbox-sla'
+import { legacyEffectivePriority } from '@/lib/inbox-sla'
 import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
 import {
   useSlaForSubjects,
@@ -45,7 +40,18 @@ import {
   type ServiceGroupColor,
 } from '@/lib/service-group-colors'
 import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
-import type { WorksheetListItem, Instrument } from '@/lib/api'
+import type {
+  WorksheetListItem,
+  Instrument,
+  WorksheetItemPatch,
+} from '@/lib/api'
+import { isEndoWorksheetItem } from '@/lib/endo-worksheet'
+import { EndoPrepLine } from './EndoPrepLine'
+import { EndoWorksheetTable } from './EndoWorksheetTable'
+import { PrepStatusSelect } from './PrepStatusSelect'
+import { ReassignButton } from './ReassignButton'
+import { worksheetKind } from '@/lib/worksheet-kind'
+import { worksheetItemSlaSubjects } from '@/lib/worksheet-sla-subjects'
 
 /** Extract unique peptide names from analyses — compact display for worksheet */
 function getPeptideNames(
@@ -79,14 +85,7 @@ interface WorksheetDrawerItemsProps {
     limsSubSamplePk: number | null
   }) => void
   instruments: Instrument[]
-  onUpdateItem: (
-    itemId: number,
-    data: {
-      instrument_uid?: string
-      prep_status?: string
-      instrument_id?: number | null
-    }
-  ) => void
+  onUpdateItem: (itemId: number, data: WorksheetItemPatch) => void
   onReorder: (itemIds: number[]) => void
 }
 
@@ -106,22 +105,18 @@ export function WorksheetDrawerItems({
 }: WorksheetDrawerItemsProps) {
   const otherWorksheets = openWorksheets.filter(ws => ws.id !== worksheetId)
 
-  const slaSubjects: SlaSubject[] = useMemo(() => {
-    const worksheetCompletedAt = isCompleted
-      ? (worksheetCompletedAtProp ?? null)
-      : null
-    return items.map(item => ({
-      key: String(item.id),
-      priority: legacyToKey(item.priority),
-      groupId: item.service_group_id,
-      receivedAt: item.date_received ?? item.added_at,
-      completedAt: worksheetCompletedAt,
-      // Profile-SLA step (Task 11): tiered profile beats the group tier.
-      keywords: item.analyses
-        .map(a => a.keyword)
-        .filter((k): k is string => Boolean(k)),
-    }))
-  }, [items, isCompleted, worksheetCompletedAtProp])
+  const slaSubjects: SlaSubject[] = useMemo(
+    () =>
+      worksheetItemSlaSubjects(
+        items,
+        isCompleted ? (worksheetCompletedAtProp ?? null) : null
+      ),
+    [items, isCompleted, worksheetCompletedAtProp]
+  )
+  // Worksheets 2.0: an endo-only worksheet renders Dennis's bench table;
+  // anything else keeps the generic item list (with an endo line under
+  // any endo item it happens to hold).
+  const kind = worksheetKind(items)
   const {
     byKey: slaByKey,
     isLoading: slaLoading,
@@ -153,14 +148,14 @@ export function WorksheetDrawerItems({
       {/* Section label */}
       <div className="px-4 pt-3 pb-1">
         <span className="text-xs font-semibold text-muted-foreground">
-          Items ({items.length})
+          {kind === 'endo' ? 'Bench order' : 'Items'} ({items.length})
         </span>
       </div>
 
       {/* Column headers — widths tuned so sub-sample rows ("BW-0009-S02 ↳ child
           of BW-0009 (vial 2)") and the Microbiology badge render without
           collapsing onto multiple wrap-lines. */}
-      {items.length > 0 && (
+      {items.length > 0 && kind !== 'endo' && (
         <div className="flex items-center gap-2 px-4 py-1 border-b text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
           {!isCompleted && <div className="w-4 shrink-0" />}
           {!isCompleted && <div className="w-8 shrink-0" />}
@@ -187,6 +182,18 @@ export function WorksheetDrawerItems({
               Add samples from the inbox to get started.
             </p>
           </div>
+        ) : kind === 'endo' ? (
+          <EndoWorksheetTable
+            items={items}
+            isCompleted={isCompleted}
+            slaByKey={slaByKey}
+            slaLoading={slaLoading}
+            slaError={slaError}
+            otherWorksheets={otherWorksheets}
+            onRemove={onRemove}
+            onReassign={onReassign}
+            onUpdateItem={onUpdateItem}
+          />
         ) : (
           <DndContext
             sensors={sensors}
@@ -244,14 +251,7 @@ interface SortableItemRowProps {
     instrumentUid: string | null
     limsSubSamplePk: number | null
   }) => void
-  onUpdateItem: (
-    itemId: number,
-    data: {
-      instrument_uid?: string
-      prep_status?: string
-      instrument_id?: number | null
-    }
-  ) => void
+  onUpdateItem: (itemId: number, data: WorksheetItemPatch) => void
 }
 
 function SortableItemRow({
@@ -308,11 +308,13 @@ function SortableItemRow({
   const groupColorClass = SERVICE_GROUP_COLORS[colorKey]
   const peptideNames = getPeptideNames(item.analyses)
 
+  const isEndo = isEndoWorksheetItem(item)
+
   return (
     <div
       ref={setNodeRef}
       style={style}
-      className="group/item flex items-start gap-2 px-4 py-2.5 hover:bg-muted/50 transition-colors border-b border-border/40"
+      className="group/item flex flex-wrap items-start gap-2 px-4 py-2.5 hover:bg-muted/50 transition-colors border-b border-border/40"
     >
       {/* Drag handle */}
       {!isCompleted && (
@@ -467,51 +469,11 @@ function SortableItemRow({
 
       {/* Status dropdown */}
       <div className="w-[110px] shrink-0">
-        {(() => {
-          const status = item.prep_status ?? 'ready'
-          const statusColors: Record<string, string> = {
-            ready: 'text-zinc-400',
-            in_progress: 'text-amber-500',
-            complete: 'text-emerald-500',
-          }
-          const statusBg: Record<string, string> = {
-            ready: '',
-            in_progress: 'bg-amber-500/10 border-amber-500/20',
-            complete: 'bg-emerald-500/10 border-emerald-500/20',
-          }
-          const colorClass = statusColors[status] ?? 'text-muted-foreground'
-
-          return isCompleted ? (
-            <span className={`text-[10px] capitalize ${colorClass}`}>
-              {status.replace('_', ' ')}
-            </span>
-          ) : (
-            <Select
-              value={status}
-              onValueChange={value =>
-                onUpdateItem(item.id, { prep_status: value })
-              }
-            >
-              <SelectTrigger
-                size="sm"
-                className={`h-6 text-[10px] border-transparent shadow-none hover:border-border ${statusBg[status] ?? ''} ${colorClass}`}
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ready">
-                  <span className="text-zinc-400">Ready</span>
-                </SelectItem>
-                <SelectItem value="in_progress">
-                  <span className="text-amber-500">In Progress</span>
-                </SelectItem>
-                <SelectItem value="complete">
-                  <span className="text-emerald-500">Complete</span>
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          )
-        })()}
+        <PrepStatusSelect
+          status={item.prep_status}
+          isCompleted={isCompleted}
+          onChange={value => onUpdateItem(item.id, { prep_status: value })}
+        />
       </div>
 
       {/* Actions */}
@@ -548,64 +510,21 @@ function SortableItemRow({
             </button>
           ))}
       </div>
-    </div>
-  )
-}
 
-interface ReassignButtonProps {
-  item: ItemType
-  otherWorksheets: WorksheetListItem[]
-  onReassign: (itemId: number, targetWorksheetId: number) => void
-}
-
-function ReassignButton({
-  item,
-  otherWorksheets,
-  onReassign,
-}: ReassignButtonProps) {
-  const [open, setOpen] = useState(false)
-  const hasTargets = otherWorksheets.length > 0
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          className="h-6 w-6 flex items-center justify-center opacity-0 group-hover/item:opacity-100 transition-opacity text-muted-foreground hover:text-foreground rounded disabled:opacity-30 disabled:cursor-not-allowed"
-          aria-label={`Move ${item.sample_id} to another worksheet`}
-          disabled={!hasTargets}
-          title={hasTargets ? undefined : 'No other open worksheets'}
-          onClick={e => {
-            if (!hasTargets) e.preventDefault()
-          }}
-        >
-          <MoveRight className="h-3 w-3" />
-        </button>
-      </PopoverTrigger>
-      {hasTargets && (
-        <PopoverContent className="w-56 p-2" align="end">
-          <p className="text-xs font-semibold text-muted-foreground mb-2">
-            Move to worksheet
-          </p>
-          <Select
-            onValueChange={value => {
-              onReassign(item.id, Number(value))
-              setOpen(false)
-            }}
-          >
-            <SelectTrigger className="h-8 text-sm">
-              <SelectValue placeholder="Select worksheet..." />
-            </SelectTrigger>
-            <SelectContent>
-              {otherWorksheets.map(ws => (
-                <SelectItem key={ws.id} value={String(ws.id)}>
-                  {ws.title}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </PopoverContent>
+      {/* Endotoxin bench line: wraps under the row (basis-full) with received,
+          due, the weight/volume overrides and the figures to pipette
+          (spec 2026-09-18-endo-worksheet-design). */}
+      {isEndo && (
+        <div className="basis-full">
+          <EndoPrepLine
+            item={item}
+            dueAt={slaSnapshot?.status.due_at ?? null}
+            isCompleted={isCompleted}
+            onUpdate={data => onUpdateItem(item.id, data)}
+          />
+        </div>
       )}
-    </Popover>
+    </div>
   )
 }
 

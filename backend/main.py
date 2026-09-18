@@ -11,7 +11,7 @@ import secrets
 import subprocess
 import sys
 from contextlib import asynccontextmanager
-from datetime import datetime, date, time, timezone
+from datetime import datetime, date, time, timezone, timedelta
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -39,7 +39,7 @@ from sqlalchemy import select, desc, delete, update, func, extract, and_, or_
 from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
-from sla_engine import BusinessSchedule, compute_business_minutes, sla_status_dict
+from sla_engine import BusinessSchedule, compute_business_minutes, compute_business_deadline, sla_status_dict
 from throughput import (
     SERIES_START as THROUGHPUT_SERIES_START,
     AnalysisIn as ThroughputAnalysisIn,
@@ -21100,11 +21100,15 @@ async def compute_sla_statuses(
             item_now = item_now.astimezone(timezone.utc).replace(tzinfo=None)
         if item.business_hours_only and schedule is not None:
             elapsed = compute_business_minutes(recv, item_now, schedule, is_holiday)
+            due_at = compute_business_deadline(recv, item.target_minutes, schedule, is_holiday)
         else:
             elapsed = (item_now - recv).total_seconds() / 60.0
-        results.append(
-            SlaStatusResultItem(key=item.key, status=sla_status_dict(item.target_minutes, elapsed))
-        )
+            due_at = recv + timedelta(minutes=item.target_minutes)
+        status = sla_status_dict(item.target_minutes, elapsed)
+        # Endotoxin bench due date (spec 2026-09-18-endo-worksheet-design):
+        # the instant the clock reaches the target, naive UTC. Additive key.
+        status["due_at"] = due_at
+        results.append(SlaStatusResultItem(key=item.key, status=status))
     return SlaStatusResponse(items=results)
 
 
@@ -22606,6 +22610,43 @@ async def create_worksheet(
     }
 
 
+def _worksheet_item_parent_facts(parent: "Optional[LimsSample]") -> dict:
+    """Parent-sample facts the endotoxin bench needs on a worksheet item
+    (spec 2026-09-18-endo-worksheet-design §4). None-safe: every key is
+    present even when the item has no resolvable parent, so the FE never
+    branches on a missing key."""
+    if parent is None:
+        return {"declared_weight_mg": None, "sample_type": None,
+                "client_order_number": None, "sample_identity": None}
+    declared = None
+    if parent.declared_total_quantity not in (None, ""):
+        try:
+            declared = float(parent.declared_total_quantity)
+        except (TypeError, ValueError):
+            declared = None
+    identity = None
+    if parent.analytes:
+        try:
+            slots = json.loads(parent.analytes)
+        except (TypeError, ValueError):
+            slots = None
+        if isinstance(slots, list):
+            names = []
+            for slot in slots:
+                # Positional slots are {"name": ..., "declared_quantity": ...};
+                # a placeholder slot has name None and is skipped.
+                name = (slot.get("name") or slot.get("title")) if isinstance(slot, dict) else slot
+                if name:
+                    names.append(str(name))
+            identity = ", ".join(names) or None
+    return {
+        "declared_weight_mg": declared,
+        "sample_type": parent.sample_type_title or parent.sample_type,
+        "client_order_number": parent.client_order_number,
+        "sample_identity": identity or parent.peptide_name,
+    }
+
+
 def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
     """Serialize worksheets + items into the GET /worksheets wire shape.
 
@@ -22752,6 +22793,7 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
     sub_kind_map: dict[str, Optional[str]] = {}
     sub_role_map: dict[str, Optional[str]] = {}
     sub_box_id_map: dict[str, Optional[int]] = {}
+    sub_parent_pk_map: dict[str, Optional[int]] = {}
     if item_sample_ids:
         sub_rows = db.execute(
             select(
@@ -22765,6 +22807,7 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
                 # truth the inbox already badges by; the FE prefers it.
                 LimsSubSample.assignment_role,
                 LimsSubSample.box_id,  # current physical box, if any
+                LimsSubSample.parent_sample_pk,  # endo bench: parent facts (2026-09-18)
             ).where(
                 LimsSubSample.sample_id.in_(item_sample_ids)
             )
@@ -22773,6 +22816,7 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
         sub_kind_map = {r.sample_id: r.assignment_kind for r in sub_rows}
         sub_role_map = {r.sample_id: r.assignment_role for r in sub_rows}
         sub_box_id_map = {r.sample_id: r.box_id for r in sub_rows}
+        sub_parent_pk_map = {r.sample_id: r.parent_sample_pk for r in sub_rows}
 
     # Resolve current box labels for boxed vials so techs know which
     # physical box to grab. None for parent-sample items / unboxed vials.
@@ -22783,6 +22827,28 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
             select(LimsBox).where(LimsBox.id.in_(boxed_ids))
         ).scalars().all()
         box_label_map = {b.id: box_label_code(b) for b in box_rows}
+
+    # Endotoxin bench prep (spec 2026-09-18-endo-worksheet-design §4): resolve
+    # each item's parent sample so the declared weight, matrix, order number
+    # and identity ride on the item. Vial items go through the vial's parent;
+    # parent-sample items (legacy "<order> E" worksheets hold P-XXXX ids) match
+    # by their own sample id. ONE query for the whole page.
+    parent_pks = {pk for pk in sub_parent_pk_map.values() if pk}
+    parent_by_pk: dict[int, LimsSample] = {}
+    parent_by_sample_id: dict[str, LimsSample] = {}
+    if parent_pks or item_sample_ids:
+        parent_rows = db.execute(
+            select(LimsSample).where(or_(
+                LimsSample.id.in_(parent_pks or [0]),
+                LimsSample.sample_id.in_(item_sample_ids or ["-"]),
+            ))
+        ).scalars().all()
+        parent_by_pk = {p.id: p for p in parent_rows}
+        parent_by_sample_id = {p.sample_id: p for p in parent_rows}
+
+    def _parent_for(sample_id: str) -> Optional[LimsSample]:
+        pk = sub_parent_pk_map.get(sample_id)
+        return parent_by_pk.get(pk) if pk else parent_by_sample_id.get(sample_id)
 
     # Resolve per-item stamped method/instrument names (bench-stamping
     # slice 2, task 5): the DISTINCT non-null stamped values across a
@@ -22915,6 +22981,12 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
                     "box_label": box_label_map.get(sub_box_id_map.get(it.sample_id)),
                     "analyses": json.loads(it.analyses_json) if it.analyses_json else (group_analyses_map.get(it.service_group_id, []) if it.service_group_id else []),
                     "prep_status": it.prep_status,
+                    # Endotoxin bench prep overrides + the parent facts the
+                    # bench computes from (spec 2026-09-18-endo-worksheet-design).
+                    "prep_weight_mg": it.prep_weight_mg,
+                    "prep_volume_ml": it.prep_volume_ml,
+                    "prep_dilution_factor": it.prep_dilution_factor,
+                    **_worksheet_item_parent_facts(_parent_for(it.sample_id)),
                 }
                 for it in items
             ],
@@ -23521,6 +23593,11 @@ class WorksheetItemUpdate(BaseModel):
     instrument_uid: Optional[str] = None
     instrument_id: Optional[int] = None
     prep_status: Optional[str] = None
+    # Endotoxin bench prep overrides (spec 2026-09-18-endo-worksheet-design):
+    # explicit null clears, an omitted field is a no-op (model_fields_set).
+    prep_weight_mg: Optional[float] = None
+    prep_volume_ml: Optional[float] = None
+    prep_dilution_factor: Optional[float] = None
 
 
 @app.patch("/worksheets/{worksheet_id}/items/{item_id}")
@@ -23599,6 +23676,13 @@ async def update_worksheet_item(
         allowed = {"ready", "in_progress", "complete"}
         if data.prep_status in allowed:
             item.prep_status = data.prep_status
+
+    for field in ("prep_weight_mg", "prep_volume_ml", "prep_dilution_factor"):
+        if field in data.model_fields_set:
+            value = getattr(data, field)
+            if value is not None and value <= 0:
+                raise HTTPException(400, f"{field} must be greater than zero")
+            setattr(item, field, value)
 
     db.commit()
     return {"status": "updated", "item_id": item_id, "resolved_method": resolved_method}

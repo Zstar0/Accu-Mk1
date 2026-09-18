@@ -11,7 +11,11 @@ import {
   updateWorksheetItem,
   applyWorksheetMethodInstrument,
 } from '@/lib/api'
-import type { WorksheetListItem, AddToWorksheetPayload } from '@/lib/api'
+import type {
+  WorksheetListItem,
+  AddToWorksheetPayload,
+  WorksheetItemPatch,
+} from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
 import { toast } from 'sonner'
 
@@ -139,11 +143,7 @@ export function useWorksheetDrawer() {
     }: {
       worksheetId: number
       itemId: number
-      data: {
-        instrument_uid?: string
-        prep_status?: string
-        instrument_id?: number | null
-      }
+      data: WorksheetItemPatch
     }) => updateWorksheetItem(worksheetId, itemId, data),
     // Optimistic: the prep-status Select (and instrument pickers) render
     // straight from this cache entry, so without this the control sits on
@@ -176,6 +176,17 @@ export function useWorksheetDrawer() {
                             : {}),
                           ...(data.instrument_id !== undefined
                             ? { instrument_id: data.instrument_id }
+                            : {}),
+                          ...(data.prep_weight_mg !== undefined
+                            ? { prep_weight_mg: data.prep_weight_mg }
+                            : {}),
+                          ...(data.prep_volume_ml !== undefined
+                            ? { prep_volume_ml: data.prep_volume_ml }
+                            : {}),
+                          ...(data.prep_dilution_factor !== undefined
+                            ? {
+                                prep_dilution_factor: data.prep_dilution_factor,
+                              }
                             : {}),
                         }
                   ),
