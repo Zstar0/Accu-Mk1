@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.22.2 - 2026-09-18
+
 ### Changed
 - **The documents library applies the house theme itself.** The `accumark-docs` stylesheet used to be inlined by the Claude Code publish script before upload, so a document created any other way (the labmanager MCP, an admin) arrived unstyled or with whatever CSS its author invented; the first bot-authored SOP (SOP-0001) came in with its own grayscale sheet. Mk1 now inlines the theme when a document is created, as the first `<style>` in `<head>` so a page's own CSS still wins, and adds the Google Fonts link when the page has none. A document that already carries the `accumark-docs` marker is left byte for byte as sent, so existing revisions and artifact pages are unaffected. The canonical file moved to `backend/documents/accumark-docs.css` so the backend image ships it; the publish skill no longer inlines. The size limit now applies to the stored (themed) bytes.
 
