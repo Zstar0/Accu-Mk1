@@ -118,6 +118,26 @@ def test_partial_publish_is_not_stranded(db_session):
     assert find_stranded(db_session, now=NOW) == []
 
 
+def test_published_in_ledger_with_no_native_status_still_flags(db_session):
+    """Guards the gate's NULL edge. `native_status` NULL means the engine never
+    ran for this sample, so it is NOT the "Mk1 agrees with itself" case the gate
+    exempts and it must keep flagging. It cannot fall through to
+    `native_mirror_disagree` either, which requires a truthy native_status, so
+    this condition is the only thing that would ever report it. Prod 2026-09-18
+    has 0 such samples, so nothing but this test pins the branch.
+    """
+    from workflow.stranded import find_stranded
+    _base(db_session, authority="mk1")
+    p = LimsSample(sample_id="P-ST-10", status="verified", native_status=None,
+                   date_received=datetime(2026, 9, 1, tzinfo=timezone.utc))
+    db_session.add(p)
+    db_session.flush()
+    db_session.add(LimsSampleTransition(lims_sample_pk=p.id, verb="publish", from_status="verified",
+                                        to_status="published", source="mk1", occurred_at=NOW))
+    db_session.flush()
+    assert [s.condition for s in find_stranded(db_session, now=NOW)] == ["published_in_ledger_not_status"]
+
+
 def test_partial_publish_awaiting_verify_is_not_stranded(db_session):
     """The other 4 of those 20 (P-2915, P-2916, PB-0538, PB-0539): endotoxin is
     the only thing outstanding and its result is already IN, so the sample rests
