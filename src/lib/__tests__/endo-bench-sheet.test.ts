@@ -65,7 +65,7 @@ describe('buildEndoBenchSheetHtml', () => {
       '<th class="c">Made</th><th class="c">MCS</th><th class="c">Flag</th>'
     )
     expect(html.match(/<span class="bx"><\/span>/g)).toHaveLength(3)
-    expect(html).not.toMatch(/—|&mdash;/)
+    expect(html).not.toMatch(new RegExp('\u2014|&' + 'mdash;'))
   })
 
   it('shows the same document as paper when previewed', () => {
