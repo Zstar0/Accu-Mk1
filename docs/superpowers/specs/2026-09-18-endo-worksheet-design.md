@@ -1,4 +1,4 @@
-# Endotoxin worksheet (Worksheets 2.0, endo first) — design
+# Endotoxin worksheet (Worksheets 2.0, endo first): design
 
 Written 2026-09-18 from Dennis's `tools-dennis/tools/endotoxin-log` (in daily use since
 2026-09-01) and a read-only probe of prod Mk1 the same night. The Handler's framing: what

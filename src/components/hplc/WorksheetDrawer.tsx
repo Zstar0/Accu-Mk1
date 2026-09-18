@@ -37,6 +37,7 @@ import { EndoWorksheetActions } from './EndoWorksheetActions'
 import { EndoWorksheetView } from './EndoWorksheetView'
 import { EndoRunLog } from './EndoRunLog'
 import { worksheetKind } from '@/lib/worksheet-kind'
+import { displayName } from '@/lib/user-display'
 import AddSamplesModal from './AddSamplesModal'
 
 export function WorksheetDrawer() {
@@ -60,6 +61,7 @@ export function WorksheetDrawer() {
     completeMutation,
     reassignMutation,
     updateItemMutation,
+    bulkTicksMutation,
     applyMethodInstrumentMutation,
     reorderMutation,
     addItemMutation,
@@ -271,7 +273,7 @@ export function WorksheetDrawer() {
                   <SelectItem value="all">All analysts</SelectItem>
                   {analystOptions.map(email => (
                     <SelectItem key={email} value={email}>
-                      {email}
+                      {displayName(users.find(u => u.email === email) ?? { email })}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -352,6 +354,12 @@ export function WorksheetDrawer() {
                   updateItemMutation.mutate({
                     worksheetId: activeWorksheet.id,
                     itemId,
+                    data,
+                  })
+                }
+                onTickAll={data =>
+                  bulkTicksMutation.mutate({
+                    worksheetId: activeWorksheet.id,
                     data,
                   })
                 }

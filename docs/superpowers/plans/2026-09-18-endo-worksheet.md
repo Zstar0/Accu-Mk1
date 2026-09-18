@@ -169,7 +169,7 @@ class WorksheetItemUpdate(BaseModel):
     instrument_uid: Optional[str] = None
     instrument_id: Optional[int] = None
     prep_status: Optional[str] = None
-    # Endotoxin bench prep overrides — explicit null clears, omitted = no-op
+    # Endotoxin bench prep overrides: explicit null clears, omitted = no-op
     prep_weight_mg: Optional[float] = None
     prep_volume_ml: Optional[float] = None
     prep_dilution_factor: Optional[float] = None
@@ -468,7 +468,7 @@ describe('endo-prep: bench order and formatting', () => {
 
 - [ ] **Step 2: Run** `npx vitest run src/lib/__tests__/endo-prep.test.ts` → fails (module missing).
 
-- [ ] **Step 3: Implement `src/lib/endo-prep.ts`** — see the file in the repo; it is the plan's content verbatim (constants, `num`, `autoVolumeMl`, `isBacWater`, `calcEndoPrep`, calendar helpers using `Intl.DateTimeFormat(…, {timeZone})` for `labDate` and UTC-noon date stepping for `addBusinessDays`, `priorityRank`, `orderForBench` (stable: `Array.prototype.sort` is stable in modern engines; ties keep input order), `fmtUl`, `fmt`).
+- [ ] **Step 3: Implement `src/lib/endo-prep.ts`**: see the file in the repo; it is the plan's content verbatim (constants, `num`, `autoVolumeMl`, `isBacWater`, `calcEndoPrep`, calendar helpers using `Intl.DateTimeFormat(…, {timeZone})` for `labDate` and UTC-noon date stepping for `addBusinessDays`, `priorityRank`, `orderForBench` (stable: `Array.prototype.sort` is stable in modern engines; ties keep input order), `fmtUl`, `fmt`).
 
 - [ ] **Step 4: Run** the test → all pass. **Step 5: Commit** `-- src/lib/endo-prep.ts src/lib/__tests__/endo-prep.test.ts`.
 
@@ -493,7 +493,7 @@ export function escapeHtml(s: unknown): string
 
 - [ ] **Step 1: Failing tests**: 21 rows → exactly 3 `<section class="page">` + 1 `<section class="page summary">`; each table page has ≤ 10 `<tr>` in tbody; `<` in an identity is escaped; CSV has the header line and 22 lines; a bac-water row prints `20×` in the volume cell and a blank vial conc.
 
-- [ ] **Step 3: Implement** — port of `buildPrintDoc` from `tools-dennis/tools/endotoxin-log/endotoxin.html` (styles verbatim minus `fitRowPadding`; 11 columns: `# · Due · Priority · Order # · Sample ID · Sample identity · Volume mL · Sample µL · LAL µL · Made · Ran` with the two tick boxes printed empty for the pen), plus the summary sheet (tiles: samples, sample volume, LAL volume; priority counts; due grouping; the five rules; holiday footnote). `printHtmlDocument` writes the html into an off-screen iframe (`position:fixed;right:0;bottom:0;width:0;height:0;border:0`), waits for `load`, calls `contentWindow.print()`, and removes the iframe on `afterprint` or after 60 s.
+- [ ] **Step 3: Implement**: port of `buildPrintDoc` from `tools-dennis/tools/endotoxin-log/endotoxin.html` (styles verbatim minus `fitRowPadding`; 11 columns: `# · Due · Priority · Order # · Sample ID · Sample identity · Volume mL · Sample µL · LAL µL · Made · Ran` with the two tick boxes printed empty for the pen), plus the summary sheet (tiles: samples, sample volume, LAL volume; priority counts; due grouping; the five rules; holiday footnote). `printHtmlDocument` writes the html into an off-screen iframe (`position:fixed;right:0;bottom:0;width:0;height:0;border:0`), waits for `load`, calls `contentWindow.print()`, and removes the iframe on `afterprint` or after 60 s.
 
 - [ ] **Step 4/5:** run tests, commit `-- src/lib/endo-bench-sheet.ts src/lib/print-document.ts src/lib/__tests__/endo-bench-sheet.test.ts`.
 

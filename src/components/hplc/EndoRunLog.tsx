@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { getWorksheetBenchLog, type WorksheetUser } from '@/lib/api'
-import { displayName } from '@/lib/user-display'
+import { shortName } from '@/lib/user-display'
 
 /**
  * Dennis's run log, as the endo bench's worksheet history: the newest
@@ -73,7 +73,7 @@ export function EndoRunLog({
                   ))}
                 </span>
                 <span className="truncate text-[11px] text-muted-foreground">
-                  {analyst ? displayName(analyst) : 'unassigned'} ·{' '}
+                  {analyst ? shortName(analyst) : 'unassigned'} ·{' '}
                   {run.item_count} {run.item_count === 1 ? 'sample' : 'samples'}
                   {run.status === 'completed' ? ' · done' : ''}
                 </span>

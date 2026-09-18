@@ -58,13 +58,13 @@ export function EndoPrepLine({
       />
       <Stat
         label="Sample"
-        value={fmtUl(prep.sampleUl) || '—'}
+        value={fmtUl(prep.sampleUl) || '-'}
         unit="µL"
         strong
       />
-      <Stat label="LAL" value={fmtUl(prep.lalUl) || '—'} unit="µL" strong />
+      <Stat label="LAL" value={fmtUl(prep.lalUl) || '-'} unit="µL" strong />
       {!prep.isWater && (
-        <Stat label="Vial" value={fmt(prep.vialConc) || '—'} unit="mg/mL" />
+        <Stat label="Vial" value={fmt(prep.vialConc) || '-'} unit="mg/mL" />
       )}
       <EndoWarning warning={prep.warning} />
     </div>
@@ -216,12 +216,12 @@ export function PrepField({
         className="font-mono tabular-nums"
         title={overridden ? 'Entered by the analyst' : undefined}
       >
-        {shown || '—'}
+        {shown || '-'}
       </span>
     ) : (
       <Stat
         label={label}
-        value={shown || '—'}
+        value={shown || '-'}
         unit={unit}
         title={overridden ? 'Entered by the analyst' : undefined}
       />
@@ -239,7 +239,7 @@ export function PrepField({
           aria-label={`${label} (${unit})`}
           title={
             overridden
-              ? `Set by hand. Computed: ${computed == null ? '—' : fmt(computed)} ${unit}. Clear the cell to use it.`
+              ? `Set by hand. Computed: ${computed == null ? '-' : fmt(computed)} ${unit}. Clear the cell to use it.`
               : undefined
           }
           className="h-7 w-full rounded-[3px] border border-transparent bg-transparent px-1.5 text-right font-mono text-[12.5px] tabular-nums text-foreground placeholder:text-muted-foreground/50 hover:border-border focus:border-teal-500 focus:bg-background focus:outline-none focus:ring-2 focus:ring-teal-500/20"
@@ -272,7 +272,7 @@ export function PrepField({
         aria-label={`${label} (${unit})`}
         title={
           overridden
-            ? `Entered by the analyst; computed ${computed == null ? '—' : fmt(computed)} ${unit}`
+            ? `Entered by the analyst; computed ${computed == null ? '-' : fmt(computed)} ${unit}`
             : undefined
         }
         className={`h-6 w-16 px-1 text-[11px] font-mono tabular-nums ${overridden ? 'border-primary/60 text-foreground' : 'border-transparent bg-transparent shadow-none hover:border-border'}`}

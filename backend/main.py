@@ -22939,6 +22939,10 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
             "item_count": len(items),
             "created_at": (ws.created_at.isoformat() + "Z") if ws.created_at else None,
             "completed_at": (ws.completed_at.isoformat() + "Z") if ws.completed_at else None,
+            # First print of the bench sheet = the run's start on the bench.
+            "printed_at": (ws.printed_at.isoformat() + "Z") if ws.printed_at else None,
+            "printed_by_user_id": ws.printed_by_user_id,
+            "print_count": ws.print_count or 0,
             "items": [
                 {
                     "id": it.id,
@@ -23688,6 +23692,141 @@ async def reassign_worksheet_item_by_id(
     return {"status": "reassigned", "target_worksheet_id": data.target_worksheet_id}
 
 
+def _sole_run_context(db: Session, item: "WorksheetItem") -> "Optional[tuple[int, int]]":
+    """The one (method, instrument) this item's open analyses can have run on,
+    from the catalog: analysis service -> active method covering it ->
+    active instrument linked to that method. None unless exactly one pair
+    resolves, so a second analyzer or a second method is never guessed at
+    (the apply bar stays the way to choose)."""
+    from lims_analyses.service import STAMPABLE_STATES
+    from models import LimsAnalysis
+
+    vial_pk = db.execute(
+        select(LimsSubSample.id).where(LimsSubSample.sample_id == item.sample_id)
+    ).scalar_one_or_none()
+    if vial_pk is None:
+        return None
+    service_ids = {r[0] for r in db.execute(
+        select(LimsAnalysis.analysis_service_id).where(
+            LimsAnalysis.lims_sub_sample_pk == vial_pk,
+            LimsAnalysis.review_state.in_(STAMPABLE_STATES),
+        )
+    ).all()}
+    if not service_ids:
+        return None
+    pairs = db.execute(
+        select(method_services.c.method_id, instrument_methods.c.instrument_id)
+        .join(HplcMethod, HplcMethod.id == method_services.c.method_id)
+        .join(instrument_methods, instrument_methods.c.method_id == HplcMethod.id)
+        .join(Instrument, Instrument.id == instrument_methods.c.instrument_id)
+        .where(
+            method_services.c.analysis_service_id.in_(service_ids),
+            HplcMethod.active.is_(True),
+            Instrument.active.is_(True),
+        )
+        .distinct()
+    ).all()
+    return (pairs[0][0], pairs[0][1]) if len(pairs) == 1 else None
+
+
+def _apply_bench_ticks(db: Session, worksheet_id: int, item: "WorksheetItem", *,
+                       made: Optional[bool], ran: Optional[bool], user_id: Optional[int]) -> bool:
+    """Set or clear an item's Made / Ran ticks. The server owns who and when;
+    a tick already in the wanted state is left alone (its first stamp stands).
+    Every change writes an audit_logs row, prep_status follows the ticks, and a
+    Ran tick records the method + instrument when the catalog leaves no choice.
+    Returns whether anything changed."""
+    changed = False
+    for tick, want in (("made", made), ("ran", ran)):
+        if want is None or want == (getattr(item, f"{tick}_at") is not None):
+            continue
+        changed = True
+        setattr(item, f"{tick}_at", datetime.utcnow() if want else None)
+        setattr(item, f"{tick}_by_user_id", user_id if want else None)
+        db.add(AuditLog(
+            operation=f"bench_{tick}_{'set' if want else 'cleared'}",
+            entity_type="worksheet_item",
+            entity_id=str(item.id),
+            details={"user_id": user_id, "worksheet_id": worksheet_id, "sample_id": item.sample_id},
+        ))
+    if not changed:
+        return False
+    # The ticks ARE the row's progress on a bench sheet; keep prep_status
+    # (what the rest of Mk1 reads) in step with them.
+    item.prep_status = "complete" if item.ran_at else "in_progress" if item.made_at else "ready"
+    if ran and item.ran_at and not item.instrument_id:
+        context = _sole_run_context(db, item)
+        if context:
+            from lims_analyses.worksheet_stamping import apply_method_instrument_to_worksheet
+            from types import SimpleNamespace
+
+            apply_method_instrument_to_worksheet(
+                db, worksheet=SimpleNamespace(id=worksheet_id),
+                method_id=context[0], instrument_id=context[1],
+                item_ids=[item.id], user_id=user_id,
+            )
+    return True
+
+
+class WorksheetBenchTicks(BaseModel):
+    made: Optional[bool] = None
+    ran: Optional[bool] = None
+    item_ids: Optional[list[int]] = None
+
+
+@app.post("/worksheets/{worksheet_id}/bench-ticks")
+def bulk_bench_ticks(
+    worksheet_id: int,
+    data: WorksheetBenchTicks,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Tick (or untick) Made / Ran down a whole worksheet in one request: the
+    bench sheet is worked on paper and keyed in afterwards, a run at a time."""
+    ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
+    if not ws:
+        raise HTTPException(404, "Worksheet not found")
+    if ws.status == "completed":
+        raise HTTPException(409, "Worksheet is completed")
+    items = db.execute(
+        select(WorksheetItem).where(WorksheetItem.worksheet_id == worksheet_id)
+    ).scalars().all()
+    wanted = set(data.item_ids) if data.item_ids is not None else None
+    changed = sum(
+        1 for it in items
+        if (wanted is None or it.id in wanted)
+        and _apply_bench_ticks(db, worksheet_id, it, made=data.made, ran=data.ran,
+                               user_id=_current_user.id)
+    )
+    db.commit()
+    return {"status": "updated", "changed": changed}
+
+
+@app.post("/worksheets/{worksheet_id}/printed")
+def record_worksheet_printed(
+    worksheet_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """The bench sheet was sent to the printer. The first print is the run's
+    start on the bench (printed_at never moves); reprints only count."""
+    ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
+    if not ws or ws.status == "staging":
+        raise HTTPException(404, "Worksheet not found")
+    if ws.printed_at is None:
+        ws.printed_at = datetime.utcnow()
+        ws.printed_by_user_id = _current_user.id
+    ws.print_count = (ws.print_count or 0) + 1
+    db.add(AuditLog(
+        operation="worksheet_printed",
+        entity_type="worksheet",
+        entity_id=str(ws.id),
+        details={"user_id": _current_user.id, "print_count": ws.print_count},
+    ))
+    db.commit()
+    return {"status": "recorded", "printed_at": ws.printed_at.isoformat() + "Z", "print_count": ws.print_count}
+
+
 class WorksheetItemUpdate(BaseModel):
     instrument_uid: Optional[str] = None
     instrument_id: Optional[int] = None
@@ -23788,24 +23927,8 @@ async def update_worksheet_item(
                 raise HTTPException(400, f"{field} must be greater than zero")
             setattr(item, field, value)
 
-    ticked = False
-    for tick in ("made", "ran"):
-        want = getattr(data, tick)
-        if want is None or want == (getattr(item, f"{tick}_at") is not None):
-            continue
-        ticked = True
-        setattr(item, f"{tick}_at", datetime.utcnow() if want else None)
-        setattr(item, f"{tick}_by_user_id", _current_user.id if want else None)
-        db.add(AuditLog(
-            operation=f"bench_{tick}_{'set' if want else 'cleared'}",
-            entity_type="worksheet_item",
-            entity_id=str(item.id),
-            details={"user_id": _current_user.id, "worksheet_id": worksheet_id, "sample_id": item.sample_id},
-        ))
-    if ticked:
-        # The ticks ARE the row's progress on a bench sheet; keep prep_status
-        # (what the rest of Mk1 reads) in step with them.
-        item.prep_status = "complete" if item.ran_at else "in_progress" if item.made_at else "ready"
+    _apply_bench_ticks(db, worksheet_id, item, made=data.made, ran=data.ran,
+                       user_id=_current_user.id)
 
     db.commit()
     return {"status": "updated", "item_id": item_id, "resolved_method": resolved_method}

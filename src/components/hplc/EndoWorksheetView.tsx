@@ -13,7 +13,7 @@ import type {
   WorksheetListItem,
   WorksheetUser,
 } from '@/lib/api'
-import { displayName } from '@/lib/user-display'
+import { displayName, shortName } from '@/lib/user-display'
 import { worksheetItemSlaSubjects } from '@/lib/worksheet-sla-subjects'
 import { useSlaForSubjects } from '@/services/sla-subjects'
 import { EntityFlagButton } from '@/components/flags/EntityFlagButton'
@@ -40,6 +40,7 @@ export function EndoWorksheetView({
   onRemove,
   onReassign,
   onUpdateItem,
+  onTickAll,
 }: {
   worksheet: WorksheetListItem
   users: WorksheetUser[]
@@ -58,6 +59,7 @@ export function EndoWorksheetView({
   onRemove: (itemId: number) => void
   onReassign: (itemId: number, targetWorksheetId: number) => void
   onUpdateItem: (itemId: number, data: WorksheetItemPatch) => void
+  onTickAll: (data: { made?: boolean; ran?: boolean }) => void
 }) {
   useRegisterActiveFlagEntity(
     'worksheet',
@@ -83,6 +85,17 @@ export function EndoWorksheetView({
   }
 
   const analyst = users.find(u => u.id === worksheet.assigned_analyst)
+  const printedBy = users.find(u => u.id === worksheet.printed_by_user_id)
+  const printed = worksheet.printed_at
+    ? `printed ${new Date(worksheet.printed_at).toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      })}${printedBy ? ` by ${shortName(printedBy)}` : ''}${
+        (worksheet.print_count ?? 0) > 1 ? ` (${worksheet.print_count}x)` : ''
+      }`
+    : 'not printed yet'
 
   // Block flow, not a flex column: flexbox would shrink the sheet card
   // (overflow-hidden, so min-height 0) to fit instead of letting this column
@@ -110,7 +123,7 @@ export function EndoWorksheetView({
             />
           )}
           <span className="font-mono text-xs tracking-wide text-muted-foreground">
-            WS-{worksheet.id} · {worksheet.status}
+            WS-{worksheet.id} · {worksheet.status} · {printed}
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -157,7 +170,7 @@ export function EndoWorksheetView({
             <span className="text-sm font-medium">
               {analyst
                 ? displayName(analyst)
-                : (worksheet.assigned_analyst_email ?? '—')}
+                : (worksheet.assigned_analyst_email ?? '-')}
             </span>
           ) : (
             <Select
@@ -191,6 +204,7 @@ export function EndoWorksheetView({
         onRemove={onRemove}
         onReassign={onReassign}
         onUpdateItem={onUpdateItem}
+        onTickAll={onTickAll}
       />
 
       <EndoCalculations />
@@ -201,7 +215,7 @@ export function EndoWorksheetView({
         </h3>
         {isCompleted ? (
           <p className="whitespace-pre-wrap text-sm text-muted-foreground">
-            {userNotes || '—'}
+            {userNotes || '-'}
           </p>
         ) : (
           <Textarea

@@ -1058,6 +1058,12 @@ class Worksheet(Base):
     created_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     completed_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # The bench sheet is printed and carried to the bench, so the FIRST print is
+    # the run's real start (ticks and results are keyed in afterwards). Reprints
+    # only count. Each print is also an audit_logs row (worksheet_printed).
+    printed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    printed_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    print_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

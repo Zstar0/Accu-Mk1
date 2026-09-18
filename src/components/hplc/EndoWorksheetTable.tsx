@@ -50,6 +50,8 @@ interface EndoWorksheetTableProps {
   onRemove: (itemId: number) => void
   onReassign: (itemId: number, targetWorksheetId: number) => void
   onUpdateItem: (itemId: number, data: WorksheetItemPatch) => void
+  /** Tick a whole column: the sheet is worked on paper and keyed in after. */
+  onTickAll: (data: { made?: boolean; ran?: boolean }) => void
 }
 
 const TH =
@@ -85,6 +87,7 @@ export function EndoWorksheetTable({
   onRemove,
   onReassign,
   onUpdateItem,
+  onTickAll,
 }: EndoWorksheetTableProps) {
   const { calendar } = useLabCalendar()
   const dueAtByItemId = new Map(
@@ -127,7 +130,7 @@ export function EndoWorksheetTable({
         </Meta>
         <Meta label="Orders">
           <span className={`${MONO} block truncate`} title={orders}>
-            {orders || '—'}
+            {orders || '-'}
           </span>
         </Meta>
       </div>
@@ -163,8 +166,22 @@ export function EndoWorksheetTable({
               <th className={`${TH} ${TH_CALC}`}>
                 Vial conc.<span className={UNIT}>mg/mL</span>
               </th>
-              <th className={`${TH} text-center`}>Made</th>
-              <th className={`${TH} text-center`}>MCS</th>
+              <th className={`${TH} text-center`}>
+                <TickAll
+                  label="Made"
+                  left={rows.length - nMade}
+                  disabled={isCompleted}
+                  onClick={() => onTickAll({ made: true })}
+                />
+              </th>
+              <th className={`${TH} text-center`}>
+                <TickAll
+                  label="MCS"
+                  left={rows.length - nRan}
+                  disabled={isCompleted}
+                  onClick={() => onTickAll({ ran: true })}
+                />
+              </th>
               <th className={`${TH} text-center`}>Flag</th>
               <th className={TH} />
             </tr>
@@ -229,7 +246,7 @@ export function EndoWorksheetTable({
                     </span>
                   </td>
                   <td className={`${TD} ${MONO}`}>
-                    {shortOrder(item.client_order_number) || '—'}
+                    {shortOrder(item.client_order_number) || '-'}
                   </td>
                   <td className={TD}>
                     <button
@@ -249,7 +266,7 @@ export function EndoWorksheetTable({
                       className="block truncate"
                       title={endoIdentityFor(item)}
                     >
-                      {endoIdentityFor(item) || '—'}
+                      {endoIdentityFor(item) || '-'}
                     </span>
                   </td>
                   {prep.isWater ? (
@@ -470,6 +487,34 @@ function Total({
       </b>
       {unit}
     </span>
+  )
+}
+
+/**
+ * A tick column's heading, which also ticks every row still open. It only
+ * ever sets ticks: a slip cannot wipe a run's stamps (untick a row by hand).
+ */
+function TickAll({
+  label,
+  left,
+  disabled,
+  onClick,
+}: {
+  label: string
+  left: number
+  disabled: boolean
+  onClick: () => void
+}) {
+  if (disabled || left === 0) return <>{label}</>
+  return (
+    <button
+      type="button"
+      className="rounded-[3px] px-1 uppercase tracking-[0.09em] underline decoration-dotted underline-offset-2 hover:text-foreground focus-visible:outline-2 focus-visible:outline-teal-500"
+      title={`Tick ${label} on the ${left} row${left === 1 ? '' : 's'} still open`}
+      onClick={onClick}
+    >
+      {label}
+    </button>
   )
 }
 

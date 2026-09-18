@@ -9,6 +9,7 @@ import {
   addGroupToWorksheet,
   reorderWorksheetItems,
   updateWorksheetItem,
+  bulkWorksheetBenchTicks,
   applyWorksheetMethodInstrument,
 } from '@/lib/api'
 import type {
@@ -223,6 +224,22 @@ export function useWorksheetDrawer() {
       queryClient.invalidateQueries({ queryKey: ['worksheets-list'] }),
   })
 
+  // Made / MCS down a whole run in one request: the sheet is worked on paper
+  // and keyed in afterwards.
+  const bulkTicksMutation = useMutation({
+    mutationFn: ({
+      worksheetId,
+      data,
+    }: {
+      worksheetId: number
+      data: { made?: boolean; ran?: boolean }
+    }) => bulkWorksheetBenchTicks(worksheetId, data),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ['worksheets-list'] }),
+    onError: err =>
+      toast.error(err instanceof Error ? err.message : 'Tick all failed'),
+  })
+
   const applyMethodInstrumentMutation = useMutation({
     mutationFn: ({
       worksheetId,
@@ -283,6 +300,7 @@ export function useWorksheetDrawer() {
     completeMutation,
     reassignMutation,
     updateItemMutation,
+    bulkTicksMutation,
     applyMethodInstrumentMutation,
     reorderMutation,
     addItemMutation,

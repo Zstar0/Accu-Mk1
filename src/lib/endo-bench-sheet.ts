@@ -8,7 +8,7 @@
  * page (a CSS-only break gave 9 on page one because the title block eats a
  * row), figures in a slashed-zero monospace, priority as a filled pill, no
  * vertical rules, and a summary sheet last. The Made / Ran boxes print empty
- * for the pen — the completion of record is lims_analyses.review_state.
+ * for the pen: the completion of record is lims_analyses.review_state.
  *
  * Pure string building; every value goes through escapeHtml. Printed through
  * printHtmlDocument (an isolated iframe) so the app's label print CSS never
@@ -106,7 +106,7 @@ function longDate(iso: string): string {
 const SHEET_CSS = [
   '@page{size:letter landscape;margin:11mm 4mm}',
   '*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}',
-  // Figures: Consolas first — ships with every Windows install, slashed zero,
+  // Figures: Consolas first: ships with every Windows install, slashed zero,
   // footed 1 and an open 6/9, so 0/O, 1/7 and 5/6 stay distinct on paper.
   ":root{--num:Consolas,'Cascadia Mono','DejaVu Sans Mono',ui-monospace,Menlo,'Liberation Mono',monospace}",
   "body{margin:0;padding:0;background:#fff;color:#1A2A2E;font:14pt/1.4 'Segoe UI',system-ui,-apple-system,Arial,sans-serif}",
@@ -126,7 +126,7 @@ const SHEET_CSS = [
   'th .u{display:block;font-weight:400;text-transform:none;letter-spacing:0;font:8pt var(--num);color:#8DA0A5}',
   'td{border:0;padding:7pt 5pt;font-size:14pt;line-height:1.22;text-align:center;vertical-align:middle;overflow-wrap:break-word}',
   'tbody tr:nth-child(even) td{background:#F2F6F6}',
-  // Dates and figures never wrap — a wrapped date doubles a row's height.
+  // Dates and figures never wrap: a wrapped date doubles a row's height.
   'td.m{font-family:var(--num);font-variant-numeric:tabular-nums slashed-zero;white-space:nowrap;letter-spacing:.01em}',
   'td.c{padding-left:1pt;padding-right:1pt;line-height:1}',
   'td.n{text-align:center;color:#A2B3B7;font-family:var(--num);font-size:12pt;white-space:nowrap}',
@@ -175,25 +175,25 @@ const SHEET_CSS = [
   '.cont span{font:10pt var(--num);font-weight:400;color:#76898E}',
 ].join('')
 
-// Eleven columns, fixed width. Sample identity stays deliberately narrow and
+// Twelve columns, fixed width. Sample identity stays deliberately narrow and
 // wraps; the rest are sized to hold their widest real value whole.
 const COLGROUP =
   '<colgroup>' +
   '<col style="width:3.8%"><col style="width:11.5%"><col style="width:10.5%">' +
-  '<col style="width:6.5%"><col style="width:12.5%"><col style="width:20.7%">' +
+  '<col style="width:6.5%"><col style="width:12.5%"><col style="width:17.7%">' +
   '<col style="width:7.5%"><col style="width:7.5%"><col style="width:7.5%">' +
-  '<col style="width:6%"><col style="width:6%">' +
+  '<col style="width:5%"><col style="width:5%"><col style="width:5%">' +
   '</colgroup>'
 
 const THEAD =
   COLGROUP +
   '<thead><tr><th></th>' +
-  '<th>Due<span class="u">+3 bus. days</span></th>' +
+  '<th>Due<span class="u">SLA</span></th>' +
   '<th>Priority</th><th>Order #</th><th>Sample ID</th><th>Sample identity</th>' +
   '<th>Volume to add<span class="u">mL</span></th>' +
   '<th>Sample<span class="u">&micro;L</span></th>' +
   '<th>LAL<span class="u">&micro;L</span></th>' +
-  '<th class="c">Made</th><th class="c">Ran</th>' +
+  '<th class="c">Made</th><th class="c">MCS</th><th class="c">Flag</th>' +
   '</tr></thead>'
 
 function rowHtml(r: EndoSheetRow, n: number): string {
@@ -211,6 +211,7 @@ function rowHtml(r: EndoSheetRow, n: number): string {
     `<td class="m">${escapeHtml(r.lalUl)}</td>` +
     '<td class="c"><span class="bx"></span></td>' +
     '<td class="c"><span class="bx"></span></td>' +
+    '<td class="c"><span class="bx"></span></td>' +
     '</tr>'
   )
 }
@@ -224,12 +225,24 @@ function fmt1(v: number): string {
   return String(Math.round(v * 10) / 10)
 }
 
-export function buildEndoBenchSheetHtml(doc: EndoSheetDoc): string {
+// Preview: the very document Print hands over, shown as paper. Each section
+// is sized to a landscape Letter sheet with the @page margins as padding, so
+// what shows is what comes out.
+const PREVIEW_CSS =
+  'body{background:#E7ECEC;padding:16px 0}' +
+  '.page{width:1056px;min-height:816px;padding:41.6px 15.1px;background:#fff;' +
+  'margin:0 auto 16px;box-shadow:0 1px 8px rgba(0,0,0,.28);' +
+  'page-break-after:auto;break-after:auto}'
+
+export function buildEndoBenchSheetHtml(
+  doc: EndoSheetDoc,
+  opts: { preview?: boolean } = {}
+): string {
   const rows = doc.rows
   const title = escapeHtml(doc.title)
   const name = escapeHtml(doc.runName)
   const stamp = escapeHtml(doc.printedAt)
-  const analyst = escapeHtml(doc.analyst || '—')
+  const analyst = escapeHtml(doc.analyst || '-')
 
   const pages: EndoSheetRow[][] = []
   for (let i = 0; i < rows.length; i += ENDO_SHEET_ROWS_PER_PAGE)
@@ -240,23 +253,23 @@ export function buildEndoBenchSheetHtml(doc: EndoSheetDoc): string {
   const meta =
     '<dl class="meta">' +
     `<div><dt>Analyst</dt><dd>${analyst}</dd></div>` +
-    `<div><dt>Date made</dt><dd>${escapeHtml(doc.dateMade ? longDate(doc.dateMade) : '—')}</dd></div>` +
+    `<div><dt>Date made</dt><dd>${escapeHtml(doc.dateMade ? longDate(doc.dateMade) : '-')}</dd></div>` +
     `<div><dt>Samples</dt><dd>${rows.length}</dd></div>` +
-    `<div><dt>Orders</dt><dd>${escapeHtml(doc.orders || '—')}</dd></div>` +
+    `<div><dt>Orders</dt><dd>${escapeHtml(doc.orders || '-')}</dd></div>` +
     '</dl>'
 
   let out =
     '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
-    `<title>${title} endotoxin prep</title><style>${SHEET_CSS}</style></head><body>`
+    `<title>${title} endotoxin prep</title><style>${SHEET_CSS}${opts.preview ? PREVIEW_CSS : ''}</style></head><body>`
 
   pages.forEach((chunk, pageIx) => {
     const of = `page ${pageIx + 1} of ${totalPages}`
     const header =
       pageIx === 0
-        ? `<div class="top"><h1>${title} &mdash; endotoxin prep</h1>` +
+        ? `<div class="top"><h1>${title}: endotoxin prep</h1>` +
           `<p class="stamp">${name}  &middot;  printed ${stamp}  &middot;  ${of}</p></div>` +
           meta
-        : `<div class="cont">${title} &mdash; continued<span>${name}  &middot;  ${of}</span></div>`
+        : `<div class="cont">${title}: continued<span>${name}  &middot;  ${of}</span></div>`
     const first = pageIx * ENDO_SHEET_ROWS_PER_PAGE + 1
     const last = pageIx * ENDO_SHEET_ROWS_PER_PAGE + chunk.length
     const footer =
@@ -303,11 +316,11 @@ export function buildEndoBenchSheetHtml(doc: EndoSheetDoc): string {
 
   out +=
     '<section class="page summary">' +
-    `<div class="cont">${title} &mdash; run summary<span>${name}  &middot;  printed ${stamp}</span></div>` +
+    `<div class="cont">${title}: run summary<span>${name}  &middot;  printed ${stamp}</span></div>` +
     '<dl class="meta">' +
     `<div><dt>Analyst</dt><dd>${analyst}</dd></div>` +
-    `<div><dt>Date made</dt><dd>${escapeHtml(doc.dateMade ? longDate(doc.dateMade) : '—')}</dd></div>` +
-    `<div><dt>Orders</dt><dd>${escapeHtml(doc.orders || '—')}</dd></div>` +
+    `<div><dt>Date made</dt><dd>${escapeHtml(doc.dateMade ? longDate(doc.dateMade) : '-')}</dd></div>` +
+    `<div><dt>Orders</dt><dd>${escapeHtml(doc.orders || '-')}</dd></div>` +
     '</dl>' +
     '<dl class="tiles">' +
     tile('Samples', String(rows.length), '') +
@@ -331,7 +344,7 @@ export function buildEndoBenchSheetHtml(doc: EndoSheetDoc): string {
     '<div><dt>Volume to add</dt><dd>MIN(10, 1 + FLOOR(wt &divide; 50))<br><i>1 mL, plus 1 more per 50 mg</i></dd></div>' +
     '<div><dt>Sample needed</dt><dd>volume to add &divide; declared wt &times; 1000<br><i>at a target of 1 mg/mL</i></dd></div>' +
     '<div><dt>LAL needed</dt><dd>1000 &minus; sample needed<br><i>to fill a 1 mL cartridge</i></dd></div>' +
-    '<div><dt>Bacteriostatic water</dt><dd>20&times; dilution &mdash; 50 &micro;L<br><i>made to 1000 &micro;L with LAL water</i></dd></div>' +
+    '<div><dt>Bacteriostatic water</dt><dd>20&times; dilution: 50 &micro;L<br><i>made to 1000 &micro;L with LAL water</i></dd></div>' +
     '</dl>' +
     holidayNote +
     `<div class="pagefoot"><span>${title} &middot; ${name}${doc.analyst ? ` &middot; ${analyst}` : ''}</span>` +

@@ -247,3 +247,100 @@ def test_bench_log_counts_legacy_parent_items_by_their_endo_keyword(client, db):
 
     rows = client.get("/worksheets/bench-log?kind=endo").json()
     assert [r["id"] for r in rows] == [ws.id]
+
+
+# --- Printing, bulk ticks, and the instrument stamp behind the MCS tick ------
+
+
+def test_printing_is_recorded_once_as_the_bench_start(client, db):
+    from models import AuditLog
+
+    ws, _ = _seed(db)
+    r = client.post(f"/worksheets/{ws.id}/printed")
+    assert r.status_code == 200, r.text
+    db.refresh(ws)
+    first = ws.printed_at
+    assert first is not None and ws.printed_by_user_id == 1 and ws.print_count == 1
+    # A reprint counts, but the sheet left for the bench the first time.
+    client.post(f"/worksheets/{ws.id}/printed")
+    db.refresh(ws)
+    assert ws.printed_at == first and ws.print_count == 2
+    body = client.get(f"/worksheets/{ws.id}").json()
+    assert body["printed_at"].endswith("Z") and body["print_count"] == 2
+    assert db.query(AuditLog).filter(AuditLog.operation == "worksheet_printed").count() == 2
+    assert client.post("/worksheets/99999/printed").status_code == 404
+
+
+def test_bulk_ticks_mark_every_unticked_row_once(client, db):
+    from models import AuditLog
+
+    ws, item = _seed(db)
+    second = WorksheetItem(worksheet_id=ws.id, sample_uid="mk1://endo-9", sample_id="P-2995-S09")
+    db.add(second)
+    db.commit()
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"made": True})
+    db.refresh(item)
+    already = item.made_at
+
+    r = client.post(f"/worksheets/{ws.id}/bench-ticks", json={"made": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["changed"] == 1  # the row ticked by hand keeps its own stamp
+    db.refresh(item)
+    db.refresh(second)
+    assert item.made_at == already and second.made_at is not None
+    assert second.prep_status == "in_progress"
+    assert db.query(AuditLog).filter(AuditLog.operation == "bench_made_set").count() == 2
+
+    r = client.post(f"/worksheets/{ws.id}/bench-ticks", json={"ran": True, "item_ids": [second.id]})
+    assert r.json()["changed"] == 1
+    db.refresh(item)
+    assert item.ran_at is None
+
+
+def _endo_analysis_world(client, db, *, instruments=1):
+    """The seeded endo vial with an `assigned` endotoxin analysis, an active
+    method covering its service, and N instruments linked to that method."""
+    from models import AnalysisService, Instrument, LimsAnalysis, instrument_methods
+
+    ws, item = _seed(db)
+    vial = db.query(LimsSubSample).filter(LimsSubSample.sample_id == item.sample_id).one()
+    svc = AnalysisService(title="Endotoxin USP85 LAL", keyword="ENDOTOXIN-USP85LAL",
+                          origin="mk1", active=True, variance_capable=False)
+    db.add(svc)
+    db.flush()
+    row = LimsAnalysis(lims_sub_sample_pk=vial.id, analysis_service_id=svc.id,
+                       keyword=svc.keyword, title=svc.title, review_state="assigned",
+                       provenance="canonical")
+    db.add(row)
+    db.commit()
+    mid = client.post("/hplc/methods", json={"name": "Endotoxin", "technique": "LAL"}).json()["id"]
+    client.post(f"/hplc/methods/{mid}/activate")
+    client.put(f"/hplc/methods/{mid}/services",
+               json=[{"analysis_service_id": svc.id, "is_default": True}])
+    ids = []
+    for n in range(instruments):
+        inst = Instrument(name=f"Nexgen-MCS {n + 1}", origin="mk1", active=True)
+        db.add(inst)
+        db.flush()
+        db.execute(instrument_methods.insert().values(instrument_id=inst.id, method_id=mid))
+        ids.append(inst.id)
+    db.commit()
+    return ws, item, row, mid, ids
+
+
+def test_mcs_tick_records_the_method_and_the_only_instrument(client, db):
+    ws, item, row, mid, (inst_id,) = _endo_analysis_world(client, db)
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"ran": True})
+    db.refresh(row)
+    db.refresh(item)
+    assert row.method_id == mid and row.instrument_id == inst_id
+    assert item.instrument_id == inst_id
+
+
+def test_mcs_tick_does_not_guess_between_two_instruments(client, db):
+    ws, item, row, _mid, _ids = _endo_analysis_world(client, db, instruments=2)
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"ran": True})
+    db.refresh(row)
+    db.refresh(item)
+    assert item.ran_at is not None  # the tick itself still lands
+    assert row.instrument_id is None and item.instrument_id is None

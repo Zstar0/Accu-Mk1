@@ -59,6 +59,27 @@ describe('buildEndoBenchSheetHtml', () => {
     expect(counts).toEqual([10, 10, 1])
   })
 
+  it('carries Made, MCS and Flag boxes for the pen, and no em dashes', () => {
+    const html = buildEndoBenchSheetHtml(doc([row(1)]))
+    expect(html).toContain(
+      '<th class="c">Made</th><th class="c">MCS</th><th class="c">Flag</th>'
+    )
+    expect(html.match(/<span class="bx"><\/span>/g)).toHaveLength(3)
+    expect(html).not.toMatch(/—|&mdash;/)
+  })
+
+  it('shows the same document as paper when previewed', () => {
+    const rows = [row(1)]
+    const printed = buildEndoBenchSheetHtml(doc(rows))
+    const preview = buildEndoBenchSheetHtml(doc(rows), { preview: true })
+    expect(printed).not.toContain('width:1056px')
+    expect(preview).toContain('width:1056px')
+    // Identical content: only the paper styling differs.
+    expect(preview.replace(/<style>.*?<\/style>/s, '')).toBe(
+      printed.replace(/<style>.*?<\/style>/s, '')
+    )
+  })
+
   it('escapes untrusted text', () => {
     const html = buildEndoBenchSheetHtml(
       doc([row(1, { identity: '<b>BPC-157</b> & TB500' })])

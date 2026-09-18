@@ -5899,6 +5899,10 @@ export interface WorksheetListItem {
   item_count: number
   created_at: string | null
   completed_at: string | null
+  /** First print of the bench sheet: the run's start on the bench. */
+  printed_at?: string | null
+  printed_by_user_id?: number | null
+  print_count?: number
   items: {
     id: number
     sample_id: string
@@ -6110,6 +6114,35 @@ export async function getWorksheetBenchLog(
     { headers: getBearerHeaders() }
   )
   if (!response.ok) throw new Error(`Bench log failed: ${response.status}`)
+  return response.json()
+}
+
+/** The bench sheet went to the printer (first print = bench start). */
+export async function recordWorksheetPrinted(
+  worksheetId: number
+): Promise<{ printed_at: string; print_count: number }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/printed`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (!response.ok) throw new Error(`Record print failed: ${response.status}`)
+  return response.json()
+}
+
+/** Tick Made / Ran down a whole worksheet (or the given items) at once. */
+export async function bulkWorksheetBenchTicks(
+  worksheetId: number,
+  data: { made?: boolean; ran?: boolean; item_ids?: number[] }
+): Promise<{ changed: number }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/bench-ticks`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(data),
+    }
+  )
+  if (!response.ok) throw new Error(`Bench ticks failed: ${response.status}`)
   return response.json()
 }
 

@@ -300,6 +300,9 @@ def _run_migrations():
         # Phase 17: Worksheet completion tracking
         "ALTER TABLE worksheets ADD COLUMN IF NOT EXISTS completed_by INTEGER REFERENCES users(id) ON DELETE SET NULL",
         "ALTER TABLE worksheets ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP",
+        "ALTER TABLE worksheets ADD COLUMN IF NOT EXISTS printed_at TIMESTAMP",
+        "ALTER TABLE worksheets ADD COLUMN IF NOT EXISTS printed_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL",
+        "ALTER TABLE worksheets ADD COLUMN IF NOT EXISTS print_count INTEGER NOT NULL DEFAULT 0",
         # Method-Instrument M2M migration: move from hplc_methods.instrument_id FK to junction table
         """DO $$ BEGIN
             IF EXISTS (SELECT 1 FROM information_schema.columns

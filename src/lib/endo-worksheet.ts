@@ -50,7 +50,7 @@ export function endoIdentityFor(item: WorksheetItemRow): string {
 
 /** "Sep 16" from a YYYY-MM-DD lab date, without touching time zones. */
 export function shortLabDate(iso: string | null): string {
-  if (!iso) return '—'
+  if (!iso) return '-'
   const [y, m, d] = iso.split('-').map(Number)
   if (!y || !m || !d) return iso
   return new Date(Date.UTC(y, m - 1, d, 12)).toLocaleDateString('en-US', {

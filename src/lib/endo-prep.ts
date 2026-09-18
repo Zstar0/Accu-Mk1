@@ -4,7 +4,7 @@
  * Ported from tools-dennis/tools/endotoxin-log/calc.js (Dennis's run log, in
  * daily production since 2026-09-01). Every formula names its source; the
  * workbook cells refer to the TEMPLATE tab of September_2026_Endotoxin.xlsx.
- * Pure: no DOM, no fetch, no storage. The derived figures are never stored —
+ * Pure: no DOM, no fetch, no storage. The derived figures are never stored:
  * the worksheet item carries the analyst's overrides and the parent's declared
  * weight, and this module computes the rest wherever it is shown (drawer,
  * bench sheet, CSV), so the three can never disagree.
@@ -35,7 +35,7 @@ function num(v: unknown): number | null {
 }
 
 /**
- * Reconstitution volume. Excel: =MIN(10, 1 + FLOOR(F2/50, 1)) — 1 mL of
+ * Reconstitution volume. Excel: =MIN(10, 1 + FLOOR(F2/50, 1)): 1 mL of
  * diluent, plus 1 more mL for every whole 50 mg, capped at the vial limit.
  */
 export function autoVolumeMl(
@@ -91,7 +91,7 @@ export interface EndoPrep {
 
 /**
  * The per-sample prep. Any value that cannot be worked out is null, never
- * NaN — a half-filled row renders as blank cells.
+ * NaN: a half-filled row renders as blank cells.
  */
 export function calcEndoPrep(input: EndoPrepInput): EndoPrep {
   const targetOverride = num(input.prepTargetMgPerMl)
