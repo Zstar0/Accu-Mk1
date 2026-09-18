@@ -112,8 +112,20 @@ def find_stranded(db: Session, *, since_days: int = 90,
             states = _live_parent_line_states(db, s)
             if states and all(v == "verified" for v in states.values()):
                 condition = "lines_verified_status_behind"
+        # A publish ledger row no longer means "this sample is finished". A
+        # PARTIAL COA parks the sample while the slow add-on work runs: the
+        # catalog has the edge for it (sample_received -> publish ->
+        # waiting_for_addon_results), and a sample whose last outstanding
+        # result is already in simply rests at to_be_verified instead. Both
+        # are designed resting places and Mk1 agrees with itself in both, so
+        # the stranding is only real when the mirror column disagrees with
+        # Mk1's OWN engine (the P-2605 shape: native published, column behind).
+        # Measured in prod 2026-09-18: all 20 open flags of this class were
+        # partial publishes, every one waiting on sterility, endotoxin or the
+        # metals, and every one with status == native_status.
         if (condition is None and not dead
-                and s.id in published_pks and s.status != "published"):
+                and s.id in published_pks and s.status != "published"
+                and s.native_status != s.status):
             condition = "published_in_ledger_not_status"
         if condition is None and mk1 and s.native_status and s.native_status != s.status:
             condition = "native_mirror_disagree"

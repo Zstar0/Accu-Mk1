@@ -75,9 +75,16 @@ def test_flag_resolves_when_condition_clears(db_session):
 
 
 def test_published_in_ledger_but_not_status(db_session):
+    """The REAL case: the engine reached `published` but the mirror column never
+    caught up (the P-2605 shape). Mk1 disagrees with ITSELF, so it is stranded.
+
+    Was written with native_status="verified" (agreeing with the column), which
+    is the partial-publish shape and is no longer a stranding: see
+    test_partial_publish_is_not_stranded below.
+    """
     from workflow.stranded import find_stranded
     _base(db_session)
-    p = LimsSample(sample_id="P-ST-3", status="verified", native_status="verified",
+    p = LimsSample(sample_id="P-ST-3", status="verified", native_status="published",
                    date_received=datetime(2026, 9, 1, tzinfo=timezone.utc))
     db_session.add(p)
     db_session.flush()
@@ -85,6 +92,53 @@ def test_published_in_ledger_but_not_status(db_session):
                                         to_status="published", source="mk1", occurred_at=NOW))
     db_session.flush()
     assert [s.condition for s in find_stranded(db_session, now=NOW)] == ["published_in_ledger_not_status"]
+
+
+def test_partial_publish_is_not_stranded(db_session):
+    """A partial COA parks the sample while the slow add-on work runs, and the
+    catalog has the edge for it (`sample_received --publish-->
+    waiting_for_addon_results`). Mk1 agrees with itself, so this is a designed
+    resting place, not a stranding.
+
+    Prod 2026-09-18: 16 of the 20 open `published_in_ledger_not_status` flags
+    were exactly this, every one waiting on STERILITY-PCR / the metals.
+    """
+    from workflow.stranded import find_stranded
+    _base(db_session)
+    p = LimsSample(sample_id="P-ST-8", status="waiting_for_addon_results",
+                   native_status="waiting_for_addon_results",
+                   date_received=datetime(2026, 9, 1, tzinfo=timezone.utc))
+    db_session.add(p)
+    db_session.flush()
+    db_session.add(LimsSampleTransition(lims_sample_pk=p.id, verb="publish",
+                                        from_status="sample_received",
+                                        to_status="waiting_for_addon_results",
+                                        source="mk1", occurred_at=NOW))
+    db_session.flush()
+    assert find_stranded(db_session, now=NOW) == []
+
+
+def test_partial_publish_awaiting_verify_is_not_stranded(db_session):
+    """The other 4 of those 20 (P-2915, P-2916, PB-0538, PB-0539): endotoxin is
+    the only thing outstanding and its result is already IN, so the sample rests
+    at `to_be_verified` after the partial COA rather than at
+    `waiting_for_addon_results`. Also not a stranding."""
+    from workflow.stranded import find_stranded
+    _base(db_session)
+    p = LimsSample(sample_id="P-ST-9", status="to_be_verified", native_status="to_be_verified",
+                   date_received=datetime(2026, 9, 1, tzinfo=timezone.utc))
+    db_session.add(p)
+    db_session.flush()
+    svc = AnalysisService(keyword="ENDOTOXIN-USP85LAL", title="Endotoxin")
+    db_session.add(svc)
+    db_session.flush()
+    db_session.add(LimsAnalysis(lims_sample_pk=p.id, lims_sub_sample_pk=None,
+                                analysis_service_id=svc.id, keyword=svc.keyword, title="Endotoxin",
+                                review_state="to_be_verified", provenance="canonical", retested=False))
+    db_session.add(LimsSampleTransition(lims_sample_pk=p.id, verb="publish", from_status="verified",
+                                        to_status="to_be_verified", source="mk1", occurred_at=NOW))
+    db_session.flush()
+    assert find_stranded(db_session, now=NOW) == []
 
 
 def test_native_mirror_disagree_only_in_mk1_mode(db_session):
@@ -196,8 +250,9 @@ def test_orphan_free_dedupe_uses_the_primary_anchor(db_session):
 
 def test_cancelled_after_publish_is_not_stranded(db_session):
     """Spec §8 lets a published sample be cancelled natively (the COA stays
-    live), so the mk1 publish ledger row must not flag it forever. The same
-    sample still verified IS stranded."""
+    live), so the mk1 publish ledger row must not flag it forever. The control
+    is the same sample uncancelled AND disagreeing with its own engine, which
+    IS stranded."""
     from workflow.stranded import find_stranded
     _base(db_session)
     p = LimsSample(sample_id="P-ST-11", status="cancelled", native_status="cancelled",
@@ -209,7 +264,7 @@ def test_cancelled_after_publish_is_not_stranded(db_session):
     db_session.flush()
     assert find_stranded(db_session, now=NOW) == []
     p.status = "verified"
-    p.native_status = "verified"
+    p.native_status = "published"
     db_session.flush()
     assert [s.condition for s in find_stranded(db_session, now=NOW)] == ["published_in_ledger_not_status"]
 

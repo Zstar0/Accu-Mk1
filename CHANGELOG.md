@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- **A partially published sample no longer raises a "stranded" flag.** Publishing a COA while sterility, endotoxin or the heavy metals are still outstanding parks the sample at `waiting_for_addon_results`, or leaves it at `to_be_verified` when the last result is already in and only needs verifying. Both are designed resting places with their own catalog edges, but the stranded-sample detector read any publish as "this sample is finished" and flagged every one of them. It now flags only a sample whose status column disagrees with Accu-Mk1's own workflow engine, which is the real fault it was written to catch (a published sample whose badge never moved, the P-2605 shape). Measured against production before the change: all 20 open `published_in_ledger_not_status` flags were partial publishes, so the board drops from 55 open flags to 35 with no other sample affected.
+
 ## v1.22.0 - 2026-09-17
 
 ### Added
