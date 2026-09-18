@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- **A document revision no longer has to restate its title.** `POST /api/documents` with a `code` and no `title` answered 422, so an agent asked to "revise SOP-0001 with this content" had to know and repeat the title. A revision now inherits the title and the description of the revision it supersedes when they are omitted; sending them still overrides. A new document still requires a title.
+
 ## v1.22.2 - 2026-09-18
 
 ### Changed
