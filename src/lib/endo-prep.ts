@@ -66,12 +66,16 @@ export interface EndoPrepInput {
   prepWeightMg?: number | null
   prepVolumeMl?: number | null
   prepDilutionFactor?: number | null
+  prepTargetMgPerMl?: number | null
 }
 
 export interface EndoPrep {
   isWater: boolean
   /** Dilution factor for bac water; null for a weight prep. */
   dilution: number | null
+  /** Target concentration in the cartridge; 1 mg/mL unless the analyst set it. */
+  targetMgPerMl: number
+  targetOverridden: boolean
   weightMg: number | null
   weightOverridden: boolean
   /** What the rule would give, regardless of any override. */
@@ -90,6 +94,12 @@ export interface EndoPrep {
  * NaN — a half-filled row renders as blank cells.
  */
 export function calcEndoPrep(input: EndoPrepInput): EndoPrep {
+  const targetOverride = num(input.prepTargetMgPerMl)
+  const targetMgPerMl =
+    targetOverride !== null && targetOverride > 0
+      ? targetOverride
+      : DEFAULT_TARGET_MG_PER_ML
+  const targetOverridden = targetMgPerMl !== DEFAULT_TARGET_MG_PER_ML
   if (isBacWater(input.sampleId, input.sampleType)) {
     // Not a weight prep: a straight dilution with LAL water, 50 uL at 20x.
     const factor = num(input.prepDilutionFactor)
@@ -98,6 +108,8 @@ export function calcEndoPrep(input: EndoPrepInput): EndoPrep {
     return {
       isWater: true,
       dilution,
+      targetMgPerMl,
+      targetOverridden,
       weightMg: null,
       weightOverridden: false,
       autoVolumeMl: null,
@@ -126,6 +138,8 @@ export function calcEndoPrep(input: EndoPrepInput): EndoPrep {
   const blank: EndoPrep = {
     isWater: false,
     dilution: null,
+    targetMgPerMl,
+    targetOverridden,
     weightMg,
     weightOverridden,
     autoVolumeMl: auto,
@@ -140,7 +154,7 @@ export function calcEndoPrep(input: EndoPrepInput): EndoPrep {
 
   const vialConc = weightMg / volumeMl // Excel: =F2/G2
   if (!vialConc) return blank
-  const sampleUl = (DEFAULT_TARGET_MG_PER_ML / vialConc) * CARTRIDGE_UL // Excel: =(E2/J2)*1000
+  const sampleUl = (targetMgPerMl / vialConc) * CARTRIDGE_UL // Excel: =(E2/J2)*1000
   const lalUl = CARTRIDGE_UL - sampleUl // Excel: =1000-H2
   return {
     ...blank,

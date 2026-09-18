@@ -5943,6 +5943,13 @@ export interface WorksheetListItem {
     prep_weight_mg?: number | null
     prep_volume_ml?: number | null
     prep_dilution_factor?: number | null
+    prep_target_mg_ml?: number | null
+    /** Bench ticks: when the row was marked Made / Ran (on the MCS for
+     *  endo), and by which user. The server stamps both. */
+    made_at?: string | null
+    made_by_user_id?: number | null
+    ran_at?: string | null
+    ran_by_user_id?: number | null
     /** Parent-sample facts the endo bench computes from; null when the item
      *  has no resolvable parent. */
     declared_weight_mg?: number | null
@@ -6076,6 +6083,34 @@ export interface WorksheetItemPatch {
   prep_weight_mg?: number | null
   prep_volume_ml?: number | null
   prep_dilution_factor?: number | null
+  prep_target_mg_ml?: number | null
+  /** Bench ticks: true stamps the caller and now, false clears. */
+  made?: boolean
+  ran?: boolean
+}
+
+/** One worksheet in a bench kind's run log (no items). */
+export interface WorksheetBenchLogEntry {
+  id: number
+  title: string
+  status: string
+  created_at: string | null
+  completed_at: string | null
+  assigned_analyst: number | null
+  item_count: number
+  made_count: number
+  ran_count: number
+}
+
+export async function getWorksheetBenchLog(
+  kind: string
+): Promise<WorksheetBenchLogEntry[]> {
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/bench-log?kind=${encodeURIComponent(kind)}`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) throw new Error(`Bench log failed: ${response.status}`)
+  return response.json()
 }
 
 export async function updateWorksheetItem(

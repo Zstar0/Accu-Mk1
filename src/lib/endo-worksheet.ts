@@ -36,6 +36,7 @@ export function endoPrepFor(item: WorksheetItemRow): EndoPrep {
     prepWeightMg: item.prep_weight_mg,
     prepVolumeMl: item.prep_volume_ml,
     prepDilutionFactor: item.prep_dilution_factor,
+    prepTargetMgPerMl: item.prep_target_mg_ml,
   })
 }
 

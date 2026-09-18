@@ -47,10 +47,8 @@ import type {
 } from '@/lib/api'
 import { isEndoWorksheetItem } from '@/lib/endo-worksheet'
 import { EndoPrepLine } from './EndoPrepLine'
-import { EndoWorksheetTable } from './EndoWorksheetTable'
 import { PrepStatusSelect } from './PrepStatusSelect'
 import { ReassignButton } from './ReassignButton'
-import { worksheetKind } from '@/lib/worksheet-kind'
 import { worksheetItemSlaSubjects } from '@/lib/worksheet-sla-subjects'
 
 /** Extract unique peptide names from analyses — compact display for worksheet */
@@ -113,10 +111,6 @@ export function WorksheetDrawerItems({
       ),
     [items, isCompleted, worksheetCompletedAtProp]
   )
-  // Worksheets 2.0: an endo-only worksheet renders Dennis's bench table;
-  // anything else keeps the generic item list (with an endo line under
-  // any endo item it happens to hold).
-  const kind = worksheetKind(items)
   const {
     byKey: slaByKey,
     isLoading: slaLoading,
@@ -148,14 +142,14 @@ export function WorksheetDrawerItems({
       {/* Section label */}
       <div className="px-4 pt-3 pb-1">
         <span className="text-xs font-semibold text-muted-foreground">
-          {kind === 'endo' ? 'Bench order' : 'Items'} ({items.length})
+          Items ({items.length})
         </span>
       </div>
 
       {/* Column headers — widths tuned so sub-sample rows ("BW-0009-S02 ↳ child
           of BW-0009 (vial 2)") and the Microbiology badge render without
           collapsing onto multiple wrap-lines. */}
-      {items.length > 0 && kind !== 'endo' && (
+      {items.length > 0 && (
         <div className="flex items-center gap-2 px-4 py-1 border-b text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
           {!isCompleted && <div className="w-4 shrink-0" />}
           {!isCompleted && <div className="w-8 shrink-0" />}
@@ -182,18 +176,6 @@ export function WorksheetDrawerItems({
               Add samples from the inbox to get started.
             </p>
           </div>
-        ) : kind === 'endo' ? (
-          <EndoWorksheetTable
-            items={items}
-            isCompleted={isCompleted}
-            slaByKey={slaByKey}
-            slaLoading={slaLoading}
-            slaError={slaError}
-            otherWorksheets={otherWorksheets}
-            onRemove={onRemove}
-            onReassign={onReassign}
-            onUpdateItem={onUpdateItem}
-          />
         ) : (
           <DndContext
             sensors={sensors}

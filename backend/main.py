@@ -35,7 +35,7 @@ from fastapi import BackgroundTasks, FastAPI, Body, Depends, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field, validator, PrivateAttr
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import select, desc, delete, update, func, extract, and_, or_
+from sqlalchemy import select, desc, delete, update, func, extract, and_, or_, case
 from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
@@ -22986,6 +22986,12 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
                     "prep_weight_mg": it.prep_weight_mg,
                     "prep_volume_ml": it.prep_volume_ml,
                     "prep_dilution_factor": it.prep_dilution_factor,
+                    "prep_target_mg_ml": it.prep_target_mg_ml,
+                    # Bench ticks: who marked the row Made / Ran, and when.
+                    "made_at": (it.made_at.isoformat() + "Z") if it.made_at else None,
+                    "made_by_user_id": it.made_by_user_id,
+                    "ran_at": (it.ran_at.isoformat() + "Z") if it.ran_at else None,
+                    "ran_by_user_id": it.ran_by_user_id,
                     **_worksheet_item_parent_facts(_parent_for(it.sample_id)),
                 }
                 for it in items
@@ -23023,6 +23029,64 @@ def list_worksheets(
 
     worksheets = db.execute(query).scalars().all()
     return _serialize_worksheets(db, worksheets)
+
+
+# Bench kinds the run log can list, by the vial roles that make them up
+# (src/lib/worksheet-kind.ts is the FE twin).
+_BENCH_LOG_ROLES = {"endo": ("endo", "endo85")}
+
+
+@app.get("/worksheets/bench-log")
+def worksheet_bench_log(
+    kind: str = "endo",
+    limit: int = 60,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Run log for one bench kind: the newest worksheets whose items are ALL
+    vials of that kind, as lean summaries (no items). The full-history
+    /worksheets fetch is far too heavy for a side rail (4.2MB on prod,
+    2026-08-27). Registered before /worksheets/{worksheet_id} so the literal
+    path wins.
+    """
+    roles = _BENCH_LOG_ROLES.get(kind)
+    if not roles:
+        raise HTTPException(400, "Unknown bench kind")
+    of_kind = case((LimsSubSample.assignment_role.in_(roles), 1), else_=0)
+    rows = db.execute(
+        select(
+            Worksheet.id,
+            Worksheet.title,
+            Worksheet.status,
+            Worksheet.created_at,
+            Worksheet.completed_at,
+            Worksheet.assigned_analyst_id,
+            func.count(WorksheetItem.id).label("item_count"),
+            func.count(WorksheetItem.made_at).label("made_count"),
+            func.count(WorksheetItem.ran_at).label("ran_count"),
+        )
+        .join(WorksheetItem, WorksheetItem.worksheet_id == Worksheet.id)
+        .outerjoin(LimsSubSample, LimsSubSample.sample_id == WorksheetItem.sample_id)
+        .where(Worksheet.status != "staging")
+        .group_by(Worksheet.id)
+        .having(func.count(WorksheetItem.id) == func.sum(of_kind))
+        .order_by(Worksheet.created_at.desc())
+        .limit(min(max(limit, 1), 200))
+    ).all()
+    return [
+        {
+            "id": r.id,
+            "title": r.title,
+            "status": r.status,
+            "created_at": (r.created_at.isoformat() + "Z") if r.created_at else None,
+            "completed_at": (r.completed_at.isoformat() + "Z") if r.completed_at else None,
+            "assigned_analyst": r.assigned_analyst_id,
+            "item_count": r.item_count,
+            "made_count": r.made_count,
+            "ran_count": r.ran_count,
+        }
+        for r in rows
+    ]
 
 
 @app.get("/worksheets/{worksheet_id}")
@@ -23598,6 +23662,11 @@ class WorksheetItemUpdate(BaseModel):
     prep_weight_mg: Optional[float] = None
     prep_volume_ml: Optional[float] = None
     prep_dilution_factor: Optional[float] = None
+    prep_target_mg_ml: Optional[float] = None
+    # Bench ticks. true stamps the caller + now (a no-op when already set),
+    # false clears; the server owns who/when, never the client.
+    made: Optional[bool] = None
+    ran: Optional[bool] = None
 
 
 @app.patch("/worksheets/{worksheet_id}/items/{item_id}")
@@ -23677,12 +23746,31 @@ async def update_worksheet_item(
         if data.prep_status in allowed:
             item.prep_status = data.prep_status
 
-    for field in ("prep_weight_mg", "prep_volume_ml", "prep_dilution_factor"):
+    for field in ("prep_weight_mg", "prep_volume_ml", "prep_dilution_factor", "prep_target_mg_ml"):
         if field in data.model_fields_set:
             value = getattr(data, field)
             if value is not None and value <= 0:
                 raise HTTPException(400, f"{field} must be greater than zero")
             setattr(item, field, value)
+
+    ticked = False
+    for tick in ("made", "ran"):
+        want = getattr(data, tick)
+        if want is None or want == (getattr(item, f"{tick}_at") is not None):
+            continue
+        ticked = True
+        setattr(item, f"{tick}_at", datetime.utcnow() if want else None)
+        setattr(item, f"{tick}_by_user_id", _current_user.id if want else None)
+        db.add(AuditLog(
+            operation=f"bench_{tick}_{'set' if want else 'cleared'}",
+            entity_type="worksheet_item",
+            entity_id=str(item.id),
+            details={"user_id": _current_user.id, "worksheet_id": worksheet_id, "sample_id": item.sample_id},
+        ))
+    if ticked:
+        # The ticks ARE the row's progress on a bench sheet; keep prep_status
+        # (what the rest of Mk1 reads) in step with them.
+        item.prep_status = "complete" if item.ran_at else "in_progress" if item.made_at else "ready"
 
     db.commit()
     return {"status": "updated", "item_id": item_id, "resolved_method": resolved_method}

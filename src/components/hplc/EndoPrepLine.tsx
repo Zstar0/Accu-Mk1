@@ -228,13 +228,42 @@ export function PrepField({
     )
   }
 
+  if (bare) {
+    // Dennis's cell: borderless until hovered or focused, a dot when the
+    // value was set by hand; emptying the cell goes back to the computed one.
+    return (
+      <span className="relative block">
+        <input
+          type="text"
+          inputMode="decimal"
+          aria-label={`${label} (${unit})`}
+          title={
+            overridden
+              ? `Set by hand. Computed: ${computed == null ? '—' : fmt(computed)} ${unit}. Clear the cell to use it.`
+              : undefined
+          }
+          className="h-7 w-full rounded-[3px] border border-transparent bg-transparent px-1.5 text-right font-mono text-[12.5px] tabular-nums text-foreground placeholder:text-muted-foreground/50 hover:border-border focus:border-teal-500 focus:bg-background focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+          value={draft ?? shown}
+          placeholder={computed == null ? '' : fmt(computed)}
+          onChange={e => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={e => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+            if (e.key === 'Escape') setDraft(null)
+          }}
+        />
+        {overridden && (
+          <i className="pointer-events-none absolute right-0.5 top-1/2 h-1 w-1 -translate-y-1/2 rounded-full bg-teal-500" />
+        )}
+      </span>
+    )
+  }
+
   return (
     <span className="inline-flex items-center gap-1">
-      {!bare && (
-        <span className="uppercase tracking-wider text-[9px] font-semibold">
-          {label}
-        </span>
-      )}
+      <span className="uppercase tracking-wider text-[9px] font-semibold">
+        {label}
+      </span>
       <Input
         type="number"
         inputMode="decimal"
@@ -256,7 +285,7 @@ export function PrepField({
           if (e.key === 'Escape') setDraft(null)
         }}
       />
-      {!bare && <span className="text-[9px]">{unit}</span>}
+      <span className="text-[9px]">{unit}</span>
       {overridden && (
         <button
           type="button"

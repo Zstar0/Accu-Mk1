@@ -290,6 +290,11 @@ def _run_migrations():
         "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_weight_mg FLOAT",
         "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_volume_ml FLOAT",
         "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_dilution_factor FLOAT",
+        "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS prep_target_mg_ml FLOAT",
+        "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS made_at TIMESTAMP",
+        "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS made_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL",
+        "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS ran_at TIMESTAMP",
+        "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS ran_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL",
         # Phase 15: AnalysisService peptide link
         "ALTER TABLE analysis_services ADD COLUMN IF NOT EXISTS peptide_id INTEGER REFERENCES peptides(id) ON DELETE SET NULL",
         # Phase 17: Worksheet completion tracking

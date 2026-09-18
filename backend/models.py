@@ -1107,6 +1107,16 @@ class WorksheetItem(Base):
     prep_weight_mg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     prep_volume_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     prep_dilution_factor: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    #   prep_target_mg_ml     target concentration in the cartridge, when not 1 mg/mL
+    prep_target_mg_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Bench ticks: the analyst marks a row Made (sample prepped) and Ran (on the
+    # instrument; the MCS reader on the endo bench). The server stamps who and
+    # when; every set/clear also writes an audit_logs row, so an undone tick
+    # keeps its history. prep_status follows the ticks.
+    made_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    made_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    ran_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    ran_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     def __repr__(self) -> str:
         return f"<WorksheetItem(id={self.id}, worksheet_id={self.worksheet_id}, sample_uid='{self.sample_uid}')>"

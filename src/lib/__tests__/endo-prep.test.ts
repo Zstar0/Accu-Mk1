@@ -148,6 +148,18 @@ describe('endo-prep: bench order and formatting', () => {
     ])
   })
 
+  it('takes a target other than 1 mg/mL when the analyst sets one', () => {
+    const p = calcEndoPrep({
+      sampleId: 'P-1',
+      declaredWeightMg: 20,
+      prepTargetMgPerMl: 0.5,
+    })
+    expect(p.targetMgPerMl).toBe(0.5)
+    expect(p.targetOverridden).toBe(true)
+    expect(p.sampleUl).toBe(25)
+    expect(calcEndoPrep({ sampleId: 'P-1' }).targetMgPerMl).toBe(1)
+  })
+
   it('formats microlitres to 1 decimal and the rest to 3', () => {
     expect(fmtUl(33.333)).toBe('33.3')
     expect(fmtUl(100)).toBe('100')

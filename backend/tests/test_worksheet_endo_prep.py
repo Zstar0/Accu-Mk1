@@ -148,3 +148,84 @@ def test_list_worksheets_item_without_parent_is_none_safe(client, db):
     assert it["declared_weight_mg"] is None
     assert it["sample_identity"] is None
     assert it["sample_type"] is None
+
+
+# --- Bench ticks (Made / ran on the MCS), target override, run log ----------
+
+
+def test_made_tick_stamps_who_and_when_and_logs_it(client, db):
+    from models import AuditLog
+
+    ws, item = _seed(db)
+    r = client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"made": True})
+    assert r.status_code == 200, r.text
+    db.refresh(item)
+    assert item.made_at is not None
+    assert item.made_by_user_id == 1
+    assert item.prep_status == "in_progress"
+
+    it = client.get(f"/worksheets/{ws.id}").json()["items"][0]
+    assert it["made_at"].endswith("Z")
+    assert it["made_by_user_id"] == 1
+    assert it["ran_at"] is None
+
+    # Ticking again keeps the first stamp; unticking clears it. Both clicks
+    # that changed something are in the audit log, so the who/when of a tick
+    # that was later undone is not lost.
+    first = item.made_at
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"made": True})
+    db.refresh(item)
+    assert item.made_at == first
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"made": False})
+    db.refresh(item)
+    assert item.made_at is None and item.made_by_user_id is None
+    assert item.prep_status == "ready"
+    ops = [
+        (a.operation, a.details["user_id"])
+        for a in db.query(AuditLog).filter(AuditLog.entity_type == "worksheet_item").all()
+    ]
+    assert ops == [("bench_made_set", 1), ("bench_made_cleared", 1)]
+
+
+def test_ran_tick_completes_the_item(client, db):
+    ws, item = _seed(db)
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"made": True, "ran": True})
+    db.refresh(item)
+    assert item.ran_at is not None and item.ran_by_user_id == 1
+    assert item.prep_status == "complete"
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"ran": False})
+    db.refresh(item)
+    assert item.prep_status == "in_progress"
+
+
+def test_target_override_sets_and_clears(client, db):
+    ws, item = _seed(db)
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"prep_target_mg_ml": 0.5})
+    assert client.get(f"/worksheets/{ws.id}").json()["items"][0]["prep_target_mg_ml"] == 0.5
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"prep_target_mg_ml": None})
+    assert client.get(f"/worksheets/{ws.id}").json()["items"][0]["prep_target_mg_ml"] is None
+    r = client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"prep_target_mg_ml": 0})
+    assert r.status_code == 400
+
+
+def test_bench_log_lists_endo_only_worksheets_with_tick_counts(client, db):
+    ws, item = _seed(db)
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"made": True})
+    # A mixed worksheet (one endo vial, one bare parent id) is not an endo run.
+    mixed = Worksheet(title="Mixed micro", status="open")
+    db.add(mixed)
+    db.flush()
+    db.add(LimsSubSample(sample_id="P-2995-S03", parent_sample_pk=1, vial_sequence=3,
+                         external_lims_uid="mk1://endo-2", assignment_role="endo85"))
+    db.add(WorksheetItem(worksheet_id=mixed.id, sample_uid="mk1://endo-2", sample_id="P-2995-S03"))
+    db.add(WorksheetItem(worksheet_id=mixed.id, sample_uid="SEN-x", sample_id="P-0001"))
+    db.add(Worksheet(title="Empty", status="open"))
+    db.commit()
+
+    rows = client.get("/worksheets/bench-log?kind=endo").json()
+    assert [r["id"] for r in rows] == [ws.id]
+    assert rows[0]["title"] == "Endo 09/17/2026"
+    assert rows[0]["item_count"] == 1
+    assert rows[0]["made_count"] == 1
+    assert rows[0]["ran_count"] == 0
+    assert client.get("/worksheets/bench-log?kind=nope").status_code == 400

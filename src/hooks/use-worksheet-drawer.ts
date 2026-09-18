@@ -51,7 +51,7 @@ export function useWorksheetDrawer() {
   // By-id fallback: the active worksheet isn't in the open list (completed,
   // or a stale deep-link). Only fires once the open list has answered, so a
   // normal open-worksheet drawer never pays the extra request.
-  const { data: fallbackWorksheet } = useQuery({
+  const { data: fallbackWorksheet, isLoading: isResolvingActive } = useQuery({
     queryKey: ['worksheet-by-id', activeWorksheetId],
     queryFn: () => getWorksheet(activeWorksheetId as number),
     enabled: activeWorksheetId != null && !isLoading && !openMatch,
@@ -183,6 +183,23 @@ export function useWorksheetDrawer() {
                           ...(data.prep_volume_ml !== undefined
                             ? { prep_volume_ml: data.prep_volume_ml }
                             : {}),
+                          ...(data.prep_target_mg_ml !== undefined
+                            ? { prep_target_mg_ml: data.prep_target_mg_ml }
+                            : {}),
+                          ...(data.made !== undefined
+                            ? {
+                                made_at: data.made
+                                  ? (it.made_at ?? new Date().toISOString())
+                                  : null,
+                              }
+                            : {}),
+                          ...(data.ran !== undefined
+                            ? {
+                                ran_at: data.ran
+                                  ? (it.ran_at ?? new Date().toISOString())
+                                  : null,
+                              }
+                            : {}),
                           ...(data.prep_dilution_factor !== undefined
                             ? {
                                 prep_dilution_factor: data.prep_dilution_factor,
@@ -256,6 +273,7 @@ export function useWorksheetDrawer() {
     worksheets,
     openWorksheets,
     activeWorksheet,
+    isResolvingActive,
     totalOpenItems,
     isLoading,
     isError,
