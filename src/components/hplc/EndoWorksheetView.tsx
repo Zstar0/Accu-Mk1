@@ -84,8 +84,11 @@ export function EndoWorksheetView({
 
   const analyst = users.find(u => u.id === worksheet.assigned_analyst)
 
+  // Block flow, not a flex column: flexbox would shrink the sheet card
+  // (overflow-hidden, so min-height 0) to fit instead of letting this column
+  // scroll, clipping rows on a long run or a short screen.
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto px-6 pb-8 pt-5">
+    <div className="min-w-0 flex-1 space-y-4 overflow-y-auto px-6 pb-8 pt-5">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
           {titleDraft === null ? (
