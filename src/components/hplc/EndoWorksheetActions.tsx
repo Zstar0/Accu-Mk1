@@ -3,14 +3,17 @@ import { Button } from '@/components/ui/button'
 import type { WorksheetListItem, WorksheetUser } from '@/lib/api'
 import { buildEndoBenchSheetHtml, buildEndoCsv } from '@/lib/endo-bench-sheet'
 import { buildEndoSheetDoc, isEndoWorksheetItem } from '@/lib/endo-worksheet'
+import { worksheetItemSlaSubjects } from '@/lib/worksheet-sla-subjects'
 import { downloadTextFile, printHtmlDocument } from '@/lib/print-document'
 import { displayName } from '@/lib/user-display'
 import { useLabCalendar } from '@/hooks/use-lab-calendar'
+import { useSlaForSubjects } from '@/services/sla-subjects'
 
 /**
  * "Bench sheet" and "CSV" for a worksheet that holds endotoxin items. Both
- * build the same document (bench order, prep figures, due dates) so paper and
- * export never disagree. Renders nothing on a worksheet with no endo work.
+ * build the same document (bench order, prep figures, SLA due dates) so
+ * paper and export never disagree. Renders nothing on a worksheet with no
+ * endo work.
  */
 export function EndoWorksheetActions({
   worksheet,
@@ -20,7 +23,14 @@ export function EndoWorksheetActions({
   users: WorksheetUser[]
 }) {
   const { calendar } = useLabCalendar()
-  if (!worksheet.items.some(isEndoWorksheetItem)) return null
+  const endoItems = worksheet.items.filter(isEndoWorksheetItem)
+  const { byKey } = useSlaForSubjects(
+    worksheetItemSlaSubjects(
+      endoItems,
+      worksheet.status === 'completed' ? worksheet.completed_at : null
+    )
+  )
+  if (!endoItems.length) return null
 
   const analyst = users.find(u => u.id === worksheet.assigned_analyst)
   const analystName = analyst
@@ -37,6 +47,12 @@ export function EndoWorksheetActions({
         hour: '2-digit',
         minute: '2-digit',
       }),
+      dueAtByItemId: new Map(
+        endoItems.map(it => [
+          it.id,
+          byKey.get(String(it.id))?.status.due_at ?? null,
+        ])
+      ),
     })
   const fileStem = worksheet.title.replace(/[^A-Za-z0-9._-]+/g, '_')
 

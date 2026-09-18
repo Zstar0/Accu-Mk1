@@ -11,7 +11,7 @@ import secrets
 import subprocess
 import sys
 from contextlib import asynccontextmanager
-from datetime import datetime, date, time, timezone
+from datetime import datetime, date, time, timezone, timedelta
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -39,7 +39,7 @@ from sqlalchemy import select, desc, delete, update, func, extract, and_, or_
 from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
-from sla_engine import BusinessSchedule, compute_business_minutes, sla_status_dict
+from sla_engine import BusinessSchedule, compute_business_minutes, compute_business_deadline, sla_status_dict
 from throughput import (
     SERIES_START as THROUGHPUT_SERIES_START,
     AnalysisIn as ThroughputAnalysisIn,
@@ -21100,11 +21100,15 @@ async def compute_sla_statuses(
             item_now = item_now.astimezone(timezone.utc).replace(tzinfo=None)
         if item.business_hours_only and schedule is not None:
             elapsed = compute_business_minutes(recv, item_now, schedule, is_holiday)
+            due_at = compute_business_deadline(recv, item.target_minutes, schedule, is_holiday)
         else:
             elapsed = (item_now - recv).total_seconds() / 60.0
-        results.append(
-            SlaStatusResultItem(key=item.key, status=sla_status_dict(item.target_minutes, elapsed))
-        )
+            due_at = recv + timedelta(minutes=item.target_minutes)
+        status = sla_status_dict(item.target_minutes, elapsed)
+        # Endotoxin bench due date (spec 2026-09-18-endo-worksheet-design):
+        # the instant the clock reaches the target, naive UTC. Additive key.
+        status["due_at"] = due_at
+        results.append(SlaStatusResultItem(key=item.key, status=status))
     return SlaStatusResponse(items=results)
 
 

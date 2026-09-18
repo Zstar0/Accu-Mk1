@@ -1,13 +1,11 @@
 // Known numbers from September_2026_Endotoxin.xlsx and the LAL SOP, carried over
 // from tools-dennis/tools/endotoxin-log/calc.test.js. If these still pass, the
-// maths survived the port.
+// maths survived the port. Due dates are the SLA engine's (test_sla_deadline.py).
 import { describe, it, expect } from 'vitest'
 import {
   autoVolumeMl,
   calcEndoPrep,
   isBacWater,
-  addBusinessDays,
-  endoDueDate,
   labDate,
   orderForBench,
   fmtUl,
@@ -18,10 +16,7 @@ import {
 const cal: LabCalendar = {
   timezone: 'America/Los_Angeles',
   workingDays: [0, 1, 2, 3, 4],
-  holidays: new Map([
-    ['2026-05-25', 'Memorial Day'],
-    ['2026-09-07', 'Labor Day'],
-  ]),
+  holidays: new Map([['2026-09-07', 'Labor Day']]),
 }
 
 describe('endo-prep: reconstitution volume', () => {
@@ -123,37 +118,13 @@ describe('endo-prep: bacteriostatic water', () => {
   })
 })
 
-describe('endo-prep: due dates', () => {
-  it('reads the received date in the lab time zone', () => {
+describe('endo-prep: lab dates', () => {
+  it('reads a timestamp in the lab time zone', () => {
     // 03:00Z on the 18th is still the evening of the 17th in Los Angeles.
     expect(labDate('2026-09-18T03:00:00Z', cal)).toBe('2026-09-17')
     expect(labDate('2026-09-17T16:30:00Z', cal)).toBe('2026-09-17')
+    expect(labDate('2026-09-17T16:30:00', cal)).toBe('2026-09-17') // naive = UTC
     expect(labDate(null, cal)).toBeNull()
-  })
-
-  it('is 3 business days out, skipping weekends', () => {
-    expect(addBusinessDays('2026-09-11', 3, cal).iso).toBe('2026-09-16') // Fri -> Wed
-    expect(addBusinessDays('2026-09-15', 3, cal).iso).toBe('2026-09-18') // Tue -> Fri
-  })
-
-  it('steps over lab holidays and reports them', () => {
-    const r = addBusinessDays('2026-05-21', 3, cal) // Memorial Day, Mon 05-25
-    expect(r.iso).toBe('2026-05-27')
-    expect(r.holidaysSkipped).toEqual([
-      { iso: '2026-05-25', name: 'Memorial Day' },
-    ])
-    expect(addBusinessDays('2026-09-04', 3, cal).iso).toBe('2026-09-10') // Labor Day
-  })
-
-  it('respects a custom working-day set', () => {
-    const fourDay: LabCalendar = { ...cal, workingDays: [0, 1, 2, 3] } // no Fridays
-    // Wed 09-16 -> Thu 17, Mon 21, Tue 22
-    expect(addBusinessDays('2026-09-16', 3, fourDay).iso).toBe('2026-09-22')
-  })
-
-  it('endoDueDate takes an ISO timestamp and returns the due date', () => {
-    expect(endoDueDate('2026-09-15T16:30:00Z', cal)?.iso).toBe('2026-09-18')
-    expect(endoDueDate(null, cal)).toBeNull()
   })
 })
 

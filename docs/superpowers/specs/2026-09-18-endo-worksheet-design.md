@@ -49,8 +49,14 @@ Added on top:
    `sample_type`, `client_order_number`, `sample_identity`.
 3. **The prep calculation in the frontend** (`src/lib/endo-prep.ts`), a direct port of
    `calc.js` with its test vectors. Derived figures are never stored.
-4. **An endo prep line under each endo item** in the worksheet drawer: received, due,
-   weight (editable), volume to add (editable), sample µL, LAL µL, vial conc, bac-water chip.
+4. **Dennis's run table inside the worksheet flyout.** A worksheet whose items are all
+   endo work renders his table (bench order; received, due, priority, order, sample id,
+   identity, weight and volume as editable overrides, sample µL, LAL µL, vial conc or the
+   dilution chip, SLA, status, actions; tinted rows for cartridge warnings; run totals in
+   the footer). A mixed Microbiology worksheet keeps the generic list with a compact endo
+   line under each endo item. Bench kinds (`src/lib/worksheet-kind.ts`: endo, pcr,
+   sterility, hm, hplc) are what the PCR and HPLC tables hang off next; the flyout will
+   likely grow tabs per kind.
 5. **Bench sheet print and CSV export** on any worksheet holding endo items: landscape,
    exactly 10 samples per page, priority pill, summary sheet last. Ported from Dennis's
    `buildPrintDoc`, which the analysts iterated to legibility at the bench.
@@ -80,10 +86,13 @@ is a dilution, not a weight prep: `factor = prep_dilution_factor ?? 20`,
 
 Flags: sample needed > 1000 µL (will not fit the cartridge), LAL ≤ 0 (no diluent).
 
-Due date = received date (lab time zone) + 3 business days, skipping non-working days
-from `business_hours_config.working_days` and every `lab_holidays` row. The constant 3
-equals the Microbiology SLA tier (1440 business minutes); it is one named constant so a
-later change can read the tier instead.
+Due date = the SLA engine's deadline (Handler ruling 2026-09-18): `/sla/status` now
+returns `due_at`, the instant the business clock reaches the sample's resolved target
+(`compute_business_deadline`, the inverse of `compute_business_minutes`, walking
+`business_hours_config` working days and skipping every `lab_holidays` row). For the
+Microbiology tier (1440 business minutes at 8 h/day) that is received + 3 business days,
+exactly Dennis's rule, and priority tiers or calendar changes now flow through on their own.
+The bench shows the lab date of `due_at` and names any holiday stepped over.
 
 Bench order = due date ascending, then priority expedited → high → default, then the
 worksheet's own `sort_order`. Applied identically to the drawer line, the sheet and the CSV.
@@ -128,14 +137,15 @@ Idempotent: placed vials are never placed again; a re-run creates nothing.
 
 ## 6. Assumptions to confirm with the Handler
 
-1. Extend the existing worksheet rather than a new entity (chosen; PCR and HPLC follow the
-   same shape with their own prep line).
-2. Backfill creates historical worksheets (not only analyst stamps) so the September runs
-   are browsable in Mk1.
-3. Due date is a constant 3 business days for the endo bench, not derived from the SLA tier.
-4. The budget-ledger CSV stays in Dennis's tool for now.
-5. Dennis's tool is retired for new runs once this deploys; the Artifact and local copy stay
-   as the archive.
+1. ~~Extend the existing worksheet rather than a new entity~~ RULED 2026-09-18: yes, as
+   long as PCR and the rest slot in the same way (bench kinds, one table per kind).
+2. ~~Backfill creates historical worksheets~~ RULED 2026-09-18: yes.
+3. ~~Due date is a constant 3 business days~~ RULED 2026-09-18: the SLA engine owns it (done).
+4. ~~The budget-ledger CSV stays in Dennis's tool~~ RULED 2026-09-18: yes; the budget is a
+   separate tool/system later.
+5. ~~Dennis's tool is retired for new runs once this deploys~~ RULED 2026-09-18: he keeps
+   using it until this is working and deployed to prod, then switches and the backfill runs
+   from a fresh export.
 
 ## 7. Tests
 

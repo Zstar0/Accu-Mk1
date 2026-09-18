@@ -1,13 +1,18 @@
 /**
- * Endotoxin (LAL) sample prep: calculations, due dates and bench order.
+ * Endotoxin (LAL) sample prep: calculations, lab dates and bench order.
  *
  * Ported from tools-dennis/tools/endotoxin-log/calc.js (Dennis's run log, in
  * daily production since 2026-09-01). Every formula names its source; the
  * workbook cells refer to the TEMPLATE tab of September_2026_Endotoxin.xlsx.
  * Pure: no DOM, no fetch, no storage. The derived figures are never stored —
  * the worksheet item carries the analyst's overrides and the parent's declared
- * weight, and this module computes the rest wherever it is shown (drawer line,
+ * weight, and this module computes the rest wherever it is shown (drawer,
  * bench sheet, CSV), so the three can never disagree.
+ *
+ * Due dates are NOT computed here (Handler ruling 2026-09-18): they come from
+ * the SLA engine (`due_at` on /sla/status, the instant the business clock
+ * reaches the sample's resolved target), so priority tiers and calendar
+ * changes flow through automatically.
  *
  * Spec: docs/superpowers/specs/2026-09-18-endo-worksheet-design.md
  */
@@ -20,12 +25,6 @@ export const MAX_VOLUME_ML = 10
 export const DEFAULT_TARGET_MG_PER_ML = 1
 /** Bacteriostatic water is a 20x dilution per the LAL SOP. */
 export const DEFAULT_DILUTION = 20
-/**
- * Business days from received to due. Equals the Microbiology SLA tier
- * (1440 business minutes at 8 h/day).
- * ponytail: one constant; read sla_tiers instead if the tier ever diverges.
- */
-export const ENDO_TURNAROUND_BUSINESS_DAYS = 3
 
 /** Anything non-numeric becomes null rather than NaN. */
 function num(v: unknown): number | null {
@@ -160,9 +159,9 @@ export function calcEndoPrep(input: EndoPrepInput): EndoPrep {
 /* ---------------- calendar ---------------- */
 
 /**
- * The lab's working calendar, built from /business-hours-config and
- * /lab-holidays (see useLabCalendar). `workingDays` uses Python weekday
- * numbering, Mon=0..Sun=6, exactly as business_hours_config stores it.
+ * The lab's working calendar, from /business-hours-config and /lab-holidays
+ * (see useLabCalendar). `workingDays` uses Python weekday numbering,
+ * Mon=0..Sun=6, exactly as business_hours_config stores it.
  */
 export interface LabCalendar {
   timezone: string
@@ -173,7 +172,7 @@ export interface LabCalendar {
 
 /**
  * YYYY-MM-DD of an ISO timestamp in the lab's time zone. Mk1 serialises its
- * naive-UTC datetimes with a trailing Z; a bare date passes through.
+ * naive-UTC datetimes with a trailing Z (or none); a bare date passes through.
  */
 export function labDate(
   iso: string | null | undefined,
@@ -192,59 +191,21 @@ export function labDate(
   }).format(d)
 }
 
-// Date arithmetic at UTC noon so DST changes can never shift a day.
-function isoToUtcNoon(iso: string): Date {
-  const [y, m, d] = iso.split('-').map(Number)
-  return new Date(Date.UTC(y ?? 1970, (m ?? 1) - 1, d ?? 1, 12))
-}
-function utcIso(d: Date): string {
-  return d.toISOString().slice(0, 10)
-}
-/** JS getUTCDay (Sun=0) -> Python weekday (Mon=0). */
-function pyWeekday(d: Date): number {
-  return (d.getUTCDay() + 6) % 7
-}
-
 /**
- * Add n working days, skipping non-working weekdays and every lab holiday.
- * The holidays stepped over are returned so the bench sheet can say why a
+ * The lab holidays the SLA clock stepped over between the received date
+ * (exclusive) and the due date (inclusive), so the bench sheet can say why a
  * date moved.
  */
-export function addBusinessDays(
-  isoDate: string,
-  n: number,
+export function holidaysBetween(
+  receivedIso: string | null,
+  dueIso: string | null,
   cal: LabCalendar
-): { iso: string; holidaysSkipped: { iso: string; name: string }[] } {
-  const d = isoToUtcNoon(isoDate)
-  const working = new Set(
-    cal.workingDays.length ? cal.workingDays : [0, 1, 2, 3, 4]
-  )
-  const holidaysSkipped: { iso: string; name: string }[] = []
-  let added = 0
-  let guard = 0
-  while (added < n && guard++ < 400) {
-    d.setUTCDate(d.getUTCDate() + 1)
-    if (!working.has(pyWeekday(d))) continue
-    const iso = utcIso(d)
-    const name = cal.holidays.get(iso)
-    if (name !== undefined) {
-      holidaysSkipped.push({ iso, name })
-      continue
-    }
-    added++
-  }
-  return { iso: utcIso(d), holidaysSkipped }
-}
-
-/** Due = received (lab date) + ENDO_TURNAROUND_BUSINESS_DAYS. */
-export function endoDueDate(
-  dateReceivedIso: string | null | undefined,
-  cal: LabCalendar
-): { iso: string; holidaysSkipped: { iso: string; name: string }[] } | null {
-  const received = labDate(dateReceivedIso, cal)
-  return received
-    ? addBusinessDays(received, ENDO_TURNAROUND_BUSINESS_DAYS, cal)
-    : null
+): { iso: string; name: string }[] {
+  if (!receivedIso || !dueIso) return []
+  return [...cal.holidays]
+    .filter(([iso]) => iso > receivedIso && iso <= dueIso)
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([iso, name]) => ({ iso, name }))
 }
 
 /* ---------------- bench order ---------------- */
@@ -259,8 +220,8 @@ export function priorityRank(priority: string | null | undefined): number {
 
 /**
  * Due date ascending, then priority, then the caller's order (stable).
- * Rows with no due date sort last. Applied identically to the drawer line,
- * the bench sheet and the CSV so the three always agree.
+ * Rows with no due date sort last. Applied identically to the drawer, the
+ * bench sheet and the CSV so the three always agree.
  */
 export function orderForBench<T>(
   items: T[],

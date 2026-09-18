@@ -5591,6 +5591,9 @@ export interface SlaStatus {
   elapsed_minutes: number
   remaining_minutes: number
   breached: boolean
+  /** When the business clock reaches the target (naive UTC ISO, no zone
+   *  suffix); the endotoxin bench's due date. Null without a received date. */
+  due_at?: string | null
 }
 
 export interface SlaStatusResultItem {
