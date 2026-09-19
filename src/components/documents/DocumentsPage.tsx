@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ColumnDef } from '@tanstack/react-table'
-import { FileText, Loader2 } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { FileText, Loader2, MessageSquare } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DataTable } from '@/components/ui/data-table'
@@ -13,6 +14,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useUIStore } from '@/store/ui-store'
+import { flagKeys } from '@/hooks/use-flags'
+import { listFlags } from '@/lib/flags-api'
 import { useDocumentCategories, useDocuments } from '@/services/documents'
 import type { DocumentRow } from '@/lib/api-documents'
 import {
@@ -88,6 +91,21 @@ function DocumentsList() {
   )
   const { data, isLoading, isFetching, error } = useDocuments(params)
   const categories = useDocumentCategories(false)
+
+  // One request for every open thread on any document; counted per CODE
+  // (threads anchor on the code, not a revision). Lives under ['flags', …],
+  // so the SSE glue's invalidate refreshes it on any flag event.
+  const docFlags = useQuery({
+    queryKey: flagKeys.list('all_open', { entity_type: 'document' }),
+    queryFn: () => listFlags('all_open', { entity_type: 'document' }),
+  })
+  const openThreads = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const f of docFlags.data ?? []) {
+      if (f.entity_id) m.set(f.entity_id, (m.get(f.entity_id) ?? 0) + 1)
+    }
+    return m
+  }, [docFlags.data])
 
   const columns = useMemo<ColumnDef<DocumentRow>[]>(
     () => [
@@ -166,6 +184,32 @@ function DocumentsList() {
         ),
       },
       {
+        id: 'threads',
+        header: 'Threads',
+        size: 80,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const n = openThreads.get(row.original.code) ?? 0
+          if (n === 0) return null
+          return (
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium hover:bg-muted"
+              aria-label={`${n} open thread${n === 1 ? '' : 's'} on ${row.original.code}`}
+              onClick={e => {
+                e.stopPropagation()
+                useUIStore
+                  .getState()
+                  .openFlagsForEntity('document', row.original.code)
+              }}
+            >
+              <MessageSquare className="h-3 w-3" />
+              {n}
+            </button>
+          )
+        },
+      },
+      {
         accessorKey: 'updated_at',
         header: 'Updated',
         size: 100,
@@ -186,7 +230,7 @@ function DocumentsList() {
         ),
       },
     ],
-    []
+    [openThreads]
   )
 
   const items = data?.items ?? []

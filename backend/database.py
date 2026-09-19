@@ -2204,6 +2204,12 @@ def _run_migrations():
         SELECT 'scheduled_publish_failed', 'Scheduled Publish Failed', '#e5484d', 'issue', FALSE, TRUE, 9, '[]'::jsonb, TRUE
         WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='scheduled_publish_failed')
         """,
+        # Controlled documents (2026-09-18): review / change-request threads, document-only.
+        """
+        INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
+        SELECT 'doc_review', 'Document Review', '#0891b2', 'issue', FALSE, TRUE, 10, '["document"]'::jsonb, TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='doc_review')
+        """,
         # Documents library: the agent that authored a revision (from its scoped token).
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS co_author VARCHAR(100)",
     ]

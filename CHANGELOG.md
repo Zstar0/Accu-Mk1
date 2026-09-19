@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added
+- **Discussion threads on controlled documents.** A document can now be flagged like a sample or a worksheet: open a thread from the viewer header, @mention someone, assign it, give it a due date, attach files, and watch for the document changing status ("tell me when SOP-0001 goes active"). A thread is attached to the document's code, not to one revision, so a comment like "section 3 contradicts the spill procedure" stays open across the revision that answers it, and the thread shows which revision it was raised on. The library list gets a Threads column with the open count per document, and Documents is a filter in the flags inbox. A new "Document Review" flag type is meant for review comments and change requests and applies to documents only; every general type (Question, Blocker, Task) works on documents too. An open thread does not stop a draft from being activated. Raising a thread on a code that does not exist is refused.
+
 ## v1.23.0 - 2026-09-18
 
 ### Added

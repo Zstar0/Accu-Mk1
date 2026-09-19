@@ -153,7 +153,8 @@ def test_list_types_lists_builtins(client):
     assert slugs == ["blocker", "critical", "question",
                      "waiting_on_customer", "ready_for_verification",
                      "task", "feature_request", "identity_collision",
-                     "workflow_stranded", "scheduled_publish_failed"]
+                     "workflow_stranded", "scheduled_publish_failed",
+                     "doc_review"]
     assert all(r["is_builtin"] for r in rows)
 
 

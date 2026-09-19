@@ -66,7 +66,8 @@ export interface EventResponse {
 }
 
 /** Mirrors `DeepLink` — how the frontend navigates to a flagged entity.
- *  `kind` ∈ `sample` | `worksheet` | `none`; `id` is the navigator argument. */
+ *  `kind` ∈ `sample` | `worksheet` | `document` | `none`; `id` is the navigator
+ *  argument. */
 export interface DeepLink {
   kind: string
   id: string
@@ -667,7 +668,9 @@ export const updateItemKind = (id: number, body: FlagItemKindUpdate) =>
  *  is built-in or in use (the caller should deactivate instead). */
 export const deleteItemKind = async (id: number): Promise<void> => {
   try {
-    await apiFetch<undefined>(`/api/flags/item-kinds/${id}`, { method: 'DELETE' })
+    await apiFetch<undefined>(`/api/flags/item-kinds/${id}`, {
+      method: 'DELETE',
+    })
   } catch (e) {
     const match = e instanceof Error ? e.message.match(/(\d{3})$/) : null
     throw new FlagTypeApiError(
