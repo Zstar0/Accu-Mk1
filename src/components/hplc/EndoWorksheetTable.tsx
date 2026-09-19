@@ -9,7 +9,7 @@ import type {
   WorksheetListItem,
   WorksheetUser,
 } from '@/lib/api'
-import { fmt, fmtUl, holidaysBetween, labDate } from '@/lib/endo-prep'
+import { fmt, fmtUl, holidaysBetween, labDate, labTime } from '@/lib/endo-prep'
 import {
   endoIdentityFor,
   endoItemsInBenchOrder,
@@ -63,6 +63,21 @@ const TD = 'border-b border-border/60 px-2 py-[5px] align-middle text-[13px]'
 const MONO = 'font-mono text-[12.5px] tabular-nums'
 const TD_CALC = `${TD} ${MONO} bg-teal-500/[0.06] text-right text-foreground/80 whitespace-nowrap group-hover/item:bg-teal-500/10`
 
+// Same words and colours as the status select on every other worksheet.
+const STATUS_CHIP: Record<string, [string, string]> = {
+  ready: ['Ready', 'border-border text-zinc-400'],
+  in_progress: [
+    'In Progress',
+    'border-amber-500/20 bg-amber-500/10 text-amber-500',
+  ],
+  complete: [
+    'Complete',
+    'border-emerald-500/20 bg-emerald-500/10 text-emerald-500',
+  ],
+}
+const SUBTIME =
+  'block text-[10px] font-normal leading-tight text-muted-foreground'
+
 const PRIORITY_CHIP: Record<string, string> = {
   expedited: 'border-red-500/40 bg-red-500/10 text-red-600 font-semibold',
   high: 'border-amber-500/40 bg-amber-500/10 text-amber-600 font-semibold',
@@ -100,7 +115,11 @@ export function EndoWorksheetTable({
     const received = calendar ? labDate(item.date_received, calendar) : null
     const due = calendar ? labDate(dueAtByItemId.get(item.id), calendar) : null
     const skipped = calendar ? holidaysBetween(received, due, calendar) : []
-    return { item, prep, received, due, skipped }
+    const receivedTime = calendar ? labTime(item.date_received, calendar) : null
+    const dueTime = calendar
+      ? labTime(dueAtByItemId.get(item.id), calendar)
+      : null
+    return { item, prep, received, due, skipped, receivedTime, dueTime }
   })
   const sumSample = rows.reduce((s, r) => s + (r.prep.sampleUl ?? 0), 0)
   const sumLal = rows.reduce((s, r) => s + (r.prep.lalUl ?? 0), 0)
@@ -136,7 +155,7 @@ export function EndoWorksheetTable({
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1180px] border-collapse">
+        <table className="w-full min-w-[1260px] border-collapse">
           <thead>
             <tr>
               <th className={`${TH} w-[34px]`} />
@@ -166,6 +185,7 @@ export function EndoWorksheetTable({
               <th className={`${TH} ${TH_CALC}`}>
                 Vial conc.<span className={UNIT}>mg/mL</span>
               </th>
+              <th className={TH}>Status</th>
               <th className={`${TH} text-center`}>
                 <TickAll
                   label="Made"
@@ -187,7 +207,12 @@ export function EndoWorksheetTable({
             </tr>
           </thead>
           <tbody>
-            {rows.map(({ item, prep, received, due, skipped }, i) => {
+            {rows.map((row, i) => {
+              const { item, prep, received, due, skipped } = row
+              const [statusLabel, statusClass] = STATUS_CHIP[
+                item.prep_status
+              ] ??
+                STATUS_CHIP.ready ?? ['', '']
               const priority = (item.priority ?? 'normal').toLowerCase()
               const edge =
                 prep.warning === 'over_cartridge'
@@ -214,6 +239,9 @@ export function EndoWorksheetTable({
                   </td>
                   <td className={`${TD} ${MONO} whitespace-nowrap`}>
                     {shortLabDate(received)}
+                    {row.receivedTime && (
+                      <span className={SUBTIME}>{row.receivedTime}</span>
+                    )}
                   </td>
                   <td
                     className={`${TD_CALC} !text-left font-medium !text-foreground`}
@@ -228,6 +256,9 @@ export function EndoWorksheetTable({
                         {shortLabDate(due)}
                         {skipped.length > 0 && (
                           <sup className="ml-px font-bold text-teal-600">*</sup>
+                        )}
+                        {row.dueTime && (
+                          <span className={SUBTIME}>{row.dueTime}</span>
                         )}
                       </span>
                       <SlaAgeIndicator
@@ -256,6 +287,7 @@ export function EndoWorksheetTable({
                       }
                     >
                       <SampleIdBadge
+                        stacked
                         id={item.sample_id}
                         variance={item.assignment_kind === 'variance'}
                       />
@@ -351,6 +383,13 @@ export function EndoWorksheetTable({
                     ) : (
                       fmt(prep.vialConc)
                     )}
+                  </td>
+                  <td className={TD}>
+                    <span
+                      className={`inline-block whitespace-nowrap rounded-[3px] border px-1.5 py-0.5 text-[11px] font-medium ${statusClass}`}
+                    >
+                      {statusLabel}
+                    </span>
                   </td>
                   <td className={`${TD} text-center`}>
                     <Tick

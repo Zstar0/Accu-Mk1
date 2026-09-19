@@ -20,6 +20,25 @@ import type {
 import { useUIStore } from '@/store/ui-store'
 import { toast } from 'sonner'
 
+type WorksheetItemRow = WorksheetListItem['items'][number]
+
+/** A tick moves the row's status exactly as the server does (complete once
+ *  ran, in progress once made, else ready); other patches leave it alone. */
+function withTickStatus(
+  data: WorksheetItemPatch,
+  item: WorksheetItemRow
+): WorksheetItemRow {
+  if (data.made === undefined && data.ran === undefined) return item
+  return {
+    ...item,
+    prep_status: item.ran_at
+      ? 'complete'
+      : item.made_at
+        ? 'in_progress'
+        : 'ready',
+  }
+}
+
 export function useWorksheetDrawer() {
   const queryClient = useQueryClient()
   const activeWorksheetId = useUIStore(state => state.activeWorksheetId)
@@ -167,7 +186,7 @@ export function useWorksheetDrawer() {
                   items: ws.items.map(it =>
                     it.id !== itemId
                       ? it
-                      : {
+                      : withTickStatus(data, {
                           ...it,
                           ...(data.prep_status !== undefined
                             ? { prep_status: data.prep_status }
@@ -206,7 +225,7 @@ export function useWorksheetDrawer() {
                                 prep_dilution_factor: data.prep_dilution_factor,
                               }
                             : {}),
-                        }
+                        })
                   ),
                 }
           )

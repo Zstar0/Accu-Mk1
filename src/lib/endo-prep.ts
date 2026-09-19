@@ -185,6 +185,25 @@ export interface LabCalendar {
 }
 
 /**
+ * Clock time ("4:30 PM") of an ISO timestamp in the lab's time zone, read
+ * the same way as labDate. A bare date carries no time, so it gives null.
+ */
+export function labTime(
+  iso: string | null | undefined,
+  cal: LabCalendar
+): string | null {
+  if (!iso || /^\d{4}-\d{2}-\d{2}$/.test(iso)) return null
+  const withZone = /(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(iso) ? iso : `${iso}Z`
+  const d = new Date(withZone)
+  if (Number.isNaN(d.getTime())) return null
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: cal.timezone,
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(d)
+}
+
+/**
  * YYYY-MM-DD of an ISO timestamp in the lab's time zone. Mk1 serialises its
  * naive-UTC datetimes with a trailing Z (or none); a bare date passes through.
  */

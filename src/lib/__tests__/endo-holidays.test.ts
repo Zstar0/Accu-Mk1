@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { holidaysBetween, labDate, type LabCalendar } from '@/lib/endo-prep'
+import {
+  holidaysBetween,
+  labDate,
+  labTime,
+  type LabCalendar,
+} from '@/lib/endo-prep'
 
 const cal: LabCalendar = {
   timezone: 'America/Los_Angeles',
@@ -25,5 +30,19 @@ describe('labDate (kept after the SLA switch)', () => {
   it('reads an SLA due_at in the lab time zone', () => {
     // 2026-09-17T00:30Z is still the evening of the 16th in Los Angeles.
     expect(labDate('2026-09-17T00:30:00Z', cal)).toBe('2026-09-16')
+  })
+})
+
+describe('labTime', () => {
+  it('gives the clock time in the lab zone, for zoned and naive-UTC stamps alike', () => {
+    // 23:30 UTC on Sep 17 is 4:30 PM the same day in Los Angeles (PDT).
+    expect(labTime('2026-09-17T23:30:00Z', cal)).toBe('4:30 PM')
+    expect(labTime('2026-09-17T23:30:00', cal)).toBe('4:30 PM')
+  })
+
+  it('has no time to show for a bare date or nothing at all', () => {
+    expect(labTime('2026-09-17', cal)).toBeNull()
+    expect(labTime(null, cal)).toBeNull()
+    expect(labTime('not a date', cal)).toBeNull()
   })
 })
