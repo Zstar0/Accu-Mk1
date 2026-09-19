@@ -148,10 +148,17 @@ def test_tee_advances_only_for_senaite_representable_states(db_session):
         LimsWorkflowShadowEvaluation(lims_sample_pk=row.id, trigger="t", verb="verify",
                                      from_status="to_be_verified", to_status="verified",
                                      outcome="advanced", requirements_met=True, outcomes=[]),
+        LimsWorkflowShadowEvaluation(lims_sample_pk=row.id, trigger="t", verb="publish",
+                                     from_status="verified", to_status="published",
+                                     outcome="advanced", requirements_met=True, outcomes=[]),
     ]
     with patch("workflow.senaite_tee.tee_now") as tn:
         engine.tee_advances(db_session, row, fired)
-    tn.assert_called_once_with(db_session, row, "verify")
+    # `verify` is deliberately NOT pushed (Handler ruling 2026-09-18): SENAITE
+    # advances its own AR once its analyses verify through the proxy, so the
+    # push was redundant by construction. Prod: 325 verify rows ever entered the
+    # retry queue, 292 resolved "superseded", 33 gave up, 0 ever pushed.
+    tn.assert_called_once_with(db_session, row, "publish")
 
 
 def test_cancel_refused_at_200_is_senaite_only_not_a_retry(db_session):

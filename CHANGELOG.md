@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Changed
+- **Accu-Mk1 no longer pushes "verified" to SENAITE, and a refused SENAITE push is no longer flagged.** SENAITE advances its own sample to verified as soon as its analyses verify, so the sample-level push only ever told it what it already knew: of the 325 verify pushes that reached the retry queue in production, 292 found SENAITE already there, 33 gave up, and none ever did anything. The publish and cancel pushes stay, with their retries (the publish retry has repaired real transient failures). Separately, the stranded-sample check no longer raises a flag when a SENAITE push gives up. Accu-Mk1 owns sample status, every Data Source reads Accu-Mk1, and nothing downstream reads SENAITE's sample-level state, so those 34 flags were noise; the one real divergence among them (P-1449) was correct in Accu-Mk1 with its COA delivered. The retry rows are kept as history and the workflow page's "SENAITE lagging" count still reports them.
+
 ## v1.23.0 - 2026-09-18
 
 ### Added

@@ -429,14 +429,26 @@ def run_cascades_bg(sample_pk: int, actor_user_id: Optional[int]) -> None:
 
 
 _TEE_TO_STATES = frozenset({"verified", "published", "cancelled"})
+# `verify` is deliberately absent (Handler ruling 2026-09-18). SENAITE advances
+# its own AR to `verified` as soon as its analyses verify through the analysis
+# proxy, so the sample-level push only ever told SENAITE what it already knew:
+# of the 325 verify rows that reached the retry queue in prod, 292 resolved as
+# "superseded", 33 gave up and NOT ONE ever pushed successfully. `publish` and
+# `cancel` stay: the publish retry has repaired real transient failures (3 of
+# 7), and both keep SENAITE tidy for anyone still opening it. Nothing
+# downstream reads SENAITE's sample-level state any more (all five Data Source
+# keys are mk1; COA Builder and the IS read analysis-level state only).
+_TEE_VERBS = frozenset({"publish", "cancel"})
 
 
 def tee_advances(db: Session, sample: LimsSample, fired: list) -> None:
-    """Spec §5: tee each native advance SENAITE can represent (verify /
-    publish / cancel), prove it by read-back, queue refusals. Never raises."""
+    """Spec §5: tee the native advances still worth telling SENAITE about
+    (publish / cancel, see _TEE_VERBS), prove each by read-back, queue
+    refusals. Never raises."""
     from workflow import senaite_tee
     for ev in fired:
-        if ev.to_status in _TEE_TO_STATES and ev.verb in senaite_tee.EXPECTED_AR_STATES:
+        if (ev.to_status in _TEE_TO_STATES and ev.verb in _TEE_VERBS
+                and ev.verb in senaite_tee.EXPECTED_AR_STATES):
             try:
                 senaite_tee.tee_now(db, sample, ev.verb)
             except Exception:
