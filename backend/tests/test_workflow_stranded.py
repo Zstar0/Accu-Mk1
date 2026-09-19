@@ -186,7 +186,11 @@ def test_null_date_received_falls_back_to_created_at(db_session):
     assert [(s.sample.sample_id, s.condition) for s in found] == [("P-ST-NULL", "native_mirror_disagree")]
 
 
-def test_gave_up_tee_is_stranded(db_session):
+def test_gave_up_tee_is_not_stranded(db_session):
+    """SENAITE is on its way out and nothing downstream reads its sample-level
+    state, so a refused push is no longer a fault to chase (Handler ruling
+    2026-09-18). This is the exact P-1449 shape: Mk1 published/published, COA
+    delivered, SENAITE stuck behind because ITS analyses were never verified."""
     from workflow.stranded import find_stranded
     _base(db_session)
     p = LimsSample(sample_id="P-ST-5", status="published", native_status="published",
@@ -196,7 +200,7 @@ def test_gave_up_tee_is_stranded(db_session):
     db_session.add(LimsSenaiteTeeRetry(lims_sample_pk=p.id, verb="publish", expected_state="published",
                                        attempts=8, next_attempt_at=NOW, status="gave_up"))
     db_session.flush()
-    assert [s.condition for s in find_stranded(db_session, now=NOW)] == ["senaite_tee_gave_up"]
+    assert find_stranded(db_session, now=NOW) == []
 
 
 def test_no_admin_user_skips_flagging(db_session):
@@ -317,13 +321,12 @@ def _gave_up(db, sid, status):
 def test_cancelled_sample_never_flags_a_gave_up_tee(db_session):
     """Mk1 owns cancel (Handler ruling 2026-09-09): SENAITE is not kept in
     sync for a cancelled sample, so a gave_up tee row on one is not a
-    stranding for the lab to chase. The same row on a live sample still is."""
+    stranding for the lab to chase. Since 2026-09-18 the same row on a live
+    sample is not one either."""
     from workflow.stranded import find_stranded
     _base(db_session)
     _gave_up(db_session, "P-ST-90", "cancelled")
     assert find_stranded(db_session, now=NOW) == []
 
     _gave_up(db_session, "P-ST-91", "verified")
-    found = find_stranded(db_session, now=NOW)
-    assert [(f.sample.sample_id, f.condition) for f in found] == [
-        ("P-ST-91", "senaite_tee_gave_up")]
+    assert find_stranded(db_session, now=NOW) == []

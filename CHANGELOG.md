@@ -5,6 +5,9 @@
 ### Added
 - **Discussion threads on controlled documents.** A document can now be flagged like a sample or a worksheet: open a thread from the viewer header, @mention someone, assign it, give it a due date, attach files, and watch for the document changing status ("tell me when SOP-0001 goes active"). A thread is attached to the document's code, not to one revision, so a comment like "section 3 contradicts the spill procedure" stays open across the revision that answers it, and the thread shows which revision it was raised on. The library list gets a Threads column with the open count per document, and Documents is a filter in the flags inbox. A new "Document Review" flag type is meant for review comments and change requests and applies to documents only; every general type (Question, Blocker, Task) works on documents too. An open thread does not stop a draft from being activated. Raising a thread on a code that does not exist is refused.
 
+### Changed
+- **Accu-Mk1 no longer pushes "verified" to SENAITE, and a refused SENAITE push is no longer flagged.** SENAITE advances its own sample to verified as soon as its analyses verify, so the sample-level push only ever told it what it already knew: of the 325 verify pushes that reached the retry queue in production, 292 found SENAITE already there, 33 gave up, and none ever did anything. The publish and cancel pushes stay, with their retries (the publish retry has repaired real transient failures). Separately, the stranded-sample check no longer raises a flag when a SENAITE push gives up. Accu-Mk1 owns sample status, every Data Source reads Accu-Mk1, and nothing downstream reads SENAITE's sample-level state, so those 34 flags were noise; the one real divergence among them (P-1449) was correct in Accu-Mk1 with its COA delivered. The retry rows are kept as history and the workflow page's "SENAITE lagging" count still reports them.
+
 ## v1.23.0 - 2026-09-18
 
 ### Added
