@@ -12085,6 +12085,39 @@ async def remove_sample_analysis(
         NotFoundError as _NotFoundError,
     )
 
+    # ── Native-service guard (P-2823, 2026-09-18) ────────────────────────────
+    # The lab clicked the SENAITE-backed trash on MECURY-PPM four times and got
+    # 422 "it may be in a locked state" every time. Nothing was locked:
+    # MECURY-PPM is an mk1-origin service (id 276) that has no SENAITE analysis
+    # object, so the Integration Service's existence check fails and it reports
+    # its generic failure. Refuse here rather than proxying a call that cannot
+    # succeed, and name the control that does work.
+    #
+    # Scoped to the proxy case ONLY. A vial page (an 'mk1://' lims_sub_samples
+    # row) legitimately removes mk1-origin rows through delete_pristine_analysis
+    # in the native branch below, so the guard stands down when that row exists.
+    # It also sits AHEAD of the tiered worked-row guard, which can reject vial
+    # rows when confirm_retract=true: refusing after that would have written.
+    _svc = db.execute(
+        _select(AnalysisService).where(AnalysisService.keyword == keyword)
+    ).scalars().first()
+    if _svc is not None and _svc.origin == "mk1":
+        _native_vial = db.execute(
+            _select(LimsSubSample.id).where(
+                LimsSubSample.sample_id == sample_id,
+                LimsSubSample.external_lims_uid.like("mk1://%"),
+            )
+        ).first()
+        if _native_vial is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{keyword} is an Accu-Mk1 analysis and has no SENAITE "
+                    f"counterpart on {sample_id}. Remove it from the "
+                    '"Native (Accu-Mk1)" block in Manage Analyses.'
+                ),
+            )
+
     # ── Tiered worked-row guard (parent samples with vials) ──────────────────
     # Verified/published vial rows block; worked-unverified rows need an
     # explicit confirm and are audited-rejected before the delete proceeds.
