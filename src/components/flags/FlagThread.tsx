@@ -256,8 +256,18 @@ export function FlagThread({
   const eventText = (e: EventResponse): string => {
     const actor = nameForUser(users, e.actor_id)
     switch (e.event_type) {
-      case 'raised':
-        return `🚩 ${actor} raised this · ${def.label}`
+      case 'raised': {
+        // Entities that outlive their own revisions (documents) snapshot the
+        // revision the thread was opened against.
+        const snap = e.details?.entity_snapshot as
+          | { revision?: number; status?: string }
+          | undefined
+        const on =
+          snap?.revision != null
+            ? ` · on r${snap.revision}${snap.status ? ` (${snap.status})` : ''}`
+            : ''
+        return `🚩 ${actor} raised this · ${def.label}${on}`
+      }
       case 'assigned':
         return `Assigned to ${nameForUser(users, e.to_value ? Number(e.to_value) : null)}`
       case 'unassigned':
