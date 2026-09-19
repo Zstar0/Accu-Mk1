@@ -35,7 +35,12 @@ _BUILTINS = [
     ("workflow_stranded", "Workflow Stranded", "#f59e0b", "issue", False, 8),
     # Scheduled COA publish (2026-09-17): a due publish that did not go out.
     ("scheduled_publish_failed", "Scheduled Publish Failed", "#e5484d", "issue", False, 9),
+    # Controlled documents (2026-09-18): review / change-request threads. Document-only.
+    ("doc_review", "Document Review", "#0891b2", "issue", False, 10),
 ]
+
+# Built-ins that apply to specific entity types only ([] = every entity + general tasks).
+_BUILTIN_ENTITY_TYPES = {"doc_review": ["document"]}
 
 
 def seed_builtins(db: Session) -> None:
@@ -46,7 +51,8 @@ def seed_builtins(db: Session) -> None:
         if get_type_by_slug(db, slug) is None:
             db.add(FlagType(slug=slug, label=label, color=color, kind=kind,
                             is_blocking=blocking, sort_order=order,
-                            entity_types=[], is_builtin=True))
+                            entity_types=_BUILTIN_ENTITY_TYPES.get(slug, []),
+                            is_builtin=True))
     db.commit()
 
 

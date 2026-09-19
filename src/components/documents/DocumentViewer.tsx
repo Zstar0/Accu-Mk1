@@ -12,6 +12,7 @@ import {
 import { useTheme } from '@/hooks/use-theme'
 import { useAuthStore } from '@/store/auth-store'
 import { useUIStore } from '@/store/ui-store'
+import { EntityFlagButton } from '@/components/flags/EntityFlagButton'
 import { useDocument, useDocumentContent } from '@/services/documents'
 import {
   DOC_STATUS_LABEL,
@@ -114,6 +115,9 @@ export function DocumentViewer({ id }: { id: number }) {
                 : ''}
             </span>
             <div className="ml-auto flex items-center gap-2">
+              {/* Threads anchor on the CODE, so they follow the document
+                  across revisions. */}
+              <EntityFlagButton entityType="document" entityId={doc.code} />
               {doc.revisions.length > 1 && (
                 <Select
                   value={String(doc.id)}

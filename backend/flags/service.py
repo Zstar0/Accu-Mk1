@@ -110,6 +110,9 @@ def create_flag(db: Session, *, user, entity_type, entity_id, type, title,
         spec = seams.get_entity_spec(entity_type)
         if not spec.can_flag(user, str(entity_id)):
             raise PermissionDeniedError(f"not allowed to flag {entity_type} {entity_id}")
+        # Opt-in per entity type: a typo'd id would otherwise open a thread nobody can see.
+        if spec.must_exist and seams.resolve_context(db, entity_type, str(entity_id)) is None:
+            raise BadRequestError(f"{entity_type} {entity_id!r} not found")
     # Enforces "general task ⇒ global type": is_allowed_for_entity returns True
     # for entity_type=None only when the type's entity_types list is empty.
     if not types_service.is_allowed_for_entity(db, type, entity_type):
@@ -125,8 +128,12 @@ def create_flag(db: Session, *, user, entity_type, entity_id, type, title,
     db.add(flag)
     db.flush()  # populate flag.id
 
-    _audit(db, flag, actor_id, "raised", to_value="open",
-           details={"type": type, **(event_details or {})})
+    details = {"type": type, **(event_details or {})}
+    if entity_type is not None and not is_virtual_kind:
+        snap = seams.resolve_snapshot(db, entity_type, str(entity_id))
+        if snap:
+            details["entity_snapshot"] = snap
+    _audit(db, flag, actor_id, "raised", to_value="open", details=details)
     if due_at is not None:
         _audit(db, flag, actor_id, "due_set", to_value=due_at.isoformat())
     if assignee_id is not None:
@@ -196,6 +203,10 @@ def list_flags(db: Session, *, user_id: int, tab: str, status: Optional[str] = N
             and_(FlagFlag.entity_type == et, FlagFlag.entity_id == eid)
             for et, eid in pairs
         ]))
+    elif entity_type:
+        # Type-only filter (no id): every thread on one kind of entity, e.g. the
+        # documents library counting open threads per code in a single request.
+        stmt = stmt.where(FlagFlag.entity_type == entity_type)
     return list(db.execute(stmt).scalars().all())
 
 

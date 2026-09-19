@@ -92,7 +92,7 @@ class EventResponse(BaseModel):
 
 class DeepLink(BaseModel):
     """How the frontend navigates to a flagged entity. `kind` ∈
-    sample | worksheet | order | none; `id` is the navigator argument."""
+    sample | worksheet | order | document | none; `id` is the navigator argument."""
     kind: str
     id: str
 
