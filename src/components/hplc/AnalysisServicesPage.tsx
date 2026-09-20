@@ -58,6 +58,7 @@ import {
   useUpdateAnalysisService,
   useDeleteAnalysisService,
 } from '@/services/analysis-services'
+import { useUIStore } from '@/store/ui-store'
 import { ResultOptionsEditor, type ResultOption } from './ResultOptionsEditor'
 import { ServiceSpecsSection } from './ServiceSpecsSection'
 import { AnalysisServicesGuide } from './AnalysisServicesGuide'
@@ -96,6 +97,18 @@ export function AnalysisServicesPage() {
   useEffect(() => {
     load()
   }, [load])
+
+  // Handle target navigation (AR list service icon): open that flyout.
+  useEffect(() => {
+    const targetId = useUIStore.getState().analysisServiceTargetId
+    if (targetId && services.length > 0) {
+      if (services.some(s => s.id === targetId)) {
+        setCreating(false)
+        setSelectedId(targetId)
+      }
+      useUIStore.setState({ analysisServiceTargetId: null })
+    }
+  }, [services])
 
   const openCreate = () => {
     setSelectedId(null)

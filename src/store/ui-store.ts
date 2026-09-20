@@ -104,6 +104,9 @@ interface UIState {
   boxesSearchTarget: string | null
   samplePrepTargetId: number | null
   methodsTargetId: number | null
+  // Deep-link into Analysis Services: service id whose flyout opens on
+  // arrival. Consume-and-clear, same as methodsTargetId.
+  analysisServiceTargetId: number | null
   peptideRequestTargetId: string | null
   customerDetailTargetId: number | null
   customerListPage: number
@@ -146,6 +149,7 @@ interface UIState {
   navigateToBoxes: (boxLabel?: string) => void
   navigateToSamplePrep: (prepId: number) => void
   navigateToMethod: (methodId: number) => void
+  navigateToAnalysisService: (serviceId: number) => void
   navigateToPeptideRequest: (requestId: string) => void
   navigateToCustomer: (id: number) => void
   navigateToCustomers: () => void
@@ -255,6 +259,7 @@ export const useUIStore = create<UIState>()(
       boxesSearchTarget: null,
       samplePrepTargetId: null,
       methodsTargetId: null,
+      analysisServiceTargetId: null,
       peptideRequestTargetId: null,
       customerDetailTargetId: null,
       customerListPage: 0,
@@ -421,6 +426,18 @@ export const useUIStore = create<UIState>()(
           }),
           undefined,
           'navigateToMethod'
+        ),
+
+      navigateToAnalysisService: serviceId =>
+        set(
+          state => ({
+            activeSection: 'lims',
+            activeSubSection: 'analysis-services',
+            analysisServiceTargetId: serviceId,
+            navigationKey: state.navigationKey + 1,
+          }),
+          undefined,
+          'navigateToAnalysisService'
         ),
 
       navigateToPeptideRequest: requestId =>

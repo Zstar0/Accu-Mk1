@@ -60,6 +60,7 @@ import { toast } from 'sonner'
 import {
   lookupSenaiteSample,
   updateSenaiteSampleFields,
+  addInternalRemark,
   updateCustomerRemarks,
   getSampleAdditionalCOAs,
   updateAdditionalCOAConfig,
@@ -2883,7 +2884,8 @@ function AddRemarkForm({
   sampleId,
   onAdded,
 }: {
-  sampleUid: string
+  /** Absent on native-born samples, which save by sample_id instead. */
+  sampleUid?: string | null
   sampleId: string
   onAdded: () => void
 }) {
@@ -2897,10 +2899,14 @@ function AddRemarkForm({
 
     setSaving(true)
     try {
-      const result = await updateSenaiteSampleFields(sampleUid, {
-        Remarks: trimmed,
-      })
-      if (!result.success) throw new Error(result.message)
+      if (sampleUid) {
+        const result = await updateSenaiteSampleFields(sampleUid, {
+          Remarks: trimmed,
+        })
+        if (!result.success) throw new Error(result.message)
+      } else {
+        await addInternalRemark(sampleId, trimmed)
+      }
       toast.success('Remark added')
       setText('')
       setOpen(false)
@@ -6470,7 +6476,7 @@ export function SampleDetails() {
           ) : (
             <p className="text-sm text-muted-foreground">No remarks</p>
           )}
-          {data.sample_uid && (
+          {(data.sample_uid || isParent) && (
             <AddRemarkForm
               sampleUid={data.sample_uid}
               sampleId={data.sample_id}

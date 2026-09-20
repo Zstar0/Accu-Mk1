@@ -7005,6 +7005,24 @@ export async function updateCustomerRemarks(
   return response.json()
 }
 
+/** Add a lab-internal remark keyed by sample_id (works with no SENAITE uid,
+ *  i.e. native-born samples). */
+export async function addInternalRemark(
+  parentSampleId: string,
+  content: string,
+): Promise<{ sample_id: string }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/parent/${encodeURIComponent(parentSampleId)}/remarks`,
+    {
+      method: 'POST',
+      headers: { ...getBearerHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    }
+  )
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to add remark'))
+  return response.json()
+}
+
 /**
  * Phase 3: fetch lims_analyses rows for a sub-sample, projected to the
  * SenaiteAnalysis shape so AnalysisTable renders them unchanged. UIDs

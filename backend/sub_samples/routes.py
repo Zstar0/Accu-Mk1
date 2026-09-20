@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from auth import get_current_user
 from boxes.service import box_label_code
-from models import LimsBox, LimsSample, LimsSubSample, User
+from models import LimsBox, LimsSample, LimsSampleRemark, LimsSubSample, User
 from users_display import user_display_name
 from sub_samples import service
 from sub_samples.senaite import (
@@ -37,6 +37,7 @@ from sub_samples.schemas import (
     SubSampleAttachmentResponse, SubSampleAttachmentListResponse,
     AddSubSampleAttachmentRequest,
     CustomerRemarksUpdate,
+    InternalRemarkCreate,
     OrderedProduct, OrderedProductsResponse,
     VialBoardResponse,
 )
@@ -314,6 +315,36 @@ def update_customer_remarks(
         # outage (or a genuinely unknown AR) surfaces as RuntimeError -> 502
         # (upstream failure), not a misleading 500.
         raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.post("/parent/{parent_sample_id}/remarks", status_code=201)
+def add_internal_remark(
+    parent_sample_id: str,
+    body: InternalRemarkCreate,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Add a lab-internal remark, keyed by sample_id exactly like the read
+    (registry_details.native_sample_remarks). The older write path
+    (main.update_senaite_sample_fields) is keyed by SENAITE uid, which a
+    native-born sample does not have."""
+    content = body.content.strip()
+    if not content:
+        raise HTTPException(status_code=422, detail="Remark is empty")
+    row = db.execute(
+        select(LimsSample).where(
+            LimsSample.sample_id == parent_sample_id.strip().upper())
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=404, detail=f"No registry row for {parent_sample_id}")
+    db.add(LimsSampleRemark(
+        lims_sample_pk=row.id,
+        content=content,
+        author_user_id=getattr(user, "id", None),
+    ))
+    db.commit()
+    return {"sample_id": row.sample_id}
 
 
 @router.get("", response_model=SubSampleListResponse)

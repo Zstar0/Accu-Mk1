@@ -49,7 +49,7 @@ type Tier = 'all' | 'matrix' | 'peptide'
  *  A range rule with an LOQ filed appends " · LOQ {loq}" — equals-kind specs
  *  are never censored (backend never reads loq off them), so the equals
  *  branch stays untouched. */
-function ruleLabel(spec: AnalysisServiceSpecRecord): string {
+export function ruleLabel(spec: AnalysisServiceSpecRecord): string {
   // Report-only rows carry no bounds by construction — the admin list says
   // "As measured"; the COA's spec cell renders display_override or empty (R1).
   if (spec.rule_kind === 'informational')
@@ -65,7 +65,7 @@ function ruleLabel(spec: AnalysisServiceSpecRecord): string {
   return '—'
 }
 
-const tierChip = (spec: AnalysisServiceSpecRecord): string =>
+export const tierChip = (spec: AnalysisServiceSpecRecord): string =>
   spec.peptide_code ?? spec.matrix ?? 'All'
 
 interface AddFormState {
