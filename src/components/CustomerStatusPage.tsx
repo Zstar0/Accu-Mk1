@@ -45,6 +45,7 @@ import {
   AlertCircle,
   ChevronLeft,
   ChevronRight,
+  FlaskConical,
   PackageX,
   Search,
   User,
@@ -88,6 +89,9 @@ import { OrderRow } from '@/components/explorer/OrderRow'
 import { useOrderSlaStatuses } from '@/services/order-sla'
 import { useSenaiteLookupMap } from '@/services/senaite-lookup-map'
 import { useEffectiveReadSource } from '@/lib/read-source'
+import { useAnalysisProfiles } from '@/services/analysis-profiles'
+import { buildProductsBySampleId } from '@/lib/product-chips'
+import { useProductColorClasses } from '@/components/senaite/ProductChip'
 
 const PER_PAGE = 50
 
@@ -810,6 +814,9 @@ function CustomerDetailView() {
   )
 }
 
+/** localStorage key for the customer-detail Products toggle. */
+const SHOW_PRODUCTS_KEY = 'customer-detail-show-products'
+
 /**
  * UX revision — Customer Orders tab body (four-input AND search).
  *
@@ -995,6 +1002,35 @@ function CustomerOrdersTab({
   // D2: order-aggregated SLA verdicts for the table-view SLA column.
   const orderSla = useOrderSlaStatuses(orders, sampleLookupMap)
 
+  // Products toggle: same payload-derived chips as the Order Status page
+  // (no per-sample fetch). Map stays undefined while off so OrderRow renders
+  // no chips. Persisted per browser like the Order Status filter.
+  const [showProducts, setShowProducts] = useState(() => {
+    try {
+      return localStorage.getItem(SHOW_PRODUCTS_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+  const toggleShowProducts = () => {
+    const next = !showProducts
+    setShowProducts(next)
+    try {
+      localStorage.setItem(SHOW_PRODUCTS_KEY, next ? '1' : '0')
+    } catch {
+      // storage unavailable: toggle still works for this session
+    }
+  }
+  const profilesQuery = useAnalysisProfiles()
+  const productColorFor = useProductColorClasses()
+  const productsBySampleId = useMemo(
+    () =>
+      showProducts
+        ? buildProductsBySampleId(orders, profilesQuery.data ?? [])
+        : undefined,
+    [showProducts, orders, profilesQuery.data]
+  )
+
   const handleClearAll = () => {
     setCustomerOrderSearchReset()
     setOrderNumberInput('')
@@ -1087,11 +1123,28 @@ function CustomerOrdersTab({
 
       {/* Orders card */}
       <Card>
-        <CardHeader>
-          <CardTitle className="text-base font-semibold">Orders</CardTitle>
-          <CardDescription className="text-sm text-muted-foreground">
-            {searchActive ? 'Search results' : 'Open orders first'}
-          </CardDescription>
+        <CardHeader className="flex flex-row items-start justify-between gap-3">
+          <div className="flex flex-col gap-1.5">
+            <CardTitle className="text-base font-semibold">Orders</CardTitle>
+            <CardDescription className="text-sm text-muted-foreground">
+              {searchActive ? 'Search results' : 'Open orders first'}
+            </CardDescription>
+          </div>
+          <button
+            type="button"
+            title="Show ordered products on each sample card"
+            aria-pressed={showProducts}
+            onClick={toggleShowProducts}
+            className={cn(
+              'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium border transition-colors',
+              showProducts
+                ? 'bg-foreground text-background border-foreground'
+                : 'bg-transparent text-muted-foreground border-border hover:border-foreground/40 hover:text-foreground'
+            )}
+          >
+            <FlaskConical className="h-3.5 w-3.5" />
+            Products
+          </button>
         </CardHeader>
         <CardContent className="p-0">
           {showLoading && (
@@ -1171,6 +1224,8 @@ function CustomerOrdersTab({
                       showFinance
                       slaVerdict={orderSla.verdictByOrderId.get(order.order_id)}
                       sampleSlaStatusesMap={orderSla.sampleStatusesBySampleId}
+                      productsBySampleId={productsBySampleId}
+                      productColorFor={productColorFor}
                     />
                   ))}
                 </tbody>

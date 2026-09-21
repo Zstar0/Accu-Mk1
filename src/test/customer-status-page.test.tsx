@@ -739,6 +739,41 @@ describe('CustomerStatusPage — detail view', () => {
 
   // --- Empty state ---
 
+  it('Products toggle: OrderRow gets no chips map until toggled on, then payload-derived products', async () => {
+    localStorage.removeItem('customer-detail-show-products')
+    vi.mocked(getExplorerOrdersByCustomer).mockResolvedValue([
+      makeOrder({
+        payload: { samples: [{ services: { hplc: true } }] },
+        sample_results: { '1': { senaite_id: 'P-3157', status: 'received' } },
+      }),
+    ])
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    })
+    qc.setQueryData(
+      ['analysis-profiles'],
+      [{ key: 'hplc', name: 'HPLC', sort_order: 1, is_addon: false }]
+    )
+    renderDetailWithCache(makeCustomer({ customer_id: 42 }), qc)
+    await screen.findByTestId('order-row')
+
+    const { OrderRow } = await import('@/components/explorer/OrderRow')
+    const lastProps = () =>
+      vi.mocked(OrderRow).mock.calls.at(-1)?.[0] as {
+        productsBySampleId?: Map<string, { key: string }[]>
+      }
+    expect(lastProps().productsBySampleId).toBeUndefined()
+
+    const toggle = screen.getByRole('button', { name: 'Products' })
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(toggle)
+
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    expect(lastProps().productsBySampleId?.get('P-3157')?.[0]?.key).toBe('hplc')
+    expect(localStorage.getItem('customer-detail-show-products')).toBe('1')
+    localStorage.removeItem('customer-detail-show-products')
+  })
+
   it('renders empty state copy when the orders query resolves with []', async () => {
     vi.mocked(getExplorerOrdersByCustomer).mockResolvedValue([])
     renderDetailWithCache(makeCustomer({ customer_id: 42 }))
