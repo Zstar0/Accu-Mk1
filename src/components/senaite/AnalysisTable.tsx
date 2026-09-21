@@ -563,13 +563,17 @@ export function deriveBulkPromoteBlockers(selected: SenaiteAnalysis[]): string[]
       `${noKeyword.length} selected ${noKeyword.length === 1 ? 'analysis has' : 'analyses have'} no keyword`,
     )
   }
+  // Parent-row identity is (keyword, slot), the same key promote_to_parent
+  // supersedes on: a native blend carries one HPLC-PURITY row PER SLOT, and
+  // those are distinct parent rows, not duplicates. Slot-less rows key on 0.
   const seen = new Set<string>()
   const dups = new Set<string>()
   for (const a of selected) {
     const k = a.keyword
     if (!k) continue
-    if (seen.has(k)) dups.add(k)
-    seen.add(k)
+    const id = `${k}#${a.slot ?? 0}`
+    if (seen.has(id)) dups.add(k)
+    seen.add(id)
   }
   if (dups.size > 0) {
     blockers.push(
@@ -1318,7 +1322,7 @@ export function BulkPromoteDialog({
           promoted++
         } catch (e) {
           failed++
-          toast.error(`${a.keyword ?? a.title}: ${(e as Error).message}`)
+          toast.error(`${a.slot != null ? a.title : (a.keyword ?? a.title)}: ${(e as Error).message}`)
         }
       }
     } finally {
@@ -1346,7 +1350,8 @@ export function BulkPromoteDialog({
             <tbody>
               {analyses.map(a => (
                 <tr key={a.uid} className="border-b border-border/50">
-                  <td className="py-1.5 pr-3 font-medium">{a.keyword ?? a.title}</td>
+                  {/* Per-slot native rows share a keyword; their stamped title tells them apart. */}
+                  <td className="py-1.5 pr-3 font-medium">{a.slot != null ? a.title : (a.keyword ?? a.title)}</td>
                   <td className="py-1.5 font-mono">{a.result ?? '—'}</td>
                 </tr>
               ))}

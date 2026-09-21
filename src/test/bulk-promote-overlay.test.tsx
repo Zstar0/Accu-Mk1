@@ -114,6 +114,24 @@ describe('deriveBulkPromoteBlockers', () => {
     ])
     expect(blockers.some(b => b.includes('STER-PCR'))).toBe(true)
   })
+  it('a native blend: one row per slot sharing a keyword is NOT a duplicate', () => {
+    const slots = [1, 2, 3].flatMap(slot =>
+      ['HPLC-IDENTITY', 'HPLC-PURITY', 'HPLC-QUANTITY'].map((keyword, i) =>
+        mk({ uid: `mk1:${slot}${i}`, review_state: 'to_be_verified', keyword, slot }),
+      ),
+    )
+    const aggregates = ['HPLC-BLEND-PURITY', 'HPLC-BLEND-TOTAL'].map((keyword, i) =>
+      mk({ uid: `mk1:9${i}`, review_state: 'to_be_verified', keyword, slot: null }),
+    )
+    expect(deriveBulkPromoteBlockers([...aggregates, ...slots])).toEqual([])
+  })
+  it('still flags the same keyword twice WITHIN one slot', () => {
+    const blockers = deriveBulkPromoteBlockers([
+      mk({ uid: 'mk1:1', review_state: 'to_be_verified', keyword: 'HPLC-PURITY', slot: 2 }),
+      mk({ uid: 'mk1:2', review_state: 'to_be_verified', keyword: 'HPLC-PURITY', slot: 2 }),
+    ])
+    expect(blockers.some(b => b.includes('HPLC-PURITY'))).toBe(true)
+  })
   it('flags rows with no keyword', () => {
     const blockers = deriveBulkPromoteBlockers([mk({ uid: 'mk1:9', review_state: 'to_be_verified', keyword: null })])
     expect(blockers.some(b => b.includes('no keyword'))).toBe(true)
