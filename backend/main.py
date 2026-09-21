@@ -19370,6 +19370,19 @@ def _after_publish_native(db, *, sample_id: str, pre_publish_status, actor_user_
     except Exception:
         logger.exception("after-publish native step failed (never-raise) %s", sample_id)
         db.rollback()
+    # Analysis tier: the verified parent rows now on a certificate become
+    # 'published' (citable: a later retest supersedes instead of wiping them).
+    # Its own step AFTER the ledger commit above, so it can never undo the
+    # sample-tier publish.
+    try:
+        from lims_analyses.service import publish_parent_rows
+        moved = publish_parent_rows(db, sample_id=sample_id, user_id=actor_user_id)
+        db.commit()
+        if moved:
+            logger.info("after-publish native: %s analysis rows -> published n=%s", sample_id, moved)
+    except Exception:
+        logger.exception("after-publish native: publishing analysis rows failed (never-raise) %s", sample_id)
+        db.rollback()
     # M8 flush point: publish queued a status relay to IS above (engine's
     # drive_sample_touchpoint -> _write_status_if_authoritative). This
     # function already runs off the event loop (threadpool), so drain
