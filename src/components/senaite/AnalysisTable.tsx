@@ -35,7 +35,7 @@ import type { SenaiteAnalysis, InboxPriority } from '@/lib/api'
 import { promotionForRow, type PromotionIndex } from '@/lib/promotion-index'
 import { setAnalysisMethodInstrument, promoteAnalyses, getMethods } from '@/lib/api'
 import { SetMethodInstrumentDialog } from '@/components/senaite/SetMethodInstrumentDialog'
-import type { VialAssignment } from '@/lib/vial-assignment'
+import { vialAssignmentKey, type VialAssignment } from '@/lib/vial-assignment'
 import { ROLE_COLOR_TEXT, roleColorForCode } from '@/lib/role-display'
 import { useVialRoles, type VialRoleRow } from '@/services/vial-roles'
 import { useDepartments, type Department } from '@/services/departments'
@@ -375,12 +375,25 @@ export function isPromoted(a: SenaiteAnalysis): boolean {
  * cascades down). The states map is optional so existing callers that don't
  * have parent context are unaffected.
  */
+/** Key of one entry in the parent lock map. A native per-slot row is
+ *  identified by (service, slot): a blend carries one HPLC-PURITY parent row
+ *  PER slot, so a keyword key let one verified slot lock every other slot's
+ *  vial rows. Slot-less rows keep the bare keyword.
+ *  Twin: parent_line_state_key in backend/lims_analyses/service.py. */
+export function parentLineStateKey(
+  a: Pick<SenaiteAnalysis, 'keyword' | 'analysis_service_id' | 'slot'>,
+): string {
+  return a.slot != null && a.analysis_service_id != null
+    ? `svc:${a.analysis_service_id}:${a.slot}`
+    : (a.keyword ?? '')
+}
+
 export function isLockedByParent(
   a: SenaiteAnalysis,
   parentLineStates?: Record<string, string>,
 ): boolean {
   if (!parentLineStates) return false
-  return parentLineStates[a.keyword ?? ''] === 'verified'
+  return parentLineStates[parentLineStateKey(a)] === 'verified'
 }
 
 /** Row-menu transitions: submit needs a result; verify is hidden when Promote
@@ -1499,7 +1512,7 @@ function AnalysisRow({
   const canVarVerify = verbPolicy !== 'parent-native' && canVarianceVerify(analysis, vialKind)
   const isPromoted = analysis.promoted_to_parent_id != null
   const tooltipCopy = promotedRowTooltipCopy(isPromoted, promotedSourceRetestSeam)
-  const vialAssign = analysis.keyword ? vialAssignmentByKeyword?.get(analysis.keyword) : undefined
+  const vialAssign = vialAssignmentByKeyword?.get(vialAssignmentKey(analysis))
   const vialOverlay = vialAssign?.matches[0]?.mk1Analysis ?? null
   const vialOverlayEditable = vialAssign?.editable ?? false
   const [promoteOpen, setPromoteOpen] = useState(false)

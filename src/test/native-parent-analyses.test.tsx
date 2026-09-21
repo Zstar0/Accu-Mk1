@@ -208,7 +208,7 @@ describe('NativeParentAnalysesCard', () => {
     // level up, in SampleDetails' map construction (not exercised by this
     // component-level test — see task-6-brief.md Step 3).
     const vialMap = new Map<string, VialAssignment>([
-      ['FENTANYL', {
+      ['mk1:9', { // keyed by the parent ROW (vialAssignmentKey), not its keyword
         editable: true,
         matches: [{
           vialSampleId: 'P-0158-S01',
@@ -241,7 +241,7 @@ describe('NativeParentAnalysesCard', () => {
     // of the matched vial's — distinctive vial-side values must never leak
     // into the row's Method/Instrument/Analyst cells.
     const vialMap = new Map<string, VialAssignment>([
-      ['FENTANYL', {
+      ['mk1:9', { // keyed by the parent ROW (vialAssignmentKey), not its keyword
         editable: false,
         matches: [{
           vialSampleId: 'P-0158-S01',

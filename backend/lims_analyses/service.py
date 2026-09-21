@@ -1519,6 +1519,24 @@ def list_promotions_for_parent(
 _VIAL_PROMOTABLE_STATES = ("to_be_verified",)
 
 
+def parent_line_state_key(keyword: Optional[str], analysis_service_id: Optional[int],
+                          slot: Optional[int]) -> str:
+    """Key of one entry in the parent lock map.
+
+    A native per-slot row is identified by (service, slot), the same identity
+    promote_to_parent supersedes on: a native blend carries one HPLC-PURITY
+    parent row PER analyte slot, so keying on keyword let one verified slot
+    lock every other slot's vial rows (and wedged a retested slot with no
+    Promote path). Slot-less rows (every legacy/SENAITE row, endo, PCR, the
+    blend aggregates) keep the bare keyword, so their entries are unchanged.
+
+    Twin: parentLineStateKey in src/components/senaite/AnalysisTable.tsx.
+    Move both sides together."""
+    if slot is not None and analysis_service_id is not None:
+        return f"svc:{analysis_service_id}:{slot}"
+    return keyword or ""
+
+
 def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, str]:
     """Keyword → review_state lock map for the FE's isLockedByParent gate,
     served from native rows — the mk1-mode substitute for SENAITE's
@@ -1596,7 +1614,7 @@ def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, s
             review_state=r.review_state,
         ) != TIER_PARENT:
             continue
-        states[r.keyword] = r.review_state
+        states[parent_line_state_key(r.keyword, r.analysis_service_id, r.slot)] = r.review_state
     for r in rows:
         if (
             r.provenance == "shadow"

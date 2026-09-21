@@ -545,7 +545,7 @@ describe('AnalysisTable render — parent-bench result entry', () => {
   it('same row with a vial assignment for its keyword stays read-only', () => {
     renderReadOnlyTable(
       [bwShadow],
-      new Map([['PH-DETERM', { matches: [] as never[], editable: false }]])
+      new Map([[bwShadow.uid!, { matches: [] as never[], editable: false }]])
     )
     expect(screen.queryByRole('textbox')).toBeNull()
   })

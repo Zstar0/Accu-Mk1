@@ -43,37 +43,37 @@ describe('analyte bridge (ANALYTE-{n}-PUR/QTY ↔ PUR_/QTY_<X>)', () => {
   it('joins a generic parent analyte row to the slot peptide vial row', () => {
     const map = buildVialAssignmentMap(
       [pa('ANALYTE-1-PUR', 'Analyte 1 (Purity)')], vials, ANALYTES)
-    expect(map.get('ANALYTE-1-PUR')?.matches[0]?.vialSampleId).toBe('PB-0077-S01')
-    expect(map.get('ANALYTE-1-PUR')?.matches[0]?.mk1Analysis.keyword).toBe('PUR_GHKCU')
+    expect(map.get('sen-ANALYTE-1-PUR')?.matches[0]?.vialSampleId).toBe('PB-0077-S01')
+    expect(map.get('sen-ANALYTE-1-PUR')?.matches[0]?.mk1Analysis.keyword).toBe('PUR_GHKCU')
   })
 
   it('matches category exactly — QTY parent row never joins a PUR vial row', () => {
     const map = buildVialAssignmentMap(
       [pa('ANALYTE-2-QTY', 'Analyte 2 (Quantity)')], vials, ANALYTES)
-    expect(map.get('ANALYTE-2-QTY')).toBeUndefined() // S01 has no QTY_BPC157 row
+    expect(map.get('sen-ANALYTE-2-QTY')).toBeUndefined() // S01 has no QTY_BPC157 row
   })
 
   it('anchors on the slot peptide — parenthesized names join their own row', () => {
     const map = buildVialAssignmentMap(
       [pa('ANALYTE-3-PUR', 'Analyte 3 (Purity)')], vials, ANALYTES)
-    expect(map.get('ANALYTE-3-PUR')?.matches[0]?.mk1Analysis.keyword).toBe('PUR_TB500BETA4')
+    expect(map.get('sen-ANALYTE-3-PUR')?.matches[0]?.mk1Analysis.keyword).toBe('PUR_TB500BETA4')
   })
 
   it('no analyte map -> no bridge (back-compat for callers without it)', () => {
     const map = buildVialAssignmentMap(
       [pa('ANALYTE-1-PUR', 'Analyte 1 (Purity)')], vials)
-    expect(map.get('ANALYTE-1-PUR')).toBeUndefined()
+    expect(map.get('sen-ANALYTE-1-PUR')).toBeUndefined()
   })
 
   it('empty slot -> skipped (mirrors the seeder skip_empty_slot)', () => {
     const map = buildVialAssignmentMap(
       [pa('ANALYTE-4-PUR', 'Analyte 4 (Purity)')], vials, ANALYTES)
-    expect(map.get('ANALYTE-4-PUR')).toBeUndefined()
+    expect(map.get('sen-ANALYTE-4-PUR')).toBeUndefined()
   })
 
   it('exact keyword match still wins first (unchanged behavior)', () => {
     const map = buildVialAssignmentMap(
       [pa('BLEND-PUR', 'Blend Purity')], vials, ANALYTES)
-    expect(map.get('BLEND-PUR')?.matches[0]?.mk1Analysis.keyword).toBe('BLEND-PUR')
+    expect(map.get('sen-BLEND-PUR')?.matches[0]?.mk1Analysis.keyword).toBe('BLEND-PUR')
   })
 })
