@@ -23692,12 +23692,13 @@ async def reassign_worksheet_item_by_id(
     return {"status": "reassigned", "target_worksheet_id": data.target_worksheet_id}
 
 
-def _sole_run_context(db: Session, item: "WorksheetItem") -> "Optional[tuple[int, int]]":
-    """The one (method, instrument) this item's open analyses can have run on,
-    from the catalog: analysis service -> active method covering it ->
-    active instrument linked to that method. None unless exactly one pair
-    resolves, so a second analyzer or a second method is never guessed at
-    (the apply bar stays the way to choose)."""
+def _sole_instrument_for_item(db: Session, item: "WorksheetItem") -> "Optional[tuple[int, list]]":
+    """The one instrument this item's open analyses can have run on, with
+    the analyses it applies to, from the catalog: analysis service -> active
+    method covering it -> active instrument linked to that method. None
+    unless exactly one instrument resolves, so a second analyzer is never
+    guessed at (the apply bar stays the way to choose). The method is only
+    the path to the instrument; it is never written (see _apply_bench_ticks)."""
     from lims_analyses.service import STAMPABLE_STATES
     from models import LimsAnalysis
 
@@ -23706,16 +23707,17 @@ def _sole_run_context(db: Session, item: "WorksheetItem") -> "Optional[tuple[int
     ).scalar_one_or_none()
     if vial_pk is None:
         return None
-    service_ids = {r[0] for r in db.execute(
-        select(LimsAnalysis.analysis_service_id).where(
+    open_rows = db.execute(
+        select(LimsAnalysis).where(
             LimsAnalysis.lims_sub_sample_pk == vial_pk,
             LimsAnalysis.review_state.in_(STAMPABLE_STATES),
         )
-    ).all()}
+    ).scalars().all()
+    service_ids = {r.analysis_service_id for r in open_rows}
     if not service_ids:
         return None
     pairs = db.execute(
-        select(method_services.c.method_id, instrument_methods.c.instrument_id)
+        select(method_services.c.analysis_service_id, instrument_methods.c.instrument_id)
         .join(HplcMethod, HplcMethod.id == method_services.c.method_id)
         .join(instrument_methods, instrument_methods.c.method_id == HplcMethod.id)
         .join(Instrument, Instrument.id == instrument_methods.c.instrument_id)
@@ -23726,7 +23728,11 @@ def _sole_run_context(db: Session, item: "WorksheetItem") -> "Optional[tuple[int
         )
         .distinct()
     ).all()
-    return (pairs[0][0], pairs[0][1]) if len(pairs) == 1 else None
+    instruments = {r[1] for r in pairs}
+    if len(instruments) != 1:
+        return None
+    covered = {r[0] for r in pairs}
+    return instruments.pop(), [r for r in open_rows if r.analysis_service_id in covered]
 
 
 def _apply_bench_ticks(db: Session, worksheet_id: int, item: "WorksheetItem", *,
@@ -23734,7 +23740,14 @@ def _apply_bench_ticks(db: Session, worksheet_id: int, item: "WorksheetItem", *,
     """Set or clear an item's Made / Ran ticks. The server owns who and when;
     a tick already in the wanted state is left alone (its first stamp stands).
     Every change writes an audit_logs row, prep_status follows the ticks, and a
-    Ran tick records the method + instrument when the catalog leaves no choice.
+    Ran tick records the INSTRUMENT when the catalog leaves no choice.
+
+    It never writes a method. The COA's native section prints a row's method
+    (coa/native_sections.py) and promote copies the vial row's method to the
+    parent, so a method planted here would surface on customer COAs, and only
+    for the samples somebody ticked. Methods are not shown on COAs yet
+    (Handler, 2026-09-19); the COA wire never reads instrument_id. A method
+    already chosen through the apply bar is kept as it is.
     Returns whether anything changed."""
     changed = False
     for tick, want in (("made", made), ("ran", ran)):
@@ -23755,16 +23768,15 @@ def _apply_bench_ticks(db: Session, worksheet_id: int, item: "WorksheetItem", *,
     # (what the rest of Mk1 reads) in step with them.
     item.prep_status = "complete" if item.ran_at else "in_progress" if item.made_at else "ready"
     if ran and item.ran_at and not item.instrument_id:
-        context = _sole_run_context(db, item)
-        if context:
-            from lims_analyses.worksheet_stamping import apply_method_instrument_to_worksheet
-            from types import SimpleNamespace
+        resolved = _sole_instrument_for_item(db, item)
+        if resolved:
+            from lims_analyses.service import stamp_method_instrument
 
-            apply_method_instrument_to_worksheet(
-                db, worksheet=SimpleNamespace(id=worksheet_id),
-                method_id=context[0], instrument_id=context[1],
-                item_ids=[item.id], user_id=user_id,
-            )
+            instrument_id, rows = resolved
+            for row in rows:
+                stamp_method_instrument(db, row, method_id=row.method_id,
+                                        instrument_id=instrument_id, user_id=user_id)
+            item.instrument_id = instrument_id
     return True
 
 

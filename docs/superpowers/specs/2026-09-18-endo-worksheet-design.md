@@ -10,7 +10,8 @@ ENTRY times, good to the day, not to the minute. The honest run-level clock is
 |---|---|---|
 | Rows prepped / run per tech per day | `worksheet_items.made_by_user_id`, `ran_by_user_id` (+ `_at`) | new, server-stamped |
 | Results entered per tech | `lims_analyses.analyst_user_id`; `lims_analysis_transitions` (`submit`, user, `occurred_at`) | existing; analyst coverage rises as worksheets are used |
-| Runs per instrument, retest rate per instrument | `lims_analyses.instrument_id`, `method_id`, `retested` | was 0 of 1,288 endo analyses on prod (30 days to 2026-09-18); now stamped by the MCS tick |
+| Runs per instrument, retest rate per instrument | `lims_analyses.instrument_id`, `retested` | was 0 of 1,288 endo analyses on prod (30 days to 2026-09-18); now stamped by the MCS tick |
+| Runs per method | `lims_analyses.method_id` | NOT stamped by the tick, on purpose: the COA's native section prints it (`coa/native_sections.py`) and promote copies it to the parent row. Ruling 2026-09-19: methods go on COAs later, once the method system settles, and then for every sample |
 | Queue wait | `date_received` to `worksheet_items.added_at` | existing |
 | Staging time | `worksheets.created_at` to `printed_at` | new |
 | Bench time per run | `printed_at` to `completed_at` | new |

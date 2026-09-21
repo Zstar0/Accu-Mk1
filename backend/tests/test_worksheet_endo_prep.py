@@ -328,13 +328,26 @@ def _endo_analysis_world(client, db, *, instruments=1):
     return ws, item, row, mid, ids
 
 
-def test_mcs_tick_records_the_method_and_the_only_instrument(client, db):
-    ws, item, row, mid, (inst_id,) = _endo_analysis_world(client, db)
+def test_mcs_tick_records_the_only_instrument_and_never_the_method(client, db):
+    # The COA's native section prints a row's method (coa/native_sections.py),
+    # and promote copies the vial row's method to the parent. Methods are not
+    # shown on COAs yet (Handler, 2026-09-19), so a tick must not plant one.
+    ws, item, row, _mid, (inst_id,) = _endo_analysis_world(client, db)
     client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"ran": True})
     db.refresh(row)
     db.refresh(item)
-    assert row.method_id == mid and row.instrument_id == inst_id
+    assert row.instrument_id == inst_id
+    assert row.method_id is None
     assert item.instrument_id == inst_id
+
+
+def test_mcs_tick_keeps_a_method_the_apply_bar_already_set(client, db):
+    ws, item, row, mid, (inst_id,) = _endo_analysis_world(client, db)
+    row.method_id = mid  # chosen on purpose, through the apply bar
+    db.commit()
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"ran": True})
+    db.refresh(row)
+    assert row.method_id == mid and row.instrument_id == inst_id
 
 
 def test_mcs_tick_does_not_guess_between_two_instruments(client, db):
