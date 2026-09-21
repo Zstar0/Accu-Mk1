@@ -221,7 +221,6 @@ import type { VialAssignment } from '@/lib/vial-assignment'
 import { vialLabel, vialPosition, vialTotal } from '@/lib/vial-label'
 import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
 import { PrioritySelect } from '@/components/common/PrioritySelect'
-import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { useVialRoles } from '@/services/vial-roles'
 import { useDepartments } from '@/services/departments'
 import { ROLE_COLOR_TEXT, roleColorForCode } from '@/lib/role-display'
@@ -3537,14 +3536,12 @@ const EMPTY_ANALYTE_NAME_MAP = new Map<number, string>()
 export function NativeParentAnalysesCard({
   sampleId,
   isParentPage,
-  lookup,
   promotions,
   vialAssignmentByKeyword,
   onParentDataStale,
 }: {
   sampleId: string | null | undefined
   isParentPage: boolean
-  lookup: SenaiteLookupResult | null
   promotions: PromotionIndex
   vialAssignmentByKeyword?: Map<string, VialAssignment>
   onParentDataStale?: () => void
@@ -3557,14 +3554,6 @@ export function NativeParentAnalysesCard({
     staleTime: 30_000,
   })
   const analyses = rows ?? []
-  // Same code path the Vials Quick Look uses: SLA needs a lookup whose
-  // analyses are THESE rows (the page's map is keyed off the SENAITE rows,
-  // which never contain native keywords) and a non-null date_received.
-  const slaLookup = useMemo(
-    () => (lookup ? { ...lookup, analyses } : null),
-    [lookup, analyses]
-  )
-  const sla = useAnalysisSlaMap(slaLookup)
   // Shared confirm flow (also drives the read-flip main table's registry
   // seam) — behavior identical to the pre-extraction inline version.
   const { confirm, retestPending, requestRetest, executeRetest, cancelRetest } =
@@ -3632,11 +3621,6 @@ export function NativeParentAnalysesCard({
           })
           onParentDataStale?.()
         }}
-        analysisSlaMap={sla.byAnalysis}
-        isAnalysisSlaLoading={sla.isLoading}
-        isAnalysisSlaError={sla.isError}
-        isAnalysisSlaPublished={sla.isPublished}
-        analysisSlaPriority={sla.priority}
       />
       <ParentRetestConfirmDialog
         state={confirm}
@@ -3845,8 +3829,6 @@ export function SampleDetails() {
       String(hideHplcServices)
     )
   }, [hideHplcServices])
-
-  const analysisSla = useAnalysisSlaMap(data)
 
   // Product chips (header bar) colored by their fulfillment role — same
   // catalog source as the boxing lanes (Handler request, 2026-08-28).
@@ -7360,11 +7342,6 @@ export function SampleDetails() {
           })
         }}
         onTransitionComplete={() => refreshSample(data.sample_id)}
-        analysisSlaMap={analysisSla.byAnalysis}
-        isAnalysisSlaLoading={analysisSla.isLoading}
-        isAnalysisSlaError={analysisSla.isError}
-        isAnalysisSlaPublished={analysisSla.isPublished}
-        analysisSlaPriority={analysisSla.priority}
         vialKind={currentVialKind}
       />
 
@@ -7408,7 +7385,6 @@ export function SampleDetails() {
           <NativeParentAnalysesCard
             sampleId={data.sample_id}
             isParentPage={parentSampleId === null}
-            lookup={data}
             promotions={promotions}
             vialAssignmentByKeyword={nativeVialAssignmentByKeyword}
             onParentDataStale={() => refreshSample(data.sample_id)}

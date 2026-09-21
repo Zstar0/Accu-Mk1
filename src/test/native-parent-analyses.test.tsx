@@ -23,7 +23,6 @@ import {
   parentRetestAnalysis,
   transitionAnalysis,
   type SenaiteAnalysis,
-  type SenaiteLookupResult,
   type ParentPromotionInfo,
 } from '@/lib/api'
 import { NATIVE_PARENT_ANALYSES_QUERY_KEY } from '@/lib/native-parent-analyses'
@@ -32,7 +31,6 @@ import {
   indexPromotions,
   type PromotionIndex,
 } from '@/lib/promotion-index'
-import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import type { VialAssignment } from '@/lib/vial-assignment'
 
 // AnalysisTable uses IntersectionObserver for its sticky-toolbar effect; jsdom doesn't have it.
@@ -65,25 +63,6 @@ vi.mock('@/lib/api', async importOriginal => {
   }
 })
 
-// Mock the SLA hook wholesale — same pattern as src/test/vials-quicklook.test.tsx:
-// protects this render test from real services/groups/sample-sla queries firing;
-// the hook's own internals are covered by analysis-sla.test.tsx. Imported below
-// so the "wires the native rows in" test can assert on its call arguments —
-// the card's one novel piece of SLA wiring is building a synthetic lookup
-// ({...lookup, analyses: nativeRows}) instead of passing the page lookup
-// straight through, and only a call-args assertion can catch a regression
-// back to the latter (the rendered table looks identical either way since
-// this mock ignores its argument).
-vi.mock('@/services/analysis-sla', () => ({
-  useAnalysisSlaMap: vi.fn(() => ({
-    byAnalysis: new Map(),
-    isLoading: false,
-    isError: false,
-    isPublished: false,
-    priority: null,
-  })),
-}))
-
 // AnalysisTable calls useSidebar internally; stub it so tests don't need a full SidebarProvider.
 vi.mock('@/components/ui/sidebar', async importOriginal => {
   const actual = await importOriginal<typeof import('@/components/ui/sidebar')>()
@@ -109,32 +88,6 @@ const shapedRow = (over: Partial<SenaiteAnalysis>): SenaiteAnalysis => ({
   review_state: 'verified', sort_key: null, captured: null, retested: false,
   service_group_id: null, service_group_name: null, ...over,
 })
-
-function fakeLookup(overrides: Partial<SenaiteLookupResult> = {}): SenaiteLookupResult {
-  return {
-    sample_id: 'P-0120',
-    sample_uid: 'uid-P-0120',
-    client: null,
-    contact: null,
-    sample_type: null,
-    date_received: '2026-08-01T00:00:00',
-    date_sampled: null,
-    profiles: [],
-    client_order_number: null,
-    client_sample_id: null,
-    client_lot: null,
-    review_state: 'sample_received',
-    declared_weight_mg: null,
-    analytes: [],
-    remarks: [],
-    analyses: [],
-    attachments: [],
-    published_coa: null,
-    senaite_url: null,
-    cached_at: null,
-    ...overrides,
-  } as unknown as SenaiteLookupResult
-}
 
 const promo = (
   keyword: string,
@@ -165,7 +118,6 @@ function renderCard(
       <NativeParentAnalysesCard
         sampleId={opts.sampleId ?? 'P-0120'}
         isParentPage={opts.isParentPage ?? true}
-        lookup={fakeLookup({ date_received: '2026-08-01' })}
         promotions={promos}
         vialAssignmentByKeyword={opts.vialAssignmentByKeyword}
         onParentDataStale={opts.staleSpy}
@@ -180,7 +132,6 @@ describe('NativeParentAnalysesCard', () => {
     vi.mocked(listNativeParentAnalysesShaped).mockReset()
     vi.mocked(parentRetestAnalysis).mockReset()
     vi.mocked(transitionAnalysis).mockReset()
-    vi.mocked(useAnalysisSlaMap).mockClear()
   })
 
   it('renders the shared AnalysisTable with the card header folded in', async () => {
@@ -298,26 +249,6 @@ describe('NativeParentAnalysesCard', () => {
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(listNativeParentAnalysesShaped).not.toHaveBeenCalled()
     expect(container).toBeEmptyDOMElement()
-  })
-
-  it('wires the native rows into useAnalysisSlaMap, not the page lookup straight through', async () => {
-    // The card's one novel piece of SLA wiring: it must build a synthetic
-    // lookup ({...lookup, analyses: nativeRows}) since the page's own
-    // lookup.analyses are SENAITE rows that never contain native keywords
-    // (see the card's slaLookup comment). A regression back to passing
-    // `lookup` straight through would still render an identical table (the
-    // hook is mocked), so only a call-args assertion catches it.
-    renderCard([shapedRow({ keyword: 'HM' })])
-    await screen.findByText('Heavy Metals')
-
-    expect(useAnalysisSlaMap).toHaveBeenCalledWith(
-      expect.objectContaining({
-        date_received: '2026-08-01',
-        analyses: expect.arrayContaining([
-          expect.objectContaining({ keyword: 'HM' }),
-        ]),
-      })
-    )
   })
 
   it('verified row offers only Retest; lineage rows are display-only', async () => {

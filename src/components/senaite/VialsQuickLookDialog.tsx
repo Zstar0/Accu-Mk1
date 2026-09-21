@@ -8,7 +8,7 @@
  * The vial pages load analyses with local state and refetch on mount, so the
  * dialog's 'quicklook-*' query keys are private to this surface.
  */
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -40,14 +40,12 @@ import type {
 import { useUIStore } from '@/store/ui-store'
 import { useEffectiveReadSource } from '@/lib/read-source'
 import { AnalysisTable } from '@/components/senaite/AnalysisTable'
-import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
 import { vialLabel, vialTotal } from '@/lib/vial-label'
 import {
   invalidateVialAssignmentCaches,
   invalidateParentVialOverlay,
   QUICKLOOK_VIAL_ANALYSES_QUERY_KEY,
 } from '@/lib/vial-assignment'
-import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import {
   RoleHeaderBadge,
   VialPhotoThumb,
@@ -276,14 +274,6 @@ function VialSection({
   const departmentsQ = useDepartments()
   const reassignOptions = buildReassignOptions(vialRolesQ.data ?? [], departmentsQ.data ?? [])
 
-  // Per-vial SLA — same code path the vial detail page uses (native-built
-  // lookup + the vial's analyses), so the SLA column matches the vial page.
-  const slaLookup = useMemo(
-    () => ({ ...buildNativeSubSampleLookup(vial, parent), analyses }),
-    [vial, parent, analyses]
-  )
-  const sla = useAnalysisSlaMap(slaLookup)
-
   const handleReassign = async (role: AssignmentRole | null) => {
     setIsReassigning(true)
     try {
@@ -394,11 +384,6 @@ function VialSection({
         primaryAnalysisUids={primaryUids}
         primaryRole={vial.assignment_role}
         parentLineStates={parentLineStates}
-        analysisSlaMap={sla.byAnalysis}
-        isAnalysisSlaLoading={sla.isLoading}
-        isAnalysisSlaError={sla.isError}
-        isAnalysisSlaPublished={sla.isPublished}
-        analysisSlaPriority={sla.priority}
         headerContent={vialHeader}
         hideProgress
         onResultSaved={onResultSaved}

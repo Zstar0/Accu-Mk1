@@ -4263,6 +4263,24 @@ export interface SenaiteAnalysis {
   slot?: number | null
   /** Task 6: native-born row's peptide id (mk1 origin only). */
   peptide_id?: number | null
+  /** Spec column: the active spec for this row and its verdict, resolved by
+   *  the backend with the same rule the certificate uses. Absent/null when
+   *  the service has no active spec (every SENAITE-sourced service today). */
+  specification?: AnalysisSpecification | null
+  /** true / false, or null: no result yet, a report-only spec, or a rule that
+   *  could not run. Never computed on the FE. */
+  conforms?: boolean | null
+}
+
+/** The COA wire `specification` dict (backend coa.native_sections). */
+export interface AnalysisSpecification {
+  rule_kind: 'range' | 'equals' | 'informational' | (string & {})
+  equals: string | null
+  min: number | null
+  max: number | null
+  unit: string | null
+  display: string | null
+  loq: number | null
 }
 
 export interface SenaiteAttachment {

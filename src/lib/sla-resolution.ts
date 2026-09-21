@@ -77,21 +77,6 @@ export function serviceIdOfAnalysis(
 }
 
 /**
- * Map key for one analysis row's SLA snapshot. A Mk1 row carries its service
- * FK (analysis_service_id), and the SLA tier hangs off the SERVICE (via its
- * group or profile), so that id is the identity. Keyword is only for rows
- * that have no service id (SENAITE-sourced), where it is all there is.
- */
-export function analysisSlaKey(a: {
-  analysis_service_id?: number | null
-  keyword?: string | null
-}): string {
-  return a.analysis_service_id != null
-    ? `svc:${a.analysis_service_id}`
-    : (a.keyword ?? '')
-}
-
-/**
  * Build keyword → analysis_services.id map from the local /analysis-services
  * response. Services with no keyword are skipped (they can't be matched against
  * SENAITE analysis keywords).

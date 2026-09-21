@@ -7,7 +7,6 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
-  analysisSlaKey,
   buildKeywordToServiceIdMap,
   resolveSampleTier,
   serviceIdOfAnalysis,
@@ -52,11 +51,6 @@ describe('SLA resolves a row through its own service FK', () => {
       kwMap, serviceToGroupTier, new Map(), tier(1, 1440)
     )
     expect(got?.id).toBe(2)
-  })
-
-  it('snapshot map key: service id for Mk1 rows, keyword only without one', () => {
-    expect(analysisSlaKey({ analysis_service_id: 230, keyword: 'HPLC-PURITY' })).toBe('svc:230')
-    expect(analysisSlaKey({ keyword: 'HPLC-PUR' })).toBe('HPLC-PUR')
   })
 })
 

@@ -13459,6 +13459,19 @@ async def _maybe_emit_regular_coa_child(db, sample_id, parent_row, primary_data)
         _logger.warning("regular COA child generation failed for %s: %s", sample_id, e)
 
 
+def _senaite_has_no_ar(db, sample_id: str) -> bool:
+    """True when SENAITE never had this sample, so a SENAITE call for it can
+    only 404. A native-born parent (lims_samples.external_lims_system ==
+    'mk1') has no AR, and neither do its vials ("<parent>-S01"). Unknown ids
+    answer False: legacy behaviour, keep calling SENAITE."""
+    from lims_analyses.hplc_native import is_native_born
+    parent_id = re.sub(r"-S\d{2,}$", "", sample_id or "")
+    row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == parent_id)
+    ).scalar_one_or_none()
+    return row is not None and is_native_born(row)
+
+
 @app.post("/wizard/senaite/samples/{sample_id}/generate-coa")
 async def generate_sample_coa(
     sample_id: str,
@@ -13791,7 +13804,9 @@ async def generate_sample_coa(
     # This mirrors the full COAGeneratorView flow: saves VerificationCode field
     # and creates an ARReport child object so the PDF appears in SENAITE's
     # Reports tab.  Best-effort — generation already succeeded at this point.
-    if SENAITE_URL and pdf_base64:
+    # A native-born sample has no AR to attach to: skip, instead of two 404
+    # round trips (user creds, then service creds) on every native COA.
+    if SENAITE_URL and pdf_base64 and not _senaite_has_no_ar(db, sample_id):
         try:
             attach_payload = {
                 "sample_id": sample_id,
@@ -14747,7 +14762,8 @@ async def regen_primary_coa(
     )
 
     # 2. Attach new PDF to SENAITE (best-effort — the generation already has a PDF in S3)
-    if SENAITE_URL and pdf_base64:
+    # Native-born: no AR to attach to (see _senaite_has_no_ar).
+    if SENAITE_URL and pdf_base64 and not _senaite_has_no_ar(db, sample_id):
         try:
             async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
                 timeout=httpx.Timeout(30.0, connect=5.0),

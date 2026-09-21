@@ -31,9 +31,8 @@ import {
 } from '@/components/ui/dialog'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import type { SenaiteAnalysis, InboxPriority } from '@/lib/api'
+import type { SenaiteAnalysis } from '@/lib/api'
 import { promotionForRow, type PromotionIndex } from '@/lib/promotion-index'
-import { analysisSlaKey } from '@/lib/sla-resolution'
 import { setAnalysisMethodInstrument, promoteAnalyses, getMethods } from '@/lib/api'
 import { SetMethodInstrumentDialog } from '@/components/senaite/SetMethodInstrumentDialog'
 import { vialAssignmentKey, type VialAssignment } from '@/lib/vial-assignment'
@@ -41,8 +40,7 @@ import { ROLE_COLOR_TEXT, roleColorForCode } from '@/lib/role-display'
 import { useVialRoles, type VialRoleRow } from '@/services/vial-roles'
 import { useDepartments, type Department } from '@/services/departments'
 import { PromotedFromBadge } from '@/components/senaite/PromotedFromBadge'
-import type { SampleSlaSnapshot } from '@/services/order-sla'
-import { AnalysisSlaCell } from '@/components/senaite/AnalysisSlaCell'
+import { AnalysisSpecCell } from '@/components/senaite/AnalysisSpecCell'
 import { formatNumericResult } from '@/components/senaite/senaite-utils'
 import { useAnalysisEditing, type UseAnalysisEditingReturn } from '@/hooks/use-analysis-editing'
 import { useAnalysisTransition, type UseAnalysisTransitionReturn } from '@/hooks/use-analysis-transition'
@@ -679,19 +677,6 @@ function TabButton({
   )
 }
 
-function formatDate(dateStr: string | null | undefined): string {
-  if (!dateStr) return '\u2014'
-  const d = new Date(dateStr)
-  if (isNaN(d.getTime())) return dateStr
-  return d.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: '2-digit',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
-}
-
 /** Replace "Analyte N" prefix with the mapped peptide name when available. */
 export function formatAnalysisTitle(title: string, nameMap: Map<number, string>): { display: string; original: string } {
   const match = title.match(/^Analyte\s+(\d)\s*(.*)/i)
@@ -1291,9 +1276,8 @@ function HistoryRow({
           Superseded
         </span>
       </td>
-      <td className="py-1.5 px-3" />
-      <td className="py-1.5 px-3 text-xs text-muted-foreground/60 whitespace-nowrap">
-        {formatDate(analysis.captured)}
+      <td className="py-1.5 px-3">
+        <AnalysisSpecCell analysis={analysis} faded />
       </td>
       <td className="py-1.5 px-3" />
     </tr>
@@ -1496,11 +1480,6 @@ function AnalysisRow({
   onToggleHistory,
   onMethodInstrumentSaved,
   onPromoted,
-  slaSnapshot,
-  isSlaLoading,
-  isSlaError,
-  isSlaPublished,
-  slaPriority,
   primaryAnalysisUids,
   primaryRole,
   promotions,
@@ -1530,11 +1509,6 @@ function AnalysisRow({
   onToggleHistory?: () => void
   onMethodInstrumentSaved?: (uid: string, field: 'method' | 'instrument', newUid: string | null, newTitle: string | null) => void
   onPromoted?: () => void
-  slaSnapshot: SampleSlaSnapshot | null
-  isSlaLoading: boolean
-  isSlaError: boolean
-  isSlaPublished: boolean
-  slaPriority: InboxPriority | null
   primaryAnalysisUids?: Set<string>
   primaryRole?: string | null
   promotions?: PromotionIndex
@@ -1846,16 +1820,7 @@ function AnalysisRow({
         </div>
       </td>
       <td className="py-2.5 px-3">
-        <AnalysisSlaCell
-          snapshot={slaSnapshot}
-          priority={slaPriority}
-          isLoading={isSlaLoading}
-          isError={isSlaError}
-          isPublished={isSlaPublished}
-        />
-      </td>
-      <td className="py-2.5 px-3 text-xs text-muted-foreground whitespace-nowrap">
-        {formatDate(analysis.captured)}
+        <AnalysisSpecCell analysis={analysis} />
       </td>
       <td className="py-2 px-3 text-right">
         {analysis.uid && (allowedTransitions.length > 0 || canPromote || canVarVerify || showSetMethodInstrument) && (
@@ -1987,7 +1952,7 @@ function AnalystNames({ prepper, processedBy }: { prepper: string | null; proces
   )
 }
 
-type SortColumn = 'title' | 'result' | 'review_state' | 'analyst' | 'method' | 'instrument' | 'captured' | 'sla'
+type SortColumn = 'title' | 'result' | 'review_state' | 'analyst' | 'method' | 'instrument' | 'spec'
 type SortDir = 'asc' | 'desc'
 
 interface SortConfig { column: SortColumn; dir: SortDir }
@@ -2019,38 +1984,12 @@ function SortableHeader({
   )
 }
 
-function getSlaSortValue(
-  a: SenaiteAnalysis,
-  analysisSlaMap: Map<string, SampleSlaSnapshot> | undefined,
-  isPublished: boolean
-): number {
-  if (!analysisSlaMap) return Number.POSITIVE_INFINITY
-  const snap = analysisSlaMap.get(analysisSlaKey(a))
-  if (!snap) return Number.POSITIVE_INFINITY
-  return isPublished ? snap.status.elapsed_minutes : snap.status.remaining_minutes
-}
-
 function sortGroups(
   groups: AnalysisGroup[],
   config: SortConfig,
-  nameMap: Map<number, string>,
-  analysisSlaMap: Map<string, SampleSlaSnapshot> | undefined,
-  isPublished: boolean
+  nameMap: Map<number, string>
 ): AnalysisGroup[] {
   return [...groups].sort((a, b) => {
-    if (config.column === 'sla') {
-      const aVal = getSlaSortValue(a.current, analysisSlaMap, isPublished)
-      const bVal = getSlaSortValue(b.current, analysisSlaMap, isPublished)
-      // Missing-data rows (POSITIVE_INFINITY sentinel) always sort to the
-      // bottom regardless of direction — per spec.
-      const aMissing = !Number.isFinite(aVal)
-      const bMissing = !Number.isFinite(bVal)
-      if (aMissing && bMissing) return 0
-      if (aMissing) return 1
-      if (bMissing) return -1
-      const cmp = aVal - bVal
-      return config.dir === 'asc' ? cmp : -cmp
-    }
     const aVal = getCellValue(a.current, config.column, nameMap)
     const bVal = getCellValue(b.current, config.column, nameMap)
     const cmp = aVal.localeCompare(bVal, undefined, { numeric: true, sensitivity: 'base' })
@@ -2058,7 +1997,7 @@ function sortGroups(
   })
 }
 
-function getCellValue(a: SenaiteAnalysis, col: Exclude<SortColumn, 'sla'>, nameMap: Map<number, string>): string {
+function getCellValue(a: SenaiteAnalysis, col: SortColumn, nameMap: Map<number, string>): string {
   switch (col) {
     case 'title': return formatAnalysisTitle(a.title, nameMap).display
     case 'result': return a.result ?? ''
@@ -2066,7 +2005,10 @@ function getCellValue(a: SenaiteAnalysis, col: Exclude<SortColumn, 'sla'>, nameM
     case 'analyst': return a.analyst ?? ''
     case 'method': return a.method ?? ''
     case 'instrument': return a.instrument ?? ''
-    case 'captured': return a.captured ?? ''
+    // Failures first, then unjudged rows, then passes; no spec last.
+    case 'spec':
+      if (!a.specification) return '3'
+      return a.conforms === false ? '0' : a.conforms == null ? '1' : '2'
   }
 }
 
@@ -2078,11 +2020,6 @@ interface AnalysisTableProps {
   onResultSaved?: (uid: string, newResult: string, newReviewState: string | null) => void
   onTransitionComplete?: () => void
   onMethodInstrumentSaved?: (uid: string, field: 'method' | 'instrument', newUid: string | null, newTitle: string | null) => void
-  analysisSlaMap?: Map<string, SampleSlaSnapshot>
-  isAnalysisSlaLoading?: boolean
-  isAnalysisSlaError?: boolean
-  isAnalysisSlaPublished?: boolean
-  analysisSlaPriority?: InboxPriority | null
   /**
    * UIDs of analyses that are "primary" for the viewing sample's vial-
    * assignment role. Used to tint the analysis title — does NOT filter
@@ -2173,11 +2110,6 @@ export function AnalysisTable({
   onResultSaved,
   onTransitionComplete,
   onMethodInstrumentSaved,
-  analysisSlaMap,
-  isAnalysisSlaLoading = false,
-  isAnalysisSlaError = false,
-  isAnalysisSlaPublished = false,
-  analysisSlaPriority = null,
   primaryAnalysisUids,
   primaryRole,
   promotions,
@@ -2264,7 +2196,7 @@ export function AnalysisTable({
   // Group filtered analyses by title so retest chains collapse
   const rawGroups = groupAnalysesByTitle(filteredAnalyses)
   const groups = sortConfig
-    ? sortGroups(rawGroups, sortConfig, analyteNameMap, analysisSlaMap, isAnalysisSlaPublished)
+    ? sortGroups(rawGroups, sortConfig, analyteNameMap)
     : rawGroups
 
   // Profile sections (mk1 rows only — backend-resolved profile_section_*
@@ -2530,8 +2462,7 @@ export function AnalysisTable({
               <SortableHeader column="instrument" label="Instrument" sortConfig={sortConfig} onSort={handleSort} />
               <SortableHeader column="analyst" label="Analyst" sortConfig={sortConfig} onSort={handleSort} />
               <SortableHeader column="review_state" label="Status" sortConfig={sortConfig} onSort={handleSort} />
-              <SortableHeader column="sla" label="SLA" sortConfig={sortConfig} onSort={handleSort} />
-              <SortableHeader column="captured" label="Captured" sortConfig={sortConfig} onSort={handleSort} />
+              <SortableHeader column="spec" label="Spec" sortConfig={sortConfig} onSort={handleSort} />
               <th className="py-2 px-3 text-right text-[11px] font-semibold text-muted-foreground uppercase tracking-wider w-12">
                 <span className="sr-only">Actions</span>
               </th>
@@ -2544,7 +2475,7 @@ export function AnalysisTable({
                   {section.label != null && (
                     <tr>
                       <td
-                        colSpan={11}
+                        colSpan={10}
                         className="pt-3 pb-1.5 px-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider border-b border-border/50"
                       >
                         {section.label}
@@ -2571,13 +2502,6 @@ export function AnalysisTable({
                       onToggleHistory={() => toggleGroup(groupKey)}
                       onMethodInstrumentSaved={onMethodInstrumentSaved}
                       onPromoted={onTransitionComplete}
-                      slaSnapshot={
-                        analysisSlaMap?.get(analysisSlaKey(group.current)) ?? null
-                      }
-                      isSlaLoading={isAnalysisSlaLoading}
-                      isSlaError={isAnalysisSlaError}
-                      isSlaPublished={isAnalysisSlaPublished}
-                      slaPriority={analysisSlaPriority}
                       primaryAnalysisUids={primaryAnalysisUids}
                       primaryRole={primaryRole}
                       promotions={promotions}
@@ -2606,7 +2530,7 @@ export function AnalysisTable({
             ) : (
               <tr>
                 <td
-                  colSpan={11}
+                  colSpan={10}
                   className="py-8 text-center text-sm text-muted-foreground"
                 >
                   No {analysisFilter === 'all' ? '' : analysisFilter} analyses found
