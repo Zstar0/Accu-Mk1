@@ -118,9 +118,17 @@ def init_db():
     # Import models to register them with Base
     import models  # noqa: F401
     import flags.models  # noqa: F401  (register flag_* tables on Base)
+    import documents.models  # noqa: F401  (register documents tables on Base)
     # Run column migrations before create_all so ORM mappings match the DB schema
     _run_migrations()
     Base.metadata.create_all(bind=engine)
+    # Documents library: seed the Artifact/SOP categories (spec 2026-09-15 §3.1).
+    try:
+        from documents.service import seed_categories
+        with SessionLocal() as _s:
+            seed_categories(_s)
+    except Exception as e:  # never block startup
+        log.warning("documents_category_seed_skipped err=%s", e)
     # S6b: per-substance PUR_/QTY_ derivation — moved out of _run_migrations
     # into an on-demand reconciler (same statements, now with a report).
     # MUST run before backfill_departments so freshly minted rows get their
@@ -1663,6 +1671,15 @@ def _run_migrations():
         "AND NOT EXISTS (SELECT 1 FROM lims_workflow_transitions t "
         "WHERE t.entity_scope='sample' AND t.from_state_id=fs.id "
         "AND t.verb='publish')",
+        # --- "Partially Published" relabel (RULED 2026-09-14) ---
+        # waiting_for_addon_results has always meant "primary COA out, add-on
+        # lines pending". The seed is insert-if-missing, so without this the
+        # prod row keeps its original label. Guarded on the old label so a
+        # label the Handler edited in Settings -> Workflow is never overwritten.
+        "UPDATE lims_workflow_states SET label='Partially Published', "
+        "description='Primary COA published; add-on lines still pending.' "
+        "WHERE entity_scope='sample' AND slug='waiting_for_addon_results' "
+        "AND label='Waiting for Add-on Results'",
         # --- Packaging fan-out + QR phone capture ---
         # lims_capture_tokens must exist before the FK-ALTER below runs (same
         # pattern as lims_boxes/sla_tiers above): migrations run BEFORE
@@ -2230,6 +2247,49 @@ def _run_migrations():
         "ALTER TABLE lims_analyses ADD COLUMN IF NOT EXISTS senaite_analysis_uid VARCHAR(50)",
         "CREATE INDEX IF NOT EXISTS ix_lims_analyses_senaite_analysis_uid "
         "ON lims_analyses (senaite_analysis_uid)",
+        # ClientSampleID edits accepted by Mk1 after SENAITE locked the field
+        # (PB-0553): the refresh must not overwrite them. See models.LimsSample.
+        "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS "
+        "client_sample_id_locked_in_senaite BOOLEAN NOT NULL DEFAULT FALSE",
+        # Documents library: actor on the in-place metadata patch path.
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS updated_by VARCHAR(200)",
+        # ── Scheduled COA publish (2026-09-17). Full CREATE here (migrations
+        # run BEFORE create_all and the partial index needs the table); the
+        # ORM twin is models.LimsScheduledPublish.
+        """
+        CREATE TABLE IF NOT EXISTS lims_scheduled_publishes (
+            id                   SERIAL PRIMARY KEY,
+            sample_id            VARCHAR(100) NOT NULL,
+            scheduled_at         TIMESTAMP NOT NULL,
+            pdf_date             VARCHAR(10) NOT NULL,
+            status               VARCHAR(12) NOT NULL DEFAULT 'pending'
+                                 CHECK (status IN ('pending','firing','published','failed','cancelled')),
+            created_by_user_id   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            created_at           TIMESTAMP NOT NULL DEFAULT NOW(),
+            fired_at             TIMESTAMP,
+            last_error           TEXT,
+            cancelled_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            cancelled_at         TIMESTAMP
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_lims_scheduled_publishes_sample_id "
+        "ON lims_scheduled_publishes (sample_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_lims_scheduled_publishes_pending "
+        "ON lims_scheduled_publishes (sample_id) WHERE status = 'pending'",
+        # Flag type raised by the scheduled-publish job when a fire fails.
+        """
+        INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
+        SELECT 'scheduled_publish_failed', 'Scheduled Publish Failed', '#e5484d', 'issue', FALSE, TRUE, 9, '[]'::jsonb, TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='scheduled_publish_failed')
+        """,
+        # Controlled documents (2026-09-18): review / change-request threads, document-only.
+        """
+        INSERT INTO flag_types (slug, label, color, kind, is_blocking, is_active, sort_order, entity_types, is_builtin)
+        SELECT 'doc_review', 'Document Review', '#0891b2', 'issue', FALSE, TRUE, 10, '["document"]'::jsonb, TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM flag_types WHERE slug='doc_review')
+        """,
+        # Documents library: the agent that authored a revision (from its scoped token).
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS co_author VARCHAR(100)",
         # --- HPLC-native slice 1 (spec 2026-09-10, M1) ---
         # peptide_id + slot on analysis rows. Additive, nullable, no backfill:
         # NULL on every legacy row by contract. CHECK uses the union-preserve

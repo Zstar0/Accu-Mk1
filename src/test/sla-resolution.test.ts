@@ -22,6 +22,7 @@ import {
   classifySampleColor,
   aggregateOrderSlaVerdict,
   NO_GROUP_KEY,
+  profileBucketKey,
   type SampleSlaInputs,
 } from '@/lib/sla-resolution'
 import type { SlaPriorityTier } from '@/lib/api'
@@ -243,7 +244,11 @@ describe('buildServiceToProfileTierMap', () => {
       [profile(1, 'Rush Panel', tierA.id, [100])],
       tiersById
     )
-    expect(map.get(100)).toEqual({ tier: tierA, profileName: 'Rush Panel' })
+    expect(map.get(100)).toEqual({
+      tier: tierA,
+      profileName: 'Rush Panel',
+      profileId: 1,
+    })
   })
 
   it('multi-profile: tightest target wins, carries the winning profile name', () => {
@@ -260,8 +265,16 @@ describe('buildServiceToProfileTierMap', () => {
       ],
       tiersById
     )
-    expect(map.get(100)).toEqual({ tier: looseTier, profileName: 'Loose Profile' })
-    expect(map.get(200)).toEqual({ tier: tightTier, profileName: 'Tight Profile' })
+    expect(map.get(100)).toEqual({
+      tier: looseTier,
+      profileName: 'Loose Profile',
+      profileId: 1,
+    })
+    expect(map.get(200)).toEqual({
+      tier: tightTier,
+      profileName: 'Tight Profile',
+      profileId: 2,
+    })
   })
 
   it('profile without sla_tier_id contributes nothing', () => {
@@ -1279,32 +1292,114 @@ describe('resolveSampleTiersByGroup', () => {
     expect(m.get(11)?.reason.profileName).toBe('Profile B')
   })
 
-  it('a tiered profile on a service with no group never applies — the NO_GROUP_KEY bucket ' +
-    'stays on default (profile step is gated same as the group-tier step)', () => {
-    const orphanServices = [...services, svc(200, 'kw_orphan')]
-    const orphanKwMap = buildKeywordToServiceIdMap(orphanServices)
-    const PROFILE_TIER = tier(7, 'Profile Rush 1h', 60)
-    const inputs: SampleSlaInputs = {
-      analyses: [analysis('kw_orphan')],
-      priority: null,
-    }
-    // svc 200 belongs to a tiered profile even though it's in no service group.
-    const serviceIdToProfileTier = new Map([
-      [200, { tier: PROFILE_TIER, profileName: 'Rush Panel' }],
-    ])
+  // ─── Ungrouped services on a tiered profile (the prod USP 71 shape) ────────
+  // The lab hangs SLAs off analysis profiles, and its USP 71 services
+  // (BACTERIA, FUNGI) sit in NO service group. They used to fall into the
+  // no-group bucket and be judged against the 3-day default; they now get
+  // their own per-profile bucket. Supersedes the Task 11 test "a tiered
+  // profile on a service with no group never applies" (Handler 2026-09-17).
+  const USP71_TIER = tier(30, 'USP71', 6720)
+  const orphanKwMap = buildKeywordToServiceIdMap([
+    ...services,
+    svc(279, 'BACTERIA'),
+    svc(281, 'ENDOTOXIN-USP85LAL'),
+    svc(300, 'kw_plain_orphan'),
+  ])
+
+  it('an ungrouped service on a tiered profile gets its own labelled bucket', () => {
     const m = resolveSampleTiersByGroup(
-      inputs,
+      { analyses: [analysis('BACTERIA'), analysis('kw_plain_orphan')], priority: null },
       orphanKwMap,
       serviceIdToGroupId,
-      serviceIdToProfileTier,
+      new Map([
+        [279, { tier: USP71_TIER, profileName: 'Sterility USP 71', profileId: 8 }],
+      ]),
       groupIdToTier,
       new Map(),
       new Map(),
       DEFAULT_TIER
     )
-    expect(m.size).toBe(1)
+    expect([...m.keys()].sort()).toEqual([NO_GROUP_KEY, profileBucketKey(8)].sort())
+    const usp = m.get(profileBucketKey(8))
+    expect(usp?.tier).toBe(USP71_TIER)
+    expect(usp?.label).toBe('Sterility USP 71')
+    expect(usp?.reason.tierSource).toBe('profile')
+    expect(usp?.reason.profileName).toBe('Sterility USP 71')
+    // The rest of the sample keeps the fast default clock.
     expect(m.get(NO_GROUP_KEY)?.tier).toBe(DEFAULT_TIER)
     expect(m.get(NO_GROUP_KEY)?.reason.tierSource).toBe('default')
+  })
+
+  it('a profile that ticks exactly like the default is NOT split off (same clock, one span)', () => {
+    // Prod: "Endotoxin USP85 LAL" carries a 1440-minute tier, same as the
+    // default. Splitting it would add an identical second span to ~190 samples.
+    const SAME_AS_DEFAULT = tier(31, 'Microbiology', DEFAULT_TIER.target_minutes)
+    const m = resolveSampleTiersByGroup(
+      { analyses: [analysis('ENDOTOXIN-USP85LAL')], priority: null },
+      orphanKwMap,
+      serviceIdToGroupId,
+      new Map([
+        [281, { tier: SAME_AS_DEFAULT, profileName: 'Endotoxin USP85 LAL', profileId: 9 }],
+      ]),
+      groupIdToTier,
+      new Map(),
+      new Map(),
+      DEFAULT_TIER
+    )
+    expect([...m.keys()]).toEqual([NO_GROUP_KEY])
+    expect(m.get(NO_GROUP_KEY)?.tier).toBe(DEFAULT_TIER)
+  })
+
+  it('a global priority override beats the profile tier, so nothing is split off', () => {
+    const globalMap = new Map<InboxPriority, SlaTier>([['expedited', EXPEDITED_TIER]])
+    const m = resolveSampleTiersByGroup(
+      { analyses: [analysis('BACTERIA')], priority: 'expedited' },
+      orphanKwMap,
+      serviceIdToGroupId,
+      new Map([
+        [279, { tier: USP71_TIER, profileName: 'Sterility USP 71', profileId: 8 }],
+      ]),
+      groupIdToTier,
+      globalMap,
+      new Map(),
+      DEFAULT_TIER
+    )
+    expect([...m.keys()]).toEqual([NO_GROUP_KEY])
+    expect(m.get(NO_GROUP_KEY)?.tier).toBe(EXPEDITED_TIER)
+    expect(m.get(NO_GROUP_KEY)?.reason.tierSource).toBe('priority')
+  })
+
+  it('a hand-built profile map without a profileId cannot be split, so it stays on default', () => {
+    const m = resolveSampleTiersByGroup(
+      { analyses: [analysis('BACTERIA')], priority: null },
+      orphanKwMap,
+      serviceIdToGroupId,
+      new Map([[279, { tier: USP71_TIER, profileName: 'Sterility USP 71' }]]),
+      groupIdToTier,
+      new Map(),
+      new Map(),
+      DEFAULT_TIER
+    )
+    expect([...m.keys()]).toEqual([NO_GROUP_KEY])
+    expect(m.get(NO_GROUP_KEY)?.tier).toBe(DEFAULT_TIER)
+  })
+
+  it('a GROUPED service on a tiered profile keeps its group bucket (unchanged)', () => {
+    const m = resolveSampleTiersByGroup(
+      { analyses: [analysis('kw_hplc')], priority: null },
+      keywordToServiceId,
+      serviceIdToGroupId,
+      new Map([
+        [100, { tier: USP71_TIER, profileName: 'Sterility USP 71', profileId: 8 }],
+      ]),
+      groupIdToTier,
+      new Map(),
+      new Map(),
+      DEFAULT_TIER
+    )
+    expect([...m.keys()]).toEqual([10])
+    expect(m.get(10)?.tier).toBe(USP71_TIER)
+    expect(m.get(10)?.label).toBeUndefined()
   })
 
   it('legacy fall-through unchanged: an empty serviceIdToProfileTier map behaves exactly like pre-Task-11', () => {

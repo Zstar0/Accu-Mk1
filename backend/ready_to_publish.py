@@ -13,8 +13,11 @@ One row per unpublished parent sample that qualifies by EITHER rule:
   first and falls back to the label.
 
 SLA comes from ``sla_engine`` exactly the way the SLA column and the SLA
-Performance report compute it: tier = service-group tier with the default
-fallback, elapsed in business hours. Colour mirrors the frontend's
+Performance report compute it, elapsed in business hours. Each of the sample's
+services owes its own tier (tiered analysis profile, else service-group tier,
+else the default: ``sla_engine.tier_by_service``). The row shows the TIGHTEST
+of those until a COA has gone out, then the LOOSEST, because what is still
+owed at that point is the slow work (a USP 71 final is not late on day 4). Colour mirrors the frontend's
 ``classifySampleColor`` (red = breached, amber = under the tier's amber
 threshold, green otherwise).
 
@@ -29,7 +32,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Iterable, Mapping, Optional
 
-from sla_engine import BusinessSchedule, compute_business_minutes, resolve_sla_tier, sla_status_dict
+from sla_engine import (
+    BusinessSchedule,
+    compute_business_minutes,
+    resolve_sla_tier,
+    sample_tier,
+    sla_status_dict,
+    tier_by_service,
+)
 
 LIVE_LINE_STATES = frozenset({"verified", "published"})
 # A rejected / retracted / cancelled line is not part of the sample any more:
@@ -113,6 +123,16 @@ class GroupIn:
     service_ids: frozenset = field(default_factory=frozenset)
 
 
+@dataclass(frozen=True)
+class ProfileIn:
+    """A tiered ACTIVE analysis profile: the lab hangs SLA tiers off profiles
+    ("Sterility USP 71" -> USP71), and a profile tier beats a group tier."""
+    id: int
+    name: str
+    sla_tier_id: Optional[int]
+    service_ids: frozenset = field(default_factory=frozenset)
+
+
 def resolve_ready_flag_kinds(flag_types: Iterable[FlagTypeIn]) -> dict[str, str]:
     """{type_slug: READY_FULL | READY_PARTIAL} for the two ready types."""
     out: dict[str, str] = {}
@@ -173,15 +193,6 @@ def sla_color(status: dict, tier: TierIn) -> str:
     return "green"
 
 
-def _group_tier_for(service_ids: set, tier_of_service: Mapping[int, TierIn]) -> Optional[TierIn]:
-    """Tightest (smallest target) tier among the sample's grouped services —
-    the same rule sla_perf applies."""
-    tiers = [tier_of_service[s] for s in service_ids if s in tier_of_service]
-    if not tiers:
-        return None
-    return min(tiers, key=lambda t: t.target_minutes)
-
-
 def build_ready_rows(
     *,
     samples: Iterable[SampleIn],
@@ -190,12 +201,23 @@ def build_ready_rows(
     flag_types: Iterable[FlagTypeIn],
     priorities: Mapping[str, str],
     services_of: Mapping[int, set],
+    # uid -> resolved {key, rank, source_level, source_id}; drives the row's
+    # PriorityGlyph. `priorities` stays the legacy string for sort_key.
+    effective_priorities: Optional[Mapping[str, dict]] = None,
     tiers: Iterable[TierIn],
     groups: Iterable[GroupIn],
     schedule: Optional[BusinessSchedule],
     holidays: frozenset,
     now: datetime,
     excluded_sample_ids: frozenset = frozenset(),
+    profiles: Iterable[ProfileIn] = (),
+    # Sample pks that already had a COA published (a `coa_published` parent
+    # event): their row is judged against the loosest tier, not the tightest.
+    delivered_pks: frozenset = frozenset(),
+    # sample_id -> serialized lims_scheduled_publishes row (scheduled_publish
+    # .active_by_sample). Rides the row as `scheduled`; the payload builder
+    # parks pending/firing ones the way it parks `hold`.
+    scheduled: Optional[Mapping[str, dict]] = None,
 ) -> list[dict]:
     """Qualifying rows, unsorted (see :func:`sort_rows`)."""
     types = {ft.slug: ft for ft in flag_types}
@@ -217,13 +239,10 @@ def build_ready_rows(
 
     tier_by_id = {t.id: t for t in tiers}
     default_tier = next((t for t in tier_by_id.values() if t.is_default), None)
-    tier_of_service: dict[int, TierIn] = {}
-    for g in groups:
-        tier = tier_by_id.get(g.sla_tier_id) if g.sla_tier_id else None
-        if tier is None:
-            continue
-        for sid in g.service_ids:
-            tier_of_service[sid] = tier
+    tier_of_service = tier_by_service(
+        [(tier_by_id[p.sla_tier_id], p.service_ids) for p in profiles if p.sla_tier_id in tier_by_id],
+        [(tier_by_id[g.sla_tier_id], g.service_ids) for g in groups if g.sla_tier_id in tier_by_id],
+    )
 
     def bh(start: datetime, end: datetime) -> float:
         if schedule is None:
@@ -252,7 +271,11 @@ def build_ready_rows(
         sla = None
         if s.date_received is not None:
             tier = resolve_sla_tier(
-                {}, _group_tier_for(services_of.get(s.pk, set()), tier_of_service), None, default_tier
+                {},
+                sample_tier(services_of.get(s.pk, set()), tier_of_service, default_tier,
+                            loosest=s.pk in delivered_pks),
+                None,
+                default_tier,
             )
             if tier is not None:
                 status = sla_status_dict(tier.target_minutes, bh(s.date_received, now))
@@ -298,6 +321,9 @@ def build_ready_rows(
                 "pending": pending,
             },
             "priority": priorities.get(s.external_uid or "", "normal") if s.external_uid else "normal",
+            "effective_priority": (
+                (effective_priorities or {}).get(s.external_uid) if s.external_uid else None
+            ),
             "sla": sla,
             # Parked, not dropped: the page shows held rows in their own
             # section with the flag title as the reason; totals skip them.
@@ -310,6 +336,7 @@ def build_ready_rows(
                 "title": hold.title,
                 "since": hold.created_at.isoformat() if hold.created_at else None,
             },
+            "scheduled": (scheduled or {}).get(s.sample_id),
         })
     return rows
 

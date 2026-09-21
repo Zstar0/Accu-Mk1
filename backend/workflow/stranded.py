@@ -17,7 +17,7 @@ from flags import catalog as flag_catalog
 from flags import seams as flag_seams
 from flags import service as flag_service
 from flags.models import FlagFlag
-from models import (LimsSample, LimsSampleTransition, LimsSenaiteTeeRetry,
+from models import (LimsSample, LimsSampleTransition,
                     LimsWorkflowShadowEvaluation, User)
 from workflow.authority import sample_status_authority
 from workflow.engine import _live_parent_line_states
@@ -90,9 +90,6 @@ def _diagnosis(db: Session, sample: LimsSample, condition: str) -> str:
 def find_stranded(db: Session, *, since_days: int = 90,
                   now: Optional[datetime] = None) -> list[Stranded]:
     mk1 = sample_status_authority(db) == "mk1"
-    gave_up_pks = set(db.execute(
-        select(LimsSenaiteTeeRetry.lims_sample_pk).where(LimsSenaiteTeeRetry.status == "gave_up")
-    ).scalars().all())
     published_pks = set(db.execute(
         select(LimsSampleTransition.lims_sample_pk).where(
             LimsSampleTransition.verb == "publish", LimsSampleTransition.source == "mk1")
@@ -112,13 +109,30 @@ def find_stranded(db: Session, *, since_days: int = 90,
             states = _live_parent_line_states(db, s)
             if states and all(v == "verified" for v in states.values()):
                 condition = "lines_verified_status_behind"
+        # A publish ledger row no longer means "this sample is finished". A
+        # PARTIAL COA parks the sample while the slow add-on work runs: the
+        # catalog has the edge for it (sample_received -> publish ->
+        # waiting_for_addon_results), and a sample whose last outstanding
+        # result is already in simply rests at to_be_verified instead. Both
+        # are designed resting places and Mk1 agrees with itself in both, so
+        # the stranding is only real when the mirror column disagrees with
+        # Mk1's OWN engine (the P-2605 shape: native published, column behind).
+        # Measured in prod 2026-09-18: all 20 open flags of this class were
+        # partial publishes, every one waiting on sterility, endotoxin or the
+        # metals, and every one with status == native_status.
         if (condition is None and not dead
-                and s.id in published_pks and s.status != "published"):
+                and s.id in published_pks and s.status != "published"
+                and s.native_status != s.status):
             condition = "published_in_ledger_not_status"
         if condition is None and mk1 and s.native_status and s.native_status != s.status:
             condition = "native_mirror_disagree"
-        if condition is None and not dead and s.id in gave_up_pks:
-            condition = "senaite_tee_gave_up"
+        # A SENAITE tee that gave up is deliberately NOT a stranding (Handler
+        # ruling 2026-09-18): SENAITE is on its way out, nothing downstream
+        # reads its sample-level state, and in prod the condition was 34 flags
+        # of noise. The one real divergence among them (P-1449) was correct on
+        # the Mk1 side with its COA delivered; SENAITE was behind only because
+        # its own analyses were never verified there. The retry rows are kept
+        # as history and `senaite_lagging` on the workflow page still counts them.
         if condition is not None:
             out.append(Stranded(sample=s, condition=condition,
                                 diagnosis=_diagnosis(db, s, condition)))

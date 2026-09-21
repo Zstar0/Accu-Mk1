@@ -107,7 +107,7 @@ export const STATUS_LABELS: Record<string, string> = {
   retracted: 'Retracted',
   rejected: 'Rejected',
   registered: 'Registered',
-  waiting_for_addon_results: 'Waiting Addon',
+  waiting_for_addon_results: 'Partially Published',
   ready_for_review: 'Ready for Review',
   variance_verified: 'Verified — Variance',
 }

@@ -55,6 +55,7 @@ from sla_perf import (  # noqa: E402
     AnalysisIn as SlaPerfAnalysisIn,
     CoaIn as SlaPerfCoaIn,
     GroupIn as SlaPerfGroupIn,
+    ProfileIn as SlaPerfProfileIn,
     SampleIn as SlaPerfSampleIn,
     TierIn as SlaPerfTierIn,
     build_sla_performance,
@@ -123,6 +124,7 @@ from workflow.routes import router as workflow_router
 from priority.routes import router as priority_router
 from workflow.cancel_routes import router as cancel_router
 from conformance.routes import router as conformance_router
+from documents.routes import router as documents_router
 
 import logging
 
@@ -503,6 +505,15 @@ async def lifespan(app: FastAPI):
             db.close()
     _flag_scheduler.register("workflow_stranded_check", interval=_timedelta(minutes=15),
                              fn=_stranded_job)
+    # Scheduled COA publish (2026-09-17): fires due rows through the SAME
+    # publish route the button calls. Every minute; the quiet window and the
+    # per-tick cap live in the module.
+    import scheduled_publish as _scheduled_publish
+
+    async def _scheduled_publish_job(now):
+        await _scheduled_publish.run_due(_SessionLocal, publish_sample_coa, now=now)
+    _flag_scheduler.register("scheduled_publish", interval=_timedelta(minutes=1),
+                             fn=_scheduled_publish_job, jitter=0.0)
     _flag_scheduler.start()
     # Seed default settings and admin user
     from database import SessionLocal
@@ -586,6 +597,7 @@ app.include_router(workflow_router)
 app.include_router(priority_router)
 app.include_router(cancel_router)
 app.include_router(conformance_router)
+app.include_router(documents_router)
 
 # --- Endpoints ---
 
@@ -1589,6 +1601,10 @@ async def get_sample_activity(
                 LimsSubSampleEvent.lims_sample_pk == parent.id
             )
         ).scalars().all()
+        # (event, verification_code) -> actor email, from the actor-only rows
+        # Mk1 writes at generate/publish time (the timeline line itself comes
+        # from the Integration DB, which has no actor column).
+        coa_actors: dict = {}
         for se in parent_events:
             actor_email = None
             if se.user_id:
@@ -1633,6 +1649,16 @@ async def get_sample_activity(
                 if d.get("branding_to"):
                     bits.append(f"branding \"{d.get('branding_from') or ''}\" → \"{d['branding_to']}\"")
                 label = "Customer edit (portal)" + (" — " + "; ".join(bits) if bits else "")
+            elif se.event == "sample_field_updated":
+                label = (
+                    f"{d.get('label') or d.get('field')}: "
+                    f"\"{d.get('from') or ''}\" → \"{d.get('to') or ''}\""
+                )
+                if d.get("senaite") == "locked":
+                    label += " (SENAITE locked — saved in Mk1 only)"
+            elif se.event in ("coa_generated", "coa_published"):
+                coa_actors[(se.event, d.get("verification_code"))] = actor_email
+                continue
             else:
                 label = se.event
 
@@ -1645,6 +1671,19 @@ async def get_sample_activity(
                 "details": event_details,
                 "source": "lims_sub_sample_events",
             })
+
+        # Actors for the Integration-DB rows: COA rows from the actor-only
+        # events above, status rows from Mk1's own transition ledger.
+        from models import LimsSampleTransition
+        transitions = [
+            (t.to_status, t.occurred_at, email)
+            for t, email in db.execute(
+                select(LimsSampleTransition, User.email)
+                .join(User, User.id == LimsSampleTransition.actor_user_id)
+                .where(LimsSampleTransition.lims_sample_pk == parent.id)
+            ).all()
+        ]
+        _overlay_mk1_actors(events, coa_actors, transitions)
 
     # --- Mk1 DB: priority_audit (priority changes at any level) ------------
     # The log is derived at read time (spec §3.4) — no per-sample copy of the
@@ -6710,14 +6749,19 @@ async def upload_chromatogram_to_senaite(
             # AR uid here (SelectVialChromatogramDialog), not a vial uid.
             # attachment_type/render_in_report mirror exactly what the
             # SENAITE form POST above just sent ("HPLC Graph" /
-            # RenderInReport=False). source_sample_id=None — lineage here is
-            # the HPLC analysis, not a vial; out of scope for this capture.
+            # RenderInReport=False). source_sample_id = the analysis'
+            # sample_id_label when it is a vial id ("P-2627-S01"): the vial
+            # is the lineage per-vial COAs read (P-2627, 2026-09-14); a bare
+            # parent label leaves it NULL. The helper checks the vial
+            # belongs to this parent.
             from fastapi.concurrency import run_in_threadpool
+            _label = analysis.sample_id_label or ""
             await run_in_threadpool(
                 _capture_parent_attachment_bg,
                 sample_uid=sample_uid, file_bytes=csv_bytes,
                 filename=filename, content_type="text/csv",
-                kind="chromatogram", source_sample_id=None,
+                kind="chromatogram",
+                source_sample_id=_label if re.search(r"-S\d{2,}$", _label) else None,
                 user_id=getattr(current_user, "id", None),
                 render_in_report=False, attachment_type="HPLC Graph",
                 sample_id=analysis.sample_id_label,
@@ -10807,6 +10851,30 @@ def _sla_perf_rows(db: Session) -> tuple[dict, bool]:
         return _sla_perf_rows_cache, False
 
 
+def _load_tiered_profiles(db: Session) -> list[tuple[int, str, int, frozenset]]:
+    """(id, name, sla_tier_id, service_ids) for every ACTIVE analysis profile
+    that carries an SLA tier. The lab hangs its SLAs off profiles ("Sterility
+    USP 71" -> USP71), and a profile tier beats a service-group tier; both
+    report engines take these through ``sla_engine.tier_by_service``. Inactive
+    profiles are skipped: a retired profile must not keep driving a deadline
+    (same rule as the frontend's buildServiceToProfileTierMap)."""
+    from models import AnalysisProfile, analysis_profile_members
+
+    members: dict[int, set] = {}
+    for pid, svc_id in db.execute(
+        select(analysis_profile_members.c.analysis_profile_id,
+               analysis_profile_members.c.analysis_service_id)
+    ).all():
+        members.setdefault(pid, set()).add(svc_id)
+    return [
+        (pid, name, tier_id, frozenset(members.get(pid, set())))
+        for pid, name, tier_id in db.execute(
+            select(AnalysisProfile.id, AnalysisProfile.name, AnalysisProfile.sla_tier_id)
+            .where(AnalysisProfile.active.is_(True), AnalysisProfile.sla_tier_id.is_not(None))
+        ).all()
+    ]
+
+
 def _load_sla_perf_inputs(db: Session) -> dict:
     """Fetch the Mk1-side rows the SLA performance engine needs.
 
@@ -10883,6 +10951,8 @@ def _load_sla_perf_inputs(db: Session) -> dict:
         "samples": samples,
         "analyses": analyses,
         "tiers": tiers,
+        "profiles": [SlaPerfProfileIn(id=pid, name=name, sla_tier_id=tier_id, service_ids=svc)
+                     for pid, name, tier_id, svc in _load_tiered_profiles(db)],
         "groups": groups,
         "schedule": schedule,
         "holidays": holidays,
@@ -10975,6 +11045,22 @@ class ReadyHoldOut(BaseModel):
     since: Optional[str] = None
 
 
+from priority.schemas import EffectiveOut as _PriorityEffectiveOut
+
+
+class ScheduledPublishOut(BaseModel):
+    """One lims_scheduled_publishes row (scheduled_publish.serialize)."""
+    id: int
+    sample_id: str
+    scheduled_at: str
+    pdf_date: str
+    status: str
+    created_by_user_id: Optional[int] = None
+    created_at: str
+    fired_at: Optional[str] = None
+    last_error: Optional[str] = None
+
+
 class ReadyRowOut(BaseModel):
     sample_id: str
     status: str
@@ -10989,9 +11075,15 @@ class ReadyRowOut(BaseModel):
     flags: list[ReadyFlagOut]
     lines: ReadyLinesOut
     priority: str
+    # Resolved priority (customer → order → sample → vial) for the row's
+    # PriorityGlyph; `priority` above is the legacy sort string.
+    effective_priority: Optional[_PriorityEffectiveOut] = None
     sla: Optional[ReadySlaOut] = None
     # Open "On Hold" flag → parked in the page's On-hold section; None = live.
     hold: Optional[ReadyHoldOut] = None
+    # Scheduled publish: pending/firing rows are parked in the page's
+    # Scheduled section; a failed row stays live with a red badge.
+    scheduled: Optional[ScheduledPublishOut] = None
 
 
 class ReadyFlagTypeOut(BaseModel):
@@ -11015,6 +11107,35 @@ _RTP_TERMINAL_STATUSES = frozenset({"published", "cancelled", "invalid", "reject
 _RTP_NO_LINES_STATUSES = frozenset({"sample_due", "scheduled_sampling", "registered"})
 
 
+def _delivered_sample_pks(db: Session, sample_pks) -> frozenset:
+    """Parent sample pks that have already had a COA published.
+
+    Two signals, either is enough:
+    * a ``publish`` row in the sample ledger (``lims_sample_transitions``):
+      the one with HISTORY, written since July 2026 by Mk1's publish route and
+      by the SENAITE event sync alike, so it also sees a partial COA that went
+      out before the event below existed (prod: P-2777, published 09-15);
+    * a parent ``coa_published`` event: written by every Mk1 publish path, but
+      only since 1.21.9 (first rows 2026-09-17), and the only signal for a
+      partial publish the workflow engine declined to ledger.
+    """
+    pks = list(sample_pks)
+    if not pks:
+        return frozenset()
+    from models import LimsSampleTransition, LimsSubSampleEvent
+    ledger = db.execute(
+        select(LimsSampleTransition.lims_sample_pk)
+        .where(LimsSampleTransition.lims_sample_pk.in_(pks),
+               LimsSampleTransition.verb == "publish")
+    ).scalars().all()
+    events = db.execute(
+        select(LimsSubSampleEvent.lims_sample_pk)
+        .where(LimsSubSampleEvent.lims_sample_pk.in_(pks),
+               LimsSubSampleEvent.event == "coa_published")
+    ).scalars().all()
+    return frozenset(ledger) | frozenset(events)
+
+
 def _load_ready_to_publish_inputs(db: Session) -> dict:
     """Fetch everything ``ready_to_publish.build_ready_rows`` needs.
 
@@ -11035,6 +11156,7 @@ def _load_ready_to_publish_inputs(db: Session) -> dict:
         FlagIn as RtpFlagIn,
         FlagTypeIn as RtpFlagTypeIn,
         GroupIn as RtpGroupIn,
+        ProfileIn as RtpProfileIn,
         SampleIn as RtpSampleIn,
         TierIn as RtpTierIn,
         resolve_flag_kinds,
@@ -11126,15 +11248,20 @@ def _load_ready_to_publish_inputs(db: Session) -> dict:
         ).all():
             services_of.setdefault(pk, set()).add(svc)
 
+    # Samples that already had a COA go out owe the LOOSEST tier, because what
+    # is left is the slow work (a USP 71 final is not late on day 4).
+    delivered_pks = _delivered_sample_pks(db, candidate_pks)
+
+    # Effective priority from the modern resolver (customer → order → sample →
+    # vial chain). The legacy `sample_priorities` table this read used to hit
+    # is only written at SENAITE ingest, so it disagreed with every other page
+    # once anyone set a priority in Mk1. `priorities` keeps the legacy
+    # three-value string for sort_key; `effective_priorities` feeds the glyph.
+    from priority.service import legacy_priority_string, load_effective_for_uids
     uids = [s.external_uid for s in samples if s.external_uid]
-    priorities: dict[str, str] = {}
-    if uids:
-        priorities = {
-            uid: prio for uid, prio in db.execute(
-                select(SamplePriority.sample_uid, SamplePriority.priority)
-                .where(SamplePriority.sample_uid.in_(uids))
-            ).all()
-        }
+    effective = load_effective_for_uids(db, uids) if uids else {}
+    priorities: dict[str, str] = {u: legacy_priority_string(e) for u, e in effective.items()}
+    effective_priorities: dict[str, dict] = {u: e.as_dict() for u, e in effective.items()}
 
     tiers = [
         RtpTierIn(id=t.id, name=t.name, target_minutes=t.target_minutes, is_default=bool(t.is_default),
@@ -11163,17 +11290,24 @@ def _load_ready_to_publish_inputs(db: Session) -> dict:
     )
     holidays = frozenset(r[0] for r in db.execute(select(LabHoliday.holiday_date)).all())
 
+    import scheduled_publish as _scheduled_publish
+
     return {
         "samples": samples,
         "line_states_by_pk": line_states_by_pk,
         "flags": flags,
         "flag_types": flag_types,
         "priorities": priorities,
+        "effective_priorities": effective_priorities,
         "services_of": services_of,
         "tiers": tiers,
+        "profiles": [RtpProfileIn(id=pid, name=name, sla_tier_id=tier_id, service_ids=svc)
+                     for pid, name, tier_id, svc in _load_tiered_profiles(db)],
+        "delivered_pks": delivered_pks,
         "groups": groups,
         "schedule": schedule,
         "holidays": holidays,
+        "scheduled": _scheduled_publish.active_by_sample(db),
     }
 
 
@@ -11238,7 +11372,14 @@ def _build_ready_to_publish_payload(db: Session, include_test_orders: bool) -> d
         **inputs, now=now_utc.replace(tzinfo=None), excluded_sample_ids=excluded,
     ))
     kinds = resolve_flag_kinds(inputs["flag_types"])
-    live = [r for r in rows if r["hold"] is None]
+    # Parked rows leave every total but their own: On Hold (hold wins) and a
+    # pending/firing scheduled publish. A FAILED schedule stays live.
+    from scheduled_publish import PARKED_STATUSES as _PARKED
+
+    def _scheduled(r: dict) -> bool:
+        s = r.get("scheduled")
+        return r["hold"] is None and bool(s) and s["status"] in _PARKED
+    live = [r for r in rows if r["hold"] is None and not _scheduled(r)]
     totals = {
         "rows": len(live),
         "orders": len({r["order"] for r in live}),
@@ -11246,7 +11387,8 @@ def _build_ready_to_publish_payload(db: Session, include_test_orders: bool) -> d
         "flag_ready": sum(1 for r in live if "flag_ready" in r["reasons"]),
         "flag_partial": sum(1 for r in live if "flag_partial" in r["reasons"]),
         "breached": sum(1 for r in live if r["sla"] and r["sla"]["breached"]),
-        "held": len(rows) - len(live),
+        "held": sum(1 for r in rows if r["hold"] is not None),
+        "scheduled": sum(1 for r in rows if _scheduled(r)),
     }
     return {
         "generated_at": now_utc.isoformat().replace("+00:00", "Z"),
@@ -12057,6 +12199,39 @@ async def remove_sample_analysis(
         BadRequestError as _BadRequestError,
         NotFoundError as _NotFoundError,
     )
+
+    # ── Native-service guard (P-2823, 2026-09-18) ────────────────────────────
+    # The lab clicked the SENAITE-backed trash on MECURY-PPM four times and got
+    # 422 "it may be in a locked state" every time. Nothing was locked:
+    # MECURY-PPM is an mk1-origin service (id 276) that has no SENAITE analysis
+    # object, so the Integration Service's existence check fails and it reports
+    # its generic failure. Refuse here rather than proxying a call that cannot
+    # succeed, and name the control that does work.
+    #
+    # Scoped to the proxy case ONLY. A vial page (an 'mk1://' lims_sub_samples
+    # row) legitimately removes mk1-origin rows through delete_pristine_analysis
+    # in the native branch below, so the guard stands down when that row exists.
+    # It also sits AHEAD of the tiered worked-row guard, which can reject vial
+    # rows when confirm_retract=true: refusing after that would have written.
+    _svc = db.execute(
+        _select(AnalysisService).where(AnalysisService.keyword == keyword)
+    ).scalars().first()
+    if _svc is not None and _svc.origin == "mk1":
+        _native_vial = db.execute(
+            _select(LimsSubSample.id).where(
+                LimsSubSample.sample_id == sample_id,
+                LimsSubSample.external_lims_uid.like("mk1://%"),
+            )
+        ).first()
+        if _native_vial is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{keyword} is an Accu-Mk1 analysis and has no SENAITE "
+                    f"counterpart on {sample_id}. Remove it from the "
+                    '"Native (Accu-Mk1)" block in Manage Analyses.'
+                ),
+            )
 
     # ── Tiered worked-row guard (parent samples with vials) ──────────────────
     # Verified/published vial rows block; worked-unverified rows need an
@@ -13234,6 +13409,8 @@ async def _maybe_emit_regular_coa_child(db, sample_id, parent_row, primary_data)
     alias_map = _load_sample_aliases(db, sample_id)
     if alias_map:
         body["analyte_display_names"] = {str(k): v for k, v in alias_map.items()}
+    import scheduled_publish as _scheduled_publish
+    body.update(_scheduled_publish.process_override(db, sample_id))
     include_remarks = bool(parent_row.customer_remarks_include)
     body["include_lab_remarks"] = include_remarks
     if include_remarks and (parent_row.customer_remarks or "").strip():
@@ -13515,6 +13692,11 @@ async def generate_sample_coa(
     alias_map = _load_sample_aliases(db, sample_id)
     if alias_map:
         alias_body["analyte_display_names"] = {str(k): v for k, v in alias_map.items()}
+    # Scheduled publish pending: the draft prints the scheduled date (IS
+    # publishes the NEWEST draft, so a manual regenerate must carry it too).
+    if not is_sub:
+        import scheduled_publish as _scheduled_publish
+        alias_body.update(_scheduled_publish.process_override(db, sample_id))
 
     # Variance replicate series (parent's assignment_kind='variance' vials).
     # Raw per-vial values; COABuilder prepends its own parent figure and renders
@@ -13627,6 +13809,8 @@ async def generate_sample_coa(
     # just-created primary (best-effort; the helper no-ops for non-variance).
     if not is_sub:
         await _maybe_emit_regular_coa_child(db, sample_id, _parent_row, data)
+        await _maybe_emit_vial_coas(db, sample_id, _parent_row, data,
+                                    user_id=getattr(current_user, "id", None))
 
     # Build a meaningful message from the COA Builder response
     warnings = data.get("warnings", [])
@@ -13695,11 +13879,140 @@ async def generate_sample_coa(
     # the generated sections as if that's all that's on it. The deferral is
     # still logged by build_native_sections and still rides the wire's
     # deferred_sections key (COA Builder's completeness-rule exemption).
+    # Who generated it: coa_generations (IS) has no actor column; the activity
+    # log overlays this onto its "COA vN generated" row.
+    _record_parent_event(
+        db, sample_id, "coa_generated",
+        {"verification_code": verification_code, "generation_number": generation_number},
+        getattr(current_user, "id", None), commit=True,
+    )
     return SampleCOAActionResponse(
         success=True,
         message=message,
         verification_code=verification_code,
     )
+
+
+async def _generate_vial_coas_loop(db, parent, vials, parent_generation_id, existing,
+                                   *, include_remarks, lab_remarks, user_id=None):
+    """One COABuilder /process per reportable HPLC vial not already in
+    `existing`. Returns (generated, skipped, errors). Shared by the
+    generate-vial-coas route and the post-primary auto-run for variance lots.
+
+    Seam 4: vial COAs follow the coa_generation toggle for their BASE row
+    sourcing via a legacy-only document (vial certs never render native
+    sections). The document is built PER VIAL so its chromatogram is the
+    row linked to that vial (P-2627, 2026-09-14) — a vial with no linked
+    row fails closed as an error entry and never borrows a sibling's trace;
+    the other vials still generate.
+    """
+    import logging as _logging
+    _logger = _logging.getLogger(__name__)
+    from coa.native_sections import NativeSectionsError
+    from coa.wire_document import build_vial_wire_document, warn_if_source_ignored
+    sample_id = parent.sample_id
+    subs_by_seq = {
+        s.vial_sequence: s for s in db.execute(
+            select(LimsSubSample).where(
+                LimsSubSample.parent_sample_pk == parent.id,
+                LimsSubSample.assignment_role == "hplc",
+            ).order_by(LimsSubSample.id)
+        ).scalars().all()
+    }
+    generated: list[dict] = []
+    skipped: list[int] = []
+    errors: list[dict] = []
+    # Scheduled publish pending: vial COAs print the same scheduled date as
+    # the primary they ride on.
+    import scheduled_publish as _scheduled_publish
+    _vial_date_override = _scheduled_publish.process_override(db, sample_id)
+    async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=120.0) as client:
+        for vial_seq, figs in vials:
+            if vial_seq in existing:
+                skipped.append(vial_seq)
+                continue
+            try:
+                _vial_doc = build_vial_wire_document(db, parent, subs_by_seq.get(vial_seq))
+            except NativeSectionsError as e:
+                errors.append({"vial_sequence": vial_seq, "error": f"COA aborted — {e.detail}"})
+                _logger.warning("vial COA aborted for %s vial %s: %s", sample_id, vial_seq, e.detail)
+                continue
+            vbody: dict = {
+                "vial_figures": figs,
+                "parent_generation_id": parent_generation_id,
+                "vial_sequence": vial_seq,
+                "include_lab_remarks": bool(include_remarks),
+            }
+            if include_remarks and lab_remarks:
+                vbody["lab_remarks"] = lab_remarks
+            if _vial_doc is not None:
+                vbody["native_sections"] = _vial_doc
+            vbody.update(_vial_date_override)
+            try:
+                resp = await client.post(f"{COA_BUILDER_URL}/process/{sample_id}", json=vbody)
+                resp.raise_for_status()
+                data = resp.json()
+                warn_if_source_ignored(_vial_doc, data, sample_id)
+                generated.append({
+                    "vial_sequence": vial_seq,
+                    "verification_code": data.get("verification_code"),
+                    "generation_id": data.get("generation_id"),
+                })
+                _record_parent_event(
+                    db, parent.sample_id, "coa_generated",
+                    {"verification_code": data.get("verification_code"),
+                     "vial_sequence": vial_seq},
+                    user_id, commit=True,
+                )
+            except httpx.HTTPStatusError as e:
+                try:
+                    detail = e.response.json().get("detail", str(e.response.status_code))
+                except Exception:
+                    detail = str(e.response.status_code)
+                errors.append({"vial_sequence": vial_seq, "error": detail})
+                _logger.warning("vial COA gen failed for %s vial %s: %s", sample_id, vial_seq, detail)
+            except Exception as e:  # noqa: BLE001 — one vial failing must not abort the rest
+                errors.append({"vial_sequence": vial_seq, "error": str(e)})
+                _logger.warning("vial COA gen error for %s vial %s: %s", sample_id, vial_seq, e)
+    return generated, skipped, errors
+
+
+async def _maybe_emit_vial_coas(db, sample_id, parent_row, primary_data, user_id=None):
+    """Variance lot: after the primary COA, auto-run the per-vial COAs the
+    generate-vial-coas route would produce (2026-09-14). Best-effort — never
+    fails the primary; idempotent via fetch_existing_vial_sequences; no-op
+    for non-variance samples. The route remains the manual/retry path."""
+    import logging as _logging
+    _logger = _logging.getLogger(__name__)
+    try:
+        if not COA_BUILDER_URL or parent_row is None:
+            return
+        from coa.variance_series import (
+            build_variance_replicates,
+            list_hplc_vials_with_figures,
+        )
+        if not build_variance_replicates(db, parent_row):
+            return
+        primary_gen_id = primary_data.get("generation_id")
+        if not primary_gen_id:
+            _logger.warning("auto vial COAs skipped for %s: no primary generation_id", sample_id)
+            return
+        vials = list_hplc_vials_with_figures(db, parent_row)
+        if not vials:
+            return
+        from integration_db import fetch_existing_vial_sequences
+        existing = fetch_existing_vial_sequences(str(primary_gen_id))
+        include_remarks = bool(parent_row.customer_remarks_include)
+        lab_remarks = (parent_row.customer_remarks or "").strip() if include_remarks else ""
+        generated, skipped, errors = await _generate_vial_coas_loop(
+            db, parent_row, vials, str(primary_gen_id), existing,
+            include_remarks=include_remarks, lab_remarks=lab_remarks,
+            user_id=user_id,
+        )
+        _logger.info("auto vial COAs for %s: generated=%s skipped=%s errors=%s",
+                     sample_id, [g["vial_sequence"] for g in generated], skipped, errors)
+    except Exception as e:  # noqa: BLE001 — must never fail the primary
+        _logger.warning("auto vial COAs failed for %s: %s", sample_id, e)
 
 
 class GenerateVialCOAsRequest(BaseModel):
@@ -13781,54 +14094,11 @@ async def generate_vial_coas(
         if include_remarks and not lab_remarks:
             lab_remarks = (parent.customer_remarks or "").strip()
 
-    # Seam 4: vial COAs follow the coa_generation toggle for their BASE row
-    # sourcing, via a legacy-only document (vial certs never render native
-    # sections). Fail-closed: an assembly error aborts the whole run.
-    from coa.native_sections import NativeSectionsError
-    from coa.wire_document import build_vial_wire_document, warn_if_source_ignored
-    try:
-        _vial_doc = build_vial_wire_document(db, parent)
-    except NativeSectionsError as e:
-        return _resp(False, f"COA aborted — {e.detail}")
-
-    generated: list[dict] = []
-    skipped: list[int] = []
-    errors: list[dict] = []
-    async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=120.0) as client:
-        for vial_seq, figs in vials:
-            if vial_seq in existing:
-                skipped.append(vial_seq)
-                continue
-            vbody: dict = {
-                "vial_figures": figs,
-                "parent_generation_id": parent_generation_id,
-                "vial_sequence": vial_seq,
-                "include_lab_remarks": bool(include_remarks),
-            }
-            if include_remarks and lab_remarks:
-                vbody["lab_remarks"] = lab_remarks
-            if _vial_doc is not None:
-                vbody["native_sections"] = _vial_doc
-            try:
-                resp = await client.post(f"{COA_BUILDER_URL}/process/{sample_id}", json=vbody)
-                resp.raise_for_status()
-                data = resp.json()
-                warn_if_source_ignored(_vial_doc, data, sample_id)
-                generated.append({
-                    "vial_sequence": vial_seq,
-                    "verification_code": data.get("verification_code"),
-                    "generation_id": data.get("generation_id"),
-                })
-            except httpx.HTTPStatusError as e:
-                try:
-                    detail = e.response.json().get("detail", str(e.response.status_code))
-                except Exception:
-                    detail = str(e.response.status_code)
-                errors.append({"vial_sequence": vial_seq, "error": detail})
-                _logger.warning("vial COA gen failed for %s vial %s: %s", sample_id, vial_seq, detail)
-            except Exception as e:  # noqa: BLE001 — one vial failing must not abort the rest
-                errors.append({"vial_sequence": vial_seq, "error": str(e)})
-                _logger.warning("vial COA gen error for %s vial %s: %s", sample_id, vial_seq, e)
+    generated, skipped, errors = await _generate_vial_coas_loop(
+        db, parent, vials, parent_generation_id, existing,
+        include_remarks=include_remarks, lab_remarks=lab_remarks,
+        user_id=getattr(current_user, "id", None),
+    )
 
     g, s, f = len(generated), len(skipped), len(errors)
     parts = [f"Generated {g} per-vial COA(s)"]
@@ -13841,6 +14111,24 @@ async def generate_vial_coas(
         "success": f == 0, "message": "; ".join(parts), "expected": len(vials),
         "generated": generated, "skipped": skipped, "errors": errors,
     }
+
+
+def _refuse_while_publish_scheduled(db: Session, sample_id: str) -> None:
+    """409 while a publish is parked for the sample (backend/scheduled_publish.py).
+    Its newest draft carries the scheduled, future Published Date, and IS
+    publishes the newest draft, so a direct publish would ship a post-dated
+    certificate. The scheduler's own row is `firing` when it calls the publish
+    route, so the job passes. Sample Details cancels first (that regenerates
+    with today's date); this covers every other caller."""
+    import scheduled_publish as _scheduled_publish
+    if _scheduled_publish.has_pending(db, sample_id):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "A publish is scheduled for this sample and its draft carries the scheduled date. "
+                "Cancel the schedule first (the draft is regenerated with today's date), then publish."
+            ),
+        )
 
 
 @app.post("/wizard/senaite/samples/{sample_id}/publish-coa")
@@ -13867,6 +14155,7 @@ async def publish_sample_coa(
                 "Publish the parent sample's COA instead."
             ),
         )
+    _refuse_while_publish_scheduled(db, sample_id)
 
     # 2. Resolve SENAITE UID upfront so we fail before touching integration service state.
     # Native-born samples (external_lims_system == "mk1") have no SENAITE AR at
@@ -14118,6 +14407,7 @@ async def publish_sample_coa(
         sample_id=sample_id, pre_publish_status=_pre_publish_status,
         actor_user_id=getattr(current_user, "id", None),
         senaite_actual_state=_senaite_actual_state,
+        verification_code=verification_code,
     )
     if _deferred_error is not None:
         raise _deferred_error
@@ -14127,6 +14417,209 @@ async def publish_sample_coa(
         message=data.get("message", "COA published"),
         verification_code=verification_code,
         warning=warning,
+    )
+
+
+# ── Scheduled publish (2026-09-17) ────────────────────────────────────
+# Park a finished COA and publish it later, on the normal turnaround cadence.
+# Rows + job + time math live in backend/scheduled_publish.py; these routes
+# are the thin edges. `ScheduledPublishOut` is declared with the Ready to
+# Publish models above (the report embeds the same shape per row).
+
+class SchedulePublishIn(BaseModel):
+    # Offset-aware; the browser sends ISO UTC. A naive value is a 422.
+    scheduled_at: datetime
+
+
+class ScheduledPublishStateOut(BaseModel):
+    schedule: Optional[ScheduledPublishOut] = None
+    suggested_at: str
+    sla_deadline: Optional[str] = None
+    # Name of the tier the deadline came from ("Standard", "USP71"), for the
+    # dialog's SLA line.
+    sla_tier: Optional[str] = None
+    # True when the SLA clamp moved the suggestion, or the sample is already
+    # past its deadline (the dialog shows a warning either way).
+    suggestion_clamped: bool
+    lab_timezone: str
+
+
+class SchedulePublishResultOut(SampleCOAActionResponse):
+    schedule: Optional[ScheduledPublishOut] = None
+
+
+_SCHEDULED_PUBLISH_PATH = "/wizard/senaite/samples/{sample_id}/scheduled-publish"
+
+
+@app.get(_SCHEDULED_PUBLISH_PATH, response_model=ScheduledPublishStateOut)
+def get_sample_scheduled_publish(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """The sample's active schedule (pending / firing / last failed) plus a
+    fresh suggestion for the dialog. The suggestion is random inside its
+    window, so two GETs differ; the stored row is the truth."""
+    import scheduled_publish as _sp
+    sample = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)).scalar_one_or_none()
+    if sample is None:
+        raise HTTPException(status_code=404, detail=f"Sample {sample_id} not found")
+    row = _sp.active_for(db, sample_id)
+    suggested, deadline, clamped, tier = _sp.suggest(db, sample, now=datetime.utcnow())
+    return ScheduledPublishStateOut(
+        schedule=_sp.serialize(row) if row is not None else None,
+        suggested_at=_sp.iso_z(suggested),
+        sla_deadline=_sp.iso_z(deadline),
+        sla_tier=tier.name if tier is not None else None,
+        suggestion_clamped=clamped,
+        lab_timezone=_sp.lab_tz(db),
+    )
+
+
+class ScheduledPublishRowOut(ScheduledPublishOut):
+    """A scheduled publish plus the sample context the list page shows."""
+    cancelled_at: Optional[str] = None
+    client: Optional[str] = None
+    order: Optional[str] = None
+    received_at: Optional[str] = None
+    sample_status: Optional[str] = None
+    created_by: Optional[str] = None
+
+
+class ScheduledPublishListOut(BaseModel):
+    generated_at: str
+    lab_timezone: str
+    rows: list[ScheduledPublishRowOut]
+    totals: dict[str, int]
+
+
+@app.get("/reports/scheduled-publishes", response_model=ScheduledPublishListOut)
+def reports_scheduled_publishes(
+    include_history: bool = Query(False),
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Every scheduled publish: firing, then pending soonest first, then
+    failed; with ``include_history`` the settled rows too (published /
+    cancelled, newest first). Removing one is the per-sample DELETE above
+    (a pending row's draft is regenerated with today's date). Plain ``def``:
+    synchronous DB work, runs in the threadpool."""
+    import scheduled_publish as _sp
+    rows = _sp.list_rows(db, include_history=include_history)
+    totals = {s: 0 for s in ("pending", "firing", "failed", "published", "cancelled")}
+    for r in rows:
+        totals[r["status"]] = totals.get(r["status"], 0) + 1
+    return {
+        "generated_at": _sp.iso_z(datetime.utcnow()),
+        "lab_timezone": _sp.lab_tz(db),
+        "rows": rows,
+        "totals": totals,
+    }
+
+
+@app.post(_SCHEDULED_PUBLISH_PATH, response_model=SchedulePublishResultOut)
+async def schedule_sample_publish(
+    sample_id: str,
+    body: SchedulePublishIn,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Schedule the publish: store the pending row FIRST (generate reads it),
+    then regenerate the draft so its Published Date is the scheduled lab
+    date. A generate failure (preflight 422, COA Builder down) removes the
+    row again and surfaces the error unchanged."""
+    import scheduled_publish as _sp
+    if re.search(r"-S\d{2}$", sample_id):
+        raise HTTPException(status_code=403, detail="Only a parent sample's COA can be scheduled.")
+    sample = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)).scalar_one_or_none()
+    if sample is None:
+        raise HTTPException(status_code=404, detail=f"Sample {sample_id} not found")
+    try:
+        at = _sp.to_naive_utc(body.scheduled_at)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    now = datetime.utcnow()
+    if at < now + _sp.MIN_LEAD:
+        lead = int(_sp.MIN_LEAD.total_seconds() // 60)
+        raise HTTPException(
+            status_code=422,
+            detail=f"Pick a time at least {lead} minute{'s' if lead != 1 else ''} out "
+                   f"(the draft is regenerated first). To publish now, use Publish Accumark COA.",
+        )
+    tz = _sp.lab_tz(db)
+    if _sp.in_quiet_window(at, tz):
+        raise HTTPException(
+            status_code=422,
+            detail=f"No publishing between {_sp.QUIET_START:%H:%M} and {_sp.QUIET_END:%H:%M} lab time ({tz}).",
+        )
+    try:
+        _sp.create_pending(db, sample_id, at, _sp.pdf_date(at, tz), getattr(current_user, "id", None), now=now)
+    except _sp.PublishInProgress:
+        raise HTTPException(status_code=409, detail="A scheduled publish is firing right now; try again in a minute.")
+
+    def _undo(reason: str) -> None:
+        try:
+            _sp.cancel_active(db, sample_id, getattr(current_user, "id", None), reason=reason)
+        except Exception:  # noqa: BLE001
+            logger.exception("scheduled publish undo failed %s", sample_id)
+
+    try:
+        result = await generate_sample_coa(sample_id=sample_id, db=db, current_user=current_user)
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        _undo("regeneration failed")
+        raise
+    if not result.success:
+        _undo("regeneration failed")
+        return SchedulePublishResultOut(success=False, message=result.message)
+    import ready_to_publish_cache
+    ready_to_publish_cache.invalidate()
+    row = _sp.active_for(db, sample_id)
+    return SchedulePublishResultOut(
+        success=True,
+        message=f"Draft regenerated with Published Date {_sp.pdf_date(at, tz)}; publish scheduled.",
+        verification_code=result.verification_code,
+        warning=result.warning,
+        schedule=_sp.serialize(row) if row is not None else None,
+    )
+
+
+@app.delete(_SCHEDULED_PUBLISH_PATH, response_model=SchedulePublishResultOut)
+async def cancel_sample_scheduled_publish(
+    sample_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Cancel a pending schedule (and regenerate the draft with today's date,
+    so a future-dated certificate can never ship by a later manual publish)
+    or dismiss a failed one (no regenerate: nothing about the draft changed)."""
+    import scheduled_publish as _sp
+    row = _sp.active_for(db, sample_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="No scheduled publish for this sample.")
+    if row.status == "firing":
+        raise HTTPException(status_code=409, detail="This publish is firing right now and cannot be cancelled.")
+    was_pending = row.status == "pending"
+    _sp.cancel_active(db, sample_id, getattr(current_user, "id", None), reason="cancelled by user")
+    import ready_to_publish_cache
+    ready_to_publish_cache.invalidate()
+    if not was_pending:
+        return SchedulePublishResultOut(success=True, message="Failed scheduled publish dismissed.")
+    result = await generate_sample_coa(sample_id=sample_id, db=db, current_user=current_user)
+    if not result.success:
+        return SchedulePublishResultOut(
+            success=False,
+            message=f"Schedule cancelled, but the draft still carries the scheduled date: {result.message} "
+                    f"Regenerate the COA before publishing.",
+        )
+    return SchedulePublishResultOut(
+        success=True,
+        message="Schedule cancelled; draft regenerated with today's date.",
+        verification_code=result.verification_code,
+        warning=result.warning,
     )
 
 
@@ -14144,6 +14637,9 @@ async def regen_primary_coa(
     with skip_additional_coas=true so existing additional COAs keep their
     codes untouched, then publishes the new primary.
     """
+    # Before anything is generated: a refusal at the publish step would leave
+    # a today-dated draft for the scheduled fire to ship.
+    _refuse_while_publish_scheduled(db, sample_id)
     if not COA_BUILDER_URL:
         return SampleCOAActionResponse(
             success=False,
@@ -14162,6 +14658,17 @@ async def regen_primary_coa(
         select(LimsSample).where(LimsSample.sample_id == sample_id)
     ).scalar_one_or_none()
     if _regen_parent is not None:
+        # Customer remarks — MUST mirror generate_sample_coa. COA Builder's
+        # lab-remarks gate refuses a non-conforming certificate with no
+        # remarks, so a regen that omits them 422s on every failing sample
+        # (P-2627, 2026-09-14). include_lab_remarks is ALWAYS sent; the text
+        # only when the lab chose to include it.
+        _include_remarks = bool(_regen_parent.customer_remarks_include)
+        alias_body["include_lab_remarks"] = _include_remarks
+        _remarks_text = (_regen_parent.customer_remarks or "").strip()
+        if _include_remarks and _remarks_text:
+            alias_body["lab_remarks"] = _remarks_text
+
         from coa.variance_series import process_variance_fields
         alias_body.update(process_variance_fields(db, _regen_parent))
 
@@ -14216,6 +14723,12 @@ async def regen_primary_coa(
             success=False,
             message="Primary regenerated but no verification code returned",
         )
+    _record_parent_event(
+        db, sample_id, "coa_generated",
+        {"verification_code": verification_code,
+         "generation_number": data.get("generation_number")},
+        getattr(current_user, "id", None), commit=True,
+    )
 
     # 2. Attach new PDF to SENAITE (best-effort — the generation already has a PDF in S3)
     if SENAITE_URL and pdf_base64:
@@ -18047,6 +18560,102 @@ class SenaiteFieldUpdateResponse(BaseModel):
     success: bool
     message: str
     updated_fields: Optional[list] = None
+    # Set when the edit landed in Mk1 only (SENAITE locked the field).
+    warning: Optional[str] = None
+
+
+# Fields Mk1 owns outright once SENAITE's workflow has locked them
+# (verified/published AR): the edit is accepted locally instead of failing.
+# Mk1 is already the read source for these in mk1 read mode (PB-0553).
+_MK1_OWNED_WHEN_SENAITE_LOCKED = frozenset({"ClientSampleID"})
+_SENAITE_FIELD_LOCK_MARKER = "Not allowed to set the field"
+
+
+def _senaite_field_locked(err: httpx.HTTPStatusError) -> bool:
+    """SENAITE answers 401 + this message when the AR's workflow state has
+    revoked the field's write permission. A plain 401 (bad credentials)
+    carries no such message and must NOT be treated as a lock."""
+    try:
+        return (
+            err.response.status_code == 401
+            and _SENAITE_FIELD_LOCK_MARKER in (err.response.text or "")
+        )
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _senaite_field_label(key: str) -> str:
+    """'ClientSampleID' -> 'Client Sample ID' for the activity line."""
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ", key)
+
+
+def _record_parent_event(db: Session, sample_id: str, event: str,
+                         details: dict, user_id, *, commit: bool = False) -> bool:
+    """Append one parent-hosted `lims_sub_sample_events` row (Task 7's
+    polymorphic host) so the activity log can say WHO did it — the
+    Integration-DB coa_generations / sample_status_events rows carry no actor.
+    `sample_id` may be a parent or a vial id (a vial's event lands on its
+    parent). Returns False (never raises) when there is no registry row or the
+    write fails: an audit row must never fail the action it records."""
+    try:
+        from models import LimsSubSampleEvent
+        pk = db.execute(
+            select(LimsSample.id).where(LimsSample.sample_id == sample_id)
+        ).scalar_one_or_none()
+        if pk is None:
+            pk = db.execute(
+                select(LimsSubSample.parent_sample_pk)
+                .where(LimsSubSample.sample_id == sample_id)
+            ).scalar_one_or_none()
+        if pk is None:
+            return False
+        db.add(LimsSubSampleEvent(lims_sample_pk=pk, event=event,
+                                  details=details, user_id=user_id))
+        db.commit() if commit else db.flush()
+        return True
+    except Exception:  # noqa: BLE001
+        logger.warning("sample_event.write_failed sample_id=%s event=%s",
+                       sample_id, event, exc_info=True)
+        if commit:
+            try:
+                db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+        return False
+
+
+def _overlay_mk1_actors(events: list, coa_actors: dict, transitions: list) -> None:
+    """Stamp `details.by` onto Integration-DB activity rows from what Mk1
+    recorded: coa_* rows match on (event, verification_code); status_change
+    rows match a Mk1 transition on to_status, nearest within 15 minutes (the
+    IS row is written from the SENAITE webhook seconds after our verb).
+    `transitions` is [(to_status, occurred_at naive-UTC, email)]. In place."""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+    def _naive_utc(dt):
+        return dt.astimezone(_tz.utc).replace(tzinfo=None) if dt.tzinfo else dt
+
+    window = _td(minutes=15)
+    for ev in events:
+        d = ev.get("details") or {}
+        if ev.get("source") == "coa_generations":
+            email = coa_actors.get((ev.get("event"), d.get("verification_code")))
+            if email:
+                d["by"] = email
+        elif ev.get("source") == "sample_status_events" and ev.get("timestamp"):
+            at = _naive_utc(_dt.fromisoformat(ev["timestamp"]))
+            best = min(
+                (
+                    (abs(occurred - at), email)
+                    for to_status, occurred, email in transitions
+                    if email and to_status == d.get("new_status")
+                    and abs(occurred - at) <= window
+                ),
+                default=None,
+            )
+            if best:
+                d["by"] = best[1]
+        ev["details"] = d
 
 
 @app.post(
@@ -18188,6 +18797,7 @@ async def update_senaite_sample_fields(
             # If SENAITE returns 400 (e.g. isDecimal validator rejects
             # unicode strings in Python 2), fall back to form-encoded
             # which sends Python 2 str values that pass the validator.
+            senaite_locked = False
             try:
                 resp = await client.post(update_url, json=senaite_fields)
                 resp.raise_for_status()
@@ -18198,23 +18808,80 @@ async def update_senaite_sample_fields(
                         update_url, data=senaite_fields
                     )
                     resp.raise_for_status()
+                elif (
+                    _senaite_field_locked(json_err)
+                    and set(req.fields) <= _MK1_OWNED_WHEN_SENAITE_LOCKED
+                ):
+                    # PB-0553 (2026-09-16): SENAITE locks ClientSampleID once
+                    # the AR is verified/published, but Mk1 is the read source
+                    # for it, so the edit lands here only — and stays: the
+                    # refresh guard in _populate_basic_info honours the flag.
+                    senaite_locked = True
                 else:
                     raise
 
             # Dual-write mirror (registry slice 1): reflect the accepted
-            # SENAITE edit onto the local registry row. Best-effort — a
-            # mirror problem must never fail the user's edit.
+            # SENAITE edit onto the local registry row, and log who changed
+            # what (`sample_field_updated`, parent-hosted). Best-effort when
+            # SENAITE took the write — a mirror problem must never fail the
+            # user's edit. When SENAITE locked the field the mirror IS the
+            # write, so that path fails closed instead.
+            mirrored = False
             try:
-                from sub_samples.service import apply_senaite_fields_to_row
-                if apply_senaite_fields_to_row(db, uid, req.fields):
+                from models import LimsSubSampleEvent
+                from sub_samples.service import (
+                    _FIELD_MIRROR_SCALARS, apply_senaite_fields_to_row,
+                )
+                row = db.execute(
+                    select(LimsSample).where(LimsSample.external_lims_uid == uid)
+                ).scalar_one_or_none()
+                if row is not None:
+                    previous = {
+                        k: getattr(row, col)
+                        for k, col in _FIELD_MIRROR_SCALARS.items()
+                        if k in req.fields
+                    }
+                    mirrored = apply_senaite_fields_to_row(db, uid, req.fields)
+                    if senaite_locked:
+                        row.client_sample_id_locked_in_senaite = True
+                    for k, v in req.fields.items():
+                        db.add(LimsSubSampleEvent(
+                            lims_sample_pk=row.id,
+                            event="sample_field_updated",
+                            details={
+                                "field": k,
+                                "label": _senaite_field_label(k),
+                                "from": previous.get(k),
+                                "to": str(v) if v not in (None, "") else None,
+                                "senaite": "locked" if senaite_locked else "accepted",
+                            },
+                            user_id=getattr(current_user, "id", None),
+                        ))
                     db.commit()
             except Exception as mirror_err:
                 try:
                     db.rollback()
                 except Exception:
                     pass
+                if senaite_locked:
+                    return SenaiteFieldUpdateResponse(
+                        success=False,
+                        message=(
+                            "SENAITE has locked this field and the Mk1 save "
+                            f"failed: {mirror_err}"
+                        ),
+                    )
                 logger.warning(
                     "registry.field_mirror_failed uid=%s err=%s", uid, mirror_err
+                )
+            if senaite_locked and not mirrored:
+                return SenaiteFieldUpdateResponse(
+                    success=False,
+                    message=(
+                        "SENAITE has locked this field (sample verified/"
+                        f"published) and there is no Mk1 registry row for uid "
+                        f"{uid} to save it on"
+                    ),
                 )
 
             updated_fields = (
@@ -18224,6 +18891,11 @@ async def update_senaite_sample_fields(
                 success=True,
                 message=f"Updated {len(updated_fields)} field(s)",
                 updated_fields=updated_fields,
+                warning=(
+                    "SENAITE has locked this field (sample verified/published), "
+                    "so the change is saved in Accu-Mk1 only."
+                    if senaite_locked else None
+                ),
             )
 
     except httpx.TimeoutException:
@@ -18639,7 +19311,8 @@ def _native_auto_checkin_bg(sample_id: str) -> None:
 
 
 def _after_publish_native(db, *, sample_id: str, pre_publish_status, actor_user_id,
-                          senaite_actual_state: str) -> None:
+                          senaite_actual_state: str,
+                          verification_code: str | None = None) -> None:
     """Sample-status authority flip (spec §4.4 / §5): the native publish verb is
     the user's direct intent, so it runs synchronously (ledger + engine), and a
     SENAITE publish that did not read back as 'published' becomes a retry row.
@@ -18652,6 +19325,14 @@ def _after_publish_native(db, *, sample_id: str, pre_publish_status, actor_user_
         ready_to_publish_cache.invalidate()
     except Exception:  # noqa: BLE001 -- never let the chip touch the publish
         logger.exception("ready-to-publish cache invalidate failed %s", sample_id)
+    # A manual publish retires any pending or failed scheduled publish for the
+    # sample. The job's own row is `firing`, which this never touches.
+    try:
+        import scheduled_publish as _scheduled_publish
+        _scheduled_publish.cancel_active(db, sample_id, actor_user_id, reason="published manually")
+    except Exception:  # noqa: BLE001 -- never let the schedule touch the publish
+        logger.exception("scheduled publish cancel failed %s", sample_id)
+        db.rollback()
     try:
         from workflow.engine import drive_sample_touchpoint
         from workflow.sample_log import record_sample_transition
@@ -18669,6 +19350,9 @@ def _after_publish_native(db, *, sample_id: str, pre_publish_status, actor_user_
         drive_sample_touchpoint(db, sample_id, "publish", from_status=pre_publish_status,
                                 actor_user_id=actor_user_id,
                                 attested={"coa_published": True})
+        # Who published it (actor overlay for the IS "COA vN published" row).
+        _record_parent_event(db, sample_id, "coa_published",
+                             {"verification_code": verification_code}, actor_user_id)
         if senaite_actual_state != "published":
             row = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)
                              ).scalar_one_or_none()
@@ -18913,8 +19597,8 @@ def _capture_parent_attachment_bg(
     source_sample_id, attachment_type), receive_senaite_sample's step-1 image
     upload (kind='receive_image', source_sample_id=None,
     attachment_type='Sample Image', hardcoded), and
-    upload_chromatogram_to_senaite (kind='chromatogram', source_sample_id=None
-    — lineage is the analysis, not a vial — attachment_type='HPLC Graph',
+    upload_chromatogram_to_senaite (kind='chromatogram', source_sample_id=the
+    analysis' vial label or None — attachment_type='HPLC Graph',
     render_in_report=False, all hardcoded to match what that endpoint sends
     SENAITE). `kind` is clamped to the allowed set here rather than trusted
     from the caller, since the upload endpoint's native_kind is user-supplied.
@@ -19450,6 +20134,21 @@ async def transition_analysis(
                     is_retest=_is_retest,
                     senaite_analysis_uid=item.get("uid"),
                 )
+                # Drive the SAMPLE engine the way the native analysis routes do
+                # (lims_analyses.routes._schedule_sbs_cascade). This proxy used to
+                # update only the mirror row, so a line verified here never
+                # re-derived the sample's native_status: BW-0094 sat at
+                # sample_received through 19 days of proxy work and its publish
+                # then ran from that stale state. Runs AFTER the mirror commit so
+                # the cascade reads the new line state; own session, never raises.
+                _parent_pk = db.execute(
+                    select(LimsSample.id).where(LimsSample.sample_id == _sid)
+                ).scalar_one_or_none()
+                if _parent_pk is not None:
+                    from workflow.engine import run_cascades_bg
+                    await run_in_threadpool(
+                        run_cascades_bg, _parent_pk, getattr(current_user, "id", None),
+                    )
 
             return AnalysisResultResponse(
                 success=True,

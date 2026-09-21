@@ -9,6 +9,9 @@
  * against `useHashNavigation` (see backend/flags/seams.py):
  *   - sample    → senaite/sample-details         (navigateToSample)
  *   - worksheet → worksheet-detail drawer         (openWorksheetDrawer)
+ *   - document  → reports/documents viewer        (navigateToDocument); the
+ *     anchor is the document CODE, so only the server deep_link (which
+ *     carries the latest revision's row id) can navigate.
  *   - sub_sample → NO dedicated route; vials are viewed inside the parent
  *     sample page and the event payload lacks the parent id, so the arrow is
  *     suppressed for vials (documented gap, deferred to a follow-up).
@@ -18,6 +21,7 @@ import {
   FlaskConical,
   TestTube2,
   ClipboardList,
+  FileText,
   Tag,
   ListTodo,
 } from 'lucide-react'
@@ -35,6 +39,9 @@ const ENTITY_META: Record<string, EntityMeta> = {
   sample: { Icon: FlaskConical, label: 'Sample', canDeepLink: true },
   sub_sample: { Icon: TestTube2, label: 'Sub Sample', canDeepLink: false },
   worksheet: { Icon: ClipboardList, label: 'Worksheet', canDeepLink: true },
+  // entity_id is the document CODE (SOP-0001); navigation needs the server
+  // deep_link, so the type-only fallback cannot deep-link.
+  document: { Icon: FileText, label: 'Document', canDeepLink: false },
   // The seeded builtin item kind (slice 7). Legacy null-anchor general tasks are
   // backfilled to this slug; the chip must show a human label, never the slug.
   // Other (admin-created) kinds resolve their label FE-side via useItemKinds.
@@ -44,7 +51,10 @@ const ENTITY_META: Record<string, EntityMeta> = {
 /** Entity types with a backend `state` seam (→ watchable). Mirror of the
  *  `state=` registrations in backend/flags/seams.py `register_mk1_entities`.
  *  Update both together if another type opts in. */
-export const WATCHABLE_ENTITY_TYPES: ReadonlySet<string> = new Set(['sample'])
+export const WATCHABLE_ENTITY_TYPES: ReadonlySet<string> = new Set([
+  'sample',
+  'document',
+])
 
 /** The Mk1-backed ("code") entity types — anchors that always carry an
  *  entity_id and can have per-entity flag buttons. NOT derived from
@@ -55,6 +65,7 @@ export const CODE_ENTITY_TYPES: ReadonlySet<string> = new Set([
   'sample',
   'sub_sample',
   'worksheet',
+  'document',
 ])
 
 /** Meta for a null-anchor general task (Phase 2). */
@@ -131,6 +142,10 @@ export function navigateToDeepLink(deepLink: DeepLink): boolean {
     case 'worksheet':
       store.closeFlagsFlyout()
       store.openWorksheetDrawer(Number(deepLink.id))
+      return true
+    case 'document':
+      store.closeFlagsFlyout()
+      store.navigateToDocument(Number(deepLink.id))
       return true
     default:
       return false

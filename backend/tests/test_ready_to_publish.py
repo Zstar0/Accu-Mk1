@@ -9,6 +9,7 @@ from ready_to_publish import (
     FlagIn,
     FlagTypeIn,
     GroupIn,
+    ProfileIn,
     SampleIn,
     TierIn,
     build_ready_rows,
@@ -75,6 +76,23 @@ def test_dead_lines_do_not_block_or_count():
     assert [r["sample_id"] for r in rows] == ["PB-0474"]
     assert rows[0]["reasons"] == [ALL_VERIFIED]
     assert rows[0]["lines"] == {"total": 1, "verified": 1, "pending": []}
+
+
+def test_effective_priority_rides_the_row_by_uid():
+    """The PriorityGlyph reads the resolved priority (modern resolver, keyed
+    by external uid); `priority` stays the legacy string for sort_key."""
+    eff = {"key": "rush", "rank": 30, "source_level": "order", "source_id": "WP-1"}
+    rows = build([sample(1, "PB-0553", external_uid="U1"), sample(2, "PB-0554", external_uid="U2")],
+                 {1: {"HPLC-PUR": "verified"}, 2: {"HPLC-PUR": "verified"}},
+                 priorities={"U1": "expedited"}, effective_priorities={"U1": eff})
+    by_id = {r["sample_id"]: r for r in rows}
+    assert by_id["PB-0553"]["effective_priority"] == eff
+    assert by_id["PB-0553"]["priority"] == "expedited"
+    assert by_id["PB-0554"]["effective_priority"] is None
+    assert by_id["PB-0554"]["priority"] == "normal"
+    # Omitting the input (older callers) still builds rows.
+    assert build([sample(1, "PB-0553", external_uid="U1")], {1: {"HPLC-PUR": "verified"}})[0][
+        "effective_priority"] is None
 
 
 def test_strip_identity_suffix():
@@ -208,11 +226,11 @@ def test_sort_most_critical_first():
 HOLD_T = FlagTypeIn(slug="new_type_7", label="On Hold", color="#64748b")
 
 
-def build_h(samples, line_states, flags):
+def build_h(samples, line_states, flags, **kw):
     return build_ready_rows(
         samples=samples, line_states_by_pk=line_states, flags=flags,
         flag_types=(READY_T, PARTIAL_T, HOLD_T), priorities={}, services_of={},
-        tiers=(STANDARD,), groups=(), schedule=SCHEDULE, holidays=frozenset(), now=NOW,
+        tiers=(STANDARD,), groups=(), schedule=SCHEDULE, holidays=frozenset(), now=NOW, **kw,
     )
 
 
@@ -251,3 +269,49 @@ def test_hold_alone_does_not_qualify_a_sample():
 
 def test_unheld_rows_have_hold_none():
     assert build_h([sample(1, "P-1")], {1: {"HPLC-PUR": "verified"}}, [])[0]["hold"] is None
+
+
+# ── profile tiers (where the lab actually hangs its SLAs) ───────────────────
+# Prod shape, read 2026-09-17: "Sterility USP 71" -> USP71 on services 279/280,
+# which sit in NO service group. HPLC services (10) carry no tier at all.
+USP71_PROFILE = ProfileIn(id=8, name="Sterility USP 71", sla_tier_id=3, service_ids=frozenset({279, 280}))
+VERIFIED = {"HPLC-PUR": "verified"}
+
+
+def test_usp71_only_sample_takes_the_profile_tier_without_any_service_group():
+    rows = build([sample(1, "BW-1")], {1: VERIFIED}, services_of={1: {279, 280}}, profiles=(USP71_PROFILE,))
+    assert rows[0]["sla"]["tier"] == "USP71" and rows[0]["sla"]["target_minutes"] == 6720
+
+
+def test_mixed_sample_owes_the_fast_tier_until_a_coa_has_gone_out():
+    kw = dict(services_of={1: {10, 279}}, profiles=(USP71_PROFILE,))
+    before = build([sample(1, "P-2777")], {1: VERIFIED}, **kw)
+    assert before[0]["sla"]["tier"] == "Standard"          # first COA: the 3-day work
+    after = build([sample(1, "P-2777")], {1: VERIFIED}, delivered_pks=frozenset({1}), **kw)
+    assert after[0]["sla"]["tier"] == "USP71"              # what is left is the 14-day work
+    assert after[0]["sla"]["breached"] is False
+
+
+def test_a_profile_tier_beats_a_group_tier_on_the_same_service():
+    group = GroupIn(id=2, name="Microbiology", sla_tier_id=1, service_ids=frozenset({279}))
+    rows = build([sample(1, "BW-1")], {1: VERIFIED}, services_of={1: {279}},
+                 groups=(group,), profiles=(USP71_PROFILE,))
+    assert rows[0]["sla"]["tier"] == "USP71"
+
+
+def test_no_profiles_passed_is_the_old_group_or_default_behaviour():
+    rows = build([sample(1, "P-1")], {1: VERIFIED}, services_of={1: {91}}, groups=(MICRO,))
+    assert rows[0]["sla"]["tier"] == "USP71"               # every service in the tiered group
+    rows = build([sample(1, "P-1")], {1: VERIFIED}, services_of={1: {10}})
+    assert rows[0]["sla"]["tier"] == "Standard"
+
+def test_scheduled_publish_rides_the_row_and_coexists_with_hold():
+    sched = {"P-1": {"id": 7, "status": "pending", "scheduled_at": "2026-09-19T17:00:00Z", "pdf_date": "09/19/2026"}}
+    flags = [FlagIn(id=1, sample_id="P-1", type_slug="new_type_7", status="open", title="hold")]
+    rows = build_h([sample(1, "P-1"), sample(2, "P-2")],
+                   {1: {"HPLC-PUR": "verified"}, 2: {"HPLC-PUR": "verified"}}, flags, scheduled=sched)
+    by = {r["sample_id"]: r for r in rows}
+    assert by["P-1"]["scheduled"] == sched["P-1"] and by["P-1"]["hold"]["title"] == "hold"
+    assert by["P-2"]["scheduled"] is None
+    # Callers that do not pass the mapping get None, not a KeyError.
+    assert build([sample(1, "P-1")], {1: {"HPLC-PUR": "verified"}})[0]["scheduled"] is None

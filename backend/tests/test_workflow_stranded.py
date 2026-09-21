@@ -75,9 +75,16 @@ def test_flag_resolves_when_condition_clears(db_session):
 
 
 def test_published_in_ledger_but_not_status(db_session):
+    """The REAL case: the engine reached `published` but the mirror column never
+    caught up (the P-2605 shape). Mk1 disagrees with ITSELF, so it is stranded.
+
+    Was written with native_status="verified" (agreeing with the column), which
+    is the partial-publish shape and is no longer a stranding: see
+    test_partial_publish_is_not_stranded below.
+    """
     from workflow.stranded import find_stranded
     _base(db_session)
-    p = LimsSample(sample_id="P-ST-3", status="verified", native_status="verified",
+    p = LimsSample(sample_id="P-ST-3", status="verified", native_status="published",
                    date_received=datetime(2026, 9, 1, tzinfo=timezone.utc))
     db_session.add(p)
     db_session.flush()
@@ -85,6 +92,73 @@ def test_published_in_ledger_but_not_status(db_session):
                                         to_status="published", source="mk1", occurred_at=NOW))
     db_session.flush()
     assert [s.condition for s in find_stranded(db_session, now=NOW)] == ["published_in_ledger_not_status"]
+
+
+def test_partial_publish_is_not_stranded(db_session):
+    """A partial COA parks the sample while the slow add-on work runs, and the
+    catalog has the edge for it (`sample_received --publish-->
+    waiting_for_addon_results`). Mk1 agrees with itself, so this is a designed
+    resting place, not a stranding.
+
+    Prod 2026-09-18: 16 of the 20 open `published_in_ledger_not_status` flags
+    were exactly this, every one waiting on STERILITY-PCR / the metals.
+    """
+    from workflow.stranded import find_stranded
+    _base(db_session)
+    p = LimsSample(sample_id="P-ST-8", status="waiting_for_addon_results",
+                   native_status="waiting_for_addon_results",
+                   date_received=datetime(2026, 9, 1, tzinfo=timezone.utc))
+    db_session.add(p)
+    db_session.flush()
+    db_session.add(LimsSampleTransition(lims_sample_pk=p.id, verb="publish",
+                                        from_status="sample_received",
+                                        to_status="waiting_for_addon_results",
+                                        source="mk1", occurred_at=NOW))
+    db_session.flush()
+    assert find_stranded(db_session, now=NOW) == []
+
+
+def test_published_in_ledger_with_no_native_status_still_flags(db_session):
+    """Guards the gate's NULL edge. `native_status` NULL means the engine never
+    ran for this sample, so it is NOT the "Mk1 agrees with itself" case the gate
+    exempts and it must keep flagging. It cannot fall through to
+    `native_mirror_disagree` either, which requires a truthy native_status, so
+    this condition is the only thing that would ever report it. Prod 2026-09-18
+    has 0 such samples, so nothing but this test pins the branch.
+    """
+    from workflow.stranded import find_stranded
+    _base(db_session, authority="mk1")
+    p = LimsSample(sample_id="P-ST-10", status="verified", native_status=None,
+                   date_received=datetime(2026, 9, 1, tzinfo=timezone.utc))
+    db_session.add(p)
+    db_session.flush()
+    db_session.add(LimsSampleTransition(lims_sample_pk=p.id, verb="publish", from_status="verified",
+                                        to_status="published", source="mk1", occurred_at=NOW))
+    db_session.flush()
+    assert [s.condition for s in find_stranded(db_session, now=NOW)] == ["published_in_ledger_not_status"]
+
+
+def test_partial_publish_awaiting_verify_is_not_stranded(db_session):
+    """The other 4 of those 20 (P-2915, P-2916, PB-0538, PB-0539): endotoxin is
+    the only thing outstanding and its result is already IN, so the sample rests
+    at `to_be_verified` after the partial COA rather than at
+    `waiting_for_addon_results`. Also not a stranding."""
+    from workflow.stranded import find_stranded
+    _base(db_session)
+    p = LimsSample(sample_id="P-ST-9", status="to_be_verified", native_status="to_be_verified",
+                   date_received=datetime(2026, 9, 1, tzinfo=timezone.utc))
+    db_session.add(p)
+    db_session.flush()
+    svc = AnalysisService(keyword="ENDOTOXIN-USP85LAL", title="Endotoxin")
+    db_session.add(svc)
+    db_session.flush()
+    db_session.add(LimsAnalysis(lims_sample_pk=p.id, lims_sub_sample_pk=None,
+                                analysis_service_id=svc.id, keyword=svc.keyword, title="Endotoxin",
+                                review_state="to_be_verified", provenance="canonical", retested=False))
+    db_session.add(LimsSampleTransition(lims_sample_pk=p.id, verb="publish", from_status="verified",
+                                        to_status="to_be_verified", source="mk1", occurred_at=NOW))
+    db_session.flush()
+    assert find_stranded(db_session, now=NOW) == []
 
 
 def test_native_mirror_disagree_only_in_mk1_mode(db_session):
@@ -112,7 +186,11 @@ def test_null_date_received_falls_back_to_created_at(db_session):
     assert [(s.sample.sample_id, s.condition) for s in found] == [("P-ST-NULL", "native_mirror_disagree")]
 
 
-def test_gave_up_tee_is_stranded(db_session):
+def test_gave_up_tee_is_not_stranded(db_session):
+    """SENAITE is on its way out and nothing downstream reads its sample-level
+    state, so a refused push is no longer a fault to chase (Handler ruling
+    2026-09-18). This is the exact P-1449 shape: Mk1 published/published, COA
+    delivered, SENAITE stuck behind because ITS analyses were never verified."""
     from workflow.stranded import find_stranded
     _base(db_session)
     p = LimsSample(sample_id="P-ST-5", status="published", native_status="published",
@@ -122,7 +200,7 @@ def test_gave_up_tee_is_stranded(db_session):
     db_session.add(LimsSenaiteTeeRetry(lims_sample_pk=p.id, verb="publish", expected_state="published",
                                        attempts=8, next_attempt_at=NOW, status="gave_up"))
     db_session.flush()
-    assert [s.condition for s in find_stranded(db_session, now=NOW)] == ["senaite_tee_gave_up"]
+    assert find_stranded(db_session, now=NOW) == []
 
 
 def test_no_admin_user_skips_flagging(db_session):
@@ -196,8 +274,9 @@ def test_orphan_free_dedupe_uses_the_primary_anchor(db_session):
 
 def test_cancelled_after_publish_is_not_stranded(db_session):
     """Spec §8 lets a published sample be cancelled natively (the COA stays
-    live), so the mk1 publish ledger row must not flag it forever. The same
-    sample still verified IS stranded."""
+    live), so the mk1 publish ledger row must not flag it forever. The control
+    is the same sample uncancelled AND disagreeing with its own engine, which
+    IS stranded."""
     from workflow.stranded import find_stranded
     _base(db_session)
     p = LimsSample(sample_id="P-ST-11", status="cancelled", native_status="cancelled",
@@ -209,7 +288,7 @@ def test_cancelled_after_publish_is_not_stranded(db_session):
     db_session.flush()
     assert find_stranded(db_session, now=NOW) == []
     p.status = "verified"
-    p.native_status = "verified"
+    p.native_status = "published"
     db_session.flush()
     assert [s.condition for s in find_stranded(db_session, now=NOW)] == ["published_in_ledger_not_status"]
 
@@ -242,13 +321,12 @@ def _gave_up(db, sid, status):
 def test_cancelled_sample_never_flags_a_gave_up_tee(db_session):
     """Mk1 owns cancel (Handler ruling 2026-09-09): SENAITE is not kept in
     sync for a cancelled sample, so a gave_up tee row on one is not a
-    stranding for the lab to chase. The same row on a live sample still is."""
+    stranding for the lab to chase. Since 2026-09-18 the same row on a live
+    sample is not one either."""
     from workflow.stranded import find_stranded
     _base(db_session)
     _gave_up(db_session, "P-ST-90", "cancelled")
     assert find_stranded(db_session, now=NOW) == []
 
     _gave_up(db_session, "P-ST-91", "verified")
-    found = find_stranded(db_session, now=NOW)
-    assert [(f.sample.sample_id, f.condition) for f in found] == [
-        ("P-ST-91", "senaite_tee_gave_up")]
+    assert find_stranded(db_session, now=NOW) == []

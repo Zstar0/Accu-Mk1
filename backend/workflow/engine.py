@@ -39,13 +39,25 @@ def _live_parent_line_states(db: Session, sample: LimsSample) -> dict[str, str]:
     """{keyword: effective_state} for the sample's LIVE parent-tier lines.
     Canonical rows win per keyword over shadow mirrors (read-flip collapse
     rule); shadow rows contribute mirror_review_state. Exception states and
-    retest-superseded canonical rows are excluded."""
+    retest-superseded canonical rows are excluded.
+
+    Live 'ordered' placeholders (parent_placeholders.py: native demand not
+    yet promoted) fill any keyword still absent with their pending state
+    (RULED 2026-09-14, Option B). Same rule as the Ready-to-Publish map
+    (lims_analyses.service.native_parent_line_states, PR #202), so the
+    engine can no longer cascade a sample to 'verified' while a paid-for
+    native line is still on its vial (P-2739 / WP-7322). No COA is gated by
+    this: the publish touchpoint from sample_received takes the partial
+    edge to waiting_for_addon_results, and the add-on's later promotion
+    cascades the sample forward."""
+    from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
     rows = db.execute(select(LimsAnalysis).where(
         LimsAnalysis.lims_sample_pk == sample.id,
         LimsAnalysis.lims_sub_sample_pk.is_(None),
     )).scalars().all()
     out: dict[str, str] = {}
     shadow: dict[str, str] = {}
+    ordered: dict[str, str] = {}
     for r in rows:
         if r.provenance == "canonical":
             if r.retested or r.review_state in _EXCLUDED_LINE_STATES:
@@ -63,7 +75,13 @@ def _live_parent_line_states(db: Session, sample: LimsSample) -> dict[str, str]:
             if not st or st in _EXCLUDED_LINE_STATES:
                 continue
             shadow[r.keyword] = st
+        elif r.provenance == PROVENANCE_ORDERED:
+            if r.retested or r.review_state in _EXCLUDED_LINE_STATES:
+                continue
+            ordered[r.keyword] = r.review_state
     for kw, st in shadow.items():
+        out.setdefault(kw, st)
+    for kw, st in ordered.items():
         out.setdefault(kw, st)
     return out
 
@@ -386,8 +404,19 @@ def drive_sample_touchpoint(db: Session, sample_id: str, verb: str, *,
                               trigger=verb, actor_user_id=actor_user_id)
         execute_verb(db, row, verb, trigger=verb,
                      actor_user_id=actor_user_id, attested=attested)
-        evaluate_cascades(db, row, trigger=verb,
-                          actor_user_id=actor_user_id)
+        fired = evaluate_cascades(db, row, trigger=verb,
+                                  actor_user_id=actor_user_id)
+        # Re-run the verb once when the cascades moved the state and the
+        # verb has an edge out of the NEW state. A sample whose engine state
+        # lagged its lines (results verified through the SENAITE proxy, which
+        # never drove the engine) otherwise takes the wrong edge or none:
+        # BW-0094's publish from sample_received hopped to
+        # waiting_for_addon_results, the cascades caught up to verified, and
+        # the publish was never re-tried (published COA on a verified sample;
+        # PB-0172 same from to_be_verified via no_edge).
+        if fired and _find_edge(db, row.native_status, verb) is not None:
+            execute_verb(db, row, verb, trigger=verb,
+                         actor_user_id=actor_user_id, attested=attested)
         return True
     except Exception:
         log.exception("sbs touchpoint failed (never-raise)")
@@ -433,14 +462,26 @@ def run_cascades_bg(sample_pk: int, actor_user_id: Optional[int]) -> None:
 
 
 _TEE_TO_STATES = frozenset({"verified", "published", "cancelled"})
+# `verify` is deliberately absent (Handler ruling 2026-09-18). SENAITE advances
+# its own AR to `verified` as soon as its analyses verify through the analysis
+# proxy, so the sample-level push only ever told SENAITE what it already knew:
+# of the 325 verify rows that reached the retry queue in prod, 292 resolved as
+# "superseded", 33 gave up and NOT ONE ever pushed successfully. `publish` and
+# `cancel` stay: the publish retry has repaired real transient failures (3 of
+# 7), and both keep SENAITE tidy for anyone still opening it. Nothing
+# downstream reads SENAITE's sample-level state any more (all five Data Source
+# keys are mk1; COA Builder and the IS read analysis-level state only).
+_TEE_VERBS = frozenset({"publish", "cancel"})
 
 
 def tee_advances(db: Session, sample: LimsSample, fired: list) -> None:
-    """Spec §5: tee each native advance SENAITE can represent (verify /
-    publish / cancel), prove it by read-back, queue refusals. Never raises."""
+    """Spec §5: tee the native advances still worth telling SENAITE about
+    (publish / cancel, see _TEE_VERBS), prove each by read-back, queue
+    refusals. Never raises."""
     from workflow import senaite_tee
     for ev in fired:
-        if ev.to_status in _TEE_TO_STATES and ev.verb in senaite_tee.EXPECTED_AR_STATES:
+        if (ev.to_status in _TEE_TO_STATES and ev.verb in _TEE_VERBS
+                and ev.verb in senaite_tee.EXPECTED_AR_STATES):
             try:
                 senaite_tee.tee_now(db, sample, ev.verb)
             except Exception:

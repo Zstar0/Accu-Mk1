@@ -138,6 +138,10 @@ export function buildServiceToGroupTierMap(
 export interface ServiceProfileTier {
   tier: SlaTier
   profileName: string
+  /** Id of the winning profile. Always set by `buildServiceToProfileTierMap`;
+   *  optional only so hand-built maps stay valid. Needed to give an UNGROUPED
+   *  service its own per-profile bucket in `resolveSampleTiersByGroup`. */
+  profileId?: number
 }
 
 /**
@@ -167,7 +171,7 @@ export function buildServiceToProfileTierMap(
     for (const svcId of p.member_service_ids) {
       const existing = out.get(svcId)
       if (!existing || tier.target_minutes < existing.tier.target_minutes) {
-        out.set(svcId, { tier, profileName: p.name })
+        out.set(svcId, { tier, profileName: p.name, profileId: p.id })
       }
     }
   }
@@ -471,7 +475,27 @@ export function aggregateOrderSlaVerdict(
  *  group. Kept as a typed constant so consumers can branch on it without magic
  *  strings. */
 export const NO_GROUP_KEY = 'no-group' as const
-export type GroupKey = number | typeof NO_GROUP_KEY
+/** Bucket for an UNGROUPED service that belongs to a tiered analysis profile
+ *  whose clock differs from the default. The lab hangs SLAs off profiles
+ *  (prod: "Sterility USP 71" → 14 working days) and those services sit in no
+ *  service group, so without their own bucket they would be judged against
+ *  the 3-day default. */
+export type ProfileBucketKey = `profile:${number}`
+export type GroupKey = number | typeof NO_GROUP_KEY | ProfileBucketKey
+
+export function profileBucketKey(profileId: number): ProfileBucketKey {
+  return `profile:${profileId}`
+}
+
+/** Same clock = same target and same business-hours rule. Two tiers that
+ *  tick identically do not deserve two header spans. */
+function sameClock(a: SlaTier, b: SlaTier | null): boolean {
+  return (
+    b != null &&
+    a.target_minutes === b.target_minutes &&
+    a.business_hours_only === b.business_hours_only
+  )
+}
 
 /**
  * Service-id → group-id map. When a service is a member of multiple groups,
@@ -553,8 +577,15 @@ export function buildPerGroupPriorityToTierMap(
  * between the priority overrides and the group's own tier — a tiered
  * analysis profile beats its member services' group tier, but still loses to
  * either priority override). Analyses with unmapped keywords or whose
- * service has no group land in a `NO_GROUP_KEY` bucket; the profile-tier step
- * (like the group's-own-tier step) never applies there.
+ * service has no group land in a `NO_GROUP_KEY` bucket, with one exception:
+ * an ungrouped service that belongs to a tiered profile gets its OWN bucket
+ * (`profile:<id>`, labelled with the profile name) when that profile's clock
+ * differs from the default and no global priority override is in force. The
+ * lab configures SLAs on analysis profiles and its USP 71 services sit in no
+ * service group; lumping them into the no-group bucket judged 14-day sterility
+ * work against the 3-day default. A profile that ticks exactly like the
+ * default (prod: Endotoxin, also 1440 min) is NOT split off: same clock, one
+ * span.
  *
  * Returns at least one entry whenever the sample has any analyses (or the
  * sample has a priority override / default tier configured — see edge cases
@@ -581,12 +612,20 @@ export function resolveSampleTiersByGroup(
   globalPriorityToTier: Map<string, SlaTier>,
   perGroupPriorityToTier: Map<string, SlaTier>,
   defaultTier: SlaTier | null
-): Map<GroupKey, { tier: SlaTier | null; reason: SampleSlaReason }> {
+): Map<
+  GroupKey,
+  { tier: SlaTier | null; reason: SampleSlaReason; label?: string }
+> {
   // Bucket each analysis by group, and accumulate unmapped keywords AND
   // mapped service ids per bucket. The service ids feed the profile-tier step
   // below (2.5) — profile membership is per-service, not per-keyword.
   const bucketKeywords = new Map<GroupKey, string[]>()
   const bucketServiceIds = new Map<GroupKey, number[]>()
+  // A global priority override beats a profile tier, so under one there is
+  // nothing to split off: every no-group service takes the override.
+  const globalOverride =
+    inputs.priority != null && globalPriorityToTier.has(inputs.priority)
+  const profileBuckets = new Map<ProfileBucketKey, ServiceProfileTier>()
   for (const a of inputs.analyses) {
     if (!a.keyword) continue
     const svcId = serviceIdOfAnalysis(a, keywordToServiceId)
@@ -597,15 +636,43 @@ export function resolveSampleTiersByGroup(
       continue
     }
     const groupId = serviceIdToGroupId.get(svcId)
-    const key: GroupKey = groupId ?? NO_GROUP_KEY
+    let key: GroupKey = groupId ?? NO_GROUP_KEY
+    if (groupId == null && !globalOverride) {
+      const own = serviceIdToProfileTier.get(svcId)
+      if (own?.profileId != null && !sameClock(own.tier, defaultTier)) {
+        const pKey = profileBucketKey(own.profileId)
+        profileBuckets.set(pKey, own)
+        key = pKey
+      }
+    }
     if (!bucketKeywords.has(key)) bucketKeywords.set(key, [])
     const svcArr = bucketServiceIds.get(key) ?? []
     svcArr.push(svcId)
     bucketServiceIds.set(key, svcArr)
   }
 
-  const result = new Map<GroupKey, { tier: SlaTier | null; reason: SampleSlaReason }>()
+  const result = new Map<
+    GroupKey,
+    { tier: SlaTier | null; reason: SampleSlaReason; label?: string }
+  >()
   for (const [key, keywords] of bucketKeywords) {
+    // 0. Per-profile bucket (ungrouped service, tiered profile, no global
+    // priority override): the profile's own tier, labelled with its name.
+    if (typeof key === 'string' && key !== NO_GROUP_KEY) {
+      const own = profileBuckets.get(key)
+      if (own) {
+        result.set(key, {
+          tier: own.tier,
+          label: own.profileName,
+          reason: {
+            tierSource: 'profile',
+            profileName: own.profileName,
+            unmappedKeywords: keywords,
+          },
+        })
+      }
+      continue
+    }
     // 1. (priority, group_id) — only meaningful when the bucket has a real group.
     if (inputs.priority && key !== NO_GROUP_KEY) {
       const perGroupTier = perGroupPriorityToTier.get(`${inputs.priority}|${key}`)

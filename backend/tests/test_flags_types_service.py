@@ -28,7 +28,8 @@ def test_list_types_returns_builtins(db):
     assert slugs == ["blocker", "critical", "question",
                      "waiting_on_customer", "ready_for_verification",
                      "task", "feature_request", "identity_collision",
-                     "workflow_stranded"]
+                     "workflow_stranded", "scheduled_publish_failed",
+                     "doc_review"]
 
 
 def test_is_valid_type(db):

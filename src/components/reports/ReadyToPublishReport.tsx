@@ -7,6 +7,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import {
+  CalendarClock,
   ChevronDown,
   ChevronRight,
   Flag,
@@ -15,6 +16,7 @@ import {
   PlayCircle,
   XCircle,
 } from 'lucide-react'
+import { fmtWhen, isParkedSchedule } from '@/lib/scheduled-publish'
 import { cn } from '@/lib/utils'
 import { getReadyToPublish } from '@/lib/api'
 import type { ReadyRow, ReadySla } from '@/lib/api'
@@ -26,7 +28,11 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { PriorityGlyph } from '@/components/common/PriorityGlyph'
+import { FlagIndicator } from '@/components/flags/FlagIndicator'
 import { SlaBreakdownTooltip } from '@/components/explorer/SlaBreakdownTooltip'
+import { STATE_LABELS } from '@/components/senaite/senaite-utils'
+import { useStateLabel } from '@/lib/workflow-states-store'
 import type { InboxPriority, SlaTier } from '@/lib/api'
 import {
   Tooltip,
@@ -83,6 +89,9 @@ function fmtAge(iso: string | null): string {
 function statusLabel(status: string): string {
   return status.replace(/_/g, ' ')
 }
+
+/** The partial-publish state: primary COA out, add-on lines pending. */
+const PARTIAL_STATE = 'waiting_for_addon_results'
 
 // ─── Cells ───────────────────────────────────────────────────────────────────
 
@@ -148,9 +157,31 @@ export function SlaCell({ row }: { row: ReadyRow }) {
   )
 }
 
-function ReasonBadges({ row }: { row: ReadyRow }) {
+export function ReasonBadges({ row }: { row: ReadyRow }) {
+  const partialLabel = useStateLabel(
+    PARTIAL_STATE,
+    STATE_LABELS[PARTIAL_STATE]?.label ?? 'Partially Published'
+  )
   return (
     <span className="inline-flex flex-wrap gap-1">
+      {row.status === PARTIAL_STATE && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge
+              variant="outline"
+              className="text-[10px] border-indigo-400/40 text-indigo-300"
+              data-testid="rtp-partial"
+            >
+              {partialLabel}
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="text-xs">
+            {row.lines.pending.length
+              ? 'Primary COA is out; add-on results still pending.'
+              : 'Primary COA is out and the add-on results are in. Publish again to regenerate.'}
+          </TooltipContent>
+        </Tooltip>
+      )}
       {row.reasons.includes('all_verified') && (
         <Badge
           variant="outline"
@@ -207,6 +238,10 @@ function SampleLine({
 }) {
   const held = row.hold !== null
   const busy = actions.busyId === row.sample_id
+  const statusText = useStateLabel(
+    row.status,
+    STATE_LABELS[row.status]?.label ?? statusLabel(row.status)
+  )
   return (
     <tr
       className={cn(
@@ -219,17 +254,17 @@ function SampleLine({
       onClick={() => actions.onOpen(row.sample_id)}
     >
       <td className={cn('py-1.5 pr-2 align-top', indent ? 'pl-8' : 'pl-3')}>
-        <div className="font-mono text-sm text-primary">{row.sample_id}</div>
+        <div className="font-mono text-sm text-primary inline-flex items-center gap-1.5">
+          {row.sample_id}
+          {/* Same glyph as the samples list / inbox; renders nothing on the
+              default priority. */}
+          <PriorityGlyph priority={row.effective_priority} size="row" />
+        </div>
         <div className="text-[11px] text-muted-foreground">
           {!indent && (
             <span className="mr-2 tabular-nums">Order {row.order || '—'}</span>
           )}
           {row.lot ? `Lot ${row.lot}` : 'No lot'}
-          {row.priority !== 'normal' && (
-            <span className="ml-2 uppercase tracking-wide text-amber-400">
-              {row.priority}
-            </span>
-          )}
         </div>
       </td>
       <td className="py-1.5 pr-2 align-top text-xs">
@@ -241,10 +276,12 @@ function SampleLine({
       </td>
       <td className="py-1.5 pr-2 align-top">
         <Badge variant="secondary" className="text-[10px] capitalize">
-          {statusLabel(row.status)}
+          {statusText}
         </Badge>
+        {/* Bounded so a long pending list (native keywords since 1.21.2) cannot
+            widen this auto-layout column and push Why away; full text on hover. */}
         <div
-          className="text-[11px] text-muted-foreground mt-0.5"
+          className="text-[11px] text-muted-foreground mt-0.5 max-w-56 truncate"
           title={linesText(row.lines)}
         >
           {linesText(row.lines)}
@@ -267,8 +304,43 @@ function SampleLine({
               {row.hold.since ? ` · since ${fmtDate(row.hold.since)}` : ''}
             </div>
           </div>
+        ) : isParkedSchedule(row.scheduled) && row.scheduled ? (
+          <div className="text-xs">
+            <Badge
+              variant="outline"
+              className="text-[10px] gap-1 border-sky-500/50 text-sky-400"
+              data-testid="rtp-scheduled"
+            >
+              <CalendarClock className="h-2.5 w-2.5" />
+              {row.scheduled.status === 'firing'
+                ? 'Publishing now'
+                : `Publishes ${fmtWhen(row.scheduled.scheduled_at)}`}
+            </Badge>
+            <div className="text-muted-foreground mt-0.5">
+              COA date {row.scheduled.pdf_date}
+            </div>
+          </div>
         ) : (
-          <ReasonBadges row={row} />
+          <>
+            {row.scheduled?.status === 'failed' && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge
+                    variant="outline"
+                    className="text-[10px] gap-1 border-red-500/50 text-red-400 mb-0.5"
+                    data-testid="rtp-scheduled-failed"
+                  >
+                    <CalendarClock className="h-2.5 w-2.5" />
+                    Scheduled publish failed
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-xs text-xs">
+                  {row.scheduled.last_error ?? 'No error recorded'}
+                </TooltipContent>
+              </Tooltip>
+            )}
+            <ReasonBadges row={row} />
+          </>
         )}
       </td>
       <td className="py-1.5 pr-2 align-top text-xs tabular-nums whitespace-nowrap">
@@ -279,6 +351,11 @@ function SampleLine({
       </td>
       <td className="py-1.5 pr-2 align-top text-right">
         <SlaCell row={row} />
+      </td>
+      <td className="py-1.5 pr-2 align-top" data-testid="rtp-flags">
+        {/* All open flags on the sample, coloured by the dominant type; click
+            opens the flags flyout (the indicator stops row-click propagation). */}
+        <FlagIndicator scope={{ kind: 'sample', sampleId: row.sample_id }} />
       </td>
       <td className="py-1.5 pr-3 align-top text-right whitespace-nowrap">
         {held ? (
@@ -344,6 +421,7 @@ export function ReadyToPublishReport() {
   const [query, setQuery] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
   const [showHeld, setShowHeld] = useState(false)
+  const [showScheduled, setShowScheduled] = useState(false)
   // null = the backend's "most critical first"; a header click sorts that column.
   const [sort, setSort] = useState<ReadySort | null>(null)
   const toggleSort = (key: ReadySortKey) =>
@@ -416,7 +494,7 @@ export function ReadyToPublishReport() {
     [data, query]
   )
   const sorted = useMemo(() => sortRows(filtered, sort), [filtered, sort])
-  const { live, held } = useMemo(() => splitHeld(sorted), [sorted])
+  const { live, held, scheduled } = useMemo(() => splitHeld(sorted), [sorted])
   const groups = useMemo(() => groupByOrder(live), [live])
 
   const toggle = (order: string) =>
@@ -486,6 +564,7 @@ export function ReadyToPublishReport() {
             </button>
           </th>
         ))}
+        <th className="text-left py-2 pr-2 font-medium">Flags</th>
         <th className="py-2 pr-3" />
       </tr>
     </thead>
@@ -546,6 +625,15 @@ export function ReadyToPublishReport() {
           {totals.held > 0 && (
             <Badge variant="outline" className="text-muted-foreground">
               {totals.held} on hold
+            </Badge>
+          )}
+          {(totals.scheduled ?? 0) > 0 && (
+            <Badge
+              variant="outline"
+              className="border-sky-500/40 text-sky-400"
+              data-testid="rtp-total-scheduled"
+            >
+              {totals.scheduled} scheduled
             </Badge>
           )}
         </div>
@@ -642,6 +730,46 @@ export function ReadyToPublishReport() {
           )}
         </div>
       )}
+
+      {scheduled.length > 0 && (
+        <div className="rounded-md border border-border/40">
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 px-3 py-2 text-xs text-muted-foreground hover:text-foreground"
+            onClick={() => setShowScheduled(v => !v)}
+            data-testid="rtp-scheduled-toggle"
+          >
+            {showScheduled ? (
+              <ChevronDown className="h-3.5 w-3.5" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5" />
+            )}
+            <CalendarClock className="h-3.5 w-3.5" />
+            Scheduled ({scheduled.length})
+            <span className="ml-auto text-[11px]">
+              Publishes automatically at the scheduled time; open the sample to
+              reschedule or cancel.
+            </span>
+          </button>
+          {showScheduled && (
+            <div className="overflow-x-auto border-t border-border/40">
+              <table className="w-full text-sm">
+                {header}
+                <tbody>
+                  {scheduled.map(r => (
+                    <SampleLine
+                      key={r.sample_id}
+                      row={r}
+                      indent={false}
+                      actions={actions}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -703,6 +831,7 @@ function GroupRows({
             </span>
           )}
         </td>
+        <td className="py-2 pr-2" />
         <td className="py-2 pr-3" />
       </tr>
       {!collapsed &&

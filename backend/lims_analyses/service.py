@@ -1557,6 +1557,9 @@ def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, s
         row's mirror_review_state, so legacy vials keep their lock without
         a SENAITE call (shadow rows are native DB) — EXCEPT where the family
         still holds a PROMOTABLE vial row for that keyword (see below).
+      - Live 'ordered' placeholders (native demand not yet promoted) fill
+        any keyword still absent with their pending state — never a lock,
+        but the Ready-to-Publish report grades this map and must see them.
 
     The fallback's exception (P-2553 / P-2606, 2026-09-09): a promote whose
     SENAITE half landed and whose Mk1 half did not leaves the keyword with no
@@ -1577,6 +1580,7 @@ def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, s
     changed exactly four dormant unassigned rows (BW-0028..31, WP-4067) and
     no genuinely stuck family; this one changes neither.
     """
+    from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
     from models import LimsSample, LimsSubSample
 
     parent = db.execute(
@@ -1589,7 +1593,7 @@ def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, s
         select(LimsAnalysis).where(
             LimsAnalysis.lims_sample_pk == parent.id,
             LimsAnalysis.lims_sub_sample_pk.is_(None),
-            LimsAnalysis.provenance.in_(("canonical", "shadow")),
+            LimsAnalysis.provenance.in_(("canonical", "shadow", PROVENANCE_ORDERED)),
         )
     ).scalars().all())
 
@@ -1625,6 +1629,21 @@ def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, s
             and r.mirror_review_state
         ):
             states[r.keyword] = r.mirror_review_state
+    # Ordered placeholders (parent_placeholders.py) are pre-promotion native
+    # demand. A live one whose keyword no live canonical/shadow row owns reads
+    # as its own pending state, so Ready-to-Publish — which grades this map —
+    # cannot call a sample all-verified while a paid-for native test is still
+    # on its vial (P-2739 PCR sterility, 2026-09-14). Never 'verified', so the
+    # FE lock gate is untouched; a delivered service's live canonical row is
+    # already in `states` (canonical wins, as on the parent table).
+    for r in rows:
+        if (
+            r.provenance == PROVENANCE_ORDERED
+            and not r.retested
+            and r.review_state not in ("rejected", "retracted")
+            and r.keyword not in states
+        ):
+            states[r.keyword] = r.review_state
     return states
 
 

@@ -193,6 +193,79 @@ def test_rule4_partial_pending_profile_aborts_not_skips(db_session, monkeypatch)
         build_native_sections(db_session, parent)
 
 
+def _add_parent_row(db, parent, svc, *, state, provenance="canonical", result=None):
+    from models import LimsAnalysis
+    db.add(LimsAnalysis(
+        lims_sample_pk=parent.id, analysis_service_id=svc.id,
+        keyword=svc.keyword, title=svc.title, provenance=provenance,
+        result_value=result, result_unit=svc.unit, review_state=state,
+    ))
+    db.flush()
+
+
+def test_rule4_member_withdrawn_in_manage_analyses_prints_without_it(db_session, monkeypatch, caplog):
+    """Withdrawn member (2026-09-14): a metal the lab could not run and
+    REMOVED from the sample (Manage Analyses soft-rejects its 'ordered'
+    placeholder; a worked one also has its canonical force-retracted) is no
+    longer a paid test on this sample — the section prints the remaining
+    members, nothing is deferred, and each skip is logged."""
+    prof, svcs = _mk_native_profile(
+        db_session, key="heavy_metals",
+        services=[("HM-PB", "mk1"), ("HM-HG", "mk1"), ("HM-AS", "mk1")],
+    )
+    from models import LimsSample
+    parent = LimsSample(sample_id="P-7001")
+    db_session.add(parent); db_session.flush()
+    _add_parent_row(db_session, parent, svcs[0], state="verified", result="0.12")
+    # un-worked removal: rejected placeholder only
+    _add_parent_row(db_session, parent, svcs[1], state="rejected", provenance="ordered")
+    # worked removal: rejected placeholder + force-retracted canonical
+    _add_parent_row(db_session, parent, svcs[2], state="rejected", provenance="ordered")
+    _add_parent_row(db_session, parent, svcs[2], state="retracted", result="0.30")
+    monkeypatch.setattr(
+        "coa.native_sections.fetch_sample_services",
+        lambda sample_id: {"services": {"heavy_metals": True}, "package": None},
+    )
+    with caplog.at_level("WARNING", logger="coa.native_sections"):
+        doc = build_native_sections(db_session, parent)
+    [section] = doc["sections"]
+    assert [r["keyword"] for r in section["rows"]] == ["HM-PB"]
+    assert "deferred_sections" not in doc
+    assert sum("native_section_member_withdrawn" in r.getMessage()
+               for r in caplog.records) == 2
+
+
+@pytest.mark.parametrize("shape", [
+    "placeholder_live_after_retest",   # {ordered/unassigned, canonical/retracted}
+    "retracted_only_no_placeholder",   # {canonical/retracted}
+    "placeholder_pending",             # {ordered/unassigned}
+])
+def test_rule4_dead_but_not_withdrawn_still_aborts(db_session, monkeypatch, shape):
+    """Only an explicit Manage Analyses removal lifts Rule 4. A retest
+    cascade RETRACTS (never rejects) and leaves the never-retired 'ordered'
+    placeholder live; a retracted row with no placeholder (pre-placeholder
+    sample) carries no rejected signature; a pending placeholder is simply
+    not done. All three still abort, now with the actionable message."""
+    prof, svcs = _mk_native_profile(
+        db_session, key="heavy_metals",
+        services=[("HM-PB", "mk1"), ("HM-HG", "mk1")],
+    )
+    from models import LimsSample
+    parent = LimsSample(sample_id="P-7001")
+    db_session.add(parent); db_session.flush()
+    _add_parent_row(db_session, parent, svcs[0], state="verified", result="0.12")
+    if shape != "retracted_only_no_placeholder":
+        _add_parent_row(db_session, parent, svcs[1], state="unassigned", provenance="ordered")
+    if shape != "placeholder_pending":
+        _add_parent_row(db_session, parent, svcs[1], state="retracted", result="0.30")
+    monkeypatch.setattr(
+        "coa.native_sections.fetch_sample_services",
+        lambda sample_id: {"services": {"heavy_metals": True}, "package": None},
+    )
+    with pytest.raises(NativeSectionsError, match="HM-HG.*no eligible result.*Manage Analyses"):
+        build_native_sections(db_session, parent)
+
+
 def test_fully_pending_profile_deferred_other_sections_still_render(db_session, monkeypatch, caplog):
     """(a) The core partial-COA scenario: an armed profile with ZERO results
     yet (P-2432) must not block the rest of the certificate. Two profiles
@@ -728,7 +801,8 @@ def test_wire_carries_loq_and_display_fields(db_session, monkeypatch):
 
 
 def test_censoring_boundary(db_session, monkeypatch):
-    """result == loq is NOT censored; below is; above is not."""
+    """result == loq IS censored (at-or-below the LOQ prints "< LOQ",
+    ruling 2026-09-14); below is; above is not."""
     from decimal import Decimal
     from models import AnalysisServiceSpec, LimsAnalysis, LimsSample
     prof, svcs = _mk_native_profile(db_session, key="heavy_metals",
@@ -753,7 +827,7 @@ def test_censoring_boundary(db_session, monkeypatch):
         return p
 
     doc = build_native_sections(db_session, _parent("P-8001", "0.5"))
-    assert doc["sections"][0]["rows"][0]["result_display"] is None
+    assert doc["sections"][0]["rows"][0]["result_display"] == "< LOQ"
 
     doc = build_native_sections(db_session, _parent("P-8002", "0.51"))
     assert doc["sections"][0]["rows"][0]["result_display"] is None

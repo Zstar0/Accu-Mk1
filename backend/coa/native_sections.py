@@ -23,6 +23,11 @@ tested, so there is nothing incomplete to print. That profile is DEFERRED
 still aborts, unchanged, the moment a profile has SOME eligible members and
 SOME missing — a half-filled section must never print. See
 build_native_sections for the eligible/partial/deferred split.
+
+Withdrawn member (2026-09-14): a member the lab REMOVED from the sample in
+Manage Analyses (every parent-tier row dead, one of them 'rejected') is not
+missing — it is no longer a paid test on this sample — so it is skipped and
+logged rather than aborting the section (a metal that could not be run).
 """
 from __future__ import annotations
 
@@ -171,6 +176,28 @@ def _eligible_parent_row(db: Session, parent_pk: int, service_id: int):
     ).scalars().first()
 
 
+def _withdrawn_by_lab(db: Session, parent_pk: int, service_id: int) -> bool:
+    """True iff the lab took this member OFF the sample in Manage Analyses
+    (lims_analyses/manage_native.remove_parent_native_analysis): every
+    parent-tier row for the service is dead AND at least one is 'rejected'.
+    'rejected' is the soft-reject signature — parent-tier reject is reachable
+    only through soft_reject_parent_placeholder. A retest cascade only
+    RETRACTS, and the 'ordered' placeholder is never retired (it stays live
+    through promote and retest), so a member that is pending, under retest,
+    or never seeded still reads as missing and Rule 4 aborts."""
+    from models import LimsAnalysis
+
+    states = db.execute(
+        select(LimsAnalysis.review_state).where(
+            LimsAnalysis.lims_sample_pk == parent_pk,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+            LimsAnalysis.analysis_service_id == service_id,
+        )
+    ).scalars().all()
+    return (bool(states) and all(s in _DEAD_STATES for s in states)
+            and "rejected" in states)
+
+
 def _method_label(db: Session, method_id: Optional[int]) -> str:
     if method_id is None:
         return ""
@@ -212,7 +239,10 @@ def _result_display(spec, result) -> Optional[str]:
         return None
     if not math.isfinite(value):
         return None
-    return "< LOQ" if value < float(spec.loq) else None
+    # At-or-below the LOQ prints "< LOQ" (Handler ruling 2026-09-14: a result
+    # reported AT the LOQ is the reporting floor, not a quantified figure —
+    # Endotoxin USP85 2.50 vs LOQ 2.5). The verdict still uses the raw number.
+    return "< LOQ" if value <= float(spec.loq) else None
 
 
 def build_native_sections(db: Session, parent) -> dict:
@@ -284,6 +314,16 @@ def build_native_sections(db: Session, parent) -> dict:
         rows = []
         for svc, row in member_rows:
             if row is None:
+                if _withdrawn_by_lab(db, parent.id, svc.id):
+                    # The lab removed this member from the sample in Manage
+                    # Analyses (e.g. a metal that could not be run) — it is
+                    # no longer a paid, reportable test on THIS sample, so
+                    # the section prints without it. Logged, never silent.
+                    log.warning(
+                        "native_section_member_withdrawn sample=%s profile=%s keyword=%s",
+                        sample_id, prof.key, svc.keyword,
+                    )
+                    continue
                 # Rule 4: a partially-pending profile — SOME members have an
                 # eligible result and this one doesn't — makes the section
                 # INCOMPLETE — abort, never skip. (A fully-pending profile
@@ -291,7 +331,9 @@ def build_native_sections(db: Session, parent) -> dict:
                 raise NativeSectionsError(
                     f"native sections: profile '{prof.key}' member service "
                     f"'{svc.keyword}' (id={svc.id}) has no eligible result "
-                    f"(need review_state in {ELIGIBLE_STATES}) on {sample_id}"
+                    f"(need review_state in {ELIGIBLE_STATES}) on {sample_id} "
+                    f"— enter and verify it, or remove it from the sample in "
+                    f"Manage Analyses to issue the certificate without it"
                 )
             if not (row.result_value or "").strip():
                 # Rule 3 (row half): an eligible row with an empty result.

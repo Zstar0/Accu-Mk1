@@ -1191,6 +1191,14 @@ class LimsSample(Base):
     status: Mapped[Optional[str]] = mapped_column(String(50))
     peptide_name: Mapped[Optional[str]] = mapped_column(String(200))
     client_sample_id: Mapped[Optional[str]] = mapped_column(String(200))
+    # TRUE once SENAITE refused a ClientSampleID write because the AR's
+    # workflow state locks the field (verified/published — 401 "Not allowed to
+    # set the field"). From then on Mk1 owns the value: the edit landed here
+    # only, and _populate_basic_info must never overwrite it with SENAITE's
+    # frozen copy (PB-0553, 2026-09-16).
+    client_sample_id_locked_in_senaite: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
     date_sampled: Mapped[Optional[datetime]] = mapped_column(DateTime)
     date_received: Mapped[Optional[datetime]] = mapped_column(DateTime)
     is_retest: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -1374,6 +1382,47 @@ class LimsSampleRemark(Base):
 
     def __repr__(self) -> str:
         return f"<LimsSampleRemark(id={self.id}, sample_pk={self.lims_sample_pk})>"
+
+
+class LimsScheduledPublish(Base):
+    """A COA publish parked for a future time (scheduled publish, 2026-09-17).
+
+    One row per scheduling act. `status` walks pending -> firing -> published
+    | failed, or -> cancelled from pending/failed. The partial unique index
+    keeps ONE pending row per sample; history rows (published/failed/cancelled)
+    stay for the audit trail. `pdf_date` is the MM/DD/YYYY lab-local date the
+    draft was regenerated with, so the certificate prints the date it ships.
+    Keyed by sample_id string (no FK) like lims_sample_transitions: the row
+    must survive registry oddities. DDL lives in database._run_migrations
+    (lims_sample_remarks precedent); this model serves SQLite test fixtures.
+    """
+    __tablename__ = "lims_scheduled_publishes"
+    __table_args__ = (
+        Index("uq_lims_scheduled_publishes_pending", "sample_id", unique=True,
+              postgresql_where=text("status = 'pending'"),
+              sqlite_where=text("status = 'pending'")),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    sample_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    pdf_date: Mapped[str] = mapped_column(String(10), nullable=False)
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="pending")
+    created_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+    fired_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    cancelled_by_user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<LimsScheduledPublish(id={self.id}, sample={self.sample_id}, status={self.status})>"
 
 
 class LimsParentAttachment(Base):

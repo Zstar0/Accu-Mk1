@@ -33,6 +33,7 @@ import {
   Radar,
   Eraser,
   Ban,
+  CalendarClock,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -79,6 +80,9 @@ import {
   generateSenaiteCOA,
   generateVialCOAs,
   publishSenaiteCOA,
+  getScheduledPublish,
+  schedulePublish,
+  cancelScheduledPublish,
   regenPrimaryCOA,
   regenAdditionalCOA,
   listSamplePreps,
@@ -190,6 +194,12 @@ import { ReplaceAnalyteDialog } from '@/components/senaite/ReplaceAnalyteDialog'
 import { RelabelNativeSlotDialog } from '@/components/senaite/RelabelNativeSlotDialog'
 import { ClearAnalyteDialog } from '@/components/senaite/ClearAnalyteDialog'
 import { CancelSampleDialog } from './CancelSampleDialog'
+import {
+  SchedulePublishDialog,
+  ScheduledPublishBadge,
+} from '@/components/senaite/SchedulePublishDialog'
+import type { ScheduledPublishState } from '@/lib/api'
+import { fmtWhen } from '@/lib/scheduled-publish'
 import { isHplcAnalyteService } from '@/lib/hplc-analyte-services'
 import { needsMk1AnalysesSwap } from '@/lib/mk1-analyses-swap'
 import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
@@ -3696,6 +3706,11 @@ export function SampleDetails() {
   const [coaGenerations, setCoaGenerations] = useState<ExplorerCOAGeneration[]>(
     []
   )
+  // Scheduled publish (parent-only): active row + suggestion for the dialog.
+  const [scheduleState, setScheduleState] =
+    useState<ScheduledPublishState | null>(null)
+  const [scheduleOpen, setScheduleOpen] = useState(false)
+  const [isSchedulingCOA, setIsSchedulingCOA] = useState(false)
   const [isGeneratingCOA, setIsGeneratingCOA] = useState(false)
   const [isGeneratingVialCOAs, setIsGeneratingVialCOAs] = useState(false)
   const [isPublishingCOA, setIsPublishingCOA] = useState(false)
@@ -4669,6 +4684,18 @@ export function SampleDetails() {
     }
   }, [sampleId])
 
+  // Scheduled publish state (parent-only): the active row + a fresh
+  // suggestion for the dialog. Refreshed after every COA action.
+  const refreshSchedule = useCallback(() => {
+    if (!sampleId || !isParent) return
+    getScheduledPublish(sampleId)
+      .then(setScheduleState)
+      .catch(() => setScheduleState(null))
+  }, [sampleId, isParent])
+  useEffect(() => {
+    refreshSchedule()
+  }, [refreshSchedule])
+
   // Fetch retest relationship metadata (drives the retest banner + chain pills)
   useEffect(() => {
     if (!sampleId) {
@@ -4929,6 +4956,43 @@ export function SampleDetails() {
   }
 
   const handlePublishCOA = async () => {
+    // A pending schedule means the draft carries a FUTURE Published Date:
+    // publishing now first cancels the schedule, which regenerates the draft
+    // with today's date, then publishes that.
+    const pending =
+      scheduleState?.schedule?.status === 'pending'
+        ? scheduleState.schedule
+        : null
+    if (pending) {
+      const go = window.confirm(
+        `This sample is scheduled to publish ${fmtWhen(pending.scheduled_at)}.\n\n` +
+          `Publish now instead? The COA is regenerated with today's date first.`
+      )
+      if (!go) return
+      setIsPublishingCOA(true)
+      const settleCancel = startCOAConsole(
+        `cancel-schedule ${sampleId}`,
+        generateSteps(isParent ? coaGenSource : 'senaite')
+      )
+      try {
+        const cancelled = await cancelScheduledPublish(sampleId)
+        if (!cancelled.success) {
+          settleCancel(false, cancelled.message)
+          toast.error('Publish now', { description: cancelled.message })
+          setIsPublishingCOA(false)
+          refreshSchedule()
+          return
+        }
+        settleCancel(true)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unknown error'
+        settleCancel(false, msg)
+        toast.error('Publish now', { description: msg })
+        setIsPublishingCOA(false)
+        refreshSchedule()
+        return
+      }
+    }
     setIsPublishingCOA(true)
     const settle = startCOAConsole(`publish-coa ${sampleId}`, PUBLISH_STEPS)
     try {
@@ -4954,6 +5018,94 @@ export function SampleDetails() {
       toast.error('COA publish failed', { description: msg })
     } finally {
       setIsPublishingCOA(false)
+      refreshSchedule()
+    }
+  }
+
+  /** Schedule (or reschedule) the publish: regenerates the draft with the
+   *  scheduled lab date, then parks the publish. `iso` is UTC. */
+  const handleSchedulePublish = async (iso: string) => {
+    setIsSchedulingCOA(true)
+    const settle = startCOAConsole(
+      `schedule-publish ${sampleId}`,
+      generateSteps(isParent ? coaGenSource : 'senaite')
+    )
+    try {
+      const result = await schedulePublish(sampleId, iso)
+      if (result.success) {
+        settle(true)
+        setScheduleOpen(false)
+        toast.success('Publish scheduled', { description: result.message })
+        if (result.warning) {
+          toast.warning('COA generated with warning', {
+            description: result.warning,
+          })
+        }
+        refreshSample(sampleId)
+        getExplorerCOAGenerations(sampleId, 50)
+          .then(setCoaGenerations)
+          .catch(() => undefined)
+        getSampleAdditionalCOAs(sampleId)
+          .then(setAdditionalCoas)
+          .catch(() => undefined)
+      } else {
+        settle(false, result.message ?? 'Scheduling failed')
+        toast.error('Schedule publish failed', { description: result.message })
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error'
+      settle(false, msg)
+      toast.error('Schedule publish failed', { description: msg })
+    } finally {
+      setIsSchedulingCOA(false)
+      refreshSchedule()
+    }
+  }
+
+  /** Cancel a pending schedule (regenerates the draft with today's date) or
+   *  dismiss a failed one. */
+  const handleCancelSchedule = async () => {
+    const s = scheduleState?.schedule
+    if (!s) return
+    const pending = s.status === 'pending'
+    if (
+      pending &&
+      !window.confirm(
+        `Cancel the publish scheduled for ${fmtWhen(s.scheduled_at)}?\n\n` +
+          `The draft COA is regenerated with today's date.`
+      )
+    )
+      return
+    setIsSchedulingCOA(true)
+    const settle = pending
+      ? startCOAConsole(
+          `cancel-schedule ${sampleId}`,
+          generateSteps(isParent ? coaGenSource : 'senaite')
+        )
+      : null
+    try {
+      const result = await cancelScheduledPublish(sampleId)
+      settle?.(result.success, result.success ? undefined : result.message)
+      if (result.success) {
+        toast.success(pending ? 'Schedule cancelled' : 'Dismissed', {
+          description: result.message,
+        })
+        if (pending) {
+          refreshSample(sampleId)
+          getExplorerCOAGenerations(sampleId, 50)
+            .then(setCoaGenerations)
+            .catch(() => undefined)
+        }
+      } else {
+        toast.error('Cancel schedule', { description: result.message })
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error'
+      settle?.(false, msg)
+      toast.error('Cancel schedule', { description: msg })
+    } finally {
+      setIsSchedulingCOA(false)
+      refreshSchedule()
     }
   }
 
@@ -5085,6 +5237,15 @@ export function SampleDetails() {
                     up the sample → order → customer chain. Renders nothing
                     when the effective priority is the default. */}
                 <PriorityGlyph priority={data.priority} size="header" />
+                {/* Scheduled publish chip (parent-only): when it fires, or
+                    red when the fire failed. The X cancels / dismisses. */}
+                {isParent && scheduleState?.schedule && (
+                  <ScheduledPublishBadge
+                    schedule={scheduleState.schedule}
+                    busy={isSchedulingCOA}
+                    onCancel={handleCancelSchedule}
+                  />
+                )}
                 {/* Read-source indicator + tri-state override — parent-only.
                     The override only affects parent basic-info reads (see
                     resolveSampleData: sub-sample fetches are hardcoded to
@@ -5513,12 +5674,14 @@ export function SampleDetails() {
                           disabled={
                             isGeneratingCOA ||
                             isPublishingCOA ||
-                            isGeneratingVialCOAs
+                            isGeneratingVialCOAs ||
+                            isSchedulingCOA
                           }
                         >
                           {isGeneratingCOA ||
                           isPublishingCOA ||
-                          isGeneratingVialCOAs ? (
+                          isGeneratingVialCOAs ||
+                          isSchedulingCOA ? (
                             <Loader2 size={12} className="animate-spin" />
                           ) : (
                             <ChevronDown size={12} />
@@ -5561,6 +5724,23 @@ export function SampleDetails() {
                             className="cursor-pointer"
                           >
                             Publish Accumark COA
+                          </DropdownMenuItem>
+                        )}
+                        {isParent && (
+                          <DropdownMenuItem
+                            onClick={() => setScheduleOpen(true)}
+                            disabled={
+                              isSchedulingCOA ||
+                              isPublishingCOA ||
+                              isGeneratingCOA
+                            }
+                            className="cursor-pointer"
+                            data-testid="schedule-publish-menu"
+                          >
+                            <CalendarClock className="h-4 w-4 mr-2" />
+                            {scheduleState?.schedule?.status === 'pending'
+                              ? 'Reschedule publish…'
+                              : 'Schedule publish…'}
                           </DropdownMenuItem>
                         )}
                         {data.review_state !== 'cancelled' && (
@@ -7102,6 +7282,17 @@ export function SampleDetails() {
         onClose={() => setCancelOpen(false)}
         onCancelled={() => refreshSample(data.sample_id)}
       />
+      {isParent && (
+        <SchedulePublishDialog
+          open={scheduleOpen}
+          onOpenChange={setScheduleOpen}
+          sampleId={data.sample_id}
+          state={scheduleState}
+          busy={isSchedulingCOA}
+          onSubmit={handleSchedulePublish}
+          onRefresh={refreshSchedule}
+        />
+      )}
 
       {/* Analyses Table */}
       <AnalysisTable

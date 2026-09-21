@@ -22,10 +22,12 @@ import { ActiveBoxesPage } from '@/components/intake/ActiveBoxesPage'
 import { UserManagement } from '@/components/auth/UserManagement'
 import { ProfilePage } from '@/components/auth/ProfilePage'
 import { ReportsDashboard } from '@/components/reports/ReportsDashboard'
+import { DocumentsPage } from '@/components/documents/DocumentsPage'
 import { ReportsSyncDebug } from '@/components/reports/ReportsSyncDebug'
 import { CheckInTimesReport } from '@/components/reports/CheckInTimesReport'
 import { ThroughputReport } from '@/components/reports/ThroughputReport'
 import { ReadyToPublishReport } from '@/components/reports/ReadyToPublishReport'
+import { ScheduledPublishesReport } from '@/components/reports/ScheduledPublishesReport'
 import { SlaPerformanceReport } from '@/components/reports/SlaPerformanceReport'
 import { TurnaroundReport } from '@/components/reports/TurnaroundReport'
 import { PeptideRequestsList } from '@/pages/PeptideRequestsList'
@@ -80,9 +82,12 @@ export function MainWindowContent({
       case 'reports':
         if (activeSubSection === 'sync-debug') return <ReportsSyncDebug />
         if (activeSubSection === 'checkin-times') return <CheckInTimesReport />
+        if (activeSubSection === 'documents') return <DocumentsPage />
         if (activeSubSection === 'throughput') return <ThroughputReport />
         if (activeSubSection === 'ready-to-publish')
           return <ReadyToPublishReport />
+        if (activeSubSection === 'scheduled-publishes')
+          return <ScheduledPublishesReport />
         if (activeSubSection === 'sla-performance')
           return <SlaPerformanceReport />
         if (activeSubSection === 'bottlenecks') return <TurnaroundReport />

@@ -38,6 +38,107 @@
 - Native-born guards added to the remaining SENAITE-uid-keyed paths: attachment capture falls back to `sample_id` when the uid lookup misses; the SENAITE refresh (and its debug-refresh route) no-op for native-born rows; the IS event-stream puller and the parity script skip native-born samples.
 - Behaviour-neutral for SENAITE-born samples throughout.
 
+## v1.24.0 - 2026-09-18
+
+### Added
+- **Discussion threads on controlled documents.** A document can now be flagged like a sample or a worksheet: open a thread from the viewer header, @mention someone, assign it, give it a due date, attach files, and watch for the document changing status ("tell me when SOP-0001 goes active"). A thread is attached to the document's code, not to one revision, so a comment like "section 3 contradicts the spill procedure" stays open across the revision that answers it, and the thread shows which revision it was raised on. The library list gets a Threads column with the open count per document, and Documents is a filter in the flags inbox. A new "Document Review" flag type is meant for review comments and change requests and applies to documents only; every general type (Question, Blocker, Task) works on documents too. An open thread does not stop a draft from being activated. Raising a thread on a code that does not exist is refused.
+
+### Changed
+- **Accu-Mk1 no longer pushes "verified" to SENAITE, and a refused SENAITE push is no longer flagged.** SENAITE advances its own sample to verified as soon as its analyses verify, so the sample-level push only ever told it what it already knew: of the 325 verify pushes that reached the retry queue in production, 292 found SENAITE already there, 33 gave up, and none ever did anything. The publish and cancel pushes stay, with their retries (the publish retry has repaired real transient failures). Separately, the stranded-sample check no longer raises a flag when a SENAITE push gives up. Accu-Mk1 owns sample status, every Data Source reads Accu-Mk1, and nothing downstream reads SENAITE's sample-level state, so those 34 flags were noise; the one real divergence among them (P-1449) was correct in Accu-Mk1 with its COA delivered. The retry rows are kept as history and the workflow page's "SENAITE lagging" count still reports them.
+
+### Fixed
+- **Removing an Accu-Mk1-native analysis from the SENAITE remove control now says where to go instead of failing four times.** The SENAITE-backed trash in Manage Analyses proxies to the Integration Service, which removes an analysis object from the SENAITE sample. A service created in Accu-Mk1 (`origin='mk1'`, such as the heavy metals) has no SENAITE object, so the call could never succeed and came back as "it may be in a locked state" (P-2823 / MECURY-PPM, 2026-09-18, four attempts before the lab found the working control). Accu-Mk1 now refuses up front with a 409 that names the "Native (Accu-Mk1)" block in the same overlay. The guard is scoped to the proxy case only, so a native vial page still removes those rows, and it sits ahead of the worked-row guard so a refusal never writes first.
+
+## v1.23.0 - 2026-09-18
+
+### Added
+- **Scheduled publish.** Sample Details > Actions > "Schedule publish…" parks a finished COA and publishes it later, on the normal turnaround cadence. Confirming regenerates the draft so the certificate's Published Date (and the reviewed / certified dates) read the scheduled lab-local date, then a once-a-minute job publishes it through the same route the Publish button uses. The dialog suggests a time late in the sample's SLA window (50 to 70 hours after receipt on the 3-day tier, the same share of a longer tier such as USP 71), skipping closed days and never later than an hour before the SLA deadline. Nothing publishes between 10pm and 5am lab time. A failed scheduled publish is never retried: it shows a red badge and raises a "Scheduled Publish Failed" flag for whoever scheduled it. Cancelling regenerates the draft with today's date, "Publish now" does the same before publishing, and any manual publish retires the schedule. While a publish is scheduled, the publish and regen routes answer 409 to any caller that has not cancelled first, so a post-dated certificate cannot ship early. New table `lims_scheduled_publishes`; minimum scheduling lead is 30 minutes (`SCHEDULED_PUBLISH_MIN_LEAD_MINUTES` overrides, for dev stacks).
+- **Reports > Scheduled Publishes.** Lists every scheduled publish (firing, pending soonest first, failed), with a history toggle and a remove button. Ready to Publish parks scheduled samples in their own "Scheduled" section, out of the live counts, the way it parks On Hold samples; a failed scheduled publish stays in the live list.
+
+### Changed
+- **SLA clocks honour the tier set on an analysis profile.** SLA tiers hang off analysis profiles ("Sterility USP 71" = 14 working days), and the services on those profiles sit in no service group, so the Sample Details header, Order Status, Ready to Publish and SLA Performance judged USP 71 work against the 3-day default. Each service now owes one tier: the tightest tiered active profile, else the tightest group tier, else the default. The header and Order Status give an ungrouped service on a tiered profile its own bucket labelled with the profile name. Ready to Publish judges a sample against its tightest tier until a COA has gone out, then its loosest. SLA Performance judges a sample against its tightest tier (its clock stops at the first primary COA). "A COA has already gone out" reads the publish ledger as well as the `coa_published` event, which has no history before 2026-09-17.
+
+### Fixed
+- **A partially published sample no longer raises a "stranded" flag.** Publishing a COA while sterility, endotoxin or the heavy metals are still outstanding parks the sample at `waiting_for_addon_results`, or leaves it at `to_be_verified` when the last result is already in and only needs verifying. Both are designed resting places with their own catalog edges, but the stranded-sample detector read any publish as "this sample is finished" and flagged every one of them. It now flags only a sample whose status column disagrees with Accu-Mk1's own workflow engine, which is the real fault it was written to catch (a published sample whose badge never moved, the P-2605 shape). Measured against production before the change: all 20 open `published_in_ledger_not_status` flags were partial publishes, so the board drops from 55 open flags to 35 with no other sample affected.
+
+## v1.22.3 - 2026-09-18
+
+### Fixed
+- **A document revision no longer has to restate its title.** `POST /api/documents` with a `code` and no `title` answered 422, so an agent asked to "revise SOP-0001 with this content" had to know and repeat the title. A revision now inherits the title and the description of the revision it supersedes when they are omitted; sending them still overrides. A new document still requires a title.
+
+## v1.22.2 - 2026-09-18
+
+### Changed
+- **The documents library applies the house theme itself.** The `accumark-docs` stylesheet used to be inlined by the Claude Code publish script before upload, so a document created any other way (the labmanager MCP, an admin) arrived unstyled or with whatever CSS its author invented; the first bot-authored SOP (SOP-0001) came in with its own grayscale sheet. Mk1 now inlines the theme when a document is created, as the first `<style>` in `<head>` so a page's own CSS still wins, and adds the Google Fonts link when the page has none. A document that already carries the `accumark-docs` marker is left byte for byte as sent, so existing revisions and artifact pages are unaffected. The canonical file moved to `backend/documents/accumark-docs.css` so the backend image ships it; the publish skill no longer inlines. The size limit now applies to the stored (themed) bytes.
+
+## v1.22.1 - 2026-09-17
+
+### Added
+- **Per-agent document tokens, and a co-author on every agent-written revision.** Agents (Jarvis, TARS, Claude Code) now publish to the documents library with their own token from `MK1_DOCUMENT_AGENT_TOKENS` (`jarvis:<token>,tars:<token>`, tokens of 32+ characters) instead of the internal service token. The internal token also opens the order and sample service endpoints, so it must not sit on a bot host; an agent token opens the documents API and nothing else. The token, not the request body, names the agent: a revision written through one records that agent as `co_author` (shown as "by Forrest Parker with jarvis" in the viewer and in the Author column), and a metadata edit records "<who> via <agent>". Agent tokens can create, revise, retitle, activate and archive; they cannot delete a draft or manage categories (403), which enforces on the server what the bot tooling already assumed. Admin logins and the internal service token behave exactly as before. Every agent write is logged as `documents.agent_write`. New column `documents.co_author`.
+
+## v1.22.0 - 2026-09-17
+
+### Added
+- **Documents library.** Reports → Documents lists controlled documents published by agents (artifacts, SOPs), with search, category and status filters, a sandboxed in-app viewer, revision history, download, and admin retitle. Documents carry a code (ART-0012 / SOP-0003), a revision, draft/active/retired status and an effective date, following the Methods lifecycle; a new revision retires the previous active one and content is never rewritten. Settings → Documents manages categories. Agents publish with the `mk1-publish-document` skill over the existing service token (`POST /api/documents`). New tables `document_categories`, `documents`, `document_code_counters`; HTML bytes live in the vial-photo blob store, under `documents/` inside the photo prefix (`MK1_DOCUMENTS_S3_PREFIX` overrides). Spec: `docs/superpowers/specs/2026-09-15-documents-library-design.md`.
+
+## v1.21.9 — 2026-09-16
+
+### Fixed
+- **Client Sample ID can be changed after a sample is verified or (partially) published.** SENAITE locks the field once the AR leaves the editable states and answered every save with 401 "Not allowed to set the field 'ClientSampleID'" (PB-0553). Accu-Mk1 is already the read source for this field, so the edit is now saved in Mk1 when SENAITE refuses it — the row is flagged (`client_sample_id_locked_in_senaite`) so the five-minute SENAITE refresh never overwrites it with SENAITE's frozen copy, and the toast says the change lives in Accu-Mk1 only. A plain 401 (bad credentials) or a lock on any other field still fails as before.
+
+### Changed
+- **Ready to Publish rows show the sample's priority glyph and a Flags column.** The glyph is the same one the samples list and inbox use and reads the resolved priority (customer → order → sample → vial); the page previously printed a text tag from the legacy ingest-time priority table, which stopped agreeing with the rest of the app once priorities were set in Mk1. The new Flags column shows every open flag on the sample, coloured by the dominant type, and clicking it opens the flags flyout.
+- **The activity log now says who did it.** Every basic-info edit made through the field editor (Client Sample ID, Client Lot, COA branding fields, analyte slots) is logged as `sample_field_updated` with the old and new value, the user, and whether SENAITE accepted the write or Mk1 kept it. "COA vN generated" / "COA vN published" rows are stamped with the user who clicked Generate, Regen or Publish (including per-vial COAs), and "Status → …" rows carry the user from Mk1's own transition ledger when Mk1 initiated the transition. Prep-session start/complete lines still have no actor — that table never recorded one.
+
+## v1.21.8 — 2026-09-14
+
+### Fixed
+- **A COA can be issued when one metal in a Heavy Metals panel could not be run.** Remove that metal from the sample in Manage Analyses, as for any test the lab withdraws; the certificate then prints the remaining metals and the skip is logged (`native_section_member_withdrawn`). Previously the native-sections rule that refuses a half-filled section treated the removed metal as still missing and blocked generation with "has no eligible result". A metal that is merely pending, under retest, or never seeded still blocks, and that message now says what to do: enter and verify it, or remove it from the sample in Manage Analyses.
+
+## v1.21.7 — 2026-09-14
+
+### Changed
+- **A native-section result reported at the LOQ now prints "< LOQ".** The COA wire censored only results strictly below the spec's LOQ, so an Endotoxin USP85 result entered as 2.50 against an LOQ of 2.5 printed the number. At-or-below now prints "< LOQ" on the PDF and the digital COA; the verdict still evaluates the raw number (#209).
+
+## v1.21.6 — 2026-09-14
+
+### Fixed
+- **Regen & Republish works again on non-conforming samples.** The regen route never forwarded the sample's customer remarks to COA Builder, whose lab-remarks gate refuses a failing certificate without them, so every regen of a non-conforming sample was rejected with "Non-conforming COA requires customer remarks" even when the remarks were already on the sample (P-2627). The route now sends `include_lab_remarks` and the remarks text exactly as the first generate does (#208).
+
+## v1.21.5 — 2026-09-14
+
+### Fixed
+- **Per-vial COAs now embed their own vial's chromatogram, never a sibling's.** The vial certificate read whichever chromatogram was newest on the parent, so on a two-vial variance lot where only S02's trace had been pushed, vial 1's COA printed vial 2's chromatogram (P-2627). The chromatogram push now records which vial the HPLC analysis belongs to (`source_sub_sample_pk`, from the analysis' sample label), and a vial COA reads only the row linked to its vial — with no linked row the vial COA is refused with "No chromatogram is linked to vial P-2627-S01 — push it from the vial's HPLC analysis, or upload the CSV with that vial selected as the source." The other vials still generate; the parent COA is untouched. Historical push rows are stamped by `scripts/backfill_chromatogram_source_vial.py` (dry-run by default, `--apply` to write), matched by our own push filename against the same parent's vials only (#207).
+- **The parent COA prefers the core vial's chromatogram.** When a chromatogram row is linked to the promoted core HPLC vial it is used; otherwise the newest row on the parent is used as before, so nothing that generates today stops generating. The rule that picked the row is logged (#207).
+
+### Added
+- **Variance lots get their per-vial COAs automatically after the primary COA.** The same per-vial generation the "Generate vial COAs" action performs now runs best-effort right after the primary COA on a sample with a variance vial set; vials that already have a live child are skipped, and a failure never affects the primary. The manual action remains for retries (#207).
+
+## v1.21.4 — 2026-09-14
+
+### Added
+- **Ready to Publish shows a "Partially Published" chip** on rows whose primary COA is already out while add-on lines are still pending (workflow state `waiting_for_addon_results`). The hover says whether the add-on results are still pending or are in and a second publish is owed. The row's status badge now reads the workflow catalog label for the state instead of the raw slug (#206).
+
+### Fixed
+- Ready to Publish: the Why column had drifted away from Status · Lines since 1.21.2 because the lines sub-line printed every pending keyword and the long native keywords widened the auto-layout column. The sub-line is now bounded, with the full text on hover (#206).
+
+## v1.21.3 — 2026-09-14
+
+### Changed
+- **A sample can no longer read Verified while a paid-for native test is still on its vial.** The workflow engine's line map skipped `ordered` placeholders (pre-promotion native demand) by construction, so the submit and verify cascades ignored them: 34 samples sat at Verified with PCR sterility or endotoxin still assigned, and a primary COA published from there landed at Published instead of Waiting for Add-on Results, leaving the add-on's own publish with no edge. Live placeholders now count as pending lines, the same rule the Ready to Publish map adopted in 1.21.2 (#203). No COA is gated: publishing the primary COA from Received takes the partial edge, and the add-on's promotion cascades the sample forward. Samples already at Verified do not move; their next publish is refused until the add-on lands.
+- **"Waiting Addon" is now "Partially Published"** on the Order Status filter and tooltip, sample badges, the Receive page, the explorer and the sample dashboard, and in the workflow catalog. Same state, same slug (#204).
+
+## v1.21.2 — 2026-09-14
+
+### Fixed
+- **Ready to Publish no longer badges a sample "All lines verified" while a native add-on is still on its vial.** The report grades the same line map the sample page's lock gate reads, and that map only saw promoted (`canonical`) and SENAITE-mirrored (`shadow`) rows. A paid-for native test that has not been promoted yet lives on an `ordered` placeholder, which the map ignored, so WP-7322 / P-2739 read 4/4 verified with its Rapid Sterility Screening (PCR) line still assigned on vial 3. Live placeholders now count as pending lines (#202). The vial lock gate is unchanged: it keys on `verified` only.
+
+## v1.21.1 — 2026-09-13
+
+### Fixed
+- **Samples worked through the SENAITE proxy no longer strand at `verified` with a published COA.** Verifying a SENAITE-backed line from the sample page (`POST /wizard/senaite/analyses/{uid}/transition`) updated the mirror row and stopped, so the sample's engine state never re-derived (BW-0094 sat at `sample_received` through 19 days of proxy work). The route now drives the same engine cascade the native analysis routes do after a successful transition.
+- The sample touchpoint re-runs its verb once after the cascades move the state. A publish from a lagging state used to take the partial-publish edge (`sample_received` → `waiting_for_addon_results`) or find no edge (`to_be_verified`), let the cascades catch up to `verified`, and never try the publish again — leaving a published primary on a `verified` sample (BW-0094, PB-0172, and the five "Limbo" samples repaired by hand on 2026-09-12).
+
 ## v1.21.0 — 2026-09-11
 
 ### Added

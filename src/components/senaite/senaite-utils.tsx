@@ -8,7 +8,7 @@ export const STATE_LABELS: Record<string, { label: string; className: string }> 
   sample_registered:         { label: 'Registered',       className: 'bg-zinc-700 text-zinc-200' },
   sample_due:                { label: 'Due',               className: 'bg-yellow-900 text-yellow-300' },
   sample_received:           { label: 'Received',          className: 'bg-blue-900 text-blue-300' },
-  waiting_for_addon_results: { label: 'Waiting Addon',     className: 'bg-indigo-900 text-indigo-300' },
+  waiting_for_addon_results: { label: 'Partially Published',     className: 'bg-indigo-900 text-indigo-300' },
   ready_for_review:          { label: 'Ready for Review',  className: 'bg-cyan-900 text-cyan-300' },
   to_be_verified:            { label: 'To Verify',         className: 'bg-orange-900 text-orange-300' },
   // Native parent-verification (Task 9): a parent-tier row awaiting Verify
