@@ -226,10 +226,15 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
   const vials = (vialsQ.data ?? []).filter(v => v.assignment_role)
 
   // Columns are catalog-driven (spec 4, Task 10): every vial_roles row with
-  // boxable=true, ordered by sort_order — UNIONED with any role that already
-  // has a box for this order. The union matters: a boxable flag flipped off
-  // mid-flight must not make an already-physical box vanish from the grid
-  // (same invisibility class as Task 9's variance_eligible finding — stored
+  // boxable=true that has at least one of this order's vials — boxed or not —
+  // ordered by sort_order, UNIONED with any role that already has a box for
+  // this order. The vial-presence gate is the 2026-09-01 ruling: as the
+  // catalog grew past the original four roles, every boxable role painted an
+  // empty lane and the grid overflowed; a role with nothing to box earns no
+  // column. The union still matters twice over: a boxable flag flipped off
+  // mid-flight, or a box left in a lane whose vials were since unassigned,
+  // must not make an already-physical box vanish from the grid (same
+  // invisibility class as Task 9's variance_eligible finding — stored
   // reality always wins over the flag). Unrecognized/no-longer-catalog codes
   // sort after every known one; roleLabel()'s fallback still labels them.
   //
@@ -243,8 +248,9 @@ export function BoxStep({ orderKey, orderLabel, sampleIds }: Props) {
   const vialRoles = vialRolesQ.data ?? []
   const boxableCodes = new Set(vialRoles.filter(r => r.boxable).map(r => r.code))
   const sortOrderByCode = new Map(vialRoles.map(r => [r.code, r.sort_order]))
+  const rolesWithVials = new Set(vials.map(v => v.assignment_role))
   const roles: BoxRole[] = Array.from(new Set([
-    ...boxableCodes,
+    ...[...boxableCodes].filter(code => rolesWithVials.has(code)),
     ...boxes.map(b => b.role),
   ])).sort((a, b) => {
     const sa = sortOrderByCode.get(a) ?? Number.MAX_SAFE_INTEGER
