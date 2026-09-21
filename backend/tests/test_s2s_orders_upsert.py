@@ -203,3 +203,95 @@ def test_seed_failure_does_not_fail_upsert(client, db_session):
     assert r.json()["placeholders_created"] == 0
     db_session.refresh(parent)
     assert parent.wc_line_item_ids == [7]
+
+
+# --- the seed race with the registration-signal seeder (2026-09-21) ---------
+# Both seeders write the same parent placeholders concurrently. Whichever
+# commits second hits uq_lims_analyses_parent_service_ordered. Seen on the
+# priority stack for P-5008 and PB-1002 (2 of 8 native samples): logged as
+# order_upsert_seed_FAILED although every placeholder was present.
+
+import logging  # noqa: E402
+
+from sqlalchemy.exc import IntegrityError  # noqa: E402
+
+
+def _race_once(real_seed, *, winner_seeds: bool):
+    """First call: behave as the LOSER of the race (optionally after the
+    winner's rows land), raising the unique violation. Later calls: real."""
+    calls = {"n": 0}
+
+    def fake(db, *, parent, services, package, source):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            if winner_seeds:
+                real_seed(db, parent=parent, services=services, package=package,
+                          source="registration_signal")
+                db.commit()
+            raise IntegrityError("INSERT", {}, Exception(
+                'duplicate key value violates unique constraint '
+                '"uq_lims_analyses_parent_service_ordered"'))
+        return real_seed(db, parent=parent, services=services, package=package, source=source)
+
+    return fake, calls
+
+
+def test_losing_the_seed_race_is_benign_and_verified(client, db_session, caplog):
+    import main
+    _native_pcr_profile(db_session)
+    parent = LimsSample(sample_id="P-8001", sample_type="x", status="received")
+    db_session.add(parent)
+    db_session.commit()
+    fake, calls = _race_once(main.seed_parent_from_services, winner_seeds=True)
+    with _patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}), \
+         _patch("catalog.snapshot.compute_catalog_snapshot", return_value={"profiles": []}), \
+         _patch("main.seed_parent_from_services", side_effect=fake), \
+         caplog.at_level(logging.INFO):
+        r = client.post(URL, json=_order_with_services(services={"sterility_pcr": True},
+                                                       line_item_ids=[7]), headers=HDR)
+    assert r.status_code == 200
+    assert calls["n"] == 2                                   # it retried
+    # The winner's row is the only one: the retry created nothing.
+    assert [x.keyword for x in _ordered_rows(db_session, parent.id)] == ["STERILITY-PCR"]
+    assert r.json()["placeholders_created"] == 0
+    msgs = " | ".join(rec.getMessage() for rec in caplog.records)
+    assert "order_upsert_seed_already_present sample_id=P-8001 created=0 existing=1" in msgs
+    assert "order_upsert_seed_failed" not in msgs
+    db_session.refresh(parent)
+    assert parent.wc_line_item_ids == [7]                    # stamps untouched
+
+
+def test_retry_creates_what_the_winner_did_not(client, db_session, caplog):
+    """Why this retries instead of just relabelling the log: if the rollback
+    discarded rows nobody else wrote, "already present" would be a lie."""
+    import main
+    _native_pcr_profile(db_session)
+    parent = LimsSample(sample_id="P-8001", sample_type="x", status="received")
+    db_session.add(parent)
+    db_session.commit()
+    fake, calls = _race_once(main.seed_parent_from_services, winner_seeds=False)
+    with _patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}), \
+         _patch("catalog.snapshot.compute_catalog_snapshot", return_value={"profiles": []}), \
+         _patch("main.seed_parent_from_services", side_effect=fake), \
+         caplog.at_level(logging.INFO):
+        r = client.post(URL, json=_order_with_services(services={"sterility_pcr": True}), headers=HDR)
+    assert r.status_code == 200
+    assert [x.keyword for x in _ordered_rows(db_session, parent.id)] == ["STERILITY-PCR"]
+    assert r.json()["placeholders_created"] == 1
+    assert "created=1 existing=0" in " | ".join(rec.getMessage() for rec in caplog.records)
+
+
+def test_a_retry_that_also_fails_is_still_reported_as_a_failure(client, db_session, caplog):
+    parent = LimsSample(sample_id="P-8001", sample_type="x", status="received")
+    db_session.add(parent)
+    db_session.commit()
+    boom = IntegrityError("INSERT", {}, Exception("uq_lims_analyses_parent_service_ordered"))
+    with _patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}), \
+         _patch("main.seed_parent_from_services", side_effect=boom), \
+         caplog.at_level(logging.INFO):
+        r = client.post(URL, json=_order_with_services(services={"sterility_pcr": True}), headers=HDR)
+    assert r.status_code == 200                              # never fails the upsert
+    msgs = " | ".join(rec.getMessage() for rec in caplog.records)
+    assert "order_upsert_seed_failed sample_id=P-8001" in msgs
+    assert "already_present" not in msgs
+

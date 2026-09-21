@@ -24285,6 +24285,39 @@ def s2s_upsert_orders(
                 )
                 db.commit()
                 placeholders_created += stats["created"]
+            except IntegrityError as race_err:
+                # This seed and the registration-signal seed (own session,
+                # _seed_native_placeholders_at_registration_bg) run concurrently
+                # for the same sample. Whichever commits second hits
+                # uq_lims_analyses_parent_service_ordered: the rows it wanted
+                # are already there. The registration side has logged its loss
+                # as benign since the 2026-09-14 rehearsal (D3); this side
+                # still called it a failure. Observed on ~2 of 8 native
+                # samples, the ones with the most rows to write.
+                #
+                # Do not ASSUME the winner covered everything: roll back and
+                # seed once more. The seed dedupes against committed rows, so
+                # the retry creates only what is genuinely missing (normally
+                # nothing) and the log line carries the verified counts.
+                db.rollback()
+                try:
+                    sample = db.query(LimsSample).filter_by(
+                        sample_id=s.senaite_sample_id).first()
+                    stats = seed_parent_from_services(
+                        db, parent=sample, services=s.services, package=s.package,
+                        source="order_upsert_retry",
+                    )
+                    db.commit()
+                    placeholders_created += stats["created"]
+                    logger.info(
+                        "registry.order_upsert_seed_already_present sample_id=%s "
+                        "created=%s existing=%s reason=race_lost_to_registration_seed",
+                        s.senaite_sample_id, stats["created"], stats["existing"])
+                except Exception as retry_err:  # noqa: BLE001
+                    db.rollback()
+                    logger.warning(
+                        "registry.order_upsert_seed_failed sample_id=%s err=%s first_err=%s",
+                        s.senaite_sample_id, retry_err, race_err)
             except Exception as seed_err:  # noqa: BLE001
                 db.rollback()
                 logger.warning("registry.order_upsert_seed_failed sample_id=%s err=%s",
