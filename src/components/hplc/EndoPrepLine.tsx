@@ -195,19 +195,33 @@ export function PrepField({
 }) {
   const shown = value == null ? '' : fmt(value)
   const [draft, setDraft] = useState<string | null>(null)
+  // These figures drive what gets pipetted, so an entry that was refused
+  // ("1,5", "0", stray text) must not quietly snap back to the old number:
+  // it stays in the cell, marked, until it is corrected or Escape is pressed.
+  const [rejected, setRejected] = useState(false)
 
   function commit() {
     if (draft === null) return
     const text = draft.trim()
-    setDraft(null)
     if (text === '') {
+      setDraft(null)
+      setRejected(false)
       if (overridden) onCommit(null)
       return
     }
     const n = Number(text)
-    if (!Number.isFinite(n) || n <= 0) return
+    if (!Number.isFinite(n) || n <= 0) {
+      setRejected(true)
+      return
+    }
+    setDraft(null)
+    setRejected(false)
     if (fmt(n) === shown) return
     onCommit(n)
+  }
+  function cancel() {
+    setDraft(null)
+    setRejected(false)
   }
 
   if (disabled) {
@@ -237,19 +251,25 @@ export function PrepField({
           type="text"
           inputMode="decimal"
           aria-label={`${label} (${unit})`}
+          aria-invalid={rejected || undefined}
           title={
-            overridden
-              ? `Set by hand. Computed: ${computed == null ? '-' : fmt(computed)} ${unit}. Clear the cell to use it.`
-              : undefined
+            rejected
+              ? `Not a number above zero: "${draft ?? ''}" was not saved. Fix it, or press Escape to go back.`
+              : overridden
+                ? `Set by hand. Computed: ${computed == null ? '-' : fmt(computed)} ${unit}. Clear the cell to use it.`
+                : undefined
           }
-          className="h-7 w-full rounded-[3px] border border-transparent bg-transparent px-1.5 text-right font-mono text-[12.5px] tabular-nums text-foreground placeholder:text-muted-foreground/50 hover:border-border focus:border-teal-500 focus:bg-background focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+          className={`h-7 w-full rounded-[3px] border bg-transparent px-1.5 text-right font-mono text-[12.5px] tabular-nums placeholder:text-muted-foreground/50 focus:bg-background focus:outline-none focus:ring-2 ${rejected ? 'border-red-500 bg-red-500/10 text-red-600 focus:ring-red-500/25' : 'border-transparent text-foreground hover:border-border focus:border-teal-500 focus:ring-teal-500/20'}`}
           value={draft ?? shown}
           placeholder={computed == null ? '' : fmt(computed)}
-          onChange={e => setDraft(e.target.value)}
+          onChange={e => {
+            setDraft(e.target.value)
+            setRejected(false)
+          }}
           onBlur={commit}
           onKeyDown={e => {
             if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-            if (e.key === 'Escape') setDraft(null)
+            if (e.key === 'Escape') cancel()
           }}
         />
         {overridden && (
@@ -270,19 +290,25 @@ export function PrepField({
         step="any"
         min={0}
         aria-label={`${label} (${unit})`}
+        aria-invalid={rejected || undefined}
         title={
-          overridden
-            ? `Entered by the analyst; computed ${computed == null ? '-' : fmt(computed)} ${unit}`
-            : undefined
+          rejected
+            ? `Not a number above zero: "${draft ?? ''}" was not saved. Fix it, or press Escape to go back.`
+            : overridden
+              ? `Entered by the analyst; computed ${computed == null ? '-' : fmt(computed)} ${unit}`
+              : undefined
         }
-        className={`h-6 w-16 px-1 text-[11px] font-mono tabular-nums ${overridden ? 'border-primary/60 text-foreground' : 'border-transparent bg-transparent shadow-none hover:border-border'}`}
+        className={`h-6 w-16 px-1 text-[11px] font-mono tabular-nums ${rejected ? 'border-red-500 bg-red-500/10 text-red-600' : overridden ? 'border-primary/60 text-foreground' : 'border-transparent bg-transparent shadow-none hover:border-border'}`}
         value={draft ?? shown}
         placeholder={computed == null ? '' : fmt(computed)}
-        onChange={e => setDraft(e.target.value)}
+        onChange={e => {
+          setDraft(e.target.value)
+          setRejected(false)
+        }}
         onBlur={commit}
         onKeyDown={e => {
           if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-          if (e.key === 'Escape') setDraft(null)
+          if (e.key === 'Escape') cancel()
         }}
       />
       <span className="text-[9px]">{unit}</span>

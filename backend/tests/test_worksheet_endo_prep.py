@@ -357,3 +357,38 @@ def test_mcs_tick_does_not_guess_between_two_instruments(client, db):
     db.refresh(item)
     assert item.ran_at is not None  # the tick itself still lands
     assert row.instrument_id is None and item.instrument_id is None
+
+
+def test_an_explicit_instrument_clear_wins_over_the_mcs_tick(client, db):
+    # One request that both clears the instrument and ticks MCS: the caller's
+    # explicit choice stands; the tick must not quietly put an instrument back.
+    ws, item, row, _mid, (inst_id,) = _endo_analysis_world(client, db)
+    item.instrument_id = inst_id
+    db.commit()
+    r = client.patch(f"/worksheets/{ws.id}/items/{item.id}",
+                     json={"instrument_id": None, "ran": True})
+    assert r.status_code == 200, r.text
+    db.refresh(item)
+    db.refresh(row)
+    assert item.ran_at is not None
+    assert item.instrument_id is None
+    assert row.instrument_id is None
+
+
+def test_only_a_newly_set_mcs_tick_records_the_instrument(client, db):
+    # Ran was ticked while two analyzers made the choice ambiguous, so nothing
+    # was recorded. A later Made tick that merely re-sends ran=true is not a
+    # statement about the instrument and must not stamp one after the fact.
+    from models import Instrument
+
+    ws, item, row, _mid, ids = _endo_analysis_world(client, db, instruments=2)
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"ran": True})
+    second = db.get(Instrument, ids[1])
+    second.active = False  # the catalog now resolves to exactly one
+    db.commit()
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"made": True, "ran": True})
+    db.refresh(item)
+    db.refresh(row)
+    assert item.made_at is not None
+    assert item.instrument_id is None and row.instrument_id is None
+

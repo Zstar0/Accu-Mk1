@@ -77,6 +77,11 @@ export function EndoWorksheetView({
     )
   )
 
+  // Enter saves; Escape or clicking away cancels. Nothing saves on blur: the
+  // input unmounts the moment editing ends, Chromium (the desktop WebView)
+  // fires blur on a focused element as it is removed, and that blur runs the
+  // handler from the render that still held the typed text. A save-on-blur
+  // would therefore save exactly what Escape was pressed to discard.
   const [titleDraft, setTitleDraft] = useState<string | null>(null)
   function saveTitle() {
     const next = (titleDraft ?? '').trim()
@@ -115,7 +120,7 @@ export function EndoWorksheetView({
               className="w-[22rem] max-w-full rounded-[5px] border bg-background px-2 py-1 text-xl font-semibold focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
               value={titleDraft}
               onChange={e => setTitleDraft(e.target.value)}
-              onBlur={saveTitle}
+              onBlur={() => setTitleDraft(null)}
               onKeyDown={e => {
                 if (e.key === 'Enter') saveTitle()
                 if (e.key === 'Escape') setTitleDraft(null)

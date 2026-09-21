@@ -20,6 +20,8 @@ import type {
 import { useUIStore } from '@/store/ui-store'
 import { toast } from 'sonner'
 
+const ITEM_UPDATE_KEY = ['worksheet-item-update'] as const
+
 type WorksheetItemRow = WorksheetListItem['items'][number]
 
 /** A tick moves the row's status exactly as the server does (complete once
@@ -156,6 +158,8 @@ export function useWorksheetDrawer() {
   })
 
   const updateItemMutation = useMutation({
+    // Keyed so onSettled can tell whether it is the last tick of a burst.
+    mutationKey: ITEM_UPDATE_KEY,
     mutationFn: ({
       worksheetId,
       itemId,
@@ -169,6 +173,14 @@ export function useWorksheetDrawer() {
     // straight from this cache entry, so without this the control sits on
     // its old value until the refetch lands — the "status change takes a
     // minute" user report (2026-08-27). Rolled back on error.
+    //
+    // A bench sheet is keyed in after the run, so ticks arrive in bursts with
+    // several PATCHes in flight against this one cache entry. Two rules keep
+    // them from stomping each other: a failure rolls back ONLY its own row
+    // (a whole-list snapshot predates its neighbours and would revert rows
+    // that succeeded), and the list is refetched once, when the LAST tick
+    // of the burst settles (a refetch mid-burst returns server state without
+    // the ticks still in flight and wipes their checkmarks).
     onMutate: async ({ worksheetId, itemId, data }) => {
       await queryClient.cancelQueries({ queryKey: ['worksheets-list', 'open'] })
       const previous = queryClient.getQueryData<WorksheetListItem[]>([
@@ -231,16 +243,36 @@ export function useWorksheetDrawer() {
           )
         )
       }
-      return { previous }
+      const previousItem = previous
+        ?.find(ws => ws.id === worksheetId)
+        ?.items.find(it => it.id === itemId)
+      return { previousItem }
     },
-    onError: (err, _vars, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(['worksheets-list', 'open'], context.previous)
+    onError: (err, { worksheetId, itemId }, context) => {
+      const before = context?.previousItem
+      if (before) {
+        queryClient.setQueryData<WorksheetListItem[]>(
+          ['worksheets-list', 'open'],
+          list =>
+            list?.map(ws =>
+              ws.id !== worksheetId
+                ? ws
+                : {
+                    ...ws,
+                    items: ws.items.map(it => (it.id === itemId ? before : it)),
+                  }
+            )
+        )
       }
       toast.error(err instanceof Error ? err.message : 'Update item failed')
     },
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ['worksheets-list'] }),
+    onSettled: () => {
+      // This mutation still counts as in flight here, so 1 means it is the last.
+      if (queryClient.isMutating({ mutationKey: ITEM_UPDATE_KEY }) > 1) return
+      queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })
+      // A worksheet resolved by id (not in the open list) reads from here.
+      queryClient.invalidateQueries({ queryKey: ['worksheet-by-id'] })
+    },
   })
 
   // Made / MCS down a whole run in one request: the sheet is worked on paper

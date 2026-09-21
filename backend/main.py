@@ -24114,7 +24114,8 @@ def _sole_instrument_for_item(db: Session, item: "WorksheetItem") -> "Optional[t
 
 
 def _apply_bench_ticks(db: Session, worksheet_id: int, item: "WorksheetItem", *,
-                       made: Optional[bool], ran: Optional[bool], user_id: Optional[int]) -> bool:
+                       made: Optional[bool], ran: Optional[bool], user_id: Optional[int],
+                       stamp_instrument: bool = True) -> bool:
     """Set or clear an item's Made / Ran ticks. The server owns who and when;
     a tick already in the wanted state is left alone (its first stamp stands).
     Every change writes an audit_logs row, prep_status follows the ticks, and a
@@ -24128,10 +24129,13 @@ def _apply_bench_ticks(db: Session, worksheet_id: int, item: "WorksheetItem", *,
     already chosen through the apply bar is kept as it is.
     Returns whether anything changed."""
     changed = False
+    newly_set = set()
     for tick, want in (("made", made), ("ran", ran)):
         if want is None or want == (getattr(item, f"{tick}_at") is not None):
             continue
         changed = True
+        if want:
+            newly_set.add(tick)
         setattr(item, f"{tick}_at", datetime.utcnow() if want else None)
         setattr(item, f"{tick}_by_user_id", user_id if want else None)
         db.add(AuditLog(
@@ -24145,7 +24149,11 @@ def _apply_bench_ticks(db: Session, worksheet_id: int, item: "WorksheetItem", *,
     # The ticks ARE the row's progress on a bench sheet; keep prep_status
     # (what the rest of Mk1 reads) in step with them.
     item.prep_status = "complete" if item.ran_at else "in_progress" if item.made_at else "ready"
-    if ran and item.ran_at and not item.instrument_id:
+    # Only a Ran tick SET BY THIS CALL speaks for the instrument (re-sending
+    # ran=true beside another change does not), and never when the caller
+    # set or cleared the instrument itself in the same request: their
+    # explicit choice stands (stamp_instrument=False).
+    if stamp_instrument and "ran" in newly_set and not item.instrument_id:
         resolved = _sole_instrument_for_item(db, item)
         if resolved:
             from lims_analyses.service import stamp_method_instrument
@@ -24318,7 +24326,8 @@ async def update_worksheet_item(
             setattr(item, field, value)
 
     _apply_bench_ticks(db, worksheet_id, item, made=data.made, ran=data.ran,
-                       user_id=_current_user.id)
+                       user_id=_current_user.id,
+                       stamp_instrument="instrument_id" not in data.model_fields_set)
 
     db.commit()
     return {"status": "updated", "item_id": item_id, "resolved_method": resolved_method}

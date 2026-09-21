@@ -148,6 +148,37 @@ describe('endo-prep: bench order and formatting', () => {
     ])
   })
 
+  it('knows bac water by every spelling the reference tool accepts', () => {
+    // calc.test.js in tools-dennis asserts these; the port must agree.
+    for (const type of [
+      'Bacteriostatic Water',
+      'bac water',
+      'Bac. Water',
+      'BAC WATER',
+    ])
+      expect(isBacWater('P-0001', type)).toBe(true)
+    expect(isBacWater('bw-0010-S01')).toBe(true)
+    expect(isBacWater('P-0001', 'Peptide')).toBe(false)
+    expect(isBacWater('P-0001', null)).toBe(false)
+  })
+
+  it('also knows bac water by its identity, as the reference tool does', () => {
+    // tools-dennis dilutionOf() keys off the identity text. Mk1 usually says it
+    // in the sample type (the identity is the analyte), so both must count.
+    expect(isBacWater('P-0999', null, 'bac water')).toBe(true)
+    expect(isBacWater('P-0999', 'Peptide', 'Bac. Water')).toBe(true)
+    expect(isBacWater('P-0999', 'Peptide', 'Examplerelin')).toBe(false)
+    const p = calcEndoPrep({
+      sampleId: 'P-0999',
+      identity: 'Bacteriostatic Water',
+      declaredWeightMg: 30,
+    })
+    expect(p.isWater).toBe(true)
+    expect(p.sampleUl).toBe(50)
+    expect(p.lalUl).toBe(950)
+    expect(p.vialConc).toBeNull()
+  })
+
   it('takes a target other than 1 mg/mL when the analyst sets one', () => {
     const p = calcEndoPrep({
       sampleId: 'P-1',

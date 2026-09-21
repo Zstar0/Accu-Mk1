@@ -32,6 +32,7 @@ export function endoPrepFor(item: WorksheetItemRow): EndoPrep {
   return calcEndoPrep({
     sampleId: item.sample_id,
     sampleType: item.sample_type,
+    identity: endoIdentityFor(item),
     declaredWeightMg: item.declared_weight_mg,
     prepWeightMg: item.prep_weight_mg,
     prepVolumeMl: item.prep_volume_ml,

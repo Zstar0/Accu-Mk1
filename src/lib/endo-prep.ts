@@ -46,20 +46,31 @@ export function autoVolumeMl(
   return Math.min(MAX_VOLUME_ML, 1 + Math.floor(w / 50))
 }
 
-/** Bac water is identified by a BW- sample id or its sample type. */
+/**
+ * Bac water is identified by a BW- sample id, or by its sample type or its
+ * identity saying so. The reference tool (tools-dennis dilutionOf) reads the
+ * identity; Mk1 usually says it in the sample type, where the identity is the
+ * analyte ("Benzyl Alcohol"). Either counts: missing a water sample would
+ * hand the bench a weight-prep figure for it.
+ */
 export function isBacWater(
   sampleId: string,
-  sampleType?: string | null
+  sampleType?: string | null,
+  identity?: string | null
 ): boolean {
+  const says = /bacteriostatic|bac\.?\s*water/i
   return (
     /^BW-/i.test(sampleId ?? '') ||
-    /bacteriostatic|bac\.?\s*water/i.test(sampleType ?? '')
+    says.test(sampleType ?? '') ||
+    says.test(identity ?? '')
   )
 }
 
 export interface EndoPrepInput {
   sampleId: string
   sampleType?: string | null
+  /** Sample identity text; a bac-water identity makes it a dilution prep. */
+  identity?: string | null
   /** The order's declared quantity (lims_samples.declared_total_quantity). */
   declaredWeightMg?: number | null
   /** Analyst overrides from worksheet_items; null/undefined = computed. */
@@ -100,7 +111,7 @@ export function calcEndoPrep(input: EndoPrepInput): EndoPrep {
       ? targetOverride
       : DEFAULT_TARGET_MG_PER_ML
   const targetOverridden = targetMgPerMl !== DEFAULT_TARGET_MG_PER_ML
-  if (isBacWater(input.sampleId, input.sampleType)) {
+  if (isBacWater(input.sampleId, input.sampleType, input.identity)) {
     // Not a weight prep: a straight dilution with LAL water, 50 uL at 20x.
     const factor = num(input.prepDilutionFactor)
     const dilution = factor !== null && factor > 0 ? factor : DEFAULT_DILUTION
