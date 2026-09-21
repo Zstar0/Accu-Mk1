@@ -1110,6 +1110,11 @@ def promote_to_parent(
             details=_deltas(src_before, src),
         ))
 
+    # A native blend's parent aggregates are a function of the parent's own
+    # slot rows (which may come from different vials). Rides this transaction.
+    from lims_analyses.blend_aggregates import recalc_parent_aggregates_safely
+    recalc_parent_aggregates_safely(db, parent_pk=parent_row.lims_sample_pk, user_id=user_id)
+
     if commit:
         db.commit()
         db.refresh(parent_row)
@@ -2243,6 +2248,9 @@ def cascade_parent_retest_to_sources(
             reason="un-promoted: source vial retested",
             details=_deltas(parent_before, parent_analysis),
         ))
+        from lims_analyses.blend_aggregates import recalc_parent_aggregates_safely
+        recalc_parent_aggregates_safely(
+            db, parent_pk=parent_analysis.lims_sample_pk, user_id=user_id)
         db.commit()
 
     return new_row_ids
@@ -2573,6 +2581,9 @@ def vial_source_retest(
                     details=_deltas(parent_before, parent),
                 ))
                 parent_unverified = True
+                from lims_analyses.blend_aggregates import recalc_parent_aggregates_safely
+                recalc_parent_aggregates_safely(
+                    db, parent_pk=parent.lims_sample_pk, user_id=user_id)
 
     # Activity event (Task 7): written unconditionally — rides the
     # un-promote commit above when there is one, otherwise gets this commit

@@ -504,6 +504,13 @@ def transition(
             method_id=req.method_id,
             instrument_id=req.instrument_id,
         )
+        if req.kind == "submit":
+            # Native blend aggregates are calculated, never typed: a slot result
+            # entered by hand must fill/correct them exactly as Process HPLC
+            # does. No-op for every row that is not a native per-slot
+            # purity/quantity line on a vial.
+            from lims_analyses.blend_aggregates import recalc_vial_aggregates_for_row
+            recalc_vial_aggregates_for_row(db, row, getattr(current_user, "id", None))
         # side-by-side engine: schedules workflow.engine.run_cascades_bg post-response
         _schedule_sbs_cascade(background_tasks, db, row, current_user)
         return AnalysisResponse.model_validate(row)
