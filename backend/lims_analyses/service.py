@@ -2141,8 +2141,16 @@ def publish_parent_rows(db: Session, *, sample_id: str,
     Only 'verified' rows move. On a partial publish the pending add-on lines
     are not verified, stay where they are, and publish with the later COA.
     Every reader already treats 'published' like 'verified' (COA eligibility,
-    Ready to Publish, the source resolver, the sample-scope workflow gates)."""
-    from models import LimsSample
+    Ready to Publish, the source resolver, the sample-scope workflow gates).
+
+    SCOPE: rows of NATIVE services only (analysis_services.origin == 'mk1'),
+    which is what the Handler ruled on (2026-09-21). Canonical rows of
+    SENAITE-origin services have exactly the same gap -- prod holds ~10k of
+    them at 'verified' on ~2.2k published samples and ZERO canonical rows at
+    'published' -- but moving those changes what the lab sees on every legacy
+    publish (the vial lock tests for 'verified'), so it waits for its own
+    sign-off. Widening is the one origin filter below."""
+    from models import AnalysisService, LimsSample
 
     parent = db.execute(
         select(LimsSample).where(LimsSample.sample_id == sample_id)
@@ -2150,12 +2158,15 @@ def publish_parent_rows(db: Session, *, sample_id: str,
     if parent is None:
         return 0
     ids = db.execute(
-        select(LimsAnalysis.id).where(
+        select(LimsAnalysis.id)
+        .join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
+        .where(
             LimsAnalysis.lims_sample_pk == parent.id,
             LimsAnalysis.lims_sub_sample_pk.is_(None),
             LimsAnalysis.provenance == "canonical",
             LimsAnalysis.retested.is_(False),
             LimsAnalysis.review_state == "verified",
+            AnalysisService.origin == "mk1",
         )
     ).scalars().all()
     for analysis_id in ids:

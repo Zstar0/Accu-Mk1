@@ -99,6 +99,31 @@ def test_republishing_is_a_no_op_and_placeholders_and_vials_never_move(db):
     assert publish_parent_rows(db, sample_id="NOPE-1") == 0
 
 
+def test_legacy_service_rows_are_out_of_scope_until_signed_off(db):
+    """Same gap, deliberately untouched: moving SENAITE-origin canonical rows
+    changes what the lab sees on every legacy publish, so it needs its own
+    sign-off (Handler ruled on native rows, 2026-09-21)."""
+    from models import AnalysisService, LimsSample
+    parent = LimsSample(sample_id="P-7290", external_lims_uid="uid-7290")
+    legacy = AnalysisService(title="Peptide Purity (HPLC)", keyword="HPLC-PUR", origin="senaite")
+    native = AnalysisService(title="Endotoxin", keyword="ENDOTOXIN-USP85LAL", origin="mk1")
+    db.add_all([parent, legacy, native])
+    db.flush()
+    rows = {}
+    for svc in (legacy, native):
+        rows[svc.origin] = LimsAnalysis(
+            lims_sample_pk=parent.id, analysis_service_id=svc.id, keyword=svc.keyword,
+            title=svc.title, provenance="canonical", review_state="verified", result_value="1")
+        db.add(rows[svc.origin])
+    db.commit()
+
+    assert publish_parent_rows(db, sample_id="P-7290") == 1
+    db.commit()
+    db.refresh(rows["senaite"]); db.refresh(rows["mk1"])
+    assert rows["mk1"].review_state == "published"          # native add-on on a legacy sample
+    assert rows["senaite"].review_state == "verified"       # unchanged
+
+
 def test_a_retest_after_publish_keeps_the_published_figure(db):
     """The point of the whole change. Before: the row was still 'verified', so
     this retest RETRACTED it and cleared a value printed on a certificate the
