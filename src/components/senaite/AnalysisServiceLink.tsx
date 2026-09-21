@@ -54,6 +54,21 @@ export function specsForAnalysis(
   )
 }
 
+/** When the result was captured at the bench. The table has no Captured
+ *  column any more (slice 22), so the hover is where it is read. */
+function formatCaptured(iso: string | null | undefined): string | null {
+  if (!iso) return null
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: '2-digit',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
 /** Pure hover card: line details + the service's filed specs. */
 export function AnalysisServiceTooltip({
   analysis,
@@ -77,6 +92,8 @@ export function AnalysisServiceTooltip({
     ['Unit', analysis.unit ?? service.unit],
     ['Method', analysis.method],
     ['Instrument', analysis.instrument],
+    ['Analyst', analysis.analyst],
+    ['Captured', formatCaptured(analysis.captured)],
     ['State', analysis.review_state],
   ]
   const shown = specs ? specsForAnalysis(specs, analysis.peptide_id) : []

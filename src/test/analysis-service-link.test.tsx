@@ -118,6 +118,26 @@ describe('AnalysisServiceTooltip', () => {
     expect(text).toContain('≥ 98 %')
   })
 
+  it('shows who produced the result and when it was captured', () => {
+    const { getByTestId } = render(
+      <AnalysisServiceTooltip
+        analysis={line({ analyst: 'F. Parker', captured: '2026-09-21T16:33:26' })}
+        service={svc({})}
+        specs={[]}
+      />
+    )
+    const text = getByTestId('analysis-service-tooltip').textContent ?? ''
+    expect(text).toContain('Analyst: F. Parker')
+    expect(text).toMatch(/Captured: Sep 21, 26/)
+    // Neither line is printed for a row that has no value yet.
+    const empty = render(
+      <AnalysisServiceTooltip analysis={line({})} service={svc({})} specs={[]} />
+    )
+    expect(empty.getAllByTestId('analysis-service-tooltip').at(-1)?.textContent).not.toContain(
+      'Captured'
+    )
+  })
+
   it('says so when no spec is filed, and when still loading', () => {
     const none = render(
       <AnalysisServiceTooltip analysis={line({})} service={svc({})} specs={[]} />
