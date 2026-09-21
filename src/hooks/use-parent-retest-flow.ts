@@ -12,19 +12,19 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import {
   parentRetestAnalysis,
-  type ParentPromotionInfo,
   type SenaiteAnalysis,
 } from '@/lib/api'
+import type { PromotionIndex } from '@/lib/promotion-index'
 import { buildBulkParentRetestImpact } from '@/lib/native-parent-analyses'
 import type { ParentRetestConfirmState } from '@/components/senaite/ParentRetestConfirmDialog'
 
 export function useParentRetestFlow({
   sampleId,
-  promotionsByKeyword,
+  promotions,
   onDone,
 }: {
   sampleId: string | null | undefined
-  promotionsByKeyword?: Map<string, ParentPromotionInfo>
+  promotions?: PromotionIndex
   /** Runs after every execution attempt (finally) — refresh/invalidate the
    *  caller's surfaces here. */
   onDone?: () => void
@@ -40,7 +40,7 @@ export function useParentRetestFlow({
     setConfirm({
       titles: newTargets.map(a => a.title),
       keywords,
-      impact: buildBulkParentRetestImpact(keywords, promotionsByKeyword),
+      impact: buildBulkParentRetestImpact(newTargets, promotions),
       publishedTitles: newTargets
         .filter(a => a.review_state === 'published')
         .map(a => a.title),

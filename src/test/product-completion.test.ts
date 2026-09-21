@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { computeProductCompletion } from '@/lib/product-completion'
+import { indexPromotions } from '@/lib/promotion-index'
 import type {
   OrderedProduct,
   ParentPromotionInfo,
@@ -44,7 +45,7 @@ function ctx(opts: {
 }) {
   return {
     analyses: opts.analyses ?? [],
-    promotionsByKeyword: new Map(opts.promos ?? []),
+    promotions: indexPromotions((opts.promos ?? []).map(([, p]) => p)),
     varianceSet: opts.varianceSet as VarianceSetResponse | undefined,
   }
 }

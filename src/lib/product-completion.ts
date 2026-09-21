@@ -28,10 +28,10 @@
 import type {
   AnalysisProfile,
   OrderedProduct,
-  ParentPromotionInfo,
   SenaiteAnalysis,
   VarianceSetResponse,
 } from '@/lib/api'
+import { promotionForRow, type PromotionIndex } from './promotion-index'
 
 export interface ProductCompletion {
   /** True when this product's completion condition is satisfied. */
@@ -44,7 +44,7 @@ export interface ProductCompletionContext {
   /** Parent AR analyses (from the per-sample lookup, either read source). */
   analyses: SenaiteAnalysis[]
   /** keyword → promotion record (from listParentPromotions). */
-  promotionsByKeyword: Map<string, ParentPromotionInfo>
+  promotions: PromotionIndex
   /** Variance set overlay (present only when the family has a variance vial). */
   varianceSet: VarianceSetResponse | undefined
   /** UPPERCASE keyword → owning profile key, from buildKeywordFamilyMap.
@@ -199,14 +199,14 @@ export function computeProductCompletion(
   if (category.length === 0) return { met: false, vials: [] }
 
   const allPromoted = category.every(a =>
-    ctx.promotionsByKeyword.has(a.keyword!)
+    promotionForRow(ctx.promotions, a) != null
   )
   if (!allPromoted) return { met: false, vials: [] }
 
   const vials = Array.from(
     new Set(
       category.flatMap(a =>
-        (ctx.promotionsByKeyword.get(a.keyword!)?.sources ?? [])
+        (promotionForRow(ctx.promotions, a)?.sources ?? [])
           .map(s => s.sample_id)
           .filter((id): id is string => !!id)
       )

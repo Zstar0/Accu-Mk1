@@ -27,6 +27,11 @@ import {
   type ParentPromotionInfo,
 } from '@/lib/api'
 import { NATIVE_PARENT_ANALYSES_QUERY_KEY } from '@/lib/native-parent-analyses'
+import {
+  EMPTY_PROMOTION_INDEX,
+  indexPromotions,
+  type PromotionIndex,
+} from '@/lib/promotion-index'
 import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import type { VialAssignment } from '@/lib/vial-assignment'
 
@@ -131,16 +136,20 @@ function fakeLookup(overrides: Partial<SenaiteLookupResult> = {}): SenaiteLookup
   } as unknown as SenaiteLookupResult
 }
 
-const promo = (keyword: string, ids: (string | null)[]): ParentPromotionInfo => ({
+const promo = (
+  keyword: string,
+  ids: (string | null)[],
+  parent_analysis_id = 1
+): ParentPromotionInfo => ({
   keyword,
-  parent_analysis_id: 1,
+  parent_analysis_id,
   promoted_at: '2026-08-01T00:00:00Z',
   sources: ids.map(sample_id => ({ sample_id, contribution_kind: 'primary' })),
 })
 
 function renderCard(
   rows: SenaiteAnalysis[],
-  promos: Map<string, ParentPromotionInfo> = new Map(),
+  promos: PromotionIndex = EMPTY_PROMOTION_INDEX,
   opts: {
     staleSpy?: () => void
     qc?: QueryClient
@@ -157,7 +166,7 @@ function renderCard(
         sampleId={opts.sampleId ?? 'P-0120'}
         isParentPage={opts.isParentPage ?? true}
         lookup={fakeLookup({ date_received: '2026-08-01' })}
-        promotionsByKeyword={promos}
+        promotions={promos}
         vialAssignmentByKeyword={opts.vialAssignmentByKeyword}
         onParentDataStale={opts.staleSpy}
       />
@@ -214,7 +223,7 @@ describe('NativeParentAnalysesCard', () => {
     ])
     renderCard(
       [shapedRow({ uid: 'mk1:9', keyword: 'FENTANYL', title: 'Fentanyl' })],
-      new Map(),
+      EMPTY_PROMOTION_INDEX,
       { vialAssignmentByKeyword: vialMap }
     )
 
@@ -255,7 +264,7 @@ describe('NativeParentAnalysesCard', () => {
         instrument: 'RowInstrument', instrument_uid: 'ri-uid',
         analyst: 'RowAnalyst',
       })],
-      new Map(),
+      EMPTY_PROMOTION_INDEX,
       { vialAssignmentByKeyword: vialMap }
     )
 
@@ -280,7 +289,7 @@ describe('NativeParentAnalysesCard', () => {
   })
 
   it('never fetches on a sub-sample page', async () => {
-    const { container } = renderCard([shapedRow({})], new Map(), {
+    const { container } = renderCard([shapedRow({})], EMPTY_PROMOTION_INDEX, {
       sampleId: 'P-0120-S01',
       isParentPage: false,
     })
@@ -360,7 +369,7 @@ describe('NativeParentAnalysesCard', () => {
   })
 
   it('retest confirm names the blast radius and fires the parent-retest route', async () => {
-    const promos = new Map([['HM', promo('HM', ['P-0120-S01', 'P-0120-S02'])]])
+    const promos = indexPromotions([promo('HM', ['P-0120-S01', 'P-0120-S02'])])
     vi.mocked(parentRetestAnalysis).mockResolvedValue({ new_row_ids: [101, 102], parent_review_state: null })
     const staleSpy = vi.fn()
     const { qc } = renderCard(
@@ -388,7 +397,8 @@ describe('NativeParentAnalysesCard', () => {
   })
 
   it('retest passes analysis_service_id + slot through when the target row carries them', async () => {
-    const promos = new Map([['HM', promo('HM', ['P-0120-S01'])]])
+    // A per-slot row joins its promotion by id, so the record names row 9.
+    const promos = indexPromotions([promo('HM', ['P-0120-S01'], 9)])
     vi.mocked(parentRetestAnalysis).mockResolvedValue({ new_row_ids: [101], parent_review_state: null })
     renderCard(
       [shapedRow({
@@ -413,7 +423,7 @@ describe('NativeParentAnalysesCard', () => {
   it('retest confirm fails closed with no promotion record', async () => {
     renderCard(
       [shapedRow({ uid: 'mk1:5', keyword: 'HM', title: 'Heavy Metals', review_state: 'verified' })],
-      new Map()
+      EMPTY_PROMOTION_INDEX
     )
     await screen.findByText('Heavy Metals')
 
@@ -442,7 +452,7 @@ describe('NativeParentAnalysesCard', () => {
     const staleSpy = vi.fn()
     const { qc } = renderCard(
       [shapedRow({ uid: 'mk1:6', keyword: 'HM', title: 'Heavy Metals', review_state: 'parent_to_verify' })],
-      new Map(),
+      EMPTY_PROMOTION_INDEX,
       { staleSpy }
     )
     const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')

@@ -4,6 +4,9 @@ import {
   buildParentRetestImpact,
 } from '@/lib/native-parent-analyses'
 import type { ParentPromotionInfo } from '@/lib/api'
+import { indexPromotions } from '@/lib/promotion-index'
+
+const row = (keyword: string) => ({ uid: null, keyword, slot: null })
 
 const promo = (keyword: string, ids: (string | null)[]): ParentPromotionInfo => ({
   keyword,
@@ -32,16 +35,16 @@ describe('buildParentRetestImpact', () => {
 
 describe('buildBulkParentRetestImpact', () => {
   it('aggregates across keywords and dedupes vial ids', () => {
-    const map = new Map([
-      ['HM', promo('HM', ['P-1-S01'])],
-      ['STER', promo('STER', ['P-1-S01', 'P-1-S03'])],
+    const index = indexPromotions([
+      promo('HM', ['P-1-S01']),
+      promo('STER', ['P-1-S01', 'P-1-S03']),
     ])
-    expect(buildBulkParentRetestImpact(['HM', 'STER'], map)).toEqual({
+    expect(buildBulkParentRetestImpact([row('HM'), row('STER')], index)).toEqual({
       sourceCount: 3,
       vialIds: ['P-1-S01', 'P-1-S03'],
     })
   })
   it('missing map or keywords contribute zero', () => {
-    expect(buildBulkParentRetestImpact(['HM'], undefined)).toEqual({ sourceCount: 0, vialIds: [] })
+    expect(buildBulkParentRetestImpact([row('HM')], undefined)).toEqual({ sourceCount: 0, vialIds: [] })
   })
 })

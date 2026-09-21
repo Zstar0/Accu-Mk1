@@ -31,7 +31,8 @@ import {
 } from '@/components/ui/dialog'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import type { SenaiteAnalysis, InboxPriority, ParentPromotionInfo } from '@/lib/api'
+import type { SenaiteAnalysis, InboxPriority } from '@/lib/api'
+import { promotionForRow, type PromotionIndex } from '@/lib/promotion-index'
 import { setAnalysisMethodInstrument, promoteAnalyses, getMethods } from '@/lib/api'
 import { SetMethodInstrumentDialog } from '@/components/senaite/SetMethodInstrumentDialog'
 import type { VialAssignment } from '@/lib/vial-assignment'
@@ -1400,7 +1401,7 @@ function AnalysisRow({
   slaPriority,
   primaryAnalysisUids,
   primaryRole,
-  promotionsByKeyword,
+  promotions,
   vialAssignmentByKeyword,
   onVialMethodInstrumentSaved,
   parentLineStates,
@@ -1434,7 +1435,7 @@ function AnalysisRow({
   slaPriority: InboxPriority | null
   primaryAnalysisUids?: Set<string>
   primaryRole?: string | null
-  promotionsByKeyword?: Map<string, ParentPromotionInfo>
+  promotions?: PromotionIndex
   vialAssignmentByKeyword?: Map<string, VialAssignment>
   onVialMethodInstrumentSaved?: () => void
   parentLineStates?: Record<string, string>
@@ -1585,12 +1586,12 @@ function AnalysisRow({
             )}
           </span>
           <AnalysisServiceLink analysis={analysis} />
-          <PromotedFromBadge promotion={analysis.keyword ? promotionsByKeyword?.get(analysis.keyword) : undefined} />
+          <PromotedFromBadge promotion={promotionForRow(promotions, analysis)} />
           {vialAssign && vialAssign.matches.filter(m => {
             // The "from <vial>" promotion badge above already names the
             // source vial — drop its duplicate assignment chip and keep
             // only the OTHER vials (e.g. the variance replicate).
-            const promo = analysis.keyword ? promotionsByKeyword?.get(analysis.keyword) : undefined
+            const promo = promotionForRow(promotions, analysis)
             return !promo?.sources?.some(s => s.sample_id === m.vialSampleId)
           }).map(m => {
             // Key each overlay vial by ITS OWN assignment_kind (carried on the
@@ -1996,11 +1997,12 @@ interface AnalysisTableProps {
    */
   primaryRole?: string | null
   /**
-   * Promotion provenance map for parent pages — keyword → ParentPromotionInfo.
-   * When provided, matching analysis rows render a "from <sub-sample>" badge.
+   * Promotion provenance for parent pages, joined to each row by id (see
+   * lib/promotion-index). When provided, a promoted row renders a
+   * "from <sub-sample>" badge.
    * Omit (undefined) on sub-sample pages; no behavior change for existing callers.
    */
-  promotionsByKeyword?: Map<string, ParentPromotionInfo>
+  promotions?: PromotionIndex
   /**
    * Parent-page vial assignment overlay — keyword → VialAssignment. When a row's
    * keyword maps here, the row shows an inline assigned-vial link and overlays
@@ -2078,7 +2080,7 @@ export function AnalysisTable({
   analysisSlaPriority = null,
   primaryAnalysisUids,
   primaryRole,
-  promotionsByKeyword,
+  promotions,
   vialAssignmentByKeyword,
   onVialMethodInstrumentSaved,
   parentLineStates,
@@ -2480,7 +2482,7 @@ export function AnalysisTable({
                       slaPriority={analysisSlaPriority}
                       primaryAnalysisUids={primaryAnalysisUids}
                       primaryRole={primaryRole}
-                      promotionsByKeyword={promotionsByKeyword}
+                      promotions={promotions}
                       vialAssignmentByKeyword={vialAssignmentByKeyword}
                       onVialMethodInstrumentSaved={onVialMethodInstrumentSaved}
                       parentLineStates={parentLineStates}

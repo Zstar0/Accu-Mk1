@@ -58,6 +58,11 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { toast } from 'sonner'
 import {
+  EMPTY_PROMOTION_INDEX,
+  indexPromotions,
+  type PromotionIndex,
+} from '@/lib/promotion-index'
+import {
   lookupSenaiteSample,
   updateSenaiteSampleFields,
   addInternalRemark,
@@ -104,7 +109,6 @@ import {
   listLimsAnalysesForSubSample,
   listParentPromotions,
   listParentLineStates,
-  type ParentPromotionInfo,
   fetchSubSamplePhotoUrl,
   invalidateSubSamplePhoto,
   seedSubSamplePhoto,
@@ -3524,14 +3528,14 @@ export function NativeParentAnalysesCard({
   sampleId,
   isParentPage,
   lookup,
-  promotionsByKeyword,
+  promotions,
   vialAssignmentByKeyword,
   onParentDataStale,
 }: {
   sampleId: string | null | undefined
   isParentPage: boolean
   lookup: SenaiteLookupResult | null
-  promotionsByKeyword: Map<string, ParentPromotionInfo>
+  promotions: PromotionIndex
   vialAssignmentByKeyword?: Map<string, VialAssignment>
   onParentDataStale?: () => void
 }) {
@@ -3556,7 +3560,7 @@ export function NativeParentAnalysesCard({
   const { confirm, retestPending, requestRetest, executeRetest, cancelRetest } =
     useParentRetestFlow({
       sampleId,
-      promotionsByKeyword,
+      promotions,
       onDone: () => {
         void queryClient.invalidateQueries({
           queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY],
@@ -3604,7 +3608,7 @@ export function NativeParentAnalysesCard({
       <AnalysisTable
         analyses={analyses}
         analyteNameMap={EMPTY_ANALYTE_NAME_MAP}
-        promotionsByKeyword={promotionsByKeyword}
+        promotions={promotions}
         vialAssignmentByKeyword={vialAssignmentByKeyword}
         headerContent={header}
         hideProgress
@@ -3748,11 +3752,12 @@ export function SampleDetails() {
   >(null)
 
   // Phase senaite-writeback Task 4: promotion provenance for parent pages.
-  // Populated via useEffect below; empty Map on sub-sample pages (gated by
-  // !parentSampleId, which is null only when we ARE the parent).
-  const [promotionsByKeyword, setPromotionsByKeyword] = useState<
-    Map<string, ParentPromotionInfo>
-  >(new Map())
+  // Populated via useEffect below; empty on sub-sample pages (gated by
+  // !parentSampleId, which is null only when we ARE the parent). Joined to
+  // rows by id, see lib/promotion-index.
+  const [promotions, setPromotions] = useState<PromotionIndex>(
+    EMPTY_PROMOTION_INDEX
+  )
 
   // Parent-line states for sub-sample pages — keyword → SENAITE review_state.
   // Populated via useEffect below; empty object on parent pages (gated by
@@ -4151,10 +4156,10 @@ export function SampleDetails() {
   const refreshPromotions = useCallback((id: string) => {
     listParentPromotions(id)
       .then(records => {
-        setPromotionsByKeyword(new Map(records.map(r => [r.keyword, r])))
+        setPromotions(indexPromotions(records))
       })
       .catch(() => {
-        // Best-effort: promotionsByKeyword stays whatever it was (empty on
+        // Best-effort: promotions stays whatever it was (empty on
         // first load) — this map feeds BOTH the promotion badge AND the
         // native parent card's retest confirm (buildBulkParentRetestImpact
         // reads it for the blast-radius/fail-closed gate), so a swallowed
@@ -4495,8 +4500,8 @@ export function SampleDetails() {
     parentSampleId === null && effectiveReadSource === 'mk1'
   const mainParentRetest = useParentRetestFlow({
     sampleId: data?.sample_id,
-    promotionsByKeyword:
-      parentSampleId === null ? promotionsByKeyword : undefined,
+    promotions:
+      parentSampleId === null ? promotions : undefined,
     onDone: () => {
       if (data) refreshSample(data.sample_id)
     },
@@ -4972,7 +4977,7 @@ export function SampleDetails() {
   // page already loads. Shared by the card chips and the sticky-header chips.
   const productCompletionCtx: ProductCompletionContext = {
     analyses: data.analyses,
-    promotionsByKeyword,
+    promotions,
     varianceSet: varianceSetOverlay,
     keywordFamilies,
   }
@@ -7115,8 +7120,8 @@ export function SampleDetails() {
             ? mainParentRetest.requestRetest
             : undefined
         }
-        promotionsByKeyword={
-          parentSampleId === null ? promotionsByKeyword : undefined
+        promotions={
+          parentSampleId === null ? promotions : undefined
         }
         vialAssignmentByKeyword={
           parentSampleId === null ? vialAssignmentByKeyword : undefined
@@ -7213,7 +7218,7 @@ export function SampleDetails() {
             sampleId={data.sample_id}
             isParentPage={parentSampleId === null}
             lookup={data}
-            promotionsByKeyword={promotionsByKeyword}
+            promotions={promotions}
             vialAssignmentByKeyword={nativeVialAssignmentByKeyword}
             onParentDataStale={() => refreshSample(data.sample_id)}
           />
