@@ -18,3 +18,17 @@ def user_display_name(user) -> str:
     last = (getattr(user, "last_name", None) or "").strip()
     full = " ".join(p for p in (first, last) if p)
     return full or (getattr(user, "email", None) or "")
+
+
+def user_short_name(user) -> str:
+    """Compact name for narrow table cells: "F. Last" when the profile has BOTH
+    a first and a last name (Handler 2026-09-21, the analyses table's Analyst
+    column). Anything less falls back to user_display_name: the single name
+    that is set, else the email."""
+    if user is None:
+        return ""
+    first = (getattr(user, "first_name", None) or "").strip()
+    last = (getattr(user, "last_name", None) or "").strip()
+    if first and last:
+        return f"{first[0].upper()}. {last}"
+    return user_display_name(user)
