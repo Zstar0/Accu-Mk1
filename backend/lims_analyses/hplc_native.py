@@ -334,6 +334,29 @@ def kw_slot_key(row) -> tuple:
     return ((row.keyword or ""), row.slot or 0)
 
 
+def parent_line_state_key(keyword: Optional[str], analysis_service_id: Optional[int],
+                          slot: Optional[int]) -> str:
+    """Key of one parent-tier LINE in a line-state map.
+
+    A native per-slot row is identified by (service, slot), the same identity
+    promote_to_parent supersedes on: a native blend carries one HPLC-PURITY
+    parent row PER analyte slot, so a keyword key collapses the slots into
+    one line. Slot-less rows (every legacy/SENAITE row, endo, PCR, the blend
+    aggregates) keep the bare keyword, so their entries are unchanged.
+
+    EVERY map of parent line states must key through this, including the
+    'ordered' placeholder fill: a placeholder asks "is MY line already
+    covered", and on a blend a sibling slot sharing the keyword is not it.
+    Users: service.native_parent_line_states (FE lock gate + Ready-to-Publish)
+    and workflow.engine._live_parent_line_states (sample-status cascade).
+
+    Twin: parentLineStateKey in src/components/senaite/AnalysisTable.tsx.
+    Move both sides together."""
+    if slot is not None and analysis_service_id is not None:
+        return f"svc:{analysis_service_id}:{slot}"
+    return keyword or ""
+
+
 def slot_clause(slot: Optional[int]):
     """SQL twin of slot_key's second element."""
     from sqlalchemy import func

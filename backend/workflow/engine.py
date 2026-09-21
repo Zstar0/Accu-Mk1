@@ -50,7 +50,18 @@ def _live_parent_line_states(db: Session, sample: LimsSample) -> dict[str, str]:
     this: the publish touchpoint from sample_received takes the partial
     edge to waiting_for_addon_results, and the add-on's later promotion
     cascades the sample forward."""
+    from lims_analyses.hplc_native import parent_line_state_key
     from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
+
+    def _key(r) -> str:
+        # Line identity, NOT keyword: a native blend carries one HPLC-PURITY
+        # line per analyte slot. Keyed by keyword, the slots collapsed to one
+        # entry and an unpromoted slot's placeholder lost the setdefault below
+        # to its verified sibling, so all_analyses_in_state passed and the
+        # sample cascaded to 'verified' with peptides still on the vial (the
+        # P-2739 class, reached through a blend).
+        return parent_line_state_key(r.keyword, r.analysis_service_id, r.slot)
+
     rows = db.execute(select(LimsAnalysis).where(
         LimsAnalysis.lims_sample_pk == sample.id,
         LimsAnalysis.lims_sub_sample_pk.is_(None),
@@ -68,8 +79,8 @@ def _live_parent_line_states(db: Session, sample: LimsSample) -> dict[str, str]:
             # awaiting sign-off) to the seeded all_analyses_in_state value
             # lists; real catalog modeling of the state ships with the
             # catalog release, not here.
-            out[r.keyword] = ("to_be_verified" if r.review_state == "parent_to_verify"
-                              else r.review_state)
+            out[_key(r)] = ("to_be_verified" if r.review_state == "parent_to_verify"
+                            else r.review_state)
         elif r.provenance == "shadow":
             st = r.mirror_review_state
             if not st or st in _EXCLUDED_LINE_STATES:
@@ -78,7 +89,7 @@ def _live_parent_line_states(db: Session, sample: LimsSample) -> dict[str, str]:
         elif r.provenance == PROVENANCE_ORDERED:
             if r.retested or r.review_state in _EXCLUDED_LINE_STATES:
                 continue
-            ordered[r.keyword] = r.review_state
+            ordered[_key(r)] = r.review_state
     for kw, st in shadow.items():
         out.setdefault(kw, st)
     for kw, st in ordered.items():

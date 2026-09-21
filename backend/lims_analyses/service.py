@@ -1519,22 +1519,8 @@ def list_promotions_for_parent(
 _VIAL_PROMOTABLE_STATES = ("to_be_verified",)
 
 
-def parent_line_state_key(keyword: Optional[str], analysis_service_id: Optional[int],
-                          slot: Optional[int]) -> str:
-    """Key of one entry in the parent lock map.
-
-    A native per-slot row is identified by (service, slot), the same identity
-    promote_to_parent supersedes on: a native blend carries one HPLC-PURITY
-    parent row PER analyte slot, so keying on keyword let one verified slot
-    lock every other slot's vial rows (and wedged a retested slot with no
-    Promote path). Slot-less rows (every legacy/SENAITE row, endo, PCR, the
-    blend aggregates) keep the bare keyword, so their entries are unchanged.
-
-    Twin: parentLineStateKey in src/components/senaite/AnalysisTable.tsx.
-    Move both sides together."""
-    if slot is not None and analysis_service_id is not None:
-        return f"svc:{analysis_service_id}:{slot}"
-    return keyword or ""
+# The key builder lives in the leaf module so workflow.engine can share it.
+from lims_analyses.hplc_native import parent_line_state_key  # noqa: E402,F401
 
 
 def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, str]:
@@ -1641,9 +1627,15 @@ def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, s
             r.provenance == PROVENANCE_ORDERED
             and not r.retested
             and r.review_state not in ("rejected", "retracted")
-            and r.keyword not in states
         ):
-            states[r.keyword] = r.review_state
+            # Same identity key as the canonical loop. Keyed by keyword, a
+            # per-slot placeholder never found its own canonical line (that
+            # sits under svc:<id>:<slot>) and re-entered as a phantom pending
+            # line, so a fully verified native HPLC sample never read as
+            # ready to publish.
+            key = parent_line_state_key(r.keyword, r.analysis_service_id, r.slot)
+            if key not in states:
+                states[key] = r.review_state
     return states
 
 
