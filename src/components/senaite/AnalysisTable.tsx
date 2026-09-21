@@ -740,6 +740,33 @@ function resolveResultLabel(result: string | null, options: SenaiteAnalysis['res
 }
 
 /** Maps stored identity result values to human-readable labels. */
+/**
+ * The LEGACY identity convention, or null when it does not apply.
+ *
+ * A SENAITE-era "<Peptide> - Identity (HPLC)" line has no result options; its
+ * dropdown says "Conforms" but SAVES the peptide name, and conformance is a
+ * name match. This returns that peptide name so the cell can offer it.
+ *
+ * A NATIVE identity row (service_origin 'mk1') carries its own catalog options
+ * (Conforms / Does Not Conform) and its spec is `equals "Conforms"`. Its
+ * stamped title has the same "- Identity (HPLC)" shape, so without this guard
+ * the legacy branch won and "Conforms" silently saved the peptide name
+ * (PB-1002, P-5007): COABuilder still passed it by name match, but Mk1's own
+ * verdict read Does Not Conform. For those rows the catalog options own the
+ * vocabulary, so the legacy convention stands down.
+ */
+export function legacyIdentityConformsValue(
+  analysis: Pick<SenaiteAnalysis, 'service_origin' | 'result_options'>,
+  display: string,
+): string | null {
+  if (analysis.service_origin === 'mk1' && (analysis.result_options ?? []).length > 0) {
+    return null
+  }
+  return /Identity\s*\(HPLC\)/i.test(display)
+    ? (display.match(/^(.+?)\s*[-–]\s*Identity\s*\(HPLC\)/i)?.[1]?.trim() ?? null)
+    : null
+}
+
 function resolveIdentityLabel(result: string | null, conformsValue: string): string | null {
   if (!result) return null
   if (result === conformsValue) return 'Conforms'
@@ -1159,9 +1186,7 @@ function HistoryRow({
 }) {
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
   const wasRenamed = display !== original
-  const conformsValue = /Identity\s*\(HPLC\)/i.test(display)
-    ? (display.match(/^(.+?)\s*[-–]\s*Identity\s*\(HPLC\)/i)?.[1]?.trim() ?? null)
-    : null
+  const conformsValue = legacyIdentityConformsValue(analysis, display)
   const resultLabel = conformsValue
     ? resolveIdentityLabel(analysis.result, conformsValue)
     : resolveResultLabel(analysis.result, analysis.result_options ?? [])
@@ -1478,9 +1503,7 @@ function AnalysisRow({
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
   const wasRenamed = display !== original
-  const conformsValue = /Identity\s*\(HPLC\)/i.test(display)
-    ? (display.match(/^(.+?)\s*[-–]\s*Identity\s*\(HPLC\)/i)?.[1]?.trim() ?? null)
-    : null
+  const conformsValue = legacyIdentityConformsValue(analysis, display)
   // Phase 4b promote affordance — see isPromotable; verify is hidden on
   // promotable rows via visibleRowTransitions.
   const locked = isLockedByParent(analysis, parentLineStates)
