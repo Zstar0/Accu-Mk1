@@ -3718,9 +3718,45 @@ def _serialize_senaite_shape_rows(
         for i in sorted(instruments_by_id.values(), key=lambda i: i.id)
     ]
 
+    # Spec column: each row's active spec + verdict, from the same machinery
+    # the COA uses. The matrix is the PARENT sample's; a vial row reaches it
+    # through its sub-sample. Two bulk lookups, then resolve_spec once per
+    # distinct (service, matrix, peptide).
+    # ponytail: up to 3 small indexed queries per distinct key (a 4-peptide
+    # blend = ~14 keys); bulk-load analysis_service_specs for service_ids and
+    # apply the precedence in Python if this listing ever shows up in a profile.
+    from coa.identity_verdict import identity_wire_result
+    from coa.spec_rules import display_spec_fields, normalize_matrix
+    from models import LimsSample, LimsSubSample
+    _vial_pks = {r.lims_sub_sample_pk for r in rows if r.lims_sub_sample_pk}
+    _parent_pk_by_vial = dict(db.execute(
+        select(LimsSubSample.id, LimsSubSample.parent_sample_pk)
+        .where(LimsSubSample.id.in_(_vial_pks))
+    ).all()) if _vial_pks else {}
+    _sample_pks = ({r.lims_sample_pk for r in rows if r.lims_sample_pk}
+                   | set(_parent_pk_by_vial.values()))
+    _matrix_by_sample = {
+        pk: normalize_matrix(title)
+        for pk, title in (db.execute(
+            select(LimsSample.id, LimsSample.sample_type_title)
+            .where(LimsSample.id.in_(_sample_pks))
+        ).all() if _sample_pks else [])
+    }
+    _spec_cache: dict = {}
+
     out = []
     for r in rows:
         svc = services_by_id.get(r.analysis_service_id)
+        _spec_fields = display_spec_fields(
+            db, service_id=r.analysis_service_id,
+            matrix=_matrix_by_sample.get(
+                r.lims_sample_pk or _parent_pk_by_vial.get(r.lims_sub_sample_pk)),
+            peptide_id=r.peptide_id,
+            wire_result=identity_wire_result(
+                db, keyword=r.keyword, result=r.result_value,
+                analysis_service_id=r.analysis_service_id),
+            cache=_spec_cache,
+        )
         method_name = None
         if r.method_id and r.method_id in methods_by_id:
             method_name = getattr(methods_by_id[r.method_id], "name", None)
@@ -3786,6 +3822,7 @@ def _serialize_senaite_shape_rows(
             reportable=r.reportable,
             peptide_id=r.peptide_id,
             slot=r.slot,
+            **_spec_fields,
         ))
     return out
 

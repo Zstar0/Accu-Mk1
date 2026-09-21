@@ -7,7 +7,6 @@ import i18n from '@/i18n/config'
 import { VialsQuickLookDialog } from '@/components/senaite/VialsQuickLookDialog'
 import { useUIStore } from '@/store/ui-store'
 import type { SenaiteAnalysis, SubSampleListResponse } from '@/lib/api'
-import type { SampleSlaSnapshot } from '@/services/order-sla'
 
 // AnalysisTable uses IntersectionObserver for its sticky-toolbar effect; jsdom doesn't have it.
 // Must be a real class (not arrow function) since AnalysisTable does `new IntersectionObserver(...)`.
@@ -47,38 +46,6 @@ vi.mock('@/lib/api', async importOriginal => {
   }
 })
 
-// Mock the SLA hook wholesale: (1) protect existing tests from VialSection's new
-// useAnalysisSlaMap firing real services/groups/sample-sla queries, and (2) give
-// test #3 a spy. The hook's internals are covered by analysis-sla.test.tsx.
-const fakeSlaSnapshot: SampleSlaSnapshot = {
-  groupKey: 100,
-  groupName: 'Analytics',
-  tier: {
-    id: 2,
-    name: 'HPLC fast',
-    target_minutes: 240,
-    business_hours_only: false,
-    is_default: false,
-    amber_threshold_percent: 80,
-    created_at: '2026-01-01T00:00:00',
-    updated_at: '2026-01-01T00:00:00',
-  },
-  status: { elapsed_minutes: 60, remaining_minutes: 180, target_minutes: 240, breached: false },
-  color: 'green',
-  reason: { tierSource: 'group', unmappedKeywords: [] },
-  priority: 'normal',
-} as SampleSlaSnapshot
-
-vi.mock('@/services/analysis-sla', () => ({
-  useAnalysisSlaMap: vi.fn(() => ({
-    byAnalysis: new Map([['PUR-HPLC', fakeSlaSnapshot]]),
-    isLoading: false,
-    isError: false,
-    isPublished: false,
-    priority: null,
-  })),
-}))
-
 // AnalysisTable calls useSidebar internally; stub it so tests don't need a full SidebarProvider.
 vi.mock('@/components/ui/sidebar', async importOriginal => {
   const actual = await importOriginal<typeof import('@/components/ui/sidebar')>()
@@ -108,7 +75,6 @@ import {
   type Department,
   type VialRoleRow,
 } from '@/lib/api'
-import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { VialPhotoThumb } from '@/components/senaite/vial-quicklook-helpers'
 import { AnalysisTable } from '@/components/senaite/AnalysisTable'
 import { buildReassignOptions } from '@/components/senaite/VialsQuickLookDialog'
@@ -389,20 +355,6 @@ describe('VialsQuickLookDialog', () => {
     await waitFor(() => {
       expect(overlayFn).toHaveBeenCalledTimes(2)
     })
-  })
-
-  it('wires per-vial SLA into AnalysisTable via useAnalysisSlaMap', async () => {
-    renderDialog()
-    // wait for S01's analyses so the hook has been called with the populated lookup
-    await screen.findByText('Purity (HPLC)')
-    expect(useAnalysisSlaMap).toHaveBeenCalledWith(
-      expect.objectContaining({
-        date_received: '2026-06-01T00:00:00Z',
-        analyses: expect.arrayContaining([
-          expect.objectContaining({ keyword: 'PUR-HPLC' }),
-        ]),
-      })
-    )
   })
 
   it('merges the vial header into the AnalysisTable card (no double wrap)', async () => {

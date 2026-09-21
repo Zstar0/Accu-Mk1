@@ -161,3 +161,46 @@ def evaluate(spec, result: str) -> Optional[bool]:
     if spec.max_value is not None and value > float(spec.max_value):
         return False
     return True
+
+
+def display_spec_fields(db: Session, *, service_id: Optional[int],
+                        matrix: Optional[str], peptide_id: Optional[int],
+                        wire_result: Optional[str],
+                        cache: Optional[dict] = None) -> dict:
+    """`specification` + `conforms` for a row in the analyses TABLE: the same
+    resolve_spec / evaluate / wire dict the certificate is built from, so the
+    table can never disagree with the COA. Same inputs as
+    coa.legacy_rows._native_spec_fields (the row's OWN peptide_id, the WIRE
+    result, i.e. identity as the Conforms token).
+
+    The one deliberate difference: a table must render, so this is FAIL-SOFT
+    where the COA is fail-closed. A rule that cannot run (non-numeric result
+    on a range, blank equals_value) ships the spec with conforms=None; a
+    broken catalog (two active rows in one slot) ships nothing. No spec, no
+    service id: {}.
+
+    `cache` (optional dict) memoises the resolved spec per
+    (service, matrix, peptide) across the rows of one listing."""
+    if service_id is None:
+        return {}
+    key = (service_id, matrix, peptide_id)
+    if cache is not None and key in cache:
+        spec = cache[key]
+    else:
+        try:
+            spec = resolve_spec(db, service_id, matrix, peptide_id=peptide_id)
+        except Exception:  # noqa: BLE001 -- a catalog fault must not 500 the page
+            spec = None
+        if cache is not None:
+            cache[key] = spec
+    if spec is None:
+        return {}
+    from coa.native_sections import _spec_wire_dict   # local: it imports this module
+
+    conforms = None
+    if str(wire_result or "").strip():
+        try:
+            conforms = evaluate(spec, wire_result)
+        except SpecRuleError:
+            conforms = None
+    return {"specification": _spec_wire_dict(spec), "conforms": conforms}

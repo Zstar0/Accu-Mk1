@@ -82,6 +82,11 @@ class SenaiteAnalysis(BaseModel):
     profile_section_key: Optional[str] = None
     profile_section_label: Optional[str] = None
     profile_section_sort: Optional[int] = None
+    # Spec column (slice 22). Mk1-local, same reason as service_origin above:
+    # the registry-details re-type drops undeclared fields. Always None on the
+    # SENAITE read path. See SenaiteShapeAnalysisResponse.
+    specification: Optional[dict] = None
+    conforms: Optional[bool] = None
 
 
 class SenaiteAttachment(BaseModel):
