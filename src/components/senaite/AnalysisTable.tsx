@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, Fragment, type ReactNode } from 'react'
-import { Activity, ArrowDownUp, ArrowUpDown, Check, ChevronDown, ChevronRight, HelpCircle, Layers, Lock, MoreHorizontal, Pencil, Wrench, X } from 'lucide-react'
+import { Activity, ArrowDownUp, ArrowUpDown, Calculator, Check, ChevronDown, ChevronRight, HelpCircle, Layers, Lock, MoreHorizontal, Pencil, Wrench, X } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
@@ -774,11 +774,56 @@ function resolveIdentityLabel(result: string | null, conformsValue: string): str
   return result
 }
 
+/** Native blend aggregates are CALCULATED by Mk1 from the peptide rows, never
+ *  typed (backend/lims_analyses/blend_aggregates.py). Typed by hand on PB-1002
+ *  they drifted from what the COA recomputes. Twin: hplc_native.AGGREGATES. */
+const CALCULATED_AGGREGATES: Record<string, { label: string; formula: string }> = {
+  'HPLC-BLEND-TOTAL': {
+    label: 'Blend total quantity',
+    formula: 'Sum of every peptide\u2019s quantity',
+  },
+  'HPLC-BLEND-PURITY': {
+    label: 'Blend purity',
+    formula: 'Quantity-weighted average of every peptide\u2019s purity',
+  },
+}
+
+export function calculatedAggregateInfo(
+  a: Pick<SenaiteAnalysis, 'service_origin' | 'keyword'>,
+): { label: string; formula: string } | null {
+  if (a.service_origin !== 'mk1') return null
+  return CALCULATED_AGGREGATES[(a.keyword ?? '').toUpperCase()] ?? null
+}
+
+/** Pure hover card for a calculated row (rich-tooltip pattern). */
+export function CalculatedAggregateTooltip({
+  info,
+  hasValue,
+}: {
+  info: { label: string; formula: string }
+  hasValue: boolean
+}) {
+  return (
+    <div data-testid="calculated-aggregate-tooltip" className="flex flex-col gap-1.5 p-3 text-xs font-mono">
+      <div className="flex items-center gap-1.5 font-semibold border-b border-primary-foreground/20 pb-1.5">
+        <Calculator size={12} className="shrink-0" />
+        <span>Calculated: {info.label}</span>
+      </div>
+      <div>{info.formula}</div>
+      <div className="border-t border-primary-foreground/20 pt-1.5 opacity-70">
+        {hasValue
+          ? 'Updates by itself when a peptide result changes. It is still promoted and verified like any other row.'
+          : 'Fills in once every peptide has both a purity and a quantity.'}
+      </div>
+    </div>
+  )
+}
+
 function EditableResultCell({
   analysis,
   editing,
   conformsValue = null,
-  readOnly = false,
+  readOnly: readOnlyProp = false,
 }: {
   analysis: SenaiteAnalysis
   editing: UseAnalysisEditingReturn
@@ -789,6 +834,9 @@ function EditableResultCell({
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const selectRef = useRef<HTMLSelectElement>(null)
+  const calculated = calculatedAggregateInfo(analysis)
+  // A calculated row is never editable, whatever the caller allows.
+  const readOnly = readOnlyProp || calculated != null
   const isEditing = !readOnly && editing.editingUid === analysis.uid
   const canEdit = !readOnly && isResultEditable(analysis)
   // autoEdit: always show input when there's no result yet (no click needed)
@@ -1018,6 +1066,21 @@ function EditableResultCell({
       </span>
       {analysis.unit && analysis.unit.toLowerCase() !== 'text' && (
         <span className="text-xs text-muted-foreground ml-1.5">{analysis.unit}</span>
+      )}
+      {calculated && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              className="ml-1.5 inline-flex align-middle text-muted-foreground/60 hover:text-foreground transition-colors"
+              aria-label={`${calculated.label} is calculated`}
+            >
+              <Calculator size={12} />
+            </span>
+          </TooltipTrigger>
+          <TooltipContent className="p-0 max-w-xs">
+            <CalculatedAggregateTooltip info={calculated} hasValue={!!displayLabel} />
+          </TooltipContent>
+        </Tooltip>
       )}
     </td>
   )

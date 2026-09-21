@@ -271,53 +271,13 @@ def bridge_blend_aggregates(
         )
     ).scalars().all()
 
-    # ---- Native-born blend (spec 2026-09-10 M5): aggregates keyed on the
-    # HPLC-BLEND-PURITY row; components are the per-slot HPLC-PURITY /
-    # HPLC-QUANTITY rows paired by `slot`. Same completeness + formulas as
-    # the legacy branch below; only the pairing key differs.
-    by_kw: dict[str, list[LimsAnalysis]] = {}
-    for r in rows:
-        by_kw.setdefault((r.keyword or "").upper(), []).append(r)
-    native_bp = by_kw.get(KW_BLEND_PURITY, [])
-    if native_bp:
-        if len(native_bp) != 1:
-            logger.warning("prep_bridge: %d %s rows on vial=%s — skipping aggregates",
-                           len(native_bp), KW_BLEND_PURITY, lims_sub_sample_pk)
-            return []
-        blend_pur = native_bp[0]
-        blend_total = next(iter(by_kw.get(KW_BLEND_TOTAL, [])), None)
-        comps: dict[int, dict[str, Optional[float]]] = {}
-        comp_rows: list[LimsAnalysis] = []
-        for r in by_kw.get(KW_PURITY, []) + by_kw.get(KW_QUANTITY, []):
-            if r.slot is None:
-                continue
-            comp_rows.append(r)
-            key = "pur" if (r.keyword or "").upper() == KW_PURITY else "qty"
-            comps.setdefault(r.slot, {})[key] = _parse_float(r.result_value)
-        if not comp_rows or any(r.review_state in RESULT_PENDING_STATES for r in comp_rows):
-            return []
-        total_qty = sum(c["qty"] for c in comps.values() if c.get("qty") is not None)
-        weighted = sum(
-            c["qty"] * c["pur"]
-            for c in comps.values()
-            if c.get("qty") is not None and c.get("pur") is not None
-        )
-        written: list[int] = []
-        if blend_total is not None and blend_total.review_state in RESULT_PENDING_STATES:
-            val = _fmt_num(total_qty)
-            if val is not None:
-                apply_transition(db, analysis_id=blend_total.id, kind="submit", result_value=val,
-                                 reason="auto: blend total quantity (Σ component quantity)",
-                                 user_id=user_id, processed_by_user_id=user_id)
-                written.append(blend_total.id)
-        if blend_pur.review_state in RESULT_PENDING_STATES and total_qty > 0:
-            val = _fmt_num(weighted / total_qty)
-            if val is not None:
-                apply_transition(db, analysis_id=blend_pur.id, kind="submit", result_value=val,
-                                 reason="auto: blend purity (mass-weighted component mean)",
-                                 user_id=user_id, processed_by_user_id=user_id)
-                written.append(blend_pur.id)
-        return written
+    # ---- Native-born blend: one formula, shared with the manual-entry and
+    # parent-tier paths (lims_analyses/blend_aggregates.py). It returns [] for
+    # anything that is not a native blend vial, so legacy vials fall through.
+    if any((r.keyword or "").upper() == KW_BLEND_PURITY for r in rows):
+        from lims_analyses.blend_aggregates import recalc_vial_blend_aggregates
+        return recalc_vial_blend_aggregates(
+            db, lims_sub_sample_pk=lims_sub_sample_pk, user_id=user_id)
     # ---- Legacy (SENAITE-born) blend below: unchanged.
 
     blend_pur = next((r for r in rows if (r.keyword or "").upper() == "BLEND-PUR"), None)
