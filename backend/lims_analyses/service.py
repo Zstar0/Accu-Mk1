@@ -769,6 +769,36 @@ def set_method_instrument(
 # ─── Phase 4a: promote_to_parent ────────────────────────────────────────────
 
 
+def _carried_result_provenance(db: Session, sources: list, source_rows: dict,
+                               promoter_id: Optional[int]):
+    """(captured_at, analyst_user_id, processed_by_user_id) for a parent row
+    minted by a promotion: a promoted result is still the bench's result, so
+    the parent line says who produced it and when, not who clicked Promote.
+
+    Result-bearing sources are the 'chosen' row, or every 'aggregated_in' row;
+    a 'reference' row never bears the result. captured_at is the LATEST capture
+    among them (an aggregate is only complete once its last input was
+    captured). The analyst is the bearing row's own analyst (the worksheet
+    stamp); a hand-entered row has none, so it falls back to whoever submitted
+    that row's result, and only then to the promoter (the pre-slice-24 value)."""
+    bearing = [source_rows[s["analysis_id"]] for s in sources
+               if s["contribution_kind"] in ("chosen", "aggregated_in")]
+    if not bearing:
+        return None, promoter_id, None
+    captured = max((r.captured_at for r in bearing if r.captured_at), default=None)
+    lead = bearing[0]
+    analyst = lead.analyst_user_id
+    if analyst is None:
+        analyst = db.execute(
+            select(LimsAnalysisTransition.user_id)
+            .where(LimsAnalysisTransition.analysis_id == lead.id,
+                   LimsAnalysisTransition.transition_kind == "submit",
+                   LimsAnalysisTransition.user_id.is_not(None))
+            .order_by(LimsAnalysisTransition.id.desc()).limit(1)
+        ).scalar_one_or_none()
+    return captured, analyst if analyst is not None else promoter_id, lead.processed_by_user_id
+
+
 def promote_to_parent(
     db: Session,
     *,
@@ -804,7 +834,11 @@ def promote_to_parent(
 
     Performs in one transaction:
       1. INSERT parent-tier lims_analyses row (review_state='parent_to_verify',
-         verified_at=NULL, analyst_user_id=user_id). Promotion is the
+         verified_at=NULL). captured_at / analyst_user_id /
+         processed_by_user_id are carried over from the result-bearing
+         source row (_carried_result_provenance); WHO PROMOTED stays on
+         created_by_user_id, the promotions rows and the audit transition.
+         Promotion is the
          submission, not the sign-off — a reviewer calls the generic
          transitions endpoint with kind='verify' to reach 'verified'
          (spec 2026-08-04).
@@ -1042,6 +1076,9 @@ def promote_to_parent(
         # there is no published blocker left for this branch to diagnose.
     # ── end retest-source supersession ───────────────────────────────────────
 
+    _captured_at, _analyst_id, _processed_by_id = _carried_result_provenance(
+        db, sources, source_rows, user_id)
+
     # Promotion mints the parent-tier row in 'parent_to_verify' — it is the
     # submission, not the sign-off. verified_at stays NULL until a reviewer
     # calls the generic transitions endpoint with kind='verify' (state
@@ -1057,7 +1094,9 @@ def promote_to_parent(
         review_state="parent_to_verify",
         method_id=method_id,
         instrument_id=instrument_id,
-        analyst_user_id=user_id,
+        analyst_user_id=_analyst_id,
+        processed_by_user_id=_processed_by_id,
+        captured_at=_captured_at,
         created_by_user_id=user_id,
         peptide_id=first_source.peptide_id,
         slot=first_source.slot,

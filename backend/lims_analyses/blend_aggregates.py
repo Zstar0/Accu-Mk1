@@ -221,6 +221,8 @@ def recalc_parent_blend_aggregates(db: Session, *, parent_pk: int,
 
         before = _snapshot(row)
         prior = row.review_state
+        if new != row.result_value:
+            row.captured_at = now          # a recalculated figure is captured now
         row.result_value = new
         if prior == "verified":
             row.review_state = "parent_to_verify"
