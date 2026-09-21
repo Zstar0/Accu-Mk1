@@ -159,3 +159,64 @@ def test_published_blend_aggregates_are_left_alone_by_the_recalculation(db):
     assert recalc_parent_blend_aggregates(db, parent_pk=parent.id) == []
     db.refresh(total)
     assert (total.result_value, total.review_state) == ("999", "published")
+
+
+# --- a retest of a PUBLISHED result is allowed, and must be traceable ---------
+# Handler 2026-09-21: "that is fine for now, it just needs to be tracked in the
+# activity log, and they will have to re-publish again."
+
+def test_retesting_a_published_blend_slot_is_fully_traceable(db):
+    from models import LimsSubSampleEvent
+    from tests.test_blend_aggregates import SLOTS, _fill, _promote
+    parent, _, _, vial_rows = native_family(db, sample_id="PB-7210", slots=SLOTS)
+    rows = next(iter(vial_rows.values()))
+    _fill(db, rows, pur=["98", "99"], qty=["1", "3"])
+    parents = {(r.keyword, r.slot): _promote(db, r) for r in rows if r.result_value is not None}
+    publish_parent_rows(db, sample_id="PB-7210")
+    db.commit()
+    slot2 = parents[(KW_PURITY, 2)]
+
+    parent_retest(db, sample_id="PB-7210", keyword=KW_PURITY, user_id=9, reason="customer dispute",
+                  parent_analysis_id=slot2.id)
+
+    ev = db.query(LimsSubSampleEvent).filter_by(
+        lims_sample_pk=parent.id, event="parent_analysis_retested").one()
+    d = ev.details
+    assert ev.user_id == 9
+    assert d["parent_review_state_at_retest"] == "published"
+    assert (d["parent_analysis_id"], d["slot"]) == (slot2.id, 2)         # WHICH peptide
+    assert d["title"] == slot2.title and "GHK-Cu" in d["title"]
+    assert d["value_at_retest"] == "99"                                   # the certificate figure
+    assert d["unpromoted"] is False                                       # kept, not wiped
+    # ...and on the row itself.
+    row_audit = db.query(LimsAnalysisTransition).filter_by(analysis_id=slot2.id) \
+                  .order_by(LimsAnalysisTransition.id.desc()).first()
+    assert (row_audit.from_state, row_audit.to_state) == ("published", "published")
+    assert "published value retained" in row_audit.reason
+
+
+def test_a_verified_row_records_the_figure_the_unpromote_is_about_to_clear(db):
+    from models import LimsSubSampleEvent
+    parent, rows = _vial_rows(db, "P-7211", [("KPV", "KPV")])
+    pur = _result_and_promote(db, next(r for r in rows if r.keyword == KW_PURITY), "99.1")
+    parent_retest(db, sample_id="P-7211", keyword=KW_PURITY, user_id=1, reason="t",
+                  parent_analysis_id=pur.id)
+    db.refresh(pur)
+    assert pur.result_value is None                                       # un-promote cleared it
+    d = db.query(LimsSubSampleEvent).filter_by(
+        lims_sample_pk=parent.id, event="parent_analysis_retested").one().details
+    assert (d["value_at_retest"], d["unpromoted"]) == ("99.1", True)      # but the log kept it
+
+
+def test_activity_feed_wording():
+    from main import parent_retest_activity_label as label
+    published = label({"keyword": "HPLC-PURITY", "slot": 2, "title": "GHK-Cu - Purity (HPLC)",
+                       "parent_review_state_at_retest": "published", "value_at_retest": "99",
+                       "unit_at_retest": "%", "source_row_ids": [1]})
+    assert published == ("GHK-Cu - Purity (HPLC) retested AFTER PUBLISH: published value 99 % stays "
+                         "on the certificate until the retest is promoted. Re-publish required. (1 source)")
+    # Every other case keeps the exact wording it always had.
+    assert label({"keyword": "HM", "source_row_ids": [1, 2],
+                  "parent_review_state_at_retest": "verified"}) == "HM retested (parent) \u2014 2 sources"
+    assert label({"keyword": "ENDO-LAL", "source_row_ids": [7]}) == "ENDO-LAL retested (parent) \u2014 1 source"
+

@@ -1077,6 +1077,26 @@ def _activity_bucket_label(kind, role):
     return role
 
 
+def parent_retest_activity_label(d: dict) -> str:
+    """Sample activity feed wording for a `parent_analysis_retested` event.
+
+    A retest of an already PUBLISHED result is called out as such (Handler
+    2026-09-21: allowed, but it must be visible in the activity log and the COA
+    has to be published again): it names the figure that stays on the
+    certificate in the meantime. A per-slot native line is named by its title,
+    because a blend's slots share one keyword; every other line keeps the
+    keyword wording it always had."""
+    n = len(d.get("source_row_ids") or [])
+    srcs = f"{n} source{'s' if n != 1 else ''}"
+    name = (d.get("title") if d.get("slot") is not None else None) or d.get("keyword", "?")
+    if d.get("parent_review_state_at_retest") == "published":
+        shown = " ".join(str(x) for x in (d.get("value_at_retest"), d.get("unit_at_retest")) if x)
+        kept = f"published value {shown} stays" if shown else "published value stays"
+        return (f"{name} retested AFTER PUBLISH: {kept} on the certificate "
+                f"until the retest is promoted. Re-publish required. ({srcs})")
+    return f"{name} retested (parent) \u2014 {srcs}"
+
+
 @app.get("/samples/{sample_id}/activity")
 async def get_sample_activity(
     sample_id: str,
@@ -1617,11 +1637,7 @@ async def get_sample_activity(
             if se.event == "parent_analysis_verified":
                 label = f"{d.get('keyword', '?')} verified (parent)"
             elif se.event == "parent_analysis_retested":
-                n = len(d.get("source_row_ids") or [])
-                label = (
-                    f"{d.get('keyword', '?')} retested (parent) — "
-                    f"{n} source{'s' if n != 1 else ''}"
-                )
+                label = parent_retest_activity_label(d)
             elif se.event == "native_profile_added":
                 hosts = d.get("hosts") or []
                 n = sum(int(h.get("vial_rows_created") or 0) for h in hosts)

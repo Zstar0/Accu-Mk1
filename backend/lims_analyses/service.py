@@ -2382,6 +2382,8 @@ def parent_retest(
                 f"{active.review_state!r}"
             ),
         )
+    # Figure AT THE CALL: the un-promote below clears it on a verified row.
+    value_at_retest, unit_at_retest = active.result_value, active.result_unit
     # State AT THE CALL, before the cascade's un-promote can flip a
     # verified/awaiting row to 'retracted' — both the published branch below
     # and the activity event key off what the operator actually retested.
@@ -2453,6 +2455,16 @@ def parent_retest(
         "unpromoted": active.review_state == "retracted",
         "parent_review_state_at_retest": state_at_retest,
         "service_origin": svc.origin if svc else None,
+        # Which line, exactly. On a native blend the keyword is shared by every
+        # analyte slot, so "HPLC-PURITY retested" does not say which peptide.
+        "parent_analysis_id": active.id,
+        "slot": active.slot,
+        "title": active.title,
+        # The figure at the moment of the retest. For a PUBLISHED line this is
+        # the value on the certificate the customer holds, which stays in force
+        # until the retest is promoted and the COA is published again.
+        "value_at_retest": value_at_retest,
+        "unit_at_retest": unit_at_retest,
     }
     if keyword != active.keyword:
         _details["requested_keyword"] = keyword
