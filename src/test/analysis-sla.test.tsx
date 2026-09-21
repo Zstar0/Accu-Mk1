@@ -101,20 +101,20 @@ beforeEach(() => {
 })
 
 describe('useAnalysisSlaMap', () => {
-  it('returns empty byKeyword when lookup is null', async () => {
+  it('returns empty byAnalysis when lookup is null', async () => {
     const { result } = renderHook(() => useAnalysisSlaMap(null), { wrapper: Wrapper })
     await waitFor(() => {
-      expect(result.current.byKeyword.size).toBe(0)
+      expect(result.current.byAnalysis.size).toBe(0)
       expect(result.current.isLoading).toBe(false)
       expect(result.current.priority).toBeNull()
     })
   })
 
-  it('returns empty byKeyword when sample has no date_received', async () => {
+  it('returns empty byAnalysis when sample has no date_received', async () => {
     const lookup = makeLookup({ date_received: null })
     const { result } = renderHook(() => useAnalysisSlaMap(lookup), { wrapper: Wrapper })
     await waitFor(() => {
-      expect(result.current.byKeyword.size).toBe(0)
+      expect(result.current.byAnalysis.size).toBe(0)
     })
     expect(fetchSlaStatusesMock).not.toHaveBeenCalled()
   })
@@ -136,9 +136,9 @@ describe('useAnalysisSlaMap', () => {
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false)
     })
-    expect(result.current.byKeyword.size).toBe(2)
-    expect(result.current.byKeyword.get('identity_hplc')?.tier.id).toBe(2)
-    expect(result.current.byKeyword.get('purity_hplc')?.tier.id).toBe(2)
+    expect(result.current.byAnalysis.size).toBe(2)
+    expect(result.current.byAnalysis.get('identity_hplc')?.tier.id).toBe(2)
+    expect(result.current.byAnalysis.get('purity_hplc')?.tier.id).toBe(2)
   })
 
   it('unmapped keyword falls through to default-tier snapshot when default exists', async () => {
@@ -160,10 +160,10 @@ describe('useAnalysisSlaMap', () => {
     })
     const { result } = renderHook(() => useAnalysisSlaMap(lookup), { wrapper: Wrapper })
     await waitFor(() => {
-      expect(result.current.byKeyword.size).toBe(2)
+      expect(result.current.byAnalysis.size).toBe(2)
     })
-    expect(result.current.byKeyword.get('identity_hplc')?.tier.id).toBe(2)
-    expect(result.current.byKeyword.get('orphan_kw')?.tier.id).toBe(1)
+    expect(result.current.byAnalysis.get('identity_hplc')?.tier.id).toBe(2)
+    expect(result.current.byAnalysis.get('orphan_kw')?.tier.id).toBe(1)
   })
 
   it('unmapped keyword with NO default tier produces no entry', async () => {
@@ -182,9 +182,9 @@ describe('useAnalysisSlaMap', () => {
     })
     const { result } = renderHook(() => useAnalysisSlaMap(lookup), { wrapper: Wrapper })
     await waitFor(() => {
-      expect(result.current.byKeyword.has('identity_hplc')).toBe(true)
+      expect(result.current.byAnalysis.has('identity_hplc')).toBe(true)
     })
-    expect(result.current.byKeyword.has('orphan_kw')).toBe(false)
+    expect(result.current.byAnalysis.has('orphan_kw')).toBe(false)
   })
 
   it('null keyword on an analysis produces no entry', async () => {
@@ -201,7 +201,7 @@ describe('useAnalysisSlaMap', () => {
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false)
     })
-    expect(result.current.byKeyword.size).toBe(0)
+    expect(result.current.byAnalysis.size).toBe(0)
   })
 
   it('forwards isPublished and priority from useSampleSla', async () => {
@@ -226,7 +226,7 @@ describe('useAnalysisSlaMap', () => {
     })
     const { result } = renderHook(() => useAnalysisSlaMap(lookup), { wrapper: Wrapper })
     await waitFor(() => {
-      expect(result.current.byKeyword.size).toBe(1)
+      expect(result.current.byAnalysis.size).toBe(1)
     })
     expect(result.current.isPublished).toBe(true)
     expect(result.current.priority).toBe('expedited')

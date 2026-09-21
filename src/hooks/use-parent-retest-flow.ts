@@ -14,7 +14,7 @@ import {
   parentRetestAnalysis,
   type SenaiteAnalysis,
 } from '@/lib/api'
-import type { PromotionIndex } from '@/lib/promotion-index'
+import { mk1RowId, type PromotionIndex } from '@/lib/promotion-index'
 import { buildBulkParentRetestImpact } from '@/lib/native-parent-analyses'
 import type { ParentRetestConfirmState } from '@/components/senaite/ParentRetestConfirmDialog'
 
@@ -54,17 +54,26 @@ export function useParentRetestFlow({
       let retested = 0
       for (const target of targets) {
         if (!target.keyword) continue
-        // Native per-slot rows carry a numeric `slot`; only those need
-        // analysis_service_id + slot on the wire so the backend can
-        // disambiguate the slot. Legacy (SENAITE-born) targets keep the
-        // original {keyword} / {keyword, reason} body untouched.
+        // A canonical Mk1 parent row is addressed by ITS ID: the row the
+        // operator clicked is the row that gets retested, and the backend
+        // fails closed if that row is no longer the active one. Per-slot
+        // rows still send analysis_service_id + slot alongside. A row with
+        // no Mk1 id (SENAITE hex uid) or a non-canonical row keeps the
+        // original {keyword} body.
+        const parentAnalysisId =
+          target.provenance === 'canonical' ? mk1RowId(target.uid) : null
+        const opts = {
+          ...(parentAnalysisId != null && { parent_analysis_id: parentAnalysisId }),
+          ...(typeof target.slot === 'number' && {
+            analysis_service_id: target.analysis_service_id,
+            slot: target.slot,
+          }),
+        }
         const resp = await parentRetestAnalysis(
           sampleId,
           target.keyword,
           undefined,
-          typeof target.slot === 'number'
-            ? { analysis_service_id: target.analysis_service_id, slot: target.slot }
-            : undefined
+          Object.keys(opts).length > 0 ? opts : undefined
         )
         retested += resp.new_row_ids.length
       }

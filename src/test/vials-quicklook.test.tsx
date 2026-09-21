@@ -71,7 +71,7 @@ const fakeSlaSnapshot: SampleSlaSnapshot = {
 
 vi.mock('@/services/analysis-sla', () => ({
   useAnalysisSlaMap: vi.fn(() => ({
-    byKeyword: new Map([['PUR-HPLC', fakeSlaSnapshot]]),
+    byAnalysis: new Map([['PUR-HPLC', fakeSlaSnapshot]]),
     isLoading: false,
     isError: false,
     isPublished: false,

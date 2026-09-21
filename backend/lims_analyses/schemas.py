@@ -320,6 +320,10 @@ class PromoteResponse(BaseModel):
 
 class ParentRetestRequest(BaseModel):
     keyword: str
+    # The parent row itself (lims_analyses.id). When present it ALONE
+    # identifies the row: no service/keyword/slot resolution, and no
+    # fallthrough if it does not name the active parent row (fail closed).
+    parent_analysis_id: Optional[int] = None
     # S3: the native identity key. When present it alone identifies the parent
     # row (keyword is ignored for the match); keyword stays the compatibility
     # alias and remains the only thing today's FE sends.

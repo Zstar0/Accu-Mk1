@@ -394,7 +394,7 @@ function VialSection({
         primaryAnalysisUids={primaryUids}
         primaryRole={vial.assignment_role}
         parentLineStates={parentLineStates}
-        analysisSlaMap={sla.byKeyword}
+        analysisSlaMap={sla.byAnalysis}
         isAnalysisSlaLoading={sla.isLoading}
         isAnalysisSlaError={sla.isError}
         isAnalysisSlaPublished={sla.isPublished}

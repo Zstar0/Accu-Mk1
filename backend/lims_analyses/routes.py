@@ -321,6 +321,7 @@ def parent_retest(
             reason=req.reason,
             analysis_service_id=req.analysis_service_id,
             slot=req.slot,
+            parent_analysis_id=req.parent_analysis_id,
         )
         return ParentRetestResponse(new_row_ids=new_ids, parent_review_state=state)
     except Exception as e:

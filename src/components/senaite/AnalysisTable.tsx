@@ -33,6 +33,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import type { SenaiteAnalysis, InboxPriority } from '@/lib/api'
 import { promotionForRow, type PromotionIndex } from '@/lib/promotion-index'
+import { analysisSlaKey } from '@/lib/sla-resolution'
 import { setAnalysisMethodInstrument, promoteAnalyses, getMethods } from '@/lib/api'
 import { SetMethodInstrumentDialog } from '@/components/senaite/SetMethodInstrumentDialog'
 import { vialAssignmentKey, type VialAssignment } from '@/lib/vial-assignment'
@@ -1937,8 +1938,8 @@ function getSlaSortValue(
   analysisSlaMap: Map<string, SampleSlaSnapshot> | undefined,
   isPublished: boolean
 ): number {
-  if (!analysisSlaMap || !a.keyword) return Number.POSITIVE_INFINITY
-  const snap = analysisSlaMap.get(a.keyword)
+  if (!analysisSlaMap) return Number.POSITIVE_INFINITY
+  const snap = analysisSlaMap.get(analysisSlaKey(a))
   if (!snap) return Number.POSITIVE_INFINITY
   return isPublished ? snap.status.elapsed_minutes : snap.status.remaining_minutes
 }
@@ -2485,9 +2486,7 @@ export function AnalysisTable({
                       onMethodInstrumentSaved={onMethodInstrumentSaved}
                       onPromoted={onTransitionComplete}
                       slaSnapshot={
-                        analysisSlaMap && group.current.keyword
-                          ? analysisSlaMap.get(group.current.keyword) ?? null
-                          : null
+                        analysisSlaMap?.get(analysisSlaKey(group.current)) ?? null
                       }
                       isSlaLoading={isAnalysisSlaLoading}
                       isSlaError={isAnalysisSlaError}

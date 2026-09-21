@@ -59,11 +59,11 @@ export function resolvePromotedSourceParentState(
   parentId?: number | null
 ): string | null {
   // The vial row names its parent row by id (promoted_to_parent_id): join on
-  // that. On a native blend every slot shares the keyword, so keyword-newest
-  // would answer with another slot's parent.
+  // that and ONLY that. On a native blend every slot shares the keyword, so
+  // keyword-newest would answer with another slot's parent; an id that is
+  // not in `rows` fails closed (null) rather than guessing.
   if (parentId != null) {
-    const own = rows.find(r => r.uid === `mk1:${parentId}`)
-    if (own) return own.review_state ?? null
+    return rows.find(r => r.uid === `mk1:${parentId}`)?.review_state ?? null
   }
   const matches = rows.filter(r => r.keyword === keyword)
   return matches[matches.length - 1]?.review_state ?? null

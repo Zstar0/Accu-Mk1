@@ -76,7 +76,7 @@ vi.mock('@/lib/api', async importOriginal => {
 // this mock ignores its argument).
 vi.mock('@/services/analysis-sla', () => ({
   useAnalysisSlaMap: vi.fn(() => ({
-    byKeyword: new Map(),
+    byAnalysis: new Map(),
     isLoading: false,
     isError: false,
     isPublished: false,
@@ -415,6 +415,32 @@ describe('NativeParentAnalysesCard', () => {
 
     await waitFor(() => expect(parentRetestAnalysis).toHaveBeenCalledTimes(1))
     expect(parentRetestAnalysis).toHaveBeenCalledWith('P-0120', 'HM', undefined, {
+      analysis_service_id: 42,
+      slot: 2,
+    })
+  })
+
+  it('a canonical Mk1 parent row is retested BY ITS ROW ID', async () => {
+    // The backend then resolves nothing by keyword/service/slot, and fails
+    // closed if row 9 is no longer the active parent row.
+    const promos = indexPromotions([promo('HM', ['P-0120-S01'], 9)])
+    vi.mocked(parentRetestAnalysis).mockResolvedValue({ new_row_ids: [101], parent_review_state: null })
+    renderCard(
+      [shapedRow({
+        uid: 'mk1:9', keyword: 'HM', title: 'Heavy Metals', review_state: 'verified',
+        analysis_service_id: 42, slot: 2, provenance: 'canonical',
+      })],
+      promos
+    )
+    await screen.findByText('Heavy Metals')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Analysis actions' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Retest' }))
+    await userEvent.click(screen.getByRole('button', { name: /^retest$/i }))
+
+    await waitFor(() => expect(parentRetestAnalysis).toHaveBeenCalledTimes(1))
+    expect(parentRetestAnalysis).toHaveBeenCalledWith('P-0120', 'HM', undefined, {
+      parent_analysis_id: 9,
       analysis_service_id: 42,
       slot: 2,
     })

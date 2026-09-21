@@ -1,7 +1,9 @@
 import { useMemo } from 'react'
 import type { SenaiteLookupResult } from '@/lib/api'
 import {
+  analysisSlaKey,
   buildKeywordToServiceIdMap,
+  serviceIdOfAnalysis,
   buildServiceIdToGroupIdMap,
   NO_GROUP_KEY,
   type GroupKey,
@@ -13,10 +15,11 @@ import { useSampleSla } from '@/services/sample-sla'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 
 export interface AnalysisSlaMapResult {
-  /** Per-keyword snapshot for the resolved service-group bucket. Empty when
-   *  SLA isn't applicable (no lookup, no date_received) or while underlying
-   *  queries are still loading. */
-  byKeyword: Map<string, SampleSlaSnapshot>
+  /** Per-analysis snapshot for the resolved service-group bucket, keyed by
+   *  analysisSlaKey(row): the row's service id, keyword only for rows without
+   *  one. Empty when SLA isn't applicable (no lookup, no date_received) or
+   *  while underlying queries are still loading. */
+  byAnalysis: Map<string, SampleSlaSnapshot>
   isLoading: boolean
   isError: boolean
   isPublished: boolean
@@ -29,7 +32,7 @@ export interface AnalysisSlaMapResult {
  *
  * Composes `useSampleSla` (per-group snapshots + flags) with the
  * analysis-services and service-groups queries (already shared TanStack cache)
- * to expose a flat `Map<keyword, snapshot>` that table rows can read in O(1).
+ * to expose a flat map (keyed by analysisSlaKey) that table rows read in O(1).
  *
  * Resolution: analysis.keyword → service.id → group.id → snapshot whose
  * `groupKey === group_id`. Unmapped keywords (no service match or service has
@@ -44,7 +47,7 @@ export function useAnalysisSlaMap(
   const groupsQuery = useServiceGroups()
   const tiersQuery = useSlaTiers()
 
-  const byKeyword = useMemo(() => {
+  const byAnalysis = useMemo(() => {
     const out = new Map<string, SampleSlaSnapshot>()
     if (!lookup || !lookup.date_received) return out
     const services = servicesQuery.data ?? []
@@ -59,12 +62,12 @@ export function useAnalysisSlaMap(
     }
     for (const analysis of lookup.analyses) {
       const kw = analysis.keyword
-      if (!kw) continue
-      const serviceId = keywordToServiceId.get(kw)
+      if (!kw && analysis.analysis_service_id == null) continue
+      const serviceId = serviceIdOfAnalysis(analysis, keywordToServiceId)
       const groupId = serviceId !== undefined ? serviceIdToGroupId.get(serviceId) : undefined
       const groupKey: GroupKey = groupId ?? NO_GROUP_KEY
       const snap = snapshotByGroupKey.get(groupKey)
-      if (snap) out.set(kw, snap)
+      if (snap) out.set(analysisSlaKey(analysis), snap)
     }
     return out
   }, [
@@ -75,7 +78,7 @@ export function useAnalysisSlaMap(
     tiersQuery.data,
   ])
 
-  // Mirror the byKeyword gate (and useSampleSla's `applicable` guard): when
+  // Mirror the byAnalysis gate (and useSampleSla's `applicable` guard): when
   // SLA isn't applicable for this sample, the underlying queries' loading /
   // error states are irrelevant — short-circuit to false so the inapplicable
   // branch never appears "loading" on first render.
@@ -94,7 +97,7 @@ export function useAnalysisSlaMap(
       tiersQuery.isError)
 
   return {
-    byKeyword,
+    byAnalysis,
     isLoading,
     isError,
     isPublished: sampleSla.isPublished,

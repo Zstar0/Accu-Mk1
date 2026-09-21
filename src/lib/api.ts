@@ -7278,10 +7278,18 @@ export async function parentRetestAnalysis(
   sampleId: string,
   keyword: string,
   reason?: string,
-  opts?: { analysis_service_id?: number | null; slot?: number | null }
+  opts?: {
+    analysis_service_id?: number | null
+    slot?: number | null
+    /** The parent row itself (lims_analyses.id). When sent it alone
+     *  identifies the row server-side; the backend fails closed if it is
+     *  not the active parent row. */
+    parent_analysis_id?: number | null
+  }
 ): Promise<ParentRetestResponse> {
   const body: Record<string, unknown> = { keyword }
   if (reason) body.reason = reason
+  if (opts?.parent_analysis_id != null) body.parent_analysis_id = opts.parent_analysis_id
   if (opts?.analysis_service_id != null) body.analysis_service_id = opts.analysis_service_id
   if (opts?.slot != null) body.slot = opts.slot
   const response = await fetch(

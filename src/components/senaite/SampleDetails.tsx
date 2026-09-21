@@ -3622,7 +3622,7 @@ export function NativeParentAnalysesCard({
           })
           onParentDataStale?.()
         }}
-        analysisSlaMap={sla.byKeyword}
+        analysisSlaMap={sla.byAnalysis}
         isAnalysisSlaLoading={sla.isLoading}
         isAnalysisSlaError={sla.isError}
         isAnalysisSlaPublished={sla.isPublished}
@@ -7169,7 +7169,7 @@ export function SampleDetails() {
           })
         }}
         onTransitionComplete={() => refreshSample(data.sample_id)}
-        analysisSlaMap={analysisSla.byKeyword}
+        analysisSlaMap={analysisSla.byAnalysis}
         isAnalysisSlaLoading={analysisSla.isLoading}
         isAnalysisSlaError={analysisSla.isError}
         isAnalysisSlaPublished={analysisSla.isPublished}

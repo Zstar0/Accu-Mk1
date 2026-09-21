@@ -2003,6 +2003,7 @@ def _find_active_parent_row(
     analysis_service_id: Optional[int] = None,
     allow_native_rescue: bool = True,
     slot: Optional[int] = None,
+    parent_analysis_id: Optional[int] = None,
 ) -> Optional[LimsAnalysis]:
     """Resolve the one active canonical parent-tier row a retest lineage hangs
     off. Shared by cascade_parent_retest_to_sources and parent_retest so the
@@ -2010,6 +2011,12 @@ def _find_active_parent_row(
 
     Identity resolution (S3), in order:
 
+      0. explicit `parent_analysis_id` -- the caller holds the ROW. Same
+         active-row predicates as every other leg, plus id equality, and NO
+         fallthrough: an id that is not this parent's active canonical
+         parent-tier row (superseded, retracted, another sample's) returns
+         None. Guessing a different row by keyword would retest something
+         the operator did not click.
       1. explicit `analysis_service_id` — the caller already holds the native
          identity key, so match on the service FK alone with no keyword term.
       2. exact stored keyword — byte-identical to the pre-S3 lookup.
@@ -2071,6 +2078,9 @@ def _find_active_parent_row(
         return db.execute(
             select(LimsAnalysis).where(*base, ident)
         ).scalars().first()
+
+    if parent_analysis_id is not None:
+        return _first(LimsAnalysis.id == parent_analysis_id)
 
     def _by_service(service_id):
         # Slot-aware (M6): a caller holding a slot resolves that ONE row
@@ -2236,6 +2246,7 @@ def parent_retest(
     reason: Optional[str] = None,
     analysis_service_id: Optional[int] = None,
     slot: Optional[int] = None,
+    parent_analysis_id: Optional[int] = None,
 ) -> tuple[list[int], Optional[str]]:
     """Native origination of a parent-tier retest: validate, then run the
     existing cascade (retest promoted sources + un-promote the verified or
@@ -2271,13 +2282,16 @@ def parent_retest(
         keyword=keyword,
         analysis_service_id=analysis_service_id,
         slot=slot,
+        parent_analysis_id=parent_analysis_id,
     )
     if active is None:
         # Name the identity that was actually used, not always the keyword —
         # a service-id caller passes keyword only as the legacy alias, so
         # echoing it would point the operator at the wrong thing.
         _asked = (
-            f"analysis_service_id={analysis_service_id}"
+            f"parent_analysis_id={parent_analysis_id}"
+            if parent_analysis_id is not None
+            else f"analysis_service_id={analysis_service_id}"
             if analysis_service_id is not None
             else f"keyword {keyword!r}"
         )

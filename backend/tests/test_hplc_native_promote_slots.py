@@ -144,3 +144,66 @@ def test_parent_retest_without_slot_on_single_slot_native_sample(db):
     db.refresh(p1)
     assert p1.review_state == "retracted"
     assert len(new_ids) == 1 and db.get(LimsAnalysis, new_ids[0]).retest_of_id == pur1.id
+
+
+# --- parent retest addressed by the parent ROW ID (slice 14) ---------------
+# The FE holds the row it clicked. Addressing it by id removes keyword, service
+# and slot resolution from the path entirely, and fails closed when the id is
+# not this parent's ACTIVE canonical parent-tier row.
+
+def _promoted_blend(db, sample_id, slots=(("BPC-157", "BPC157"), ("TB-500", "TB500")), services=None):
+    parent, services, peps, vial_rows = native_family(
+        db, sample_id=sample_id, slots=list(slots), services=services)
+    rows = next(iter(vial_rows.values()))
+    pur1, pur2 = _purity_rows(rows)
+    _submit_verify(db, pur1, "98.1"); _submit_verify(db, pur2, "96.2")
+    parents = []
+    for r in (pur1, pur2):
+        p, _ = promote_to_parent(db, keyword=KW_PURITY, result_value=r.result_value, result_unit="%",
+                                 method_id=None, instrument_id=None,
+                                 sources=[{"analysis_id": r.id, "contribution_kind": "chosen"}],
+                                 user_id=1, commit=False)
+        apply_transition(db, analysis_id=p.id, kind="verify", user_id=1, commit=False)
+        parents.append(p)
+    db.commit()
+    return parents, (pur1, pur2), services
+
+
+def test_parent_retest_by_row_id_retests_exactly_that_row(db):
+    parents, (pur1, pur2), _ = _promoted_blend(db, "PB-1106")
+    # Row id ONLY: no analysis_service_id, no slot. On a two-slot blend the
+    # keyword alone refuses to guess, so reaching slot 2 proves the id leg.
+    new_ids, _state = parent_retest(db, sample_id="PB-1106", keyword=KW_PURITY, user_id=1, reason="t",
+                                    parent_analysis_id=parents[1].id)
+    db.refresh(parents[0]); db.refresh(parents[1])
+    assert parents[0].review_state == "verified"
+    assert parents[1].review_state == "retracted"
+    assert len(new_ids) == 1 and db.get(LimsAnalysis, new_ids[0]).retest_of_id == pur2.id
+
+
+def test_parent_retest_by_row_id_fails_closed_on_a_retracted_row(db):
+    from lims_analyses.service import NotFoundError
+    parents, _, _ = _promoted_blend(db, "PB-1107")
+    parent_retest(db, sample_id="PB-1107", keyword=KW_PURITY, user_id=1, reason="t",
+                  parent_analysis_id=parents[1].id)
+    # Same id again: that row is retracted now. It must NOT fall through to
+    # keyword/service and retest the still-verified slot 1 instead.
+    with pytest.raises(NotFoundError, match=f"parent_analysis_id={parents[1].id}"):
+        parent_retest(db, sample_id="PB-1107", keyword=KW_PURITY, user_id=1, reason="t",
+                      parent_analysis_id=parents[1].id)
+    db.refresh(parents[0])
+    assert parents[0].review_state == "verified"
+
+
+def test_parent_retest_by_row_id_rejects_another_samples_row(db):
+    from lims_analyses.service import NotFoundError
+    mine, _, services = _promoted_blend(db, "PB-1108")
+    # Second family: own peptides (abbreviation is unique), same catalog.
+    theirs, _, _ = _promoted_blend(db, "PB-1109", services=services,
+                                   slots=(("GHK-Cu", "GHKCU"), ("Ipamorelin", "IPA")))
+    with pytest.raises(NotFoundError):
+        parent_retest(db, sample_id="PB-1108", keyword=KW_PURITY, user_id=1, reason="t",
+                      parent_analysis_id=theirs[0].id)
+    db.refresh(theirs[0]); db.refresh(mine[0])
+    assert theirs[0].review_state == "verified" and mine[0].review_state == "verified"
+
