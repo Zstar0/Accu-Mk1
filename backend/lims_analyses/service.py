@@ -2120,6 +2120,50 @@ def _find_active_parent_row(
     return _by_service(native_svc.id)
 
 
+def publish_parent_rows(db: Session, *, sample_id: str,
+                        user_id: Optional[int] = None) -> int:
+    """The analysis-tier half of a COA publish: every live canonical
+    parent-tier row in 'verified' rides the sample's publish to 'published',
+    through the state machine's own `publish` verb (stamps published_at, writes
+    the audit transition). Does NOT commit. Returns the rows moved.
+
+    The workflow catalog has always described this edge ("analysis: verified ->
+    published, rides the sample COA publish") and parent_mirror moves the
+    SHADOW rows on publish, saying of canonical rows that "publish there runs
+    its own native state machine". Nothing did: native rows sat at 'verified'
+    forever (PB-1002, P-5007). The consequence was not cosmetic. 'published'
+    is what makes a result citable history: parent_retest keeps a published
+    row live and lets the re-promote supersede it (#156), whereas a 'verified'
+    row is un-promoted, i.e. RETRACTED with its value cleared. A native result
+    on a certificate the customer already holds was one retest away from
+    being wiped.
+
+    Only 'verified' rows move. On a partial publish the pending add-on lines
+    are not verified, stay where they are, and publish with the later COA.
+    Every reader already treats 'published' like 'verified' (COA eligibility,
+    Ready to Publish, the source resolver, the sample-scope workflow gates)."""
+    from models import LimsSample
+
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        return 0
+    ids = db.execute(
+        select(LimsAnalysis.id).where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+            LimsAnalysis.provenance == "canonical",
+            LimsAnalysis.retested.is_(False),
+            LimsAnalysis.review_state == "verified",
+        )
+    ).scalars().all()
+    for analysis_id in ids:
+        apply_transition(db, analysis_id=analysis_id, kind="publish", user_id=user_id,
+                         reason="rides the sample COA publish", commit=False)
+    return len(ids)
+
+
 def cascade_parent_retest_to_sources(
     db: Session,
     *,
