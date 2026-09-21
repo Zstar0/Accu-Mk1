@@ -39,6 +39,9 @@ export interface DragData {
   analyses: {
     title: string
     keyword: string | null
+    /** Service FK off the inbox item; rides into the worksheet's stored
+     *  analyses so SLA resolves by id. */
+    analysis_service_id?: number | null
     peptide_name: string | null
     method: string | null
   }[]
@@ -140,6 +143,7 @@ export function InboxVialCard({
       analyses: vial.analyses.map(a => ({
         title: a.title,
         keyword: a.keyword,
+        analysis_service_id: a.analysis_service_id,
         peptide_name: a.peptide_name,
         method: a.method,
       })),

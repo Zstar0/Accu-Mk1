@@ -15612,6 +15612,9 @@ def _attach_prep_sla(db: Session, rows: "list[dict]") -> None:
     # Live analysis keywords + owning department per vial — same live-row
     # predicate as the inbox's native fetch (retested=False, dead states out).
     kws_by_pk: dict[int, list[str]] = {}
+    # (service FK, keyword) per live row, so the FE resolves the SLA profile
+    # tier through the FK and uses the keyword only for a row without one.
+    analyses_by_pk: dict[int, list[dict]] = {}
     dept_by_pk: dict[int, int] = {}
     if sub_by_pk:
         arows = db.execute(
@@ -15619,15 +15622,19 @@ def _attach_prep_sla(db: Session, rows: "list[dict]") -> None:
                 LimsAnalysis.lims_sub_sample_pk,
                 LimsAnalysis.keyword,
                 AnalysisService.department_id,
+                LimsAnalysis.analysis_service_id,
             )
             .outerjoin(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
             .where(LimsAnalysis.lims_sub_sample_pk.in_(set(sub_by_pk)))
             .where(LimsAnalysis.retested.is_(False))
             .where(LimsAnalysis.review_state.notin_(("rejected", "retracted")))
         ).all()
-        for pk, kw, dept in arows:
+        for pk, kw, dept, svc_id in arows:
             if kw:
                 kws_by_pk.setdefault(pk, []).append(kw)
+            if kw or svc_id is not None:
+                analyses_by_pk.setdefault(pk, []).append(
+                    {"analysis_service_id": svc_id, "keyword": kw})
             if dept is not None and pk not in dept_by_pk:
                 dept_by_pk[pk] = dept
 
@@ -15640,11 +15647,13 @@ def _attach_prep_sla(db: Session, rows: "list[dict]") -> None:
             received = sub.received_at
             uid = sub.external_lims_uid
             keywords = kws_by_pk.get(sub.id, [])
+            analyses = analyses_by_pk.get(sub.id, [])
             department_id = dept_by_pk.get(sub.id)
         elif parent is not None:
             received = parent.date_received
             uid = parent.external_lims_uid
             keywords = []
+            analyses = []
             department_id = None
         else:
             continue
@@ -15652,6 +15661,8 @@ def _attach_prep_sla(db: Session, rows: "list[dict]") -> None:
             "received_at": (received.isoformat() + "Z") if received else None,
             "priority": priority_by_uid.get(uid, "normal") if uid else "normal",
             "keywords": keywords,
+            # Additive: `keywords` stays for older clients; new clients read this.
+            "analyses": analyses,
             "department_id": department_id,
         }
 
@@ -21153,6 +21164,11 @@ class InboxAnalysisItem(BaseModel):
     uid: Optional[str] = None
     title: str
     keyword: Optional[str] = None
+    # The row's own catalog service FK (native rows). None on the
+    # SENAITE-derived emitter, whose source dicts carry no Mk1 id; there the
+    # keyword is the only identity. Travels inbox -> add-to-worksheet ->
+    # analyses_json -> worksheet list so SLA resolves by id, not keyword.
+    analysis_service_id: Optional[int] = None
     peptide_name: Optional[str] = None
     method: Optional[str] = None
     review_state: Optional[str] = None
@@ -21388,6 +21404,7 @@ def _fetch_mk1_inbox_analyses_for_sub_sample(
             uid=f"mk1:{la.id}",
             title=la.title or la.keyword or "",
             keyword=la.keyword,
+            analysis_service_id=la.analysis_service_id,
             peptide_name=keyword_to_peptide.get(la.keyword or "") if keyword_to_peptide else None,
             method=None,                  # Mk1 vial method not yet wired
             review_state=la.review_state,
@@ -23025,6 +23042,9 @@ async def update_worksheet(
 class AddToWorksheetAnalysis(BaseModel):
     title: str
     keyword: Optional[str] = None
+    # Persisted into analyses_json with the rest (model_dump). Optional: a
+    # SENAITE-derived inbox item has none, and older clients send none.
+    analysis_service_id: Optional[int] = None
     peptide_name: Optional[str] = None
     method: Optional[str] = None
 

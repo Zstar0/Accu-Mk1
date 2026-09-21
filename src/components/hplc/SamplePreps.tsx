@@ -40,7 +40,7 @@ import {
 import { useUIStore } from '@/store/ui-store'
 import { useWizardStore } from '@/store/wizard-store'
 import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
-import { useSlaForSubjects, type SlaSubject } from '@/services/sla-subjects'
+import { slaSubjectIdentities, useSlaForSubjects, type SlaSubject } from '@/services/sla-subjects'
 import { useServiceGroups } from '@/services/service-groups'
 import { departmentToGroupId } from '@/lib/inbox-sla'
 import { legacyToKey } from '@/lib/inbox-sla'
@@ -269,7 +269,11 @@ export function SamplePreps() {
               ? (deptToGroup.get(p.sla.department_id) ?? null)
               : null,
           receivedAt: p.sla?.received_at ?? null,
-          keywords: p.sla?.keywords ?? [],
+          // `analyses` carries each row's service FK; `keywords` is the
+          // older payload, used only when the backend predates it.
+          ...(p.sla?.analyses
+            ? slaSubjectIdentities(p.sla.analyses)
+            : { keywords: p.sla?.keywords ?? [] }),
         })),
     [preps, deptToGroup]
   )

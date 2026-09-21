@@ -22,7 +22,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
 import { PriorityGlyph } from '@/components/common/PriorityGlyph'
 import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
-import { useSlaForSubjects, type SlaSubject, type SlaSubjectSnapshot } from '@/services/sla-subjects'
+import { slaSubjectIdentities, useSlaForSubjects, type SlaSubject, type SlaSubjectSnapshot } from '@/services/sla-subjects'
 import { listWorksheets } from '@/lib/api'
 import { legacyEffectivePriority, legacyToKey } from '@/lib/inbox-sla'
 import { priorityByKey, usePriorities } from '@/services/priorities'
@@ -109,9 +109,7 @@ export default function WorksheetsListPage() {
       // Profile-SLA step (Task 11): a tiered profile covering the item's
       // analyses beats the group tier (e.g. usp71's 14-day tier — without
       // this the item wrongly read the 24h default and showed breached).
-      keywords: item.analyses
-        .map(a => a.keyword)
-        .filter((k): k is string => Boolean(k)),
+      ...slaSubjectIdentities(item.analyses),
     })),
   )
   const { byKey: slaByKey, isLoading: slaLoading, isError: slaError } =

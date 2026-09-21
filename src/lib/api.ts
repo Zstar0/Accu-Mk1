@@ -3844,6 +3844,8 @@ export interface SamplePrep {
     received_at: string | null
     priority: string
     keywords: string[]
+    /** Per live row: its service FK plus keyword. Supersedes `keywords`. */
+    analyses?: { analysis_service_id: number | null; keyword: string | null }[]
     department_id: number | null
   }
 }
@@ -5771,6 +5773,9 @@ export interface InboxAnalysisItem {
   uid: string | null
   title: string
   keyword: string | null
+  /** The row's own catalog service FK. Null on SENAITE-derived items (no Mk1
+   *  id exists for them); there the keyword is the only identity. */
+  analysis_service_id?: number | null
   peptide_name: string | null
   method: string | null
   review_state: string | null
@@ -5995,6 +6000,9 @@ export interface WorksheetListItem {
     analyses: {
       title: string
       keyword: string | null
+      /** Captured at add-time from the inbox; absent on items stored before
+       *  it was, which resolve by keyword. */
+      analysis_service_id?: number | null
       peptide_name: string | null
       method: string | null
     }[]
@@ -6067,7 +6075,7 @@ export interface AddToWorksheetPayload {
   department_id?: number
   service_group_id?: number
   date_received?: string | null
-  analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[]
+  analyses?: { title: string; keyword?: string | null; analysis_service_id?: number | null; peptide_name?: string | null; method?: string | null }[]
 }
 
 export async function addGroupToWorksheet(

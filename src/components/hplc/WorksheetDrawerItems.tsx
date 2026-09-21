@@ -35,6 +35,7 @@ import { PriorityGlyph } from '@/components/common/PriorityGlyph'
 import { legacyEffectivePriority, legacyToKey } from '@/lib/inbox-sla'
 import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
 import {
+  slaSubjectIdentities,
   useSlaForSubjects,
   type SlaSubject,
   type SlaSubjectSnapshot,
@@ -117,9 +118,7 @@ export function WorksheetDrawerItems({
       receivedAt: item.date_received ?? item.added_at,
       completedAt: worksheetCompletedAt,
       // Profile-SLA step (Task 11): tiered profile beats the group tier.
-      keywords: item.analyses
-        .map(a => a.keyword)
-        .filter((k): k is string => Boolean(k)),
+      ...slaSubjectIdentities(item.analyses),
     }))
   }, [items, isCompleted, worksheetCompletedAtProp])
   const {

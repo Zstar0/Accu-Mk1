@@ -27,7 +27,7 @@ vi.mock('@/lib/api', async () => {
   }
 })
 
-const { useSlaForSubjects, pickWorstSnapshot } =
+const { useSlaForSubjects, pickWorstSnapshot, slaSubjectIdentities } =
   await import('@/services/sla-subjects')
 import type { SlaSubject, SlaSubjectSnapshot } from '@/services/sla-subjects'
 
@@ -571,5 +571,64 @@ describe('useSlaForSubjects — profile tier step', () => {
     })
     await waitFor(() => expect(result.current.isLoading).toBe(false))
     expect(result.current.byKey.get('plain')?.tier.name).toBe('HPLC fast')
+  })
+  // ── ids, not keywords (worksheets + sample preps, 2026-09-20) ─────────────
+  it('a subject resolves its profile tier from serviceIds alone', async () => {
+    seedProfileCatalogs()
+    const subjects: SlaSubject[] = [
+      {
+        key: 'usp71-by-id',
+        priority: 'normal',
+        groupId: 100,
+        receivedAt: '2026-08-24T12:00:00Z',
+        serviceIds: [50],
+      },
+    ]
+    const { result } = renderHook(() => useSlaForSubjects(subjects), {
+      wrapper: Wrapper,
+    })
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    const s = result.current.byKey.get('usp71-by-id')
+    expect(s?.tier.name).toBe('USP71')
+    expect(s?.reason?.tierSource).toBe('profile')
+  })
+
+  it('an analysis with a service id is never re-resolved by a colliding keyword', async () => {
+    seedProfileCatalogs()
+    // Two services share the keyword DUP. Service 51 (no tiered profile) is
+    // the row's real service; service 50 (14-day USP71 profile) loads LAST,
+    // so keyword -> service answers 50. Legal shape: the keyword unique index
+    // is partial on origin='mk1'.
+    getAnalysisServicesMock.mockResolvedValue([
+      { id: 51, keyword: 'DUP' },
+      { id: 50, keyword: 'DUP' },
+    ])
+    const analysis = { analysis_service_id: 51, keyword: 'DUP' }
+    const base = { priority: 'normal', groupId: 100, receivedAt: '2026-08-24T12:00:00Z' }
+    const subjects: SlaSubject[] = [
+      { key: 'by-id', ...base, ...slaSubjectIdentities([analysis]) },
+      { key: 'by-keyword', ...base, keywords: ['DUP'] },
+    ]
+    const { result } = renderHook(() => useSlaForSubjects(subjects), {
+      wrapper: Wrapper,
+    })
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    // The id keeps the row on its own service: group tier, 4h.
+    expect(result.current.byKey.get('by-id')?.tier.name).toBe('HPLC fast')
+    // The hazard the id removes: the keyword alone lands on the wrong
+    // service and hands a 4-hour HPLC row a 14-day clock.
+    expect(result.current.byKey.get('by-keyword')?.tier.name).toBe('USP71')
+  })
+
+  it('slaSubjectIdentities: id rows give ids, only id-less rows give keywords', () => {
+    expect(
+      slaSubjectIdentities([
+        { analysis_service_id: 230, keyword: 'HPLC-PURITY' },
+        { analysis_service_id: null, keyword: 'HPLC-PUR' },
+        { keyword: 'ENDO-LAL' },
+        { analysis_service_id: null, keyword: null },
+      ])
+    ).toEqual({ serviceIds: [230], keywords: ['HPLC-PUR', 'ENDO-LAL'] })
+    expect(slaSubjectIdentities(undefined)).toEqual({ serviceIds: [], keywords: [] })
   })
 })

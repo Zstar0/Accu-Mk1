@@ -33,7 +33,7 @@ import {
 import { PriorityGlyph } from '@/components/common/PriorityGlyph'
 import { legacyEffectivePriority, legacyToKey } from '@/lib/inbox-sla'
 import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
-import { useSlaForSubjects, type SlaSubject } from '@/services/sla-subjects'
+import { slaSubjectIdentities, useSlaForSubjects, type SlaSubject } from '@/services/sla-subjects'
 import type { WorksheetUser } from '@/lib/api'
 import { itemRoleBadges } from '@/lib/inbox-filters'
 import { RoleBadge } from '@/components/shared/RoleBadge'
@@ -152,9 +152,7 @@ function WorksheetDropZone({
         groupId: item.service_group_id,
         receivedAt: item.date_received ?? item.added_at,
         // Profile-SLA step (Task 11): tiered profile beats the group tier.
-        keywords: (item.analyses ?? [])
-          .map(a => a.keyword)
-          .filter((k): k is string => Boolean(k)),
+        ...slaSubjectIdentities(item.analyses),
       })),
     [worksheet.items]
   )
