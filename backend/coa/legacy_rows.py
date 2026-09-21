@@ -35,7 +35,8 @@ from coa.hplc_shim import (
     native_hplc_service_archetypes, slot_wires, wire_keyword, wire_title,
 )
 from coa.identity_verdict import identity_wire_result
-from coa.native_sections import NativeSectionsError
+from coa.native_sections import NativeSectionsError, _spec_wire_dict
+from coa.spec_rules import SpecRuleError, evaluate, normalize_matrix, resolve_spec
 from lims_analyses.hplc_native import TRIO
 
 # Twin contract: src/coabuilder_core/legacy_rows.py + tests/
@@ -46,6 +47,13 @@ FIELD_CONTRACT = (
     "Result", "Unit", "review_state", "ResultCaptureDate",
 )
 
+# Optional, native rows only: the SAME two fields native_sections ships per
+# row (spec-ownership slice 1) -- Mk1 resolves the analysis_service_specs row
+# and owns the verdict; COABuilder formats and renders. Absent on every
+# SENAITE-origin row and on a native row with no active spec filed, where
+# COABuilder's page-1 defaults apply. Twin-pinned like FIELD_CONTRACT.
+OPTIONAL_FIELDS = ("specification", "conforms")
+
 # Wire contract, twin-pinned (see FIELD_CONTRACT docstring above) alongside
 # src/coabuilder_core/legacy_rows.py in the coabuilder repo. Move both sides
 # together.
@@ -55,6 +63,33 @@ SKIP_STATES = frozenset({"retracted", "rejected", "cancelled"})
 def _shaped_rows(db, sample_id):
     from lims_analyses.service import list_parent_analyses_senaite_shape
     return list_parent_analyses_senaite_shape(db, sample_id)
+
+
+def _native_spec_fields(db, parent, r, wire_result) -> dict:
+    """`specification` + `conforms` for a native row, resolved and judged by
+    the same resolve_spec/evaluate/_spec_wire_dict native_sections uses. The
+    peptide tier anchors on the ROW's own peptide_id, so a blend resolves
+    per slot. Judged against the WIRE result (identity rides as the literal
+    Conforms token). A pending row ships its spec with conforms=None; no
+    active spec ships nothing."""
+    service_id = getattr(r, "analysis_service_id", None)
+    if db is None or service_id is None:
+        # No catalog to consult (same stance as identity_wire_result).
+        return {}
+    matrix = normalize_matrix(getattr(parent, "sample_type_title", None))
+    spec = resolve_spec(db, service_id, matrix,
+                        peptide_id=getattr(r, "peptide_id", None))
+    if spec is None:
+        return {}
+    conforms = None
+    if str(wire_result or "").strip():
+        try:
+            conforms = evaluate(spec, wire_result)
+        except SpecRuleError as e:
+            raise NativeSectionsError(
+                f"legacy rows: {parent.sample_id} row '{r.keyword}' "
+                f"({r.uid}): {e.detail}") from e
+    return {"specification": _spec_wire_dict(spec), "conforms": conforms}
 
 
 def build_legacy_rows(db, parent) -> list[dict]:
@@ -186,5 +221,7 @@ def build_legacy_rows(db, parent) -> list[dict]:
             "Unit": r.unit,
             "review_state": r.review_state,
             "ResultCaptureDate": r.captured,
+            **(_native_spec_fields(db, parent, r, wire_result)
+               if is_native_hplc_row(r) else {}),
         })
     return rows
