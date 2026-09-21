@@ -17,10 +17,17 @@ Definitions:
   Service ``coa_generations`` with no parent). Re-issues are included and the
   earliest wins, because a later re-issue does not undo first delivery. An
   unpublished sample's clock runs to now.
-* **target** — resolved per sample through ``sla_engine.resolve_sla_tier``: a
-  tier on any service group the sample touches, else the default tier. Every
-  tier in production is 1440 minutes today, but the resolution is real so the
-  report follows the day a group is given its own target.
+* **target**: each of the sample's services owes its own tier. A tiered
+  ACTIVE analysis profile (the lab hangs SLAs off profiles: "Sterility USP 71"
+  -> USP71, 112 bh), else a service-group tier, else the default
+  (``sla_engine.tier_by_service``). The SAMPLE is judged against the TIGHTEST
+  of those, because the clock above stops at the FIRST primary COA and on a
+  multi-tier sample that COA is the early partial one carrying the fast work
+  (prod 2026-09-17: P-2432, P-2492 and P-2777 all published their first COA
+  3 to 6 days after receipt with USP 71 still unverified). Only a sample whose
+  every service is slow (USP 71 on its own) gets the long target. Each FAMILY
+  in the gating cut is timed against its own tier instead, so sterility is
+  compared with 112 bh, not with the sample's 24.
 * **late** — strictly ``elapsed > target``; sitting exactly on the limit is not
   a breach (``sla_engine.sla_status_dict``).
 * **gating family** — for a sample carrying two or more families, the one whose
@@ -36,7 +43,13 @@ from datetime import date, datetime, timedelta
 from statistics import median
 from typing import Iterable, Optional, Sequence
 
-from sla_engine import BusinessSchedule, compute_business_minutes, resolve_sla_tier
+from sla_engine import (
+    BusinessSchedule,
+    compute_business_minutes,
+    resolve_sla_tier,
+    sample_tier,
+    tier_by_service,
+)
 from throughput import (
     DEPARTMENT_OF_FAMILY,
     DEPARTMENTS,
@@ -123,6 +136,15 @@ class GroupIn:
     service_ids: frozenset[int]
 
 
+@dataclass(frozen=True)
+class ProfileIn:
+    """A tiered ACTIVE analysis profile; its tier beats a group tier."""
+    id: int
+    name: str
+    sla_tier_id: Optional[int]
+    service_ids: frozenset[int]
+
+
 def month_label(ym: str) -> str:
     """``"2026-07"`` -> ``"Jul 2026"``."""
     return "%s %s" % (MONTHS_SHORT[int(ym[5:7]) - 1], ym[:4])
@@ -187,6 +209,7 @@ def build_sla_performance(
     order: Optional[str] = None,
     departments: Sequence[str] = (),
     families: Sequence[str] = (),
+    profiles: Iterable[ProfileIn] = (),
 ) -> dict:
     """Build the whole SLA performance report from already-fetched rows."""
     department_keys = tuple(k for k, _ in DEPARTMENTS)
@@ -205,13 +228,10 @@ def build_sla_performance(
     # ── tiers ───────────────────────────────────────────────────────────────
     tier_by_id = {t.id: t for t in tiers}
     default_tier = next((t for t in tier_by_id.values() if t.is_default), None)
-    tier_of_service: dict[int, TierIn] = {}
-    for g in groups:
-        tier = tier_by_id.get(g.sla_tier_id) if g.sla_tier_id else None
-        if tier is None:
-            continue
-        for sid in g.service_ids:
-            tier_of_service[sid] = tier
+    tier_of_service = tier_by_service(
+        [(tier_by_id[p.sla_tier_id], p.service_ids) for p in profiles if p.sla_tier_id in tier_by_id],
+        [(tier_by_id[g.sla_tier_id], g.service_ids) for g in groups if g.sla_tier_id in tier_by_id],
+    )
 
     # ── per-sample analysis facts ───────────────────────────────────────────
     # De-duplicate on (sample, keyword) across shadow + canonical provenance,
@@ -224,6 +244,8 @@ def build_sla_performance(
     family_of_keyword: dict[tuple[int, str], str] = {}
     families_of: dict[int, set] = defaultdict(set)
     services_of: dict[int, set] = defaultdict(set)
+    # (sample, family) -> the services behind it, for the family's own target.
+    services_of_family: dict[tuple[int, str], set] = defaultdict(set)
     for a in analyses:
         fam = classify_keyword(a.keyword, a.category)
         families_of[a.sample_pk].add(fam)
@@ -234,6 +256,7 @@ def build_sla_performance(
             family_of_keyword[key] = fam
         if a.service_id is not None:
             services_of[a.sample_pk].add(a.service_id)
+            services_of_family[(a.sample_pk, fam)].add(a.service_id)
         seen = verified_by_keyword[a.sample_pk].get(a.keyword)
         if a.verified_at is not None and (seen is None or a.verified_at > seen):
             verified_by_keyword[a.sample_pk][a.keyword] = a.verified_at
@@ -274,11 +297,17 @@ def build_sla_performance(
         sample_families = families_of.get(s.pk, set())
         tier = resolve_sla_tier(
             {},
-            _group_tier_for(services_of.get(s.pk, set()), tier_of_service),
+            sample_tier(services_of.get(s.pk, set()), tier_of_service, default_tier),
             None,
             default_tier,
         )
         target_bh = (tier.target_minutes if tier else 1440) / 60.0
+        # A family is timed to its LAST verification, so it owes its loosest tier.
+        family_target = {}
+        for fam in sample_families:
+            ft = sample_tier(services_of_family.get((s.pk, fam), set()), tier_of_service,
+                             default_tier, loosest=True)
+            family_target[fam] = (ft.target_minutes if ft else 1440) / 60.0
         published = first_primary.get(s.sample_id)
         cancelled = (s.status or "") in CANCELLED_STATUSES
         if published is not None:
@@ -310,6 +339,7 @@ def build_sla_performance(
             "tier": tier.name if tier else "—",
             "late": elapsed > target_bh,
             "families": sample_families,
+            "family_target": family_target,
             "verified": fam_verified,
             "last_verified": last_verified,
         })
@@ -371,19 +401,6 @@ def _naive(dt: datetime) -> datetime:
     """Drop tzinfo. Integration Service timestamps arrive tz-aware; Mk1's are naive
     UTC by codebase convention, and the two are compared against each other."""
     return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
-
-
-def _group_tier_for(service_ids: set, tier_of_service: dict) -> Optional[TierIn]:
-    """The tier of any service group the sample touches.
-
-    Production has exactly one tiered group, so "any" is unambiguous today. If a
-    second tiered group ever appears the longest target wins, which is the only
-    reading that cannot mark work late for a test it was never waiting on.
-    """
-    hits = [tier_of_service[sid] for sid in service_ids if sid in tier_of_service]
-    if not hits:
-        return None
-    return max(hits, key=lambda t: t.target_minutes)
 
 
 def _targets(records: Sequence[dict]) -> list:
@@ -500,7 +517,8 @@ def _gating(delivered: Sequence[dict], bh) -> dict:
         verified = {f: v for f, v in r["verified"].items() if f in GATING_FAMILIES}
         month = r["pub_month"]
         for fam, v in verified.items():
-            fam_times[fam].append({"bh": bh(r["received"], v), "target": r["target"], "m": month})
+            fam_times[fam].append({"bh": bh(r["received"], v),
+                                   "target": r["family_target"].get(fam, r["target"]), "m": month})
         gate = gating_family(verified)
         if gate is None:
             continue

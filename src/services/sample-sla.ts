@@ -145,10 +145,12 @@ export function useSampleSla(
         reason,
       }]
     }
-    return Array.from(byGroup, ([groupKey, { tier, reason }]) => ({
+    // A per-profile bucket (ungrouped service on a tiered profile) carries its
+    // own label; a real group is named from the service-groups catalog.
+    return Array.from(byGroup, ([groupKey, { tier, reason, label }]) => ({
       groupKey,
       groupName:
-        groupKey !== NO_GROUP_KEY ? groupNameById.get(groupKey) : undefined,
+        typeof groupKey === 'number' ? groupNameById.get(groupKey) : label,
       tier,
       reason,
     }))

@@ -12,7 +12,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-HTML = "<!doctype html><html><head><title>t</title></head><body><p>hi</p></body></html>"
+# Carries the theme marker so the server leaves the bytes alone (theming has its own tests).
+HTML = "<!doctype html><html><head><title>t</title><style>/* accumark-docs v1 */</style></head><body><p>hi</p></body></html>"
 SVC = {"X-Service-Token": "test-token"}
 SVC_ENV = {"ACCUMK1_INTERNAL_SERVICE_TOKEN": "test-token"}
 
@@ -316,4 +317,18 @@ def test_malformed_agent_entries_open_nothing(client, env_value):
 def test_unknown_token_is_401_with_agents_configured(client):
     with patch.dict(os.environ, AGENT_ENV):
         assert _publish(client, headers=_agent("z" * 40)).status_code == 401
+
+
+def test_a_revision_may_omit_title_over_http(client):
+    """The 422 the MCP hit on 2026-09-18 came from the request schema, so the
+    proof has to go through the route, not just the service."""
+    with patch.dict(os.environ, SVC_ENV):
+        first = _publish(client, headers=SVC, title="Waste Disposal", description="d1").json()
+        r = client.post("/api/documents", headers=SVC,
+                        json={"code": first["code"], "html": HTML + "<!--2-->", "author": "Forrest"})
+        assert r.status_code == 201, r.text
+        assert (r.json()["revision"], r.json()["title"], r.json()["description"]) == (2, "Waste Disposal", "d1")
+        # a NEW document without a title is still refused
+        r = client.post("/api/documents", headers=SVC, json={"html": HTML + "<!--3-->", "category": "ART"})
+        assert r.status_code == 400 and "title is required" in r.text
 

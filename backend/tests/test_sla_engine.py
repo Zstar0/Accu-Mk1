@@ -234,3 +234,33 @@ def test_multi_day_both_endpoints_inside_window():
     # Mon 10:30 PT -> Wed 14:00 PT: Mon 10:30-17:00 (390) + Tue full (480) + Wed 09:00-14:00 (300) = 1170
     got = compute_business_minutes(_utc(2026, 7, 13, 10, 30), _utc(2026, 7, 15, 14), _SCHED, _NO_HOLIDAY)
     assert got == 1170.0
+
+
+# ── per-service tiers (profile beats group) and the sample pick ─────────────
+def test_tier_by_service_profile_beats_group_and_tightest_wins_within_a_level():
+    from types import SimpleNamespace as T
+    from sla_engine import tier_by_service
+    std, micro, usp = T(name="Std", target_minutes=1440), T(name="Micro", target_minutes=1440), T(name="USP71", target_minutes=6720)
+    rush = T(name="Rush", target_minutes=480)
+    out = tier_by_service(
+        profile_tiers=[(usp, {279, 280}), (rush, {280})],      # 280 sits in two tiered profiles
+        group_tiers=[(micro, {279, 91}), (std, {91})],
+    )
+    assert out[279] is usp          # profile beats the group's tier
+    assert out[280] is rush         # tightest profile
+    assert out[91] in (micro, std) and out[91].target_minutes == 1440
+    assert 10 not in out            # untiered service: absent, falls to the default
+
+
+def test_sample_tier_folds_in_the_default_and_picks_tightest_or_loosest():
+    from types import SimpleNamespace as T
+    from sla_engine import sample_tier
+    std, usp = T(name="Std", target_minutes=1440), T(name="USP71", target_minutes=6720)
+    by_service = {279: usp}
+    assert sample_tier({10, 279}, by_service, std) is std                  # first COA: fast work
+    assert sample_tier({10, 279}, by_service, std, loosest=True) is usp    # what remains: slow work
+    assert sample_tier({279}, by_service, std) is usp                      # all slow
+    assert sample_tier(set(), by_service, std) is std                      # no services
+    assert sample_tier({10}, by_service, None) is None                     # no default configured
+    assert sample_tier({10, 279}, by_service, None) is usp
+

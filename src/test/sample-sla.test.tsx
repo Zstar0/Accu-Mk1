@@ -323,4 +323,47 @@ describe('useSampleSla', () => {
     expect(byGroup.get(11)?.groupName).toBe('Sterility')
     expect(byGroup.get(11)?.color).toBe('green') // on-track
   })
+  it('gives an ungrouped USP 71 service its own 14-day clock, labelled with the profile', async () => {
+    // Prod shape (read 2026-09-17): the USP71 tier hangs off the "Sterility
+    // USP 71" analysis profile and its service sits in NO service group.
+    getSlaTiersMock.mockResolvedValue([
+      { id: 1, name: 'Standard', target_minutes: 1440, business_hours_only: true, is_default: true, amber_threshold_percent: 20, created_at: '', updated_at: '' },
+      { id: 3, name: 'USP71', target_minutes: 6720, business_hours_only: true, is_default: false, amber_threshold_percent: 20, created_at: '', updated_at: '' },
+    ])
+    getAnalysisServicesMock.mockResolvedValue([
+      { id: 10, keyword: 'HPLC-PUR', title: 'Purity' },
+      { id: 279, keyword: 'BACTERIA', title: 'Bacteria' },
+    ])
+    getAnalysisProfilesMock.mockResolvedValue([
+      { id: 8, name: 'Sterility USP 71', active: true, sla_tier_id: 3, member_service_ids: [279] },
+    ])
+    fetchSlaStatusesMock.mockImplementation(async items =>
+      items.map(i => ({
+        key: i.key,
+        status: {
+          target_minutes: i.target_minutes,
+          elapsed_minutes: 600,
+          remaining_minutes: i.target_minutes - 600,
+          breached: false,
+        },
+      }))
+    )
+    const lookup = makeLookup({
+      analyses: [{ keyword: 'HPLC-PUR' }, { keyword: 'BACTERIA' }],
+    } as unknown as Partial<SenaiteLookupResult>)
+    const { result } = renderHook(() => useSampleSla(lookup), { wrapper })
+    await waitFor(() => {
+      expect(result.current.snapshots).toHaveLength(2)
+    })
+    const usp = result.current.snapshots.find(s => s.groupKey === 'profile:8')
+    expect(usp?.groupName).toBe('Sterility USP 71')
+    expect(usp?.tier.target_minutes).toBe(6720)
+    expect(usp?.reason.tierSource).toBe('profile')
+    const rest = result.current.snapshots.find(s => s.groupKey === 'no-group')
+    expect(rest?.tier.target_minutes).toBe(1440)
+    expect(rest?.groupName).toBeUndefined()
+    // One /sla/status item per bucket, each with its own target.
+    const sent = fetchSlaStatusesMock.mock.calls.at(-1)?.[0] ?? []
+    expect(sent.map(i => i.target_minutes).sort((a, b) => a - b)).toEqual([1440, 6720])
+  })
 })

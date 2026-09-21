@@ -215,6 +215,7 @@ def sqlite_session():
     from sqlalchemy.orm import sessionmaker
 
     from models import (
+        AnalysisProfile,
         AnalysisService,
         Base,
         BusinessHoursConfig,
@@ -222,6 +223,7 @@ def sqlite_session():
         LimsSample,
         ServiceGroup,
         SlaTier,
+        analysis_profile_members,
         service_group_members,
     )
     from models import LimsAnalysis
@@ -233,6 +235,8 @@ def sqlite_session():
             LimsSample.__table__, LimsAnalysis.__table__, AnalysisService.__table__,
             SlaTier.__table__, ServiceGroup.__table__, service_group_members,
             BusinessHoursConfig.__table__, LabHoliday.__table__,
+            # The loader also reads tiered analysis profiles (SLAs hang off profiles).
+            AnalysisProfile.__table__, analysis_profile_members,
         ],
     )
     session = sessionmaker(bind=engine)()
@@ -258,8 +262,13 @@ def test_the_loader_reads_the_schedule_tiers_and_group_membership(sqlite_session
     sqlite_session.add(SlaTier(id=1, name="Standard", target_minutes=1440, is_default=True))
     sqlite_session.add(SlaTier(id=3, name="USP71", target_minutes=6720, is_default=False))
     sqlite_session.add(ServiceGroup(id=2, name="Microbiology", sla_tier_id=3))
+    # The lab hangs SLAs off analysis profiles: prod's "Sterility USP 71".
+    from models import AnalysisProfile, analysis_profile_members
+    sqlite_session.add(AnalysisProfile(id=8, key="usp71", name="Sterility USP 71", is_addon=True, sla_tier_id=3))
     sqlite_session.flush()
     sqlite_session.execute(service_group_members.insert().values(service_group_id=2, analysis_service_id=91))
+    sqlite_session.execute(analysis_profile_members.insert().values(
+        analysis_profile_id=8, analysis_service_id=279, sort_order=0))
     s = LimsSample(id=1, sample_id="P-1", date_received=datetime(2026, 7, 6, 16, 0),
                    status="published", client_title="acme", client_order_number="WP-9")
     sqlite_session.add(s)
@@ -275,6 +284,8 @@ def test_the_loader_reads_the_schedule_tiers_and_group_membership(sqlite_session
     assert [t.name for t in inputs["tiers"]] == ["Standard", "USP71"]
     micro = next(g for g in inputs["groups"] if g.name == "Microbiology")
     assert micro.sla_tier_id == 3 and micro.service_ids == frozenset({91})
+    assert [(p.name, p.sla_tier_id, p.service_ids) for p in inputs["profiles"]] == [
+        ("Sterility USP 71", 3, frozenset({279}))]
     assert inputs["samples"][0].order == "WP-9"
     a = inputs["analyses"][0]
     assert (a.keyword, a.category, a.service_id) == ("STER-PCR", "Sterility", 91)

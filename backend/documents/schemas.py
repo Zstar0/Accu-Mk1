@@ -74,7 +74,7 @@ class DocumentListOut(BaseModel):
 
 
 class DocumentCreate(BaseModel):
-    title: str
+    title: Optional[str] = None       # required for a new code; a revision inherits
     html: str
     category: Optional[str] = None       # code prefix or name
     category_id: Optional[int] = None

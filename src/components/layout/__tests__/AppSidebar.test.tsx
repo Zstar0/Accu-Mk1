@@ -206,6 +206,7 @@ describe('AppSidebar — Customers entry (Phase 29-03)', () => {
       'Dashboard',
       'Check-In Times',
       'Ready to Publish',
+      'Scheduled Publishes',
       'Documents',
       'Lab Throughput',
       'SLA Performance',

@@ -181,13 +181,14 @@ export function useOrderSlaStatuses(
         })
         continue
       }
-      for (const [groupKey, { tier, reason }] of byGroup) {
+      for (const [groupKey, { tier, reason, label }] of byGroup) {
         out.push({
           senaiteId,
           lookup,
           groupKey,
+          // Per-profile buckets carry their own label (the profile name).
           groupName:
-            groupKey !== NO_GROUP_KEY ? groupNameById.get(groupKey) : undefined,
+            typeof groupKey === 'number' ? groupNameById.get(groupKey) : label,
           tier,
           priority,
           reason,

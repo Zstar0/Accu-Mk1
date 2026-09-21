@@ -46,6 +46,15 @@ class EntitySpec:
     # a search-as-you-type picker. Pure host-domain closure; the core never
     # learns how a sample or worksheet is matched.
     search: Optional[Callable[[Session, str], list]] = None
+    # Optional creation snapshot. A small JSON dict describing the entity AT THE MOMENT
+    # a flag is raised; the core stores it on the 'raised' event and never interprets it.
+    # Documents use it to record which revision a thread was opened against: the anchor
+    # is the document CODE, which outlives revisions.
+    snapshot: Optional[Callable[[Session, str], Optional[dict]]] = None
+    # Opt-in existence check. When True, raising a flag on an entity_id whose `context`
+    # resolves to None is refused. Off for the legacy types, which accept ids the
+    # registry cannot resolve.
+    must_exist: bool = False
 
 
 _REGISTRY: dict[str, EntitySpec] = {}
@@ -53,11 +62,12 @@ _REGISTRY: dict[str, EntitySpec] = {}
 
 def register_entity(entity_type: str, *, label, deep_link, can_flag,
                     context=None, contexts=None, descendants=None, state=None,
-                    search=None) -> None:
+                    search=None, snapshot=None, must_exist=False) -> None:
     _REGISTRY[entity_type] = EntitySpec(entity_type, label, deep_link, can_flag,
                                         context=context, contexts=contexts,
                                         descendants=descendants,
-                                        state=state, search=search)
+                                        state=state, search=search,
+                                        snapshot=snapshot, must_exist=must_exist)
 
 
 def is_registered(entity_type: str) -> bool:
@@ -133,6 +143,18 @@ def has_state_seam(entity_type: str) -> bool:
     'unresolvable right now'. Arm-time validation uses THIS."""
     spec = _REGISTRY.get(entity_type)
     return spec is not None and spec.state is not None
+
+
+def resolve_snapshot(db: Session, entity_type: str, entity_id: str) -> Optional[dict]:
+    """The entity's creation snapshot, or None (unregistered, no `snapshot` closure,
+    row gone, or resolver error). Best-effort: a snapshot never blocks raising a flag."""
+    spec = _REGISTRY.get(entity_type)
+    if spec is None or spec.snapshot is None:
+        return None
+    try:
+        return spec.snapshot(db, str(entity_id))
+    except Exception:  # noqa: BLE001 - snapshot is best-effort
+        return None
 
 
 def resolve_state(db: Session, entity_type: str, entity_id: str) -> Optional[str]:
@@ -607,3 +629,66 @@ def register_mk1_entities() -> None:
                     can_flag=lambda user, eid: True,
                     context=_order_context,
                     descendants=_order_descendants)
+
+    # --- controlled documents (2026-09-18) --------------------------------
+    # entity_id is the document CODE ("SOP-0001"), never a revision row id: a
+    # thread is about the document and has to survive the revision that answers
+    # it. Everything below resolves the LATEST revision of that code.
+    def _document_latest(db, code):
+        from documents.models import Document
+        if db is None or not code:
+            return None
+        return (db.query(Document)
+                # EXACT match on purpose. Codes are always uppercase; accepting
+                # "sop-0001" would store a thread under an id the UI never queries.
+                .filter(Document.code == str(code).strip())
+                .order_by(Document.revision.desc()).first())
+
+    def _document_label(db, eid):
+        doc = _document_latest(db, eid)
+        return f"{doc.code} \u00b7 {doc.title}" if doc else str(eid)
+
+    def _document_context(db, eid):
+        doc = _document_latest(db, eid)
+        if doc is None:
+            return None
+        return {"label": f"{doc.code} \u00b7 {doc.title}",
+                "sample_id": None, "analyses": [], "lot": None,
+                # the viewer route takes a revision row id; hand it the latest
+                "deep_link": {"kind": "document", "id": str(doc.id)}}
+
+    def _document_state(db, eid):
+        doc = _document_latest(db, eid)
+        return doc.status if doc else None
+
+    def _document_snapshot(db, eid):
+        doc = _document_latest(db, eid)
+        return {"revision": doc.revision, "status": doc.status} if doc else None
+
+    def _document_search(db, q):
+        from sqlalchemy import or_
+        from documents.models import Document
+        rows = (db.query(Document)
+                .filter(or_(Document.code.ilike(_ilike_prefix(q), escape="\\"),
+                            Document.title.ilike("%" + _ilike_prefix(q), escape="\\")))
+                .order_by(Document.code, Document.revision.desc())
+                .limit(60).all())
+        out, seen = [], set()
+        for r in rows:  # newest revision of each code wins
+            if r.code in seen:
+                continue
+            seen.add(r.code)
+            out.append({"entity_id": r.code, "label": f"{r.code} \u00b7 {r.title}"})
+            if len(out) == 10:
+                break
+        return out
+
+    register_entity("document",
+                    label=_document_label,
+                    deep_link=lambda eid: "/#reports/documents",
+                    can_flag=lambda user, eid: True,
+                    context=_document_context,
+                    state=_document_state,
+                    search=_document_search,
+                    snapshot=_document_snapshot,
+                    must_exist=True)
