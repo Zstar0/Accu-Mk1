@@ -3665,7 +3665,7 @@ def _serialize_senaite_shape_rows(
         SenaiteShapeMethodOption,
         SenaiteShapeResultOption,
     )
-    from users_display import user_display_name
+    from users_display import user_short_name
 
     if not rows:
         return []
@@ -3704,8 +3704,10 @@ def _serialize_senaite_shape_rows(
     )
     analyst_name_by_id = {}
     if analyst_ids:
+        # "F. Last" when the profile has both names, else the display-name
+        # rule (single name, then email). The Analyst column is narrow.
         analyst_name_by_id = {
-            u.id: user_display_name(u)
+            u.id: user_short_name(u)
             for u in db.execute(select(User).where(User.id.in_(analyst_ids))).scalars()
         }
 

@@ -52,3 +52,15 @@ def test_migration_idempotent_and_columns_present():
     # Sanity: the columns are usable (no exception writing/reading them).
     with database.engine.connect() as conn:
         conn.execute(text("SELECT first_name, last_name FROM users LIMIT 1"))
+
+
+def test_short_name_is_initial_dot_last_only_when_both_names_are_set():
+    from users_display import user_short_name
+
+    assert user_short_name(_u("Forrest", "Parker")) == "F. Parker"
+    assert user_short_name(_u("  mary ann ", " O'Neil ")) == "M. O'Neil"
+    # Anything less keeps the existing rule: the one name, else the email.
+    assert user_short_name(_u("Forrest", None)) == "Forrest"
+    assert user_short_name(_u(None, "Parker")) == "Parker"
+    assert user_short_name(_u(None, "", email="tech@lab.test")) == "tech@lab.test"
+    assert user_short_name(None) == ""
