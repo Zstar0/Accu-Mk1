@@ -1058,6 +1058,12 @@ class Worksheet(Base):
     created_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     completed_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # The bench sheet is printed and carried to the bench, so the FIRST print is
+    # the run's real start (ticks and results are keyed in afterwards). Reprints
+    # only count. Each print is also an audit_logs row (worksheet_printed).
+    printed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    printed_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    print_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -1094,6 +1100,29 @@ class WorksheetItem(Base):
     prep_status: Mapped[str] = mapped_column(String(20), default="ready", nullable=False, server_default="ready")
     date_received: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # SENAITE sample received date
     added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # Endotoxin bench prep (2026-09-18, ported from Dennis's endotoxin-log; spec
+    # docs/superpowers/specs/2026-09-18-endo-worksheet-design.md). All three are
+    # analyst OVERRIDES; NULL means "use the computed value":
+    #   prep_weight_mg        weight actually prepped, when it differs from the
+    #                         parent's declared quantity
+    #   prep_volume_ml        reconstitution volume, when it differs from
+    #                         MIN(10, 1 + FLOOR(mg / 50))
+    #   prep_dilution_factor  bacteriostatic-water dilution, when not 20x
+    # Derived figures (vial conc, sample uL, LAL uL, due date) are never stored;
+    # src/lib/endo-prep.ts computes them from these plus the parent's declared weight.
+    prep_weight_mg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    prep_volume_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    prep_dilution_factor: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    #   prep_target_mg_ml     target concentration in the cartridge, when not 1 mg/mL
+    prep_target_mg_ml: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Bench ticks: the analyst marks a row Made (sample prepped) and Ran (on the
+    # instrument; the MCS reader on the endo bench). The server stamps who and
+    # when; every set/clear also writes an audit_logs row, so an undone tick
+    # keeps its history. prep_status follows the ticks.
+    made_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    made_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    ran_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    ran_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     def __repr__(self) -> str:
         return f"<WorksheetItem(id={self.id}, worksheet_id={self.worksheet_id}, sample_uid='{self.sample_uid}')>"

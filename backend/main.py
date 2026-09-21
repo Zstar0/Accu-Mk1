@@ -11,7 +11,7 @@ import secrets
 import subprocess
 import sys
 from contextlib import asynccontextmanager
-from datetime import datetime, date, time, timezone
+from datetime import datetime, date, time, timezone, timedelta
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -39,7 +39,7 @@ from sqlalchemy import select, desc, delete, update, func, extract, and_, or_
 from sqlalchemy.exc import IntegrityError
 
 from database import get_db, init_db
-from sla_engine import BusinessSchedule, compute_business_minutes, sla_status_dict
+from sla_engine import BusinessSchedule, compute_business_minutes, compute_business_deadline, sla_status_dict
 from throughput import (
     SERIES_START as THROUGHPUT_SERIES_START,
     AnalysisIn as ThroughputAnalysisIn,
@@ -21478,11 +21478,15 @@ async def compute_sla_statuses(
             item_now = item_now.astimezone(timezone.utc).replace(tzinfo=None)
         if item.business_hours_only and schedule is not None:
             elapsed = compute_business_minutes(recv, item_now, schedule, is_holiday)
+            due_at = compute_business_deadline(recv, item.target_minutes, schedule, is_holiday)
         else:
             elapsed = (item_now - recv).total_seconds() / 60.0
-        results.append(
-            SlaStatusResultItem(key=item.key, status=sla_status_dict(item.target_minutes, elapsed))
-        )
+            due_at = recv + timedelta(minutes=item.target_minutes)
+        status = sla_status_dict(item.target_minutes, elapsed)
+        # Endotoxin bench due date (spec 2026-09-18-endo-worksheet-design):
+        # the instant the clock reaches the target, naive UTC. Additive key.
+        status["due_at"] = due_at
+        results.append(SlaStatusResultItem(key=item.key, status=status))
     return SlaStatusResponse(items=results)
 
 
@@ -22984,6 +22988,43 @@ async def create_worksheet(
     }
 
 
+def _worksheet_item_parent_facts(parent: "Optional[LimsSample]") -> dict:
+    """Parent-sample facts the endotoxin bench needs on a worksheet item
+    (spec 2026-09-18-endo-worksheet-design §4). None-safe: every key is
+    present even when the item has no resolvable parent, so the FE never
+    branches on a missing key."""
+    if parent is None:
+        return {"declared_weight_mg": None, "sample_type": None,
+                "client_order_number": None, "sample_identity": None}
+    declared = None
+    if parent.declared_total_quantity not in (None, ""):
+        try:
+            declared = float(parent.declared_total_quantity)
+        except (TypeError, ValueError):
+            declared = None
+    identity = None
+    if parent.analytes:
+        try:
+            slots = json.loads(parent.analytes)
+        except (TypeError, ValueError):
+            slots = None
+        if isinstance(slots, list):
+            names = []
+            for slot in slots:
+                # Positional slots are {"name": ..., "declared_quantity": ...};
+                # a placeholder slot has name None and is skipped.
+                name = (slot.get("name") or slot.get("title")) if isinstance(slot, dict) else slot
+                if name:
+                    names.append(str(name))
+            identity = ", ".join(names) or None
+    return {
+        "declared_weight_mg": declared,
+        "sample_type": parent.sample_type_title or parent.sample_type,
+        "client_order_number": parent.client_order_number,
+        "sample_identity": identity or parent.peptide_name,
+    }
+
+
 def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
     """Serialize worksheets + items into the GET /worksheets wire shape.
 
@@ -23130,6 +23171,7 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
     sub_kind_map: dict[str, Optional[str]] = {}
     sub_role_map: dict[str, Optional[str]] = {}
     sub_box_id_map: dict[str, Optional[int]] = {}
+    sub_parent_pk_map: dict[str, Optional[int]] = {}
     if item_sample_ids:
         sub_rows = db.execute(
             select(
@@ -23143,6 +23185,7 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
                 # truth the inbox already badges by; the FE prefers it.
                 LimsSubSample.assignment_role,
                 LimsSubSample.box_id,  # current physical box, if any
+                LimsSubSample.parent_sample_pk,  # endo bench: parent facts (2026-09-18)
             ).where(
                 LimsSubSample.sample_id.in_(item_sample_ids)
             )
@@ -23151,6 +23194,7 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
         sub_kind_map = {r.sample_id: r.assignment_kind for r in sub_rows}
         sub_role_map = {r.sample_id: r.assignment_role for r in sub_rows}
         sub_box_id_map = {r.sample_id: r.box_id for r in sub_rows}
+        sub_parent_pk_map = {r.sample_id: r.parent_sample_pk for r in sub_rows}
 
     # Resolve current box labels for boxed vials so techs know which
     # physical box to grab. None for parent-sample items / unboxed vials.
@@ -23161,6 +23205,28 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
             select(LimsBox).where(LimsBox.id.in_(boxed_ids))
         ).scalars().all()
         box_label_map = {b.id: box_label_code(b) for b in box_rows}
+
+    # Endotoxin bench prep (spec 2026-09-18-endo-worksheet-design §4): resolve
+    # each item's parent sample so the declared weight, matrix, order number
+    # and identity ride on the item. Vial items go through the vial's parent;
+    # parent-sample items (legacy "<order> E" worksheets hold P-XXXX ids) match
+    # by their own sample id. ONE query for the whole page.
+    parent_pks = {pk for pk in sub_parent_pk_map.values() if pk}
+    parent_by_pk: dict[int, LimsSample] = {}
+    parent_by_sample_id: dict[str, LimsSample] = {}
+    if parent_pks or item_sample_ids:
+        parent_rows = db.execute(
+            select(LimsSample).where(or_(
+                LimsSample.id.in_(parent_pks or [0]),
+                LimsSample.sample_id.in_(item_sample_ids or ["-"]),
+            ))
+        ).scalars().all()
+        parent_by_pk = {p.id: p for p in parent_rows}
+        parent_by_sample_id = {p.sample_id: p for p in parent_rows}
+
+    def _parent_for(sample_id: str) -> Optional[LimsSample]:
+        pk = sub_parent_pk_map.get(sample_id)
+        return parent_by_pk.get(pk) if pk else parent_by_sample_id.get(sample_id)
 
     # Resolve per-item stamped method/instrument names (bench-stamping
     # slice 2, task 5): the DISTINCT non-null stamped values across a
@@ -23251,6 +23317,10 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
             "item_count": len(items),
             "created_at": (ws.created_at.isoformat() + "Z") if ws.created_at else None,
             "completed_at": (ws.completed_at.isoformat() + "Z") if ws.completed_at else None,
+            # First print of the bench sheet = the run's start on the bench.
+            "printed_at": (ws.printed_at.isoformat() + "Z") if ws.printed_at else None,
+            "printed_by_user_id": ws.printed_by_user_id,
+            "print_count": ws.print_count or 0,
             "items": [
                 {
                     "id": it.id,
@@ -23293,6 +23363,18 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
                     "box_label": box_label_map.get(sub_box_id_map.get(it.sample_id)),
                     "analyses": json.loads(it.analyses_json) if it.analyses_json else (group_analyses_map.get(it.service_group_id, []) if it.service_group_id else []),
                     "prep_status": it.prep_status,
+                    # Endotoxin bench prep overrides + the parent facts the
+                    # bench computes from (spec 2026-09-18-endo-worksheet-design).
+                    "prep_weight_mg": it.prep_weight_mg,
+                    "prep_volume_ml": it.prep_volume_ml,
+                    "prep_dilution_factor": it.prep_dilution_factor,
+                    "prep_target_mg_ml": it.prep_target_mg_ml,
+                    # Bench ticks: who marked the row Made / Ran, and when.
+                    "made_at": (it.made_at.isoformat() + "Z") if it.made_at else None,
+                    "made_by_user_id": it.made_by_user_id,
+                    "ran_at": (it.ran_at.isoformat() + "Z") if it.ran_at else None,
+                    "ran_by_user_id": it.ran_by_user_id,
+                    **_worksheet_item_parent_facts(_parent_for(it.sample_id)),
                 }
                 for it in items
             ],
@@ -23329,6 +23411,99 @@ def list_worksheets(
 
     worksheets = db.execute(query).scalars().all()
     return _serialize_worksheets(db, worksheets)
+
+
+# Which bench a worksheet item belongs to. A faithful port of
+# src/lib/worksheet-kind.ts (benchKindForItem): the vial's catalog role wins;
+# an item with no mapped role (a bare parent id on a legacy "<order> E"
+# worksheet has no lims_sub_samples row at all) falls back to the first
+# analysis keyword that names a bench. Keep the two in step.
+_ROLE_BENCH_KIND = {
+    "endo": "endo", "endo85": "endo", "pcr": "pcr", "ster": "sterility",
+    "usp71": "sterility", "hm": "hm", "hplc": "hplc", "fentanyl": "hplc",
+}
+_KEYWORD_BENCH_KIND = (
+    (re.compile(r"ENDO", re.I), "endo"),
+    (re.compile(r"PCR", re.I), "pcr"),
+    (re.compile(r"USP71|STERILITY[_-]USP", re.I), "sterility"),
+    (re.compile(r"PURITY|IDENTITY|^ID_|^HPLC", re.I), "hplc"),
+)
+
+
+def _bench_kind_for_item(role: Optional[str], analyses_json: Optional[str]) -> Optional[str]:
+    by_role = _ROLE_BENCH_KIND.get(role or "")
+    if by_role:
+        return by_role
+    try:
+        analyses = json.loads(analyses_json) if analyses_json else []
+    except ValueError:
+        analyses = []
+    for a in analyses if isinstance(analyses, list) else []:
+        keyword = (a.get("keyword") if isinstance(a, dict) else None) or ""
+        for pattern, kind in _KEYWORD_BENCH_KIND:
+            if pattern.search(keyword):
+                return kind
+    return None
+
+
+@app.get("/worksheets/bench-log")
+def worksheet_bench_log(
+    kind: str = "endo",
+    limit: int = 60,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Run log for one bench kind: the newest worksheets whose items are ALL
+    of that kind, as lean summaries (no items). The full-history /worksheets
+    fetch is far too heavy for a side rail (4.2MB on prod, 2026-08-27).
+    Registered before /worksheets/{worksheet_id} so the literal path wins.
+    """
+    if kind not in set(_ROLE_BENCH_KIND.values()):
+        raise HTTPException(400, "Unknown bench kind")
+    limit = min(max(limit, 1), 200)
+    # ponytail: kind is decided in Python (the keyword fallback reads JSON), so
+    # only the newest 500 worksheets are scanned. Store a kind column on
+    # worksheets if a bench's history ever needs to reach further back.
+    worksheets = db.execute(
+        select(
+            Worksheet.id, Worksheet.title, Worksheet.status, Worksheet.created_at,
+            Worksheet.completed_at, Worksheet.assigned_analyst_id,
+        )
+        .where(Worksheet.status != "staging")
+        .order_by(Worksheet.created_at.desc())
+        .limit(500)
+    ).all()
+    item_rows = db.execute(
+        select(
+            WorksheetItem.worksheet_id, LimsSubSample.assignment_role,
+            WorksheetItem.analyses_json, WorksheetItem.made_at, WorksheetItem.ran_at,
+        )
+        .outerjoin(LimsSubSample, LimsSubSample.sample_id == WorksheetItem.sample_id)
+        .where(WorksheetItem.worksheet_id.in_([w.id for w in worksheets]))
+    ).all() if worksheets else []
+    by_ws: dict[int, list] = {}
+    for r in item_rows:
+        by_ws.setdefault(r.worksheet_id, []).append(r)
+
+    out = []
+    for w in worksheets:
+        rows = by_ws.get(w.id, [])
+        if not rows or any(_bench_kind_for_item(r.assignment_role, r.analyses_json) != kind for r in rows):
+            continue
+        out.append({
+            "id": w.id,
+            "title": w.title,
+            "status": w.status,
+            "created_at": (w.created_at.isoformat() + "Z") if w.created_at else None,
+            "completed_at": (w.completed_at.isoformat() + "Z") if w.completed_at else None,
+            "assigned_analyst": w.assigned_analyst_id,
+            "item_count": len(rows),
+            "made_count": sum(1 for r in rows if r.made_at),
+            "ran_count": sum(1 for r in rows if r.ran_at),
+        })
+        if len(out) >= limit:
+            break
+    return out
 
 
 @app.get("/worksheets/{worksheet_id}")
@@ -23895,10 +24070,175 @@ async def reassign_worksheet_item_by_id(
     return {"status": "reassigned", "target_worksheet_id": data.target_worksheet_id}
 
 
+def _sole_instrument_for_item(db: Session, item: "WorksheetItem") -> "Optional[tuple[int, list]]":
+    """The one instrument this item's open analyses can have run on, with
+    the analyses it applies to, from the catalog: analysis service -> active
+    method covering it -> active instrument linked to that method. None
+    unless exactly one instrument resolves, so a second analyzer is never
+    guessed at (the apply bar stays the way to choose). The method is only
+    the path to the instrument; it is never written (see _apply_bench_ticks)."""
+    from lims_analyses.service import STAMPABLE_STATES
+    from models import LimsAnalysis
+
+    vial_pk = db.execute(
+        select(LimsSubSample.id).where(LimsSubSample.sample_id == item.sample_id)
+    ).scalar_one_or_none()
+    if vial_pk is None:
+        return None
+    open_rows = db.execute(
+        select(LimsAnalysis).where(
+            LimsAnalysis.lims_sub_sample_pk == vial_pk,
+            LimsAnalysis.review_state.in_(STAMPABLE_STATES),
+        )
+    ).scalars().all()
+    service_ids = {r.analysis_service_id for r in open_rows}
+    if not service_ids:
+        return None
+    pairs = db.execute(
+        select(method_services.c.analysis_service_id, instrument_methods.c.instrument_id)
+        .join(HplcMethod, HplcMethod.id == method_services.c.method_id)
+        .join(instrument_methods, instrument_methods.c.method_id == HplcMethod.id)
+        .join(Instrument, Instrument.id == instrument_methods.c.instrument_id)
+        .where(
+            method_services.c.analysis_service_id.in_(service_ids),
+            HplcMethod.active.is_(True),
+            Instrument.active.is_(True),
+        )
+        .distinct()
+    ).all()
+    instruments = {r[1] for r in pairs}
+    if len(instruments) != 1:
+        return None
+    covered = {r[0] for r in pairs}
+    return instruments.pop(), [r for r in open_rows if r.analysis_service_id in covered]
+
+
+def _apply_bench_ticks(db: Session, worksheet_id: int, item: "WorksheetItem", *,
+                       made: Optional[bool], ran: Optional[bool], user_id: Optional[int],
+                       stamp_instrument: bool = True) -> bool:
+    """Set or clear an item's Made / Ran ticks. The server owns who and when;
+    a tick already in the wanted state is left alone (its first stamp stands).
+    Every change writes an audit_logs row, prep_status follows the ticks, and a
+    Ran tick records the INSTRUMENT when the catalog leaves no choice.
+
+    It never writes a method. The COA's native section prints a row's method
+    (coa/native_sections.py) and promote copies the vial row's method to the
+    parent, so a method planted here would surface on customer COAs, and only
+    for the samples somebody ticked. Methods are not shown on COAs yet
+    (Handler, 2026-09-19); the COA wire never reads instrument_id. A method
+    already chosen through the apply bar is kept as it is.
+    Returns whether anything changed."""
+    changed = False
+    newly_set = set()
+    for tick, want in (("made", made), ("ran", ran)):
+        if want is None or want == (getattr(item, f"{tick}_at") is not None):
+            continue
+        changed = True
+        if want:
+            newly_set.add(tick)
+        setattr(item, f"{tick}_at", datetime.utcnow() if want else None)
+        setattr(item, f"{tick}_by_user_id", user_id if want else None)
+        db.add(AuditLog(
+            operation=f"bench_{tick}_{'set' if want else 'cleared'}",
+            entity_type="worksheet_item",
+            entity_id=str(item.id),
+            details={"user_id": user_id, "worksheet_id": worksheet_id, "sample_id": item.sample_id},
+        ))
+    if not changed:
+        return False
+    # The ticks ARE the row's progress on a bench sheet; keep prep_status
+    # (what the rest of Mk1 reads) in step with them.
+    item.prep_status = "complete" if item.ran_at else "in_progress" if item.made_at else "ready"
+    # Only a Ran tick SET BY THIS CALL speaks for the instrument (re-sending
+    # ran=true beside another change does not), and never when the caller
+    # set or cleared the instrument itself in the same request: their
+    # explicit choice stands (stamp_instrument=False).
+    if stamp_instrument and "ran" in newly_set and not item.instrument_id:
+        resolved = _sole_instrument_for_item(db, item)
+        if resolved:
+            from lims_analyses.service import stamp_method_instrument
+
+            instrument_id, rows = resolved
+            for row in rows:
+                stamp_method_instrument(db, row, method_id=row.method_id,
+                                        instrument_id=instrument_id, user_id=user_id)
+            item.instrument_id = instrument_id
+    return True
+
+
+class WorksheetBenchTicks(BaseModel):
+    made: Optional[bool] = None
+    ran: Optional[bool] = None
+    item_ids: Optional[list[int]] = None
+
+
+@app.post("/worksheets/{worksheet_id}/bench-ticks")
+def bulk_bench_ticks(
+    worksheet_id: int,
+    data: WorksheetBenchTicks,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Tick (or untick) Made / Ran down a whole worksheet in one request: the
+    bench sheet is worked on paper and keyed in afterwards, a run at a time."""
+    ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
+    if not ws:
+        raise HTTPException(404, "Worksheet not found")
+    if ws.status == "completed":
+        raise HTTPException(409, "Worksheet is completed")
+    items = db.execute(
+        select(WorksheetItem).where(WorksheetItem.worksheet_id == worksheet_id)
+    ).scalars().all()
+    wanted = set(data.item_ids) if data.item_ids is not None else None
+    changed = sum(
+        1 for it in items
+        if (wanted is None or it.id in wanted)
+        and _apply_bench_ticks(db, worksheet_id, it, made=data.made, ran=data.ran,
+                               user_id=_current_user.id)
+    )
+    db.commit()
+    return {"status": "updated", "changed": changed}
+
+
+@app.post("/worksheets/{worksheet_id}/printed")
+def record_worksheet_printed(
+    worksheet_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """The bench sheet was sent to the printer. The first print is the run's
+    start on the bench (printed_at never moves); reprints only count."""
+    ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
+    if not ws or ws.status == "staging":
+        raise HTTPException(404, "Worksheet not found")
+    if ws.printed_at is None:
+        ws.printed_at = datetime.utcnow()
+        ws.printed_by_user_id = _current_user.id
+    ws.print_count = (ws.print_count or 0) + 1
+    db.add(AuditLog(
+        operation="worksheet_printed",
+        entity_type="worksheet",
+        entity_id=str(ws.id),
+        details={"user_id": _current_user.id, "print_count": ws.print_count},
+    ))
+    db.commit()
+    return {"status": "recorded", "printed_at": ws.printed_at.isoformat() + "Z", "print_count": ws.print_count}
+
+
 class WorksheetItemUpdate(BaseModel):
     instrument_uid: Optional[str] = None
     instrument_id: Optional[int] = None
     prep_status: Optional[str] = None
+    # Endotoxin bench prep overrides (spec 2026-09-18-endo-worksheet-design):
+    # explicit null clears, an omitted field is a no-op (model_fields_set).
+    prep_weight_mg: Optional[float] = None
+    prep_volume_ml: Optional[float] = None
+    prep_dilution_factor: Optional[float] = None
+    prep_target_mg_ml: Optional[float] = None
+    # Bench ticks. true stamps the caller + now (a no-op when already set),
+    # false clears; the server owns who/when, never the client.
+    made: Optional[bool] = None
+    ran: Optional[bool] = None
 
 
 @app.patch("/worksheets/{worksheet_id}/items/{item_id}")
@@ -23977,6 +24317,17 @@ async def update_worksheet_item(
         allowed = {"ready", "in_progress", "complete"}
         if data.prep_status in allowed:
             item.prep_status = data.prep_status
+
+    for field in ("prep_weight_mg", "prep_volume_ml", "prep_dilution_factor", "prep_target_mg_ml"):
+        if field in data.model_fields_set:
+            value = getattr(data, field)
+            if value is not None and value <= 0:
+                raise HTTPException(400, f"{field} must be greater than zero")
+            setattr(item, field, value)
+
+    _apply_bench_ticks(db, worksheet_id, item, made=data.made, ran=data.ran,
+                       user_id=_current_user.id,
+                       stamp_instrument="instrument_id" not in data.model_fields_set)
 
     db.commit()
     return {"status": "updated", "item_id": item_id, "resolved_method": resolved_method}

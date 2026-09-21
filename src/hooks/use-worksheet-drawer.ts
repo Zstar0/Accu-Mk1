@@ -9,11 +9,37 @@ import {
   addGroupToWorksheet,
   reorderWorksheetItems,
   updateWorksheetItem,
+  bulkWorksheetBenchTicks,
   applyWorksheetMethodInstrument,
 } from '@/lib/api'
-import type { WorksheetListItem, AddToWorksheetPayload } from '@/lib/api'
+import type {
+  WorksheetListItem,
+  AddToWorksheetPayload,
+  WorksheetItemPatch,
+} from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
 import { toast } from 'sonner'
+
+const ITEM_UPDATE_KEY = ['worksheet-item-update'] as const
+
+type WorksheetItemRow = WorksheetListItem['items'][number]
+
+/** A tick moves the row's status exactly as the server does (complete once
+ *  ran, in progress once made, else ready); other patches leave it alone. */
+function withTickStatus(
+  data: WorksheetItemPatch,
+  item: WorksheetItemRow
+): WorksheetItemRow {
+  if (data.made === undefined && data.ran === undefined) return item
+  return {
+    ...item,
+    prep_status: item.ran_at
+      ? 'complete'
+      : item.made_at
+        ? 'in_progress'
+        : 'ready',
+  }
+}
 
 export function useWorksheetDrawer() {
   const queryClient = useQueryClient()
@@ -47,7 +73,7 @@ export function useWorksheetDrawer() {
   // By-id fallback: the active worksheet isn't in the open list (completed,
   // or a stale deep-link). Only fires once the open list has answered, so a
   // normal open-worksheet drawer never pays the extra request.
-  const { data: fallbackWorksheet } = useQuery({
+  const { data: fallbackWorksheet, isLoading: isResolvingActive } = useQuery({
     queryKey: ['worksheet-by-id', activeWorksheetId],
     queryFn: () => getWorksheet(activeWorksheetId as number),
     enabled: activeWorksheetId != null && !isLoading && !openMatch,
@@ -132,6 +158,8 @@ export function useWorksheetDrawer() {
   })
 
   const updateItemMutation = useMutation({
+    // Keyed so onSettled can tell whether it is the last tick of a burst.
+    mutationKey: ITEM_UPDATE_KEY,
     mutationFn: ({
       worksheetId,
       itemId,
@@ -139,16 +167,20 @@ export function useWorksheetDrawer() {
     }: {
       worksheetId: number
       itemId: number
-      data: {
-        instrument_uid?: string
-        prep_status?: string
-        instrument_id?: number | null
-      }
+      data: WorksheetItemPatch
     }) => updateWorksheetItem(worksheetId, itemId, data),
     // Optimistic: the prep-status Select (and instrument pickers) render
     // straight from this cache entry, so without this the control sits on
     // its old value until the refetch lands — the "status change takes a
     // minute" user report (2026-08-27). Rolled back on error.
+    //
+    // A bench sheet is keyed in after the run, so ticks arrive in bursts with
+    // several PATCHes in flight against this one cache entry. Two rules keep
+    // them from stomping each other: a failure rolls back ONLY its own row
+    // (a whole-list snapshot predates its neighbours and would revert rows
+    // that succeeded), and the list is refetched once, when the LAST tick
+    // of the burst settles (a refetch mid-burst returns server state without
+    // the ticks still in flight and wipes their checkmarks).
     onMutate: async ({ worksheetId, itemId, data }) => {
       await queryClient.cancelQueries({ queryKey: ['worksheets-list', 'open'] })
       const previous = queryClient.getQueryData<WorksheetListItem[]>([
@@ -166,7 +198,7 @@ export function useWorksheetDrawer() {
                   items: ws.items.map(it =>
                     it.id !== itemId
                       ? it
-                      : {
+                      : withTickStatus(data, {
                           ...it,
                           ...(data.prep_status !== undefined
                             ? { prep_status: data.prep_status }
@@ -177,22 +209,86 @@ export function useWorksheetDrawer() {
                           ...(data.instrument_id !== undefined
                             ? { instrument_id: data.instrument_id }
                             : {}),
-                        }
+                          ...(data.prep_weight_mg !== undefined
+                            ? { prep_weight_mg: data.prep_weight_mg }
+                            : {}),
+                          ...(data.prep_volume_ml !== undefined
+                            ? { prep_volume_ml: data.prep_volume_ml }
+                            : {}),
+                          ...(data.prep_target_mg_ml !== undefined
+                            ? { prep_target_mg_ml: data.prep_target_mg_ml }
+                            : {}),
+                          ...(data.made !== undefined
+                            ? {
+                                made_at: data.made
+                                  ? (it.made_at ?? new Date().toISOString())
+                                  : null,
+                              }
+                            : {}),
+                          ...(data.ran !== undefined
+                            ? {
+                                ran_at: data.ran
+                                  ? (it.ran_at ?? new Date().toISOString())
+                                  : null,
+                              }
+                            : {}),
+                          ...(data.prep_dilution_factor !== undefined
+                            ? {
+                                prep_dilution_factor: data.prep_dilution_factor,
+                              }
+                            : {}),
+                        })
                   ),
                 }
           )
         )
       }
-      return { previous }
+      const previousItem = previous
+        ?.find(ws => ws.id === worksheetId)
+        ?.items.find(it => it.id === itemId)
+      return { previousItem }
     },
-    onError: (err, _vars, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(['worksheets-list', 'open'], context.previous)
+    onError: (err, { worksheetId, itemId }, context) => {
+      const before = context?.previousItem
+      if (before) {
+        queryClient.setQueryData<WorksheetListItem[]>(
+          ['worksheets-list', 'open'],
+          list =>
+            list?.map(ws =>
+              ws.id !== worksheetId
+                ? ws
+                : {
+                    ...ws,
+                    items: ws.items.map(it => (it.id === itemId ? before : it)),
+                  }
+            )
+        )
       }
       toast.error(err instanceof Error ? err.message : 'Update item failed')
     },
+    onSettled: () => {
+      // This mutation still counts as in flight here, so 1 means it is the last.
+      if (queryClient.isMutating({ mutationKey: ITEM_UPDATE_KEY }) > 1) return
+      queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })
+      // A worksheet resolved by id (not in the open list) reads from here.
+      queryClient.invalidateQueries({ queryKey: ['worksheet-by-id'] })
+    },
+  })
+
+  // Made / MCS down a whole run in one request: the sheet is worked on paper
+  // and keyed in afterwards.
+  const bulkTicksMutation = useMutation({
+    mutationFn: ({
+      worksheetId,
+      data,
+    }: {
+      worksheetId: number
+      data: { made?: boolean; ran?: boolean }
+    }) => bulkWorksheetBenchTicks(worksheetId, data),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ['worksheets-list'] }),
+    onError: err =>
+      toast.error(err instanceof Error ? err.message : 'Tick all failed'),
   })
 
   const applyMethodInstrumentMutation = useMutation({
@@ -245,6 +341,7 @@ export function useWorksheetDrawer() {
     worksheets,
     openWorksheets,
     activeWorksheet,
+    isResolvingActive,
     totalOpenItems,
     isLoading,
     isError,
@@ -254,6 +351,7 @@ export function useWorksheetDrawer() {
     completeMutation,
     reassignMutation,
     updateItemMutation,
+    bulkTicksMutation,
     applyMethodInstrumentMutation,
     reorderMutation,
     addItemMutation,
