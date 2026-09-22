@@ -73,6 +73,7 @@ def test_token_claims_carry_identity(db_session):
     assert c["email"] == "c@test" and c["scope"] == "finance" and c["role"] == "standard"
     assert c["first_name"] == "Ada" and c["last_name"] == "Lovelace"
     assert "exp" in c
+    assert c["iss"] == "accu-mk1"
 
 
 # ── routes ────────────────────────────────────────────────────

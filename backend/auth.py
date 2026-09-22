@@ -52,7 +52,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": expire, "iss": "accu-mk1"})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 def token_claims_for(user) -> dict:
