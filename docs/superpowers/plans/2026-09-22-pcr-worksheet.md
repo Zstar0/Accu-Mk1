@@ -33,7 +33,7 @@
 **Interfaces:**
 - Produces: `Worksheet.bench_config: Optional[dict]`; `WorksheetItem.plate_no | well_pos: Optional[int]`; GET keys `bench_config`, `plate_no`, `well_pos`; PUT body key `bench_config`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 """PCR plate wells and run settings on worksheets (spec 2026-09-22-pcr-worksheet-design).
@@ -131,12 +131,12 @@ def test_put_replaces_bench_config_whole(client, db):
     assert client.get(f"/worksheets/{ws.id}").json()["bench_config"] == {"overage": 1.1}
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cd backend && python -m pytest tests/test_worksheet_pcr_wells.py -q`
 Expected: 3 failures (`bench-log` returns the ster worksheet under `sterility`; `KeyError: 'bench_config'`; PUT ignores `bench_config`).
 
-- [ ] **Step 3: Models and boot migration**
+- [x] **Step 3: Models and boot migration**
 
 `backend/models.py`, class `Worksheet`, after `print_count`:
 
@@ -169,7 +169,7 @@ class `WorksheetItem`, after `ran_by_user_id`:
         "ALTER TABLE worksheets ADD COLUMN IF NOT EXISTS bench_config JSON",
 ```
 
-- [ ] **Step 4: Kind, serializer and PUT in `backend/main.py`**
+- [x] **Step 4: Kind, serializer and PUT in `backend/main.py`**
 
 `_ROLE_BENCH_KIND`: change `"ster": "sterility"` to `"ster": "pcr"` and update the comment above it:
 
@@ -220,12 +220,12 @@ item dict, after `"ran_by_user_id"`:
                     "well_pos": it.well_pos,
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `cd backend && python -m pytest tests/test_worksheet_pcr_wells.py tests/test_worksheet_endo_prep.py tests/test_worksheets_list_sync.py -q`
 Expected: all pass (the endo bench-log tests still pass because `ster` never appears there).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend/models.py backend/database.py backend/main.py backend/tests/test_worksheet_pcr_wells.py
@@ -243,7 +243,7 @@ git commit -m "feat(worksheets): PCR bench kind, frozen well columns, bench_conf
 **Interfaces:**
 - Produces: `POST /worksheets/{id}/freeze-wells` body `{"wells": [{"item_id": int, "plate_no": int, "well_pos": int}]}` -> `{"status": "frozen", "frozen": n}`; `DELETE /worksheets/{id}/frozen-wells` -> `{"status": "cleared", "cleared": n}`. 404 unknown worksheet or item, 409 completed worksheet or taken well, 400 out of range.
 
-- [ ] **Step 1: Write the failing tests** (append to `test_worksheet_pcr_wells.py`)
+- [x] **Step 1: Write the failing tests** (append to `test_worksheet_pcr_wells.py`)
 
 ```python
 # --- Freezing wells --------------------------------------------------------
@@ -314,12 +314,12 @@ def test_wells_are_locked_on_a_completed_worksheet(client, db):
     assert client.post("/worksheets/99999/freeze-wells", json={"wells": []}).status_code == 404
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cd backend && python -m pytest tests/test_worksheet_pcr_wells.py -q`
 Expected: the four new tests fail with 404 (route missing) or 405.
 
-- [ ] **Step 3: Implement the endpoints** (in `backend/main.py`, after `record_worksheet_printed`)
+- [x] **Step 3: Implement the endpoints** (in `backend/main.py`, after `record_worksheet_printed`)
 
 ```python
 class WorksheetWellFreeze(BaseModel):
@@ -420,12 +420,12 @@ def unfreeze_worksheet_wells(
     return {"status": "cleared", "cleared": len(items)}
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cd backend && python -m pytest tests/test_worksheet_pcr_wells.py -q`
 Expected: 7 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git commit -m "feat(worksheets): freeze / unfreeze PCR plate wells" -- backend/main.py backend/tests/test_worksheet_pcr_wells.py
@@ -444,7 +444,7 @@ git commit -m "feat(worksheets): freeze / unfreeze PCR plate wells" -- backend/m
 **Interfaces:**
 - Produces: `WorksheetListItem.bench_config?: Record<string, unknown> | null`; item keys `plate_no?: number | null`, `well_pos?: number | null`; `updateWorksheet(id, { title?, assigned_analyst?, notes?, bench_config? })`; `freezeWorksheetWells(id, wells: WorksheetWellFreeze[])`; `unfreezeWorksheetWells(id)`; hook fields `freezeWellsMutation`, `unfreezeWellsMutation`; `csvField(v: string): string` exported from endo-bench-sheet.
 
-- [ ] **Step 1: Fix the kind test first**
+- [x] **Step 1: Fix the kind test first**
 
 In `src/lib/__tests__/worksheet-kind.test.ts` change line 17 to:
 
@@ -455,14 +455,14 @@ In `src/lib/__tests__/worksheet-kind.test.ts` change line 17 to:
 Run: `npx vitest run src/lib/__tests__/worksheet-kind.test.ts`
 Expected: FAIL (`ster` still gives `sterility`).
 
-- [ ] **Step 2: Kind map**
+- [x] **Step 2: Kind map**
 
 `src/lib/worksheet-kind.ts`: change `ster: 'sterility',` to `ster: 'pcr', // legacy STER-PCR vial, same plate as pcr (ruling 2026-09-22)`.
 
 Run: `npx vitest run src/lib/__tests__/worksheet-kind.test.ts`
 Expected: PASS.
 
-- [ ] **Step 3: API types and calls**
+- [x] **Step 3: API types and calls**
 
 In `WorksheetListItem`, after `print_count?: number`:
 
@@ -537,7 +537,7 @@ export async function unfreezeWorksheetWells(
 }
 ```
 
-- [ ] **Step 4: Drawer hook**
+- [x] **Step 4: Drawer hook**
 
 Imports: add `freezeWorksheetWells, unfreezeWorksheetWells` to the value import and `WorksheetWellFreeze` to the type import.
 
@@ -587,11 +587,11 @@ After `bulkTicksMutation`:
 
 Add both to the returned object after `bulkTicksMutation`.
 
-- [ ] **Step 5: Export `csvField`**
+- [x] **Step 5: Export `csvField`**
 
 `src/lib/endo-bench-sheet.ts`: change `function csvField(v: string): string {` to `export function csvField(v: string): string {` (the PCR CSVs defuse formulas the same way).
 
-- [ ] **Step 6: Typecheck and commit**
+- [x] **Step 6: Typecheck and commit**
 
 Run: `npm run typecheck`
 Expected: clean.
@@ -612,7 +612,7 @@ git commit -m "feat(worksheets): PCR kind, well freeze API and drawer mutations"
 - Consumes: `shortLabDate` from `@/lib/endo-worksheet`.
 - Produces: `PROTOCOL`, `CAPACITY = 48`, `SAMPLE_CAPACITY = 47`, `DEFAULT_OVERAGE = 1.4`, `NPC_ID`, `NPC_IDENTITY`; `fractions(parts)`, `fmt2(v)`, `calculatePrep(n, overage): PrepCalc`; `assess(due, runDate, priority): PcrAssessment`; types `PcrSample`, `PcrPlacement`, `PcrPlate`, `PcrListRow`, `PcrLayout`, `PlateCell`, `OrderGroup`, `PcrSummary`; `orderKey(order)`, `layoutPlates(samples, { sortByOrder? }): PcrLayout`, `wellName(pos)`, `wellsOf(placement, plateCount)`, `plateGrid(plate)`, `orderGroups(plates)`, `summarize(layout)`, `freezePayload(layout)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 import { describe, it, expect } from 'vitest'
@@ -871,12 +871,12 @@ describe('layoutPlates with frozen wells', () => {
 })
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `npx vitest run src/lib/__tests__/pcr-plate.test.ts`
 Expected: FAIL, cannot resolve `@/lib/pcr-plate`.
 
-- [ ] **Step 3: Write `src/lib/pcr-plate.ts`** (the exports section is appended in Task 5)
+- [x] **Step 3: Write `src/lib/pcr-plate.ts`** (the exports section is appended in Task 5)
 
 ```ts
 /**
@@ -1379,12 +1379,12 @@ export function freezePayload(
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run src/lib/__tests__/pcr-plate.test.ts`
 Expected: 17 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git commit -m "feat(pcr): plate layout with frozen wells and reagent prep (calc.js port)" -- src/lib/pcr-plate.ts src/lib/__tests__/pcr-plate.test.ts
@@ -1402,7 +1402,7 @@ git commit -m "feat(pcr): plate layout with frozen wells and reagent prep (calc.
 - Consumes: `csvField` (Task 3).
 - Produces: `PcrRunMeta`, `metaHeaderRows(meta, L)`, `plateMapRows(L)`, `WELL_LIST_HEADER`, `wellListRows(L)`, `prepRows(L, overage)`, `QS_ATTRIBUTES`, `QuantStudioFile`, `quantStudioFiles(L, { runId, date })`, `toCsv(rows)`.
 
-- [ ] **Step 1: Write the failing tests** (append to `pcr-plate.test.ts`; extend the import with `metaHeaderRows, plateMapRows, prepRows, quantStudioFiles, toCsv, wellListRows, QS_ATTRIBUTES, WELL_LIST_HEADER`)
+- [x] **Step 1: Write the failing tests** (append to `pcr-plate.test.ts`; extend the import with `metaHeaderRows, plateMapRows, prepRows, quantStudioFiles, toCsv, wellListRows, QS_ATTRIBUTES, WELL_LIST_HEADER`)
 
 ```ts
 /* --- exports --- */
@@ -1479,12 +1479,12 @@ describe('exports', () => {
 })
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `npx vitest run src/lib/__tests__/pcr-plate.test.ts`
 Expected: the 6 new tests fail (missing exports).
 
-- [ ] **Step 3: Append to `src/lib/pcr-plate.ts`**
+- [x] **Step 3: Append to `src/lib/pcr-plate.ts`**
 
 ```ts
 /* ---------------- exports ---------------- */
@@ -1693,12 +1693,12 @@ export function toCsv(rows: string[][]): string {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run src/lib/__tests__/pcr-plate.test.ts`
 Expected: 23 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git commit -m "feat(pcr): plate map, well list, prep and QuantStudio exports" -- src/lib/pcr-plate.ts src/lib/__tests__/pcr-plate.test.ts
@@ -1718,7 +1718,7 @@ git commit -m "feat(pcr): plate map, well list, prep and QuantStudio exports" --
 - Produces (`pcr-worksheet.ts`): `isPcrWorksheetItem(item)`, `plateLabel(id)`, `PcrConfig`, `DEFAULT_PCR_CONFIG`, `pcrConfigOf(ws)`, `pcrConfigToWire(cfg)`, `pcrRunDate(ws, cal)`, `pcrSamplesFor(items, dueAtByItemId, cal, runDate)`, `stampedInstrument(items)`, `PcrRunDoc`, `PcrRunOptions`, `buildPcrRunDoc(ws, opts)`.
 - Produces (`pcr-bench-sheet.ts`): `buildPcrBenchSheetHtml(doc, { preview? })`, `buildPcrPlateMapCsv(doc)`, `buildPcrWellListCsv(doc)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `src/lib/__tests__/pcr-worksheet.test.ts`:
 
@@ -1912,12 +1912,12 @@ describe('CSVs', () => {
 })
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `npx vitest run src/lib/__tests__/pcr-worksheet.test.ts src/lib/__tests__/pcr-bench-sheet.test.ts`
 Expected: FAIL, modules missing.
 
-- [ ] **Step 3: Write `src/lib/pcr-worksheet.ts`**
+- [x] **Step 3: Write `src/lib/pcr-worksheet.ts`**
 
 ```ts
 /**
@@ -2110,7 +2110,7 @@ export function buildPcrRunDoc(
 }
 ```
 
-- [ ] **Step 4: Write `src/lib/pcr-bench-sheet.ts`**
+- [x] **Step 4: Write `src/lib/pcr-bench-sheet.ts`**
 
 ```ts
 /**
@@ -2423,12 +2423,12 @@ export function buildPcrWellListCsv(doc: PcrRunDoc): string {
 }
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `npx vitest run src/lib/__tests__/pcr-worksheet.test.ts src/lib/__tests__/pcr-bench-sheet.test.ts`
 Expected: 8 passed.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git commit -m "feat(pcr): run document, settings glue and the printed plate sheet" -- src/lib/pcr-worksheet.ts src/lib/pcr-bench-sheet.ts src/lib/__tests__/pcr-worksheet.test.ts src/lib/__tests__/pcr-bench-sheet.test.ts
@@ -2447,7 +2447,7 @@ git commit -m "feat(pcr): run document, settings glue and the printed plate shee
 **Interfaces:**
 - Produces: `BenchRunLog({ kind, label, tickLabels, activeId, users, onSelect })`; `PcrCalculations({ wells, overage })`; `PcrPlateMap({ plate, plateCount, outlineGroups, frozenCount, isCompleted, onUnfreeze })`.
 
-- [ ] **Step 1: Generalise the run log**
+- [x] **Step 1: Generalise the run log**
 
 ```bash
 git mv src/components/hplc/EndoRunLog.tsx src/components/hplc/BenchRunLog.tsx
@@ -2578,7 +2578,7 @@ In `WorksheetDrawer.tsx`: `import { BenchRunLog } from './BenchRunLog'` replaces
 Run: `npm run typecheck && npx vitest run src/components/hplc/__tests__/WorksheetDrawer.test.tsx`
 Expected: clean; the drawer test passes as before.
 
-- [ ] **Step 2: `src/components/hplc/PcrCalculations.tsx`**
+- [x] **Step 2: `src/components/hplc/PcrCalculations.tsx`**
 
 ```tsx
 import type { ReactNode } from 'react'
@@ -2743,7 +2743,7 @@ function Mix({ rows, overage }: { rows: MixRow[]; overage: number }) {
 export default PcrCalculations
 ```
 
-- [ ] **Step 3: `src/components/hplc/PcrPlateMap.tsx`**
+- [x] **Step 3: `src/components/hplc/PcrPlateMap.tsx`**
 
 ```tsx
 import { Lock, Unlock } from 'lucide-react'
@@ -2963,7 +2963,7 @@ function Legend() {
 export default PcrPlateMap
 ```
 
-- [ ] **Step 4: Typecheck, lint and commit**
+- [x] **Step 4: Typecheck, lint and commit**
 
 Run: `npm run typecheck && npx eslint src/components/hplc/BenchRunLog.tsx src/components/hplc/PcrCalculations.tsx src/components/hplc/PcrPlateMap.tsx src/components/hplc/WorksheetDrawer.tsx`
 Expected: clean.
@@ -2987,7 +2987,7 @@ git commit -m "feat(pcr): run log by bench kind, calculation cards and plate map
 - Consumes: everything from Tasks 3 to 7; `useSlaForSubjects`, `worksheetItemSlaSubjects`, `useLabCalendar`, `SampleIdBadge`, `SlaAgeIndicator`, `ReassignButton`, `EntityFlagButton`, `useRegisterActiveFlagEntity`, `printHtmlDocument`, `downloadTextFile`, `recordWorksheetPrinted`.
 - Produces: `PriorityChip({ priority })`, `PcrSampleList`, `PcrWorksheetActions`, `PcrWorksheetView`; the drawer renders the PCR view for an all-PCR worksheet.
 
-- [ ] **Step 1: Share the flag cell and the priority chip**
+- [x] **Step 1: Share the flag cell and the priority chip**
 
 In `EndoWorksheetTable.tsx`: `function FlagCell(` becomes `export function FlagCell(`. Replace the inline priority span in the endo row
 
@@ -3017,7 +3017,7 @@ export function PriorityChip({ priority }: { priority: string | null | undefined
 }
 ```
 
-- [ ] **Step 2: `src/components/hplc/PcrSampleList.tsx`**
+- [x] **Step 2: `src/components/hplc/PcrSampleList.tsx`**
 
 ```tsx
 import { X } from 'lucide-react'
@@ -3267,7 +3267,7 @@ export function PcrSampleList({
 export default PcrSampleList
 ```
 
-- [ ] **Step 3: `src/components/hplc/PcrWorksheetActions.tsx`**
+- [x] **Step 3: `src/components/hplc/PcrWorksheetActions.tsx`**
 
 ```tsx
 import { useState } from 'react'
@@ -3482,7 +3482,7 @@ export function PcrWorksheetActions({
 export default PcrWorksheetActions
 ```
 
-- [ ] **Step 4: `src/components/hplc/PcrWorksheetView.tsx`**
+- [x] **Step 4: `src/components/hplc/PcrWorksheetView.tsx`**
 
 ```tsx
 import { useState, type ReactNode } from 'react'
@@ -3983,7 +3983,7 @@ function RunTick({
 export default PcrWorksheetView
 ```
 
-- [ ] **Step 5: Wire the drawer**
+- [x] **Step 5: Wire the drawer**
 
 In `WorksheetDrawer.tsx`:
 
@@ -4060,7 +4060,7 @@ In `WorksheetDrawer.tsx`:
 
 - The generic block's condition becomes `activeWorksheet && !isBench`.
 
-- [ ] **Step 6: Typecheck, lint, run the drawer tests, commit**
+- [x] **Step 6: Typecheck, lint, run the drawer tests, commit**
 
 Run: `npm run typecheck && npx eslint src/components/hplc && npx vitest run src/components/hplc src/lib`
 Expected: clean; no new failures against the baseline (4 vitest files fail on master too).
@@ -4076,7 +4076,7 @@ git commit -m "feat(pcr): plate builder view in the worksheet flyout" -- src/com
 **Files:**
 - Modify: `CHANGELOG.md` (under `## Unreleased`)
 
-- [ ] **Step 1: Frontend gates as failure-set diffs against master**
+- [x] **Step 1: Frontend gates as failure-set diffs against master**
 
 Run, in this worktree and in a master checkout (`/c/tmp/Accu-Mk1-master-baseline`, `git pull --ff-only` first):
 
@@ -4090,12 +4090,12 @@ npx vitest run 2>&1 | grep -E "FAIL|Test Files|Tests " > /tmp/vitest-<tree>.txt
 
 Expected: typecheck clean; the eslint failure set equals master's; prettier clean on the new files (never `prettier --write` api.ts or WorksheetDrawer.tsx, both are unclean on master); ast:lint clean; the vitest failing-file set equals master's (the 5 s `FlagsFlyout` timeout is baseline).
 
-- [ ] **Step 2: Backend gate**
+- [x] **Step 2: Backend gate**
 
 Run: `cd backend && python -m pytest tests/test_worksheet_pcr_wells.py tests/test_worksheet_endo_prep.py tests/test_worksheets_list_sync.py tests/test_worksheet_item_by_id.py tests/test_worksheet_analyst_stamp.py -q`
 Expected: all pass. (The full suite runs in the stack container before deploy, one tree at a time, as for 1.25.0.)
 
-- [ ] **Step 3: Changelog** (under `## Unreleased`)
+- [x] **Step 3: Changelog** (under `## Unreleased`)
 
 ```markdown
 ### Worksheets 2.0: rapid sterility PCR plate builder
