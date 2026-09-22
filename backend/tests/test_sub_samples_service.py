@@ -6,7 +6,10 @@ from sqlalchemy.orm import sessionmaker
 from database import Base
 # Note: use new ORM names from Task 3
 from models import LimsSample, LimsSubSample
-from sub_samples.service import ensure_sample_row, create_sub_sample, list_sub_samples
+from sub_samples.service import (
+    ensure_sample_row, create_sub_sample, list_sub_samples,
+    _refresh_parent_from_senaite,
+)
 from sub_samples.senaite import SecondaryCreateResult, SecondaryFalloutError
 from sub_samples import service
 
@@ -469,5 +472,42 @@ def test_auto_assign_short_demand_leaves_unfilled():
     result = service.auto_assign(vials, demand)
     # Only 2 vials, but demand was 4. S01 → ENDO (priority order). HPLC met by parent.
     assert [v["assignment_role"] for v in result] == ["hplc", "endo"]
+
+
+# ─── _refresh_parent_from_senaite native-born guard (HPLC slice 6 M8 Task 4) ──
+
+def test_refresh_parent_native_born_skips_senaite_call(db):
+    """A native-born row (external_lims_system == 'mk1') has no SENAITE
+    record to reconcile against — the refresh must return early without
+    ever calling senaite.fetch_parent_metadata."""
+    row = LimsSample(sample_id="P-NATIVE-1", external_lims_system="mk1",
+                     sample_type="x", status="sample_due")
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    with patch("sub_samples.senaite.fetch_parent_metadata",
+               side_effect=AssertionError("SENAITE called")):
+        _refresh_parent_from_senaite(db, row)  # must not raise
+
+    db.refresh(row)
+    assert row.status == "sample_due"
+
+
+def test_refresh_parent_senaite_born_still_calls_senaite(db):
+    """Proves the guard is scoped to native-born rows: a legacy SENAITE-born
+    row must still hit the SENAITE fetch — the AssertionError firing is the
+    evidence the legacy path is untouched."""
+    row = LimsSample(sample_id="P-SENAITE-1", external_lims_system="senaite",
+                     external_lims_uid="UID-1", sample_type="x",
+                     status="sample_due")
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    with patch("sub_samples.senaite.fetch_parent_metadata",
+               side_effect=AssertionError("SENAITE called")):
+        with pytest.raises(AssertionError, match="SENAITE called"):
+            _refresh_parent_from_senaite(db, row)
 
 

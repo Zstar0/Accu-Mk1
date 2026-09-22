@@ -1,0 +1,493 @@
+"""Native-born HPLC seeding model (spec 2026-09-10-hplc-native-born-design, M4).
+
+A native-born sample (lims_samples.external_lims_system == 'mk1') has no
+SENAITE AR to mirror. Its HPLC content is derived from lims_samples.analytes
+(the positional slot list) against the GENERIC native trio: one identity /
+purity / quantity row per occupied slot, carrying the slot's peptide_id and a
+STAMPED per-row title, plus the two blend aggregates when more than one slot
+is occupied. The peptide is data on the row — never part of the catalog key —
+which is what removes the SENAITE-era title-string joins (P-1500 / P-1611 /
+PB-0469 class).
+
+Resolution order per slot: the signal's Analyte{i}PeptideId (written by the
+IS once WordPress carries Mk1 ids) → exact fold of the label (identity suffix
+stripped) against peptides.name / abbreviation → hplc_aliases / display_aliases.
+Zero matches or 2+ distinct matches never guess: the rows are still seeded,
+with peptide_id NULL and reportable_reason 'analyte_unresolved|ambiguous: …'
+(Handler ruling 2026-09-10) so the bench sees the slot. `reportable` itself
+stays True here (Handler ruling pending) -- gating these rows out of the prep
+bridge (M5), out of the COA wire (M7), and restamping them via
+relabel_native_slot (M6) are named follow-up requirements, not yet built.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import re
+from dataclasses import dataclass
+from typing import Optional
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from catalog.hplc_native_seed import HPLC_NATIVE_PROFILE_KEY, HPLC_NATIVE_SERVICES
+from models import AnalysisService, LimsAnalysis, LimsSample, LimsSubSample, Peptide
+
+log = logging.getLogger(__name__)
+
+KW_IDENTITY = "HPLC-IDENTITY"
+KW_PURITY = "HPLC-PURITY"
+KW_QUANTITY = "HPLC-QUANTITY"
+KW_BLEND_PURITY = "HPLC-BLEND-PURITY"
+KW_BLEND_TOTAL = "HPLC-BLEND-TOTAL"
+TRIO = (KW_IDENTITY, KW_PURITY, KW_QUANTITY)
+AGGREGATES = (KW_BLEND_PURITY, KW_BLEND_TOTAL)
+
+# Handler ruling 4 (2026-09-14): an analyte name that doesn't resolve to a
+# peptide at registration gets a flag, not just the silent reportable_reason.
+# No dedicated data-quality flag type is seeded (flags/types_service.py
+# _BUILTINS) and none is minted at runtime (plan constraint) — "question" is
+# the closest generic, non-domain-specific built-in (issue, non-blocking):
+# an unresolved analyte is exactly that, a question someone needs to answer.
+UNRESOLVED_FLAG_TYPE = "question"
+assert set(TRIO + AGGREGATES) == {kw for kw, *_ in HPLC_NATIVE_SERVICES}
+
+_NATIVE_CATEGORY = {
+    KW_IDENTITY: "identity",
+    KW_PURITY: "purity",
+    KW_QUANTITY: "quantity",
+}
+
+
+def native_category(keyword: Optional[str]) -> Optional[str]:
+    """Result category of a NATIVE trio keyword; None for everything else.
+
+    The single source every `_category` mirror (prep_bridge, coa.variance_series,
+    coa.identity_verdict) consults first, so the three cannot drift on the
+    native keywords. Aggregates (HPLC-BLEND-*) are deliberately None: like
+    legacy BLEND-PUR / PEPT-Total they are owned by bridge_blend_aggregates
+    and are never a direct bridge/stamp target nor a per-peptide series row.
+    """
+    return _NATIVE_CATEGORY.get((keyword or "").upper())
+
+# Same rule sub_samples/senaite.py uses to strip SENAITE's identity-service
+# title form ("BPC-157 - Identity (HPLC)") back to the bare label.
+_IDENTITY_SUFFIX_RE = re.compile(r"\s*-\s*identity\s*\(hplc\)\s*$", re.I)
+
+
+def is_native_born(parent: LimsSample) -> bool:
+    return (getattr(parent, "external_lims_system", None) or "senaite") == "mk1"
+
+
+def strip_identity_suffix(label: str) -> str:
+    return _IDENTITY_SUFFIX_RE.sub("", label or "").strip()
+
+
+def _fold(s: Optional[str]) -> str:
+    """Alphanumeric-only, upper-cased — the same fold the HPLC standard-label
+    matcher uses (main.py _normalize_label)."""
+    return re.sub(r"[^A-Za-z0-9]", "", s or "").upper()
+
+
+def identity_title(name: str) -> str:
+    return f"{name} - Identity (HPLC)"
+
+
+def purity_title(name: str) -> str:
+    return f"{name} - Purity (HPLC)"
+
+
+def quantity_title(name: str) -> str:
+    return f"{name} - Quantity (HPLC)"
+
+
+@dataclass
+class SlotResolution:
+    slot: int                 # 1-based position in lims_samples.analytes
+    raw_name: str             # label as stored (title form or bare)
+    display_name: str         # peptide.name when resolved, else suffix-stripped raw
+    peptide_id: Optional[int]
+    reason: Optional[str]     # None | "unresolved" | "ambiguous"
+
+
+def _parse_slots(parent: LimsSample) -> list[dict]:
+    try:
+        slots = json.loads(parent.analytes) if parent.analytes else []
+    except (TypeError, ValueError):
+        return []
+    return slots if isinstance(slots, list) else []
+
+
+def resolve_slot_peptides(db: Session, parent: LimsSample) -> list[SlotResolution]:
+    """One SlotResolution per OCCUPIED slot (placeholders with name None are
+    skipped but keep their neighbours' slot numbers). A stored `peptide_id`
+    resolves against ALL peptides (active or not) — a slot already bound to
+    a peptide must keep resolving after that peptide is retired, or every
+    published native COA that used it bricks on regen (F2). Only ACTIVE
+    peptides participate in name/abbreviation/alias folding — a retired
+    peptide should not be re-matched by a bare label."""
+    all_peptides = db.execute(select(Peptide)).scalars().all()
+    by_id = {p.id: p for p in all_peptides}
+    active_peptides = [p for p in all_peptides if p.active]
+    by_exact: dict[str, set[int]] = {}
+    by_alias: dict[str, set[int]] = {}
+    for p in active_peptides:
+        by_exact.setdefault(_fold(p.name), set()).add(p.id)
+        by_exact.setdefault(_fold(p.abbreviation), set()).add(p.id)
+        for alias in (p.hplc_aliases or []) + (p.display_aliases or []):
+            by_alias.setdefault(_fold(alias), set()).add(p.id)
+
+    out: list[SlotResolution] = []
+    for idx, slot in enumerate(_parse_slots(parent), start=1):
+        raw = (slot.get("name") or "").strip() if isinstance(slot, dict) else ""
+        if not raw:
+            continue
+        bare = strip_identity_suffix(raw)
+        pid = slot.get("peptide_id") if isinstance(slot, dict) else None
+        if pid is not None and pid in by_id:
+            out.append(SlotResolution(idx, raw, by_id[pid].name, pid, None))
+            continue
+        hits = by_exact.get(_fold(bare)) or by_alias.get(_fold(bare)) or set()
+        if len(hits) == 1:
+            p = by_id[next(iter(hits))]
+            out.append(SlotResolution(idx, raw, p.name, p.id, None))
+        elif not hits:
+            out.append(SlotResolution(idx, raw, bare, None, "unresolved"))
+        else:
+            out.append(SlotResolution(idx, raw, bare, None, "ambiguous"))
+    return out
+
+
+def flag_unresolved_slots(db: Session, parent: LimsSample, results: list[SlotResolution],
+                          *, commit: bool = True) -> None:
+    """One open flag per sample for any slot(s) whose analyte name didn't
+    resolve to a peptide at seed time (Handler ruling 4). Both seed sites
+    (this module's vial seed and parent_placeholders' registration seed)
+    call this, so dedupe on (sample, type, open) — the second call (whichever
+    seeder loses the race) must not duplicate. `_SystemActor` / dedupe-query
+    pattern copied from sub_samples/service.py::_flag_identity_collision.
+
+    `commit` must mirror the caller's own seed `commit` flag: a caller with
+    commit=False (e.g. `set_assignment_role`'s atomic "seed then one commit"
+    contract, sub_samples/service.py:~2367) needs the flag row to be part of
+    ITS transaction, not committed early underneath it — flags.service.create_flag
+    now takes the same additive `commit` kwarg for exactly this. Failures
+    logged, never raised: seeding must not fail because the flag machinery does."""
+    unresolved = [r for r in results if r.reason]
+    if not unresolved:
+        return
+    try:
+        from flags import service as flags_service
+        from flags.models import FlagFlag
+        from sub_samples.service import _SystemActor
+        existing = db.execute(select(FlagFlag).where(
+            FlagFlag.entity_type == "sample",
+            FlagFlag.entity_id == str(parent.id),
+            FlagFlag.type == UNRESOLVED_FLAG_TYPE,
+            FlagFlag.status == "open",
+            # Automated-only discriminator (finding 3, 2026-09-14): a human
+            # question flag must not suppress the automated one, and the
+            # resolve query below must never touch a human's flag.
+            # _SystemActor.id == 0 -> create_flag stamps created_by=0.
+            FlagFlag.created_by == 0,
+        )).scalars().first()
+        if existing is not None:
+            return
+        parts = ", ".join(f"{r.raw_name} (slot {r.slot})" for r in unresolved)
+        flags_service.create_flag(
+            db, user=_SystemActor(), entity_type="sample", entity_id=str(parent.id),
+            type=UNRESOLVED_FLAG_TYPE,
+            title=f"{parent.sample_id}: analyte unresolved — {parts}",
+            event_details={"automated": True,
+                           "slots": [r.slot for r in unresolved],
+                           "raw": [r.raw_name for r in unresolved]},
+            commit=commit,
+        )
+    except Exception as e:
+        log.error("hplc_native.unresolved_flag_failed sample_id=%s err=%s", parent.sample_id, e)
+
+
+def resolve_unresolved_flag_if_clean(db: Session, parent: LimsSample, *, commit: bool = True) -> None:
+    """Auto-resolve the open unresolved-analyte flag once every slot on the
+    sample resolves — called from relabel_native_slot, inside its own
+    commit block (after the event is added, before its `if commit: db.commit()`),
+    so `commit` here must mirror relabel_native_slot's `commit` param: a
+    commit=False caller must see the resolution pending in the SAME
+    transaction as the restamp + event, not committed early underneath it.
+    Resolve-path pattern copied from workflow/stranded.py's run_check.
+    Failures logged, never raised."""
+    try:
+        if any(r.reason for r in resolve_slot_peptides(db, parent)):
+            return
+        from flags import service as flags_service
+        from flags.models import FlagFlag
+        from sub_samples.service import _SystemActor
+        flag = db.execute(select(FlagFlag).where(
+            FlagFlag.entity_type == "sample",
+            FlagFlag.entity_id == str(parent.id),
+            FlagFlag.type == UNRESOLVED_FLAG_TYPE,
+            FlagFlag.status == "open",
+            FlagFlag.created_by == 0,  # automated-only — see flag_unresolved_slots
+        )).scalars().first()
+        if flag is None:
+            return
+        flags_service.change_status(db, user=_SystemActor(), flag_id=flag.id,
+                                    to_status="resolved", commit=commit)
+    except Exception as e:
+        log.error("hplc_native.unresolved_flag_resolve_failed sample_id=%s err=%s", parent.sample_id, e)
+
+
+def native_hplc_services(db: Session) -> dict[str, AnalysisService]:
+    """The five origin=mk1 services by keyword. Fail-closed: if any is
+    missing (seed skipped, collision at boot) return {} and log ERROR so the
+    caller seeds nothing rather than a partial trio."""
+    rows = db.execute(select(AnalysisService).where(
+        AnalysisService.keyword.in_(TRIO + AGGREGATES),
+        AnalysisService.origin == "mk1",
+    )).scalars().all()
+    found = {r.keyword: r for r in rows}
+    missing = [kw for kw in TRIO + AGGREGATES if kw not in found]
+    if missing:
+        log.error("hplc_native.catalog_incomplete missing=%s", missing)
+        return {}
+    return found
+
+
+def _title_for(kw: str, name: str) -> str:
+    return {KW_IDENTITY: identity_title, KW_PURITY: purity_title, KW_QUANTITY: quantity_title}[kw](name)
+
+
+def title_for_slot(kw: str, res: "SlotResolution") -> str:
+    """The single per-row title rule, shared by seed_native_hplc_rows and
+    parent_placeholders.seed_parent_placeholders so the trio and its
+    placeholder never drift apart: the peptide's canonical name when
+    resolved; for an unresolved identity row, the raw label as stored
+    (already title-form from the IS) since the bench must show what the
+    customer typed and relabel_native_slot restamps it later."""
+    if kw == KW_IDENTITY and not res.peptide_id:
+        return res.raw_name
+    return _title_for(kw, res.display_name)
+
+
+def seed_native_hplc_rows(
+    db: Session, *, sub_sample: LimsSubSample, parent: LimsSample,
+    existing_keys: set, existing_service_ids: set,
+    created_by_user_id: Optional[int], commit: bool,
+) -> list[LimsAnalysis]:
+    """Seed the trio per occupied slot (+ the two aggregates when N>1) on an
+    HPLC vial of a native-born parent. Dedupe keys are SLOT-AWARE tuples
+    ((keyword, slot or 0) and (service_id, slot or 0)) mirroring the widened
+    root indexes; the caller passes the live sets and we add to them."""
+    from lims_analyses import service as la_service
+
+    services = native_hplc_services(db)
+    if not services:
+        return []
+    slots = resolve_slot_peptides(db, parent)
+    if not slots:
+        log.error("seeder.native_hplc.no_analyte_slots sample_id=%s", sub_sample.sample_id)
+        return []
+    inserted: list[LimsAnalysis] = []
+
+    def _mint(kw: str, *, slot: Optional[int], peptide_id: Optional[int],
+              title: str, reason: Optional[str]) -> None:
+        svc = services[kw]
+        key_kw, key_id = (kw, slot or 0), (svc.id, slot or 0)
+        if key_kw in existing_keys or key_id in existing_service_ids:
+            return
+        row = la_service.create_analysis(
+            db, host_kind="sub_sample", host_pk=sub_sample.id,
+            analysis_service_id=svc.id, keyword=kw, title=title,
+            created_by_user_id=created_by_user_id, commit=commit,
+            peptide_id=peptide_id, slot=slot, reportable_reason=reason,
+        )
+        existing_keys.add(key_kw)
+        existing_service_ids.add(key_id)
+        inserted.append(row)
+        log.info("seeder.native_hplc_seeded sub=%s analysis_id=%s keyword=%s slot=%s peptide_id=%s",
+                 sub_sample.sample_id, row.id, kw, slot, peptide_id)
+
+    for res in slots:
+        reason = f"analyte_{res.reason}: {res.raw_name}" if res.reason else None
+        if res.reason:
+            log.warning("seeder.native_hplc.unresolved_slot sub=%s slot=%s raw=%r reason=%s",
+                        sub_sample.sample_id, res.slot, res.raw_name, res.reason)
+        for kw in TRIO:
+            title = title_for_slot(kw, res)
+            _mint(kw, slot=res.slot, peptide_id=res.peptide_id, title=title, reason=reason)
+
+    if len(slots) > 1:
+        for kw in AGGREGATES:
+            _mint(kw, slot=None, peptide_id=None, title=services[kw].title, reason=None)
+    flag_unresolved_slots(db, parent, slots, commit=commit)
+    return inserted
+
+
+def slot_key(row) -> tuple:
+    """(analysis_service_id, slot or 0) — the ONE identity key for parent-tier
+    collapse/overlay/lookup. Legacy rows have slot NULL → (sid, 0): identical
+    to keying on service id alone (spec 2026-09-10 M6 addendum)."""
+    return (row.analysis_service_id, row.slot or 0)
+
+
+def kw_slot_key(row) -> tuple:
+    return ((row.keyword or ""), row.slot or 0)
+
+
+def parent_line_state_key(keyword: Optional[str], analysis_service_id: Optional[int],
+                          slot: Optional[int]) -> str:
+    """Key of one parent-tier LINE in a line-state map.
+
+    A native per-slot row is identified by (service, slot), the same identity
+    promote_to_parent supersedes on: a native blend carries one HPLC-PURITY
+    parent row PER analyte slot, so a keyword key collapses the slots into
+    one line. Slot-less rows (every legacy/SENAITE row, endo, PCR, the blend
+    aggregates) keep the bare keyword, so their entries are unchanged.
+
+    EVERY map of parent line states must key through this, including the
+    'ordered' placeholder fill: a placeholder asks "is MY line already
+    covered", and on a blend a sibling slot sharing the keyword is not it.
+    Users: service.native_parent_line_states (FE lock gate + Ready-to-Publish)
+    and workflow.engine._live_parent_line_states (sample-status cascade).
+
+    Twin: parentLineStateKey in src/components/senaite/AnalysisTable.tsx.
+    Move both sides together."""
+    if slot is not None and analysis_service_id is not None:
+        return f"svc:{analysis_service_id}:{slot}"
+    return keyword or ""
+
+
+def slot_clause(slot: Optional[int]):
+    """SQL twin of slot_key's second element."""
+    from sqlalchemy import func
+    return func.coalesce(LimsAnalysis.slot, 0) == (slot or 0)
+
+
+# ─── M6: relabel_native_slot ──────────────────────────────────────────────────
+#
+# The only sanctioned way to change a native-born sample's slot peptide
+# (spec 2026-09-10 M6). A slot may be relabeled only while every row it
+# touches — parent-tier + every family vial — is still pristine (no result,
+# no retest, no promotion link): anything else means the bench has already
+# acted on the old identity and the slot must go through retest instead.
+
+
+class NativeSlotLockedError(Exception):
+    """409: the slot cannot be relabeled right now. `code` distinguishes the
+    reason (native_slot_locked / peptide_not_found / duplicate_peptide) for
+    the FE without parsing the message."""
+    def __init__(self, msg, code="native_slot_locked"):
+        super().__init__(msg)
+        self.code = code
+
+
+class NativeSlotNotFoundError(Exception):
+    code = "native_slot_not_found"
+
+
+_PRISTINE_STATES = ("unassigned", "assigned")
+
+
+def slot_rows(db: Session, parent: LimsSample, slot: int) -> list[LimsAnalysis]:
+    """Every live row for (parent, slot): parent-tier + all family vials, any
+    keyword in TRIO. Retracted/rejected rows are dead and never block."""
+    return db.execute(
+        select(LimsAnalysis)
+        .outerjoin(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
+        .where(
+            (LimsAnalysis.lims_sample_pk == parent.id) | (LimsSubSample.parent_sample_pk == parent.id),
+            LimsAnalysis.slot == slot,
+            LimsAnalysis.review_state.notin_(("retracted", "rejected")),
+        )
+    ).scalars().all()
+
+
+def is_slot_pristine(db: Session, rows: list[LimsAnalysis]) -> bool:
+    """True iff every row is still untouched: no result, still in an
+    unassigned/assigned review_state, never retested, not itself a retest,
+    and not linked as a promotion source."""
+    from models import LimsAnalysisPromotion
+    if any(r.review_state not in _PRISTINE_STATES or r.result_value is not None
+           or r.retested or r.retest_of_id is not None for r in rows):
+        return False
+    ids = [r.id for r in rows]
+    if not ids:
+        return True
+    linked = db.execute(select(LimsAnalysisPromotion.id).where(
+        LimsAnalysisPromotion.source_analysis_id.in_(ids))).first()
+    return linked is None
+
+
+def restamp_native_slot_rows(db: Session, *, parent: LimsSample, slot: int, res: "SlotResolution") -> int:
+    """Restamp peptide_id/title/reportable_reason on every PRISTINE row of the
+    slot from `res`. Worked rows are left alone — restamping a row that
+    already carries a result would silently relabel history. Returns the
+    count of rows touched."""
+    n = 0
+    for r in slot_rows(db, parent, slot):
+        if r.review_state not in _PRISTINE_STATES or r.result_value is not None:
+            continue
+        r.peptide_id = res.peptide_id
+        if res.reason == "cleared":
+            # Analyte blanked out from under the row: leave the title as-is
+            # (nothing to rename to) and stamp a plain reason, no ": {raw}"
+            # suffix since there is no raw label left to show.
+            r.reportable_reason = "analyte_cleared"
+        else:
+            r.title = title_for_slot(r.keyword, res)
+            r.reportable_reason = f"analyte_{res.reason}: {res.raw_name}" if res.reason else None
+        n += 1
+    db.flush()
+    return n
+
+
+def relabel_native_slot(db: Session, *, parent: LimsSample, slot: int, new_peptide_id: int,
+                        user_id: Optional[int], reason: Optional[str] = None, commit: bool = True) -> dict:
+    """The ONLY sanctioned way to change a native-born slot's peptide (spec
+    M6). Raises NativeSlotLockedError (409) unless the sample is native-born,
+    every row of the slot is pristine, and the peptide is active and not
+    already on another slot; NativeSlotNotFoundError (404) when the slot is
+    empty. Rewrites analytes[slot-1] (name + peptide_id; declared_quantity is
+    kept), restamps every pristine row, and logs a native_slot_relabeled
+    event."""
+    from models import LimsSubSampleEvent
+    if not is_native_born(parent):
+        raise NativeSlotLockedError("not a native-born sample", code="native_slot_locked")
+    slots = _parse_slots(parent)
+    if slot < 1 or slot > len(slots) or not (slots[slot - 1] or {}).get("name"):
+        raise NativeSlotNotFoundError(f"slot {slot} is empty on {parent.sample_id}")
+    pep = db.get(Peptide, new_peptide_id)
+    if pep is None or not pep.active:
+        raise NativeSlotLockedError("peptide not found or inactive", code="peptide_not_found")
+    for i, s in enumerate(slots, start=1):
+        if i != slot and isinstance(s, dict) and s.get("peptide_id") == new_peptide_id:
+            raise NativeSlotLockedError(f"{pep.name} already occupies slot {i}", code="duplicate_peptide")
+    rows = slot_rows(db, parent, slot)
+    if not is_slot_pristine(db, rows):
+        raise NativeSlotLockedError(f"slot {slot} has bench activity — retest/retract first")
+    old = slots[slot - 1]
+    old_pid = old.get("peptide_id")
+    slots[slot - 1] = {"name": pep.name, "declared_quantity": old.get("declared_quantity"), "peptide_id": pep.id}
+    parent.analytes = json.dumps(slots)
+    if slot == 1:
+        parent.peptide_name = pep.name
+    res = SlotResolution(slot, pep.name, pep.name, pep.id, None)
+    n = restamp_native_slot_rows(db, parent=parent, slot=slot, res=res)
+    db.add(LimsSubSampleEvent(lims_sample_pk=parent.id, event="native_slot_relabeled",
+                              details={"slot": slot, "old_peptide_id": old_pid, "new_peptide_id": pep.id,
+                                       "old_name": old.get("name"), "new_name": pep.name,
+                                       "restamped": n, "reason": reason}, user_id=user_id))
+    # Always flush-only here (never this call's own commit=True): the restamp,
+    # the event just added above, and the flag resolution must land in ONE
+    # commit — this function's own `if commit: db.commit()` below, which then
+    # emits whatever flags events got staged. Threading relabel's `commit`
+    # straight into resolve_unresolved_flag_if_clean would let a commit=True
+    # call commit (and emit) the flag resolution mid-function, before the
+    # event add above is itself committed — the exact ordering bug fix round 1
+    # fixed once already; keeping the commit point singular avoids re-opening it.
+    resolve_unresolved_flag_if_clean(db, parent, commit=False)
+    if commit:
+        db.commit()
+        from flags import service as flags_service
+        flags_service.emit_pending_events(db)
+    return {"slot": slot, "old_peptide_id": old_pid, "new_peptide_id": pep.id, "restamped": n}

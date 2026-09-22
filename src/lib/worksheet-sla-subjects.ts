@@ -1,6 +1,6 @@
 import type { WorksheetListItem } from '@/lib/api'
 import { legacyToKey } from '@/lib/inbox-sla'
-import type { SlaSubject } from '@/services/sla-subjects'
+import { slaSubjectIdentities, type SlaSubject } from '@/services/sla-subjects'
 
 export type WorksheetItemRow = WorksheetListItem['items'][number]
 
@@ -21,8 +21,8 @@ export function worksheetItemSlaSubjects(
     receivedAt: item.date_received ?? item.added_at,
     completedAt,
     // Profile-SLA step (Task 11): tiered profile beats the group tier.
-    keywords: item.analyses
-      .map(a => a.keyword)
-      .filter((k): k is string => Boolean(k)),
+    // Each row's service FK is the identity; keyword only for rows without
+    // one (HPLC-native slice 15).
+    ...slaSubjectIdentities(item.analyses),
   }))
 }

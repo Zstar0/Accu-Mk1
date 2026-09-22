@@ -394,6 +394,18 @@ def test_field_sources_cover_every_lookup_field(db_session):
     assert present.field_sources["senaite_url"] == "unavailable"
 
 
+def test_external_lims_system_passthrough_for_native_born(db_session):
+    """Native-born gate (HPLC slice 4 M6): the registry read model exposes
+    LimsSample.external_lims_system verbatim so the frontend can tell a
+    native-born sample apart from a SENAITE-born one."""
+    from sub_samples.registry_details import build_native_details
+
+    _seed_full_sample(db_session, sample_id="TEST-L4B-NATIVE",
+                       external_lims_system="mk1")
+    result = build_native_details(db_session, "TEST-L4B-NATIVE")
+    assert result.external_lims_system == "mk1"
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 6. Remarks helper move: main re-export stays wired (L2 call sites)
 # ═══════════════════════════════════════════════════════════════════════════

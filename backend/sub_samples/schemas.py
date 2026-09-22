@@ -103,6 +103,10 @@ class CustomerRemarksUpdate(BaseModel):
     include: bool = True
 
 
+class InternalRemarkCreate(BaseModel):
+    content: str
+
+
 class SubSampleListResponse(BaseModel):
     parent: ParentSampleSummary
     sub_samples: list[SubSampleResponse]

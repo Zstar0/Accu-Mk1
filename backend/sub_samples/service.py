@@ -145,6 +145,12 @@ def _populate_basic_info(row: LimsSample, meta: dict) -> None:
     row.company_logo_url = meta.get("CompanyLogoUrl")
     row.coa_meta = json.dumps(_merge_coa_meta(row.coa_meta, meta))
     row.last_synced_at = datetime.utcnow()
+    # HPLC-native slice 6 (M8): signal-owned, keep-prior on replays that
+    # don't carry the key (mirrors the VendorName gate below in
+    # upsert_sample_from_signal) — a later signal without RetestOfSampleId
+    # must never clear a value this row already has.
+    if meta.get("RetestOfSampleId"):
+        row.retest_of_sample_id = str(meta["RetestOfSampleId"])
 
 
 def _create_sample_row(db: Session, parent_sample_id: str, meta: dict) -> LimsSample:
@@ -237,9 +243,12 @@ def _quarantine_collision(db: Session, existing: LimsSample,
     if row is None:
         row = _create_sample_row(db, quarantine_id, meta)
         row.quarantined = True
+        native_note = (
+            " (native-born row)" if existing.external_lims_system == "mk1" else ""
+        )
         row.quarantine_reason = (
             f"identity collision: signal for {existing.sample_id} carried uid "
-            f"{senaite_uid}; stored uid {existing.external_lims_uid}"
+            f"{senaite_uid}; stored uid {existing.external_lims_uid}{native_note}"
         )
         db.flush()
     log.error(
@@ -301,8 +310,10 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
     writer.
 
     SENAITE-attached form: sample_id = the fresh P-xxxx id. SENAITE-free form
-    (future native lines): sample_id None -> the minted native id becomes the
-    sample_id and external_lims_system = "mk1".
+    (native-born lines, HPLC-native M3): sample_id None -> mint_customer_sample_id
+    mints the customer-facing P-/PB- id (sample_type-keyed counters, Task 1)
+    and that becomes row.sample_id; the internal native_id (aP-xxxx) is still
+    derived from it. external_lims_system = "mk1", external_lims_uid = None.
 
     Idempotent: keyed on sample_id; native_id minted exactly once; a repeat
     signal refreshes fields but never re-mints and never regresses status,
@@ -311,14 +322,17 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
     until a line goes native, and a signal can never un-receive a sample).
 
     Retry contract (SENAITE-free form): callers MUST retry with the returned
-    sample_id (the native id echoed back). A retry with sample_id=None mints
-    a brand-new sample by design — there is no natural key to dedupe on; the
-    IS-side Idempotency-Key becomes meaningful only when a later slice stores
-    it. An echoed-id retry without a senaite_uid preserves the row's native
-    identity (external_lims_system stays "mk1"); if a later signal DOES carry
-    a senaite_uid, the attach wins only when the stored uid is NULL or
-    agrees; a disagreeing uid is an identity collision — the adopt is
-    refused and the incoming order parks on a quarantine row (S8 guard)."""
+    sample_id (the minted customer-facing id echoed back). A retry with
+    sample_id=None mints a brand-new sample by design — there is no natural
+    key to dedupe on; the IS-side Idempotency-Key becomes meaningful only
+    when a later slice stores it. An echoed-id retry without a senaite_uid
+    preserves the row's native identity (external_lims_system stays "mk1").
+
+    Adoption guard (spec 2026-09-10 F3): native identity is FINAL. A signal
+    carrying a senaite_uid against an existing row whose stored uid
+    disagrees, OR against an existing native-born ("mk1") row at all, is an
+    identity collision, never an attach — the adopt is refused and the
+    incoming order parks on a quarantine row (S8 guard)."""
     meta = dict(meta)
     meta.setdefault("review_state", "sample_due")
     # Normalize unconditionally: the trusted senaite_uid PARAM must always
@@ -341,6 +355,12 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
     if existing:
         if (senaite_uid and existing.external_lims_uid
                 and existing.external_lims_uid != senaite_uid):
+            return _quarantine_collision(db, existing, senaite_uid, meta)
+        # Adoption guard (spec 2026-09-10 F3): a native-born row has no uid to
+        # disagree with, so the old guard let a SENAITE AR minted under the
+        # same P- id (legacy retest / transfer after the flip) be ADOPTED onto
+        # another customer's native sample. Native identity is final.
+        if senaite_uid and existing.external_lims_system == "mk1":
             return _quarantine_collision(db, existing, senaite_uid, meta)
         prior_status = existing.status
         prior_uid = existing.external_lims_uid
@@ -370,17 +390,19 @@ def upsert_sample_from_signal(db: Session, sample_id: Optional[str],
         apply_signal_priority(db, existing, meta)
         return existing
 
+    sample_type_title = (meta.get("getSampleTypeTitle") or meta.get("SampleTypeTitle"))
+    born_native = not sample_id
+    if born_native:
+        from sub_samples.native_id import mint_customer_sample_id
+        sample_id = mint_customer_sample_id(db, sample_type_title)
     native_id_value = mint_native_id(
-        db,
-        senaite_sample_id=sample_id,
-        sample_type_title=(meta.get("getSampleTypeTitle")
-                           or meta.get("SampleTypeTitle")),
+        db, senaite_sample_id=sample_id, sample_type_title=sample_type_title,
     )
-    row = _create_sample_row(db, sample_id or native_id_value, meta)
+    row = _create_sample_row(db, sample_id, meta)
     if meta.get("VendorName"):
         row.vendor_name = str(meta["VendorName"])[:200]
     row.native_id = native_id_value
-    if not sample_id:
+    if born_native:
         row.external_lims_uid = None
         row.external_lims_system = "mk1"
     db.flush()
@@ -498,20 +520,26 @@ def _merge_coa_meta(existing_coa_meta: Optional[str], meta: dict) -> dict:
     return out
 
 
-_EMPTY_SLOT = {"name": None, "declared_quantity": None}
+_EMPTY_SLOT = {"name": None, "declared_quantity": None, "peptide_id": None}
 
 
 def _parse_analyte_slots(meta: dict) -> list[dict]:
-    """Analyte slots 1-8 as POSITIONAL {name, declared_quantity} pairs:
-    list index + 1 == SENAITE slot number. An empty slot below the last
-    occupied one is kept as a {"name": None, "declared_quantity": None}
-    placeholder so the position-keyed readers (registry details
-    slot_number, the COA name resolver, coa.sample_meta, the inbox overlay)
-    keep SENAITE's slot numbers after a middle slot is cleared -- PB-0469
-    (2026-09-08): compacting slot 2 away re-labelled BPC-157/TB500 as
-    Analyte 2/3 against the slot-3/4 results, on the parent table and on
-    the COA wire alike. Trailing empties are trimmed; all-empty -> [].
-    IS writes up to 8 slots; the Mk1 UI shows 4."""
+    """Analyte slots 1-8 as POSITIONAL {name, declared_quantity, peptide_id}
+    pairs: list index + 1 == SENAITE slot number. An empty slot below the
+    last occupied one is kept as an _EMPTY_SLOT placeholder so the
+    position-keyed readers (registry details slot_number, the COA name
+    resolver, coa.sample_meta, the inbox overlay) keep SENAITE's slot
+    numbers after a middle slot is cleared -- PB-0469 (2026-09-08):
+    compacting slot 2 away re-labelled BPC-157/TB500 as Analyte 2/3 against
+    the slot-3/4 results, on the parent table and on the COA wire alike.
+    Trailing empties are trimmed; all-empty -> []. IS writes up to 8 slots;
+    the Mk1 UI shows 4.
+
+    `peptide_id` (HPLC-native M3): the native-born signal's
+    Analyte{i}PeptideId, when present -- the catalog peptide id the
+    native-born intake path resolves against, independent of the SENAITE
+    fuzzy-match. None when the signal doesn't carry one (SENAITE-attached
+    form)."""
     slots: list[dict] = []
     for i in range(1, 9):
         name = _extract_label(meta.get(f"Analyte{i}Peptide"))
@@ -519,9 +547,15 @@ def _parse_analyte_slots(meta: dict) -> list[dict]:
             slots.append(dict(_EMPTY_SLOT))
             continue
         qty = meta.get(f"Analyte{i}DeclaredQuantity")
+        pid_raw = meta.get(f"Analyte{i}PeptideId")
+        try:
+            pid = int(pid_raw) if pid_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            pid = None
         slots.append({
             "name": str(name).strip(),
             "declared_quantity": str(qty) if qty not in (None, "") else None,
+            "peptide_id": pid,
         })
     return _trim_trailing_empty_slots(slots)
 
@@ -588,9 +622,18 @@ def _apply_senaite_fields_to_row(db: Session, row: "LimsSample", fields: dict) -
             m = _ANALYTE_KEY_RE.match(key)
             idx, kind = int(m.group(1)) - 1, m.group(2)
             while len(slots) <= idx:
-                slots.append({"name": None, "declared_quantity": None})
+                slots.append(dict(_EMPTY_SLOT))
             if kind == "Peptide":
-                slots[idx]["name"] = str(value).strip() if value else None
+                new_name = str(value).strip() if value else None
+                old_name = (slots[idx].get("name") or "").strip()
+                if "peptide_id" in slots[idx] and (new_name or "").casefold() != old_name.casefold():
+                    # Rename invalidates the stored peptide link (spec 2026-09-10
+                    # M6 addendum): resolve_slot_peptides trusts a stored id first,
+                    # so a stale id would re-seed the previous peptide. Legacy
+                    # slot dicts that never carried a peptide_id key (pre-M4)
+                    # are left as-is — nothing to invalidate.
+                    slots[idx]["peptide_id"] = None
+                slots[idx]["name"] = new_name
             else:
                 slots[idx]["declared_quantity"] = str(value) if value not in (None, "") else None
         # Positional list (see _parse_analyte_slots): a cleared middle slot
@@ -653,7 +696,14 @@ def _refresh_parent_from_senaite(db: Session, parent: LimsSample) -> None:
     whole refresh (fail closed) and raises an identity_collision flag. A
     fetch missing `uid` entirely never NULLs a stored uid either — that
     would silently prime the NULL-adopt rule to rebind the row to ANY
-    future uid on the next refresh."""
+    future uid on the next refresh.
+
+    Native-born guard (HPLC slice 6 M8 Task 4): a native-born row has no
+    SENAITE record to refresh from — skip before any SENAITE call."""
+    if (parent.external_lims_system or "senaite") == "mk1":
+        log.info(
+            "refresh_parent.native_born_skip sample=%s", parent.sample_id)
+        return
     old_status = parent.status
     meta = senaite.fetch_parent_metadata(parent.sample_id)
     incoming_uid = meta.get("uid")
@@ -1489,11 +1539,13 @@ def derive_variance_demand(services: dict) -> dict:
     normalization as the entitlement endpoint (counts int-filtered >= 2,
     so the target is always >= 1 when purchased).
 
-    The hplc bucket is BW-aware — it reads hplcpurity_identity OR bac_water_panel
-    (mirroring derive_base_demand), since both produce chromatography vials and
+    The hplc bucket is BW-aware — it reads either HPLC primary key (legacy
+    `hplcpurity_identity` or native `hplc-purity-identity`, see catalog/hplc_keys.py)
+    OR bac_water_panel (mirroring derive_base_demand), since both produce chromatography vials and
     are mutually exclusive per order. (Handler decision 2026-06-17.)"""
+    from catalog.hplc_keys import hplc_primary_count
     entitlement = normalize_variance_entitlement({"variance": (services or {}).get("variance")})
-    hplc_total = max(entitlement.get("hplcpurity_identity", 0), entitlement.get("bac_water_panel", 0))
+    hplc_total = max(hplc_primary_count(entitlement), entitlement.get("bac_water_panel", 0))
     return {
         "hplc": max(0, hplc_total - 1),
         "endo": max(0, entitlement.get("endotoxin", 0) - 1),
@@ -1534,7 +1586,8 @@ def derive_base_demand(services: dict, db=None, snapshot: Optional[dict] = None)
     not as the expected steady-state noise it would otherwise be for every
     post-registration legacy-bucket purchase.
     """
-    hplc = bool(services.get("hplcpurity_identity") or services.get("bac_water_panel"))
+    from catalog.hplc_keys import hplc_primary_selected
+    hplc = hplc_primary_selected(services) or bool(services.get("bac_water_panel"))
     endo = bool(services.get("endotoxin"))
     ster = bool(services.get("sterility_pcr"))
     legacy = {
@@ -1580,7 +1633,8 @@ def derive_base_demand(services: dict, db=None, snapshot: Optional[dict] = None)
 def derive_demand(services: dict, db=None, snapshot: Optional[dict] = None) -> dict:
     """Translate WP services dict to CORE vial demand per bucket.
 
-    HPLC is satisfied by either `hplcpurity_identity` or `bac_water_panel` —
+    HPLC is satisfied by either HPLC primary key (legacy `hplcpurity_identity`
+    or native `hplc-purity-identity`, see catalog/hplc_keys.py) OR `bac_water_panel` —
     both result in chromatography vials. No legacy bucket needs more than
     one vial (ruling 2026-08-05: PCR and USP<71> are separately sold
     products, one vial each).
@@ -2333,6 +2387,13 @@ def set_assignment_role(db: Session, sample_id: str, role: Optional[str],
                 commit=False,
             )
         db.commit()
+        # The seed above may have staged a flags event (e.g. the
+        # unresolved-analyte flag, lims_analyses/hplc_native.py) with
+        # commit=False so it landed in THIS commit rather than an early one
+        # of its own (see flags/service.py::create_flag's commit kwarg) —
+        # now that the row is really persisted, let the sink see it.
+        from flags import service as flags_service
+        flags_service.emit_pending_events(db)
         return {"sample_id": sample_id, "assignment_role": role}
 
     parent = db.execute(
@@ -2469,15 +2530,24 @@ def _fetch_mk1_results_for_host(
       - superseded rows: vial hosts select the current row (retested=False);
         sample hosts keep the parent-tier canonical row (retest_of_id IS NULL,
         updated in place via promotion — same convention as source_resolver).
+
+    Native-born rows share a generic keyword (HPLC-PURITY etc.) across every
+    occupied slot, so a raw keyword key would collide an N-slot blend's vial
+    results into one entry. coa.hplc_shim.wire_keyword re-keys those rows per
+    slot (same vocabulary the COA series uses) once the parent's slot count is
+    known; legacy rows keep their raw keyword unchanged.
     """
     from models import LimsAnalysis, LimsAnalysisPromotion, AnalysisService, Peptide
     from sub_samples.variance import identity_conforms
-    from coa.variance_series import _category
+    from coa.variance_series import _category, _NATIVE_KWS
+    from coa.hplc_shim import slot_wires, wire_keyword
 
     base = (
         select(LimsAnalysis, AnalysisService, Peptide)
         .outerjoin(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
-        .outerjoin(Peptide, Peptide.id == AnalysisService.peptide_id)
+        # Native-born rows carry peptide_id on the ROW (generic service has
+        # none); legacy rows carry it on the per-substance service.
+        .outerjoin(Peptide, Peptide.id == func.coalesce(LimsAnalysis.peptide_id, AnalysisService.peptide_id))
     )
     if host_kind == "sample":
         stmt = base.where(
@@ -2506,6 +2576,19 @@ def _fetch_mk1_results_for_host(
         )
     else:
         return {}
+
+    # Native rows need the parent's occupied-slot count to re-key per slot
+    # (wire_keyword) — resolve it here, one query, before the result loop.
+    if host_kind == "sample":
+        parent = db.execute(select(LimsSample).where(LimsSample.id == host_pk)).scalar_one_or_none()
+    else:
+        parent = db.execute(
+            select(LimsSample)
+            .join(LimsSubSample, LimsSubSample.parent_sample_pk == LimsSample.id)
+            .where(LimsSubSample.id == host_pk)
+        ).scalar_one_or_none()
+    n_slots = len(slot_wires(db, parent)) if parent is not None else 0
+
     triples = db.execute(stmt).all()
     if not triples:
         return {}
@@ -2558,7 +2641,12 @@ def _fetch_mk1_results_for_host(
                 peptide_name=pep.name if pep is not None else None,
                 result_options=options,
             )
-        out[r.keyword] = entry
+        raw_kw = (r.keyword or "").strip()
+        if svc is not None and svc.origin == "mk1" and raw_kw.upper() in _NATIVE_KWS:
+            key = wire_keyword(raw_kw, r.slot, n_slots)
+        else:
+            key = raw_kw
+        out[key] = entry
     return out
 
 

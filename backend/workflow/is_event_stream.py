@@ -173,7 +173,7 @@ def sync_once(db_factory: Callable[[], Session], *, batch_size: int = 500,
     made by `_heal_status` for freshly-inserted rows (log-and-heal).
     """
     stats = {"fetched": 0, "inserted": 0, "dup": 0, "no_sample": 0,
-             "healed": 0, "errors": 0}
+             "healed": 0, "errors": 0, "native_skipped": 0}
     db = db_factory()
     try:
         cursor_row = db.execute(
@@ -212,11 +212,20 @@ def sync_once(db_factory: Callable[[], Session], *, batch_size: int = 500,
             if created_at > max_created_at:
                 max_created_at = created_at
             try:
-                sample_pk = db.execute(
-                    select(LimsSample.id).where(LimsSample.sample_id == ev["sample_id"])
-                ).scalar_one_or_none()
-                if sample_pk is None:
+                row = db.execute(
+                    select(LimsSample.id, LimsSample.external_lims_system).where(
+                        LimsSample.sample_id == ev["sample_id"])
+                ).one_or_none()
+                if row is None:
                     stats["no_sample"] += 1
+                    continue
+                sample_pk, external_lims_system = row
+                if external_lims_system == "mk1":
+                    # Native-born guard (HPLC slice 6 M8 Task 4): this
+                    # sample is mk1-authoritative — the SENAITE event stream
+                    # is a legacy-only retirement precursor, never a source
+                    # of truth for native-born rows.
+                    stats["native_skipped"] += 1
                     continue
                 occurred = _occurred_at(ev)
                 inserted = record_sample_transition(

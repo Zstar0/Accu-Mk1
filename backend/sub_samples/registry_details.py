@@ -345,6 +345,7 @@ def build_native_details(db: Session, sample_id: str) -> RegistrySampleReadResul
         tracking_number=display.get("tracking_number"),
         tracking_url=display.get("tracking_url"),
         review_state=row.status,
+        external_lims_system=row.external_lims_system,
         declared_weight_mg=display.get("declared_weight_mg"),
         analytes=analytes_from_registry_json(row.analytes),
         coa=coa,

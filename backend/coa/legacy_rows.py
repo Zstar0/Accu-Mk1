@@ -22,10 +22,22 @@ permanently 'rejected' (A7 remove-analysis cascade) elsewhere in the app —
 those must not reach the COA wire. Filtered BEFORE the zero-row check so an
 all-skip-state sample hits the existing fail-closed empty abort.
 
+Native-born HPLC rows (service_origin == 'mk1', keyword in the HPLC
+trio/aggregates) also ride this wire: coa/hplc_shim.py maps their
+slot-generic keywords/titles into the same legacy vocabulary the engine
+reads, keyed by the parent's resolved analyte slots. An unresolved slot
+(no catalog peptide) aborts generation rather than shipping a blank title.
+
 Spec: docs/superpowers/specs/2026-08-26-coa-legacy-rows-mk1-source-design.md
 """
+from coa.hplc_shim import (
+    LEGACY_HPLC_ARCHETYPE, UnresolvedNativeSlotError, is_native_hplc_row,
+    native_hplc_service_archetypes, slot_wires, wire_keyword, wire_title,
+)
 from coa.identity_verdict import identity_wire_result
-from coa.native_sections import NativeSectionsError
+from coa.native_sections import NativeSectionsError, _spec_wire_dict
+from coa.spec_rules import SpecRuleError, evaluate, normalize_matrix, resolve_spec
+from lims_analyses.hplc_native import TRIO
 
 # Twin contract: src/coabuilder_core/legacy_rows.py + tests/
 # test_legacy_rows_contract.py in the coabuilder repo pin the same tuple.
@@ -34,6 +46,13 @@ FIELD_CONTRACT = (
     "uid", "Keyword", "Title", "ServiceTitle",
     "Result", "Unit", "review_state", "ResultCaptureDate",
 )
+
+# Optional, native rows only: the SAME two fields native_sections ships per
+# row (spec-ownership slice 1) -- Mk1 resolves the analysis_service_specs row
+# and owns the verdict; COABuilder formats and renders. Absent on every
+# SENAITE-origin row and on a native row with no active spec filed, where
+# COABuilder's page-1 defaults apply. Twin-pinned like FIELD_CONTRACT.
+OPTIONAL_FIELDS = ("specification", "conforms")
 
 # Wire contract, twin-pinned (see FIELD_CONTRACT docstring above) alongside
 # src/coabuilder_core/legacy_rows.py in the coabuilder repo. Move both sides
@@ -46,6 +65,33 @@ def _shaped_rows(db, sample_id):
     return list_parent_analyses_senaite_shape(db, sample_id)
 
 
+def _native_spec_fields(db, parent, r, wire_result) -> dict:
+    """`specification` + `conforms` for a native row, resolved and judged by
+    the same resolve_spec/evaluate/_spec_wire_dict native_sections uses. The
+    peptide tier anchors on the ROW's own peptide_id, so a blend resolves
+    per slot. Judged against the WIRE result (identity rides as the literal
+    Conforms token). A pending row ships its spec with conforms=None; no
+    active spec ships nothing."""
+    service_id = getattr(r, "analysis_service_id", None)
+    if db is None or service_id is None:
+        # No catalog to consult (same stance as identity_wire_result).
+        return {}
+    matrix = normalize_matrix(getattr(parent, "sample_type_title", None))
+    spec = resolve_spec(db, service_id, matrix,
+                        peptide_id=getattr(r, "peptide_id", None))
+    if spec is None:
+        return {}
+    conforms = None
+    if str(wire_result or "").strip():
+        try:
+            conforms = evaluate(spec, wire_result)
+        except SpecRuleError as e:
+            raise NativeSectionsError(
+                f"legacy rows: {parent.sample_id} row '{r.keyword}' "
+                f"({r.uid}): {e.detail}") from e
+    return {"specification": _spec_wire_dict(spec), "conforms": conforms}
+
+
 def build_legacy_rows(db, parent) -> list[dict]:
     shaped = _shaped_rows(db, parent.sample_id)
     # Check for unresolvable service_origin (None) — indicates a broken service FK
@@ -54,7 +100,42 @@ def build_legacy_rows(db, parent) -> list[dict]:
             raise NativeSectionsError(
                 f"legacy rows: analysis {r.uid} on {parent.sample_id} has "
                 f"unresolvable service origin — aborting")
-    legacy = [r for r in shaped if r.service_origin == "senaite"]
+    # Slice 8: a native TRIO/aggregate row rides page 1 only when the
+    # profile that owns its service on THIS sample has
+    # coa_archetype == legacy_hplc — limit_table/NULL route it to
+    # native_sections (or nowhere) instead. Resolved once per build, and
+    # only when a native row is actually present, so SENAITE-born parents
+    # pay no extra IS lookup (requirement: byte-identical). A service_id
+    # ABSENT from archetype_by_service (empty/partial resolved mapping, or
+    # a None mapping when the lookup couldn't run at all — a 404 "no
+    # order", an inactive/lab-added-only profile, or a hard failure are all
+    # the same "can't tell" case to this gate) admits unchanged — that is
+    # slice 7's behaviour, and it must never become a new abort surface.
+    # Only a service the mapping actually RESOLVED to something other than
+    # legacy_hplc is excluded. See native_hplc_service_archetypes.
+    archetype_by_service = (
+        native_hplc_service_archetypes(db, parent)
+        if any(is_native_hplc_row(r) for r in shaped) else {}
+    ) or {}
+
+    def _rides_page_one(r) -> bool:
+        if not is_native_hplc_row(r):
+            return False
+        service_id = getattr(r, "analysis_service_id", None)
+        if service_id is None or service_id not in archetype_by_service:
+            return True
+        return archetype_by_service[service_id] == LEGACY_HPLC_ARCHETYPE
+
+    # Computed on `shaped` (pre-skip-state-filter), not the post-filter
+    # `legacy` list below: a legacy_hplc blend whose trio rows are ALL
+    # rejected/retracted (e.g. the HM-partial-panel remove workflow) still
+    # counts as "a native row was admitted" for the empty_slots guard below
+    # — the trio existing-but-filtered must still abort as a broken/removed
+    # slot, not silently skip the guard because none of it survived
+    # SKIP_STATES.
+    admitted_native = any(_rides_page_one(r) for r in shaped)
+
+    legacy = [r for r in shaped if r.service_origin == "senaite" or _rides_page_one(r)]
     # review_state=None aborts producer-side (consumer requires a string;
     # same treatment as the missing-keyword abort below) — checked before
     # the skip-state filter so a None can't silently pass as "not in
@@ -73,9 +154,51 @@ def build_legacy_rows(db, parent) -> list[dict]:
             f"legacy rows: no legacy-family analyses found for "
             f"{parent.sample_id} — refusing to assemble an empty results "
             f"table (mirror gap?)")
+    # {} for SENAITE-born parents (slot_wires short-circuits there) AND for
+    # a native-born parent whose HPLC trio didn't ride page 1 at all
+    # (archetype != legacy_hplc, or unresolved) — slot_wires alone doesn't
+    # know about the archetype gate, so without this guard a limit_table/
+    # NULL blend would hit the empty_slots abort below despite
+    # build_legacy_rows correctly emitting zero native rows for it (slice
+    # 8). admitted_native is computed above, pre-skip-state-filter, so an
+    # all-rejected/retracted legacy_hplc blend still aborts here as before.
+    wires = {w.slot: w for w in slot_wires(db, parent)} if admitted_native else {}
+    n_slots = len(wires)
+    if n_slots > 1:
+        rowed_slots = {
+            r.slot for r in legacy
+            if is_native_hplc_row(r) and (r.keyword or "").upper() in TRIO
+        }
+        empty_slots = sorted(set(wires) - rowed_slots)
+        if empty_slots:
+            raise NativeSectionsError(
+                f"legacy rows: {parent.sample_id} registry slot "
+                f"{empty_slots[0]} has no analysis rows — remove it via "
+                f"relabel/Manage Analyses before COA")
     rows = []
     for r in legacy:
-        if not (r.keyword or "").strip():
+        keyword, title = r.keyword, r.title
+        if is_native_hplc_row(r):
+            if (r.keyword or "").upper() in TRIO:
+                wire = wires.get(r.slot)
+                if wire is None:
+                    raise NativeSectionsError(
+                        f"legacy rows: {parent.sample_id} row {r.uid} (slot {r.slot}) "
+                        f"has no registry analyte slot — registry/rows drift")
+                if r.peptide_id is None or wire.peptide_id is None:
+                    raise UnresolvedNativeSlotError(
+                        sample_id=parent.sample_id, slot=r.slot, raw_name=wire.display_name)
+                if r.peptide_id != wire.peptide_id:
+                    raise NativeSectionsError(
+                        f"legacy rows: {parent.sample_id} slot {r.slot} — "
+                        f"row peptide_id {r.peptide_id} != registry peptide_id "
+                        f"{wire.peptide_id} — registry/rows peptide drift — "
+                        f"relabel before COA")
+                keyword = wire_keyword(r.keyword, r.slot, n_slots)
+                title = wire_title(r.keyword, r.title, wire)
+            else:
+                keyword = wire_keyword(r.keyword, None, n_slots)
+        if not (keyword or "").strip():
             raise NativeSectionsError(
                 f"legacy rows: analysis {r.uid} on {parent.sample_id} has no "
                 f"keyword — aborting")
@@ -83,18 +206,22 @@ def build_legacy_rows(db, parent) -> list[dict]:
         # A conforming value rides as the literal "Conforms" token so
         # COABuilder never re-derives conformance from the slot-title vs
         # peptide-name pair (P-1986 class); everything else rides raw.
+        # identity_wire_result keeps receiving the ROW keyword (e.g.
+        # HPLC-IDENTITY) so is_identity_keyword still recognises it.
         wire_result = identity_wire_result(
             db, keyword=r.keyword, result=r.result,
             analysis_service_id=getattr(r, "analysis_service_id", None),
         )
         rows.append({
             "uid": r.uid,
-            "Keyword": r.keyword,
-            "Title": r.title,
-            "ServiceTitle": r.title,
+            "Keyword": keyword,
+            "Title": title,
+            "ServiceTitle": title,
             "Result": wire_result,
             "Unit": r.unit,
             "review_state": r.review_state,
             "ResultCaptureDate": r.captured,
+            **(_native_spec_fields(db, parent, r, wire_result)
+               if is_native_hplc_row(r) else {}),
         })
     return rows

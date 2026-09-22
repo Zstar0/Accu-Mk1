@@ -135,6 +135,35 @@ def test_happy_analyte_update_rebuilds_slots_and_clears_aliases(client, db_sessi
     assert other[0].alias == "Other Sample"
 
 
+# 3b. native-born: blanking one Analyte{N}Peptide slot restamps ONLY that
+#    slot's pristine native rows (peptide_id None, reportable_reason
+#    "analyte_cleared"), title left as-is; the other slot is untouched
+#    (final-review finding #5).
+def test_native_born_analyte_clear_restamps_only_that_slot(client, db_session):
+    from sqlalchemy import select
+    from tests.hplc_native_family import native_family
+
+    parent, services, peps, vial_rows = native_family(
+        db_session, sample_id="PB-S2S-CLEAR",
+        slots=[("BPC-157", "BPC157"), ("TB-500", "TB500")],
+    )
+    db_session.commit()
+
+    body = {"samples": [{"sample_id": "PB-S2S-CLEAR", "fields": {
+        "Analyte2Peptide": "", "Analyte2DeclaredQuantity": "",
+    }}]}
+    with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}):
+        r = client.post(URL, json=body, headers=HDR)
+    assert r.status_code == 200
+    assert r.json()["updated"] == ["PB-S2S-CLEAR"]
+
+    rows2 = db_session.execute(select(LimsAnalysis).where(LimsAnalysis.slot == 2)).scalars().all()
+    assert rows2 and all(r.peptide_id is None and r.reportable_reason == "analyte_cleared" for r in rows2)
+
+    rows1 = db_session.execute(select(LimsAnalysis).where(LimsAnalysis.slot == 1)).scalars().all()
+    assert rows1 and all(r.peptide_id == peps[1].id and r.reportable_reason is None for r in rows1)
+
+
 # 4. alias preservation: branding-only fields (no Analyte keys) -> alias
 #    rows UNTOUCHED.
 def test_branding_only_update_leaves_aliases_untouched(client, db_session):

@@ -18,10 +18,14 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from coa.hplc_shim import slot_wires, wire_keyword
+from lims_analyses.hplc_native import AGGREGATES, TRIO, native_category
 from models import AnalysisService, LimsAnalysis, LimsSubSample, Peptide
+
+_NATIVE_KWS = frozenset(TRIO + AGGREGATES)
 
 # Live result states + variance sign-off (mirrors source_resolver, plus the
 # variance_verified terminal state replicates land in).
@@ -50,6 +54,9 @@ def _category(keyword: Optional[str]) -> Optional[str]:
     routing behavior on the shared function.
     """
     kw = (keyword or "").upper()
+    native = native_category(kw)
+    if native is not None:
+        return native
     if kw == "HPLC-PUR" or kw.startswith("PUR_") or _ANALYTE_PUR.match(kw):
         return "purity"
     if kw == "PEPT-TOTAL" or kw.startswith("QTY_") or _ANALYTE_QTY.match(kw):
@@ -179,7 +186,9 @@ def build_variance_replicates(db: Session, parent) -> dict:
         rows = db.execute(
             select(LimsAnalysis, AnalysisService, Peptide)
             .join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
-            .outerjoin(Peptide, Peptide.id == AnalysisService.peptide_id)
+            # Native-born rows carry peptide_id on the ROW (generic service has
+            # none); legacy rows carry it on the per-substance service.
+            .outerjoin(Peptide, Peptide.id == func.coalesce(LimsAnalysis.peptide_id, AnalysisService.peptide_id))
             .where(
                 LimsAnalysis.lims_sub_sample_pk == sub.id,
                 LimsAnalysis.review_state.in_(_VIAL_COA_STATES),  # _SERIES_STATES + 'promoted'
@@ -199,6 +208,8 @@ def build_variance_replicates(db: Session, parent) -> dict:
         # rows are too). Generic services (HPLC-PUR, PEPT-Total, HPLC-ID) carry
         # no peptide_id, so they can only be attributed when the vial measures a
         # single peptide — which is the production single-peptide case.
+        # Native-born rows are peptide-specific via `LimsAnalysis.peptide_id`
+        # (COALESCEd into `pep` above).
         keys = _series_keys(rows)
         vial_peptides = {_key_for(pep, keys) for la, svc, pep in rows if pep is not None}
         sole_peptide = next(iter(vial_peptides)) if len(vial_peptides) == 1 else None
@@ -238,7 +249,9 @@ def build_vial_figures(db: Session, sub: LimsSubSample, qty_unit: str = "mg") ->
     rows = db.execute(
         select(LimsAnalysis, AnalysisService, Peptide)
         .join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
-        .outerjoin(Peptide, Peptide.id == AnalysisService.peptide_id)
+        # Native-born rows carry peptide_id on the ROW (generic service has
+        # none); legacy rows carry it on the per-substance service.
+        .outerjoin(Peptide, Peptide.id == func.coalesce(LimsAnalysis.peptide_id, AnalysisService.peptide_id))
         .where(
             LimsAnalysis.lims_sub_sample_pk == sub.id,
             LimsAnalysis.review_state.in_(_VIAL_COA_STATES),
@@ -322,7 +335,14 @@ def build_variance_analyte_series(db: Session, parent) -> dict:
     results_table row + baked spec. Values are per-vial current results
     (retested=False) in vial-sequence order; COABuilder prepends its own parent
     figure. Generic and analyte-agnostic — no peptide attribution, no
-    purity/quantity/identity categories."""
+    purity/quantity/identity categories.
+
+    Native-born rows carry a shared generic keyword (HPLC-PURITY etc.) across
+    every occupied slot, so a raw keyword key would collapse an N-slot blend's
+    per-peptide series into one. coa.hplc_shim.wire_keyword re-keys those rows
+    per slot (ANALYTE-{n}-PUR/QTY for a blend, HPLC-PUR/PEPT-Total for a single
+    peptide) so they land in the same legacy vocabulary COABuilder already
+    understands; legacy rows keep their raw keyword unchanged."""
     subs = db.execute(
         select(LimsSubSample).where(
             LimsSubSample.parent_sample_pk == parent.id,
@@ -335,6 +355,7 @@ def build_variance_analyte_series(db: Session, parent) -> dict:
     ).scalars().all()
     if not subs:
         return {}
+    n_slots = len(slot_wires(db, parent))
     out: dict[str, dict] = {}
     for sub in subs:
         rows = db.execute(
@@ -357,7 +378,11 @@ def build_variance_analyte_series(db: Session, parent) -> dict:
             .order_by(LimsAnalysis.keyword)
         ).all()
         for la, svc in rows:
-            kw = (la.keyword or svc.keyword or "").strip()
+            raw_kw = (la.keyword or "").strip()
+            if svc.origin == "mk1" and raw_kw.upper() in _NATIVE_KWS:
+                kw = wire_keyword(raw_kw, la.slot, n_slots)
+            else:
+                kw = raw_kw or (svc.keyword or "").strip()
             if not kw:
                 continue
             # Unit locked from the first vial seen for this keyword

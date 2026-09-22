@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { computeProductCompletion } from '@/lib/product-completion'
+import { indexPromotions } from '@/lib/promotion-index'
 import type {
   OrderedProduct,
   ParentPromotionInfo,
@@ -44,7 +45,7 @@ function ctx(opts: {
 }) {
   return {
     analyses: opts.analyses ?? [],
-    promotionsByKeyword: new Map(opts.promos ?? []),
+    promotions: indexPromotions((opts.promos ?? []).map(([, p]) => p)),
     varianceSet: opts.varianceSet as VarianceSetResponse | undefined,
   }
 }
@@ -250,6 +251,27 @@ describe('computeProductCompletion', () => {
       ctx({ analyses, promos: [promo('HPLC-PUR', ['P-1-S01'])] })
     )!
     expect(r.met).toBe(true)
+  })
+
+  describe('native HPLC profile key', () => {
+    it('treats hplc-purity-identity like hplcpurity_identity for completion', () => {
+      const legacy = computeProductCompletion(
+        prod('hplcpurity_identity'),
+        ctx({
+          analyses: [ana('HPLC-PUR', 'Analytics')],
+          promos: [promo('HPLC-PUR', ['P-1-S01'])],
+        })
+      )
+      const native = computeProductCompletion(
+        prod('hplc-purity-identity'),
+        ctx({
+          analyses: [ana('HPLC-PUR', 'Analytics')],
+          promos: [promo('HPLC-PUR', ['P-1-S01'])],
+        })
+      )
+      expect(native?.met).toBe(legacy?.met)
+      expect(native?.met).toBe(true)
+    })
   })
 })
 

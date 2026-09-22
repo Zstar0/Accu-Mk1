@@ -23,11 +23,14 @@ import {
   parentRetestAnalysis,
   transitionAnalysis,
   type SenaiteAnalysis,
-  type SenaiteLookupResult,
   type ParentPromotionInfo,
 } from '@/lib/api'
 import { NATIVE_PARENT_ANALYSES_QUERY_KEY } from '@/lib/native-parent-analyses'
-import { useAnalysisSlaMap } from '@/services/analysis-sla'
+import {
+  EMPTY_PROMOTION_INDEX,
+  indexPromotions,
+  type PromotionIndex,
+} from '@/lib/promotion-index'
 import type { VialAssignment } from '@/lib/vial-assignment'
 
 // AnalysisTable uses IntersectionObserver for its sticky-toolbar effect; jsdom doesn't have it.
@@ -60,25 +63,6 @@ vi.mock('@/lib/api', async importOriginal => {
   }
 })
 
-// Mock the SLA hook wholesale — same pattern as src/test/vials-quicklook.test.tsx:
-// protects this render test from real services/groups/sample-sla queries firing;
-// the hook's own internals are covered by analysis-sla.test.tsx. Imported below
-// so the "wires the native rows in" test can assert on its call arguments —
-// the card's one novel piece of SLA wiring is building a synthetic lookup
-// ({...lookup, analyses: nativeRows}) instead of passing the page lookup
-// straight through, and only a call-args assertion can catch a regression
-// back to the latter (the rendered table looks identical either way since
-// this mock ignores its argument).
-vi.mock('@/services/analysis-sla', () => ({
-  useAnalysisSlaMap: vi.fn(() => ({
-    byKeyword: new Map(),
-    isLoading: false,
-    isError: false,
-    isPublished: false,
-    priority: null,
-  })),
-}))
-
 // AnalysisTable calls useSidebar internally; stub it so tests don't need a full SidebarProvider.
 vi.mock('@/components/ui/sidebar', async importOriginal => {
   const actual = await importOriginal<typeof import('@/components/ui/sidebar')>()
@@ -105,42 +89,20 @@ const shapedRow = (over: Partial<SenaiteAnalysis>): SenaiteAnalysis => ({
   service_group_id: null, service_group_name: null, ...over,
 })
 
-function fakeLookup(overrides: Partial<SenaiteLookupResult> = {}): SenaiteLookupResult {
-  return {
-    sample_id: 'P-0120',
-    sample_uid: 'uid-P-0120',
-    client: null,
-    contact: null,
-    sample_type: null,
-    date_received: '2026-08-01T00:00:00',
-    date_sampled: null,
-    profiles: [],
-    client_order_number: null,
-    client_sample_id: null,
-    client_lot: null,
-    review_state: 'sample_received',
-    declared_weight_mg: null,
-    analytes: [],
-    remarks: [],
-    analyses: [],
-    attachments: [],
-    published_coa: null,
-    senaite_url: null,
-    cached_at: null,
-    ...overrides,
-  } as unknown as SenaiteLookupResult
-}
-
-const promo = (keyword: string, ids: (string | null)[]): ParentPromotionInfo => ({
+const promo = (
+  keyword: string,
+  ids: (string | null)[],
+  parent_analysis_id = 1
+): ParentPromotionInfo => ({
   keyword,
-  parent_analysis_id: 1,
+  parent_analysis_id,
   promoted_at: '2026-08-01T00:00:00Z',
   sources: ids.map(sample_id => ({ sample_id, contribution_kind: 'primary' })),
 })
 
 function renderCard(
   rows: SenaiteAnalysis[],
-  promos: Map<string, ParentPromotionInfo> = new Map(),
+  promos: PromotionIndex = EMPTY_PROMOTION_INDEX,
   opts: {
     staleSpy?: () => void
     qc?: QueryClient
@@ -156,8 +118,7 @@ function renderCard(
       <NativeParentAnalysesCard
         sampleId={opts.sampleId ?? 'P-0120'}
         isParentPage={opts.isParentPage ?? true}
-        lookup={fakeLookup({ date_received: '2026-08-01' })}
-        promotionsByKeyword={promos}
+        promotions={promos}
         vialAssignmentByKeyword={opts.vialAssignmentByKeyword}
         onParentDataStale={opts.staleSpy}
       />
@@ -171,7 +132,6 @@ describe('NativeParentAnalysesCard', () => {
     vi.mocked(listNativeParentAnalysesShaped).mockReset()
     vi.mocked(parentRetestAnalysis).mockReset()
     vi.mocked(transitionAnalysis).mockReset()
-    vi.mocked(useAnalysisSlaMap).mockClear()
   })
 
   it('renders the shared AnalysisTable with the card header folded in', async () => {
@@ -199,7 +159,7 @@ describe('NativeParentAnalysesCard', () => {
     // level up, in SampleDetails' map construction (not exercised by this
     // component-level test — see task-6-brief.md Step 3).
     const vialMap = new Map<string, VialAssignment>([
-      ['FENTANYL', {
+      ['mk1:9', { // keyed by the parent ROW (vialAssignmentKey), not its keyword
         editable: true,
         matches: [{
           vialSampleId: 'P-0158-S01',
@@ -214,7 +174,7 @@ describe('NativeParentAnalysesCard', () => {
     ])
     renderCard(
       [shapedRow({ uid: 'mk1:9', keyword: 'FENTANYL', title: 'Fentanyl' })],
-      new Map(),
+      EMPTY_PROMOTION_INDEX,
       { vialAssignmentByKeyword: vialMap }
     )
 
@@ -232,7 +192,7 @@ describe('NativeParentAnalysesCard', () => {
     // of the matched vial's — distinctive vial-side values must never leak
     // into the row's Method/Instrument/Analyst cells.
     const vialMap = new Map<string, VialAssignment>([
-      ['FENTANYL', {
+      ['mk1:9', { // keyed by the parent ROW (vialAssignmentKey), not its keyword
         editable: false,
         matches: [{
           vialSampleId: 'P-0158-S01',
@@ -255,7 +215,7 @@ describe('NativeParentAnalysesCard', () => {
         instrument: 'RowInstrument', instrument_uid: 'ri-uid',
         analyst: 'RowAnalyst',
       })],
-      new Map(),
+      EMPTY_PROMOTION_INDEX,
       { vialAssignmentByKeyword: vialMap }
     )
 
@@ -280,7 +240,7 @@ describe('NativeParentAnalysesCard', () => {
   })
 
   it('never fetches on a sub-sample page', async () => {
-    const { container } = renderCard([shapedRow({})], new Map(), {
+    const { container } = renderCard([shapedRow({})], EMPTY_PROMOTION_INDEX, {
       sampleId: 'P-0120-S01',
       isParentPage: false,
     })
@@ -289,26 +249,6 @@ describe('NativeParentAnalysesCard', () => {
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(listNativeParentAnalysesShaped).not.toHaveBeenCalled()
     expect(container).toBeEmptyDOMElement()
-  })
-
-  it('wires the native rows into useAnalysisSlaMap, not the page lookup straight through', async () => {
-    // The card's one novel piece of SLA wiring: it must build a synthetic
-    // lookup ({...lookup, analyses: nativeRows}) since the page's own
-    // lookup.analyses are SENAITE rows that never contain native keywords
-    // (see the card's slaLookup comment). A regression back to passing
-    // `lookup` straight through would still render an identical table (the
-    // hook is mocked), so only a call-args assertion catches it.
-    renderCard([shapedRow({ keyword: 'HM' })])
-    await screen.findByText('Heavy Metals')
-
-    expect(useAnalysisSlaMap).toHaveBeenCalledWith(
-      expect.objectContaining({
-        date_received: '2026-08-01',
-        analyses: expect.arrayContaining([
-          expect.objectContaining({ keyword: 'HM' }),
-        ]),
-      })
-    )
   })
 
   it('verified row offers only Retest; lineage rows are display-only', async () => {
@@ -360,7 +300,7 @@ describe('NativeParentAnalysesCard', () => {
   })
 
   it('retest confirm names the blast radius and fires the parent-retest route', async () => {
-    const promos = new Map([['HM', promo('HM', ['P-0120-S01', 'P-0120-S02'])]])
+    const promos = indexPromotions([promo('HM', ['P-0120-S01', 'P-0120-S02'])])
     vi.mocked(parentRetestAnalysis).mockResolvedValue({ new_row_ids: [101, 102], parent_review_state: null })
     const staleSpy = vi.fn()
     const { qc } = renderCard(
@@ -380,15 +320,67 @@ describe('NativeParentAnalysesCard', () => {
     await userEvent.click(screen.getByRole('button', { name: /^retest$/i }))
 
     await waitFor(() => expect(parentRetestAnalysis).toHaveBeenCalledTimes(1))
-    expect(parentRetestAnalysis).toHaveBeenCalledWith('P-0120', 'HM')
+    // Legacy (SENAITE-born) target: no numeric slot, so the body carries
+    // neither analysis_service_id nor slot (final-review finding #8).
+    expect(parentRetestAnalysis).toHaveBeenCalledWith('P-0120', 'HM', undefined, undefined)
     await waitFor(() => expect(staleSpy).toHaveBeenCalled())
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY] })
+  })
+
+  it('retest passes analysis_service_id + slot through when the target row carries them', async () => {
+    // A per-slot row joins its promotion by id, so the record names row 9.
+    const promos = indexPromotions([promo('HM', ['P-0120-S01'], 9)])
+    vi.mocked(parentRetestAnalysis).mockResolvedValue({ new_row_ids: [101], parent_review_state: null })
+    renderCard(
+      [shapedRow({
+        uid: 'mk1:9', keyword: 'HM', title: 'Heavy Metals', review_state: 'verified',
+        analysis_service_id: 42, slot: 2,
+      })],
+      promos
+    )
+    await screen.findByText('Heavy Metals')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Analysis actions' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Retest' }))
+    await userEvent.click(screen.getByRole('button', { name: /^retest$/i }))
+
+    await waitFor(() => expect(parentRetestAnalysis).toHaveBeenCalledTimes(1))
+    expect(parentRetestAnalysis).toHaveBeenCalledWith('P-0120', 'HM', undefined, {
+      analysis_service_id: 42,
+      slot: 2,
+    })
+  })
+
+  it('a canonical Mk1 parent row is retested BY ITS ROW ID', async () => {
+    // The backend then resolves nothing by keyword/service/slot, and fails
+    // closed if row 9 is no longer the active parent row.
+    const promos = indexPromotions([promo('HM', ['P-0120-S01'], 9)])
+    vi.mocked(parentRetestAnalysis).mockResolvedValue({ new_row_ids: [101], parent_review_state: null })
+    renderCard(
+      [shapedRow({
+        uid: 'mk1:9', keyword: 'HM', title: 'Heavy Metals', review_state: 'verified',
+        analysis_service_id: 42, slot: 2, provenance: 'canonical',
+      })],
+      promos
+    )
+    await screen.findByText('Heavy Metals')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Analysis actions' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Retest' }))
+    await userEvent.click(screen.getByRole('button', { name: /^retest$/i }))
+
+    await waitFor(() => expect(parentRetestAnalysis).toHaveBeenCalledTimes(1))
+    expect(parentRetestAnalysis).toHaveBeenCalledWith('P-0120', 'HM', undefined, {
+      parent_analysis_id: 9,
+      analysis_service_id: 42,
+      slot: 2,
+    })
   })
 
   it('retest confirm fails closed with no promotion record', async () => {
     renderCard(
       [shapedRow({ uid: 'mk1:5', keyword: 'HM', title: 'Heavy Metals', review_state: 'verified' })],
-      new Map()
+      EMPTY_PROMOTION_INDEX
     )
     await screen.findByText('Heavy Metals')
 
@@ -417,7 +409,7 @@ describe('NativeParentAnalysesCard', () => {
     const staleSpy = vi.fn()
     const { qc } = renderCard(
       [shapedRow({ uid: 'mk1:6', keyword: 'HM', title: 'Heavy Metals', review_state: 'parent_to_verify' })],
-      new Map(),
+      EMPTY_PROMOTION_INDEX,
       { staleSpy }
     )
     const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')

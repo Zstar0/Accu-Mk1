@@ -678,6 +678,36 @@ def test_parent_line_states_mk1_retested_published_canonical_unlocks(
     assert "ENDO" not in states
 
 
+def test_parent_line_states_mk1_native_blend_locks_per_slot(route_client, line_states_parent):
+    """A native blend carries one parent row PER analyte slot under ONE
+    generic keyword and ONE service. Keyed by keyword, slot 1's verified row
+    locked every slot's vial rows, and a retested slot came back with no
+    Promote path (the PB-0486 dead end, reached through a blend). Per-slot
+    rows key on (service, slot); slot-less rows keep the bare keyword."""
+    db, parent, svc = line_states_parent
+    purity = AnalysisService(title="HPLC Purity", keyword="HPLC-PURITY", origin="mk1")
+    db.add(purity)
+    db.commit()
+    _parent_tier_row(db, parent, purity, "HPLC-PURITY", slot=1,
+                     provenance="canonical", review_state="verified")
+    # Slot 2 retested from the parent: its canonical row is retracted.
+    _parent_tier_row(db, parent, purity, "HPLC-PURITY", slot=2,
+                     provenance="canonical", review_state="retracted")
+    _parent_tier_row(db, parent, purity, "HPLC-PURITY", slot=3,
+                     provenance="canonical", review_state="parent_to_verify")
+    # A slot-less native row on the same parent keeps its keyword key.
+    _parent_tier_row(db, parent, svc, "ENDO",
+                     provenance="canonical", review_state="verified")
+
+    states = _get_states_mk1(route_client)
+
+    assert states.get(f"svc:{purity.id}:1") == "verified"
+    assert f"svc:{purity.id}:2" not in states          # unlocked to re-promote
+    assert states.get(f"svc:{purity.id}:3") == "parent_to_verify"
+    assert "HPLC-PURITY" not in states                  # never a keyword entry
+    assert states.get("ENDO") == "verified"
+
+
 # ─── shadow fallback must not lock a family with unfinished vial work ────────
 # P-2553 / P-2606 (2026-09-09): a promote whose SENAITE half landed and whose
 # Mk1 half did not leaves the keyword with NO canonical history and a shadow

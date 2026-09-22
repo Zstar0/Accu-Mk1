@@ -88,7 +88,7 @@ const DEAD_STATES = new Set(['retracted', 'rejected'])
  *  keyword ID_*, or a per-peptide title ending in "Identity (HPLC)". */
 export function isIdentityAnalysis(a: { keyword?: string | null; title?: string | null }): boolean {
   const kw = (a.keyword ?? '').toUpperCase()
-  if (kw === 'HPLC-ID' || kw.startsWith('ID_')) return true
+  if (kw === 'HPLC-ID' || kw === 'HPLC-IDENTITY' || kw.startsWith('ID_')) return true
   return /\bidentity\s*\(hplc\)/i.test(a.title ?? '')
 }
 
@@ -107,19 +107,36 @@ function liveByKeyword(analyses: SenaiteAnalysis[]): Map<string, SenaiteAnalysis
   return out
 }
 
+/** The NATIVE identity of an analysis line: (service, slot). Service id alone
+ *  is not enough: a native blend vial carries one row per analyte slot under
+ *  ONE generic service (HPLC-PURITY x3), so a service-id index collapsed them
+ *  and every parent slot joined the same vial row. Slot-less rows key on 0. */
+const serviceSlotKey = (serviceId: number, slot: number | null | undefined): string =>
+  `${serviceId}:${slot ?? 0}`
+
+/** Map key for one PARENT row's assignment: the row itself (uid). Keyword is
+ *  only the fallback for a row with no uid. Per-slot blend rows share a
+ *  keyword, so a keyword key handed every slot the last slot's entry. */
+export function vialAssignmentKey(
+  a: Pick<SenaiteAnalysis, 'uid' | 'keyword'>,
+): string {
+  return a.uid ?? a.keyword ?? ''
+}
+
 /** Same live-row rules as liveByKeyword, indexed by the NATIVE identity key.
  *  Rows without an analysis_service_id (SENAITE-sourced) are absent — they
  *  are reachable only through the keyword tiers. */
-function liveByServiceId(analyses: SenaiteAnalysis[]): Map<number, SenaiteAnalysis> {
-  const out = new Map<number, SenaiteAnalysis>()
+function liveByServiceSlot(analyses: SenaiteAnalysis[]): Map<string, SenaiteAnalysis> {
+  const out = new Map<string, SenaiteAnalysis>()
   for (const a of analyses) {
     const serviceId = a.analysis_service_id
     if (serviceId == null) continue
     if (DEAD_STATES.has(a.review_state ?? '')) continue
-    const existing = out.get(serviceId)
-    if (!existing) { out.set(serviceId, a); continue }
+    const key = serviceSlotKey(serviceId, a.slot)
+    const existing = out.get(key)
+    if (!existing) { out.set(key, a); continue }
     // Prefer the non-retested (current) row.
-    if (existing.retested && !a.retested) out.set(serviceId, a)
+    if (existing.retested && !a.retested) out.set(key, a)
   }
   return out
 }
@@ -129,7 +146,7 @@ function liveByServiceId(analyses: SenaiteAnalysis[]): Map<number, SenaiteAnalys
  *  backend/lims_analyses/seeder.py `_PARENT_ANALYTE`. Kept in sync by hand. */
 const PARENT_ANALYTE = /^ANALYTE-([1-4])-(PUR|QTY)$/
 
-/** Build parentKeyword → VialAssignment.
+/** Build parent row → VialAssignment.
  *
  *  The join ladder, first tier that produces ≥1 match wins:
  *    0. service id     — analysis_service_id equality. The NATIVE identity:
@@ -148,8 +165,8 @@ const PARENT_ANALYTE = /^ANALYTE-([1-4])-(PUR|QTY)$/
  *  Adding a fifth keyword-equality tier is guarded by the ast-grep rule
  *  no-new-keyword-join-tiers.
  *
- *  The result map stays keyed by the PARENT row's keyword regardless of which
- *  tier matched — its consumers key by keyword. */
+ *  The result map is keyed by the PARENT ROW (vialAssignmentKey: its uid),
+ *  never by keyword: per-slot blend rows share one keyword. */
 export function buildVialAssignmentMap(
   parentAnalyses: SenaiteAnalysis[],
   vials: VialInput[],
@@ -159,7 +176,7 @@ export function buildVialAssignmentMap(
   const vialLive = vials.map(v => ({
     v,
     live: liveByKeyword(v.analyses),
-    liveById: liveByServiceId(v.analyses),
+    liveById: liveByServiceSlot(v.analyses),
   }))
 
   const toVialMatch = (v: VialInput, a: SenaiteAnalysis): VialMatch => ({
@@ -183,10 +200,10 @@ export function buildVialAssignmentMap(
 
   /** Tier 0. The per-vial index is already one row per service, so this is
    *  the same "one analysis per vial per parent row" rule by construction. */
-  const matchByServiceId = (serviceId: number): VialMatch[] => {
+  const matchByServiceId = (serviceId: number, slot: number | null | undefined): VialMatch[] => {
     const out: VialMatch[] = []
     for (const { v, liveById } of vialLive) {
-      const a = liveById.get(serviceId)
+      const a = liveById.get(serviceSlotKey(serviceId, slot))
       if (a) out.push(toVialMatch(v, a))
     }
     return out
@@ -201,8 +218,17 @@ export function buildVialAssignmentMap(
     if (!pa.keyword) continue
     // 0) service id — native identity, when both sides are mk1 rows.
     let matches: VialMatch[] = pa.analysis_service_id != null
-      ? matchByServiceId(pa.analysis_service_id)
+      ? matchByServiceId(pa.analysis_service_id, pa.slot)
       : []
+    // A per-slot native row joins on (service, slot) or not at all: its
+    // keyword is shared across slots, so the keyword tiers below would hand
+    // it another slot's vial row. A miss means "no vial row for this slot".
+    if (pa.slot != null && pa.analysis_service_id != null) {
+      if (matches.length > 0) {
+        result.set(vialAssignmentKey(pa), { matches, editable: matches.length === 1 })
+      }
+      continue
+    }
     // 1) exact keyword — the sanctioned keyword-equality tier (SENAITE rows).
     // ast-grep-ignore: no-new-keyword-join-tiers
     if (matches.length === 0) matches = matchToVialMatches(kw => kw === pa.keyword)
@@ -226,7 +252,7 @@ export function buildVialAssignmentMap(
       }
     }
     if (matches.length === 0) continue
-    result.set(pa.keyword, { matches, editable: matches.length === 1 })
+    result.set(vialAssignmentKey(pa), { matches, editable: matches.length === 1 })
   }
   return result
 }

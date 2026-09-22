@@ -96,6 +96,9 @@ def day(result, iso):
         ("ARSENIC-PPM", None, "hm"),
         ("MOISTURE-KF", "Moisture", "other"),
         ("FENTANYL", None, "other"),
+        ("HPLC-IDENTITY", None, "hplc"),
+        ("HPLC-PURITY", None, "hplc"),
+        ("HPLC-BLEND-TOTAL", None, "hplc"),
     ],
 )
 def test_classify_keyword(keyword, category, expected):

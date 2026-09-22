@@ -20,8 +20,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from models import (LimsAnalysis, LimsSample, LimsSampleTransition,
-                    LimsWorkflowShadowEvaluation, LimsWorkflowState,
-                    LimsWorkflowTransition)
+                    LimsSubSampleEvent, LimsWorkflowShadowEvaluation,
+                    LimsWorkflowState, LimsWorkflowTransition)
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +50,18 @@ def _live_parent_line_states(db: Session, sample: LimsSample) -> dict[str, str]:
     this: the publish touchpoint from sample_received takes the partial
     edge to waiting_for_addon_results, and the add-on's later promotion
     cascades the sample forward."""
+    from lims_analyses.hplc_native import parent_line_state_key
     from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
+
+    def _key(r) -> str:
+        # Line identity, NOT keyword: a native blend carries one HPLC-PURITY
+        # line per analyte slot. Keyed by keyword, the slots collapsed to one
+        # entry and an unpromoted slot's placeholder lost the setdefault below
+        # to its verified sibling, so all_analyses_in_state passed and the
+        # sample cascaded to 'verified' with peptides still on the vial (the
+        # P-2739 class, reached through a blend).
+        return parent_line_state_key(r.keyword, r.analysis_service_id, r.slot)
+
     rows = db.execute(select(LimsAnalysis).where(
         LimsAnalysis.lims_sample_pk == sample.id,
         LimsAnalysis.lims_sub_sample_pk.is_(None),
@@ -68,8 +79,8 @@ def _live_parent_line_states(db: Session, sample: LimsSample) -> dict[str, str]:
             # awaiting sign-off) to the seeded all_analyses_in_state value
             # lists; real catalog modeling of the state ships with the
             # catalog release, not here.
-            out[r.keyword] = ("to_be_verified" if r.review_state == "parent_to_verify"
-                              else r.review_state)
+            out[_key(r)] = ("to_be_verified" if r.review_state == "parent_to_verify"
+                            else r.review_state)
         elif r.provenance == "shadow":
             st = r.mirror_review_state
             if not st or st in _EXCLUDED_LINE_STATES:
@@ -78,7 +89,7 @@ def _live_parent_line_states(db: Session, sample: LimsSample) -> dict[str, str]:
         elif r.provenance == PROVENANCE_ORDERED:
             if r.retested or r.review_state in _EXCLUDED_LINE_STATES:
                 continue
-            ordered[r.keyword] = r.review_state
+            ordered[_key(r)] = r.review_state
     for kw, st in shadow.items():
         out.setdefault(kw, st)
     for kw, st in ordered.items():
@@ -256,7 +267,32 @@ def _write_status_if_authoritative(db: Session, sample: LimsSample, to_slug: str
     record_sample_transition(db, sample_id=sample.sample_id, to_status=to_slug,
                              source="mk1", verb=verb, from_status=from_status,
                              actor_user_id=actor_user_id)
+    _queue_native_status_relay(db, sample, to_slug)
     return True
+
+
+def _queue_native_status_relay(db: Session, sample: LimsSample, to_slug: str) -> None:
+    """M8: native-born samples relay receive/verify/publish to Integration
+    Service. Intent is recorded HERE, in the same transaction as the status
+    write (flush-only — the caller commits); the HTTP call itself happens
+    later, out of band, at a flush point (status_relay.flush_pending_relays).
+    SENAITE-born samples: no event, no queue entry — byte-identical to
+    pre-M8 behaviour. Never raises."""
+    try:
+        from lims_analyses.hplc_native import is_native_born
+        from workflow.status_relay import RELAYED_SLUGS, queue_relay
+        if not is_native_born(sample) or to_slug not in RELAYED_SLUGS:
+            return
+        transition = RELAYED_SLUGS[to_slug]
+        db.add(LimsSubSampleEvent(
+            lims_sample_pk=sample.id, event="native_status_relay_pending",
+            details={"transition": transition}, user_id=None,
+        ))
+        db.flush()
+        queue_relay(sample.sample_id, transition)
+    except Exception:
+        log.exception("status_relay.queue_failed (never-raise) sample=%s to_slug=%s",
+                      sample.sample_id, to_slug)
 
 
 def execute_verb(db: Session, sample: LimsSample, verb: str, *, trigger: str,
@@ -426,6 +462,14 @@ def run_cascades_bg(sample_pk: int, actor_user_id: Optional[int]) -> None:
     finally:
         if db is not None:
             db.close()
+    # M8 flush point: verify (and any other RELAYED_SLUGS edge) reaches the
+    # engine via this cascade run — drain what _write_status_if_authoritative
+    # queued, after our own commit/close above. Never raises.
+    try:
+        from workflow.status_relay import flush_pending_relays
+        flush_pending_relays()
+    except Exception:
+        log.exception("status_relay.flush_failed in run_cascades_bg (never-raise)")
 
 
 _TEE_TO_STATES = frozenset({"verified", "published", "cancelled"})

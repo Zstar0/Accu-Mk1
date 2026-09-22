@@ -59,14 +59,21 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { toast } from 'sonner'
 import {
+  EMPTY_PROMOTION_INDEX,
+  indexPromotions,
+  type PromotionIndex,
+} from '@/lib/promotion-index'
+import {
   lookupSenaiteSample,
   updateSenaiteSampleFields,
+  addInternalRemark,
   updateCustomerRemarks,
   getSampleAdditionalCOAs,
   updateAdditionalCOAConfig,
   fetchSenaiteAttachmentUrl,
   fetchSenaiteAttachmentText,
   uploadSenaiteAttachment,
+  uploadNativeAttachment,
   fetchSenaiteReportUrl,
   getExplorerCOAGenerations,
   getExplorerCOASignedUrl,
@@ -106,7 +113,6 @@ import {
   listLimsAnalysesForSubSample,
   listParentPromotions,
   listParentLineStates,
-  type ParentPromotionInfo,
   fetchSubSamplePhotoUrl,
   invalidateSubSamplePhoto,
   seedSubSamplePhoto,
@@ -124,6 +130,8 @@ import {
   getSenaiteSamples,
   listSubSampleChromatograms,
   uploadChromatogramToSenaite,
+  uploadChromatogramNative,
+  chooseChromatogramUpload,
   type SubSampleChromatogram,
   listPackagingPhotos,
   fetchPackagingPhotoUrl,
@@ -183,6 +191,7 @@ import {
 } from '@/components/senaite/AnalysisTable'
 import { RemovalConfirmModal } from '@/components/senaite/RemovalConfirmModal'
 import { ReplaceAnalyteDialog } from '@/components/senaite/ReplaceAnalyteDialog'
+import { RelabelNativeSlotDialog } from '@/components/senaite/RelabelNativeSlotDialog'
 import { ClearAnalyteDialog } from '@/components/senaite/ClearAnalyteDialog'
 import { CancelSampleDialog } from './CancelSampleDialog'
 import {
@@ -212,7 +221,6 @@ import type { VialAssignment } from '@/lib/vial-assignment'
 import { vialLabel, vialPosition, vialTotal } from '@/lib/vial-label'
 import { SampleHeaderSla } from '@/components/senaite/SampleHeaderSla'
 import { PrioritySelect } from '@/components/common/PrioritySelect'
-import { useAnalysisSlaMap } from '@/services/analysis-sla'
 import { useVialRoles } from '@/services/vial-roles'
 import { useDepartments } from '@/services/departments'
 import { ROLE_COLOR_TEXT, roleColorForCode } from '@/lib/role-display'
@@ -1706,9 +1714,13 @@ const isRenderable = (a: SenaiteAttachment) =>
 
 function AddAttachmentForm({
   sampleUid,
+  sampleId,
+  isNativeBorn,
   onUploaded,
 }: {
-  sampleUid: string
+  sampleUid: string | null
+  sampleId: string
+  isNativeBorn: boolean
   onUploaded: () => void
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -1721,11 +1733,14 @@ function AddAttachmentForm({
     if (!file) return
     setIsUploading(true)
     try {
-      const result = await uploadSenaiteAttachment(
-        sampleUid,
-        file,
-        attachmentType
-      )
+      let result
+      if (isNativeBorn) {
+        result = await uploadNativeAttachment(sampleId, file, attachmentType)
+      } else if (sampleUid) {
+        result = await uploadSenaiteAttachment(sampleUid, file, attachmentType)
+      } else {
+        throw new Error('Missing SENAITE sample UID')
+      }
       if (result.success) {
         toast.success('Attachment uploaded')
         setFile(null)
@@ -2391,6 +2406,7 @@ function SelectVialImageDialog({
   onOpenChange,
   parentSampleId,
   parentSampleUid,
+  isNativeBorn,
   vials,
   containerMode,
   onAttached,
@@ -2398,7 +2414,8 @@ function SelectVialImageDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
   parentSampleId: string
-  parentSampleUid: string
+  parentSampleUid: string | null
+  isNativeBorn: boolean
   vials: SubSample[]
   containerMode: boolean
   onAttached: () => void
@@ -2422,13 +2439,26 @@ function SelectVialImageDialog({
       const file = new File([blob], `${vial.sample_id}-vial-photo${ext}`, {
         type: blob.type || 'image/jpeg',
       })
-      const result = await uploadSenaiteAttachment(
-        parentSampleUid,
-        file,
-        'Sample Image',
-        'vial_image',
-        vial.sample_id
-      )
+      let result
+      if (isNativeBorn) {
+        result = await uploadNativeAttachment(
+          parentSampleId,
+          file,
+          'Sample Image',
+          'vial_image',
+          vial.sample_id
+        )
+      } else if (parentSampleUid) {
+        result = await uploadSenaiteAttachment(
+          parentSampleUid,
+          file,
+          'Sample Image',
+          'vial_image',
+          vial.sample_id
+        )
+      } else {
+        throw new Error('Missing SENAITE sample UID')
+      }
       if (!result.success) throw new Error(result.message)
       // Seed the parent's photo cache with the exact bytes so the header
       // thumb updates instantly — the SENAITE attachment listing has a
@@ -2532,6 +2562,7 @@ function SelectVialChromatogramDialog({
   onOpenChange,
   parentSampleId,
   parentSampleUid,
+  isNativeBorn,
   chromatograms,
   containerMode,
   onAttached,
@@ -2539,7 +2570,8 @@ function SelectVialChromatogramDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
   parentSampleId: string
-  parentSampleUid: string
+  parentSampleUid: string | null
+  isNativeBorn: boolean
   chromatograms: SubSampleChromatogram[]
   containerMode: boolean
   onAttached: () => void
@@ -2549,10 +2581,15 @@ function SelectVialChromatogramDialog({
   const handleSelect = async (c: SubSampleChromatogram) => {
     setAttachingId(c.analysis_id)
     try {
-      const result = await uploadChromatogramToSenaite(
-        c.analysis_id,
-        parentSampleUid
-      )
+      const target = chooseChromatogramUpload({
+        external_lims_system: isNativeBorn ? 'mk1' : null,
+        sample_uid: parentSampleUid,
+      })
+      if (!target) throw new Error('Missing SENAITE sample UID')
+      const result =
+        target.kind === 'native'
+          ? await uploadChromatogramNative(c.analysis_id, parentSampleId)
+          : await uploadChromatogramToSenaite(c.analysis_id, target.sampleUid)
       if (!result.success) throw new Error(result.message)
       toast.success(
         `${c.vial_sample_id} chromatogram attached to ${parentSampleId}`
@@ -2860,7 +2897,8 @@ function AddRemarkForm({
   sampleId,
   onAdded,
 }: {
-  sampleUid: string
+  /** Absent on native-born samples, which save by sample_id instead. */
+  sampleUid?: string | null
   sampleId: string
   onAdded: () => void
 }) {
@@ -2874,10 +2912,14 @@ function AddRemarkForm({
 
     setSaving(true)
     try {
-      const result = await updateSenaiteSampleFields(sampleUid, {
-        Remarks: trimmed,
-      })
-      if (!result.success) throw new Error(result.message)
+      if (sampleUid) {
+        const result = await updateSenaiteSampleFields(sampleUid, {
+          Remarks: trimmed,
+        })
+        if (!result.success) throw new Error(result.message)
+      } else {
+        await addInternalRemark(sampleId, trimmed)
+      }
       toast.success('Remark added')
       setText('')
       setOpen(false)
@@ -3494,15 +3536,13 @@ const EMPTY_ANALYTE_NAME_MAP = new Map<number, string>()
 export function NativeParentAnalysesCard({
   sampleId,
   isParentPage,
-  lookup,
-  promotionsByKeyword,
+  promotions,
   vialAssignmentByKeyword,
   onParentDataStale,
 }: {
   sampleId: string | null | undefined
   isParentPage: boolean
-  lookup: SenaiteLookupResult | null
-  promotionsByKeyword: Map<string, ParentPromotionInfo>
+  promotions: PromotionIndex
   vialAssignmentByKeyword?: Map<string, VialAssignment>
   onParentDataStale?: () => void
 }) {
@@ -3514,20 +3554,12 @@ export function NativeParentAnalysesCard({
     staleTime: 30_000,
   })
   const analyses = rows ?? []
-  // Same code path the Vials Quick Look uses: SLA needs a lookup whose
-  // analyses are THESE rows (the page's map is keyed off the SENAITE rows,
-  // which never contain native keywords) and a non-null date_received.
-  const slaLookup = useMemo(
-    () => (lookup ? { ...lookup, analyses } : null),
-    [lookup, analyses]
-  )
-  const sla = useAnalysisSlaMap(slaLookup)
   // Shared confirm flow (also drives the read-flip main table's registry
   // seam) — behavior identical to the pre-extraction inline version.
   const { confirm, retestPending, requestRetest, executeRetest, cancelRetest } =
     useParentRetestFlow({
       sampleId,
-      promotionsByKeyword,
+      promotions,
       onDone: () => {
         void queryClient.invalidateQueries({
           queryKey: [NATIVE_PARENT_ANALYSES_QUERY_KEY],
@@ -3575,7 +3607,7 @@ export function NativeParentAnalysesCard({
       <AnalysisTable
         analyses={analyses}
         analyteNameMap={EMPTY_ANALYTE_NAME_MAP}
-        promotionsByKeyword={promotionsByKeyword}
+        promotions={promotions}
         vialAssignmentByKeyword={vialAssignmentByKeyword}
         headerContent={header}
         hideProgress
@@ -3589,11 +3621,6 @@ export function NativeParentAnalysesCard({
           })
           onParentDataStale?.()
         }}
-        analysisSlaMap={sla.byKeyword}
-        isAnalysisSlaLoading={sla.isLoading}
-        isAnalysisSlaError={sla.isError}
-        isAnalysisSlaPublished={sla.isPublished}
-        analysisSlaPriority={sla.priority}
       />
       <ParentRetestConfirmDialog
         state={confirm}
@@ -3724,11 +3751,12 @@ export function SampleDetails() {
   >(null)
 
   // Phase senaite-writeback Task 4: promotion provenance for parent pages.
-  // Populated via useEffect below; empty Map on sub-sample pages (gated by
-  // !parentSampleId, which is null only when we ARE the parent).
-  const [promotionsByKeyword, setPromotionsByKeyword] = useState<
-    Map<string, ParentPromotionInfo>
-  >(new Map())
+  // Populated via useEffect below; empty on sub-sample pages (gated by
+  // !parentSampleId, which is null only when we ARE the parent). Joined to
+  // rows by id, see lib/promotion-index.
+  const [promotions, setPromotions] = useState<PromotionIndex>(
+    EMPTY_PROMOTION_INDEX
+  )
 
   // Parent-line states for sub-sample pages — keyword → SENAITE review_state.
   // Populated via useEffect below; empty object on parent pages (gated by
@@ -3774,6 +3802,12 @@ export function SampleDetails() {
     peptideId: number | null
     peptideName: string
   } | null>(null)
+  // Relabel-native-slot dialog (mk1 origin only) — native sibling of Replace.
+  const [relabelSlot, setRelabelSlot] = useState<{
+    slot: number
+    oldPeptideId: number | null
+    oldPeptideName: string
+  } | null>(null)
   // Cancel-sample dialog (customer withdrew) — header action.
   const [cancelOpen, setCancelOpen] = useState(false)
   // Task 10: promoted-source (vial-side) retest warning — sub-sample pages
@@ -3795,8 +3829,6 @@ export function SampleDetails() {
       String(hideHplcServices)
     )
   }, [hideHplcServices])
-
-  const analysisSla = useAnalysisSlaMap(data)
 
   // Product chips (header bar) colored by their fulfillment role — same
   // catalog source as the boxing lanes (Handler request, 2026-08-28).
@@ -4121,10 +4153,10 @@ export function SampleDetails() {
   const refreshPromotions = useCallback((id: string) => {
     listParentPromotions(id)
       .then(records => {
-        setPromotionsByKeyword(new Map(records.map(r => [r.keyword, r])))
+        setPromotions(indexPromotions(records))
       })
       .catch(() => {
-        // Best-effort: promotionsByKeyword stays whatever it was (empty on
+        // Best-effort: promotions stays whatever it was (empty on
         // first load) — this map feeds BOTH the promotion badge AND the
         // native parent card's retest confirm (buildBulkParentRetestImpact
         // reads it for the blast-radius/fail-closed gate), so a swallowed
@@ -4465,8 +4497,8 @@ export function SampleDetails() {
     parentSampleId === null && effectiveReadSource === 'mk1'
   const mainParentRetest = useParentRetestFlow({
     sampleId: data?.sample_id,
-    promotionsByKeyword:
-      parentSampleId === null ? promotionsByKeyword : undefined,
+    promotions:
+      parentSampleId === null ? promotions : undefined,
     onDone: () => {
       if (data) refreshSample(data.sample_id)
     },
@@ -5079,7 +5111,7 @@ export function SampleDetails() {
   // page already loads. Shared by the card chips and the sticky-header chips.
   const productCompletionCtx: ProductCompletionContext = {
     analyses: data.analyses,
-    promotionsByKeyword,
+    promotions,
     varianceSet: varianceSetOverlay,
     keywordFamilies,
   }
@@ -6368,6 +6400,7 @@ export function SampleDetails() {
                       const approvedAliases =
                         matchedPeptide?.display_aliases ?? []
                       const currentAlias = sampleAliases.get(slot) ?? ''
+                      const isNativeBorn = data.external_lims_system === 'mk1'
                       const handleAliasChange = async (next: string) => {
                         try {
                           if (!next) {
@@ -6408,63 +6441,86 @@ export function SampleDetails() {
                                 Analyte {slot}
                               </span>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setReplaceSlot({
-                                  slot,
-                                  oldPeptideId:
-                                    analyte.matched_peptide_id ?? null,
-                                  oldPeptideName: displayName,
-                                })
-                              }
-                              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-primary transition-colors"
-                              title="Replace this analyte's peptide (wrong-variant correction)"
-                            >
-                              <RefreshCw size={11} aria-hidden="true" />
-                              Replace
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setClearSlot({
-                                  slot,
-                                  peptideId: analyte.matched_peptide_id ?? null,
-                                  peptideName: displayName,
-                                })
-                              }
-                              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-destructive transition-colors"
-                              title="Clear this analyte slot (the blend has one analyte fewer)"
-                            >
-                              <Eraser size={11} aria-hidden="true" />
-                              Clear
-                            </button>
+                            {isNativeBorn ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setRelabelSlot({
+                                    slot,
+                                    oldPeptideId:
+                                      analyte.matched_peptide_id ?? null,
+                                    oldPeptideName: displayName,
+                                  })
+                                }
+                                className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-primary transition-colors"
+                                title="Relabel this analyte's peptide"
+                              >
+                                <RefreshCw size={11} aria-hidden="true" />
+                                Relabel
+                              </button>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setReplaceSlot({
+                                      slot,
+                                      oldPeptideId:
+                                        analyte.matched_peptide_id ?? null,
+                                      oldPeptideName: displayName,
+                                    })
+                                  }
+                                  className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-primary transition-colors"
+                                  title="Replace this analyte's peptide (wrong-variant correction)"
+                                >
+                                  <RefreshCw size={11} aria-hidden="true" />
+                                  Replace
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setClearSlot({
+                                      slot,
+                                      peptideId: analyte.matched_peptide_id ?? null,
+                                      peptideName: displayName,
+                                    })
+                                  }
+                                  className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-destructive transition-colors"
+                                  title="Clear this analyte slot (the blend has one analyte fewer)"
+                                >
+                                  <Eraser size={11} aria-hidden="true" />
+                                  Clear
+                                </button>
+                              </>
+                            )}
                           </div>
                           <div className="[&>div]:border-0 [&>div]:py-1">
-                            <EditableDataRow
-                              label="Peptide"
-                              value={displayName}
-                              readOnly={subSamples.length > 0}
-                              readOnlyHint="Locked once vials exist — use Replace or Clear so vial rows and the identity service follow the change"
-                              senaiteField={`Analyte${slot}Peptide`}
-                              sampleUid={data.sample_uid ?? ''}
-                              onSaved={v =>
-                                setData(prev => {
-                                  if (!prev) return prev
-                                  const updated = prev.analytes.map(a =>
-                                    a.slot_number === slot
-                                      ? {
-                                          ...a,
-                                          matched_peptide_name:
-                                            (v as string) ??
-                                            a.matched_peptide_name,
-                                        }
-                                      : a
-                                  )
-                                  return { ...prev, analytes: updated }
-                                })
-                              }
-                            />
+                            {!isNativeBorn && (
+                              <EditableDataRow
+                                label="Peptide"
+                                value={displayName}
+                                readOnly={subSamples.length > 0}
+                                readOnlyHint="Locked once vials exist — use Replace or Clear so vial rows and the identity service follow the change"
+                                senaiteField={`Analyte${slot}Peptide`}
+                                sampleUid={data.sample_uid ?? ''}
+                                onSaved={v =>
+                                  setData(prev => {
+                                    if (!prev) return prev
+                                    const updated = prev.analytes.map(a =>
+                                      a.slot_number === slot
+                                        ? {
+                                            ...a,
+                                            matched_peptide_name:
+                                              (v as string) ??
+                                              a.matched_peptide_name,
+                                          }
+                                        : a
+                                    )
+                                    return { ...prev, analytes: updated }
+                                  })
+                                }
+                              />
+                            )}
                             <EditableDataRow
                               label="Declared Qty"
                               value={analyte.declared_quantity}
@@ -6587,7 +6643,7 @@ export function SampleDetails() {
           ) : (
             <p className="text-sm text-muted-foreground">No remarks</p>
           )}
-          {data.sample_uid && (
+          {(data.sample_uid || isParent) && (
             <AddRemarkForm
               sampleUid={data.sample_uid}
               sampleId={data.sample_id}
@@ -6810,12 +6866,17 @@ export function SampleDetails() {
                   )}
                 </div>
               ))}
-            {/* SENAITE upload form — not for Mk1-native vials, whose
-                  "sample_uid" is an mk1:// provenance marker, not a SENAITE
-                  UID (the upload would 502). They use AddVialImageForm above. */}
-            {data.sample_uid && !data.sample_uid.startsWith('mk1://') && (
+            {/* Attachment upload form. Native-born parents post through the
+                  native route (uploadNativeAttachment); SENAITE-born parents
+                  keep uploadSenaiteAttachment. Mk1-native VIALS still use
+                  AddVialImageForm above (their "sample_uid" is an mk1://
+                  provenance marker, not a SENAITE UID). */}
+            {(data.external_lims_system === 'mk1' ||
+              (data.sample_uid && !data.sample_uid.startsWith('mk1://'))) && (
               <AddAttachmentForm
                 sampleUid={data.sample_uid}
+                sampleId={data.sample_id}
+                isNativeBorn={data.external_lims_system === 'mk1'}
                 onUploaded={() => fetchSample(data.sample_id)}
               />
             )}
@@ -6823,7 +6884,7 @@ export function SampleDetails() {
                   Only offered when at least one vial has an Mk1-stored
                   primary (legacy vial photos already live on this AR). */}
             {parentSampleId === null &&
-              data.sample_uid &&
+              (data.external_lims_system === 'mk1' || data.sample_uid) &&
               ((subData?.sub_samples.some(v =>
                 v.photo_external_uid?.startsWith('mk1://')
               ) ??
@@ -7184,6 +7245,17 @@ export function SampleDetails() {
           onCleared={() => refreshSample(data.sample_id)}
         />
       )}
+      {relabelSlot && data && (
+        <RelabelNativeSlotDialog
+          open
+          sampleId={data.sample_id}
+          slot={relabelSlot.slot}
+          oldPeptideId={relabelSlot.oldPeptideId}
+          oldPeptideName={relabelSlot.oldPeptideName}
+          onClose={() => setRelabelSlot(null)}
+          onDone={() => refreshSample(data.sample_id)}
+        />
+      )}
       <CancelSampleDialog
         open={cancelOpen}
         sampleId={data.sample_id}
@@ -7221,8 +7293,8 @@ export function SampleDetails() {
             ? mainParentRetest.requestRetest
             : undefined
         }
-        promotionsByKeyword={
-          parentSampleId === null ? promotionsByKeyword : undefined
+        promotions={
+          parentSampleId === null ? promotions : undefined
         }
         vialAssignmentByKeyword={
           parentSampleId === null ? vialAssignmentByKeyword : undefined
@@ -7270,11 +7342,6 @@ export function SampleDetails() {
           })
         }}
         onTransitionComplete={() => refreshSample(data.sample_id)}
-        analysisSlaMap={analysisSla.byKeyword}
-        isAnalysisSlaLoading={analysisSla.isLoading}
-        isAnalysisSlaError={analysisSla.isError}
-        isAnalysisSlaPublished={analysisSla.isPublished}
-        analysisSlaPriority={analysisSla.priority}
         vialKind={currentVialKind}
       />
 
@@ -7318,8 +7385,7 @@ export function SampleDetails() {
           <NativeParentAnalysesCard
             sampleId={data.sample_id}
             isParentPage={parentSampleId === null}
-            lookup={data}
-            promotionsByKeyword={promotionsByKeyword}
+            promotions={promotions}
             vialAssignmentByKeyword={nativeVialAssignmentByKeyword}
             onParentDataStale={() => refreshSample(data.sample_id)}
           />
@@ -7335,12 +7401,15 @@ export function SampleDetails() {
         />
       )}
 
-      {parentSampleId === null && data.sample_id && data.sample_uid && (
+      {parentSampleId === null &&
+        data.sample_id &&
+        (data.external_lims_system === 'mk1' || data.sample_uid) && (
         <SelectVialImageDialog
           open={selectVialImageOpen}
           onOpenChange={setSelectVialImageOpen}
           parentSampleId={data.sample_id}
           parentSampleUid={data.sample_uid}
+          isNativeBorn={data.external_lims_system === 'mk1'}
           vials={subData?.sub_samples ?? []}
           containerMode={subData?.parent.container_mode ?? false}
           onAttached={() => {
@@ -7354,12 +7423,15 @@ export function SampleDetails() {
         />
       )}
 
-      {parentSampleId === null && data.sample_id && data.sample_uid && (
+      {parentSampleId === null &&
+        data.sample_id &&
+        (data.external_lims_system === 'mk1' || data.sample_uid) && (
         <SelectVialChromatogramDialog
           open={selectVialChromOpen}
           onOpenChange={setSelectVialChromOpen}
           parentSampleId={data.sample_id}
           parentSampleUid={data.sample_uid}
+          isNativeBorn={data.external_lims_system === 'mk1'}
           chromatograms={vialChromatograms}
           containerMode={subData?.parent.container_mode ?? false}
           onAttached={() => refreshSample(data.sample_id)}

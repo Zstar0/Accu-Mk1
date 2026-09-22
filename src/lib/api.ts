@@ -3946,6 +3946,8 @@ export interface SamplePrep {
     received_at: string | null
     priority: string
     keywords: string[]
+    /** Per live row: its service FK plus keyword. Supersedes `keywords`. */
+    analyses?: { analysis_service_id: number | null; keyword: string | null }[]
     department_id: number | null
   }
 }
@@ -4257,6 +4259,28 @@ export interface SenaiteAnalysis {
   profile_section_key?: string | null
   profile_section_label?: string | null
   profile_section_sort?: number | null
+  /** Task 6: native-born row's occupied analyte slot (mk1 origin only). */
+  slot?: number | null
+  /** Task 6: native-born row's peptide id (mk1 origin only). */
+  peptide_id?: number | null
+  /** Spec column: the active spec for this row and its verdict, resolved by
+   *  the backend with the same rule the certificate uses. Absent/null when
+   *  the service has no active spec (every SENAITE-sourced service today). */
+  specification?: AnalysisSpecification | null
+  /** true / false, or null: no result yet, a report-only spec, or a rule that
+   *  could not run. Never computed on the FE. */
+  conforms?: boolean | null
+}
+
+/** The COA wire `specification` dict (backend coa.native_sections). */
+export interface AnalysisSpecification {
+  rule_kind: 'range' | 'equals' | 'informational' | (string & {})
+  equals: string | null
+  min: number | null
+  max: number | null
+  unit: string | null
+  display: string | null
+  loq: number | null
 }
 
 export interface SenaiteAttachment {
@@ -4316,6 +4340,10 @@ export interface SenaiteLookupResult {
   registry_pk?: number | null
   /** The sample's OWN explicit priority key (null = inherit up the chain). */
   explicit_priority_key?: string | null
+  /** Task 5: which LIMS owns this sample's canonical record — 'mk1' = native-
+   *  born (Analytes card switches to Relabel-only mode); 'senaite' = legacy.
+   *  Null when unresolved. */
+  external_lims_system?: string | null
 }
 
 export interface SenaiteStatusResponse {
@@ -4538,6 +4566,64 @@ export async function uploadChromatogramToSenaite(
     throw new Error(err?.detail || `Chromatogram upload failed: ${response.status}`)
   }
   return response.json()
+}
+
+/** Native-born twin of uploadChromatogramToSenaite — no SENAITE hop. */
+export async function uploadChromatogramNative(
+  analysisId: number,
+  sampleId: string
+): Promise<{ success: boolean; message: string; filename?: string; size_bytes?: number }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/hplc/analyses/${analysisId}/chromatogram-native?sample_id=${encodeURIComponent(sampleId)}`,
+    { method: 'POST', headers: getBearerHeaders() }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    throw new Error(err?.detail || `Chromatogram upload failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+/** Decision for where a chromatogram CSV push should go. Native-born
+ *  parents (`external_lims_system === 'mk1'`) always use the native route —
+ *  their `sample_uid` is null, so this must be checked BEFORE falling back
+ *  to `sample_uid`. Legacy SENAITE-born parents need a real `sample_uid`. */
+export type ChromatogramUploadTarget =
+  | { kind: 'native' }
+  | { kind: 'senaite'; sampleUid: string }
+  | null
+
+export function chooseChromatogramUpload(data: {
+  external_lims_system?: string | null
+  sample_uid: string | null
+}): ChromatogramUploadTarget {
+  if (data.external_lims_system === 'mk1') return { kind: 'native' }
+  if (data.sample_uid) return { kind: 'senaite', sampleUid: data.sample_uid }
+  return null
+}
+
+/** Native-born twin of uploadSenaiteAttachment — no SENAITE hop. */
+export async function uploadNativeAttachment(
+  sampleId: string,
+  file: File,
+  attachmentType: SenaiteAttachmentType,
+  nativeKind?: string,
+  sourceSampleId?: string
+): Promise<SenaiteUploadAttachmentResponse> {
+  const form = new FormData()
+  form.append('file', file, file.name)
+  form.append('attachment_type', attachmentType)
+  if (nativeKind) form.append('native_kind', nativeKind)
+  if (sourceSampleId) form.append('source_sample_id', sourceSampleId)
+
+  const response = await fetch(
+    `${API_BASE_URL()}/wizard/samples/${encodeURIComponent(sampleId)}/attachments`,
+    { method: 'POST', headers: getBearerHeaders(), body: form }
+  )
+  if (!response.ok) {
+    throw new Error(`Upload failed: ${response.status}`)
+  }
+  return response.json() as Promise<SenaiteUploadAttachmentResponse>
 }
 
 export interface SenaiteFieldUpdateResponse {
@@ -5817,6 +5903,9 @@ export interface InboxAnalysisItem {
   uid: string | null
   title: string
   keyword: string | null
+  /** The row's own catalog service FK. Null on SENAITE-derived items (no Mk1
+   *  id exists for them); there the keyword is the only identity. */
+  analysis_service_id?: number | null
   peptide_name: string | null
   method: string | null
   review_state: string | null
@@ -6045,6 +6134,9 @@ export interface WorksheetListItem {
     analyses: {
       title: string
       keyword: string | null
+      /** Captured at add-time from the inbox; absent on items stored before
+       *  it was, which resolve by keyword. */
+      analysis_service_id?: number | null
       peptide_name: string | null
       method: string | null
     }[]
@@ -6135,7 +6227,7 @@ export interface AddToWorksheetPayload {
   department_id?: number
   service_group_id?: number
   date_received?: string | null
-  analyses?: { title: string; keyword?: string | null; peptide_name?: string | null; method?: string | null }[]
+  analyses?: { title: string; keyword?: string | null; analysis_service_id?: number | null; peptide_name?: string | null; method?: string | null }[]
 }
 
 export async function addGroupToWorksheet(
@@ -7141,6 +7233,24 @@ export async function updateCustomerRemarks(
   return response.json()
 }
 
+/** Add a lab-internal remark keyed by sample_id (works with no SENAITE uid,
+ *  i.e. native-born samples). */
+export async function addInternalRemark(
+  parentSampleId: string,
+  content: string,
+): Promise<{ sample_id: string }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/sub-samples/parent/${encodeURIComponent(parentSampleId)}/remarks`,
+    {
+      method: 'POST',
+      headers: { ...getBearerHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    }
+  )
+  if (!response.ok) throw new Error(await extractErrorMessage(response, 'Failed to add remark'))
+  return response.json()
+}
+
 /**
  * Phase 3: fetch lims_analyses rows for a sub-sample, projected to the
  * SenaiteAnalysis shape so AnalysisTable renders them unchanged. UIDs
@@ -7395,14 +7505,27 @@ export async function vialSourceRetest(
 export async function parentRetestAnalysis(
   sampleId: string,
   keyword: string,
-  reason?: string
+  reason?: string,
+  opts?: {
+    analysis_service_id?: number | null
+    slot?: number | null
+    /** The parent row itself (lims_analyses.id). When sent it alone
+     *  identifies the row server-side; the backend fails closed if it is
+     *  not the active parent row. */
+    parent_analysis_id?: number | null
+  }
 ): Promise<ParentRetestResponse> {
+  const body: Record<string, unknown> = { keyword }
+  if (reason) body.reason = reason
+  if (opts?.parent_analysis_id != null) body.parent_analysis_id = opts.parent_analysis_id
+  if (opts?.analysis_service_id != null) body.analysis_service_id = opts.analysis_service_id
+  if (opts?.slot != null) body.slot = opts.slot
   const response = await fetch(
     `${API_BASE_URL()}/api/lims-analyses/parent/${encodeURIComponent(sampleId)}/retest`,
     {
       method: 'POST',
       headers: getBearerHeaders('application/json'),
-      body: JSON.stringify(reason ? { keyword, reason } : { keyword }),
+      body: JSON.stringify(body),
     }
   )
   if (!response.ok) {
@@ -7411,6 +7534,45 @@ export async function parentRetestAnalysis(
     throw new Error(
       (typeof detail === 'string' ? detail : detail?.message) ||
         `parentRetestAnalysis failed: ${response.status}`
+    )
+  }
+  return response.json()
+}
+
+export interface RelabelNativeSlotResponse {
+  slot: number
+  old_peptide_id: number | null
+  new_peptide_id: number
+  restamped: number
+}
+
+/** Task 6: relabel a native-born (mk1 origin) sample's occupied analyte
+ *  slot — the native-mode sibling of replaceAnalyte (SENAITE-only). 409s
+ *  with a `{code, message}` detail when the slot is locked, the target
+ *  peptide already occupies another slot, or the peptide id doesn't exist;
+ *  404 when the slot itself isn't found. */
+export async function relabelNativeSlot(
+  sampleId: string,
+  slot: number,
+  newPeptideId: number,
+  reason?: string
+): Promise<RelabelNativeSlotResponse> {
+  const response = await fetch(
+    `${API_BASE_URL()}/api/lims-analyses/parent/${encodeURIComponent(sampleId)}/native-slots/${slot}/relabel`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify(
+        reason ? { new_peptide_id: newPeptideId, reason } : { new_peptide_id: newPeptideId }
+      ),
+    }
+  )
+  if (!response.ok) {
+    const err = await response.json().catch(() => null)
+    const detail = err?.detail
+    throw new Error(
+      (typeof detail === 'string' ? detail : detail?.message) ||
+        `relabelNativeSlot failed: ${response.status}`
     )
   }
   return response.json()

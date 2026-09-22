@@ -39,6 +39,8 @@ from lims_analyses.schemas import (
     PromoteRequest,
     PromoteResponse,
     PromotionRow,
+    RelabelNativeSlotRequest,
+    RelabelNativeSlotResponse,
     RemoveNativeAnalysisResponse,
     ResyncFromOrderResponse,
     SenaiteShapeAnalysisResponse,
@@ -318,10 +320,38 @@ def parent_retest(
             user_id=getattr(current_user, "id", None),
             reason=req.reason,
             analysis_service_id=req.analysis_service_id,
+            slot=req.slot,
+            parent_analysis_id=req.parent_analysis_id,
         )
         return ParentRetestResponse(new_row_ids=new_ids, parent_review_state=state)
     except Exception as e:
         raise _handle_service_error(e)
+
+
+@router.post("/parent/{sample_id}/native-slots/{slot}/relabel", response_model=RelabelNativeSlotResponse)
+def relabel_native_slot_route(
+    sample_id: str,
+    slot: int,
+    req: RelabelNativeSlotRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """The only sanctioned way to change a native-born sample's analyte slot
+    (spec M6). 409 native_slot_locked (not native-born / bench activity),
+    409 peptide_not_found, 409 duplicate_peptide, or 404 native_slot_not_found
+    (empty slot)."""
+    from lims_analyses.hplc_native import NativeSlotLockedError, NativeSlotNotFoundError, relabel_native_slot
+    parent = _load_parent_or_404(db, sample_id)
+    try:
+        out = relabel_native_slot(
+            db, parent=parent, slot=slot, new_peptide_id=req.new_peptide_id,
+            user_id=getattr(current_user, "id", None), reason=req.reason,
+        )
+    except NativeSlotNotFoundError as e:
+        raise HTTPException(status_code=404, detail={"code": e.code, "message": str(e)})
+    except NativeSlotLockedError as e:
+        raise HTTPException(status_code=409, detail={"code": e.code, "message": str(e)})
+    return RelabelNativeSlotResponse(**out)
 
 
 # ── Native Manage Analyses (spec 2026-08-18) ─────────────────────────────────
@@ -474,6 +504,13 @@ def transition(
             method_id=req.method_id,
             instrument_id=req.instrument_id,
         )
+        if req.kind == "submit":
+            # Native blend aggregates are calculated, never typed: a slot result
+            # entered by hand must fill/correct them exactly as Process HPLC
+            # does. No-op for every row that is not a native per-slot
+            # purity/quantity line on a vial.
+            from lims_analyses.blend_aggregates import recalc_vial_aggregates_for_row
+            recalc_vial_aggregates_for_row(db, row, getattr(current_user, "id", None))
         # side-by-side engine: schedules workflow.engine.run_cascades_bg post-response
         _schedule_sbs_cascade(background_tasks, db, row, current_user)
         return AnalysisResponse.model_validate(row)

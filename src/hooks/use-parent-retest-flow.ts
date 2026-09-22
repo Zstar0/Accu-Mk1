@@ -12,19 +12,19 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import {
   parentRetestAnalysis,
-  type ParentPromotionInfo,
   type SenaiteAnalysis,
 } from '@/lib/api'
+import { mk1RowId, type PromotionIndex } from '@/lib/promotion-index'
 import { buildBulkParentRetestImpact } from '@/lib/native-parent-analyses'
 import type { ParentRetestConfirmState } from '@/components/senaite/ParentRetestConfirmDialog'
 
 export function useParentRetestFlow({
   sampleId,
-  promotionsByKeyword,
+  promotions,
   onDone,
 }: {
   sampleId: string | null | undefined
-  promotionsByKeyword?: Map<string, ParentPromotionInfo>
+  promotions?: PromotionIndex
   /** Runs after every execution attempt (finally) — refresh/invalidate the
    *  caller's surfaces here. */
   onDone?: () => void
@@ -32,13 +32,16 @@ export function useParentRetestFlow({
   const [confirm, setConfirm] = useState<ParentRetestConfirmState | null>(null)
   const [retestPending, setRetestPending] = useState(false)
 
-  const requestRetest = (targets: SenaiteAnalysis[]) => {
-    const keywords = targets.map(a => a.keyword).filter((k): k is string => !!k)
+  const [targets, setTargets] = useState<SenaiteAnalysis[]>([])
+
+  const requestRetest = (newTargets: SenaiteAnalysis[]) => {
+    const keywords = newTargets.map(a => a.keyword).filter((k): k is string => !!k)
+    setTargets(newTargets)
     setConfirm({
-      titles: targets.map(a => a.title),
+      titles: newTargets.map(a => a.title),
       keywords,
-      impact: buildBulkParentRetestImpact(keywords, promotionsByKeyword),
-      publishedTitles: targets
+      impact: buildBulkParentRetestImpact(newTargets, promotions),
+      publishedTitles: newTargets
         .filter(a => a.review_state === 'published')
         .map(a => a.title),
     })
@@ -49,8 +52,29 @@ export function useParentRetestFlow({
     setRetestPending(true)
     try {
       let retested = 0
-      for (const keyword of confirm.keywords) {
-        const resp = await parentRetestAnalysis(sampleId, keyword)
+      for (const target of targets) {
+        if (!target.keyword) continue
+        // A canonical Mk1 parent row is addressed by ITS ID: the row the
+        // operator clicked is the row that gets retested, and the backend
+        // fails closed if that row is no longer the active one. Per-slot
+        // rows still send analysis_service_id + slot alongside. A row with
+        // no Mk1 id (SENAITE hex uid) or a non-canonical row keeps the
+        // original {keyword} body.
+        const parentAnalysisId =
+          target.provenance === 'canonical' ? mk1RowId(target.uid) : null
+        const opts = {
+          ...(parentAnalysisId != null && { parent_analysis_id: parentAnalysisId }),
+          ...(typeof target.slot === 'number' && {
+            analysis_service_id: target.analysis_service_id,
+            slot: target.slot,
+          }),
+        }
+        const resp = await parentRetestAnalysis(
+          sampleId,
+          target.keyword,
+          undefined,
+          Object.keys(opts).length > 0 ? opts : undefined
+        )
         retested += resp.new_row_ids.length
       }
       if (retested > 0) {

@@ -82,6 +82,11 @@ class SenaiteAnalysis(BaseModel):
     profile_section_key: Optional[str] = None
     profile_section_label: Optional[str] = None
     profile_section_sort: Optional[int] = None
+    # Spec column (slice 22). Mk1-local, same reason as service_origin above:
+    # the registry-details re-type drops undeclared fields. Always None on the
+    # SENAITE read path. See SenaiteShapeAnalysisResponse.
+    specification: Optional[dict] = None
+    conforms: Optional[bool] = None
 
 
 class SenaiteAttachment(BaseModel):
@@ -149,3 +154,8 @@ class RegistrySampleReadResult(SenaiteLookupResult):
     read_source: str = "mk1"
     registry_missing: bool = False
     field_sources: dict[str, str] = {}
+    # LimsSample.external_lims_system passthrough (native-born gate, HPLC
+    # slice 4 M6) — lets the frontend tell a native-born sample ("mk1") apart
+    # from a SENAITE-born one without re-deriving it from field_sources.
+    # None on the registry_missing path (no row to read it from).
+    external_lims_system: Optional[str] = None

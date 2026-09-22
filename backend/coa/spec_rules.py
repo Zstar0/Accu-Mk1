@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 # MUST stay identical to coabuilder src/coabuilder_core/logic.py:5
@@ -102,15 +102,19 @@ def sample_peptide_id(db: Session, parent_pk: int) -> Optional[int]:
     'ordered' placeholders and 'shadow' SENAITE mirror rows — stays IN the
     anchor query; over-filtering would return None for samples whose anchor
     is in fact knowable, which is exactly the coarsening R4 wants avoided
-    when it isn't necessary."""
+    when it isn't necessary. The join is always the `AnalysisService.peptide_id`
+    FK, COALESCEd behind the row's own `LimsAnalysis.peptide_id` for
+    native-born rows (spec 2026-09-10) — never a name string."""
     from models import AnalysisService, LimsAnalysis, LimsSubSample
 
+    anchor = func.coalesce(LimsAnalysis.peptide_id, AnalysisService.peptide_id)
     ids = db.execute(
-        select(AnalysisService.peptide_id)
+        select(anchor)
+        .select_from(AnalysisService)
         .join(LimsAnalysis, LimsAnalysis.analysis_service_id == AnalysisService.id)
         .outerjoin(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
         .where(
-            AnalysisService.peptide_id.is_not(None),
+            anchor.is_not(None),
             LimsAnalysis.review_state != "retracted",
             (LimsAnalysis.lims_sample_pk == parent_pk)
             | (LimsSubSample.parent_sample_pk == parent_pk),
@@ -157,3 +161,46 @@ def evaluate(spec, result: str) -> Optional[bool]:
     if spec.max_value is not None and value > float(spec.max_value):
         return False
     return True
+
+
+def display_spec_fields(db: Session, *, service_id: Optional[int],
+                        matrix: Optional[str], peptide_id: Optional[int],
+                        wire_result: Optional[str],
+                        cache: Optional[dict] = None) -> dict:
+    """`specification` + `conforms` for a row in the analyses TABLE: the same
+    resolve_spec / evaluate / wire dict the certificate is built from, so the
+    table can never disagree with the COA. Same inputs as
+    coa.legacy_rows._native_spec_fields (the row's OWN peptide_id, the WIRE
+    result, i.e. identity as the Conforms token).
+
+    The one deliberate difference: a table must render, so this is FAIL-SOFT
+    where the COA is fail-closed. A rule that cannot run (non-numeric result
+    on a range, blank equals_value) ships the spec with conforms=None; a
+    broken catalog (two active rows in one slot) ships nothing. No spec, no
+    service id: {}.
+
+    `cache` (optional dict) memoises the resolved spec per
+    (service, matrix, peptide) across the rows of one listing."""
+    if service_id is None:
+        return {}
+    key = (service_id, matrix, peptide_id)
+    if cache is not None and key in cache:
+        spec = cache[key]
+    else:
+        try:
+            spec = resolve_spec(db, service_id, matrix, peptide_id=peptide_id)
+        except Exception:  # noqa: BLE001 -- a catalog fault must not 500 the page
+            spec = None
+        if cache is not None:
+            cache[key] = spec
+    if spec is None:
+        return {}
+    from coa.native_sections import _spec_wire_dict   # local: it imports this module
+
+    conforms = None
+    if str(wire_result or "").strip():
+        try:
+            conforms = evaluate(spec, wire_result)
+        except SpecRuleError:
+            conforms = None
+    return {"specification": _spec_wire_dict(spec), "conforms": conforms}

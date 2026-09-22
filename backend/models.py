@@ -7,7 +7,7 @@ from datetime import datetime, time, date, timezone
 from decimal import Decimal
 from typing import Optional, List
 import uuid
-from sqlalchemy import String, Text, Float, Integer, BigInteger, Boolean, DateTime, Time, Date, ForeignKey, JSON, Column, Table, UniqueConstraint, CheckConstraint, Index, Numeric, text, func
+from sqlalchemy import String, Text, Float, Integer, SmallInteger, BigInteger, Boolean, DateTime, Time, Date, ForeignKey, JSON, Column, Table, UniqueConstraint, CheckConstraint, Index, Numeric, text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -1231,6 +1231,9 @@ class LimsSample(Base):
     date_sampled: Mapped[Optional[datetime]] = mapped_column(DateTime)
     date_received: Mapped[Optional[datetime]] = mapped_column(DateTime)
     is_retest: Mapped[bool] = mapped_column(Boolean, default=False)
+    # HPLC-native slice 6 (M8): sample_id of the original Mk1 row this row is
+    # a retest of, from registry signal meta RetestOfSampleId. Nullable.
+    retest_of_sample_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     assignment_role: Mapped[str] = mapped_column(String(8), nullable=False, server_default="hplc")
     # TRUE = parent is a pure report depository (container-mode families,
     # 2026-06-10-container-parent-design.md): every physical vial is a
@@ -1278,11 +1281,12 @@ class LimsSample(Base):
     date_created: Mapped[Optional[datetime]] = mapped_column(DateTime)
     verification_code: Mapped[Optional[str]] = mapped_column(String(50))
     client_order_number: Mapped[Optional[str]] = mapped_column(String(100))
-    # JSON list of {"name": str|None, "declared_quantity": str|None},
-    # POSITIONAL: index + 1 == SENAITE slot number (1-8). An empty slot below
-    # the last occupied one is a {"name": None, ...} placeholder; trailing
-    # empties are trimmed (sub_samples.service._parse_analyte_slots).
-    # peptide_name stays = slot-1 label for back-compat.
+    # JSON list of {"name": str|None, "declared_quantity": str|None,
+    # "peptide_id": int|None}, POSITIONAL: index + 1 == SENAITE slot number
+    # (1-8). An empty slot below the last occupied one is a
+    # {"name": None, ...} placeholder; trailing empties are trimmed
+    # (sub_samples.service._parse_analyte_slots). peptide_name stays =
+    # slot-1 label for back-compat.
     analytes: Mapped[Optional[str]] = mapped_column(Text)
     declared_total_quantity: Mapped[Optional[str]] = mapped_column(String(50))
     client_lot: Mapped[Optional[str]] = mapped_column(String(100))
@@ -1580,6 +1584,19 @@ class LimsNativeIdSequence(Base):
 
     prefix: Mapped[str] = mapped_column(String(8), primary_key=True)
     next_value: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+
+class LimsRegistrySignalKey(Base):
+    """Idempotency ledger for POST /s2s/lims-samples (spec 2026-09-10, M3).
+    The IS sends `Idempotency-Key: registry-{order_id}-{sample_number}`; a
+    sample_id-less (native-born) signal has no natural key, so without this a
+    Mk1-committed-but-IS-timed-out retry minted a SECOND sample. Rows are
+    write-once; replay returns the stored sample."""
+    __tablename__ = "lims_registry_signal_keys"
+
+    idempotency_key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    sample_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class LimsSubSampleAttachment(Base):
@@ -2121,6 +2138,16 @@ class LimsAnalysis(Base):
         Boolean, nullable=False, default=True, server_default="true"
     )
     reportable_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # HPLC-native (spec 2026-09-10, shape B): the analyte this row measures
+    # and its 1-based position in lims_samples.analytes. NULL on every
+    # non-HPLC row and on every legacy (SENAITE-mirror) row. The row's
+    # `title` is STAMPED per row ("BPC-157 - Purity (HPLC)") by the native
+    # seeder — never derived from the generic service title.
+    peptide_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("peptides.id", ondelete="SET NULL"), nullable=True
+    )
+    slot: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
 
     # SENAITE phase-out (parent analysis mirror): provenance discriminates a
     # promoted/native 'canonical' row from a SENAITE 'shadow' mirror row, and

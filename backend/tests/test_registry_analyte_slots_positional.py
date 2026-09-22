@@ -38,7 +38,7 @@ def test_parse_keeps_an_empty_slot_below_the_last_occupied_one():
         "BPC-157 - Identity (HPLC)",
         "TB500 (17-23 Fragment) - Identity (HPLC)",
     ]
-    assert slots[1] == {"name": None, "declared_quantity": None}
+    assert slots[1] == {"name": None, "declared_quantity": None, "peptide_id": None}
     assert slots[0]["declared_quantity"] == "50.00"
     assert slots[3]["declared_quantity"] == "10.00"
 
@@ -47,7 +47,9 @@ def test_parse_trims_trailing_empty_slots():
     from sub_samples.service import _parse_analyte_slots
 
     meta = {"Analyte1Peptide": "X", "Analyte2Peptide": None, "Analyte5Peptide": ""}
-    assert _parse_analyte_slots(meta) == [{"name": "X", "declared_quantity": None}]
+    assert _parse_analyte_slots(meta) == [
+        {"name": "X", "declared_quantity": None, "peptide_id": None}
+    ]
 
 
 def test_parse_all_empty_is_an_empty_list():
@@ -56,7 +58,7 @@ def test_parse_all_empty_is_an_empty_list():
     assert _parse_analyte_slots({"Analyte2Peptide": "", "Analyte3Peptide": None}) == []
 
 
-def test_positional_consumers_keep_the_senaite_slot_numbers():
+def test_positional_consumers_keep_the_senaite_slot_numbers(db_session):
     """The three ``Analyte{N}``-by-position readers all see slots 1, 3, 4 --
     never 1, 2, 3 -- for a blend whose slot 2 was cleared."""
     from coa.sample_meta import _analyte_slots
@@ -73,7 +75,10 @@ def test_positional_consumers_keep_the_senaite_slot_numbers():
     class _Parent:
         analytes = raw
 
-    assert set(_analyte_slots(_Parent())) == {
+    # SENAITE-born stand-in (no external_lims_system attr -> is_native_born
+    # is False), so slot_wires(db_session, ...) returns [] and _analyte_slots
+    # falls through to the raw-label path unchanged.
+    assert set(_analyte_slots(db_session, _Parent())) == {
         "Analyte1Peptide", "Analyte3Peptide", "Analyte4Peptide",
     }
     assert [a.slot_number for a in analytes_from_registry_json(raw)] == [1, 3, 4]
@@ -140,3 +145,18 @@ def test_mirror_blank_of_every_slot_clears_the_list(db_session):
     apply_senaite_fields_to_row(db_session, "U-SLOTS-3", {"Analyte1Peptide": ""})
     assert row.analytes is None
     assert row.peptide_name is None
+
+
+def test_mirror_rename_nulls_stale_peptide_id(db_session):
+    from sub_samples.service import apply_senaite_fields_to_row
+
+    row = LimsSample(sample_id="PB-SLOTS-PID", external_lims_uid="U-SLOTS-PID",
+                     analytes=json.dumps([{"name": "BPC-157", "declared_quantity": "1", "peptide_id": 11},
+                                          {"name": "TB-500", "declared_quantity": "2", "peptide_id": 22}]))
+    db_session.add(row); db_session.flush()
+    apply_senaite_fields_to_row(db_session, "U-SLOTS-PID", {"Analyte2Peptide": "GHK-Cu"})
+    assert json.loads(row.analytes)[1] == {"name": "GHK-Cu", "declared_quantity": "2", "peptide_id": None}
+    assert json.loads(row.analytes)[0]["peptide_id"] == 11
+    # same name (case/space-insensitive) keeps the id
+    apply_senaite_fields_to_row(db_session, "U-SLOTS-PID", {"Analyte1Peptide": " bpc-157 "})
+    assert json.loads(row.analytes)[0]["peptide_id"] == 11

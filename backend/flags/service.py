@@ -4,12 +4,13 @@ transaction boundary."""
 from __future__ import annotations
 
 import base64
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, event, or_, select
 from sqlalchemy.orm import Session
 
 from flags import catalog, permissions, seams, types_service
@@ -19,8 +20,59 @@ from flags.models import (
     FlagFlag, FlagLink, FlagParticipant, FlagRead,
 )
 
+log = logging.getLogger(__name__)
+
 MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 _ATTACHMENT_TOKEN = re.compile(r"\{attachment:(\d+)\}")
+
+
+@event.listens_for(Session, "after_flush_postexec")
+def _stamp_pending_flag_event_ids(session, _ctx) -> None:
+    """Fill `event_id` on staged events as soon as their FlagEvent row has an
+    id (post-flush). Lets the after_commit listener below emit without touching
+    expired row attributes.
+
+    Session-wide listener (finding 5, 2026-09-14): runs on EVERY flush in the
+    process, including ones with nothing to do with flags. A stale entry
+    whose FlagEvent row was since expunged/deleted must never raise out of
+    an unrelated flush — skip detached rows and swallow any access error."""
+    from sqlalchemy import inspect as _sa_inspect
+    try:
+        for row, event_ in session.info.get("flag_pending_events", []):
+            state = _sa_inspect(row)
+            if state.detached or state.deleted:
+                continue
+            if event_.get("event_id") is None and row.id is not None:
+                event_["event_id"] = row.id
+    except Exception:
+        log.exception("flags.stamp_pending_event_ids_failed")
+
+
+@event.listens_for(Session, "after_commit")
+def _emit_pending_flag_events_on_commit(session) -> None:
+    """Root-cause twin of the rollback listener: ANY real commit on ANY session
+    emits whatever flag events are still staged, so a commit=False
+    create_flag/change_status caller (seed_native_hplc_rows, the placeholder
+    seed under seed_parent_from_services, relabel) never has to remember to
+    call emit_pending_events after its own db.commit(). _commit_and_emit pops
+    the queue itself, so nothing is ever emitted twice. Never raises."""
+    emit_pending_events(session)
+
+
+@event.listens_for(Session, "after_rollback")
+def _clear_pending_flag_events_on_rollback(session) -> None:
+    """`db.info` lives on the Session, not the transaction, so it survives a
+    rollback untouched (verified empirically — SQLAlchemy does not clear
+    Session.info on rollback). Without this, a commit=False create_flag/
+    change_status caller (e.g. seed_native_hplc_rows(commit=False)) that
+    rolls back instead of committing would leave its staged
+    `flag_pending_events` sitting in `db.info` — and a LATER, unrelated
+    commit=True flags call in the SAME session would then emit events for
+    a write that never happened. Clear it the moment any rollback fires,
+    on any session, regardless of which code path caused it — this is a
+    session-wide listener (registered once, at import), not scoped to a
+    single call, because the pending list itself is session-scoped."""
+    session.info.pop("flag_pending_events", None)
 
 _MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 _MD_INLINE = re.compile(r"[*_`~]+")
@@ -67,25 +119,63 @@ def _audit(db, flag, actor_id, event_type, *, from_value=None, to_value=None, de
     }))
 
 
-def _commit_and_emit(db):
+def emit_pending_events(db) -> int:
+    """Pop and emit the staged flags event queue (`db.info["flag_pending_events"]`)
+    WITHOUT flushing or committing. For a commit=False create_flag/change_status
+    caller (e.g. `seed_native_hplc_rows(commit=False)` inside
+    `set_assignment_role`'s atomic seed-then-one-commit unit): call this
+    immediately after YOUR OWN `db.commit()` succeeds, so the sink still sees
+    the event exactly once, on the same session, post-commit.
+
+    Safe to call after a rollback instead of a commit: the `after_rollback`
+    listener above clears the pending list the moment the rollback fires, so
+    this is then a no-op (0 events, nothing stale re-emitted later).
+
+    Never raises: a sink failure is logged, not propagated — same "log never
+    raise" contract the seed/flag machinery around this uses throughout.
+    Returns the number of events actually emitted.
+    """
+    pending = db.info.pop("flag_pending_events", [])
+    n = 0
+    for _row, event_ in pending:
+        try:
+            seams.EVENT_SINK.emit(event_)
+            n += 1
+        except Exception:
+            log.exception("flags.emit_pending_event_failed event_type=%s flag_id=%s",
+                          event_.get("event_type"), event_.get("flag_id"))
+    return n
+
+
+def _commit_and_emit(db, *, commit: bool = True):
     """Flush to populate row ids, commit, then emit staged events in order.
 
     event_id is read after flush (ids populated) but before commit (rows not yet
     expired) so the post-commit emit needs no per-event reload. Emit is strictly
     post-commit: a rollback never reaches the sink.
+
+    `commit=False` (additive; every existing caller keeps the default) flushes
+    only, leaving the row(s) and the staged events pending in `db.info` for the
+    CALLER's own commit — for a caller that must stay inside a larger atomic
+    transaction (e.g. `seed_native_hplc_rows(commit=False)`). That caller is
+    responsible for calling `emit_pending_events(db)` itself right after its
+    own commit (see that function's docstring) — this function never leaves
+    events unemitted after a REAL commit of its own.
     """
-    pending = db.info.pop("flag_pending_events", [])
+    if not commit:
+        db.flush()
+        return
+    pending = db.info.get("flag_pending_events", [])
     db.flush()                       # populate FlagEvent.id on every staged row
-    for row, event in pending:
-        event["event_id"] = row.id
+    for row, event_ in pending:
+        event_["event_id"] = row.id
     db.commit()
-    for _row, event in pending:
-        seams.EVENT_SINK.emit(event)
+    emit_pending_events(db)
 
 
 def create_flag(db: Session, *, user, entity_type, entity_id, type, title,
                 assignee_id=None, first_comment=None, due_at=None,
-                event_details=None) -> FlagFlag:
+                event_details=None, commit: bool = True) -> FlagFlag:
     # A NULL anchor = a general task (spec §5). entity_id without an entity_type
     # is malformed. A present entity_type is either a registered code entity
     # (sample/worksheet — carries an entity_id) or a virtual item kind
@@ -142,7 +232,7 @@ def create_flag(db: Session, *, user, entity_type, entity_id, type, title,
     if first_comment:
         db.add(FlagComment(flag_id=flag.id, author_id=actor_id, body=first_comment))
         _audit(db, flag, actor_id, "commented")
-    _commit_and_emit(db)
+    _commit_and_emit(db, commit=commit)
     db.refresh(flag)
     return flag
 
@@ -752,7 +842,7 @@ def list_flag_links(db: Session, flag_id: int) -> list[FlagLink]:
         .order_by(FlagLink.created_at.asc())).scalars().all())
 
 
-def change_status(db: Session, *, user, flag_id, to_status) -> FlagFlag:
+def change_status(db: Session, *, user, flag_id, to_status, commit: bool = True) -> FlagFlag:
     from flags.errors import ConflictError
     flag = get_flag(db, flag_id)
     if not permissions.can(user, "change_status", flag):
@@ -770,7 +860,7 @@ def change_status(db: Session, *, user, flag_id, to_status) -> FlagFlag:
         flag.resolved_at = None
         flag.resolved_by = None
     _audit(db, flag, actor_id, "status_changed", from_value=from_status, to_value=to_status)
-    _commit_and_emit(db)
+    _commit_and_emit(db, commit=commit)
     db.refresh(flag)
     return flag
 

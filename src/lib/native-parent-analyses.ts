@@ -1,4 +1,5 @@
 import type { ParentPromotionInfo, SenaiteAnalysis } from './api'
+import { promotionForRow, type PromotionIndex } from './promotion-index'
 
 /** Query-key literal for the native parent analyses card, hoisted so
  *  SampleDetails.refreshSample can invalidate it — the literal used to live
@@ -27,12 +28,13 @@ export function buildParentRetestImpact(
   }
 }
 
-/** Aggregate impact for bulk retest across keywords (vial ids deduped). */
+/** Aggregate impact for bulk retest across the target ROWS (vial ids
+ *  deduped). Each row resolves its OWN promotion by id (promotion-index). */
 export function buildBulkParentRetestImpact(
-  keywords: string[],
-  promotionsByKeyword: Map<string, ParentPromotionInfo> | undefined
+  targets: Pick<SenaiteAnalysis, 'uid' | 'keyword' | 'slot'>[],
+  promotions: PromotionIndex | undefined
 ): ParentRetestImpact {
-  const per = keywords.map(k => buildParentRetestImpact(promotionsByKeyword?.get(k)))
+  const per = targets.map(t => buildParentRetestImpact(promotionForRow(promotions, t)))
   return {
     sourceCount: per.reduce((n, p) => n + p.sourceCount, 0),
     vialIds: Array.from(new Set(per.flatMap(p => p.vialIds))),
@@ -53,8 +55,16 @@ export function buildBulkParentRetestImpact(
  *  decides whether to call this at all. */
 export function resolvePromotedSourceParentState(
   rows: SenaiteAnalysis[],
-  keyword: string | null
+  keyword: string | null,
+  parentId?: number | null
 ): string | null {
+  // The vial row names its parent row by id (promoted_to_parent_id): join on
+  // that and ONLY that. On a native blend every slot shares the keyword, so
+  // keyword-newest would answer with another slot's parent; an id that is
+  // not in `rows` fails closed (null) rather than guessing.
+  if (parentId != null) {
+    return rows.find(r => r.uid === `mk1:${parentId}`)?.review_state ?? null
+  }
   const matches = rows.filter(r => r.keyword === keyword)
   return matches[matches.length - 1]?.review_state ?? null
 }
@@ -98,7 +108,8 @@ export async function resolvePromotedSourceDialogParentState(
   }
   try {
     const rows = await fetchParentRows()
-    return resolvePromotedSourceParentState(rows, analysis.keyword)
+    return resolvePromotedSourceParentState(
+      rows, analysis.keyword, analysis.promoted_to_parent_id)
   } catch {
     return null
   }

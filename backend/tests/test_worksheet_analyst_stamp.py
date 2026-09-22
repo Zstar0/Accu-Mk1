@@ -340,7 +340,8 @@ def test_restamp_unassign_clears_stamp(db_session):
 
 
 def test_senaite_shape_analyst_uses_display_name(db_session):
-    """Analyst column shows 'First Last' when set, single name with one, email when none."""
+    """Analyst column shows 'F. Last' when both names are set (Handler
+    2026-09-21), the single name with one, the email when none."""
     from lims_analyses.service import list_analyses_in_senaite_shape
 
     parent = _mk_parent(db_session)
@@ -364,7 +365,7 @@ def test_senaite_shape_analyst_uses_display_name(db_session):
 
     by_kw = {s.keyword: s for s in list_analyses_in_senaite_shape(
         db_session, host_kind="sub_sample", host_pk=sub.id)}
-    assert by_kw["K1"].analyst == "Ada Lovelace"
+    assert by_kw["K1"].analyst == "A. Lovelace"
     assert by_kw["K2"].analyst == "Grace"
     assert by_kw["K3"].analyst == "nameless@lab.test"
 

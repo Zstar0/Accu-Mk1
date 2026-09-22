@@ -207,14 +207,30 @@ def test_senaite_healthy_tee_runs_after_native(db, fake_storage):
 
 
 def test_native_born_parent_skips_tee(db, fake_storage):
+    from models import LimsSubSampleEvent
     _seed(db, status="sample_due", uid="mk1://rnf-native-1", system="mk1")
     p = patch("httpx.AsyncClient")
     cls = p.start()
+    # TestClient itself is httpx.Client-based, so the patch must only
+    # intercept calls to the relay's own URL (/explorer/samples/.../status)
+    # — anything else (the TestClient's own ASGI transport call) passes
+    # through to the real bound method.
+    _real_post = httpx.Client.post
+
+    def _relay_or_real(self, url, *args, **kwargs):
+        if "/explorer/samples/" in str(url) and str(url).endswith("/status"):
+            return httpx.Response(200, json={"status": "ok"})
+        return _real_post(self, url, *args, **kwargs)
+
+    relay_post = patch("httpx.Client.post", autospec=True, side_effect=_relay_or_real)
+    relay_post_mock = relay_post.start()
     try:
-        with patch.object(main, "SENAITE_URL", "http://senaite.test"):
+        with patch.object(main, "SENAITE_URL", "http://senaite.test"), \
+             patch("workflow.authority.sample_status_authority", return_value="mk1"):
             r = _post({"sample_uid": "mk1://rnf-native-1", "sample_id": SAMPLE_ID,
                        "image_base64": IMG_B64, "remarks": None})
     finally:
+        relay_post.stop()
         p.stop()
     body = r.json()
     assert body["success"] is True
@@ -222,6 +238,22 @@ def test_native_born_parent_skips_tee(db, fake_storage):
     row, transitions, _, _ = _native_state(db)
     assert row.status == "sample_received" and len(transitions) == 1
     assert "senaite_tee_skipped" in body["senaite_response"]["steps_done"]
+    # M8: native receive queues + flushes a status relay to IS (the flush
+    # point at the tail of the receive route) — pending event recorded by
+    # the engine hook, and httpx.Client.post called with the contract body.
+    events = db.execute(
+        select(LimsSubSampleEvent.event)
+        .where(LimsSubSampleEvent.lims_sample_pk == row.id)
+    ).scalars().all()
+    assert "native_status_relay_pending" in events
+    relay_calls = [c for c in relay_post_mock.call_args_list
+                  if "/explorer/samples/" in str(c.args[1] if len(c.args) > 1
+                                                 else c.kwargs.get("url", ""))]
+    assert len(relay_calls) == 1
+    kwargs = relay_calls[0].kwargs
+    assert kwargs["json"]["transition"] == "receive"
+    assert kwargs["json"]["event_id"].startswith(f"mk1-{SAMPLE_ID}-receive-")
+    assert kwargs["headers"]["X-API-Key"] == main.INTEGRATION_SERVICE_API_KEY
 
 
 def test_senaite_url_unset_still_receives(db, fake_storage):
@@ -279,3 +311,83 @@ def test_photo_storage_failure_fails_atomically(db):
     assert row.status == "sample_due"        # nothing half-applied
     assert row.date_received is None
     assert transitions == [] and remarks == [] and atts == []
+
+
+# ── M8 Task 3: native_auto_checkin exercised through the REAL
+# _receive_native_phase (unit tests in test_native_auto_checkin.py patch
+# that phase out; this is the one live-DB pass proving the real photo
+# fetch -> save_photo round trip and remark copy actually receive the row).
+
+class _FakeRoundTripStorage(_FakePhotoStorage):
+    """save_photo + fetch_photo back each other via an in-memory dict, so a
+    photo copied off the original can be read back for the new row."""
+    def __init__(self):
+        super().__init__()
+        self._by_key: dict[str, bytes] = {}
+
+    def save_photo(self, sample_id, photo_bytes, filename):
+        key = super().save_photo(sample_id, photo_bytes, filename)
+        self._by_key[key] = photo_bytes
+        return key
+
+    def fetch_photo(self, key: str) -> bytes:
+        return self._by_key[key]
+
+
+def test_native_auto_checkin_real_phase_copies_photo_and_remark(db):
+    from datetime import datetime
+    from models import LimsSubSampleEvent
+    from sub_samples.native_checkin import native_auto_checkin
+
+    orig_id = PFX + "ORIG"
+    new_id = PFX + "NEW"
+    orig = LimsSample(sample_id=orig_id, external_lims_uid="mk1://rnf-orig",
+                      external_lims_system="mk1", sample_type="x",
+                      status="sample_received",
+                      date_received=datetime(2026, 9, 1, 12, 0, 0))
+    db.add(orig)
+    db.commit()
+    db.refresh(orig)
+
+    fake = _FakeRoundTripStorage()
+    prev = get_storage()
+    set_storage_for_tests(fake)
+    try:
+        key = fake.save_photo(orig_id, b"orig-photo-bytes", "orig.png")
+        db.add(LimsParentAttachment(
+            lims_sample_pk=orig.id, kind="receive_image", filename="orig.png",
+            content_type="image/png", storage="s3", storage_key=key,
+        ))
+        db.add(LimsSampleRemark(
+            lims_sample_pk=orig.id, content="arrived cold", author_user_id=1,
+            created_at=orig.date_received,
+        ))
+        db.commit()
+
+        new_row = LimsSample(sample_id=new_id, external_lims_system="mk1",
+                             sample_type="x", status="sample_due",
+                             retest_of_sample_id=orig_id)
+        db.add(new_row)
+        db.commit()
+
+        with patch("workflow.authority.sample_status_authority", return_value="mk1"):
+            result = native_auto_checkin(new_id)
+    finally:
+        set_storage_for_tests(prev)
+
+    assert result["ok"] is True
+    assert result["copied_image"] is True
+    assert result["copied_remark"] is True
+
+    row, _, remarks, atts = _native_state(db, sample_id=new_id)
+    assert row.status == "sample_received" and row.date_received is not None
+    assert any(r.content == "arrived cold" for r in remarks)
+    assert any(a.kind == "receive_image" and a.storage == "s3" for a in atts)
+    events = db.execute(
+        select(LimsSubSampleEvent).where(LimsSubSampleEvent.lims_sample_pk == row.id)
+    ).scalars().all()
+    checkin_events = [e for e in events if e.event == "native_auto_checkin"]
+    assert len(checkin_events) == 1
+    assert checkin_events[0].details["original"] == orig_id
+    assert checkin_events[0].details["copied_image"] is True
+    assert checkin_events[0].details["copied_remark"] is True

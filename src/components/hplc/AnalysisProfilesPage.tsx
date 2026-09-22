@@ -24,6 +24,7 @@ import { Label } from '@/components/ui/label'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
+import { COA_ARCHETYPE_OPTIONS } from './coa-archetype-options'
 import {
   Table,
   TableBody,
@@ -1031,10 +1032,13 @@ export default function AnalysisProfilesPage() {
                                   Certificate reporting
                                 </div>
                                 <div>
-                                  <span className="font-semibold">Not reported</span> — internal-only; never appears on the COA.
+                                  <span className="font-semibold">Legacy</span> — results render in the certificate&apos;s page-1 HPLC design.
                                 </div>
                                 <div>
-                                  <span className="font-semibold">Limit table</span> — renders as Test / Result / Unit / Specification / Verdict on the certificate.
+                                  <span className="font-semibold">Limit table</span> — results render as a page-2 section (Test / Result / Unit / Specification / Verdict).
+                                </div>
+                                <div>
+                                  <span className="font-semibold">Not reported</span> — internal only.
                                 </div>
                               </div>
                             </TooltipContent>
@@ -1051,8 +1055,11 @@ export default function AnalysisProfilesPage() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="none">Not reported</SelectItem>
-                          <SelectItem value="limit_table">Limit table</SelectItem>
+                          {COA_ARCHETYPE_OPTIONS.map(opt => (
+                            <SelectItem key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                     </div>

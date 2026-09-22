@@ -60,6 +60,23 @@ export interface OrderSlaVerdict {
 }
 
 /**
+ * The catalog service behind an analysis row: the row's OWN service FK first.
+ * Keyword -> service (buildKeywordToServiceIdMap) is last-writer-wins when two
+ * services share a keyword across origins, so it is only the fallback for a
+ * row that has no FK (SENAITE-sourced). Every resolver below goes through
+ * this, so they cannot disagree about which service a row belongs to.
+ */
+export function serviceIdOfAnalysis(
+  a: { analysis_service_id?: number | null; keyword?: string | null },
+  keywordToServiceId: Map<string, number>
+): number | undefined {
+  return (
+    a.analysis_service_id ??
+    (a.keyword ? keywordToServiceId.get(a.keyword) : undefined)
+  )
+}
+
+/**
  * Build keyword → analysis_services.id map from the local /analysis-services
  * response. Services with no keyword are skipped (they can't be matched against
  * SENAITE analysis keywords).
@@ -173,7 +190,7 @@ export function resolveSampleTier(
     let tightestProfile: ServiceProfileTier | null = null
     for (const a of inputs.analyses) {
       if (!a.keyword) continue
-      const svcId = keywordToServiceId.get(a.keyword)
+      const svcId = serviceIdOfAnalysis(a, keywordToServiceId)
       if (svcId == null) continue
       const candidate = serviceToProfileTier.get(svcId)
       if (!candidate) continue
@@ -187,7 +204,7 @@ export function resolveSampleTier(
   let tightest: SlaTier | null = null
   for (const a of inputs.analyses) {
     if (!a.keyword) continue
-    const svcId = keywordToServiceId.get(a.keyword)
+    const svcId = serviceIdOfAnalysis(a, keywordToServiceId)
     if (svcId == null) continue
     const groupTier = serviceToGroupTier.get(svcId)
     if (!groupTier) continue
@@ -280,7 +297,7 @@ export function resolveSampleTierWithReason(
   let tightestProfile: ServiceProfileTier | null = null
   for (const a of inputs.analyses) {
     if (!a.keyword) continue
-    const svcId = keywordToServiceId.get(a.keyword)
+    const svcId = serviceIdOfAnalysis(a, keywordToServiceId)
     if (svcId == null) {
       unmappedKeywords.push(a.keyword)
       continue
@@ -596,7 +613,7 @@ export function resolveSampleTiersByGroup(
   const profileBuckets = new Map<ProfileBucketKey, ServiceProfileTier>()
   for (const a of inputs.analyses) {
     if (!a.keyword) continue
-    const svcId = keywordToServiceId.get(a.keyword)
+    const svcId = serviceIdOfAnalysis(a, keywordToServiceId)
     if (svcId == null) {
       const arr = bucketKeywords.get(NO_GROUP_KEY) ?? []
       arr.push(a.keyword)

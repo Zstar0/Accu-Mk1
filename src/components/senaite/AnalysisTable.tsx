@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, Fragment, type ReactNode } from 'react'
-import { Activity, ArrowDownUp, ArrowUpDown, Check, ChevronDown, ChevronRight, Database, HelpCircle, Layers, Lock, MoreHorizontal, Pencil, Wrench, X } from 'lucide-react'
+import { Activity, ArrowDownUp, ArrowUpDown, Calculator, Check, ChevronDown, ChevronRight, HelpCircle, Layers, Lock, MoreHorizontal, Pencil, Wrench, X } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
@@ -31,22 +31,23 @@ import {
 } from '@/components/ui/dialog'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import type { SenaiteAnalysis, InboxPriority, ParentPromotionInfo } from '@/lib/api'
+import type { SenaiteAnalysis } from '@/lib/api'
+import { promotionForRow, type PromotionIndex } from '@/lib/promotion-index'
 import { setAnalysisMethodInstrument, promoteAnalyses, getMethods } from '@/lib/api'
 import { SetMethodInstrumentDialog } from '@/components/senaite/SetMethodInstrumentDialog'
-import type { VialAssignment } from '@/lib/vial-assignment'
+import { vialAssignmentKey, type VialAssignment } from '@/lib/vial-assignment'
 import { ROLE_COLOR_TEXT, roleColorForCode } from '@/lib/role-display'
 import { useVialRoles, type VialRoleRow } from '@/services/vial-roles'
 import { useDepartments, type Department } from '@/services/departments'
 import { PromotedFromBadge } from '@/components/senaite/PromotedFromBadge'
-import type { SampleSlaSnapshot } from '@/services/order-sla'
-import { AnalysisSlaCell } from '@/components/senaite/AnalysisSlaCell'
+import { AnalysisSpecCell } from '@/components/senaite/AnalysisSpecCell'
 import { formatNumericResult } from '@/components/senaite/senaite-utils'
 import { useAnalysisEditing, type UseAnalysisEditingReturn } from '@/hooks/use-analysis-editing'
 import { useAnalysisTransition, type UseAnalysisTransitionReturn } from '@/hooks/use-analysis-transition'
 import { useBulkAnalysisTransition } from '@/hooks/use-bulk-analysis-transition'
 import { useSidebar } from '@/components/ui/sidebar'
 import { useUIStore } from '@/store/ui-store'
+import { AnalysisServiceLink } from '@/components/senaite/AnalysisServiceLink'
 
 // --- Status styling constants ---
 
@@ -373,12 +374,25 @@ export function isPromoted(a: SenaiteAnalysis): boolean {
  * cascades down). The states map is optional so existing callers that don't
  * have parent context are unaffected.
  */
+/** Key of one entry in the parent lock map. A native per-slot row is
+ *  identified by (service, slot): a blend carries one HPLC-PURITY parent row
+ *  PER slot, so a keyword key let one verified slot lock every other slot's
+ *  vial rows. Slot-less rows keep the bare keyword.
+ *  Twin: parent_line_state_key in backend/lims_analyses/service.py. */
+export function parentLineStateKey(
+  a: Pick<SenaiteAnalysis, 'keyword' | 'analysis_service_id' | 'slot'>,
+): string {
+  return a.slot != null && a.analysis_service_id != null
+    ? `svc:${a.analysis_service_id}:${a.slot}`
+    : (a.keyword ?? '')
+}
+
 export function isLockedByParent(
   a: SenaiteAnalysis,
   parentLineStates?: Record<string, string>,
 ): boolean {
   if (!parentLineStates) return false
-  return parentLineStates[a.keyword ?? ''] === 'verified'
+  return parentLineStates[parentLineStateKey(a)] === 'verified'
 }
 
 /** Row-menu transitions: submit needs a result; verify is hidden when Promote
@@ -562,13 +576,17 @@ export function deriveBulkPromoteBlockers(selected: SenaiteAnalysis[]): string[]
       `${noKeyword.length} selected ${noKeyword.length === 1 ? 'analysis has' : 'analyses have'} no keyword`,
     )
   }
+  // Parent-row identity is (keyword, slot), the same key promote_to_parent
+  // supersedes on: a native blend carries one HPLC-PURITY row PER SLOT, and
+  // those are distinct parent rows, not duplicates. Slot-less rows key on 0.
   const seen = new Set<string>()
   const dups = new Set<string>()
   for (const a of selected) {
     const k = a.keyword
     if (!k) continue
-    if (seen.has(k)) dups.add(k)
-    seen.add(k)
+    const id = `${k}#${a.slot ?? 0}`
+    if (seen.has(id)) dups.add(k)
+    seen.add(id)
   }
   if (dups.size > 0) {
     blockers.push(
@@ -659,34 +677,7 @@ function TabButton({
   )
 }
 
-function formatDate(dateStr: string | null | undefined): string {
-  if (!dateStr) return '\u2014'
-  const d = new Date(dateStr)
-  if (isNaN(d.getTime())) return dateStr
-  return d.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: '2-digit',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
-}
-
 /** Replace "Analyte N" prefix with the mapped peptide name when available. */
-/**
- * Marks analysis line items served from a Mk1 lims_analyses row (uid prefixed
- * "mk1:") versus a legacy SENAITE analysis (32-char hex uid). A transition-era
- * cue while both data sources coexist; renders nothing for SENAITE rows.
- */
-export function Mk1NativeBadge({ uid }: { uid?: string | null }) {
-  if (!uid?.startsWith('mk1:')) return null
-  return (
-    <span title="Stored in Accu-Mk1 (no SENAITE record)" className="inline-flex shrink-0">
-      <Database size={10} className="text-muted-foreground/60" aria-label="Stored in Accu-Mk1" />
-    </span>
-  )
-}
-
 export function formatAnalysisTitle(title: string, nameMap: Map<number, string>): { display: string; original: string } {
   const match = title.match(/^Analyte\s+(\d)\s*(.*)/i)
   if (match?.[1]) {
@@ -734,6 +725,33 @@ function resolveResultLabel(result: string | null, options: SenaiteAnalysis['res
 }
 
 /** Maps stored identity result values to human-readable labels. */
+/**
+ * The LEGACY identity convention, or null when it does not apply.
+ *
+ * A SENAITE-era "<Peptide> - Identity (HPLC)" line has no result options; its
+ * dropdown says "Conforms" but SAVES the peptide name, and conformance is a
+ * name match. This returns that peptide name so the cell can offer it.
+ *
+ * A NATIVE identity row (service_origin 'mk1') carries its own catalog options
+ * (Conforms / Does Not Conform) and its spec is `equals "Conforms"`. Its
+ * stamped title has the same "- Identity (HPLC)" shape, so without this guard
+ * the legacy branch won and "Conforms" silently saved the peptide name
+ * (PB-1002, P-5007): COABuilder still passed it by name match, but Mk1's own
+ * verdict read Does Not Conform. For those rows the catalog options own the
+ * vocabulary, so the legacy convention stands down.
+ */
+export function legacyIdentityConformsValue(
+  analysis: Pick<SenaiteAnalysis, 'service_origin' | 'result_options'>,
+  display: string,
+): string | null {
+  if (analysis.service_origin === 'mk1' && (analysis.result_options ?? []).length > 0) {
+    return null
+  }
+  return /Identity\s*\(HPLC\)/i.test(display)
+    ? (display.match(/^(.+?)\s*[-–]\s*Identity\s*\(HPLC\)/i)?.[1]?.trim() ?? null)
+    : null
+}
+
 function resolveIdentityLabel(result: string | null, conformsValue: string): string | null {
   if (!result) return null
   if (result === conformsValue) return 'Conforms'
@@ -741,11 +759,56 @@ function resolveIdentityLabel(result: string | null, conformsValue: string): str
   return result
 }
 
+/** Native blend aggregates are CALCULATED by Mk1 from the peptide rows, never
+ *  typed (backend/lims_analyses/blend_aggregates.py). Typed by hand on PB-1002
+ *  they drifted from what the COA recomputes. Twin: hplc_native.AGGREGATES. */
+const CALCULATED_AGGREGATES: Record<string, { label: string; formula: string }> = {
+  'HPLC-BLEND-TOTAL': {
+    label: 'Blend total quantity',
+    formula: 'Sum of every peptide\u2019s quantity',
+  },
+  'HPLC-BLEND-PURITY': {
+    label: 'Blend purity',
+    formula: 'Quantity-weighted average of every peptide\u2019s purity',
+  },
+}
+
+export function calculatedAggregateInfo(
+  a: Pick<SenaiteAnalysis, 'service_origin' | 'keyword'>,
+): { label: string; formula: string } | null {
+  if (a.service_origin !== 'mk1') return null
+  return CALCULATED_AGGREGATES[(a.keyword ?? '').toUpperCase()] ?? null
+}
+
+/** Pure hover card for a calculated row (rich-tooltip pattern). */
+export function CalculatedAggregateTooltip({
+  info,
+  hasValue,
+}: {
+  info: { label: string; formula: string }
+  hasValue: boolean
+}) {
+  return (
+    <div data-testid="calculated-aggregate-tooltip" className="flex flex-col gap-1.5 p-3 text-xs font-mono">
+      <div className="flex items-center gap-1.5 font-semibold border-b border-primary-foreground/20 pb-1.5">
+        <Calculator size={12} className="shrink-0" />
+        <span>Calculated: {info.label}</span>
+      </div>
+      <div>{info.formula}</div>
+      <div className="border-t border-primary-foreground/20 pt-1.5 opacity-70">
+        {hasValue
+          ? 'Updates by itself when a peptide result changes. It is still promoted and verified like any other row.'
+          : 'Fills in once every peptide has both a purity and a quantity.'}
+      </div>
+    </div>
+  )
+}
+
 function EditableResultCell({
   analysis,
   editing,
   conformsValue = null,
-  readOnly = false,
+  readOnly: readOnlyProp = false,
 }: {
   analysis: SenaiteAnalysis
   editing: UseAnalysisEditingReturn
@@ -756,6 +819,9 @@ function EditableResultCell({
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const selectRef = useRef<HTMLSelectElement>(null)
+  const calculated = calculatedAggregateInfo(analysis)
+  // A calculated row is never editable, whatever the caller allows.
+  const readOnly = readOnlyProp || calculated != null
   const isEditing = !readOnly && editing.editingUid === analysis.uid
   const canEdit = !readOnly && isResultEditable(analysis)
   // autoEdit: always show input when there's no result yet (no click needed)
@@ -986,6 +1052,21 @@ function EditableResultCell({
       {analysis.unit && analysis.unit.toLowerCase() !== 'text' && (
         <span className="text-xs text-muted-foreground ml-1.5">{analysis.unit}</span>
       )}
+      {calculated && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              className="ml-1.5 inline-flex align-middle text-muted-foreground/60 hover:text-foreground transition-colors"
+              aria-label={`${calculated.label} is calculated`}
+            >
+              <Calculator size={12} />
+            </span>
+          </TooltipTrigger>
+          <TooltipContent className="p-0 max-w-xs">
+            <CalculatedAggregateTooltip info={calculated} hasValue={!!displayLabel} />
+          </TooltipContent>
+        </Tooltip>
+      )}
     </td>
   )
 }
@@ -1153,9 +1234,7 @@ function HistoryRow({
 }) {
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
   const wasRenamed = display !== original
-  const conformsValue = /Identity\s*\(HPLC\)/i.test(display)
-    ? (display.match(/^(.+?)\s*[-–]\s*Identity\s*\(HPLC\)/i)?.[1]?.trim() ?? null)
-    : null
+  const conformsValue = legacyIdentityConformsValue(analysis, display)
   const resultLabel = conformsValue
     ? resolveIdentityLabel(analysis.result, conformsValue)
     : resolveResultLabel(analysis.result, analysis.result_options ?? [])
@@ -1197,9 +1276,8 @@ function HistoryRow({
           Superseded
         </span>
       </td>
-      <td className="py-1.5 px-3" />
-      <td className="py-1.5 px-3 text-xs text-muted-foreground/60 whitespace-nowrap">
-        {formatDate(analysis.captured)}
+      <td className="py-1.5 px-3">
+        <AnalysisSpecCell analysis={analysis} faded />
       </td>
       <td className="py-1.5 px-3" />
     </tr>
@@ -1331,7 +1409,7 @@ export function BulkPromoteDialog({
           promoted++
         } catch (e) {
           failed++
-          toast.error(`${a.keyword ?? a.title}: ${(e as Error).message}`)
+          toast.error(`${a.slot != null ? a.title : (a.keyword ?? a.title)}: ${(e as Error).message}`)
         }
       }
     } finally {
@@ -1359,7 +1437,8 @@ export function BulkPromoteDialog({
             <tbody>
               {analyses.map(a => (
                 <tr key={a.uid} className="border-b border-border/50">
-                  <td className="py-1.5 pr-3 font-medium">{a.keyword ?? a.title}</td>
+                  {/* Per-slot native rows share a keyword; their stamped title tells them apart. */}
+                  <td className="py-1.5 pr-3 font-medium">{a.slot != null ? a.title : (a.keyword ?? a.title)}</td>
                   <td className="py-1.5 font-mono">{a.result ?? '—'}</td>
                 </tr>
               ))}
@@ -1401,14 +1480,9 @@ function AnalysisRow({
   onToggleHistory,
   onMethodInstrumentSaved,
   onPromoted,
-  slaSnapshot,
-  isSlaLoading,
-  isSlaError,
-  isSlaPublished,
-  slaPriority,
   primaryAnalysisUids,
   primaryRole,
-  promotionsByKeyword,
+  promotions,
   vialAssignmentByKeyword,
   onVialMethodInstrumentSaved,
   parentLineStates,
@@ -1435,14 +1509,9 @@ function AnalysisRow({
   onToggleHistory?: () => void
   onMethodInstrumentSaved?: (uid: string, field: 'method' | 'instrument', newUid: string | null, newTitle: string | null) => void
   onPromoted?: () => void
-  slaSnapshot: SampleSlaSnapshot | null
-  isSlaLoading: boolean
-  isSlaError: boolean
-  isSlaPublished: boolean
-  slaPriority: InboxPriority | null
   primaryAnalysisUids?: Set<string>
   primaryRole?: string | null
-  promotionsByKeyword?: Map<string, ParentPromotionInfo>
+  promotions?: PromotionIndex
   vialAssignmentByKeyword?: Map<string, VialAssignment>
   onVialMethodInstrumentSaved?: () => void
   parentLineStates?: Record<string, string>
@@ -1471,9 +1540,7 @@ function AnalysisRow({
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
   const wasRenamed = display !== original
-  const conformsValue = /Identity\s*\(HPLC\)/i.test(display)
-    ? (display.match(/^(.+?)\s*[-–]\s*Identity\s*\(HPLC\)/i)?.[1]?.trim() ?? null)
-    : null
+  const conformsValue = legacyIdentityConformsValue(analysis, display)
   // Phase 4b promote affordance — see isPromotable; verify is hidden on
   // promotable rows via visibleRowTransitions.
   const locked = isLockedByParent(analysis, parentLineStates)
@@ -1506,7 +1573,7 @@ function AnalysisRow({
   const canVarVerify = verbPolicy !== 'parent-native' && canVarianceVerify(analysis, vialKind)
   const isPromoted = analysis.promoted_to_parent_id != null
   const tooltipCopy = promotedRowTooltipCopy(isPromoted, promotedSourceRetestSeam)
-  const vialAssign = analysis.keyword ? vialAssignmentByKeyword?.get(analysis.keyword) : undefined
+  const vialAssign = vialAssignmentByKeyword?.get(vialAssignmentKey(analysis))
   const vialOverlay = vialAssign?.matches[0]?.mk1Analysis ?? null
   const vialOverlayEditable = vialAssign?.editable ?? false
   const [promoteOpen, setPromoteOpen] = useState(false)
@@ -1592,13 +1659,13 @@ function AnalysisRow({
               </span>
             )}
           </span>
-          <Mk1NativeBadge uid={analysis.uid} />
-          <PromotedFromBadge promotion={analysis.keyword ? promotionsByKeyword?.get(analysis.keyword) : undefined} />
+          <AnalysisServiceLink analysis={analysis} />
+          <PromotedFromBadge promotion={promotionForRow(promotions, analysis)} />
           {vialAssign && vialAssign.matches.filter(m => {
             // The "from <vial>" promotion badge above already names the
             // source vial — drop its duplicate assignment chip and keep
             // only the OTHER vials (e.g. the variance replicate).
-            const promo = analysis.keyword ? promotionsByKeyword?.get(analysis.keyword) : undefined
+            const promo = promotionForRow(promotions, analysis)
             return !promo?.sources?.some(s => s.sample_id === m.vialSampleId)
           }).map(m => {
             // Key each overlay vial by ITS OWN assignment_kind (carried on the
@@ -1753,16 +1820,7 @@ function AnalysisRow({
         </div>
       </td>
       <td className="py-2.5 px-3">
-        <AnalysisSlaCell
-          snapshot={slaSnapshot}
-          priority={slaPriority}
-          isLoading={isSlaLoading}
-          isError={isSlaError}
-          isPublished={isSlaPublished}
-        />
-      </td>
-      <td className="py-2.5 px-3 text-xs text-muted-foreground whitespace-nowrap">
-        {formatDate(analysis.captured)}
+        <AnalysisSpecCell analysis={analysis} />
       </td>
       <td className="py-2 px-3 text-right">
         {analysis.uid && (allowedTransitions.length > 0 || canPromote || canVarVerify || showSetMethodInstrument) && (
@@ -1894,7 +1952,7 @@ function AnalystNames({ prepper, processedBy }: { prepper: string | null; proces
   )
 }
 
-type SortColumn = 'title' | 'result' | 'review_state' | 'analyst' | 'method' | 'instrument' | 'captured' | 'sla'
+type SortColumn = 'title' | 'result' | 'review_state' | 'analyst' | 'method' | 'instrument' | 'spec'
 type SortDir = 'asc' | 'desc'
 
 interface SortConfig { column: SortColumn; dir: SortDir }
@@ -1926,38 +1984,12 @@ function SortableHeader({
   )
 }
 
-function getSlaSortValue(
-  a: SenaiteAnalysis,
-  analysisSlaMap: Map<string, SampleSlaSnapshot> | undefined,
-  isPublished: boolean
-): number {
-  if (!analysisSlaMap || !a.keyword) return Number.POSITIVE_INFINITY
-  const snap = analysisSlaMap.get(a.keyword)
-  if (!snap) return Number.POSITIVE_INFINITY
-  return isPublished ? snap.status.elapsed_minutes : snap.status.remaining_minutes
-}
-
 function sortGroups(
   groups: AnalysisGroup[],
   config: SortConfig,
-  nameMap: Map<number, string>,
-  analysisSlaMap: Map<string, SampleSlaSnapshot> | undefined,
-  isPublished: boolean
+  nameMap: Map<number, string>
 ): AnalysisGroup[] {
   return [...groups].sort((a, b) => {
-    if (config.column === 'sla') {
-      const aVal = getSlaSortValue(a.current, analysisSlaMap, isPublished)
-      const bVal = getSlaSortValue(b.current, analysisSlaMap, isPublished)
-      // Missing-data rows (POSITIVE_INFINITY sentinel) always sort to the
-      // bottom regardless of direction — per spec.
-      const aMissing = !Number.isFinite(aVal)
-      const bMissing = !Number.isFinite(bVal)
-      if (aMissing && bMissing) return 0
-      if (aMissing) return 1
-      if (bMissing) return -1
-      const cmp = aVal - bVal
-      return config.dir === 'asc' ? cmp : -cmp
-    }
     const aVal = getCellValue(a.current, config.column, nameMap)
     const bVal = getCellValue(b.current, config.column, nameMap)
     const cmp = aVal.localeCompare(bVal, undefined, { numeric: true, sensitivity: 'base' })
@@ -1965,7 +1997,7 @@ function sortGroups(
   })
 }
 
-function getCellValue(a: SenaiteAnalysis, col: Exclude<SortColumn, 'sla'>, nameMap: Map<number, string>): string {
+function getCellValue(a: SenaiteAnalysis, col: SortColumn, nameMap: Map<number, string>): string {
   switch (col) {
     case 'title': return formatAnalysisTitle(a.title, nameMap).display
     case 'result': return a.result ?? ''
@@ -1973,7 +2005,10 @@ function getCellValue(a: SenaiteAnalysis, col: Exclude<SortColumn, 'sla'>, nameM
     case 'analyst': return a.analyst ?? ''
     case 'method': return a.method ?? ''
     case 'instrument': return a.instrument ?? ''
-    case 'captured': return a.captured ?? ''
+    // Failures first, then unjudged rows, then passes; no spec last.
+    case 'spec':
+      if (!a.specification) return '3'
+      return a.conforms === false ? '0' : a.conforms == null ? '1' : '2'
   }
 }
 
@@ -1985,11 +2020,6 @@ interface AnalysisTableProps {
   onResultSaved?: (uid: string, newResult: string, newReviewState: string | null) => void
   onTransitionComplete?: () => void
   onMethodInstrumentSaved?: (uid: string, field: 'method' | 'instrument', newUid: string | null, newTitle: string | null) => void
-  analysisSlaMap?: Map<string, SampleSlaSnapshot>
-  isAnalysisSlaLoading?: boolean
-  isAnalysisSlaError?: boolean
-  isAnalysisSlaPublished?: boolean
-  analysisSlaPriority?: InboxPriority | null
   /**
    * UIDs of analyses that are "primary" for the viewing sample's vial-
    * assignment role. Used to tint the analysis title — does NOT filter
@@ -2004,11 +2034,12 @@ interface AnalysisTableProps {
    */
   primaryRole?: string | null
   /**
-   * Promotion provenance map for parent pages — keyword → ParentPromotionInfo.
-   * When provided, matching analysis rows render a "from <sub-sample>" badge.
+   * Promotion provenance for parent pages, joined to each row by id (see
+   * lib/promotion-index). When provided, a promoted row renders a
+   * "from <sub-sample>" badge.
    * Omit (undefined) on sub-sample pages; no behavior change for existing callers.
    */
-  promotionsByKeyword?: Map<string, ParentPromotionInfo>
+  promotions?: PromotionIndex
   /**
    * Parent-page vial assignment overlay — keyword → VialAssignment. When a row's
    * keyword maps here, the row shows an inline assigned-vial link and overlays
@@ -2079,14 +2110,9 @@ export function AnalysisTable({
   onResultSaved,
   onTransitionComplete,
   onMethodInstrumentSaved,
-  analysisSlaMap,
-  isAnalysisSlaLoading = false,
-  isAnalysisSlaError = false,
-  isAnalysisSlaPublished = false,
-  analysisSlaPriority = null,
   primaryAnalysisUids,
   primaryRole,
-  promotionsByKeyword,
+  promotions,
   vialAssignmentByKeyword,
   onVialMethodInstrumentSaved,
   parentLineStates,
@@ -2170,7 +2196,7 @@ export function AnalysisTable({
   // Group filtered analyses by title so retest chains collapse
   const rawGroups = groupAnalysesByTitle(filteredAnalyses)
   const groups = sortConfig
-    ? sortGroups(rawGroups, sortConfig, analyteNameMap, analysisSlaMap, isAnalysisSlaPublished)
+    ? sortGroups(rawGroups, sortConfig, analyteNameMap)
     : rawGroups
 
   // Profile sections (mk1 rows only — backend-resolved profile_section_*
@@ -2436,8 +2462,7 @@ export function AnalysisTable({
               <SortableHeader column="instrument" label="Instrument" sortConfig={sortConfig} onSort={handleSort} />
               <SortableHeader column="analyst" label="Analyst" sortConfig={sortConfig} onSort={handleSort} />
               <SortableHeader column="review_state" label="Status" sortConfig={sortConfig} onSort={handleSort} />
-              <SortableHeader column="sla" label="SLA" sortConfig={sortConfig} onSort={handleSort} />
-              <SortableHeader column="captured" label="Captured" sortConfig={sortConfig} onSort={handleSort} />
+              <SortableHeader column="spec" label="Spec" sortConfig={sortConfig} onSort={handleSort} />
               <th className="py-2 px-3 text-right text-[11px] font-semibold text-muted-foreground uppercase tracking-wider w-12">
                 <span className="sr-only">Actions</span>
               </th>
@@ -2450,7 +2475,7 @@ export function AnalysisTable({
                   {section.label != null && (
                     <tr>
                       <td
-                        colSpan={11}
+                        colSpan={10}
                         className="pt-3 pb-1.5 px-3 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider border-b border-border/50"
                       >
                         {section.label}
@@ -2477,18 +2502,9 @@ export function AnalysisTable({
                       onToggleHistory={() => toggleGroup(groupKey)}
                       onMethodInstrumentSaved={onMethodInstrumentSaved}
                       onPromoted={onTransitionComplete}
-                      slaSnapshot={
-                        analysisSlaMap && group.current.keyword
-                          ? analysisSlaMap.get(group.current.keyword) ?? null
-                          : null
-                      }
-                      isSlaLoading={isAnalysisSlaLoading}
-                      isSlaError={isAnalysisSlaError}
-                      isSlaPublished={isAnalysisSlaPublished}
-                      slaPriority={analysisSlaPriority}
                       primaryAnalysisUids={primaryAnalysisUids}
                       primaryRole={primaryRole}
-                      promotionsByKeyword={promotionsByKeyword}
+                      promotions={promotions}
                       vialAssignmentByKeyword={vialAssignmentByKeyword}
                       onVialMethodInstrumentSaved={onVialMethodInstrumentSaved}
                       parentLineStates={parentLineStates}
@@ -2514,7 +2530,7 @@ export function AnalysisTable({
             ) : (
               <tr>
                 <td
-                  colSpan={11}
+                  colSpan={10}
                   className="py-8 text-center text-sm text-muted-foreground"
                 >
                   No {analysisFilter === 'all' ? '' : analysisFilter} analyses found

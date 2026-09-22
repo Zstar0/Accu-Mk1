@@ -92,6 +92,7 @@ export function AddSamplesModal({
         analyses: slot.analyses.map(a => ({
           title: a.title,
           keyword: a.keyword,
+          analysis_service_id: a.analysis_service_id,
           peptide_name: a.peptide_name,
           method: a.method,
         })),

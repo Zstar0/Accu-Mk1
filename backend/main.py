@@ -1077,6 +1077,26 @@ def _activity_bucket_label(kind, role):
     return role
 
 
+def parent_retest_activity_label(d: dict) -> str:
+    """Sample activity feed wording for a `parent_analysis_retested` event.
+
+    A retest of an already PUBLISHED result is called out as such (Handler
+    2026-09-21: allowed, but it must be visible in the activity log and the COA
+    has to be published again): it names the figure that stays on the
+    certificate in the meantime. A per-slot native line is named by its title,
+    because a blend's slots share one keyword; every other line keeps the
+    keyword wording it always had."""
+    n = len(d.get("source_row_ids") or [])
+    srcs = f"{n} source{'s' if n != 1 else ''}"
+    name = (d.get("title") if d.get("slot") is not None else None) or d.get("keyword", "?")
+    if d.get("parent_review_state_at_retest") == "published":
+        shown = " ".join(str(x) for x in (d.get("value_at_retest"), d.get("unit_at_retest")) if x)
+        kept = f"published value {shown} stays" if shown else "published value stays"
+        return (f"{name} retested AFTER PUBLISH: {kept} on the certificate "
+                f"until the retest is promoted. Re-publish required. ({srcs})")
+    return f"{name} retested (parent) \u2014 {srcs}"
+
+
 @app.get("/samples/{sample_id}/activity")
 async def get_sample_activity(
     sample_id: str,
@@ -1617,11 +1637,7 @@ async def get_sample_activity(
             if se.event == "parent_analysis_verified":
                 label = f"{d.get('keyword', '?')} verified (parent)"
             elif se.event == "parent_analysis_retested":
-                n = len(d.get("source_row_ids") or [])
-                label = (
-                    f"{d.get('keyword', '?')} retested (parent) — "
-                    f"{n} source{'s' if n != 1 else ''}"
-                )
+                label = parent_retest_activity_label(d)
             elif se.event == "native_profile_added":
                 hosts = d.get("hosts") or []
                 n = sum(int(h.get("vial_rows_created") or 0) for h in hosts)
@@ -2996,11 +3012,14 @@ class RideHostsRequest(BaseModel):
 _RIDE_HOST_FORBIDDEN = {"endo", "ster", "xtra"}
 
 
-# Only legal non-NULL coa_archetype today. NULL = profile is not reported on
-# the certificate (a legitimate internal-only test); validated at the route
-# edge rather than a DB CHECK constraint so a second archetype is a one-line
-# addition here.
-COA_ARCHETYPES = {"limit_table"}
+# Only legal non-NULL coa_archetype values today. NULL = profile is not
+# reported on the certificate (a legitimate internal-only test); validated at
+# the route edge rather than a DB CHECK constraint so a new archetype is a
+# one-line addition here. legacy_hplc is owned by coa/hplc_shim.py (slice 8)
+# so the seed, legacy_rows, native_sections and this route share one literal.
+from coa.hplc_shim import LEGACY_HPLC_ARCHETYPE
+
+COA_ARCHETYPES = {"limit_table", LEGACY_HPLC_ARCHETYPE}
 
 # S9 Task 2: the POST/PATCH route guard that reserved hplc/endo/ster for the
 # five legacy-key profiles retired WITH Task 1's flip (its only justification
@@ -6624,6 +6643,25 @@ async def refetch_chromatogram_data(
     }
 
 
+def _lims_sample_for_attachment(db, *, sample_uid: str | None,
+                                sample_id: str | None):
+    """Same uid-then-sample_id resolution `_capture_parent_attachment_bg`
+    uses (HPLC slice 6 M8 Task 4), reused up front by the legacy SENAITE
+    attachment routes to gate a native-born row onto the native routes
+    BEFORE any SENAITE HTTP call. Returns None on a miss — callers decide
+    what that means (SENAITE routes: proceed; native routes: 404)."""
+    row = None
+    if sample_uid:
+        row = db.execute(
+            select(LimsSample).where(LimsSample.external_lims_uid == sample_uid)
+        ).scalar_one_or_none()
+    if row is None and sample_id:
+        row = db.execute(
+            select(LimsSample).where(LimsSample.sample_id == sample_id)
+        ).scalar_one_or_none()
+    return row
+
+
 @app.post("/hplc/analyses/{analysis_id}/chromatogram-to-senaite")
 async def upload_chromatogram_to_senaite(
     analysis_id: int,
@@ -6646,6 +6684,15 @@ async def upload_chromatogram_to_senaite(
     chrom = analysis.chromatogram_data
     if not chrom or not chrom.get("times") or not chrom.get("signals"):
         raise HTTPException(400, "No chromatogram data stored on this analysis")
+
+    # Native-born guard (Task 1, slice 7): a native-born parent has no real
+    # SENAITE AR to attach to — send it to the native route BEFORE any
+    # SENAITE HTTP call. Same uid-then-sample_id resolution the bg capture
+    # below already uses for this exact endpoint.
+    _target = _lims_sample_for_attachment(
+        db, sample_uid=sample_uid, sample_id=analysis.sample_id_label)
+    if _target is not None and (_target.external_lims_system or "senaite") == "mk1":
+        raise HTTPException(409, detail="native_born_use_native_route")
 
     # Step 1: Build CSV from chromatogram data (shared builder — backend/
     # hplc_csv.py — so a Task-6 historical backfill produces byte-identical
@@ -6733,6 +6780,7 @@ async def upload_chromatogram_to_senaite(
                 source_sample_id=_label if re.search(r"-S\d{2,}$", _label) else None,
                 user_id=getattr(current_user, "id", None),
                 render_in_report=False, attachment_type="HPLC Graph",
+                sample_id=analysis.sample_id_label,
             )
 
     except HTTPException:
@@ -6745,6 +6793,89 @@ async def upload_chromatogram_to_senaite(
     return {
         "success": True,
         "message": f"Chromatogram CSV uploaded to SENAITE for {analysis.sample_id_label}",
+        "filename": filename,
+        "size_bytes": len(csv_bytes),
+    }
+
+
+@app.post("/hplc/analyses/{analysis_id}/chromatogram-native")
+async def upload_chromatogram_native(
+    analysis_id: int,
+    sample_id: str | None = Query(
+        None, description="Native lims_samples.sample_id to attach the chromatogram to "
+                          "— must match the analysis's own sample_id_label when given; "
+                          "omit to resolve it from the analysis"),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Native twin of `upload_chromatogram_to_senaite` (Task 1, slice 7): a
+    native-born parent has no SENAITE AR, so this writes the chromatogram
+    CSV straight to `lims_parent_attachments` via `write_parent_attachment`
+    — no SENAITE hop, no bg thread, fail-loud. Same CSV builder, same
+    `kind`/`attachment_type`/`render_in_report` as the SENAITE twin sends.
+
+    Fix round 1, finding 2: `sample_id` used to be trusted blind, so a
+    caller could attach one analysis's chromatogram to an unrelated native
+    parent. `analysis.sample_id_label` is this endpoint's own lineage
+    (same field `upload_chromatogram_to_senaite` and `_lims_sample_for_attachment`
+    already treat as the analysis's owning sample) — a `sample_id` that
+    disagrees with it is rejected before any write; omitting it resolves
+    straight from the analysis.
+    """
+    analysis = db.execute(
+        select(HPLCAnalysis).where(HPLCAnalysis.id == analysis_id)
+    ).scalar_one_or_none()
+    if not analysis:
+        raise HTTPException(404, f"HPLC Analysis {analysis_id} not found")
+
+    # The bench stamps `sample_id_label` with the VIAL id (P-5008-S01) — the
+    # parent id only on legacy/manual rows — so resolve the owning parent
+    # through lims_sub_samples first, then lims_samples. A caller-supplied
+    # `sample_id` (the FE passes the PARENT id) must name that owner.
+    label = analysis.sample_id_label
+    owner_id = label
+    vial = db.execute(
+        select(LimsSubSample).where(LimsSubSample.sample_id == label)
+    ).scalar_one_or_none()
+    if vial is not None:
+        owner = db.execute(
+            select(LimsSample).where(LimsSample.id == vial.parent_sample_pk)
+        ).scalar_one_or_none()
+        if owner is not None:
+            owner_id = owner.sample_id
+    if sample_id and sample_id != owner_id:
+        raise HTTPException(409, detail="chromatogram_sample_mismatch")
+    resolved_sample_id = owner_id
+
+    chrom = analysis.chromatogram_data
+    if not chrom or not chrom.get("times") or not chrom.get("signals"):
+        raise HTTPException(400, "No chromatogram data stored on this analysis")
+
+    row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == resolved_sample_id)
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(404, f"Sample {resolved_sample_id} not found")
+    if (row.external_lims_system or "senaite") != "mk1":
+        raise HTTPException(409, detail="senaite_born_use_senaite_route")
+
+    csv_bytes = build_chromatogram_csv(analysis)
+    filename = f"chromatogram_{analysis.sample_id_label}.csv"
+    try:
+        write_parent_attachment(
+            db, row, file_bytes=csv_bytes, filename=filename,
+            content_type="text/csv", kind="chromatogram",
+            source_sample_id=None, user_id=getattr(current_user, "id", None),
+            render_in_report=False, attachment_type="HPLC Graph",
+        )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Failed to store chromatogram attachment: {e}")
+
+    return {
+        "success": True,
+        "message": f"Chromatogram CSV attached for {resolved_sample_id}",
         "filename": filename,
         "size_bytes": len(csv_bytes),
     }
@@ -12315,6 +12446,7 @@ async def replace_analyte(
     """
     from sqlalchemy import select as _select
     from models import AnalysisService, LimsSample, Peptide, SampleAnalyteAlias
+    from lims_analyses.hplc_native import is_native_born
     from lims_analyses.service import (
         peptide_has_full_service_set,
         classify_slot_replacement_impact,
@@ -12323,6 +12455,11 @@ async def replace_analyte(
         BadRequestError as _BadRequestError,
         NotFoundError as _NotFoundError,
     )
+
+    _row = db.execute(_select(LimsSample).where(LimsSample.sample_id == sample_id)).scalar_one_or_none()
+    if _row is not None and is_native_born(_row):
+        raise HTTPException(409, detail={"code": "native_born_use_relabel",
+                                         "message": "Native-born sample: use Relabel on the Analytes card"})
 
     if slot < 1 or slot > 4:
         raise HTTPException(400, "slot must be between 1 and 4")
@@ -12576,6 +12713,7 @@ async def clear_analyte(
     """
     from sqlalchemy import select as _select
     from models import AnalysisService, LimsSample, Peptide, SampleAnalyteAlias
+    from lims_analyses.hplc_native import is_native_born
     from lims_analyses.service import (
         classify_slot_replacement_impact,
         clear_analyte_slot,
@@ -12586,6 +12724,12 @@ async def clear_analyte(
     from sub_samples import senaite as _senaite_slots
     import logging as _logging
     _clr_logger = _logging.getLogger(__name__)
+
+    _row = db.execute(_select(LimsSample).where(LimsSample.sample_id == sample_id)).scalar_one_or_none()
+    if _row is not None and is_native_born(_row):
+        raise HTTPException(409, detail={"code": "native_born_use_relabel",
+                                         "message": "Native-born sample: use Relabel on the Analytes card"})
+
     if slot < 1 or slot > 4:
         raise HTTPException(400, "slot must be between 1 and 4")
     try:
@@ -13315,6 +13459,19 @@ async def _maybe_emit_regular_coa_child(db, sample_id, parent_row, primary_data)
         _logger.warning("regular COA child generation failed for %s: %s", sample_id, e)
 
 
+def _senaite_has_no_ar(db, sample_id: str) -> bool:
+    """True when SENAITE never had this sample, so a SENAITE call for it can
+    only 404. A native-born parent (lims_samples.external_lims_system ==
+    'mk1') has no AR, and neither do its vials ("<parent>-S01"). Unknown ids
+    answer False: legacy behaviour, keep calling SENAITE."""
+    from lims_analyses.hplc_native import is_native_born
+    parent_id = re.sub(r"-S\d{2,}$", "", sample_id or "")
+    row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == parent_id)
+    ).scalar_one_or_none()
+    return row is not None and is_native_born(row)
+
+
 @app.post("/wizard/senaite/samples/{sample_id}/generate-coa")
 async def generate_sample_coa(
     sample_id: str,
@@ -13647,7 +13804,9 @@ async def generate_sample_coa(
     # This mirrors the full COAGeneratorView flow: saves VerificationCode field
     # and creates an ARReport child object so the PDF appears in SENAITE's
     # Reports tab.  Best-effort — generation already succeeded at this point.
-    if SENAITE_URL and pdf_base64:
+    # A native-born sample has no AR to attach to: skip, instead of two 404
+    # round trips (user creds, then service creds) on every native COA.
+    if SENAITE_URL and pdf_base64 and not _senaite_has_no_ar(db, sample_id):
         try:
             attach_payload = {
                 "sample_id": sample_id,
@@ -14029,9 +14188,16 @@ async def publish_sample_coa(
         )
     _refuse_while_publish_scheduled(db, sample_id)
 
-    # 2. Resolve SENAITE UID upfront so we fail before touching integration service state
+    # 2. Resolve SENAITE UID upfront so we fail before touching integration service state.
+    # Native-born samples (external_lims_system == "mk1") have no SENAITE AR at
+    # all — skip the search entirely instead of 404ing against SENAITE for a
+    # sample it never had (HPLC native slice 4 M6).
+    _registry_row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    _native_born = _registry_row is not None and _registry_row.external_lims_system == "mk1"
     senaite_uid: str | None = None
-    if SENAITE_URL:
+    if SENAITE_URL and not _native_born:
         try:
             async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
                 timeout=httpx.Timeout(15.0, connect=5.0),
@@ -14057,9 +14223,7 @@ async def publish_sample_coa(
     # generated COA, so capture it HERE and send to IS, which forwards it to the
     # WP COA email + order-page Lab Remarks button. publish-coa is parent-only
     # (sub-samples are rejected above), so the parent row carries the remark.
-    _parent_row = db.execute(
-        select(LimsSample).where(LimsSample.sample_id == sample_id)
-    ).scalar_one_or_none()
+    _parent_row = _registry_row
     # Snapshot the pre-publish status NOW, before any commit below can expire
     # `_parent_row` (expire_on_commit=True). The transition-log hook at the
     # bottom of this function passes `from_status` as a run_in_threadpool
@@ -14598,7 +14762,8 @@ async def regen_primary_coa(
     )
 
     # 2. Attach new PDF to SENAITE (best-effort — the generation already has a PDF in S3)
-    if SENAITE_URL and pdf_base64:
+    # Native-born: no AR to attach to (see _senaite_has_no_ar).
+    if SENAITE_URL and pdf_base64 and not _senaite_has_no_ar(db, sample_id):
         try:
             async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, 
                 timeout=httpx.Timeout(30.0, connect=5.0),
@@ -15992,6 +16157,9 @@ def _attach_prep_sla(db: Session, rows: "list[dict]") -> None:
     # Live analysis keywords + owning department per vial — same live-row
     # predicate as the inbox's native fetch (retested=False, dead states out).
     kws_by_pk: dict[int, list[str]] = {}
+    # (service FK, keyword) per live row, so the FE resolves the SLA profile
+    # tier through the FK and uses the keyword only for a row without one.
+    analyses_by_pk: dict[int, list[dict]] = {}
     dept_by_pk: dict[int, int] = {}
     if sub_by_pk:
         arows = db.execute(
@@ -15999,15 +16167,19 @@ def _attach_prep_sla(db: Session, rows: "list[dict]") -> None:
                 LimsAnalysis.lims_sub_sample_pk,
                 LimsAnalysis.keyword,
                 AnalysisService.department_id,
+                LimsAnalysis.analysis_service_id,
             )
             .outerjoin(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
             .where(LimsAnalysis.lims_sub_sample_pk.in_(set(sub_by_pk)))
             .where(LimsAnalysis.retested.is_(False))
             .where(LimsAnalysis.review_state.notin_(("rejected", "retracted")))
         ).all()
-        for pk, kw, dept in arows:
+        for pk, kw, dept, svc_id in arows:
             if kw:
                 kws_by_pk.setdefault(pk, []).append(kw)
+            if kw or svc_id is not None:
+                analyses_by_pk.setdefault(pk, []).append(
+                    {"analysis_service_id": svc_id, "keyword": kw})
             if dept is not None and pk not in dept_by_pk:
                 dept_by_pk[pk] = dept
 
@@ -16020,11 +16192,13 @@ def _attach_prep_sla(db: Session, rows: "list[dict]") -> None:
             received = sub.received_at
             uid = sub.external_lims_uid
             keywords = kws_by_pk.get(sub.id, [])
+            analyses = analyses_by_pk.get(sub.id, [])
             department_id = dept_by_pk.get(sub.id)
         elif parent is not None:
             received = parent.date_received
             uid = parent.external_lims_uid
             keywords = []
+            analyses = []
             department_id = None
         else:
             continue
@@ -16032,6 +16206,8 @@ def _attach_prep_sla(db: Session, rows: "list[dict]") -> None:
             "received_at": (received.isoformat() + "Z") if received else None,
             "priority": priority_by_uid.get(uid, "normal") if uid else "normal",
             "keywords": keywords,
+            # Additive: `keywords` stays for older clients; new clients read this.
+            "analyses": analyses,
             "department_id": department_id,
         }
 
@@ -16612,14 +16788,27 @@ async def get_senaite_status(_current_user=Depends(get_current_user)):
 async def get_senaite_raw_fields(
     sample_id: str,
     _current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),  # noqa: B008 — house pattern, every other route in this file does the same
 ):
     """
     Return the raw SENAITE API fields for a sample — useful for diagnosing what
     Analyte1Peptide, SampleType, Profiles, etc. actually contain.
+
+    Native-born samples (lims_samples.external_lims_system == "mk1") have no
+    SENAITE AnalysisRequest — there are no raw SENAITE fields to diagnose, so
+    this short-circuits with a marker instead of making a doomed SENAITE
+    call (task 1b, 2026-09-14). No FE caller depends on the shape of this
+    diagnostic route (grep of src/lib/api.ts finds none), so the marker dict
+    is the lazy, sufficient shape here.
     """
+    sample_id = sample_id.strip().upper()
+    row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if row is not None and row.external_lims_system == "mk1":
+        return {"native_born": True}
     if SENAITE_URL is None:
         raise HTTPException(status_code=503, detail="SENAITE not configured")
-    sample_id = sample_id.strip().upper()
     data = await _fetch_senaite_sample(sample_id)
     if data.get("count", 0) == 0:
         raise HTTPException(status_code=404, detail=f"Sample {sample_id} not found")
@@ -16681,7 +16870,7 @@ async def clear_senaite_lookup_cache(
     return {"cleared": count}
 
 
-@app.get("/wizard/senaite/lookup", response_model=SenaiteLookupResult)
+@app.get("/wizard/senaite/lookup", response_model=RegistrySampleReadResult | SenaiteLookupResult)
 async def lookup_senaite_sample(
     id: str,
     no_cache: bool = True,
@@ -16702,11 +16891,32 @@ async def lookup_senaite_sample(
         503 if SENAITE is not configured or is unreachable/timed out.
         404 if the sample ID does not exist in SENAITE.
     """
-    if SENAITE_URL is None:
-        raise HTTPException(status_code=503, detail="SENAITE not configured")
-
     # SENAITE sample IDs are always uppercase (e.g. PB-0056) — normalize
     id = id.strip().upper()
+
+    # Native-born samples (lims_samples.external_lims_system == "mk1", no
+    # SENAITE AR) are registry-authoritative — serve them from the same
+    # builder the mk1 read-source route uses, BEFORE any SENAITE HTTP or
+    # cache lookup, regardless of what read-source the caller defaulted to.
+    # Hoisted above the SENAITE_URL gate (finding 4, 2026-09-14): a native-born
+    # row must resolve even when SENAITE is disconnected/unconfigured — only
+    # a SENAITE-born lookup needs SENAITE_URL at all.
+    # This is the same row the SENAITE-born path below loads as `_logi` for
+    # its logistics merge — reused here for the native-born gate check.
+    # No caching here either: the mk1 route (/registry/sample/{id}/details)
+    # never populates _senaite_lookup_cache, so this branch matches that
+    # cache semantics exactly (task 1b, 2026-09-14).
+    _row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == id)
+    ).scalar_one_or_none()
+    if _row is not None and _row.external_lims_system == "mk1":
+        from sub_samples.registry_details import build_native_details
+        result = build_native_details(db, id)
+        _enrich_analytes_with_peptide_match(db, result.analytes)
+        return result
+
+    if SENAITE_URL is None:
+        raise HTTPException(status_code=503, detail="SENAITE not configured")
 
     # Check server-side cache (skipped when no_cache=true)
     import time as _time
@@ -17474,6 +17684,7 @@ async def upload_senaite_attachment(
     attachment_type: str = Form(...),  # "HPLC Graph" or "Sample Image"
     native_kind: str = Form("manual"),
     source_sample_id: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """Upload a file attachment to a SENAITE sample.
@@ -17482,6 +17693,12 @@ async def upload_senaite_attachment(
     the intake wizard image upload. The attachment_type name is matched against
     the options rendered in the sample page HTML to resolve its UID.
     """
+    # Native-born guard (Task 1, slice 7): route a native-born row to the
+    # native twin BEFORE any SENAITE HTTP call.
+    _target = _lims_sample_for_attachment(db, sample_uid=sample_uid, sample_id=None)
+    if _target is not None and (_target.external_lims_system or "senaite") == "mk1":
+        raise HTTPException(409, detail="native_born_use_native_route")
+
     if SENAITE_URL is None:
         return SenaiteUploadAttachmentResponse(success=False, message="SENAITE not configured")
 
@@ -17578,6 +17795,54 @@ async def upload_senaite_attachment(
     except Exception as e:
         print(f"[WARN] Failed to upload attachment to sample {sample_uid}: {e}")
         return SenaiteUploadAttachmentResponse(success=False, message=str(e))
+
+
+@app.post(
+    "/wizard/samples/{sample_id}/attachments",
+    response_model=SenaiteUploadAttachmentResponse,
+)
+async def upload_native_attachment(
+    sample_id: str,
+    file: UploadFile,
+    attachment_type: str = Form(...),  # "HPLC Graph" or "Sample Image"
+    native_kind: str = Form("manual"),
+    source_sample_id: str | None = Form(None),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Native twin of `upload_senaite_attachment` (Task 1, slice 7): a
+    native-born parent has no SENAITE AR, so this writes straight to
+    `lims_parent_attachments` via `write_parent_attachment` — no SENAITE
+    hop, fail-loud. Same form fields as the SENAITE twin;
+    `render_in_report=True` matches its manual-attachment default (only the
+    chromatogram writer passes False).
+    """
+    row = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(404, f"Sample {sample_id} not found")
+    if (row.external_lims_system or "senaite") != "mk1":
+        raise HTTPException(409, detail="senaite_born_use_senaite_route")
+
+    file_bytes = await file.read()
+    filename = file.filename or "attachment"
+    content_type = file.content_type or "application/octet-stream"
+
+    try:
+        write_parent_attachment(
+            db, row, file_bytes=file_bytes, filename=filename,
+            content_type=content_type, kind=native_kind,
+            source_sample_id=source_sample_id,
+            user_id=getattr(current_user, "id", None),
+            render_in_report=True, attachment_type=attachment_type,
+        )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Failed to store attachment: {e}")
+
+    return SenaiteUploadAttachmentResponse(success=True, message="Attachment uploaded")
 
 
 class SenaiteAnalyteDetail(BaseModel):
@@ -17971,6 +18236,16 @@ async def receive_senaite_sample(
             success=False, message=native["message"],
             senaite_response={"steps_done": []},
         )
+
+    # M8 flush point: a native receive queued a status relay to IS
+    # (workflow.engine._write_status_if_authoritative, via drive_sample_
+    # touchpoint above) — drain it now the native phase has committed.
+    # Never raises; runs off the event loop like the phase itself.
+    try:
+        from workflow.status_relay import flush_pending_relays
+        await run_in_threadpool(flush_pending_relays)
+    except Exception:
+        logger.exception("status_relay.flush_failed after receive (never-raise)")
 
     steps_done = list(native["steps"])
 
@@ -18981,10 +19256,23 @@ def _native_placeholders_at_registration_bg(sample_id: str) -> None:
                 db.rollback()
             except Exception:
                 pass
-        logger.warning(
-            "registry.native_placeholder_seed_failed sample_id=%s err=%s",
-            sample_id, seed_err,
-        )
+        # D3 (2026-09-14 rehearsal): this fallback races the primary seed
+        # (order upsert) for every sample but the last of a multi-sample
+        # order (see module docstring above) — losing that race raises
+        # IntegrityError on uq_lims_analyses_parent_service_ordered, which
+        # is the seed already having happened, not a failure. Log it at
+        # info under a distinct reason instead of warning as a real error.
+        if isinstance(seed_err, IntegrityError) or "already" in str(seed_err).lower():
+            logger.info(
+                "registry.native_placeholder_seed_skipped sample_id=%s "
+                "reason=race_lost_to_primary_seed err=%s",
+                sample_id, seed_err,
+            )
+        else:
+            logger.warning(
+                "registry.native_placeholder_seed_failed sample_id=%s err=%s",
+                sample_id, seed_err,
+            )
     finally:
         if db is not None:
             db.close()
@@ -19036,6 +19324,22 @@ def _arm_native_status_at_registration_bg(sample_id: str) -> None:
     finally:
         if db is not None:
             db.close()
+
+
+def _native_auto_checkin_bg(sample_id: str) -> None:
+    """Retest auto check-in (2026-09-12, HPLC native slice 6 M8): scheduled
+    by the S2S upsert route when a retest signal carries `AutoCheckin` for a
+    native-born, already-received original. Own module (native_checkin.py)
+    so it can be unit-tested against sqlite; this is just the never-raise bg
+    wrapper matching the other `_..._bg` helpers in this file."""
+    try:
+        from sub_samples.native_checkin import native_auto_checkin
+        result = native_auto_checkin(sample_id)
+        logger.info("native_auto_checkin.done sample_id=%s result=%s",
+                    sample_id, result)
+    except Exception as e:  # noqa: BLE001 — never raise off a bg task
+        logger.warning("native_auto_checkin.bg_failed sample_id=%s err=%s",
+                       sample_id, e)
 
 
 def _after_publish_native(db, *, sample_id: str, pre_publish_status, actor_user_id,
@@ -19098,6 +19402,28 @@ def _after_publish_native(db, *, sample_id: str, pre_publish_status, actor_user_
     except Exception:
         logger.exception("after-publish native step failed (never-raise) %s", sample_id)
         db.rollback()
+    # Analysis tier: the verified parent rows now on a certificate become
+    # 'published' (citable: a later retest supersedes instead of wiping them).
+    # Its own step AFTER the ledger commit above, so it can never undo the
+    # sample-tier publish.
+    try:
+        from lims_analyses.service import publish_parent_rows
+        moved = publish_parent_rows(db, sample_id=sample_id, user_id=actor_user_id)
+        db.commit()
+        if moved:
+            logger.info("after-publish native: %s analysis rows -> published n=%s", sample_id, moved)
+    except Exception:
+        logger.exception("after-publish native: publishing analysis rows failed (never-raise) %s", sample_id)
+        db.rollback()
+    # M8 flush point: publish queued a status relay to IS above (engine's
+    # drive_sample_touchpoint -> _write_status_if_authoritative). This
+    # function already runs off the event loop (threadpool), so drain
+    # synchronously; never raises.
+    try:
+        from workflow.status_relay import flush_pending_relays
+        flush_pending_relays()
+    except Exception:
+        logger.exception("status_relay.flush_failed after publish (never-raise) %s", sample_id)
 
 
 def _record_sample_transition_bg(**kwargs) -> None:
@@ -19233,17 +19559,83 @@ def _observe_parent_analyses_bg(sample_id: str, observed: list[dict]) -> None:
             db.close()
 
 
+def write_parent_attachment(
+    db, row, *, file_bytes: bytes, filename: str, content_type: str,
+    kind: str, source_sample_id: str | None, user_id: int | None,
+    render_in_report: bool = True, attachment_type: str | None = None,
+) -> LimsParentAttachment:
+    """Synchronous, fail-loud parent-attachment writer (Task 1, slice 7):
+    extracted from `_capture_parent_attachment_bg`'s body so the new native
+    attachment routes can call it directly on the request session — no
+    best-effort swallowing, no bg thread. `_capture_parent_attachment_bg`
+    now delegates here inside its own try/except, so its never-raises
+    contract is unchanged.
+
+    Resolves `kind` against the same allowed set, truncates `filename` to
+    the VARCHAR(255) column width, resolves `source_sample_id` to a vial PK
+    scoped to `row` (logs and drops it on a miss or cross-parent mismatch —
+    never raises for that), saves `file_bytes` to storage under `row`'s own
+    sample_id, and adds (but does not commit) the `LimsParentAttachment`
+    row. Raises on any failure (storage, DB) — the caller decides whether
+    that's best-effort (bg wrapper) or fail-loud (native routes) and owns
+    the commit/rollback.
+    """
+    from sub_samples.photo_storage import get_storage
+    resolved_kind = kind if kind in (
+        "vial_image", "packaging_image", "receive_image",
+        "chromatogram", "manual",
+    ) else "manual"
+    filename = filename[:255]  # column is VARCHAR(255) — guard both writers
+    source_pk = None
+    if source_sample_id:
+        sub = db.execute(
+            select(LimsSubSample).where(
+                LimsSubSample.sample_id == source_sample_id)
+        ).scalar_one_or_none()
+        if sub is None:
+            logger.warning(
+                "parent_attachment.source_unresolvable sample_id=%s "
+                "source_sample_id=%s", row.sample_id, source_sample_id)
+        elif sub.parent_sample_pk != row.id:
+            logger.warning(
+                "parent_attachment.source_lineage_mismatch sample_id=%s "
+                "source_sample_id=%s vial_parent_pk=%s row_id=%s",
+                row.sample_id, source_sample_id, sub.parent_sample_pk,
+                row.id)
+        else:
+            source_pk = sub.id
+    key = get_storage().save_photo(row.sample_id, file_bytes, filename)
+    attachment = LimsParentAttachment(
+        lims_sample_pk=row.id,
+        kind=resolved_kind,
+        source_sub_sample_pk=source_pk,
+        filename=filename,
+        content_type=content_type,
+        storage="s3",
+        storage_key=key,
+        render_in_report=render_in_report,
+        attachment_type=attachment_type,
+        created_by_user_id=user_id,
+    )
+    db.add(attachment)
+    db.flush()
+    return attachment
+
+
 def _capture_parent_attachment_bg(
     *, sample_uid: str, file_bytes: bytes, filename: str,
     content_type: str, kind: str, source_sample_id: Optional[str],
     user_id: Optional[int], render_in_report: bool = True,
     attachment_type: Optional[str] = None,
+    sample_id: Optional[str] = None,
 ) -> None:
     """Best-effort native parent-attachment capture + frozen S3 snapshot
     (read-flip spec §7, Layer 3 Task 3) on its own short-lived session —
     never holds the request session across the SENAITE HTTP call. Never
     raises: a capture failure must never fail or delay-fail the endpoint
-    it's scheduled from.
+    it's scheduled from. The row write itself is `write_parent_attachment`
+    (Task 1, slice 7) — this wrapper only resolves the target row and
+    guards the call with try/except/commit.
 
     Shared by three call sites: upload_senaite_attachment (kind/source_sample_id
     /attachment_type come from user-controlled form fields — native_kind,
@@ -19265,57 +19657,37 @@ def _capture_parent_attachment_bg(
     `SessionLocal()` and the storage/model imports live INSIDE the try, same
     hardening rationale as `_mirror_parent_analysis_bg`: `db` starts as None
     so `finally` can guard `db.close()` if construction itself failed.
+
+    `sample_id` (native-born guard, HPLC slice 6 M8 Task 4): a native-born
+    row has no SENAITE uid, so `sample_uid` is a synthetic `mk1://...`
+    placeholder that never matches `external_lims_uid`. When the uid lookup
+    misses and a caller-known `sample_id` was passed, fall back to
+    `LimsSample.sample_id == sample_id` before giving up.
     """
     db = None
     try:
         from database import SessionLocal
-        from sub_samples.photo_storage import get_storage
-        resolved_kind = kind if kind in (
-            "vial_image", "packaging_image", "receive_image",
-            "chromatogram", "manual",
-        ) else "manual"
-        filename = filename[:255]  # column is VARCHAR(255) — guard both writers
         db = SessionLocal()
         row = db.execute(
             select(LimsSample).where(
                 LimsSample.external_lims_uid == sample_uid)
         ).scalar_one_or_none()
+        if row is None and sample_id:
+            row = db.execute(
+                select(LimsSample).where(
+                    LimsSample.sample_id == sample_id)
+            ).scalar_one_or_none()
         if row is None:
             logger.warning(
                 "parent_attachment.capture_failed uid=%s "
                 "err=no-registry-row", sample_uid)
             return
-        source_pk = None
-        if source_sample_id:
-            sub = db.execute(
-                select(LimsSubSample).where(
-                    LimsSubSample.sample_id == source_sample_id)
-            ).scalar_one_or_none()
-            if sub is None:
-                logger.warning(
-                    "parent_attachment.source_unresolvable uid=%s "
-                    "source_sample_id=%s", sample_uid, source_sample_id)
-            elif sub.parent_sample_pk != row.id:
-                logger.warning(
-                    "parent_attachment.source_lineage_mismatch uid=%s "
-                    "source_sample_id=%s vial_parent_pk=%s row_id=%s",
-                    sample_uid, source_sample_id, sub.parent_sample_pk,
-                    row.id)
-            else:
-                source_pk = sub.id
-        key = get_storage().save_photo(row.sample_id, file_bytes, filename)
-        db.add(LimsParentAttachment(
-            lims_sample_pk=row.id,
-            kind=resolved_kind,
-            source_sub_sample_pk=source_pk,
-            filename=filename,
-            content_type=content_type,
-            storage="s3",
-            storage_key=key,
-            render_in_report=render_in_report,
-            attachment_type=attachment_type,
-            created_by_user_id=user_id,
-        ))
+        write_parent_attachment(
+            db, row, file_bytes=file_bytes, filename=filename,
+            content_type=content_type, kind=kind,
+            source_sample_id=source_sample_id, user_id=user_id,
+            render_in_report=render_in_report, attachment_type=attachment_type,
+        )
         db.commit()
     except Exception as cap_err:  # noqa: BLE001
         if db is not None:
@@ -21540,6 +21912,11 @@ class InboxAnalysisItem(BaseModel):
     uid: Optional[str] = None
     title: str
     keyword: Optional[str] = None
+    # The row's own catalog service FK (native rows). None on the
+    # SENAITE-derived emitter, whose source dicts carry no Mk1 id; there the
+    # keyword is the only identity. Travels inbox -> add-to-worksheet ->
+    # analyses_json -> worksheet list so SLA resolves by id, not keyword.
+    analysis_service_id: Optional[int] = None
     peptide_name: Optional[str] = None
     method: Optional[str] = None
     review_state: Optional[str] = None
@@ -21775,6 +22152,7 @@ def _fetch_mk1_inbox_analyses_for_sub_sample(
             uid=f"mk1:{la.id}",
             title=la.title or la.keyword or "",
             keyword=la.keyword,
+            analysis_service_id=la.analysis_service_id,
             peptide_name=keyword_to_peptide.get(la.keyword or "") if keyword_to_peptide else None,
             method=None,                  # Mk1 vial method not yet wired
             review_state=la.review_state,
@@ -23583,6 +23961,9 @@ async def update_worksheet(
 class AddToWorksheetAnalysis(BaseModel):
     title: str
     keyword: Optional[str] = None
+    # Persisted into analyses_json with the rest (model_dump). Optional: a
+    # SENAITE-derived inbox item has none, and older clients send none.
+    analysis_service_id: Optional[int] = None
     peptide_name: Optional[str] = None
     method: Optional[str] = None
 
@@ -24572,6 +24953,47 @@ def s2s_catalog_service_keys(
     return {"keys": keys, "generated_at": generated_at}
 
 
+class S2SPeptide(BaseModel):
+    id: int
+    name: str
+    abbreviation: str
+    is_blend: bool = False
+    active: bool = True
+    analyte_class: str = "peptide"
+    display_aliases: Optional[list[str]] = None
+    hplc_aliases: Optional[list[str]] = None
+
+
+class S2SPeptideList(BaseModel):
+    peptides: list[S2SPeptide]
+    generated_at: str
+
+
+@app.get("/s2s/peptides", response_model=S2SPeptideList)
+def s2s_peptides(
+    db: Session = Depends(get_db),
+    _: None = Depends(require_internal_service_token),
+):
+    """Mk1 peptide catalog for the Integration Service (spec 2026-09-10,
+    M3/IS-6): the WordPress analyte dropdown and Analyte{i}PeptideId on the
+    registry signal come from HERE, not from SENAITE's service titles. Ships
+    every peptide, active or not, on purpose (same rule as
+    /s2s/catalog/service-keys): the IS decides what is sellable. Read-only,
+    no pagination (low hundreds of rows). Every declared field is listed
+    explicitly because response_model silently drops undeclared keys."""
+    from models import Peptide
+    rows = db.query(Peptide).order_by(Peptide.name).all()
+    return S2SPeptideList(
+        peptides=[S2SPeptide(
+            id=p.id, name=p.name, abbreviation=p.abbreviation,
+            is_blend=bool(p.is_blend), active=bool(p.active),
+            analyte_class=p.analyte_class or "peptide",
+            display_aliases=p.display_aliases, hplc_aliases=p.hplc_aliases,
+        ) for p in rows],
+        generated_at=datetime.utcnow().isoformat() + "Z",
+    )
+
+
 # ── Registry creation signal (integration-service bridge) ────────────
 # Called server-to-server by integration-service immediately after it creates
 # a SENAITE AR (dual-write slice 1, 2026-07-06 spec). Idempotent upsert into
@@ -24596,6 +25018,7 @@ def s2s_upsert_lims_sample(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _: None = Depends(require_internal_service_token),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ):
     """Server-to-server registry upsert, called by the Integration Service
     immediately after it creates a SENAITE AR (or, for future SENAITE-free
@@ -24614,9 +25037,25 @@ def s2s_upsert_lims_sample(
     `external_lims_uid`: the IS adapter documents `senaite_uid` as optional
     ("Mk1 fills uid via its reconcile later") and `fetch_parent_analyses`
     keys on the SAMPLE ID, so a uid gate would silently skip a real AR.
+
+    Optional `Idempotency-Key` header (IS sends `registry-{order_id}-{n}`):
+    a sample_id-less signal has no natural key, so a Mk1-committed-but-IS-
+    timed-out retry used to mint a second sample. On a known key we return
+    the stored sample and schedule no background tasks; a new key is
+    recorded (via `LimsRegistrySignalKey`) only after a successful upsert.
     """
     from sub_samples.service import upsert_sample_from_signal
+    from models import LimsRegistrySignalKey, LimsSample
+    if idempotency_key:
+        seen = db.get(LimsRegistrySignalKey, idempotency_key)
+        if seen is not None:
+            prior = db.query(LimsSample).filter_by(sample_id=seen.sample_id).one_or_none()
+            if prior is not None:
+                logger.info("registry.signal_replayed key=%s sample_id=%s", idempotency_key, prior.sample_id)
+                return RegistrySampleSignalResponse(sample_id=prior.sample_id, native_id=prior.native_id)
     row = upsert_sample_from_signal(db, req.sample_id, req.senaite_uid, req.meta)
+    if idempotency_key:
+        db.merge(LimsRegistrySignalKey(idempotency_key=idempotency_key, sample_id=row.sample_id))
     db.commit()
     if row.external_lims_system != "mk1":
         background_tasks.add_task(_shadow_analyses_at_registration_bg, row.sample_id)
@@ -24629,6 +25068,12 @@ def s2s_upsert_lims_sample(
     # SENAITE-attached and SENAITE-free rows — unrelated to (and never
     # gated on) the SENAITE analyses shadow-sync scheduled above.
     background_tasks.add_task(_arm_native_status_at_registration_bg, row.sample_id)
+    # Retest auto check-in (2026-09-12, M8): a retest signal for a native-born,
+    # already-received original never needs the customer to redo the vial
+    # photo/remark — copy them and run the native receive phase.
+    if (req.meta.get("AutoCheckin") in (True, "true", "1")
+            and row.external_lims_system == "mk1" and row.retest_of_sample_id):
+        background_tasks.add_task(_native_auto_checkin_bg, row.sample_id)
     return RegistrySampleSignalResponse(sample_id=row.sample_id, native_id=row.native_id)
 
 
@@ -24733,7 +25178,10 @@ def s2s_mirror_lims_sample_fields(
     edits). Idempotent; only mirrors the keys present in `fields`. Lock
     criterion mirrors the receive inbox / shipping route: only pre-received
     rows accept edits."""
-    from sub_samples.service import _PRE_RECEIVED_STATES, _apply_senaite_fields_to_row
+    from sub_samples.service import _ANALYTE_KEY_RE, _PRE_RECEIVED_STATES, _apply_senaite_fields_to_row
+    from lims_analyses.hplc_native import (
+        SlotResolution, is_native_born, resolve_slot_peptides, restamp_native_slot_rows,
+    )
     updated: list[str] = []
     locked: list[str] = []
     missing: list[str] = []
@@ -24759,6 +25207,30 @@ def s2s_mirror_lims_sample_fields(
             "coa_meta": row.coa_meta,
         }
         _apply_senaite_fields_to_row(db, row, fields)
+        if is_native_born(row) and any(_ANALYTE_KEY_RE.match(k) for k in fields):
+            # Native-born: the only rows that exist pre-receipt are per-slot
+            # ordered placeholders — restamp them from the re-resolved slots
+            # so a customer rename never leaves a stale peptide/title behind
+            # (spec M6 addendum).
+            resolved = resolve_slot_peptides(db, row)
+            for res in resolved:
+                restamp_native_slot_rows(db, parent=row, slot=res.slot, res=res)
+            # Controller ruling: a request that BLANKS an Analyte{N}Peptide
+            # slot (name now empty) leaves nothing for resolve_slot_peptides
+            # to return -- restamp that slot's pristine rows to peptide_id
+            # None / reportable_reason "analyte_cleared" so they don't keep
+            # reporting the old peptide. Titles are left as-is (guarded in
+            # restamp_native_slot_rows).
+            occupied_slots = {res.slot for res in resolved}
+            cleared_idx = {
+                int(m.group(1))
+                for k in fields
+                if (m := _ANALYTE_KEY_RE.match(k)) and m.group(2) == "Peptide"
+            } - occupied_slots
+            for idx in cleared_idx:
+                restamp_native_slot_rows(
+                    db, parent=row, slot=idx, res=SlotResolution(idx, "", "", None, "cleared")
+                )
         touched_analytes = any(_ANALYTE_KEY.match(k) for k in fields)
         if touched_analytes:
             n = db.query(SampleAnalyteAlias).filter(
@@ -24908,6 +25380,39 @@ def s2s_upsert_orders(
                 )
                 db.commit()
                 placeholders_created += stats["created"]
+            except IntegrityError as race_err:
+                # This seed and the registration-signal seed (own session,
+                # _seed_native_placeholders_at_registration_bg) run concurrently
+                # for the same sample. Whichever commits second hits
+                # uq_lims_analyses_parent_service_ordered: the rows it wanted
+                # are already there. The registration side has logged its loss
+                # as benign since the 2026-09-14 rehearsal (D3); this side
+                # still called it a failure. Observed on ~2 of 8 native
+                # samples, the ones with the most rows to write.
+                #
+                # Do not ASSUME the winner covered everything: roll back and
+                # seed once more. The seed dedupes against committed rows, so
+                # the retry creates only what is genuinely missing (normally
+                # nothing) and the log line carries the verified counts.
+                db.rollback()
+                try:
+                    sample = db.query(LimsSample).filter_by(
+                        sample_id=s.senaite_sample_id).first()
+                    stats = seed_parent_from_services(
+                        db, parent=sample, services=s.services, package=s.package,
+                        source="order_upsert_retry",
+                    )
+                    db.commit()
+                    placeholders_created += stats["created"]
+                    logger.info(
+                        "registry.order_upsert_seed_already_present sample_id=%s "
+                        "created=%s existing=%s reason=race_lost_to_registration_seed",
+                        s.senaite_sample_id, stats["created"], stats["existing"])
+                except Exception as retry_err:  # noqa: BLE001
+                    db.rollback()
+                    logger.warning(
+                        "registry.order_upsert_seed_failed sample_id=%s err=%s first_err=%s",
+                        s.senaite_sample_id, retry_err, race_err)
             except Exception as seed_err:  # noqa: BLE001
                 db.rollback()
                 logger.warning("registry.order_upsert_seed_failed sample_id=%s err=%s",
@@ -25297,7 +25802,14 @@ def refresh_sample_registry_debug(
     row = db.execute(
         select(LimsSample).where(LimsSample.sample_id == sample_id)
     ).scalar_one_or_none()
-    if row is not None:
+    if row is not None and (row.external_lims_system or "senaite") == "mk1":
+        # Native-born guard (HPLC slice 6 M8 Task 4): no SENAITE record to
+        # reconcile against. _refresh_parent_from_senaite already no-ops for
+        # these rows, but skip the call here too so no SENAITE-shaped work
+        # is even scheduled; load.external_lims_system == "mk1" in the
+        # returned payload already tells the caller why nothing refreshed.
+        logger.info("registry_debug.refresh.native_born_no_senaite sample=%s", sample_id)
+    elif row is not None:
         try:
             _refresh_parent_from_senaite(db, row)
             db.commit()

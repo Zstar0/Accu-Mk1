@@ -8,6 +8,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from catalog.hplc_keys import HPLC_PRIMARY_KEYS
+
 log = logging.getLogger(__name__)
 
 
@@ -114,7 +116,7 @@ def build_ordered_products(services: dict, package: str | None, db=None) -> list
             continue
         if not val:
             continue
-        if key == "hplcpurity_identity" and has_package:
+        if key in HPLC_PRIMARY_KEYS and has_package:
             continue  # implied by the package — avoid a redundant chip
         pdef = lookup_product_def(key, db)
         if pdef is None:

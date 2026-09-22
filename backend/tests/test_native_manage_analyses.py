@@ -47,6 +47,23 @@ def _make_sample(db, *, sample_id="P-TEST"):
     return parent
 
 
+def _make_senaite_sample(db, *, sample_id="P-TEST", external_lims_uid="uid-senaite-001"):
+    """A SENAITE-born parent (external_lims_system='senaite', a real
+    external_lims_uid) — for the legacy Replace/Clear tests below, which
+    must NOT hit the native-born 409 guard (relabel_native_slot is the
+    sanctioned path for native-born samples; legacy Replace/Clear is
+    SENAITE-only, spec 2026-09-10 M6 addendum)."""
+    parent = LimsSample(
+        sample_id=sample_id,
+        external_lims_uid=external_lims_uid,
+        external_lims_system="senaite",
+        assignment_role="hplc",
+    )
+    db.add(parent)
+    db.flush()
+    return parent
+
+
 def _make_sub(db, parent, *, uid="mk1://test-uuid-001", sample_id="P-TEST-S01", seq=1):
     sub = LimsSubSample(
         parent_sample_pk=parent.id,
@@ -561,7 +578,7 @@ class TestReplaceAnalyteGates:
         db = route_client._test_session
         new_pep = self._peptide(db, "Lonely Variant", "LONE")
         self._svc(db, keyword="ID_LONE", peptide_id=new_pep.id)  # ID only
-        _make_sample(db, sample_id="P-REP01")
+        _make_senaite_sample(db, sample_id="P-REP01", external_lims_uid="uid-rep01")
         db.commit()
 
         resp = route_client.post(
@@ -581,7 +598,7 @@ class TestReplaceAnalyteGates:
         self._svc(db, keyword="ID_TP500", peptide_id=old_pep.id)
         for cat in ("ID", "PUR", "QTY"):
             self._svc(db, keyword=f"{cat}_TB500B4", peptide_id=new_pep.id)
-        parent = _make_sample(db, sample_id="P-REP02")
+        parent = _make_senaite_sample(db, sample_id="P-REP02", external_lims_uid="uid-rep02")
         sub = _make_sub(db, parent, uid="mk1://rep02-v1", sample_id="P-REP02-S01")
         sub.assignment_role = "hplc"  # classifier only sees assigned, non-xtra vials
         db.commit()
@@ -629,7 +646,10 @@ class TestReplaceRegistryDualWrite:
         self._svc(db, keyword="PUR_TP500", peptide_id=old_pep.id)
         for cat in ("ID", "PUR", "QTY"):
             self._svc(db, keyword=f"{cat}_TB500B4", peptide_id=new_pep.id)
-        parent = _make_sample(db, sample_id="P-RDW01")
+        # external_lims_uid matches the senaite_uid the tests below POST
+        # ("AR-RDW01") so the field-mirror's identity-collision guard
+        # (sub_samples.service) doesn't refuse the refresh as a uid mismatch.
+        parent = _make_senaite_sample(db, sample_id="P-RDW01", external_lims_uid="AR-RDW01")
         sub = _make_sub(db, parent, uid="mk1://rdw01-v1", sample_id="P-RDW01-S01")
         sub.assignment_role = "hplc"
         db.commit()

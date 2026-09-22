@@ -56,3 +56,47 @@ def mint_native_id(db: Session,
     seq.next_value = value + 1
     db.flush()
     return f"{prefix}-{value:0{_PAD}d}"
+
+
+# ── Customer-facing native ids (spec 2026-09-10, M3) ────────────────────────
+# A native-born sample (no SENAITE AR) must still LOOK like every other
+# sample to the customer: P-NNNN / PB-NNNN. These counters are seeded by a
+# guarded boot migration ABOVE SENAITE's prod maximum (P at 5000, PB at 1000,
+# Handler ruling 2026-09-10) so the two authorities cannot collide while the
+# legacy drain runs. Bacteriostatic Water is deliberately absent: BW stays
+# SENAITE-born in this program. A prefix row that does not exist is an
+# operator error (the seed never ran), never auto-created at 1 — that would
+# mint P-0001 on prod.
+CUSTOMER_PREFIXES = {"peptide": "P", "peptide blend": "PB"}
+
+
+def mint_customer_sample_id(db: Session, sample_type_title: str) -> str:
+    from models import LimsSample
+
+    key = (sample_type_title or "").strip().lower()
+    prefix = CUSTOMER_PREFIXES.get(key)
+    if prefix is None:
+        raise ValueError(
+            f"no native customer-facing prefix for sample type {sample_type_title!r} "
+            "(only Peptide / Peptide Blend are native-born)"
+        )
+    seq = db.execute(
+        select(LimsNativeIdSequence)
+        .where(LimsNativeIdSequence.prefix == prefix)
+        .with_for_update()
+    ).scalar_one_or_none()
+    if seq is None:
+        raise ValueError(
+            f"customer id counter for prefix {prefix!r} is not seeded "
+            "(boot migration lims_native_id_sequences P/PB missing)"
+        )
+    while True:
+        value = seq.next_value
+        seq.next_value = value + 1
+        candidate = f"{prefix}-{value:0{_PAD}d}"
+        taken = db.execute(
+            select(LimsSample.id).where(LimsSample.sample_id == candidate)
+        ).first()
+        if taken is None:
+            db.flush()
+            return candidate

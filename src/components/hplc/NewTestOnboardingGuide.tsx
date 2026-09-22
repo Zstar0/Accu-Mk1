@@ -919,7 +919,8 @@ export function NewTestOnboardingGuide() {
           <p className="text-xs text-muted-foreground">
             Where: LIMS → Analysis Profiles → edit the profile → COA Section →
             archetype (edit-only; <Code>limit_table</Code> is the archetype for
-            tabular result sections)
+            tabular result sections, <Code>legacy_hplc</Code> routes results
+            through the certificate&apos;s page-1 HPLC design)
           </p>
           <p>
             Setting the archetype flips the profile from unreported to reported,{' '}

@@ -194,6 +194,9 @@ def create_analysis(
     instrument_id: Optional[int] = None,
     created_by_user_id: Optional[int] = None,
     commit: bool = True,
+    peptide_id: Optional[int] = None,
+    slot: Optional[int] = None,
+    reportable_reason: Optional[str] = None,
 ) -> LimsAnalysis:
     """Insert a new lims_analyses row in state='unassigned'. Writes the
     initial audit row (from_state=NULL, to_state='unassigned',
@@ -223,6 +226,9 @@ def create_analysis(
         method_id=method_id,
         instrument_id=instrument_id,
         created_by_user_id=created_by_user_id,
+        peptide_id=peptide_id,
+        slot=slot,
+        reportable_reason=reportable_reason,
     )
     db.add(row)
     db.flush()  # populate row.id before writing the audit log
@@ -487,6 +493,8 @@ def apply_transition(
             review_state="unassigned",
             retest_of_id=row.id,
             created_by_user_id=user_id,
+            peptide_id=row.peptide_id,
+            slot=row.slot,
         )
         db.add(new_row)
         db.flush()  # populate new_row.id before audit rows
@@ -761,6 +769,36 @@ def set_method_instrument(
 # ─── Phase 4a: promote_to_parent ────────────────────────────────────────────
 
 
+def _carried_result_provenance(db: Session, sources: list, source_rows: dict,
+                               promoter_id: Optional[int]):
+    """(captured_at, analyst_user_id, processed_by_user_id) for a parent row
+    minted by a promotion: a promoted result is still the bench's result, so
+    the parent line says who produced it and when, not who clicked Promote.
+
+    Result-bearing sources are the 'chosen' row, or every 'aggregated_in' row;
+    a 'reference' row never bears the result. captured_at is the LATEST capture
+    among them (an aggregate is only complete once its last input was
+    captured). The analyst is the bearing row's own analyst (the worksheet
+    stamp); a hand-entered row has none, so it falls back to whoever submitted
+    that row's result, and only then to the promoter (the pre-slice-24 value)."""
+    bearing = [source_rows[s["analysis_id"]] for s in sources
+               if s["contribution_kind"] in ("chosen", "aggregated_in")]
+    if not bearing:
+        return None, promoter_id, None
+    captured = max((r.captured_at for r in bearing if r.captured_at), default=None)
+    lead = bearing[0]
+    analyst = lead.analyst_user_id
+    if analyst is None:
+        analyst = db.execute(
+            select(LimsAnalysisTransition.user_id)
+            .where(LimsAnalysisTransition.analysis_id == lead.id,
+                   LimsAnalysisTransition.transition_kind == "submit",
+                   LimsAnalysisTransition.user_id.is_not(None))
+            .order_by(LimsAnalysisTransition.id.desc()).limit(1)
+        ).scalar_one_or_none()
+    return captured, analyst if analyst is not None else promoter_id, lead.processed_by_user_id
+
+
 def promote_to_parent(
     db: Session,
     *,
@@ -796,7 +834,11 @@ def promote_to_parent(
 
     Performs in one transaction:
       1. INSERT parent-tier lims_analyses row (review_state='parent_to_verify',
-         verified_at=NULL, analyst_user_id=user_id). Promotion is the
+         verified_at=NULL). captured_at / analyst_user_id /
+         processed_by_user_id are carried over from the result-bearing
+         source row (_carried_result_provenance); WHO PROMOTED stays on
+         created_by_user_id, the promotions rows and the audit transition.
+         Promotion is the
          submission, not the sign-off — a reviewer calls the generic
          transitions endpoint with kind='verify' to reach 'verified'
          (spec 2026-08-04).
@@ -884,6 +926,9 @@ def promote_to_parent(
                     f"source {sid} has analysis_service_id={row.analysis_service_id}, "
                     f"expected {first_source_svc.id} (native promote is service-keyed)"
                 )
+            first_source_row = source_rows[source_ids[0]]
+            if (row.slot or 0) != (first_source_row.slot or 0):
+                raise BadRequestError("sources span multiple slots")
         elif row.keyword != keyword:
             raise BadRequestError(
                 f"source {sid} has keyword={row.keyword!r}, "
@@ -933,7 +978,10 @@ def promote_to_parent(
         # Native identity comes from the catalog service, not the request
         # string or the (possibly drifted) source row label.
         eff_parent_keyword = first_source_svc.keyword
-        eff_title = first_source_svc.title
+        # Native-born per-slot rows carry a STAMPED title ("BPC-157 - Purity
+        # (HPLC)"); slot-less native rows (endo, PCR, aggregates) keep the
+        # service title.
+        eff_title = first_source.title if first_source.slot is not None else first_source_svc.title
         if result_unit is None:
             result_unit = first_source_svc.unit
 
@@ -972,8 +1020,13 @@ def promote_to_parent(
     if all(source_rows[sid].retest_of_id is not None for sid in source_ids):
         # Native services key identity on the service FK (see is_native above);
         # a keyword-string match would miss a drifted label on the old row.
+        # Slot-aware (M6): a native blend keys on (service, slot) so two
+        # parent rows for the same service (one per slot) supersede
+        # independently — COALESCE(slot,0) keeps legacy/slot-less rows
+        # (slot NULL) matching exactly as before.
+        from lims_analyses.hplc_native import slot_clause
         _ident_clause = (
-            LimsAnalysis.analysis_service_id == eff_service_id
+            and_(LimsAnalysis.analysis_service_id == eff_service_id, slot_clause(first_source.slot))
             if is_native
             else LimsAnalysis.keyword == eff_parent_keyword
         )
@@ -1023,6 +1076,9 @@ def promote_to_parent(
         # there is no published blocker left for this branch to diagnose.
     # ── end retest-source supersession ───────────────────────────────────────
 
+    _captured_at, _analyst_id, _processed_by_id = _carried_result_provenance(
+        db, sources, source_rows, user_id)
+
     # Promotion mints the parent-tier row in 'parent_to_verify' — it is the
     # submission, not the sign-off. verified_at stays NULL until a reviewer
     # calls the generic transitions endpoint with kind='verify' (state
@@ -1038,8 +1094,12 @@ def promote_to_parent(
         review_state="parent_to_verify",
         method_id=method_id,
         instrument_id=instrument_id,
-        analyst_user_id=user_id,
+        analyst_user_id=_analyst_id,
+        processed_by_user_id=_processed_by_id,
+        captured_at=_captured_at,
         created_by_user_id=user_id,
+        peptide_id=first_source.peptide_id,
+        slot=first_source.slot,
     )
     db.add(parent_row)
     db.flush()
@@ -1089,6 +1149,11 @@ def promote_to_parent(
             details=_deltas(src_before, src),
         ))
 
+    # A native blend's parent aggregates are a function of the parent's own
+    # slot rows (which may come from different vials). Rides this transaction.
+    from lims_analyses.blend_aggregates import recalc_parent_aggregates_safely
+    recalc_parent_aggregates_safely(db, parent_pk=parent_row.lims_sample_pk, user_id=user_id)
+
     if commit:
         db.commit()
         db.refresh(parent_row)
@@ -1128,6 +1193,7 @@ def list_native_parent_analyses(db: Session, sample_id: str) -> list:
     """
     from models import AnalysisService, LimsSample
     from lims_analyses.schemas import NativeParentAnalysisRow
+    from lims_analyses.hplc_native import slot_key
 
     parent = db.execute(
         select(LimsSample).where(LimsSample.sample_id == sample_id)
@@ -1156,14 +1222,18 @@ def list_native_parent_analyses(db: Session, sample_id: str) -> list:
     # for the same service id. order_by(id.desc()) + first-seen-wins mirrors
     # _eligible_parent_row's resolve-to-newest posture rather than depending
     # on an invariant this function doesn't own.
-    seen_service_ids: set[int] = set()
+    # Dedup key is slot-aware: (analysis_service_id, slot or 0), so a
+    # native-born blend's two peptide slots on the same service are never
+    # collapsed into a single "current" row (spec 2026-09-10 M6 addendum).
+    seen: set[tuple] = set()
     deduped: list = []
     for analysis in rows:
-        if analysis.analysis_service_id in seen_service_ids:
+        k = slot_key(analysis)
+        if k in seen:
             continue
-        seen_service_ids.add(analysis.analysis_service_id)
+        seen.add(k)
         deduped.append(analysis)
-    deduped.sort(key=lambda a: a.keyword)
+    deduped.sort(key=lambda a: (a.keyword, a.slot or 0))
 
     return [NativeParentAnalysisRow.model_validate(a) for a in deduped]
 
@@ -1186,6 +1256,7 @@ def _overlay_live_vial_state(db: Session, parent_pk: int, shaped: list) -> None:
     disagree between the two surfaces.
     """
     from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
+    from lims_analyses.hplc_native import slot_key
     from models import LimsSubSample
 
     ordered_service_ids = {
@@ -1195,6 +1266,11 @@ def _overlay_live_vial_state(db: Session, parent_pk: int, shaped: list) -> None:
     if not ordered_service_ids:
         return
 
+    # The vial query still filters by service id only (an IN filter on slot
+    # too would need the same slot-or-0 coalescing as slot_clause; service id
+    # is cheap and merely widens the candidate set) -- the slot-aware overlay
+    # match happens below, keyed by slot_key, so a wrong-slot vial row can
+    # never overlay a placeholder it doesn't belong to.
     vial_rows = db.execute(
         select(LimsAnalysis)
         .join(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
@@ -1208,18 +1284,20 @@ def _overlay_live_vial_state(db: Session, parent_pk: int, shaped: list) -> None:
     _PROGRESS_RANK = {
         "unassigned": 0, "assigned": 1, "to_be_verified": 2, "verified": 3,
     }
-    live_state_by_service: dict[int, str] = {}
+    # Keyed by slot_key (service id, slot or 0) rather than service id alone,
+    # so a two-slot blend's per-slot vial progress overlays only its own
+    # placeholder slot instead of bleeding into its sibling's.
+    live_state_by_key: dict[tuple, str] = {}
     for vr in vial_rows:
+        key = slot_key(vr)
         rank = _PROGRESS_RANK.get(vr.review_state, -1)
-        best = _PROGRESS_RANK.get(
-            live_state_by_service.get(vr.analysis_service_id, ""), -1
-        )
+        best = _PROGRESS_RANK.get(live_state_by_key.get(key, ""), -1)
         if rank > best:
-            live_state_by_service[vr.analysis_service_id] = vr.review_state
+            live_state_by_key[key] = vr.review_state
     for shaped_row in shaped:
-        if (shaped_row.provenance == PROVENANCE_ORDERED
-                and shaped_row.analysis_service_id in live_state_by_service):
-            shaped_row.review_state = live_state_by_service[shaped_row.analysis_service_id]
+        key = slot_key(shaped_row)
+        if shaped_row.provenance == PROVENANCE_ORDERED and key in live_state_by_key:
+            shaped_row.review_state = live_state_by_key[key]
 
 
 # Legacy family classifier (profile sections rule 2): SENAITE-era keywords
@@ -1330,6 +1408,7 @@ def list_native_parent_analyses_senaite_shape(
     """
     from models import AnalysisService, LimsSample
     from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
+    from lims_analyses.hplc_native import slot_key
 
     parent = db.execute(
         select(LimsSample).where(LimsSample.sample_id == sample_id)
@@ -1369,13 +1448,18 @@ def list_native_parent_analyses_senaite_shape(
     # remove. Mirrors the live-only collapse in
     # list_parent_analyses_senaite_shape (shadow-vs-canonical). Do not
     # "simplify" this back to "any canonical" — that was tried and is wrong.
-    services_with_live_canonical = {
-        r.analysis_service_id for r in fetched
+    # Keyed by slot_key (service id, slot or 0), not service id alone, so a
+    # canonical row for one slot of a native-born blend suppresses only that
+    # slot's placeholder — its sibling slot's demand marker must stay visible
+    # (spec 2026-09-10 M6 addendum; legacy rows have slot NULL -> 0, identical
+    # to the old service-id-only behaviour).
+    live_canonical_keys = {
+        slot_key(r) for r in fetched
         if r.provenance == "canonical" and r.review_state not in ("retracted", "rejected")
     }
     rows = [
         r for r in fetched
-        if r.provenance == "canonical" or r.analysis_service_id not in services_with_live_canonical
+        if r.provenance == "canonical" or slot_key(r) not in live_canonical_keys
     ]
 
     shaped = _serialize_senaite_shape_rows(db, rows)
@@ -1479,6 +1563,10 @@ def list_promotions_for_parent(
 _VIAL_PROMOTABLE_STATES = ("to_be_verified",)
 
 
+# The key builder lives in the leaf module so workflow.engine can share it.
+from lims_analyses.hplc_native import parent_line_state_key  # noqa: E402,F401
+
+
 def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, str]:
     """Keyword → review_state lock map for the FE's isLockedByParent gate,
     served from native rows — the mk1-mode substitute for SENAITE's
@@ -1560,7 +1648,7 @@ def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, s
             review_state=r.review_state,
         ) != TIER_PARENT:
             continue
-        states[r.keyword] = r.review_state
+        states[parent_line_state_key(r.keyword, r.analysis_service_id, r.slot)] = r.review_state
     for r in rows:
         if (
             r.provenance == "shadow"
@@ -1583,9 +1671,15 @@ def native_parent_line_states(db: Session, parent_sample_id: str) -> Dict[str, s
             r.provenance == PROVENANCE_ORDERED
             and not r.retested
             and r.review_state not in ("rejected", "retracted")
-            and r.keyword not in states
         ):
-            states[r.keyword] = r.review_state
+            # Same identity key as the canonical loop. Keyed by keyword, a
+            # per-slot placeholder never found its own canonical line (that
+            # sits under svc:<id>:<slot>) and re-entered as a phantom pending
+            # line, so a fully verified native HPLC sample never read as
+            # ready to publish.
+            key = parent_line_state_key(r.keyword, r.analysis_service_id, r.slot)
+            if key not in states:
+                states[key] = r.review_state
     return states
 
 
@@ -1670,6 +1764,7 @@ def list_parent_analyses_senaite_shape(
         return []
 
     from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
+    from lims_analyses.hplc_native import slot_key, kw_slot_key
 
     rows = list(db.execute(
         select(LimsAnalysis).where(
@@ -1713,17 +1808,19 @@ def list_parent_analyses_senaite_shape(
 
     # Canonical-wins placeholder suppression (mirrors the native card feed):
     # a service with a LIVE canonical row has been delivered — its
-    # placeholder drops. Keyed by service id (placeholders always share the
-    # service row they were minted from). Retracted canonicals are already
+    # placeholder drops. Keyed by slot_key (service id, slot or 0), not
+    # service id alone, so one slot of a native-born blend being delivered
+    # never suppresses its sibling slot's still-outstanding placeholder
+    # (spec 2026-09-10 M6 addendum). Retracted canonicals are already
     # excluded from `rows` by the query, so a thrown-away result correctly
     # leaves the placeholder visible: the test is outstanding again.
-    delivered_service_ids = {
-        r.analysis_service_id for r in rows if r.provenance == "canonical"
+    delivered_keys = {
+        slot_key(r) for r in rows if r.provenance == "canonical"
     }
     rows = [
         r for r in rows
         if r.provenance != PROVENANCE_ORDERED
-        or r.analysis_service_id not in delivered_service_ids
+        or slot_key(r) not in delivered_keys
     ]
 
     # Cross-provenance keyword collapse (UAT catch, P-0143 promote flow):
@@ -1745,23 +1842,33 @@ def list_parent_analyses_senaite_shape(
     # the withdrawn value on this table or on the COA wire (legacy_rows
     # delegates row selection here). Same rule native_parent_line_states
     # applies: the canonical tier owns any keyword it ever held.
-    live_canonical_keywords = {r.keyword for r in rows if r.provenance == "canonical"}
-    canonical_ever = set(db.execute(
-        select(LimsAnalysis.keyword).where(
+    #
+    # Collapse key is now (keyword, slot or 0) via kw_slot_key, not keyword
+    # alone, so a canonical row minted for one slot of a native-born blend
+    # collapses only its own slot's shadow/placeholder counterpart, never a
+    # sibling slot sharing the same keyword (spec 2026-09-10 M6 addendum).
+    live_canonical_kw_keys = {kw_slot_key(r) for r in rows if r.provenance == "canonical"}
+    canonical_ever = {(kw, slot or 0) for kw, slot in db.execute(
+        select(LimsAnalysis.keyword, LimsAnalysis.slot).where(
             LimsAnalysis.lims_sample_pk == parent.id,
             LimsAnalysis.lims_sub_sample_pk.is_(None),
             LimsAnalysis.provenance == "canonical",
         ).distinct()
-    ).scalars().all()) | live_canonical_keywords
+    ).all()} | live_canonical_kw_keys
     rows = [
         r for r in rows
         if r.provenance == "canonical"
-        # shadow: hidden once the canonical tier EVER held the keyword
-        or (r.provenance == "shadow" and r.keyword not in canonical_ever)
+        # shadow: hidden once the canonical tier EVER held the (keyword, slot).
+        # Written as an inline tuple (not kw_slot_key(r)) deliberately -- the
+        # identity-convergence guard's AST sweep only recognizes a literal
+        # keyword-attribute compare/membership, and this is the ruled
+        # PERMANENT site (P-0143) it must keep counting.
+        or (r.provenance == "shadow" and (r.keyword, r.slot or 0) not in canonical_ever)
         # ordered placeholders: live-canonical collapse only -- a retracted
         # canonical must NOT hide the demand marker (pinned by
-        # test_retracted_canonical_does_not_suppress_placeholder)
-        or (r.provenance != "shadow" and r.keyword not in live_canonical_keywords)
+        # test_retracted_canonical_does_not_suppress_placeholder). Same
+        # inline-tuple note as above applies here.
+        or (r.provenance != "shadow" and (r.keyword, r.slot or 0) not in live_canonical_kw_keys)
     ]
 
     shaped = _serialize_senaite_shape_rows(db, rows)
@@ -1950,6 +2057,8 @@ def _find_active_parent_row(
     keyword: str,
     analysis_service_id: Optional[int] = None,
     allow_native_rescue: bool = True,
+    slot: Optional[int] = None,
+    parent_analysis_id: Optional[int] = None,
 ) -> Optional[LimsAnalysis]:
     """Resolve the one active canonical parent-tier row a retest lineage hangs
     off. Shared by cascade_parent_retest_to_sources and parent_retest so the
@@ -1957,6 +2066,12 @@ def _find_active_parent_row(
 
     Identity resolution (S3), in order:
 
+      0. explicit `parent_analysis_id` -- the caller holds the ROW. Same
+         active-row predicates as every other leg, plus id equality, and NO
+         fallthrough: an id that is not this parent's active canonical
+         parent-tier row (superseded, retracted, another sample's) returns
+         None. Guessing a different row by keyword would retest something
+         the operator did not click.
       1. explicit `analysis_service_id` — the caller already holds the native
          identity key, so match on the service FK alone with no keyword term.
       2. exact stored keyword — byte-identical to the pre-S3 lookup.
@@ -2004,6 +2119,7 @@ def _find_active_parent_row(
     canonical row actually promoted — a real (not cosmetic) correctness gap.
     """
     from models import AnalysisService
+    from lims_analyses.hplc_native import slot_clause
 
     base = (
         LimsAnalysis.lims_sample_pk == parent_sample_pk,
@@ -2018,8 +2134,26 @@ def _find_active_parent_row(
             select(LimsAnalysis).where(*base, ident)
         ).scalars().first()
 
+    if parent_analysis_id is not None:
+        return _first(LimsAnalysis.id == parent_analysis_id)
+
+    def _by_service(service_id):
+        # Slot-aware (M6): a caller holding a slot resolves that ONE row
+        # directly. Without a slot, a multi-slot native blend parent has
+        # more than one live row for this service — refuse to guess which
+        # one the caller means (controller ruling) rather than returning
+        # .first() nondeterministically. Legacy/slot-less rows are exactly
+        # one row (or none) either way, so this is byte-identical for them.
+        ident = LimsAnalysis.analysis_service_id == service_id
+        if slot is not None:
+            return _first(and_(ident, slot_clause(slot)))
+        rows = db.execute(select(LimsAnalysis).where(*base, ident)).scalars().all()
+        if len({r.slot or 0 for r in rows}) > 1:
+            return None
+        return rows[0] if rows else None
+
     if analysis_service_id is not None:
-        return _first(LimsAnalysis.analysis_service_id == analysis_service_id)
+        return _by_service(analysis_service_id)
 
     row = _first(LimsAnalysis.keyword == keyword)
     if row is not None or not allow_native_rescue:
@@ -2033,7 +2167,62 @@ def _find_active_parent_row(
     ).scalars().first()
     if native_svc is None:
         return None
-    return _first(LimsAnalysis.analysis_service_id == native_svc.id)
+    return _by_service(native_svc.id)
+
+
+def publish_parent_rows(db: Session, *, sample_id: str,
+                        user_id: Optional[int] = None) -> int:
+    """The analysis-tier half of a COA publish: every live canonical
+    parent-tier row in 'verified' rides the sample's publish to 'published',
+    through the state machine's own `publish` verb (stamps published_at, writes
+    the audit transition). Does NOT commit. Returns the rows moved.
+
+    The workflow catalog has always described this edge ("analysis: verified ->
+    published, rides the sample COA publish") and parent_mirror moves the
+    SHADOW rows on publish, saying of canonical rows that "publish there runs
+    its own native state machine". Nothing did: native rows sat at 'verified'
+    forever (PB-1002, P-5007). The consequence was not cosmetic. 'published'
+    is what makes a result citable history: parent_retest keeps a published
+    row live and lets the re-promote supersede it (#156), whereas a 'verified'
+    row is un-promoted, i.e. RETRACTED with its value cleared. A native result
+    on a certificate the customer already holds was one retest away from
+    being wiped.
+
+    Only 'verified' rows move. On a partial publish the pending add-on lines
+    are not verified, stay where they are, and publish with the later COA.
+    Every reader already treats 'published' like 'verified' (COA eligibility,
+    Ready to Publish, the source resolver, the sample-scope workflow gates).
+
+    SCOPE: rows of NATIVE services only (analysis_services.origin == 'mk1'),
+    which is what the Handler ruled on (2026-09-21). Canonical rows of
+    SENAITE-origin services have exactly the same gap -- prod holds ~10k of
+    them at 'verified' on ~2.2k published samples and ZERO canonical rows at
+    'published' -- but moving those changes what the lab sees on every legacy
+    publish (the vial lock tests for 'verified'), so it waits for its own
+    sign-off. Widening is the one origin filter below."""
+    from models import AnalysisService, LimsSample
+
+    parent = db.execute(
+        select(LimsSample).where(LimsSample.sample_id == sample_id)
+    ).scalar_one_or_none()
+    if parent is None:
+        return 0
+    ids = db.execute(
+        select(LimsAnalysis.id)
+        .join(AnalysisService, AnalysisService.id == LimsAnalysis.analysis_service_id)
+        .where(
+            LimsAnalysis.lims_sample_pk == parent.id,
+            LimsAnalysis.lims_sub_sample_pk.is_(None),
+            LimsAnalysis.provenance == "canonical",
+            LimsAnalysis.retested.is_(False),
+            LimsAnalysis.review_state == "verified",
+            AnalysisService.origin == "mk1",
+        )
+    ).scalars().all()
+    for analysis_id in ids:
+        apply_transition(db, analysis_id=analysis_id, kind="publish", user_id=user_id,
+                         reason="rides the sample COA publish", commit=False)
+    return len(ids)
 
 
 def cascade_parent_retest_to_sources(
@@ -2045,6 +2234,7 @@ def cascade_parent_retest_to_sources(
     source_reason: str = "cascaded from parent SENAITE retest",
     analysis_service_id: Optional[int] = None,
     allow_native_rescue: bool = True,
+    slot: Optional[int] = None,
 ) -> list[int]:
     """When a PARENT-tier analysis is retested (via SENAITE), cascade the retest
     down to each source vial-tier analysis that was promoted into that parent.
@@ -2084,6 +2274,7 @@ def cascade_parent_retest_to_sources(
         keyword=keyword,
         analysis_service_id=analysis_service_id,
         allow_native_rescue=allow_native_rescue,
+        slot=slot,
     )
     if parent_analysis is None:
         return []
@@ -2151,6 +2342,9 @@ def cascade_parent_retest_to_sources(
             reason="un-promoted: source vial retested",
             details=_deltas(parent_before, parent_analysis),
         ))
+        from lims_analyses.blend_aggregates import recalc_parent_aggregates_safely
+        recalc_parent_aggregates_safely(
+            db, parent_pk=parent_analysis.lims_sample_pk, user_id=user_id)
         db.commit()
 
     return new_row_ids
@@ -2164,6 +2358,8 @@ def parent_retest(
     user_id: Optional[int],
     reason: Optional[str] = None,
     analysis_service_id: Optional[int] = None,
+    slot: Optional[int] = None,
+    parent_analysis_id: Optional[int] = None,
 ) -> tuple[list[int], Optional[str]]:
     """Native origination of a parent-tier retest: validate, then run the
     existing cascade (retest promoted sources + un-promote the verified or
@@ -2198,13 +2394,17 @@ def parent_retest(
         parent_sample_pk=parent.id,
         keyword=keyword,
         analysis_service_id=analysis_service_id,
+        slot=slot,
+        parent_analysis_id=parent_analysis_id,
     )
     if active is None:
         # Name the identity that was actually used, not always the keyword —
         # a service-id caller passes keyword only as the legacy alias, so
         # echoing it would point the operator at the wrong thing.
         _asked = (
-            f"analysis_service_id={analysis_service_id}"
+            f"parent_analysis_id={parent_analysis_id}"
+            if parent_analysis_id is not None
+            else f"analysis_service_id={analysis_service_id}"
             if analysis_service_id is not None
             else f"keyword {keyword!r}"
         )
@@ -2221,6 +2421,8 @@ def parent_retest(
                 f"{active.review_state!r}"
             ),
         )
+    # Figure AT THE CALL: the un-promote below clears it on a verified row.
+    value_at_retest, unit_at_retest = active.result_value, active.result_unit
     # State AT THE CALL, before the cascade's un-promote can flip a
     # verified/awaiting row to 'retracted' — both the published branch below
     # and the activity event key off what the operator actually retested.
@@ -2238,6 +2440,7 @@ def parent_retest(
         user_id=user_id,
         source_reason=reason or "retested from parent (native)",
         analysis_service_id=active.analysis_service_id,
+        slot=active.slot,
     )
     db.refresh(active)
 
@@ -2291,6 +2494,16 @@ def parent_retest(
         "unpromoted": active.review_state == "retracted",
         "parent_review_state_at_retest": state_at_retest,
         "service_origin": svc.origin if svc else None,
+        # Which line, exactly. On a native blend the keyword is shared by every
+        # analyte slot, so "HPLC-PURITY retested" does not say which peptide.
+        "parent_analysis_id": active.id,
+        "slot": active.slot,
+        "title": active.title,
+        # The figure at the moment of the retest. For a PUBLISHED line this is
+        # the value on the certificate the customer holds, which stays in force
+        # until the retest is promoted and the COA is published again.
+        "value_at_retest": value_at_retest,
+        "unit_at_retest": unit_at_retest,
     }
     if keyword != active.keyword:
         _details["requested_keyword"] = keyword
@@ -2474,6 +2687,9 @@ def vial_source_retest(
                     details=_deltas(parent_before, parent),
                 ))
                 parent_unverified = True
+                from lims_analyses.blend_aggregates import recalc_parent_aggregates_safely
+                recalc_parent_aggregates_safely(
+                    db, parent_pk=parent.lims_sample_pk, user_id=user_id)
 
     # Activity event (Task 7): written unconditionally — rides the
     # un-promote commit above when there is one, otherwise gets this commit
@@ -2569,6 +2785,7 @@ def cascade_parent_reject_to_vials(
     parent_sample_id: str,
     keyword: str,
     user_id: Optional[int],
+    slot: Optional[int] = None,
 ) -> list[int]:
     """When a PARENT analysis is rejected (via SENAITE — service removed from
     the offering), cascade the reject to the UNPOPULATED vial-tier mirror rows
@@ -2603,15 +2820,20 @@ def cascade_parent_reject_to_vials(
     # LimsAnalysis.lims_sub_sample_pk) — shadow rows are always parent-tier
     # only (lims_sub_sample_pk IS NULL, per parent_mirror.py), so they can
     # never satisfy this join regardless of review_state. Safe by construction.
+    from lims_analyses.hplc_native import slot_clause
+
+    clauses = [
+        LimsSubSample.parent_sample_pk == parent_sample.id,
+        LimsAnalysis.keyword.in_(candidate_kws),
+        LimsAnalysis.review_state.in_(("unassigned", "assigned")),
+        LimsAnalysis.result_value.is_(None),
+    ]
+    if slot is not None:
+        clauses.append(slot_clause(slot))
     targets = db.execute(
         select(LimsAnalysis)
         .join(LimsSubSample, LimsSubSample.id == LimsAnalysis.lims_sub_sample_pk)
-        .where(
-            LimsSubSample.parent_sample_pk == parent_sample.id,
-            LimsAnalysis.keyword.in_(candidate_kws),
-            LimsAnalysis.review_state.in_(("unassigned", "assigned")),
-            LimsAnalysis.result_value.is_(None),
-        )
+        .where(*clauses)
     ).scalars().all()
 
     rejected_ids: list[int] = []
@@ -3349,6 +3571,7 @@ def delete_pristine_analysis(
     keyword: Optional[str] = None,
     user_id: Optional[int],
     analysis_service_id: Optional[int] = None,
+    slot: Optional[int] = None,
 ) -> None:
     """Hard-delete a pristine (mistake-correction) analysis from a native vial.
 
@@ -3369,6 +3592,7 @@ def delete_pristine_analysis(
         retested flag, or promotion link) — instruct caller to retract instead.
     """
     from models import LimsAnalysisPromotion
+    from lims_analyses.hplc_native import slot_clause
 
     if (analysis_service_id is None) == (keyword is None):
         raise BadRequestError(
@@ -3383,14 +3607,20 @@ def delete_pristine_analysis(
         _ident = LimsAnalysis.keyword == keyword
         _named = f"keyword={keyword!r}"
 
-    row = db.execute(
-        select(LimsAnalysis).where(
-            LimsAnalysis.lims_sub_sample_pk == sub_sample_pk,
-            _ident,
-            LimsAnalysis.retest_of_id.is_(None),
-            LimsAnalysis.review_state.notin_(["retracted", "rejected"]),
+    clauses = [
+        LimsAnalysis.lims_sub_sample_pk == sub_sample_pk,
+        _ident,
+        LimsAnalysis.retest_of_id.is_(None),
+        LimsAnalysis.review_state.notin_(["retracted", "rejected"]),
+    ]
+    if slot is not None:
+        clauses.append(slot_clause(slot))
+    rows = db.execute(select(LimsAnalysis).where(*clauses)).scalars().all()
+    if slot is None and len({(r.slot or 0) for r in rows}) > 1:
+        raise BadRequestError(
+            f"multiple slots match {_named} on sub_sample_pk={sub_sample_pk} — pass slot"
         )
-    ).scalar_one_or_none()
+    row = rows[0] if rows else None
     if row is None:
         raise NotFoundError(
             f"no active lims_analysis with {_named} on sub_sample_pk={sub_sample_pk}"
@@ -3485,7 +3715,7 @@ def _serialize_senaite_shape_rows(
         SenaiteShapeMethodOption,
         SenaiteShapeResultOption,
     )
-    from users_display import user_display_name
+    from users_display import user_short_name
 
     if not rows:
         return []
@@ -3524,8 +3754,10 @@ def _serialize_senaite_shape_rows(
     )
     analyst_name_by_id = {}
     if analyst_ids:
+        # "F. Last" when the profile has both names, else the display-name
+        # rule (single name, then email). The Analyst column is narrow.
         analyst_name_by_id = {
-            u.id: user_display_name(u)
+            u.id: user_short_name(u)
             for u in db.execute(select(User).where(User.id.in_(analyst_ids))).scalars()
         }
 
@@ -3538,9 +3770,45 @@ def _serialize_senaite_shape_rows(
         for i in sorted(instruments_by_id.values(), key=lambda i: i.id)
     ]
 
+    # Spec column: each row's active spec + verdict, from the same machinery
+    # the COA uses. The matrix is the PARENT sample's; a vial row reaches it
+    # through its sub-sample. Two bulk lookups, then resolve_spec once per
+    # distinct (service, matrix, peptide).
+    # ponytail: up to 3 small indexed queries per distinct key (a 4-peptide
+    # blend = ~14 keys); bulk-load analysis_service_specs for service_ids and
+    # apply the precedence in Python if this listing ever shows up in a profile.
+    from coa.identity_verdict import identity_wire_result
+    from coa.spec_rules import display_spec_fields, normalize_matrix
+    from models import LimsSample, LimsSubSample
+    _vial_pks = {r.lims_sub_sample_pk for r in rows if r.lims_sub_sample_pk}
+    _parent_pk_by_vial = dict(db.execute(
+        select(LimsSubSample.id, LimsSubSample.parent_sample_pk)
+        .where(LimsSubSample.id.in_(_vial_pks))
+    ).all()) if _vial_pks else {}
+    _sample_pks = ({r.lims_sample_pk for r in rows if r.lims_sample_pk}
+                   | set(_parent_pk_by_vial.values()))
+    _matrix_by_sample = {
+        pk: normalize_matrix(title)
+        for pk, title in (db.execute(
+            select(LimsSample.id, LimsSample.sample_type_title)
+            .where(LimsSample.id.in_(_sample_pks))
+        ).all() if _sample_pks else [])
+    }
+    _spec_cache: dict = {}
+
     out = []
     for r in rows:
         svc = services_by_id.get(r.analysis_service_id)
+        _spec_fields = display_spec_fields(
+            db, service_id=r.analysis_service_id,
+            matrix=_matrix_by_sample.get(
+                r.lims_sample_pk or _parent_pk_by_vial.get(r.lims_sub_sample_pk)),
+            peptide_id=r.peptide_id,
+            wire_result=identity_wire_result(
+                db, keyword=r.keyword, result=r.result_value,
+                analysis_service_id=r.analysis_service_id),
+            cache=_spec_cache,
+        )
         method_name = None
         if r.method_id and r.method_id in methods_by_id:
             method_name = getattr(methods_by_id[r.method_id], "name", None)
@@ -3604,6 +3872,9 @@ def _serialize_senaite_shape_rows(
             # extra lookup. See SenaiteShapeAnalysisResponse docstring.
             retest_of_id=r.retest_of_id,
             reportable=r.reportable,
+            peptide_id=r.peptide_id,
+            slot=r.slot,
+            **_spec_fields,
         ))
     return out
 

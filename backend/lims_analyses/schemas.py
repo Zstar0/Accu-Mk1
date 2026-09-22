@@ -286,6 +286,19 @@ class SenaiteShapeAnalysisResponse(BaseModel):
     # new, optional fields — additive, no existing consumer reads them.
     retest_of_id: Optional[int] = None
     reportable: bool = True
+    # HPLC-native slice 1 (M1): the row's own peptide identity + blend slot,
+    # surfaced additively so the FE can render slot-aware blend rows without
+    # a second query. None for every pre-slice row and for non-blend rows.
+    peptide_id: Optional[int] = None
+    slot: Optional[int] = None
+    # Spec column (slice 22): the active spec for THIS row and its verdict,
+    # resolved by coa.spec_rules.display_spec_fields, which is the same
+    # resolve_spec/evaluate the certificate uses. `specification` is the COA
+    # wire dict ({rule_kind, equals, min, max, unit, display, loq}); None when
+    # the service has no active spec. `conforms`: True / False / None (no
+    # result yet, an informational spec, or a rule that could not run).
+    specification: Optional[dict] = None
+    conforms: Optional[bool] = None
 
 
 # ─── Phase 4a: promote_to_parent response shapes ─────────────────────────────
@@ -315,10 +328,16 @@ class PromoteResponse(BaseModel):
 
 class ParentRetestRequest(BaseModel):
     keyword: str
+    # The parent row itself (lims_analyses.id). When present it ALONE
+    # identifies the row: no service/keyword/slot resolution, and no
+    # fallthrough if it does not name the active parent row (fail closed).
+    parent_analysis_id: Optional[int] = None
     # S3: the native identity key. When present it alone identifies the parent
     # row (keyword is ignored for the match); keyword stays the compatibility
     # alias and remains the only thing today's FE sends.
     analysis_service_id: Optional[int] = None
+    # native-born per-slot rows: identifies which slot's parent row (spec 2026-09-10 M6)
+    slot: Optional[int] = None
     reason: Optional[str] = None
 
 
@@ -332,6 +351,22 @@ class ParentRetestResponse(BaseModel):
 
 class SourceRetestRequest(BaseModel):
     reason: Optional[str] = None
+
+
+# ── M6: native slot relabel (the only sanctioned way to change a native-born
+# slot's peptide) ──────────────────────────────────────────────────────────
+
+
+class RelabelNativeSlotRequest(BaseModel):
+    new_peptide_id: int
+    reason: Optional[str] = None
+
+
+class RelabelNativeSlotResponse(BaseModel):
+    slot: int
+    old_peptide_id: Optional[int] = None
+    new_peptide_id: int
+    restamped: int
 
 
 class SourceRetestResponse(BaseModel):

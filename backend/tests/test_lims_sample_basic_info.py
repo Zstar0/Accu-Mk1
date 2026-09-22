@@ -323,8 +323,8 @@ def test_populate_analyte_slots_pairs_ordered(db):
     service._populate_basic_info(row, _full_meta())
     slots = _json.loads(row.analytes)
     assert slots == [
-        {"name": "BPC-157", "declared_quantity": "10.00"},
-        {"name": "GHK-Cu", "declared_quantity": None},
+        {"name": "BPC-157", "declared_quantity": "10.00", "peptide_id": None},
+        {"name": "GHK-Cu", "declared_quantity": None, "peptide_id": None},
     ]
     # peptide_name stays slot-1 label (back-compat)
     assert row.peptide_name == "BPC-157"

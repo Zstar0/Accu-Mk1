@@ -6,6 +6,7 @@ describe('isHplcAnalyteService', () => {
     'ID_BPC157', 'ID_TB500BETA4', 'HPLC-ID', 'BLEND-IDENT', 'ANALYTE-2-IDENT',  // identity
     'ANALYTE-2-PUR', 'PUR_TB500BETA4', 'BLEND-PUR', 'HPLC-PUR',                 // purity
     'ANALYTE-2-QTY', 'QTY_TB500BETA4', 'PEPT-Total',                           // quantity
+    'HPLC-IDENTITY', 'HPLC-PURITY', 'HPLC-QUANTITY', 'HPLC-BLEND-PURITY', 'HPLC-BLEND-TOTAL', // native trio + aggregates
   ])('hides HPLC analyte service %s', kw => {
     expect(isHplcAnalyteService(kw)).toBe(true)
   })

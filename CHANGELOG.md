@@ -2,6 +2,73 @@
 
 ## Unreleased
 
+## v1.27.0 - 2026-09-21
+
+The HPLC native-born release: slices 1 to 24 of the program (spec `docs/superpowers/specs/2026-09-10-hplc-native-born-design.md`). Every NEW HPLC order can be minted, benched, promoted and certified in Accu-Mk1 with no SENAITE record. Nothing routes there until the WordPress `profile_key` on the HPLC test-service row is set to `hplc-purity-identity` (the flip runbook, `docs/superpowers/runbooks/2026-09-12-hplc-native-flip-runbook.md`); the Mk1 profile `HPLC Purity + Identity` seeds inactive. The changes below under "Visible on every sample from this release" apply to every sample, native or not, on deploy day.
+
+### Visible on every sample from this release
+- **Analyses table: a Spec column replaces SLA and Captured.** One cell per row, two lines: the row's active spec on top (`≥ 98 %`, `= Conforms`, `As measured`, or a filed display override), the verdict under it (Conforms; Does not conform with the deviation the certificate prints, e.g. `-1.02%`; Pending; Report only; Not evaluated). Sortable, failures first; hover shows rule, result and verdict. The verdict is the backend's, judged by the same rule the certificate uses, so the table can never disagree with the COA. Every native family with specs filed shows them (endotoxin, PCR, heavy metals, fentanyl, USP 71, moisture, HPLC); SENAITE-origin services have no specs, so legacy HPLC rows show a dash. The sample-level SLA stays in the sample header. Applies to the sample details page, vial pages, Vials Quick Look and the native parent card.
+- **Analyst column shows `F. Last`** when the profile has both names (the single name with one, the email with none). Parent rows, vial rows and the "Prepped by / Processed by" hover.
+- **The data icon on each analysis row is now a link to its analysis service** (opens the flyout under LIMS > Analysis Services); hover shows the line's details, its analyst and capture time, and the specs filed on the service.
+- **A promoted result keeps its capture time and analyst.** Promote copies the vial row's capture time (the latest among the result-bearing sources), analyst (worksheet stamp, else whoever entered the result, else the promoter) and processed-by onto the parent row, for every family. Who promoted stays on `created_by_user_id`, the promotions rows and the audit transition. A recalculated blend aggregate is captured at the recalculation. `scripts/backfill_parent_result_provenance.py` catches up existing parent rows through the same rule (dry-run by default; `--with-analyst` and `--include-legacy` need sign-off).
+- **Native analysis rows ride the COA publish to `published`.** The workflow catalog always described the edge and nothing applied it: every native parent row (endotoxin, PCR, heavy metals and so on, already live) stayed `verified` after publish. Now they move to `published` with `published_at` and an audit row, as their own step after the ledger commit. A retest of a published row is allowed: the published value stays on the certificate until the retest is promoted, and the activity feed says so ("... retested AFTER PUBLISH: published value 99 % stays on the certificate until the retest is promoted. Re-publish required."). `scripts/backfill_published_analysis_rows.py` catches up samples published before this release (dry-run by default; only rows verified at or before the sample's last publish; `--include-legacy` needs sign-off).
+- **Row joins use ids first, keyword only as the fallback:** promotions to parent rows, the vial overlay, the parent lock map, the worksheet and sample-prep SLA subjects, and the sample-status cascade. A keyword is not an identity on a native blend (every slot shares one keyword), and the keyword maps had produced a false HPLC product completion and a wedged lock map.
+- **Native internal remarks** on native-born parents (`POST /api/sub-samples/parent/{id}/remarks`).
+- **Manage Analyses (native block):** remove is enabled only on `ordered` placeholder rows.
+
+### HPLC native-born, slices 7 to 24 (dormant until the flip, except where noted above)
+- **Slice 7:** native parent attachments (chromatogram and sample image) served from the registry; unresolved-analyte flag; native-born lookup served from the registry instead of SENAITE.
+- **Slice 8:** `legacy_hplc` COA archetype decides whether a native trio row rides page 1; the identity result is a select (`Conforms` / `Does Not Conform`) on native identity rows.
+- **Slice 9:** native remarks; the analysis-service link and spec hover (above).
+- **Slice 10:** native HPLC rows ship their Mk1-filed spec and verdict on the COA wire (`specification` + `conforms`), the same fields endotoxin and PCR ship; COABuilder 2.35.0 honours them on page 1. The certificate prints the lab's spec (e.g. `≥ 98 %`), not a built-in.
+- **Slice 11:** bulk promote is slot-aware; a native blend no longer trips the "Duplicate keywords" guard.
+- **Slices 12 to 15:** the id-first joins (above).
+- **Slice 16:** losing the placeholder-seed race to the registration seed logs `order_upsert_seed_already_present` instead of a failure (benign, no data loss).
+- **Slice 17:** picking `Conforms` on a native identity row saves the token, not the peptide name.
+- **Slice 18:** blend aggregates (`HPLC-BLEND-TOTAL`, `HPLC-BLEND-PURITY`) are calculated on both tiers, nobody types them; a verified aggregate whose inputs change drops to `parent_to_verify`; a published one is never touched.
+- **Slice 19:** native rows publish with the COA (above).
+- **Slice 20:** retesting a published result is traceable: the event carries the row id, slot, title and the value and unit at the time of the retest.
+- **Slice 21:** `scripts/backfill_published_analysis_rows.py` (above).
+- **Slice 22:** the Spec column (above); COA generate and regenerate skip the SENAITE PDF attach for a native-born sample and its vials (two 404 round trips per native COA before).
+- **Slice 23:** the `F. Last` analyst (above).
+- **Slice 24:** the promote provenance carry-over (above).
+
+### HPLC native-born, slices 1 to 6 (schema, intake, prep bridge, promote, COA shim, status relay)
+- **HPLC-native foundation** (slice 1 of the native-born HPLC program, spec `docs/superpowers/specs/2026-09-10-hplc-native-born-design.md`): `lims_analyses.peptide_id` + `slot` (nullable, additive) with slot-aware root unique indexes; boot seed of the five native HPLC services, the `hplc-purity-identity` profile (seeded **inactive** — activating it is an explicit flip-runbook step, keeping it out of the Manage Analyses picker until then) and their wildcard specs; `hplc-purity-identity` accepted as the HPLC primary key alongside `hplcpurity_identity` in demand, seeding, verification and product-completion. Dark: no order carries the new key until the WordPress `profile_key` is set.
+- HPLC-native slice 2 (spec `docs/superpowers/specs/2026-09-10-hplc-native-born-design.md`, M3+M4): a registry signal with no SENAITE id now mints a customer-facing `P-`/`PB-` sample from counters seeded at 5000/1000 (guarded boot migration) and never adopts a later SENAITE uid (identity collision → quarantine); `POST /s2s/lims-samples` honors `Idempotency-Key`; `GET /s2s/peptides` ships the Mk1 peptide list to the Integration Service; `Analyte{i}PeptideId` on the signal lands in `lims_samples.analytes`; HPLC vials of native-born parents seed the generic native trio per analyte slot (unresolved names ⇒ `peptide_id NULL` + `analyte_unresolved` reason, never a guess) with the two blend aggregates for blends; parent placeholders are minted per slot. SENAITE-born samples are untouched.
+
+### HPLC native-born — slice 3 (M5)
+- Prep bridge routes HPLC results onto native-born vials' generic trio rows by `LimsAnalysis.peptide_id` (never by keyword prefix); native identity rows receive the literal `Conforms` / `Does Not Conform`; unresolved (`peptide_id NULL`) rows are never written.
+- Blend aggregates (`HPLC-BLEND-TOTAL`, `HPLC-BLEND-PURITY`) computed from per-slot native components.
+- Variance replicate series, variance-set identity verdict, and spec peptide-tier anchor attribute native rows via `COALESCE(lims_analyses.peptide_id, analysis_services.peptide_id)`.
+- Throughput report and FE HPLC/identity classifiers recognise the native keywords.
+- Behaviour-neutral for SENAITE-born samples (all new branches keyed on native keywords / row-level peptide_id).
+
+### HPLC native-born — slice 5 (M7)
+- `coa/hplc_shim` maps native HPLC rows to the legacy wire vocabulary (`ANALYTE-{slot}-ID/PUR/QTY`, `HPLC-PUR`, `PEPT-Total`, `BLEND-PUR`) so the COA path never sees a bare native keyword.
+- `legacy_rows` admits native rows and aborts on an unresolved slot rather than emitting a guessed identity.
+- `sample_meta` analyte titles for native-born rows derive from the same shim helper as `legacy_rows`, so Title and `Analyte{N}Peptide` never diverge (the P-1611 class).
+- COA variance analyte series, variance-set results, and the mk1 source resolver are now keyed per slot for native rows; the shadow reader excludes native HPLC rows from its candidate map.
+- Parity tests exercise the vendored engine end to end for both single-peptide and blend native samples. COABuilder is untouched. Behaviour-neutral for SENAITE-born samples.
+
+### HPLC native-born — slice 4 (M6)
+- Promote is slot-aware: the native identity rule keys on `(analysis_service_id, COALESCE(slot,0))`, and the minted parent row inherits the vial row's `peptide_id`/`slot`/stamped title.
+- Supersession and parent-retest lookup never guess across slots — `ParentRetestRequest.slot` threads through the route, cascade and `_find_active_parent_row`; a multi-slot native parent without a slot returns "no parent row" rather than picking one.
+- Parent read surfaces (placeholder suppression, live-vial-state overlay) key on `(analysis_service_id, slot)` instead of service alone, so slot 2's outstanding placeholder no longer renders slot 1's state.
+- Removal classification, pristine delete, and the reject cascade are slot-aware for native-born parents; the SENAITE-driven reject cascade stays keyword-only (legacy-only by construction).
+- New `relabel_native_slot` + `POST /api/lims-analyses/parent/{sample_id}/native-slots/{slot}/relabel`, pristine slots only. Legacy Replace/Clear now 409 (`native_born_use_relabel`) on native-born parents; relabel is the only path.
+- Renaming a slot nulls its stored `peptide_id` (never re-seeds the previous peptide from a stale id); the S2S customer-edit mirror restamps native placeholders the same way.
+- Publish skips the SENAITE AR lookup entirely for native-born samples; the registry read surface now exposes `external_lims_system`.
+- FE: parent retest requests carry `slot`; the Analytes card gets a Relabel dialog for native-born slots.
+- Behaviour-neutral for SENAITE-born samples throughout.
+
+### HPLC native-born — slice 6 (M8)
+- Native status relay Mk1→IS on receive/verify/publish: `workflow/status_relay.py`, hooked into the single mk1-authority sample-status writer (`workflow/engine.py::_write_status_if_authoritative`); stable per-transition `event_id`s so a re-send de-duplicates on the IS side; never raises; records `native_status_relayed` / `native_status_relay_failed` events.
+- `lims_samples.retest_of_sample_id` populated from registry-signal meta `RetestOfSampleId`.
+- Native retest auto check-in (`native_auto_checkin`, triggered by meta `AutoCheckin`): copies the original native-born sample's receive photo and receive-time remark, then runs the native receive on the retest row.
+- Native-born guards added to the remaining SENAITE-uid-keyed paths: attachment capture falls back to `sample_id` when the uid lookup misses; the SENAITE refresh (and its debug-refresh route) no-op for native-born rows; the IS event-stream puller and the parity script skip native-born samples.
+- Behaviour-neutral for SENAITE-born samples throughout.
+
 ## v1.26.1 - 2026-09-21
 
 ### Changed
@@ -20,7 +87,6 @@
 - **Endotoxin worksheets (Worksheets 2.0, endo first).** Any worksheet holding endotoxin vials is now the endo bench log that Dennis's `tools-dennis/endotoxin-log` prototype proved in September. An endo-only worksheet renders Dennis's run table in the flyout (bench order, editable overrides, run totals); a mixed worksheet shows a compact line under each endo item. Each row carries: received and due dates (the SLA engine's deadline, `due_at` on `/sla/status`, with any lab holiday it stepped over named), the weight and reconstitution volume (both analyst overrides, stored only when they differ from the order's declared quantity or the `MIN(10, 1 + FLOOR(mg / 50))` rule), the sample and LAL microlitres to pipette, vial concentration, and the bacteriostatic-water dilution path. The worksheet gains **Bench sheet** (landscape, exactly ten samples per page, priority pills, summary sheet last) and **CSV** for its endo rows, both built from the same figures. New nullable columns `worksheet_items.prep_weight_mg`, `prep_volume_ml`, `prep_dilution_factor`; the worksheet API adds the parent's declared weight, sample type, order number and identity to every item. `scripts/backfill_endo_worksheets.py` creates the missing September worksheets from the log's data file and stamps analyst attribution through the normal worksheet path (dry-run by default). Spec: `docs/superpowers/specs/2026-09-18-endo-worksheet-design.md`.
 - **The endo worksheet now looks and works like Dennis's tool.** An all-endo worksheet opens the flyout at near full width with his layout: a **Run log** rail of endotoxin worksheets (open and completed, `GET /worksheets/bench-log?kind=endo`), the run title and actions, a meta strip (analyst, date made, due, orders), two-line column headers, the figures the analyst types (target, declared weight, volume to add) on the plain surface and the worked-out ones (sample, LAL, vial concentration) on a tinted one, run totals, and the Calculations legend. **Made** and **MCS** are tick boxes: the server stamps who and when (`worksheet_items.made_at` / `made_by_user_id`, `ran_at` / `ran_by_user_id`), writes an `audit_logs` row for every set and clear, and keeps `prep_status` in step (ready, in progress, complete). **Flag** raises a real flag on the vial, or opens the one already open. Target concentration is overridable (`prep_target_mg_ml`, default 1 mg/mL). His Accmk1 tick is dropped (the row is in Mk1). Also fixed: opening a completed worksheet while you had open ones bounced you to the first open one.
 - **Endo worksheets: Preview, Print, and the data reports will need.** The tech prints the bench sheet, works the run on paper and keys it in afterwards, so the worksheet now follows that. **Preview** shows the print document as paper and **Print** sends it (Made, MCS and Flag boxes for the pen). Every print is recorded: the first is the run's start on the bench (`worksheets.printed_at` / `printed_by_user_id`), reprints only raise `print_count`, and each is an `audit_logs` row. The **Made** and **MCS** column headings tick every row still open in one request (`POST /worksheets/{id}/bench-ticks`); they only set ticks, never clear them. An **MCS** tick now records the instrument on the vial's analyses whenever the catalog leaves exactly one choice (analysis service, the active method covering it, the active instrument linked to that method), so instrument reports get data with no extra step at the bench; with two analyzers nothing is guessed and the apply bar still decides. It never writes a method: the COA's native section prints a row's method and promote carries it to the parent, and methods are not shown on COAs yet. The worksheet analyst filter shows people's names instead of emails, and narrow spots use the short form (`shortName`, "Forrest P.").
-
 ## v1.24.0 - 2026-09-18
 
 ### Added

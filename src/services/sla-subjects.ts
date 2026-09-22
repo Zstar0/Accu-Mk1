@@ -34,12 +34,39 @@ export interface SlaSubject {
   receivedAt: string | null
   /** When set, freezes elapsed at this instant (now_override) → met/missed. */
   completedAt?: string | null
+  /** Catalog service ids of the subject's analyses (their own FK). These
+   *  resolve the profile tier directly. An analysis listed here must NOT also
+   *  appear in `keywords`: keyword -> service is last-writer-wins across
+   *  origins, and tightest-tier-wins would let a colliding keyword pull in a
+   *  wrong tier. Build both with `slaSubjectIdentities`. */
+  serviceIds?: number[]
   /** Analysis keywords on the subject's row/vial. Enables the profile-SLA
    *  precedence step (Task 11): keyword -> service id -> tightest tiered
    *  ACTIVE profile, which beats the group tier and loses to a priority
    *  override — same chain as the Order Status resolvers. Omitted → the
    *  legacy group-only resolution (profile tiers invisible). */
   keywords?: string[]
+}
+
+/**
+ * Split a subject's analyses into the two identity lists `SlaSubject` takes:
+ * an analysis with its own service FK goes to `serviceIds`, and ONLY one
+ * without an FK (SENAITE-derived, or a worksheet item stored before the id
+ * was captured) contributes its keyword.
+ */
+export function slaSubjectIdentities(
+  analyses:
+    | { analysis_service_id?: number | null; keyword?: string | null }[]
+    | null
+    | undefined
+): { serviceIds: number[]; keywords: string[] } {
+  const serviceIds: number[] = []
+  const keywords: string[] = []
+  for (const a of analyses ?? []) {
+    if (a.analysis_service_id != null) serviceIds.push(a.analysis_service_id)
+    else if (a.keyword) keywords.push(a.keyword)
+  }
+  return { serviceIds, keywords }
 }
 
 export interface SlaSubjectSnapshot {
@@ -84,17 +111,15 @@ function resolveSubjectTier(
 ): { tier: SlaTier; reason: SampleSlaReason } | null {
   const unmappedKeywords: string[] = []
   let profileWin: ServiceProfileTier | null = null
-  if (
-    subject.keywords?.length &&
-    keywordToServiceId &&
-    serviceIdToProfileTier
-  ) {
-    for (const kw of subject.keywords) {
+  if (keywordToServiceId && serviceIdToProfileTier) {
+    // Ids first (exact), then keyword only for analyses that had no id.
+    const svcIds: number[] = [...(subject.serviceIds ?? [])]
+    for (const kw of subject.keywords ?? []) {
       const svcId = keywordToServiceId.get(kw)
-      if (svcId == null) {
-        unmappedKeywords.push(kw)
-        continue
-      }
+      if (svcId == null) unmappedKeywords.push(kw)
+      else svcIds.push(svcId)
+    }
+    for (const svcId of svcIds) {
       const cand = serviceIdToProfileTier.get(svcId)
       if (
         cand &&
@@ -184,7 +209,9 @@ export function useSlaForSubjects(subjects: SlaSubject[]): SlaSubjectsResult {
   // before this step existed.
   const servicesQuery = useAnalysisServices()
   const profilesQuery = useAnalysisProfiles()
-  const anyKeywords = subjects.some(s => s.keywords && s.keywords.length > 0)
+  const anyKeywords = subjects.some(
+    s => (s.keywords?.length ?? 0) > 0 || (s.serviceIds?.length ?? 0) > 0
+  )
 
   /** Subjects that resolve to a real tier AND have a received date — paired
    *  with their resolved tier so batchItems and snapshots share the iteration. */

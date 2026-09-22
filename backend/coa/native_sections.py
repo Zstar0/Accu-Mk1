@@ -126,8 +126,15 @@ def _ordered_native_profiles(db: Session, services: dict, package: Optional[str]
         ).scalar_one_or_none()
         if prof is None:
             continue
-        if require_archetype and prof.coa_archetype is None:
-            continue
+        if require_archetype:
+            # Slice 8: legacy_hplc rides page 1 via coa/hplc_shim.py and
+            # must never surface as a native_sections page-2 section (coab
+            # aborts on an unknown archetype) — treated like NULL here.
+            # Local import: hplc_shim imports NativeSectionsError from this
+            # module at load time, so a module-level import back would cycle.
+            from coa.hplc_shim import LEGACY_HPLC_ARCHETYPE
+            if prof.coa_archetype is None or prof.coa_archetype == LEGACY_HPLC_ARCHETYPE:
+                continue
         members = prof.analysis_services  # ordered by member sort_order (spec 1)
         if not members or any(svc.origin != "mk1" for svc in members):
             continue
