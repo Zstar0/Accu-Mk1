@@ -81,6 +81,7 @@ def test_token_claims_carry_identity(db_session):
 # save/restore of dependency_overrides.
 
 from fastapi.testclient import TestClient
+import auth
 from database import get_db
 from main import app
 
@@ -115,15 +116,28 @@ def db_session():
 
 @pytest.fixture
 def client(db_session):
+    """Eleven pre-existing test modules install a module-level
+    app.dependency_overrides[auth.get_current_user] = lambda: {...} at import
+    time and never remove it. If one of those is in effect when this module's
+    tests run, require_admin receives a dict instead of a User and
+    current_user.role raises AttributeError. Pop (not save-and-restore) those
+    two overrides: the poison may already be installed before this fixture
+    ever runs, so "restore the previous value" would just restore the poison."""
     def _override_db():
         yield db_session
-    prev = app.dependency_overrides.get(get_db)
+    prev = {
+        d: app.dependency_overrides.get(d)
+        for d in (get_db, auth.get_current_user, auth.get_current_user_any_scope)
+    }
     app.dependency_overrides[get_db] = _override_db
+    app.dependency_overrides.pop(auth.get_current_user, None)
+    app.dependency_overrides.pop(auth.get_current_user_any_scope, None)
     yield TestClient(app)
-    if prev is None:
-        app.dependency_overrides.pop(get_db, None)
-    else:
-        app.dependency_overrides[get_db] = prev
+    for d, v in prev.items():
+        if v is None:
+            app.dependency_overrides.pop(d, None)
+        else:
+            app.dependency_overrides[d] = v
 
 
 def _bearer(u):
@@ -165,3 +179,22 @@ def test_admin_updates_scope(client, db_session):
     assert r.json()["scope"] == "both"
     r = client.put(f"/auth/users/{target.id}", headers=_bearer(admin), json={"scope": "nope"})
     assert r.status_code == 400
+
+
+def test_admin_cannot_change_own_scope(client, db_session):
+    admin = _user(db_session, "admin@lab.test", role="admin")
+    r = client.put(f"/auth/users/{admin.id}", headers=_bearer(admin), json={"scope": "finance"})
+    assert r.status_code == 400, r.text
+    db_session.refresh(admin)
+    assert admin.scope == "lab"
+
+
+# ── LIMS routes reject finance scope at the plain get_current_user fence ──
+# (spec §7). /watcher/status: Depends(get_current_user) only (no
+# require_admin, no path/query params, no DB) — the simplest LIMS route
+# behind the plain lab fence.
+
+def test_finance_user_refused_by_lims_get_route(client, db_session):
+    u = _user(db_session, "fin@test", scope="finance")
+    r = client.get("/watcher/status", headers=_bearer(u))
+    assert r.status_code == 403, r.text

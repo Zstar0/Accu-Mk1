@@ -805,6 +805,8 @@ async def update_user(
     if data.scope is not None:
         if data.scope not in SCOPES:
             raise HTTPException(status_code=400, detail="Scope must be 'lab', 'finance' or 'both'")
+        if user.id == admin.id:
+            raise HTTPException(status_code=400, detail="Cannot change your own scope")
         user.scope = data.scope
 
     if data.is_active is not None:
