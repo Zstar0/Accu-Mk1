@@ -36,6 +36,7 @@ import WorksheetDrawerItems from './WorksheetDrawerItems'
 import { EndoWorksheetActions } from './EndoWorksheetActions'
 import { EndoWorksheetView } from './EndoWorksheetView'
 import { BenchRunLog } from './BenchRunLog'
+import { PcrWorksheetView } from './PcrWorksheetView'
 import { worksheetKind } from '@/lib/worksheet-kind'
 import { displayName } from '@/lib/user-display'
 import AddSamplesModal from './AddSamplesModal'
@@ -62,6 +63,8 @@ export function WorksheetDrawer() {
     reassignMutation,
     updateItemMutation,
     bulkTicksMutation,
+    freezeWellsMutation,
+    unfreezeWellsMutation,
     applyMethodInstrumentMutation,
     reorderMutation,
     addItemMutation,
@@ -129,10 +132,12 @@ export function WorksheetDrawer() {
   const [addSamplesOpen, setAddSamplesOpen] = useState(false)
 
   const isCompleted = activeWorksheet?.status === 'completed'
-  // Worksheets 2.0: an all-endo worksheet gets the endo bench view, which
-  // needs the room of a page; every other worksheet keeps the 1100px drawer.
-  const isEndo =
-    !!activeWorksheet && worksheetKind(activeWorksheet.items) === 'endo'
+  // Worksheets 2.0: an all-endo or all-PCR worksheet gets its bench view,
+  // which needs the room of a page; every other worksheet keeps the 1100px drawer.
+  const kind = activeWorksheet ? worksheetKind(activeWorksheet.items) : null
+  const isEndo = kind === 'endo'
+  const isPcr = kind === 'pcr'
+  const isBench = isEndo || isPcr
 
   // Parse notes JSON: separate user text from prep_started metadata
   const { userNotes, prepStartedItems } = useMemo(() => {
@@ -210,6 +215,7 @@ export function WorksheetDrawer() {
     title?: string
     assigned_analyst?: number
     notes?: string
+    bench_config?: Record<string, unknown>
   }) {
     if (!activeWorksheet) return
     if (data.notes !== undefined) {
@@ -232,7 +238,7 @@ export function WorksheetDrawer() {
       <Sheet open={drawerOpen} onOpenChange={open => { if (!open) closeDrawer() }}>
         <SheetContent
           side="right"
-          className={`p-0 flex flex-col ${isEndo ? 'w-[97vw] sm:max-w-[1760px]' : 'w-[1100px] sm:max-w-[1100px]'}`}
+          className={`p-0 flex flex-col ${isBench ? 'w-[97vw] sm:max-w-[1760px]' : 'w-[1100px] sm:max-w-[1100px]'}`}
         >
           {/* Loading state */}
           {isLoading && (
@@ -379,8 +385,61 @@ export function WorksheetDrawer() {
             </div>
           )}
 
+          {/* PCR worksheet: Dennis's plate builder + the PCR run log (Worksheets 2.0) */}
+          {!isLoading && !isError && activeWorksheet && isPcr && (
+            <div className="flex flex-1 min-h-0 overflow-hidden bg-muted/30">
+              <BenchRunLog
+                kind="pcr"
+                label="Rapid sterility PCR"
+                tickLabels={['Plate made', 'Ran']}
+                activeId={activeWorksheet.id}
+                users={users}
+                onSelect={id => {
+                  setAnalystFilter('all')
+                  setActiveId(id)
+                }}
+              />
+              <PcrWorksheetView
+                key={activeWorksheet.id}
+                worksheet={activeWorksheet}
+                users={users}
+                userNotes={userNotes}
+                isCompleted={!!isCompleted}
+                otherWorksheets={openWorksheets.filter(ws => ws.id !== activeWorksheet.id)}
+                applyBar={
+                  !isCompleted && (
+                    <WorksheetApplyBar
+                      key={activeWorksheet.id}
+                      activeMethods={activeMethods}
+                      instruments={instruments}
+                      isPending={applyMethodInstrumentMutation.isPending}
+                      onApply={handleApplyToAll}
+                    />
+                  )
+                }
+                completeAction={completeAction}
+                onAddSamples={() => setAddSamplesOpen(true)}
+                onUpdate={handleUpdateWorksheet}
+                onRemove={itemId => removeMutation.mutate({ worksheetId: activeWorksheet.id, itemId })}
+                onReassign={(itemId, targetId) =>
+                  reassignMutation.mutate({ worksheetId: activeWorksheet.id, itemId, targetWorksheetId: targetId })
+                }
+                onTickAll={data => bulkTicksMutation.mutate({ worksheetId: activeWorksheet.id, data })}
+                onFreeze={wells => freezeWellsMutation.mutateAsync({ worksheetId: activeWorksheet.id, wells })}
+                onUnfreeze={() => unfreezeWellsMutation.mutate(activeWorksheet.id)}
+              />
+              <AddSamplesModal
+                open={addSamplesOpen}
+                onOpenChange={setAddSamplesOpen}
+                worksheetId={activeWorksheet.id}
+                existingItems={activeWorksheet.items}
+                onAdd={data => addItemMutation.mutate({ worksheetId: activeWorksheet.id, data })}
+              />
+            </div>
+          )}
+
           {/* Active worksheet content */}
-          {!isLoading && !isError && activeWorksheet && !isEndo && (
+          {!isLoading && !isError && activeWorksheet && !isBench && (
             <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
               {/* Header */}
               <WorksheetDrawerHeader

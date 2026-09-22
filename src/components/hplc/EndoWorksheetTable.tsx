@@ -89,6 +89,18 @@ const PRIORITY_LABEL: Record<string, string> = {
   normal: 'Default',
 }
 
+/** The priority as a chip, in the same words as the inbox. */
+export function PriorityChip({ priority }: { priority: string | null | undefined }) {
+  const key = (priority ?? 'normal').toLowerCase()
+  return (
+    <span
+      className={`inline-block rounded-[3px] border px-1.5 py-0.5 text-xs ${PRIORITY_CHIP[key] ?? PRIORITY_CHIP.normal}`}
+    >
+      {PRIORITY_LABEL[key] ?? key}
+    </span>
+  )
+}
+
 export function EndoWorksheetTable({
   items,
   isCompleted,
@@ -213,7 +225,6 @@ export function EndoWorksheetTable({
                 item.prep_status
               ] ??
                 STATUS_CHIP.ready ?? ['', '']
-              const priority = (item.priority ?? 'normal').toLowerCase()
               const edge =
                 prep.warning === 'over_cartridge'
                   ? 'before:bg-red-500'
@@ -270,11 +281,7 @@ export function EndoWorksheetTable({
                     </span>
                   </td>
                   <td className={TD}>
-                    <span
-                      className={`inline-block rounded-[3px] border px-1.5 py-0.5 text-xs ${PRIORITY_CHIP[priority] ?? PRIORITY_CHIP.normal}`}
-                    >
-                      {PRIORITY_LABEL[priority] ?? priority}
-                    </span>
+                    <PriorityChip priority={item.priority} />
                   </td>
                   <td className={`${TD} ${MONO}`}>
                     {shortOrder(item.client_order_number) || '-'}
@@ -613,7 +620,7 @@ const OPEN_FLAG_STATES = new Set(['open', 'in_progress', 'blocked'])
  * for a legacy item): no open flag opens the raise-flag compose, an open one
  * shows in its type colour and opens the thread.
  */
-function FlagCell({ item }: { item: WorksheetItemRow }) {
+export function FlagCell({ item }: { item: WorksheetItemRow }) {
   const entityType = item.lims_sub_sample_pk ? 'sub_sample' : 'sample'
   const entityId = item.lims_sub_sample_pk
     ? String(item.lims_sub_sample_pk)
