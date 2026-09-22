@@ -22,7 +22,8 @@ import { getReadyToPublish } from '@/lib/api'
 import type { ReadyRow, ReadySla } from '@/lib/api'
 import { changeStatus } from '@/lib/flags-api'
 import { useCreateFlag } from '@/hooks/use-flags'
-import { formatMinutes } from '@/lib/sla-format'
+import { formatMinutes, tierDayMinutes } from '@/lib/sla-format'
+import { useBusinessDayMinutes } from '@/services/business-hours'
 import { useUIStore } from '@/store/ui-store'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -99,7 +100,7 @@ const PARTIAL_STATE = 'waiting_for_addon_results'
  *  The report has no client-side resolver snapshot, so `reason` is null; the
  *  card still shows received, tier, target, elapsed and remaining exactly as
  *  the Order Status page does (memory: feedback_sla_hover_breakdown_everywhere). */
-function tierFromSla(sla: ReadySla): SlaTier {
+function tierFromSla(sla: ReadySla, day_minutes?: number): SlaTier {
   return {
     id: 0,
     name: sla.tier,
@@ -109,19 +110,23 @@ function tierFromSla(sla: ReadySla): SlaTier {
     amber_threshold_percent: 0,
     created_at: '',
     updated_at: '',
+    day_minutes,
   }
 }
 
 export function SlaCell({ row }: { row: ReadyRow }) {
   const sla = row.sla
+  const dayMinutes = useBusinessDayMinutes()
   if (!sla) {
     return (
       <span className="text-xs text-muted-foreground/50">Awaiting sample</span>
     )
   }
+  const tier = tierFromSla(sla, dayMinutes)
+  const day = tierDayMinutes(tier)
   const text = sla.breached
-    ? `${formatMinutes(-sla.remaining_minutes)} over`
-    : `${formatMinutes(sla.remaining_minutes)} left`
+    ? `${formatMinutes(-sla.remaining_minutes, day)} over`
+    : `${formatMinutes(sla.remaining_minutes, day)} left`
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -141,7 +146,7 @@ export function SlaCell({ row }: { row: ReadyRow }) {
       </TooltipTrigger>
       <TooltipContent side="left" className="p-0 max-w-md">
         <SlaBreakdownTooltip
-          tier={tierFromSla(sla)}
+          tier={tier}
           status={{
             target_minutes: sla.target_minutes,
             elapsed_minutes: sla.elapsed_minutes,

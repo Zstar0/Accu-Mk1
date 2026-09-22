@@ -5539,6 +5539,11 @@ export interface SlaTier {
   amber_threshold_percent: number
   created_at: string
   updated_at: string
+  /** NOT from the API. Attached client-side by `useSlaTiers`: minutes in one
+   *  business day (the lab's open..close window), so every surface holding a
+   *  tier can size durations in business days. Absent until the business-hours
+   *  config loads; read it through `tierDayMinutes`. */
+  day_minutes?: number
 }
 
 export interface SlaTierCreate {

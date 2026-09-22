@@ -1,7 +1,7 @@
 import { memo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
-import { formatMinutes } from '@/lib/sla-format'
+import { formatMinutes, tierDayMinutes } from '@/lib/sla-format'
 import type { SlaSubjectSnapshot } from '@/services/sla-subjects'
 import { pickWorstSnapshot } from '@/services/sla-subjects'
 import {
@@ -70,20 +70,21 @@ function SlaAgeIndicatorImpl(props: SlaAgeIndicatorProps) {
   const className = COLOR_CLASS[color]
   const dot = DOT[color]
   const compact = props.compact ?? false
+  const day = tierDayMinutes(snap?.tier)
 
   let text = ''
   let titleAttr: string | undefined
   if (snap && color === 'red') {
-    const over = formatMinutes(Math.abs(snap.status.remaining_minutes))
+    const over = formatMinutes(Math.abs(snap.status.remaining_minutes), day)
     text = compact ? `−${over}` : t('orderStatus.sla.over', { time: over })
   } else if (snap && (color === 'amber' || color === 'green')) {
-    const left = formatMinutes(snap.status.remaining_minutes)
+    const left = formatMinutes(snap.status.remaining_minutes, day)
     text = compact ? left : t('orderStatus.sla.left', { time: left })
   } else if (snap && color === 'met') {
-    const took = formatMinutes(snap.status.elapsed_minutes)
+    const took = formatMinutes(snap.status.elapsed_minutes, day)
     text = compact ? took : t('orderStatus.sla.publishedTook', { time: took })
   } else if (snap && color === 'missed') {
-    const by = formatMinutes(Math.abs(snap.status.remaining_minutes))
+    const by = formatMinutes(Math.abs(snap.status.remaining_minutes), day)
     text = compact ? `−${by}` : t('orderStatus.sla.missedBy', { time: by })
   } else if (color === 'loading') {
     titleAttr = t('orderStatus.sla.loading')
@@ -164,6 +165,8 @@ function propsEqual(
     (a.tier?.business_hours_only ?? null) !==
     (b.tier?.business_hours_only ?? null)
   )
+    return false
+  if ((a.tier?.day_minutes ?? null) !== (b.tier?.day_minutes ?? null))
     return false
   if (a.status.elapsed_minutes !== b.status.elapsed_minutes) return false
   if (a.status.remaining_minutes !== b.status.remaining_minutes) return false

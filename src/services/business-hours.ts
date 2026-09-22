@@ -5,6 +5,8 @@ import {
   getLabHolidays, createLabHoliday, deleteLabHoliday, generateFederalHolidays,
   type BusinessHoursConfig, type LabHoliday,
 } from '@/lib/api'
+import { slaQueryKeys } from '@/services/sla'
+import { businessDayMinutes } from '@/lib/sla-format'
 
 export const businessHoursQueryKeys = {
   config: ['business-hours', 'config'] as const,
@@ -19,12 +21,20 @@ export function useBusinessHoursConfig() {
   })
 }
 
+/** Minutes in one business day (open..close), for sizing the durations of
+ *  business-hours SLA tiers. Undefined until the config loads. */
+export function useBusinessDayMinutes(): number | undefined {
+  return businessDayMinutes(useBusinessHoursConfig().data)
+}
+
 export function useUpdateBusinessHoursConfig() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (data: BusinessHoursConfig) => updateBusinessHoursConfig(data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: businessHoursQueryKeys.config })
+      // Tiers carry the business-day length derived from this config.
+      qc.invalidateQueries({ queryKey: slaQueryKeys.tiers })
       toast.success('Business hours saved')
     },
     onError: (e: Error) => toast.error(e.message),
