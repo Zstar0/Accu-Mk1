@@ -18,6 +18,7 @@ export interface UserCreateInput {
   email: string
   password: string
   role?: string
+  scope?: string
 }
 
 export interface UserUpdateInput {
@@ -26,6 +27,7 @@ export interface UserUpdateInput {
   is_active?: boolean
   first_name?: string | null
   last_name?: string | null
+  scope?: string
 }
 
 export interface PasswordChangeInput {

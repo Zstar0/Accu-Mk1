@@ -33,6 +33,7 @@ export function UserEditFlyout({
   const [lastName, setLastName] = useState(user.last_name ?? '')
   const [email, setEmail] = useState(user.email)
   const [role, setRole] = useState(user.role)
+  const [scope, setScope] = useState<string>(user.scope)
   const [isActive, setIsActive] = useState(user.is_active)
   const [saving, setSaving] = useState(false)
 
@@ -46,6 +47,7 @@ export function UserEditFlyout({
     patch.last_name = lastName.trim() || null
   if (emailTrim !== user.email) patch.email = emailTrim
   if (!isSelf && role !== user.role) patch.role = role
+  if (!isSelf && scope !== user.scope) patch.scope = scope
   if (!isSelf && isActive !== user.is_active) patch.is_active = isActive
   const hasChanges = Object.keys(patch).length > 0
 
@@ -134,6 +136,19 @@ export function UserEditFlyout({
                 </SelectContent>
               </Select>
             </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="edit-scope">Scope</Label>
+              <Select value={scope} onValueChange={setScope} disabled={isSelf}>
+                <SelectTrigger id="edit-scope">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="lab">Lab</SelectItem>
+                  <SelectItem value="finance">Finance (Workbench only)</SelectItem>
+                  <SelectItem value="both">Both</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
             <div className="flex items-center justify-between">
               <Label htmlFor="edit-active">Active</Label>
               <Switch
@@ -145,7 +160,7 @@ export function UserEditFlyout({
             </div>
             {isSelf && (
               <p className="text-xs text-muted-foreground">
-                You cannot change your own role or active status.
+                You cannot change your own role, scope or active status.
               </p>
             )}
             <div className="flex justify-end gap-2 pt-2">

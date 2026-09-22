@@ -18,6 +18,7 @@ const baseUser: AuthUser = {
   senaite_configured: false,
   first_name: 'Jane',
   last_name: 'Doe',
+  scope: 'lab',
 }
 
 async function renderFlyout(
