@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Worksheets 2.0: rapid sterility PCR plate builder
+- **A PCR worksheet is a run.** Open any worksheet whose samples are all PCR vials (native `pcr` or legacy `ster`, the same test) and the flyout shows Dennis's plate builder: the run header, the samples panel beside a 96-well plate map (16S in columns 1 to 6, its 18S mirror in 7 to 12, one boxed block per order, the NPC after the last sample), the reagent calculations for every plate, and the PCR run log rail. One worksheet spans every order on the plate.
+- **Wells lock when the plate leaves for the bench.** Print or the QuantStudio export pins every sample to its well; a locked well never moves. Samples added later take the wells after the last locked one and the NPC stays last. A locked well is never re-issued, even after its sample is removed. "Unlock wells" releases them on purpose (audited).
+- **Exports and print:** the QuantStudio 6/7 Flex sample file (one per plate), the plate map CSV, the well list CSV, Preview and Print (one landscape page per plate, run strip on every page, notes on the last). Print is recorded as the run's start on the bench, as on the endo sheet.
+- **Run status and parameters:** Plate made / Ran on QuantStudio tick every row at once (Ran records the QuantStudio on each row); overage, curve, plate type and the order-sort switch are saved on the worksheet.
+- Legacy `ster` vials now classify as PCR work everywhere (bench kind, run log).
+
 ## v1.27.0 - 2026-09-21
 
 The HPLC native-born release: slices 1 to 24 of the program (spec `docs/superpowers/specs/2026-09-10-hplc-native-born-design.md`). Every NEW HPLC order can be minted, benched, promoted and certified in Accu-Mk1 with no SENAITE record. Nothing routes there until the WordPress `profile_key` on the HPLC test-service row is set to `hplc-purity-identity` (the flip runbook, `docs/superpowers/runbooks/2026-09-12-hplc-native-flip-runbook.md`); the Mk1 profile `HPLC Purity + Identity` seeds inactive. The changes below under "Visible on every sample from this release" apply to every sample, native or not, on deploy day.
