@@ -59,3 +59,17 @@ def test_any_scope_resolver_still_refuses_inactive(db_session):
     with pytest.raises(HTTPException) as e:
         auth.get_current_user_any_scope(token=_token_for(u), db=db_session)
     assert e.value.status_code == 401
+
+
+# ── token claims ──────────────────────────────────────────────────
+
+def test_token_claims_carry_identity(db_session):
+    import auth
+    from jose import jwt
+    u = _user(db_session, "c@test", scope="finance", first_name="Ada", last_name="Lovelace")
+    tok = auth.create_access_token(auth.token_claims_for(u))
+    c = jwt.decode(tok, auth.SECRET_KEY, algorithms=[auth.ALGORITHM])
+    assert c["sub"] == str(u.id)
+    assert c["email"] == "c@test" and c["scope"] == "finance" and c["role"] == "standard"
+    assert c["first_name"] == "Ada" and c["last_name"] == "Lovelace"
+    assert "exp" in c

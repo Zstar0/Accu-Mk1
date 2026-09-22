@@ -55,6 +55,18 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
+def token_claims_for(user) -> dict:
+    """Claims for a login token. Accu-Mk1 ignores everything but `sub` (it re-reads
+    the DB); the rest lets a federated app (Workbench) verify a request locally."""
+    return {
+        "sub": str(user.id),
+        "email": user.email,
+        "scope": user.scope,
+        "role": user.role,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+    }
+
 # ── Pydantic schemas ─────────────────────────────────────────
 
 class UserCreate(BaseModel):

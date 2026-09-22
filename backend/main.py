@@ -63,7 +63,7 @@ from sla_perf import (  # noqa: E402
 from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment, MethodAttachment, method_services, LimsOrder
 from catalog.change_log import apply_and_log, log_create, log_delete, log_members
 from auth import (
-    get_current_user, require_admin, create_access_token,
+    get_current_user, require_admin, create_access_token, token_claims_for,
     verify_password, get_password_hash, seed_admin_user,
     require_internal_service_token,
     UserCreate, UserRead, UserUpdate, MeUpdate, PasswordChange, TokenResponse,
@@ -628,7 +628,7 @@ async def login(
             detail="Account is deactivated",
         )
 
-    access_token = create_access_token(data={"sub": str(user.id)})
+    access_token = create_access_token(data=token_claims_for(user))
     return TokenResponse(
         access_token=access_token,
         user=_user_to_read(user),
