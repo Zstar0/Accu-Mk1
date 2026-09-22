@@ -12,7 +12,15 @@ import {
   orderGroups,
   plateGrid,
   summarize,
+  metaHeaderRows,
+  plateMapRows,
+  prepRows,
+  quantStudioFiles,
+  toCsv,
+  wellListRows,
   wellsOf,
+  QS_ATTRIBUTES,
+  WELL_LIST_HEADER,
   type PcrSample,
 } from '@/lib/pcr-plate'
 
@@ -347,5 +355,110 @@ describe('layoutPlates with frozen wells', () => {
       [1, '9002', 1],
       [2, '9002', 2],
     ])
+  })
+})
+
+/* --- exports --- */
+
+describe('exports', () => {
+  const meta = {
+    runId: 'WS-24',
+    runName: 'PCR 09/22/2026',
+    date: '2026-09-22',
+    analyst: 'Guian',
+    curve: 'Quantitative',
+    plateType: '8-Well Strip',
+    instrument: 'QuantStudio 6 Flex',
+    overage: 1.4,
+  }
+
+  it('well list: one row per occupied well in both blocks, the NPC as task NTC', () => {
+    const rows = wellListRows(layoutPlates(fake(2)))
+    expect(rows[0]).toEqual(WELL_LIST_HEADER)
+    expect(rows.length).toBe(1 + 3 * 2)
+    const npc = rows.filter(r => r[2] === 'NPC')
+    expect(npc.map(r => [r[1], r[8], r[9], r[10]])).toEqual([
+      ['C1', 'Bacterial', '16S', 'NTC'],
+      ['C7', 'Fungal', '18S', 'NTC'],
+    ])
+    expect(rows[1]?.[10]).toBe('UNKNOWN')
+  })
+
+  it('plate map: two 8 x 12 grids per plate, ids then identities', () => {
+    const rows = plateMapRows(layoutPlates(fake(1)))
+    expect(rows[0]).toEqual(['Plate 1 of 1: Sample ID'])
+    expect(rows[1]).toEqual([
+      '',
+      '1',
+      '2',
+      '3',
+      '4',
+      '5',
+      '6',
+      '7',
+      '8',
+      '9',
+      '10',
+      '11',
+      '12',
+    ])
+    expect(rows[2]?.[1]).toBe('P-0101')
+    expect(rows[2]?.[7]).toBe('P-0101')
+    expect(rows[3]?.[1]).toBe('NPC')
+    expect(rows[11]).toEqual(['Plate 1 of 1: Sample identity'])
+    expect(rows[13]?.[1]).toBe('Examplerelin')
+    expect(rows[14]?.[7]).toBe('No-template control')
+  })
+
+  it('the run header leads the plate map CSV', () => {
+    const rows = metaHeaderRows(meta, layoutPlates(fake(1)))
+    expect(rows[0]).toEqual(['Run ID', 'WS-24'])
+    expect(rows[7]).toEqual(['Samples', '1'])
+    expect(rows[9]).toEqual(['Overage', '1.4x'])
+    expect(rows.at(-1)).toEqual([])
+  })
+
+  it('prepRows carries the calculation cards for every plate', () => {
+    const rows = prepRows(layoutPlates(fake(8)), 1.4)
+    expect(rows[1]).toEqual(['1', 'Wells', 'Wells on plate (N)', '9', ''])
+    expect(rows[2]).toEqual(['1', 'Wells', 'Master mix wells', '22', ''])
+    const h2o = rows.find(r => r[1] === 'BAC mix' && r[2] === 'H2O')
+    expect(h2o).toEqual(['1', 'BAC mix', 'H2O', '8.47', '11.86'])
+  })
+
+  it('QuantStudio file: tab-delimited, Sample Name first, 7 attributes, one row per well pair, no tabs in values', () => {
+    const s = sample('P-0101', '9001', {
+      identity: 'Exam\tplerelin',
+      received: '2026-09-11',
+      assessment: assess('2026-09-16', '2026-09-16', 'normal'),
+    })
+    const files = quantStudioFiles(layoutPlates([s]), {
+      runId: 'WS-24',
+      date: '2026-09-16',
+    })
+    expect(files.length).toBe(1)
+    const lines = (files[0]?.text ?? '').split('\r\n')
+    expect(lines[0]).toBe(['Sample Name', ...QS_ATTRIBUTES].join('\t'))
+    expect(QS_ATTRIBUTES.length).toBe(7)
+    expect(lines[1]).toBe(
+      'P-0101\t9001\tExam plerelin\t2026-09-11\t2026-09-16\tDue today\t1\tA1; A7'
+    )
+    expect(lines[2]).toBe('NPC\t\tNo-template control\t\t\t\t1\tB1; B7')
+    expect(lines[3]).toBe('')
+    expect(files[0]?.filename).toBe('quantstudio-WS-24-2026-09-16.txt')
+    const two = quantStudioFiles(layoutPlates(fake(48)), {
+      runId: 'WS-24',
+      date: '2026-09-16',
+    })
+    expect(two.map(f => f.filename)).toEqual([
+      'quantstudio-WS-24-plate1-2026-09-16.txt',
+      'quantstudio-WS-24-plate2-2026-09-16.txt',
+    ])
+  })
+
+  it('toCsv quotes where needed and defuses a formula cell', () => {
+    expect(toCsv([['a', 'x, y'], ['=1+1', ''], []])).toBe(
+      'a,"x, y"\r\n"\'=1+1",\r\n\r\n'
+    )
   })
 })

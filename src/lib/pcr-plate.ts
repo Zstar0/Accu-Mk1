@@ -17,6 +17,7 @@
  *
  * Spec: docs/superpowers/specs/2026-09-22-pcr-worksheet-design.md
  */
+import { csvField } from '@/lib/endo-bench-sheet'
 import { shortLabDate } from '@/lib/endo-worksheet'
 
 export const PROTOCOL = {
@@ -504,4 +505,225 @@ export function freezePayload(
         well_pos: p.pos,
       }))
   )
+}
+
+/* ---------------- exports ---------------- */
+
+export interface PcrRunMeta {
+  /** "WS-24": the worksheet id stands in for Dennis's R-YYYYMMDD-n. */
+  runId: string
+  runName: string
+  /** YYYY-MM-DD lab date the run was made. */
+  date: string
+  analyst: string
+  curve: string
+  plateType: string
+  instrument: string
+  overage: number
+}
+
+/** The run header that leads the plate map CSV. */
+export function metaHeaderRows(meta: PcrRunMeta, L: PcrLayout): string[][] {
+  return [
+    ['Run ID', meta.runId],
+    ['Run name', meta.runName],
+    ['Date', meta.date],
+    ['Analyst', meta.analyst],
+    ['Curve', meta.curve],
+    ['Plate type', meta.plateType],
+    ['QuantStudio', meta.instrument],
+    ['Samples', String(L.list.filter(r => !r.isControl).length)],
+    ['Plates', String(L.plateCount)],
+    ['Overage', `${meta.overage}x`],
+    [],
+  ]
+}
+
+/** Two 8 x 12 grids per plate: sample ids, then sample identities. */
+export function plateMapRows(L: PcrLayout): string[][] {
+  const rows: string[][] = []
+  const colHead = [
+    '',
+    ...Array.from({ length: PROTOCOL.cols }, (_, i) => String(i + 1)),
+  ]
+  const grid = (
+    map: Map<string, PlateCell>,
+    pick: (c: PlateCell | undefined) => string
+  ) =>
+    PROTOCOL.rows.map(r => [
+      r,
+      ...Array.from({ length: PROTOCOL.cols }, (_, i) =>
+        pick(map.get(`${r}${i + 1}`))
+      ),
+    ])
+  for (const pl of L.plates) {
+    const map = plateGrid(pl)
+    const label = `Plate ${pl.plate} of ${L.plateCount}`
+    rows.push(
+      [`${label}: Sample ID`],
+      colHead,
+      ...grid(map, c => c?.placement.id ?? ''),
+      []
+    )
+    rows.push(
+      [`${label}: Sample identity`],
+      colHead,
+      ...grid(map, c => c?.placement.identity ?? ''),
+      []
+    )
+  }
+  return rows
+}
+
+export const WELL_LIST_HEADER = [
+  'Plate',
+  'Well',
+  'Sample Name',
+  'Order',
+  'Identity',
+  'Received',
+  'Due',
+  'Priority',
+  'Assay',
+  'Target',
+  'Task',
+]
+
+/** One row per occupied well, both assay blocks. Task NTC for the control. */
+export function wellListRows(L: PcrLayout): string[][] {
+  const rows: string[][] = [WELL_LIST_HEADER]
+  for (const pl of L.plates) {
+    const map = plateGrid(pl)
+    for (const r of PROTOCOL.rows)
+      for (let c = 1; c <= PROTOCOL.cols; c++) {
+        const cell = map.get(`${r}${c}`)
+        if (!cell) continue
+        const p = cell.placement
+        const a = p.assessment
+        rows.push([
+          String(pl.plate),
+          `${r}${c}`,
+          p.id,
+          p.order,
+          p.identity,
+          p.sample?.received ?? '',
+          a?.due ?? '',
+          a?.flagged ? a.reasons.join('; ') : '',
+          cell.assay === 'bac' ? 'Bacterial' : 'Fungal',
+          cell.assay === 'bac' ? '16S' : '18S',
+          p.isControl ? 'NTC' : 'UNKNOWN',
+        ])
+      }
+  }
+  return rows
+}
+
+/** The calculation cards as rows, one block per plate. */
+export function prepRows(L: PcrLayout, overage: number): string[][] {
+  const rows: string[][] = [
+    ['Plate', 'Table', 'Item', 'Calculated (uL)', `Pipette x${overage} (uL)`],
+  ]
+  for (const pl of L.plates) {
+    const p = String(pl.plate)
+    const c = calculatePrep(pl.n, overage)
+    rows.push([p, 'Wells', 'Wells on plate (N)', String(pl.n), ''])
+    rows.push([p, 'Wells', 'Master mix wells', String(c.wells.mm), ''])
+    rows.push([p, 'Wells', 'BAC wells', String(c.wells.bac), ''])
+    rows.push([p, 'Wells', 'FUN wells', String(c.wells.fun), ''])
+    rows.push([p, 'Wells', 'IPC wells', String(c.wells.ipc), ''])
+    rows.push([p, 'Per well', 'Master mix', fmt2(c.perWell.mm), ''])
+    rows.push([p, 'Per well', 'Assay mix', fmt2(c.perWell.assayMix), ''])
+    rows.push([p, 'Per well', 'IPC mix', fmt2(c.perWell.ipcMix), ''])
+    rows.push([p, 'Per well', 'Template', fmt2(c.perWell.template), ''])
+    rows.push([p, 'Per well', 'Total per well', fmt2(c.perWell.total), ''])
+    rows.push([p, 'Bulk', 'Master mix', fmt2(c.bulk.mm), ''])
+    rows.push([p, 'Bulk', 'BAC mix', fmt2(c.bulk.bac), ''])
+    rows.push([p, 'Bulk', 'FUN mix', fmt2(c.bulk.fun), ''])
+    rows.push([p, 'Bulk', 'IPC mix', fmt2(c.bulk.ipc), ''])
+    const tables: [string, MixRow[]][] = [
+      ['BAC mix', c.bac],
+      ['FUN mix', c.fun],
+      ['IPC mix', c.ipc],
+    ]
+    for (const [table, comps] of tables) {
+      for (const r of comps)
+        rows.push([p, table, r.name, fmt2(r.base), fmt2(r.pipette)])
+      rows.push([
+        p,
+        table,
+        'Total',
+        fmt2(comps.reduce((a, r) => a + r.base, 0)),
+        fmt2(comps.reduce((a, r) => a + r.pipette, 0)),
+      ])
+    }
+  }
+  return rows
+}
+
+/* QuantStudio 6/7 Flex "Import Sample File": tab-delimited, header row first,
+ * the first column named exactly `Sample Name`, at most 32 attribute columns
+ * after it, attribute names under 256 characters, no tabs or line breaks in a
+ * value. One file per plate (each plate is its own experiment), every sample
+ * listed once (the fungal mirror is the same sample in another well). The
+ * NPC rides as a sample named NPC; the task is set on the instrument. */
+export const QS_ATTRIBUTES = [
+  'Order',
+  'Identity',
+  'Received',
+  'Due',
+  'Priority',
+  'Plate',
+  'Wells',
+]
+
+export interface QuantStudioFile {
+  plate: number
+  label: string
+  filename: string
+  text: string
+}
+
+export function quantStudioFiles(
+  L: PcrLayout,
+  meta: { runId: string; date: string }
+): QuantStudioFile[] {
+  const clean = (v: string | null | undefined) =>
+    String(v ?? '')
+      .replace(/[\t\r\n]+/g, ' ')
+      .trim()
+  return L.plates.map(pl => {
+    const rows = [['Sample Name', ...QS_ATTRIBUTES]]
+    for (const p of pl.placements) {
+      const a = p.assessment
+      rows.push([
+        clean(p.id),
+        clean(p.order),
+        clean(p.identity),
+        clean(p.sample?.received),
+        clean(a?.due),
+        clean(a?.flagged ? a.reasons.join('; ') : ''),
+        String(pl.plate),
+        `${p.row}${p.col}; ${p.row}${p.col + 6}`,
+      ])
+    }
+    const suffix = L.plateCount > 1 ? `-plate${pl.plate}` : ''
+    return {
+      plate: pl.plate,
+      label:
+        L.plateCount > 1
+          ? `Plate ${pl.plate} of ${L.plateCount} (${pl.n} wells)`
+          : `Plate (${pl.n} wells)`,
+      filename:
+        `quantstudio-${meta.runId || 'run'}${suffix}-${meta.date || 'undated'}.txt`.replace(
+          /[^\w.-]+/g,
+          '-'
+        ),
+      text: rows.map(r => r.join('\t')).join('\r\n') + '\r\n',
+    }
+  })
+}
+
+/** Rows to CSV: CRLF, quoted where needed, formula cells defused (csvField). */
+export function toCsv(rows: string[][]): string {
+  return rows.map(r => r.map(csvField).join(',')).join('\r\n') + '\r\n'
 }
