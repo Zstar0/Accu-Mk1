@@ -11,11 +11,14 @@ import {
   updateWorksheetItem,
   bulkWorksheetBenchTicks,
   applyWorksheetMethodInstrument,
+  freezeWorksheetWells,
+  unfreezeWorksheetWells,
 } from '@/lib/api'
 import type {
   WorksheetListItem,
   AddToWorksheetPayload,
   WorksheetItemPatch,
+  WorksheetWellFreeze,
 } from '@/lib/api'
 import { useUIStore } from '@/store/ui-store'
 import { toast } from 'sonner'
@@ -98,7 +101,12 @@ export function useWorksheetDrawer() {
       data,
     }: {
       worksheetId: number
-      data: { title?: string; assigned_analyst?: number; notes?: string }
+      data: {
+        title?: string
+        assigned_analyst?: number
+        notes?: string
+        bench_config?: Record<string, unknown>
+      }
     }) => updateWorksheet(worksheetId, data),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ['worksheets-list'] }),
@@ -291,6 +299,37 @@ export function useWorksheetDrawer() {
       toast.error(err instanceof Error ? err.message : 'Tick all failed'),
   })
 
+  // PCR plate map: the wells are pinned the moment the sheet leaves for the
+  // bench (print or QuantStudio export). Unfreezing is a deliberate re-layout.
+  const freezeWellsMutation = useMutation({
+    mutationFn: ({
+      worksheetId,
+      wells,
+    }: {
+      worksheetId: number
+      wells: WorksheetWellFreeze[]
+    }) => freezeWorksheetWells(worksheetId, wells),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })
+      queryClient.invalidateQueries({ queryKey: ['worksheet-by-id'] })
+    },
+    onError: err =>
+      toast.error(err instanceof Error ? err.message : 'Freeze wells failed'),
+  })
+
+  const unfreezeWellsMutation = useMutation({
+    mutationFn: (worksheetId: number) => unfreezeWorksheetWells(worksheetId),
+    onSuccess: res => {
+      queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })
+      queryClient.invalidateQueries({ queryKey: ['worksheet-by-id'] })
+      toast.success(
+        `Released ${res.cleared} well${res.cleared === 1 ? '' : 's'}`
+      )
+    },
+    onError: err =>
+      toast.error(err instanceof Error ? err.message : 'Unfreeze wells failed'),
+  })
+
   const applyMethodInstrumentMutation = useMutation({
     mutationFn: ({
       worksheetId,
@@ -352,6 +391,8 @@ export function useWorksheetDrawer() {
     reassignMutation,
     updateItemMutation,
     bulkTicksMutation,
+    freezeWellsMutation,
+    unfreezeWellsMutation,
     applyMethodInstrumentMutation,
     reorderMutation,
     addItemMutation,

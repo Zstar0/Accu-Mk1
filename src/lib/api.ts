@@ -6099,6 +6099,8 @@ export interface WorksheetListItem {
   printed_at?: string | null
   printed_by_user_id?: number | null
   print_count?: number
+  /** Per-bench run settings (PCR: overage, curve, plate_type, sort_by_order). */
+  bench_config?: Record<string, unknown> | null
   items: {
     id: number
     sample_id: string
@@ -6153,6 +6155,10 @@ export interface WorksheetListItem {
     made_by_user_id?: number | null
     ran_at?: string | null
     ran_by_user_id?: number | null
+    /** PCR plate map: the frozen well (1-based plate, 0..47 column-major
+     *  position), or null while the layout may still move the row. */
+    plate_no?: number | null
+    well_pos?: number | null
     /** Parent-sample facts the endo bench computes from; null when the item
      *  has no resolvable parent. */
     declared_weight_mg?: number | null
@@ -6205,7 +6211,12 @@ export async function deleteWorksheet(worksheetId: number): Promise<void> {
 
 export async function updateWorksheet(
   worksheetId: number,
-  data: { title?: string; assigned_analyst?: number; notes?: string }
+  data: {
+    title?: string
+    assigned_analyst?: number
+    notes?: string
+    bench_config?: Record<string, unknown>
+  }
 ): Promise<void> {
   const response = await fetch(`${API_BASE_URL()}/worksheets/${worksheetId}`, {
     method: 'PUT',
@@ -6342,6 +6353,45 @@ export async function bulkWorksheetBenchTicks(
     }
   )
   if (!response.ok) throw new Error(`Bench ticks failed: ${response.status}`)
+  return response.json()
+}
+
+export interface WorksheetWellFreeze {
+  item_id: number
+  plate_no: number
+  well_pos: number
+}
+
+/** Pin every unfrozen PCR item to the well it was laid out in (a frozen well
+ *  never moves). Called before a print or a QuantStudio export. */
+export async function freezeWorksheetWells(
+  worksheetId: number,
+  wells: WorksheetWellFreeze[]
+): Promise<{ frozen: number }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/freeze-wells`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ wells }),
+    }
+  )
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null)
+    throw new Error(detail?.detail ?? `Freeze wells failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+/** Release every frozen well so the plate can be laid out again. */
+export async function unfreezeWorksheetWells(
+  worksheetId: number
+): Promise<{ cleared: number }> {
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/frozen-wells`,
+    { method: 'DELETE', headers: getBearerHeaders() }
+  )
+  if (!response.ok) throw new Error(`Unfreeze wells failed: ${response.status}`)
   return response.json()
 }
 

@@ -11,7 +11,7 @@ const ROLE_KIND: Record<string, BenchKind> = {
   endo: 'endo',
   endo85: 'endo',
   pcr: 'pcr',
-  ster: 'sterility',
+  ster: 'pcr', // legacy STER-PCR vial, same plate as pcr (ruling 2026-09-22)
   usp71: 'sterility',
   hm: 'hm',
   hplc: 'hplc',
