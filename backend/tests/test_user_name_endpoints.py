@@ -27,19 +27,27 @@ def user(db):
 @pytest.fixture
 def client_as(db, user):
     """TestClient authed as `user`. Shares ONE session across the request and the
-    test: get_db yields the fixture session and get_current_user returns the
-    fixture user, so the endpoint's commit/refresh act on the same instance the
-    test reads (mirrors production, where get_current_user fetches via get_db)."""
+    test: get_db yields the fixture session and get_current_user (plus
+    get_current_user_any_scope, which /auth/me, /auth/change-password and
+    /auth/directory resolve through) returns the fixture user, so the
+    endpoint's commit/refresh act on the same instance the test reads
+    (mirrors production, where get_current_user fetches via get_db)."""
     prev_user = app.dependency_overrides.get(auth.get_current_user)
+    prev_user_any_scope = app.dependency_overrides.get(auth.get_current_user_any_scope)
     prev_db = app.dependency_overrides.get(get_db)
 
     def _override_get_db():
         yield db
 
     app.dependency_overrides[auth.get_current_user] = lambda: user
+    app.dependency_overrides[auth.get_current_user_any_scope] = lambda: user
     app.dependency_overrides[get_db] = _override_get_db
     yield TestClient(app)
-    for dep, prev in ((auth.get_current_user, prev_user), (get_db, prev_db)):
+    for dep, prev in (
+        (auth.get_current_user, prev_user),
+        (auth.get_current_user_any_scope, prev_user_any_scope),
+        (get_db, prev_db),
+    ):
         if prev is None:
             app.dependency_overrides.pop(dep, None)
         else:
