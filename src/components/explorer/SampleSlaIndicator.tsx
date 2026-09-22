@@ -1,7 +1,10 @@
 import { memo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
-import { formatMinutes, tierDayMinutes } from '@/lib/sla-format'
+import { formatMinutes, tierUnits } from '@/lib/sla-format'
+import { useLabClockState } from '@/lib/lab-clock'
+import { SlaClockMoon } from '@/components/explorer/SlaClockMoon'
+import type { LabClockState } from '@/lib/lab-clock'
 import { NO_GROUP_KEY, type SlaColor } from '@/lib/sla-resolution'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 import {
@@ -37,13 +40,14 @@ interface SampleSlaIndicatorProps {
 function renderRow(
   snapshot: SampleSlaSnapshot,
   t: (key: string, opts?: Record<string, string | number>) => string,
-  showLabel: boolean
+  showLabel: boolean,
+  clock: LabClockState | null
 ) {
   const { status, color } = snapshot
-  const day = tierDayMinutes(snapshot.tier)
+  const units = tierUnits(snapshot.tier)
   const text = status.breached
-    ? t('orderStatus.sla.over', { time: formatMinutes(status.remaining_minutes, day) })
-    : t('orderStatus.sla.left', { time: formatMinutes(status.remaining_minutes, day) })
+    ? t('orderStatus.sla.over', { time: formatMinutes(status.remaining_minutes, units) })
+    : t('orderStatus.sla.left', { time: formatMinutes(status.remaining_minutes, units) })
   // For multi-row, the group name prefixes the indicator; NO_GROUP_KEY rows
   // (analyses with no group / fallback to default tier) show no prefix because
   // there's no real group name to label them with.
@@ -67,6 +71,7 @@ function renderRow(
             <span className="text-muted-foreground/60 mr-1">{label}</span>
           )}
           {text}
+          <SlaClockMoon units={units} clock={clock} />
         </span>
       </TooltipTrigger>
       <TooltipContent className="p-0 max-w-md">
@@ -77,6 +82,7 @@ function renderRow(
           priority={snapshot.priority}
           receivedAt={snapshot.receivedAt}
           groupName={snapshot.groupName}
+          clock={clock}
         />
       </TooltipContent>
     </Tooltip>
@@ -95,6 +101,7 @@ function renderRow(
  */
 function SampleSlaIndicatorImpl({ snapshots }: SampleSlaIndicatorProps) {
   const { t } = useTranslation()
+  const clock = useLabClockState()
   if (!snapshots || snapshots.length === 0) {
     return (
       <span className="text-[10px] font-mono leading-none tabular-nums text-muted-foreground/70" />
@@ -110,7 +117,7 @@ function SampleSlaIndicatorImpl({ snapshots }: SampleSlaIndicatorProps) {
         <span className="text-[10px] font-mono leading-none tabular-nums text-muted-foreground/70" />
       )
     }
-    return renderRow(single, t, false)
+    return renderRow(single, t, false, clock)
   }
   // Multi-snapshot: stacked rows, worst-color first. Tie-break alphabetically
   // by group name so the order is stable when severities match.
@@ -126,7 +133,7 @@ function SampleSlaIndicatorImpl({ snapshots }: SampleSlaIndicatorProps) {
       data-testid="sample-sla-indicator-list"
       className="flex flex-col items-end gap-0.5"
     >
-      {sorted.map(s => renderRow(s, t, true))}
+      {sorted.map(s => renderRow(s, t, true, clock))}
     </div>
   )
 }

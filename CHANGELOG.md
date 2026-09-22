@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Changed
+- **SLA cells say when the lab clock is paused, and in what unit.** "4.8h left" read at 7 PM on a sample due the next afternoon was correct (4.8 business hours, clock paused overnight) but did not say so. On a business-hours tier the units are now business hours and business days: `4.8bh left`, `2bd 3bh over`, target `32bh (4bd)`; a calendar-time tier keeps `h` / `d`. A moon after the value marks a business-hours tier whose clock is paused right now (before open, after close, a non-working day or a lab holiday, judged on the lab's own clock from the Business Hours settings), with the resume time on hover; it never shows on a calendar tier or a published row. The SLA hover gains a `Due:` line, in the viewer's local time like Received, from the deadline the status API already returned, and its headline reads "4.8bh left, due Sep 22, 01:49 PM"; while paused it adds "Lab closed. SLA clock resumes Tue 9:00 AM." All six SLA cells share the one clock (one timer for the page), fed from the app root.
+
 ## v1.26.0 - 2026-09-21
 
 ### Changed
