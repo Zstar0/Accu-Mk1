@@ -26,6 +26,11 @@ SECRET_KEY = os.environ.get("JWT_SECRET", "dev-secret-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("JWT_EXPIRE_MINUTES", 10080))  # Default: 7 days
 
+# Which system an account may reach. Every LIMS endpoint resolves its caller via
+# get_current_user, which refuses 'finance'; the Workbench keeps its own allowlist.
+SCOPES = ("lab", "finance", "both")
+LAB_SCOPES = ("lab", "both")
+
 # ── Password hashing ─────────────────────────────────────────
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -95,11 +100,12 @@ class TokenResponse(BaseModel):
 
 # ── Dependencies ──────────────────────────────────────────────
 
-def get_current_user(
+def get_current_user_any_scope(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ):
-    """Dependency: extract and validate current user from JWT token."""
+    """Dependency: identity only — any scope. Use ONLY for self-service auth routes
+    (/auth/me, change-password, directory). Everything else uses get_current_user."""
     from models import User
 
     credentials_exception = HTTPException(
@@ -121,6 +127,22 @@ def get_current_user(
     if user is None or not user.is_active:
         raise credentials_exception
 
+    return user
+
+
+def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+):
+    """Dependency: the lab-scoped caller. The single fence for every LIMS endpoint —
+    finance-only accounts authenticate but are refused here. Same (token, db)
+    signature as before: documents/routes.py calls it directly."""
+    user = get_current_user_any_scope(token=token, db=db)
+    if user.scope not in LAB_SCOPES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is not authorized for the lab system",
+        )
     return user
 
 
