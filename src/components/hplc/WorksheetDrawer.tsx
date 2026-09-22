@@ -35,7 +35,7 @@ import WorksheetDrawerHeader from './WorksheetDrawerHeader'
 import WorksheetDrawerItems from './WorksheetDrawerItems'
 import { EndoWorksheetActions } from './EndoWorksheetActions'
 import { EndoWorksheetView } from './EndoWorksheetView'
-import { EndoRunLog } from './EndoRunLog'
+import { BenchRunLog } from './BenchRunLog'
 import { worksheetKind } from '@/lib/worksheet-kind'
 import { displayName } from '@/lib/user-display'
 import AddSamplesModal from './AddSamplesModal'
@@ -304,7 +304,10 @@ export function WorksheetDrawer() {
           {/* Endotoxin worksheet: Dennis's run log + sheet (Worksheets 2.0) */}
           {!isLoading && !isError && activeWorksheet && isEndo && (
             <div className="flex flex-1 min-h-0 overflow-hidden bg-muted/30">
-              <EndoRunLog
+              <BenchRunLog
+                kind="endo"
+                label="Endotoxin"
+                tickLabels={['Made', 'MCS']}
                 activeId={activeWorksheet.id}
                 users={users}
                 onSelect={id => {
