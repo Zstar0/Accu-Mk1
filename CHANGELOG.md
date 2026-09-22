@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Auth: `users.scope` (`lab` | `finance` | `both`, default `lab`). `get_current_user` refuses `finance` with 403 — one fence for every LIMS endpoint. `/auth/me`, `PATCH /auth/me`, change-password and `/auth/directory` accept any scope.
+- Auth: login tokens carry `email`, `scope`, `role`, `first_name`, `last_name` claims (Accu-Mk1 still resolves callers from the DB by `sub`).
+- Admin: scope selector on user create/edit; scope column in the user list.
+
 ## v1.27.0 - 2026-09-21
 
 The HPLC native-born release: slices 1 to 24 of the program (spec `docs/superpowers/specs/2026-09-10-hplc-native-born-design.md`). Every NEW HPLC order can be minted, benched, promoted and certified in Accu-Mk1 with no SENAITE record. Nothing routes there until the WordPress `profile_key` on the HPLC test-service row is set to `hplc-purity-identity` (the flip runbook, `docs/superpowers/runbooks/2026-09-12-hplc-native-flip-runbook.md`); the Mk1 profile `HPLC Purity + Identity` seeds inactive. The changes below under "Visible on every sample from this release" apply to every sample, native or not, on deploy day.
