@@ -24617,6 +24617,104 @@ def record_worksheet_printed(
     return {"status": "recorded", "printed_at": ws.printed_at.isoformat() + "Z", "print_count": ws.print_count}
 
 
+class WorksheetWellFreeze(BaseModel):
+    item_id: int
+    plate_no: int
+    well_pos: int
+
+
+class WorksheetFreezeWells(BaseModel):
+    wells: list[WorksheetWellFreeze]
+
+
+# 8 rows x 6 columns of the bacterial block; the fungal mirror is col + 6.
+_PLATE_WELLS = 48
+
+
+@app.post("/worksheets/{worksheet_id}/freeze-wells")
+def freeze_worksheet_wells(
+    worksheet_id: int,
+    data: WorksheetFreezeWells,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """PCR plate map: pin each item to the well the client laid it out in, the
+    moment the plate is printed or exported for the QuantStudio (ruling
+    2026-09-22). A well already frozen never moves, whatever the client sends:
+    the plate is loaded by then, and a moved well would credit results to the
+    wrong sample. Two items can never share a well on a plate. The NPC is not
+    an item and is never frozen; the client keeps it after the last sample."""
+    ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
+    if not ws or ws.status == "staging":
+        raise HTTPException(404, "Worksheet not found")
+    if ws.status == "completed":
+        raise HTTPException(409, "Worksheet is completed")
+    items = {
+        it.id: it for it in db.execute(
+            select(WorksheetItem).where(WorksheetItem.worksheet_id == worksheet_id)
+        ).scalars()
+    }
+    taken = {(it.plate_no, it.well_pos) for it in items.values() if it.well_pos is not None}
+    to_pin: list[tuple["WorksheetItem", int, int]] = []
+    for w in data.wells:
+        item = items.get(w.item_id)
+        if item is None:
+            raise HTTPException(404, f"Item {w.item_id} is not on this worksheet")
+        if w.plate_no < 1 or not (0 <= w.well_pos < _PLATE_WELLS):
+            raise HTTPException(400, "Well out of range")
+        if item.well_pos is not None:
+            continue  # frozen wells never move
+        key = (w.plate_no, w.well_pos)
+        if key in taken:
+            raise HTTPException(409, f"Well {w.well_pos} on plate {w.plate_no} is already taken")
+        taken.add(key)
+        to_pin.append((item, w.plate_no, w.well_pos))
+    for item, plate_no, well_pos in to_pin:
+        item.plate_no = plate_no
+        item.well_pos = well_pos
+    if to_pin:
+        db.add(AuditLog(
+            operation="worksheet_wells_frozen",
+            entity_type="worksheet",
+            entity_id=str(ws.id),
+            details={"user_id": _current_user.id, "frozen": len(to_pin)},
+        ))
+    db.commit()
+    return {"status": "frozen", "frozen": len(to_pin)}
+
+
+@app.delete("/worksheets/{worksheet_id}/frozen-wells")
+def unfreeze_worksheet_wells(
+    worksheet_id: int,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Release every frozen well: a deliberate re-layout of a plate that was
+    printed too early. Audited, because a loaded plate may be on the bench."""
+    ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
+    if not ws or ws.status == "staging":
+        raise HTTPException(404, "Worksheet not found")
+    if ws.status == "completed":
+        raise HTTPException(409, "Worksheet is completed")
+    items = db.execute(
+        select(WorksheetItem).where(
+            WorksheetItem.worksheet_id == worksheet_id, WorksheetItem.well_pos.isnot(None)
+        )
+    ).scalars().all()
+    for item in items:
+        item.plate_no = None
+        item.well_pos = None
+    if items:
+        db.add(AuditLog(
+            operation="worksheet_wells_unfrozen",
+            entity_type="worksheet",
+            entity_id=str(ws.id),
+            details={"user_id": _current_user.id, "cleared": len(items)},
+        ))
+    db.commit()
+    return {"status": "cleared", "cleared": len(items)}
+
+
 class WorksheetItemUpdate(BaseModel):
     instrument_uid: Optional[str] = None
     instrument_id: Optional[int] = None

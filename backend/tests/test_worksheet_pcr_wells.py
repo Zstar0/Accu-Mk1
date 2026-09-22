@@ -91,3 +91,71 @@ def test_put_replaces_bench_config_whole(client, db):
     # A title-only update leaves the settings alone.
     client.put(f"/worksheets/{ws.id}", json={"title": "Renamed"})
     assert client.get(f"/worksheets/{ws.id}").json()["bench_config"] == {"overage": 1.1}
+
+
+# --- Freezing wells --------------------------------------------------------
+
+
+def _freeze(client, ws, wells):
+    return client.post(f"/worksheets/{ws.id}/freeze-wells", json={"wells": wells})
+
+
+def test_freeze_pins_unfrozen_items_and_never_moves_a_frozen_one(client, db):
+    ws, (a, b) = _seed(db)
+    r = _freeze(client, ws, [{"item_id": a.id, "plate_no": 1, "well_pos": 0}])
+    assert r.status_code == 200, r.text
+    assert r.json() == {"status": "frozen", "frozen": 1}
+    db.refresh(a)
+    assert (a.plate_no, a.well_pos) == (1, 0)
+
+    # A second layout that would move a onto well 5 leaves it where it was and
+    # only pins b. The audit row counts what was pinned.
+    r = _freeze(client, ws, [{"item_id": a.id, "plate_no": 1, "well_pos": 5},
+                             {"item_id": b.id, "plate_no": 1, "well_pos": 1}])
+    assert r.json()["frozen"] == 1
+    db.refresh(a)
+    db.refresh(b)
+    assert (a.plate_no, a.well_pos) == (1, 0)
+    assert (b.plate_no, b.well_pos) == (1, 1)
+    rows = db.query(AuditLog).filter(AuditLog.operation == "worksheet_wells_frozen").all()
+    assert [(r.entity_id, r.details["frozen"], r.details["user_id"]) for r in rows] == [
+        (str(ws.id), 1, 1), (str(ws.id), 1, 1)]
+
+
+def test_freeze_refuses_a_taken_well_and_bad_input(client, db):
+    ws, (a, b) = _seed(db)
+    _freeze(client, ws, [{"item_id": a.id, "plate_no": 1, "well_pos": 0}])
+    r = _freeze(client, ws, [{"item_id": b.id, "plate_no": 1, "well_pos": 0}])
+    assert r.status_code == 409
+    db.refresh(b)
+    assert b.well_pos is None
+    assert _freeze(client, ws, [{"item_id": b.id, "plate_no": 0, "well_pos": 0}]).status_code == 400
+    assert _freeze(client, ws, [{"item_id": b.id, "plate_no": 1, "well_pos": 48}]).status_code == 400
+    assert _freeze(client, ws, [{"item_id": 99999, "plate_no": 1, "well_pos": 2}]).status_code == 404
+    # Two new items on the same well in one request: neither lands.
+    r = _freeze(client, ws, [{"item_id": b.id, "plate_no": 2, "well_pos": 0},
+                             {"item_id": b.id, "plate_no": 2, "well_pos": 0}])
+    assert r.status_code == 409
+    db.refresh(b)
+    assert b.well_pos is None
+
+
+def test_unfreeze_releases_every_well_once(client, db):
+    ws, (a, b) = _seed(db)
+    _freeze(client, ws, [{"item_id": a.id, "plate_no": 1, "well_pos": 0},
+                         {"item_id": b.id, "plate_no": 1, "well_pos": 1}])
+    r = client.delete(f"/worksheets/{ws.id}/frozen-wells")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"status": "cleared", "cleared": 2}
+    db.refresh(a)
+    db.refresh(b)
+    assert a.well_pos is None and a.plate_no is None and b.well_pos is None
+    assert client.delete(f"/worksheets/{ws.id}/frozen-wells").json()["cleared"] == 0
+    assert db.query(AuditLog).filter(AuditLog.operation == "worksheet_wells_unfrozen").count() == 1
+
+
+def test_wells_are_locked_on_a_completed_worksheet(client, db):
+    ws, (a, _) = _seed(db, status="completed")
+    assert _freeze(client, ws, [{"item_id": a.id, "plate_no": 1, "well_pos": 0}]).status_code == 409
+    assert client.delete(f"/worksheets/{ws.id}/frozen-wells").status_code == 409
+    assert client.post("/worksheets/99999/freeze-wells", json={"wells": []}).status_code == 404
