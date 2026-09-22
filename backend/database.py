@@ -2469,10 +2469,12 @@ def _run_migrations():
         SELECT 'PB', 1000
         WHERE NOT EXISTS (SELECT 1 FROM lims_native_id_sequences WHERE prefix = 'PB')
         """,
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS scope VARCHAR(10) NOT NULL DEFAULT 'lab'",
         # HPLC-native slice 6 (M8): links a retest's sample row back to the
         # original Mk1 row it was retested from (from signal meta
         # RetestOfSampleId). Nullable, no FK — the original may be a
         # SENAITE-born sample_id.
+        # Pinned last by test_boot_migrations_add_retest_of_sample_id_as_last_statement.
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS retest_of_sample_id TEXT",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that

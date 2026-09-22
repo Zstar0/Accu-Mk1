@@ -26,6 +26,11 @@ SECRET_KEY = os.environ.get("JWT_SECRET", "dev-secret-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("JWT_EXPIRE_MINUTES", 10080))  # Default: 7 days
 
+# Which system an account may reach. Every LIMS endpoint resolves its caller via
+# get_current_user, which refuses 'finance'; the Workbench keeps its own allowlist.
+SCOPES = ("lab", "finance", "both")
+LAB_SCOPES = ("lab", "both")
+
 # ── Password hashing ─────────────────────────────────────────
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -47,8 +52,20 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": expire, "iss": "accu-mk1"})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+def token_claims_for(user) -> dict:
+    """Claims for a login token. Accu-Mk1 ignores everything but `sub` (it re-reads
+    the DB); the rest lets a federated app (Workbench) verify a request locally."""
+    return {
+        "sub": str(user.id),
+        "email": user.email,
+        "scope": user.scope,
+        "role": user.role,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+    }
 
 # ── Pydantic schemas ─────────────────────────────────────────
 
@@ -56,6 +73,7 @@ class UserCreate(BaseModel):
     email: str
     password: str
     role: str = "standard"
+    scope: str = "lab"
 
 class UserRead(BaseModel):
     id: int
@@ -66,6 +84,7 @@ class UserRead(BaseModel):
     senaite_configured: bool = False
     first_name: Optional[str] = None
     last_name: Optional[str] = None
+    scope: str = "lab"
 
     class Config:
         from_attributes = True
@@ -76,6 +95,7 @@ class UserUpdate(BaseModel):
     is_active: Optional[bool] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
+    scope: Optional[str] = None
 
 class MeUpdate(BaseModel):
     first_name: Optional[str] = None
@@ -95,11 +115,12 @@ class TokenResponse(BaseModel):
 
 # ── Dependencies ──────────────────────────────────────────────
 
-def get_current_user(
+def get_current_user_any_scope(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ):
-    """Dependency: extract and validate current user from JWT token."""
+    """Dependency: identity only — any scope. Use ONLY for self-service auth routes
+    (/auth/me, change-password, directory). Everything else uses get_current_user."""
     from models import User
 
     credentials_exception = HTTPException(
@@ -121,6 +142,22 @@ def get_current_user(
     if user is None or not user.is_active:
         raise credentials_exception
 
+    return user
+
+
+def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+):
+    """Dependency: the lab-scoped caller. The single fence for every LIMS endpoint —
+    finance-only accounts authenticate but are refused here. Same (token, db)
+    signature as before: documents/routes.py calls it directly."""
+    user = get_current_user_any_scope(token=token, db=db)
+    if user.scope not in LAB_SCOPES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is not authorized for the lab system",
+        )
     return user
 
 

@@ -18,6 +18,7 @@ export interface UserCreateInput {
   email: string
   password: string
   role?: string
+  scope?: string
 }
 
 export interface UserUpdateInput {
@@ -26,6 +27,7 @@ export interface UserUpdateInput {
   is_active?: boolean
   first_name?: string | null
   last_name?: string | null
+  scope?: string
 }
 
 export interface PasswordChangeInput {
@@ -72,6 +74,9 @@ export async function login(
     throw new Error(body?.detail || 'Invalid credentials')
   }
   const data: LoginResponse = await response.json()
+  if (data.user.scope === 'finance') {
+    throw new Error('This account is for the Workbench, not the lab system')
+  }
   useAuthStore.getState().setAuth(data.access_token, data.user)
   return data
 }

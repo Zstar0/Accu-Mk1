@@ -17,7 +17,7 @@ from database import Base
 class User(Base):
     """
     User account for authentication.
-    Roles: 'admin' or 'standard'.
+    Roles: 'admin' or 'standard'. Scope: 'lab' | 'finance' | 'both' (default 'lab').
     """
     __tablename__ = "users"
 
@@ -30,6 +30,10 @@ class User(Base):
     senaite_password_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     first_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     last_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # 'lab' | 'finance' | 'both'. Fences which system an account may reach:
+    # get_current_user refuses 'finance' (see auth.py); Workbench keeps its own
+    # allowlist and ignores this column entirely.
+    scope: Mapped[str] = mapped_column(String(10), nullable=False, default="lab", server_default="lab")
 
     def __repr__(self) -> str:
         return f"<User(id={self.id}, email='{self.email}', role='{self.role}')>"

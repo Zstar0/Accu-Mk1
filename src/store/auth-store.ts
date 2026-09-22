@@ -10,6 +10,7 @@ export interface AuthUser {
   senaite_configured: boolean
   first_name?: string | null
   last_name?: string | null
+  scope: 'lab' | 'finance' | 'both'
 }
 
 interface AuthState {

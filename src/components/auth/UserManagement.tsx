@@ -52,6 +52,7 @@ export function UserManagement() {
   const [newEmail, setNewEmail] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [newRole, setNewRole] = useState('standard')
+  const [newScope, setNewScope] = useState('lab')
   const [creating, setCreating] = useState(false)
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null)
   const currentUser = useAuthStore(state => state.user)
@@ -84,12 +85,14 @@ export function UserManagement() {
         email: newEmail,
         password: newPassword,
         role: newRole,
+        scope: newScope,
       })
       toast.success(`User ${newEmail} created`)
       setCreateOpen(false)
       setNewEmail('')
       setNewPassword('')
       setNewRole('standard')
+      setNewScope('lab')
       await loadUsers()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to create user')
@@ -176,6 +179,19 @@ export function UserManagement() {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="new-scope">Scope</Label>
+                <Select value={newScope} onValueChange={setNewScope}>
+                  <SelectTrigger id="new-scope">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="lab">Lab</SelectItem>
+                    <SelectItem value="finance">Finance (Workbench only)</SelectItem>
+                    <SelectItem value="both">Both</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
               <Button onClick={handleCreate} disabled={creating}>
                 {creating ? 'Creating...' : 'Create User'}
               </Button>
@@ -195,6 +211,7 @@ export function UserManagement() {
               <TableRow>
                 <TableHead>Email</TableHead>
                 <TableHead>Role</TableHead>
+                <TableHead>Scope</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Created</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -227,6 +244,9 @@ export function UserManagement() {
                       )}
                       {user.role}
                     </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline">{user.scope}</Badge>
                   </TableCell>
                   <TableCell>
                     <Badge
