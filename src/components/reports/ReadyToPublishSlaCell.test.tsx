@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { ReadyRow } from '@/lib/api'
 import { SlaCell } from '@/components/reports/ReadyToPublishReport'
@@ -34,9 +35,15 @@ const row: ReadyRow = {
 describe('Ready to Publish SlaCell', () => {
   it('hovers the shared SLA breakdown card with tier, target and received', async () => {
     render(
-      <TooltipProvider>
-        <SlaCell row={row} />
-      </TooltipProvider>
+      <QueryClientProvider
+        client={
+          new QueryClient({ defaultOptions: { queries: { retry: false } } })
+        }
+      >
+        <TooltipProvider>
+          <SlaCell row={row} />
+        </TooltipProvider>
+      </QueryClientProvider>
     )
     const trigger = screen.getByTestId('rtp-sla')
     fireEvent.pointerMove(trigger)

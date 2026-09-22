@@ -423,4 +423,38 @@ describe('SlaBreakdownTooltip', () => {
     // priorityGroup variant with an empty {{group}}.
     expect(el.textContent ?? '').not.toMatch(/\(expedited, \s* only\)/i)
   })
+
+  // Reported 2026-09-21 (sample prep list, received Sep 14): a 48 business-hour
+  // target read "48h (2d)" and 43.2 bh elapsed read "1d 19h", because days were
+  // sized at 24h while the clock only counts the lab's 8h open window.
+  it('sizes a business-hours tier in business days, not 24h days', () => {
+    render(
+      <SlaBreakdownTooltip
+        tier={{ ...tier, target_minutes: 2880, business_hours_only: true, day_minutes: 480 }}
+        status={{ target_minutes: 2880, elapsed_minutes: 2592, remaining_minutes: 288, breached: false }}
+        reason={null}
+      />
+    )
+    const text = screen.getByTestId('sla-breakdown-tooltip').textContent ?? ''
+    expect(text).toContain('48h (6d)')
+    expect(text).toContain('5d 3h')
+    expect(text).toContain('4.8h')
+    expect(text).not.toContain('48h (2d)')
+    expect(text).not.toContain('1d 19h')
+    expect(screen.getByTestId('sla-business-day-note')).toBeTruthy()
+  })
+
+  it('keeps 24h days, and no business-day note, for calendar-time tiers', () => {
+    render(
+      <SlaBreakdownTooltip
+        tier={{ ...tier, target_minutes: 2880, day_minutes: 480 }}
+        status={{ target_minutes: 2880, elapsed_minutes: 2592, remaining_minutes: 288, breached: false }}
+        reason={null}
+      />
+    )
+    const text = screen.getByTestId('sla-breakdown-tooltip').textContent ?? ''
+    expect(text).toContain('48h (2d)')
+    expect(text).toContain('1d 19h')
+    expect(screen.queryByTestId('sla-business-day-note')).toBeNull()
+  })
 })

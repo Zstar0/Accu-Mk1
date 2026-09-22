@@ -1,7 +1,7 @@
 import { memo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
-import { formatMinutes } from '@/lib/sla-format'
+import { formatMinutes, tierDayMinutes } from '@/lib/sla-format'
 import type { InboxPriority } from '@/lib/api'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 import {
@@ -62,21 +62,22 @@ function AnalysisSlaCellImpl(props: AnalysisSlaCellProps) {
   let text = ''
   let titleAttr: string | undefined
   const snap = props.snapshot
+  const day = tierDayMinutes(snap?.tier)
   if (color === 'red' && snap) {
     text = t('orderStatus.sla.over', {
-      time: formatMinutes(Math.abs(snap.status.remaining_minutes)),
+      time: formatMinutes(Math.abs(snap.status.remaining_minutes), day),
     })
   } else if ((color === 'amber' || color === 'green') && snap) {
     text = t('orderStatus.sla.left', {
-      time: formatMinutes(snap.status.remaining_minutes),
+      time: formatMinutes(snap.status.remaining_minutes, day),
     })
   } else if (color === 'met' && snap) {
     text = t('orderStatus.sla.publishedTook', {
-      time: formatMinutes(snap.status.elapsed_minutes),
+      time: formatMinutes(snap.status.elapsed_minutes, day),
     })
   } else if (color === 'missed' && snap) {
     text = t('orderStatus.sla.missedBy', {
-      time: formatMinutes(Math.abs(snap.status.remaining_minutes)),
+      time: formatMinutes(Math.abs(snap.status.remaining_minutes), day),
     })
   } else if (color === 'loading') {
     titleAttr = t('orderStatus.sla.loading')
@@ -148,6 +149,7 @@ function slaPropsEqual(prev: AnalysisSlaCellProps, next: AnalysisSlaCellProps): 
   if ((a.tier?.target_minutes ?? null) !== (b.tier?.target_minutes ?? null)) return false
   if ((a.tier?.amber_threshold_percent ?? null) !== (b.tier?.amber_threshold_percent ?? null)) return false
   if ((a.tier?.business_hours_only ?? null) !== (b.tier?.business_hours_only ?? null)) return false
+  if ((a.tier?.day_minutes ?? null) !== (b.tier?.day_minutes ?? null)) return false
   if (a.status.elapsed_minutes !== b.status.elapsed_minutes) return false
   if (a.status.remaining_minutes !== b.status.remaining_minutes) return false
   if (a.status.breached !== b.status.breached) return false

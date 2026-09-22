@@ -1,7 +1,7 @@
 import { memo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
-import { formatMinutes } from '@/lib/sla-format'
+import { formatMinutes, tierDayMinutes } from '@/lib/sla-format'
 import type { InboxPriority, SenaiteLookupResult } from '@/lib/api'
 import { NO_GROUP_KEY } from '@/lib/sla-resolution'
 import { useSampleSla } from '@/services/sample-sla'
@@ -42,6 +42,7 @@ function renderSnapshotSpan({
   t: (key: string, opts?: Record<string, string | number>) => string
 }) {
   const { status, color } = snapshot
+  const day = tierDayMinutes(snapshot.tier)
   let text: string
   let colorClass: string
   let dataColor: string
@@ -49,14 +50,14 @@ function renderSnapshotSpan({
     // Historical view — total time taken to publish. Color is binary
     // (met/missed) since amber is meaningless after the fact.
     text = t('orderStatus.sla.publishedTook', {
-      time: formatMinutes(status.elapsed_minutes),
+      time: formatMinutes(status.elapsed_minutes, day),
     })
     colorClass = status.breached ? 'text-red-400' : 'text-green-600/70'
     dataColor = status.breached ? 'missed' : 'met'
   } else {
     text = status.breached
-      ? t('orderStatus.sla.over', { time: formatMinutes(status.remaining_minutes) })
-      : t('orderStatus.sla.left', { time: formatMinutes(status.remaining_minutes) })
+      ? t('orderStatus.sla.over', { time: formatMinutes(status.remaining_minutes, day) })
+      : t('orderStatus.sla.left', { time: formatMinutes(status.remaining_minutes, day) })
     colorClass =
       color === 'red'
         ? 'text-red-400'

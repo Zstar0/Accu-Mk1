@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
+  getBusinessHoursConfig,
   getSlaTiers,
   createSlaTier,
   updateSlaTier,
@@ -13,16 +14,32 @@ import {
   type SlaTierUpdate,
 } from '@/lib/api'
 import { priorityQueryKeys } from '@/services/priority-keys'
+import { businessDayMinutes } from '@/lib/sla-format'
 
 export const slaQueryKeys = {
   tiers: ['sla', 'tiers'] as const,
   priorityTiers: ['sla', 'priority-tiers'] as const,
 }
 
+/** Tiers plus `day_minutes`, the business-day length from the business-hours
+ *  config. Attached here, once, because every SLA surface already holds a
+ *  tier: no surface needs its own config query to print business days. A
+ *  config failure leaves it unset and durations fall back to 24h days. */
+async function getSlaTiersWithDay(): Promise<SlaTier[]> {
+  const tiers = await getSlaTiers()
+  let day_minutes: number | undefined
+  try {
+    day_minutes = businessDayMinutes(await getBusinessHoursConfig())
+  } catch {
+    day_minutes = undefined
+  }
+  return day_minutes ? tiers.map(t => ({ ...t, day_minutes })) : tiers
+}
+
 export function useSlaTiers() {
   return useQuery({
     queryKey: slaQueryKeys.tiers,
-    queryFn: getSlaTiers,
+    queryFn: getSlaTiersWithDay,
     staleTime: 1000 * 60 * 5,
   })
 }

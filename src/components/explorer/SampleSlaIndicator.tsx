@@ -1,7 +1,7 @@
 import { memo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
-import { formatMinutes } from '@/lib/sla-format'
+import { formatMinutes, tierDayMinutes } from '@/lib/sla-format'
 import { NO_GROUP_KEY, type SlaColor } from '@/lib/sla-resolution'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 import {
@@ -40,9 +40,10 @@ function renderRow(
   showLabel: boolean
 ) {
   const { status, color } = snapshot
+  const day = tierDayMinutes(snapshot.tier)
   const text = status.breached
-    ? t('orderStatus.sla.over', { time: formatMinutes(status.remaining_minutes) })
-    : t('orderStatus.sla.left', { time: formatMinutes(status.remaining_minutes) })
+    ? t('orderStatus.sla.over', { time: formatMinutes(status.remaining_minutes, day) })
+    : t('orderStatus.sla.left', { time: formatMinutes(status.remaining_minutes, day) })
   // For multi-row, the group name prefixes the indicator; NO_GROUP_KEY rows
   // (analyses with no group / fallback to default tier) show no prefix because
   // there's no real group name to label them with.
@@ -154,6 +155,7 @@ function snapshotsPropsEqual(
     if (x.tier.id !== y.tier.id) return false
     if (x.tier.target_minutes !== y.tier.target_minutes) return false
     if (x.tier.business_hours_only !== y.tier.business_hours_only) return false
+    if (x.tier.day_minutes !== y.tier.day_minutes) return false
     if (x.status.elapsed_minutes !== y.status.elapsed_minutes) return false
     if (x.status.remaining_minutes !== y.status.remaining_minutes) return false
     if (x.status.breached !== y.status.breached) return false

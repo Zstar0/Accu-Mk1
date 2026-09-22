@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next'
-import { formatMinutes, formatTarget } from '@/lib/sla-format'
+import { formatMinutes, formatTarget, tierDayMinutes } from '@/lib/sla-format'
 import { formatDate } from './helpers'
 import type { InboxPriority, SlaStatus, SlaTier } from '@/lib/api'
 import type { SampleSlaReason } from '@/lib/sla-resolution'
@@ -57,17 +57,18 @@ export function SlaBreakdownTooltip({
   isPublished = false,
 }: SlaBreakdownTooltipProps) {
   const { t } = useTranslation()
+  const day = tierDayMinutes(tier)
   let headline: string
   if (isPublished) {
     headline = status.breached
       ? t('orderStatus.sla.publishedMissed', {
-          time: formatMinutes(Math.abs(status.remaining_minutes)),
+          time: formatMinutes(Math.abs(status.remaining_minutes), day),
         })
       : t('orderStatus.sla.publishedMet')
   } else {
     headline = status.breached
-      ? t('orderStatus.sla.over', { time: formatMinutes(status.remaining_minutes) })
-      : t('orderStatus.sla.left', { time: formatMinutes(status.remaining_minutes) })
+      ? t('orderStatus.sla.over', { time: formatMinutes(status.remaining_minutes, day) })
+      : t('orderStatus.sla.left', { time: formatMinutes(status.remaining_minutes, day) })
   }
   const elapsedLabel = isPublished
     ? t('orderStatus.sla.breakdown.totalTime')
@@ -163,23 +164,30 @@ export function SlaBreakdownTooltip({
         <div>
           {t('orderStatus.sla.breakdown.target')}{' '}
           <span className="tabular-nums">
-            {formatTarget(tier.target_minutes)}
+            {formatTarget(tier.target_minutes, day)}
             {businessSuffix}
           </span>
         </div>
         <div>
           {elapsedLabel}{' '}
           <span className="tabular-nums">
-            {formatMinutes(status.elapsed_minutes)}
+            {formatMinutes(status.elapsed_minutes, day)}
           </span>
         </div>
         <div>
           {t('orderStatus.sla.breakdown.remaining')}{' '}
           <span className="tabular-nums">
             {status.remaining_minutes < 0 ? '-' : ''}
-            {formatMinutes(status.remaining_minutes)}
+            {formatMinutes(status.remaining_minutes, day)}
           </span>
         </div>
+        {day !== 60 * 24 && (
+          <div data-testid="sla-business-day-note" className="opacity-70">
+            {t('orderStatus.sla.breakdown.businessDayNote', {
+              hours: +(day / 60).toFixed(2),
+            })}
+          </div>
+        )}
       </div>
       {(drivingSampleId || priority) && (
         <div className="flex flex-col gap-0.5 border-t border-primary-foreground/20 pt-1.5">
