@@ -1064,6 +1064,11 @@ class Worksheet(Base):
     printed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     printed_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     print_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default="0")
+    # Per-bench run settings (Worksheets 2.0). Free-form JSON keyed by the
+    # bench kind's own names; PCR stores overage / curve / plate_type /
+    # sort_by_order (spec 2026-09-22-pcr-worksheet-design). Replaced whole
+    # by PUT, never merged.
+    bench_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -1123,6 +1128,13 @@ class WorksheetItem(Base):
     made_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     ran_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     ran_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    # PCR plate map (spec 2026-09-22-pcr-worksheet-design): the well this vial
+    # was printed / exported in, frozen because the plate is loaded by then.
+    # plate_no is 1-based; well_pos is 0..47, column-major within the
+    # bacterial block (row = pos % 8, col = pos // 8 + 1; the fungal mirror is
+    # col + 6). NULL = not frozen yet; the layout is free to move the row.
+    plate_no: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    well_pos: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     def __repr__(self) -> str:
         return f"<WorksheetItem(id={self.id}, worksheet_id={self.worksheet_id}, sample_uid='{self.sample_uid}')>"

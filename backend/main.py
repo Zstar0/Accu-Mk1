@@ -23699,6 +23699,7 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
             "printed_at": (ws.printed_at.isoformat() + "Z") if ws.printed_at else None,
             "printed_by_user_id": ws.printed_by_user_id,
             "print_count": ws.print_count or 0,
+            "bench_config": ws.bench_config,
             "items": [
                 {
                     "id": it.id,
@@ -23752,6 +23753,9 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
                     "made_by_user_id": it.made_by_user_id,
                     "ran_at": (it.ran_at.isoformat() + "Z") if it.ran_at else None,
                     "ran_by_user_id": it.ran_by_user_id,
+                    # PCR plate map: the frozen well, or null while the row may still move.
+                    "plate_no": it.plate_no,
+                    "well_pos": it.well_pos,
                     **_worksheet_item_parent_facts(_parent_for(it.sample_id)),
                 }
                 for it in items
@@ -23795,9 +23799,11 @@ def list_worksheets(
 # src/lib/worksheet-kind.ts (benchKindForItem): the vial's catalog role wins;
 # an item with no mapped role (a bare parent id on a legacy "<order> E"
 # worksheet has no lims_sub_samples row at all) falls back to the first
-# analysis keyword that names a bench. Keep the two in step.
+# analysis keyword that names a bench. Keep the two in step. `ster` is the
+# legacy rapid-sterility PCR vial (STER-PCR), the same plate as `pcr`
+# (ruling 2026-09-22); only usp71 is plated sterility.
 _ROLE_BENCH_KIND = {
-    "endo": "endo", "endo85": "endo", "pcr": "pcr", "ster": "sterility",
+    "endo": "endo", "endo85": "endo", "pcr": "pcr", "ster": "pcr",
     "usp71": "sterility", "hm": "hm", "hplc": "hplc", "fentanyl": "hplc",
 }
 _KEYWORD_BENCH_KIND = (
@@ -23910,6 +23916,9 @@ class WorksheetUpdate(BaseModel):
     title: Optional[str] = None
     assigned_analyst: Optional[int] = None
     notes: Optional[str] = None
+    # Per-bench run settings, replaced whole (PCR: overage, curve, plate_type,
+    # sort_by_order). Omitted = untouched.
+    bench_config: Optional[dict] = None
 
 
 @app.put("/worksheets/{worksheet_id}")
@@ -23953,6 +23962,8 @@ async def update_worksheet(
             )
     if data.notes is not None:
         ws.notes = data.notes
+    if data.bench_config is not None:
+        ws.bench_config = data.bench_config
 
     db.commit()
     return {"status": "updated"}

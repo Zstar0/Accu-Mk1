@@ -322,6 +322,10 @@ def _run_migrations():
         "ALTER TABLE worksheets ADD COLUMN IF NOT EXISTS printed_at TIMESTAMP",
         "ALTER TABLE worksheets ADD COLUMN IF NOT EXISTS printed_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL",
         "ALTER TABLE worksheets ADD COLUMN IF NOT EXISTS print_count INTEGER NOT NULL DEFAULT 0",
+        # PCR plate map: frozen wells + per-bench run settings (2026-09-22)
+        "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS plate_no INTEGER",
+        "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS well_pos INTEGER",
+        "ALTER TABLE worksheets ADD COLUMN IF NOT EXISTS bench_config JSON",
         # Method-Instrument M2M migration: move from hplc_methods.instrument_id FK to junction table
         """DO $$ BEGIN
             IF EXISTS (SELECT 1 FROM information_schema.columns
