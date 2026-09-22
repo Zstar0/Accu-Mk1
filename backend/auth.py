@@ -73,6 +73,7 @@ class UserCreate(BaseModel):
     email: str
     password: str
     role: str = "standard"
+    scope: str = "lab"
 
 class UserRead(BaseModel):
     id: int
@@ -83,6 +84,7 @@ class UserRead(BaseModel):
     senaite_configured: bool = False
     first_name: Optional[str] = None
     last_name: Optional[str] = None
+    scope: str = "lab"
 
     class Config:
         from_attributes = True
@@ -93,6 +95,7 @@ class UserUpdate(BaseModel):
     is_active: Optional[bool] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
+    scope: Optional[str] = None
 
 class MeUpdate(BaseModel):
     first_name: Optional[str] = None

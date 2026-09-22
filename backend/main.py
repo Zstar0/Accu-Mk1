@@ -67,7 +67,7 @@ from auth import (
     verify_password, get_password_hash, seed_admin_user,
     require_internal_service_token,
     UserCreate, UserRead, UserUpdate, MeUpdate, PasswordChange, TokenResponse,
-    SenaiteCredentials,
+    SenaiteCredentials, SCOPES, get_current_user_any_scope,
 )
 from models_peptide_request import (
     PeptideRequestCreate, PeptideRequest, PeptideRequestList,
@@ -636,7 +636,7 @@ async def login(
 
 
 @app.get("/auth/me", response_model=UserRead)
-async def get_me(current_user=Depends(get_current_user)):
+async def get_me(current_user=Depends(get_current_user_any_scope)):
     """Get current authenticated user info."""
     return _user_to_read(current_user)
 
@@ -644,7 +644,7 @@ async def get_me(current_user=Depends(get_current_user)):
 @app.patch("/auth/me", response_model=UserRead)
 async def update_me(
     data: MeUpdate,
-    current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user_any_scope),
     db: Session = Depends(get_db),
 ):
     """Self-serve update of the caller's own name fields. Empty string clears
@@ -664,7 +664,7 @@ async def update_me(
 @app.put("/auth/change-password")
 async def change_password(
     data: PasswordChange,
-    current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user_any_scope),
     db: Session = Depends(get_db),
 ):
     """Change current user's password (requires current password)."""
@@ -737,7 +737,7 @@ async def list_users(
 
 @app.get("/auth/directory")
 async def user_directory(
-    _current_user=Depends(get_current_user),
+    _current_user=Depends(get_current_user_any_scope),
     db: Session = Depends(get_db),
 ):
     """Lightweight id/email/name list for ALL users (active + inactive) so the
@@ -766,6 +766,9 @@ async def create_user(
     if data.role not in ("standard", "admin"):
         raise HTTPException(status_code=400, detail="Role must be 'standard' or 'admin'")
 
+    if data.scope not in SCOPES:
+        raise HTTPException(status_code=400, detail="Scope must be 'lab', 'finance' or 'both'")
+
     if len(data.password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
 
@@ -773,6 +776,7 @@ async def create_user(
         email=data.email,
         hashed_password=get_password_hash(data.password),
         role=data.role,
+        scope=data.scope,
         is_active=True,
     )
     db.add(user)
@@ -797,6 +801,11 @@ async def update_user(
         if data.role not in ("standard", "admin"):
             raise HTTPException(status_code=400, detail="Role must be 'standard' or 'admin'")
         user.role = data.role
+
+    if data.scope is not None:
+        if data.scope not in SCOPES:
+            raise HTTPException(status_code=400, detail="Scope must be 'lab', 'finance' or 'both'")
+        user.scope = data.scope
 
     if data.is_active is not None:
         user.is_active = data.is_active
@@ -16580,6 +16589,7 @@ def _user_to_read(user) -> UserRead:
         senaite_configured=user.senaite_password_encrypted is not None,
         first_name=user.first_name,
         last_name=user.last_name,
+        scope=user.scope,
     )
 
 

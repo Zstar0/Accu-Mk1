@@ -73,3 +73,95 @@ def test_token_claims_carry_identity(db_session):
     assert c["email"] == "c@test" and c["scope"] == "finance" and c["role"] == "standard"
     assert c["first_name"] == "Ada" and c["last_name"] == "Lovelace"
     assert "exp" in c
+
+
+# ── routes ────────────────────────────────────────────────────
+# Real tokens through the real resolvers; only get_db is overridden so the
+# handlers see the in-memory session. Mirrors test_user_name_endpoints.py's
+# save/restore of dependency_overrides.
+
+from fastapi.testclient import TestClient
+from database import get_db
+from main import app
+
+
+@pytest.fixture
+def db_session():
+    """Module-local override of conftest's db_session: StaticPool +
+    check_same_thread=False, because the route tests below share this session
+    with TestClient's worker threads (FastAPI resolves sync deps off-thread).
+    conftest's plain sqlite:///:memory: engine (SingletonThreadPool,
+    check_same_thread=True) raises 'SQLite objects created in a thread can
+    only be used in that same thread' the moment a request handler touches it
+    from the threadpool. The 8 pre-existing tests in this module call auth.py
+    functions directly (single-threaded), so this is behaviorally identical
+    for them."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+    from database import Base
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    s = sessionmaker(bind=engine)()
+    try:
+        yield s
+    finally:
+        s.close()
+
+
+@pytest.fixture
+def client(db_session):
+    def _override_db():
+        yield db_session
+    prev = app.dependency_overrides.get(get_db)
+    app.dependency_overrides[get_db] = _override_db
+    yield TestClient(app)
+    if prev is None:
+        app.dependency_overrides.pop(get_db, None)
+    else:
+        app.dependency_overrides[get_db] = prev
+
+
+def _bearer(u):
+    return {"Authorization": f"Bearer {_token_for(u)}"}
+
+
+def test_finance_user_can_read_self_and_directory(client, db_session):
+    u = _user(db_session, "fin@test", scope="finance")
+    r = client.get("/auth/me", headers=_bearer(u))
+    assert r.status_code == 200, r.text
+    assert r.json()["scope"] == "finance"
+    r = client.get("/auth/directory", headers=_bearer(u))
+    assert r.status_code == 200, r.text
+    assert any(d["email"] == "fin@test" for d in r.json())
+
+
+def test_finance_user_refused_by_lab_admin_route(client, db_session):
+    u = _user(db_session, "fin@test", scope="finance", role="admin")
+    r = client.get("/auth/users", headers=_bearer(u))
+    assert r.status_code == 403, r.text
+
+
+def test_admin_creates_finance_user(client, db_session):
+    admin = _user(db_session, "admin@lab.test", role="admin")
+    r = client.post("/auth/users", headers=_bearer(admin),
+                    json={"email": "new@fin.test", "password": "longenough", "scope": "finance"})
+    assert r.status_code == 200, r.text
+    assert r.json()["scope"] == "finance"
+    r = client.post("/auth/users", headers=_bearer(admin),
+                    json={"email": "bad@fin.test", "password": "longenough", "scope": "bogus"})
+    assert r.status_code == 400
+
+
+def test_admin_updates_scope(client, db_session):
+    admin = _user(db_session, "admin@lab.test", role="admin")
+    target = _user(db_session, "t@test", scope="finance")
+    r = client.put(f"/auth/users/{target.id}", headers=_bearer(admin), json={"scope": "both"})
+    assert r.status_code == 200, r.text
+    assert r.json()["scope"] == "both"
+    r = client.put(f"/auth/users/{target.id}", headers=_bearer(admin), json={"scope": "nope"})
+    assert r.status_code == 400
