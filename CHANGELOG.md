@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+- **SLA durations on business-hours tiers now read in business days.** A tier that only counts the lab's open hours sized its "days" at 24 hours, so a 48 business-hour target read "48h (2d)" when it is six working days, and 43 business hours elapsed read "1d 19h" (reported on the Sample Preps list, 2026-09-21). On every SLA cell and the shared hover, "d" is now one business day (the configured open-to-close window, 8 hours today) for a business-hours tier and stays 24 hours for a calendar-time tier; the hover says which. The SLA tier editor takes business days for a business-hours tier and shows the business-hour equivalent next to the input, so "3 business days = 24 business hours". The day length follows the Business Hours setting; changing the open or close time updates every label. Targets are still stored in minutes and the SLA engine is unchanged, so nothing downstream moves. Customer-facing "48-72 hours" is 2 to 3 business days.
+- **Sample Preps: sortable columns, SLA first, creator by name.** Every column heading except Actions is clickable and toggles ascending and descending. The list opens sorted by SLA, most overdue first, then least time left, with rows that have no SLA clock (standards, not yet received) last, so the top of the list is what needs handling next. Sample IDs sort naturally (P-999 before P-1000) and Status sorts in workflow order. Created By shows "F. Lastname" from the lab-user directory instead of the email (email local part for an account no longer in the directory; the full email on hover).
+
 ## v1.25.0 - 2026-09-21
 
 ### Added

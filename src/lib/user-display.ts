@@ -26,6 +26,17 @@ export function shortName(u: NameUser): string {
   return first || last || shortEmail(u.email)
 }
 
+/**
+ * Table form: "F. Parker" when both names are set, so a column sorts and scans
+ * by surname. Same fallbacks as `shortName`.
+ */
+export function initialLastName(u: NameUser): string {
+  const first = (u.first_name ?? '').trim()
+  const last = (u.last_name ?? '').trim()
+  if (first && last) return `${first[0]?.toUpperCase()}. ${last}`
+  return first || last || shortEmail(u.email)
+}
+
 /** Local-part of an email (before '@'), for fallback when no name is known. */
 export function shortEmail(email: string): string {
   if (!email) return ''
