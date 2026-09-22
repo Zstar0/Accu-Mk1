@@ -164,18 +164,26 @@ export function PcrSampleList({
                   <td className={`${TD} ${MONO}`}>{s?.order || '-'}</td>
                   <td className={TD}>
                     {s && item ? (
-                      <button
-                        className="text-left transition-colors hover:text-primary hover:underline"
+                      // Not a <button>: the stacked badge carries its own
+                      // parent-link button, and a button may not nest one.
+                      <span
+                        role="link"
+                        tabIndex={0}
+                        className="inline-block cursor-pointer text-left transition-colors hover:text-primary hover:underline"
                         onClick={() =>
                           useUIStore.getState().navigateToSample(s.id)
                         }
+                        onKeyDown={e => {
+                          if (e.key === 'Enter')
+                            useUIStore.getState().navigateToSample(s.id)
+                        }}
                       >
                         <SampleIdBadge
                           stacked
                           id={s.id}
                           variance={item.assignment_kind === 'variance'}
                         />
-                      </button>
+                      </span>
                     ) : (
                       <span className="font-mono text-[12.5px]">
                         {row.placements[0]?.id ?? 'NPC'}
