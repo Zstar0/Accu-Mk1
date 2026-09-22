@@ -2474,6 +2474,7 @@ def _run_migrations():
         # RetestOfSampleId). Nullable, no FK — the original may be a
         # SENAITE-born sample_id.
         "ALTER TABLE lims_samples ADD COLUMN IF NOT EXISTS retest_of_sample_id TEXT",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS scope VARCHAR(10) NOT NULL DEFAULT 'lab'",
     ]
     # Per-statement isolation: a failure in one statement (e.g., a table that
     # create_all hasn't built yet on first run) must not skip subsequent
