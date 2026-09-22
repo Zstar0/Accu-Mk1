@@ -4106,14 +4106,14 @@ Expected: all pass. (The full suite runs in the stack container before deploy, o
 - Legacy `ster` vials now classify as PCR work everywhere (bench kind, run log).
 ```
 
-- [ ] **Step 4: Push and open the PR**
+- [x] **Step 4: Push and open the PR** (PR #243)
 
 ```bash
 git push -u origin feat/pcr-worksheet
 gh pr create --title "Worksheets 2.0: PCR plate builder (Dennis's qpcr-plate-builder port)" --body-file docs/superpowers/specs/2026-09-22-pcr-worksheet-design.md
 ```
 
-- [ ] **Step 5: Stack UAT**
+- [x] **Step 5: Stack UAT** (endows stack, worksheet 29, 2026-09-22: layout, freeze on Print, late add after the last locked well with the NPC last, ticks, overage, Preview, Unlock all verified; instrument stamp not exercised, the stack has no PCR method)
 
 On the devbox (`forrestparker@100.73.137.3`), in the `endows` stack's worktree:
 
