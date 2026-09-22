@@ -11,6 +11,8 @@ const deleteSlaPriorityTierMock = vi.fn().mockResolvedValue(undefined)
 // Per-test override hooks: each test can re-mock returned data shape.
 const getSlaPriorityTiersMock = vi.fn().mockResolvedValue([])
 const getServiceGroupsMock = vi.fn().mockResolvedValue([])
+// Rejects by default: no business-day length, so tiers edit in hours + minutes.
+const getBusinessHoursConfigMock = vi.fn().mockRejectedValue(new Error('no config'))
 const getSlaTiersMock = vi.fn().mockResolvedValue([
   {
     id: 1,
@@ -31,6 +33,7 @@ vi.mock('@/lib/api', async () => {
     getSlaTiers: () => getSlaTiersMock(),
     getSlaPriorityTiers: () => getSlaPriorityTiersMock(),
     getServiceGroups: () => getServiceGroupsMock(),
+    getBusinessHoursConfig: () => getBusinessHoursConfigMock(),
     updateSlaTier: (id: number, data: unknown) => updateSlaTierMock(id, data),
     createSlaTier: vi.fn(),
     deleteSlaTier: vi.fn(),
@@ -80,6 +83,7 @@ beforeEach(() => {
   // Reset queries to defaults so each test starts clean.
   getSlaPriorityTiersMock.mockReset().mockResolvedValue([])
   getServiceGroupsMock.mockReset().mockResolvedValue([])
+  getBusinessHoursConfigMock.mockReset().mockRejectedValue(new Error('no config'))
   getSlaTiersMock.mockReset().mockResolvedValue([
     {
       id: 1,
@@ -274,5 +278,69 @@ describe('SlaPane — per-group priority overrides', () => {
     expect(
       screen.queryByTestId('sla-priority-add-group-expedited')
     ).toBeNull()
+  })
+})
+
+// Reported 2026-09-21: a business-hours tier typed as "48 hours" is six working
+// days, not two. Business-hours tiers are entered in business days instead.
+describe('SlaPane: business-hours tiers are entered in business days', () => {
+  const bhTier = (target_minutes: number) => [
+    {
+      id: 1,
+      name: 'Standard',
+      target_minutes,
+      business_hours_only: true,
+      is_default: true,
+      amber_threshold_percent: 20,
+      created_at: '2026-01-01T00:00:00',
+      updated_at: '2026-01-01T00:00:00',
+    },
+  ]
+  const nineToFive = {
+    open_time: '09:00:00',
+    close_time: '17:00:00',
+    timezone: 'America/Los_Angeles',
+    working_days: [0, 1, 2, 3, 4],
+  }
+
+  it('shows 1440 business minutes as 3 business days and saves 2 days as 960', async () => {
+    getBusinessHoursConfigMock.mockResolvedValue(nineToFive)
+    getSlaTiersMock.mockResolvedValue(bhTier(1440))
+    render(<SlaPane />, { wrapper })
+    const input = await screen.findByTestId('sla-target-days')
+    expect((input as HTMLInputElement).value).toBe('3')
+    // i18n is key-only under test, so the numbers ride data attributes.
+    expect(screen.getByTestId('sla-target-days-equals').getAttribute('data-hours')).toBe('24')
+    fireEvent.change(input, { target: { value: '2' } })
+    fireEvent.blur(input)
+    await waitFor(() => expect(updateSlaTierMock).toHaveBeenCalled())
+    expect(updateSlaTierMock.mock.calls[0]?.[1]).toMatchObject({ target_minutes: 960 })
+  })
+
+  it('follows the configured day: an 08:00 open makes a 9h business day', async () => {
+    getBusinessHoursConfigMock.mockResolvedValue({ ...nineToFive, open_time: '08:00:00' })
+    getSlaTiersMock.mockResolvedValue(bhTier(1620))
+    render(<SlaPane />, { wrapper })
+    const input = await screen.findByTestId('sla-target-days')
+    expect((input as HTMLInputElement).value).toBe('3')
+    expect(screen.getByTestId('sla-target-days-equals').getAttribute('data-per-day')).toBe('9')
+  })
+
+  it('never re-saves an untouched fractional target with rounding drift', async () => {
+    getBusinessHoursConfigMock.mockResolvedValue(nineToFive)
+    getSlaTiersMock.mockResolvedValue(bhTier(1000)) // 2.08 days on screen
+    render(<SlaPane />, { wrapper })
+    const input = await screen.findByTestId('sla-target-days')
+    expect((input as HTMLInputElement).value).toBe('2.08')
+    fireEvent.blur(input)
+    await new Promise(r => setTimeout(r, 50))
+    expect(updateSlaTierMock).not.toHaveBeenCalled()
+  })
+
+  it('stays on hours + minutes when the business-hours config is unavailable', async () => {
+    getSlaTiersMock.mockResolvedValue(bhTier(1440))
+    render(<SlaPane />, { wrapper })
+    await screen.findByTestId('sla-amber-input-1')
+    expect(screen.queryByTestId('sla-target-days')).toBeNull()
   })
 })

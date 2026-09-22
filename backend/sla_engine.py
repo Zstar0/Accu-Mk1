@@ -103,6 +103,48 @@ def compute_business_minutes(
     return total
 
 
+def compute_business_deadline(
+    received_at: Optional[datetime],
+    target_minutes: int,
+    schedule: BusinessSchedule,
+    is_holiday: Callable[[date], bool],
+) -> Optional[datetime]:
+    """The instant the business clock reaches ``target_minutes`` after
+    ``received_at`` -- the inverse of :func:`compute_business_minutes`, so a
+    deadline computed here reads back as exactly the target. This is the
+    endotoxin bench's due date (spec 2026-09-18-endo-worksheet-design; the
+    Handler ruled the bench follows the SLA engine, not a constant).
+
+    Walks working days from the received date, clamping the start to the next
+    open window (a sample received after close starts on the next working
+    morning), skipping holidays, and returns naive UTC like every Mk1
+    timestamp. Returns None for a missing ``received_at`` or a schedule that
+    can never accrue minutes (no working days, close <= open, 400 days without
+    an open day) -- never raises on misconfiguration.
+    """
+    if received_at is None:
+        return None
+    if not schedule.working_days or schedule.close_time <= schedule.open_time:
+        return None
+    start = _to_aware_utc(received_at)
+    tz = ZoneInfo(schedule.timezone)
+    remaining = float(max(target_minutes, 0))
+    d = start.astimezone(tz).date()
+    for _ in range(400):
+        if d.weekday() in schedule.working_days and not is_holiday(d):
+            open_dt = datetime.combine(d, schedule.open_time, tzinfo=tz)
+            close_dt = datetime.combine(d, schedule.close_time, tzinfo=tz)
+            lo = max(start, open_dt)
+            if lo < close_dt:
+                available = (close_dt - lo).total_seconds() / 60.0
+                if remaining <= available:
+                    end = lo + timedelta(minutes=remaining)
+                    return end.astimezone(timezone.utc).replace(tzinfo=None)
+                remaining -= available
+        d += timedelta(days=1)
+    return None
+
+
 def resolve_sla_tier(
     priority_map: Mapping[str, T],
     group_tier: Optional[T],

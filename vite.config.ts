@@ -42,6 +42,11 @@ export default defineConfig(async () => ({
     port: 1420,
     strictPort: true,
     host: host || false,
+    // Dev stacks on the devbox are reached over Tailscale; MagicDNS names
+    // (devbox.<tailnet>.ts.net) let the desktop app's browser remember a site
+    // permission, which it refuses for a bare IP. Vite blocks unknown hosts
+    // by default, so allow the tailnet suffix. Dev server only.
+    allowedHosts: ['.ts.net'],
     // Same-origin API proxy — mirrors the baked nginx image (nginx.conf:
     // `location /api/` strips the prefix and proxies to the backend). When a
     // mounted dev stack sets VITE_API_URL=/api, the SPA calls a relative base

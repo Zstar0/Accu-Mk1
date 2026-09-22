@@ -1,0 +1,394 @@
+"""Endotoxin bench prep on worksheet items (spec 2026-09-18-endo-worksheet-design).
+
+Three analyst overrides (`prep_weight_mg`, `prep_volume_ml`, `prep_dilution_factor`)
+land on `worksheet_items` through the existing item PATCH, and the worksheet GET
+carries the parent-sample facts the bench computes from (declared weight, sample
+type, order number, identity). In-memory SQLite + dependency overrides, no live stack.
+"""
+import json
+from datetime import datetime
+from unittest.mock import MagicMock
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from main import app
+from auth import get_current_user
+from database import Base, get_db
+from models import Department, LimsSample, LimsSubSample, Worksheet, WorksheetItem
+
+
+@pytest.fixture
+def db():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+@pytest.fixture
+def client(db):
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_current_user] = lambda: MagicMock(id=1)
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+def _seed(db, *, vial=True):
+    micro = Department(name="Microbiology")
+    db.add(micro)
+    db.flush()
+    parent = LimsSample(
+        sample_id="P-2995",
+        external_lims_uid="SEN-P-2995",
+        declared_total_quantity="10.00",
+        sample_type_title="Peptide",
+        client_order_number="WP-7536",
+        # Positional analyte slots, the shape sub_samples/service.py writes.
+        analytes=json.dumps([{"name": "MOTS-c", "declared_quantity": None}]),
+        date_received=datetime(2026, 9, 17, 16, 30),
+    )
+    db.add(parent)
+    db.flush()
+    sub = None
+    if vial:
+        sub = LimsSubSample(
+            sample_id="P-2995-S02",
+            parent_sample_pk=parent.id,
+            vial_sequence=2,
+            external_lims_uid="mk1://endo-1",
+            assignment_role="endo85",
+        )
+        db.add(sub)
+        db.flush()
+    ws = Worksheet(title="Endo 09/17/2026", status="open")
+    db.add(ws)
+    db.flush()
+    item = WorksheetItem(
+        worksheet_id=ws.id,
+        sample_uid=sub.external_lims_uid if sub else parent.external_lims_uid,
+        sample_id=sub.sample_id if sub else parent.sample_id,
+        department_id=micro.id,
+    )
+    db.add(item)
+    db.commit()
+    return ws, item
+
+
+def test_patch_sets_and_clears_prep_overrides(client, db):
+    ws, item = _seed(db)
+    r = client.patch(
+        f"/worksheets/{ws.id}/items/{item.id}",
+        json={"prep_weight_mg": 30, "prep_volume_ml": 2, "prep_dilution_factor": 40},
+    )
+    assert r.status_code == 200, r.text
+    db.refresh(item)
+    assert (item.prep_weight_mg, item.prep_volume_ml, item.prep_dilution_factor) == (30, 2, 40)
+
+    # Explicit null clears; an omitted field is untouched.
+    r = client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"prep_volume_ml": None})
+    assert r.status_code == 200, r.text
+    db.refresh(item)
+    assert item.prep_volume_ml is None
+    assert item.prep_weight_mg == 30
+
+
+def test_patch_rejects_non_positive_override(client, db):
+    ws, item = _seed(db)
+    r = client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"prep_weight_mg": 0})
+    assert r.status_code == 400
+    db.refresh(item)
+    assert item.prep_weight_mg is None
+
+
+def test_get_worksheet_carries_parent_facts_for_vial_item(client, db):
+    ws, item = _seed(db)
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"prep_volume_ml": 2})
+    body = client.get(f"/worksheets/{ws.id}").json()
+    it = body["items"][0]
+    assert it["declared_weight_mg"] == 10.0
+    assert it["sample_type"] == "Peptide"
+    assert it["client_order_number"] == "WP-7536"
+    assert it["sample_identity"] == "MOTS-c"
+    assert it["prep_volume_ml"] == 2
+    assert it["prep_weight_mg"] is None
+    assert it["prep_dilution_factor"] is None
+
+
+def test_get_worksheet_resolves_parent_sample_item(client, db):
+    # Legacy "<order> E" worksheets hold bare P-XXXX ids, not vial ids.
+    ws, item = _seed(db, vial=False)
+    it = client.get(f"/worksheets/{ws.id}").json()["items"][0]
+    assert it["declared_weight_mg"] == 10.0
+    assert it["sample_identity"] == "MOTS-c"
+    assert it["client_order_number"] == "WP-7536"
+
+
+def test_list_worksheets_item_without_parent_is_none_safe(client, db):
+    micro = Department(name="Microbiology")
+    db.add(micro)
+    db.flush()
+    ws = Worksheet(title="Orphan", status="open")
+    db.add(ws)
+    db.flush()
+    db.add(WorksheetItem(worksheet_id=ws.id, sample_uid="SEN-nowhere", sample_id="P-0000",
+                         department_id=micro.id))
+    db.commit()
+    it = client.get("/worksheets").json()[0]["items"][0]
+    assert it["declared_weight_mg"] is None
+    assert it["sample_identity"] is None
+    assert it["sample_type"] is None
+
+
+# --- Bench ticks (Made / ran on the MCS), target override, run log ----------
+
+
+def test_made_tick_stamps_who_and_when_and_logs_it(client, db):
+    from models import AuditLog
+
+    ws, item = _seed(db)
+    r = client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"made": True})
+    assert r.status_code == 200, r.text
+    db.refresh(item)
+    assert item.made_at is not None
+    assert item.made_by_user_id == 1
+    assert item.prep_status == "in_progress"
+
+    it = client.get(f"/worksheets/{ws.id}").json()["items"][0]
+    assert it["made_at"].endswith("Z")
+    assert it["made_by_user_id"] == 1
+    assert it["ran_at"] is None
+
+    # Ticking again keeps the first stamp; unticking clears it. Both clicks
+    # that changed something are in the audit log, so the who/when of a tick
+    # that was later undone is not lost.
+    first = item.made_at
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"made": True})
+    db.refresh(item)
+    assert item.made_at == first
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"made": False})
+    db.refresh(item)
+    assert item.made_at is None and item.made_by_user_id is None
+    assert item.prep_status == "ready"
+    ops = [
+        (a.operation, a.details["user_id"])
+        for a in db.query(AuditLog).filter(AuditLog.entity_type == "worksheet_item").all()
+    ]
+    assert ops == [("bench_made_set", 1), ("bench_made_cleared", 1)]
+
+
+def test_ran_tick_completes_the_item(client, db):
+    ws, item = _seed(db)
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"made": True, "ran": True})
+    db.refresh(item)
+    assert item.ran_at is not None and item.ran_by_user_id == 1
+    assert item.prep_status == "complete"
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"ran": False})
+    db.refresh(item)
+    assert item.prep_status == "in_progress"
+
+
+def test_target_override_sets_and_clears(client, db):
+    ws, item = _seed(db)
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"prep_target_mg_ml": 0.5})
+    assert client.get(f"/worksheets/{ws.id}").json()["items"][0]["prep_target_mg_ml"] == 0.5
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"prep_target_mg_ml": None})
+    assert client.get(f"/worksheets/{ws.id}").json()["items"][0]["prep_target_mg_ml"] is None
+    r = client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"prep_target_mg_ml": 0})
+    assert r.status_code == 400
+
+
+def test_bench_log_lists_endo_only_worksheets_with_tick_counts(client, db):
+    ws, item = _seed(db)
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"made": True})
+    # A mixed worksheet (one endo vial, one bare parent id) is not an endo run.
+    mixed = Worksheet(title="Mixed micro", status="open")
+    db.add(mixed)
+    db.flush()
+    db.add(LimsSubSample(sample_id="P-2995-S03", parent_sample_pk=1, vial_sequence=3,
+                         external_lims_uid="mk1://endo-2", assignment_role="endo85"))
+    db.add(WorksheetItem(worksheet_id=mixed.id, sample_uid="mk1://endo-2", sample_id="P-2995-S03"))
+    db.add(WorksheetItem(worksheet_id=mixed.id, sample_uid="SEN-x", sample_id="P-0001"))
+    db.add(Worksheet(title="Empty", status="open"))
+    db.commit()
+
+    rows = client.get("/worksheets/bench-log?kind=endo").json()
+    assert [r["id"] for r in rows] == [ws.id]
+    assert rows[0]["title"] == "Endo 09/17/2026"
+    assert rows[0]["item_count"] == 1
+    assert rows[0]["made_count"] == 1
+    assert rows[0]["ran_count"] == 0
+    assert client.get("/worksheets/bench-log?kind=nope").status_code == 400
+
+
+def test_bench_log_counts_legacy_parent_items_by_their_endo_keyword(client, db):
+    # Legacy "<order> E" worksheets hold bare P-XXXX ids with no vial row; the
+    # screen calls them endo from the analysis keyword, so the log must too.
+    ws, _ = _seed(db, vial=False)
+    item = db.query(WorksheetItem).filter(WorksheetItem.worksheet_id == ws.id).one()
+    item.analyses_json = json.dumps([{"title": "Endotoxin", "keyword": "ENDO-LAL"}])
+    # Same shape, but HPLC work: must stay out of the endo log.
+    hplc = Worksheet(title="HPLC run", status="open")
+    db.add(hplc)
+    db.flush()
+    db.add(WorksheetItem(worksheet_id=hplc.id, sample_uid="SEN-h", sample_id="P-0002",
+                         analyses_json=json.dumps([{"title": "Purity", "keyword": "PURITY"}])))
+    db.commit()
+
+    rows = client.get("/worksheets/bench-log?kind=endo").json()
+    assert [r["id"] for r in rows] == [ws.id]
+
+
+# --- Printing, bulk ticks, and the instrument stamp behind the MCS tick ------
+
+
+def test_printing_is_recorded_once_as_the_bench_start(client, db):
+    from models import AuditLog
+
+    ws, _ = _seed(db)
+    r = client.post(f"/worksheets/{ws.id}/printed")
+    assert r.status_code == 200, r.text
+    db.refresh(ws)
+    first = ws.printed_at
+    assert first is not None and ws.printed_by_user_id == 1 and ws.print_count == 1
+    # A reprint counts, but the sheet left for the bench the first time.
+    client.post(f"/worksheets/{ws.id}/printed")
+    db.refresh(ws)
+    assert ws.printed_at == first and ws.print_count == 2
+    body = client.get(f"/worksheets/{ws.id}").json()
+    assert body["printed_at"].endswith("Z") and body["print_count"] == 2
+    assert db.query(AuditLog).filter(AuditLog.operation == "worksheet_printed").count() == 2
+    assert client.post("/worksheets/99999/printed").status_code == 404
+
+
+def test_bulk_ticks_mark_every_unticked_row_once(client, db):
+    from models import AuditLog
+
+    ws, item = _seed(db)
+    second = WorksheetItem(worksheet_id=ws.id, sample_uid="mk1://endo-9", sample_id="P-2995-S09")
+    db.add(second)
+    db.commit()
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"made": True})
+    db.refresh(item)
+    already = item.made_at
+
+    r = client.post(f"/worksheets/{ws.id}/bench-ticks", json={"made": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["changed"] == 1  # the row ticked by hand keeps its own stamp
+    db.refresh(item)
+    db.refresh(second)
+    assert item.made_at == already and second.made_at is not None
+    assert second.prep_status == "in_progress"
+    assert db.query(AuditLog).filter(AuditLog.operation == "bench_made_set").count() == 2
+
+    r = client.post(f"/worksheets/{ws.id}/bench-ticks", json={"ran": True, "item_ids": [second.id]})
+    assert r.json()["changed"] == 1
+    db.refresh(item)
+    assert item.ran_at is None
+
+
+def _endo_analysis_world(client, db, *, instruments=1):
+    """The seeded endo vial with an `assigned` endotoxin analysis, an active
+    method covering its service, and N instruments linked to that method."""
+    from models import AnalysisService, Instrument, LimsAnalysis, instrument_methods
+
+    ws, item = _seed(db)
+    vial = db.query(LimsSubSample).filter(LimsSubSample.sample_id == item.sample_id).one()
+    svc = AnalysisService(title="Endotoxin USP85 LAL", keyword="ENDOTOXIN-USP85LAL",
+                          origin="mk1", active=True, variance_capable=False)
+    db.add(svc)
+    db.flush()
+    row = LimsAnalysis(lims_sub_sample_pk=vial.id, analysis_service_id=svc.id,
+                       keyword=svc.keyword, title=svc.title, review_state="assigned",
+                       provenance="canonical")
+    db.add(row)
+    db.commit()
+    mid = client.post("/hplc/methods", json={"name": "Endotoxin", "technique": "LAL"}).json()["id"]
+    client.post(f"/hplc/methods/{mid}/activate")
+    client.put(f"/hplc/methods/{mid}/services",
+               json=[{"analysis_service_id": svc.id, "is_default": True}])
+    ids = []
+    for n in range(instruments):
+        inst = Instrument(name=f"Nexgen-MCS {n + 1}", origin="mk1", active=True)
+        db.add(inst)
+        db.flush()
+        db.execute(instrument_methods.insert().values(instrument_id=inst.id, method_id=mid))
+        ids.append(inst.id)
+    db.commit()
+    return ws, item, row, mid, ids
+
+
+def test_mcs_tick_records_the_only_instrument_and_never_the_method(client, db):
+    # The COA's native section prints a row's method (coa/native_sections.py),
+    # and promote copies the vial row's method to the parent. Methods are not
+    # shown on COAs yet (Handler, 2026-09-19), so a tick must not plant one.
+    ws, item, row, _mid, (inst_id,) = _endo_analysis_world(client, db)
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"ran": True})
+    db.refresh(row)
+    db.refresh(item)
+    assert row.instrument_id == inst_id
+    assert row.method_id is None
+    assert item.instrument_id == inst_id
+
+
+def test_mcs_tick_keeps_a_method_the_apply_bar_already_set(client, db):
+    ws, item, row, mid, (inst_id,) = _endo_analysis_world(client, db)
+    row.method_id = mid  # chosen on purpose, through the apply bar
+    db.commit()
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"ran": True})
+    db.refresh(row)
+    assert row.method_id == mid and row.instrument_id == inst_id
+
+
+def test_mcs_tick_does_not_guess_between_two_instruments(client, db):
+    ws, item, row, _mid, _ids = _endo_analysis_world(client, db, instruments=2)
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"ran": True})
+    db.refresh(row)
+    db.refresh(item)
+    assert item.ran_at is not None  # the tick itself still lands
+    assert row.instrument_id is None and item.instrument_id is None
+
+
+def test_an_explicit_instrument_clear_wins_over_the_mcs_tick(client, db):
+    # One request that both clears the instrument and ticks MCS: the caller's
+    # explicit choice stands; the tick must not quietly put an instrument back.
+    ws, item, row, _mid, (inst_id,) = _endo_analysis_world(client, db)
+    item.instrument_id = inst_id
+    db.commit()
+    r = client.patch(f"/worksheets/{ws.id}/items/{item.id}",
+                     json={"instrument_id": None, "ran": True})
+    assert r.status_code == 200, r.text
+    db.refresh(item)
+    db.refresh(row)
+    assert item.ran_at is not None
+    assert item.instrument_id is None
+    assert row.instrument_id is None
+
+
+def test_only_a_newly_set_mcs_tick_records_the_instrument(client, db):
+    # Ran was ticked while two analyzers made the choice ambiguous, so nothing
+    # was recorded. A later Made tick that merely re-sends ran=true is not a
+    # statement about the instrument and must not stamp one after the fact.
+    from models import Instrument
+
+    ws, item, row, _mid, ids = _endo_analysis_world(client, db, instruments=2)
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"ran": True})
+    second = db.get(Instrument, ids[1])
+    second.active = False  # the catalog now resolves to exactly one
+    db.commit()
+    client.patch(f"/worksheets/{ws.id}/items/{item.id}", json={"made": True, "ran": True})
+    db.refresh(item)
+    db.refresh(row)
+    assert item.made_at is not None
+    assert item.instrument_id is None and row.instrument_id is None
+

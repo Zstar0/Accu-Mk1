@@ -1,10 +1,11 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { I18nextProvider } from 'react-i18next'
 import i18n from '@/i18n/config'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { SlaSubjectSnapshot } from '@/services/sla-subjects'
 import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
+import { setLabClockState } from '@/lib/lab-clock'
 
 const TIER = {
   id: 2, name: 'HPLC fast', target_minutes: 240, business_hours_only: false,
@@ -87,5 +88,40 @@ describe('SlaAgeIndicator', () => {
     render(wrap(<SlaAgeIndicator snapshot={null} isLoading={false} isError={false} compact />))
     expect(screen.getByTestId('sla-age-indicator')).toHaveAttribute('data-sla-color', 'none')
     expect(screen.getByText(/no sla tier configured/i)).toBeInTheDocument()
+  })
+})
+
+// The moon: shown on a business-hours tier while the lab clock is paused, so
+// "4.8bh left" read at 7 PM is understood as lab time that resumes tomorrow.
+describe('SlaAgeIndicator lab-clock moon', () => {
+  const BIZ_TIER = { ...TIER, business_hours_only: true, day_minutes: 480 }
+  const bizSnap = (over: Partial<SlaSubjectSnapshot> = {}) =>
+    snap({ tier: BIZ_TIER, status: { elapsed_minutes: 1631, remaining_minutes: 289, target_minutes: 1920, breached: false }, color: 'amber', ...over })
+  const paused = { paused: true, reason: 'after_close' as const, resumesAt: new Date('2026-09-22T16:00:00Z') }
+
+  afterEach(() => setLabClockState(null))
+
+  it('prints business units and a moon while the clock is paused', () => {
+    setLabClockState(paused)
+    render(wrap(<SlaAgeIndicator snapshot={bizSnap()} isLoading={false} isError={false} />))
+    expect(screen.getByText(/4.8bh left/)).toBeInTheDocument()
+    const moon = screen.getByTestId('sla-clock-paused')
+    expect(moon.getAttribute('title')).toMatch(/Lab closed. SLA clock resumes/)
+  })
+
+  it('no moon while the lab is open, on a calendar tier, on a frozen row, or with no clock', () => {
+    setLabClockState({ paused: false, reason: 'open', resumesAt: null })
+    const { unmount } = render(wrap(<SlaAgeIndicator snapshot={bizSnap()} isLoading={false} isError={false} />))
+    expect(screen.queryByTestId('sla-clock-paused')).toBeNull()
+    unmount()
+    setLabClockState(paused)
+    render(wrap(<SlaAgeIndicator snapshot={snap({ color: 'amber' })} isLoading={false} isError={false} />))
+    expect(screen.queryByTestId('sla-clock-paused')).toBeNull()
+    expect(screen.getByText(/3h left/)).toBeInTheDocument() // calendar units unchanged
+    render(wrap(<SlaAgeIndicator snapshot={bizSnap({ isFrozen: true })} isLoading={false} isError={false} />))
+    expect(screen.queryByTestId('sla-clock-paused')).toBeNull()
+    setLabClockState(null)
+    render(wrap(<SlaAgeIndicator snapshot={bizSnap()} isLoading={false} isError={false} />))
+    expect(screen.queryByTestId('sla-clock-paused')).toBeNull()
   })
 })

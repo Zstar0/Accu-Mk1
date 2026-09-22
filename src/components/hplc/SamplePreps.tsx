@@ -13,6 +13,9 @@ import {
   X,
   HardDrive,
   Cloud,
+  ArrowUp,
+  ArrowDown,
+  ChevronsUpDown,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -41,6 +44,13 @@ import { useUIStore } from '@/store/ui-store'
 import { useWizardStore } from '@/store/wizard-store'
 import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
 import { slaSubjectIdentities, useSlaForSubjects, type SlaSubject } from '@/services/sla-subjects'
+import { useFlagUsers } from '@/components/flags/flag-users'
+import { initialLastName, shortEmail } from '@/lib/user-display'
+import {
+  sortPreps,
+  type PrepSortKey,
+  type SortDir,
+} from '@/lib/sample-prep-sort'
 import { useServiceGroups } from '@/services/service-groups'
 import { departmentToGroupId } from '@/lib/inbox-sla'
 import { legacyToKey } from '@/lib/inbox-sla'
@@ -75,6 +85,20 @@ const STATUSES: { value: string; label: string; cls: string }[] = [
   { value: 'on_hold', label: 'On Hold', cls: 'bg-amber-500 text-white' },
   { value: 'review', label: 'Review', cls: 'bg-purple-600 text-white' },
 ]
+
+// Sortable columns, in display order. Actions is not a column of data.
+const COLUMNS: { key: PrepSortKey; label: string; align: 'left' | 'right' }[] =
+  [
+    { key: 'sampleId', label: 'Sample ID', align: 'left' },
+    { key: 'peptide', label: 'Peptide', align: 'left' },
+    { key: 'declaredWt', label: 'Declared Wt.', align: 'right' },
+    { key: 'targetConc', label: 'Target Conc.', align: 'right' },
+    { key: 'actualConc', label: 'Actual Conc.', align: 'right' },
+    { key: 'sla', label: 'SLA', align: 'left' },
+    { key: 'status', label: 'Status', align: 'left' },
+    { key: 'createdAt', label: 'Created', align: 'left' },
+    { key: 'createdBy', label: 'Created By', align: 'left' },
+  ]
 
 function fmtDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-US', {
@@ -284,6 +308,48 @@ export function SamplePreps() {
   } = useSlaForSubjects(slaSubjects)
   const [error, setError] = useState<string | null>(null)
   const [searchInput, setSearchInput] = useState('')
+
+  // Default = SLA ascending: most overdue first, then least time left, so the
+  // top of the list is what needs handling next.
+  const [sort, setSort] = useState<{ key: PrepSortKey; dir: SortDir }>({
+    key: 'sla',
+    dir: 'asc',
+  })
+  const toggleSort = (key: PrepSortKey) =>
+    setSort(cur =>
+      cur.key === key
+        ? { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' }
+        : { key, dir: 'asc' }
+    )
+
+  // Creator shows as "F. Lastname" from the shared lab-user directory; an
+  // account missing from it (deleted, legacy row) falls back to the email's
+  // local part. The full email stays on hover.
+  const users = useFlagUsers()
+  const creatorLabel = (p: SamplePrep): string => {
+    const u =
+      p.created_by_user_id != null ? users.get(p.created_by_user_id) : null
+    if (u) return initialLastName(u)
+    return p.created_by_email ? shortEmail(p.created_by_email) : ''
+  }
+
+  const sortedPreps = sortPreps(
+    preps.map(p => ({
+      ...p,
+      sampleId: p.senaite_sample_id,
+      peptide: p.peptide_abbreviation,
+      declaredWt: p.declared_weight_mg,
+      targetConc: p.target_conc_ug_ml,
+      actualConc: p.actual_conc_ug_ml,
+      slaRemaining:
+        slaByKey.get(String(p.id))?.status.remaining_minutes ?? null,
+      statusRank: STATUSES.findIndex(st => st.value === p.status),
+      createdAt: p.created_at,
+      createdBy: creatorLabel(p),
+    })),
+    sort.key,
+    sort.dir
+  )
   const [openingId, setOpeningId] = useState<number | null>(null)
   const [updatingStatusId, setUpdatingStatusId] = useState<number | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<SamplePrep | null>(null)
@@ -646,33 +712,46 @@ export function SamplePreps() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b bg-muted/50">
-                <th className="px-4 py-3 text-left font-medium text-muted-foreground">
-                  Sample ID
-                </th>
-                <th className="px-4 py-3 text-left font-medium text-muted-foreground">
-                  Peptide
-                </th>
-                <th className="px-4 py-3 text-right font-medium text-muted-foreground">
-                  Declared Wt.
-                </th>
-                <th className="px-4 py-3 text-right font-medium text-muted-foreground">
-                  Target Conc.
-                </th>
-                <th className="px-4 py-3 text-right font-medium text-muted-foreground">
-                  Actual Conc.
-                </th>
-                <th className="px-4 py-3 text-left font-medium text-muted-foreground">
-                  SLA
-                </th>
-                <th className="px-4 py-3 text-left font-medium text-muted-foreground">
-                  Status
-                </th>
-                <th className="px-4 py-3 text-left font-medium text-muted-foreground">
-                  Created
-                </th>
-                <th className="px-4 py-3 text-left font-medium text-muted-foreground">
-                  Created By
-                </th>
+                {COLUMNS.map(col => {
+                  const active = sort.key === col.key
+                  const Icon = !active
+                    ? ChevronsUpDown
+                    : sort.dir === 'asc'
+                      ? ArrowUp
+                      : ArrowDown
+                  return (
+                    <th
+                      key={col.key}
+                      aria-sort={
+                        active
+                          ? sort.dir === 'asc'
+                            ? 'ascending'
+                            : 'descending'
+                          : 'none'
+                      }
+                      className={cn(
+                        'px-4 py-3 font-medium text-muted-foreground',
+                        col.align === 'right' ? 'text-right' : 'text-left'
+                      )}
+                    >
+                      <button
+                        type="button"
+                        data-testid={`prep-sort-${col.key}`}
+                        onClick={() => toggleSort(col.key)}
+                        className={cn(
+                          'inline-flex items-center gap-1 hover:text-foreground transition-colors',
+                          active && 'text-foreground'
+                        )}
+                      >
+                        {col.label}
+                        <Icon
+                          className={cn('h-3 w-3', !active && 'opacity-40')}
+                          aria-hidden="true"
+                        />
+                      </button>
+                    </th>
+                  )
+                })}
                 <th className="px-4 py-3 text-right font-medium text-muted-foreground">
                   Actions
                 </th>
@@ -707,7 +786,7 @@ export function SamplePreps() {
                   </td>
                 </tr>
               ) : (
-                preps.map(prep => {
+                sortedPreps.map(prep => {
                   const match = scanMatches.get(prep.id)
                   return (
                     <tr
@@ -805,8 +884,11 @@ export function SamplePreps() {
                       <td className="px-4 py-3 text-muted-foreground text-xs">
                         {fmtDate(prep.created_at)}
                       </td>
-                      <td className="px-4 py-3 text-muted-foreground text-xs">
-                        {prep.created_by_email ?? '—'}
+                      <td
+                        className="px-4 py-3 text-muted-foreground text-xs"
+                        title={prep.created_by_email ?? undefined}
+                      >
+                        {prep.createdBy || '—'}
                       </td>
 
                       {/* Actions */}

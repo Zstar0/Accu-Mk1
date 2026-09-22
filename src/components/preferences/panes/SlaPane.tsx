@@ -94,7 +94,7 @@ export function SlaPane() {
         <div className="space-y-3">
           {sorted.map(tier => (
             <TierCard
-              key={`${tier.id}-${tier.updated_at}`}
+              key={`${tier.id}-${tier.updated_at}-${tier.day_minutes ?? ''}`}
               tier={tier}
               readOnly={!isAdmin}
               onSave={(data) => updateTier.mutate({ id: tier.id, data })}
@@ -315,6 +315,21 @@ function TierCard({
   const [bh, setBh] = useState(tier.business_hours_only)
   const [amber, setAmber] = useState(String(tier.amber_threshold_percent))
 
+  // A business-hours tier is entered in BUSINESS DAYS (one day = the lab's
+  // open..close window, tier.day_minutes), because "48 hours" on a tier that
+  // only counts open hours is six working days, not two. Stored as minutes
+  // either way. Falls back to hours + minutes until the day length is known.
+  const dayMin = tier.day_minutes
+  const daysMode = bh && !!dayMin
+  const toDays = (m: number) => String(+(m / (dayMin ?? 1440)).toFixed(2))
+  const [days, setDays] = useState(toDays(tier.target_minutes))
+  const currentMinutes = () => {
+    if (!daysMode) return (parseInt(hours, 10) || 0) * 60 + (parseInt(minutes, 10) || 0)
+    // Untouched input keeps the stored minutes: 2.08 days must not re-save as 998.
+    if (days === toDays(tier.target_minutes)) return tier.target_minutes
+    return Math.round((parseFloat(days) || 0) * dayMin)
+  }
+
   const buildPayload = (overrides?: Partial<{
     name: string
     target_minutes: number
@@ -322,7 +337,7 @@ function TierCard({
     amber_threshold_percent: number
   }>) => ({
     name: name.trim() || tier.name,
-    target_minutes: (parseInt(hours, 10) || 0) * 60 + (parseInt(minutes, 10) || 0),
+    target_minutes: currentMinutes(),
     business_hours_only: bh,
     amber_threshold_percent: clampAmber(amber, tier.amber_threshold_percent),
     ...overrides,
@@ -364,21 +379,50 @@ function TierCard({
       </div>
       <div className="flex items-center gap-2 text-sm">
         <span className="text-muted-foreground">{t('preferences.sla.target')}:</span>
-        <Input className="h-8 w-16" type="number" min={0} value={hours} disabled={readOnly}
-          onChange={e => setHours(e.target.value)} onBlur={commit} />
-        <span className="text-muted-foreground">{t('preferences.sla.hours')}</span>
-        <Input className="h-8 w-16" type="number" min={0} max={59} value={minutes} disabled={readOnly}
-          onChange={e => setMinutes(e.target.value)} onBlur={commit} />
-        <span className="text-muted-foreground">{t('preferences.sla.minutes')}</span>
+        {daysMode ? (
+          <>
+            <Input className="h-8 w-20" type="number" min={0} step={0.5} value={days} disabled={readOnly}
+              data-testid="sla-target-days"
+              onChange={e => setDays(e.target.value)} onBlur={commit} />
+            <span className="text-muted-foreground">{t('preferences.sla.businessDays')}</span>
+            <span
+              className="text-xs text-muted-foreground"
+              data-testid="sla-target-days-equals"
+              data-hours={+(currentMinutes() / 60).toFixed(2)}
+              data-per-day={+(dayMin / 60).toFixed(2)}
+            >
+              {t('preferences.sla.businessDaysEquals', {
+                hours: +(currentMinutes() / 60).toFixed(2),
+                perDay: +(dayMin / 60).toFixed(2),
+              })}
+            </span>
+          </>
+        ) : (
+          <>
+            <Input className="h-8 w-16" type="number" min={0} value={hours} disabled={readOnly}
+              onChange={e => setHours(e.target.value)} onBlur={commit} />
+            <span className="text-muted-foreground">{t('preferences.sla.hours')}</span>
+            <Input className="h-8 w-16" type="number" min={0} max={59} value={minutes} disabled={readOnly}
+              onChange={e => setMinutes(e.target.value)} onBlur={commit} />
+            <span className="text-muted-foreground">{t('preferences.sla.minutes')}</span>
+          </>
+        )}
       </div>
       <div className="flex items-center gap-2">
         <Switch
           checked={bh}
           disabled={readOnly}
           onCheckedChange={(v: boolean) => {
+            // The target's minutes survive the flip; only the unit shown changes,
+            // so re-seed both input sets from the same minute count.
+            const cur = currentMinutes()
+            const curHm = minutesToHM(cur)
+            setHours(String(curHm.hours))
+            setMinutes(String(curHm.minutes))
+            setDays(toDays(cur))
             setBh(v)
             if (!readOnly) {
-              onSave(buildPayload({ business_hours_only: v }))
+              onSave(buildPayload({ business_hours_only: v, target_minutes: cur }))
             }
           }}
         />

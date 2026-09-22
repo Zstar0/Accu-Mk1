@@ -1,7 +1,9 @@
 import { memo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
-import { formatMinutes, formatTarget } from '@/lib/sla-format'
+import { formatMinutes, formatTarget, tierUnits } from '@/lib/sla-format'
+import { useLabClockState } from '@/lib/lab-clock'
+import { SlaClockMoon } from '@/components/explorer/SlaClockMoon'
 import type { OrderSlaColor, OrderSlaVerdict } from '@/lib/sla-resolution'
 import {
   Tooltip,
@@ -45,13 +47,15 @@ function OrderSlaCellImpl({
   const color: OrderSlaColor = isError ? 'error' : isLoading ? 'loading' : verdict.color
   const className = COLOR_CLASS[color] ?? 'text-muted-foreground'
   const dot = DOT[color]
+  const units = tierUnits(verdict.drivingTier)
+  const clock = useLabClockState()
 
   let text = ''
   let tooltip = ''
   if (color === 'red' && verdict.drivingStatus) {
-    text = t('orderStatus.sla.over', { time: formatMinutes(verdict.drivingStatus.remaining_minutes) })
+    text = t('orderStatus.sla.over', { time: formatMinutes(verdict.drivingStatus.remaining_minutes, units) })
   } else if ((color === 'amber' || color === 'green') && verdict.drivingStatus) {
-    text = t('orderStatus.sla.left', { time: formatMinutes(verdict.drivingStatus.remaining_minutes) })
+    text = t('orderStatus.sla.left', { time: formatMinutes(verdict.drivingStatus.remaining_minutes, units) })
   } else if (color === 'met') {
     text = t('orderStatus.sla.met')
     tooltip = t('orderStatus.sla.allPublished')
@@ -74,11 +78,9 @@ function OrderSlaCellImpl({
   ) {
     tooltip = t('orderStatus.sla.tooltipFull', {
       tier: verdict.drivingTier.name,
-      target: formatTarget(verdict.drivingTier.target_minutes),
-      elapsed: formatMinutes(verdict.drivingStatus.elapsed_minutes),
-      businessSuffix: verdict.drivingTier.business_hours_only
-        ? t('orderStatus.sla.businessSuffix')
-        : '',
+      target: formatTarget(verdict.drivingTier.target_minutes, units),
+      elapsed: formatMinutes(verdict.drivingStatus.elapsed_minutes, units),
+      businessSuffix: '',
       sampleId: verdict.drivingSampleId,
     })
   }
@@ -101,6 +103,7 @@ function OrderSlaCellImpl({
       title={hasBreakdown ? undefined : tooltip || undefined}
     >
       <span aria-hidden="true">{dot}</span>
+      <SlaClockMoon units={units} clock={clock} frozen={color === 'met'} />
       {text && <span>{text}</span>}
       {!text && tooltip && <span className="sr-only">{tooltip}</span>}
     </span>
@@ -156,6 +159,8 @@ function slaPropsEqual(prev: OrderSlaCellProps, next: OrderSlaCellProps): boolea
     (a.drivingTier?.business_hours_only ?? null) !==
     (b.drivingTier?.business_hours_only ?? null)
   )
+    return false
+  if ((a.drivingTier?.day_minutes ?? null) !== (b.drivingTier?.day_minutes ?? null))
     return false
   // Status — compare structural identity not reference. Elapsed/remaining/
   // breached drive the rendered text. target_minutes is captured above via tier.

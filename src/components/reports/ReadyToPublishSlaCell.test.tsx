@@ -1,9 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { ReadyRow } from '@/lib/api'
 import { SlaCell } from '@/components/reports/ReadyToPublishReport'
 import { formatMinutes } from '@/lib/sla-format'
+
+// The row's tier counts business hours and the day length is unknown under
+// test (no config), so the target reads in bh with no day part.
+const BH = { dayMinutes: Number.POSITIVE_INFINITY, business: true }
 
 const row: ReadyRow = {
   sample_id: 'P-1',
@@ -34,9 +39,15 @@ const row: ReadyRow = {
 describe('Ready to Publish SlaCell', () => {
   it('hovers the shared SLA breakdown card with tier, target and received', async () => {
     render(
-      <TooltipProvider>
-        <SlaCell row={row} />
-      </TooltipProvider>
+      <QueryClientProvider
+        client={
+          new QueryClient({ defaultOptions: { queries: { retry: false } } })
+        }
+      >
+        <TooltipProvider>
+          <SlaCell row={row} />
+        </TooltipProvider>
+      </QueryClientProvider>
     )
     const trigger = screen.getByTestId('rtp-sla')
     fireEvent.pointerMove(trigger)
@@ -46,7 +57,7 @@ describe('Ready to Publish SlaCell', () => {
     expect(card.length).toBeGreaterThan(0)
     // Target comes through the shared card's own formatter.
     expect(
-      (await screen.findAllByText(new RegExp(formatMinutes(2880)))).length
+      (await screen.findAllByText(new RegExp(formatMinutes(2880, BH)))).length
     ).toBeGreaterThan(0)
   })
 })

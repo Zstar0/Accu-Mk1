@@ -33,6 +33,11 @@ import type { HplcMethod, Instrument } from '@/lib/api'
 import { prepStartedKey } from '@/lib/worksheet-scope-key'
 import WorksheetDrawerHeader from './WorksheetDrawerHeader'
 import WorksheetDrawerItems from './WorksheetDrawerItems'
+import { EndoWorksheetActions } from './EndoWorksheetActions'
+import { EndoWorksheetView } from './EndoWorksheetView'
+import { EndoRunLog } from './EndoRunLog'
+import { worksheetKind } from '@/lib/worksheet-kind'
+import { displayName } from '@/lib/user-display'
 import AddSamplesModal from './AddSamplesModal'
 
 export function WorksheetDrawer() {
@@ -47,6 +52,7 @@ export function WorksheetDrawer() {
   const {
     openWorksheets: allOpenWorksheets,
     activeWorksheet,
+    isResolvingActive,
     isLoading,
     isError,
     refetch,
@@ -55,6 +61,7 @@ export function WorksheetDrawer() {
     completeMutation,
     reassignMutation,
     updateItemMutation,
+    bulkTicksMutation,
     applyMethodInstrumentMutation,
     reorderMutation,
     addItemMutation,
@@ -102,15 +109,30 @@ export function WorksheetDrawer() {
   // Auto-select first worksheet when drawer opens or filter changes
   useEffect(() => {
     if (!drawerOpen || openWorksheets.length === 0) return
-    const activeStillVisible = openWorksheets.some(ws => ws.id === activeWorksheetId)
-    if (!activeStillVisible) {
-      setActiveId(openWorksheets[0]!.id)
-    }
-  }, [drawerOpen, activeWorksheetId, openWorksheets, setActiveId])
+    if (openWorksheets.some(ws => ws.id === activeWorksheetId)) return
+    // A completed worksheet (run log, Worksheets page, flag deep link) is
+    // never in the open list: leave it up instead of bouncing to the first
+    // open one, including while its by-id fetch is still in flight.
+    if (isResolvingActive) return
+    if (activeWorksheet && activeWorksheet.status !== 'open') return
+    const [first] = openWorksheets
+    if (first) setActiveId(first.id)
+  }, [
+    drawerOpen,
+    activeWorksheetId,
+    activeWorksheet,
+    isResolvingActive,
+    openWorksheets,
+    setActiveId,
+  ])
 
   const [addSamplesOpen, setAddSamplesOpen] = useState(false)
 
   const isCompleted = activeWorksheet?.status === 'completed'
+  // Worksheets 2.0: an all-endo worksheet gets the endo bench view, which
+  // needs the room of a page; every other worksheet keeps the 1100px drawer.
+  const isEndo =
+    !!activeWorksheet && worksheetKind(activeWorksheet.items) === 'endo'
 
   // Parse notes JSON: separate user text from prep_started metadata
   const { userNotes, prepStartedItems } = useMemo(() => {
@@ -154,11 +176,64 @@ export function WorksheetDrawer() {
     )
   }
 
+  const completeAction = activeWorksheet && (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button variant="destructive" size="sm">
+          Complete Worksheet
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Complete this worksheet?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This worksheet will be marked as completed and removed from the active
+            queue. This cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Keep Worksheet</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={() => completeMutation.mutate(activeWorksheet.id)}
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+          >
+            Complete Worksheet
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+
+  // Worksheet PUT from either header: a notes edit is merged into the notes
+  // JSON so the prep_started metadata riding in it survives.
+  function handleUpdateWorksheet(data: {
+    title?: string
+    assigned_analyst?: number
+    notes?: string
+  }) {
+    if (!activeWorksheet) return
+    if (data.notes !== undefined) {
+      const raw = activeWorksheet.notes ?? ''
+      let parsed: Record<string, unknown> = {}
+      try {
+        parsed = JSON.parse(raw)
+      } catch {
+        parsed = {}
+      }
+      parsed.text = data.notes
+      data = { ...data, notes: JSON.stringify(parsed) }
+    }
+    updateMutation.mutate({ worksheetId: activeWorksheet.id, data })
+  }
+
   return (
     <>
       {/* Sheet drawer */}
       <Sheet open={drawerOpen} onOpenChange={open => { if (!open) closeDrawer() }}>
-        <SheetContent side="right" className="w-[1100px] sm:max-w-[1100px] p-0 flex flex-col">
+        <SheetContent
+          side="right"
+          className={`p-0 flex flex-col ${isEndo ? 'w-[97vw] sm:max-w-[1760px]' : 'w-[1100px] sm:max-w-[1100px]'}`}
+        >
           {/* Loading state */}
           {isLoading && (
             <div className="p-4 space-y-3">
@@ -198,7 +273,7 @@ export function WorksheetDrawer() {
                   <SelectItem value="all">All analysts</SelectItem>
                   {analystOptions.map(email => (
                     <SelectItem key={email} value={email}>
-                      {email}
+                      {displayName(users.find(u => u.email === email) ?? { email })}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -226,29 +301,90 @@ export function WorksheetDrawer() {
             </div>
           )}
 
+          {/* Endotoxin worksheet: Dennis's run log + sheet (Worksheets 2.0) */}
+          {!isLoading && !isError && activeWorksheet && isEndo && (
+            <div className="flex flex-1 min-h-0 overflow-hidden bg-muted/30">
+              <EndoRunLog
+                activeId={activeWorksheet.id}
+                users={users}
+                onSelect={id => {
+                  // The log spans every analyst; drop the filter so an open
+                  // worksheet of someone else's is not bounced off.
+                  setAnalystFilter('all')
+                  setActiveId(id)
+                }}
+              />
+              <EndoWorksheetView
+                key={activeWorksheet.id}
+                worksheet={activeWorksheet}
+                users={users}
+                userNotes={userNotes}
+                isCompleted={!!isCompleted}
+                otherWorksheets={openWorksheets.filter(
+                  ws => ws.id !== activeWorksheet.id
+                )}
+                applyBar={
+                  !isCompleted && (
+                    <WorksheetApplyBar
+                      key={activeWorksheet.id}
+                      activeMethods={activeMethods}
+                      instruments={instruments}
+                      isPending={applyMethodInstrumentMutation.isPending}
+                      onApply={handleApplyToAll}
+                    />
+                  )
+                }
+                completeAction={completeAction}
+                onAddSamples={() => setAddSamplesOpen(true)}
+                onUpdate={handleUpdateWorksheet}
+                onRemove={itemId =>
+                  removeMutation.mutate({
+                    worksheetId: activeWorksheet.id,
+                    itemId,
+                  })
+                }
+                onReassign={(itemId, targetId) =>
+                  reassignMutation.mutate({
+                    worksheetId: activeWorksheet.id,
+                    itemId,
+                    targetWorksheetId: targetId,
+                  })
+                }
+                onUpdateItem={(itemId, data) =>
+                  updateItemMutation.mutate({
+                    worksheetId: activeWorksheet.id,
+                    itemId,
+                    data,
+                  })
+                }
+                onTickAll={data =>
+                  bulkTicksMutation.mutate({
+                    worksheetId: activeWorksheet.id,
+                    data,
+                  })
+                }
+              />
+              <AddSamplesModal
+                open={addSamplesOpen}
+                onOpenChange={setAddSamplesOpen}
+                worksheetId={activeWorksheet.id}
+                existingItems={activeWorksheet.items}
+                onAdd={data =>
+                  addItemMutation.mutate({ worksheetId: activeWorksheet.id, data })
+                }
+              />
+            </div>
+          )}
+
           {/* Active worksheet content */}
-          {!isLoading && !isError && activeWorksheet && (
+          {!isLoading && !isError && activeWorksheet && !isEndo && (
             <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
               {/* Header */}
               <WorksheetDrawerHeader
                 worksheet={activeWorksheet}
                 userNotes={userNotes}
                 users={users}
-                onUpdate={data => {
-                  // If updating notes text, merge with existing metadata
-                  if (data.notes !== undefined) {
-                    const raw = activeWorksheet.notes ?? ''
-                    let parsed: Record<string, unknown> = {}
-                    try {
-                      parsed = JSON.parse(raw)
-                    } catch {
-                      parsed = {}
-                    }
-                    parsed.text = data.notes
-                    data = { ...data, notes: JSON.stringify(parsed) }
-                  }
-                  updateMutation.mutate({ worksheetId: activeWorksheet.id, data })
-                }}
+                onUpdate={handleUpdateWorksheet}
                 isCompleted={!!isCompleted}
               />
 
@@ -262,38 +398,23 @@ export function WorksheetDrawer() {
                   >
                     Add Samples
                   </Button>
+                  <EndoWorksheetActions
+                    worksheet={activeWorksheet}
+                    users={users}
+                  />
                   <div className="flex-1" />
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button variant="destructive" size="sm">
-                        Complete Worksheet
-                      </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Complete this worksheet?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                          This worksheet will be marked as completed and removed from the active
-                          queue. This cannot be undone.
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Keep Worksheet</AlertDialogCancel>
-                        <AlertDialogAction
-                          onClick={() => completeMutation.mutate(activeWorksheet.id)}
-                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                        >
-                          Complete Worksheet
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
+                  {completeAction}
                 </div>
               ) : (
-                <div className="px-4 py-2 border-b">
+                <div className="px-4 py-2 border-b flex items-center gap-2">
                   <span className="text-xs text-muted-foreground">
                     View only — worksheet is completed
                   </span>
+                  <div className="flex-1" />
+                  <EndoWorksheetActions
+                    worksheet={activeWorksheet}
+                    users={users}
+                  />
                 </div>
               )}
 
