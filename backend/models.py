@@ -17,7 +17,7 @@ from database import Base
 class User(Base):
     """
     User account for authentication.
-    Roles: 'admin' or 'standard'.
+    Roles: 'admin' or 'standard'. Scope: 'lab' | 'finance' | 'both' (default 'lab').
     """
     __tablename__ = "users"
 
