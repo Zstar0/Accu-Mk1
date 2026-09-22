@@ -436,12 +436,62 @@ describe('SlaBreakdownTooltip', () => {
       />
     )
     const text = screen.getByTestId('sla-breakdown-tooltip').textContent ?? ''
-    expect(text).toContain('48h (6d)')
-    expect(text).toContain('5d 3h')
-    expect(text).toContain('4.8h')
+    expect(text).toContain('48bh (6bd)')
+    expect(text).toContain('5bd 3bh')
+    expect(text).toContain('4.8bh')
     expect(text).not.toContain('48h (2d)')
     expect(text).not.toContain('1d 19h')
     expect(screen.getByTestId('sla-business-day-note')).toBeTruthy()
+  })
+
+  // 2026-09-21 evening: "4.8h left" read at 7 PM on a sample due the next
+  // afternoon. The card now says when it is due and that the clock is paused.
+  it('shows the due time and the paused lab clock for a business-hours tier', () => {
+    const resumesAt = new Date('2026-09-22T16:00:00Z')
+    render(
+      <SlaBreakdownTooltip
+        tier={{ ...tier, target_minutes: 1920, business_hours_only: true, day_minutes: 480 }}
+        status={{
+          target_minutes: 1920,
+          elapsed_minutes: 1631,
+          remaining_minutes: 289,
+          breached: false,
+          due_at: '2026-09-22T20:49:00',
+        }}
+        reason={null}
+        clock={{ paused: true, reason: 'after_close', resumesAt }}
+      />
+    )
+    const el = screen.getByTestId('sla-breakdown-tooltip')
+    const due = screen.getByTestId('sla-due').textContent ?? ''
+    // naive UTC due_at is rendered in local time, like Received
+    expect(due).toContain(new Date('2026-09-22T20:49:00Z').toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }))
+    expect(screen.getByTestId('sla-clock-paused-line')).toBeTruthy()
+    expect(el.getAttribute('data-tier-source')).toBe('unknown')
+  })
+
+  it('shows no due line once published and no paused line on a calendar tier', () => {
+    render(
+      <SlaBreakdownTooltip
+        tier={{ ...tier, target_minutes: 1920 }}
+        status={{ target_minutes: 1920, elapsed_minutes: 100, remaining_minutes: 1820, breached: false, due_at: '2026-09-22T20:49:00' }}
+        reason={null}
+        clock={{ paused: true, reason: 'after_close', resumesAt: new Date() }}
+      />
+    )
+    expect(screen.getByTestId('sla-due')).toBeTruthy() // calendar tier still has a due time
+    expect(screen.queryByTestId('sla-clock-paused-line')).toBeNull()
+    render(
+      <SlaBreakdownTooltip
+        tier={{ ...tier, target_minutes: 1920, business_hours_only: true, day_minutes: 480 }}
+        status={{ target_minutes: 1920, elapsed_minutes: 100, remaining_minutes: 1820, breached: false, due_at: '2026-09-22T20:49:00' }}
+        reason={null}
+        isPublished
+        clock={{ paused: true, reason: 'after_close', resumesAt: new Date() }}
+      />
+    )
+    expect(screen.getAllByTestId('sla-due')).toHaveLength(1)
+    expect(screen.queryByTestId('sla-clock-paused-line')).toBeNull()
   })
 
   it('keeps 24h days, and no business-day note, for calendar-time tiers', () => {

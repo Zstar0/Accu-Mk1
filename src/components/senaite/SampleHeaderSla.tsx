@@ -1,7 +1,10 @@
 import { memo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
-import { formatMinutes, tierDayMinutes } from '@/lib/sla-format'
+import { formatMinutes, tierUnits } from '@/lib/sla-format'
+import type { LabClockState } from '@/lib/lab-clock'
+import { useLabClockState } from '@/lib/lab-clock'
+import { SlaClockMoon } from '@/components/explorer/SlaClockMoon'
 import type { InboxPriority, SenaiteLookupResult } from '@/lib/api'
 import { NO_GROUP_KEY } from '@/lib/sla-resolution'
 import { useSampleSla } from '@/services/sample-sla'
@@ -34,15 +37,17 @@ function renderSnapshotSpan({
   isPublished,
   showGroupLabel,
   t,
+  clock,
 }: {
   snapshot: SampleSlaSnapshot
   priority: InboxPriority | null
   isPublished: boolean
   showGroupLabel: boolean
   t: (key: string, opts?: Record<string, string | number>) => string
+  clock: LabClockState | null
 }) {
   const { status, color } = snapshot
-  const day = tierDayMinutes(snapshot.tier)
+  const units = tierUnits(snapshot.tier)
   let text: string
   let colorClass: string
   let dataColor: string
@@ -50,14 +55,14 @@ function renderSnapshotSpan({
     // Historical view — total time taken to publish. Color is binary
     // (met/missed) since amber is meaningless after the fact.
     text = t('orderStatus.sla.publishedTook', {
-      time: formatMinutes(status.elapsed_minutes, day),
+      time: formatMinutes(status.elapsed_minutes, units),
     })
     colorClass = status.breached ? 'text-red-400' : 'text-green-600/70'
     dataColor = status.breached ? 'missed' : 'met'
   } else {
     text = status.breached
-      ? t('orderStatus.sla.over', { time: formatMinutes(status.remaining_minutes, day) })
-      : t('orderStatus.sla.left', { time: formatMinutes(status.remaining_minutes, day) })
+      ? t('orderStatus.sla.over', { time: formatMinutes(status.remaining_minutes, units) })
+      : t('orderStatus.sla.left', { time: formatMinutes(status.remaining_minutes, units) })
     colorClass =
       color === 'red'
         ? 'text-red-400'
@@ -83,6 +88,7 @@ function renderSnapshotSpan({
           className={cn('font-mono', colorClass)}
         >
           ({label}{text})
+          <SlaClockMoon units={units} clock={clock} frozen={isPublished} />
         </span>
       </TooltipTrigger>
       <TooltipContent className="p-0 max-w-md">
@@ -94,6 +100,7 @@ function renderSnapshotSpan({
           receivedAt={snapshot.receivedAt}
           groupName={snapshot.groupName}
           isPublished={isPublished}
+          clock={clock}
         />
       </TooltipContent>
     </Tooltip>
@@ -115,6 +122,7 @@ function renderSnapshotSpan({
  */
 function SampleHeaderSlaImpl({ lookup }: SampleHeaderSlaProps) {
   const { t } = useTranslation()
+  const clock = useLabClockState()
   const { snapshots, priority, isPublished, isLoading, isError } =
     useSampleSla(lookup)
 
@@ -150,6 +158,7 @@ function SampleHeaderSlaImpl({ lookup }: SampleHeaderSlaProps) {
           isPublished,
           showGroupLabel,
           t,
+          clock,
         })
       )}
     </span>

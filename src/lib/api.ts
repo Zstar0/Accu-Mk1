@@ -5542,7 +5542,7 @@ export interface SlaTier {
   /** NOT from the API. Attached client-side by `useSlaTiers`: minutes in one
    *  business day (the lab's open..close window), so every surface holding a
    *  tier can size durations in business days. Absent until the business-hours
-   *  config loads; read it through `tierDayMinutes`. */
+   *  config loads; read it through `tierUnits`. */
   day_minutes?: number
 }
 

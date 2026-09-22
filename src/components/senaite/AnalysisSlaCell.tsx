@@ -1,7 +1,9 @@
 import { memo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
-import { formatMinutes, tierDayMinutes } from '@/lib/sla-format'
+import { formatMinutes, tierUnits } from '@/lib/sla-format'
+import { useLabClockState } from '@/lib/lab-clock'
+import { SlaClockMoon } from '@/components/explorer/SlaClockMoon'
 import type { InboxPriority } from '@/lib/api'
 import type { SampleSlaSnapshot } from '@/services/order-sla'
 import {
@@ -62,22 +64,23 @@ function AnalysisSlaCellImpl(props: AnalysisSlaCellProps) {
   let text = ''
   let titleAttr: string | undefined
   const snap = props.snapshot
-  const day = tierDayMinutes(snap?.tier)
+  const units = tierUnits(snap?.tier)
+  const clock = useLabClockState()
   if (color === 'red' && snap) {
     text = t('orderStatus.sla.over', {
-      time: formatMinutes(Math.abs(snap.status.remaining_minutes), day),
+      time: formatMinutes(Math.abs(snap.status.remaining_minutes), units),
     })
   } else if ((color === 'amber' || color === 'green') && snap) {
     text = t('orderStatus.sla.left', {
-      time: formatMinutes(snap.status.remaining_minutes, day),
+      time: formatMinutes(snap.status.remaining_minutes, units),
     })
   } else if (color === 'met' && snap) {
     text = t('orderStatus.sla.publishedTook', {
-      time: formatMinutes(snap.status.elapsed_minutes, day),
+      time: formatMinutes(snap.status.elapsed_minutes, units),
     })
   } else if (color === 'missed' && snap) {
     text = t('orderStatus.sla.missedBy', {
-      time: formatMinutes(Math.abs(snap.status.remaining_minutes), day),
+      time: formatMinutes(Math.abs(snap.status.remaining_minutes), units),
     })
   } else if (color === 'loading') {
     titleAttr = t('orderStatus.sla.loading')
@@ -104,6 +107,7 @@ function AnalysisSlaCellImpl(props: AnalysisSlaCellProps) {
       title={hasBreakdown ? undefined : titleAttr}
     >
       <span aria-hidden="true">{dot}</span>
+      <SlaClockMoon units={units} clock={clock} frozen={props.isPublished} />
       {text && <span>{text}</span>}
       {!text && titleAttr && <span className="sr-only">{titleAttr}</span>}
     </span>
@@ -122,6 +126,7 @@ function AnalysisSlaCellImpl(props: AnalysisSlaCellProps) {
             receivedAt={props.snapshot.receivedAt}
             groupName={props.snapshot.groupName}
             isPublished={props.isPublished}
+            clock={clock}
           />
         </TooltipContent>
       </Tooltip>

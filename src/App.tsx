@@ -15,6 +15,7 @@ import { LoginPage } from './components/auth/LoginPage'
 import { useAuthStore } from './store/auth-store'
 import { fetchCurrentUser } from './lib/auth-api'
 import { WorkflowStatesLoader } from './lib/workflow-states-store'
+import { LabClockFeeder } from './services/business-hours'
 
 function App() {
   const isAuthenticated = useAuthStore(state => state.isAuthenticated)
@@ -113,6 +114,7 @@ function App() {
         {isAuthenticated ? (
           <>
             <WorkflowStatesLoader />
+            <LabClockFeeder />
             <MainWindow />
           </>
         ) : (

@@ -6,6 +6,10 @@ import type { ReadyRow } from '@/lib/api'
 import { SlaCell } from '@/components/reports/ReadyToPublishReport'
 import { formatMinutes } from '@/lib/sla-format'
 
+// The row's tier counts business hours and the day length is unknown under
+// test (no config), so the target reads in bh with no day part.
+const BH = { dayMinutes: Number.POSITIVE_INFINITY, business: true }
+
 const row: ReadyRow = {
   sample_id: 'P-1',
   status: 'verified',
@@ -53,7 +57,7 @@ describe('Ready to Publish SlaCell', () => {
     expect(card.length).toBeGreaterThan(0)
     // Target comes through the shared card's own formatter.
     expect(
-      (await screen.findAllByText(new RegExp(formatMinutes(2880)))).length
+      (await screen.findAllByText(new RegExp(formatMinutes(2880, BH)))).length
     ).toBeGreaterThan(0)
   })
 })

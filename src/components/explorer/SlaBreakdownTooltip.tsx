@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next'
-import { formatMinutes, formatTarget, tierDayMinutes } from '@/lib/sla-format'
+import { formatMinutes, formatTarget, tierUnits } from '@/lib/sla-format'
+import { formatResumesAt, type LabClockState } from '@/lib/lab-clock'
 import { formatDate } from './helpers'
 import type { InboxPriority, SlaStatus, SlaTier } from '@/lib/api'
 import type { SampleSlaReason } from '@/lib/sla-resolution'
@@ -38,6 +39,9 @@ export interface SlaBreakdownTooltipProps {
    *  historical "Met / Missed by Xh" headline and "Total time:" label. Driven
    *  by `useSampleSla.isPublished`. */
   isPublished?: boolean
+  /** Lab clock state from `useLabClockState`. When paused and the tier counts
+   *  business hours, the card says so and when the clock resumes. */
+  clock?: LabClockState | null
 }
 
 /**
@@ -55,28 +59,40 @@ export function SlaBreakdownTooltip({
   drivingSampleId,
   groupName,
   isPublished = false,
+  clock,
 }: SlaBreakdownTooltipProps) {
   const { t } = useTranslation()
-  const day = tierDayMinutes(tier)
+  const units = tierUnits(tier)
+  // due_at is naive UTC (no zone suffix), like every Mk1 timestamp.
+  const dueAt =
+    status.due_at && !isPublished
+      ? formatDate(
+          /[zZ]|[+-]\d\d:?\d\d$/.test(status.due_at)
+            ? status.due_at
+            : `${status.due_at}Z`
+        )
+      : null
   let headline: string
   if (isPublished) {
     headline = status.breached
       ? t('orderStatus.sla.publishedMissed', {
-          time: formatMinutes(Math.abs(status.remaining_minutes), day),
+          time: formatMinutes(Math.abs(status.remaining_minutes), units),
         })
       : t('orderStatus.sla.publishedMet')
   } else {
     headline = status.breached
-      ? t('orderStatus.sla.over', { time: formatMinutes(status.remaining_minutes, day) })
-      : t('orderStatus.sla.left', { time: formatMinutes(status.remaining_minutes, day) })
+      ? t('orderStatus.sla.over', { time: formatMinutes(status.remaining_minutes, units) })
+      : dueAt
+        ? t('orderStatus.sla.leftDue', {
+            time: formatMinutes(status.remaining_minutes, units),
+            due: dueAt,
+          })
+        : t('orderStatus.sla.left', { time: formatMinutes(status.remaining_minutes, units) })
   }
   const elapsedLabel = isPublished
     ? t('orderStatus.sla.breakdown.totalTime')
     : t('orderStatus.sla.breakdown.elapsed')
 
-  const businessSuffix = tier.business_hours_only
-    ? t('orderStatus.sla.businessSuffix')
-    : ''
 
   // Multi-tier follow-on: when priorityScope is populated, distinguish global
   // overrides from per-group ones in the source line. groupName comes from
@@ -164,27 +180,39 @@ export function SlaBreakdownTooltip({
         <div>
           {t('orderStatus.sla.breakdown.target')}{' '}
           <span className="tabular-nums">
-            {formatTarget(tier.target_minutes, day)}
-            {businessSuffix}
+            {formatTarget(tier.target_minutes, units)}
           </span>
         </div>
         <div>
           {elapsedLabel}{' '}
           <span className="tabular-nums">
-            {formatMinutes(status.elapsed_minutes, day)}
+            {formatMinutes(status.elapsed_minutes, units)}
           </span>
         </div>
         <div>
           {t('orderStatus.sla.breakdown.remaining')}{' '}
           <span className="tabular-nums">
             {status.remaining_minutes < 0 ? '-' : ''}
-            {formatMinutes(status.remaining_minutes, day)}
+            {formatMinutes(status.remaining_minutes, units)}
           </span>
         </div>
-        {day !== 60 * 24 && (
+        {dueAt && (
+          <div data-testid="sla-due">
+            {t('orderStatus.sla.breakdown.due')}{' '}
+            <span className="tabular-nums">{dueAt}</span>
+          </div>
+        )}
+        {units.business && Number.isFinite(units.dayMinutes) && (
           <div data-testid="sla-business-day-note" className="opacity-70">
             {t('orderStatus.sla.breakdown.businessDayNote', {
-              hours: +(day / 60).toFixed(2),
+              hours: +(units.dayMinutes / 60).toFixed(2),
+            })}
+          </div>
+        )}
+        {units.business && !isPublished && clock?.paused && (
+          <div data-testid="sla-clock-paused-line" className="opacity-70">
+            {t('orderStatus.sla.clockPaused', {
+              when: formatResumesAt(clock.resumesAt),
             })}
           </div>
         )}

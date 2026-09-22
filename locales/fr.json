@@ -231,6 +231,7 @@
 
   "orderStatus.sla": "SLA",
   "orderStatus.sla.left": "{{time}} left",
+  "orderStatus.sla.leftDue": "{{time}} left, due {{due}}",
   "orderStatus.sla.over": "over by {{time}}",
   "orderStatus.sla.met": "Met",
   "orderStatus.sla.awaiting": "Awaiting sample",
@@ -255,7 +256,9 @@
   "orderStatus.sla.breakdown.target": "Target:",
   "orderStatus.sla.breakdown.elapsed": "Elapsed:",
   "orderStatus.sla.breakdown.remaining": "Remaining:",
-  "orderStatus.sla.breakdown.businessDayNote": "1d = 1 business day ({{hours}}h of lab time)",
+  "orderStatus.sla.breakdown.businessDayNote": "1bd = 1 business day ({{hours}}h of lab time)",
+  "orderStatus.sla.breakdown.due": "Due:",
+  "orderStatus.sla.clockPaused": "Lab closed. SLA clock resumes {{when}}.",
   "orderStatus.sla.breakdown.drivingSample": "Driving sample:",
   "orderStatus.sla.breakdown.priority": "Priority:",
   "orderStatus.sla.breakdown.unmapped": "{{count}} analyses had no service-group mapping: {{keywords}}",

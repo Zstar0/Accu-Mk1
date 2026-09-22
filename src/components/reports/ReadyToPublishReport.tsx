@@ -22,8 +22,10 @@ import { getReadyToPublish } from '@/lib/api'
 import type { ReadyRow, ReadySla } from '@/lib/api'
 import { changeStatus } from '@/lib/flags-api'
 import { useCreateFlag } from '@/hooks/use-flags'
-import { formatMinutes, tierDayMinutes } from '@/lib/sla-format'
+import { formatMinutes, tierUnits } from '@/lib/sla-format'
 import { useBusinessDayMinutes } from '@/services/business-hours'
+import { useLabClockState } from '@/lib/lab-clock'
+import { SlaClockMoon } from '@/components/explorer/SlaClockMoon'
 import { useUIStore } from '@/store/ui-store'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -117,16 +119,17 @@ function tierFromSla(sla: ReadySla, day_minutes?: number): SlaTier {
 export function SlaCell({ row }: { row: ReadyRow }) {
   const sla = row.sla
   const dayMinutes = useBusinessDayMinutes()
+  const clock = useLabClockState()
   if (!sla) {
     return (
       <span className="text-xs text-muted-foreground/50">Awaiting sample</span>
     )
   }
   const tier = tierFromSla(sla, dayMinutes)
-  const day = tierDayMinutes(tier)
+  const units = tierUnits(tier)
   const text = sla.breached
-    ? `${formatMinutes(-sla.remaining_minutes, day)} over`
-    : `${formatMinutes(sla.remaining_minutes, day)} left`
+    ? `${formatMinutes(-sla.remaining_minutes, units)} over`
+    : `${formatMinutes(sla.remaining_minutes, units)} left`
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -142,6 +145,7 @@ export function SlaCell({ row }: { row: ReadyRow }) {
             className={cn('h-2 w-2 rounded-full shrink-0', SLA_DOT[sla.color])}
           />
           {text}
+          <SlaClockMoon units={units} clock={clock} />
         </span>
       </TooltipTrigger>
       <TooltipContent side="left" className="p-0 max-w-md">
@@ -156,6 +160,7 @@ export function SlaCell({ row }: { row: ReadyRow }) {
           reason={null}
           priority={row.priority as InboxPriority}
           receivedAt={row.received_at}
+          clock={clock}
         />
       </TooltipContent>
     </Tooltip>
