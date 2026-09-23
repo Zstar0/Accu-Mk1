@@ -53,6 +53,22 @@ export const DEFAULT_PCR_CONFIG: PcrConfig = {
   sortByOrder: true,
 }
 
+/** The highest well ever frozen per plate (worksheets.well_high_water), with
+ *  its JSON string keys turned back into plate numbers. Anything malformed is
+ *  skipped: the highest frozen well still stands in for a missing entry. */
+export function highWaterOf(
+  ws: Pick<WorksheetListItem, 'well_high_water'>
+): Record<number, number> {
+  const out: Record<number, number> = {}
+  for (const [plate, pos] of Object.entries(ws.well_high_water ?? {})) {
+    const p = Number(plate)
+    const w = Number(pos)
+    if (Number.isInteger(p) && p >= 1 && Number.isInteger(w) && w >= 0)
+      out[p] = w
+  }
+  return out
+}
+
 /** The run's settings from worksheets.bench_config (free-form JSON shared by
  *  every bench kind); anything missing or malformed falls back to the default. */
 export function pcrConfigOf(
@@ -161,7 +177,10 @@ export function buildPcrRunDoc(
     cal,
     pcrRunDate(ws, cal)
   )
-  const layout = layoutPlates(samples, { sortByOrder: cfg.sortByOrder })
+  const layout = layoutPlates(samples, {
+    sortByOrder: cfg.sortByOrder,
+    highWater: highWaterOf(ws),
+  })
   return {
     title: ws.title,
     meta: {

@@ -99,7 +99,9 @@ completed one. Due = the SLA engine's `due_at`, as on the endo sheet.
 
 ## 4. Data and API
 
-`worksheet_items` + `plate_no INTEGER`, `well_pos INTEGER`; `worksheets` + `bench_config JSON`
+`worksheet_items` + `plate_no INTEGER`, `well_pos INTEGER`; `worksheets` + `bench_config JSON`,
+`well_high_water JSON` (the highest well ever frozen per plate, `{"1": 46}`; server-owned: freeze
+raises it and rejects a pin at or below it, unfreeze clears it)
 (boot ALTERs in `database.py`, models in `models.py`). Additive; nothing existing changes.
 
 `GET /worksheets` and `GET /worksheets/{id}` gain `bench_config` on the worksheet and

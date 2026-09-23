@@ -210,4 +210,25 @@ describe('buildPcrRunDoc', () => {
     expect(doc.summary.samples).toBe(2)
     expect(doc.notes).toBe('lot 42')
   })
+  it('keeps the frozen well of a removed sample empty through the worksheet record', () => {
+    // Printed with three samples in A1..C1; the one in C1 was removed.
+    const ws = worksheet(
+      [
+        item(1, { plate_no: 1, well_pos: 0 }),
+        item(2, { plate_no: 1, well_pos: 1 }),
+        item(4),
+      ],
+      { well_high_water: { '1': 2 } }
+    )
+    const doc = buildPcrRunDoc(ws, {
+      analystName: '',
+      calendar: cal,
+      printedAt: '',
+      dueAtByItemId: new Map(),
+      notes: '',
+    })
+    expect(
+      doc.layout.plates[0]?.placements.map(p => `${p.id}@${p.row}${p.col}`)
+    ).toEqual(['P-3001-S01@A1', 'P-3001-S02@B1', 'P-3001-S04@D1', 'NPC@E1'])
+  })
 })

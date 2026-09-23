@@ -6101,6 +6101,9 @@ export interface WorksheetListItem {
   print_count?: number
   /** Per-bench run settings (PCR: overage, curve, plate_type, sort_by_order). */
   bench_config?: Record<string, unknown> | null
+  /** PCR plate map: the highest well ever frozen per plate ({"1": 46}); a
+   *  frozen well stays spent after its sample is removed. Server-owned. */
+  well_high_water?: Record<string, number> | null
   items: {
     id: number
     sample_id: string

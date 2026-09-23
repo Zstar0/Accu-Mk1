@@ -462,3 +462,47 @@ describe('exports', () => {
     )
   })
 })
+
+/* --- a frozen well stays spent after its sample is removed (review 2026-09-22) --- */
+
+describe('layoutPlates with the issued-well record', () => {
+  const frozenAt = (s: PcrSample, plate: number, pos: number): PcrSample => ({
+    ...s,
+    frozen: { plate, pos },
+  })
+  // Printed A1..F1 with the NPC in G1; F1's sample (pos 5) was then removed.
+  const kept = () =>
+    [0, 1, 2, 3, 4].map(i => frozenAt(sample(`P-10${i}`), 1, i))
+
+  it('the removed last well stays empty: a late addition goes after it', () => {
+    const L = layoutPlates([...kept(), sample('P-200')], {
+      highWater: { 1: 5 },
+    })
+    expect(ids(L).slice(5)).toEqual(['P-200@G1', 'NPC@H1'])
+    expect(plateGrid(plateOf(L)).has('F1')).toBe(false)
+    expect(freezePayload(L)).toEqual([
+      { item_id: 200, plate_no: 1, well_pos: 6 },
+    ])
+  })
+
+  it('with no late addition the NPC keeps its well rather than moving into the vacated one', () => {
+    const L = layoutPlates(kept(), { highWater: { 1: 5 } })
+    expect(ids(L).at(-1)).toBe('NPC@G1')
+    expect(plateGrid(plateOf(L)).has('F1')).toBe(false)
+  })
+
+  it('a plate whose issued wells reach 47 sends late additions to the next plate', () => {
+    // 46 samples frozen at pos 0..45; the one at pos 46 (G6) was removed.
+    const frozen = fake(46).map((x, i) => frozenAt(x, 1, i))
+    const L = layoutPlates([...frozen, sample('P-0900')], {
+      highWater: { 1: 46 },
+    })
+    expect(ids(L, 0).at(-1)).toBe('NPC@H6')
+    expect(ids(L, 1)).toEqual(['P-0900@A1', 'NPC@B1'])
+  })
+
+  it('without a record the highest frozen well still counts, as before', () => {
+    const L = layoutPlates([...kept(), sample('P-200')])
+    expect(ids(L).slice(5)).toEqual(['P-200@F1', 'NPC@G1'])
+  })
+})

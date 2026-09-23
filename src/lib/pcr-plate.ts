@@ -262,10 +262,13 @@ export const wellName = (pos: number): string =>
   `${rowOf(pos)}${Math.floor(pos / 8) + 1}`
 
 /**
- * Deal a run's samples onto plates. Frozen samples keep their wells. The next
- * free well on a plate is one past its highest frozen well (a well once
- * issued is never re-issued, even after its sample was removed), and a plate
- * takes samples up to SAMPLE_CAPACITY so the NPC always has the last well.
+ * Deal a run's samples onto plates. Frozen samples keep their wells. A well
+ * once frozen stays spent even after its sample is removed (its liquid is
+ * still in the plate), so the next free well on a plate is one past the
+ * highest well ever issued there: the worksheet's record (`highWater`, plate
+ * -> well) or, where it has none, the highest frozen well. A plate takes
+ * samples up to SAMPLE_CAPACITY so the NPC always has the last well, which is
+ * the one after both the last sample and the record.
  * Loose samples fill plate 1's free wells, then plate 2's, then new plates.
  * Within a plate the fill is column-major, A1..H1 then A2..H2 (Template!D5
  * = B10, D6 = B11 ... E5 = B18); every well mirrors into the fungal block at
@@ -273,9 +276,10 @@ export const wellName = (pos: number): string =>
  */
 export function layoutPlates(
   samples: PcrSample[],
-  opts: { sortByOrder?: boolean } = {}
+  opts: { sortByOrder?: boolean; highWater?: Record<number, number> } = {}
 ): PcrLayout {
   const sortByOrder = opts.sortByOrder !== false
+  const issuedUpTo = (plate: number) => opts.highWater?.[plate] ?? -1
   const wells = new Map<number, Map<number, PcrSample>>()
   const place = (plate: number, pos: number, s: PcrSample) => {
     let m = wells.get(plate)
@@ -291,10 +295,8 @@ export function layoutPlates(
       place(s.frozen.plate, s.frozen.pos, s)
       frozenCount++
     }
-  const nextFree = (plate: number) => {
-    const m = wells.get(plate)
-    return m ? Math.max(-1, ...m.keys()) + 1 : 0
-  }
+  const nextFree = (plate: number) =>
+    Math.max(issuedUpTo(plate), ...(wells.get(plate)?.keys() ?? [])) + 1
   const loose = samples.map((s, i) => ({ s, i })).filter(x => !x.s.frozen)
   if (sortByOrder) loose.sort(compareByOrder)
   let plate = 1
@@ -348,7 +350,8 @@ export function layoutPlates(
   const npcs: PcrPlacement[] = []
   for (const pl of plates) {
     if (!pl.sampleCount) continue
-    const pos = Math.max(...pl.placements.map(x => x.pos)) + 1
+    const pos =
+      Math.max(issuedUpTo(pl.plate), ...pl.placements.map(x => x.pos)) + 1
     const npc: PcrPlacement = {
       sample: null,
       id: NPC_ID,
