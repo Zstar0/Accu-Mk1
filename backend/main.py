@@ -22565,7 +22565,9 @@ async def get_worksheets_inbox(
 
     # Step 4c: Load vial metadata (assignment_role, parent linkage, vial_sequence)
     # per item.uid. Parents come from lims_samples; sub-samples from lims_sub_samples.
-    # The structure: vial_meta_by_uid[external_lims_uid] = dict(...).
+    # The structure: vial_meta_by_uid[external_lims_uid] = dict(...). A native-born
+    # parent (no SENAITE uid) is keyed by its sample_id, which is the uid the
+    # registry candidate builder emits for it (P-5014, 2026-09-23).
     # vial_total for each family lets the frontend render "vial K of N" — derived
     # from a parent + its lims_sub_samples count.
     vial_meta_by_uid: dict[str, dict] = {}
@@ -22577,12 +22579,13 @@ async def get_worksheets_inbox(
             LimsSample.sample_id,
             LimsSample.assignment_role,
             LimsSample.container_mode,
-        ).where(LimsSample.external_lims_uid.in_(uids))
+        ).where(or_(LimsSample.external_lims_uid.in_(uids),
+                    LimsSample.sample_id.in_(uids)))
     ).all()
     parent_id_to_sample_id: dict[int, str] = {r.id: r.sample_id for r in parent_rows}
     parent_container_mode: dict[int, bool] = {r.id: r.container_mode for r in parent_rows}
     for r in parent_rows:
-        vial_meta_by_uid[r.external_lims_uid] = {
+        vial_meta_by_uid[r.external_lims_uid or r.sample_id] = {
             "sample_id": r.sample_id,
             "is_parent": True,
             "parent_sample_id": r.sample_id,
