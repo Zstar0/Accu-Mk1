@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v1.27.3 - 2026-09-23
+
+### Fixed
+- **Analyte names on native-born samples (PB-1001).** The Analytes card printed "Analyte 1, 2, 3" with no peptide names on every native-born sample, blends and singles alike. The native Relabel work had hidden the whole "Peptide" row on native samples because it is the SENAITE inline editor; the row now renders read-only there with a hint pointing at Relabel, and legacy samples keep the editor. The data was never wrong.
+
+### Added
+- **DEV STACK bar** (#246): when the backend runs inside an accumark-stack dev stack (`ACCUMARK_STACK_NAME` set), the shell shows a bar naming the stack with links to its services. Inert on prod, where the variable is never set.
+
 ## v1.27.2 - 2026-09-23
 
 ### Fixed
