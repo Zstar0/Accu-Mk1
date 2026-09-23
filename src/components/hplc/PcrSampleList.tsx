@@ -2,7 +2,12 @@ import { X } from 'lucide-react'
 import { useUIStore } from '@/store/ui-store'
 import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
 import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
-import { FlagCell, PriorityChip } from '@/components/hplc/EndoWorksheetTable'
+import {
+  FlagCell,
+  PriorityChip,
+  Tick,
+} from '@/components/hplc/EndoWorksheetTable'
+import type { WorksheetItemPatch, WorksheetUser } from '@/lib/api'
 import type { SlaSubjectSnapshot } from '@/services/sla-subjects'
 import { labTime, type LabCalendar } from '@/lib/endo-prep'
 import { shortLabDate, type WorksheetItemRow } from '@/lib/endo-worksheet'
@@ -18,10 +23,15 @@ const SUBTIME =
 
 /**
  * Dennis's Samples panel: the run list in well order (order chips above it),
- * one row per sample with its order, id, identity, received and due dates,
- * priority, the wells it sits in on the plate, a flag, and Remove. The NPC
- * closes the list as a control row. Rows of one order share a tint with
- * their block on the plate.
+ * one row per sample with its order, id, its own Made and Ran ticks, identity,
+ * received and due dates, priority, the wells it sits in on the plate, a
+ * flag, and Remove. The NPC closes the list as a control row. Rows of one
+ * order share a tint with their block on the plate.
+ *
+ * The per-row ticks are the endo table's (Handler, 2026-09-23): the run-level
+ * boxes only ever set, so a single row is where a slip is undone. They sit
+ * right after the id, not at the far right as on endo, because this panel is
+ * narrow and scrolls sideways past the identity.
  *
  * No Reassign here (ruling 2026-09-23): a sample that has to leave a run goes
  * back to the inbox and joins the next run like a new arrival, as Dennis's
@@ -30,21 +40,26 @@ const SUBTIME =
 export function PcrSampleList({
   doc,
   items,
+  users,
   calendar,
   slaByKey,
   slaLoading,
   slaError,
   isCompleted,
   onRemove,
+  onUpdateItem,
 }: {
   doc: PcrRunDoc
   items: WorksheetItemRow[]
+  /** For the ticks' "by whom" tooltip. */
+  users: WorksheetUser[]
   calendar: LabCalendar | null
   slaByKey: Map<string, SlaSubjectSnapshot>
   slaLoading: boolean
   slaError: boolean
   isCompleted: boolean
   onRemove: (itemId: number) => void
+  onUpdateItem: (itemId: number, data: WorksheetItemPatch) => void
 }) {
   const L = doc.layout
   const byId = new Map(items.map(it => [it.id, it]))
@@ -107,6 +122,8 @@ export function PcrSampleList({
               <th className={`${TH} w-[34px]`} />
               <th className={TH}>Order #</th>
               <th className={TH}>Sample ID</th>
+              <th className={`${TH} text-center`}>Made</th>
+              <th className={`${TH} text-center`}>Ran</th>
               <th className={TH}>Sample identity</th>
               <th className={TH}>Received</th>
               <th
@@ -186,6 +203,30 @@ export function PcrSampleList({
                       <span className="font-mono text-[12.5px]">
                         {row.placements[0]?.id ?? 'NPC'}
                       </span>
+                    )}
+                  </td>
+                  <td className={`${TD} text-center`}>
+                    {item && (
+                      <Tick
+                        label="Made"
+                        at={item.made_at}
+                        byUserId={item.made_by_user_id}
+                        users={users}
+                        disabled={isCompleted}
+                        onToggle={on => onUpdateItem(item.id, { made: on })}
+                      />
+                    )}
+                  </td>
+                  <td className={`${TD} text-center`}>
+                    {item && (
+                      <Tick
+                        label="Ran on QuantStudio"
+                        at={item.ran_at}
+                        byUserId={item.ran_by_user_id}
+                        users={users}
+                        disabled={isCompleted}
+                        onToggle={on => onUpdateItem(item.id, { ran: on })}
+                      />
                     )}
                   </td>
                   <td className={`${TD} max-w-[180px]`}>

@@ -565,7 +565,7 @@ function TickAll({
 }
 
 /** A bench tick. The server stamps who and when; the tooltip shows both. */
-function Tick({
+export function Tick({
   label,
   at,
   byUserId,

@@ -62,7 +62,8 @@ attribution apply unchanged. Added on top:
    freeze the wells first; Print is recorded like the endo sheet (`printed_at`).
 7. **Run status** "Plate Made" and "Ran on QuantStudio" = the existing bulk bench ticks
    over every row. Set only, like the endo tick-all (Handler, 2026-09-23): once every row is
-   ticked the box stays ticked. "Ran" stamps the QuantStudio through the existing sole-instrument walk
+   ticked the box stays ticked. Each sample row carries its own Made and Ran ticks (the endo
+   table's `Tick`), which set and clear, so a slip is undone one row at a time. "Ran" stamps the QuantStudio through the existing sole-instrument walk
    (prod: methods 24 and 27 both link only instrument 6, QuantStudio 6 Flex).
 
 Not ported (and why): the CSV/paste intake (the inbox is the intake), the holiday calendar

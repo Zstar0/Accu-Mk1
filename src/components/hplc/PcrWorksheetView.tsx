@@ -10,6 +10,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import type {
+  WorksheetItemPatch,
   WorksheetListItem,
   WorksheetUser,
   WorksheetWellFreeze,
@@ -55,6 +56,7 @@ export function PcrWorksheetView({
   onAddSamples,
   onUpdate,
   onRemove,
+  onUpdateItem,
   onTickAll,
   onFreeze,
   onUnfreeze,
@@ -73,6 +75,8 @@ export function PcrWorksheetView({
     bench_config?: Record<string, unknown>
   }) => void
   onRemove: (itemId: number) => void
+  /** One row's Made / Ran tick (the server stamps who and when). */
+  onUpdateItem: (itemId: number, data: WorksheetItemPatch) => void
   onTickAll: (data: { made?: boolean; ran?: boolean }) => void
   onFreeze: (wells: WorksheetWellFreeze[]) => Promise<unknown>
   onUnfreeze: () => void
@@ -380,6 +384,8 @@ export function PcrWorksheetView({
           slaError={slaError}
           isCompleted={isCompleted}
           onRemove={onRemove}
+          users={users}
+          onUpdateItem={onUpdateItem}
         />
         <div className="min-w-0 space-y-4">
           {L.plates.map(pl => (

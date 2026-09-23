@@ -420,6 +420,9 @@ export function WorksheetDrawer() {
                 onAddSamples={() => setAddSamplesOpen(true)}
                 onUpdate={handleUpdateWorksheet}
                 onRemove={itemId => removeMutation.mutate({ worksheetId: activeWorksheet.id, itemId })}
+                onUpdateItem={(itemId, data) =>
+                  updateItemMutation.mutate({ worksheetId: activeWorksheet.id, itemId, data })
+                }
                 onTickAll={data => bulkTicksMutation.mutate({ worksheetId: activeWorksheet.id, data })}
                 onFreeze={wells => freezeWellsMutation.mutateAsync({ worksheetId: activeWorksheet.id, wells })}
                 onUnfreeze={() => unfreezeWellsMutation.mutate(activeWorksheet.id)}
