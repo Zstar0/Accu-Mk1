@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+- **Native-born samples in the worksheets inbox (P-5008, P-5009, P-5010, PB-1001, P-5014, PB-1004).** A parent born in Mk1 has no SENAITE uid. The inbox's registry candidate builder emitted an empty uid for it and the route looked parents up by uid only, so the family anchor was never found and the parent's native vials never reached any lane: every native sample the lab received was missing from HPLC, Endotoxin and Sterility. A uid-less parent is now identified by its sample id, the convention the registry list already used; container-parent suppression and the per-vial cards behave exactly as for legacy families.
+- **Manage Sub-Samples greyed out on native-born samples.** The button and the wizard opener were gated on the SENAITE uid. They now accept a native parent (external LIMS system mk1) and hand the wizard an empty uid, which its backend calls resolve by sample id; the SENAITE-only remarks editor keeps disabling itself.
+
 ## v1.27.1 - 2026-09-23
 
 ### Fixed

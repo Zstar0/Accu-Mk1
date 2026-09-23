@@ -150,6 +150,7 @@ import {
 } from '@/lib/native-parent-analyses'
 import { NativeManageAnalysesBlock } from '@/components/senaite/NativeManageAnalysesBlock'
 import { pickerSourceFor } from '@/lib/manage-analyses-picker'
+import { hasParentIdentity } from '@/lib/parent-identity'
 import { ParentRetestConfirmDialog } from '@/components/senaite/ParentRetestConfirmDialog'
 import { useParentRetestFlow } from '@/hooks/use-parent-retest-flow'
 import {
@@ -4229,9 +4230,11 @@ export function SampleDetails() {
     // created a sub-sample for it). For a fresh parent we fall back to
     // a direct SENAITE lookup to get the UID.
     if (isParent) {
-      if (!data?.sample_id || !data.sample_uid) return
+      if (!hasParentIdentity(data) || !data?.sample_id) return
+      // Native-born parents carry no SENAITE uid; receive-sample resolves
+      // them by sample_id and the SENAITE-only remarks editor self-disables.
       setWizardParent({
-        uid: data.sample_uid,
+        uid: data.sample_uid ?? '',
         sample_id: data.sample_id,
         status: data.review_state,
       })
@@ -5609,7 +5612,7 @@ export function SampleDetails() {
                 size="sm"
                 className="h-7 px-2 gap-1 cursor-pointer"
                 onClick={openSubSampleWizard}
-                disabled={isParent ? !data?.sample_uid : !parentSampleId}
+                disabled={isParent ? !hasParentIdentity(data) : !parentSampleId}
               >
                 <Plus size={12} />
                 Manage Sub-Samples
