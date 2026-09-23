@@ -8,6 +8,7 @@
 - **Exports and print:** the QuantStudio 6/7 Flex sample file (one per plate), the plate map CSV, the well list CSV, Preview and Print (one landscape page per plate, run strip on every page, notes on the last). Print is recorded as the run's start on the bench, as on the endo sheet.
 - **Run status and parameters:** Plate made / Ran on QuantStudio tick every row at once (Ran records the QuantStudio on each row); overage, curve, plate type and the order-sort switch are saved on the worksheet.
 - Legacy `ster` vials now classify as PCR work everywhere (bench kind, run log).
+- **A sample leaves a run through the inbox.** The PCR samples list offers Remove, not Reassign: the vial goes back to the inbox and joins the next run like a new arrival. Its locked well stays empty, because its liquid is still in the plate (`worksheets.well_high_water` records the highest well ever locked per plate; a lock at or below it is refused). A reassign from anywhere else releases the well.
 
 ## v1.27.0 - 2026-09-21
 
