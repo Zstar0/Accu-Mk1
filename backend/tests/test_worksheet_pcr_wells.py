@@ -150,8 +150,66 @@ def test_unfreeze_releases_every_well_once(client, db):
     db.refresh(a)
     db.refresh(b)
     assert a.well_pos is None and a.plate_no is None and b.well_pos is None
+    # Unlocking is a deliberate re-layout: the issued-well record goes too.
+    assert client.get(f"/worksheets/{ws.id}").json()["well_high_water"] is None
     assert client.delete(f"/worksheets/{ws.id}/frozen-wells").json()["cleared"] == 0
     assert db.query(AuditLog).filter(AuditLog.operation == "worksheet_wells_unfrozen").count() == 1
+
+
+# --- Issued wells are never re-issued (review 2026-09-22) --------------------
+
+
+def _high_water(client, ws):
+    return client.get(f"/worksheets/{ws.id}").json()["well_high_water"]
+
+
+def _late_item(db, ws, n=9):
+    item = WorksheetItem(worksheet_id=ws.id, sample_uid=f"mk1://pcr-{n}", sample_id=f"P-3001-S0{n}")
+    db.add(item)
+    db.commit()
+    return item
+
+
+def test_a_vacated_well_is_never_issued_again(client, db):
+    # Printed with a in A1 and b in B1, then b is removed. B1 still holds b's
+    # liquid, so a late addition must take C1, never B1.
+    ws, (a, b) = _seed(db)
+    _freeze(client, ws, [{"item_id": a.id, "plate_no": 1, "well_pos": 0},
+                         {"item_id": b.id, "plate_no": 1, "well_pos": 1}])
+    assert _high_water(client, ws) == {"1": 1}
+    assert client.delete(f"/worksheets/{ws.id}/items/{b.id}").status_code == 200
+    assert _high_water(client, ws) == {"1": 1}  # removal does not lower it
+
+    late = _late_item(db, ws)
+    r = _freeze(client, ws, [{"item_id": late.id, "plate_no": 1, "well_pos": 1}])
+    assert r.status_code == 409, r.text
+    db.refresh(late)
+    assert late.well_pos is None
+    r = _freeze(client, ws, [{"item_id": late.id, "plate_no": 1, "well_pos": 2}])
+    assert r.status_code == 200, r.text
+    assert _high_water(client, ws) == {"1": 2}
+
+
+def test_one_request_may_pin_wells_in_any_order_and_across_plates(client, db):
+    ws, (a, b) = _seed(db)
+    c = _late_item(db, ws)
+    r = _freeze(client, ws, [{"item_id": a.id, "plate_no": 1, "well_pos": 8},
+                             {"item_id": b.id, "plate_no": 1, "well_pos": 6},
+                             {"item_id": c.id, "plate_no": 2, "well_pos": 0}])
+    assert r.status_code == 200, r.text
+    assert r.json()["frozen"] == 3
+    assert _high_water(client, ws) == {"1": 8, "2": 0}
+
+
+def test_wells_frozen_before_the_record_existed_still_count(client, db):
+    # A worksheet locked before well_high_water existed has no record; the
+    # highest frozen well stands in for it.
+    ws, (a, b) = _seed(db)
+    a.plate_no, a.well_pos = 1, 3
+    db.commit()
+    assert _freeze(client, ws, [{"item_id": b.id, "plate_no": 1, "well_pos": 2}]).status_code == 409
+    assert _freeze(client, ws, [{"item_id": b.id, "plate_no": 1, "well_pos": 4}]).status_code == 200
+    assert _high_water(client, ws) == {"1": 4}
 
 
 def test_reassign_releases_the_frozen_well(client, db):

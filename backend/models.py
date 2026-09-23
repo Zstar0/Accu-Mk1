@@ -1069,6 +1069,13 @@ class Worksheet(Base):
     # sort_by_order (spec 2026-09-22-pcr-worksheet-design). Replaced whole
     # by PUT, never merged.
     bench_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # PCR plate map: the highest well ever frozen on each plate, {"<plate_no>":
+    # well_pos}. A frozen well was loaded at the bench, so it stays spent after
+    # its sample is removed; new samples start above it. Kept out of
+    # bench_config because PUT replaces that whole. Server-owned (freeze sets,
+    # unfreeze clears); always assigned a new dict, JSON does not track
+    # in-place changes.
+    well_high_water: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

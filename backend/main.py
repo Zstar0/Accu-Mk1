@@ -23700,6 +23700,7 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
             "printed_by_user_id": ws.printed_by_user_id,
             "print_count": ws.print_count or 0,
             "bench_config": ws.bench_config,
+            "well_high_water": ws.well_high_water,
             "items": [
                 {
                     "id": it.id,
@@ -24650,7 +24651,12 @@ def freeze_worksheet_wells(
     2026-09-22). A well already frozen never moves, whatever the client sends:
     the plate is loaded by then, and a moved well would credit results to the
     wrong sample. Two items can never share a well on a plate. The NPC is not
-    an item and is never frozen; the client keeps it after the last sample."""
+    an item and is never frozen; the client keeps it after the last sample.
+
+    A well once frozen stays spent: removing its sample leaves the liquid in
+    it, so a new pin must land above the highest well ever frozen on that
+    plate (worksheets.well_high_water). The record only rises here and is
+    cleared by unfreeze."""
     ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
     if not ws or ws.status == "staging":
         raise HTTPException(404, "Worksheet not found")
@@ -24662,6 +24668,13 @@ def freeze_worksheet_wells(
         ).scalars()
     }
     taken = {(it.plate_no, it.well_pos) for it in items.values() if it.well_pos is not None}
+    # Highest issued well per plate as it stood BEFORE this request: the stored
+    # record, or the highest frozen well where the record is missing (a plate
+    # frozen before the column existed). Judging every pin against this, not a
+    # running maximum, lets one request pin its wells in any order.
+    issued: dict[int, int] = {int(p): int(v) for p, v in (ws.well_high_water or {}).items()}
+    for plate_no, well_pos in taken:
+        issued[plate_no] = max(issued.get(plate_no, -1), well_pos)
     to_pin: list[tuple["WorksheetItem", int, int]] = []
     for w in data.wells:
         item = items.get(w.item_id)
@@ -24674,12 +24687,21 @@ def freeze_worksheet_wells(
         key = (w.plate_no, w.well_pos)
         if key in taken:
             raise HTTPException(409, f"Well {w.well_pos} on plate {w.plate_no} is already taken")
+        if w.well_pos <= issued.get(w.plate_no, -1):
+            raise HTTPException(
+                409,
+                f"Well {w.well_pos} on plate {w.plate_no} was already issued on this plate; "
+                "reload the worksheet and try again",
+            )
         taken.add(key)
         to_pin.append((item, w.plate_no, w.well_pos))
     for item, plate_no, well_pos in to_pin:
         item.plate_no = plate_no
         item.well_pos = well_pos
+        issued[plate_no] = max(issued.get(plate_no, -1), well_pos)
     if to_pin:
+        # A new dict every time: a plain JSON column does not see in-place edits.
+        ws.well_high_water = {str(p): v for p, v in sorted(issued.items())}
         db.add(AuditLog(
             operation="worksheet_wells_frozen",
             entity_type="worksheet",
@@ -24711,7 +24733,9 @@ def unfreeze_worksheet_wells(
     for item in items:
         item.plate_no = None
         item.well_pos = None
-    if items:
+    had_record = ws.well_high_water is not None
+    ws.well_high_water = None  # a re-layout starts the plate from A1 again
+    if items or had_record:
         db.add(AuditLog(
             operation="worksheet_wells_unfrozen",
             entity_type="worksheet",

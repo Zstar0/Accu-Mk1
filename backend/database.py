@@ -326,6 +326,7 @@ def _run_migrations():
         "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS plate_no INTEGER",
         "ALTER TABLE worksheet_items ADD COLUMN IF NOT EXISTS well_pos INTEGER",
         "ALTER TABLE worksheets ADD COLUMN IF NOT EXISTS bench_config JSON",
+        "ALTER TABLE worksheets ADD COLUMN IF NOT EXISTS well_high_water JSON",
         # Method-Instrument M2M migration: move from hplc_methods.instrument_id FK to junction table
         """DO $$ BEGIN
             IF EXISTS (SELECT 1 FROM information_schema.columns
