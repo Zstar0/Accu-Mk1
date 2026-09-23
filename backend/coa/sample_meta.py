@@ -86,19 +86,27 @@ def _newest(db, parent_pk: int, *, chromatogram: bool, source_sub_pks=None):
         # kind='chromatogram' = the HPLC-prep push / Select-Vial flow. The
         # attachment_type arm (BW-0106, 2026-08-31) admits CSVs attached
         # manually from the sample page (kind='manual', SENAITE-typed
-        # 'HPLC Graph') — symmetric with the image arm below. text/* only:
+        # 'HPLC Graph'), symmetric with the image arm below. text/* only:
         # the coab wire role is chromatogram_csv and the renderer parses
-        # CSV, so an image typed 'HPLC Graph' must not qualify. Twin of
-        # main.py's _parent_attachment_kinds_native — keep in lockstep.
+        # CSV, so an image typed 'HPLC Graph' must not qualify. 'Sample
+        # Image' is admitted too (P-1777, 2026-09-22): the May-2026 attach
+        # flow filed chromatogram CSVs under that SENAITE type, and content
+        # type, not the mirrored label, says what the file is. Twin of
+        # main.py's _parent_attachment_kinds_native, keep in lockstep.
         q = q.where(
             (A.kind == "chromatogram")
-            | ((A.attachment_type == "HPLC Graph")
+            | (A.attachment_type.in_(("HPLC Graph", "Sample Image"))
                & A.content_type.ilike("text/%"))
         )
     else:
+        # image/* only (P-1777, 2026-09-22): without this guard the newest
+        # 'Sample Image'-typed row won even when it was a CSV, and coab drew
+        # the CSV as the photo (blank frame) while the real jpeg was never
+        # sent.
         q = q.where(
             A.render_in_report.is_(True),
             (A.kind == "receive_image") | (A.attachment_type == "Sample Image"),
+            A.content_type.ilike("image/%"),
         )
     return db.execute(q.order_by(A.id.desc()).limit(1)).scalar_one_or_none()
 

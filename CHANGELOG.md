@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.27.1 - 2026-09-23
+
+### Fixed
+- **Certificate photo and chromatogram on legacy samples (P-1777; 26 reissued certificates).** The mk1-mode attachment selector picked the newest row typed "Sample Image" as the vial photo with no content-type check. On samples whose chromatogram CSV was mirrored from SENAITE under that type (the May 2026 attach flow, 85 samples), COABuilder was sent the CSV as the photo and no chromatogram at all, so the PDF shipped with an empty photo frame and an empty chromatogram section while the digital view, which reads the first generation's S3 objects, looked fine. The photo arm now requires an image content type and the chromatogram arm accepts a text row typed "HPLC Graph" or "Sample Image"; the generate-flow attachments gate is kept in lockstep. No data change. The 26 affected additional COAs (orders 5604, 5605, 5267, 5268) are regenerated separately.
+
 ## v1.27.0 - 2026-09-21
 
 The HPLC native-born release: slices 1 to 24 of the program (spec `docs/superpowers/specs/2026-09-10-hplc-native-born-design.md`). Every NEW HPLC order can be minted, benched, promoted and certified in Accu-Mk1 with no SENAITE record. Nothing routes there until the WordPress `profile_key` on the HPLC test-service row is set to `hplc-purity-identity` (the flip runbook, `docs/superpowers/runbooks/2026-09-12-hplc-native-flip-runbook.md`); the Mk1 profile `HPLC Purity + Identity` seeds inactive. The changes below under "Visible on every sample from this release" apply to every sample, native or not, on deploy day.

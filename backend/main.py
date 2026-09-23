@@ -13359,14 +13359,17 @@ def _parent_attachment_kinds_native(db, parent_pk: int) -> set[str]:
     "can't reach the read-source" failure mode).
 
     image = storage='s3' AND render_in_report AND (kind='receive_image' OR
-    attachment_type='Sample Image').
+    attachment_type='Sample Image') AND content_type image/*.
     chromatogram = storage='s3' AND (kind='chromatogram' OR
-    (attachment_type='HPLC Graph' AND content_type text/*)) — the second arm
-    (BW-0106, 2026-08-31) admits CSVs attached manually from the sample page,
-    symmetric with the image arm; text/* keeps non-CSV 'HPLC Graph' files
-    (chromatogram screenshots) out, since coab's chromatogram_csv role
-    parses CSV. No render_in_report requirement — chromatogram rows are
-    minted render_in_report=False. Twin of coa/sample_meta._newest — keep
+    (attachment_type IN ('HPLC Graph', 'Sample Image') AND content_type
+    text/*)), the second arm (BW-0106, 2026-08-31) admits CSVs attached
+    manually from the sample page, symmetric with the image arm; text/* keeps
+    non-CSV 'HPLC Graph' files (chromatogram screenshots) out, since coab's
+    chromatogram_csv role parses CSV. 'Sample Image' text rows and the image/*
+    guard (P-1777, 2026-09-22): legacy CSVs mirrored from SENAITE under the
+    'Sample Image' type were counted as the photo and never as the
+    chromatogram. No render_in_report requirement, chromatogram rows are
+    minted render_in_report=False. Twin of coa/sample_meta._newest, keep
     in lockstep.
     """
     kinds: set = set()
@@ -13379,6 +13382,7 @@ def _parent_attachment_kinds_native(db, parent_pk: int) -> set[str]:
                 LimsParentAttachment.kind == "receive_image",
                 LimsParentAttachment.attachment_type == "Sample Image",
             ),
+            LimsParentAttachment.content_type.ilike("image/%"),
         ).limit(1)
     ).first() is not None
     if has_image:
@@ -13391,7 +13395,7 @@ def _parent_attachment_kinds_native(db, parent_pk: int) -> set[str]:
             or_(
                 LimsParentAttachment.kind == "chromatogram",
                 and_(
-                    LimsParentAttachment.attachment_type == "HPLC Graph",
+                    LimsParentAttachment.attachment_type.in_(("HPLC Graph", "Sample Image")),
                     LimsParentAttachment.content_type.ilike("text/%"),
                 ),
             ),
