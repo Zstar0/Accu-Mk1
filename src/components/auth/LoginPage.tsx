@@ -29,7 +29,7 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex h-screen w-full flex-col bg-background">
+    <div className="flex h-full w-full flex-col bg-background">
       <TitleBar />
       <div className="flex flex-1 items-center justify-center p-4">
       <Card className="w-full max-w-sm">

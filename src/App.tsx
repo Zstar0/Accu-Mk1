@@ -9,6 +9,7 @@ import { cleanupOldFiles } from './lib/recovery'
 import { commands } from './lib/tauri-bindings'
 import './App.css'
 import { MainWindow } from './components/layout/MainWindow'
+import { StackBanner } from './components/layout/StackBanner'
 import { ThemeProvider } from './components/ThemeProvider'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { LoginPage } from './components/auth/LoginPage'
@@ -111,15 +112,22 @@ function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider>
-        {isAuthenticated ? (
-          <>
-            <WorkflowStatesLoader />
-            <LabClockFeeder />
-            <MainWindow />
-          </>
-        ) : (
-          <LoginPage />
-        )}
+        {/* Column so the dev-stack-only banner takes its own 24px and the
+            page below fills the rest; MainWindow/LoginPage are h-full. */}
+        <div className="flex h-screen flex-col">
+          <StackBanner />
+          <div className="min-h-0 flex-1">
+            {isAuthenticated ? (
+              <>
+                <WorkflowStatesLoader />
+                <LabClockFeeder />
+                <MainWindow />
+              </>
+            ) : (
+              <LoginPage />
+            )}
+          </div>
+        </div>
       </ThemeProvider>
     </ErrorBoundary>
   )
