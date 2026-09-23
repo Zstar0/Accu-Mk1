@@ -156,8 +156,13 @@ export function MainWindow() {
     }
   }
 
+  // SidebarProvider renders its own wrapper div with only min-h-svh; the
+  // h-full below is a percentage of it, so the wrapper must carry a definite
+  // height too or the content pane grows unbounded and body{overflow:hidden}
+  // clips it (no page scrolled, 1.27.3 / #246). min-h-0 drops the svh floor
+  // so a dev-stack banner above still fits.
   return (
-    <SidebarProvider>
+    <SidebarProvider className="h-full min-h-0">
       <div className="relative flex h-full w-full flex-col overflow-hidden rounded-xl bg-background">
         <TitleBar />
 
