@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.27.4 - 2026-09-23
+
+### Fixed
+- **Pages could not scroll (every page, 1.27.3).** The DEV STACK bar change (#246) moved the app shell from a fixed viewport height to a percentage height under a new banner column, but the sidebar provider renders its own wrapper with only a minimum height in between, so the percentage collapsed, the content pane grew to its content and the page body, which never scrolls by design, clipped it. The sidebar wrapper now carries a definite height, so the pane is bounded and scrolls again, with room left for the banner on dev stacks. Measured on the stack: pane 648 px tall over 2,737 px of content, where before the fix it was 2,753 px tall with nothing to scroll.
+
 ## v1.27.3 - 2026-09-23
 
 ### Fixed
