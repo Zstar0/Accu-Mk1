@@ -316,14 +316,14 @@ export function PcrWorksheetView({
             count={`${doc.status.made}/${total}`}
             checked={allMade}
             disabled={isCompleted || total === 0}
-            onChange={on => onTickAll({ made: on })}
+            onSet={() => onTickAll({ made: true })}
           />
           <RunTick
             label="Ran on QuantStudio"
             count={`${doc.status.ran}/${total}`}
             checked={allRan}
             disabled={isCompleted || total === 0}
-            onChange={on => onTickAll({ ran: on })}
+            onSet={() => onTickAll({ ran: true })}
           />
           <span className="flex-1" />
           <span className="text-[9.5px] font-semibold uppercase tracking-[0.13em] text-muted-foreground">
@@ -494,26 +494,37 @@ function ConfigField({
 }
 
 /** A run-level tick: sets (or clears) Made / Ran on every row at once. */
-function RunTick({
+/**
+ * A run-level tick: sets Made / Ran on every row still open. It only ever
+ * sets, like the endo sheet's tick-all headings (Handler, 2026-09-23): one
+ * slip must not wipe a whole run's who/when stamps, so once every row is
+ * ticked the box stays ticked.
+ */
+export function RunTick({
   label,
   count,
   checked,
   disabled,
-  onChange,
+  onSet,
 }: {
   label: string
   count: string
   checked: boolean
   disabled: boolean
-  onChange: (on: boolean) => void
+  onSet: () => void
 }) {
   return (
-    <label className="flex items-center gap-1.5 text-sm">
+    <label
+      className="flex items-center gap-1.5 text-sm"
+      title={checked ? `${label}: every row is ticked` : undefined}
+    >
       <Checkbox
         checked={checked}
-        disabled={disabled}
+        disabled={disabled || checked}
         aria-label={label}
-        onCheckedChange={v => onChange(v === true)}
+        onCheckedChange={v => {
+          if (v === true) onSet()
+        }}
       />
       {label}
       <span className="font-mono text-[11px] text-muted-foreground">
