@@ -17,6 +17,12 @@ Written 2026-09-22 from Dennis's `tools-dennis/tools/qpcr-plate-builder` (in dai
    PCR test (`STER-PCR` service 75, `STERILITY-PCR` service 282). `ster` is phasing out and
    is treated as an alias of `pcr`; nothing is built for it specifically.
 
+4. **A sample leaves a run by going back to the inbox** (Handler, 2026-09-23). The PCR
+   samples list offers Remove only, no Reassign; the removed vial rejoins the next run like
+   a new arrival, which is how Dennis's lab carried unrun samples into the next day's CSV.
+   Reassign from anywhere else (a mixed worksheet's list, the API) releases the frozen
+   well, because the well belongs to the plate it was printed on.
+
 Standing rulings carried over from endo: extend the worksheet system, keep Dennis's layout
 and way of working inside the flyout in Mk1 styling, due dates from the SLA engine.
 

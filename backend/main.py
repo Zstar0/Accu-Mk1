@@ -24439,6 +24439,13 @@ async def reassign_worksheet_item_by_id(
     gid = item.service_group_id
     dept_id = item.department_id
     item.worksheet_id = data.target_worksheet_id
+    # A PCR well belongs to the plate it was printed on; the target is another
+    # plate. Carried along, it would pin the row to a well the target never
+    # issued and could collide with one it did (the layout keeps only one).
+    # The PCR view offers Remove instead of Reassign (ruling 2026-09-23); this
+    # covers the other ways in (a mixed worksheet's list, the API).
+    item.plate_no = None
+    item.well_pos = None
     if target.assigned_analyst_id:
         item.assigned_analyst_id = target.assigned_analyst_id
     try:

@@ -50,13 +50,11 @@ export function PcrWorksheetView({
   users,
   userNotes,
   isCompleted,
-  otherWorksheets,
   applyBar,
   completeAction,
   onAddSamples,
   onUpdate,
   onRemove,
-  onReassign,
   onTickAll,
   onFreeze,
   onUnfreeze,
@@ -65,7 +63,6 @@ export function PcrWorksheetView({
   users: WorksheetUser[]
   userNotes: string
   isCompleted: boolean
-  otherWorksheets: WorksheetListItem[]
   applyBar: ReactNode
   completeAction: ReactNode
   onAddSamples: () => void
@@ -76,7 +73,6 @@ export function PcrWorksheetView({
     bench_config?: Record<string, unknown>
   }) => void
   onRemove: (itemId: number) => void
-  onReassign: (itemId: number, targetWorksheetId: number) => void
   onTickAll: (data: { made?: boolean; ran?: boolean }) => void
   onFreeze: (wells: WorksheetWellFreeze[]) => Promise<unknown>
   onUnfreeze: () => void
@@ -383,9 +379,7 @@ export function PcrWorksheetView({
           slaLoading={slaLoading}
           slaError={slaError}
           isCompleted={isCompleted}
-          otherWorksheets={otherWorksheets}
           onRemove={onRemove}
-          onReassign={onReassign}
         />
         <div className="min-w-0 space-y-4">
           {L.plates.map(pl => (

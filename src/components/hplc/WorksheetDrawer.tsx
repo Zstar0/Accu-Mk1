@@ -405,7 +405,6 @@ export function WorksheetDrawer() {
                 users={users}
                 userNotes={userNotes}
                 isCompleted={!!isCompleted}
-                otherWorksheets={openWorksheets.filter(ws => ws.id !== activeWorksheet.id)}
                 applyBar={
                   !isCompleted && (
                     <WorksheetApplyBar
@@ -421,9 +420,6 @@ export function WorksheetDrawer() {
                 onAddSamples={() => setAddSamplesOpen(true)}
                 onUpdate={handleUpdateWorksheet}
                 onRemove={itemId => removeMutation.mutate({ worksheetId: activeWorksheet.id, itemId })}
-                onReassign={(itemId, targetId) =>
-                  reassignMutation.mutate({ worksheetId: activeWorksheet.id, itemId, targetWorksheetId: targetId })
-                }
                 onTickAll={data => bulkTicksMutation.mutate({ worksheetId: activeWorksheet.id, data })}
                 onFreeze={wells => freezeWellsMutation.mutateAsync({ worksheetId: activeWorksheet.id, wells })}
                 onUnfreeze={() => unfreezeWellsMutation.mutate(activeWorksheet.id)}

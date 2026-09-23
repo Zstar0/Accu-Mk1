@@ -154,6 +154,23 @@ def test_unfreeze_releases_every_well_once(client, db):
     assert db.query(AuditLog).filter(AuditLog.operation == "worksheet_wells_unfrozen").count() == 1
 
 
+def test_reassign_releases_the_frozen_well(client, db):
+    # A frozen well belongs to the plate it was printed on. Carried to another
+    # worksheet it could collide with a well there and drop a sample off the
+    # plate map (review 2026-09-22).
+    ws, (a, _) = _seed(db)
+    _freeze(client, ws, [{"item_id": a.id, "plate_no": 1, "well_pos": 0}])
+    target = Worksheet(title="PCR 09/23/2026", status="open")
+    db.add(target)
+    db.commit()
+    r = client.post(f"/worksheets/{ws.id}/items/{a.id}/reassign",
+                    json={"target_worksheet_id": target.id})
+    assert r.status_code == 200, r.text
+    db.refresh(a)
+    assert a.worksheet_id == target.id
+    assert (a.plate_no, a.well_pos) == (None, None)
+
+
 def test_wells_are_locked_on_a_completed_worksheet(client, db):
     ws, (a, _) = _seed(db, status="completed")
     assert _freeze(client, ws, [{"item_id": a.id, "plate_no": 1, "well_pos": 0}]).status_code == 409

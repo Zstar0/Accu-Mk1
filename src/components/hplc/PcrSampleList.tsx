@@ -3,9 +3,7 @@ import { useUIStore } from '@/store/ui-store'
 import { SampleIdBadge } from '@/components/samples/SampleIdBadge'
 import { SlaAgeIndicator } from '@/components/hplc/SlaAgeIndicator'
 import { FlagCell, PriorityChip } from '@/components/hplc/EndoWorksheetTable'
-import { ReassignButton } from '@/components/hplc/ReassignButton'
 import type { SlaSubjectSnapshot } from '@/services/sla-subjects'
-import type { WorksheetListItem } from '@/lib/api'
 import { labTime, type LabCalendar } from '@/lib/endo-prep'
 import { shortLabDate, type WorksheetItemRow } from '@/lib/endo-worksheet'
 import { orderGroups, wellsOf } from '@/lib/pcr-plate'
@@ -21,9 +19,13 @@ const SUBTIME =
 /**
  * Dennis's Samples panel: the run list in well order (order chips above it),
  * one row per sample with its order, id, identity, received and due dates,
- * priority, the wells it sits in on the plate, a flag, and the worksheet
- * actions. The NPC closes the list as a control row. Rows of one order share
- * a tint with their block on the plate.
+ * priority, the wells it sits in on the plate, a flag, and Remove. The NPC
+ * closes the list as a control row. Rows of one order share a tint with
+ * their block on the plate.
+ *
+ * No Reassign here (ruling 2026-09-23): a sample that has to leave a run goes
+ * back to the inbox and joins the next run like a new arrival, as Dennis's
+ * lab carried unrun samples into the next day's CSV.
  */
 export function PcrSampleList({
   doc,
@@ -33,9 +35,7 @@ export function PcrSampleList({
   slaLoading,
   slaError,
   isCompleted,
-  otherWorksheets,
   onRemove,
-  onReassign,
 }: {
   doc: PcrRunDoc
   items: WorksheetItemRow[]
@@ -44,9 +44,7 @@ export function PcrSampleList({
   slaLoading: boolean
   slaError: boolean
   isCompleted: boolean
-  otherWorksheets: WorksheetListItem[]
   onRemove: (itemId: number) => void
-  onReassign: (itemId: number, targetWorksheetId: number) => void
 }) {
   const L = doc.layout
   const byId = new Map(items.map(it => [it.id, it]))
@@ -254,11 +252,6 @@ export function PcrSampleList({
                   <td className={`${TD} whitespace-nowrap text-right`}>
                     {item && !isCompleted && (
                       <span className="inline-flex items-center gap-1">
-                        <ReassignButton
-                          item={item}
-                          otherWorksheets={otherWorksheets}
-                          onReassign={onReassign}
-                        />
                         <button
                           className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover/item:opacity-100 focus-visible:opacity-100"
                           aria-label={`Remove ${item.sample_id} from worksheet`}
