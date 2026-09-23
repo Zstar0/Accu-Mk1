@@ -164,10 +164,32 @@ async def verify_api_key(x_api_key: Optional[str] = Header(None, alias="X-API-Ke
 
 # --- Pydantic schemas ---
 
+class StackInfo(BaseModel):
+    """Which accumark-stack dev stack this backend belongs to. Drawn as the
+    DEV STACK bar by the frontend. None on prod (env never set)."""
+    name: str
+    links: dict[str, str] = {}
+
+
 class HealthResponse(BaseModel):
     """Health check response."""
     status: str
     version: str
+    stack: StackInfo | None = None
+
+
+def _stack_info() -> StackInfo | None:
+    """ACCUMARK_STACK_NAME + ACCUMARK_STACK_LINKS ("WP=http://...;Mk1=http://...")
+    come from the accumark-stack compose file. Unset anywhere else."""
+    name = os.environ.get("ACCUMARK_STACK_NAME", "").strip()
+    if not name:
+        return None
+    links: dict[str, str] = {}
+    for pair in os.environ.get("ACCUMARK_STACK_LINKS", "").split(";"):
+        label, sep, url = pair.partition("=")
+        if sep and label.strip() and url.strip():
+            links[label.strip()] = url.strip()
+    return StackInfo(name=name, links=links)
 
 
 class AuditLogCreate(BaseModel):
@@ -604,7 +626,7 @@ app.include_router(documents_router)
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint to verify backend is running."""
-    return HealthResponse(status="ok", version=APP_VERSION)
+    return HealthResponse(status="ok", version=APP_VERSION, stack=_stack_info())
 
 
 # --- Auth Endpoints ---

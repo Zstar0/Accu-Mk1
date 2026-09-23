@@ -158,7 +158,7 @@ export function MainWindow() {
 
   return (
     <SidebarProvider>
-      <div className="relative flex h-screen w-full flex-col overflow-hidden rounded-xl bg-background">
+      <div className="relative flex h-full w-full flex-col overflow-hidden rounded-xl bg-background">
         <TitleBar />
 
         <div className="flex flex-1 overflow-hidden">
