@@ -57,12 +57,16 @@ const SHEET_CSS = [
   'td .wid{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.4}',
   'td .wo,td .wd{display:block;font-size:.68rem;color:#595959;line-height:1.35}',
   'td .wd.overdue{color:#c00000;font-weight:700}td .wd.today{color:#bf6a00;font-weight:700}',
-  'td.bac{background:#deeaf6}td.fun{background:#fff2cc}td.bac.alt{background:#bdd7ee}td.fun.alt{background:#ffe699}',
-  'td.ctrl{background:#d9d9d9;font-weight:700}',
+  // Every fill, outline and divider carries the table.plate prefix: the base
+  // cell rule above is (0,1,2) and a bare td.bac (0,1,1) loses to it, which
+  // printed white wells with no order outlines (review 2026-09-22).
+  'table.plate td.bac{background:#deeaf6}table.plate td.fun{background:#fff2cc}table.plate td.bac.alt{background:#bdd7ee}table.plate td.fun.alt{background:#ffe699}',
+  'table.plate td.ctrl{background:#d9d9d9;font-weight:700}',
   "td.prio::after{content:'';position:absolute;top:0;right:0;border-style:solid;border-width:0 .6rem .6rem 0;border-color:transparent #c00000 transparent transparent}",
   'td.prio.overdue .wid{color:#c00000;font-weight:700}',
-  'td.ob-t{border-top:2px solid #44546a}td.ob-b{border-bottom:2px solid #44546a}td.ob-l{border-left:2px solid #44546a}td.ob-r{border-right:2px solid #44546a}',
-  'td.bs,td.bs.ob-l,th.bs{border-left:3px solid #000}',
+  'table.plate td.ob-t{border-top:2px solid #44546a}table.plate td.ob-b{border-bottom:2px solid #44546a}table.plate td.ob-l{border-left:2px solid #44546a}table.plate td.ob-r{border-right:2px solid #44546a}',
+  // After the outlines on purpose: same specificity, so the assay divider wins.
+  'table.plate td.bs,table.plate th.bs{border-left:3px solid #000}',
   '.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.3rem}',
   '.card{border:1px solid #000}',
   '.card h3{margin:0;background:#ededed;border-bottom:1px solid #000;font-size:.7rem;font-weight:700;padding:.1rem .3rem;display:flex;justify-content:space-between}',
@@ -75,7 +79,9 @@ const SHEET_CSS = [
   'table.mix td.s{font-weight:700;background:#f2e8e1}',
   'tr.total th,tr.total td{font-weight:700;border-top:2px solid #000}',
   'table.kv tr.total td{background:#f2e8e1}',
-  '.card.reag{grid-column:1/-1}.card.reag table.kv{display:grid;grid-template-columns:1fr auto 1fr auto}.card.reag table.kv tr{display:contents}',
+  // The HTML parser wraps the rows in a <tbody>; it has to dissolve too, or
+  // all ten pairs land on one row and push the page past the paper.
+  '.card.reag{grid-column:1/-1}.card.reag table.kv{display:grid;grid-template-columns:1fr auto 1fr auto}.card.reag table.kv tbody,.card.reag table.kv tr{display:contents}',
   '.notes{margin-top:.3rem;font-size:.62rem;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:#595959}',
   '.notes div{font-weight:400;text-transform:none;letter-spacing:0;font-size:.7rem;color:#000;border:1px solid #808080;min-height:2rem;padding:.12rem .3rem;white-space:pre-wrap;margin-top:.2rem}',
   '.foot{margin-top:.25rem;font-size:.62rem;color:#595959;display:flex;justify-content:space-between}',

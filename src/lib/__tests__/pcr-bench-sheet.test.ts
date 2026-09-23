@@ -74,6 +74,25 @@ describe('buildPcrBenchSheetHtml', () => {
     expect(html).toContain('>53.9<')
   })
 
+  it('keeps the fills, outlines and reagent grid from losing to the base rules', () => {
+    // jsdom does no layout, so this pins the two rules a real print needed
+    // (review 2026-09-22): a bare `td.bac` loses to `table.plate td`, and the
+    // parser's implicit <tbody> breaks a grid built from `tr{display:contents}`.
+    const html = buildPcrBenchSheetHtml(doc([sample(1)]))
+    for (const rule of [
+      'table.plate td.bac{',
+      'table.plate td.ctrl{',
+      'table.plate td.ob-l{',
+      'table.plate td.bs,table.plate th.bs{',
+      '.card.reag table.kv tbody,.card.reag table.kv tr{display:contents}',
+    ])
+      expect(html).toContain(rule)
+    expect(html).toMatch(/<table class="kv">(<tbody>)?<tr><th>16S-F<\/th>/)
+    expect(html.indexOf('table.plate td.bs')).toBeGreaterThan(
+      html.indexOf('table.plate td.ob-l{')
+    )
+  })
+
   it('escapes every value and marks the preview as paper', () => {
     const d = doc([sample(1, '<b>', 'Examplerelin')])
     d.title = '<script>alert(1)</script>'

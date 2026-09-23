@@ -88,10 +88,12 @@ no order number after those with one, the worksheet's own order within an order.
 (the NPC) go last on every plate. Order groups are contiguous runs of one order number and
 are numbered once across the run.
 
-Freezing: frozen samples keep their (plate, pos). The next free well on a plate is one past
-its highest frozen well; a well once issued is never re-issued, even after its sample was
-removed. Unfrozen samples fill plate 1's free wells, then plate 2's, then new plates. The
-NPC sits at (highest sample well + 1) on every plate that has a sample.
+Freezing: frozen samples keep their (plate, pos). A well once frozen is never issued again,
+even after its sample was removed, because its liquid is still in the plate: the next free
+well on a plate is one past the highest well ever frozen there (`well_high_water`, or the
+highest frozen well where the record is missing). Unfrozen samples fill plate 1's free wells,
+then plate 2's, then new plates. The NPC sits one past both the last sample and that record
+on every plate that has a sample.
 
 Priority flag = priority expedited or high, or overdue (due before the run date), or due
 today. The run date is today in lab time for an open worksheet and the completion day for a
