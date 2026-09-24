@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.28.0 - 2026-09-23
+
 ### Worksheets 2.0: rapid sterility PCR plate builder
 - **A PCR worksheet is a run.** Open any worksheet whose samples are all PCR vials (native `pcr` or legacy `ster`, the same test) and the flyout shows Dennis's plate builder: the run header, the samples list across the full width, then a 96-well plate map (16S in columns 1 to 6, its 18S mirror in 7 to 12, one boxed block per order, the NPC after the last sample), the reagent calculations for every plate, and the PCR run log rail. One worksheet spans every order on the plate.
 - **Wells lock when the plate leaves for the bench.** Print or the QuantStudio export pins every sample to its well; a locked well never moves. Samples added later take the wells after the last locked one and the NPC stays last. A locked well is never re-issued, even after its sample is removed. "Unlock wells" releases them on purpose (audited).
