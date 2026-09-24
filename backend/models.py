@@ -1147,6 +1147,21 @@ class WorksheetItem(Base):
         return f"<WorksheetItem(id={self.id}, worksheet_id={self.worksheet_id}, sample_uid='{self.sample_uid}')>"
 
 
+class WorksheetNote(Base):
+    """One note on a worksheet, append-only: the server stamps who wrote it and
+    when, and a note is never edited or deleted (Handler, 2026-09-23). The old
+    free-text `worksheets.notes` field is left as it was."""
+    __tablename__ = "worksheet_notes"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    worksheet_id: Mapped[int] = mapped_column(
+        ForeignKey("worksheets.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class WizardMeasurement(Base):
     """
     Individual balance reading within a wizard session.

@@ -60,7 +60,7 @@ from sla_perf import (  # noqa: E402
     TierIn as SlaPerfTierIn,
     build_sla_performance,
 )
-from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment, MethodAttachment, method_services, LimsOrder
+from models import AuditLog, Settings, Job, Sample, Result, Instrument, AnalysisService, AnalysisServiceSpec, HplcMethod, Peptide, PeptideAnalyte, CalibrationCurve, HPLCAnalysis, User, SharePointFileCache, WizardSession, WizardMeasurement, peptide_methods, blend_components, ServiceGroup, service_group_members, SamplePriority, Worksheet, WorksheetItem, WorksheetNote, instrument_methods, SampleAnalyteAlias, SlaTier, SlaPriorityTier, BusinessHoursConfig, LabHoliday, LimsSample, LimsSampleRemark, LimsSubSample, LimsBox, FlagType, LimsParentAttachment, MethodAttachment, method_services, LimsOrder
 from catalog.change_log import apply_and_log, log_create, log_delete, log_members
 from auth import (
     get_current_user, require_admin, create_access_token,
@@ -23403,6 +23403,18 @@ def _worksheet_item_parent_facts(parent: "Optional[LimsSample]") -> dict:
     }
 
 
+def _worksheet_note_dict(note: "WorksheetNote", author: "Optional[User]") -> dict:
+    """One worksheet note on the wire: body, who and when."""
+    from users_display import user_display_name
+    return {
+        "id": note.id,
+        "body": note.body,
+        "user_id": note.user_id,
+        "author": user_display_name(author) if author else None,
+        "created_at": note.created_at.isoformat() + "Z",
+    }
+
+
 def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
     """Serialize worksheets + items into the GET /worksheets wire shape.
 
@@ -23435,6 +23447,19 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
         ).scalars().all()
         for it in all_items:
             items_by_ws.setdefault(it.worksheet_id, []).append(it)
+
+    # Worksheet notes (append-only, author + time stamped by the server): ONE
+    # query for the whole page, the author's name resolved server-side so a
+    # note keeps its byline even when the author is not in the FE users list.
+    notes_by_ws: dict[int, list] = {wid: [] for wid in ws_ids}
+    if ws_ids:
+        for note, author in db.execute(
+            select(WorksheetNote, User)
+            .outerjoin(User, User.id == WorksheetNote.user_id)
+            .where(WorksheetNote.worksheet_id.in_(ws_ids))
+            .order_by(WorksheetNote.worksheet_id, WorksheetNote.created_at, WorksheetNote.id)
+        ).all():
+            notes_by_ws[note.worksheet_id].append(_worksheet_note_dict(note, author))
 
     # Resolve service group names, colors, departments, peptide ids and
     # analyses for display — one groups query + one members query for the
@@ -23701,6 +23726,7 @@ def _serialize_worksheets(db: Session, worksheets: "list[Worksheet]") -> list:
             "print_count": ws.print_count or 0,
             "bench_config": ws.bench_config,
             "well_high_water": ws.well_high_water,
+            "note_log": notes_by_ws.get(ws.id, []),
             "items": [
                 {
                     "id": it.id,
@@ -24744,6 +24770,41 @@ def unfreeze_worksheet_wells(
         ))
     db.commit()
     return {"status": "cleared", "cleared": len(items)}
+
+
+class WorksheetNoteCreate(BaseModel):
+    body: str
+
+
+_NOTE_MAX_CHARS = 2000
+
+
+@app.post("/worksheets/{worksheet_id}/notes", status_code=201)
+def add_worksheet_note(
+    worksheet_id: int,
+    data: WorksheetNoteCreate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Append a note to a worksheet. The server stamps the author and the time;
+    notes are never edited or deleted, so the log is the history (Handler,
+    2026-09-23). A completed worksheet is read-only, like the rest of its view."""
+    ws = db.execute(select(Worksheet).where(Worksheet.id == worksheet_id)).scalar_one_or_none()
+    if not ws or ws.status == "staging":
+        raise HTTPException(404, "Worksheet not found")
+    if ws.status == "completed":
+        raise HTTPException(409, "Worksheet is completed")
+    body = (data.body or "").strip()
+    if not body:
+        raise HTTPException(400, "A note cannot be empty")
+    if len(body) > _NOTE_MAX_CHARS:
+        raise HTTPException(400, f"A note is limited to {_NOTE_MAX_CHARS} characters")
+    note = WorksheetNote(worksheet_id=ws.id, user_id=_current_user.id, body=body)
+    db.add(note)
+    db.commit()
+    db.refresh(note)
+    author = db.get(User, note.user_id) if note.user_id else None
+    return _worksheet_note_dict(note, author)
 
 
 class WorksheetItemUpdate(BaseModel):
