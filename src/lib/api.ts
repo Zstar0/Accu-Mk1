@@ -50,9 +50,16 @@ export async function apiFetch<T>(
 
 // --- Types ---
 
+/** Set only when the backend runs inside an accumark-stack dev stack. */
+export interface StackInfo {
+  name: string
+  links: Record<string, string>
+}
+
 export interface HealthResponse {
   status: string
   version: string
+  stack?: StackInfo | null
 }
 
 export interface AuditLog {

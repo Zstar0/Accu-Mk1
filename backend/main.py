@@ -164,10 +164,32 @@ async def verify_api_key(x_api_key: Optional[str] = Header(None, alias="X-API-Ke
 
 # --- Pydantic schemas ---
 
+class StackInfo(BaseModel):
+    """Which accumark-stack dev stack this backend belongs to. Drawn as the
+    DEV STACK bar by the frontend. None on prod (env never set)."""
+    name: str
+    links: dict[str, str] = {}
+
+
 class HealthResponse(BaseModel):
     """Health check response."""
     status: str
     version: str
+    stack: StackInfo | None = None
+
+
+def _stack_info() -> StackInfo | None:
+    """ACCUMARK_STACK_NAME + ACCUMARK_STACK_LINKS ("WP=http://...;Mk1=http://...")
+    come from the accumark-stack compose file. Unset anywhere else."""
+    name = os.environ.get("ACCUMARK_STACK_NAME", "").strip()
+    if not name:
+        return None
+    links: dict[str, str] = {}
+    for pair in os.environ.get("ACCUMARK_STACK_LINKS", "").split(";"):
+        label, sep, url = pair.partition("=")
+        if sep and label.strip() and url.strip():
+            links[label.strip()] = url.strip()
+    return StackInfo(name=name, links=links)
 
 
 class AuditLogCreate(BaseModel):
@@ -604,7 +626,7 @@ app.include_router(documents_router)
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint to verify backend is running."""
-    return HealthResponse(status="ok", version=APP_VERSION)
+    return HealthResponse(status="ok", version=APP_VERSION, stack=_stack_info())
 
 
 # --- Auth Endpoints ---
@@ -13359,14 +13381,17 @@ def _parent_attachment_kinds_native(db, parent_pk: int) -> set[str]:
     "can't reach the read-source" failure mode).
 
     image = storage='s3' AND render_in_report AND (kind='receive_image' OR
-    attachment_type='Sample Image').
+    attachment_type='Sample Image') AND content_type image/*.
     chromatogram = storage='s3' AND (kind='chromatogram' OR
-    (attachment_type='HPLC Graph' AND content_type text/*)) — the second arm
-    (BW-0106, 2026-08-31) admits CSVs attached manually from the sample page,
-    symmetric with the image arm; text/* keeps non-CSV 'HPLC Graph' files
-    (chromatogram screenshots) out, since coab's chromatogram_csv role
-    parses CSV. No render_in_report requirement — chromatogram rows are
-    minted render_in_report=False. Twin of coa/sample_meta._newest — keep
+    (attachment_type IN ('HPLC Graph', 'Sample Image') AND content_type
+    text/*)), the second arm (BW-0106, 2026-08-31) admits CSVs attached
+    manually from the sample page, symmetric with the image arm; text/* keeps
+    non-CSV 'HPLC Graph' files (chromatogram screenshots) out, since coab's
+    chromatogram_csv role parses CSV. 'Sample Image' text rows and the image/*
+    guard (P-1777, 2026-09-22): legacy CSVs mirrored from SENAITE under the
+    'Sample Image' type were counted as the photo and never as the
+    chromatogram. No render_in_report requirement, chromatogram rows are
+    minted render_in_report=False. Twin of coa/sample_meta._newest, keep
     in lockstep.
     """
     kinds: set = set()
@@ -13379,6 +13404,7 @@ def _parent_attachment_kinds_native(db, parent_pk: int) -> set[str]:
                 LimsParentAttachment.kind == "receive_image",
                 LimsParentAttachment.attachment_type == "Sample Image",
             ),
+            LimsParentAttachment.content_type.ilike("image/%"),
         ).limit(1)
     ).first() is not None
     if has_image:
@@ -13391,7 +13417,7 @@ def _parent_attachment_kinds_native(db, parent_pk: int) -> set[str]:
             or_(
                 LimsParentAttachment.kind == "chromatogram",
                 and_(
-                    LimsParentAttachment.attachment_type == "HPLC Graph",
+                    LimsParentAttachment.attachment_type.in_(("HPLC Graph", "Sample Image")),
                     LimsParentAttachment.content_type.ilike("text/%"),
                 ),
             ),
@@ -22561,7 +22587,9 @@ async def get_worksheets_inbox(
 
     # Step 4c: Load vial metadata (assignment_role, parent linkage, vial_sequence)
     # per item.uid. Parents come from lims_samples; sub-samples from lims_sub_samples.
-    # The structure: vial_meta_by_uid[external_lims_uid] = dict(...).
+    # The structure: vial_meta_by_uid[external_lims_uid] = dict(...). A native-born
+    # parent (no SENAITE uid) is keyed by its sample_id, which is the uid the
+    # registry candidate builder emits for it (P-5014, 2026-09-23).
     # vial_total for each family lets the frontend render "vial K of N" — derived
     # from a parent + its lims_sub_samples count.
     vial_meta_by_uid: dict[str, dict] = {}
@@ -22573,12 +22601,13 @@ async def get_worksheets_inbox(
             LimsSample.sample_id,
             LimsSample.assignment_role,
             LimsSample.container_mode,
-        ).where(LimsSample.external_lims_uid.in_(uids))
+        ).where(or_(LimsSample.external_lims_uid.in_(uids),
+                    LimsSample.sample_id.in_(uids)))
     ).all()
     parent_id_to_sample_id: dict[int, str] = {r.id: r.sample_id for r in parent_rows}
     parent_container_mode: dict[int, bool] = {r.id: r.container_mode for r in parent_rows}
     for r in parent_rows:
-        vial_meta_by_uid[r.external_lims_uid] = {
+        vial_meta_by_uid[r.external_lims_uid or r.sample_id] = {
             "sample_id": r.sample_id,
             "is_parent": True,
             "parent_sample_id": r.sample_id,

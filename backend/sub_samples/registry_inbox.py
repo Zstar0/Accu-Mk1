@@ -68,7 +68,11 @@ def inbox_candidates_from_registry(
     items: list[dict[str, Any]] = []
     for r in rows:
         item: dict[str, Any] = {
-            "uid": r.external_lims_uid or "",
+            # Native-born parents have no SENAITE uid; their inbox identity is
+            # the sample_id (registry_list.py convention). An empty uid used to
+            # make step 4c skip the parent, so its native vials never reached
+            # any lane (P-5014, 2026-09-23).
+            "uid": r.external_lims_uid or r.sample_id,
             "id": r.sample_id,
             "title": r.sample_id,
             "review_state": r.status,

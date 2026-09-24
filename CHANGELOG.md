@@ -12,6 +12,30 @@
 - **Worksheet notes are a log.** Each note shows who wrote it and when, in lab time; a box below adds the next one, and notes are never edited or deleted. Text typed before the log existed shows first as an earlier note with no recorded author. The printed sheet carries every note with its author and time. New table `worksheet_notes`, `POST /worksheets/{id}/notes`, and `note_log` on every worksheet; the old `worksheets.notes` field is left as it is. PCR view only for now.
 - **The plate map follows the dark theme:** deep blue and amber tints for the two assay blocks, a light order outline, dark empty wells. The printed sheet stays on paper colours.
 
+## v1.27.4 - 2026-09-23
+
+### Fixed
+- **Pages could not scroll (every page, 1.27.3).** The DEV STACK bar change (#246) moved the app shell from a fixed viewport height to a percentage height under a new banner column, but the sidebar provider renders its own wrapper with only a minimum height in between, so the percentage collapsed, the content pane grew to its content and the page body, which never scrolls by design, clipped it. The sidebar wrapper now carries a definite height, so the pane is bounded and scrolls again, with room left for the banner on dev stacks. Measured on the stack: pane 648 px tall over 2,737 px of content, where before the fix it was 2,753 px tall with nothing to scroll.
+
+## v1.27.3 - 2026-09-23
+
+### Fixed
+- **Analyte names on native-born samples (PB-1001).** The Analytes card printed "Analyte 1, 2, 3" with no peptide names on every native-born sample, blends and singles alike. The native Relabel work had hidden the whole "Peptide" row on native samples because it is the SENAITE inline editor; the row now renders read-only there with a hint pointing at Relabel, and legacy samples keep the editor. The data was never wrong.
+
+### Added
+- **DEV STACK bar** (#246): when the backend runs inside an accumark-stack dev stack (`ACCUMARK_STACK_NAME` set), the shell shows a bar naming the stack with links to its services. Inert on prod, where the variable is never set.
+
+## v1.27.2 - 2026-09-23
+
+### Fixed
+- **Native-born samples in the worksheets inbox (P-5008, P-5009, P-5010, PB-1001, P-5014, PB-1004).** A parent born in Mk1 has no SENAITE uid. The inbox's registry candidate builder emitted an empty uid for it and the route looked parents up by uid only, so the family anchor was never found and the parent's native vials never reached any lane: every native sample the lab received was missing from HPLC, Endotoxin and Sterility. A uid-less parent is now identified by its sample id, the convention the registry list already used; container-parent suppression and the per-vial cards behave exactly as for legacy families.
+- **Manage Sub-Samples greyed out on native-born samples.** The button and the wizard opener were gated on the SENAITE uid. They now accept a native parent (external LIMS system mk1) and hand the wizard an empty uid, which its backend calls resolve by sample id; the SENAITE-only remarks editor keeps disabling itself.
+
+## v1.27.1 - 2026-09-23
+
+### Fixed
+- **Certificate photo and chromatogram on legacy samples (P-1777; 26 reissued certificates).** The mk1-mode attachment selector picked the newest row typed "Sample Image" as the vial photo with no content-type check. On samples whose chromatogram CSV was mirrored from SENAITE under that type (the May 2026 attach flow, 85 samples), COABuilder was sent the CSV as the photo and no chromatogram at all, so the PDF shipped with an empty photo frame and an empty chromatogram section while the digital view, which reads the first generation's S3 objects, looked fine. The photo arm now requires an image content type and the chromatogram arm accepts a text row typed "HPLC Graph" or "Sample Image"; the generate-flow attachments gate is kept in lockstep. No data change. The 26 affected additional COAs (orders 5604, 5605, 5267, 5268) are regenerated separately.
+
 ## v1.27.0 - 2026-09-21
 
 The HPLC native-born release: slices 1 to 24 of the program (spec `docs/superpowers/specs/2026-09-10-hplc-native-born-design.md`). Every NEW HPLC order can be minted, benched, promoted and certified in Accu-Mk1 with no SENAITE record. Nothing routes there until the WordPress `profile_key` on the HPLC test-service row is set to `hplc-purity-identity` (the flip runbook, `docs/superpowers/runbooks/2026-09-12-hplc-native-flip-runbook.md`); the Mk1 profile `HPLC Purity + Identity` seeds inactive. The changes below under "Visible on every sample from this release" apply to every sample, native or not, on deploy day.
