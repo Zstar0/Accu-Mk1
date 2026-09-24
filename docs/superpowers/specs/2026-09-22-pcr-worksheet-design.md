@@ -22,6 +22,11 @@ Written 2026-09-22 from Dennis's `tools-dennis/tools/qpcr-plate-builder` (in dai
    a new arrival, which is how Dennis's lab carried unrun samples into the next day's CSV.
    Reassign from anywhere else (a mixed worksheet's list, the API) releases the frozen
    well, because the well belongs to the plate it was printed on.
+5. **Notes say who and when; samples sit above the plate; dark mode** (Handler,
+   2026-09-23). Worksheet notes become an append-only log, each note stamped by the server
+   with its author and time; the old free text shows first as an earlier note with no
+   recorded author. The samples list runs full width above the plate map instead of beside
+   it. The on-screen plate map follows the dark theme; the printed sheet stays on paper.
 
 Standing rulings carried over from endo: extend the worksheet system, keep Dennis's layout
 and way of working inside the flyout in Mk1 styling, due dates from the SLA engine.
@@ -55,8 +60,8 @@ attribution apply unchanged. Added on top:
    layout with freezing, reagent prep, order groups, the four export layouts. Derived
    figures are never stored.
 5. **Dennis's screen inside the flyout** when every item is PCR work: run header (meta,
-   run status, run parameters), samples panel beside the plate map(s), one calculation
-   panel per plate, notes. The PCR run log rail is the endo rail generalised by kind.
+   run status, run parameters), the samples list across the full width, then each plate
+   map with its calculation panel, then the notes log (ruling 5). The PCR run log rail is the endo rail generalised by kind.
 6. **Exports and print:** QuantStudio sample file (one per plate), plate map CSV, well list
    CSV, Preview, Print (one landscape page per plate). Print and the QuantStudio export
    freeze the wells first; Print is recorded like the endo sheet (`printed_at`).
@@ -113,6 +118,12 @@ raises it and rejects a pin at or below it, unfreeze clears it)
 
 `POST /worksheets/{id}/freeze-wells` body `{"wells": [{"item_id", "plate_no", "well_pos"}]}`;
 `DELETE /worksheets/{id}/frozen-wells`; `PUT /worksheets/{id}` body gains `bench_config`.
+
+Notes (ruling 5): new table `worksheet_notes` (`id`, `worksheet_id` cascade, `user_id` set null,
+`body` text, `created_at`), created at boot by `create_all`. `POST /worksheets/{id}/notes` body
+`{"body"}` returns 201 with `{id, body, user_id, author, created_at}`; the server sets author
+and time. Empty or over 2000 characters gives 400, a completed worksheet 409, a missing one 404.
+Every worksheet carries `note_log`, oldest first, loaded in one batched query. No edit or delete.
 
 `GET /worksheets/bench-log?kind=pcr` already works; `ster` items now count as PCR.
 
