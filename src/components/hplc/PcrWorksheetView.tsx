@@ -43,9 +43,10 @@ const FIELD =
 /**
  * The main column of the flyout for a PCR worksheet, laid out as Dennis's
  * plate builder: the run title and its actions, the run header (fields, run
- * status, run parameters), the samples panel beside the plate map(s) with a
- * calculations panel under each plate, and the notes. The generic header and
- * item list stay in charge of every other kind of worksheet.
+ * status, run parameters), the samples list across the full width, then
+ * each plate map with its calculations panel under it, and the notes log.
+ * The generic header and item list stay in charge of every other kind of
+ * worksheet.
  */
 export function PcrWorksheetView({
   worksheet,
@@ -378,7 +379,9 @@ export function PcrWorksheetView({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(340px,460px)_minmax(0,1fr)]">
+      {/* Samples across the top, then each plate with its calculations
+          (Handler, 2026-09-23): the list reads full width, not as a column. */}
+      <div className="space-y-4">
         <PcrSampleList
           doc={doc}
           items={pcrItems}

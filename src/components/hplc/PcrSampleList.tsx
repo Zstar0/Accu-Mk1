@@ -30,8 +30,8 @@ const SUBTIME =
  *
  * The per-row ticks are the endo table's (Handler, 2026-09-23): the run-level
  * boxes only ever set, so a single row is where a slip is undone. They sit
- * right after the id, not at the far right as on endo, because this panel is
- * narrow and scrolls sideways past the identity.
+ * right after the id, not at the far right as on endo, so they stay in view
+ * when a narrow window scrolls the table sideways past the identity.
  *
  * No Reassign here (ruling 2026-09-23): a sample that has to leave a run goes
  * back to the inbox and joins the next run like a new arrival, as Dennis's
@@ -86,12 +86,12 @@ export function PcrSampleList({
             return (
               <span
                 key={`${g.plate}-${g.group}`}
-                className={`inline-flex items-baseline gap-1 rounded-[3px] border border-[#44546a]/60 px-1.5 py-0.5 text-[11px] text-zinc-900 ${
+                className={`inline-flex items-baseline gap-1 rounded-[3px] border border-[#44546a]/60 px-1.5 py-0.5 text-[11px] text-zinc-900 dark:border-[#9fb3cf]/50 dark:text-zinc-100 ${
                   g.isControl
-                    ? 'bg-[#d9d9d9]'
+                    ? 'bg-[#d9d9d9] dark:bg-zinc-600'
                     : g.group % 2 === 1
-                      ? 'bg-[#bdd7ee]'
-                      : 'bg-[#deeaf6]'
+                      ? 'bg-[#bdd7ee] dark:bg-[#2b5582]'
+                      : 'bg-[#deeaf6] dark:bg-[#1d3a5c]'
                 }`}
                 title={`${g.isControl ? 'Controls' : `Order ${g.order}`}${L.plateCount > 1 ? ` · plate ${g.plate}` : ''} · wells ${span}${g.flagged ? ` · ${g.flagged} priority` : ''}`}
               >
@@ -104,7 +104,9 @@ export function PcrSampleList({
                   {g.isControl ? 'Controls' : g.order}
                 </b>
                 <span className="font-mono">{span}</span>
-                <span className="text-zinc-600">×{g.count}</span>
+                <span className="text-zinc-600 dark:text-zinc-300">
+                  ×{g.count}
+                </span>
                 {g.flagged > 0 && (
                   <span className="rounded-[2px] bg-[#c00000] px-1 text-[10px] font-bold text-white">
                     !{g.flagged > 1 ? g.flagged : ''}
@@ -249,7 +251,7 @@ export function PcrSampleList({
                     {s && (
                       <span className="inline-flex items-center gap-1.5">
                         <span
-                          className={`${MONO} ${a?.urgency === 'overdue' ? 'font-bold text-[#c00000]' : a?.urgency === 'today' ? 'font-bold text-[#bf6a00]' : ''}`}
+                          className={`${MONO} ${a?.urgency === 'overdue' ? 'font-bold text-[#c00000] dark:text-red-300' : a?.urgency === 'today' ? 'font-bold text-[#bf6a00] dark:text-orange-300' : ''}`}
                         >
                           {shortLabDate(a?.due ?? null)}
                           {dueTime && (
