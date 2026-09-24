@@ -102,7 +102,7 @@ a worktree can junction `node_modules` from the clone.
 ### 6. First stack
 
 ```bash
-ssh devbox 'accumark-stack create <you>-hello --no-knowledge'
+ssh devbox 'accumark-stack create <you>-hello'
 ssh devbox 'accumark-stack creds <you>-hello'
 ```
 

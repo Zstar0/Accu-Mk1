@@ -36,7 +36,7 @@ Where things live on the devbox:
 ## Lifecycle
 
 ```bash
-ssh devbox 'accumark-stack create dennis-copyid --no-knowledge'   # 3-5 min, restores newest golden
+ssh devbox 'accumark-stack create dennis-copyid'                   # 3-5 min, restores newest golden
 ssh devbox 'accumark-stack creds dennis-copyid'                    # URLs + the stackdev login (WP + Mk1)
 ssh devbox 'accumark-stack validate dennis-copyid'                 # smoke battery, retry if services still "starting"
 .claude/skills/accumark-feature-workflow/scripts/devbox-mount-branch.sh dennis-copyid   # from your laptop worktree: push + mount
