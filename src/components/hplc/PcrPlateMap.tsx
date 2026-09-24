@@ -5,20 +5,28 @@ import { plateLabel } from '@/lib/pcr-worksheet'
 import { useUIStore } from '@/store/ui-store'
 
 // The workbook's fills: Office accent5 / accent4 tints for the two assay
-// blocks, gray for the control. Paper colours, so the ink stays dark in both
-// themes; the plate is printed as often as it is read.
+// blocks, gray for the control. Dark mode keeps the same hues as deep tints
+// (blue for 16S, amber for 18S) under light ink. The printed sheet is its own
+// HTML (pcr-bench-sheet.ts) and stays on paper colours whatever the theme.
 const FILL = {
-  bac: 'bg-[#deeaf6]',
-  bacAlt: 'bg-[#bdd7ee]',
-  fun: 'bg-[#fff2cc]',
-  funAlt: 'bg-[#ffe699]',
-  ctrl: 'bg-[#d9d9d9] font-bold',
-  empty: 'bg-white dark:bg-zinc-100',
+  bac: 'bg-[#deeaf6] dark:bg-[#1d3a5c]',
+  bacAlt: 'bg-[#bdd7ee] dark:bg-[#2b5582]',
+  fun: 'bg-[#fff2cc] dark:bg-[#3f3510]',
+  funAlt: 'bg-[#ffe699] dark:bg-[#5c4d12]',
+  ctrl: 'bg-[#d9d9d9] dark:bg-zinc-600 font-bold',
+  empty: 'bg-white dark:bg-zinc-900',
 }
-const GROUP = '#44546a'
+// The order outline is drawn with inline border styles (one edge at a time),
+// so its colour is a CSS variable the theme can flip.
+const GROUP = 'var(--pcr-group)'
+const GROUP_VAR = '[--pcr-group:#44546a] dark:[--pcr-group:#9fb3cf]'
 const TH =
-  'border border-zinc-400 bg-zinc-100 px-0.5 py-0.5 text-center font-sans text-[11px] font-bold text-zinc-800'
-const BLOCK = 'border-l-[3px] border-l-zinc-900'
+  'border border-zinc-400 bg-zinc-100 px-0.5 py-0.5 text-center font-sans text-[11px] font-bold text-zinc-800 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200'
+const BLOCK = 'border-l-[3px] border-l-zinc-900 dark:border-l-zinc-300'
+const RED_TEXT = 'text-[#c00000] dark:text-red-300'
+const RED_CORNER =
+  'border-r-[#c00000] border-t-[#c00000] dark:border-r-red-400 dark:border-t-red-400'
+const MUTED_INK = 'text-zinc-600 dark:text-zinc-300'
 const COLS = Array.from({ length: PROTOCOL.cols }, (_, i) => i + 1)
 
 /**
@@ -51,7 +59,9 @@ export function PcrPlateMap({
       : (map.get(`${PROTOCOL.rows[ri]}${c}`)?.placement.group ?? null)
 
   return (
-    <section className="overflow-hidden rounded-[5px] border bg-card shadow-sm">
+    <section
+      className={`overflow-hidden rounded-[5px] border bg-card shadow-sm ${GROUP_VAR}`}
+    >
       <header className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b bg-muted/60 px-3.5 py-2">
         <h3 className="text-[9.5px] font-semibold uppercase tracking-[0.13em] text-muted-foreground">
           Plate map
@@ -82,7 +92,7 @@ export function PcrPlateMap({
         )}
       </header>
       <div className="overflow-x-auto p-3">
-        <table className="w-full min-w-[760px] table-fixed border-collapse font-mono text-[11px] text-zinc-900">
+        <table className="w-full min-w-[760px] table-fixed border-collapse font-mono text-[11px] text-zinc-900 dark:text-zinc-100">
           <thead>
             <tr>
               <th className={`${TH} w-7`} />
@@ -99,7 +109,7 @@ export function PcrPlateMap({
                 <th className={`${TH} w-7`}>{r}</th>
                 {COLS.map(c => {
                   const cell = map.get(`${r}${c}`)
-                  const base = `relative h-[52px] overflow-hidden border border-zinc-400 px-0.5 py-0.5 text-center align-middle ${c === 7 ? BLOCK : ''}`
+                  const base = `relative h-[52px] overflow-hidden border border-zinc-400 px-0.5 py-0.5 text-center dark:border-zinc-600 align-middle ${c === 7 ? BLOCK : ''}`
                   if (!cell)
                     return <td key={c} className={`${base} ${FILL.empty}`} />
                   const p = cell.placement
@@ -144,10 +154,10 @@ export function PcrPlateMap({
                   const a = p.assessment
                   const dueClass =
                     a?.urgency === 'overdue'
-                      ? 'font-bold text-[#c00000]'
+                      ? `font-bold ${RED_TEXT}`
                       : a?.urgency === 'today'
-                        ? 'font-bold text-[#bf6a00]'
-                        : 'text-zinc-600'
+                        ? 'font-bold text-[#bf6a00] dark:text-orange-300'
+                        : MUTED_INK
                   const title = [
                     `${r}${c}`,
                     p.id,
@@ -163,7 +173,7 @@ export function PcrPlateMap({
                   return (
                     <td
                       key={c}
-                      className={`${base} ${fill} ${p.sample ? 'cursor-pointer hover:brightness-95' : ''}`}
+                      className={`${base} ${fill} ${p.sample ? 'cursor-pointer hover:brightness-95 dark:hover:brightness-125' : ''}`}
                       style={edges}
                       title={title}
                       onClick={
@@ -175,16 +185,18 @@ export function PcrPlateMap({
                       {a?.flagged && (
                         <span
                           aria-hidden
-                          className="absolute right-0 top-0 h-0 w-0 border-[0.4rem] border-transparent border-r-[#c00000] border-t-[#c00000]"
+                          className={`absolute right-0 top-0 h-0 w-0 border-[0.4rem] border-transparent ${RED_CORNER}`}
                         />
                       )}
                       <span
-                        className={`block truncate leading-[1.4] ${a?.urgency === 'overdue' && a.flagged ? 'font-bold text-[#c00000]' : ''}`}
+                        className={`block truncate leading-[1.4] ${a?.urgency === 'overdue' && a.flagged ? `font-bold ${RED_TEXT}` : ''}`}
                       >
                         {plateLabel(p.id)}
                       </span>
                       {p.order && (
-                        <span className="block text-[9.5px] leading-tight text-zinc-600">
+                        <span
+                          className={`block text-[9.5px] leading-tight ${MUTED_INK}`}
+                        >
                           {p.order}
                         </span>
                       )}
@@ -214,7 +226,7 @@ export function PcrPlateMap({
 function Legend() {
   const sw = (cls: string, extra = '') => (
     <i
-      className={`inline-block h-2.5 w-5 border border-zinc-400 ${cls} ${extra}`}
+      className={`inline-block h-2.5 w-5 border border-zinc-400 dark:border-zinc-600 ${cls} ${extra}`}
     />
   )
   return (
@@ -227,11 +239,14 @@ function Legend() {
       </span>
       <span className="flex items-center gap-1">{sw(FILL.ctrl)} Control</span>
       <span className="flex items-center gap-1">
-        {sw(FILL.bac, 'border-2 border-[#44546a]')}
-        {sw(FILL.bacAlt, 'border-2 border-[#44546a]')} one order per box
+        {sw(FILL.bac, 'border-2 border-[var(--pcr-group)]')}
+        {sw(FILL.bacAlt, 'border-2 border-[var(--pcr-group)]')} one order per
+        box
       </span>
       <span className="flex items-center gap-1">
-        <i className="inline-block h-0 w-0 border-[5px] border-transparent border-r-[#c00000] border-t-[#c00000]" />
+        <i
+          className={`inline-block h-0 w-0 border-[5px] border-transparent ${RED_CORNER}`}
+        />
         priority, overdue or due today
       </span>
     </span>
