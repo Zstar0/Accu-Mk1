@@ -101,7 +101,16 @@ export function WorksheetNoteLog({
               }
             }}
           />
-          <div className="flex items-center justify-between gap-3">
+          {/* Button on the left: the app's corner bubble sits bottom right. */}
+          <div className="flex items-center gap-3">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!body || saving}
+              onClick={() => void add()}
+            >
+              Add note
+            </Button>
             {error ? (
               <p role="alert" className="text-xs text-destructive">
                 {error}
@@ -111,14 +120,6 @@ export function WorksheetNoteLog({
                 Saved with your name and the time. Ctrl+Enter adds it.
               </span>
             )}
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!body || saving}
-              onClick={() => void add()}
-            >
-              Add note
-            </Button>
           </div>
         </div>
       )}
