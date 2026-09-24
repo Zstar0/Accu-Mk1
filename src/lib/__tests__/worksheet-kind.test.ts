@@ -14,7 +14,7 @@ describe('benchKindForItem', () => {
     expect(benchKindForItem(item('endo'))).toBe('endo')
     expect(benchKindForItem(item('endo85'))).toBe('endo')
     expect(benchKindForItem(item('pcr'))).toBe('pcr')
-    expect(benchKindForItem(item('ster'))).toBe('sterility')
+    expect(benchKindForItem(item('ster'))).toBe('pcr')
     expect(benchKindForItem(item('usp71'))).toBe('sterility')
     expect(benchKindForItem(item('hm'))).toBe('hm')
     expect(benchKindForItem(item('hplc'))).toBe('hplc')

@@ -376,7 +376,7 @@ const CSV_COLUMNS: [string, (r: EndoSheetRow) => string][] = [
  * (=, +, -, @ or a control character first): a leading apostrophe keeps it as
  * text in Excel and Sheets, and such cells are always quoted.
  */
-function csvField(v: string): string {
+export function csvField(v: string): string {
   const defused = /^[=+\-@\t\r]/.test(v) ? `'${v}` : v
   const mustQuote = defused !== v || /[",\r\n]/.test(defused)
   return mustQuote ? `"${defused.replace(/"/g, '""')}"` : defused

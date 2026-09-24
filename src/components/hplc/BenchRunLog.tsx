@@ -1,19 +1,29 @@
 import { useQuery } from '@tanstack/react-query'
 import { getWorksheetBenchLog, type WorksheetUser } from '@/lib/api'
 import { shortName } from '@/lib/user-display'
+import type { BenchKind } from '@/lib/worksheet-kind'
 
 /**
- * Dennis's run log, as the endo bench's worksheet history: the newest
- * endotoxin worksheets (open and completed), one button each, with the
- * analyst, the sample count and a two-bar meter that fills when every row is
- * Made / ran on the MCS. Lean summaries from /worksheets/bench-log; the full
- * worksheet loads only when one is picked.
+ * Dennis's run log, as one bench's worksheet history: the newest worksheets
+ * of that kind (open and completed), one button each, with the analyst, the
+ * sample count and a two-bar meter that fills when every row carries the
+ * bench's two ticks (Made / MCS on the endo bench, Plate made / Ran on the
+ * PCR bench). Lean summaries from /worksheets/bench-log; the full worksheet
+ * loads only when one is picked.
  */
-export function EndoRunLog({
+export function BenchRunLog({
+  kind,
+  label,
+  tickLabels,
   activeId,
   users,
   onSelect,
 }: {
+  kind: BenchKind
+  /** The bench's name over the rail, e.g. Endotoxin. */
+  label: string
+  /** The two tick columns' names for the meter tooltip, e.g. Made / MCS. */
+  tickLabels: [string, string]
   activeId: number | null
   users: WorksheetUser[]
   onSelect: (worksheetId: number) => void
@@ -21,8 +31,8 @@ export function EndoRunLog({
   // Under the 'worksheets-list' prefix on purpose: every worksheet mutation
   // already invalidates that prefix, so ticks and completions refresh the log.
   const { data: runs = [], isLoading } = useQuery({
-    queryKey: ['worksheets-list', 'bench-log', 'endo'],
-    queryFn: () => getWorksheetBenchLog('endo'),
+    queryKey: ['worksheets-list', 'bench-log', kind],
+    queryFn: () => getWorksheetBenchLog(kind),
     staleTime: 30_000,
   })
 
@@ -30,7 +40,7 @@ export function EndoRunLog({
     <aside className="flex w-[232px] shrink-0 flex-col border-r bg-card">
       <div className="flex flex-col gap-0.5 border-b px-4 pb-3 pt-4">
         <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-teal-700 dark:text-teal-300">
-          Endotoxin
+          {label}
         </span>
         <h2 className="text-lg font-semibold leading-tight">Run log</h2>
         <span className="text-xs text-muted-foreground">
@@ -63,7 +73,7 @@ export function EndoRunLog({
                 </span>
                 <span
                   className="row-span-2 flex gap-0.5"
-                  title={`Made ${run.made_count}/${run.item_count} · MCS ${run.ran_count}/${run.item_count}`}
+                  title={`${tickLabels[0]} ${run.made_count}/${run.item_count} · ${tickLabels[1]} ${run.ran_count}/${run.item_count}`}
                 >
                   {[run.made_count, run.ran_count].map((n, i) => (
                     <i
@@ -86,4 +96,4 @@ export function EndoRunLog({
   )
 }
 
-export default EndoRunLog
+export default BenchRunLog
