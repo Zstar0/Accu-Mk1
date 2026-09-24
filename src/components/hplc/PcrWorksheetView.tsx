@@ -1,7 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Textarea } from '@/components/ui/textarea'
 import {
   Select,
   SelectContent,
@@ -25,6 +24,7 @@ import {
   type PcrConfig,
 } from '@/lib/pcr-worksheet'
 import { displayName, shortName } from '@/lib/user-display'
+import { worksheetNotesText } from '@/lib/worksheet-notes'
 import { worksheetItemSlaSubjects } from '@/lib/worksheet-sla-subjects'
 import { useLabCalendar } from '@/hooks/use-lab-calendar'
 import { useSlaForSubjects } from '@/services/sla-subjects'
@@ -34,6 +34,7 @@ import { PcrCalculations } from './PcrCalculations'
 import { PcrPlateMap } from './PcrPlateMap'
 import { PcrSampleList } from './PcrSampleList'
 import { PcrWorksheetActions } from './PcrWorksheetActions'
+import { WorksheetNoteLog } from './WorksheetNoteLog'
 
 const MONO = 'font-mono text-[12.5px] tabular-nums'
 const FIELD =
@@ -60,6 +61,7 @@ export function PcrWorksheetView({
   onTickAll,
   onFreeze,
   onUnfreeze,
+  onAddNote,
 }: {
   worksheet: WorksheetListItem
   users: WorksheetUser[]
@@ -80,6 +82,8 @@ export function PcrWorksheetView({
   onTickAll: (data: { made?: boolean; ran?: boolean }) => void
   onFreeze: (wells: WorksheetWellFreeze[]) => Promise<unknown>
   onUnfreeze: () => void
+  /** Append a note; the server stamps who and when. Rejects with the reason. */
+  onAddNote: (body: string) => Promise<unknown>
 }) {
   useRegisterActiveFlagEntity(
     'worksheet',
@@ -120,7 +124,7 @@ export function PcrWorksheetView({
           slaByKey.get(String(it.id))?.status.due_at ?? null,
         ])
       ),
-      notes: userNotes,
+      notes: worksheetNotesText(worksheet.note_log ?? [], userNotes, calendar),
     })
   const doc = buildDoc()
   const L = doc.layout
@@ -413,22 +417,14 @@ export function PcrWorksheetView({
         <h3 className="pb-2 text-[9.5px] font-semibold uppercase tracking-[0.13em] text-muted-foreground">
           Notes
         </h3>
-        {isCompleted ? (
-          <p className="whitespace-pre-wrap text-sm text-muted-foreground">
-            {userNotes || '-'}
-          </p>
-        ) : (
-          <Textarea
-            key={worksheet.id}
-            className="min-h-[60px] resize-none bg-card text-sm"
-            placeholder="Deviations, lot numbers, observations…"
-            defaultValue={userNotes}
-            onBlur={e => {
-              if (e.target.value !== userNotes)
-                onUpdate({ notes: e.target.value })
-            }}
-          />
-        )}
+        <WorksheetNoteLog
+          key={worksheet.id}
+          notes={worksheet.note_log ?? []}
+          legacyText={userNotes}
+          isCompleted={isCompleted}
+          calendar={calendar}
+          onAdd={onAddNote}
+        />
       </section>
     </div>
   )

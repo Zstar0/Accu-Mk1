@@ -65,6 +65,7 @@ export function WorksheetDrawer() {
     bulkTicksMutation,
     freezeWellsMutation,
     unfreezeWellsMutation,
+    addNoteMutation,
     applyMethodInstrumentMutation,
     reorderMutation,
     addItemMutation,
@@ -426,6 +427,7 @@ export function WorksheetDrawer() {
                 onTickAll={data => bulkTicksMutation.mutate({ worksheetId: activeWorksheet.id, data })}
                 onFreeze={wells => freezeWellsMutation.mutateAsync({ worksheetId: activeWorksheet.id, wells })}
                 onUnfreeze={() => unfreezeWellsMutation.mutate(activeWorksheet.id)}
+                onAddNote={body => addNoteMutation.mutateAsync({ worksheetId: activeWorksheet.id, body })}
               />
               <AddSamplesModal
                 open={addSamplesOpen}

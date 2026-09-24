@@ -6104,6 +6104,9 @@ export interface WorksheetListItem {
   /** PCR plate map: the highest well ever frozen per plate ({"1": 46}); a
    *  frozen well stays spent after its sample is removed. Server-owned. */
   well_high_water?: Record<string, number> | null
+  /** Append-only notes, oldest first, each stamped by the server with who
+   *  wrote it and when. The old free-text `notes` field is left as it is. */
+  note_log?: WorksheetNote[]
   items: {
     id: number
     sample_id: string
@@ -6382,6 +6385,35 @@ export async function freezeWorksheetWells(
   if (!response.ok) {
     const detail = await response.json().catch(() => null)
     throw new Error(detail?.detail ?? `Freeze wells failed: ${response.status}`)
+  }
+  return response.json()
+}
+
+export interface WorksheetNote {
+  id: number
+  body: string
+  user_id: number | null
+  /** Display name of the author; null when the account is gone. */
+  author: string | null
+  created_at: string
+}
+
+/** Add a note to a worksheet's log; the server stamps the author and time. */
+export async function addWorksheetNote(
+  worksheetId: number,
+  body: string
+): Promise<WorksheetNote> {
+  const response = await fetch(
+    `${API_BASE_URL()}/worksheets/${worksheetId}/notes`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ body }),
+    }
+  )
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null)
+    throw new Error(detail?.detail ?? `Add note failed: ${response.status}`)
   }
   return response.json()
 }

@@ -13,6 +13,7 @@ import {
   applyWorksheetMethodInstrument,
   freezeWorksheetWells,
   unfreezeWorksheetWells,
+  addWorksheetNote,
 } from '@/lib/api'
 import type {
   WorksheetListItem,
@@ -330,6 +331,17 @@ export function useWorksheetDrawer() {
       toast.error(err instanceof Error ? err.message : 'Unfreeze wells failed'),
   })
 
+  // Notes are an append-only log stamped by the server. No toast on error:
+  // the note box keeps the typed text and says why beside it.
+  const addNoteMutation = useMutation({
+    mutationFn: ({ worksheetId, body }: { worksheetId: number; body: string }) =>
+      addWorksheetNote(worksheetId, body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['worksheets-list'] })
+      queryClient.invalidateQueries({ queryKey: ['worksheet-by-id'] })
+    },
+  })
+
   const applyMethodInstrumentMutation = useMutation({
     mutationFn: ({
       worksheetId,
@@ -393,6 +405,7 @@ export function useWorksheetDrawer() {
     bulkTicksMutation,
     freezeWellsMutation,
     unfreezeWellsMutation,
+    addNoteMutation,
     applyMethodInstrumentMutation,
     reorderMutation,
     addItemMutation,
