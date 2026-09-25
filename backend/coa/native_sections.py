@@ -276,8 +276,10 @@ def build_native_sections(db: Session, parent) -> dict:
         if not services.get(key):
             services[key] = True
     # Native retest: carried profiles report from the retest's own carried
-    # rows, whatever shape the IS payload gives their keys.
-    for key in (((parent.catalog_snapshot or {}).get("retest") or {}).get("carry") or []):
+    # rows, whatever shape the IS payload gives their keys. Keys in `missing`
+    # were never on the original, so nothing was carried for them.
+    rider = (parent.catalog_snapshot or {}).get("retest") or {}
+    for key in set(rider.get("carry") or []) - set(rider.get("missing") or []):
         if not services.get(key):
             services[key] = True
 

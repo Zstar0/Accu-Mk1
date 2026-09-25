@@ -143,3 +143,25 @@ def test_carried_profile_renders_regardless_of_the_is_payload(db_session, monkey
     assert doc["ordered_profiles"] == ["heavy_metals"]
     [section] = doc["sections"]
     assert section["rows"][0]["keyword"] == "HM-PB"
+
+
+def test_carry_key_missing_on_the_original_is_not_rendered(db_session, monkeypatch):
+    # Round 4: a carry key the original never had is recorded in
+    # retest.missing and was never carried; it must not summon a section.
+    prof, _svcs = _mk_native_profile(
+        db_session, key="heavy_metals", services=[("HM-PB", "mk1")], title="Heavy Metals",
+    )
+    prof.active = False
+    from models import LimsSample
+    parent = LimsSample(sample_id="P-7003",
+                        catalog_snapshot={"profiles": [], "retest": {"carry": ["heavy_metals"],
+                                                                     "missing": ["heavy_metals"]}})
+    db_session.add(parent)
+    db_session.flush()
+    monkeypatch.setattr(
+        "coa.native_sections.fetch_sample_services",
+        lambda sample_id: {"services": {"hplcpurity_identity": True}, "package": None},
+    )
+    doc = build_native_sections(db_session, parent)
+    assert "heavy_metals" not in doc["ordered_profiles"]
+    assert doc.get("deferred_sections") is None
