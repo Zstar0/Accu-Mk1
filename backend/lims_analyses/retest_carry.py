@@ -183,7 +183,11 @@ def _carry_plan(db: Session, original: LimsSample, prof: AnalysisProfile):
 
 
 def carry_eligible_profile_keys(db: Session, original: LimsSample) -> set[str]:
-    """Snapshot profiles on the original that _carry_plan accepts."""
+    """Snapshot profiles on the original that _carry_plan accepts.
+
+    A member with no row at any tier on the original does not block the
+    carry: such members were never seeded (e.g. the blend aggregate services
+    on a single-analyte sample), so there is nothing pending to wait for."""
     profiles = _profiles_by_key(db, snapshot_profile_keys(original))
     return {key for key, prof in profiles.items() if _carry_plan(db, original, prof) is not None}
 
