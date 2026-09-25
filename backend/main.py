@@ -25486,6 +25486,7 @@ def s2s_mirror_lims_sample_fields(
 # (2026-09-08 spec: docs/superpowers/specs/2026-09-08-order-upsert-placeholder-seed-design.md).
 # Module-level import so tests can patch `main.seed_parent_from_services`.
 from lims_analyses.order_seed import seed_parent_from_services  # noqa: E402
+from lims_analyses.retest_carry import apply_retest_spec  # noqa: E402
 
 
 class S2SOrderSampleStamp(BaseModel):
@@ -25496,6 +25497,10 @@ class S2SOrderSampleStamp(BaseModel):
     # the registration signal's callback. Optional for old-IS compatibility.
     services: Optional[dict] = None
     package: Optional[str] = None
+    # Native retest (2026-09-24): when present, the seed goes through
+    # lims_analyses.retest_carry.apply_retest_spec (filtered demand + carried
+    # results + lineage) instead of the plain placeholder seed.
+    retest_spec: Optional[dict] = None
 
 
 class S2SOrderCustomer(BaseModel):
@@ -25595,6 +25600,14 @@ def s2s_upsert_orders(
     # never roll back the order stamps and one bad sample never blocks its
     # siblings (idempotent: re-pushes report 0 created). Stamps without
     # services (old IS) skip this phase entirely.
+    def _seed(sample, s):
+        if s.retest_spec:
+            return apply_retest_spec(db, parent=sample, raw_spec=s.retest_spec,
+                                     services=s.services, package=s.package,
+                                     source="order_upsert")
+        return seed_parent_from_services(db, parent=sample, services=s.services,
+                                         package=s.package, source="order_upsert")
+
     placeholders_created = 0
     for o in req.orders:
         for s in o.samples:
@@ -25604,12 +25617,9 @@ def s2s_upsert_orders(
             if sample is None:
                 continue
             try:
-                stats = seed_parent_from_services(
-                    db, parent=sample, services=s.services, package=s.package,
-                    source="order_upsert",
-                )
+                stats = _seed(sample, s)
                 db.commit()
-                placeholders_created += stats["created"]
+                placeholders_created += stats.get("created", stats.get("carried", 0))
             except IntegrityError as race_err:
                 # This seed and the registration-signal seed (own session,
                 # _seed_native_placeholders_at_registration_bg) run concurrently
@@ -25628,16 +25638,14 @@ def s2s_upsert_orders(
                 try:
                     sample = db.query(LimsSample).filter_by(
                         sample_id=s.senaite_sample_id).first()
-                    stats = seed_parent_from_services(
-                        db, parent=sample, services=s.services, package=s.package,
-                        source="order_upsert_retry",
-                    )
+                    stats = _seed(sample, s)
                     db.commit()
-                    placeholders_created += stats["created"]
+                    placeholders_created += stats.get("created", stats.get("carried", 0))
                     logger.info(
                         "registry.order_upsert_seed_already_present sample_id=%s "
                         "created=%s existing=%s reason=race_lost_to_registration_seed",
-                        s.senaite_sample_id, stats["created"], stats["existing"])
+                        s.senaite_sample_id, stats.get("created", stats.get("carried", 0)),
+                        stats.get("existing", 0))
                 except Exception as retry_err:  # noqa: BLE001
                     db.rollback()
                     logger.warning(

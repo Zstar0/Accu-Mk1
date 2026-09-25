@@ -295,3 +295,37 @@ def test_a_retry_that_also_fails_is_still_reported_as_a_failure(client, db_sessi
     assert "order_upsert_seed_failed sample_id=P-8001" in msgs
     assert "already_present" not in msgs
 
+
+
+def test_stamp_with_retest_spec_routes_through_apply_retest_spec(client, db_session):
+    """A stamp carrying retest_spec must NOT go through the plain seed: the
+    retest path filters demand, carries results and stamps lineage."""
+    db_session.add(LimsSample(sample_id="P-8002", external_lims_system="mk1", status="sample_due"))
+    db_session.commit()
+    body = _order_with_services(sample_id="P-8002", services={"hplcpurity_identity": True, "heavy_metals": True})
+    spec = {"retest_of_sample_id": "P-2799", "retest": ["hplcpurity_identity"], "carry": ["heavy_metals"],
+            "add": None, "auto_checkin": False, "fee": "free", "reason": "t"}
+    body["orders"][0]["samples"][0]["retest_spec"] = spec
+    with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}), \
+            patch("main.apply_retest_spec", return_value={"applied": True, "carried": 0,
+                                                          "missing": [], "demand_keys": []}) as ap, \
+            patch("main.seed_parent_from_services") as plain:
+        r = client.post(URL, json=body, headers=HDR)
+    assert r.status_code == 200, r.text
+    ap.assert_called_once()
+    assert ap.call_args.kwargs["raw_spec"] == spec
+    assert ap.call_args.kwargs["parent"].sample_id == "P-8002"
+    plain.assert_not_called()
+
+
+def test_stamp_without_retest_spec_uses_the_plain_seed(client, db_session):
+    db_session.add(LimsSample(sample_id="P-8003", external_lims_system="mk1", status="sample_due"))
+    db_session.commit()
+    body = _order_with_services(sample_id="P-8003", services={"heavy_metals": True})
+    with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}), \
+            patch("main.apply_retest_spec") as ap, \
+            patch("main.seed_parent_from_services", return_value={"created": 0, "existing": 0, "skipped": 0}) as plain:
+        r = client.post(URL, json=body, headers=HDR)
+    assert r.status_code == 200, r.text
+    ap.assert_not_called()
+    plain.assert_called_once()
