@@ -133,3 +133,59 @@ def test_skips_rows_that_are_not_verified_or_published(db):
     original, retest, _, _ = _world(db, state="parent_to_verify")
     out = carry_results(db, original=original, retest=retest, profile_keys=["heavy_metals"], user_id=None)
     assert out == [] and _carried_rows(db, retest) == []
+
+
+# I2: eligibility is per mk1 member, and a lab-withdrawn member rides as a
+# rejected marker row so the retest COA's withdrawn check passes.
+
+def test_profile_with_a_pending_member_is_not_carry_eligible(db):
+    from lims_analyses.retest_carry import carry_eligible_profile_keys
+    original, retest, parents, _ = _world(db)
+    parents["LEAD-PPM"].review_state = "parent_to_verify"
+    db.commit()
+    assert carry_eligible_profile_keys(db, original) == set()
+    assert carry_results(db, original=original, retest=retest, profile_keys=["heavy_metals"],
+                         user_id=None) == []
+
+
+def test_withdrawn_member_is_eligible_and_rides_as_a_rejected_marker(db):
+    from coa.native_sections import _withdrawn_by_lab
+    from lims_analyses.retest_carry import carry_eligible_profile_keys
+    original, retest, parents, _ = _world(db)
+    lead = parents["LEAD-PPM"]
+    lead.review_state = "rejected"
+    db.commit()
+    assert carry_eligible_profile_keys(db, original) == {"heavy_metals"}
+    out = carry_results(db, original=original, retest=retest, profile_keys=["heavy_metals"], user_id=9)
+    db.commit()
+    assert [o["keyword"] for o in out] == ["ARSENIC-PPM"]
+    rows = {r.keyword: r for r in _carried_rows(db, retest)}
+    assert rows["ARSENIC-PPM"].review_state == "verified"
+    marker = rows["LEAD-PPM"]
+    assert marker.review_state == "rejected" and marker.result_value is None
+    assert marker.provenance == "canonical"
+    assert db.execute(select(LimsAnalysisPromotion).where(
+        LimsAnalysisPromotion.parent_analysis_id == marker.id)).scalars().all() == []
+    [t] = db.execute(select(LimsAnalysisTransition).where(
+        LimsAnalysisTransition.analysis_id == marker.id)).scalars().all()
+    assert t.from_state is None and t.to_state == "rejected" and t.transition_kind == "auto"
+    assert t.reason == "withdrawn on P-2799"
+    assert _withdrawn_by_lab(db, retest.id, lead.analysis_service_id)
+    # Idempotent: a second pass mints neither a carried row nor a second marker.
+    assert carry_results(db, original=original, retest=retest, profile_keys=["heavy_metals"],
+                         user_id=9) == []
+    db.commit()
+    assert len(_carried_rows(db, retest)) == 2
+
+
+def test_never_seeded_member_does_not_block_the_carry(db):
+    # e.g. HPLC-BLEND-* on a single-analyte sample: no row at any tier.
+    from lims_analyses.retest_carry import carry_eligible_profile_keys
+    original, _, _, _ = _world(db)
+    hm = db.execute(select(AnalysisProfile)).scalars().one()
+    extra = AnalysisService(title="Blend Total", keyword="HPLC-BLEND-TOTAL", origin="mk1")
+    db.add(extra)
+    db.flush()
+    hm.analysis_services.append(extra)
+    db.commit()
+    assert carry_eligible_profile_keys(db, original) == {"heavy_metals"}

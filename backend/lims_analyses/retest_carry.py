@@ -148,16 +148,45 @@ def _profiles_by_key(db: Session, keys) -> dict[str, AnalysisProfile]:
     return {p.key: p for p in rows}
 
 
+def _on_sample(db: Session, sample: LimsSample, service_id: int) -> bool:
+    """Any row for the service on the sample, parent tier or any vial."""
+    from models import LimsSubSample
+    vial_ids = select(LimsSubSample.id).where(LimsSubSample.parent_sample_pk == sample.id)
+    return db.execute(select(LimsAnalysis.id).where(
+        LimsAnalysis.analysis_service_id == service_id,
+        (LimsAnalysis.lims_sample_pk == sample.id) | LimsAnalysis.lims_sub_sample_pk.in_(vial_ids),
+    ).limit(1)).first() is not None
+
+
+def _carry_plan(db: Session, original: LimsSample, prof: AnalysisProfile):
+    """(rows to copy, withdrawn mk1 members) when `prof` may be carried, else None.
+
+    Every mk1-origin member must have a live verified/published parent row,
+    or be withdrawn by the lab (coa.native_sections._withdrawn_by_lab), or
+    never have been on the sample at all (no row at any tier: the blend
+    aggregates on a single-analyte sample). At least one row must carry.
+    A pending member blocks the carry: the retest COA would abort on Rule 4."""
+    from coa.native_sections import _withdrawn_by_lab  # local: import cycle
+    members = list(prof.analysis_services)
+    rows = _live_carry_rows(db, original, {svc.id for svc in members})
+    if not rows:
+        return None
+    live = {r.analysis_service_id for r in rows}
+    withdrawn = []
+    for svc in members:
+        if (svc.origin or "") != "mk1" or svc.id in live:
+            continue
+        if _withdrawn_by_lab(db, original.id, svc.id):
+            withdrawn.append(svc)
+        elif _on_sample(db, original, svc.id):
+            return None
+    return rows, withdrawn
+
+
 def carry_eligible_profile_keys(db: Session, original: LimsSample) -> set[str]:
-    """Snapshot profiles on the original with at least one verified/published
-    parent-tier canonical row for one of their services."""
+    """Snapshot profiles on the original that _carry_plan accepts."""
     profiles = _profiles_by_key(db, snapshot_profile_keys(original))
-    out: set[str] = set()
-    for key, prof in profiles.items():
-        svc_ids = {svc.id for svc in prof.analysis_services}
-        if _live_carry_rows(db, original, svc_ids):
-            out.add(key)
-    return out
+    return {key for key, prof in profiles.items() if _carry_plan(db, original, prof) is not None}
 
 
 def validate_retest_spec(db: Session, *, original: LimsSample, spec: RetestSpec) -> list[str]:
@@ -208,6 +237,33 @@ def _ultimate_source(db: Session, row: LimsAnalysis) -> LimsAnalysis:
     return src
 
 
+def _mint_withdrawn_marker(db: Session, *, original: LimsSample, retest: LimsSample,
+                           svc, user_id: Optional[int], now: datetime) -> None:
+    """A rejected canonical parent row for a member the lab withdrew on the
+    original, so native_sections._withdrawn_by_lab reads it as withdrawn on
+    the retest too. No promotion link. Idempotent per (retest, service)."""
+    from models import LimsAnalysisTransition
+    exists = db.execute(select(LimsAnalysis.id).where(
+        LimsAnalysis.lims_sample_pk == retest.id, LimsAnalysis.lims_sub_sample_pk.is_(None),
+        LimsAnalysis.analysis_service_id == svc.id, LimsAnalysis.provenance == "canonical",
+        LimsAnalysis.review_state == "rejected",
+    ).limit(1)).first()
+    if exists is not None:
+        return
+    row = LimsAnalysis(
+        lims_sample_pk=retest.id, lims_sub_sample_pk=None, analysis_service_id=svc.id,
+        keyword=svc.keyword, title=svc.title, result_value=None,
+        review_state="rejected", provenance="canonical",
+        created_by_user_id=user_id, created_at=now, updated_at=now,
+    )
+    db.add(row)
+    db.flush()
+    db.add(LimsAnalysisTransition(
+        analysis_id=row.id, from_state=None, to_state="rejected", transition_kind="auto",
+        user_id=user_id, reason=f"withdrawn on {original.sample_id}", details={"changed": {}},
+    ))
+
+
 def carry_results(db: Session, *, original: LimsSample, retest: LimsSample,
                   profile_keys, user_id: Optional[int]) -> list[dict]:
     """Mint one verified parent row on `retest` per live verified/published
@@ -229,8 +285,14 @@ def carry_results(db: Session, *, original: LimsSample, retest: LimsSample,
         prof = profiles.get(key)
         if prof is None:
             continue
-        svc_ids = {svc.id for svc in prof.analysis_services}
-        for src_parent in _live_carry_rows(db, original, svc_ids):
+        plan = _carry_plan(db, original, prof)
+        if plan is None:
+            continue                    # never carry a profile partially
+        live_rows, withdrawn = plan
+        for svc in withdrawn:
+            _mint_withdrawn_marker(db, original=original, retest=retest, svc=svc,
+                                   user_id=user_id, now=now)
+        for src_parent in live_rows:
             source = _ultimate_source(db, src_parent)
             if source.id in already:
                 continue
