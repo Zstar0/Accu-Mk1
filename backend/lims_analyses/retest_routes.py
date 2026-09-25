@@ -10,7 +10,6 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Optional
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException
@@ -20,9 +19,13 @@ from sqlalchemy.orm import Session
 
 from auth import get_current_user
 from database import get_db
-from lims_analyses.retest_carry import (HPLC_PROFILE_KEY, carry_eligible_profile_keys,
-                                        parse_retest_spec, snapshot_profile_keys,
-                                        validate_retest_spec)
+from lims_analyses.retest_carry import (
+    HPLC_PROFILE_KEY,
+    carry_eligible_profile_keys,
+    parse_retest_spec,
+    snapshot_profile_keys,
+    validate_retest_spec,
+)
 from lims_analyses.service import BadRequestError
 from models import AnalysisProfile, LimsAnalysis, LimsSample
 
@@ -42,7 +45,7 @@ def _is_base_and_key() -> tuple[str, str]:
     return base, key
 
 
-def _fetch_addon_prices() -> Optional[dict]:
+def _fetch_addon_prices() -> dict | None:
     """IS proxies WP's add-on product prices. None when unreachable: the
     overlay still renders, with prices blank."""
     base, key = _is_base_and_key()
@@ -58,7 +61,7 @@ def _fetch_addon_prices() -> Optional[dict]:
         return None
 
 
-def _best_state(db: Session, sample: LimsSample, service_ids: set[int]) -> Optional[str]:
+def _best_state(db: Session, sample: LimsSample, service_ids: set[int]) -> str | None:
     if not service_ids:
         return None
     rank = {"published": 3, "verified": 2, "parent_to_verify": 1}
@@ -77,7 +80,7 @@ def _best_state(db: Session, sample: LimsSample, service_ids: set[int]) -> Optio
 
 
 @router.get("/{sample_id}/retest-options")
-def retest_options(sample_id: str, db: Session = Depends(get_db), _user=Depends(get_current_user)):
+def retest_options(sample_id: str, db: Session = Depends(get_db), _user=Depends(get_current_user)):  # noqa: B008
     sample = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)).scalar_one_or_none()
     if sample is None:
         raise HTTPException(status_code=404, detail=f"sample {sample_id!r} not known to Mk1")
@@ -122,15 +125,15 @@ def retest_options(sample_id: str, db: Session = Depends(get_db), _user=Depends(
 class RetestRequest(BaseModel):
     retest: list[str] = []
     carry: list[str] = []
-    add: Optional[dict] = None
+    add: dict | None = None
     auto_checkin: bool = False
     fee: str = "paid"
     reason: str
 
 
 @router.post("/{sample_id}/retest")
-def create_retest(sample_id: str, req: RetestRequest, db: Session = Depends(get_db),
-                  user=Depends(get_current_user)):
+def create_retest(sample_id: str, req: RetestRequest, db: Session = Depends(get_db),  # noqa: B008
+                  user=Depends(get_current_user)):  # noqa: B008
     sample = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)).scalar_one_or_none()
     if sample is None:
         raise HTTPException(status_code=404, detail=f"sample {sample_id!r} not known to Mk1")

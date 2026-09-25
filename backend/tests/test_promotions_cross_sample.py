@@ -6,7 +6,13 @@ from sqlalchemy.orm import sessionmaker
 
 from database import Base
 from lims_analyses.service import list_promotions_for_parent
-from models import AnalysisService, LimsAnalysis, LimsAnalysisPromotion, LimsSample, LimsSubSample
+from models import (
+    AnalysisService,
+    LimsAnalysis,
+    LimsAnalysisPromotion,
+    LimsSample,
+    LimsSubSample,
+)
 
 
 @pytest.fixture
@@ -139,7 +145,7 @@ def test_parent_retest_of_a_carried_row_never_retests_the_original_vial(db):
     """Parent-side mirror of C1: retesting the carried row on the RETEST
     sample must not follow the carried link down into the original's vial."""
     from lims_analyses.service import parent_retest
-    _, _, src, own, carried = _carried_world(db)
+    _, _, src, own, _carried = _carried_world(db)
     parent_retest(db, sample_id="P-3021", keyword="ARSENIC-PPM", user_id=None)
     db.commit()
     db.refresh(src)

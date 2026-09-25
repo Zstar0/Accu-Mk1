@@ -8,8 +8,16 @@ from sqlalchemy.orm import sessionmaker
 from database import Base
 from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
 from lims_analyses.retest_carry import apply_retest_spec
-from models import (AnalysisProfile, AnalysisService, LimsAnalysis, LimsAnalysisPromotion,
-                    LimsSample, LimsSubSample, LimsSubSampleEvent, VialRole)
+from models import (
+    AnalysisProfile,
+    AnalysisService,
+    LimsAnalysis,
+    LimsAnalysisPromotion,
+    LimsSample,
+    LimsSubSample,
+    LimsSubSampleEvent,
+    VialRole,
+)
 
 
 @pytest.fixture

@@ -5,10 +5,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from database import Base
-from lims_analyses.service import BadRequestError
 from lims_analyses.retest_carry import (
-    RetestSpec, carry_eligible_profile_keys, parse_retest_spec, validate_retest_spec,
+    RetestSpec,
+    carry_eligible_profile_keys,
+    parse_retest_spec,
+    validate_retest_spec,
 )
+from lims_analyses.service import BadRequestError
 from models import AnalysisProfile, AnalysisService, LimsAnalysis, LimsSample
 
 

@@ -8,8 +8,15 @@ from sqlalchemy.orm import sessionmaker
 
 from database import Base
 from lims_analyses.retest_carry import CARRIED, carry_results
-from models import (AnalysisProfile, AnalysisService, LimsAnalysis, LimsAnalysisPromotion,
-                    LimsAnalysisTransition, LimsSample, LimsSubSample)
+from models import (
+    AnalysisProfile,
+    AnalysisService,
+    LimsAnalysis,
+    LimsAnalysisPromotion,
+    LimsAnalysisTransition,
+    LimsSample,
+    LimsSubSample,
+)
 
 
 @pytest.fixture
@@ -40,7 +47,7 @@ def _world(db, *, vial_source=True, state="published"):
     vial = LimsSubSample(parent_sample_pk=original.id, external_lims_uid="vial-1", sample_id="P-2799-S02", vial_sequence=2)
     db.add(vial)
     db.flush()
-    verified_at = datetime(2026, 9, 14, 23, 23, 40)
+    verified_at = datetime(2026, 9, 14, 23, 23, 40)  # noqa: DTZ001 (naive TIMESTAMP)
     parents = {}
     for svc, val in ((arsenic, "9.077"), (lead, "0.522")):
         parent_row = LimsAnalysis(lims_sample_pk=original.id, analysis_service_id=svc.id,
@@ -69,7 +76,7 @@ def _carried_rows(db, retest):
 
 
 def test_carries_each_verified_row_linked_to_the_original_vial(db):
-    original, retest, parents, vial = _world(db)
+    original, retest, _parents, vial = _world(db)
     out = carry_results(db, original=original, retest=retest, profile_keys=["heavy_metals"], user_id=9)
     db.commit()
     rows = _carried_rows(db, retest)
@@ -77,7 +84,7 @@ def test_carries_each_verified_row_linked_to_the_original_vial(db):
     for r in rows:
         assert r.review_state == "verified" and r.published_at is None
         assert r.provenance == "canonical" and r.created_by_user_id == 9
-        assert r.analyst_user_id == 5 and r.verified_at == datetime(2026, 9, 14, 23, 23, 40)
+        assert r.analyst_user_id == 5 and r.verified_at == datetime(2026, 9, 14, 23, 23, 40)  # noqa: DTZ001
         assert r.result_unit == "ug/g"
         [link] = db.execute(select(LimsAnalysisPromotion).where(
             LimsAnalysisPromotion.parent_analysis_id == r.id)).scalars().all()
@@ -105,7 +112,7 @@ def test_legacy_parent_row_without_link_is_the_source_itself(db):
 
 
 def test_carry_of_a_carried_row_links_to_the_ultimate_source(db):
-    original, retest, parents, vial = _world(db)
+    original, retest, _parents, vial = _world(db)
     carry_results(db, original=original, retest=retest, profile_keys=["heavy_metals"], user_id=None)
     db.commit()
     third = LimsSample(sample_id="P-3050", external_lims_system="mk1", retest_of_sample_id="P-3017")
@@ -193,7 +200,7 @@ def test_never_seeded_member_does_not_block_the_carry(db):
 
 def test_two_original_rows_sharing_one_source_both_carry_once(db):
     # M6: dedupe keys on the ORIGINAL parent row, not the shared source.
-    original, retest, parents, _ = _world(db)
+    original, retest, _parents, _ = _world(db)
     arsenic_link, lead_link = db.execute(select(LimsAnalysisPromotion).order_by(
         LimsAnalysisPromotion.id)).scalars().all()
     lead_link.source_analysis_id = arsenic_link.source_analysis_id

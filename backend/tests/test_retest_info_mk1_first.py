@@ -4,10 +4,10 @@ from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-from fastapi.testclient import TestClient
 
 import auth
 from database import Base, get_db
@@ -63,7 +63,7 @@ def test_mk1_lineage_wins_and_merges_legacy_is_entries(client, db_session):
     db_session.commit()
     legacy = [
         {"new_sample_id": "P-3017", "order_id": "7920", "created_at": None},   # Mk1 already lists it
-        {"new_sample_id": "P-2900", "order_id": "7001", "created_at": datetime(2026, 8, 1, 12, 0)},
+        {"new_sample_id": "P-2900", "order_id": "7001", "created_at": datetime(2026, 8, 1, 12, 0)},  # noqa: DTZ001
     ]
     with patch("main.get_integration_db", _fake_is(fetchall=legacy)) as is_db:
         r = client.get("/samples/P-3017/retest-info")

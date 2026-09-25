@@ -13,7 +13,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -40,8 +39,8 @@ class RetestSpec:
     auto_checkin: bool
     fee: str
     reason: str
-    requested_by_user_id: Optional[int]
-    requested_at: Optional[str]
+    requested_by_user_id: int | None
+    requested_at: str | None
 
     @property
     def demand_keys(self) -> tuple[str, ...]:
@@ -238,7 +237,7 @@ def _ultimate_source(db: Session, row: LimsAnalysis) -> LimsAnalysis:
 
 
 def _mint_withdrawn_marker(db: Session, *, original: LimsSample, retest: LimsSample,
-                           svc, user_id: Optional[int], now: datetime) -> None:
+                           svc, user_id: int | None, now: datetime) -> None:
     """A rejected canonical parent row for a member the lab withdrew on the
     original, so native_sections._withdrawn_by_lab reads it as withdrawn on
     the retest too. No promotion link. Idempotent per (retest, service)."""
@@ -265,7 +264,7 @@ def _mint_withdrawn_marker(db: Session, *, original: LimsSample, retest: LimsSam
 
 
 def carry_results(db: Session, *, original: LimsSample, retest: LimsSample,
-                  profile_keys, user_id: Optional[int]) -> list[dict]:
+                  profile_keys, user_id: int | None) -> list[dict]:
     """Mint one verified parent row on `retest` per live verified/published
     parent row on `original` for each profile in `profile_keys`, linked
     (contribution_kind='carried') to the original vial's analysis. Idempotent
@@ -283,7 +282,7 @@ def carry_results(db: Session, *, original: LimsSample, retest: LimsSample,
                LimsAnalysisPromotion.contribution_kind == CARRIED,
                LimsAnalysisTransition.from_state.is_(None))
     ).scalars().all() if d}
-    now = datetime.utcnow()
+    now = datetime.utcnow()  # noqa: DTZ003 (naive TIMESTAMP columns)
     out: list[dict] = []
     for key in profile_keys:
         prof = profiles.get(key)
@@ -347,7 +346,7 @@ VARIANCE_KEY = "samplevariance"
 
 
 def _event(db: Session, sample: LimsSample, event: str, details: dict,
-           user_id: Optional[int] = None) -> None:
+           user_id: int | None = None) -> None:
     from models import LimsSubSampleEvent
     db.add(LimsSubSampleEvent(lims_sample_pk=sample.id, event=event, details=details,
                               user_id=user_id))
@@ -384,7 +383,7 @@ def _demand_snapshot_profiles(db: Session, demand: dict, package, snap: dict) ->
 
 
 def _retire_carried_placeholders(db: Session, *, parent: LimsSample, original: LimsSample,
-                                 carry_keys, demand_keys, user_id: Optional[int]) -> int:
+                                 carry_keys, demand_keys, user_id: int | None) -> int:
     """Soft-reject every live 'ordered' placeholder on the retest whose
     service belongs to a carried profile and to no demand profile (the
     Manage Analyses remove primitive). Returns the count."""
@@ -406,7 +405,7 @@ def _retire_carried_placeholders(db: Session, *, parent: LimsSample, original: L
 
 
 def apply_retest_spec(db: Session, *, parent: LimsSample, raw_spec: dict,
-                      services: Optional[dict], package, source: str) -> dict:
+                      services: dict | None, package, source: str) -> dict:
     """Retest-aware sibling of seed_parent_from_services. Sets lineage, seeds
     only the demand profiles (retest + add), stamps the `retest` snapshot
     rider, carries the rest, writes the activity events. A bad spec or a
