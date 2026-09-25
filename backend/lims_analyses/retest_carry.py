@@ -185,3 +185,92 @@ def validate_retest_spec(db: Session, *, original: LimsSample, spec: RetestSpec)
         raise BadRequestError(
             f"cannot carry unverified profile(s): {not_eligible}; retest them instead")
     return [k for k in (*spec.retest, *spec.carry) if k not in have]
+
+
+def _ultimate_source(db: Session, row: LimsAnalysis) -> LimsAnalysis:
+    """Follow promotion links from a parent row to the vial analysis that
+    produced it. A 'chosen'/'aggregated_in' link points at the vial; a
+    'carried' link points at the previous carry's ultimate source, so one hop
+    is always enough. Legacy rows with no link are their own source."""
+    from models import LimsAnalysisPromotion
+    link = db.execute(select(LimsAnalysisPromotion).where(
+        LimsAnalysisPromotion.parent_analysis_id == row.id
+    ).order_by(LimsAnalysisPromotion.id)).scalars().first()
+    if link is None:
+        return row
+    src = db.get(LimsAnalysis, link.source_analysis_id)
+    if src is None:
+        return row
+    if link.contribution_kind == CARRIED:
+        return src                      # already the ultimate source
+    if src.lims_sub_sample_pk is None:
+        return row                      # parent-hosted source: keep the parent row
+    return src
+
+
+def carry_results(db: Session, *, original: LimsSample, retest: LimsSample,
+                  profile_keys, user_id: Optional[int]) -> list[dict]:
+    """Mint one verified parent row on `retest` per live verified/published
+    parent row on `original` for each profile in `profile_keys`, linked
+    (contribution_kind='carried') to the original vial's analysis. Idempotent
+    per (retest, source). Does NOT commit."""
+    from models import LimsAnalysisPromotion, LimsAnalysisTransition, LimsSubSample
+
+    profiles = _profiles_by_key(db, profile_keys)
+    already = set(db.execute(
+        select(LimsAnalysisPromotion.source_analysis_id)
+        .join(LimsAnalysis, LimsAnalysis.id == LimsAnalysisPromotion.parent_analysis_id)
+        .where(LimsAnalysis.lims_sample_pk == retest.id,
+               LimsAnalysisPromotion.contribution_kind == CARRIED)
+    ).scalars().all())
+    now = datetime.utcnow()
+    out: list[dict] = []
+    for key in profile_keys:
+        prof = profiles.get(key)
+        if prof is None:
+            continue
+        svc_ids = {svc.id for svc in prof.analysis_services}
+        for src_parent in _live_carry_rows(db, original, svc_ids):
+            source = _ultimate_source(db, src_parent)
+            if source.id in already:
+                continue
+            row = LimsAnalysis(
+                lims_sample_pk=retest.id, lims_sub_sample_pk=None,
+                analysis_service_id=src_parent.analysis_service_id,
+                keyword=src_parent.keyword, title=src_parent.title,
+                slot=src_parent.slot, peptide_id=src_parent.peptide_id,
+                result_value=src_parent.result_value, result_unit=src_parent.result_unit,
+                method_id=src_parent.method_id, instrument_id=src_parent.instrument_id,
+                analyst_user_id=src_parent.analyst_user_id,
+                captured_at=src_parent.captured_at, submitted_at=src_parent.submitted_at,
+                verified_at=src_parent.verified_at, published_at=None,
+                review_state="verified", provenance="canonical",
+                created_by_user_id=user_id, created_at=now, updated_at=now,
+            )
+            db.add(row)
+            db.flush()
+            db.add(LimsAnalysisPromotion(
+                parent_analysis_id=row.id, source_analysis_id=source.id,
+                contribution_kind=CARRIED, promoted_by_user_id=user_id, promoted_at=now,
+                reason=f"carried from {original.sample_id} on retest",
+            ))
+            db.add(LimsAnalysisTransition(
+                analysis_id=row.id, from_state=None, to_state="verified",
+                transition_kind="auto", user_id=user_id,
+                reason=f"carried from {original.sample_id}",
+                details={"changed": {}, "carried_from": source.id},
+            ))
+            already.add(source.id)
+            vial_id = None
+            if source.lims_sub_sample_pk is not None:
+                sub = db.get(LimsSubSample, source.lims_sub_sample_pk)
+                vial_id = sub.sample_id if sub else None
+            out.append({
+                "analysis_id": row.id, "keyword": row.keyword, "title": row.title,
+                "result_value": row.result_value, "result_unit": row.result_unit,
+                "source_analysis_id": source.id, "source_sample_id": original.sample_id,
+                "source_vial_id": vial_id, "verified_at": row.verified_at,
+                "analyst_user_id": row.analyst_user_id,
+            })
+    db.flush()
+    return out
