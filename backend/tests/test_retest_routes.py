@@ -97,3 +97,51 @@ def test_options_without_is_still_renders(client, db_session):
 
 def test_options_unknown_sample_404(client, db_session):
     assert client.get("/api/samples/P-0000/retest-options").status_code == 404
+
+
+def _body(**over):
+    d = {"retest": ["hplcpurity_identity"], "carry": ["heavy_metals"],
+         "add": {"profiles": ["endotoxin-usp85-lal"], "variance_points": 0, "additional_vials": 1},
+         "auto_checkin": True, "fee": "paid", "reason": "customer asked"}
+    d.update(over)
+    return d
+
+
+def test_retest_forwards_a_stamped_spec_to_is(client, db_session):
+    _seed(db_session)
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = {"order_id": 7920, "order_number": "WP-7920", "status": "pending",
+                              "payment_url": "https://x/pay"}
+    with patch.dict(os.environ, {"INTEGRATION_SERVICE_URL": "http://is", "ACCU_MK1_API_KEY": "k"}), \
+            patch("lims_analyses.retest_routes.requests.post", return_value=resp) as post:
+        r = client.post("/api/samples/P-2799/retest", json=_body())
+    assert r.status_code == 200, r.text
+    assert r.json()["order_number"] == "WP-7920"
+    sent = post.call_args.kwargs["json"]
+    assert sent["sample_id"] == "P-2799"
+    spec = sent["retest_spec"]
+    assert spec["retest_of_sample_id"] == "P-2799" and spec["requested_by_user_id"] == 9
+    assert spec["requested_at"].endswith("Z") and spec["carry"] == ["heavy_metals"]
+    assert post.call_args.args[0] == "http://is/api/service/retest-orders"
+    assert post.call_args.kwargs["headers"]["X-API-Key"] == "k"
+
+
+def test_retest_rejects_a_bad_spec_before_calling_is(client, db_session):
+    _seed(db_session)
+    with patch("lims_analyses.retest_routes.requests.post") as post:
+        r = client.post("/api/samples/P-2799/retest", json=_body(carry=["hplcpurity_identity"], retest=["heavy_metals"]))
+    assert r.status_code == 400 and "hplcpurity_identity" in r.text
+    post.assert_not_called()
+
+
+def test_retest_502_when_is_fails(client, db_session):
+    _seed(db_session)
+    bad = MagicMock(status_code=500, text="boom")
+    with patch.dict(os.environ, {"INTEGRATION_SERVICE_URL": "http://is", "ACCU_MK1_API_KEY": "k"}), \
+            patch("lims_analyses.retest_routes.requests.post", return_value=bad):
+        r = client.post("/api/samples/P-2799/retest", json=_body())
+    assert r.status_code == 502 and "500" in r.json()["detail"]
+
+
+def test_retest_unknown_sample_404(client, db_session):
+    assert client.post("/api/samples/P-0000/retest", json=_body()).status_code == 404
