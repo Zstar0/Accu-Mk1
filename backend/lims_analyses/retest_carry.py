@@ -269,16 +269,20 @@ def carry_results(db: Session, *, original: LimsSample, retest: LimsSample,
     """Mint one verified parent row on `retest` per live verified/published
     parent row on `original` for each profile in `profile_keys`, linked
     (contribution_kind='carried') to the original vial's analysis. Idempotent
-    per (retest, source). Does NOT commit."""
+    per (retest, original parent row). Does NOT commit."""
     from models import LimsAnalysisPromotion, LimsAnalysisTransition, LimsSubSample
 
     profiles = _profiles_by_key(db, profile_keys)
-    already = set(db.execute(
-        select(LimsAnalysisPromotion.source_analysis_id)
-        .join(LimsAnalysis, LimsAnalysis.id == LimsAnalysisPromotion.parent_analysis_id)
+    # Dedupe on the ORIGINAL parent row (M6): two original rows may share
+    # one source link. The id rides on the mint transition's details.
+    already = {d.get("carried_from_parent") for d in db.execute(
+        select(LimsAnalysisTransition.details)
+        .join(LimsAnalysis, LimsAnalysis.id == LimsAnalysisTransition.analysis_id)
+        .join(LimsAnalysisPromotion, LimsAnalysisPromotion.parent_analysis_id == LimsAnalysis.id)
         .where(LimsAnalysis.lims_sample_pk == retest.id,
-               LimsAnalysisPromotion.contribution_kind == CARRIED)
-    ).scalars().all())
+               LimsAnalysisPromotion.contribution_kind == CARRIED,
+               LimsAnalysisTransition.from_state.is_(None))
+    ).scalars().all() if d}
     now = datetime.utcnow()
     out: list[dict] = []
     for key in profile_keys:
@@ -294,7 +298,7 @@ def carry_results(db: Session, *, original: LimsSample, retest: LimsSample,
                                    user_id=user_id, now=now)
         for src_parent in live_rows:
             source = _ultimate_source(db, src_parent)
-            if source.id in already:
+            if src_parent.id in already:
                 continue
             row = LimsAnalysis(
                 lims_sample_pk=retest.id, lims_sub_sample_pk=None,
@@ -320,9 +324,10 @@ def carry_results(db: Session, *, original: LimsSample, retest: LimsSample,
                 analysis_id=row.id, from_state=None, to_state="verified",
                 transition_kind="auto", user_id=user_id,
                 reason=f"carried from {original.sample_id}",
-                details={"changed": {}, "carried_from": source.id},
+                details={"changed": {}, "carried_from": source.id,
+                         "carried_from_parent": src_parent.id},
             ))
-            already.add(source.id)
+            already.add(src_parent.id)
             vial_id = None
             if source.lims_sub_sample_pk is not None:
                 sub = db.get(LimsSubSample, source.lims_sub_sample_pk)
@@ -346,6 +351,16 @@ def _event(db: Session, sample: LimsSample, event: str, details: dict,
     from models import LimsSubSampleEvent
     db.add(LimsSubSampleEvent(lims_sample_pk=sample.id, event=event, details=details,
                               user_id=user_id))
+
+
+def _has_warning(db: Session, sample: LimsSample, reason: str, message: str) -> bool:
+    from models import LimsSubSampleEvent
+    for d in db.execute(select(LimsSubSampleEvent.details).where(
+            LimsSubSampleEvent.lims_sample_pk == sample.id,
+            LimsSubSampleEvent.event == "retest_spec_warning")).scalars():
+        if (d or {}).get("reason") == reason and (d or {}).get("message") == message:
+            return True
+    return False
 
 
 def _demand_services(spec: RetestSpec, services: dict) -> dict:
@@ -403,8 +418,9 @@ def apply_retest_spec(db: Session, *, parent: LimsSample, raw_spec: dict,
         logger.warning("retest_spec.ignored sample_id=%s reason=%s msg=%s",
                        parent.sample_id, reason, message)
         seed_parent_from_services(db, parent=parent, services=services, package=package, source=source)
-        _event(db, parent, "retest_spec_warning",
-               {"reason": reason, "message": message, "spec": raw_spec})
+        if not _has_warning(db, parent, reason, message):   # re-pushes stay quiet (M1)
+            _event(db, parent, "retest_spec_warning",
+                   {"reason": reason, "message": message, "spec": raw_spec})
         return {"applied": False, "carried": 0, "missing": [], "demand_keys": []}
 
     try:

@@ -189,3 +189,18 @@ def test_never_seeded_member_does_not_block_the_carry(db):
     hm.analysis_services.append(extra)
     db.commit()
     assert carry_eligible_profile_keys(db, original) == {"heavy_metals"}
+
+
+def test_two_original_rows_sharing_one_source_both_carry_once(db):
+    # M6: dedupe keys on the ORIGINAL parent row, not the shared source.
+    original, retest, parents, _ = _world(db)
+    arsenic_link, lead_link = db.execute(select(LimsAnalysisPromotion).order_by(
+        LimsAnalysisPromotion.id)).scalars().all()
+    lead_link.source_analysis_id = arsenic_link.source_analysis_id
+    db.commit()
+    out = carry_results(db, original=original, retest=retest, profile_keys=["heavy_metals"], user_id=None)
+    db.commit()
+    assert sorted(o["keyword"] for o in out) == ["ARSENIC-PPM", "LEAD-PPM"]
+    again = carry_results(db, original=original, retest=retest, profile_keys=["heavy_metals"], user_id=None)
+    db.commit()
+    assert again == [] and len(_carried_rows(db, retest)) == 2

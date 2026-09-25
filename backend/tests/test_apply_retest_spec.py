@@ -238,3 +238,15 @@ def test_registration_seed_first_is_corrected_on_the_first_pass(db):
     [hm] = db.execute(select(LimsAnalysis).where(
         LimsAnalysis.lims_sample_pk == retest.id, LimsAnalysis.provenance == "canonical")).scalars().all()
     assert hm.keyword == "ARSENIC-PPM" and hm.review_state == "verified"
+
+
+def test_fallback_warning_is_written_once_across_re_pushes(db):
+    # M1: every order-upsert re-push re-runs the fallback; one warning only.
+    cat = _catalog(db)
+    _original(db, cat)
+    retest = _retest(db)
+    for _ in range(3):
+        apply_retest_spec(db, parent=retest, raw_spec=_spec(fee="gratis"), services=SERVICES,
+                          package=None, source="test")
+        db.commit()
+    assert len(_events(db, retest, "retest_spec_warning")) == 1

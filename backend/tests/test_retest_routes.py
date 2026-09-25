@@ -124,6 +124,12 @@ def test_retest_forwards_a_stamped_spec_to_is(client, db_session):
     assert spec["requested_at"].endswith("Z") and spec["carry"] == ["heavy_metals"]
     assert post.call_args.args[0] == "http://is/api/service/retest-orders"
     assert post.call_args.kwargs["headers"]["X-API-Key"] == "k"
+    # M7: idempotency key over the spec minus requested_at.
+    import hashlib
+    import json as _json
+    body = {k: v for k, v in spec.items() if k != "requested_at"}
+    digest = hashlib.sha256(_json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    assert post.call_args.kwargs["headers"]["Idempotency-Key"] == f"retest:P-2799:{digest[:16]}"
 
 
 def test_retest_rejects_a_bad_spec_before_calling_is(client, db_session):
@@ -140,7 +146,15 @@ def test_retest_502_when_is_fails(client, db_session):
     with patch.dict(os.environ, {"INTEGRATION_SERVICE_URL": "http://is", "ACCU_MK1_API_KEY": "k"}), \
             patch("lims_analyses.retest_routes.requests.post", return_value=bad):
         r = client.post("/api/samples/P-2799/retest", json=_body())
-    assert r.status_code == 502 and "500" in r.json()["detail"]
+    assert r.status_code == 502 and r.json()["detail"] == "Integration Service returned 500"
+
+
+def test_retest_502_unreachable_detail_is_short(client, db_session):
+    # M8: transport errors are logged, not echoed to the client.
+    _seed(db_session)
+    with patch.dict(os.environ, {"INTEGRATION_SERVICE_URL": "http://is", "ACCU_MK1_API_KEY": "k"}),             patch("lims_analyses.retest_routes.requests.post", side_effect=OSError("secret-host:5432 refused")):
+        r = client.post("/api/samples/P-2799/retest", json=_body())
+    assert r.status_code == 502 and r.json()["detail"] == "Integration Service unreachable"
 
 
 def test_retest_unknown_sample_404(client, db_session):

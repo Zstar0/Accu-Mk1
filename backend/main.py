@@ -924,8 +924,10 @@ async def get_sample_retest_info(
 
     Mk1-native retests (Task 4/5) carry lineage on the row itself
     (retest_of_sample_id, catalog_snapshot["retest"]); checked first.
-    The Integration DB is only queried when Mk1 has no lineage at all,
-    to serve retests that were still made through WP/SENAITE.
+    The Integration DB is still queried so legacy WP/SENAITE retests are not
+    lost: with Mk1 lineage present it only adds `retested_as` entries Mk1 did
+    not list and fills is_retest/source_* when Mk1 had none (source stays
+    "mk1"); an IS failure never costs the Mk1 answer.
     """
     from psycopg2.extras import RealDictCursor
 
@@ -966,7 +968,9 @@ async def get_sample_retest_info(
                 "carry": fr.get("carry") or [],
                 "add": (fr.get("add") or {}).get("profiles") or [],
             })
-        return result
+
+    legacy = {"is_retest": False, "source_sample_id": None, "source_order_id": None,
+              "this_order_id": None, "retest_created_at": None, "retested_as": []}
 
     try:
         with get_integration_db() as int_conn:
@@ -988,14 +992,14 @@ async def get_sample_retest_info(
                     """,
                     [sample_id],
                 )
-                row = cur.fetchone()
-                if row:
-                    result["is_retest"] = True
-                    result["source_sample_id"] = row["source_sample_id"]
-                    result["source_order_id"] = row["retest_of_order_id"]
-                    result["this_order_id"] = int(row["order_id"]) if row["order_id"] else None
-                    result["retest_created_at"] = (
-                        row["created_at"].isoformat() if row["created_at"] else None
+                is_row = cur.fetchone()
+                if is_row:
+                    legacy["is_retest"] = True
+                    legacy["source_sample_id"] = is_row["source_sample_id"]
+                    legacy["source_order_id"] = is_row["retest_of_order_id"]
+                    legacy["this_order_id"] = int(is_row["order_id"]) if is_row["order_id"] else None
+                    legacy["retest_created_at"] = (
+                        is_row["created_at"].isoformat() if is_row["created_at"] else None
                     )
 
                 # Forward-chain: samples that retest THIS one
@@ -1015,7 +1019,7 @@ async def get_sample_retest_info(
                     [sample_id],
                 )
                 for r in cur.fetchall():
-                    result["retested_as"].append({
+                    legacy["retested_as"].append({
                         "sample_id": r["new_sample_id"],
                         "order_id": int(r["order_id"]) if r["order_id"] else None,
                         "created_at": r["created_at"].isoformat() if r["created_at"] else None,
@@ -1024,6 +1028,15 @@ async def get_sample_retest_info(
         # Integration DB unavailable — return the empty shell so callers can render gracefully
         pass
 
+    if result["source"] != "mk1":
+        result.update(legacy)
+        return result
+    listed = {e["sample_id"] for e in result["retested_as"]}
+    result["retested_as"] += [e for e in legacy["retested_as"] if e["sample_id"] not in listed]
+    if not result["is_retest"] and legacy["is_retest"]:
+        for k in ("is_retest", "source_sample_id", "source_order_id", "this_order_id",
+                  "retest_created_at"):
+            result[k] = legacy[k]
     return result
 
 
@@ -25705,7 +25718,7 @@ def s2s_upsert_orders(
             try:
                 stats = _seed(sample, s, "order_upsert")
                 db.commit()
-                placeholders_created += stats.get("created", stats.get("carried", 0))
+                placeholders_created += stats.get("created", 0)
             except IntegrityError as race_err:
                 # This seed and the registration-signal seed (own session,
                 # _seed_native_placeholders_at_registration_bg) run concurrently
@@ -25726,11 +25739,11 @@ def s2s_upsert_orders(
                         sample_id=s.senaite_sample_id).first()
                     stats = _seed(sample, s, "order_upsert_retry")
                     db.commit()
-                    placeholders_created += stats.get("created", stats.get("carried", 0))
+                    placeholders_created += stats.get("created", 0)
                     logger.info(
                         "registry.order_upsert_seed_already_present sample_id=%s "
                         "created=%s existing=%s reason=race_lost_to_registration_seed",
-                        s.senaite_sample_id, stats.get("created", stats.get("carried", 0)),
+                        s.senaite_sample_id, stats.get("created", 0),
                         stats.get("existing", 0))
                 except Exception as retry_err:  # noqa: BLE001
                     db.rollback()

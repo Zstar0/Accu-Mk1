@@ -5,6 +5,8 @@ POST /api/samples/{id}/retest          validate + forward to IS (Task 9)
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -148,13 +150,25 @@ def create_retest(sample_id: str, req: RetestRequest, db: Session = Depends(get_
     base, key = _is_base_and_key()
     if not base or not key:
         raise HTTPException(status_code=502, detail="Integration Service not configured")
+    headers = {"X-API-Key": key, "Idempotency-Key": _idempotency_key(sample.sample_id, spec)}
     try:
         resp = requests.post(f"{base}/api/service/retest-orders",
                              json={"sample_id": sample.sample_id, "retest_spec": spec.as_dict()},
-                             headers={"X-API-Key": key}, timeout=30)
+                             headers=headers, timeout=30)
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"Integration Service unreachable: {e}")
+        logger.warning("retest.is_unreachable sample_id=%s err=%s", sample.sample_id, e)
+        raise HTTPException(status_code=502, detail="Integration Service unreachable")
     if resp.status_code < 200 or resp.status_code >= 300:
+        logger.warning("retest.is_error sample_id=%s status=%s body=%s",
+                       sample.sample_id, resp.status_code, (resp.text or "")[:500])
         raise HTTPException(status_code=502,
-                            detail=f"Integration Service {resp.status_code}: {(resp.text or '')[:300]}")
+                            detail=f"Integration Service returned {resp.status_code}")
     return resp.json()
+
+
+def _idempotency_key(sample_id: str, spec) -> str:
+    """Same spec (requested_at aside) -> same key, so a double-click cannot
+    mint two WP orders once IS honours the header."""
+    body = {k: v for k, v in spec.as_dict().items() if k != "requested_at"}
+    digest = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode())
+    return f"retest:{sample_id}:{digest.hexdigest()[:16]}"

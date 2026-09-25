@@ -366,3 +366,17 @@ def test_retest_spec_retry_branch_uses_order_upsert_retry_source(client, db_sess
     assert ap.call_args_list[0].kwargs["source"] == "order_upsert"
     assert ap.call_args_list[1].kwargs["source"] == "order_upsert_retry"
     plain.assert_not_called()
+
+
+def test_carried_rows_do_not_count_as_placeholders_created(client, db_session):
+    # M2: the retest path contributes 0; only the plain seed's `created` counts.
+    db_session.add(LimsSample(sample_id="P-8004", external_lims_system="mk1", status="sample_due"))
+    db_session.commit()
+    body = _order_with_services(sample_id="P-8004", services={"hplcpurity_identity": True})
+    body["orders"][0]["samples"][0]["retest_spec"] = {"retest_of_sample_id": "P-2799"}
+    with patch.dict(os.environ, {"ACCUMK1_INTERNAL_SERVICE_TOKEN": SVC_TOKEN}), \
+            patch("main.apply_retest_spec", return_value={"applied": True, "carried": 3,
+                                                          "missing": [], "demand_keys": []}):
+        r = client.post(URL, json=body, headers=HDR)
+    assert r.status_code == 200, r.text
+    assert r.json()["placeholders_created"] == 0
