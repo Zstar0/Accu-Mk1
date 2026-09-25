@@ -258,3 +258,22 @@ def test_fallback_warning_is_written_once_across_re_pushes(db):
                           package=None, source="test")
         db.commit()
     assert len(_events(db, retest, "retest_spec_warning")) == 1
+
+
+def test_registration_seed_after_apply_is_restricted_to_demand(db):
+    """Round-2 ruling: the registration fallback firing AFTER the order upsert
+    must not re-mint the carried profile's placeholder or touch the snapshot."""
+    from lims_analyses.order_seed import seed_parent_from_services
+    cat = _catalog(db)
+    _original(db, cat)
+    retest = _retest(db)
+    apply_retest_spec(db, parent=retest, raw_spec=_spec(), services=SERVICES, package=None, source="test")
+    db.commit()
+    profiles_before = [p["key"] for p in retest.catalog_snapshot["profiles"]]
+    seed_parent_from_services(db, parent=retest, services={**SERVICES, "heavy_metals": {"carry": True}},
+                              package=None, source="registration_signal")
+    db.commit()
+    db.refresh(retest)
+    assert "ARSENIC-PPM" not in _live_ordered_keywords(db, retest)
+    assert _live_ordered_keywords(db, retest) == ["ENDOTOXIN-USP85LAL", "HPLC-PURITY"]
+    assert [p["key"] for p in retest.catalog_snapshot["profiles"]] == profiles_before
