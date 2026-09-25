@@ -1597,9 +1597,12 @@ async def get_sample_activity(
                 })
 
             # Section A2: lims_analysis_promotions (vial side — source_analysis_id)
+            from lims_analyses.service import own_promotion_clause
             promotions = db.execute(
                 select(LimsAnalysisPromotion).where(
-                    LimsAnalysisPromotion.source_analysis_id.in_(analysis_ids)
+                    LimsAnalysisPromotion.source_analysis_id.in_(analysis_ids),
+                    # A carried link belongs to the retest sample's feed.
+                    own_promotion_clause(),
                 )
             ).scalars().all()
             for p in promotions:

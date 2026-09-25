@@ -66,3 +66,70 @@ def test_parent_hosted_source_reports_parent_only(db):
     [source] = info.sources
     assert source.sample_id is None
     assert source.parent_sample_id == "P-2700"
+
+
+# C1 (final review): source-side readers must ignore 'carried' links. A carried
+# link's source is the ORIGINAL vial's analysis, so anything that walks
+# source -> parent from the original must land on the original's own parent row.
+
+def _carried_world(db):
+    original = LimsSample(sample_id="P-2801", external_lims_system="mk1")
+    retest = LimsSample(sample_id="P-3021", external_lims_system="mk1", retest_of_sample_id="P-2801")
+    svc = AnalysisService(title="Arsenic", keyword="ARSENIC-PPM", origin="mk1")
+    db.add_all([original, retest, svc])
+    db.flush()
+    vial = LimsSubSample(parent_sample_pk=original.id, external_lims_uid="P-2801-S02-uid",
+                         sample_id="P-2801-S02", vial_sequence=2)
+    db.add(vial)
+    db.flush()
+    src = LimsAnalysis(lims_sub_sample_pk=vial.id, analysis_service_id=svc.id, keyword="ARSENIC-PPM",
+                       title="Arsenic", review_state="promoted", result_value="9.077")
+    own = LimsAnalysis(lims_sample_pk=original.id, analysis_service_id=svc.id, keyword="ARSENIC-PPM",
+                       title="Arsenic", provenance="canonical", review_state="verified",
+                       result_value="9.077")
+    db.add_all([src, own])
+    db.flush()
+    db.add(LimsAnalysisPromotion(parent_analysis_id=own.id, source_analysis_id=src.id,
+                                 contribution_kind="chosen"))
+    db.flush()
+    carried = LimsAnalysis(lims_sample_pk=retest.id, analysis_service_id=svc.id, keyword="ARSENIC-PPM",
+                           title="Arsenic", provenance="canonical", review_state="verified",
+                           result_value="9.077")
+    db.add(carried)
+    db.flush()
+    # The carried link is the NEWEST link on the source (highest id).
+    db.add(LimsAnalysisPromotion(parent_analysis_id=carried.id, source_analysis_id=src.id,
+                                 contribution_kind="carried"))
+    db.commit()
+    return original, retest, src, own, carried
+
+
+def test_source_retest_on_original_retracts_own_parent_not_the_carried_row(db):
+    from lims_analyses.service import vial_source_retest
+    _, _, src, own, carried = _carried_world(db)
+    vial_source_retest(db, analysis_id=src.id, user_id=None)
+    db.commit()
+    db.refresh(own)
+    db.refresh(carried)
+    assert own.review_state == "retracted" and own.result_value is None
+    assert carried.review_state == "verified" and carried.result_value == "9.077"
+
+
+def test_removal_tier_with_a_carried_link_does_not_raise(db):
+    from lims_analyses.service import classify_removal_impact
+    _, _, src, _, _ = _carried_world(db)
+    impact = classify_removal_impact(db, parent_sample_id="P-2801", keyword="ARSENIC-PPM")
+    assert [e["analysis_id"] for e in impact["blocked"]] == [src.id]
+
+
+def test_force_retract_on_original_leaves_the_carried_row_and_link(db):
+    from lims_analyses.service import force_retract_analysis
+    _, _, src, own, carried = _carried_world(db)
+    force_retract_analysis(db, analysis_id=src.id, user_id=None)
+    db.commit()
+    db.refresh(own)
+    db.refresh(carried)
+    assert own.review_state == "retracted"
+    assert carried.review_state == "verified"
+    kinds = [p.contribution_kind for p in db.query(LimsAnalysisPromotion).all()]
+    assert kinds == ["carried"]
