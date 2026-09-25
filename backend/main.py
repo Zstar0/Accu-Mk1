@@ -921,7 +921,7 @@ async def get_sample_retest_info(
           "integration_db" when we fell back to the legacy IS query
 
     Mk1-native retests (Task 4/5) carry lineage on the row itself
-    (retest_of_sample_id, catalog_snapshot["retest"]) — checked first.
+    (retest_of_sample_id, catalog_snapshot["retest"]); checked first.
     The Integration DB is only queried when Mk1 has no lineage at all,
     to serve retests that were still made through WP/SENAITE.
     """
