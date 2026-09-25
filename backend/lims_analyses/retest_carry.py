@@ -274,3 +274,92 @@ def carry_results(db: Session, *, original: LimsSample, retest: LimsSample,
             })
     db.flush()
     return out
+
+
+VARIANCE_KEY = "samplevariance"
+
+
+def _event(db: Session, sample: LimsSample, event: str, details: dict,
+           user_id: Optional[int] = None) -> None:
+    from models import LimsSubSampleEvent
+    db.add(LimsSubSampleEvent(lims_sample_pk=sample.id, event=event, details=details,
+                              user_id=user_id))
+
+
+def _demand_services(spec: RetestSpec, services: dict) -> dict:
+    keys = set(spec.demand_keys)
+    demand = {k: v for k, v in (services or {}).items() if k in keys}
+    for k in spec.demand_keys:
+        demand.setdefault(k, True)      # an added profile may be absent from the WP dict
+    if spec.variance_points > 0:
+        demand[VARIANCE_KEY] = (services or {}).get(VARIANCE_KEY) or {
+            "varianceMap": {HPLC_PROFILE_KEY: spec.variance_points}}
+    return demand
+
+
+def apply_retest_spec(db: Session, *, parent: LimsSample, raw_spec: dict,
+                      services: Optional[dict], package, source: str) -> dict:
+    """Retest-aware sibling of seed_parent_from_services. Sets lineage, seeds
+    only the demand profiles (retest + add), stamps the `retest` snapshot
+    rider, carries the rest, writes the activity events. A bad spec or a
+    missing original degrades to the plain seed with a warning event: the
+    sample must never lose its placeholders over the spec. Does NOT commit."""
+    from lims_analyses.order_seed import seed_parent_from_services
+
+    def _fallback(reason: str, message: str) -> dict:
+        logger.warning("retest_spec.ignored sample_id=%s reason=%s msg=%s",
+                       parent.sample_id, reason, message)
+        seed_parent_from_services(db, parent=parent, services=services, package=package, source=source)
+        _event(db, parent, "retest_spec_warning",
+               {"reason": reason, "message": message, "spec": raw_spec})
+        return {"applied": False, "carried": 0, "missing": [], "demand_keys": []}
+
+    try:
+        spec = parse_retest_spec(raw_spec)
+    except BadRequestError as e:
+        return _fallback("invalid_spec", str(e))
+    original = db.execute(select(LimsSample).where(
+        LimsSample.sample_id == spec.retest_of_sample_id)).scalar_one_or_none()
+    if original is None:
+        return _fallback("original_missing", f"{spec.retest_of_sample_id} not in Mk1")
+    try:
+        missing = validate_retest_spec(db, original=original, spec=spec)
+    except BadRequestError as e:
+        return _fallback("invalid_spec", str(e))
+
+    first_time = "retest" not in (parent.catalog_snapshot or {})
+    user_id = spec.requested_by_user_id
+
+    parent.is_retest = True
+    parent.retest_of_sample_id = original.sample_id
+    seed_parent_from_services(db, parent=parent, services=_demand_services(spec, services or {}),
+                              package=package, source=source)
+    snap = dict(parent.catalog_snapshot or {})
+    snap["retest"] = {**spec.as_dict(), "missing": missing}
+    parent.catalog_snapshot = snap
+
+    carry_keys = [k for k in spec.carry if k not in missing]
+    carried = carry_results(db, original=original, retest=parent, profile_keys=carry_keys,
+                            user_id=user_id)
+    for c in carried:
+        _event(db, parent, "analysis_carried",
+               {**c, "verified_at": c["verified_at"].isoformat() if c["verified_at"] else None},
+               user_id)
+
+    if first_time:
+        _event(db, parent, "retest_created", {
+            "original": original.sample_id, "fee": spec.fee, "auto_checkin": spec.auto_checkin,
+            "reason": spec.reason, "requested_by_user_id": user_id,
+            "retest": list(spec.retest), "carry": carry_keys, "add": list(spec.add_profiles),
+            "variance_points": spec.variance_points, "additional_vials": spec.additional_vials,
+        }, user_id)
+        _event(db, original, "retested_as", {
+            "sample_id": parent.sample_id, "retest": list(spec.retest),
+            "carry": carry_keys, "add": list(spec.add_profiles),
+        }, user_id)
+        if missing:
+            _event(db, parent, "retest_spec_warning",
+                   {"reason": "profiles_missing_on_original", "missing": missing}, user_id)
+    db.flush()
+    return {"applied": True, "carried": len(carried), "missing": missing,
+            "demand_keys": list(spec.demand_keys)}
