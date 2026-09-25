@@ -25600,13 +25600,13 @@ def s2s_upsert_orders(
     # never roll back the order stamps and one bad sample never blocks its
     # siblings (idempotent: re-pushes report 0 created). Stamps without
     # services (old IS) skip this phase entirely.
-    def _seed(sample, s):
+    def _seed(sample, s, source):
         if s.retest_spec:
             return apply_retest_spec(db, parent=sample, raw_spec=s.retest_spec,
                                      services=s.services, package=s.package,
-                                     source="order_upsert")
+                                     source=source)
         return seed_parent_from_services(db, parent=sample, services=s.services,
-                                         package=s.package, source="order_upsert")
+                                         package=s.package, source=source)
 
     placeholders_created = 0
     for o in req.orders:
@@ -25617,7 +25617,7 @@ def s2s_upsert_orders(
             if sample is None:
                 continue
             try:
-                stats = _seed(sample, s)
+                stats = _seed(sample, s, "order_upsert")
                 db.commit()
                 placeholders_created += stats.get("created", stats.get("carried", 0))
             except IntegrityError as race_err:
@@ -25638,7 +25638,7 @@ def s2s_upsert_orders(
                 try:
                     sample = db.query(LimsSample).filter_by(
                         sample_id=s.senaite_sample_id).first()
-                    stats = _seed(sample, s)
+                    stats = _seed(sample, s, "order_upsert_retry")
                     db.commit()
                     placeholders_created += stats.get("created", stats.get("carried", 0))
                     logger.info(
