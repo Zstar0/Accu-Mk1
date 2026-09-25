@@ -2457,6 +2457,30 @@ def parent_retest(
                 f"{active.review_state!r}"
             ),
         )
+    # Native retest (round-2 ruling): a CARRIED row's result belongs to the
+    # original sample; re-running it means a new retest with the service in
+    # the retest set, never a cascade into the original's vials.
+    from models import LimsAnalysisPromotion
+    carried_link = db.execute(select(LimsAnalysisPromotion).where(
+        LimsAnalysisPromotion.parent_analysis_id == active.id,
+        LimsAnalysisPromotion.contribution_kind == "carried",
+    )).scalars().first()
+    if carried_link is not None:
+        src = db.get(LimsAnalysis, carried_link.source_analysis_id)
+        origin_pk = None
+        if src is not None:
+            origin_pk = src.lims_sample_pk
+            if origin_pk is None and src.lims_sub_sample_pk is not None:
+                from models import LimsSubSample
+                sub = db.get(LimsSubSample, src.lims_sub_sample_pk)
+                origin_pk = sub.parent_sample_pk if sub else None
+        origin = db.get(LimsSample, origin_pk) if origin_pk is not None else None
+        origin_id = origin.sample_id if origin else (parent.retest_of_sample_id or "the original")
+        raise InvalidTransitionError(
+            active.review_state, "retest",
+            message=(f"{active.keyword} is a carried result from {origin_id}; to re-run it, "
+                     "create a retest with this service in the retest set"),
+        )
     # Figure AT THE CALL: the un-promote below clears it on a verified row.
     value_at_retest, unit_at_retest = active.result_value, active.result_unit
     # State AT THE CALL, before the cascade's un-promote can flip a

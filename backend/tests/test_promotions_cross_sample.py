@@ -3,6 +3,7 @@ retest) must name that sample, not render as an anonymous source."""
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from database import Base
 from lims_analyses.service import list_promotions_for_parent
@@ -17,7 +18,9 @@ from models import (
 
 @pytest.fixture
 def db():
-    engine = create_engine("sqlite:///:memory:")
+    # StaticPool + any thread: the route test drives this session via TestClient.
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False},
+                           poolclass=StaticPool)
     Base.metadata.create_all(engine)
     s = sessionmaker(bind=engine)()
     try:
@@ -141,19 +144,40 @@ def test_force_retract_on_original_leaves_the_carried_row_and_link(db):
     assert kinds == ["carried"]
 
 
-def test_parent_retest_of_a_carried_row_never_retests_the_original_vial(db):
-    """Parent-side mirror of C1: retesting the carried row on the RETEST
-    sample must not follow the carried link down into the original's vial."""
-    from lims_analyses.service import parent_retest
+def test_parent_retest_of_a_carried_row_is_refused(db):
+    """Parent-side mirror of C1 (round-2 ruling): retesting a carried row on
+    the RETEST sample is refused outright. Nothing moves on either sample
+    and no retest event is written."""
+    from lims_analyses.service import InvalidTransitionError, parent_retest
+    from models import LimsSubSampleEvent
     _, _, src, own, carried = _carried_world(db)
-    parent_retest(db, sample_id="P-3021", keyword="ARSENIC-PPM", user_id=None)
-    db.commit()
-    db.refresh(src)
-    db.refresh(own)
-    assert src.retested is False
-    assert own.review_state == "verified"
+    with pytest.raises(InvalidTransitionError) as exc:
+        parent_retest(db, sample_id="P-3021", keyword="ARSENIC-PPM", user_id=None)
+    assert "carried result from P-2801" in str(exc.value)
+    db.rollback()
+    for r in (src, own, carried):
+        db.refresh(r)
+    assert src.retested is False and own.review_state == "verified"
+    assert carried.review_state == "verified" and carried.result_value == "9.077"
     assert db.query(LimsAnalysis).filter(LimsAnalysis.retest_of_id == src.id).count() == 0
-    # Pending ruling: with the cascade filtered this is a no-op on the retest's
-    # carried row (it stays verified; parent_retest returns ([], 'verified')).
-    db.refresh(carried)
-    assert carried.review_state == "verified"
+    assert db.query(LimsSubSampleEvent).filter(
+        LimsSubSampleEvent.event == "parent_analysis_retested").count() == 0
+
+
+def test_parent_retest_route_on_a_carried_row_is_409(db):
+    from fastapi.testclient import TestClient
+
+    import auth
+    from database import get_db
+    from main import app
+    _carried_world(db)
+    app.dependency_overrides[get_db] = lambda: (yield db)
+    app.dependency_overrides[auth.get_current_user] = lambda: type("U", (), {"id": None})()
+    try:
+        r = TestClient(app).post("/api/lims-analyses/parent/P-3021/retest",
+                                 json={"keyword": "ARSENIC-PPM"})
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(auth.get_current_user, None)
+    assert r.status_code == 409, r.text
+    assert "carried result from P-2801" in r.text
