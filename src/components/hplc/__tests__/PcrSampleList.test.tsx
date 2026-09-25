@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import type { WorksheetListItem, WorksheetUser } from '@/lib/api'
+import type { PcrSort } from '@/lib/pcr-plate'
 import { buildPcrRunDoc } from '@/lib/pcr-worksheet'
 import { PcrSampleList } from '@/components/hplc/PcrSampleList'
 
@@ -69,7 +70,9 @@ const users: WorksheetUser[] = [
 function renderList(
   items: Item[],
   isCompleted = false,
-  onUpdateItem = vi.fn()
+  onUpdateItem = vi.fn(),
+  sort: PcrSort = { key: 'order', dir: 'asc' },
+  onSort: ((next: PcrSort) => void) | undefined = vi.fn()
 ) {
   const ws: WorksheetListItem = {
     id: 29,
@@ -100,6 +103,8 @@ function renderList(
       slaLoading={false}
       slaError={false}
       isCompleted={isCompleted}
+      sort={sort}
+      onSort={isCompleted ? undefined : onSort}
       onRemove={vi.fn()}
       onUpdateItem={onUpdateItem}
     />
@@ -146,5 +151,40 @@ describe('PcrSampleList per-row ticks', () => {
     expect(made).toBeDisabled()
     fireEvent.click(made)
     expect(onUpdateItem).not.toHaveBeenCalled()
+  })
+})
+
+// Sortable columns (Handler, 2026-09-24): a header click hands the next sort
+// up to be saved on the worksheet, which re-deals the plate.
+describe('PcrSampleList column sort', () => {
+  const header = (name: RegExp) => screen.getByRole('button', { name })
+
+  it('a new column sorts ascending, the sorted one flips, # returns to worksheet order', () => {
+    const onSort = vi.fn()
+    renderList([item(1)], false, vi.fn(), { key: 'due', dir: 'asc' }, onSort)
+    fireEvent.click(header(/^Priority/))
+    expect(onSort).toHaveBeenLastCalledWith({ key: 'priority', dir: 'asc' })
+    fireEvent.click(header(/^Due/))
+    expect(onSort).toHaveBeenLastCalledWith({ key: 'due', dir: 'desc' })
+    fireEvent.click(header(/^#/))
+    expect(onSort).toHaveBeenLastCalledWith({ key: 'listed', dir: 'asc' })
+  })
+
+  it('marks the sorted column for assistive tech', () => {
+    renderList([item(1)], false, vi.fn(), { key: 'sampleId', dir: 'desc' })
+    expect(header(/^Sample ID/).closest('th')).toHaveAttribute(
+      'aria-sort',
+      'descending'
+    )
+    expect(header(/^Order #/).closest('th')).toHaveAttribute(
+      'aria-sort',
+      'none'
+    )
+  })
+
+  it('offers no sort on a completed worksheet', () => {
+    renderList([item(1)], true)
+    expect(screen.queryByRole('button', { name: /^Order #/ })).toBeNull()
+    expect(screen.getByText('Order #')).toBeInTheDocument()
   })
 })
