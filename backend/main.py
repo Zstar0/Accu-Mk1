@@ -112,6 +112,7 @@ from sub_samples.lookup_models import (
     SenaiteRemark,
 )
 from lims_analyses.routes import router as lims_analyses_router
+from lims_analyses.retest_routes import router as retest_router
 from families.routes import router as families_router  # Phase 5b
 from boxes.routes import router as boxes_router
 from boxes.service import box_label_code
@@ -608,6 +609,7 @@ file_watcher = FileWatcher()
 # Register sub-samples router
 app.include_router(sub_samples_router)
 app.include_router(lims_analyses_router)
+app.include_router(retest_router)
 app.include_router(families_router)
 app.include_router(boxes_router)
 app.include_router(packaging_photos_router)
