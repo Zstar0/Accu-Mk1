@@ -167,6 +167,11 @@ def validate_retest_spec(db: Session, *, original: LimsSample, spec: RetestSpec)
         raise BadRequestError(
             f"retest_spec is for {spec.retest_of_sample_id!r}, not {original.sample_id!r}")
     have = set(snapshot_profile_keys(original))
+    demand = set(spec.retest) | set(spec.carry)
+    omitted = have - demand
+    if omitted:
+        raise BadRequestError(
+            f"every profile on {original.sample_id} must be retested or carried; missing: {sorted(omitted)}")
     clash = set(spec.add_profiles) & have
     if clash:
         raise BadRequestError(f"already on the original, cannot be added: {sorted(clash)}")

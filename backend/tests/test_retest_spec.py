@@ -142,3 +142,10 @@ def test_keys_missing_from_snapshot_are_returned_not_raised(db):
 def test_valid_spec_returns_no_missing(db):
     original = _original(db)
     assert validate_retest_spec(db, original=original, spec=parse_retest_spec(_raw())) == []
+
+
+def test_every_snapshot_profile_must_be_retested_or_carried(db):
+    original = _original(db)          # snapshot = hplcpurity_identity + heavy_metals
+    spec = parse_retest_spec(_raw(retest=["hplcpurity_identity"], carry=[]))
+    with pytest.raises(BadRequestError, match="heavy_metals"):
+        validate_retest_spec(db, original=original, spec=spec)
