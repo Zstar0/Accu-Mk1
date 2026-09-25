@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from auth import get_current_user
 from database import get_db
 from lims_analyses.retest_carry import (
-    HPLC_PROFILE_KEY,
+    HPLC_PROFILE_KEYS,
     carry_eligible_profile_keys,
     parse_retest_spec,
     snapshot_profile_keys,
@@ -117,7 +117,7 @@ def retest_options(sample_id: str, db: Session = Depends(get_db), _user=Depends(
         "order_number": sample.client_order_number,
         "profiles": out_profiles, "addons": addons,
         "variance": {"point_price": ((prices or {}).get("variance") or {}).get("point_price"),
-                     "allowed": HPLC_PROFILE_KEY in have},
+                     "allowed": bool(HPLC_PROFILE_KEYS & set(have))},
         "prices_available": prices is not None,
     }
 

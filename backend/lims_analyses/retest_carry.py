@@ -23,7 +23,8 @@ from models import AnalysisProfile, LimsAnalysis, LimsSample
 logger = logging.getLogger(__name__)
 
 CARRIED = "carried"
-HPLC_PROFILE_KEY = "hplcpurity_identity"
+# Legacy WP key and the native-born key (catalog.hplc_keys); both are stamped in snapshots.
+HPLC_PROFILE_KEYS = frozenset({"hplcpurity_identity", "hplc-purity-identity"})
 _CARRY_SOURCE_STATES = ("verified", "published")
 _FEES = ("paid", "free")
 
@@ -102,8 +103,8 @@ def parse_retest_spec(raw: dict) -> RetestSpec:
         raise BadRequestError("retest_spec must retest or add at least one service")
     if variance_points not in (0, *range(2, 11)):
         raise BadRequestError("retest_spec.add.variance_points must be 0 or 2..10")
-    if variance_points > 0 and HPLC_PROFILE_KEY not in retest:
-        raise BadRequestError("variance requires hplcpurity_identity in the retest set")
+    if variance_points > 0 and not HPLC_PROFILE_KEYS & set(retest):
+        raise BadRequestError("variance requires an HPLC purity/identity profile in the retest set")
     if additional_vials < 0 or additional_vials > 20:
         raise BadRequestError("retest_spec.add.additional_vials must be 0..20")
     if fee not in _FEES:
@@ -366,6 +367,11 @@ def _has_warning(db: Session, sample: LimsSample, reason: str, message: str) -> 
     return False
 
 
+def _hplc_key(spec: RetestSpec) -> str:
+    """Whichever HPLC profile key the spec retests (parse guarantees one when variance is set)."""
+    return next(k for k in spec.retest if k in HPLC_PROFILE_KEYS)
+
+
 def _demand_services(spec: RetestSpec, services: dict) -> dict:
     keys = set(spec.demand_keys)
     demand = {k: v for k, v in (services or {}).items() if k in keys}
@@ -373,7 +379,7 @@ def _demand_services(spec: RetestSpec, services: dict) -> dict:
         demand.setdefault(k, True)      # an added profile may be absent from the WP dict
     if spec.variance_points > 0:
         demand[VARIANCE_KEY] = (services or {}).get(VARIANCE_KEY) or {
-            "varianceMap": {HPLC_PROFILE_KEY: spec.variance_points}}
+            "varianceMap": {_hplc_key(spec): spec.variance_points}}
     return demand
 
 

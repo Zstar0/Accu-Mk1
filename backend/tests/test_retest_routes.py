@@ -38,8 +38,8 @@ def client(db_session):
     app.dependency_overrides.pop(auth.get_current_user, None)
 
 
-def _seed(db):
-    hplc = AnalysisProfile(key="hplcpurity_identity", name="HPLC", is_addon=False, active=True)
+def _seed(db, hplc_key="hplcpurity_identity"):
+    hplc = AnalysisProfile(key=hplc_key, name="HPLC", is_addon=False, active=True)
     hm = AnalysisProfile(key="heavy_metals", name="Heavy Metals", is_addon=True, active=True, vials_required=2)
     endo = AnalysisProfile(key="endotoxin-usp85-lal", name="Endotoxin", is_addon=True, active=True, vials_required=1)
     dead = AnalysisProfile(key="old-thing", name="Old", is_addon=True, active=False)
@@ -51,7 +51,7 @@ def _seed(db):
     hplc.analysis_services.append(pur)
     original = LimsSample(sample_id="P-2799", external_lims_system="mk1", status="published",
                           client_order_number="WP-7437",
-                          catalog_snapshot={"profiles": [{"key": "hplcpurity_identity", "profile_id": hplc.id, "service_ids": [pur.id]},
+                          catalog_snapshot={"profiles": [{"key": hplc_key, "profile_id": hplc.id, "service_ids": [pur.id]},
                                                          {"key": "heavy_metals", "profile_id": hm.id, "service_ids": [arsenic.id]}]})
     db.add(original)
     db.flush()
@@ -82,6 +82,14 @@ def test_options_lists_profiles_eligibility_addons_and_prices(client, db_session
     assert endo["key"] == "endotoxin-usp85-lal" and endo["price"] == 200.0 and endo["vials"] == 1
     assert body["variance"] == {"point_price": 76.5, "allowed": True}
     assert body["prices_available"] is True
+
+
+@pytest.mark.parametrize("hplc_key", ["hplcpurity_identity", "hplc-purity-identity"])
+def test_options_variance_allowed_for_either_hplc_key(client, db_session, hplc_key):
+    _seed(db_session, hplc_key=hplc_key)
+    with patch.dict(os.environ, {"INTEGRATION_SERVICE_URL": "", "ACCU_MK1_API_KEY": ""}):
+        body = client.get("/api/samples/P-2799/retest-options").json()
+    assert body["variance"]["allowed"] is True
 
 
 def test_options_without_is_still_renders(client, db_session):

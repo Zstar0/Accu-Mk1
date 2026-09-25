@@ -152,3 +152,12 @@ def test_every_snapshot_profile_must_be_retested_or_carried(db):
     spec = parse_retest_spec(_raw(retest=["hplcpurity_identity"], carry=[]))
     with pytest.raises(BadRequestError, match="heavy_metals"):
         validate_retest_spec(db, original=original, spec=spec)
+
+
+@pytest.mark.parametrize("hplc_key", ["hplcpurity_identity", "hplc-purity-identity"])
+def test_variance_accepts_either_hplc_profile_key(hplc_key):
+    # Round 3: legacy samples snapshot hplcpurity_identity, native-born ones
+    # (P-5000, PB-1000) hplc-purity-identity; either satisfies the variance rule.
+    spec = parse_retest_spec(_raw(retest=[hplc_key],
+                                  add={"profiles": [], "variance_points": 3, "additional_vials": 0}))
+    assert spec.variance_points == 3

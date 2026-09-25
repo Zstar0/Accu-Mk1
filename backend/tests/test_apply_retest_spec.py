@@ -277,3 +277,12 @@ def test_registration_seed_after_apply_is_restricted_to_demand(db):
     assert "ARSENIC-PPM" not in _live_ordered_keywords(db, retest)
     assert _live_ordered_keywords(db, retest) == ["ENDOTOXIN-USP85LAL", "HPLC-PURITY"]
     assert [p["key"] for p in retest.catalog_snapshot["profiles"]] == profiles_before
+
+
+def test_demand_services_keys_variance_map_by_the_native_hplc_key():
+    from lims_analyses.retest_carry import _demand_services, parse_retest_spec
+    spec = parse_retest_spec(_spec(retest=["hplc-purity-identity"], carry=[],
+                                   add={"profiles": [], "variance_points": 4, "additional_vials": 0}))
+    demand = _demand_services(spec, {"hplc-purity-identity": True, "heavy_metals": True})
+    assert demand == {"hplc-purity-identity": True,
+                      "samplevariance": {"varianceMap": {"hplc-purity-identity": 4}}}
