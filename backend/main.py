@@ -895,9 +895,18 @@ async def get_audit_logs(
     return result.scalars().all()
 
 
+def _wp_order_int(client_order_number: Optional[str]) -> Optional[int]:
+    """'WP-7920' -> 7920; anything else -> None."""
+    if not client_order_number:
+        return None
+    digits = str(client_order_number).rsplit("-", 1)[-1]
+    return int(digits) if digits.isdigit() else None
+
+
 @app.get("/samples/{sample_id}/retest-info")
 async def get_sample_retest_info(
     sample_id: str,
+    db: Session = Depends(get_db),
     _current_user=Depends(get_current_user),
 ):
     """
@@ -908,9 +917,13 @@ async def get_sample_retest_info(
       - source_sample_id, source_order_id, this_order_id, retest_created_at:
           populated when is_retest=True
       - retested_as: list of samples that retest THIS one (chain-forward)
+      - source: "mk1" when Mk1's own lineage columns answered the question,
+          "integration_db" when we fell back to the legacy IS query
 
-    Reads from the integration-service Postgres directly. Cheap — bounded
-    queries against indexed columns + JSONB lateral expansions.
+    Mk1-native retests (Task 4/5) carry lineage on the row itself
+    (retest_of_sample_id, catalog_snapshot["retest"]) — checked first.
+    The Integration DB is only queried when Mk1 has no lineage at all,
+    to serve retests that were still made through WP/SENAITE.
     """
     from psycopg2.extras import RealDictCursor
 
@@ -922,7 +935,36 @@ async def get_sample_retest_info(
         "this_order_id": None,
         "retest_created_at": None,
         "retested_as": [],
+        "source": "integration_db",
     }
+
+    row = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)).scalar_one_or_none()
+    forward = db.execute(select(LimsSample).where(
+        LimsSample.retest_of_sample_id == sample_id).order_by(LimsSample.id)).scalars().all()
+    if row is not None and (row.retest_of_sample_id or forward):
+        result["source"] = "mk1"
+        rider = (row.catalog_snapshot or {}).get("retest") or {}
+        if row.retest_of_sample_id:
+            result["is_retest"] = True
+            result["source_sample_id"] = row.retest_of_sample_id
+            result["retest_created_at"] = rider.get("requested_at") or (
+                row.created_at.isoformat() if row.created_at else None)
+            result["this_order_id"] = _wp_order_int(row.client_order_number)
+            src = db.execute(select(LimsSample).where(
+                LimsSample.sample_id == row.retest_of_sample_id)).scalar_one_or_none()
+            result["source_order_id"] = _wp_order_int(src.client_order_number) if src else None
+        for f in forward:
+            fr = (f.catalog_snapshot or {}).get("retest") or {}
+            result["retested_as"].append({
+                "sample_id": f.sample_id,
+                "order_id": _wp_order_int(f.client_order_number),
+                "created_at": fr.get("requested_at") or (f.created_at.isoformat() if f.created_at else None),
+                "status": f.status,
+                "retest": fr.get("retest") or [],
+                "carry": fr.get("carry") or [],
+                "add": (fr.get("add") or {}).get("profiles") or [],
+            })
+        return result
 
     try:
         with get_integration_db() as int_conn:
