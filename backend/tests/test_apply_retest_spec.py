@@ -279,10 +279,27 @@ def test_registration_seed_after_apply_is_restricted_to_demand(db):
     assert [p["key"] for p in retest.catalog_snapshot["profiles"]] == profiles_before
 
 
-def test_demand_services_keys_variance_map_by_the_native_hplc_key():
+@pytest.mark.parametrize("hplc_key", ["hplcpurity_identity", "hplc-purity-identity"])
+def test_demand_services_emits_the_wp_variance_wire_shape(hplc_key):
+    # Round 5: the WP/IS wire is services["variance"] = {<hplc key>: points}
+    # plus services["samplevariance"] = True (prod PB-1000). No varianceMap.
     from lims_analyses.retest_carry import _demand_services, parse_retest_spec
-    spec = parse_retest_spec(_spec(retest=["hplc-purity-identity"], carry=[],
+    from sub_samples.service import normalize_variance_entitlement
+    spec = parse_retest_spec(_spec(retest=[hplc_key], carry=[],
                                    add={"profiles": [], "variance_points": 4, "additional_vials": 0}))
-    demand = _demand_services(spec, {"hplc-purity-identity": True, "heavy_metals": True})
-    assert demand == {"hplc-purity-identity": True,
-                      "samplevariance": {"varianceMap": {"hplc-purity-identity": 4}}}
+    demand = _demand_services(spec, {hplc_key: True, "heavy_metals": True})
+    assert demand == {hplc_key: True, "variance": {hplc_key: 4}, "samplevariance": True}
+    assert normalize_variance_entitlement(demand) == {hplc_key: 4}
+
+
+def test_late_seed_keeps_the_variance_keys_on_a_variance_retest(db):
+    # Round 5: _retest_demand_only must never strip variance/samplevariance.
+    from lims_analyses import order_seed
+    retest = _retest(db)
+    retest.catalog_snapshot = {"profiles": [], "retest": {
+        "retest": ["hplc-purity-identity"], "add": {"profiles": [], "variance_points": 3}}}
+    kept = order_seed._retest_demand_only(retest, {
+        "hplc-purity-identity": True, "heavy_metals": True,
+        "variance": {"hplc-purity-identity": 3}, "samplevariance": True})
+    assert kept == {"hplc-purity-identity": True, "variance": {"hplc-purity-identity": 3},
+                    "samplevariance": True}

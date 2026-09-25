@@ -347,7 +347,7 @@ def carry_results(db: Session, *, original: LimsSample, retest: LimsSample,
     return out
 
 
-VARIANCE_KEY = "samplevariance"
+VARIANCE_KEY = "samplevariance"      # WP buy-flag (bool); the counts ride services["variance"]
 
 
 def _event(db: Session, sample: LimsSample, event: str, details: dict,
@@ -378,8 +378,10 @@ def _demand_services(spec: RetestSpec, services: dict) -> dict:
     for k in spec.demand_keys:
         demand.setdefault(k, True)      # an added profile may be absent from the WP dict
     if spec.variance_points > 0:
-        demand[VARIANCE_KEY] = (services or {}).get(VARIANCE_KEY) or {
-            "varianceMap": {_hplc_key(spec): spec.variance_points}}
+        # The WP/IS wire shape normalize_variance_entitlement reads (prod
+        # PB-1000): {"variance": {<hplc key>: points}, "samplevariance": True}.
+        demand["variance"] = {_hplc_key(spec): spec.variance_points}
+        demand[VARIANCE_KEY] = True
     return demand
 
 

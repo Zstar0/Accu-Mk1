@@ -34,7 +34,7 @@ def _retest_demand_only(parent: LimsSample, services: Optional[dict]) -> Optiona
     add = rider.get("add") or {}
     keep = set(rider.get("retest") or []) | set(add.get("profiles") or [])
     if (add.get("variance_points") or 0) > 0:
-        keep.add("samplevariance")
+        keep |= {"variance", "samplevariance"}   # the variance wire keys
     return {k: v for k, v in services.items() if k in keep}
 
 
