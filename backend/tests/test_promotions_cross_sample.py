@@ -145,7 +145,7 @@ def test_parent_retest_of_a_carried_row_never_retests_the_original_vial(db):
     """Parent-side mirror of C1: retesting the carried row on the RETEST
     sample must not follow the carried link down into the original's vial."""
     from lims_analyses.service import parent_retest
-    _, _, src, own, _carried = _carried_world(db)
+    _, _, src, own, carried = _carried_world(db)
     parent_retest(db, sample_id="P-3021", keyword="ARSENIC-PPM", user_id=None)
     db.commit()
     db.refresh(src)
@@ -153,3 +153,7 @@ def test_parent_retest_of_a_carried_row_never_retests_the_original_vial(db):
     assert src.retested is False
     assert own.review_state == "verified"
     assert db.query(LimsAnalysis).filter(LimsAnalysis.retest_of_id == src.id).count() == 0
+    # Pending ruling: with the cascade filtered this is a no-op on the retest's
+    # carried row (it stays verified; parent_retest returns ([], 'verified')).
+    db.refresh(carried)
+    assert carried.review_state == "verified"
