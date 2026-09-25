@@ -6106,7 +6106,8 @@ export interface WorksheetListItem {
   printed_at?: string | null
   printed_by_user_id?: number | null
   print_count?: number
-  /** Per-bench run settings (PCR: overage, curve, plate_type, sort_by_order). */
+  /** Per-bench run settings (PCR: overage, curve, plate_type, sort_key,
+   *  sort_dir, and the older sort_by_order kept in step). */
   bench_config?: Record<string, unknown> | null
   /** PCR plate map: the highest well ever frozen per plate ({"1": 46}); a
    *  frozen well stays spent after its sample is removed. Server-owned. */
