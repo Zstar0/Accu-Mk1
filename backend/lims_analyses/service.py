@@ -2315,7 +2315,10 @@ def cascade_parent_retest_to_sources(
     # 3. Find all promotion sources for this parent analysis
     promo_rows = db.execute(
         select(LimsAnalysisPromotion).where(
-            LimsAnalysisPromotion.parent_analysis_id == parent_analysis.id
+            LimsAnalysisPromotion.parent_analysis_id == parent_analysis.id,
+            # A carried row's source is the ORIGINAL sample's vial: never
+            # retest another sample's work from here.
+            own_promotion_clause(),
         )
     ).scalars().all()
     if not promo_rows:
