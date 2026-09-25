@@ -201,3 +201,40 @@ def test_variance_add_seeds_the_variance_service_key(db):
     db.commit()
     assert out["applied"] is True
     assert retest.catalog_snapshot["retest"]["add"]["variance_points"] == 3
+
+
+def _live_ordered_keywords(db, sample):
+    return sorted(r.keyword for r in db.execute(select(LimsAnalysis).where(
+        LimsAnalysis.lims_sample_pk == sample.id, LimsAnalysis.provenance == PROVENANCE_ORDERED,
+        LimsAnalysis.review_state.notin_(("rejected", "retracted")))).scalars())
+
+
+def test_registration_seed_first_is_corrected_on_the_first_pass(db):
+    """C2: the registration fallback seeds the FULL services dict (carried HM
+    included) and stamps the snapshot before the order upsert runs
+    apply_retest_spec. The first pass must retire the carried placeholder and
+    rewrite snapshot.profiles to the demand set."""
+    from lims_analyses.order_seed import seed_parent_from_services
+    cat = _catalog(db)
+    _original(db, cat)
+    retest = _retest(db)
+    seed_parent_from_services(db, parent=retest, services={**SERVICES, "heavy_metals": {"carry": True}},
+                              package=None, source="registration_signal")
+    db.commit()
+    assert "ARSENIC-PPM" in _live_ordered_keywords(db, retest)
+    assert retest.catalog_snapshot.get("resolved_at")
+
+    apply_retest_spec(db, parent=retest, raw_spec=_spec(), services=SERVICES, package=None, source="test")
+    db.commit()
+    db.refresh(retest)
+    assert _live_ordered_keywords(db, retest) == ["ENDOTOXIN-USP85LAL", "HPLC-PURITY"]
+    assert [p["key"] for p in retest.catalog_snapshot["profiles"]] == ["hplcpurity_identity", "endotoxin-usp85-lal"]
+    assert retest.catalog_snapshot.get("resolved_at")          # other snapshot keys kept
+    assert retest.catalog_snapshot["retest"]["carry"] == ["heavy_metals"]
+    [rejected] = db.execute(select(LimsAnalysis).where(
+        LimsAnalysis.lims_sample_pk == retest.id, LimsAnalysis.provenance == PROVENANCE_ORDERED,
+        LimsAnalysis.keyword == "ARSENIC-PPM")).scalars().all()
+    assert rejected.review_state == "rejected"
+    [hm] = db.execute(select(LimsAnalysis).where(
+        LimsAnalysis.lims_sample_pk == retest.id, LimsAnalysis.provenance == "canonical")).scalars().all()
+    assert hm.keyword == "ARSENIC-PPM" and hm.review_state == "verified"

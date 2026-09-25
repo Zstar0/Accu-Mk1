@@ -297,6 +297,37 @@ def _demand_services(spec: RetestSpec, services: dict) -> dict:
     return demand
 
 
+def _demand_snapshot_profiles(db: Session, demand: dict, package, snap: dict) -> list:
+    from catalog.snapshot import compute_catalog_snapshot  # call time: patchable
+    try:
+        return compute_catalog_snapshot(db, demand, package)["profiles"]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("retest_spec.snapshot_failed err=%s", e)
+        return snap.get("profiles") or []
+
+
+def _retire_carried_placeholders(db: Session, *, parent: LimsSample, original: LimsSample,
+                                 carry_keys, demand_keys, user_id: Optional[int]) -> int:
+    """Soft-reject every live 'ordered' placeholder on the retest whose
+    service belongs to a carried profile and to no demand profile (the
+    Manage Analyses remove primitive). Returns the count."""
+    from lims_analyses.service import soft_reject_parent_placeholder
+    carried_ids = {s.id for p in _profiles_by_key(db, carry_keys).values() for s in p.analysis_services}
+    carried_ids -= {s.id for p in _profiles_by_key(db, demand_keys).values() for s in p.analysis_services}
+    if not carried_ids:
+        return 0
+    rows = db.execute(select(LimsAnalysis).where(
+        LimsAnalysis.lims_sample_pk == parent.id, LimsAnalysis.lims_sub_sample_pk.is_(None),
+        LimsAnalysis.provenance == "ordered",
+        LimsAnalysis.review_state.notin_(("rejected", "retracted")),
+        LimsAnalysis.analysis_service_id.in_(carried_ids),
+    )).scalars().all()
+    for row in rows:
+        soft_reject_parent_placeholder(db, row, reason=f"carried from {original.sample_id}",
+                                       user_id=user_id)
+    return len(rows)
+
+
 def apply_retest_spec(db: Session, *, parent: LimsSample, raw_spec: dict,
                       services: Optional[dict], package, source: str) -> dict:
     """Retest-aware sibling of seed_parent_from_services. Sets lineage, seeds
@@ -332,13 +363,22 @@ def apply_retest_spec(db: Session, *, parent: LimsSample, raw_spec: dict,
 
     parent.is_retest = True
     parent.retest_of_sample_id = original.sample_id
-    seed_parent_from_services(db, parent=parent, services=_demand_services(spec, services or {}),
-                              package=package, source=source)
+    demand = _demand_services(spec, services or {})
+    seed_parent_from_services(db, parent=parent, services=demand, package=package, source=source)
     snap = dict(parent.catalog_snapshot or {})
+    if first_time:
+        # The registration fallback may have seeded + stamped the FULL
+        # services dict before this ran (C2): freeze the demand profiles only.
+        snap["profiles"] = _demand_snapshot_profiles(db, demand, package, snap)
     snap["retest"] = {**spec.as_dict(), "missing": missing}
     parent.catalog_snapshot = snap
 
     carry_keys = [k for k in spec.carry if k not in missing]
+    if first_time:
+        _retire_carried_placeholders(db, parent=parent, original=original,
+                                     carry_keys=carry_keys, demand_keys=spec.demand_keys,
+                                     user_id=user_id)
+
     carried = carry_results(db, original=original, retest=parent, profile_keys=carry_keys,
                             user_id=user_id)
     for c in carried:
