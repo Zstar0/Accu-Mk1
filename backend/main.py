@@ -1161,6 +1161,43 @@ def parent_retest_activity_label(d: dict) -> str:
     return f"{name} retested (parent) \u2014 {srcs}"
 
 
+def retest_activity_label(event: str, d: dict) -> Optional[str]:
+    """Activity feed wording for the native-retest events written by
+    lims_analyses.retest_carry. None for any other event."""
+    if event == "retest_created":
+        mode = "auto check-in" if d.get("auto_checkin") else "due at lab"
+        head = f"Created as retest of {d.get('original', '?')} ({d.get('fee', '?')}, {mode}): {d.get('reason', '')}"
+        parts = []
+        if d.get("retest"):
+            parts.append("Retesting " + ", ".join(d["retest"]))
+        if d.get("carry"):
+            parts.append("carrying " + ", ".join(d["carry"]))
+        if d.get("add"):
+            parts.append("adding " + ", ".join(d["add"]))
+        if d.get("variance_points"):
+            parts.append(f"variance {d['variance_points']} points")
+        return head + (". " + "; ".join(parts) if parts else "")
+    if event == "analysis_carried":
+        shown = " ".join(str(x) for x in (d.get("result_value"), d.get("result_unit")) if x)
+        src = d.get("source_vial_id") or d.get("source_sample_id") or "?"
+        label = f"{d.get('title') or d.get('keyword', '?')} {shown} carried from {src}".rstrip()
+        if d.get("verified_at"):
+            label += f", verified {str(d['verified_at'])[:10]}"
+        return label
+    if event == "retested_as":
+        head = f"Retested as {d.get('sample_id', '?')} ({', '.join(d.get('retest') or []) or 'add only'})"
+        tail = []
+        if d.get("carry"):
+            tail.append("carried: " + ", ".join(d["carry"]))
+        if d.get("add"):
+            tail.append("added: " + ", ".join(d["add"]))
+        return head + ("; " + "; ".join(tail) if tail else "")
+    if event == "retest_spec_warning":
+        detail = ", ".join(d.get("missing") or []) or d.get("message") or ""
+        return f"Retest spec warning: {d.get('reason', '?')}" + (f" ({detail})" if detail else "")
+    return None
+
+
 @app.get("/samples/{sample_id}/activity")
 async def get_sample_activity(
     sample_id: str,
@@ -1698,7 +1735,9 @@ async def get_sample_activity(
                 actor_email = actor.email if actor else None
 
             d = se.details or {}
-            if se.event == "parent_analysis_verified":
+            if (retest_label := retest_activity_label(se.event, d)) is not None:
+                label = retest_label
+            elif se.event == "parent_analysis_verified":
                 label = f"{d.get('keyword', '?')} verified (parent)"
             elif se.event == "parent_analysis_retested":
                 label = parent_retest_activity_label(d)
