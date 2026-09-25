@@ -599,3 +599,44 @@ def test_parent_retest_custom_reason_plumbs_to_source_transitions(
     assert len(retest_transitions) == len(source_ids)
     for t in retest_transitions:
         assert "HTTP-TEST: operator note" in (t.reason or "")
+
+
+def test_parent_retest_refuses_when_source_is_parent_hosted(client, db_session):
+    """P-3016 (2026-09-23): the parent row was promoted from a PARENT-HOSTED
+    source (a tech typed results straight onto the 'ordered' placeholder; no
+    vial for the role existed). Cascading the retest down minted a canonical
+    'unassigned' parent-hosted row that the AnalysisTable hides (tier_of reads
+    it as vial tier) and the workflow engine counts, so nothing in the UI
+    could ever clear it. Refuse with 409 and leave every row untouched; the
+    fix is to add a vial for the role."""
+    from lims_analyses.parent_placeholders import PROVENANCE_ORDERED
+    from models import LimsAnalysis, LimsAnalysisPromotion
+
+    parent, _ = _seed_parent_and_subs(db_session, sample_id="P-RETEST-006", n_subs=0)
+    svc = _mk_service(db_session, keyword="ARSENIC-PPM")
+    src = LimsAnalysis(lims_sample_pk=parent.id, analysis_service_id=svc.id,
+                       keyword=svc.keyword, title="Arsenic",
+                       provenance=PROVENANCE_ORDERED, review_state="promoted",
+                       result_value="30.131")
+    canon = LimsAnalysis(lims_sample_pk=parent.id, analysis_service_id=svc.id,
+                         keyword=svc.keyword, title="Arsenic",
+                         provenance="canonical", review_state="parent_to_verify",
+                         result_value="30.131")
+    db_session.add_all([src, canon])
+    db_session.flush()
+    db_session.add(LimsAnalysisPromotion(parent_analysis_id=canon.id,
+                                         source_analysis_id=src.id,
+                                         contribution_kind="chosen"))
+    db_session.commit()
+
+    r = client.post(f"/api/lims-analyses/parent/{parent.sample_id}/retest",
+                    json={"keyword": svc.keyword})
+    assert r.status_code == 409, r.text
+    assert "vial" in r.json()["detail"]["message"].lower()
+
+    db_session.expire_all()
+    assert db_session.get(LimsAnalysis, src.id).retested is False
+    assert db_session.get(LimsAnalysis, canon.id).review_state == "parent_to_verify"
+    assert db_session.execute(
+        select(LimsAnalysis).where(LimsAnalysis.retest_of_id == src.id)
+    ).scalars().first() is None
