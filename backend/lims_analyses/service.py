@@ -1533,13 +1533,23 @@ def list_promotions_for_parent(
         for prom in promo_rows:
             src_analysis = db.get(LimsAnalysis, prom.source_analysis_id)
             vial_sample_id: Optional[str] = None
-            if src_analysis and src_analysis.lims_sub_sample_pk is not None:
-                sub = db.get(LimsSubSample, src_analysis.lims_sub_sample_pk)
-                if sub is not None:
-                    vial_sample_id = sub.sample_id
+            source_parent_pk: Optional[int] = None
+            if src_analysis is not None:
+                if src_analysis.lims_sub_sample_pk is not None:
+                    sub = db.get(LimsSubSample, src_analysis.lims_sub_sample_pk)
+                    if sub is not None:
+                        vial_sample_id = sub.sample_id
+                        source_parent_pk = sub.parent_sample_pk
+                else:
+                    source_parent_pk = src_analysis.lims_sample_pk
+            source_parent_id: Optional[str] = None
+            if source_parent_pk is not None:
+                source_parent = db.get(LimsSample, source_parent_pk)
+                source_parent_id = source_parent.sample_id if source_parent else None
             sources.append(PromotionSourceInfo(
                 sample_id=vial_sample_id,
                 contribution_kind=prom.contribution_kind,
+                parent_sample_id=source_parent_id,
             ))
 
         result.append(ParentPromotionInfo(
