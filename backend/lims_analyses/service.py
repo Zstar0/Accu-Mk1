@@ -316,7 +316,30 @@ def soft_reject_parent_placeholder(
     return row
 
 
-# ─── Amendment audit (spec 2026-08-07) ───────────────────────────────────────
+def own_promotion_clause():
+    """WHERE clause for promotion links a SOURCE-side reader may act on.
+
+    Native retest (2026-09-24): a 'carried' link's source is the ORIGINAL
+    vial's analysis but its parent row lives on the RETEST sample. Anything
+    that walks source -> parent from the original (source retest, removal
+    tiers, force retract, promoted_to_parent chips, activity) must skip it,
+    or it acts on another sample's row."""
+    from models import LimsAnalysisPromotion
+    return LimsAnalysisPromotion.contribution_kind != "carried"
+
+
+def own_promotions_for_source(db: Session, source_analysis_id: int) -> list:
+    """Promotion rows for one source, carried links excluded, oldest first."""
+    from models import LimsAnalysisPromotion
+    return list(db.execute(
+        select(LimsAnalysisPromotion)
+        .where(LimsAnalysisPromotion.source_analysis_id == source_analysis_id,
+               own_promotion_clause())
+        .order_by(LimsAnalysisPromotion.id)
+    ).scalars().all())
+
+
+# ─── Amendment audit (spec 2026-08-07)───────────────────────────────────────
 # Fields whose changes are captured as before/after into
 # lims_analysis_transitions.details. Values must stay JSON-serializable
 # (str/int/bool/None) — never add a datetime here; per-state timestamps are
@@ -1533,13 +1556,23 @@ def list_promotions_for_parent(
         for prom in promo_rows:
             src_analysis = db.get(LimsAnalysis, prom.source_analysis_id)
             vial_sample_id: Optional[str] = None
-            if src_analysis and src_analysis.lims_sub_sample_pk is not None:
-                sub = db.get(LimsSubSample, src_analysis.lims_sub_sample_pk)
-                if sub is not None:
-                    vial_sample_id = sub.sample_id
+            source_parent_pk: Optional[int] = None
+            if src_analysis is not None:
+                if src_analysis.lims_sub_sample_pk is not None:
+                    sub = db.get(LimsSubSample, src_analysis.lims_sub_sample_pk)
+                    if sub is not None:
+                        vial_sample_id = sub.sample_id
+                        source_parent_pk = sub.parent_sample_pk
+                else:
+                    source_parent_pk = src_analysis.lims_sample_pk
+            source_parent_id: Optional[str] = None
+            if source_parent_pk is not None:
+                source_parent = db.get(LimsSample, source_parent_pk)
+                source_parent_id = source_parent.sample_id if source_parent else None
             sources.append(PromotionSourceInfo(
                 sample_id=vial_sample_id,
                 contribution_kind=prom.contribution_kind,
+                parent_sample_id=source_parent_id,
             ))
 
         result.append(ParentPromotionInfo(
@@ -2282,7 +2315,10 @@ def cascade_parent_retest_to_sources(
     # 3. Find all promotion sources for this parent analysis
     promo_rows = db.execute(
         select(LimsAnalysisPromotion).where(
-            LimsAnalysisPromotion.parent_analysis_id == parent_analysis.id
+            LimsAnalysisPromotion.parent_analysis_id == parent_analysis.id,
+            # A carried row's source is the ORIGINAL sample's vial: never
+            # retest another sample's work from here.
+            own_promotion_clause(),
         )
     ).scalars().all()
     if not promo_rows:
@@ -2420,6 +2456,30 @@ def parent_retest(
                 f"'parent_to_verify' or 'published'; row is "
                 f"{active.review_state!r}"
             ),
+        )
+    # Native retest (round-2 ruling): a CARRIED row's result belongs to the
+    # original sample; re-running it means a new retest with the service in
+    # the retest set, never a cascade into the original's vials.
+    from models import LimsAnalysisPromotion
+    carried_link = db.execute(select(LimsAnalysisPromotion).where(
+        LimsAnalysisPromotion.parent_analysis_id == active.id,
+        LimsAnalysisPromotion.contribution_kind == "carried",
+    )).scalars().first()
+    if carried_link is not None:
+        src = db.get(LimsAnalysis, carried_link.source_analysis_id)
+        origin_pk = None
+        if src is not None:
+            origin_pk = src.lims_sample_pk
+            if origin_pk is None and src.lims_sub_sample_pk is not None:
+                from models import LimsSubSample
+                sub = db.get(LimsSubSample, src.lims_sub_sample_pk)
+                origin_pk = sub.parent_sample_pk if sub else None
+        origin = db.get(LimsSample, origin_pk) if origin_pk is not None else None
+        origin_id = origin.sample_id if origin else (parent.retest_of_sample_id or "the original")
+        raise InvalidTransitionError(
+            active.review_state, "retest",
+            message=(f"{active.keyword} is a carried result from {origin_id}; to re-run it, "
+                     "create a retest with this service in the retest set"),
         )
     # Figure AT THE CALL: the un-promote below clears it on a verified row.
     value_at_retest, unit_at_retest = active.result_value, active.result_unit
@@ -2578,7 +2638,7 @@ def vial_source_retest(
     guarantees "retest committed, un-promote-and-event lost" is the only
     possible partial-failure shape — never the reverse.
     """
-    from models import AnalysisService, LimsAnalysisPromotion
+    from models import AnalysisService
 
     row = get_analysis(db, analysis_id)  # NotFoundError -> 404
 
@@ -2649,7 +2709,8 @@ def vial_source_retest(
     # promoted twice (e.g. reopened outside apply_transition, as the
     # review_state CHECK-constraint backfill in database.py demonstrates is
     # possible for this exact column) would otherwise resolve
-    # nondeterministically. order_by(id.desc()) + first-wins mirrors
+    # nondeterministically. Latest own link wins (carried links, whose
+    # parent row lives on a retest sample, are skipped: C1) and mirrors
     # list_native_parent_analyses' latest-per-service dedup (service.py
     # ~963) for the identical reason: "rather than depending on an
     # invariant this function doesn't own." Unlike the down-cascade's
@@ -2657,11 +2718,8 @@ def vial_source_retest(
     # retracted/rejected, provenance='canonical'), this doesn't filter on
     # parent state — a stale promotion's parent naturally reads as
     # published/retracted/etc. below and the un-promote step no-ops.
-    promo = db.execute(
-        select(LimsAnalysisPromotion)
-        .where(LimsAnalysisPromotion.source_analysis_id == row.id)
-        .order_by(LimsAnalysisPromotion.id.desc())
-    ).scalars().first()
+    own = own_promotions_for_source(db, row.id)
+    promo = own[-1] if own else None
     if promo is not None:
         parent = db.get(LimsAnalysis, promo.parent_analysis_id)
         if parent is not None:
@@ -3020,7 +3078,7 @@ def classify_removal_impact(
     Keyword matching reuses the reject/remove cascade candidate set (analyte-
     bridge translated for blend parents, generic kept as fallback).
     """
-    from models import LimsSample, LimsSubSample, LimsAnalysisPromotion
+    from models import LimsSample, LimsSubSample
 
     out: Dict[str, List[dict]] = {"pristine": [], "worked_unverified": [], "blocked": []}
     parent = db.execute(
@@ -3060,13 +3118,7 @@ def _analysis_removal_tier(db: Session, row: "LimsAnalysis") -> str:
     'worked_unverified' (retract-on-confirm), or 'blocked' (verified/published/
     promoted — invalidate/retest first). Shared by classify_removal_impact and
     the slot-replace re-mirror so both honor the same tiers."""
-    from models import LimsAnalysisPromotion
-
-    promoted = db.execute(
-        select(LimsAnalysisPromotion.id).where(
-            LimsAnalysisPromotion.source_analysis_id == row.id
-        )
-    ).scalar_one_or_none() is not None
+    promoted = bool(own_promotions_for_source(db, row.id))
     if row.review_state in ("verified", "published") or promoted:
         return "blocked"
     if row.review_state == "unassigned" and row.result_value is None and not row.retested:
@@ -3150,8 +3202,6 @@ def force_retract_analysis(
     Idempotent on the canonical row (skipped if already terminal). Raises only
     on published; transition errors propagate to the caller's per-row guard.
     """
-    from models import LimsAnalysisPromotion
-
     row = get_analysis(db, analysis_id)
     if row.review_state == "published":
         raise BadRequestError(
@@ -3159,11 +3209,7 @@ def force_retract_analysis(
         )
 
     if row.review_state == "promoted":
-        links = list(db.execute(
-            select(LimsAnalysisPromotion).where(
-                LimsAnalysisPromotion.source_analysis_id == analysis_id
-            )
-        ).scalars().all())
+        links = own_promotions_for_source(db, analysis_id)
         for link in links:
             canonical = db.get(LimsAnalysis, link.parent_analysis_id)
             if canonical is not None and not is_terminal(canonical.review_state):
@@ -3916,7 +3962,8 @@ def list_analyses_in_senaite_shape(
         for p, parent_state in db.execute(
             select(LimsAnalysisPromotion, LimsAnalysis.review_state)
             .join(LimsAnalysis, LimsAnalysis.id == LimsAnalysisPromotion.parent_analysis_id)
-            .where(LimsAnalysisPromotion.source_analysis_id.in_(row_ids))
+            .where(LimsAnalysisPromotion.source_analysis_id.in_(row_ids),
+                   own_promotion_clause())
         ).all():
             if parent_state not in ("retracted", "rejected"):
                 promo_by_source[p.source_analysis_id] = p.parent_analysis_id

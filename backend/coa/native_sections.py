@@ -275,6 +275,13 @@ def build_native_sections(db: Session, parent) -> dict:
     for key in _lab_added_profile_keys(db, parent.id):
         if not services.get(key):
             services[key] = True
+    # Native retest: carried profiles report from the retest's own carried
+    # rows, whatever shape the IS payload gives their keys. Keys in `missing`
+    # were never on the original, so nothing was carried for them.
+    rider = (parent.catalog_snapshot or {}).get("retest") or {}
+    for key in set(rider.get("carry") or []) - set(rider.get("missing") or []):
+        if not services.get(key):
+            services[key] = True
 
     if raw is None and not services:
         # IS 404 — no linked order AND nothing lab-added. Nothing native can

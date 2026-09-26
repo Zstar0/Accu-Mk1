@@ -2597,11 +2597,13 @@ def _fetch_mk1_results_for_host(
     peptide_by_analysis = {t[0].id: t[2] for t in triples}
 
     # Bulk-load promotion links for these rows
+    from lims_analyses.service import own_promotion_clause
     row_ids = [r.id for r in rows]
     promo_by_source: dict[int, int] = {}
     for p in db.execute(
         select(LimsAnalysisPromotion).where(
-            LimsAnalysisPromotion.source_analysis_id.in_(row_ids)
+            LimsAnalysisPromotion.source_analysis_id.in_(row_ids),
+            own_promotion_clause(),  # a carried link's parent is on the retest
         )
     ).scalars().all():
         promo_by_source[p.source_analysis_id] = p.parent_analysis_id
