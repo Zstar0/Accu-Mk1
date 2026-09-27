@@ -5383,6 +5383,27 @@ export function SampleDetails() {
                         </span>{' '}
                         {retestInfo.retested_as.map((r, i) => {
                           const status = r.status
+                          // Hand-format: each detail is independent, so the
+                          // tooltip still shows retest/carry/add info even
+                          // when created_at is missing (previously the
+                          // whole title was gated on created_at).
+                          const titleParts: string[] = []
+                          if (r.created_at) {
+                            titleParts.push(`Created ${formatDate(r.created_at)}`)
+                          }
+                          if (r.retest?.length) {
+                            titleParts.push(`retesting ${r.retest.join(', ')}`)
+                          }
+                          if (r.carry?.length) {
+                            titleParts.push(`carrying ${r.carry.join(', ')}`)
+                          }
+                          if (r.add?.length) {
+                            titleParts.push(`added ${r.add.join(', ')}`)
+                          }
+                          const title =
+                            titleParts.length > 0
+                              ? titleParts.join(' · ')
+                              : undefined
                           return (
                             <span key={r.sample_id}>
                               {i > 0 && ', '}
@@ -5390,23 +5411,7 @@ export function SampleDetails() {
                                 type="button"
                                 onClick={() => navigateToSample(r.sample_id)}
                                 className="font-mono font-semibold text-violet-700 dark:text-violet-300 hover:underline underline-offset-2"
-                                title={
-                                  r.created_at
-                                    ? `Created ${formatDate(r.created_at)}${
-                                        r.retest?.length
-                                          ? ` · retesting ${r.retest.join(', ')}`
-                                          : ''
-                                      }${
-                                        r.carry?.length
-                                          ? ` · carrying ${r.carry.join(', ')}`
-                                          : ''
-                                      }${
-                                        r.add?.length
-                                          ? ` · added ${r.add.join(', ')}`
-                                          : ''
-                                      }`
-                                    : undefined
-                                }
+                                title={title}
                               >
                                 {r.sample_id}
                               </button>
@@ -7452,6 +7457,9 @@ export function SampleDetails() {
             promotions={promotions}
             vialAssignmentByKeyword={nativeVialAssignmentByKeyword}
             onParentDataStale={() => refreshSample(data.sample_id)}
+            // Inert here: listNativeParentAnalysesShaped (this card's data
+            // source) doesn't annotate rows with retest info, so chips never
+            // render from this prop. Kept for signature parity / future wiring.
             retestInfo={retestInfo}
           />
         )}
