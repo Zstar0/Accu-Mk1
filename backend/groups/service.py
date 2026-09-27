@@ -64,8 +64,8 @@ def update_group(db: Session, group_id: int, **fields) -> UserGroup:
         raise BadRequestError("slug is immutable")
     if fields.get("name") is not None:
         g.name = _clean_name(fields["name"])
-    if "description" in fields and fields["description"] is not None:
-        g.description = fields["description"].strip() or None
+    if "description" in fields:
+        g.description = (fields["description"] or "").strip() or None
     if fields.get("is_active") is not None:
         g.is_active = bool(fields["is_active"])
     db.commit()
@@ -103,10 +103,16 @@ def replace_members(db: Session, group_id: int, user_ids: list[int]) -> list[int
     from models import User
     get_group(db, group_id)
     wanted = sorted(set(int(u) for u in user_ids))
-    if wanted:
-        ok = set(db.execute(select(User.id).where(User.id.in_(wanted),
+    current = set(db.execute(select(UserGroupMember.user_id)
+                             .where(UserGroupMember.group_id == group_id)).scalars().all())
+    # Only ids being ADDED must exist and be active. An id already in the group may be kept
+    # (or dropped) even if the user has since been deactivated (I-3): otherwise the group
+    # can never be saved again from the UI once any member leaves.
+    adding = [u for u in wanted if u not in current]
+    if adding:
+        ok = set(db.execute(select(User.id).where(User.id.in_(adding),
                                                    User.is_active.is_(True))).scalars().all())
-        bad = [u for u in wanted if u not in ok]
+        bad = [u for u in adding if u not in ok]
         if bad:
             raise BadRequestError(f"unknown or inactive user ids: {bad}")
     db.query(UserGroupMember).filter(UserGroupMember.group_id == group_id).delete()

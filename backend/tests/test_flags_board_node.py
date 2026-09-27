@@ -106,10 +106,18 @@ def test_can_raise_is_can_edit_board(w):
 def test_entity_node_redirects_flags_to_underlying_entity(w):
     """Review Focus 5: a thread about an SOP must never fork onto the board copy."""
     from flags import service
-    from flags.errors import BadRequestError
+    from flags.errors import BadRequestError, PermissionDeniedError
     with pytest.raises(BadRequestError, match="worksheet '1'"):
         service.create_flag(w.s, user=EDITOR, entity_type="board_node", entity_id=str(w.ent.id),
                             type="task", title="x")
+    # I-2: an OUTSIDER (no grant on the restricted `exec` board) must not learn that the
+    # entity node exists at all, let alone what it points at. can_view_board is checked
+    # BEFORE the entity-kind branch, so this is a plain permission denial, not a 400
+    # naming the anchor.
+    with pytest.raises(PermissionDeniedError) as exc_info:
+        service.create_flag(w.s, user=OUTSIDER, entity_type="board_node", entity_id=str(w.ent.id),
+                            type="task", title="x")
+    assert "worksheet" not in str(exc_info.value)
 
 
 def test_snapshot_records_board_and_kind(w):
@@ -132,6 +140,18 @@ def test_can_view_follows_the_board(w):
     assert seams.can_view_entity(w.s, OUTSIDER, "board_node", str(w.pub.id)) is True
     assert seams.can_view_entity(w.s, OUTSIDER, "board_node", "999") is False, "orphans: admins only"
     assert seams.can_view_entity(w.s, ADMIN, "board_node", "999") is True
+
+
+def test_malformed_ids_are_rejected_not_500(w):
+    """M-2: `str.isdigit()` accepts non-ASCII digit codepoints that break `int()`, and an
+    unbounded digit string can overflow. Both must resolve to nothing, not raise."""
+    from flags import seams
+    superscript_two = "²"
+    thirty_digits = "9" * 30
+    assert seams.resolve_context(w.s, "board_node", superscript_two) is None
+    assert seams.resolve_context(w.s, "board_node", thirty_digits) is None
+    assert seams.can_view_entity(w.s, OUTSIDER, "board_node", superscript_two) is False
+    assert seams.can_view_entity(w.s, OUTSIDER, "board_node", thirty_digits) is False
 
 
 def test_visible_entity_ids_and_clause(w):

@@ -128,6 +128,57 @@ def test_parent_rules(client):
     assert r.status_code == 400
 
 
+def test_frame_with_children_cannot_be_nested(client):
+    """I-1: a frame that already has (or is about to gain, within the same positions
+    batch) a child cannot itself be moved under another frame."""
+    F = _node(client, kind="frame", label="F")
+    G = _node(client, kind="frame", label="G")
+    child = _node(client, kind="text", parent_id=F["id"])
+
+    # (a) PATCH F.parent_id=G when F has a child -> 400
+    r = client.patch(f"/api/boards/org/nodes/{F['id']}", json={"parent_id": G["id"], "version": 1})
+    assert r.status_code == 400
+
+    # (b) positions batch [F into G] when F has a child -> 400
+    r = client.patch("/api/boards/org/nodes/positions", json=[
+        {"id": F["id"], "x": F["x"], "y": F["y"], "parent_id": G["id"], "version": 1}])
+    assert r.status_code == 400
+
+    # (c) positions batch [loose node into F2, F2 into G] -> 400 and nothing written,
+    # even though F2 has no child in the DB yet (the re-parent is only pending in-batch).
+    F2 = _node(client, kind="frame", label="F2")
+    loose = _node(client, kind="text")
+    r = client.patch("/api/boards/org/nodes/positions", json=[
+        {"id": loose["id"], "x": loose["x"], "y": loose["y"], "parent_id": F2["id"], "version": 1},
+        {"id": F2["id"], "x": F2["x"], "y": F2["y"], "parent_id": G["id"], "version": 1}])
+    assert r.status_code == 400
+    nodes = {n["id"]: n for n in client.get("/api/boards/org").json()["nodes"]}
+    assert (nodes[loose["id"]]["parent_id"], nodes[loose["id"]]["version"]) == (None, 1)
+    assert (nodes[F2["id"]]["parent_id"], nodes[F2["id"]]["version"]) == (None, 1)
+
+    # (d) positions batch [F3 into G] when F3 has NO children -> 200
+    F3 = _node(client, kind="frame", label="F3")
+    r = client.patch("/api/boards/org/nodes/positions", json=[
+        {"id": F3["id"], "x": F3["x"], "y": F3["y"], "parent_id": G["id"], "version": 1}])
+    assert r.status_code == 200 and r.json()[0]["parent_id"] == G["id"]
+
+
+def test_board_and_node_null_clears_fields(client):
+    """M-4 / T6: an explicit null clears default_viewport (board) and w/h (node); it is
+    not treated the same as the field being absent from the request."""
+    r = client.patch("/api/boards/org", json={"default_viewport": {"x": 1, "y": 2, "zoom": 1}})
+    assert r.status_code == 200 and r.json()["default_viewport"] == {"x": 1.0, "y": 2.0, "zoom": 1.0}
+    r = client.patch("/api/boards/org", json={"default_viewport": None})
+    assert r.status_code == 200 and r.json()["default_viewport"] is None
+
+    n = _node(client, kind="text")
+    r = client.patch(f"/api/boards/org/nodes/{n['id']}", json={"w": 50, "h": 20, "version": 1})
+    assert r.status_code == 200 and (r.json()["w"], r.json()["h"]) == (50.0, 20.0)
+    r = client.patch(f"/api/boards/org/nodes/{n['id']}", json={"w": None, "version": 2})
+    assert r.status_code == 200
+    assert (r.json()["w"], r.json()["h"]) == (None, 20.0)
+
+
 def test_patch_version_conflict_and_revalidation(client):
     n = _node(client, kind="frame", label="A")
     r = client.patch(f"/api/boards/org/nodes/{n['id']}", json={"label": "B", "version": 7})
@@ -188,6 +239,7 @@ def test_delete_frame_reparents_children_with_absolute_coords(client):
     d = client.get("/api/boards/org").json()
     c = next(n for n in d["nodes"] if n["id"] == child["id"])
     assert (c["parent_id"], c["x"], c["y"]) == (None, 110.0, 55.0)
+    assert c["version"] == 2, "M-3: reparenting a child on frame delete must bump its version"
     assert d["edges"] == []
     assert client.delete(f"/api/boards/org/nodes/{frame['id']}").status_code == 404
     client.as_user(VIEWER)

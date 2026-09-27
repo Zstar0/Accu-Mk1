@@ -181,8 +181,11 @@ Unique `(board_id, source_id, target_id, kind)`.
   None and whose label renders "Deleted board item". Same class of rule as `must_exist`.
 - Deleting a board requires zero open flags across its nodes (409 otherwise). Cascade removes
   nodes, edges, grants.
-- Deleting a group cascades grants and memberships. A restricted board left with zero grants
-  is visible to admins only, which is the safe direction.
+- Deleting a group is a hard delete allowed only when the group is UNUSED (no members and no
+  board grants); a group with members or grants is refused with 409 per §7.1 (deactivate
+  instead). Deleting an unused group has nothing left to cascade. A restricted board left
+  with zero grants (all its groups deactivated or deleted) is visible to admins only, which
+  is the safe direction.
 - Deactivating a group (`is_active=false`) is the soft path and is what the UI offers first.
 
 ## 5. Access rules
@@ -576,3 +579,9 @@ and PR. Deploy follows the `accumark-deploy` skill; boards need no env change.
   Postgres behave the same.
 - §4.2: `user_group_ids` reads membership on every call (no per-request cache) so a
   revoked group takes effect on the next request; caching waits for a query-count test.
+- §7.1: `GET /api/groups` returns the full group record (`description`, `is_active`,
+  `member_count`, `created_at`) to every login, not just id/slug/name, because the
+  read-only Groups pane shown to non-admins needs them and none of it is sensitive.
+- §4.8: "deleting a group cascades grants and memberships" applies only to the hard
+  delete of an UNUSED group (no members, no board grants). A group with members or
+  grants is refused with 409 per §7.1 (deactivate instead).

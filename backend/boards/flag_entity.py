@@ -6,6 +6,7 @@ follows the board through boards.access; an orphaned anchor (node deleted) is ad
 All host knowledge lives in these closures; flags.service never imports boards."""
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from sqlalchemy import String, cast, or_, select
@@ -13,10 +14,15 @@ from sqlalchemy.orm import Session
 
 DELETED_LABEL = "Deleted board item"
 
+# ASCII digits only, at most 9 chars: `str.isdigit()` also accepts superscripts/other
+# unicode digit codepoints that fail `int()`, and an unbounded digit string can overflow
+# or abort a real Postgres transaction on bind (M-2).
+_ID_RE = re.compile(r"[0-9]{1,9}")
+
 
 def _load(db: Session, eid: str):
     from boards.models import Board, BoardNode
-    if db is None or not str(eid).isdigit():
+    if db is None or not _ID_RE.fullmatch(str(eid)):
         return None, None
     row = db.execute(select(BoardNode, Board).join(Board, Board.id == BoardNode.board_id)
                      .where(BoardNode.id == int(eid))).first()
@@ -41,7 +47,7 @@ def _context(db, eid) -> Optional[dict]:
 
 def _contexts(db, eids) -> dict:
     from boards.models import Board, BoardNode
-    ids = [int(e) for e in eids if str(e).isdigit()]
+    ids = [int(e) for e in eids if _ID_RE.fullmatch(str(e))]
     if not ids:
         return {}
     rows = db.execute(select(BoardNode, Board).join(Board, Board.id == BoardNode.board_id)
@@ -69,11 +75,13 @@ def _can_raise(db, user, eid) -> bool:
     flag on an `entity`-kind node to its underlying anchor instead. Any OTHER exception
     type raised from here would propagate out of flags.service.create_flag uncaught and
     surface as a 500, so this closure must only ever raise BadRequestError deliberately."""
-    from boards.access import can_edit_board
+    from boards.access import can_edit_board, can_view_board
     from flags.errors import BadRequestError  # the flags one: flags.routes maps it to 400
     node, board = _load(db, eid)
     if node is None:
         return False
+    if not can_view_board(db, user, board):
+        return False  # existence is never confirmed (spec §9): check before the 400 below
     if node.kind == "entity":
         raise BadRequestError(
             f"flag the underlying {node.entity_type} {node.entity_id!r} instead of the board node")

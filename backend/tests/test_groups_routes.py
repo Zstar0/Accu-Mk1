@@ -108,6 +108,45 @@ def test_members_replace_and_validation(client):
     assert client.get("/api/groups").json()[0]["member_count"] == 1
 
 
+def test_deactivated_member_can_be_kept_but_not_newly_added(client):
+    """I-3: a member who has since been deactivated must not lock the group's membership
+    from being saved. Existing inactive members may be kept or dropped; only NEW ids must
+    be active."""
+    from models import User
+    g = _mk(client)
+    client.as_user(ADMIN)
+    r = client.put(f"/api/groups/{g['id']}/members", json={"user_ids": [42, 43]})
+    assert r.status_code == 200 and r.json()["user_ids"] == [42, 43]
+
+    u = client.db.get(User, 43)
+    u.is_active = False
+    client.db.commit()
+
+    # PUT the same list back (43 still included, now inactive) -> 200, member stays
+    r = client.put(f"/api/groups/{g['id']}/members", json={"user_ids": [42, 43]})
+    assert r.status_code == 200 and r.json()["user_ids"] == [42, 43]
+
+    # dropping the now-inactive member is allowed
+    r = client.put(f"/api/groups/{g['id']}/members", json={"user_ids": [42]})
+    assert r.status_code == 200 and r.json()["user_ids"] == [42]
+
+    # adding a DIFFERENT inactive user (44) still fails (existing behavior)
+    assert client.put(f"/api/groups/{g['id']}/members", json={"user_ids": [42, 44]}).status_code == 400
+
+
+def test_description_can_be_cleared_with_explicit_null(client):
+    """I-4: an explicit `description: null` clears it; the field simply being absent
+    from the request must leave it untouched (covered by test_update_keeps_slug_immutable)."""
+    g = _mk(client)
+    client.as_user(ADMIN)
+    r = client.put(f"/api/groups/{g['id']}", json={"description": "secret-ish"})
+    assert r.status_code == 200 and r.json()["description"] == "secret-ish"
+    r = client.put(f"/api/groups/{g['id']}", json={"description": None})
+    assert r.status_code == 200 and r.json()["description"] is None
+    r = client.put(f"/api/groups/{g['id']}", json={"name": "Exec"})
+    assert r.status_code == 200 and r.json()["description"] is None
+
+
 def test_mine_lists_the_callers_groups(client):
     g = _mk(client)
     client.as_user(ADMIN)

@@ -95,9 +95,9 @@ def patch_board(db: Session, user, slug: str, **fields) -> Board:
         board.name = _clean_name(fields["name"])
     if fields.get("kind") is not None:
         board.kind = _check_kind(fields["kind"])
-    if fields.get("default_viewport") is not None:
+    if "default_viewport" in fields:
         vp = fields["default_viewport"]
-        board.default_viewport = vp if isinstance(vp, dict) else vp.model_dump()
+        board.default_viewport = None if vp is None else (vp if isinstance(vp, dict) else vp.model_dump())
     db.commit()
     db.refresh(board)
     return board
@@ -258,7 +258,8 @@ def _node_on_board(db: Session, board: Board, node_id: int) -> BoardNode:
     return n
 
 
-def _check_parent(db: Session, board: Board, parent_id: Optional[int], *, self_id: Optional[int] = None) -> None:
+def _check_parent(db: Session, board: Board, parent_id: Optional[int], *, self_id: Optional[int] = None,
+                  pending_parents: frozenset = frozenset()) -> None:
     if parent_id is None:
         return
     if self_id is not None and int(parent_id) == int(self_id):
@@ -268,6 +269,11 @@ def _check_parent(db: Session, board: Board, parent_id: Optional[int], *, self_i
         raise BadRequestError("parent must be a frame")
     if parent.parent_id is not None:
         raise BadRequestError("frames nest one level deep")
+    if self_id is not None:
+        has_child = db.execute(select(BoardNode.id).where(BoardNode.parent_id == self_id)
+                               .limit(1)).scalar_one_or_none()
+        if has_child is not None or self_id in pending_parents:
+            raise BadRequestError("a frame that has children cannot be nested")
 
 
 def _editable(db: Session, user, slug: str) -> Board:
@@ -313,8 +319,11 @@ def patch_node(db: Session, user, slug: str, node_id: int, *, version: int, **fi
     if "parent_id" in fields:
         _check_parent(db, board, fields["parent_id"], self_id=node.id)
         node.parent_id = fields["parent_id"]
-    for f in ("label", "x", "y", "w", "h", "z"):
+    for f in ("label", "x", "y", "z"):
         if f in fields and fields[f] is not None:
+            setattr(node, f, fields[f])
+    for f in ("w", "h"):
+        if f in fields:
             setattr(node, f, fields[f])
     node.version += 1
     node.updated_by = getattr(user, "id", None)
@@ -330,10 +339,17 @@ def patch_positions(db: Session, user, slug: str, items) -> list[NodeOut]:
     stale = [n.id for n, it in nodes if n.version != it.version]
     if stale:
         raise StaleVersionError("stale versions in positions batch", stale_ids=stale)
+    # Validate every re-parent in the batch before mutating anything. An item that sets
+    # parent_id = X makes X a parent for the nesting-depth check even though X's own
+    # re-parent (if any) hasn't been written yet, so the check is order-independent.
+    pending_parents = frozenset(int(it.parent_id) for _, it in nodes
+                                if "parent_id" in it.model_fields_set and it.parent_id is not None)
+    for n, it in nodes:
+        if "parent_id" in it.model_fields_set:
+            _check_parent(db, board, it.parent_id, self_id=n.id, pending_parents=pending_parents)
     uid = getattr(user, "id", None)
     for n, it in nodes:
         if "parent_id" in it.model_fields_set:
-            _check_parent(db, board, it.parent_id, self_id=n.id)
             n.parent_id = it.parent_id
         n.x, n.y = it.x, it.y
         n.version += 1
@@ -348,10 +364,13 @@ def delete_node(db: Session, user, slug: str, node_id: int) -> None:
     n = open_flag_count(db, [node.id])
     if n:
         raise ConflictError(f"node has {n} open flag(s); resolve them first")
+    uid = getattr(user, "id", None)
     for child in db.execute(select(BoardNode).where(BoardNode.parent_id == node.id)).scalars():
         child.parent_id = None
         child.x += node.x  # keep the child where it was on the canvas
         child.y += node.y
+        child.version += 1
+        child.updated_by = uid
     db.query(BoardEdge).filter((BoardEdge.source_id == node.id) | (BoardEdge.target_id == node.id)).delete(
         synchronize_session=False)
     db.delete(node)
