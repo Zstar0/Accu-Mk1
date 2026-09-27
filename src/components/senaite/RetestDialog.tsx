@@ -299,9 +299,7 @@ export function RetestDialog({
                 </ul>
               </>
             ) : (
-              <p className="text-muted-foreground">
-                Customer and pricing unavailable
-              </p>
+              <p className="text-muted-foreground">Customer info unavailable</p>
             )}
           </div>
         ) : (

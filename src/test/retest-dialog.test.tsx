@@ -280,6 +280,26 @@ describe('RetestDialog', () => {
     expect(screen.getByText(/Delta/)).toHaveTextContent('$0.00')
   })
 
+  it('shows Customer info unavailable but still applies the fee when the sample has no linked order', async () => {
+    // context is present (retest_fee is known from IS) but order is null,
+    // e.g. the sample is not yet on a WP order.
+    vi.mocked(getRetestOptions).mockResolvedValue({
+      ...OPTIONS,
+      context: { order: null, retest_fee: { price: 85 } },
+    })
+    renderDialog()
+    const block = await screen.findByTestId('retest-context-block')
+    expect(
+      within(block).getByText(/Customer info unavailable/)
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText(/Customer and pricing unavailable/)
+    ).not.toBeInTheDocument()
+    // endo defaults to Retest, Fee defaults to Paid: the $85 fee still
+    // applies even though there is no order to show.
+    expect(screen.getByText(/Delta/)).toHaveTextContent('$85.00')
+  })
+
   it('shows a quiet unavailable line when order context is missing', async () => {
     // Mirrors the real API contract: context is null exactly when IS was
     // unreachable, so prices_available is false too.
