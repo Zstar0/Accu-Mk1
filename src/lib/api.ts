@@ -7136,6 +7136,21 @@ export const HPLC_PROFILE_KEYS = ['hplcpurity_identity', 'hplc-purity-identity']
 
 export interface RetestOptionProfile { key: string; name: string; carry_eligible: boolean; state: string | null }
 export interface RetestOptionAddon { key: string; name: string; wp_type: string | null; price: number | null; vials: number | null }
+export interface RetestContextOrderLine { key: string; label: string; price: number }
+export interface RetestContextOrder {
+  number: string
+  placed_at: string
+  customer_name: string
+  customer_email: string
+  total: number
+  currency: string
+  status: string
+  lines: RetestContextOrderLine[]
+}
+export interface RetestContext {
+  order: RetestContextOrder | null
+  retest_fee: { price: number | null } | null
+}
 export interface RetestOptions {
   sample_id: string
   status: string | null
@@ -7144,6 +7159,7 @@ export interface RetestOptions {
   addons: RetestOptionAddon[]
   variance: { point_price: number | null; allowed: boolean }
   prices_available: boolean
+  context?: RetestContext | null
 }
 export interface RetestRequestBody {
   retest: string[]

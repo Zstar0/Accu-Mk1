@@ -64,6 +64,19 @@ const OPTIONS = {
   ],
   variance: { point_price: 76.5, allowed: true },
   prices_available: true,
+  context: {
+    order: {
+      number: 'WP-3134',
+      placed_at: '2026-09-20T10:00:00Z',
+      customer_name: 'Jane Doe',
+      customer_email: 'jane@example.com',
+      total: 285,
+      currency: 'USD',
+      status: 'processing',
+      lines: [{ key: 'hplc', label: 'HPLC Purity + Identity', price: 85 }],
+    },
+    retest_fee: { price: 85 },
+  },
 }
 
 function renderDialog(onCreated = vi.fn()) {
@@ -133,7 +146,9 @@ describe('RetestDialog', () => {
     fireEvent.click(within(hplc).getByRole('button', { name: 'Retest' }))
     expect(variance).toBeEnabled()
     fireEvent.click(variance)
-    expect(screen.getByText(/Delta/)).toHaveTextContent('$153.00') // (3 - 1) * 76.5
+    // (3 - 1) * 76.5 variance + $85 retest fee (endo is forced to Retest,
+    // and Fee defaults to Paid)
+    expect(screen.getByText(/Delta/)).toHaveTextContent('$238.00')
     expect(screen.getByText(/^fee$/i)).toBeInTheDocument()
   })
 
@@ -148,12 +163,14 @@ describe('RetestDialog', () => {
     const variance = screen.getByLabelText(/^variance$/i)
     fireEvent.click(variance)
     fireEvent.click(screen.getByLabelText(/Rapid Sterility Screening/))
-    expect(screen.getByText(/Delta/)).toHaveTextContent('$383.00') // 230 + 153
+    // 230 (addon) + 153 (variance) + 85 (retest fee, endo forced to Retest)
+    expect(screen.getByText(/Delta/)).toHaveTextContent('$468.00')
 
     fireEvent.click(within(hplc).getByRole('button', { name: 'Carry' }))
     expect(variance).toBeDisabled()
     expect(variance).toBeChecked()
-    expect(screen.getByText(/Delta/)).toHaveTextContent('$230.00')
+    // 230 (addon) + 85 (retest fee, endo still forced to Retest)
+    expect(screen.getByText(/Delta/)).toHaveTextContent('$315.00')
 
     fireEvent.change(screen.getByLabelText(/reason/i), {
       target: { value: 'carry check' },
@@ -240,6 +257,45 @@ describe('RetestDialog', () => {
     expect(screen.queryByText(/\$0\.00/)).not.toBeInTheDocument()
   })
 
+  it('renders the order/customer context block at the top', async () => {
+    renderDialog()
+    const block = await screen.findByTestId('retest-context-block')
+    expect(within(block).getByText(/Order WP-3134/)).toBeInTheDocument()
+    expect(within(block).getByText(/Jane Doe/)).toBeInTheDocument()
+    expect(within(block).getByText(/jane@example.com/)).toBeInTheDocument()
+    expect(within(block).getByText(/\$285\.00/)).toBeInTheDocument()
+    expect(
+      within(block).getByText(/HPLC Purity \+ Identity: \$85\.00/)
+    ).toBeInTheDocument()
+  })
+
+  it('shows the fee amount on the Paid label and adds it to Delta only when Paid is selected', async () => {
+    renderDialog()
+    await screen.findByTestId('retest-context-block')
+    // endo is carry_eligible: false, so it defaults to Retest and Fee
+    // defaults to Paid: the $85 fee is already in the delta.
+    expect(screen.getByLabelText(/Paid \(\$85\.00\)/)).toBeInTheDocument()
+    expect(screen.getByText(/Delta/)).toHaveTextContent('$85.00')
+    fireEvent.click(screen.getByLabelText(/^free$/i))
+    expect(screen.getByText(/Delta/)).toHaveTextContent('$0.00')
+  })
+
+  it('shows a quiet unavailable line when order context is missing', async () => {
+    // Mirrors the real API contract: context is null exactly when IS was
+    // unreachable, so prices_available is false too.
+    vi.mocked(getRetestOptions).mockResolvedValue({
+      ...OPTIONS,
+      context: null,
+      prices_available: false,
+    })
+    renderDialog()
+    expect(
+      await screen.findByText(/Customer and pricing unavailable/)
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId('retest-context-block')).not.toBeInTheDocument()
+    expect(screen.getByText(/Delta/)).toHaveTextContent('price unavailable')
+  })
+
   it('resets the form on reopen for the same sample', async () => {
     const qc = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -294,6 +350,28 @@ describe('retestDelta', () => {
     expect(
       retestDelta({ addons: [], variancePoints: 3, pointPrice: null })
     ).toBeNull()
+  })
+
+  it('adds the retest fee when given, is null when the fee applies but its price is unknown, and is left out when omitted', () => {
+    expect(
+      retestDelta({
+        addons: [],
+        variancePoints: 0,
+        pointPrice: null,
+        retestFeePrice: 85,
+      })
+    ).toBe(85)
+    expect(
+      retestDelta({
+        addons: [],
+        variancePoints: 0,
+        pointPrice: null,
+        retestFeePrice: null,
+      })
+    ).toBeNull()
+    expect(
+      retestDelta({ addons: [], variancePoints: 0, pointPrice: null })
+    ).toBe(0)
   })
 })
 

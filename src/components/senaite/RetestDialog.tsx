@@ -49,6 +49,11 @@ export function retestDelta(sel: {
   addons: RetestOptionAddon[]
   variancePoints: number
   pointPrice: number | null
+  /** Omit to leave the retest fee out of the delta entirely (e.g. order
+   * context unavailable); pass null when the fee applies but its price is
+   * unknown, which makes the whole delta unavailable like a missing
+   * add-on price. */
+  retestFeePrice?: number | null
 }): number | null {
   let total = 0
   for (const a of sel.addons) {
@@ -58,6 +63,10 @@ export function retestDelta(sel: {
   if (sel.variancePoints > 0) {
     if (sel.pointPrice === null) return null
     total += (sel.variancePoints - 1) * sel.pointPrice
+  }
+  if (sel.retestFeePrice !== undefined) {
+    if (sel.retestFeePrice === null) return null
+    total += sel.retestFeePrice
   }
   return total
 }
@@ -203,11 +212,16 @@ export function RetestDialog({
   const canCreate =
     state.reason.trim().length > 0 && hasSomethingToDo && !pending
 
+  const feeApplies =
+    anyRetest && state.fee === 'paid' && options.context != null
   const delta = options.prices_available
     ? retestDelta({
         addons: selectedAddons,
         variancePoints: varianceEffective ? state.variancePoints : 0,
         pointPrice: options.variance.point_price,
+        retestFeePrice: feeApplies
+          ? (options.context?.retest_fee?.price ?? null)
+          : undefined,
       })
     : null
 
@@ -250,6 +264,51 @@ export function RetestDialog({
             COA.
           </p>
         </div>
+
+        {options.context ? (
+          <div
+            data-testid="retest-context-block"
+            className="rounded-md border border-border/40 p-3 space-y-1.5 text-sm"
+          >
+            {options.context.order ? (
+              <>
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">
+                    Order {options.context.order.number}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {new Date(
+                      options.context.order.placed_at
+                    ).toLocaleDateString()}
+                  </span>
+                </div>
+                <div className="text-muted-foreground">
+                  {options.context.order.customer_name} ·{' '}
+                  {options.context.order.customer_email}
+                </div>
+                <div>
+                  {formatMoney(options.context.order.total)} ·{' '}
+                  {options.context.order.status}
+                </div>
+                <ul className="text-xs text-muted-foreground space-y-0.5">
+                  {options.context.order.lines.map(l => (
+                    <li key={l.key}>
+                      {l.label}: {formatMoney(l.price)}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : (
+              <p className="text-muted-foreground">
+                Customer and pricing unavailable
+              </p>
+            )}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Customer and pricing unavailable
+          </p>
+        )}
 
         <div>
           {options.profiles.map(p => {
@@ -389,7 +448,11 @@ export function RetestDialog({
             >
               <div className="flex items-center gap-2">
                 <RadioGroupItem id="fee-paid" value="paid" />
-                <Label htmlFor="fee-paid">Paid</Label>
+                <Label htmlFor="fee-paid">
+                  {typeof options.context?.retest_fee?.price === 'number'
+                    ? `Paid (${formatMoney(options.context.retest_fee.price)})`
+                    : 'Paid'}
+                </Label>
               </div>
               <div className="flex items-center gap-2">
                 <RadioGroupItem id="fee-free" value="free" />
