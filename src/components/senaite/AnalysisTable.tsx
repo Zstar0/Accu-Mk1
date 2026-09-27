@@ -31,8 +31,9 @@ import {
 } from '@/components/ui/dialog'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import type { SenaiteAnalysis } from '@/lib/api'
+import type { SenaiteAnalysis, SampleRetestInfo } from '@/lib/api'
 import { promotionForRow, type PromotionIndex } from '@/lib/promotion-index'
+import { retestChipFor } from '@/lib/retest-chips'
 import { setAnalysisMethodInstrument, promoteAnalyses, getMethods } from '@/lib/api'
 import { SetMethodInstrumentDialog } from '@/components/senaite/SetMethodInstrumentDialog'
 import { vialAssignmentKey, type VialAssignment } from '@/lib/vial-assignment'
@@ -635,6 +636,25 @@ export function VarianceChip() {
       className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-500/15 dark:text-sky-400 dark:border-sky-500/20"
     >
       Variance
+    </span>
+  )
+}
+
+/** Chip on an ORDERED placeholder line, marking it as a re-run of an existing
+ *  service ('retesting') or a service bought new on this retest ('added').
+ *  Gate visibility with retestChipFor(). */
+export function RetestLineChip({ kind }: { kind: 'retesting' | 'added' }) {
+  const retesting = kind === 'retesting'
+  return (
+    <span
+      title={retesting
+        ? 'This service is being re-run on this retest; a new vial result will be promoted here.'
+        : 'This service was added on this retest; it was not on the original sample.'}
+      className={retesting
+        ? 'inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-500/15 dark:text-violet-300 dark:border-violet-500/20'
+        : 'inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border-emerald-500/20'}
+    >
+      {retesting ? 'Retesting' : 'Added'}
     </span>
   )
 }
@@ -1492,6 +1512,7 @@ function AnalysisRow({
   onParentRetest,
   onPromotedNativeRetest,
   parentRegistryRetestSeam = false,
+  retestInfo,
 }: {
   analysis: SenaiteAnalysis
   analyteNameMap: Map<number, string>
@@ -1536,6 +1557,9 @@ function AnalysisRow({
    *  gain the verb — see isParentRegistryRetestEligible. Omitted (every
    *  other surface, incl. vial-tier tables) → byte-identical to today. */
   parentRegistryRetestSeam?: boolean
+  /** Task 3: retest/carry/add sets for this sample, used only to render
+   *  RetestLineChip on an ordered placeholder line. Omit → no chip. */
+  retestInfo?: SampleRetestInfo | null
 }) {
   const rowTint = ROW_STATUS_STYLE[analysis.review_state ?? ''] ?? ''
   const { display, original } = formatAnalysisTitle(analysis.title, analyteNameMap)
@@ -1661,6 +1685,7 @@ function AnalysisRow({
           </span>
           <AnalysisServiceLink analysis={analysis} />
           <PromotedFromBadge promotion={promotionForRow(promotions, analysis)} />
+          {(() => { const chip = retestChipFor(analysis, retestInfo); return chip ? <RetestLineChip kind={chip} /> : null })()}
           {vialAssign && vialAssign.matches.filter(m => {
             // The "from <vial>" promotion badge above already names the
             // source vial — drop its duplicate assignment chip and keep
@@ -2102,6 +2127,10 @@ interface AnalysisTableProps {
    *  and published rows gain the verb (published-parent-retest ruling
    *  2026-08-28). Omitted → byte-identical to today. */
   parentRegistryRetestSeam?: boolean
+  /** Task 3: retest/carry/add sets for the viewed sample, threaded to
+   *  AnalysisRow to render RetestLineChip on ordered placeholder lines.
+   *  Omit → no chip. */
+  retestInfo?: SampleRetestInfo | null
 }
 
 export function AnalysisTable({
@@ -2125,6 +2154,7 @@ export function AnalysisTable({
   onParentBulkRetest,
   onPromotedNativeRetest,
   parentRegistryRetestSeam = false,
+  retestInfo,
 }: AnalysisTableProps) {
   const [analysisFilter, setAnalysisFilter] = useState<'all' | 'verified' | 'pending' | 'invalid'>('all')
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null)
@@ -2514,6 +2544,7 @@ export function AnalysisTable({
                       onParentRetest={onParentRetest}
                       onPromotedNativeRetest={onPromotedNativeRetest}
                       parentRegistryRetestSeam={parentRegistryRetestSeam}
+                      retestInfo={retestInfo}
                     />
                     {isExpanded && group.history.map(h => (
                       <HistoryRow
