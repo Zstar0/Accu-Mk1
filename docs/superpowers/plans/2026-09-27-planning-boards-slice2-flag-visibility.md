@@ -707,10 +707,10 @@ and call `service.list_unread(db, user_id=user_id, user=user)`.
 
 ```bash
 "$PY" -m pytest tests/test_flags_visibility_enforcement.py tests/test_flags_seams_visibility_hooks.py -q -p no:cacheprovider
-"$PY" -m pytest tests/test_flags_activity.py tests/test_flags_activity_relevance.py tests/test_flags_context_batch.py tests/test_flags_entity_search.py tests/test_flags_documents.py -q -p no:cacheprovider
+"$PY" -m pytest tests/test_flags_activity.py tests/test_flags_activity_relevance.py tests/test_flags_context_batch.py tests/test_flags_entity_search.py tests/test_flags_documents.py tests/test_slack_digest.py -q -p no:cacheprovider
 ```
 
-Expected: `12 passed` and `8 passed` respectively for the two new/extended files (4 + 8 in enforcement, 7 + 1 in hooks); the existing files unchanged. Also run the Slack digest tests if present: `ls tests | grep -i digest` and run any hits.
+Expected: `12 passed` and `8 passed` respectively for the two new/extended files (4 + 8 in enforcement, 7 + 1 in hooks); the existing files, including `test_slack_digest.py`, unchanged.
 
 - [ ] **Step 6: Commit**
 
@@ -910,10 +910,10 @@ In `backend/flags/service.py` `add_entity_link`, after loading the flag and vali
 - [ ] **Step 4: Run to verify pass**
 
 ```bash
-"$PY" -m pytest tests/test_flags_visibility_enforcement.py tests/test_flags_links.py -q -p no:cacheprovider 2>/dev/null || "$PY" -m pytest tests/test_flags_visibility_enforcement.py -q -p no:cacheprovider
+"$PY" -m pytest tests/test_flags_visibility_enforcement.py tests/test_flags_links.py -q -p no:cacheprovider
 ```
 
-(Run `ls tests | grep -i link` first and include any flag link test files that exist.) Expected: `17 passed` in the enforcement file.
+Expected: `17 passed` in the enforcement file; `test_flags_links.py` unchanged.
 
 - [ ] **Step 5: Commit**
 
@@ -1147,10 +1147,10 @@ In `backend/slack_notify/notifier.py` line 128: `sub = bus.subscribe(None, syste
 
 ```bash
 "$PY" -m pytest tests/test_flags_bus.py tests/test_flags_visibility_enforcement.py -q -p no:cacheprovider
-"$PY" -m pytest tests/test_flags_sse.py -q -p no:cacheprovider 2>/dev/null; ls tests | grep -iE "sse|stream|slack" 
+"$PY" -m pytest tests/test_flags_stream.py tests/test_is_event_stream_sync.py tests/test_flags_reactions.py tests/test_slack_notify_notifier.py tests/test_slack_notify_planner.py -q -p no:cacheprovider
 ```
 
-Run every file the `ls` prints. Expected: bus file 10 passed (5 + 5), enforcement 18 passed, existing SSE/Slack files unchanged.
+Expected: bus file 10 passed (5 + 5), enforcement 18 passed, the existing stream/reaction/Slack files unchanged. Note: `tests/test_flags_stream.py:84` calls the route function directly as `stream(FakeRequest(), user=user)`, so `db` arrives as the `Depends` marker, not a Session. Guard it in the route: `if not isinstance(db, Session): gids, adm = frozenset(), False` before calling `seams.resolve_membership` (fail closed), so that test keeps passing unchanged.
 
 - [ ] **Step 7: Commit**
 
