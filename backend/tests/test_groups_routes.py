@@ -23,6 +23,7 @@ def client():
     from database import Base, get_db
     import models  # noqa: F401
     import groups.models  # noqa: F401
+    import boards.models  # noqa: F401
     from models import User
 
     engine = create_engine("sqlite:///:memory:",
