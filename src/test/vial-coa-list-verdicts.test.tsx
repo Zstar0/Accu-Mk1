@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import type * as ApiModule from '@/lib/api'
 import type { ExplorerCOAGeneration } from '@/lib/api'
 
@@ -72,8 +72,18 @@ describe('VialCOAList verdict controls', () => {
         onStateChanged={vi.fn()}
       />
     )
-    expect(screen.getAllByRole('button', { name: /revoke/i })).toHaveLength(2)
-    expect(screen.getAllByLabelText('Forward to current')).toHaveLength(1)
+    const manage = screen.getAllByRole('button', { name: 'Manage' })
+    expect(manage).toHaveLength(2)
+
+    // Published vial: Revoke only.
+    fireEvent.click(manage[0] as HTMLElement)
+    expect(screen.getByRole('button', { name: 'Revoke…' })).toBeTruthy()
+    expect(screen.queryByLabelText('Forward to current')).toBeNull()
+
+    // Superseded vial: Forward plus Revoke (opening it closes the first popover).
+    fireEvent.click(manage[1] as HTMLElement)
+    expect(screen.getByLabelText('Forward to current')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Revoke…' })).toBeTruthy()
   })
 
   it('offers nothing on a draft or a revoked vial', () => {
@@ -85,6 +95,7 @@ describe('VialCOAList verdict controls', () => {
         ]}
       />
     )
+    expect(screen.queryByRole('button', { name: 'Manage' })).toBeNull()
     expect(screen.queryByRole('button', { name: /revoke/i })).toBeNull()
     expect(screen.queryByLabelText('Forward to current')).toBeNull()
     expect(screen.getByText('Revoked')).toBeTruthy()

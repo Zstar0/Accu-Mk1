@@ -57,6 +57,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { toast } from 'sonner'
 import {
   EMPTY_PROMOTION_INDEX,
@@ -854,9 +855,11 @@ function PrimaryRegenButton({
 export function ForwardToCurrentToggle({
   gen,
   onChanged,
+  hideLabel,
 }: {
   gen: ExplorerCOAGeneration
   onChanged?: () => void
+  hideLabel?: boolean
 }) {
   return (
     <span
@@ -881,7 +884,7 @@ export function ForwardToCurrentToggle({
           }
         }}
       />
-      <span>Forward to current</span>
+      {!hideLabel && <span>Forward to current</span>}
     </span>
   )
 }
@@ -899,12 +902,23 @@ export function ForwardToCurrentToggle({
 export function RevokeCOADialog({
   gen,
   onRevoked,
+  open,
+  onOpenChange,
+  hideTrigger,
 }: {
   gen: ExplorerCOAGeneration
   onRevoked?: () => void
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+  hideTrigger?: boolean
 }) {
   const isAdmin = useAuthStore(s => s.user?.role === 'admin')
-  const [open, setOpen] = useState(false)
+  const [ownOpen, setOwnOpen] = useState(false)
+  const isOpen = open ?? ownOpen
+  const setOpenState = (o: boolean) => {
+    if (open === undefined) setOwnOpen(o)
+    onOpenChange?.(o)
+  }
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
   const [includeOthers, setIncludeOthers] = useState(false)
@@ -959,7 +973,7 @@ export function RevokeCOADialog({
             'WordPress did not accept the notice. The portal and email need a manual follow-up.',
         })
       }
-      setOpen(false)
+      setOpenState(false)
       reset()
       onRevoked?.()
     } catch (err) {
@@ -975,19 +989,21 @@ export function RevokeCOADialog({
 
   return (
     <>
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="h-6 px-2 text-[11px] text-red-600 hover:text-red-700"
-        onClick={() => setOpen(true)}
-      >
-        Revoke…
-      </Button>
+      {!hideTrigger && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-6 px-2 text-[11px] text-red-600 hover:text-red-700"
+          onClick={() => setOpenState(true)}
+        >
+          Revoke…
+        </Button>
+      )}
       <Dialog
-        open={open}
+        open={isOpen}
         onOpenChange={o => {
-          setOpen(o)
+          setOpenState(o)
           if (!o) reset()
         }}
       >
@@ -1067,7 +1083,7 @@ export function RevokeCOADialog({
               variant="outline"
               size="sm"
               onClick={() => {
-                setOpen(false)
+                setOpenState(false)
                 reset()
               }}
               disabled={busy}
@@ -1088,6 +1104,150 @@ export function RevokeCOADialog({
           </div>
         </DialogContent>
       </Dialog>
+    </>
+  )
+}
+
+const FORWARD_HELP =
+  'This certificate was replaced by a newer one. Off (default): the public page still shows it exactly as issued. On: the public page shows a Superseded notice and links to the current certificate. PDF downloads keep working either way. Any lab user can switch this.'
+const REGEN_HELP_PRIMARY =
+  'Builds a new primary generation with a new verification code and publishes it. This certificate becomes Superseded and stays verifiable. Additional COAs keep their codes.'
+const REGEN_HELP_ADDITIONAL =
+  'Builds a new generation of this additional COA with a new verification code and publishes it. This one becomes Superseded and stays verifiable.'
+const REVOKE_HELP =
+  'Withdraws the certificate permanently. The public page and the AccuVerify badge show Certificate Revoked with your reason, the customer portal marks it Revoked and its PDF can no longer be downloaded, and the customer is emailed unless you switch that off. Nothing replaces a revoked certificate; regenerate if a corrected one is needed. On a primary you can also revoke every other certificate of the sample in one action. Admins only.'
+
+function ManageRow({
+  title,
+  hint,
+  help,
+  destructive,
+  children,
+}: {
+  title: string
+  hint: string
+  help: string
+  destructive?: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <div className="min-w-0 space-y-0.5">
+        <div className="flex items-center gap-1.5">
+          <span className={cn('text-xs font-medium', destructive && 'text-red-600')}>
+            {title}
+          </span>
+          <HoverTooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex text-muted-foreground/70 hover:text-foreground"
+                aria-label={`About ${title}`}
+              >
+                <Info size={12} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-xs text-[11px] leading-snug">
+              {help}
+            </TooltipContent>
+          </HoverTooltip>
+        </div>
+        <p className="text-[11px] text-muted-foreground">{hint}</p>
+      </div>
+      <div className="shrink-0 flex items-center">{children}</div>
+    </div>
+  )
+}
+
+/**
+ * Per-row popover that gathers the lab COA actions (Forward to current,
+ * Regen & Republish, Revoke) behind a single "Manage" trigger, each with a
+ * one-line hint and a hover help icon. View Digital COA and PDF stay inline
+ * at the call site; this only replaces the inline control clusters.
+ */
+export function CoaManagePopover({
+  gen,
+  onStateChanged,
+  regen,
+  regenHelp = REGEN_HELP_PRIMARY,
+}: {
+  gen: ExplorerCOAGeneration
+  onStateChanged?: () => void
+  /** The row's existing regen control (PrimaryRegenButton or the ACOA Regen button), rendered inside the popover. */
+  regen?: React.ReactNode
+  regenHelp?: string
+}) {
+  const isAdmin = useAuthStore(s => s.user?.role === 'admin')
+  const [open, setOpen] = useState(false)
+  const [revokeOpen, setRevokeOpen] = useState(false)
+  const issued = gen.status === 'published' || gen.status === 'superseded'
+  const showForward = gen.status === 'superseded'
+  const showRevoke = isAdmin && issued
+  const showRegen = regen != null
+  if (!showForward && !showRevoke && !showRegen) return null
+  return (
+    <>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button type="button" variant="outline" size="sm" className="h-6 px-2 text-[11px]">
+            Manage
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-80 p-3 space-y-3">
+          <div className="flex items-center gap-2 text-xs">
+            <span className="font-mono">{gen.verification_code}</span>
+            <span className="text-muted-foreground">Gen #{gen.generation_number}</span>
+          </div>
+          {showForward && (
+            <ManageRow
+              title="Forward to current"
+              hint="Public page adds a Superseded notice and a link to the current certificate"
+              help={FORWARD_HELP}
+            >
+              <ForwardToCurrentToggle gen={gen} onChanged={onStateChanged} hideLabel />
+            </ManageRow>
+          )}
+          {showRegen && (
+            <ManageRow
+              title="Regen & Republish"
+              hint="New generation and code; this one becomes Superseded"
+              help={regenHelp}
+            >
+              {regen}
+            </ManageRow>
+          )}
+          {showRevoke && (
+            <ManageRow
+              title="Revoke"
+              hint="Permanent. Public page shows Certificate Revoked"
+              help={REVOKE_HELP}
+              destructive
+            >
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-[11px] text-red-600 hover:text-red-700"
+                onClick={() => {
+                  setOpen(false)
+                  setRevokeOpen(true)
+                }}
+              >
+                Revoke…
+              </Button>
+            </ManageRow>
+          )}
+        </PopoverContent>
+      </Popover>
+      {showRevoke && (
+        <RevokeCOADialog
+          gen={gen}
+          onRevoked={onStateChanged}
+          open={revokeOpen}
+          onOpenChange={setRevokeOpen}
+          hideTrigger
+        />
+      )}
     </>
   )
 }
@@ -1163,18 +1323,18 @@ export function GeneratedCOAFallbackList({
                     sampleId={sampleId}
                     generationNumber={gen.generation_number}
                   />
-                  {gen.status === 'superseded' && (
-                    <ForwardToCurrentToggle gen={gen} onChanged={onStateChanged} />
-                  )}
-                  {(gen.status === 'published' || gen.status === 'superseded') && (
-                    <RevokeCOADialog gen={gen} onRevoked={onStateChanged} />
-                  )}
-                  {onPrimaryRegenerated && gen.id === regenTarget?.id && (
-                    <PrimaryRegenButton
-                      sampleId={sampleId}
-                      onRegenerated={onPrimaryRegenerated}
-                    />
-                  )}
+                  <CoaManagePopover
+                    gen={gen}
+                    onStateChanged={onStateChanged}
+                    regen={
+                      onPrimaryRegenerated && gen.id === regenTarget?.id ? (
+                        <PrimaryRegenButton
+                          sampleId={sampleId}
+                          onRegenerated={onPrimaryRegenerated}
+                        />
+                      ) : undefined
+                    }
+                  />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-x-3 gap-y-1">
@@ -1271,12 +1431,7 @@ export function VialCOAList({
                   {release.label}
                 </span>
                 <span className="ml-auto flex items-center gap-2 shrink-0">
-                  {gen.status === 'superseded' && (
-                    <ForwardToCurrentToggle gen={gen} onChanged={onStateChanged} />
-                  )}
-                  {(gen.status === 'published' || gen.status === 'superseded') && (
-                    <RevokeCOADialog gen={gen} onRevoked={onStateChanged} />
-                  )}
+                  <CoaManagePopover gen={gen} onStateChanged={onStateChanged} />
                 </span>
               </div>
               <div className="grid grid-cols-2 gap-x-3 gap-y-1">
@@ -1397,16 +1552,15 @@ export function PublishedCOACard({
               )}
               PDF
             </button>
-            <span className="flex items-center gap-2">
-              {generation && generation.status === 'superseded' && (
-                <ForwardToCurrentToggle gen={generation} onChanged={onRefresh} />
-              )}
-              {generation &&
-                (generation.status === 'published' || generation.status === 'superseded') && (
-                  <RevokeCOADialog gen={generation} onRevoked={onRefresh} />
-                )}
-            </span>
-            <PrimaryRegenButton sampleId={sampleId} onRegenerated={onRefresh} />
+            {generation ? (
+              <CoaManagePopover
+                gen={generation}
+                onStateChanged={onRefresh}
+                regen={<PrimaryRegenButton sampleId={sampleId} onRegenerated={onRefresh} />}
+              />
+            ) : (
+              <PrimaryRegenButton sampleId={sampleId} onRegenerated={onRefresh} />
+            )}
           </div>
         </div>
         <div className="grid grid-cols-2 gap-x-3 gap-y-1">
@@ -3348,8 +3502,7 @@ function EarlierVersionsList({
                 </span>
               </span>
               <span className="flex items-center gap-2 shrink-0">
-                <ForwardToCurrentToggle gen={v} onChanged={onStateChanged} />
-                <RevokeCOADialog gen={v} onRevoked={onStateChanged} />
+                <CoaManagePopover gen={v} onStateChanged={onStateChanged} />
               </span>
             </li>
           ))}
@@ -3451,6 +3604,22 @@ export function AdditionalCoaCard({
     }
   }
 
+  const regenButton = coa.generation_id ? (
+    <button
+      onClick={handleRegen}
+      disabled={regenerating}
+      title="Regenerate & republish just this additional COA. Mints a new verification code."
+      className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-600 hover:bg-amber-500/20 transition-colors disabled:opacity-50 cursor-pointer dark:text-amber-400"
+    >
+      {regenerating ? (
+        <Loader2 size={11} className="animate-spin" />
+      ) : (
+        <RefreshCw size={11} />
+      )}
+      Regen
+    </button>
+  ) : undefined
+
   return (
     <div className="rounded-lg bg-muted/50 border border-border/30">
       <button
@@ -3548,25 +3717,16 @@ export function AdditionalCoaCard({
                   PDF
                 </button>
               )}
-              {coa.generation_id && (
-                <button
-                  onClick={handleRegen}
-                  disabled={regenerating}
-                  title="Regenerate & republish just this additional COA. Mints a new verification code."
-                  className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-600 hover:bg-amber-500/20 transition-colors disabled:opacity-50 cursor-pointer dark:text-amber-400"
-                >
-                  {regenerating ? (
-                    <Loader2 size={11} className="animate-spin" />
-                  ) : (
-                    <RefreshCw size={11} />
-                  )}
-                  Regen
-                </button>
+              {generation ? (
+                <CoaManagePopover
+                  gen={generation}
+                  onStateChanged={onStateChanged}
+                  regen={regenButton}
+                  regenHelp={REGEN_HELP_ADDITIONAL}
+                />
+              ) : (
+                regenButton
               )}
-              {generation &&
-                (generation.status === 'published' || generation.status === 'superseded') && (
-                  <RevokeCOADialog gen={generation} onRevoked={onStateChanged} />
-                )}
             </div>
           </div>
           <EarlierVersionsList versions={earlierVersions} onStateChanged={onStateChanged} />

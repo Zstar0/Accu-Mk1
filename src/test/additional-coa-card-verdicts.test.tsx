@@ -108,6 +108,7 @@ describe('AdditionalCoaCard verdict controls', () => {
   it('offers Revoke on the current certificate once opened', () => {
     renderCard()
     fireEvent.click(screen.getByRole('button', { name: /Acme Peptides/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Manage' }))
     expect(screen.getByRole('button', { name: /^revoke/i })).toBeTruthy()
   })
 
@@ -118,8 +119,21 @@ describe('AdditionalCoaCard verdict controls', () => {
       screen.getByRole('button', { name: /Earlier versions \(1\)/ })
     )
     expect(screen.getByText('OLD-0001')).toBeTruthy()
+
+    // Each row is its own popover (a click outside one closes it), so open
+    // and check them one at a time rather than expecting both open together.
+    const [currentManage, oldManage] = screen.getAllByRole('button', {
+      name: 'Manage',
+    })
+    if (!currentManage || !oldManage)
+      throw new Error('expected two Manage buttons')
+
+    fireEvent.click(currentManage)
+    expect(screen.getByRole('button', { name: /^revoke/i })).toBeTruthy()
+
+    fireEvent.click(oldManage)
     expect(screen.getByLabelText('Forward to current')).toBeTruthy()
-    expect(screen.getAllByRole('button', { name: /^revoke/i })).toHaveLength(2)
+    expect(screen.getByRole('button', { name: /^revoke/i })).toBeTruthy()
   })
 
   it('shows the generation status (revoked) over the config status', () => {
@@ -133,6 +147,7 @@ describe('AdditionalCoaCard verdict controls', () => {
     })
     expect(screen.getByText('revoked')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /Acme Peptides/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Manage' }))
     expect(screen.queryByRole('button', { name: /^revoke/i })).toBeNull()
   })
 
@@ -142,6 +157,7 @@ describe('AdditionalCoaCard verdict controls', () => {
     })
     renderCard()
     fireEvent.click(screen.getByRole('button', { name: /Acme Peptides/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Manage' }))
     expect(screen.queryByRole('button', { name: /^revoke/i })).toBeNull()
   })
 })

@@ -117,6 +117,9 @@ describe('GeneratedCOAFallbackList verdict controls', () => {
       />
     )
 
+    screen
+      .getAllByRole('button', { name: 'Manage' })
+      .forEach(btn => fireEvent.click(btn))
     expect(screen.getAllByLabelText('Forward to current')).toHaveLength(1) // superseded only
     fireEvent.click(screen.getByLabelText('Forward to current'))
 
@@ -151,8 +154,9 @@ describe('GeneratedCOAFallbackList verdict controls', () => {
       />
     )
 
-    expect(screen.getAllByRole('button', { name: /revoke/i })).toHaveLength(1) // published yes, draft no
-    fireEvent.click(screen.getByRole('button', { name: /revoke/i }))
+    expect(screen.getAllByRole('button', { name: 'Manage' })).toHaveLength(1) // published yes, draft no
+    fireEvent.click(screen.getByRole('button', { name: 'Manage' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke…' }))
 
     const reason = await screen.findByPlaceholderText(/reason/i)
     fireEvent.change(reason, { target: { value: 'Sample mix-up' } })
@@ -188,7 +192,8 @@ describe('GeneratedCOAFallbackList verdict controls', () => {
     render(
       <GeneratedCOAFallbackList generations={[PUBLISHED]} sampleId="P-0001" />
     )
-    fireEvent.click(screen.getByRole('button', { name: /revoke/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Manage' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke…' }))
 
     const emailBox = await screen.findByLabelText(
       'Email the customer about this revocation'
@@ -232,6 +237,7 @@ describe('GeneratedCOAFallbackList verdict controls', () => {
       />
     )
     expect(screen.getByText('Revoked')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Manage' })).toBeNull()
     expect(screen.queryByRole('button', { name: /revoke/i })).toBeNull()
     expect(screen.queryByLabelText('Forward to current')).toBeNull()
   })
@@ -244,6 +250,7 @@ describe('GeneratedCOAFallbackList verdict controls', () => {
         sampleId="P-0001"
       />
     )
+    fireEvent.click(screen.getByRole('button', { name: 'Manage' })) // superseded only; published has no controls at all here
     expect(screen.queryByRole('button', { name: /revoke/i })).toBeNull()
     expect(screen.getByLabelText('Forward to current')).toBeTruthy()
   })
@@ -284,7 +291,8 @@ describe('GeneratedCOAFallbackList verdict controls', () => {
     render(
       <GeneratedCOAFallbackList generations={[PUBLISHED]} sampleId="P-0001" />
     )
-    fireEvent.click(screen.getByRole('button', { name: /revoke/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Manage' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke…' }))
     fireEvent.click(
       screen.getByLabelText(
         'Also revoke every other certificate issued for this sample'
@@ -322,7 +330,8 @@ describe('GeneratedCOAFallbackList verdict controls', () => {
       verification_code: 'ACOA-0001',
     })
     render(<GeneratedCOAFallbackList generations={[child]} sampleId="P-0001" />)
-    fireEvent.click(screen.getByRole('button', { name: /revoke/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Manage' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke…' }))
     expect(
       screen.queryByLabelText(
         'Also revoke every other certificate issued for this sample'
@@ -354,7 +363,8 @@ describe('GeneratedCOAFallbackList verdict controls', () => {
     render(
       <GeneratedCOAFallbackList generations={[PUBLISHED]} sampleId="P-0001" />
     )
-    fireEvent.click(screen.getByRole('button', { name: /revoke/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Manage' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke…' }))
     fireEvent.change(screen.getByPlaceholderText(/reason/i), {
       target: { value: 'r' },
     })
@@ -400,7 +410,8 @@ describe('GeneratedCOAFallbackList verdict controls', () => {
       <GeneratedCOAFallbackList generations={[PUBLISHED]} sampleId="P-0001" />
     )
 
-    fireEvent.click(screen.getByRole('button', { name: /revoke/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Manage' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke…' }))
     fireEvent.change(screen.getByPlaceholderText(/reason/i), {
       target: { value: 'stale' },
     })
@@ -412,7 +423,8 @@ describe('GeneratedCOAFallbackList verdict controls', () => {
     expect(await screen.findByText('ACOA-0009')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }))
 
-    fireEvent.click(screen.getByRole('button', { name: /revoke/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Manage' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke…' }))
     expect(
       (screen.getByPlaceholderText(/reason/i) as HTMLTextAreaElement).value
     ).toBe('')

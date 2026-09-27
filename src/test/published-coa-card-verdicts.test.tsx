@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import type { ComponentProps } from 'react'
 import type * as ApiModule from '@/lib/api'
 import type { ExplorerCOAGeneration, SenaitePublishedCOA } from '@/lib/api'
@@ -100,11 +100,13 @@ beforeEach(() => {
 describe('PublishedCOACard verdict controls', () => {
   it('offers Revoke on a published root to an admin', () => {
     renderCard({ generation: PUBLISHED })
+    fireEvent.click(screen.getByRole('button', { name: 'Manage' }))
     expect(screen.getByRole('button', { name: /^revoke/i })).toBeTruthy()
   })
 
   it('offers Forward to current on a superseded root to an admin', () => {
     renderCard({ generation: SUPERSEDED })
+    fireEvent.click(screen.getByRole('button', { name: 'Manage' }))
     expect(screen.getByLabelText('Forward to current')).toBeTruthy()
     expect(screen.getByRole('button', { name: /^revoke/i })).toBeTruthy()
   })
@@ -114,6 +116,7 @@ describe('PublishedCOACard verdict controls', () => {
       user: { id: 2, email: 'tech@example.com', role: 'hplc' } as never,
     })
     renderCard({ generation: PUBLISHED })
+    fireEvent.click(screen.getByRole('button', { name: 'Manage' }))
     expect(screen.queryByRole('button', { name: /^revoke/i })).toBeNull()
   })
 })
