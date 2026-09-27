@@ -24,6 +24,7 @@ export function PromotedFromBadge({
     return (
       <span
         title={`Carried from ${origin}, promoted ${datePart} by ${byWhom}`}
+        role="note"
         aria-label="Carried from original"
         className="inline-flex items-center gap-1 rounded-md border border-violet-300 bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-300 shrink-0"
       >
