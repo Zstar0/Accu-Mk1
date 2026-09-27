@@ -388,7 +388,7 @@ def entity_search(entity_type: str = Query(..., description="registered entity t
         return []
     try:
         return [EntitySearchHit.model_validate(h)
-                for h in seams.resolve_entity_search(db, entity_type, query)]
+                for h in seams.resolve_entity_search(db, entity_type, query, user=user)]
     except Exception as e:
         raise _http(e)
 

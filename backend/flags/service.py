@@ -198,7 +198,11 @@ def create_flag(db: Session, *, user, entity_type, entity_id, type, title,
     # seam (and no entity_id) to authorize against.
     if entity_type is not None and not is_virtual_kind:
         spec = seams.get_entity_spec(entity_type)
-        if not spec.can_flag(user, str(entity_id)):
+        # can_raise (db-aware, planning boards) wins over the legacy can_flag when defined.
+        # It may raise BadRequestError itself (e.g. "flag the underlying entity instead").
+        allowed = (spec.can_raise(db, user, str(entity_id)) if spec.can_raise is not None
+                   else spec.can_flag(user, str(entity_id)))
+        if not allowed:
             raise PermissionDeniedError(f"not allowed to flag {entity_type} {entity_id}")
         # Opt-in per entity type: a typo'd id would otherwise open a thread nobody can see.
         if spec.must_exist and seams.resolve_context(db, entity_type, str(entity_id)) is None:

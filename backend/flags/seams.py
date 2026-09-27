@@ -55,6 +55,17 @@ class EntitySpec:
     # resolves to None is refused. Off for the legacy types, which accept ids the
     # registry cannot resolve.
     must_exist: bool = False
+    # --- visibility seams (planning boards, spec 2026-09-26 §6.2, §14) ---------------
+    # can_raise(db, user, entity_id): db-aware replacement for can_flag. When set,
+    # create_flag consults it INSTEAD of can_flag. May raise BadRequestError to answer 400.
+    can_raise: Optional[Callable[[Session, object, str], bool]] = None
+    # can_view(db, user, entity_id): point visibility check. Unset = visible to all staff.
+    can_view: Optional[Callable[[Session, object, str], bool]] = None
+    # visible_entity_ids(db, user): a Select of the entity_ids (as strings) of this type the
+    # user may see, or None meaning "all". Lets list queries stay in SQL.
+    visible_entity_ids: Optional[Callable[[Session, object], Optional[object]]] = None
+    # search_scoped(db, user, q): typeahead that needs the user; preferred over `search`.
+    search_scoped: Optional[Callable[[Session, object, str], list]] = None
 
 
 _REGISTRY: dict[str, EntitySpec] = {}
@@ -62,12 +73,17 @@ _REGISTRY: dict[str, EntitySpec] = {}
 
 def register_entity(entity_type: str, *, label, deep_link, can_flag,
                     context=None, contexts=None, descendants=None, state=None,
-                    search=None, snapshot=None, must_exist=False) -> None:
+                    search=None, snapshot=None, must_exist=False,
+                    can_raise=None, can_view=None, visible_entity_ids=None,
+                    search_scoped=None) -> None:
     _REGISTRY[entity_type] = EntitySpec(entity_type, label, deep_link, can_flag,
                                         context=context, contexts=contexts,
                                         descendants=descendants,
                                         state=state, search=search,
-                                        snapshot=snapshot, must_exist=must_exist)
+                                        snapshot=snapshot, must_exist=must_exist,
+                                        can_raise=can_raise, can_view=can_view,
+                                        visible_entity_ids=visible_entity_ids,
+                                        search_scoped=search_scoped)
 
 
 def is_registered(entity_type: str) -> bool:
@@ -170,20 +186,61 @@ def resolve_state(db: Session, entity_type: str, entity_id: str) -> Optional[str
         return None
 
 
-def resolve_entity_search(db: Session, entity_type: str, q: str) -> list:
+def resolve_entity_search(db: Session, entity_type: str, q: str, user=None) -> list:
     """Typeahead hits for a registered entity type, as
-    `[{"entity_id": str, "label": str}, …]`. Returns [] for an unregistered
-    type, a type with no `search` resolver, or on resolver error — never raises
-    into a request (mirrors resolve_context/resolve_state; a picker with no
-    results is fine, a 500 is not)."""
+    `[{"entity_id": str, "label": str}, …]`. A type with `search_scoped` is searched with
+    the user (no user -> []); otherwise the legacy `search(db, q)` runs. Returns [] for an
+    unregistered type, no resolver, or resolver error : never raises into a request."""
     spec = _REGISTRY.get(entity_type)
-    if spec is None or spec.search is None:
+    if spec is None:
         return []
     try:
-        rows = spec.search(db, str(q))
-    except Exception:  # noqa: BLE001 — search is best-effort decoration
+        if spec.search_scoped is not None:
+            if user is None:
+                return []
+            rows = spec.search_scoped(db, user, str(q))
+        elif spec.search is not None:
+            rows = spec.search(db, str(q))
+        else:
+            return []
+    except Exception:  # noqa: BLE001 : search is best-effort decoration
         return []
     return list(rows or [])
+
+
+def can_view_entity(db: Session, user, entity_type: str, entity_id) -> bool:
+    """Point visibility check. Types without `can_view` are visible to all staff. A raising
+    closure hides the entity (fail closed), never shows it."""
+    spec = _REGISTRY.get(entity_type)
+    if spec is None or spec.can_view is None:
+        return True
+    try:
+        return bool(spec.can_view(db, user, str(entity_id)))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def visibility_clause(db: Session, user):
+    """SQL predicate over FlagFlag: for every registered type that scopes visibility,
+    (entity_type IS NULL) OR (entity_type != T) OR (entity_id IN <visible ids>). Types
+    without the seam add nothing; unanchored general tasks always pass. A closure that
+    raises hides that whole type (fail closed). Slice 2 adds this to every list query."""
+    from sqlalchemy import and_, or_, true
+    from flags.models import FlagFlag
+    clauses = []
+    for spec in list(_REGISTRY.values()):
+        if spec.visible_entity_ids is None:
+            continue
+        not_this_type = or_(FlagFlag.entity_type.is_(None), FlagFlag.entity_type != spec.entity_type)
+        try:
+            sub = spec.visible_entity_ids(db, user)
+        except Exception:  # noqa: BLE001
+            clauses.append(not_this_type)
+            continue
+        if sub is None:
+            continue
+        clauses.append(or_(not_this_type, FlagFlag.entity_id.in_(sub)))
+    return and_(*clauses) if clauses else true()
 
 
 def resolve_descendants(db: Session, entity_type: str, entity_id: str) -> list:
