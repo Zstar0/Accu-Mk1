@@ -62,13 +62,21 @@ def _seed(db, hplc_key="hplcpurity_identity"):
     db.commit()
 
 
-PRICES = {"addons": {"endotoxin": {"price": 200.0, "vials": 1}}, "variance": {"point_price": 76.5}}
+CONTEXT = {
+    "order": {"number": "WP-7437", "placed_at": "2026-09-20T10:00:00Z",
+              "customer_name": "Jane Doe", "customer_email": "jane@example.com",
+              "total": 285.0, "currency": "USD", "status": "processing",
+              "lines": [{"key": "hplc", "label": "HPLC Purity", "price": 85.0}]},
+    "retest_fee": {"price": 85.0},
+    "addons": {"endotoxin": {"price": 200.0, "vials": 1}},
+    "variance": {"point_price": 76.5},
+}
 
 
 def test_options_lists_profiles_eligibility_addons_and_prices(client, db_session):
     _seed(db_session)
     resp = MagicMock(status_code=200)
-    resp.json.return_value = PRICES
+    resp.json.return_value = CONTEXT
     with patch.dict(os.environ, {"INTEGRATION_SERVICE_URL": "http://is", "ACCU_MK1_API_KEY": "k"}), \
             patch("lims_analyses.retest_routes.requests.get", return_value=resp):
         r = client.get("/api/samples/P-2799/retest-options")
@@ -82,6 +90,8 @@ def test_options_lists_profiles_eligibility_addons_and_prices(client, db_session
     assert endo["key"] == "endotoxin-usp85-lal" and endo["price"] == 200.0 and endo["vials"] == 1
     assert body["variance"] == {"point_price": 76.5, "allowed": True}
     assert body["prices_available"] is True
+    assert body["context"]["order"]["customer_email"] == "jane@example.com"
+    assert body["context"]["retest_fee"]["price"] == 85.0
 
 
 @pytest.mark.parametrize("hplc_key", ["hplcpurity_identity", "hplc-purity-identity"])
@@ -101,6 +111,7 @@ def test_options_without_is_still_renders(client, db_session):
     body = r.json()
     assert body["prices_available"] is False and body["addons"][0]["price"] is None
     assert body["variance"]["point_price"] is None
+    assert body["context"] is None
 
 
 def test_options_unknown_sample_404(client, db_session):
