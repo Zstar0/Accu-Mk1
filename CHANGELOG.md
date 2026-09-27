@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Planning boards, slice 1: groups and boards backend
+- **User groups.** New `user_groups` / `user_group_members` tables, admin CRUD at `/api/groups`, a Groups pane in Settings (create, rename, deactivate, edit members; delete only when unused). Groups are the unit of access for boards and, through board nodes, for flags.
+- **Boards API.** `board_boards`, `board_grants`, `board_nodes`, `board_edges` and `/api/boards` (boards, grants, nodes with per-kind validation and optimistic versions, a positions batch that is all-or-nothing, edges, and a `for-entity` reverse lookup). Company boards are viewable by every active user and editable by granted groups; restricted boards cannot be created yet (`RESTRICTED_BOARDS_ENABLED` is off until the flag visibility slice lands). Boards a user cannot see answer 404 on every route.
+- **`board_node` is a flag entity.** Frames, notes, links and text on a board can carry flags; a node of kind `entity` refuses them with a 400 that names the real anchor. Frames roll up their children's flags through `descendants`. Deleting a node or board with open flags is refused (409).
+- **Flag registry gains visibility seams** (`can_raise`, `can_view`, `visible_entity_ids`, `search_scoped`) plus `can_view_entity` and `visibility_clause` helpers. `create_flag` consults `can_raise` when a type defines it; `/entity-search` passes the caller so scoped types can filter. No read path is filtered yet. See `docs/developer/flags-add-entity.md`.
+
 ## v1.28.0 - 2026-09-23
 
 ### Worksheets 2.0: rapid sterility PCR plate builder

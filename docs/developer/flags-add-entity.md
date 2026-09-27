@@ -163,3 +163,28 @@ button on `SamplePrepsPage`.
 - **The `EntityContext` shape** — produce it from your `context` closure; don't
   add fields without updating both the Pydantic model (`flags/schemas.py`) and
   the TS type (`lib/flags-api.ts`).
+
+## Visibility seams (2026-09-26, planning boards)
+
+Four more optional closures on `register_entity(...)`. Leave them out and the type behaves
+exactly as before: raisable by anyone `can_flag` allows, visible to every staff login.
+
+```python
+register_entity(
+    "<type>", ...,
+    can_raise=lambda db, user, eid: ...,          # db-aware; WINS over can_flag when set;
+                                                  # may raise flags.errors.BadRequestError -> 400
+    can_view=lambda db, user, eid: ...,           # point check; unset = visible to all staff
+    visible_entity_ids=lambda db, user: <Select of str ids> | None,  # None = all
+    search_scoped=lambda db, user, q: [...],      # typeahead that needs the user; wins over `search`
+)
+```
+
+`seams.can_view_entity(db, user, type, id)` and `seams.visibility_clause(db, user)` are the
+helpers the flag read paths use (slice 2 of the planning boards work wires them in). A closure
+that raises hides, never shows. Unanchored general tasks always pass the clause.
+
+Worked example: `backend/boards/flag_entity.py` registers `board_node`. Its `can_raise` is
+"can edit the board", `can_view` is "can view the board", `visible_entity_ids` is a subselect of
+node ids on visible boards, and it refuses (400) to anchor a flag on a node of kind `entity`,
+pointing the caller at the underlying entity so a thread never forks.
