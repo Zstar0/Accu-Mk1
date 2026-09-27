@@ -15,18 +15,30 @@ export function useRetestOptions(sampleId: string | null, enabled: boolean) {
   })
 }
 
-export function useCreateRetest(sampleId: string, opts: { onCreated?: (r: RetestCreated) => void }) {
+export function useCreateRetest(
+  sampleId: string,
+  opts: { onCreated?: (r: RetestCreated) => void }
+) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (body: RetestRequestBody) => createRetest(sampleId, body),
     onSuccess: r => {
-      toast.success(`Retest order ${r.order_number ?? ''} created`.replace('  ', ' ').trim(), {
-        description: r.payment_url
-          ? 'Waiting for payment; the sample is created when the order completes.'
-          : 'The sample is created when the order completes.',
+      toast.success(
+        `Retest order ${r.order_number ?? ''} created`
+          .replace('  ', ' ')
+          .trim(),
+        {
+          description: r.payment_url
+            ? 'Waiting for payment; the sample is created when the order completes.'
+            : 'The sample is created when the order completes.',
+        }
+      )
+      queryClient.invalidateQueries({
+        queryKey: ['ordered-products', sampleId],
       })
-      queryClient.invalidateQueries({ queryKey: ['ordered-products', sampleId] })
-      queryClient.invalidateQueries({ queryKey: [RETEST_OPTIONS_KEY, sampleId] })
+      queryClient.invalidateQueries({
+        queryKey: [RETEST_OPTIONS_KEY, sampleId],
+      })
       opts.onCreated?.(r)
     },
     onError: (e: Error) => {
