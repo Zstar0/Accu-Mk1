@@ -2830,7 +2830,7 @@ def resolve_entity_search(db: Session, entity_type: str, q: str, user=None) -> l
     """Typeahead hits for a registered entity type, as
     `[{"entity_id": str, "label": str}, …]`. A type with `search_scoped` is searched with
     the user (no user -> []); otherwise the legacy `search(db, q)` runs. Returns [] for an
-    unregistered type, no resolver, or resolver error — never raises into a request."""
+    unregistered type, no resolver, or resolver error : never raises into a request."""
     spec = _REGISTRY.get(entity_type)
     if spec is None:
         return []
@@ -2843,7 +2843,7 @@ def resolve_entity_search(db: Session, entity_type: str, q: str, user=None) -> l
             rows = spec.search(db, str(q))
         else:
             return []
-    except Exception:  # noqa: BLE001 — search is best-effort decoration
+    except Exception:  # noqa: BLE001 : search is best-effort decoration
         return []
     return list(rows or [])
 
