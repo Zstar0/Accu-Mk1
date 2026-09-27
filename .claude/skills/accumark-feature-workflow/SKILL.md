@@ -56,8 +56,11 @@ If not, do `references/onboarding.md` first.
 7. **Verify on YOUR devbox stack.** After each commit run
    `.claude/skills/accumark-feature-workflow/scripts/devbox-mount-branch.sh <stack>`
    (it pushes; first run creates the devbox worktree and mounts it, later
-   runs fast-forward). Prove it with curl output or a screenshot from that
-   stack and name the stack in the PR. A port-forward to your own stack is
+   runs fast-forward). Then run the Playwright suite against that stack
+   (`e2e/README.md`: source your `/c/tmp/<stack>-e2e.env`, then
+   `npm run test:e2e`) and add a spec for the feature's main flow. Prove it
+   with the e2e result line, curl output or a screenshot from that stack and
+   name the stack in the PR. A port-forward to your own stack is
    fine. Not evidence: the `host` stack, production, another person's stack,
    a server you started on your laptop, or any backend that happens to
    answer.
