@@ -1657,6 +1657,7 @@ function AnalysisRow({
   const primaryTitleClass = isPrimary && primaryRole
     ? primaryTitleColorClass(primaryRole, vialRoles, departments)
     : ''
+  const retestChip = retestChipFor(analysis, retestInfo)
 
   return (
     <tr className={`border-b border-border/50 hover:bg-muted/30 transition-colors ${rowTint}`}>
@@ -1685,7 +1686,7 @@ function AnalysisRow({
           </span>
           <AnalysisServiceLink analysis={analysis} />
           <PromotedFromBadge promotion={promotionForRow(promotions, analysis)} />
-          {(() => { const chip = retestChipFor(analysis, retestInfo); return chip ? <RetestLineChip kind={chip} /> : null })()}
+          {retestChip ? <RetestLineChip kind={retestChip} /> : null}
           {vialAssign && vialAssign.matches.filter(m => {
             // The "from <vial>" promotion badge above already names the
             // source vial — drop its duplicate assignment chip and keep
