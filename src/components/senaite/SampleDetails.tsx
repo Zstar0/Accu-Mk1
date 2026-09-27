@@ -908,6 +908,7 @@ export function RevokeCOADialog({
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
   const [includeOthers, setIncludeOthers] = useState(false)
+  const [emailCustomer, setEmailCustomer] = useState(true)
   const [preview, setPreview] = useState<RevokePreviewItem[] | null>(null)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const isPrimary = gen.parent_generation_id == null
@@ -932,6 +933,7 @@ export function RevokeCOADialog({
   const reset = () => {
     setReason('')
     setIncludeOthers(false)
+    setEmailCustomer(true)
     setPreview(null)
     setPreviewError(null)
   }
@@ -939,7 +941,7 @@ export function RevokeCOADialog({
   const handleRevoke = async () => {
     setBusy(true)
     try {
-      const result = await revokeCoaGeneration(gen.id, reason.trim(), includeCodes)
+      const result = await revokeCoaGeneration(gen.id, reason.trim(), includeCodes, emailCustomer)
       const codes = result.revoked.map(r => r.verification_code)
       toast.success(
         codes.length === 1 ? `Revoked ${codes[0]}` : `Revoked ${codes.length} certificates`,
@@ -1046,7 +1048,19 @@ export function RevokeCOADialog({
               )}
             </div>
           )}
-          <p className="text-[11px] text-muted-foreground">The customer will be emailed.</p>
+          <label className="flex items-center gap-2 text-xs select-none cursor-pointer">
+            <Checkbox
+              aria-label="Email the customer about this revocation"
+              checked={emailCustomer}
+              onCheckedChange={checked => setEmailCustomer(checked === true)}
+            />
+            <span>Email the customer about this revocation</span>
+          </label>
+          {!emailCustomer && (
+            <p className="text-[11px] text-muted-foreground pl-6">
+              No email goes out. The portal and the public page still show Revoked.
+            </p>
+          )}
           <div className="flex justify-end gap-2">
             <Button
               type="button"

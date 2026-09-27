@@ -161,9 +161,60 @@ describe('GeneratedCOAFallbackList verdict controls', () => {
     )
 
     await waitFor(() =>
-      expect(mockRevoke).toHaveBeenCalledWith('g2', 'Sample mix-up', [])
+      expect(mockRevoke).toHaveBeenCalledWith('g2', 'Sample mix-up', [], true)
     )
     await waitFor(() => expect(onStateChanged).toHaveBeenCalled())
+  })
+
+  it('unticking "Email the customer" revokes without the customer email', async () => {
+    signInAs('admin')
+    mockRevoke.mockResolvedValue({
+      revoked: [
+        {
+          generation_id: 'g2',
+          verification_code: 'PRIM-0002',
+          status: 'revoked',
+          kind: 'primary',
+          brand: null,
+          revoked_at: '2026-09-23T15:04:05Z',
+          revocation_reason: 'Internal test certificate',
+        },
+      ],
+      skipped: [],
+      wp_notified: true,
+      wp_error: null,
+    })
+
+    render(
+      <GeneratedCOAFallbackList generations={[PUBLISHED]} sampleId="P-0001" />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /revoke/i }))
+
+    const emailBox = await screen.findByLabelText(
+      'Email the customer about this revocation'
+    )
+    expect(
+      emailBox.getAttribute('aria-checked') ??
+        emailBox.getAttribute('data-state')
+    ).toMatch(/true|checked/)
+    fireEvent.click(emailBox)
+    expect(screen.getByText(/No email goes out/)).toBeTruthy()
+
+    fireEvent.change(screen.getByPlaceholderText(/reason/i), {
+      target: { value: 'Internal test certificate' },
+    })
+    fireEvent.click(
+      screen.getByRole('button', { name: /^revoke 1 certificate$/i })
+    )
+
+    await waitFor(() =>
+      expect(mockRevoke).toHaveBeenCalledWith(
+        'g2',
+        'Internal test certificate',
+        [],
+        false
+      )
+    )
   })
 
   it('labels a revoked row as Revoked and offers no controls on it', () => {
@@ -254,10 +305,12 @@ describe('GeneratedCOAFallbackList verdict controls', () => {
     )
 
     await waitFor(() =>
-      expect(mockRevoke).toHaveBeenCalledWith('g2', 'Lot recalled', [
-        'ACOA-0009',
-        'OLD-0001',
-      ])
+      expect(mockRevoke).toHaveBeenCalledWith(
+        'g2',
+        'Lot recalled',
+        ['ACOA-0009', 'OLD-0001'],
+        true
+      )
     )
   })
 

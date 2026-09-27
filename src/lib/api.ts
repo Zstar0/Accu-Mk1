@@ -2150,19 +2150,21 @@ export async function getCoaRevokePreview(
 /**
  * Terminal: the certificate no longer stands and nothing replaces it. The reason
  * is printed on the public verdict. includeCodes must be exactly the codes the
- * preview showed; the server skips anything else. Admin only.
+ * preview showed; the server skips anything else. notifyCustomer false skips the
+ * customer email; the portal and the public page update either way. Admin only.
  */
 export async function revokeCoaGeneration(
   generationId: string,
   reason: string,
-  includeCodes: string[] = []
+  includeCodes: string[] = [],
+  notifyCustomer: boolean = true
 ): Promise<RevokeCOAResult> {
   const response = await fetch(
     `${API_BASE_URL()}/explorer/coa-generations/${encodeURIComponent(generationId)}/revoke`,
     {
       method: 'POST',
       headers: getBearerHeaders('application/json'),
-      body: JSON.stringify({ reason, include_codes: includeCodes }),
+      body: JSON.stringify({ reason, include_codes: includeCodes, notify_customer: notifyCustomer }),
     }
   )
   if (!response.ok) throw new Error(await extractErrorMessage(response, `COA revoke failed: ${response.status}`))

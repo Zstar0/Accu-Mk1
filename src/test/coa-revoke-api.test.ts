@@ -31,7 +31,7 @@ describe('revoke API client', () => {
     expect(out.others).toEqual([])
   })
 
-  it('revokeCoaGeneration POSTs reason and include_codes only', async () => {
+  it('revokeCoaGeneration POSTs reason, include_codes and notify_customer (no revoked_by)', async () => {
     const fetchMock = stubFetch({
       revoked: [],
       skipped: [],
@@ -45,10 +45,11 @@ describe('revoke API client', () => {
     expect(JSON.parse(String(init?.body))).toEqual({
       reason: 'Lot recalled',
       include_codes: ['ACOA-0002'],
+      notify_customer: true,
     })
   })
 
-  it('revokeCoaGeneration defaults include_codes to an empty list', async () => {
+  it('revokeCoaGeneration defaults include_codes to an empty list and notify_customer to true', async () => {
     const fetchMock = stubFetch({
       revoked: [],
       skipped: [],
@@ -59,6 +60,22 @@ describe('revoke API client', () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
       reason: 'r',
       include_codes: [],
+      notify_customer: true,
+    })
+  })
+
+  it('revokeCoaGeneration can switch the customer email off', async () => {
+    const fetchMock = stubFetch({
+      revoked: [],
+      skipped: [],
+      wp_notified: true,
+      wp_error: null,
+    })
+    await revokeCoaGeneration('g1', 'r', [], false)
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      reason: 'r',
+      include_codes: [],
+      notify_customer: false,
     })
   })
 })

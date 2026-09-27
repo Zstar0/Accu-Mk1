@@ -99,9 +99,23 @@ def test_revoke_posts_reason_codes_and_a_server_composed_revoked_by(monkeypatch)
 
     assert captured["method"] == "POST"
     assert captured["url"] == f"http://is.test/explorer/coa-generations/{GEN}/revoke"
-    assert captured["body"] == {"reason": "Lot recalled", "include_codes": ["ACOA-0002"], "revoked_by": "Ada Lovelace <ada@lab.test>"}
+    assert captured["body"] == {
+        "reason": "Lot recalled",
+        "include_codes": ["ACOA-0002"],
+        "notify_customer": True,
+        "revoked_by": "Ada Lovelace <ada@lab.test>",
+    }
     assert captured["headers"]["X-API-Key"] == "k-test"
     assert out["revoked"][0]["status"] == "revoked" and out["wp_notified"] is True
+
+
+def test_notify_customer_false_passes_through_to_the_is(monkeypatch):
+    captured = {}
+    _patch_is(monkeypatch, captured, body=REVOKED)
+    asyncio.run(
+        main.revoke_coa_generation(GEN, main.RevokeCOARequest(reason="Internal test", notify_customer=False), admin=ADMIN)
+    )
+    assert captured["body"]["notify_customer"] is False
 
 
 def test_revoked_by_falls_back_to_the_email_when_no_name_is_set(monkeypatch):

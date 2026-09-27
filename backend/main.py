@@ -11773,6 +11773,9 @@ class RevokeCOARequest(BaseModel):
         default_factory=list,
         description="Other certificates of the sample to revoke too (primary only; exactly the previewed codes)",
     )
+    notify_customer: bool = Field(
+        True, description="Email the customer through WordPress; the portal and the public verdict update either way"
+    )
 
 
 class RevokePreviewItem(BaseModel):
