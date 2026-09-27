@@ -16,7 +16,11 @@ vi.mock('@/lib/api', async importOriginal => {
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 
 import { createRetest, getRetestOptions } from '@/lib/api'
-import { RetestDialog, retestDelta } from '@/components/senaite/RetestDialog'
+import {
+  RetestDialog,
+  retestDelta,
+  buildRetestBody,
+} from '@/components/senaite/RetestDialog'
 
 const OPTIONS = {
   sample_id: 'P-9001',
@@ -131,6 +135,38 @@ describe('RetestDialog', () => {
     fireEvent.click(variance)
     expect(screen.getByText(/Delta/)).toHaveTextContent('$153.00') // (3 - 1) * 76.5
     expect(screen.getByText(/^fee$/i)).toBeInTheDocument()
+  })
+
+  it('drops variance when HPLC is set back to Carry after ticking it', async () => {
+    vi.mocked(createRetest).mockResolvedValue({
+      order_number: 'WP-7920',
+      payment_url: 'https://pay',
+    })
+    renderDialog()
+    const hplc = await screen.findByTestId('retest-row-hplc-purity-identity')
+    fireEvent.click(within(hplc).getByRole('button', { name: 'Retest' }))
+    const variance = screen.getByLabelText(/^variance$/i)
+    fireEvent.click(variance)
+    fireEvent.click(screen.getByLabelText(/Rapid Sterility Screening/))
+    expect(screen.getByText(/Delta/)).toHaveTextContent('$383.00') // 230 + 153
+
+    fireEvent.click(within(hplc).getByRole('button', { name: 'Carry' }))
+    expect(variance).toBeDisabled()
+    expect(variance).toBeChecked()
+    expect(screen.getByText(/Delta/)).toHaveTextContent('$230.00')
+
+    fireEvent.change(screen.getByLabelText(/reason/i), {
+      target: { value: 'carry check' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^create/i }))
+    await waitFor(() =>
+      expect(createRetest).toHaveBeenCalledWith(
+        'P-9001',
+        expect.objectContaining({
+          add: expect.objectContaining({ variance_points: 0 }),
+        })
+      )
+    )
   })
 
   it('submits the spec shape and closes on success', async () => {
@@ -258,5 +294,26 @@ describe('retestDelta', () => {
     expect(
       retestDelta({ addons: [], variancePoints: 3, pointPrice: null })
     ).toBeNull()
+  })
+})
+
+describe('buildRetestBody', () => {
+  it('zeroes out-of-range variance points (e.g. 11) even when ticked with HPLC on Retest', () => {
+    const state = {
+      toggles: {
+        'hplc-purity-identity': true,
+        heavy_metals: false,
+        'endotoxin-usp85-lal': false,
+      },
+      addons: {},
+      varianceTicked: true,
+      variancePoints: 11,
+      shipVials: 0,
+      fee: 'paid' as const,
+      autoCheckin: false,
+      reason: 'x',
+    }
+    const body = buildRetestBody(state, OPTIONS)
+    expect(body.add?.variance_points ?? 0).toBe(0)
   })
 })

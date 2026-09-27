@@ -75,7 +75,15 @@ export function buildRetestBody(
   const tickedAddonKeys = options.addons
     .filter(a => a.wp_type && state.addons[a.key])
     .map(a => a.key)
-  const variancePoints = state.varianceTicked ? state.variancePoints : 0
+  const hplcSetToRetest = retest.some(k =>
+    (HPLC_PROFILE_KEYS as readonly string[]).includes(k)
+  )
+  const varianceEffective =
+    hplcSetToRetest &&
+    state.varianceTicked &&
+    state.variancePoints >= 2 &&
+    state.variancePoints <= 10
+  const variancePoints = varianceEffective ? state.variancePoints : 0
   const hasAdd =
     tickedAddonKeys.length > 0 || variancePoints > 0 || state.shipVials > 0
   return {
@@ -179,11 +187,6 @@ export function RetestDialog({
 
   const anyRetest = options.profiles.some(p => state.toggles[p.key])
   const anyAddon = options.addons.some(a => a.wp_type && state.addons[a.key])
-  const varianceActive = state.varianceTicked && state.variancePoints > 0
-  const hasSomethingToDo = anyRetest || anyAddon || varianceActive
-  const canCreate =
-    state.reason.trim().length > 0 && hasSomethingToDo && !pending
-
   const sellableAddons = options.addons.filter(a => a.wp_type)
   const selectedAddons = sellableAddons.filter(a => state.addons[a.key])
   const hplcSetToRetest = options.profiles.some(
@@ -191,15 +194,24 @@ export function RetestDialog({
       (HPLC_PROFILE_KEYS as readonly string[]).includes(p.key) &&
       state.toggles[p.key]
   )
+  const varianceEffective =
+    hplcSetToRetest &&
+    state.varianceTicked &&
+    state.variancePoints >= 2 &&
+    state.variancePoints <= 10
+  const hasSomethingToDo = anyRetest || anyAddon || varianceEffective
+  const canCreate =
+    state.reason.trim().length > 0 && hasSomethingToDo && !pending
+
   const delta = options.prices_available
     ? retestDelta({
         addons: selectedAddons,
-        variancePoints: state.varianceTicked ? state.variancePoints : 0,
+        variancePoints: varianceEffective ? state.variancePoints : 0,
         pointPrice: options.variance.point_price,
       })
     : null
 
-  const addingSomething = anyAddon || varianceActive
+  const addingSomething = anyAddon || varianceEffective
   const title = anyRetest
     ? addingSomething
       ? 'Retest + add services'
@@ -246,6 +258,8 @@ export function RetestDialog({
               <div
                 key={p.key}
                 data-testid={`retest-row-${p.key}`}
+                role="group"
+                aria-label={p.name}
                 className="grid grid-cols-[1fr_auto_auto] items-center gap-2 py-1.5 border-b border-border/40"
               >
                 <div>
@@ -253,6 +267,11 @@ export function RetestDialog({
                   <span className="ml-2 text-xs text-muted-foreground">
                     {p.state}
                   </span>
+                  {!p.carry_eligible && (
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      Not verified on this sample; must be retested
+                    </span>
+                  )}
                 </div>
                 <Button
                   type="button"
@@ -317,6 +336,7 @@ export function RetestDialog({
                 max={10}
                 value={state.variancePoints}
                 disabled={!hplcSetToRetest || !state.varianceTicked}
+                aria-label="Variance points"
                 onChange={e =>
                   setState(s =>
                     s ? { ...s, variancePoints: Number(e.target.value) } : s
@@ -324,6 +344,11 @@ export function RetestDialog({
                 }
                 className="w-20"
               />
+              {options.variance.point_price !== null && (
+                <span className="text-xs text-muted-foreground">
+                  @ {formatMoney(options.variance.point_price)}/point
+                </span>
+              )}
             </div>
           )}
 
