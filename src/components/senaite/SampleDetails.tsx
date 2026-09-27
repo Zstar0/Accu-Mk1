@@ -3815,7 +3815,7 @@ export function SampleDetails() {
   } | null>(null)
   // Cancel-sample dialog (customer withdrew) — header action.
   const [cancelOpen, setCancelOpen] = useState(false)
-  // Retest / add-services dialog (parent-only) — header action.
+  // Retest / add-services dialog (parent-only), a header action.
   const [retestOpen, setRetestOpen] = useState(false)
   // Task 10: promoted-source (vial-side) retest warning — sub-sample pages
   // only. Carries the target row's uid alongside the dialog's own state
@@ -5382,10 +5382,7 @@ export function SampleDetails() {
                           ↳ Retested as:
                         </span>{' '}
                         {retestInfo.retested_as.map((r, i) => {
-                          // brief calls for r.status; not on RetestForwardLink
-                          // yet (api.ts), so read it optimistically here.
-                          const status = (r as { status?: string | null })
-                            .status
+                          const status = r.status
                           return (
                             <span key={r.sample_id}>
                               {i > 0 && ', '}

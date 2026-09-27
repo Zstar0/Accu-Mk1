@@ -7101,6 +7101,7 @@ export interface RetestForwardLink {
   sample_id: string
   order_id: number | null
   created_at: string | null
+  status?: string | null
   retest?: string[] | null
   add?: string[] | null
   carry?: string[] | null
