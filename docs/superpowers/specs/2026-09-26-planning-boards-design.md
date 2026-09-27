@@ -557,3 +557,22 @@ and PR. Deploy follows the `accumark-deploy` skill; boards need no env change.
 - `flag_flags.group_id` not built (§6.6).
 - Parent nesting depth is one level.
 - Widget node kind ships as a placeholder in v1.
+
+## 14. Amendments during implementation (2026-09-26, slice 1)
+
+- §6.1/§6.2: `can_flag` has the legacy signature `(user, entity_id)` with no session, so
+  `board_node` cannot check board grants through it. Added a fourth optional seam
+  `can_raise: Callable[[Session, object, str], bool]`. `create_flag` prefers `can_raise`
+  when the type defines it and falls back to `can_flag` otherwise. `board_node` registers
+  `can_raise` = `can_edit_board`; its `can_flag` stays `lambda user, eid: True` and is
+  never consulted. A `can_raise` closure may raise `BadRequestError` to answer 400 (used
+  for `entity` kind nodes, §6.1).
+- §6.1: `EntityContext` gains optional `board_slug` and `node_kind` (additive hooks, same
+  pattern as the order-only fields) so the board fields survive Pydantic serialization.
+- §7.3: node `data` is validated per kind with one Pydantic model per kind dispatched by
+  `kind` (`boards.schemas.KIND_DATA`), which is the discriminated union in practice.
+- §4.8: cascades are executed in the service (edges, nodes, grants deleted explicitly
+  before the board) in addition to the FK `ondelete` clauses, so SQLite tests and
+  Postgres behave the same.
+- §4.2: `user_group_ids` reads membership on every call (no per-request cache) so a
+  revoked group takes effect on the next request; caching waits for a query-count test.
