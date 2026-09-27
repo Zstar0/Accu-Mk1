@@ -749,3 +749,7 @@ def register_mk1_entities() -> None:
                     search=_document_search,
                     snapshot=_document_snapshot,
                     must_exist=True)
+
+    # --- planning boards (2026-09-26): closures live in boards.flag_entity -----------
+    from boards.flag_entity import register_board_node
+    register_board_node()
