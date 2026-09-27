@@ -130,12 +130,18 @@ export function RetestDialog({
   })
   const [state, setState] = useState<RetestFormState | null>(null)
   const [stateFor, setStateFor] = useState<string | null>(null)
+  const [prevOpen, setPrevOpen] = useState(open)
 
   // Reset the form whenever a new options payload for a (possibly
-  // different) sample loads. Render-time reset per React's "adjusting
-  // state when a prop changes" pattern, not an effect, so this stays in
-  // sync with `options` without a cascading-render lint violation.
-  if (options && options.sample_id !== stateFor) {
+  // different) sample loads, OR the dialog is reopened for the same
+  // sample (it stays mounted like CancelSampleDialog, so closing must
+  // not leave a stale reason / toggles / add-on ticks behind). Render-time
+  // reset per React's "adjusting state when a prop changes" pattern, not
+  // an effect, so this stays in sync without a cascading-render lint
+  // violation.
+  const reopened = open && !prevOpen
+  if (open !== prevOpen) setPrevOpen(open)
+  if (options && (options.sample_id !== stateFor || reopened)) {
     setStateFor(options.sample_id)
     setState(initialState(options))
   }
@@ -349,6 +355,7 @@ export function RetestDialog({
           <div>
             <p className="text-sm font-medium">Fee</p>
             <RadioGroup
+              aria-label="Fee"
               value={state.fee}
               onValueChange={v =>
                 setState(s => (s ? { ...s, fee: v as 'paid' | 'free' } : s))

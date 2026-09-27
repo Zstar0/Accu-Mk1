@@ -203,6 +203,37 @@ describe('RetestDialog', () => {
     expect(await screen.findAllByText(/price unavailable/i)).not.toHaveLength(0)
     expect(screen.queryByText(/\$0\.00/)).not.toBeInTheDocument()
   })
+
+  it('resets the form on reopen for the same sample', async () => {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const onClose = vi.fn()
+    const { rerender } = render(
+      <QueryClientProvider client={qc}>
+        <RetestDialog open sampleId="P-9001" onClose={onClose} />
+      </QueryClientProvider>
+    )
+    fireEvent.change(await screen.findByLabelText(/reason/i), {
+      target: { value: 'customer asked' },
+    })
+    fireEvent.click(screen.getByLabelText(/Rapid Sterility Screening/))
+    expect(screen.getByLabelText(/reason/i)).toHaveValue('customer asked')
+
+    rerender(
+      <QueryClientProvider client={qc}>
+        <RetestDialog open={false} sampleId="P-9001" onClose={onClose} />
+      </QueryClientProvider>
+    )
+    rerender(
+      <QueryClientProvider client={qc}>
+        <RetestDialog open sampleId="P-9001" onClose={onClose} />
+      </QueryClientProvider>
+    )
+
+    expect(await screen.findByLabelText(/reason/i)).toHaveValue('')
+    expect(screen.getByRole('button', { name: /^create/i })).toBeDisabled()
+  })
 })
 
 describe('retestDelta', () => {
