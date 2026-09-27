@@ -9603,6 +9603,13 @@ class ExplorerCOAGenerationResponse(BaseModel):
     # alongside a variance primary); False otherwise.
     is_regular_coa: bool = False
     ingestion_status: Optional[str] = None
+    # Lab-controlled forward pointer + terminal revocation (IS Tier 1 integrity, 2026-09-22)
+    forward_enabled: bool = False
+    revoked_at: Optional[datetime] = None
+    revocation_reason: Optional[str] = None
+    # Recorded replacement (the row that superseded this one) and who revoked.
+    superseded_by_id: Optional[str] = None
+    revoked_by: Optional[str] = None
 
 
 class ExplorerSampleEventResponse(BaseModel):
@@ -11720,6 +11727,127 @@ async def _proxy_explorer_get(path: str) -> list[dict]:
         resp = await client.get(url, headers={"X-API-Key": INTEGRATION_SERVICE_API_KEY})
         resp.raise_for_status()
         return resp.json()
+
+
+async def _proxy_explorer_send(method: str, path: str, body: Optional[dict] = None) -> dict:
+    """Proxy a request to the Integration Service explorer API.
+
+    IS status codes pass through (a 409 there is a 409 here, not a 500);
+    an unreachable IS is a 503. GET sends no body.
+    """
+    url = f"{INTEGRATION_SERVICE_URL}/explorer{path}"
+    headers = {"X-API-Key": INTEGRATION_SERVICE_API_KEY}
+    try:
+        async with httpx.AsyncClient(verify=HTTPX_SSL_CONTEXT, timeout=15.0) as client:
+            if method.upper() == "GET":
+                resp = await client.get(url, headers=headers)
+            else:
+                send = getattr(client, method.lower())
+                resp = await send(url, json=body, headers=headers)
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        detail = e.response.text
+        try:
+            error_body = e.response.json()
+        except ValueError:
+            error_body = None
+        if isinstance(error_body, dict):
+            raw = error_body.get("detail")
+            if raw is None:
+                raw = error_body.get("message") or error_body.get("error")
+            if isinstance(raw, dict):
+                raw = raw.get("message") or raw.get("error") or raw.get("detail") or json.dumps(raw)
+            if isinstance(raw, str):
+                detail = raw
+        raise HTTPException(status_code=e.response.status_code, detail=detail)
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=503, detail=f"Integration Service unavailable: {e}")
+
+
+# --- COA generation state: revoke / forward pointer (sample details COA section) ---
+
+class RevokeCOARequest(BaseModel):
+    reason: str = Field(..., min_length=1, description="Printed on the public verdict")
+    include_codes: list[str] = Field(
+        default_factory=list,
+        description="Other certificates of the sample to revoke too (primary only; exactly the previewed codes)",
+    )
+
+
+class RevokePreviewItem(BaseModel):
+    generation_id: str
+    verification_code: str
+    status: str
+    kind: str
+    brand: Optional[str] = None
+
+
+class RevokePreviewResponse(BaseModel):
+    target: RevokePreviewItem
+    others: list[RevokePreviewItem]
+
+
+class RevokedCertificate(RevokePreviewItem):
+    revoked_at: Optional[datetime] = None
+    revocation_reason: Optional[str] = None
+
+
+class RevokeCOAResponse(BaseModel):
+    revoked: list[RevokedCertificate]
+    skipped: list[str]
+    wp_notified: bool
+    wp_error: Optional[str] = None
+
+
+def _revoked_by_label(user) -> str:
+    """'First Last <email>' from the session user; the email stands in for a missing name."""
+    name = " ".join(p for p in (getattr(user, "first_name", None), getattr(user, "last_name", None)) if p).strip()
+    email = getattr(user, "email", "") or ""
+    if not email:
+        return name or "unknown"
+    return f"{name or email} <{email}>"
+
+
+class ForwardEnabledRequest(BaseModel):
+    forward_enabled: bool
+
+
+class COAGenerationStateResponse(BaseModel):
+    generation_id: str
+    verification_code: str
+    status: str
+    forward_enabled: bool
+    revoked_at: Optional[datetime] = None
+    revocation_reason: Optional[str] = None
+
+
+@app.get("/explorer/coa-generations/{generation_id}/revoke-preview", response_model=RevokePreviewResponse)
+async def revoke_coa_preview(generation_id: str, _admin=Depends(require_admin)):
+    """What 'also revoke every other certificate for this sample' would take. Admin only."""
+    return await _proxy_explorer_send("GET", f"/coa-generations/{generation_id}/revoke-preview")
+
+
+@app.post("/explorer/coa-generations/{generation_id}/revoke", response_model=RevokeCOAResponse)
+async def revoke_coa_generation(
+    generation_id: str, body: RevokeCOARequest, admin=Depends(require_admin)
+):
+    """Terminal: the certificate no longer stands and nothing replaces it.
+
+    Admin only: revocation is public, irreversible through the UI, and the kind
+    of withdrawal ISO 17025 expects to be an authorised act. revoked_by is taken
+    from the session here, never from the request body.
+    """
+    payload = {**body.model_dump(), "revoked_by": _revoked_by_label(admin)}
+    return await _proxy_explorer_send("POST", f"/coa-generations/{generation_id}/revoke", payload)
+
+
+@app.patch("/explorer/coa-generations/{generation_id}/forward", response_model=COAGenerationStateResponse)
+async def set_coa_forward_enabled(
+    generation_id: str, body: ForwardEnabledRequest, _current_user=Depends(get_current_user)
+):
+    """Lab-controlled: once superseded, the public verdict links to the current COA only while enabled."""
+    return await _proxy_explorer_send("PATCH", f"/coa-generations/{generation_id}/forward", body.model_dump())
 
 
 @app.get("/explorer/orders/{order_id}/coa-generations", response_model=list[ExplorerCOAGenerationResponse])

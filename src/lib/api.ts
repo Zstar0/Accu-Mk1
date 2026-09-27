@@ -1048,6 +1048,13 @@ export interface ExplorerCOAGeneration {
   is_regular_coa: boolean
   /** Ingestion WP delivery status: pending | processing | uploaded | notified | partial | failed */
   ingestion_status: string | null
+  /** Lab-controlled: once superseded, the public verdict links forward only while true. */
+  forward_enabled?: boolean
+  revoked_at?: string | null
+  revocation_reason?: string | null
+  /** The row that superseded this one (recorded at publish); null when nothing did. */
+  superseded_by_id?: string | null
+  revoked_by?: string | null
 }
 
 /**
@@ -2089,6 +2096,89 @@ export async function publishSenaiteCOA(
     { method: 'POST', headers: getBearerHeaders() }
   )
   if (!response.ok) throw new Error(await extractErrorMessage(response, `COA publish failed: ${response.status}`))
+  return response.json()
+}
+
+// ── COA generation state: revoke / forward pointer (2026-09-22, batch revoke 2026-09-24) ──
+
+export interface COAGenerationState {
+  generation_id: string
+  verification_code: string
+  status: string
+  forward_enabled: boolean
+  revoked_at: string | null
+  revocation_reason: string | null
+}
+
+export interface RevokePreviewItem {
+  generation_id: string
+  verification_code: string
+  status: string
+  kind: 'primary' | 'additional' | 'vial' | 'regular'
+  brand: string | null
+}
+
+export interface RevokePreview {
+  target: RevokePreviewItem
+  others: RevokePreviewItem[]
+}
+
+export interface RevokedCertificate extends RevokePreviewItem {
+  revoked_at: string | null
+  revocation_reason: string | null
+}
+
+export interface RevokeCOAResult {
+  revoked: RevokedCertificate[]
+  skipped: string[]
+  wp_notified: boolean
+  wp_error: string | null
+}
+
+/** What "also revoke every other certificate issued for this sample" would take. Admin only. */
+export async function getCoaRevokePreview(
+  generationId: string
+): Promise<RevokePreview> {
+  const response = await fetch(
+    `${API_BASE_URL()}/explorer/coa-generations/${encodeURIComponent(generationId)}/revoke-preview`,
+    { headers: getBearerHeaders() }
+  )
+  if (!response.ok) throw new Error(await extractErrorMessage(response, `Revoke preview failed: ${response.status}`))
+  return response.json()
+}
+
+/**
+ * Terminal: the certificate no longer stands and nothing replaces it. The reason
+ * is printed on the public verdict. includeCodes must be exactly the codes the
+ * preview showed; the server skips anything else. Admin only.
+ */
+export async function revokeCoaGeneration(
+  generationId: string,
+  reason: string,
+  includeCodes: string[] = []
+): Promise<RevokeCOAResult> {
+  const response = await fetch(
+    `${API_BASE_URL()}/explorer/coa-generations/${encodeURIComponent(generationId)}/revoke`,
+    {
+      method: 'POST',
+      headers: getBearerHeaders('application/json'),
+      body: JSON.stringify({ reason, include_codes: includeCodes }),
+    }
+  )
+  if (!response.ok) throw new Error(await extractErrorMessage(response, `COA revoke failed: ${response.status}`))
+  return response.json()
+}
+
+/** Once superseded, the public verdict announces the supersession and links to the current COA only while this is on. */
+export async function setCoaForwardEnabled(
+  generationId: string,
+  forwardEnabled: boolean
+): Promise<COAGenerationState> {
+  const response = await fetch(
+    `${API_BASE_URL()}/explorer/coa-generations/${encodeURIComponent(generationId)}/forward`,
+    { method: 'PATCH', headers: getBearerHeaders('application/json'), body: JSON.stringify({ forward_enabled: forwardEnabled }) }
+  )
+  if (!response.ok) throw new Error(await extractErrorMessage(response, `COA forward update failed: ${response.status}`))
   return response.json()
 }
 
