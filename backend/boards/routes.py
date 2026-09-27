@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from typing import List
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from auth import get_current_user
 from boards import service
-from boards.schemas import (BoardCreate, BoardDetail, BoardOut, BoardPatch, EntityBoardRef,
-                            GrantIn, GrantOut)
+from boards.schemas import (BoardCreate, BoardDetail, BoardOut, BoardPatch, EdgeCreate,
+                            EdgeOut, EdgePatch, EntityBoardRef, GrantIn, GrantOut, NodeCreate,
+                            NodeOut, NodePatch, PositionItem)
 from database import get_db
 from groups.routes import http_error
 
@@ -82,3 +83,86 @@ def put_grants(slug: str, body: List[GrantIn], db: Session = Depends(get_db),
     except Exception as e:
         db.rollback()
         raise http_error(e)
+
+
+def _stale(e: "service.StaleVersionError") -> HTTPException:
+    detail = {"message": str(e), "stale_ids": e.stale_ids,
+              "current": NodeOut.model_validate(e.current).model_dump(mode="json") if e.current is not None else None}
+    return HTTPException(status_code=409, detail=detail)
+
+
+@router.post("/{slug}/nodes", response_model=NodeOut, status_code=201)
+def create_node(slug: str, body: NodeCreate, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    try:
+        return service.create_node(db, user, slug, body)
+    except Exception as e:
+        db.rollback()
+        raise http_error(e)
+
+
+# Literal /positions ABOVE /{node_id} so it wins the match.
+@router.patch("/{slug}/nodes/positions", response_model=List[NodeOut])
+def patch_positions(slug: str, body: List[PositionItem], db: Session = Depends(get_db),
+                    user=Depends(get_current_user)):
+    try:
+        return service.patch_positions(db, user, slug, body)
+    except service.StaleVersionError as e:
+        db.rollback()
+        raise _stale(e)
+    except Exception as e:
+        db.rollback()
+        raise http_error(e)
+
+
+@router.patch("/{slug}/nodes/{node_id}", response_model=NodeOut)
+def patch_node(slug: str, node_id: int, body: NodePatch, db: Session = Depends(get_db),
+               user=Depends(get_current_user)):
+    try:
+        fields = body.model_dump(exclude_unset=True)
+        version = fields.pop("version")
+        return service.patch_node(db, user, slug, node_id, version=version, **fields)
+    except service.StaleVersionError as e:
+        db.rollback()
+        raise _stale(e)
+    except Exception as e:
+        db.rollback()
+        raise http_error(e)
+
+
+@router.delete("/{slug}/nodes/{node_id}", status_code=204)
+def delete_node(slug: str, node_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    try:
+        service.delete_node(db, user, slug, node_id)
+    except Exception as e:
+        db.rollback()
+        raise http_error(e)
+    return Response(status_code=204)
+
+
+@router.post("/{slug}/edges", response_model=EdgeOut, status_code=201)
+def create_edge(slug: str, body: EdgeCreate, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    try:
+        return service.create_edge(db, user, slug, body)
+    except Exception as e:
+        db.rollback()
+        raise http_error(e)
+
+
+@router.patch("/{slug}/edges/{edge_id}", response_model=EdgeOut)
+def patch_edge(slug: str, edge_id: int, body: EdgePatch, db: Session = Depends(get_db),
+               user=Depends(get_current_user)):
+    try:
+        return service.patch_edge(db, user, slug, edge_id, **body.model_dump(exclude_unset=True))
+    except Exception as e:
+        db.rollback()
+        raise http_error(e)
+
+
+@router.delete("/{slug}/edges/{edge_id}", status_code=204)
+def delete_edge(slug: str, edge_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    try:
+        service.delete_edge(db, user, slug, edge_id)
+    except Exception as e:
+        db.rollback()
+        raise http_error(e)
+    return Response(status_code=204)

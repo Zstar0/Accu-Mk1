@@ -196,3 +196,216 @@ def board_detail_payload(db: Session, user, board: Board) -> BoardDetail:
     detail.edges = [EdgeOut.model_validate(e) for e in edges]
     detail.grants = list_grants(db, board)
     return detail
+
+
+# --- nodes ------------------------------------------------------------------------
+from pydantic import ValidationError  # noqa: E402  (kept next to its only users)
+
+from boards.models import EDGE_KINDS, NODE_KINDS  # noqa: E402
+from boards.schemas import KIND_DATA  # noqa: E402
+
+# Widget keys a `widget` node may carry. Empty in slice 1 (spec §4.7); slice 5 fills it.
+ALLOWED_WIDGETS: tuple[str, ...] = ()
+
+
+class StaleVersionError(ConflictError):
+    """Optimistic-lock miss. `current` is the row as it is now (single PATCH);
+    `stale_ids` lists the losers of a bulk positions PATCH."""
+    def __init__(self, msg: str, *, current=None, stale_ids=None) -> None:
+        super().__init__(msg)
+        self.current = current
+        self.stale_ids = stale_ids or []
+
+
+def validate_node_data(db: Session, *, kind: str, data: Optional[dict], entity_type: Optional[str],
+                       entity_id: Optional[str]) -> tuple[dict, Optional[str]]:
+    """Returns (clean_data, label_from_registry_or_None). Raises BadRequestError."""
+    from flags import seams
+    if kind not in NODE_KINDS:
+        raise BadRequestError(f"kind must be one of {NODE_KINDS}")
+    try:
+        clean = KIND_DATA[kind].model_validate(data or {})
+    except ValidationError as e:
+        raise BadRequestError(f"invalid data for {kind}: {e.errors()[0]['msg']}")
+    label = None
+    if kind == "entity":
+        if not entity_type or not entity_id:
+            raise BadRequestError("entity nodes need entity_type and entity_id")
+        if entity_type == "board_node":
+            raise BadRequestError("a board node cannot point at a board node")
+        if not seams.is_registered(entity_type):
+            raise BadRequestError(f"unknown entity_type {entity_type!r}")
+        ctx = seams.resolve_context(db, entity_type, str(entity_id))
+        if ctx is None:
+            raise BadRequestError(f"{entity_type} {entity_id!r} not found")
+        label = ctx.get("label")
+    elif entity_type is not None or entity_id is not None:
+        raise BadRequestError(f"{kind} nodes take no entity_type/entity_id")
+    if kind == "person":
+        from models import User
+        u = db.get(User, clean.user_id)
+        if u is None or not u.is_active:
+            raise BadRequestError(f"unknown or inactive user {clean.user_id}")
+    if kind == "widget" and clean.key not in ALLOWED_WIDGETS:
+        raise BadRequestError(f"widget {clean.key!r} is not available")
+    return clean.model_dump(), label
+
+
+def _node_on_board(db: Session, board: Board, node_id: int) -> BoardNode:
+    n = db.get(BoardNode, int(node_id))
+    if n is None or n.board_id != board.id:
+        raise NotFoundError(f"node {node_id} not found on board {board.slug!r}")
+    return n
+
+
+def _check_parent(db: Session, board: Board, parent_id: Optional[int], *, self_id: Optional[int] = None) -> None:
+    if parent_id is None:
+        return
+    if self_id is not None and int(parent_id) == int(self_id):
+        raise BadRequestError("a node cannot be its own parent")
+    parent = _node_on_board(db, board, parent_id)
+    if parent.kind != "frame":
+        raise BadRequestError("parent must be a frame")
+    if parent.parent_id is not None:
+        raise BadRequestError("frames nest one level deep")
+
+
+def _editable(db: Session, user, slug: str) -> Board:
+    board = get_board(db, user, slug)
+    access.require_edit(db, user, board)
+    return board
+
+
+def _node_out(db: Session, node: BoardNode) -> NodeOut:
+    from flags import seams
+    out = NodeOut.model_validate(node)
+    if node.kind == "entity" and node.entity_type and node.entity_id:
+        out.context = seams.resolve_context(db, node.entity_type, node.entity_id)
+    return out
+
+
+def create_node(db: Session, user, slug: str, body) -> NodeOut:
+    board = _editable(db, user, slug)
+    clean, reg_label = validate_node_data(db, kind=body.kind, data=body.data,
+                                          entity_type=body.entity_type, entity_id=body.entity_id)
+    _check_parent(db, board, body.parent_id)
+    uid = getattr(user, "id", None)
+    node = BoardNode(board_id=board.id, kind=body.kind, label=(body.label or reg_label or "")[:200],
+                     parent_id=body.parent_id, x=body.x, y=body.y, w=body.w, h=body.h, z=body.z,
+                     entity_type=body.entity_type if body.kind == "entity" else None,
+                     entity_id=str(body.entity_id) if body.kind == "entity" else None,
+                     data=clean, created_by=uid, updated_by=uid)
+    db.add(node)
+    db.commit()
+    db.refresh(node)
+    return _node_out(db, node)
+
+
+def patch_node(db: Session, user, slug: str, node_id: int, *, version: int, **fields) -> NodeOut:
+    board = _editable(db, user, slug)
+    node = _node_on_board(db, board, node_id)
+    if node.version != version:
+        raise StaleVersionError("stale version; reload the node", current=node)
+    if "data" in fields and fields["data"] is not None:
+        clean, _ = validate_node_data(db, kind=node.kind, data=fields["data"],
+                                      entity_type=node.entity_type, entity_id=node.entity_id)
+        node.data = clean
+    if "parent_id" in fields:
+        _check_parent(db, board, fields["parent_id"], self_id=node.id)
+        node.parent_id = fields["parent_id"]
+    for f in ("label", "x", "y", "w", "h", "z"):
+        if f in fields and fields[f] is not None:
+            setattr(node, f, fields[f])
+    node.version += 1
+    node.updated_by = getattr(user, "id", None)
+    db.commit()
+    db.refresh(node)
+    return _node_out(db, node)
+
+
+def patch_positions(db: Session, user, slug: str, items) -> list[NodeOut]:
+    """All-or-nothing: one stale version rejects the whole batch (spec §7.3)."""
+    board = _editable(db, user, slug)
+    nodes = [(_node_on_board(db, board, it.id), it) for it in items]
+    stale = [n.id for n, it in nodes if n.version != it.version]
+    if stale:
+        raise StaleVersionError("stale versions in positions batch", stale_ids=stale)
+    uid = getattr(user, "id", None)
+    for n, it in nodes:
+        if "parent_id" in it.model_fields_set:
+            _check_parent(db, board, it.parent_id, self_id=n.id)
+            n.parent_id = it.parent_id
+        n.x, n.y = it.x, it.y
+        n.version += 1
+        n.updated_by = uid
+    db.commit()
+    return [_node_out(db, n) for n, _ in nodes]
+
+
+def delete_node(db: Session, user, slug: str, node_id: int) -> None:
+    board = _editable(db, user, slug)
+    node = _node_on_board(db, board, node_id)
+    n = open_flag_count(db, [node.id])
+    if n:
+        raise ConflictError(f"node has {n} open flag(s); resolve them first")
+    for child in db.execute(select(BoardNode).where(BoardNode.parent_id == node.id)).scalars():
+        child.parent_id = None
+        child.x += node.x  # keep the child where it was on the canvas
+        child.y += node.y
+    db.query(BoardEdge).filter((BoardEdge.source_id == node.id) | (BoardEdge.target_id == node.id)).delete(
+        synchronize_session=False)
+    db.delete(node)
+    db.commit()
+
+
+# --- edges ------------------------------------------------------------------------
+
+def _edge_on_board(db: Session, board: Board, edge_id: int) -> BoardEdge:
+    e = db.get(BoardEdge, int(edge_id))
+    if e is None or e.board_id != board.id:
+        raise NotFoundError(f"edge {edge_id} not found on board {board.slug!r}")
+    return e
+
+
+def _check_edge_kind(kind: str) -> str:
+    if kind not in EDGE_KINDS:
+        raise BadRequestError(f"edge kind must be one of {EDGE_KINDS}")
+    return kind
+
+
+def create_edge(db: Session, user, slug: str, body) -> BoardEdge:
+    board = _editable(db, user, slug)
+    if body.source_id == body.target_id:
+        raise BadRequestError("an edge needs two different nodes")
+    _node_on_board(db, board, body.source_id)
+    _node_on_board(db, board, body.target_id)
+    kind = _check_edge_kind(body.kind)
+    dup = db.execute(select(BoardEdge.id).where(
+        BoardEdge.board_id == board.id, BoardEdge.source_id == body.source_id,
+        BoardEdge.target_id == body.target_id, BoardEdge.kind == kind)).scalar_one_or_none()
+    if dup is not None:
+        raise ConflictError("that edge already exists")
+    e = BoardEdge(board_id=board.id, source_id=body.source_id, target_id=body.target_id,
+                  kind=kind, label=body.label)
+    db.add(e)
+    db.commit()
+    db.refresh(e)
+    return e
+
+
+def patch_edge(db: Session, user, slug: str, edge_id: int, **fields) -> BoardEdge:
+    board = _editable(db, user, slug)
+    e = _edge_on_board(db, board, edge_id)
+    if fields.get("kind") is not None:
+        e.kind = _check_edge_kind(fields["kind"])
+    if "label" in fields:
+        e.label = fields["label"]
+    db.commit()
+    db.refresh(e)
+    return e
+
+
+def delete_edge(db: Session, user, slug: str, edge_id: int) -> None:
+    board = _editable(db, user, slug)
+    db.delete(_edge_on_board(db, board, edge_id))
+    db.commit()
