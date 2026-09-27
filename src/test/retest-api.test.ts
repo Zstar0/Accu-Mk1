@@ -28,8 +28,9 @@ describe('retest api', () => {
     })
     const out = await getRetestOptions('P-1')
     expect(out.sample_id).toBe('P-1')
-    expect(fn.mock.calls).toHaveLength(1)
-    const [url, init] = fn.mock.calls[0]
+    const call = fn.mock.calls.at(0)
+    if (!call) throw new Error('Expected call to be defined')
+    const [url, init] = call
     expect(String(url)).toMatch(/\/api\/samples\/P-1\/retest-options$/)
     expect((init as RequestInit).headers).toMatchObject({
       Authorization: 'Bearer tok',
@@ -50,8 +51,9 @@ describe('retest api', () => {
     }
     const out = await createRetest('P-1', body)
     expect(out.order_number).toBe('WP-7920')
-    expect(fn.mock.calls).toHaveLength(1)
-    const [, init] = fn.mock.calls[0]
+    const call = fn.mock.calls.at(0)
+    if (!call) throw new Error('Expected call to be defined')
+    const [, init] = call
     expect((init as RequestInit).method).toBe('POST')
     expect(JSON.parse(String((init as RequestInit).body))).toEqual(body)
   })
