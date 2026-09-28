@@ -75,6 +75,34 @@ def _with_entities(db: Session, flags, resp_cls=FlagResponse):
     return resps
 
 
+_ENTITY_LINK_EVENTS = ("entity_link_added", "entity_link_removed")
+_FLAG_LINK_EVENTS = ("flag_link_added", "flag_link_removed")
+
+
+def _link_value_visible(db: Session, user, event_type: str, value: str) -> bool:
+    if event_type in _ENTITY_LINK_EVENTS:
+        et, _, eid = value.partition(":")
+        return bool(eid) and seams.can_view_entity(db, user, et, eid)
+    try:
+        service.get_visible_flag(db, user, int(value))
+    except (NotFoundError, TypeError, ValueError):
+        return False
+    return True
+
+
+def _mask_link_events(db: Session, user, events) -> None:
+    """Blank from/to on link events whose target the caller cannot see (spec §6.3):
+    the link card is masked, so its audit row must not hand the target back. Works on
+    any list of objects with event_type/from_value/to_value (detail events, activity)."""
+    for ev in events:
+        if ev.event_type not in _ENTITY_LINK_EVENTS + _FLAG_LINK_EVENTS:
+            continue
+        for attr in ("from_value", "to_value"):
+            value = getattr(ev, attr)
+            if value and not _link_value_visible(db, user, ev.event_type, value):
+                setattr(ev, attr, "")
+
+
 def _http(e: Exception) -> HTTPException:
     if isinstance(e, NotFoundError):
         return HTTPException(status_code=404, detail=str(e))
@@ -140,6 +168,7 @@ def activity(cursor: Optional[str] = None, limit: int = Query(25, ge=1, le=50),
             )
             for ev, fr in zip(rows, flag_resps)
         ]
+        _mask_link_events(db, user, items)
         return ActivityPage(items=items, next_cursor=next_cursor)
     except Exception as e:
         raise _http(e)
@@ -156,8 +185,12 @@ def unread(db: Session = Depends(get_db), user=Depends(get_current_user)):
 
 
 def _frame(event: dict) -> str:
-    """One SSE frame. `audience` is server-side only (spec §6.4) and never reaches a client."""
-    payload = {k: v for k, v in event.items() if k != "audience"}
+    """One SSE frame. `audience` is server-side only (spec §6.4) and never reaches a client.
+    Link events drop from/to: the value names the other end, which may be hidden from a
+    subscriber who can see this flag (no client reads them; detail/activity mask on read)."""
+    link = str(event.get("event_type", "")).endswith(("_link_added", "_link_removed"))
+    drop = {"audience", "from_value", "to_value"} if link else {"audience"}
+    payload = {k: v for k, v in event.items() if k not in drop}
     frame = ""
     if payload.get("event_id") is not None:
         frame += f"id: {payload['event_id']}\n"
@@ -466,6 +499,7 @@ def get_flag(flag_id: int, db: Session = Depends(get_db), user=Depends(get_curre
                 continue  # the other end is hidden from this caller
             resp.flag_links.append(FlagLinkOut(
                 id=link.id, flag_id=o.id, title=o.title, status=o.status, type=o.type))
+        _mask_link_events(db, user, resp.events)
         # Reactions are an aggregate (batch query) — can't ride from_attributes.
         agg = service.aggregate_reactions(db, [c.id for c in resp.comments])
         for c in resp.comments:

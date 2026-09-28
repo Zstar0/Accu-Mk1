@@ -314,6 +314,8 @@ def test_detail_masks_invisible_entity_links_and_drops_invisible_flag_links(w):
     link = d["entity_links"][0]
     assert link["entity_type"] == "board_node" and link["entity_id"] == ""
     assert link["entity"]["label"] == "Restricted"
+    assert link["entity"]["entity_id"] == ""
+    assert link["entity"]["deep_link"] == {"kind": "none", "id": ""}
     assert d["flag_links"] == []
     w.c.as_user(MEMBER)
     d = w.c.get(f"/api/flags/{fid}").json()
@@ -356,3 +358,122 @@ def test_producer_stamps_audience_and_frame_strips_it(w):
     assert by_title["general live"]["audience"] is None
     frame = _frame(by_title["secret live"])
     assert "audience" not in frame and "event: raised" in frame and '"flag_id"' in frame
+
+
+# --- final review fix wave (I1, I2, deferred minors) -------------------------
+def test_descendants_rollup_of_a_hidden_frame_matches_missing(w):
+    """I1: an entity-kind child resolves to a legacy anchor that the clause passes."""
+    from boards.models import BoardNode
+    w.s.add(BoardNode(board_id=w.exec_.id, kind="entity", label="P-1", parent_id=w.sec.id,
+                      entity_type="sample", entity_id="P-1"))
+    w.s.commit()
+    q = "/api/flags?tab=all_open&entity_type=board_node&entity_id={}&include_descendants=true"
+    w.c.as_user(OUTSIDER)
+    assert _titles(w.c, q.format(w.sec.id)) == [] == _titles(w.c, q.format(999999))
+    w.c.as_user(MEMBER)
+    assert _titles(w.c, q.format(w.sec.id)) == [
+        "Legacy sample flag", "Secret child flag", "Secret node flag"]
+
+
+def _link_public_flags_to_secrets(w, fid):
+    w.c.as_user(MEMBER)
+    assert w.c.post(f"/api/flags/{fid}/links/entities",
+                    json={"entity_type": "board_node", "entity_id": str(w.sec.id)}).status_code == 201
+    r = w.c.post(f"/api/flags/{fid}/links/flags", json={"flag_id": w.f_secret.id})
+    assert r.status_code == 201
+    return r.json()["id"]
+
+
+def _link_events(events):
+    return sorted((e["event_type"], e["from_value"], e["to_value"]) for e in events
+                  if "_link_" in e["event_type"])
+
+
+def test_link_event_values_are_masked_for_a_viewer_of_one_end(w):
+    """I2: the link card is masked, so the audit row must not hand the target back."""
+    fid = w.f_sample.id
+    link_id = _link_public_flags_to_secrets(w, fid)
+    w.c.as_user(MEMBER)
+    assert w.c.delete(f"/api/flags/{fid}/links/flags/{link_id}").status_code == 204
+    member = _link_events(w.c.get(f"/api/flags/{fid}").json()["events"])
+    assert member == [("entity_link_added", None, f"board_node:{w.sec.id}"),
+                      ("flag_link_added", None, str(w.f_secret.id)),
+                      ("flag_link_removed", str(w.f_secret.id), None)]
+    w.c.as_user(OUTSIDER)
+    assert w.c.post(f"/api/flags/{fid}/watchers", json={"user_id": OUTSIDER.id}).status_code == 201
+    outsider = _link_events(w.c.get(f"/api/flags/{fid}").json()["events"])
+    assert outsider == [("entity_link_added", None, ""),
+                        ("flag_link_added", None, ""),
+                        ("flag_link_removed", "", None)]
+    items = [i for i in w.c.get("/api/flags/activity?limit=50").json()["items"]
+             if i["flag"]["id"] == fid]
+    assert _link_events(items) == outsider
+    w.c.as_user(MEMBER)
+    items = [i for i in w.c.get("/api/flags/activity?limit=50").json()["items"]
+             if i["flag"]["id"] == fid]
+    assert _link_events(items) == member
+
+
+def test_frame_strips_values_from_link_events(w):
+    import json
+    from flags.routes import _frame
+    ev = {"event_id": 7, "event_type": "entity_link_added", "flag_id": 3, "audience": None,
+          "from_value": None, "to_value": "board_node:2", "actor_id": 1}
+    data = json.loads(_frame(ev).split("data: ", 1)[1])
+    assert "to_value" not in data and "from_value" not in data and data["flag_id"] == 3
+    ev["event_type"] = "flag_link_removed"
+    data = json.loads(_frame(ev).split("data: ", 1)[1])
+    assert "to_value" not in data and "from_value" not in data
+    ev["event_type"] = "status_changed"
+    assert json.loads(_frame(ev).split("data: ", 1)[1])["to_value"] == "board_node:2"
+
+
+def test_outsider_cannot_remove_a_link_to_a_hidden_flag(w):
+    from flags.models import FlagEvent
+    fid = w.f_sample.id
+    link_id = _link_public_flags_to_secrets(w, fid)
+    w.c.as_user(OUTSIDER)
+    hidden = w.c.delete(f"/api/flags/{fid}/links/flags/{link_id}")
+    missing = w.c.delete(f"/api/flags/{fid}/links/flags/999999")
+    assert hidden.status_code == missing.status_code == 404
+    assert hidden.json()["detail"] == f"link {link_id} not found on flag {fid}"
+    assert missing.json()["detail"] == f"link 999999 not found on flag {fid}"
+    assert not [e for e in w.s.query(FlagEvent).filter_by(flag_id=w.f_secret.id)
+                if e.event_type == "flag_link_removed"]
+
+
+def test_link_deletes_on_the_hidden_flag_are_404(w):
+    """Deferred T2 minor (the DELETE reaction case is pinned in
+    test_reactions_and_attachments_follow_the_flag)."""
+    sec = w.f_secret.id
+    w.c.as_user(MEMBER)
+    eid = w.c.post(f"/api/flags/{sec}/links/entities",
+                   json={"entity_type": "sample", "entity_id": "P-1"}).json()["id"]
+    lid = w.c.post(f"/api/flags/{sec}/links/flags", json={"flag_id": w.f_general.id}).json()["id"]
+    w.c.as_user(OUTSIDER)
+    for path in (f"/api/flags/{sec}/links/entities/{eid}", f"/api/flags/{sec}/links/flags/{lid}"):
+        r = w.c.delete(path)
+        assert r.status_code == 404 and r.json()["detail"] == f"flag {sec} not found"
+
+
+def test_create_and_mention_with_unknown_or_outside_users(w):
+    """Deferred T4 minor: legacy anchors take any id; a scoped anchor refuses an
+    unknown assignee. An unknown mention id is dropped before the guard runs, so it
+    never reaches the flag on either anchor."""
+    w.c.as_user(ADMIN)
+    r = w.c.post("/api/flags", json={"entity_type": "sample", "entity_id": "P-1",
+                                     "type": "task", "title": "legacy", "assignee_id": 999})
+    assert r.status_code == 201, r.text
+    r = w.c.post("/api/flags", json={"entity_type": "sample", "entity_id": "P-1",
+                                     "type": "task", "title": "legacy2", "assignee_id": OUTSIDER.id})
+    assert r.status_code == 201, r.text
+    r = w.c.post("/api/flags", json={"entity_type": "board_node", "entity_id": str(w.sec.id),
+                                     "type": "task", "title": "x", "assignee_id": 999})
+    assert r.status_code == 400 and "cannot see" in r.json()["detail"]
+    r = w.c.post(f"/api/flags/{w.f_sample.id}/comments",
+                 json={"body": "hey", "mention_ids": [OUTSIDER.id, 999]})
+    assert r.status_code == 201 and r.json()["mentions"] == [OUTSIDER.id]
+    r = w.c.post(f"/api/flags/{w.f_secret.id}/comments", json={"body": "hey", "mention_ids": [999]})
+    assert r.status_code == 201 and not r.json()["mentions"]
+    from flags.models import FlagParticipant
+    assert not w.s.query(FlagParticipant).filter_by(flag_id=w.f_secret.id, user_id=999).all()

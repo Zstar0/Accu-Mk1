@@ -311,6 +311,10 @@ def list_flags(db: Session, *, user_id: int, tab: str, status: Optional[str] = N
     if status:
         stmt = stmt.where(FlagFlag.status == status)
     if entity_type and entity_id:
+        if not seams.can_view_entity(db, user, entity_type, str(entity_id)):
+            # A hidden anchor answers like a missing one: no direct flags and no
+            # roll-up of what sits on it (spec §6.3).
+            return []
         # The matched set is the entity itself plus — when rolling up — its
         # registry-resolved descendants (a sample's vials). The hierarchy lives
         # entirely behind `resolve_descendants`; this stays entity-agnostic.
@@ -881,7 +885,10 @@ def remove_flag_link(db: Session, *, user, flag_id: int, link_id: int) -> None:
     if link is None or flag_id not in (link.flag_id, link.linked_flag_id):
         raise NotFoundError(f"link {link_id} not found on flag {flag_id}")
     other_id = link.linked_flag_id if link.flag_id == flag_id else link.flag_id
-    other = get_flag(db, other_id)
+    try:
+        other = get_visible_flag(db, user, other_id)
+    except NotFoundError:
+        raise NotFoundError(f"link {link_id} not found on flag {flag_id}")
     db.delete(link)
     actor = getattr(user, "id", None)
     _audit(db, flag, actor, "flag_link_removed", from_value=str(other_id))
