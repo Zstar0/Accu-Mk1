@@ -280,8 +280,8 @@ def _relevant_flag_ids(user_id: int):
 
 def list_flags(db: Session, *, user_id: int, tab: str, status: Optional[str] = None,
                entity_type: Optional[str] = None, entity_id: Optional[str] = None,
-               include_descendants: bool = False) -> list[FlagFlag]:
-    stmt = select(FlagFlag).order_by(FlagFlag.updated_at.desc())
+               include_descendants: bool = False, user=None) -> list[FlagFlag]:
+    stmt = select(FlagFlag).where(seams.visibility_clause(db, user)).order_by(FlagFlag.updated_at.desc())
     open_states = catalog.OPEN_STATES
     if tab == "assigned":
         stmt = stmt.where(FlagFlag.assignee_id == user_id, FlagFlag.status.in_(open_states))
@@ -329,7 +329,7 @@ def _decode_cursor(cursor: str) -> tuple[datetime, int]:
 
 
 def list_activity(db: Session, *, user_id: int, cursor: Optional[str] = None,
-                  limit: int = 25) -> tuple[list[FlagEvent], Optional[str]]:
+                  limit: int = 25, user=None) -> tuple[list[FlagEvent], Optional[str]]:
     """Newest-first feed of flag events relevant to `user_id`: events on flags
     they're the assignee/creator/watcher of, unioned with their own actions.
     Keyset paginated on (created_at, id); returns (rows, next_cursor)."""
@@ -338,6 +338,7 @@ def list_activity(db: Session, *, user_id: int, cursor: Optional[str] = None,
         FlagEvent.actor_id == user_id,
         FlagEvent.flag_id.in_(_relevant_flag_ids(user_id)),
     ))
+    stmt = stmt.where(FlagEvent.flag_id.in_(select(FlagFlag.id).where(seams.visibility_clause(db, user))))
     if cursor:
         c_ts, c_id = _decode_cursor(cursor)
         stmt = stmt.where(or_(
@@ -383,13 +384,14 @@ def compute_relevance(db: Session, events: list[FlagEvent], *,
     return out
 
 
-def list_unread(db: Session, *, user_id: int) -> list[FlagFlag]:
+def list_unread(db: Session, *, user_id: int, user=None) -> list[FlagFlag]:
     """Flags relevant to the user that changed since they last read them
     (never-read counts as unread), newest-updated first."""
     stmt = (select(FlagFlag)
             .outerjoin(FlagRead, and_(FlagRead.flag_id == FlagFlag.id,
                                       FlagRead.user_id == user_id))
             .where(FlagFlag.id.in_(_relevant_flag_ids(user_id)))
+            .where(seams.visibility_clause(db, user))
             .where(or_(FlagRead.last_read_at.is_(None),
                        FlagFlag.updated_at > FlagRead.last_read_at))
             .order_by(FlagFlag.updated_at.desc()))
@@ -447,7 +449,7 @@ def _like_pattern(q: str) -> str:
     return f"%{esc}%"
 
 
-def search_flags(db: Session, *, q: str, limit: int = 50) -> list[SearchHit]:
+def search_flags(db: Session, *, q: str, limit: int = 50, user=None) -> list[SearchHit]:
     """Flags whose title OR any comment body contains `q` (case-insensitive
     substring). Portable ILIKE: a pg_trgm GIN index accelerates it on Postgres,
     and the identical query degrades to a `lower() LIKE` seqscan on SQLite / when
@@ -457,6 +459,7 @@ def search_flags(db: Session, *, q: str, limit: int = 50) -> list[SearchHit]:
         return []
     limit = max(1, min(limit, 100))
     pattern = _like_pattern(q)
+    visible = select(FlagFlag.id).where(seams.visibility_clause(db, user))
 
     # Comment matches: the first matching comment per flag drives its snippet.
     # Bounded scan (limit*4) — enough matching comments to still cover `limit`
@@ -464,6 +467,7 @@ def search_flags(db: Session, *, q: str, limit: int = 50) -> list[SearchHit]:
     comment_rows = db.execute(
         select(FlagComment.flag_id, FlagComment.body)
         .where(FlagComment.body.ilike(pattern, escape="\\"))
+        .where(FlagComment.flag_id.in_(visible))
         .order_by(FlagComment.flag_id.desc(), FlagComment.id.asc())
         .limit(limit * 4)
     ).all()
@@ -476,6 +480,7 @@ def search_flags(db: Session, *, q: str, limit: int = 50) -> list[SearchHit]:
         fid for (fid,) in db.execute(
             select(FlagFlag.id)
             .where(FlagFlag.title.ilike(pattern, escape="\\"))
+            .where(seams.visibility_clause(db, user))
             .order_by(FlagFlag.id.desc())
             .limit(limit)
         ).all()
@@ -517,7 +522,7 @@ def mark_read(db: Session, *, user_id: int, flag_id: int, user=None) -> None:
     db.commit()
 
 
-def summary(db: Session, *, user_id: int) -> dict:
+def summary(db: Session, *, user_id: int, user=None) -> dict:
     # Header-button counts are personal: both the total and the per-type
     # breakdown are scoped to flags assigned to ME (open only). by_type drives
     # the colored chips on FlagsHeaderButton, so it must not leak other users'
@@ -525,6 +530,7 @@ def summary(db: Session, *, user_id: int) -> dict:
     open_states = catalog.OPEN_STATES
     assigned = db.execute(
         select(FlagFlag).where(FlagFlag.assignee_id == user_id, FlagFlag.status.in_(open_states))
+        .where(seams.visibility_clause(db, user))
     ).scalars().all()
     by_type: dict[str, int] = {}
     for f in assigned:

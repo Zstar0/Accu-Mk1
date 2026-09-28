@@ -18,11 +18,15 @@ from slack_notify.messages import _esc, link_hash_for
 logger = logging.getLogger(__name__)
 
 
-def compute_stats(db, user_id: int, *, now: datetime) -> dict:
+def compute_stats(db, user_id: int, *, now: datetime, user=None) -> dict:
     """Open-work summary for one user. Queries flags tables directly."""
     from flags import seams, service
     from flags.catalog import OPEN_STATES
     from flags.models import FlagFlag
+
+    if user is None:
+        from models import User
+        user = db.get(User, user_id)
 
     assigned = db.execute(select(FlagFlag).where(
         FlagFlag.assignee_id == user_id,
@@ -31,7 +35,7 @@ def compute_stats(db, user_id: int, *, now: datetime) -> dict:
     blocked = [f for f in assigned if f.status == "blocked"]
     # Unread is scoped to still-OPEN flags — a resolved flag isn't "open work" to
     # ping about in the morning (list_unread itself is status-agnostic).
-    unread = [f for f in service.list_unread(db, user_id=user_id)
+    unread = [f for f in service.list_unread(db, user_id=user_id, user=user)
               if f.status in OPEN_STATES]
 
     oldest = None

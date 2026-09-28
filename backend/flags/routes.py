@@ -110,7 +110,7 @@ def list_flags(tab: str = Query("all_open"), status: Optional[str] = None,
     try:
         rows = service.list_flags(db, user_id=getattr(user, "id", None), tab=tab,
                                   status=status, entity_type=entity_type, entity_id=entity_id,
-                                  include_descendants=include_descendants)
+                                  include_descendants=include_descendants, user=user)
         return _with_entities(db, rows)
     except Exception as e:
         raise _http(e)
@@ -118,7 +118,7 @@ def list_flags(tab: str = Query("all_open"), status: Optional[str] = None,
 
 @router.get("/summary", response_model=SummaryResponse)
 def summary(db: Session = Depends(get_db), user=Depends(get_current_user)):
-    return SummaryResponse(**service.summary(db, user_id=getattr(user, "id", None)))
+    return SummaryResponse(**service.summary(db, user_id=getattr(user, "id", None), user=user))
 
 
 @router.get("/activity", response_model=ActivityPage)
@@ -128,7 +128,7 @@ def activity(cursor: Optional[str] = None, limit: int = Query(25, ge=1, le=50),
     try:
         user_id = getattr(user, "id", None)
         rows, next_cursor = service.list_activity(
-            db, user_id=user_id, cursor=cursor, limit=limit)
+            db, user_id=user_id, cursor=cursor, limit=limit, user=user)
         rel = service.compute_relevance(db, rows, user_id=user_id)
         flag_resps = _with_entities(db, [ev.flag for ev in rows])
         items = [
@@ -149,7 +149,7 @@ def activity(cursor: Optional[str] = None, limit: int = Query(25, ge=1, le=50),
 def unread(db: Session = Depends(get_db), user=Depends(get_current_user)):
     # Literal /unread above /{flag_id}.
     try:
-        rows = service.list_unread(db, user_id=getattr(user, "id", None))
+        rows = service.list_unread(db, user_id=getattr(user, "id", None), user=user)
         return _with_entities(db, rows)
     except Exception as e:
         raise _http(e)
@@ -371,7 +371,7 @@ def search_flags(q: str = Query("", description="substring; <3 chars → empty")
     # also gates at 3 chars + a 300ms debounce.
     try:
         return [FlagSearchHit.model_validate(h)
-                for h in service.search_flags(db, q=q, limit=limit)]
+                for h in service.search_flags(db, q=q, limit=limit, user=user)]
     except Exception as e:
         raise _http(e)
 

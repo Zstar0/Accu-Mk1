@@ -162,3 +162,100 @@ def test_flag_link_needs_both_ends_visible(w):
     w.c.as_user(OUTSIDER)
     assert w.c.post(f"/api/flags/{w.f_general.id}/links/flags",
                     json={"flag_id": w.f_secret.id}).status_code == 404
+
+
+def _titles(c, path):
+    r = c.get(path)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    rows = body["items"] if isinstance(body, dict) and "items" in body else body
+    return sorted({(x.get("flag") or x)["title"] for x in rows})
+
+
+def test_all_open_hides_secret_for_outsider(w):
+    w.c.as_user(OUTSIDER)
+    assert _titles(w.c, "/api/flags?tab=all_open") == [
+        "General task", "Legacy sample flag", "Public node flag"]
+    w.c.as_user(MEMBER)
+    assert "Secret node flag" in _titles(w.c, "/api/flags?tab=all_open")
+    w.c.as_user(ADMIN)
+    assert "Secret child flag" in _titles(w.c, "/api/flags?tab=all_open")
+
+
+def test_general_and_legacy_flags_unaffected(w):
+    """Review Focus 4."""
+    w.c.as_user(OUTSIDER)
+    got = _titles(w.c, "/api/flags?tab=all_open")
+    assert "General task" in got and "Legacy sample flag" in got
+
+
+def test_orphan_anchor_is_admin_only(w):
+    """Review Focus 5: the node row is gone, the flag remains."""
+    w.s.delete(w.child)
+    w.s.commit()
+    w.c.as_user(MEMBER)
+    assert "Secret child flag" not in _titles(w.c, "/api/flags?tab=all_open")
+    assert w.c.get(f"/api/flags/{w.f_child.id}").status_code == 404
+    w.c.as_user(ADMIN)
+    assert "Secret child flag" in _titles(w.c, "/api/flags?tab=all_open")
+    assert w.c.get(f"/api/flags/{w.f_child.id}").status_code == 200
+
+
+def test_unread_summary_activity_search_are_filtered(w):
+    from flags.models import FlagParticipant
+    # A stale participant row (as if membership was revoked after watching) must not
+    # bring the secret flag back through unread/activity.
+    w.s.add(FlagParticipant(flag_id=w.f_secret.id, user_id=OUTSIDER.id, role="watcher", added_by=ADMIN.id))
+    w.s.commit()
+    w.c.as_user(ADMIN)
+    assert w.c.post(f"/api/flags/{w.f_secret.id}/comments", json={"body": "Secret update"}).status_code == 201
+    w.c.as_user(OUTSIDER)
+    assert "Secret node flag" not in _titles(w.c, "/api/flags/unread")
+    assert "Secret node flag" not in _titles(w.c, "/api/flags/activity")
+    hits = w.c.get("/api/flags/search?q=Secret").json()
+    assert hits == []
+    w.c.as_user(MEMBER)
+    assert [h["flag_id"] for h in w.c.get("/api/flags/search?q=Secret node").json()] == [w.f_secret.id]
+
+
+def test_summary_counts_only_visible_assigned(w):
+    from flags.models import FlagFlag
+    # Assigned directly in the DB (a stale assignment after revocation); Task 4 blocks new ones.
+    w.s.execute(FlagFlag.__table__.update().where(FlagFlag.id == w.f_secret.id)
+                .values(assignee_id=OUTSIDER.id))
+    w.s.commit()
+    w.c.as_user(OUTSIDER)
+    assert w.c.get("/api/flags/summary").json()["assigned_to_me"] == 0
+    w.c.as_user(MEMBER)
+    w.s.execute(FlagFlag.__table__.update().where(FlagFlag.id == w.f_secret.id)
+                .values(assignee_id=MEMBER.id))
+    w.s.commit()
+    assert w.c.get("/api/flags/summary").json()["assigned_to_me"] == 1
+
+
+def test_include_descendants_rollup_respects_viewer(w):
+    q = f"/api/flags?tab=all_open&entity_type=board_node&entity_id={w.sec.id}&include_descendants=true"
+    w.c.as_user(OUTSIDER)
+    assert _titles(w.c, q) == []
+    w.c.as_user(MEMBER)
+    assert _titles(w.c, q) == ["Secret child flag", "Secret node flag"]
+
+
+def test_list_without_user_fails_closed(w):
+    from flags import service
+    titles = sorted(f.title for f in service.list_flags(w.s, user_id=ADMIN.id, tab="all_open"))
+    assert titles == ["General task", "Legacy sample flag"], "no user = scoped types hidden"
+
+
+def test_digest_stats_pass_the_user(w):
+    from datetime import datetime, timezone
+    from flags.models import FlagParticipant
+    from slack_notify.digest import compute_stats
+    w.s.add(FlagParticipant(flag_id=w.f_secret.id, user_id=OUTSIDER.id, role="watcher", added_by=ADMIN.id))
+    w.s.commit()
+    w.c.as_user(ADMIN)
+    w.c.post(f"/api/flags/{w.f_secret.id}/comments", json={"body": "ping"})
+    stats = compute_stats(w.s, OUTSIDER.id, now=datetime.now(timezone.utc))
+    assert stats["unread"] == 0
+    stats = compute_stats(w.s, MEMBER.id, now=datetime.now(timezone.utc))
+    assert stats["unread"] >= 0  # member path loads the User row and applies the clause without error

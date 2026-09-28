@@ -154,3 +154,22 @@ def test_entity_context_carries_board_fields():
     assert (c.board_slug, c.node_kind) == ("org", "frame")
     assert EntityContext(entity_type="sample", entity_id="P-1", label="P-1",
                          deep_link={"kind": "none", "id": "P-1"}).board_slug is None
+
+
+def test_visibility_clause_hides_a_type_whose_closure_raises(db):
+    from flags import seams
+    from flags.models import FlagFlag
+    _register_thing()
+    spec = seams.get_entity_spec("thing")
+
+    def boom(db_, user):
+        raise RuntimeError("boom")
+    seams.register_entity("thing", label=spec.label, deep_link=spec.deep_link, can_flag=spec.can_flag,
+                          context=spec.context, visible_entity_ids=boom)
+    db.add_all([FlagFlag(entity_type=None, entity_id=None, kind="issue", type="task", status="open",
+                         title="general", created_by=1),
+                FlagFlag(entity_type="thing", entity_id="1", kind="issue", type="task", status="open",
+                         title="hidden", created_by=1)])
+    db.commit()
+    titles = sorted(db.execute(select(FlagFlag.title).where(seams.visibility_clause(db, ADMIN))).scalars().all())
+    assert titles == ["general"], "a raising closure hides its whole type, even for admins"
