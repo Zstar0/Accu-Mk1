@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v1.28.1 - 2026-09-28
+
+### Fixed
+- **Inline field edits on native-born samples failed with "Not Found" (P-5178).** Every pencil-edit on the sample-details page (Client Lot, Declared Qty, Client Sample ID, Date Sampled, the COA Info fields) posted to the SENAITE field-update route keyed by SENAITE uid; a native-born parent has no uid, so the request returned 404 before any write. The route now resolves a native-born parent by its sample id and writes the Accu-Mk1 registry row directly, logging the change to the activity feed. Fields the row cannot store fail closed, and analyte peptides still go through Relabel or Replace. SENAITE-born samples are unchanged. (#260)
+
 ## v1.28.0 - 2026-09-23
 
 ### Worksheets 2.0: rapid sterility PCR plate builder
