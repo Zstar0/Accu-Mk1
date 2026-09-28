@@ -437,13 +437,24 @@ def get_flag(flag_id: int, db: Session = Depends(get_db), user=Depends(get_curre
         resp.entity_links = []
         for link in service.list_entity_links(db, flag_id):
             out = EntityLinkOut.model_validate(link)
-            ctx = seams.resolve_context(db, link.entity_type, link.entity_id)
-            out.entity = EntityContext(**ctx) if ctx else None
+            if seams.can_view_entity(db, user, link.entity_type, link.entity_id):
+                ctx = seams.resolve_context(db, link.entity_type, link.entity_id)
+                out.entity = EntityContext(**ctx) if ctx else None
+            else:
+                # Spec §6.3: never confirm what a hidden anchor is. Keep the type (the
+                # card needs an icon) and blank the rest.
+                out.entity_id = ""
+                out.entity = EntityContext(entity_type=link.entity_type, entity_id="",
+                                           label="Restricted",
+                                           deep_link={"kind": "none", "id": ""})
             resp.entity_links.append(out)
         resp.flag_links = []
         for link in service.list_flag_links(db, flag_id):
             oid = link.linked_flag_id if link.flag_id == flag_id else link.flag_id
-            o = service.get_flag(db, oid)
+            try:
+                o = service.get_visible_flag(db, user, oid)
+            except NotFoundError:
+                continue  # the other end is hidden from this caller
             resp.flag_links.append(FlagLinkOut(
                 id=link.id, flag_id=o.id, title=o.title, status=o.status, type=o.type))
         # Reactions are an aggregate (batch query) — can't ride from_attributes.

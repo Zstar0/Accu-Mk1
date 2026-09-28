@@ -299,3 +299,28 @@ def test_legacy_and_general_flags_take_any_assignee(w):
 def test_unknown_target_user_is_400_on_a_scoped_flag(w):
     w.c.as_user(ADMIN)
     assert w.c.post(f"/api/flags/{w.f_secret.id}/assign", json={"assignee_id": 999}).status_code == 400
+
+
+def test_detail_masks_invisible_entity_links_and_drops_invisible_flag_links(w):
+    w.c.as_user(MEMBER)
+    fid = w.f_public.id
+    assert w.c.post(f"/api/flags/{fid}/links/entities",
+                    json={"entity_type": "board_node", "entity_id": str(w.sec.id)}).status_code == 201
+    assert w.c.post(f"/api/flags/{fid}/links/flags", json={"flag_id": w.f_secret.id}).status_code == 201
+    w.c.as_user(OUTSIDER)
+    d = w.c.get(f"/api/flags/{fid}").json()
+    link = d["entity_links"][0]
+    assert link["entity_type"] == "board_node" and link["entity_id"] == ""
+    assert link["entity"]["label"] == "Restricted"
+    assert d["flag_links"] == []
+    w.c.as_user(MEMBER)
+    d = w.c.get(f"/api/flags/{fid}").json()
+    assert d["entity_links"][0]["entity"]["label"] == "Exec > Secret"
+    assert [l["flag_id"] for l in d["flag_links"]] == [w.f_secret.id]
+
+
+def test_outsider_cannot_link_a_public_flag_to_a_secret_node(w):
+    w.c.as_user(OUTSIDER)
+    r = w.c.post(f"/api/flags/{w.f_public.id}/links/entities",
+                 json={"entity_type": "board_node", "entity_id": str(w.sec.id)})
+    assert r.status_code == 404

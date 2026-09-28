@@ -812,6 +812,8 @@ def add_entity_link(db: Session, *, user, flag_id: int, entity_type: str,
     flag = get_visible_flag(db, user, flag_id)
     if not seams.is_registered(entity_type):
         raise BadRequestError(f"unknown entity_type {entity_type!r}")
+    if not seams.can_view_entity(db, user, entity_type, str(entity_id)):
+        raise NotFoundError(f"{entity_type} {entity_id!r} not found")
     dup = db.execute(select(FlagEntityLink).where(
         FlagEntityLink.flag_id == flag_id,
         FlagEntityLink.entity_type == entity_type,
