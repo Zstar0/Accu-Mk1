@@ -121,4 +121,34 @@ describe('AddNodePalette', () => {
       expect.anything()
     )
   })
+
+  it('keeps a server hit visible when its label does not fuzzy-match the typed query', async () => {
+    h.search = [{ entity_id: 'SOP-0001', label: 'SOP-0001' }]
+    const user = userEvent.setup()
+    render(
+      <AddNodePalette
+        board={board}
+        open
+        onOpenChange={() => undefined}
+        dropAt={{ x: 0, y: 0 }}
+        parentId={7}
+      />
+    )
+    await user.click(screen.getByText('Document'))
+    await user.type(screen.getByPlaceholderText('Search document...'), 'check')
+    await user.click(await screen.findByText('SOP-0001'))
+    expect(h.create).toHaveBeenCalledWith(
+      {
+        kind: 'entity',
+        label: '',
+        entity_type: 'document',
+        entity_id: 'SOP-0001',
+        x: 0,
+        y: 0,
+        parent_id: 7,
+        data: {},
+      },
+      expect.anything()
+    )
+  })
 })

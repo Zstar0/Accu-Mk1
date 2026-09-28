@@ -63,12 +63,16 @@ export function AddNodePalette({
       open={open}
       onOpenChange={o => {
         onOpenChange(o)
-        if (!o) setStep('kind')
+        if (!o) {
+          setStep('kind')
+          setQ('')
+          setUrl('')
+        }
       }}
     >
       <DialogContent className="p-0">
         <DialogTitle className="sr-only">Add to board</DialogTitle>
-        <Command>
+        <Command shouldFilter={step !== 'entity'}>
           {step === 'kind' && (
             <>
               <CommandInput placeholder="Add to the board..." />
