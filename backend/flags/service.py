@@ -684,7 +684,10 @@ def get_attachment(db: Session, attachment_id: int, *, user=None) -> FlagAttachm
     att = db.get(FlagAttachment, attachment_id)
     if att is None:
         raise NotFoundError(f"attachment {attachment_id} not found")
-    get_visible_flag(db, user, att.flag_id)
+    try:
+        get_visible_flag(db, user, att.flag_id)
+    except NotFoundError:
+        raise NotFoundError(f"attachment {attachment_id} not found")
     return att
 
 
@@ -732,7 +735,11 @@ def add_reaction(db: Session, *, user, comment_id, emoji) -> list[dict]:
     if emoji not in CURATED_EMOJI:
         raise BadRequestError(f"unsupported emoji {emoji!r}")
     comment = _load_comment(db, comment_id)
-    if not permissions.can(user, "comment", get_visible_flag(db, user, comment.flag_id)):
+    try:
+        flag = get_visible_flag(db, user, comment.flag_id)
+    except NotFoundError:
+        raise NotFoundError(f"comment {comment_id} not found")
+    if not permissions.can(user, "comment", flag):
         raise PermissionDeniedError("not allowed to react")
     uid = getattr(user, "id", None)
     existing = db.execute(select(FlagCommentReaction).where(
@@ -748,7 +755,10 @@ def add_reaction(db: Session, *, user, comment_id, emoji) -> list[dict]:
 
 def remove_reaction(db: Session, *, user, comment_id, emoji) -> list[dict]:
     comment = _load_comment(db, comment_id)
-    get_visible_flag(db, user, comment.flag_id)
+    try:
+        get_visible_flag(db, user, comment.flag_id)
+    except NotFoundError:
+        raise NotFoundError(f"comment {comment_id} not found")
     uid = getattr(user, "id", None)
     row = db.execute(select(FlagCommentReaction).where(
         FlagCommentReaction.comment_id == comment_id,

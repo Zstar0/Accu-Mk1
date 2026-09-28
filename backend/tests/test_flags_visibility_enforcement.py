@@ -132,8 +132,24 @@ def test_reactions_and_attachments_follow_the_flag(w):
     assert att.status_code == 201, att.text
     aid = att.json()["id"]
     w.c.as_user(OUTSIDER)
-    assert w.c.put(f"/api/flags/comments/{cid}/reactions/%F0%9F%91%8D").status_code == 404
-    assert w.c.get(f"/api/flags/attachments/{aid}").status_code == 404
+    hidden_put = w.c.put(f"/api/flags/comments/{cid}/reactions/%F0%9F%91%8D")
+    missing_put = w.c.put("/api/flags/comments/999999/reactions/%F0%9F%91%8D")
+    assert hidden_put.status_code == missing_put.status_code == 404
+    assert hidden_put.json()["detail"] == f"comment {cid} not found"
+    assert missing_put.json()["detail"] == "comment 999999 not found"
+
+    hidden_delete = w.c.delete(f"/api/flags/comments/{cid}/reactions/%F0%9F%91%8D")
+    missing_delete = w.c.delete("/api/flags/comments/999999/reactions/%F0%9F%91%8D")
+    assert hidden_delete.status_code == missing_delete.status_code == 404
+    assert hidden_delete.json()["detail"] == f"comment {cid} not found"
+    assert missing_delete.json()["detail"] == "comment 999999 not found"
+
+    hidden_att = w.c.get(f"/api/flags/attachments/{aid}")
+    missing_att = w.c.get("/api/flags/attachments/999999")
+    assert hidden_att.status_code == missing_att.status_code == 404
+    assert hidden_att.json()["detail"] == f"attachment {aid} not found"
+    assert missing_att.json()["detail"] == "attachment 999999 not found"
+
     w.c.as_user(MEMBER)
     assert w.c.put(f"/api/flags/comments/{cid}/reactions/%F0%9F%91%8D").status_code == 200
     assert w.c.get(f"/api/flags/attachments/{aid}").status_code == 200

@@ -75,7 +75,7 @@ def _dispatch(db, user, action_id: str, flag_id: int) -> str:
             service.assign(db, user=user, flag_id=flag_id, assignee_id=user.id)
             return "Assigned to you."
         if action_id == "flag_mark_read":
-            service.mark_read(db, user_id=user.id, flag_id=flag_id)
+            service.mark_read(db, user_id=user.id, flag_id=flag_id, user=user)
             return "Marked as read."
         if action_id == "flag_resolve":
             service.change_status(db, user=user, flag_id=flag_id, to_status="resolved")
