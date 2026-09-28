@@ -634,3 +634,9 @@ and PR. Deploy follows the `accumark-deploy` skill; boards need no env change.
   (opener:default is already granted) and window.open with noopener on the web.
 - Slice 3: on the add palette's entity step, cmdk's client-side filter is off; the server's
   entity search is the only filter.
+- Slice 3 (final review): these §8.2 to §8.7 items are not built in slice 3 and move to slice 4:
+  the EntityNode flag indicator, the PersonNode "N assigned" pill, NodeResizer on notes, the
+  open-flag count on board cards, groups in the person panel, and the 250 ms drag-end debounce
+  (drag-end writes once per drop today). Editors delete a selected edge with Delete/Backspace
+  through the API; nodes delete only from the side panel. A board-node flag's thread opens the
+  board through the flag's server-resolved deep link.
