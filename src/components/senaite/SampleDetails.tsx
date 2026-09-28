@@ -150,7 +150,7 @@ import {
 } from '@/lib/native-parent-analyses'
 import { NativeManageAnalysesBlock } from '@/components/senaite/NativeManageAnalysesBlock'
 import { pickerSourceFor } from '@/lib/manage-analyses-picker'
-import { hasParentIdentity } from '@/lib/parent-identity'
+import { fieldEditKey, hasParentIdentity } from '@/lib/parent-identity'
 import { ParentRetestConfirmDialog } from '@/components/senaite/ParentRetestConfirmDialog'
 import { useParentRetestFlow } from '@/hooks/use-parent-retest-flow'
 import {
@@ -5847,7 +5847,7 @@ export function SampleDetails() {
                     label="Date Sampled"
                     value={data.date_sampled}
                     senaiteField="DateSampled"
-                    sampleUid={data.sample_uid ?? ''}
+                    sampleUid={fieldEditKey(data)}
                     formatDisplay={v => formatDate(v as string)}
                     onSaved={v =>
                       setData(prev =>
@@ -5876,7 +5876,7 @@ export function SampleDetails() {
                         label="Order #"
                         value={data.client_order_number}
                         senaiteField="ClientOrderNumber"
-                        sampleUid={data.sample_uid ?? ''}
+                        sampleUid={fieldEditKey(data)}
                         mono
                         emphasis
                         onSaved={v =>
@@ -5922,7 +5922,7 @@ export function SampleDetails() {
                     label="Client Sample ID"
                     value={data.client_sample_id}
                     senaiteField="ClientSampleID"
-                    sampleUid={data.sample_uid ?? ''}
+                    sampleUid={fieldEditKey(data)}
                     mono
                     onSaved={v =>
                       setData(prev =>
@@ -5940,7 +5940,7 @@ export function SampleDetails() {
                     label="Client Lot"
                     value={data.client_lot}
                     senaiteField="ClientLot"
-                    sampleUid={data.sample_uid ?? ''}
+                    sampleUid={fieldEditKey(data)}
                     mono
                     onSaved={v =>
                       setData(prev =>
@@ -6014,7 +6014,7 @@ export function SampleDetails() {
                     label="Company"
                     value={data.coa.company_name}
                     senaiteField="CoaCompanyName"
-                    sampleUid={data.sample_uid ?? ''}
+                    sampleUid={fieldEditKey(data)}
                     onSaved={v =>
                       setData(prev =>
                         prev
@@ -6033,7 +6033,7 @@ export function SampleDetails() {
                     label="Website"
                     value={data.coa.website}
                     senaiteField="CoaWebsite"
-                    sampleUid={data.sample_uid ?? ''}
+                    sampleUid={fieldEditKey(data)}
                     onSaved={v =>
                       setData(prev =>
                         prev
@@ -6049,7 +6049,7 @@ export function SampleDetails() {
                     label="Email"
                     value={data.coa.email}
                     senaiteField="CoaEmail"
-                    sampleUid={data.sample_uid ?? ''}
+                    sampleUid={fieldEditKey(data)}
                     onSaved={v =>
                       setData(prev =>
                         prev
@@ -6065,7 +6065,7 @@ export function SampleDetails() {
                     label="Verification Code"
                     value={data.coa.verification_code}
                     senaiteField="VerificationCode"
-                    sampleUid={data.sample_uid ?? ''}
+                    sampleUid={fieldEditKey(data)}
                     mono
                     formatDisplay={v =>
                       v ? (
@@ -6099,7 +6099,7 @@ export function SampleDetails() {
                     label="Address"
                     value={data.coa.address}
                     senaiteField="CoaAddress"
-                    sampleUid={data.sample_uid ?? ''}
+                    sampleUid={fieldEditKey(data)}
                     onSaved={v =>
                       setData(prev =>
                         prev
@@ -6115,7 +6115,7 @@ export function SampleDetails() {
                     label="Logo URL"
                     value={data.coa.company_logo_url}
                     senaiteField="CompanyLogoUrl"
-                    sampleUid={data.sample_uid ?? ''}
+                    sampleUid={fieldEditKey(data)}
                     truncateStart
                     onSaved={v =>
                       setData(prev =>
@@ -6135,7 +6135,7 @@ export function SampleDetails() {
                     label="Chromatograph BG"
                     value={data.coa.chromatograph_background_url}
                     senaiteField="ChromatographBackgroundUrl"
-                    sampleUid={data.sample_uid ?? ''}
+                    sampleUid={fieldEditKey(data)}
                     truncateStart
                     onSaved={v =>
                       setData(prev =>
@@ -6515,7 +6515,7 @@ export function SampleDetails() {
                                 readOnly={subSamples.length > 0}
                                 readOnlyHint="Locked once vials exist — use Replace or Clear so vial rows and the identity service follow the change"
                                 senaiteField={`Analyte${slot}Peptide`}
-                                sampleUid={data.sample_uid ?? ''}
+                                sampleUid={fieldEditKey(data)}
                                 onSaved={v =>
                                   setData(prev => {
                                     if (!prev) return prev
@@ -6540,7 +6540,7 @@ export function SampleDetails() {
                               readOnly={subSamples.length > 0}
                               readOnlyHint="Locked once vials exist — Replace or Clear the slot instead"
                               senaiteField={`Analyte${slot}DeclaredQuantity`}
-                              sampleUid={data.sample_uid ?? ''}
+                              sampleUid={fieldEditKey(data)}
                               type="number"
                               mono
                               suffix="mg"
@@ -6603,7 +6603,7 @@ export function SampleDetails() {
                     label="Total Declared Qty"
                     value={data.declared_weight_mg}
                     senaiteField="DeclaredTotalQuantity"
-                    sampleUid={data.sample_uid ?? ''}
+                    sampleUid={fieldEditKey(data)}
                     type="number"
                     mono
                     suffix="mg"
