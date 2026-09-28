@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  edgeIdsToDelete,
   resizePatch,
   resolveParentOnDrop,
   toFlowNodes,
@@ -93,5 +94,14 @@ describe('board-mapping', () => {
   it('frames carry the board slug for their own resize writes', () => {
     const [frame] = toFlowNodes([row({ kind: 'frame' })], true, 'org')
     expect(frame?.data.slug).toBe('org')
+  })
+
+  it('Delete removes only the edges the user selected, not a selected node edges', () => {
+    expect(
+      edgeIdsToDelete([
+        { id: '4', source: '1', target: '2', selected: true },
+        { id: '5', source: '1', target: '3' },
+      ])
+    ).toEqual([4])
   })
 })

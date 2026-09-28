@@ -9,17 +9,23 @@ import {
   useNodesState,
   useReactFlow,
   type Connection,
+  type Edge,
   type Node,
   type NodeChange,
   type Viewport,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import type { BoardDetail } from '@/lib/api-boards'
-import { useCreateEdge, usePatchPositions } from '@/services/boards'
+import {
+  useCreateEdge,
+  useDeleteEdge,
+  usePatchPositions,
+} from '@/services/boards'
 import { useUIStore } from '@/store/ui-store'
 import { nodeTypes } from './nodes'
 import {
   FRAME_DEFAULT,
+  edgeIdsToDelete,
   resolveParentOnDrop,
   toFlowEdges,
   toFlowNodes,
@@ -68,6 +74,7 @@ function CanvasInner({
   )
   const patchPositions = usePatchPositions(board.slug)
   const createEdge = useCreateEdge(board.slug)
+  const deleteEdge = useDeleteEdge(board.slug)
   const { fitView } = useReactFlow()
   // Read once into state (React Compiler: no impure reads during render).
   const [initialViewport] = useState(() =>
@@ -160,6 +167,16 @@ function CanvasInner({
     [canEdit, createEdge]
   )
 
+  // Edges delete through the API; returning false means xyflow never removes
+  // anything locally, and nodes are only ever deleted from the side panel.
+  const handleBeforeDelete = useCallback(
+    async ({ edges: doomed }: { edges: Edge[] }) => {
+      if (canEdit) edgeIdsToDelete(doomed).forEach(id => deleteEdge.mutate(id))
+      return false
+    },
+    [canEdit, deleteEdge]
+  )
+
   return (
     <ReactFlow
       nodes={shown}
@@ -187,8 +204,9 @@ function CanvasInner({
       nodesDraggable={canEdit}
       nodesConnectable={canEdit}
       elementsSelectable
-      // Delete goes through the API (a later task); never a local-only Backspace removal.
-      deleteKeyCode={null}
+      edgesFocusable
+      deleteKeyCode={canEdit ? ['Delete', 'Backspace'] : null}
+      onBeforeDelete={handleBeforeDelete}
       defaultViewport={initialViewport}
       fitView={!initialViewport}
       minZoom={0.2}

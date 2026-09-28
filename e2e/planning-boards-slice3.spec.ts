@@ -149,6 +149,14 @@ test('seed a company map through the API', async ({ request }) => {
   expect(person.status(), await person.text()).toBe(201)
   const personId = ((await person.json()) as { id: number }).id
 
+  // One edge for the edge-delete test (I2): editors remove it with the Delete key.
+  const edge = await request.post(`${BACKEND_URL}/api/boards/${SLUG}/edges`, {
+    headers: h,
+    data: { source_id: linkId, target_id: personId, kind: 'related' },
+  })
+  expect(edge.status(), await edge.text()).toBe(201)
+  const edgeId = ((await edge.json()) as { id: number }).id
+
   const docs = (await (
     await request.get(`${BACKEND_URL}/api/documents?page_size=1`, {
       headers: h,
@@ -191,6 +199,7 @@ test('seed a company map through the API', async ({ request }) => {
     note_id: noteId,
     link_id: linkId,
     person_id: personId,
+    edge_id: edgeId,
     document_entity_id: entityId,
     document_code: code ?? null,
     flag_title: flagTitle,
@@ -238,6 +247,7 @@ test('selecting the frame shows its flags in the side panel', async ({
 
 test('add a text node from the palette, drag it, reload, it stays', async ({
   page,
+  request,
 }) => {
   await pinViewport(page)
   await authenticate(page)
@@ -285,6 +295,24 @@ test('add a text node from the palette, drag it, reload, it stays', async ({
     expected: { dx, dy },
     measured: { dx: gotDx, dy: gotDy },
   })
+
+  // The pixel check passes whether or not the drop joined the frame, so ask the API:
+  // the text node must now be a child of the seeded frame.
+  const detail = await request.get(`${BACKEND_URL}/api/boards/${SLUG}`, {
+    headers: bearer(await token(request)),
+  })
+  expect(detail.ok(), await detail.text()).toBeTruthy()
+  const rows = (
+    (await detail.json()) as {
+      nodes: { kind: string; label: string | null; parent_id: number | null }[]
+    }
+  ).nodes
+  const dropped = rows.find(n => n.kind === 'text' && n.label === 'Heading')
+  record('drag_parent', {
+    parent_id: dropped?.parent_id ?? null,
+    frame_id: frameId,
+  })
+  expect(dropped?.parent_id).toBe(frameId)
 })
 
 test('a board_node flag deep-links to the board with the node selected', async ({
@@ -368,4 +396,23 @@ test('resize the frame from its grip, reload, it persists', async ({
     expected: { dw, dh },
     measured: { dw: gotDw, dh: gotDh },
   })
+})
+
+test('an editor deletes an edge with the Delete key, reload, it is gone', async ({
+  page,
+}) => {
+  await pinViewport(page)
+  await authenticate(page)
+  await page.goto(`/#boards/board?id=${SLUG}`)
+  const edge = page.locator('.react-flow__edge').first()
+  await expect(edge).toBeVisible({ timeout: 30_000 })
+  await edge.click()
+  await page.keyboard.press('Delete')
+  await page.waitForTimeout(800)
+  await page.reload()
+  await expect(page.locator('.react-flow__node-frame').first()).toBeVisible({
+    timeout: 30_000,
+  })
+  await expect(page.locator('.react-flow__edge')).toHaveCount(0)
+  record('edge_deleted', true)
 })

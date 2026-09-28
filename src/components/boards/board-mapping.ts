@@ -78,6 +78,14 @@ export function toFlowEdges(rows: BoardEdge[]): Edge[] {
   }))
 }
 
+/**
+ * Edge ids a Delete key press should remove through the API. xyflow also hands over
+ * every edge touching a selected node; only edges the user selected themselves count.
+ */
+export function edgeIdsToDelete(edges: Edge[]): number[] {
+  return edges.filter(e => e.selected).map(e => Number(e.id))
+}
+
 export interface FrameRect {
   id: string
   position: XYPosition
