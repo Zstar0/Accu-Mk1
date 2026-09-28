@@ -11178,6 +11178,14 @@ def _delivered_sample_pks(db: Session, sample_pks) -> frozenset:
     return frozenset(ledger) | frozenset(events)
 
 
+def _rtp_flag_title(f) -> str:
+    """The flag title the shared ready-to-publish payload may carry. The payload is
+    cached across users, so a flag on a view-scoped anchor (a board node) is masked
+    as "Restricted" rather than filtered; its hold/ready semantics are unchanged."""
+    from flags import seams
+    return "Restricted" if seams.is_view_scoped(f.entity_type) else (f.title or "")
+
+
 def _load_ready_to_publish_inputs(db: Session) -> dict:
     """Fetch everything ``ready_to_publish.build_ready_rows`` needs.
 
@@ -11241,7 +11249,7 @@ def _load_ready_to_publish_inputs(db: Session) -> dict:
                 if f.type in ready_kinds:
                     flagged_sample_ids.add(sid)
                 flags.append(RtpFlagIn(id=f.id, sample_id=sid, type_slug=f.type, status=f.status,
-                                       title=f.title or "", created_at=f.created_at))
+                                       title=_rtp_flag_title(f), created_at=f.created_at))
 
     # A terminal status (published/cancelled) normally ends the sample's
     # eligibility — but an OPEN Ready flag is an explicit human signal that a
