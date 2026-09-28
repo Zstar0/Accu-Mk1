@@ -248,6 +248,16 @@ def get_flag(db: Session, flag_id: int) -> FlagFlag:
     return flag
 
 
+def get_visible_flag(db: Session, user, flag_id: int) -> FlagFlag:
+    """The point-read gate (spec §6.3). Same NotFoundError text as a missing flag, so a
+    caller cannot tell "hidden" from "absent". Unanchored flags are visible to all staff."""
+    flag = get_flag(db, flag_id)
+    if flag.entity_type is not None and not seams.can_view_entity(
+            db, user, flag.entity_type, flag.entity_id):
+        raise NotFoundError(f"flag {flag_id} not found")
+    return flag
+
+
 def _valid_user_ids(db: Session, ids) -> list[int]:
     """Existing user ids only, order-preserving + deduped."""
     from models import User
@@ -496,8 +506,8 @@ def search_flags(db: Session, *, q: str, limit: int = 50) -> list[SearchHit]:
     return hits
 
 
-def mark_read(db: Session, *, user_id: int, flag_id: int) -> None:
-    get_flag(db, flag_id)  # 404 if the flag doesn't exist
+def mark_read(db: Session, *, user_id: int, flag_id: int, user=None) -> None:
+    get_visible_flag(db, user, flag_id)  # 404 if missing OR hidden
     row = db.execute(select(FlagRead).where(
         FlagRead.user_id == user_id, FlagRead.flag_id == flag_id)).scalar_one_or_none()
     if row is None:
@@ -524,7 +534,7 @@ def summary(db: Session, *, user_id: int) -> dict:
 
 def add_comment(db: Session, *, user, flag_id, body, mention_ids=None,
                 event_details=None) -> FlagComment:
-    flag = get_flag(db, flag_id)
+    flag = get_visible_flag(db, user, flag_id)
     if not permissions.can(user, "comment", flag):
         raise PermissionDeniedError("not allowed to comment")
     if not body or not body.strip():
@@ -560,7 +570,7 @@ def add_comment(db: Session, *, user, flag_id, body, mention_ids=None,
 
 
 def assign(db: Session, *, user, flag_id, assignee_id) -> FlagFlag:
-    flag = get_flag(db, flag_id)
+    flag = get_visible_flag(db, user, flag_id)
     if not permissions.can(user, "assign", flag):
         raise PermissionDeniedError("not allowed to assign")
     actor_id = getattr(user, "id", None)
@@ -583,7 +593,7 @@ def assign(db: Session, *, user, flag_id, assignee_id) -> FlagFlag:
 
 
 def add_watcher(db: Session, *, user, flag_id, user_id) -> FlagParticipant:
-    flag = get_flag(db, flag_id)
+    flag = get_visible_flag(db, user, flag_id)
     if not permissions.can(user, "watch", flag):
         raise PermissionDeniedError("not allowed to watch")
     existing = db.execute(
@@ -602,7 +612,7 @@ def add_watcher(db: Session, *, user, flag_id, user_id) -> FlagParticipant:
 
 
 def remove_watcher(db: Session, *, user, flag_id, user_id) -> None:
-    flag = get_flag(db, flag_id)
+    flag = get_visible_flag(db, user, flag_id)
     if not permissions.can(user, "watch", flag):
         raise PermissionDeniedError("not allowed")
     row = db.execute(
@@ -646,7 +656,7 @@ _EXT_FOR_CT = {"image/png": ".png", "image/jpeg": ".jpg",
 
 
 def add_attachment(db: Session, *, user, flag_id, data: bytes, filename: str) -> FlagAttachment:
-    flag = get_flag(db, flag_id)
+    flag = get_visible_flag(db, user, flag_id)
     if not permissions.can(user, "comment", flag):
         raise PermissionDeniedError("not allowed to attach")
     if not data:
@@ -670,10 +680,11 @@ def add_attachment(db: Session, *, user, flag_id, data: bytes, filename: str) ->
     return att
 
 
-def get_attachment(db: Session, attachment_id: int) -> FlagAttachment:
+def get_attachment(db: Session, attachment_id: int, *, user=None) -> FlagAttachment:
     att = db.get(FlagAttachment, attachment_id)
     if att is None:
         raise NotFoundError(f"attachment {attachment_id} not found")
+    get_visible_flag(db, user, att.flag_id)
     return att
 
 
@@ -721,7 +732,7 @@ def add_reaction(db: Session, *, user, comment_id, emoji) -> list[dict]:
     if emoji not in CURATED_EMOJI:
         raise BadRequestError(f"unsupported emoji {emoji!r}")
     comment = _load_comment(db, comment_id)
-    if not permissions.can(user, "comment", get_flag(db, comment.flag_id)):
+    if not permissions.can(user, "comment", get_visible_flag(db, user, comment.flag_id)):
         raise PermissionDeniedError("not allowed to react")
     uid = getattr(user, "id", None)
     existing = db.execute(select(FlagCommentReaction).where(
@@ -737,6 +748,7 @@ def add_reaction(db: Session, *, user, comment_id, emoji) -> list[dict]:
 
 def remove_reaction(db: Session, *, user, comment_id, emoji) -> list[dict]:
     comment = _load_comment(db, comment_id)
+    get_visible_flag(db, user, comment.flag_id)
     uid = getattr(user, "id", None)
     row = db.execute(select(FlagCommentReaction).where(
         FlagCommentReaction.comment_id == comment_id,
@@ -766,7 +778,7 @@ def _link_attachments(db: Session, flag_id: int, comment_id: int, body: str) -> 
 def add_entity_link(db: Session, *, user, flag_id: int, entity_type: str,
                     entity_id: str) -> FlagEntityLink:
     """Attach a navigational 'related item' to a flag. NOT a rollup anchor."""
-    flag = get_flag(db, flag_id)
+    flag = get_visible_flag(db, user, flag_id)
     if not seams.is_registered(entity_type):
         raise BadRequestError(f"unknown entity_type {entity_type!r}")
     dup = db.execute(select(FlagEntityLink).where(
@@ -787,7 +799,7 @@ def add_entity_link(db: Session, *, user, flag_id: int, entity_type: str,
 
 
 def remove_entity_link(db: Session, *, user, flag_id: int, link_id: int) -> None:
-    flag = get_flag(db, flag_id)
+    flag = get_visible_flag(db, user, flag_id)
     link = db.get(FlagEntityLink, link_id)
     if link is None or link.flag_id != flag_id:
         raise NotFoundError(f"link {link_id} not found on flag {flag_id}")
@@ -809,8 +821,8 @@ def add_flag_link(db: Session, *, user, flag_id: int, other_id: int) -> FlagLink
     events land on BOTH flags. Symmetric — the link shows in both threads."""
     if flag_id == other_id:
         raise BadRequestError("cannot link a flag to itself")
-    flag = get_flag(db, flag_id)
-    other = get_flag(db, other_id)
+    flag = get_visible_flag(db, user, flag_id)
+    other = get_visible_flag(db, user, other_id)
     lo, hi = sorted((flag_id, other_id))
     dup = db.execute(select(FlagLink).where(
         FlagLink.flag_id == lo, FlagLink.linked_flag_id == hi)).scalar_one_or_none()
@@ -827,7 +839,7 @@ def add_flag_link(db: Session, *, user, flag_id: int, other_id: int) -> FlagLink
 
 
 def remove_flag_link(db: Session, *, user, flag_id: int, link_id: int) -> None:
-    flag = get_flag(db, flag_id)
+    flag = get_visible_flag(db, user, flag_id)
     link = db.get(FlagLink, link_id)
     if link is None or flag_id not in (link.flag_id, link.linked_flag_id):
         raise NotFoundError(f"link {link_id} not found on flag {flag_id}")
@@ -848,7 +860,7 @@ def list_flag_links(db: Session, flag_id: int) -> list[FlagLink]:
 
 def change_status(db: Session, *, user, flag_id, to_status, commit: bool = True) -> FlagFlag:
     from flags.errors import ConflictError
-    flag = get_flag(db, flag_id)
+    flag = get_visible_flag(db, user, flag_id)
     if not permissions.can(user, "change_status", flag):
         raise PermissionDeniedError("not allowed to change status")
     if not catalog.is_legal_transition(flag.status, to_status):
@@ -873,7 +885,7 @@ def set_due(db: Session, *, user, flag_id: int,
             due_at: Optional[datetime]) -> FlagFlag:
     """Set/change/clear a flag's due date; no-op if unchanged. Same permission
     tier as status changes (assignee/creator/admin) per spec §5."""
-    flag = get_flag(db, flag_id)
+    flag = get_visible_flag(db, user, flag_id)
     if not permissions.can(user, "change_status", flag):
         raise PermissionDeniedError("not allowed to edit this flag")
     if flag.due_at == due_at:

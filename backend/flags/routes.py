@@ -342,7 +342,7 @@ def get_attachment(attachment_id: int, db: Session = Depends(get_db), user=Depen
     # Literal /attachments/... registered ABOVE /{flag_id} so it wins the match.
     # Authenticated serve — no public URLs (spec §11).
     try:
-        att = service.get_attachment(db, attachment_id)
+        att = service.get_attachment(db, attachment_id, user=user)
         data = seams.get_attachment_storage().fetch(att.storage_key)
     except seams.AttachmentNotFound:
         raise HTTPException(status_code=404, detail="attachment file missing from storage")
@@ -431,7 +431,7 @@ def cancel_watch(watch_id: int, db: Session = Depends(get_db),
 @router.get("/{flag_id}", response_model=FlagDetailResponse)
 def get_flag(flag_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
-        resp = _with_entity(db, service.get_flag(db, flag_id), FlagDetailResponse)
+        resp = _with_entity(db, service.get_visible_flag(db, user, flag_id), FlagDetailResponse)
         resp.watchers = [WatcherOut.model_validate(w)
                          for w in service.list_watchers(db, flag_id)]
         resp.entity_links = []
@@ -458,7 +458,7 @@ def get_flag(flag_id: int, db: Session = Depends(get_db), user=Depends(get_curre
 @router.post("/{flag_id}/read", status_code=204)
 def mark_read(flag_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
-        service.mark_read(db, user_id=getattr(user, "id", None), flag_id=flag_id)
+        service.mark_read(db, user_id=getattr(user, "id", None), flag_id=flag_id, user=user)
     except Exception as e:
         raise _http(e)
 
