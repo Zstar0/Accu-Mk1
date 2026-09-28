@@ -16,6 +16,15 @@
 - **Recurring templates are isolated.** A template mints as its creator (so an admin's template on a board node is allowed), and a template whose mint fails is logged and moved to its next run instead of stopping every other template. A refused watcher on a minted flag is logged instead of dropped silently.
 - New seams for other entity types: `audience`, `seams.load_user`, `seams.set_membership_resolver`. See `docs/developer/flags-add-entity.md`.
 
+### Planning boards, slice 3: the canvas
+- **Boards page.** `#boards/overview` lists every board you can see; admins create boards, share them with groups (view or edit), and delete them.
+- **The canvas.** `#boards/board?id=<slug>` opens an infinite canvas (React Flow): frames that hold other items, text, notes (markdown), links (open outside the app, never framed), people, and live entities (documents, samples, orders, worksheets) with their real labels. Drag to arrange, drop into a frame to group, connect handles to draw a relationship. Every save carries the item's version; if someone else saved first the board reloads and says so.
+- **Side panel.** Selecting an item shows its open flags (frames include what is inside them), lets editors raise a flag on it, edit notes and links, preview a document, and see which other boards carry the same entity. Viewers get the same panel read-only.
+- **Safety rails.** Deleting a board asks for confirmation (its items, connections and the flags raised on them go with it). Sharing loads the board's current groups before you change anything, so an unchanged save never revokes access.
+- **Frames.** Resize a frame from its bottom-right corner; the resize is saved. Items inside a frame keep their place inside it.
+- **Deep links.** A flag on a board item now opens the board with that item selected and centred (`?node=` in the hash, one-shot).
+- Not yet: rollup badges on frames, moving an item back out of a frame, the attention dock, zoom-level rendering, Cmd+K jump, auto-layout, widgets (slices 4 and 5).
+
 ## v1.28.0 - 2026-09-23
 
 ### Worksheets 2.0: rapid sterility PCR plate builder
