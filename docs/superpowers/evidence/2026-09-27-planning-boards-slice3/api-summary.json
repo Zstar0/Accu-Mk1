@@ -1,0 +1,35 @@
+{
+  "run": "70ry",
+  "seed": {
+    "slug": "map-70ry",
+    "board_name": "Company map (70ry)",
+    "frame_id": 42,
+    "note_id": 43,
+    "link_id": 44,
+    "person_id": 45,
+    "document_entity_id": null,
+    "document_code": null,
+    "flag_title": "Plan Q4 campaign (70ry)"
+  },
+  "drag_delta": {
+    "expected": {
+      "dx": 260,
+      "dy": 180
+    },
+    "measured": {
+      "dx": 238,
+      "dy": 165
+    }
+  },
+  "deep_link_path": "flyout_entity_chip",
+  "resize_delta": {
+    "expected": {
+      "dw": 80,
+      "dh": 60
+    },
+    "measured": {
+      "dw": 80,
+      "dh": 60
+    }
+  }
+}
