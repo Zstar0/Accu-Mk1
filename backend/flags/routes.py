@@ -155,9 +155,22 @@ def unread(db: Session = Depends(get_db), user=Depends(get_current_user)):
         raise _http(e)
 
 
+def _frame(event: dict) -> str:
+    """One SSE frame. `audience` is server-side only (spec §6.4) and never reaches a client."""
+    payload = {k: v for k, v in event.items() if k != "audience"}
+    frame = ""
+    if payload.get("event_id") is not None:
+        frame += f"id: {payload['event_id']}\n"
+    return frame + f"event: {payload['event_type']}\ndata: {json.dumps(payload)}\n\n"
+
+
 @router.get("/stream")
-async def stream(request: Request, user=Depends(get_current_user)):
-    sub = BUS.subscribe(getattr(user, "id", None))
+async def stream(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not isinstance(db, Session):
+        gids, adm = frozenset(), False
+    else:
+        gids, adm = seams.resolve_membership(db, user)
+    sub = BUS.subscribe(getattr(user, "id", None), group_ids=gids, is_admin=adm)
 
     async def gen():
         yield ": connected\n\n"
@@ -170,11 +183,7 @@ async def stream(request: Request, user=Depends(get_current_user)):
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
                     continue
-                frame = ""
-                if event.get("event_id") is not None:
-                    frame += f"id: {event['event_id']}\n"
-                frame += f"event: {event['event_type']}\ndata: {json.dumps(event)}\n\n"
-                yield frame
+                yield _frame(event)
         finally:
             sub.close()
 

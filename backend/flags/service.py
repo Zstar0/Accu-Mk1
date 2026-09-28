@@ -116,6 +116,7 @@ def _audit(db, flag, actor_id, event_type, *, from_value=None, to_value=None, de
         "from_value": from_value, "to_value": to_value, "details": details or {},
         "event_id": None,                 # filled in post-commit from row.id
         "flag": _flag_summary(flag),
+        "audience": seams.resolve_audience(db, flag.entity_type, flag.entity_id),
     }))
 
 
@@ -749,6 +750,7 @@ def _emit_reaction(db: Session, comment: FlagComment, actor_id, emoji: str, acti
         "comment_id": comment.id, "emoji": emoji, "action": action,
         "actor_id": actor_id, "from_value": None, "to_value": None,
         "details": {}, "event_id": None, "flag": _flag_summary(flag),
+        "audience": seams.resolve_audience(db, flag.entity_type, flag.entity_id),
     })
 
 

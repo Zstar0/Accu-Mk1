@@ -324,3 +324,33 @@ def test_outsider_cannot_link_a_public_flag_to_a_secret_node(w):
     r = w.c.post(f"/api/flags/{w.f_public.id}/links/entities",
                  json={"entity_type": "board_node", "entity_id": str(w.sec.id)})
     assert r.status_code == 404
+
+
+class _Collect:
+    def __init__(self):
+        self.events = []
+
+    def emit(self, event):
+        self.events.append(event)
+
+
+def test_producer_stamps_audience_and_frame_strips_it(w):
+    from flags import seams, service
+    from flags.routes import _frame
+    sink, saved = _Collect(), seams.EVENT_SINK
+    seams.set_event_sink(sink)
+    try:
+        service.create_flag(w.s, user=ADMIN, entity_type="board_node", entity_id=str(w.sec.id),
+                            type="task", title="secret live")
+        service.create_flag(w.s, user=ADMIN, entity_type="board_node", entity_id=str(w.pub.id),
+                            type="task", title="public live")
+        service.create_flag(w.s, user=ADMIN, entity_type=None, entity_id=None,
+                            type="task", title="general live")
+    finally:
+        seams.set_event_sink(saved)
+    by_title = {e["flag"]["title"]: e for e in sink.events if e["event_type"] == "raised"}
+    assert by_title["secret live"]["audience"] == {"groups": [w.g.id]}
+    assert by_title["public live"]["audience"] is None
+    assert by_title["general live"]["audience"] is None
+    frame = _frame(by_title["secret live"])
+    assert "audience" not in frame and "event: raised" in frame and '"flag_id"' in frame
