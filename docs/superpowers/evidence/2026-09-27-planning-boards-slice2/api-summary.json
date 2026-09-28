@@ -1,5 +1,5 @@
 {
-  "run": "65nj",
+  "run": "7rlx",
   "restricted_board_created": true,
   "outsider": {
     "board": 404,
@@ -13,5 +13,22 @@
     "flag": 200,
     "in_all_open": true,
     "entity_search": "visible"
+  },
+  "outsider_m1": {
+    "activity": false,
+    "search": "hidden",
+    "sse": "silent"
+  },
+  "member_m1": {
+    "activity": true,
+    "search": "visible",
+    "sse": "event received"
+  },
+  "revoked_member": {
+    "flag": 404,
+    "in_all_open": false,
+    "board": 404,
+    "activity_after_revocation": false,
+    "new_stream": "silent"
   }
 }
