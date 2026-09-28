@@ -14,6 +14,7 @@ import { useBoard, usePatchBoard } from '@/services/boards'
 import { ShareBoardDialog } from './ShareBoardDialog'
 import { BoardSidePanel } from './BoardSidePanel'
 import { AddNodePalette } from './AddNodePalette'
+import { parseViewport } from './board-mapping'
 
 const BoardCanvas = lazy(() => import('./BoardCanvas'))
 
@@ -84,9 +85,8 @@ export function BoardPage({ slug }: { slug: string }) {
             onClick={() => {
               let vp: { x: number; y: number; zoom: number } | null = null
               try {
-                vp = JSON.parse(
-                  window.localStorage.getItem(`boards:viewport:${slug}`) ??
-                    'null'
+                vp = parseViewport(
+                  window.localStorage.getItem(`boards:viewport:${slug}`)
                 )
               } catch {
                 vp = null

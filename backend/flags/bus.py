@@ -82,7 +82,7 @@ class FlagEventBus:
             groups = {int(g) for g in (aud.get("groups") or [])}
         except Exception:  # noqa: BLE001 : malformed audience must not drop the
             # fan-out for the OTHER subscribers; fail closed for this one.
-            return sub.system or sub.is_admin
+            return False  # admin and system already returned True above
         return bool(groups & sub.group_ids)
 
 

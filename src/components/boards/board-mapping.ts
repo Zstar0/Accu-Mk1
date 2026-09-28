@@ -86,6 +86,28 @@ export function edgeIdsToDelete(edges: Edge[]): number[] {
   return edges.filter(e => e.selected).map(e => Number(e.id))
 }
 
+/** A stored viewport, only when it is an object with finite x, y and zoom; else null. */
+export function parseViewport(
+  raw: string | null
+): { x: number; y: number; zoom: number } | null {
+  let v: unknown
+  try {
+    v = JSON.parse(raw ?? 'null')
+  } catch {
+    return null
+  }
+  if (typeof v !== 'object' || v === null) return null
+  const { x, y, zoom } = v as Record<string, unknown>
+  return typeof x === 'number' &&
+    typeof y === 'number' &&
+    typeof zoom === 'number' &&
+    Number.isFinite(x) &&
+    Number.isFinite(y) &&
+    Number.isFinite(zoom)
+    ? { x, y, zoom }
+    : null
+}
+
 export interface FrameRect {
   id: string
   position: XYPosition

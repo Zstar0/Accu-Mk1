@@ -26,6 +26,7 @@ import { nodeTypes } from './nodes'
 import {
   FRAME_DEFAULT,
   edgeIdsToDelete,
+  parseViewport,
   resolveParentOnDrop,
   toFlowEdges,
   toFlowNodes,
@@ -48,8 +49,10 @@ function readViewport(
   fallback: Viewport | null
 ): Viewport | undefined {
   try {
-    const raw = window.localStorage.getItem(VIEWPORT_KEY(slug))
-    if (raw) return JSON.parse(raw) as Viewport
+    const stored = parseViewport(
+      window.localStorage.getItem(VIEWPORT_KEY(slug))
+    )
+    if (stored) return stored
   } catch {
     /* private mode or blocked storage: fall through */
   }

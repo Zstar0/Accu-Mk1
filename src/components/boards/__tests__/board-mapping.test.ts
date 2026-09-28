@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   edgeIdsToDelete,
+  parseViewport,
   resizePatch,
   resolveParentOnDrop,
   toFlowNodes,
@@ -103,5 +104,25 @@ describe('board-mapping', () => {
         { id: '5', source: '1', target: '3' },
       ])
     ).toEqual([4])
+  })
+
+  it('parseViewport accepts only finite x, y and zoom (M4)', () => {
+    expect(parseViewport('{"x":1,"y":2,"zoom":0.5}')).toEqual({
+      x: 1,
+      y: 2,
+      zoom: 0.5,
+    })
+    for (const bad of [
+      null,
+      '',
+      'nope',
+      '{}',
+      '[]',
+      '1',
+      '{"x":1,"y":2}',
+      '{"x":"1","y":2,"zoom":1}',
+      '{"x":1e999,"y":2,"zoom":1}',
+    ])
+      expect(parseViewport(bad)).toBeNull()
   })
 })

@@ -171,7 +171,14 @@ function NodePanel({
           canEdit={canEdit}
           onSave={(url, onSaved) =>
             patch.mutate(
-              { id: node.id, data: { version: node.version, data: { url } } },
+              {
+                id: node.id,
+                // Keep the other data keys (description): patch_node replaces data wholesale.
+                data: {
+                  version: node.version,
+                  data: { ...(node.data ?? {}), url },
+                },
+              },
               { onSuccess: onSaved }
             )
           }

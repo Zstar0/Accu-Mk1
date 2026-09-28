@@ -2,7 +2,11 @@ import { render, act } from '@testing-library/react'
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useHashNavigation } from '@/lib/hash-navigation'
 import { useUIStore } from '@/store/ui-store'
-import { navigateToDeepLink } from '@/components/flags/flag-entity'
+import {
+  entityMeta,
+  navigateForFlag,
+  navigateToDeepLink,
+} from '@/components/flags/flag-entity'
 
 function Probe() {
   useHashNavigation()
@@ -64,5 +68,26 @@ describe('boards navigation', () => {
     useUIStore.getState().setPendingBoardNode('42')
     useUIStore.getState().navigateToBoard('other')
     expect(useUIStore.getState().pendingBoardNode).toBeNull()
+  })
+
+  it('a board_node flag thread can open its board (M10)', () => {
+    expect(entityMeta('board_node').canDeepLink).toBe(true)
+    expect(
+      navigateForFlag({
+        entity_type: 'board_node',
+        entity_id: '9',
+        entity: {
+          entity_type: 'board_node',
+          entity_id: '9',
+          label: 'Marketing',
+          sample_id: null,
+          analyses: [],
+          lot: null,
+          deep_link: { kind: 'board_node', id: 'exec:9' },
+        },
+      })
+    ).toBe(true)
+    expect(useUIStore.getState().boardTargetSlug).toBe('exec')
+    expect(useUIStore.getState().pendingBoardNode).toBe('9')
   })
 })

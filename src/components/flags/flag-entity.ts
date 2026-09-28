@@ -49,7 +49,7 @@ const ENTITY_META: Record<string, EntityMeta> = {
   general_task: { Icon: ListTodo, label: 'General Task', canDeepLink: false },
   // Planning boards node (slice 3). deep_link.id is "<board slug>:<node id>",
   // parsed by the navigateToDeepLink case below.
-  board_node: { Icon: Map, label: 'Board item', canDeepLink: false },
+  board_node: { Icon: Map, label: 'Board item', canDeepLink: true },
 }
 
 /** Entity types with a backend `state` seam (→ watchable). Mirror of the

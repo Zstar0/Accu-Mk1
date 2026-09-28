@@ -187,7 +187,7 @@ export function AddNodePalette({
                   {(hits.data ?? []).map(hit => (
                     <CommandItem
                       key={hit.entity_id}
-                      value={hit.label}
+                      value={`${hit.label} ${hit.entity_id}`}
                       onSelect={() =>
                         submit({
                           kind: 'entity',

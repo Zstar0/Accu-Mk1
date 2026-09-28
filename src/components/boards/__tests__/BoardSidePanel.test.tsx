@@ -162,4 +162,37 @@ describe('BoardSidePanel', () => {
       .click(screen.getByRole('button', { name: 'Delete node' }))
     expect(h.remove).toHaveBeenCalledWith(1, expect.anything())
   })
+
+  it('link save keeps the description (M2)', async () => {
+    const user = userEvent.setup()
+    const n = node({
+      id: 4,
+      kind: 'link',
+      label: 'Site',
+      data: { url: 'https://a.example', description: 'keep me' },
+      version: 5,
+    })
+    render(
+      <BoardSidePanel
+        board={board(true, [n])}
+        selectedId={4}
+        // eslint-disable-next-line @typescript-eslint/no-empty-function
+        onClose={() => {}}
+      />
+    )
+    const input = screen.getByLabelText('URL')
+    await user.clear(input)
+    await user.type(input, 'https://b.example')
+    await user.click(input.nextElementSibling as HTMLElement)
+    expect(h.patch).toHaveBeenCalledWith(
+      {
+        id: 4,
+        data: {
+          version: 5,
+          data: { url: 'https://b.example', description: 'keep me' },
+        },
+      },
+      expect.anything()
+    )
+  })
 })
