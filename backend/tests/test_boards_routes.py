@@ -160,3 +160,8 @@ def test_for_entity_is_empty_without_nodes(client):
     client.as_user(OUTSIDER)
     r = client.get("/api/boards/for-entity", params={"entity_type": "document", "entity_id": "SOP-0001"})
     assert r.status_code == 200 and r.json() == []
+
+
+def test_restricted_boards_are_enabled_by_default():
+    from boards import service
+    assert service.RESTRICTED_BOARDS_ENABLED is True, "slice 2 wires flag visibility; the lock is off"
