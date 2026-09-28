@@ -16,6 +16,7 @@ import type {
 } from '@/lib/api'
 import { labDate } from '@/lib/endo-prep'
 import { shortLabDate } from '@/lib/endo-worksheet'
+import type { PcrSort } from '@/lib/pcr-plate'
 import {
   buildPcrRunDoc,
   isPcrWorksheetItem,
@@ -107,7 +108,19 @@ export function PcrWorksheetView({
   const analystName = analyst
     ? displayName(analyst)
     : (worksheet.assigned_analyst_email ?? '')
-  const cfg = pcrConfigOf(worksheet)
+  const savedCfg = pcrConfigOf(worksheet)
+  // A clicked sort shows at once. It remembers the saved sort it was clicked
+  // over and gives way as soon as that changes (the save landing, or another
+  // analyst's sort), so it never masks the worksheet's real setting for long.
+  const savedSortKey = `${savedCfg.sort.key}:${savedCfg.sort.dir}`
+  const [sortDraft, setSortDraft] = useState<{
+    sort: PcrSort
+    over: string
+  } | null>(null)
+  const cfg =
+    sortDraft && sortDraft.over === savedSortKey
+      ? { ...savedCfg, sort: sortDraft.sort }
+      : savedCfg
   const buildDoc = () =>
     buildPcrRunDoc(worksheet, {
       analystName,
@@ -126,6 +139,7 @@ export function PcrWorksheetView({
         ])
       ),
       notes: worksheetNotesText(worksheet.note_log ?? [], userNotes, calendar),
+      sort: cfg.sort,
     })
   const doc = buildDoc()
   const L = doc.layout
@@ -365,17 +379,11 @@ export function PcrWorksheetView({
             />
             ×
           </label>
-          <label
-            className="flex items-center gap-1.5 text-xs text-muted-foreground"
-            title="Lay the plate out by order number. Untick to place samples exactly as listed on the worksheet. Locked wells never move either way."
-          >
-            <Checkbox
-              checked={cfg.sortByOrder}
-              disabled={isCompleted}
-              onCheckedChange={v => setConfig({ sortByOrder: v === true })}
-            />
-            Order wells by order #
-          </label>
+          {/* The old "Order wells by order #" switch became the list's column
+              sort (Handler, 2026-09-24): Order # ascending is its default. */}
+          <span className="text-xs text-muted-foreground">
+            Wells follow the samples list; click a column to sort.
+          </span>
         </div>
       </div>
 
@@ -390,6 +398,15 @@ export function PcrWorksheetView({
           slaLoading={slaLoading}
           slaError={slaError}
           isCompleted={isCompleted}
+          sort={cfg.sort}
+          onSort={
+            isCompleted
+              ? undefined
+              : sort => {
+                  setSortDraft({ sort, over: savedSortKey })
+                  setConfig({ sort })
+                }
+          }
           onRemove={onRemove}
           users={users}
           onUpdateItem={onUpdateItem}
@@ -400,7 +417,7 @@ export function PcrWorksheetView({
               <PcrPlateMap
                 plate={pl}
                 plateCount={L.plateCount}
-                outlineGroups={cfg.sortByOrder}
+                outlineGroups={doc.sortByOrder}
                 frozenCount={L.frozenCount}
                 isCompleted={isCompleted}
                 onUnfreeze={onUnfreeze}

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### PCR worksheet
+- **Sort the samples list and the plate follows.** Order #, Sample ID, Sample identity, Received, Due and Priority are clickable column headers (click again to flip); `#` returns to worksheet order. The plate is dealt in the list's order, so Print, Preview and the QuantStudio and CSV exports follow too. The sort is saved on the worksheet (`bench_config.sort_key` / `sort_dir`), so every analyst sees the plate that will be printed. It replaces the "Order wells by order #" switch: Order # ascending stays the default, and a worksheet that had the switch off keeps worksheet order. Locked wells never move, so after a print a sort only re-deals the unlocked samples. Order boxes and tints show only when sorted by Order #.
+
 ## v1.28.0 - 2026-09-23
 
 ### Worksheets 2.0: rapid sterility PCR plate builder
