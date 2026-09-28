@@ -34,6 +34,7 @@ const h = vi.hoisted(() => ({
   ],
   create: vi.fn(),
   remove: vi.fn(),
+  replace: vi.fn(),
   navigateToBoard: vi.fn(),
 }))
 vi.mock('@/store/auth-store', () => ({
@@ -62,16 +63,40 @@ vi.mock('@/services/boards', () => ({
       updated_at: '',
       nodes: [],
       edges: [],
-      grants: [],
+      grants: [
+        { group_id: 1, group_slug: 'exec', group_name: 'Exec', can_edit: true },
+      ],
     },
     isLoading: false,
   }),
   useCreateBoard: () => ({ mutate: h.create, isPending: false }),
   useDeleteBoard: () => ({ mutate: h.remove, isPending: false }),
-  useReplaceGrants: () => ({ mutate: vi.fn(), isPending: false }),
+  useReplaceGrants: () => ({ mutate: h.replace, isPending: false }),
 }))
 vi.mock('@/services/groups', () => ({
-  useGroups: () => ({ data: [], isLoading: false }),
+  useGroups: () => ({
+    data: [
+      {
+        id: 1,
+        slug: 'exec',
+        name: 'Exec',
+        description: null,
+        is_active: true,
+        member_count: 3,
+        created_at: '',
+      },
+      {
+        id: 2,
+        slug: 'ops',
+        name: 'Ops',
+        description: null,
+        is_active: true,
+        member_count: 5,
+        created_at: '',
+      },
+    ],
+    isLoading: false,
+  }),
 }))
 
 import { BoardsPage } from '@/components/boards/BoardsPage'
@@ -81,6 +106,7 @@ describe('BoardsPage', () => {
     h.role = 'admin'
     h.create.mockReset()
     h.remove.mockReset()
+    h.replace.mockReset()
     h.navigateToBoard.mockReset()
   })
 
@@ -88,7 +114,10 @@ describe('BoardsPage', () => {
     render(<BoardsPage />)
     expect(screen.getByText('Org chart')).toBeInTheDocument()
     expect(screen.getByText('Exec map')).toBeInTheDocument()
-    expect(screen.getByText('restricted')).toBeInTheDocument()
+    const execCard = screen
+      .getByText('Exec map')
+      .closest('.rounded-lg') as HTMLElement
+    expect(within(execCard).getByText('restricted')).toBeInTheDocument()
     expect(screen.getByText('12 items')).toBeInTheDocument()
     await userEvent
       .setup()
@@ -144,5 +173,19 @@ describe('BoardsPage', () => {
     const dialog = screen.getByRole('alertdialog')
     await user.click(within(dialog).getByRole('button', { name: 'Delete' }))
     expect(h.remove).toHaveBeenCalledWith('org', expect.anything())
+  })
+
+  it('saving the share dialog unchanged keeps the existing grant', async () => {
+    const user = userEvent.setup()
+    render(<BoardsPage />)
+    await user.click(
+      screen.getAllByRole('button', { name: 'Share' })[0] as HTMLElement
+    )
+    await screen.findByText('Share board')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(h.replace).toHaveBeenCalledWith(
+      [{ group_id: 1, can_edit: true }],
+      expect.anything()
+    )
   })
 })

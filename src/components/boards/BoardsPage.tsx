@@ -219,8 +219,8 @@ function NewBoardForm() {
           value={visibility}
           onChange={e => setVisibility(e.target.value as BoardVisibility)}
         >
-          <option value="company">Company</option>
-          <option value="restricted">Restricted</option>
+          <option value="company">company</option>
+          <option value="restricted">restricted</option>
         </select>
       </div>
       <Button type="submit" size="sm" disabled={!valid || create.isPending}>

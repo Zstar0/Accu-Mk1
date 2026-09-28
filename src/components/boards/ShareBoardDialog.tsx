@@ -16,7 +16,7 @@ type Level = 'none' | 'view' | 'edit'
 /**
  * Admin-only: which groups may view (restricted boards) or edit (any board).
  * Loads the board's current grants itself (only while open) so it never saves
- * from an empty starting state — a save with no prior grants would revoke
+ * from an empty starting state. A save with no prior grants would revoke
  * every group's access.
  */
 export function ShareBoardDialog({
