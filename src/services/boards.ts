@@ -68,10 +68,14 @@ export function useBoardsForEntity(type: string | null, id: string | null) {
   })
 }
 
+/**
+ * `conflict` names what a 409 means for this mutation. Omitted, a 409 is a
+ * version conflict (stale board). Every 409 refetches the board and the list.
+ */
 function useBoardMutation<TArgs, TOut>(
   slug: string | null,
   fn: (args: TArgs) => Promise<TOut>,
-  successMessage?: string
+  opts: { success?: string; conflict?: string } = {}
 ) {
   const qc = useQueryClient()
   return useMutation({
@@ -79,12 +83,13 @@ function useBoardMutation<TArgs, TOut>(
     onSuccess: () => {
       if (slug) qc.invalidateQueries({ queryKey: boardKeys.detail(slug) })
       qc.invalidateQueries({ queryKey: boardKeys.list })
-      if (successMessage) toast.success(successMessage)
+      if (opts.success) toast.success(opts.success)
     },
     onError: (e: Error) => {
       if (isStale(e)) {
         if (slug) qc.invalidateQueries({ queryKey: boardKeys.detail(slug) })
-        toast.error('Board changed elsewhere, reloaded')
+        qc.invalidateQueries({ queryKey: boardKeys.list })
+        toast.error(opts.conflict ?? 'Board changed elsewhere, reloaded')
         return
       }
       toast.error(e.message)
@@ -93,27 +98,29 @@ function useBoardMutation<TArgs, TOut>(
 }
 
 export function useCreateBoard() {
-  return useBoardMutation<BoardCreate, unknown>(
-    null,
-    createBoard,
-    'Board created'
-  )
+  return useBoardMutation<BoardCreate, unknown>(null, createBoard, {
+    success: 'Board created',
+    conflict: 'That slug is taken.',
+  })
 }
 export function usePatchBoard(slug: string) {
   return useBoardMutation<BoardPatch, unknown>(
     slug,
     data => patchBoard(slug, data),
-    'Board updated'
+    { success: 'Board updated' }
   )
 }
 export function useDeleteBoard() {
-  return useBoardMutation<string, unknown>(null, deleteBoard, 'Board deleted')
+  return useBoardMutation<string, unknown>(null, deleteBoard, {
+    success: 'Board deleted',
+    conflict: 'This board has open flags. Resolve them first.',
+  })
 }
 export function useReplaceGrants(slug: string) {
   return useBoardMutation<{ group_id: number; can_edit: boolean }[], unknown>(
     slug,
     grants => replaceGrants(slug, grants),
-    'Sharing updated'
+    { success: 'Sharing updated' }
   )
 }
 export function useCreateNode(slug: string) {
@@ -133,11 +140,15 @@ export function usePatchPositions(slug: string) {
   )
 }
 export function useDeleteNode(slug: string) {
-  return useBoardMutation<number, unknown>(slug, id => deleteNode(slug, id))
+  return useBoardMutation<number, unknown>(slug, id => deleteNode(slug, id), {
+    conflict: 'This item has open flags. Resolve them first.',
+  })
 }
 export function useCreateEdge(slug: string) {
-  return useBoardMutation<EdgeCreate, unknown>(slug, data =>
-    createEdge(slug, data)
+  return useBoardMutation<EdgeCreate, unknown>(
+    slug,
+    data => createEdge(slug, data),
+    { conflict: 'Those items are already connected.' }
   )
 }
 export function usePatchEdge(slug: string) {

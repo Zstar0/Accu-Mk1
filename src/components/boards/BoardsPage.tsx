@@ -120,8 +120,9 @@ function BoardCard({ board, isAdmin }: { board: Board; isAdmin: boolean }) {
             <AlertDialogHeader>
               <AlertDialogTitle>Delete board?</AlertDialogTitle>
               <AlertDialogDescription>
-                Its items, connections and the flags raised on them will be
-                removed.
+                Its items and connections will be removed. Boards with open
+                flags cannot be deleted; resolved flags stay in the flag
+                history.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
