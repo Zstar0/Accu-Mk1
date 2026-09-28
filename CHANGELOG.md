@@ -8,6 +8,13 @@
 - **`board_node` is a flag entity.** Frames, notes, links and text on a board can carry flags; a node of kind `entity` refuses them with a 400 that names the real anchor. Frames roll up their children's flags through `descendants`. Deleting a node or board with open flags is refused (409).
 - **Flag registry gains visibility seams** (`can_raise`, `can_view`, `visible_entity_ids`, `search_scoped`) plus `can_view_entity` and `visibility_clause` helpers. `create_flag` consults `can_raise` when a type defines it; `/entity-search` passes the caller so scoped types can filter. No read path is filtered yet. See `docs/developer/flags-add-entity.md`.
 
+### Planning boards, slice 2: flag visibility follows the board
+- **Restricted boards are on.** A board granted to groups is visible to those groups and admins only; every board route answers 404 to anyone else.
+- **Flags follow their anchor.** Every flag read path honors the anchor's visibility: point reads (detail, comments, assign, status, due, watchers, links, attachments, reactions, read marks) answer 404 with the same text as a missing flag; hidden attachments and comment reactions answer with the child's own not-found text, so a hidden child is indistinguishable from a missing one; All open, Unread, Activity, Summary, Search and the Slack morning digest (unread and assigned/overdue counts) filter through one SQL clause; a caller that passes no user gets the fail-closed clause. Unanchored general tasks and legacy anchors are unchanged.
+- **Nobody is pulled into a flag they cannot see.** Assigning, watching or mentioning a user who cannot view the anchor is a 400; linking a flag to a hidden entity or a hidden flag is a 404; hidden entity links render as "Restricted" and hidden flag links are dropped.
+- **Live updates respect the audience.** The producer stamps every SSE event with an audience derived from the anchor (everyone, the board's groups plus admins, or admins only for an orphaned anchor); the stream filters per connection and never sends the audience field. Group changes apply on the next reconnect. The Slack notifier subscribes as a system listener and still DMs participants only. The Slack mark-read button passes the acting user, so it keeps working for board members.
+- New seams for other entity types: `audience`, `seams.load_user`, `seams.set_membership_resolver`. See `docs/developer/flags-add-entity.md`.
+
 ## v1.28.0 - 2026-09-23
 
 ### Worksheets 2.0: rapid sterility PCR plate builder

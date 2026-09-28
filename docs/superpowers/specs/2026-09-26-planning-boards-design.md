@@ -585,3 +585,14 @@ and PR. Deploy follows the `accumark-deploy` skill; boards need no env change.
 - §4.8: "deleting a group cascades grants and memberships" applies only to the hard
   delete of an UNUSED group (no members, no board grants). A group with members or
   grants is refused with 409 per §7.1 (deactivate instead).
+- Slice 2: `EntitySpec.audience(db, entity_id)` (None = everyone, `{"groups": [...]}` otherwise,
+  `{"groups": []}` for an orphaned anchor or a raising closure) is stamped by `service._audit`;
+  `Subscription` carries `group_ids`, `is_admin`, `system`; the Slack notifier is a `system`
+  subscriber. `seams.load_user` and `seams.set_membership_resolver` are the two host hooks the
+  target guards and the stream route use; both keep the lazy `models.User` import pattern
+  `resolve_user` already established.
+- Slice 2: `add_entity_link` refuses (404) a target the caller cannot view; hidden entity links
+  serialize with `entity_id: ""` and label "Restricted"; hidden flag links are omitted.
+- Slice 2: list functions take `user=None` and fail closed without a user; the Slack digest loads
+  the `User` row and passes it.
+- Slice 2 (review fixes): get_attachment, add_reaction and remove_reaction re-raise the child's own NotFoundError text ("attachment <id> not found", "comment <id> not found") around the get_visible_flag gate; slack_notify/interactions.py passes user= to service.mark_read; slack_notify/digest.py's assigned select carries visibility_clause so overdue/blocked/oldest_overdue never name a hidden flag.
