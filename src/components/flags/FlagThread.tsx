@@ -47,7 +47,7 @@ import { useItemKindLabels } from '@/services/item-kinds'
 import {
   entityMeta,
   entityDisplayLabel,
-  navigateToEntity,
+  navigateForFlag,
 } from '@/components/flags/flag-entity'
 import {
   useFlagUsers,
@@ -314,9 +314,7 @@ export function FlagThread({
               <button
                 type="button"
                 aria-label="Open item"
-                onClick={() =>
-                  navigateToEntity(flag.entity_type, flag.entity_id)
-                }
+                onClick={() => navigateForFlag(flag)}
                 className="opacity-70 hover:opacity-100"
               >
                 <ArrowUpRight className="h-3.5 w-3.5" />

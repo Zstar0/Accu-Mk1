@@ -456,6 +456,27 @@ def test_link_deletes_on_the_hidden_flag_are_404(w):
         assert r.status_code == 404 and r.json()["detail"] == f"flag {sec} not found"
 
 
+# --- remove_entity_link gates the link's TARGET too (Task 8 item 2) --------
+def test_outsider_cannot_remove_a_link_to_a_hidden_entity(w):
+    """The flag itself (f_public) is visible, but the linked TARGET (the secret
+    node) is not: removal must 404 like add_entity_link's create-time gate,
+    never a 403 that confirms the target exists."""
+    from flags.models import FlagEntityLink
+    fid = w.f_public.id
+    w.c.as_user(MEMBER)
+    link_id = w.c.post(f"/api/flags/{fid}/links/entities",
+                       json={"entity_type": "board_node",
+                             "entity_id": str(w.sec.id)}).json()["id"]
+    w.c.as_user(OUTSIDER)
+    r = w.c.delete(f"/api/flags/{fid}/links/entities/{link_id}")
+    assert r.status_code == 404
+    assert r.json()["detail"] == f"link {link_id} not found on flag {fid}"
+    assert w.s.get(FlagEntityLink, link_id) is not None    # still there
+    w.c.as_user(MEMBER)
+    assert w.c.delete(f"/api/flags/{fid}/links/entities/{link_id}").status_code == 204
+    assert w.s.get(FlagEntityLink, link_id) is None
+
+
 def test_create_and_mention_with_unknown_or_outside_users(w):
     """Deferred T4 minor: legacy anchors take any id; a scoped anchor refuses an
     unknown assignee. An unknown mention id is dropped before the guard runs, so it

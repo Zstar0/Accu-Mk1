@@ -1,0 +1,41 @@
+{
+  "run": "j3ce",
+  "seed": {
+    "slug": "map-j3ce",
+    "board_name": "Company map (j3ce)",
+    "frame_id": 47,
+    "note_id": 48,
+    "link_id": 49,
+    "person_id": 50,
+    "edge_id": 10,
+    "document_entity_id": null,
+    "document_code": null,
+    "flag_title": "Plan Q4 campaign (j3ce)"
+  },
+  "drag_delta": {
+    "expected": {
+      "dx": 260,
+      "dy": 180
+    },
+    "measured": {
+      "dx": 238,
+      "dy": 165
+    }
+  },
+  "drag_parent": {
+    "parent_id": 47,
+    "frame_id": 47
+  },
+  "deep_link_path": "flyout_entity_chip",
+  "resize_delta": {
+    "expected": {
+      "dw": 80,
+      "dh": 60
+    },
+    "measured": {
+      "dw": 80,
+      "dh": 60
+    }
+  },
+  "edge_deleted": true
+}

@@ -78,7 +78,11 @@ class FlagEventBus:
         aud = event.get("audience")
         if sub.system or aud is None or sub.is_admin:
             return True
-        groups = {int(g) for g in (aud.get("groups") or [])}
+        try:
+            groups = {int(g) for g in (aud.get("groups") or [])}
+        except Exception:  # noqa: BLE001 : malformed audience must not drop the
+            # fan-out for the OTHER subscribers; fail closed for this one.
+            return False  # admin and system already returned True above
         return bool(groups & sub.group_ids)
 
 

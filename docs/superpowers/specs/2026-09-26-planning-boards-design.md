@@ -612,3 +612,31 @@ and PR. Deploy follows the `accumark-deploy` skill; boards need no env change.
   the other end; the detail and activity routes blank `from_value`/`to_value` on link events
   whose target is hidden and `routes._frame` drops both fields from link events; the Ready to
   Publish loader emits "Restricted" for the title of a flag on a view-scoped anchor.
+- Slice 3: the boards list route is `#boards/overview` (not `#boards/list`) so the sidebar's
+  default sub-section works unchanged; the board route is `#boards/board?id=<slug>` with
+  the one-shot `&node=<id>`. Feature pages use hard-coded English like every other Mk1 page
+  (the i18n table in §8 applied only to the settings pane).
+- Slice 3: new nodes drop at a fixed canvas offset (or inside the selected frame); dropping at
+  the viewport centre and the Cmd+K palette land with slice 4.
+- Slice 3: frame rollup pills, zoom-semantic rendering, the attention dock and dagre layout are
+  slice 4 as §11 says; `FrameNode` renders title only in this slice.
+- Slice 3: frames resize from the bottom-right corner only (a single NodeResizeControl). Edge
+  resizes would move the frame's origin and require re-saving every child's relative position;
+  the corner never moves the origin. Nodes never leave a frame in this slice (xyflow extent
+  'parent'); slice 4 adds "remove from frame" in the side panel.
+- Slice 3: ShareBoardDialog takes only the slug and loads the board's grants itself before
+  rendering, so a save with no changes reproduces the existing grants; deleting a board requires
+  an AlertDialog confirmation.
+- Slice 3: the board page is keyed by slug so a cached second board never inherits the first
+  board's viewport or selection; navigateToBoards and navigateToBoard reset the one-shot pending
+  node.
+- Slice 3: link nodes open through @tauri-apps/plugin-opener inside the desktop build
+  (opener:default is already granted) and window.open with noopener on the web.
+- Slice 3: on the add palette's entity step, cmdk's client-side filter is off; the server's
+  entity search is the only filter.
+- Slice 3 (final review): these §8.2 to §8.7 items are not built in slice 3 and move to slice 4:
+  the EntityNode flag indicator, the PersonNode "N assigned" pill, NodeResizer on notes, the
+  open-flag count on board cards, groups in the person panel, and the 250 ms drag-end debounce
+  (drag-end writes once per drop today). Editors delete a selected edge with Delete/Backspace
+  through the API; nodes delete only from the side panel. A board-node flag's thread opens the
+  board through the flag's server-resolved deep link.

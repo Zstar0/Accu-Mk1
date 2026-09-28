@@ -118,3 +118,44 @@ def test_run_due_isolates_a_failing_template_and_mints_as_the_creator(w, caplog)
                for m in msgs)
     assert any(m.startswith("flag_recurring_watcher_failed") and f"user_id={OUTSIDER.id}" in m
                for m in msgs)
+
+
+# --- deactivated creator does not keep admin authority (Task 8 item 1, fix round 1 item 2) --
+def test_run_due_deactivated_creator_does_not_mint_with_admin_authority(w):
+    """A deactivated admin's template falls back to the synthetic (plain standard)
+    actor, which the restricted board refuses, so the mint is isolated exactly
+    like any other bad template, not minted as admin.
+
+    Deactivation does NOT delete the creator's own group membership rows, so the
+    creator is also made a member of the restricted board's group here: the
+    fallback actor must itself carry is_active=False (fix round 1), or it would
+    still resolve that stale membership by id and mint anyway. A general (fully
+    unanchored) template from the same deactivated creator still mints: "create"
+    is an open action that only requires a non-None user (flags/permissions.py),
+    unaffected by this fix."""
+    from datetime import timedelta
+    from flags import recurring
+    from flags.models import FlagFlag
+    from groups.models import UserGroupMember
+    from models import User
+    now = datetime.utcnow()
+    w.s.add(UserGroupMember(group_id=w.g.id, user_id=ADMIN.id))
+    w.s.commit()
+    restricted = recurring.create_recurring(
+        w.s, user=ADMIN, title="admin template, deactivated", type="task",
+        cadence="daily", next_run_at=now - timedelta(days=1),
+        entity_type="board_node", entity_id=str(w.sec.id))
+    general = recurring.create_recurring(
+        w.s, user=ADMIN, title="general recurring, deactivated creator",
+        type="task", cadence="daily", next_run_at=now - timedelta(days=1))
+    w.s.get(User, ADMIN.id).is_active = False
+    w.s.commit()
+    assert recurring.run_due(w.s, now=now) == 1
+    titles = {f.title for f in w.s.query(FlagFlag).all()}
+    assert "admin template, deactivated" not in titles
+    assert "general recurring, deactivated creator" in titles
+    w.s.refresh(restricted)
+    assert restricted.last_minted_flag_id is None
+    assert restricted.next_run_at > now
+    w.s.refresh(general)
+    assert general.last_minted_flag_id is not None

@@ -844,6 +844,10 @@ def remove_entity_link(db: Session, *, user, flag_id: int, link_id: int) -> None
     link = db.get(FlagEntityLink, link_id)
     if link is None or link.flag_id != flag_id:
         raise NotFoundError(f"link {link_id} not found on flag {flag_id}")
+    # Gate the link's TARGET like add_entity_link does: a hidden target reads as
+    # missing, never as a 403 that confirms it exists.
+    if not seams.can_view_entity(db, user, link.entity_type, link.entity_id):
+        raise NotFoundError(f"link {link_id} not found on flag {flag_id}")
     db.delete(link)
     _audit(db, flag, getattr(user, "id", None), "entity_link_removed",
            from_value=f"{link.entity_type}:{link.entity_id}")
