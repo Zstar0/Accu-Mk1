@@ -34,6 +34,8 @@ import { PeptideRequestsList } from '@/pages/PeptideRequestsList'
 import { PeptideRequestDetail } from '@/pages/PeptideRequestDetail'
 import { AdminClickupUsers } from '@/pages/AdminClickupUsers'
 import { SettingsPage } from '@/components/preferences/SettingsPage'
+import { BoardsPage } from '@/components/boards/BoardsPage'
+import { BoardPage } from '@/components/boards/BoardPage'
 import { useUIStore } from '@/store/ui-store'
 import { useAuthStore } from '@/store/auth-store'
 
@@ -49,6 +51,7 @@ export function MainWindowContent({
   const activeSection = useUIStore(state => state.activeSection)
   const activeSubSection = useUIStore(state => state.activeSubSection)
   const navigationKey = useUIStore(state => state.navigationKey)
+  const boardTargetSlug = useUIStore(state => state.boardTargetSlug)
   const isAdmin = useAuthStore(state => state.user?.role === 'admin')
 
   // Render section content based on active section
@@ -108,6 +111,10 @@ export function MainWindowContent({
         return <AdminClickupUsers />
       case 'settings':
         return <SettingsPage />
+      case 'boards':
+        if (activeSubSection === 'board' && boardTargetSlug)
+          return <BoardPage slug={boardTargetSlug} />
+        return <BoardsPage />
       default:
         return null
     }
