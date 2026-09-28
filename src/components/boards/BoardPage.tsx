@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState } from 'react'
-import { ArrowLeft, Loader2 } from 'lucide-react'
+import { ArrowLeft, Loader2, Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -13,6 +13,7 @@ import { useUIStore } from '@/store/ui-store'
 import { useBoard, usePatchBoard } from '@/services/boards'
 import { ShareBoardDialog } from './ShareBoardDialog'
 import { BoardSidePanel } from './BoardSidePanel'
+import { AddNodePalette } from './AddNodePalette'
 
 const BoardCanvas = lazy(() => import('./BoardCanvas'))
 
@@ -24,6 +25,7 @@ export function BoardPage({ slug }: { slug: string }) {
   const patch = usePatchBoard(slug)
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [share, setShare] = useState(false)
+  const [addOpen, setAddOpen] = useState(false)
 
   if (board.isLoading) {
     return (
@@ -44,6 +46,8 @@ export function BoardPage({ slug }: { slug: string }) {
   }
   const b = board.data
   const canEdit = b.can_edit
+  const selectedFrameId =
+    b.nodes.find(n => n.id === selectedId && n.kind === 'frame')?.id ?? null
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-2 border-b px-3 py-2">
@@ -67,6 +71,12 @@ export function BoardPage({ slug }: { slug: string }) {
         )}
         <span className="flex-1" />
         <div id="board-toolbar-slot" className="flex items-center gap-2" />
+        {canEdit && (
+          <Button size="sm" onClick={() => setAddOpen(true)}>
+            <Plus className="mr-1 h-4 w-4" />
+            Add
+          </Button>
+        )}
         {canEdit && (
           <Button
             size="sm"
@@ -125,6 +135,15 @@ export function BoardPage({ slug }: { slug: string }) {
       </ResizablePanelGroup>
       {isAdmin && share && (
         <ShareBoardDialog slug={slug} open={share} onOpenChange={setShare} />
+      )}
+      {canEdit && (
+        <AddNodePalette
+          board={b}
+          open={addOpen}
+          onOpenChange={setAddOpen}
+          dropAt={{ x: 120, y: 120 }}
+          parentId={selectedFrameId}
+        />
       )}
     </div>
   )
