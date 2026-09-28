@@ -125,6 +125,20 @@ def _snapshot(db, eid) -> Optional[dict]:
     return {"board": board.slug, "kind": node.kind} if node else None
 
 
+def _audience(db, eid) -> Optional[dict]:
+    """Live-event audience: everyone for a company board, the granted groups (plus admins)
+    for a restricted board, nobody but admins for an orphaned anchor."""
+    from boards.models import BoardGrant
+    node, board = _load(db, eid)
+    if node is None:
+        return {"groups": []}
+    if board.visibility == "company":
+        return None
+    gids = db.execute(select(BoardGrant.group_id).where(BoardGrant.board_id == board.id)
+                      .order_by(BoardGrant.group_id)).scalars().all()
+    return {"groups": [int(g) for g in gids]}
+
+
 def register_board_node() -> None:
     from flags.seams import register_entity
     register_entity("board_node",
@@ -139,4 +153,5 @@ def register_board_node() -> None:
                     descendants=_descendants,
                     search_scoped=_search,
                     snapshot=_snapshot,
+                    audience=_audience,
                     must_exist=True)
