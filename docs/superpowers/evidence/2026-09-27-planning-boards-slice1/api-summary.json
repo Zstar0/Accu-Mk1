@@ -1,0 +1,39 @@
+{
+  "run": "sjjy",
+  "group": "exec-sjjy",
+  "board": "org-sjjy",
+  "restricted_board_refused_while_flag_off": true,
+  "frame_id": 10,
+  "javascript_url_refused": true,
+  "stale_positions_batch_rejected": true,
+  "board_detail": {
+    "nodes": 3,
+    "edges": 1
+  },
+  "grant_to_group": "exec-sjjy",
+  "openapi_paths": [
+    "/api/boards",
+    "/api/boards/for-entity",
+    "/api/boards/{slug}",
+    "/api/boards/{slug}/edges",
+    "/api/boards/{slug}/edges/{edge_id}",
+    "/api/boards/{slug}/grants",
+    "/api/boards/{slug}/nodes",
+    "/api/boards/{slug}/nodes/positions",
+    "/api/boards/{slug}/nodes/{node_id}",
+    "/api/groups",
+    "/api/groups/mine",
+    "/api/groups/{group_id}",
+    "/api/groups/{group_id}/members"
+  ],
+  "board_node_flag": {
+    "id": 8,
+    "label": "Company map > Marketing"
+  },
+  "non_admin_guards": {
+    "groups_post": 403,
+    "node_post": 403,
+    "unknown_board": 404,
+    "board_post": 403
+  }
+}

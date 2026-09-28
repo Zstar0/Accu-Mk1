@@ -125,6 +125,8 @@ from priority.routes import router as priority_router
 from workflow.cancel_routes import router as cancel_router
 from conformance.routes import router as conformance_router
 from documents.routes import router as documents_router
+from groups.routes import router as groups_router
+from boards.routes import router as boards_router
 
 import logging
 
@@ -620,6 +622,8 @@ app.include_router(priority_router)
 app.include_router(cancel_router)
 app.include_router(conformance_router)
 app.include_router(documents_router)
+app.include_router(groups_router)
+app.include_router(boards_router)
 
 # --- Endpoints ---
 
