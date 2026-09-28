@@ -281,8 +281,8 @@ def visibility_clause(db, user) -> ColumnElement
 | `service.create_flag`, `assign`, `add_watcher`, `add_comment` mentions | 400 `"user <id> cannot see this flag"` when the target user fails `can_view_entity` on the anchor |
 | `create_flag` | `can_flag` for `board_node` = `can_edit_board`; viewers can comment and watch but not raise |
 | `/entity-search` | `board_node` scoped to visible boards (§6.2) |
-| `/watches` | unchanged: `board_node` registers no `state` seam, so arming a watch already 400s |
-| recurring flags | admin-only already; a recurrence targeting a `board_node` is allowed |
+| `/watches` | a watch's flag references are gated: `watch_flag_id` and a comment action's `flag_id` go through `get_visible_flag` (hidden = missing, 404); `GET /watches?flag_id=` 404s a hidden flag and the unscoped list omits watches whose thread or comment target is hidden. `board_node` registers no `state` seam, so a watch on a node itself still 400s |
+| recurring flags | admin-only already; a recurrence targeting a `board_node` is allowed and mints as its creator; a template whose mint fails is logged and moved to its next run, never blocking the others |
 
 Every function above takes `user`, not `user_id`, where it does not already. `list_flags`
 and friends currently take `user_id`; add a `user` kwarg and derive `user_id` from it
@@ -307,8 +307,10 @@ so ("changes apply when the app reconnects").
 
 ### 6.5 Slack DMs and digests
 
-Recipients are assignee, mentioned users, and watchers, all of which pass the §6.3 target
-guard, so a DM never names a flag the recipient cannot open. The morning digest builds from
+Recipients are assignee, mentioned users, and watchers. They passed the §6.3 target guard
+when they were added, and for a view-scoped anchor the planner re-checks each one with
+`can_view_entity` at send time, so a DM never names a flag the recipient cannot open, and a
+user removed from the board's groups gets nothing. The morning digest builds from
 `list_flags(user=...)`, which now carries the clause. No Slack-side change.
 
 ### 6.6 Unanchored group-restricted tasks (decision pending)
@@ -471,7 +473,9 @@ Threat model (per the workspace doctrine):
 
 Controls:
 
-- 404 for invisible boards and flags on every route; existence is never confirmed.
+- 404 for invisible boards and flags on every route; existence is never confirmed. Existence
+  of a flag or node id may be inferred from the id sequence; titles, anchors, comments and
+  board content are never disclosed.
 - Visibility is computed in SQL for lists and in one helper for point reads. There is one
   implementation (`boards.access` + `seams.visibility_clause`), tested per route.
 - Assign, watcher, and mention guards prevent pulling a non-viewer into a restricted thread.
@@ -483,7 +487,8 @@ Controls:
 - Group and board administration is admin-only. Board editors cannot widen visibility.
 - No secrets belong on a board. The Groups pane and the restricted-board share dialog carry a
   one-line reminder. Flags on restricted nodes are restricted, but flag TITLES still transit
-  Slack DMs to their participants; participants are viewers by construction.
+  Slack DMs to their participants; recipients are re-checked against the anchor at send
+  time, so a revoked participant receives nothing.
 
 The re-review trigger recorded in the 2026-07-01 flag security review is addressed by §6.3
 and §6.4; a fresh review pass is part of slice 2's gate (§11).
@@ -596,3 +601,14 @@ and PR. Deploy follows the `accumark-deploy` skill; boards need no env change.
 - Slice 2: list functions take `user=None` and fail closed without a user; the Slack digest loads
   the `User` row and passes it.
 - Slice 2 (review fixes): get_attachment, add_reaction and remove_reaction re-raise the child's own NotFoundError text ("attachment <id> not found", "comment <id> not found") around the get_visible_flag gate; slack_notify/interactions.py passes user= to service.mark_read; slack_notify/digest.py's assigned select carries visibility_clause so overdue/blocked/oldest_overdue never name a hidden flag.
+- Slice 2 (final review fixes): `/watches` gates `watch_flag_id` and a comment action's
+  `flag_id` with `get_visible_flag`, `list_watches` takes the caller (hidden `flag_id` 404s;
+  the unscoped list omits watches on hidden threads or with hidden comment targets), and
+  `cancel_watch` audits only a flag the caller can see; `slack_notify.planner.plan_dms` drops
+  recipients who fail `can_view_entity` on a view-scoped anchor at send time;
+  `recurring.run_due` mints as the template's creator and isolates each template (rollback,
+  warning log, advance to the next run), and logs a refused watcher; `list_flags` returns `[]`
+  for an anchor the caller cannot view before resolving descendants; `remove_flag_link` gates
+  the other end; the detail and activity routes blank `from_value`/`to_value` on link events
+  whose target is hidden and `routes._frame` drops both fields from link events; the Ready to
+  Publish loader emits "Restricted" for the title of a flag on a view-scoped anchor.
