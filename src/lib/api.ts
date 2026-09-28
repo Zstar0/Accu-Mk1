@@ -7147,9 +7147,19 @@ export interface RetestContextOrder {
   status: string
   lines: RetestContextOrderLine[]
 }
+export interface PendingRetestOrder {
+  order_id: number
+  order_number: string
+  status: string
+  total: number
+  currency: string
+  created_at: string
+  payment_url: string
+}
 export interface RetestContext {
   order: RetestContextOrder | null
   retest_fee: { price: number | null } | null
+  pending_orders: PendingRetestOrder[]
 }
 export interface RetestOptions {
   sample_id: string

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { RefreshCw } from 'lucide-react'
+import { toast } from 'sonner'
 import {
   Dialog,
   DialogContent,
@@ -301,6 +302,48 @@ export function RetestDialog({
             ) : (
               <p className="text-muted-foreground">Customer info unavailable</p>
             )}
+            {options.context.pending_orders.length > 0 ? (
+              <div className="pt-1.5 space-y-1">
+                <div className="text-xs font-medium text-muted-foreground">
+                  Pending retest orders
+                </div>
+                {options.context.pending_orders.map(o => (
+                  <div
+                    key={o.order_id}
+                    data-testid={`pending-retest-order-${o.order_id}`}
+                    className="flex items-center justify-between gap-2 text-xs"
+                  >
+                    <span>
+                      Order {o.order_number} · {formatMoney(o.total)} · awaiting
+                      payment
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          if (!navigator.clipboard) return
+                          navigator.clipboard
+                            .writeText(o.payment_url)
+                            .then(() => toast.success('Payment link copied'))
+                            .catch(() => undefined)
+                        }}
+                      >
+                        Copy link
+                      </Button>
+                      <a
+                        href={o.payment_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline text-muted-foreground"
+                      >
+                        Open
+                      </a>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">

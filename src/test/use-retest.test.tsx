@@ -79,6 +79,43 @@ describe('useCreateRetest', () => {
       payment_url: 'https://x',
     })
   })
+  it('gives the payment toast a 15s duration and a Copy link action', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    vi.mocked(createRetest).mockResolvedValue({
+      order_number: 'WP-7920',
+      payment_url: 'https://accumarklabs.com/checkout/order-pay/7920',
+    })
+    const { Wrapper } = wrapper()
+    const { result } = renderHook(() => useCreateRetest('P-1', {}), {
+      wrapper: Wrapper,
+    })
+    await act(async () => {
+      await result.current.mutateAsync({
+        retest: ['x'],
+        carry: [],
+        add: null,
+        auto_checkin: false,
+        fee: 'paid',
+        reason: 'r',
+      })
+    })
+    expect(toast.success).toHaveBeenCalledWith(
+      'Retest order WP-7920 created',
+      expect.objectContaining({
+        duration: 15000,
+        action: expect.objectContaining({ label: 'Copy link' }),
+      })
+    )
+    const calls = vi.mocked(toast.success).mock.calls
+    const opts = calls[calls.length - 1]?.[1] as unknown as {
+      action: { onClick: (e: unknown) => void }
+    }
+    opts.action.onClick(undefined)
+    expect(writeText).toHaveBeenCalledWith(
+      'https://accumarklabs.com/checkout/order-pay/7920'
+    )
+  })
   it('toasts the server detail on failure', async () => {
     vi.mocked(createRetest).mockRejectedValue(
       new Error('Integration Service returned 502')

@@ -123,7 +123,8 @@ def retest_options(sample_id: str, db: Session = Depends(get_db), _user=Depends(
         "variance": {"point_price": ((context or {}).get("variance") or {}).get("point_price"),
                      "allowed": bool(HPLC_PROFILE_KEYS & set(have))},
         "prices_available": context is not None,
-        "context": {"order": context.get("order"), "retest_fee": context.get("retest_fee")}
+        "context": {"order": context.get("order"), "retest_fee": context.get("retest_fee"),
+                    "pending_orders": context.get("pending_retest_orders") or []}
                    if context is not None else None,
     }
 
