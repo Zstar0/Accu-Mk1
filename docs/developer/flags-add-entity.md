@@ -184,7 +184,39 @@ register_entity(
 helpers the flag read paths use (slice 2 of the planning boards work wires them in). A closure
 that raises hides, never shows. Unanchored general tasks always pass the clause.
 
+Register `can_view` and `visible_entity_ids` together; the point gate keys on the first, the
+list clause on the second. A type with only one of them gets point reads and lists that
+disagree.
+
 Worked example: `backend/boards/flag_entity.py` registers `board_node`. Its `can_raise` is
 "can edit the board", `can_view` is "can view the board", `visible_entity_ids` is a subselect of
 node ids on visible boards, and it refuses (400) to anchor a flag on a node of kind `entity`,
 pointing the caller at the underlying entity so a thread never forks.
+
+### Audience and membership (slice 2)
+
+Two more host hooks make live events and target guards follow the same visibility:
+
+```python
+register_entity("<type>", ...,
+    audience=lambda db, eid: None | {"groups": [group_ids]},  # who receives LIVE events;
+                                                              # unset = everyone
+)
+seams.set_membership_resolver(lambda db, user: (group_ids, is_admin))  # once, at startup
+```
+
+`service._audit` stamps `audience` on every event; the bus filters per subscriber
+(`system` subscribers such as the Slack notifier see everything; the Slack planner DMs
+participants only and re-checks each one against a view-scoped anchor at send time, so a
+revoked user gets nothing);
+the stream route strips `audience` before framing. `seams.load_user(db, user_id)` gives the
+target guards a user object to ask `can_view` about an assignee, watcher or mention.
+
+Every read path is gated: `service.get_visible_flag` for point reads (404, same text as a
+missing flag), `seams.visibility_clause` on every list query, and a caller that passes no
+`user` gets the fail-closed clause. Child resources (attachments, comment reactions) re-raise their own not-found text around the gate so a hidden child looks exactly like a missing one.
+The same gate covers the flag references a watch carries (`watch_flag_id` and a comment
+action's `flag_id`), the other end of a flag link, and the descendants roll-up (a hidden
+anchor lists `[]`). Link events keep the target in `from_value`/`to_value`, so the detail and
+activity routes blank it for a caller who cannot see the target, and the stream drops both
+fields from link events.

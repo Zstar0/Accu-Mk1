@@ -1,16 +1,16 @@
 {
-  "run": "sjjy",
-  "group": "exec-sjjy",
-  "board": "org-sjjy",
-  "restricted_board_refused_while_flag_off": true,
-  "frame_id": 10,
+  "run": "w7lu",
+  "group": "exec-w7lu",
+  "board": "org-w7lu",
+  "restricted_board_created": true,
+  "frame_id": 25,
   "javascript_url_refused": true,
   "stale_positions_batch_rejected": true,
   "board_detail": {
     "nodes": 3,
     "edges": 1
   },
-  "grant_to_group": "exec-sjjy",
+  "grant_to_group": "exec-w7lu",
   "openapi_paths": [
     "/api/boards",
     "/api/boards/for-entity",
@@ -27,7 +27,7 @@
     "/api/groups/{group_id}/members"
   ],
   "board_node_flag": {
-    "id": 8,
+    "id": 15,
     "label": "Company map > Marketing"
   },
   "non_admin_guards": {

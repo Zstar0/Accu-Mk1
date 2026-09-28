@@ -12,9 +12,13 @@ from typing import Optional
 
 
 class Subscription:
-    def __init__(self, bus: "FlagEventBus", user_id: Optional[int]) -> None:
+    def __init__(self, bus: "FlagEventBus", user_id: Optional[int], *,
+                 group_ids=frozenset(), is_admin: bool = False, system: bool = False) -> None:
         self._bus = bus
         self.user_id = user_id
+        self.group_ids = frozenset(int(g) for g in group_ids)
+        self.is_admin = bool(is_admin)
+        self.system = bool(system)   # the Slack notifier: sees everything, DMs participants only
         self.queue: "asyncio.Queue[dict]" = asyncio.Queue(maxsize=1000)
 
     async def get(self) -> dict:
@@ -32,8 +36,9 @@ class FlagEventBus:
     def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
 
-    def subscribe(self, user_id: Optional[int]) -> Subscription:
-        sub = Subscription(self, user_id)
+    def subscribe(self, user_id: Optional[int], *, group_ids=frozenset(),
+                  is_admin: bool = False, system: bool = False) -> Subscription:
+        sub = Subscription(self, user_id, group_ids=group_ids, is_admin=is_admin, system=system)
         self._subs.add(sub)
         if self._loop is None:
             try:
@@ -55,7 +60,7 @@ class FlagEventBus:
     def _deliver(self, event: dict) -> None:
         """Runs on the loop thread — only place that touches the queues."""
         for sub in list(self._subs):
-            if not self._visible_to(sub.user_id, event):
+            if not self._visible_to(sub, event):
                 continue
             try:
                 sub.queue.put_nowait(event)
@@ -66,11 +71,15 @@ class FlagEventBus:
                 except Exception:
                     pass
 
-    def _visible_to(self, user_id: Optional[int], event: dict) -> bool:
-        # v1: flags are internal and every staff user can see every flag, so
-        # every event is visible to every subscriber. Future per-user scoping
-        # is a swap of THIS method only (see the wire contract).
-        return True
+    def _visible_to(self, sub: Subscription, event: dict) -> bool:
+        """Producer-stamped `audience` (spec §6.4): None = everyone; {"groups": [...]} =
+        members of those groups, admins, and the system subscriber. The bus never
+        touches the database."""
+        aud = event.get("audience")
+        if sub.system or aud is None or sub.is_admin:
+            return True
+        groups = {int(g) for g in (aud.get("groups") or [])}
+        return bool(groups & sub.group_ids)
 
 
 BUS = FlagEventBus()

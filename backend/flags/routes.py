@@ -75,6 +75,34 @@ def _with_entities(db: Session, flags, resp_cls=FlagResponse):
     return resps
 
 
+_ENTITY_LINK_EVENTS = ("entity_link_added", "entity_link_removed")
+_FLAG_LINK_EVENTS = ("flag_link_added", "flag_link_removed")
+
+
+def _link_value_visible(db: Session, user, event_type: str, value: str) -> bool:
+    if event_type in _ENTITY_LINK_EVENTS:
+        et, _, eid = value.partition(":")
+        return bool(eid) and seams.can_view_entity(db, user, et, eid)
+    try:
+        service.get_visible_flag(db, user, int(value))
+    except (NotFoundError, TypeError, ValueError):
+        return False
+    return True
+
+
+def _mask_link_events(db: Session, user, events) -> None:
+    """Blank from/to on link events whose target the caller cannot see (spec §6.3):
+    the link card is masked, so its audit row must not hand the target back. Works on
+    any list of objects with event_type/from_value/to_value (detail events, activity)."""
+    for ev in events:
+        if ev.event_type not in _ENTITY_LINK_EVENTS + _FLAG_LINK_EVENTS:
+            continue
+        for attr in ("from_value", "to_value"):
+            value = getattr(ev, attr)
+            if value and not _link_value_visible(db, user, ev.event_type, value):
+                setattr(ev, attr, "")
+
+
 def _http(e: Exception) -> HTTPException:
     if isinstance(e, NotFoundError):
         return HTTPException(status_code=404, detail=str(e))
@@ -110,7 +138,7 @@ def list_flags(tab: str = Query("all_open"), status: Optional[str] = None,
     try:
         rows = service.list_flags(db, user_id=getattr(user, "id", None), tab=tab,
                                   status=status, entity_type=entity_type, entity_id=entity_id,
-                                  include_descendants=include_descendants)
+                                  include_descendants=include_descendants, user=user)
         return _with_entities(db, rows)
     except Exception as e:
         raise _http(e)
@@ -118,7 +146,7 @@ def list_flags(tab: str = Query("all_open"), status: Optional[str] = None,
 
 @router.get("/summary", response_model=SummaryResponse)
 def summary(db: Session = Depends(get_db), user=Depends(get_current_user)):
-    return SummaryResponse(**service.summary(db, user_id=getattr(user, "id", None)))
+    return SummaryResponse(**service.summary(db, user_id=getattr(user, "id", None), user=user))
 
 
 @router.get("/activity", response_model=ActivityPage)
@@ -128,7 +156,7 @@ def activity(cursor: Optional[str] = None, limit: int = Query(25, ge=1, le=50),
     try:
         user_id = getattr(user, "id", None)
         rows, next_cursor = service.list_activity(
-            db, user_id=user_id, cursor=cursor, limit=limit)
+            db, user_id=user_id, cursor=cursor, limit=limit, user=user)
         rel = service.compute_relevance(db, rows, user_id=user_id)
         flag_resps = _with_entities(db, [ev.flag for ev in rows])
         items = [
@@ -140,6 +168,7 @@ def activity(cursor: Optional[str] = None, limit: int = Query(25, ge=1, le=50),
             )
             for ev, fr in zip(rows, flag_resps)
         ]
+        _mask_link_events(db, user, items)
         return ActivityPage(items=items, next_cursor=next_cursor)
     except Exception as e:
         raise _http(e)
@@ -149,15 +178,32 @@ def activity(cursor: Optional[str] = None, limit: int = Query(25, ge=1, le=50),
 def unread(db: Session = Depends(get_db), user=Depends(get_current_user)):
     # Literal /unread above /{flag_id}.
     try:
-        rows = service.list_unread(db, user_id=getattr(user, "id", None))
+        rows = service.list_unread(db, user_id=getattr(user, "id", None), user=user)
         return _with_entities(db, rows)
     except Exception as e:
         raise _http(e)
 
 
+def _frame(event: dict) -> str:
+    """One SSE frame. `audience` is server-side only (spec §6.4) and never reaches a client.
+    Link events drop from/to: the value names the other end, which may be hidden from a
+    subscriber who can see this flag (no client reads them; detail/activity mask on read)."""
+    link = str(event.get("event_type", "")).endswith(("_link_added", "_link_removed"))
+    drop = {"audience", "from_value", "to_value"} if link else {"audience"}
+    payload = {k: v for k, v in event.items() if k not in drop}
+    frame = ""
+    if payload.get("event_id") is not None:
+        frame += f"id: {payload['event_id']}\n"
+    return frame + f"event: {payload['event_type']}\ndata: {json.dumps(payload)}\n\n"
+
+
 @router.get("/stream")
-async def stream(request: Request, user=Depends(get_current_user)):
-    sub = BUS.subscribe(getattr(user, "id", None))
+async def stream(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not isinstance(db, Session):
+        gids, adm = frozenset(), False
+    else:
+        gids, adm = seams.resolve_membership(db, user)
+    sub = BUS.subscribe(getattr(user, "id", None), group_ids=gids, is_admin=adm)
 
     async def gen():
         yield ": connected\n\n"
@@ -170,11 +216,7 @@ async def stream(request: Request, user=Depends(get_current_user)):
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
                     continue
-                frame = ""
-                if event.get("event_id") is not None:
-                    frame += f"id: {event['event_id']}\n"
-                frame += f"event: {event['event_type']}\ndata: {json.dumps(event)}\n\n"
-                yield frame
+                yield _frame(event)
         finally:
             sub.close()
 
@@ -342,7 +384,7 @@ def get_attachment(attachment_id: int, db: Session = Depends(get_db), user=Depen
     # Literal /attachments/... registered ABOVE /{flag_id} so it wins the match.
     # Authenticated serve — no public URLs (spec §11).
     try:
-        att = service.get_attachment(db, attachment_id)
+        att = service.get_attachment(db, attachment_id, user=user)
         data = seams.get_attachment_storage().fetch(att.storage_key)
     except seams.AttachmentNotFound:
         raise HTTPException(status_code=404, detail="attachment file missing from storage")
@@ -371,7 +413,7 @@ def search_flags(q: str = Query("", description="substring; <3 chars → empty")
     # also gates at 3 chars + a 300ms debounce.
     try:
         return [FlagSearchHit.model_validate(h)
-                for h in service.search_flags(db, q=q, limit=limit)]
+                for h in service.search_flags(db, q=q, limit=limit, user=user)]
     except Exception as e:
         raise _http(e)
 
@@ -414,7 +456,7 @@ def list_watches(flag_id: Optional[int] = None, db: Session = Depends(get_db),
                  user=Depends(get_current_user)):
     try:
         return [WatchResponse.model_validate(w)
-                for w in watches.list_watches(db, flag_id=flag_id)]
+                for w in watches.list_watches(db, user=user, flag_id=flag_id)]
     except Exception as e:
         raise _http(e)
 
@@ -431,21 +473,33 @@ def cancel_watch(watch_id: int, db: Session = Depends(get_db),
 @router.get("/{flag_id}", response_model=FlagDetailResponse)
 def get_flag(flag_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
-        resp = _with_entity(db, service.get_flag(db, flag_id), FlagDetailResponse)
+        resp = _with_entity(db, service.get_visible_flag(db, user, flag_id), FlagDetailResponse)
         resp.watchers = [WatcherOut.model_validate(w)
                          for w in service.list_watchers(db, flag_id)]
         resp.entity_links = []
         for link in service.list_entity_links(db, flag_id):
             out = EntityLinkOut.model_validate(link)
-            ctx = seams.resolve_context(db, link.entity_type, link.entity_id)
-            out.entity = EntityContext(**ctx) if ctx else None
+            if seams.can_view_entity(db, user, link.entity_type, link.entity_id):
+                ctx = seams.resolve_context(db, link.entity_type, link.entity_id)
+                out.entity = EntityContext(**ctx) if ctx else None
+            else:
+                # Spec §6.3: never confirm what a hidden anchor is. Keep the type (the
+                # card needs an icon) and blank the rest.
+                out.entity_id = ""
+                out.entity = EntityContext(entity_type=link.entity_type, entity_id="",
+                                           label="Restricted",
+                                           deep_link={"kind": "none", "id": ""})
             resp.entity_links.append(out)
         resp.flag_links = []
         for link in service.list_flag_links(db, flag_id):
             oid = link.linked_flag_id if link.flag_id == flag_id else link.flag_id
-            o = service.get_flag(db, oid)
+            try:
+                o = service.get_visible_flag(db, user, oid)
+            except NotFoundError:
+                continue  # the other end is hidden from this caller
             resp.flag_links.append(FlagLinkOut(
                 id=link.id, flag_id=o.id, title=o.title, status=o.status, type=o.type))
+        _mask_link_events(db, user, resp.events)
         # Reactions are an aggregate (batch query) — can't ride from_attributes.
         agg = service.aggregate_reactions(db, [c.id for c in resp.comments])
         for c in resp.comments:
@@ -458,7 +512,7 @@ def get_flag(flag_id: int, db: Session = Depends(get_db), user=Depends(get_curre
 @router.post("/{flag_id}/read", status_code=204)
 def mark_read(flag_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     try:
-        service.mark_read(db, user_id=getattr(user, "id", None), flag_id=flag_id)
+        service.mark_read(db, user_id=getattr(user, "id", None), flag_id=flag_id, user=user)
     except Exception as e:
         raise _http(e)
 

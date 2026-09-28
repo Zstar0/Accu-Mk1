@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from flags import permissions, seams, service, types_service
@@ -45,7 +45,7 @@ def _validate_condition(condition: dict) -> None:
         raise BadRequestError("condition.equals must be a non-empty string")
 
 
-def _validate_action(db: Session, action: dict) -> None:
+def _validate_action(db: Session, action: dict, *, user=None) -> None:
     if not isinstance(action, dict):
         raise BadRequestError("action must be an object")
     kind = action.get("kind")
@@ -60,7 +60,8 @@ def _validate_action(db: Session, action: dict) -> None:
             raise BadRequestError("comment action needs a flag_id")
         if not (action.get("body") or "").strip():
             raise BadRequestError("comment action needs a body")
-        service.get_flag(db, int(action["flag_id"]))  # 404 if the target is gone
+        # 404 if the target is gone OR hidden from the arming user (same text).
+        service.get_visible_flag(db, user, int(action["flag_id"]))
     else:
         raise BadRequestError(f"unknown action kind {kind!r}")
 
@@ -76,8 +77,9 @@ def arm_watch(db: Session, *, user, entity_type: str, entity_id: str,
     if not seams.has_state_seam(entity_type):
         raise BadRequestError(f"{entity_type} has no watchable state")
     _validate_condition(condition)
-    _validate_action(db, action)
-    flag = service.get_flag(db, watch_flag_id) if watch_flag_id is not None else None
+    _validate_action(db, action, user=user)
+    flag = (service.get_visible_flag(db, user, watch_flag_id)
+            if watch_flag_id is not None else None)
     uid = getattr(user, "id", None)
     armed = db.execute(
         select(FlagEntityWatch.id)
@@ -114,22 +116,52 @@ def cancel_watch(db: Session, *, user, watch_id: int) -> None:
     if watch.status != "armed":
         return  # already fired/cancelled — idempotent
     watch.status = "cancelled"
+    flag = None
     if watch.watch_flag_id is not None:
-        flag = service.get_flag(db, watch.watch_flag_id)
+        # The creator may cancel after losing access to the flag; the cancel still
+        # lands, but no audit is written into a thread the caller cannot see.
+        try:
+            flag = service.get_visible_flag(db, user, watch.watch_flag_id)
+        except NotFoundError:
+            flag = None
+    if flag is not None:
         service._audit(db, flag, uid, "watch_cancelled", details={"watch_id": watch.id})
         service._commit_and_emit(db)
     else:
         db.commit()
 
 
-def list_watches(db: Session, *, flag_id: Optional[int] = None,
+def list_watches(db: Session, *, user=None, flag_id: Optional[int] = None,
                  status: str = "armed") -> list[FlagEntityWatch]:
-    """Watches in `status` (default armed), optionally scoped to a thread."""
+    """Watches in `status` (default armed), optionally scoped to a thread.
+
+    Visibility (spec §6.3): a `flag_id` the caller cannot see 404s like a missing
+    one. The unscoped listing keeps only watches whose thread is visible (or that
+    have none), then drops any whose comment action targets a hidden flag, since
+    the action carries that flag's id and the comment body. `user=None` hides every
+    view-scoped flag (fail closed)."""
+    from flags.models import FlagFlag
     stmt = select(FlagEntityWatch).where(FlagEntityWatch.status == status)
     if flag_id is not None:
+        service.get_visible_flag(db, user, flag_id)
         stmt = stmt.where(FlagEntityWatch.watch_flag_id == flag_id)
-    return list(db.execute(
-        stmt.order_by(FlagEntityWatch.created_at.asc())).scalars().all())
+    else:
+        visible = select(FlagFlag.id).where(seams.visibility_clause(db, user))
+        stmt = stmt.where(or_(FlagEntityWatch.watch_flag_id.is_(None),
+                              FlagEntityWatch.watch_flag_id.in_(visible)))
+    rows = db.execute(stmt.order_by(FlagEntityWatch.created_at.asc())).scalars().all()
+    return [w for w in rows if _action_visible(db, user, w)]
+
+
+def _action_visible(db: Session, user, watch: FlagEntityWatch) -> bool:
+    target = (watch.action or {}).get("flag_id")
+    if target is None:
+        return True
+    try:
+        service.get_visible_flag(db, user, int(target))
+    except (NotFoundError, TypeError, ValueError):
+        return False
+    return True
 
 
 # --- poller --------------------------------------------------------------

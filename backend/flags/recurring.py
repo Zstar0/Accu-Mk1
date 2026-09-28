@@ -8,6 +8,7 @@ scope for v1 (the ~1-min ticker mints shortly after midnight of the due day).
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Optional
@@ -15,9 +16,11 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from flags import catalog, service
+from flags import catalog, seams, service
 from flags.errors import BadRequestError, NotFoundError
 from flags.models import FlagFlag, FlagRecurring
+
+logger = logging.getLogger(__name__)
 
 
 def validate_cadence(cadence: str) -> None:
@@ -119,29 +122,48 @@ def _previous_open(db: Session, r: FlagRecurring) -> bool:
     return flag is not None and flag.status in catalog.OPEN_STATES
 
 
+def _creator(db: Session, r: FlagRecurring):
+    """Mint as the template's real creator (their role and groups decide can_raise);
+    fall back to the attribution-only actor when the users row is gone."""
+    return seams.load_user(db, r.created_by) or _actor(r.created_by)
+
+
 def run_due(db: Session, *, now: datetime) -> int:
     """Scheduler job: mint every active template whose next_run_at has arrived.
-    skip_if_open skips (but still advances) when the last mint is still open."""
-    rows = db.execute(select(FlagRecurring).where(
+    skip_if_open skips (but still advances) when the last mint is still open.
+    A template whose mint fails is rolled back, logged and advanced, so it never
+    blocks the other templates or retries every tick."""
+    rids = list(db.execute(select(FlagRecurring.id).where(
         FlagRecurring.active.is_(True),
-        FlagRecurring.next_run_at <= now)).scalars().all()
+        FlagRecurring.next_run_at <= now)).scalars().all())
     minted = 0
-    for r in rows:
+    for rid in rids:
+        r = db.get(FlagRecurring, rid)
         if r.skip_if_open and _previous_open(db, r):
             r.next_run_at = next_run_after(r.cadence, now)
             db.commit()
             continue
-        flag = service.create_flag(
-            db, user=_actor(r.created_by), entity_type=r.entity_type,
-            entity_id=r.entity_id, type=r.type, title=r.title,
-            first_comment=r.body, assignee_id=r.assignee_id,
-            event_details={"automated": True, "recurring_id": r.id})
+        actor = _creator(db, r)
+        try:
+            flag = service.create_flag(
+                db, user=actor, entity_type=r.entity_type,
+                entity_id=r.entity_id, type=r.type, title=r.title,
+                first_comment=r.body, assignee_id=r.assignee_id,
+                event_details={"automated": True, "recurring_id": r.id})
+        except Exception as e:                       # noqa: BLE001 : isolate one bad template
+            db.rollback()
+            logger.warning("flag_recurring_mint_failed recurring_id=%s error=%s", rid, e)
+            r = db.get(FlagRecurring, rid)
+            r.next_run_at = next_run_after(r.cadence, now)
+            db.commit()
+            continue
         for uid in (r.watchers or []):
             try:
-                service.add_watcher(db, user=_actor(r.created_by),
-                                    flag_id=flag.id, user_id=uid)
-            except Exception:                        # noqa: BLE001 — a bad watcher id never blocks the mint
-                pass
+                service.add_watcher(db, user=actor, flag_id=flag.id, user_id=uid)
+            except Exception as e:                   # noqa: BLE001 : a bad watcher never blocks the mint
+                db.rollback()
+                logger.warning("flag_recurring_watcher_failed recurring_id=%s flag_id=%s "
+                               "user_id=%s error=%s", rid, flag.id, uid, e)
         r.last_minted_flag_id = flag.id
         r.next_run_at = next_run_after(r.cadence, now)
         db.commit()

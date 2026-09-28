@@ -131,3 +131,15 @@ def test_held_rows_are_returned_but_left_out_of_totals(monkeypatch):
     assert by_id["P-1"]["hold"] is None
     assert body["totals"]["rows"] == 1 and body["totals"]["held"] == 1
     assert body["totals"]["breached"] == 1  # only P-1 counts
+
+
+def test_flag_title_is_masked_on_a_view_scoped_anchor():
+    """Slice 2 final review I4: the payload is shared across users, so a board-node
+    flag keeps its hold/ready role but never carries its title."""
+    from types import SimpleNamespace
+    from flags import seams
+    seams.register_mk1_entities()
+    title = main_module._rtp_flag_title
+    assert title(SimpleNamespace(entity_type="board_node", title="Hold: legal review")) == "Restricted"
+    assert title(SimpleNamespace(entity_type="sample", title="Hold: waiting")) == "Hold: waiting"
+    assert title(SimpleNamespace(entity_type=None, title=None)) == ""

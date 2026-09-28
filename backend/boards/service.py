@@ -14,9 +14,10 @@ from groups.errors import BadRequestError, ConflictError, NotFoundError, Permiss
 from groups.models import UserGroup
 from groups.service import clean_slug
 
-# Flipped to True by slice 2 (flag visibility enforcement). Until then a restricted board
-# would leak its flags into every staff member's All Open tab, so it cannot exist.
-RESTRICTED_BOARDS_ENABLED = False
+# Restricted boards are safe once every flag read path honors the anchor's visibility
+# (slice 2: point-read gate, list clause, target guards, SSE audience). Left as a constant
+# so a stack can lock them off again with a one-line change.
+RESTRICTED_BOARDS_ENABLED = True
 
 
 def _require_admin(user) -> None:
