@@ -207,6 +207,7 @@ def create_flag(db: Session, *, user, entity_type, entity_id, type, title,
         # Opt-in per entity type: a typo'd id would otherwise open a thread nobody can see.
         if spec.must_exist and seams.resolve_context(db, entity_type, str(entity_id)) is None:
             raise BadRequestError(f"{entity_type} {entity_id!r} not found")
+        _require_target_can_view(db, entity_type, entity_id, assignee_id, "assignment")
     # Enforces "general task ⇒ global type": is_allowed_for_entity returns True
     # for entity_type=None only when the type's entity_types list is empty.
     if not types_service.is_allowed_for_entity(db, type, entity_type):
@@ -256,6 +257,16 @@ def get_visible_flag(db: Session, user, flag_id: int) -> FlagFlag:
             db, user, flag.entity_type, flag.entity_id):
         raise NotFoundError(f"flag {flag_id} not found")
     return flag
+
+
+def _require_target_can_view(db: Session, entity_type, entity_id, target_user_id, what: str) -> None:
+    """Target guard (spec §6.3): never pull a user into a flag they cannot see. Unanchored
+    flags and legacy anchors have no visibility scope, so they take any user."""
+    if entity_type is None or target_user_id is None:
+        return
+    target = seams.load_user(db, target_user_id)
+    if target is None or not seams.can_view_entity(db, target, entity_type, str(entity_id)):
+        raise BadRequestError(f"user {target_user_id} cannot see this flag; {what} refused")
 
 
 def _valid_user_ids(db: Session, ids) -> list[int]:
@@ -547,6 +558,8 @@ def add_comment(db: Session, *, user, flag_id, body, mention_ids=None,
         raise BadRequestError("comment body required")
     actor_id = getattr(user, "id", None)
     valid = _valid_user_ids(db, mention_ids or [])
+    for uid in valid:
+        _require_target_can_view(db, flag.entity_type, flag.entity_id, uid, "mention")
     c = FlagComment(flag_id=flag.id, author_id=actor_id, body=body.strip(),
                     mentions=valid or None)
     db.add(c)
@@ -579,6 +592,7 @@ def assign(db: Session, *, user, flag_id, assignee_id) -> FlagFlag:
     flag = get_visible_flag(db, user, flag_id)
     if not permissions.can(user, "assign", flag):
         raise PermissionDeniedError("not allowed to assign")
+    _require_target_can_view(db, flag.entity_type, flag.entity_id, assignee_id, "assignment")
     actor_id = getattr(user, "id", None)
     prev = flag.assignee_id
     flag.assignee_id = assignee_id
@@ -602,6 +616,7 @@ def add_watcher(db: Session, *, user, flag_id, user_id) -> FlagParticipant:
     flag = get_visible_flag(db, user, flag_id)
     if not permissions.can(user, "watch", flag):
         raise PermissionDeniedError("not allowed to watch")
+    _require_target_can_view(db, flag.entity_type, flag.entity_id, user_id, "watching")
     existing = db.execute(
         select(FlagParticipant).where(FlagParticipant.flag_id == flag.id,
                                       FlagParticipant.user_id == user_id)

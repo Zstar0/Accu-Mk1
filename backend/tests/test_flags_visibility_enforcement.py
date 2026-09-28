@@ -267,3 +267,35 @@ def test_digest_stats_pass_the_user(w):
     stats = compute_stats(w.s, MEMBER.id, now=datetime.now(timezone.utc))
     assert stats["unread"] >= 0  # member path loads the User row and applies the clause without error
     assert stats["assigned_open"] == 1
+
+
+def test_outsider_cannot_be_pulled_into_a_secret_flag(w):
+    fid = w.f_secret.id
+    w.c.as_user(ADMIN)
+    r = w.c.post("/api/flags", json={"entity_type": "board_node", "entity_id": str(w.sec.id),
+                                     "type": "task", "title": "x", "assignee_id": OUTSIDER.id})
+    assert r.status_code == 400 and "cannot see" in r.json()["detail"]
+    assert w.c.post(f"/api/flags/{fid}/assign", json={"assignee_id": OUTSIDER.id}).status_code == 400
+    assert w.c.post(f"/api/flags/{fid}/watchers", json={"user_id": OUTSIDER.id}).status_code == 400
+    r = w.c.post(f"/api/flags/{fid}/comments", json={"body": "hey", "mention_ids": [OUTSIDER.id]})
+    assert r.status_code == 400
+    # MEMBER is fine on every path
+    assert w.c.post(f"/api/flags/{fid}/assign", json={"assignee_id": MEMBER.id}).status_code == 200
+    assert w.c.post(f"/api/flags/{fid}/watchers", json={"user_id": MEMBER.id}).status_code == 201
+    r = w.c.post(f"/api/flags/{fid}/comments", json={"body": "hey", "mention_ids": [MEMBER.id]})
+    assert r.status_code == 201
+    r = w.c.post("/api/flags", json={"entity_type": "board_node", "entity_id": str(w.sec.id),
+                                     "type": "task", "title": "y", "assignee_id": MEMBER.id})
+    assert r.status_code == 201
+
+
+def test_legacy_and_general_flags_take_any_assignee(w):
+    w.c.as_user(ADMIN)
+    assert w.c.post(f"/api/flags/{w.f_sample.id}/assign", json={"assignee_id": OUTSIDER.id}).status_code == 200
+    assert w.c.post(f"/api/flags/{w.f_general.id}/assign", json={"assignee_id": OUTSIDER.id}).status_code == 200
+    assert w.c.post(f"/api/flags/{w.f_public.id}/watchers", json={"user_id": OUTSIDER.id}).status_code == 201
+
+
+def test_unknown_target_user_is_400_on_a_scoped_flag(w):
+    w.c.as_user(ADMIN)
+    assert w.c.post(f"/api/flags/{w.f_secret.id}/assign", json={"assignee_id": 999}).status_code == 400
