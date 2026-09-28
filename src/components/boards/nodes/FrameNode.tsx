@@ -1,4 +1,4 @@
-import { NodeResizer } from '@xyflow/react'
+import { NodeResizeControl } from '@xyflow/react'
 import type { NodeProps } from '@xyflow/react'
 import { cn } from '@/lib/utils'
 import { usePatchNode } from '@/services/boards'
@@ -27,11 +27,13 @@ export function FrameNode({ data, selected }: NodeProps<BoardFlowNode>) {
         COLOR[color] ?? COLOR.slate
       )}
     >
-      {data.canEdit && (
-        <NodeResizer
+      {/* Corner-only resize: the origin never moves, so children keep their relative positions (edge resizes would need a child re-save). */}
+      {data.canEdit && selected && (
+        <NodeResizeControl
+          position="bottom-right"
           minWidth={160}
           minHeight={100}
-          isVisible={selected}
+          className="!h-3 !w-3 !rounded-sm !border-2 !border-background !bg-muted-foreground"
           onResizeEnd={(_, p) => {
             if (data.slug) patchNode.mutate(resizePatch(data.row, p))
           }}

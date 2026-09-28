@@ -81,15 +81,13 @@ describe('board-mapping', () => {
     ).toEqual([{ id: 2, x: 1, y: 2, version: 3 }])
   })
 
-  it('a frame resize patch carries origin, size and the row version', () => {
+  it('a frame resize patch carries only size and the row version', () => {
     expect(
       resizePatch(row({ id: 5, kind: 'frame', version: 4 }), {
-        x: -20,
-        y: 10,
         width: 500,
         height: 260,
       })
-    ).toEqual({ id: 5, data: { x: -20, y: 10, w: 500, h: 260, version: 4 } })
+    ).toEqual({ id: 5, data: { w: 500, h: 260, version: 4 } })
   })
 
   it('frames carry the board slug for their own resize writes', () => {

@@ -140,13 +140,13 @@ export function toPositionItems(
   return out
 }
 
-/** A frame resize persists size AND origin: dragging the top or left edge moves the frame. */
+/** Frames resize from the bottom-right corner only, so the origin never moves: size is all that persists. */
 export function resizePatch(
   row: BoardNode,
-  p: { x: number; y: number; width: number; height: number }
+  p: { width: number; height: number }
 ): { id: number; data: NodePatch } {
   return {
     id: row.id,
-    data: { x: p.x, y: p.y, w: p.width, h: p.height, version: row.version },
+    data: { w: p.width, h: p.height, version: row.version },
   }
 }
