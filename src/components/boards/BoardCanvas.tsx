@@ -187,6 +187,8 @@ function CanvasInner({
       nodesDraggable={canEdit}
       nodesConnectable={canEdit}
       elementsSelectable
+      // Delete goes through the API (a later task); never a local-only Backspace removal.
+      deleteKeyCode={null}
       fitView={!initialViewport}
       minZoom={0.2}
       maxZoom={2}
