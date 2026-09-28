@@ -83,3 +83,38 @@ def test_run_due_skips_when_previous_open(db):
     db.commit()
     assert recurring.run_due(db, now=datetime(2026, 7, 10, 8)) == 0
     assert db.get(FlagRecurring, r.id).next_run_at == datetime(2026, 7, 11)
+
+
+# --- isolation + real creator (slice 2 final review I0) ----------------------
+from tests.test_flags_visibility_enforcement import (  # noqa: E402,F401
+    ADMIN, MEMBER, OUTSIDER, w)
+
+
+def test_run_due_isolates_a_failing_template_and_mints_as_the_creator(w, caplog):
+    import logging
+    from datetime import timedelta
+    from flags import recurring
+    from flags.models import FlagFlag
+    now = datetime.utcnow()
+    due = now - timedelta(days=1)
+    mk = lambda **kw: recurring.create_recurring(
+        w.s, user=ADMIN, type="task", cadence="daily", next_run_at=due, **kw)
+    bad = mk(title="bad: hidden assignee", entity_type="board_node",
+             entity_id=str(w.sec.id), assignee_id=OUTSIDER.id)
+    board = mk(title="admin on secret frame", entity_type="board_node",
+               entity_id=str(w.sec.id), watchers=[OUTSIDER.id])
+    general = mk(title="general recurring")
+    with caplog.at_level(logging.WARNING, logger="flags.recurring"):
+        assert recurring.run_due(w.s, now=now) == 2
+    titles = {f.title for f in w.s.query(FlagFlag).all()}
+    assert "general recurring" in titles and "admin on secret frame" in titles
+    assert "bad: hidden assignee" not in titles
+    for r in (bad, board, general):
+        w.s.refresh(r)
+        assert r.next_run_at > now, "every template advances, the failing one too"
+    assert bad.last_minted_flag_id is None
+    msgs = [rec.getMessage() for rec in caplog.records]
+    assert any(m.startswith("flag_recurring_mint_failed") and f"recurring_id={bad.id}" in m
+               for m in msgs)
+    assert any(m.startswith("flag_recurring_watcher_failed") and f"user_id={OUTSIDER.id}" in m
+               for m in msgs)
