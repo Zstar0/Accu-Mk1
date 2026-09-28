@@ -199,12 +199,15 @@ def test_revoked_creator_can_still_cancel_without_auditing_the_hidden_flag(w):
 
 
 # --- a watch armed before revocation is cancelled, not retried forever (Task 8 item 3) --
-def test_watch_cancelled_when_actor_loses_visibility_before_fire(w):
+def test_watch_cancelled_when_actor_loses_visibility_before_fire(w, caplog):
     """The fire attempt hits the SAME 404 (NotFoundError) a manual comment from
     the revoked actor would; the watch is cancelled instead of poisoned/retried
-    on every subsequent poll."""
+    on every subsequent poll, no watch_cancelled/watch_fired event lands on the
+    flag the actor can no longer see, and the cancellation is logged
+    (fix round 1 item 4)."""
+    import logging
     from flags import watches
-    from flags.models import FlagEntityWatch
+    from flags.models import FlagEntityWatch, FlagEvent
     from groups.models import UserGroupMember
     from models import LimsSample
     sec = w.f_secret.id
@@ -213,6 +216,35 @@ def test_watch_cancelled_when_actor_loses_visibility_before_fire(w):
     w.c.as_user(MEMBER)
     wid = _arm(w.c, action_flag=sec, watch_flag=sec).json()["id"]
     w.s.query(UserGroupMember).filter_by(user_id=MEMBER.id).delete()
+    w.s.commit()
+    with caplog.at_level(logging.WARNING, logger="flags.watches"):
+        assert watches.run_watch_poll(w.s) == 0
+    assert w.s.get(FlagEntityWatch, wid).status == "cancelled"
+    events = [e.event_type for e in w.s.query(FlagEvent).filter_by(flag_id=sec)]
+    assert "watch_cancelled" not in events and "watch_fired" not in events
+    msgs = [rec.getMessage() for rec in caplog.records]
+    assert any(m.startswith("flag_watch_cancelled_visibility") and f"watch_id={wid}" in m
+               for m in msgs)
+    assert watches.run_watch_poll(w.s) == 0        # second poll does not touch it
+    assert w.s.get(FlagEntityWatch, wid).status == "cancelled"
+
+
+# --- a deactivated creator's watch is cancelled, not fired (fix round 1 item 3) --
+def test_watch_cancelled_when_creator_is_deactivated_before_fire(w):
+    """_ActorRef carries only an id (reads as active by default, no is_active
+    field) and deactivation does not delete the creator's UserGroupMember rows,
+    so MEMBER's group grant is still intact here: without loading the real row
+    and checking it before the action runs, this watch would still FIRE using
+    the deactivated creator's stale group authority."""
+    from flags import watches
+    from flags.models import FlagEntityWatch
+    from models import LimsSample, User
+    sec = w.f_secret.id
+    w.s.add(LimsSample(sample_id="P-1", status="published"))
+    w.s.commit()
+    w.c.as_user(MEMBER)
+    wid = _arm(w.c, action_flag=sec, watch_flag=sec).json()["id"]
+    w.s.get(User, MEMBER.id).is_active = False
     w.s.commit()
     assert watches.run_watch_poll(w.s) == 0
     assert w.s.get(FlagEntityWatch, wid).status == "cancelled"

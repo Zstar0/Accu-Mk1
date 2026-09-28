@@ -14,7 +14,10 @@ def is_admin(user) -> bool:
 
 def user_group_ids(db: Session, user) -> frozenset[int]:
     uid = getattr(user, "id", None)
-    if uid is None:
+    # Deactivation does not delete UserGroupMember rows, so an inactive user's
+    # own membership must be stripped here (the one place that answers this
+    # question) rather than trusted to every caller checking is_active first.
+    if uid is None or not getattr(user, "is_active", True):
         return frozenset()
     rows = db.execute(select(UserGroupMember.group_id)
                       .where(UserGroupMember.user_id == uid)).scalars().all()

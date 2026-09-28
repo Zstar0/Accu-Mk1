@@ -56,10 +56,14 @@ def next_run_after(cadence: str, after: datetime) -> datetime:
     raise BadRequestError(f"bad cadence {cadence!r}")
 
 
-def _actor(user_id: int):
-    """A minimal user-like for service calls — attribution only (role unused by
-    create/watch; recurring never touches lifecycle actions)."""
-    return SimpleNamespace(id=user_id, role="standard")
+def _actor(user_id: int, *, is_active: bool = True):
+    """A minimal user-like for service calls: attribution only (role unused by
+    create/watch; recurring never touches lifecycle actions). is_active defaults
+    True (today's behavior for a missing creator row); the deactivated-creator
+    fallback passes False so this actor carries no group authority either
+    (groups/access.py user_group_ids strips an inactive user's own groups,
+    keyed off this same is_active field)."""
+    return SimpleNamespace(id=user_id, role="standard", is_active=is_active)
 
 
 def create_recurring(db: Session, *, user, title: str, type: str,
@@ -124,11 +128,14 @@ def _previous_open(db: Session, r: FlagRecurring) -> bool:
 
 def _creator(db: Session, r: FlagRecurring):
     """Mint as the template's real creator (their role and groups decide can_raise);
-    fall back to the attribution-only actor when the users row is gone OR deactivated
-    (a deactivated admin's template must not keep admin authority)."""
+    fall back to the attribution-only actor when the users row is gone OR
+    deactivated. A deactivated creator's UserGroupMember rows are NOT deleted by
+    deactivation, so the fallback actor must itself carry is_active=False (not
+    just a different id) or it would still resolve the deactivated user's real
+    groups by id and keep their board authority."""
     user = seams.load_user(db, r.created_by)
     if user is not None and not getattr(user, "is_active", True):
-        user = None
+        return _actor(r.created_by, is_active=False)
     return user or _actor(r.created_by)
 
 

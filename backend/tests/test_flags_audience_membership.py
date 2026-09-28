@@ -109,6 +109,19 @@ def test_membership_default_without_resolver():
         seams.set_membership_resolver(saved)
 
 
+# --- fix round 1 item 1: inactive users carry no group authority -----------
+def test_inactive_user_group_membership_row_does_not_count(w):
+    """groups/access.py user_group_ids is the one place every caller (board
+    grants, the SSE membership resolver, the recurring/watches actor fallbacks)
+    consults for group ids. Deactivation does not delete the membership row, so
+    this must be checked here rather than trusted to every caller."""
+    from groups.access import user_group_ids
+    from groups.models import UserGroupMember
+    w.s.add(UserGroupMember(group_id=w.g.id, user_id=INACTIVE_ADMIN.id))
+    w.s.commit()
+    assert user_group_ids(w.s, INACTIVE_ADMIN) == frozenset()
+
+
 def test_is_view_scoped(w):
     from flags import seams
     assert seams.is_view_scoped("board_node") is True
