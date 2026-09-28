@@ -61,14 +61,14 @@ function CanvasInner({
     [board.nodes]
   )
   const [nodes, setNodes, onNodesChange] = useNodesState<BoardFlowNode>(
-    toFlowNodes(board.nodes, canEdit)
+    toFlowNodes(board.nodes, canEdit, board.slug)
   )
   const [edges, setEdges, onEdgesChange] = useEdgesState(
     toFlowEdges(board.edges)
   )
   const patchPositions = usePatchPositions(board.slug)
   const createEdge = useCreateEdge(board.slug)
-  const { fitView, setViewport } = useReactFlow()
+  const { fitView } = useReactFlow()
   // Read once into state (React Compiler: no impure reads during render).
   const [initialViewport] = useState(() =>
     readViewport(board.slug, board.default_viewport)
@@ -78,13 +78,9 @@ function CanvasInner({
 
   // Server is the source of truth: refresh local graph when the query data changes.
   useEffect(() => {
-    setNodes(toFlowNodes(board.nodes, canEdit))
+    setNodes(toFlowNodes(board.nodes, canEdit, board.slug))
     setEdges(toFlowEdges(board.edges))
-  }, [board.nodes, board.edges, canEdit, setNodes, setEdges])
-
-  useEffect(() => {
-    if (initialViewport) void setViewport(initialViewport)
-  }, [initialViewport, setViewport])
+  }, [board.nodes, board.edges, board.slug, canEdit, setNodes, setEdges])
 
   // One-shot deep link: select and centre the node named by the hash. Keyed on the
   // store value so a second deep link into the already-open board also lands.
@@ -105,10 +101,11 @@ function CanvasInner({
   )
   const shown = useMemo(
     () =>
-      nodes.map(n => ({
-        ...n,
-        selected: selectedId != null && n.id === String(selectedId),
-      })),
+      nodes.map(n => {
+        // Keep identity when the flag is unchanged so xyflow does not re-adopt every node per drag frame.
+        const want = selectedId != null && n.id === String(selectedId)
+        return (n.selected ?? false) === want ? n : { ...n, selected: want }
+      }),
     [nodes, selectedId]
   )
 
@@ -121,10 +118,10 @@ function CanvasInner({
           id: n.id,
           position: n.position,
           width: Number(
-            n.style?.width ?? n.measured?.width ?? FRAME_DEFAULT.width
+            n.measured?.width ?? n.style?.width ?? FRAME_DEFAULT.width
           ),
           height: Number(
-            n.style?.height ?? n.measured?.height ?? FRAME_DEFAULT.height
+            n.measured?.height ?? n.style?.height ?? FRAME_DEFAULT.height
           ),
         }))
       const moved = dragged.map(n => {
@@ -171,6 +168,9 @@ function CanvasInner({
       onNodesChange={handleNodesChange}
       onEdgesChange={onEdgesChange}
       onNodeClick={(_, n) => onSelect(Number(n.id))}
+      // Drag selects first, so xyflow's drag set is only this node (selection stays controlled).
+      selectNodesOnDrag={false}
+      onNodeDragStart={(_, n) => onSelect(Number(n.id))}
       onNodeDragStop={handleDragStop}
       onConnect={handleConnect}
       onPaneClick={() => onSelect(null)}
@@ -189,6 +189,7 @@ function CanvasInner({
       elementsSelectable
       // Delete goes through the API (a later task); never a local-only Backspace removal.
       deleteKeyCode={null}
+      defaultViewport={initialViewport}
       fitView={!initialViewport}
       minZoom={0.2}
       maxZoom={2}

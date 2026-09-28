@@ -1,7 +1,8 @@
 import { NodeResizer } from '@xyflow/react'
 import type { NodeProps } from '@xyflow/react'
 import { cn } from '@/lib/utils'
-import type { BoardFlowNode } from '../board-mapping'
+import { usePatchNode } from '@/services/boards'
+import { resizePatch, type BoardFlowNode } from '../board-mapping'
 
 const COLOR: Record<string, string> = {
   slate: 'border-slate-400/70 bg-slate-500/5',
@@ -15,6 +16,7 @@ const COLOR: Record<string, string> = {
 }
 
 export function FrameNode({ data, selected }: NodeProps<BoardFlowNode>) {
+  const patchNode = usePatchNode(data.slug ?? '')
   const color = String(
     (data.row.data as { color?: string } | null)?.color ?? 'slate'
   )
@@ -26,7 +28,14 @@ export function FrameNode({ data, selected }: NodeProps<BoardFlowNode>) {
       )}
     >
       {data.canEdit && (
-        <NodeResizer minWidth={160} minHeight={100} isVisible={selected} />
+        <NodeResizer
+          minWidth={160}
+          minHeight={100}
+          isVisible={selected}
+          onResizeEnd={(_, p) => {
+            if (data.slug) patchNode.mutate(resizePatch(data.row, p))
+          }}
+        />
       )}
       <div className="px-3 py-2 text-sm font-medium">{data.row.label}</div>
     </div>

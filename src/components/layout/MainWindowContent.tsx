@@ -113,7 +113,7 @@ export function MainWindowContent({
         return <SettingsPage />
       case 'boards':
         if (activeSubSection === 'board' && boardTargetSlug)
-          return <BoardPage slug={boardTargetSlug} />
+          return <BoardPage key={boardTargetSlug} slug={boardTargetSlug} />
         return <BoardsPage />
       default:
         return null

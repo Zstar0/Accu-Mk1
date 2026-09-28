@@ -1,5 +1,10 @@
 import type { Edge, Node, XYPosition } from '@xyflow/react'
-import type { BoardEdge, BoardNode, PositionItem } from '@/lib/api-boards'
+import type {
+  BoardEdge,
+  BoardNode,
+  NodePatch,
+  PositionItem,
+} from '@/lib/api-boards'
 
 export const FRAME_DEFAULT = { width: 360, height: 220 }
 export const NODE_DEFAULT = { width: 180, height: 56 }
@@ -7,12 +12,15 @@ export const NODE_DEFAULT = { width: 180, height: 56 }
 export interface BoardNodeData extends Record<string, unknown> {
   row: BoardNode
   canEdit: boolean
+  /** Board slug, so a frame can persist its own resize. */
+  slug?: string
 }
 export type BoardFlowNode = Node<BoardNodeData>
 
 export function toFlowNodes(
   rows: BoardNode[],
-  canEdit: boolean
+  canEdit: boolean,
+  slug?: string
 ): BoardFlowNode[] {
   return [...rows]
     .sort(
@@ -27,7 +35,7 @@ export function toFlowNodes(
         id: String(row.id),
         type: row.kind,
         position: { x: row.x, y: row.y },
-        data: { row, canEdit },
+        data: { row, canEdit, slug },
         draggable: canEdit,
         selectable: true,
         zIndex: isFrame ? 0 : 1,
@@ -130,4 +138,15 @@ export function toPositionItems(
     out.push(item)
   }
   return out
+}
+
+/** A frame resize persists size AND origin: dragging the top or left edge moves the frame. */
+export function resizePatch(
+  row: BoardNode,
+  p: { x: number; y: number; width: number; height: number }
+): { id: number; data: NodePatch } {
+  return {
+    id: row.id,
+    data: { x: p.x, y: p.y, w: p.width, h: p.height, version: row.version },
+  }
 }

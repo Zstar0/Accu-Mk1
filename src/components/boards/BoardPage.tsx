@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState } from 'react'
 import { ArrowLeft, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -81,6 +82,10 @@ export function BoardPage({ slug }: { slug: string }) {
                 vp = null
               }
               if (vp) patch.mutate({ default_viewport: vp })
+              else
+                toast.info(
+                  'Pan or zoom the board first, then set it as the default view'
+                )
             }}
           >
             Set as default view
