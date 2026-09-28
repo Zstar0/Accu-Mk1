@@ -1,0 +1,17 @@
+{
+  "run": "wfww",
+  "restricted_board_created": true,
+  "outsider": {
+    "board": 404,
+    "flag": 404,
+    "in_all_open": false,
+    "entity_search": "hidden",
+    "assign": 400
+  },
+  "member": {
+    "board": 200,
+    "flag": 200,
+    "in_all_open": true,
+    "entity_search": "visible"
+  }
+}

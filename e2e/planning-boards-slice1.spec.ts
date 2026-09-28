@@ -15,8 +15,8 @@ import { authenticate } from './fixtures/auth'
  * Real-stack E2E: drives the Groups settings pane in a browser, exercises the
  * boards API with an admin bearer, raises a flag on a board frame and checks it
  * renders in the flag flyout with the board label, and proves the non-admin
- * paths (403 on group writes, 404 on an unknown board, 400 on a restricted
- * board while RESTRICTED_BOARDS_ENABLED is off).
+ * paths (403 on group writes, 404 on an unknown board) plus that a restricted
+ * board now creates (201) with RESTRICTED_BOARDS_ENABLED on.
  *
  * Screenshots land in E2E_SHOTS_DIR (default
  * docs/superpowers/evidence/2026-09-27-planning-boards-slice1) so a PR can
@@ -54,7 +54,8 @@ async function login(
 async function adminToken(request: APIRequestContext): Promise<string> {
   const email = process.env.E2E_EMAIL
   const password = process.env.E2E_PASSWORD
-  if (!email || !password) throw new Error('E2E_EMAIL and E2E_PASSWORD are required')
+  if (!email || !password)
+    throw new Error('E2E_EMAIL and E2E_PASSWORD are required')
   return login(request, email, password)
 }
 
@@ -77,7 +78,9 @@ function record(key: string, value: unknown) {
   )
 }
 
-test('Settings > Groups: admin creates a group and saves members', async ({ page }) => {
+test('Settings > Groups: admin creates a group and saves members', async ({
+  page,
+}) => {
   await authenticate(page)
   await page.goto('/#settings/groups')
   await expect(page.getByRole('heading', { name: 'User groups' })).toBeVisible({
@@ -98,7 +101,9 @@ test('Settings > Groups: admin creates a group and saves members', async ({ page
   await expect(me).toBeVisible({ timeout: 10_000 })
   await me.check()
   await row.getByRole('button', { name: 'Save members' }).click()
-  await expect(row.getByText('1 member', { exact: true })).toBeVisible({ timeout: 10_000 })
+  await expect(row.getByText('1 member', { exact: true })).toBeVisible({
+    timeout: 10_000,
+  })
   await expect(
     row.getByText('Stream visibility changes apply when the app reconnects.')
   ).toBeVisible()
@@ -112,7 +117,12 @@ test('Boards API: company board with frame, note, link and edge; guards hold', a
 
   let r = await request.post(`${BACKEND_URL}/api/boards`, {
     headers: h,
-    data: { slug: BOARD_SLUG, name: 'Company map', kind: 'map', visibility: 'company' },
+    data: {
+      slug: BOARD_SLUG,
+      name: 'Company map',
+      kind: 'map',
+      visibility: 'company',
+    },
   })
   expect(r.status(), await r.text()).toBe(201)
 
@@ -120,9 +130,8 @@ test('Boards API: company board with frame, note, link and edge; guards hold', a
     headers: h,
     data: { slug: `exec-board-${RUN}`, name: 'Exec', visibility: 'restricted' },
   })
-  expect(r.status()).toBe(400)
-  expect(((await r.json()) as { detail: string }).detail).toContain('not enabled')
-  record('restricted_board_refused_while_flag_off', true)
+  expect(r.status(), await r.text()).toBe(201)
+  record('restricted_board_created', true)
 
   const nodes = `${BACKEND_URL}/api/boards/${BOARD_SLUG}/nodes`
   r = await request.post(nodes, {
@@ -149,7 +158,9 @@ test('Boards API: company board with frame, note, link and edge; guards hold', a
       parent_id: frame.id,
       x: 20,
       y: 60,
-      data: { markdown: 'AccuVerify COA indexing is the SEO play. Patent first.' },
+      data: {
+        markdown: 'AccuVerify COA indexing is the SEO play. Patent first.',
+      },
     },
   })
   expect(r.status(), await r.text()).toBe(201)
@@ -189,7 +200,9 @@ test('Boards API: company board with frame, note, link and edge; guards hold', a
   expect(stale.detail.stale_ids).toEqual([link.id])
   record('stale_positions_batch_rejected', true)
 
-  r = await request.get(`${BACKEND_URL}/api/boards/${BOARD_SLUG}`, { headers: h })
+  r = await request.get(`${BACKEND_URL}/api/boards/${BOARD_SLUG}`, {
+    headers: h,
+  })
   expect(r.status()).toBe(200)
   const detail = (await r.json()) as {
     nodes: unknown[]
@@ -200,7 +213,10 @@ test('Boards API: company board with frame, note, link and edge; guards hold', a
   expect(detail.nodes).toHaveLength(3)
   expect(detail.edges).toHaveLength(1)
   expect(detail.can_edit).toBe(true)
-  record('board_detail', { nodes: detail.nodes.length, edges: detail.edges.length })
+  record('board_detail', {
+    nodes: detail.nodes.length,
+    edges: detail.edges.length,
+  })
 
   const groups = (await (
     await request.get(`${BACKEND_URL}/api/groups`, { headers: h })
@@ -212,7 +228,9 @@ test('Boards API: company board with frame, note, link and edge; guards hold', a
     data: [{ group_id: group!.id, can_edit: true }],
   })
   expect(r.status(), await r.text()).toBe(200)
-  expect(((await r.json()) as { group_slug: string }[])[0]?.group_slug).toBe(GROUP_SLUG)
+  expect(((await r.json()) as { group_slug: string }[])[0]?.group_slug).toBe(
+    GROUP_SLUG
+  )
   record('grant_to_group', GROUP_SLUG)
 })
 
@@ -223,7 +241,9 @@ test('OpenAPI lists the boards and groups routes; board detail renders from the 
   // Swagger UI cannot render the backend's very large OpenAPI document in
   // headless Chromium within a reasonable budget, so the routers are proven
   // from /openapi.json and the real board detail is shown in the app itself.
-  const spec = (await (await request.get(`${BACKEND_URL}/openapi.json`)).json()) as {
+  const spec = (await (
+    await request.get(`${BACKEND_URL}/openapi.json`)
+  ).json()) as {
     paths: Record<string, Record<string, { tags?: string[] }>>
   }
   const newPaths = Object.keys(spec.paths)
@@ -248,7 +268,9 @@ test('OpenAPI lists the boards and groups routes; board detail renders from the 
 
   await authenticate(page)
   await page.goto('/')
-  await expect(page.locator('#flags-header-button')).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('#flags-header-button')).toBeVisible({
+    timeout: 30_000,
+  })
   const rendered = await page.evaluate(async (slug: string) => {
     const token = window.localStorage.getItem('accu_mk1_auth_token')
     // A mounted dev stack serves the SPA behind a vite proxy that strips one
@@ -265,9 +287,15 @@ test('OpenAPI lists the boards and groups routes; board detail renders from the 
     pre.style.cssText =
       'position:fixed;inset:24px;z-index:99999;overflow:auto;background:#0b1020;color:#e6edf3;' +
       'padding:16px;border-radius:12px;font:13px/1.4 ui-monospace,monospace;white-space:pre-wrap'
-    pre.textContent = `GET /api/boards/${slug}  ->  HTTP ${res!.status}\n\n` + JSON.stringify(body, null, 2)
+    pre.textContent =
+      `GET /api/boards/${slug}  ->  HTTP ${res!.status}\n\n` +
+      JSON.stringify(body, null, 2)
     document.body.appendChild(pre)
-    return { status: res!.status, nodes: body.nodes?.length, edges: body.edges?.length }
+    return {
+      status: res!.status,
+      nodes: body.nodes?.length,
+      edges: body.edges?.length,
+    }
   }, BOARD_SLUG)
   expect(rendered.status).toBe(200)
   expect(rendered.nodes).toBe(3)
@@ -320,7 +348,9 @@ test('Non-admin: group writes 403, company board visible, node write 403, unknow
     headers: admin,
     data: { email, password, role: 'standard' },
   })
-  expect([200, 201], `create standard user: ${created.status()}`).toContain(created.status())
+  expect([200, 201], `create standard user: ${created.status()}`).toContain(
+    created.status()
+  )
 
   const std = bearer(await login(request, email, password))
 
@@ -343,7 +373,9 @@ test('Non-admin: group writes 403, company board visible, node write 403, unknow
   })
   expect(r.status()).toBe(403)
 
-  r = await request.get(`${BACKEND_URL}/api/boards/does-not-exist-${RUN}`, { headers: std })
+  r = await request.get(`${BACKEND_URL}/api/boards/does-not-exist-${RUN}`, {
+    headers: std,
+  })
   expect(r.status()).toBe(404)
 
   r = await request.post(`${BACKEND_URL}/api/boards`, {
@@ -351,5 +383,10 @@ test('Non-admin: group writes 403, company board visible, node write 403, unknow
     data: { slug: `std-${RUN}`, name: 'Std' },
   })
   expect(r.status()).toBe(403)
-  record('non_admin_guards', { groups_post: 403, node_post: 403, unknown_board: 404, board_post: 403 })
+  record('non_admin_guards', {
+    groups_post: 403,
+    node_post: 403,
+    unknown_board: 404,
+    board_post: 403,
+  })
 })
