@@ -30,7 +30,8 @@ def compute_stats(db, user_id: int, *, now: datetime, user=None) -> dict:
 
     assigned = db.execute(select(FlagFlag).where(
         FlagFlag.assignee_id == user_id,
-        FlagFlag.status.in_(OPEN_STATES))).scalars().all()
+        FlagFlag.status.in_(OPEN_STATES),
+        seams.visibility_clause(db, user))).scalars().all()
     overdue = [f for f in assigned if f.due_at is not None and f.due_at < now]
     blocked = [f for f in assigned if f.status == "blocked"]
     # Unread is scoped to still-OPEN flags — a resolved flag isn't "open work" to

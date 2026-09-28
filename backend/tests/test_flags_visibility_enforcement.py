@@ -249,13 +249,21 @@ def test_list_without_user_fails_closed(w):
 
 def test_digest_stats_pass_the_user(w):
     from datetime import datetime, timezone
-    from flags.models import FlagParticipant
+    from flags.models import FlagFlag, FlagParticipant
     from slack_notify.digest import compute_stats
     w.s.add(FlagParticipant(flag_id=w.f_secret.id, user_id=OUTSIDER.id, role="watcher", added_by=ADMIN.id))
     w.s.commit()
     w.c.as_user(ADMIN)
     w.c.post(f"/api/flags/{w.f_secret.id}/comments", json={"body": "ping"})
+    w.s.execute(FlagFlag.__table__.update().where(FlagFlag.id == w.f_secret.id)
+                .values(assignee_id=OUTSIDER.id))
+    w.s.commit()
     stats = compute_stats(w.s, OUTSIDER.id, now=datetime.now(timezone.utc))
     assert stats["unread"] == 0
+    assert stats["assigned_open"] == 0
+    w.s.execute(FlagFlag.__table__.update().where(FlagFlag.id == w.f_secret.id)
+                .values(assignee_id=MEMBER.id))
+    w.s.commit()
     stats = compute_stats(w.s, MEMBER.id, now=datetime.now(timezone.utc))
     assert stats["unread"] >= 0  # member path loads the User row and applies the clause without error
+    assert stats["assigned_open"] == 1
