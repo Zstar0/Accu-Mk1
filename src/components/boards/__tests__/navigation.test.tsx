@@ -59,4 +59,10 @@ describe('boards navigation', () => {
       false
     )
   })
+
+  it('a plain board navigation drops a stale pending node', () => {
+    useUIStore.getState().setPendingBoardNode('42')
+    useUIStore.getState().navigateToBoard('other')
+    expect(useUIStore.getState().pendingBoardNode).toBeNull()
+  })
 })
