@@ -423,7 +423,7 @@ def list_watches(flag_id: Optional[int] = None, db: Session = Depends(get_db),
                  user=Depends(get_current_user)):
     try:
         return [WatchResponse.model_validate(w)
-                for w in watches.list_watches(db, flag_id=flag_id)]
+                for w in watches.list_watches(db, user=user, flag_id=flag_id)]
     except Exception as e:
         raise _http(e)
 
