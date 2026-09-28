@@ -225,6 +225,13 @@ def can_view_entity(db: Session, user, entity_type: str, entity_id) -> bool:
         return False
 
 
+def is_view_scoped(entity_type) -> bool:
+    """True when the registered type scopes visibility (has a can_view seam). Legacy types
+    and unregistered names are unscoped: every staff login may see them."""
+    spec = _REGISTRY.get(entity_type) if entity_type else None
+    return spec is not None and spec.can_view is not None
+
+
 def visibility_clause(db: Session, user):
     """SQL predicate over FlagFlag: for every registered type that scopes visibility,
     (entity_type IS NULL) OR (entity_type != T) OR (entity_id IN <visible ids>). Types

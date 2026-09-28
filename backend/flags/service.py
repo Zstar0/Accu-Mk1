@@ -265,6 +265,8 @@ def _require_target_can_view(db: Session, entity_type, entity_id, target_user_id
     flags and legacy anchors have no visibility scope, so they take any user."""
     if entity_type is None or target_user_id is None:
         return
+    if not seams.is_view_scoped(entity_type):
+        return  # legacy anchors take any user
     target = seams.load_user(db, target_user_id)
     if target is None or not seams.can_view_entity(db, target, entity_type, str(entity_id)):
         raise BadRequestError(f"user {target_user_id} cannot see this flag; {what} refused")

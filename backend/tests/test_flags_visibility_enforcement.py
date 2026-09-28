@@ -294,6 +294,8 @@ def test_legacy_and_general_flags_take_any_assignee(w):
     assert w.c.post(f"/api/flags/{w.f_sample.id}/assign", json={"assignee_id": OUTSIDER.id}).status_code == 200
     assert w.c.post(f"/api/flags/{w.f_general.id}/assign", json={"assignee_id": OUTSIDER.id}).status_code == 200
     assert w.c.post(f"/api/flags/{w.f_public.id}/watchers", json={"user_id": OUTSIDER.id}).status_code == 201
+    # legacy anchors take any id, even one with no users row
+    assert w.c.post(f"/api/flags/{w.f_sample.id}/assign", json={"assignee_id": 999}).status_code == 200
 
 
 def test_unknown_target_user_is_400_on_a_scoped_flag(w):

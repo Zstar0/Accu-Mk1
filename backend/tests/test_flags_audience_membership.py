@@ -107,3 +107,11 @@ def test_membership_default_without_resolver():
         assert seams.resolve_membership(None, MEMBER) == (frozenset(), False)
     finally:
         seams.set_membership_resolver(saved)
+
+
+def test_is_view_scoped(w):
+    from flags import seams
+    assert seams.is_view_scoped("board_node") is True
+    assert seams.is_view_scoped("sample") is False
+    assert seams.is_view_scoped(None) is False
+    assert seams.is_view_scoped("nope") is False
