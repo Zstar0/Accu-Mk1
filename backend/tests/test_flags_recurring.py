@@ -118,3 +118,26 @@ def test_run_due_isolates_a_failing_template_and_mints_as_the_creator(w, caplog)
                for m in msgs)
     assert any(m.startswith("flag_recurring_watcher_failed") and f"user_id={OUTSIDER.id}" in m
                for m in msgs)
+
+
+# --- deactivated creator does not keep admin authority (Task 8 item 1) ------
+def test_run_due_deactivated_creator_does_not_mint_with_admin_authority(w):
+    """A deactivated admin's template falls back to the synthetic (plain standard,
+    no group membership) actor, which the restricted board refuses, so the mint
+    is isolated exactly like any other bad template, not minted as admin."""
+    from datetime import timedelta
+    from flags import recurring
+    from flags.models import FlagFlag
+    from models import User
+    now = datetime.utcnow()
+    r = recurring.create_recurring(
+        w.s, user=ADMIN, title="admin template, deactivated", type="task",
+        cadence="daily", next_run_at=now - timedelta(days=1),
+        entity_type="board_node", entity_id=str(w.sec.id))
+    w.s.get(User, ADMIN.id).is_active = False
+    w.s.commit()
+    assert recurring.run_due(w.s, now=now) == 0
+    assert not w.s.query(FlagFlag).filter_by(title="admin template, deactivated").all()
+    w.s.refresh(r)
+    assert r.last_minted_flag_id is None
+    assert r.next_run_at > now

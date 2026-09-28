@@ -196,3 +196,25 @@ def test_revoked_creator_can_still_cancel_without_auditing_the_hidden_flag(w):
     assert w.c.delete(f"/api/flags/watches/{wid}").status_code == 204
     assert not [e for e in w.s.query(FlagEvent).filter_by(flag_id=sec)
                 if e.event_type == "watch_cancelled"]
+
+
+# --- a watch armed before revocation is cancelled, not retried forever (Task 8 item 3) --
+def test_watch_cancelled_when_actor_loses_visibility_before_fire(w):
+    """The fire attempt hits the SAME 404 (NotFoundError) a manual comment from
+    the revoked actor would; the watch is cancelled instead of poisoned/retried
+    on every subsequent poll."""
+    from flags import watches
+    from flags.models import FlagEntityWatch
+    from groups.models import UserGroupMember
+    from models import LimsSample
+    sec = w.f_secret.id
+    w.s.add(LimsSample(sample_id="P-1", status="published"))
+    w.s.commit()
+    w.c.as_user(MEMBER)
+    wid = _arm(w.c, action_flag=sec, watch_flag=sec).json()["id"]
+    w.s.query(UserGroupMember).filter_by(user_id=MEMBER.id).delete()
+    w.s.commit()
+    assert watches.run_watch_poll(w.s) == 0
+    assert w.s.get(FlagEntityWatch, wid).status == "cancelled"
+    assert watches.run_watch_poll(w.s) == 0        # second poll does not touch it
+    assert w.s.get(FlagEntityWatch, wid).status == "cancelled"

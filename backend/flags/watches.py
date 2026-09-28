@@ -173,7 +173,7 @@ def _condition_met(db: Session, watch: FlagEntityWatch) -> bool:
     return current is not None and current == cond.get("equals")
 
 
-def _fire(db: Session, watch: FlagEntityWatch) -> None:
+def _fire(db: Session, watch: FlagEntityWatch) -> bool:
     """Execute the action + mark the watch fired ATOMICALLY (spec §9 one-shot).
 
     `status='fired'`/`fired_at` are set on the session BEFORE the service call;
@@ -184,30 +184,60 @@ def _fire(db: Session, watch: FlagEntityWatch) -> None:
     losing only the meta event on a mid-fire crash beats double-firing).
 
     Attributes the watch CREATOR and stamps {automated, watch_id} on the action's
-    own event via service's existing `event_details` merge (spec §10 lineage)."""
+    own event via service's existing `event_details` merge (spec §10 lineage).
+
+    Returns True when the action actually fired, False when it was cancelled
+    (see below): callers must not count a cancellation as a fire.
+
+    If the actor's access changed between arm and fire (revoked group membership,
+    a flag/entity gone private) the action raises NotFoundError or
+    PermissionDeniedError. Retrying that every tick forever would just fail
+    forever, so instead the watch is CANCELLED (same status flip as
+    cancel_watch), audited only if the watch's own flag is still visible to the
+    actor, and the poison-retry path is left for every OTHER exception type."""
     action = watch.action or {}
     kind = action.get("kind")
     actor = _ActorRef(id=watch.created_by)
     marker = {"automated": True, "watch_id": watch.id}
     watch.status = "fired"
     watch.fired_at = datetime.utcnow()
-    if kind == "create_flag":
-        flag = service.create_flag(
-            db, user=actor, entity_type=None, entity_id=None,
-            type=action.get("type") or "task", title=action["title"],
-            assignee_id=action.get("assignee_id"), event_details=marker)
-        if watch.watch_flag_id is None:
-            watch.watch_flag_id = flag.id      # link standalone watch to its flag
-        target_flag_id = flag.id
-    elif kind == "comment":
-        service.add_comment(db, user=actor, flag_id=int(action["flag_id"]),
-                            body=action["body"], event_details=marker)
-        target_flag_id = watch.watch_flag_id or int(action["flag_id"])
-    else:
-        raise BadRequestError(f"unknown action kind {kind!r}")
+    try:
+        if kind == "create_flag":
+            flag = service.create_flag(
+                db, user=actor, entity_type=None, entity_id=None,
+                type=action.get("type") or "task", title=action["title"],
+                assignee_id=action.get("assignee_id"), event_details=marker)
+            if watch.watch_flag_id is None:
+                watch.watch_flag_id = flag.id  # link standalone watch to its flag
+            target_flag_id = flag.id
+        elif kind == "comment":
+            service.add_comment(db, user=actor, flag_id=int(action["flag_id"]),
+                                body=action["body"], event_details=marker)
+            target_flag_id = watch.watch_flag_id or int(action["flag_id"])
+        else:
+            raise BadRequestError(f"unknown action kind {kind!r}")
+    except (NotFoundError, PermissionDeniedError):
+        if db.dirty or db.new or db.deleted:
+            db.rollback()
+        watch.status = "cancelled"
+        flag = None
+        if watch.watch_flag_id is not None:
+            try:
+                flag = service.get_visible_flag(db, actor, watch.watch_flag_id)
+            except NotFoundError:
+                flag = None
+        if flag is not None:
+            service._audit(db, flag, watch.created_by, "watch_cancelled",
+                           details={"watch_id": watch.id})
+            service._commit_and_emit(db)
+        else:
+            db.commit()
+        log.warning("flag_watch_cancelled_visibility watch_id=%s", watch.id)
+        return False
     target = service.get_flag(db, target_flag_id)
     service._audit(db, target, watch.created_by, "watch_fired", details=marker)
     service._commit_and_emit(db)
+    return True
 
 
 def run_watch_poll(db: Session, *, now: Optional[datetime] = None) -> int:
@@ -231,8 +261,8 @@ def run_watch_poll(db: Session, *, now: Optional[datetime] = None) -> int:
                 continue
             if not _condition_met(db, watch):
                 continue
-            _fire(db, watch)
-            fired += 1
+            if _fire(db, watch):
+                fired += 1
         except Exception:  # noqa: BLE001 — isolate one poison watch
             db.rollback()
             log.warning("flag_watch_fire_failed watch_id=%s", wid, exc_info=True)

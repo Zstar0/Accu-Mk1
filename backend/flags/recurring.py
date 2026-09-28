@@ -124,8 +124,12 @@ def _previous_open(db: Session, r: FlagRecurring) -> bool:
 
 def _creator(db: Session, r: FlagRecurring):
     """Mint as the template's real creator (their role and groups decide can_raise);
-    fall back to the attribution-only actor when the users row is gone."""
-    return seams.load_user(db, r.created_by) or _actor(r.created_by)
+    fall back to the attribution-only actor when the users row is gone OR deactivated
+    (a deactivated admin's template must not keep admin authority)."""
+    user = seams.load_user(db, r.created_by)
+    if user is not None and not getattr(user, "is_active", True):
+        user = None
+    return user or _actor(r.created_by)
 
 
 def run_due(db: Session, *, now: datetime) -> int:

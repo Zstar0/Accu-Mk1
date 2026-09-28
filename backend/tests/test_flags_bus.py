@@ -136,6 +136,29 @@ def test_new_subscription_after_revocation_gets_nothing():
     _run(scenario())
 
 
+def test_malformed_audience_fails_closed_and_does_not_break_fanout():
+    """Task 8 item 4: a non-int-able group id in `audience` must not drop the
+    whole fan-out. Admin/system still get it (they short-circuit before the
+    parse), everyone else is denied, and a later well-formed event is unaffected."""
+    async def scenario():
+        bus = FlagEventBus()
+        bus.set_loop(asyncio.get_running_loop())
+        member = bus.subscribe(2, group_ids=frozenset({5}))
+        admin = bus.subscribe(3, is_admin=True)
+        system = bus.subscribe(None, system=True)
+        bus.publish({"event_type": "raised", "flag_id": 11,
+                    "audience": {"groups": ["not-a-number"]}})
+        for s in (admin, system):
+            assert (await asyncio.wait_for(s.get(), timeout=1.0))["flag_id"] == 11
+        with pytest_raises_timeout():
+            await asyncio.wait_for(member.get(), timeout=0.2)
+        bus.publish({"event_type": "raised", "flag_id": 12, "audience": {"groups": [5]}})
+        for s in (member, admin, system):
+            assert (await asyncio.wait_for(s.get(), timeout=1.0))["flag_id"] == 12
+        member.close(); admin.close(); system.close()
+    _run(scenario())
+
+
 def test_legacy_subscribe_signature_still_works():
     async def scenario():
         bus = FlagEventBus()
