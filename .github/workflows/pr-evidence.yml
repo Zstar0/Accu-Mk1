@@ -1,0 +1,26 @@
+name: pr-evidence
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a Verified block with stack, tests and evidence
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -u
+          fail() { echo "::error::$1"; exit 1; }
+          printf '%s' "$BODY" > body.md
+          grep -qiE '^##+ *Verified' body.md || fail "PR body needs a '## Verified' section (see the PR template)."
+          grep -qiE 'passed|OK \([0-9]+ tests|Tests: [0-9]+' body.md || fail "Verified needs a pasted test result line (e.g. 'vitest 20 passed', 'phpunit OK (1129 tests, 0 failures)')."
+          if grep -qiE '^\s*- \[x\] No user-visible change' body.md; then
+            echo "No user-visible change declared; screenshot not required."
+            exit 0
+          fi
+          grep -qiE 'stack:? *`?[a-z0-9][a-z0-9-]*' body.md || fail "Verified needs the stack name (e.g. 'Stack: \`retest\`') or tick 'No user-visible change'."
+          grep -qE '!\[[^]]*\]\([^)]+\)|docs/superpowers/e2e/' body.md || fail "Verified needs a screenshot: an embedded image or a docs/superpowers/e2e/ path, or tick 'No user-visible change'."
+          echo "Evidence present."
