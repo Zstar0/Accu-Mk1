@@ -873,7 +873,7 @@ def _run_migrations():
                                      REFERENCES lims_analyses(id) ON DELETE CASCADE,
             contribution_kind        TEXT NOT NULL
                                      CHECK (contribution_kind IN
-                                         ('chosen', 'aggregated_in', 'reference')),
+                                         ('chosen', 'aggregated_in', 'reference', 'carried')),
             promoted_by_user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
             promoted_at              TIMESTAMP NOT NULL DEFAULT NOW(),
             reason                   TEXT,
@@ -882,6 +882,26 @@ def _run_migrations():
         """,
         "CREATE INDEX IF NOT EXISTS ix_lims_analysis_promotions_parent ON lims_analysis_promotions (parent_analysis_id)",
         "CREATE INDEX IF NOT EXISTS ix_lims_analysis_promotions_source ON lims_analysis_promotions (source_analysis_id)",
+        # Native retest (2026-09-24): a carried result on a retest sample links
+        # to the ORIGINAL vial's analysis with contribution_kind='carried'.
+        # Guarded (M3): only re-created when the live CHECK lacks 'carried',
+        # so a normal boot never drops the constraint.
+        """
+        DO $$ BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint
+            WHERE conname = 'lims_analysis_promotions_contribution_kind_check'
+              AND conrelid = 'lims_analysis_promotions'::regclass
+              AND pg_get_constraintdef(oid) LIKE '%carried%'
+          ) THEN
+            ALTER TABLE lims_analysis_promotions
+              DROP CONSTRAINT IF EXISTS lims_analysis_promotions_contribution_kind_check;
+            ALTER TABLE lims_analysis_promotions
+              ADD CONSTRAINT lims_analysis_promotions_contribution_kind_check
+              CHECK (contribution_kind IN ('chosen', 'aggregated_in', 'reference', 'carried'));
+          END IF;
+        END $$
+        """,
         # Sub-sample event log: lightweight audit for actions with no other trail.
         # Writers: set_assignment_role, update_sub_sample, delete_pristine_analysis,
         # apply_transition (parent verify), parent_retest, vial_source_retest.
