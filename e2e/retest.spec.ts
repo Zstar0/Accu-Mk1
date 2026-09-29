@@ -59,7 +59,8 @@ test.describe('Mk1-native retest dialog', () => {
 
     // Customer / order block comes from WP retest-context via IS.
     const block = dialog.getByTestId('retest-context-block')
-    await expect(block.getByText(/^Order \d+/)).toBeVisible({
+    // Anchored: pending retest order rows in the same block read "Order <n> · ...".
+    await expect(block.getByText(/^Order \d+$/)).toBeVisible({
       timeout: 15_000,
     })
     await expect(block.getByText(/\S+@\S+\.\S+/)).toBeVisible()
@@ -116,7 +117,7 @@ test.describe('Mk1-native retest dialog', () => {
   }) => {
     const dialog = await openRetestDialog(page)
     await expect(
-      dialog.getByTestId('retest-context-block').getByText(/^Order \d+/)
+      dialog.getByTestId('retest-context-block').getByText(/^Order \d+$/)
     ).toBeVisible({ timeout: 15_000 })
 
     await dialog.getByRole('tab', { name: 'Add services' }).click()
