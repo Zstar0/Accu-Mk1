@@ -848,9 +848,10 @@ function PrimaryRegenButton({
  * primary). Exported for the render test.
  */
 /**
- * The lab's per-COA switch. Off (default): the public page shows this
- * superseded COA exactly as before. On: it shows a Superseded notice with a
- * link to the current certificate (the prelim-to-final flow).
+ * The lab's per-COA switch. The Integration Service turns it on when a
+ * publish replaces the certificate (ruling 2026-09-29). On: the public page
+ * shows a Superseded notice with a link to the current certificate (the
+ * prelim-to-final flow). Off: it shows this superseded COA as issued.
  */
 export function ForwardToCurrentToggle({
   gen,
@@ -864,7 +865,7 @@ export function ForwardToCurrentToggle({
   return (
     <span
       className="flex items-center gap-1.5 text-[11px] text-muted-foreground select-none"
-      title="Off (default): the public page shows this COA exactly as before. On: it shows a Superseded notice with a link to the current certificate."
+      title="On (set automatically when a newer certificate replaces this one): the public page shows a Superseded notice with a link to the current certificate. Off: the public page shows this COA as issued."
     >
       <Checkbox
         aria-label="Forward to current"
@@ -1109,7 +1110,7 @@ export function RevokeCOADialog({
 }
 
 const FORWARD_HELP =
-  'This certificate was replaced by a newer one. Off (default): the public page still shows it exactly as issued. On: the public page shows a Superseded notice and links to the current certificate. PDF downloads keep working either way. Any lab user can switch this.'
+  'This certificate was replaced by a newer one. On (set automatically when it is replaced): the public page shows a Superseded notice and links to the current certificate. Off: the public page still shows it exactly as issued, with no notice. Certificates replaced before this release stay off until you switch them on. PDF downloads keep working either way. Any lab user can switch this.'
 const REGEN_HELP_PRIMARY =
   'Builds a new primary generation with a new verification code and publishes it. This certificate becomes Superseded and stays verifiable. Additional COAs keep their codes.'
 const REGEN_HELP_ADDITIONAL =
