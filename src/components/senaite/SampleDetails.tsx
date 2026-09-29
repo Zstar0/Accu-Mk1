@@ -202,6 +202,7 @@ import {
 } from '@/components/senaite/SchedulePublishDialog'
 import type { ScheduledPublishState, SampleRetestInfo } from '@/lib/api'
 import { fmtWhen } from '@/lib/scheduled-publish'
+import { formatLabDateTime } from '@/lib/lab-time'
 import { isHplcAnalyteService } from '@/lib/hplc-analyte-services'
 import { needsMk1AnalysesSwap } from '@/lib/mk1-analyses-swap'
 import { buildNativeSubSampleLookup } from '@/lib/native-sub-sample'
@@ -2810,13 +2811,7 @@ function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return '—'
   const d = new Date(dateStr)
   if (isNaN(d.getTime())) return dateStr
-  return d.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: '2-digit',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
+  return formatLabDateTime(d)
 }
 
 // --- Customer Remarks (delivered with the published COA) ---

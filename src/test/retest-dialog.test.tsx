@@ -166,30 +166,36 @@ beforeEach(() => {
 })
 
 describe('RetestDialog overlay v2', () => {
-  it('switches tabs with fixed titles; fee radio and variance live only on Re-test', async () => {
+  it('switches tabs with fixed titles; Billing on both tabs, variance only on Re-test', async () => {
     const { user } = renderDialog()
     await screen.findByTestId(`retest-row-${HPLC}`)
     expect(
       screen.getByRole('heading', { name: 'Re-test P-9001' })
     ).toBeInTheDocument()
-    await user.click(retestBox(HPLC))
     expect(
-      screen.getByRole('radiogroup', { name: 'Retest fee' })
+      screen.getByRole('radiogroup', { name: 'Billing' })
     ).toBeInTheDocument()
+    expect(screen.getByLabelText('Charged')).toBeChecked()
+    expect(screen.getByLabelText('Waived (whole order free)')).not.toBeChecked()
 
     await user.click(screen.getByRole('tab', { name: 'Add services' }))
     expect(
       screen.getByRole('heading', { name: 'Add services to P-9001' })
     ).toBeInTheDocument()
     expect(
-      screen.queryByRole('radiogroup', { name: 'Retest fee' })
-    ).not.toBeInTheDocument()
+      screen.getByRole('radiogroup', { name: 'Billing' })
+    ).toBeInTheDocument()
     expect(screen.queryByLabelText('Variance')).not.toBeInTheDocument()
     expect(
       screen.getByText(
-        'Add-ons are always billed at the listed price. Existing results are carried to the new sample.'
+        'Add-ons are billed at the listed price unless Billing is Waived. Existing results are carried to the new sample.'
       )
     ).toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: 'Orders' }))
+    expect(
+      screen.queryByRole('radiogroup', { name: 'Billing' })
+    ).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('tab', { name: 'Re-test' }))
     expect(
@@ -278,10 +284,16 @@ describe('RetestDialog overlay v2', () => {
     expect(within(summary).getByText('Variance, 3 points')).toBeInTheDocument()
     expect(within(summary).getByText('$153.00')).toBeInTheDocument()
     expect(total()).toHaveTextContent('$238.00')
-    expect(screen.getByLabelText('Charged $85.00')).toBeChecked()
+    expect(screen.getByLabelText('Charged')).toBeChecked()
 
-    await user.click(screen.getByLabelText('Waived'))
-    expect(total()).toHaveTextContent('$153.00')
+    await user.click(screen.getByLabelText('Waived (whole order free)'))
+    expect(
+      within(summary).getByText('$0.00 (waived $85.00)')
+    ).toBeInTheDocument()
+    expect(
+      within(summary).getByText('$0.00 (waived $153.00)')
+    ).toBeInTheDocument()
+    expect(total()).toHaveTextContent('Total$0.00 (waived)')
 
     await user.type(screen.getByLabelText('Reason (required)'), 'variance')
     await user.click(
@@ -311,7 +323,7 @@ describe('RetestDialog overlay v2', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('blocks Create with "Pricing unavailable" when the fee price is unknown, until the fee is waived', async () => {
+  it('blocks Create with "Pricing unavailable" when the fee price is unknown, until Billing is Waived', async () => {
     vi.mocked(getRetestOptions).mockResolvedValue({
       ...OPTIONS,
       context: { ...CONTEXT, retest_fee: { price: null } },
@@ -320,18 +332,85 @@ describe('RetestDialog overlay v2', () => {
     await screen.findByTestId(`retest-row-${HPLC}`)
     await user.click(retestBox(HPLC))
     await user.type(screen.getByLabelText('Reason (required)'), 'x')
-    expect(
-      screen.getByLabelText('Charged (price unavailable)')
-    ).toBeInTheDocument()
     expect(total()).toHaveTextContent('Total: price unavailable')
     expect(disabledReason()).toHaveTextContent('Pricing unavailable')
     expect(
       screen.getByRole('button', { name: 'Create retest order' })
     ).toBeDisabled()
-    await user.click(screen.getByLabelText('Waived'))
+    await user.click(screen.getByLabelText('Waived (whole order free)'))
+    expect(total()).toHaveTextContent('Total$0.00 (waived)')
+    expect(disabledReason()).not.toBeInTheDocument()
     expect(
       screen.getByRole('button', { name: 'Create retest order' })
     ).toBeEnabled()
+  })
+
+  it('Add services tab: Waived sends fee "free" and zeroes every line, extra vials included', async () => {
+    vi.mocked(createRetest).mockResolvedValue({ order_number: 'WP-7930' })
+    const { user } = renderDialog()
+    await screen.findByTestId(`retest-row-${HPLC}`)
+    await user.click(screen.getByRole('tab', { name: 'Add services' }))
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Rapid Sterility (PCR)' })
+    )
+    await user.click(screen.getByRole('button', { name: 'More options' }))
+    await user.clear(screen.getByLabelText('Extra vials to ship'))
+    await user.type(screen.getByLabelText('Extra vials to ship'), '1')
+    await user.click(screen.getByLabelText('Waived (whole order free)'))
+
+    const summary = screen.getByTestId('retest-summary')
+    expect(
+      within(summary).getByText('$0.00 (waived $230.00)')
+    ).toBeInTheDocument()
+    // Extra vials line and the Total both read $0.00 (waived).
+    expect(within(summary).getAllByText('$0.00 (waived)')).toHaveLength(2)
+    expect(total()).toHaveTextContent('Total$0.00 (waived)')
+
+    await user.type(screen.getByLabelText('Reason (required)'), 'goodwill')
+    await user.click(
+      screen.getByRole('button', { name: 'Create add-on order' })
+    )
+    await waitFor(() =>
+      expect(createRetest).toHaveBeenCalledWith(
+        'P-9001',
+        expect.objectContaining({
+          retest: [],
+          fee: 'free',
+          add: {
+            profiles: ['rapid-sterility-pcr'],
+            variance_points: 0,
+            additional_vials: 1,
+          },
+        })
+      )
+    )
+  })
+
+  it('Add services tab: Waived with a price unavailable still enables Create once a service is ticked', async () => {
+    vi.mocked(getRetestOptions).mockResolvedValue({
+      ...OPTIONS,
+      addons: OPTIONS.addons.map(a => ({ ...a, price: null })),
+      prices_available: false,
+    })
+    const { user } = renderDialog()
+    await screen.findByTestId(`retest-row-${HPLC}`)
+    await user.click(screen.getByRole('tab', { name: 'Add services' }))
+    await user.type(screen.getByLabelText('Reason (required)'), 'x')
+    await user.click(screen.getByLabelText('Waived (whole order free)'))
+    expect(disabledReason()).toHaveTextContent('Tick at least one service')
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Rapid Sterility (PCR)' })
+    )
+    expect(disabledReason()).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Create add-on order' })
+    ).toBeEnabled()
+
+    await user.click(screen.getByLabelText('Charged'))
+    expect(disabledReason()).toHaveTextContent('Pricing unavailable')
+    expect(
+      screen.getByRole('button', { name: 'Create add-on order' })
+    ).toBeDisabled()
   })
 
   it('Add services tab: retest is empty, carry is every eligible profile, ineligible ones drop', async () => {

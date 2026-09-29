@@ -20,8 +20,8 @@ services the shop sells. Audit findings 1 to 12 are all addressed here.
    its COA are untouched as before.
 3. Unverified rows cannot carry (existing rule). On the Re-test tab they show the reason inline and their
    Carry box is disabled.
-4. The retest fee applies only on the Re-test tab and only when at least one row is re-tested. Add-ons are
-   always billed at the listed price; the Add services tab has no Paid/Free choice.
+4. Billing Charged/Waived on both tabs; Waived = the whole order free (retest fee, variance, add-ons,
+   extra vials), the order completes at once and the sample is minted immediately.
 5. The add-on list is the catalog, not the `is_addon` flag: every active catalog profile the original
    does not already have, priced when WordPress can sell it (else shown as "not sold post-order").
    WordPress gains Sterility USP-71 and Fentanyl Screening as post-order add-on types so they price and
@@ -56,7 +56,7 @@ Re-test tab
    result off the new sample."
   Variance  [ ] points [3] @ $76.50/point   (only shown when an HPLC row is set to Re-test; helper
    "Requires an HPLC re-test" when HPLC exists but is not ticked)
-  Retest fee   (o) Charged $50.00   ( ) Waived
+  Billing      (o) Charged   ( ) Waived (whole order free)
   On arrival   [ ] Check in on creation (extra vial already on hand)
   Reason (required) [                                    ]
   Summary                                  Create disabled reason: "Tick at least one Re-test" /
@@ -111,8 +111,8 @@ partition rule applied; the server no longer 400s on omission, it records the om
 profile in two lists is a 400. Re-test tab sends `add = {profiles: [], variance_points: n|0,
 additional_vials: 0}`. Add services tab sends `retest = []`, `carry = every carry-eligible original
 profile`, `drop = original profiles that are not carry-eligible` (they cannot carry and are not being
-re-tested), `fee = "paid"` (ignored: no retest line is created when `retest` is empty; existing
-behaviour).
+re-tested), `fee` = the Billing choice (`"free"` when Waived: WordPress zeroes every line and completes the
+order at once).
 
 Mk1 persists `drop` in `catalog_snapshot["retest"]` and the activity event names dropped profiles
 ("dropped Endotoxin USP85 LAL (not carried to P-5001)").
@@ -186,7 +186,7 @@ the buttons.
   `test_apply_retest_spec.py` (dropped profile absent from snapshot and rows, warning event names it),
   `test_retest_routes.py` (addons from the catalog with `sellable`, `state_label`).
 - Frontend: `retest-dialog.test.tsx` rewritten: tab switch, carry default and untick, drop sentence,
-  fee only on Re-test, summary totals, disabled reasons, add-on list with unsellable row, fixed titles.
+  Billing on both tabs, summary totals, disabled reasons, add-on list with unsellable row, fixed titles.
 - WordPress: `RetestEndpointTest` (lines filtered and labelled, new addon keys), `AddonUpgrades` tests
   for the two new types, `RetestCreateFromSpecTest` for a USP-71 add-on line.
 - Playwright `e2e/retest.spec.ts` updated to the tabbed DOM (both tabs, one Create on Re-test).

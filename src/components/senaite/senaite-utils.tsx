@@ -3,6 +3,7 @@
  */
 
 import { useStateLabel } from '@/lib/workflow-states-store'
+import { formatLabDateTime } from '@/lib/lab-time'
 
 export const STATE_LABELS: Record<string, { label: string; className: string }> = {
   sample_registered:         { label: 'Registered',       className: 'bg-zinc-700 text-zinc-200' },
@@ -60,5 +61,5 @@ export function formatDate(dateStr: string | null): string {
   if (!dateStr) return '—'
   const d = new Date(dateStr)
   if (isNaN(d.getTime())) return '—'
-  return d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: '2-digit', hour: 'numeric', minute: '2-digit' })
+  return formatLabDateTime(d)
 }

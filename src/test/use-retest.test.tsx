@@ -161,4 +161,27 @@ describe('useCreateRetest', () => {
       expect.any(Object)
     )
   })
+  it('tells the operator a free order completed and the sample is being created', async () => {
+    vi.mocked(createRetest).mockResolvedValue({
+      order_number: 'WP-7930',
+      payment_url: null,
+    })
+    const { Wrapper } = wrapper()
+    const { result } = renderHook(() => useCreateRetest('P-1', {}), {
+      wrapper: Wrapper,
+    })
+    await act(async () => {
+      await result.current.mutateAsync({
+        retest: [],
+        carry: [],
+        add: { profiles: ['x'], variance_points: 0, additional_vials: 0 },
+        auto_checkin: false,
+        fee: 'free',
+        reason: 'r',
+      })
+    })
+    expect(toast.success).toHaveBeenCalledWith('Retest order WP-7930 created', {
+      description: 'Order completed; the new sample is being created now.',
+    })
+  })
 })
