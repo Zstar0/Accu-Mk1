@@ -28,6 +28,12 @@ services the shop sells. Audit findings 1 to 12 are all addressed here.
    sell through the same path as endotoxin, PCR and heavy metals.
 6. The order card shows what the customer bought: lines with a price above zero, display names from the
    shop, and the order's own total and status.
+7. Retest orders live in a third tab, "Orders", not in the order card. The tab is labelled "Orders (N)"
+   when N retest or add-on orders are unpaid, else "Orders". When N > 0 one amber (not red) line sits
+   above the tabs: "N unpaid retest order(s): 3277, 3278 · View", role=status, where View opens the
+   Orders tab.
+8. Width: the overlay is about 760 px wide (`sm:max-w-[760px]`), so the four-column profile table does
+   not wrap. Playwright keeps its 1400x1000 viewport.
 
 ## Overlay layout
 
@@ -37,9 +43,9 @@ Re-test P-9001                                      [x]
 | Order 3134  ·  Forrest Parker · forrestp@outlook.com     |
 | $250.00 · completed · 2/27/2026                          |
 | HPLC Purity & Identity $250.00                           |
-| Pending retest orders: 3270 $280 awaiting  [Copy] [Open]|
 +---------------------------------------------------------+
-[ Re-test ]  [ Add services ]
+2 unpaid retest orders: 3277, 3278 · View      (amber, only when N > 0)
+[ Re-test ]  [ Add services ]  [ Orders (2) ]
 
 Re-test tab
   Profile              State            Re-test   Carry results
@@ -73,6 +79,14 @@ Add services tab
   Reason (required) [                                    ]
   Summary: lines + Total.   New sample: carry HPLC, Heavy Metals, Endotoxin; add PCR.
                                              [Cancel] [Create add-on order]
+
+Orders tab (read only: no reason, summary or Create)
+  Order  Kind     Date       Total    Status      Sample    Actions
+  3278   Add-on   9/28/2026  $230.00  pending     not yet   [Copy link] [Open]
+  3277   Retest   9/27/2026  $85.00   processing  P-5002
+  Empty state: "No retest orders for this sample yet."   Rows newest first, as WordPress sends them.
+  Sample links to #senaite/sample-details?id=<sample_id>; Copy link and Open only when payment_url is set.
+                                             [Cancel]
 ```
 
 All Re-test boxes start unticked. Unverified rows therefore start as dropped (their Carry box is
@@ -113,6 +127,11 @@ Mk1 persists `drop` in `catalog_snapshot["retest"]` and the activity event names
   `vials`, `price` (number or null), `sellable` (bool: WordPress returned a price for this key). Order:
   sellable first, then by catalog sort order.
 - `context.order.lines[]` passes through from WordPress unchanged (see below).
+- `context.orders[]` is WordPress `retest_orders` (a non-list becomes []), each entry joined to the Mk1
+  sample minted from it: the sample whose `retest_of_sample_id` is this sample and whose
+  `client_order_number` is `WP-<order_id>` (the forward query `retest-info` uses for `retested_as`).
+  Adds `sample_id` and `sample_status`, both null until the sample exists. `context.pending_orders`
+  stays for older clients.
 - `summary_lines` is NOT computed server side; the dialog builds it from prices it already has.
 
 ### WordPress `GET accumark/v1/retest-context`
@@ -121,6 +140,9 @@ Mk1 persists `drop` in `catalog_snapshot["retest"]` and the activity event names
   `wire_key` or `profile_key` matches, then the add-on type label, then the key. `order.total` and
   `order.status` come from the WooCommerce order (they already do).
 - `addons{}` gains `sterility-usp71` and `fentanyl` when their products resolve.
+- `retest_orders[]`, newest first: `{order_id, order_number, status, total, currency, created_at,
+  paid_at: string|null, payment_url: string|null (only when pending), kind: "retest"|"addon"}`.
+  `pending_retest_orders` stays.
 - `Addon_Upgrades::ADDON_TYPES` gains `'sterility-usp71'` (label "Sterility USP-71", flat,
   catalog_match "usp-71", mk1_key "sterility-usp71") and `'fentanyl'` (label "Fentanyl Screening", flat,
   catalog_match "fentanyl", mk1_key "fentanyl"). `Retest::PROFILE_TO_ADDON` gains the two identity
@@ -149,7 +171,9 @@ No change: `retest-context` is passed through verbatim and `retest_spec` is stor
 `RetestDialog.tsx` is rewritten around `Tabs` (shadcn). State: one object with `tab`, per-profile
 `{retest: bool, carry: bool}`, `addons: Set<key>`, `variancePoints`, `varianceTicked`, `extraVials`,
 `autoCheckin`, `fee`, `reason`. Derived: `spec` per tab, `summary` lines, `canCreate` and its reason
-string, the "New sample:" sentence. Pending retest orders render above the tabs. Money formatting reuses
+string, the "New sample:" sentence. Retest orders render in the Orders tab; unpaid means
+`payment_url` is set. When `context.orders` is empty the dialog falls back to `pending_orders` (older
+WordPress) as unpaid rows. Money formatting reuses
 `formatMoney`. Existing chips, hooks and the toast are unchanged. `use-retest.ts` unchanged except the
 request body type gaining `drop`.
 

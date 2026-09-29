@@ -165,9 +165,26 @@ def retest_options(sample_id: str, db: Session = Depends(get_db), _user=Depends(
                      "allowed": bool(HPLC_PROFILE_KEYS & set(have))},
         "prices_available": context is not None,
         "context": {"order": context.get("order"), "retest_fee": context.get("retest_fee"),
-                    "pending_orders": _list_or_empty(context.get("pending_retest_orders"))}
+                    "pending_orders": _list_or_empty(context.get("pending_retest_orders")),
+                    "orders": _orders_with_samples(db, sample, context.get("retest_orders"))}
                    if context is not None else None,
     }
+
+
+def _orders_with_samples(db: Session, sample: LimsSample, orders) -> list[dict]:
+    """WP `retest_orders`, each joined to the Mk1 retest sample minted from it
+    (same forward query as retest-info's `retested_as`): sample_id and
+    sample_status are None until the order is paid and the sample exists."""
+    orders = [o for o in _list_or_empty(orders) if isinstance(o, dict)]
+    forward = db.execute(select(LimsSample).where(
+        LimsSample.retest_of_sample_id == sample.sample_id).order_by(LimsSample.id)).scalars().all()
+    by_order = {f.client_order_number: f for f in forward if f.client_order_number}
+    out = []
+    for o in orders:
+        hit = by_order.get(f"WP-{o.get('order_id')}")
+        out.append({**o, "sample_id": hit.sample_id if hit else None,
+                    "sample_status": hit.status if hit else None})
+    return out
 
 
 class RetestRequest(BaseModel):

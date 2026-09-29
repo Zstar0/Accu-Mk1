@@ -236,3 +236,35 @@ def test_retest_502_unreachable_detail_is_short(client, db_session):
 
 def test_retest_unknown_sample_404(client, db_session):
     assert client.post("/api/samples/P-0000/retest", json=_body()).status_code == 404
+
+
+def test_options_orders_join_the_minted_retest_sample(client, db_session):
+    _seed(db_session)
+    db_session.add(LimsSample(sample_id="P-3001", external_lims_system="mk1", status="received",
+                              client_order_number="WP-3277", retest_of_sample_id="P-2799"))
+    db_session.commit()
+    ctx = dict(CONTEXT, retest_orders=[
+        {"order_id": 3278, "order_number": "3278", "status": "pending", "total": 85.0, "currency": "USD",
+         "created_at": "2026-09-28T10:00:00Z", "paid_at": None,
+         "payment_url": "https://x/checkout/order-pay/3278", "kind": "retest"},
+        {"order_id": 3277, "order_number": "3277", "status": "processing", "total": 85.0, "currency": "USD",
+         "created_at": "2026-09-27T10:00:00Z", "paid_at": "2026-09-27T11:00:00Z",
+         "payment_url": None, "kind": "retest"},
+    ])
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = ctx
+    with patch.dict(os.environ, {"INTEGRATION_SERVICE_URL": "http://is", "ACCU_MK1_API_KEY": "k"}),             patch("lims_analyses.retest_routes.requests.get", return_value=resp):
+        body = client.get("/api/samples/P-2799/retest-options").json()
+    [pending, paid] = body["context"]["orders"]
+    assert pending["order_id"] == 3278 and pending["sample_id"] is None and pending["sample_status"] is None
+    assert paid["order_id"] == 3277 and paid["sample_id"] == "P-3001" and paid["sample_status"] == "received"
+    assert paid["kind"] == "retest" and paid["paid_at"] == "2026-09-27T11:00:00Z"
+
+
+def test_options_orders_default_to_empty_list_when_absent(client, db_session):
+    _seed(db_session)
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = CONTEXT
+    with patch.dict(os.environ, {"INTEGRATION_SERVICE_URL": "http://is", "ACCU_MK1_API_KEY": "k"}),             patch("lims_analyses.retest_routes.requests.get", return_value=resp):
+        body = client.get("/api/samples/P-2799/retest-options").json()
+    assert body["context"]["orders"] == []

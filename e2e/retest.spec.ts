@@ -59,7 +59,7 @@ test.describe('Mk1-native retest dialog', () => {
 
     // Customer / order block comes from WP retest-context via IS.
     const block = dialog.getByTestId('retest-context-block')
-    // Anchored: pending retest order rows in the same block read "Order <n> · ...".
+    // Anchored: the card's own "Order <n>" line, not text elsewhere in the block.
     await expect(block.getByText(/^Order \d+$/)).toBeVisible({
       timeout: 15_000,
     })
@@ -110,6 +110,24 @@ test.describe('Mk1-native retest dialog', () => {
     expect(['pending', 'completed']).toContain(body.status)
 
     await expect(dialog).toBeHidden({ timeout: 10_000 })
+
+    // Orders tab lists the created order on reopen, with its payment state.
+    const reopened = await openRetestDialog(page)
+    const strip = reopened.getByTestId('retest-unpaid-strip')
+    const ordersTab = reopened.getByRole('tab', { name: /^Orders/ })
+    if (body.status === 'pending') {
+      // Unpaid: amber strip above the tabs names it, and View opens Orders.
+      await expect(strip).toBeVisible({ timeout: 15_000 })
+      await expect(strip).toContainText(body.order_number)
+      await expect(ordersTab).toHaveText(/^Orders \(\d+\)$/)
+      await strip.getByRole('button', { name: 'View' }).click()
+    } else {
+      await ordersTab.click()
+    }
+    await expect(ordersTab).toHaveAttribute('aria-selected', 'true')
+    const row = reopened.getByTestId(`retest-order-${body.order_id}`)
+    await expect(row).toBeVisible({ timeout: 15_000 })
+    await expect(row).toContainText(body.order_number)
   })
 
   test('Add services tab: fixed title, catalog add-ons, no fee radio', async ({

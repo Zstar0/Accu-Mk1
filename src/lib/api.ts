@@ -7156,10 +7156,25 @@ export interface PendingRetestOrder {
   created_at: string
   payment_url: string
 }
+/** WP `retest_orders` (newest first), joined to the Mk1 sample minted from each. */
+export interface RetestOrder {
+  order_id: number
+  order_number: string
+  status: string
+  total: number
+  currency: string
+  created_at: string
+  paid_at: string | null
+  payment_url: string | null
+  kind: 'retest' | 'addon'
+  sample_id: string | null
+  sample_status: string | null
+}
 export interface RetestContext {
   order: RetestContextOrder | null
   retest_fee: { price: number | null } | null
   pending_orders: PendingRetestOrder[]
+  orders?: RetestOrder[]
 }
 export interface RetestOptions {
   sample_id: string

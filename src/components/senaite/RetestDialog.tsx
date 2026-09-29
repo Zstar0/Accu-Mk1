@@ -35,6 +35,7 @@ import {
   type RetestOptions,
   type RetestRequestBody,
   type RetestCreated,
+  type RetestOrder,
 } from '@/lib/api'
 
 export interface RetestDialogProps {
@@ -44,7 +45,7 @@ export interface RetestDialogProps {
   onCreated?: (r: RetestCreated) => void
 }
 
-type RetestTab = 'retest' | 'addons'
+type RetestTab = 'retest' | 'addons' | 'orders'
 
 interface RowChoice {
   retest: boolean
@@ -108,6 +109,20 @@ function clampInt(v: string, min: number, max: number): number {
 
 const names = (list: { name: string }[]) => list.map(p => p.name).join(', ')
 
+function copyLink(url: string) {
+  if (!navigator.clipboard) {
+    toast.error('Copy failed')
+    return
+  }
+  navigator.clipboard
+    .writeText(url)
+    .then(() => toast.success('Payment link copied'))
+    .catch(() => toast.error('Copy failed'))
+}
+
+/** About 760 px: the four-column profile table fits without wrapping. */
+const WIDTH = 'sm:max-w-[760px]'
+
 export function RetestDialog({
   open,
   sampleId,
@@ -152,7 +167,7 @@ export function RetestDialog({
   if (!state || !options) {
     return (
       <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className={WIDTH}>
           <DialogHeader>
             <DialogTitle>Re-test {sampleId}</DialogTitle>
           </DialogHeader>
@@ -260,7 +275,8 @@ export function RetestDialog({
 
   const reasonText = state.reason.trim()
   let blocked: string | null = null
-  if (tab === 'retest' && !anyRetest) blocked = 'Tick at least one Re-test'
+  if (tab === 'orders') blocked = null
+  else if (tab === 'retest' && !anyRetest) blocked = 'Tick at least one Re-test'
   else if (tab === 'addons' && tickedAddons.length === 0)
     blocked = 'Tick at least one service'
   else if (tab === 'retest' && varianceOutOfRange)
@@ -333,15 +349,26 @@ export function RetestDialog({
 
   const ctx = options.context
   const order = ctx?.order ?? null
+  // Older WordPress sends only pending_retest_orders: show those as unpaid rows.
+  const orders: RetestOrder[] = ctx?.orders?.length
+    ? ctx.orders
+    : (ctx?.pending_orders ?? []).map(o => ({
+        ...o,
+        paid_at: null,
+        kind: 'retest' as const,
+        sample_id: null,
+        sample_status: null,
+      }))
+  const unpaid = orders.filter(o => o.payment_url)
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className={`${WIDTH} max-h-[90vh] overflow-y-auto`}>
         <DialogHeader>
           <DialogTitle>
-            {tab === 'retest'
-              ? `Re-test ${sampleId}`
-              : `Add services to ${sampleId}`}
+            {tab === 'addons'
+              ? `Add services to ${sampleId}`
+              : `Re-test ${sampleId}`}
           </DialogTitle>
         </DialogHeader>
 
@@ -375,57 +402,33 @@ export function RetestDialog({
             ) : (
               <p className="text-muted-foreground">Customer info unavailable</p>
             )}
-            {ctx.pending_orders.length > 0 ? (
-              <div className="pt-1.5 space-y-1">
-                <div className="text-xs font-medium text-muted-foreground">
-                  Pending retest orders
-                </div>
-                {ctx.pending_orders.map(o => (
-                  <div
-                    key={o.order_id}
-                    data-testid={`pending-retest-order-${o.order_id}`}
-                    className="flex items-center justify-between gap-2 text-xs"
-                  >
-                    <span>
-                      Order {o.order_number} · {formatMoney(o.total)} ·{' '}
-                      {o.status}
-                    </span>
-                    <div className="flex items-center gap-1">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="min-h-11"
-                        onClick={() => {
-                          if (!navigator.clipboard) {
-                            toast.error('Copy failed')
-                            return
-                          }
-                          navigator.clipboard
-                            .writeText(o.payment_url)
-                            .then(() => toast.success('Payment link copied'))
-                            .catch(() => toast.error('Copy failed'))
-                        }}
-                      >
-                        Copy link
-                      </Button>
-                      <a
-                        href={o.payment_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className={`${TARGET} px-2 underline text-muted-foreground`}
-                      >
-                        Open
-                      </a>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : null}
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">
             Customer and pricing unavailable
           </p>
+        )}
+
+        {unpaid.length > 0 && (
+          <div
+            role="status"
+            data-testid="retest-unpaid-strip"
+            className="flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 text-sm text-amber-900 dark:text-amber-200"
+          >
+            <span>
+              {unpaid.length} unpaid retest order
+              {unpaid.length === 1 ? '' : 's'}:{' '}
+              {unpaid.map(o => o.order_number).join(', ')} ·
+            </span>
+            <Button
+              variant="link"
+              size="sm"
+              className="min-h-11 px-1 text-inherit underline"
+              onClick={() => update({ tab: 'orders' })}
+            >
+              View
+            </Button>
+          </div>
         )}
 
         <Tabs value={tab} onValueChange={v => update({ tab: v as RetestTab })}>
@@ -435,6 +438,9 @@ export function RetestDialog({
             </TabsTrigger>
             <TabsTrigger value="addons" className="min-h-11">
               Add services
+            </TabsTrigger>
+            <TabsTrigger value="orders" className="min-h-11">
+              {unpaid.length > 0 ? `Orders (${unpaid.length})` : 'Orders'}
             </TabsTrigger>
           </TabsList>
 
@@ -647,58 +653,141 @@ export function RetestDialog({
               </CollapsibleContent>
             </Collapsible>
           </TabsContent>
+
+          <TabsContent value="orders">
+            {orders.length === 0 ? (
+              <p className="py-4 text-sm text-muted-foreground">
+                No retest orders for this sample yet.
+              </p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Order</TableHead>
+                    <TableHead>Kind</TableHead>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Total</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Sample</TableHead>
+                    <TableHead>Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {orders.map(o => (
+                    <TableRow
+                      key={o.order_id}
+                      data-testid={`retest-order-${o.order_id}`}
+                      aria-label={`Order ${o.order_number}`}
+                    >
+                      <TableCell>{o.order_number}</TableCell>
+                      <TableCell>
+                        {o.kind === 'addon' ? 'Add-on' : 'Retest'}
+                      </TableCell>
+                      <TableCell>
+                        {new Date(o.created_at).toLocaleDateString()}
+                      </TableCell>
+                      <TableCell>{formatMoney(o.total)}</TableCell>
+                      <TableCell>{o.status}</TableCell>
+                      <TableCell>
+                        {o.sample_id ? (
+                          <a
+                            href={`#senaite/sample-details?id=${encodeURIComponent(o.sample_id)}`}
+                            className="underline"
+                          >
+                            {o.sample_id}
+                          </a>
+                        ) : (
+                          <span className="text-muted-foreground">not yet</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {o.payment_url && (
+                          <div className="flex items-center gap-1">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="min-h-11"
+                              aria-label={`Copy payment link for order ${o.order_number}`}
+                              onClick={() =>
+                                o.payment_url && copyLink(o.payment_url)
+                              }
+                            >
+                              Copy link
+                            </Button>
+                            <a
+                              href={o.payment_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              aria-label={`Open payment page for order ${o.order_number}`}
+                              className={`${TARGET} px-2 underline text-muted-foreground`}
+                            >
+                              Open
+                            </a>
+                          </div>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </TabsContent>
         </Tabs>
 
-        <div>
-          <Label htmlFor="retest-reason">Reason (required)</Label>
-          <Textarea
-            id="retest-reason"
-            value={state.reason}
-            onChange={e => update({ reason: e.target.value })}
-          />
-        </div>
-
-        <div
-          data-testid="retest-summary"
-          aria-label="Summary"
-          className="rounded-md border border-border/40 p-3 text-sm space-y-0.5"
-        >
-          <div className="font-medium">Summary</div>
-          {summary.map(l => (
-            <div key={l.key} className="flex justify-between gap-2">
-              <span>{l.label}</span>
-              <span>
-                {l.price === 'shop'
-                  ? null
-                  : l.price === null
-                    ? 'price unavailable'
-                    : formatMoney(l.price)}
-              </span>
+        {tab !== 'orders' && (
+          <>
+            <div>
+              <Label htmlFor="retest-reason">Reason (required)</Label>
+              <Textarea
+                id="retest-reason"
+                value={state.reason}
+                onChange={e => update({ reason: e.target.value })}
+              />
             </div>
-          ))}
-          <div
-            data-testid="retest-summary-total"
-            className="flex justify-between gap-2 font-medium border-t border-border/40 pt-1"
-          >
-            {total === null ? (
-              <span>Total: price unavailable</span>
-            ) : (
-              <>
-                <span>
-                  {excludesExtraVials
-                    ? 'Total (excluding extra vials)'
-                    : 'Total'}
-                </span>
-                <span>{formatMoney(total)}</span>
-              </>
-            )}
-          </div>
-        </div>
 
-        {newSample && (
-          <p data-testid="retest-new-sample" className="text-sm">
-            New sample: {newSample}.
-          </p>
+            <div
+              data-testid="retest-summary"
+              aria-label="Summary"
+              className="rounded-md border border-border/40 p-3 text-sm space-y-0.5"
+            >
+              <div className="font-medium">Summary</div>
+              {summary.map(l => (
+                <div key={l.key} className="flex justify-between gap-2">
+                  <span>{l.label}</span>
+                  <span>
+                    {l.price === 'shop'
+                      ? null
+                      : l.price === null
+                        ? 'price unavailable'
+                        : formatMoney(l.price)}
+                  </span>
+                </div>
+              ))}
+              <div
+                data-testid="retest-summary-total"
+                className="flex justify-between gap-2 font-medium border-t border-border/40 pt-1"
+              >
+                {total === null ? (
+                  <span>Total: price unavailable</span>
+                ) : (
+                  <>
+                    <span>
+                      {excludesExtraVials
+                        ? 'Total (excluding extra vials)'
+                        : 'Total'}
+                    </span>
+                    <span>{formatMoney(total)}</span>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {newSample && (
+              <p data-testid="retest-new-sample" className="text-sm">
+                New sample: {newSample}.
+              </p>
+            )}
+          </>
         )}
 
         <DialogFooter className="sm:items-center">
@@ -718,17 +807,19 @@ export function RetestDialog({
           >
             Cancel
           </Button>
-          <Button
-            className="min-h-11"
-            onClick={() => mutation.mutate(buildBody())}
-            disabled={blocked !== null || pending}
-          >
-            {pending
-              ? 'Creating…'
-              : tab === 'retest'
-                ? 'Create retest order'
-                : 'Create add-on order'}
-          </Button>
+          {tab !== 'orders' && (
+            <Button
+              className="min-h-11"
+              onClick={() => mutation.mutate(buildBody())}
+              disabled={blocked !== null || pending}
+            >
+              {pending
+                ? 'Creating…'
+                : tab === 'retest'
+                  ? 'Create retest order'
+                  : 'Create add-on order'}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

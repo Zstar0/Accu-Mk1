@@ -9,7 +9,7 @@ import {
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type * as ApiModule from '@/lib/api'
-import type { RetestOptions } from '@/lib/api'
+import type { RetestOptions, RetestOrder } from '@/lib/api'
 
 vi.mock('@/lib/api', async importOriginal => {
   const actual = await importOriginal<typeof ApiModule>()
@@ -39,6 +39,36 @@ const CONTEXT: NonNullable<RetestOptions['context']> = {
   retest_fee: { price: 85 },
   pending_orders: [],
 }
+
+const PAY_URL = 'https://accumarklabs.com/checkout/order-pay/3278'
+const ORDERS: [RetestOrder, RetestOrder] = [
+  {
+    order_id: 3278,
+    order_number: '3278',
+    status: 'pending',
+    total: 230,
+    currency: 'USD',
+    created_at: '2026-09-28T10:00:00Z',
+    paid_at: null,
+    payment_url: PAY_URL,
+    kind: 'addon',
+    sample_id: null,
+    sample_status: null,
+  },
+  {
+    order_id: 3277,
+    order_number: '3277',
+    status: 'processing',
+    total: 85,
+    currency: 'USD',
+    created_at: '2026-09-27T10:00:00Z',
+    paid_at: '2026-09-27T11:00:00Z',
+    payment_url: null,
+    kind: 'retest',
+    sample_id: 'P-9002',
+    sample_status: 'received',
+  },
+]
 
 const OPTIONS: RetestOptions = {
   sample_id: 'P-9001',
@@ -386,29 +416,25 @@ describe('RetestDialog overlay v2', () => {
     )
   })
 
-  it('renders the order card and pending retest orders above the tabs', async () => {
-    const url = 'https://accumarklabs.com/checkout/order-pay/501'
+  it('renders the order card above the tabs without the pending orders list', async () => {
     vi.mocked(getRetestOptions).mockResolvedValue({
       ...OPTIONS,
       context: {
         ...CONTEXT,
         pending_orders: [
           {
-            order_id: 501,
-            order_number: 'WP-7501',
+            order_id: 7501,
+            order_number: '7501',
             status: 'pending',
             total: 85,
             currency: 'USD',
             created_at: '2026-09-27T10:00:00Z',
-            payment_url: url,
+            payment_url: 'https://pay/7501',
           },
         ],
       },
     })
     const { user } = renderDialog()
-    const writeText = vi
-      .spyOn(navigator.clipboard, 'writeText')
-      .mockResolvedValue(undefined)
     const block = await screen.findByTestId('retest-context-block')
     expect(within(block).getByText('Order WP-3134')).toBeInTheDocument()
     expect(within(block).getByText(/Jane Doe/)).toBeInTheDocument()
@@ -417,46 +443,105 @@ describe('RetestDialog overlay v2', () => {
     expect(
       within(block).getByText('HPLC Purity + Identity')
     ).toBeInTheDocument()
+    expect(within(block).queryByText(/7501/)).not.toBeInTheDocument()
+    expect(within(block).queryByText('Copy link')).not.toBeInTheDocument()
 
-    const pending = screen.getByTestId('pending-retest-order-501')
-    const tablist = screen.getByRole('tablist')
+    // Older WordPress (no retest_orders): pending orders still reach the Orders tab.
+    await user.click(screen.getByRole('tab', { name: 'Orders (1)' }))
+    const fallback = screen.getByTestId('retest-order-7501')
+    expect(within(fallback).getByText('Copy link')).toBeInTheDocument()
+    expect(within(fallback).getByText('not yet')).toBeInTheDocument()
+  })
+
+  it('Orders tab lists orders newest first with sample link, kind and copy action', async () => {
+    vi.mocked(getRetestOptions).mockResolvedValue({
+      ...OPTIONS,
+      context: { ...CONTEXT, orders: ORDERS },
+    })
+    const { user } = renderDialog()
+    const writeText = vi
+      .spyOn(navigator.clipboard, 'writeText')
+      .mockResolvedValue(undefined)
+    await user.click(await screen.findByRole('tab', { name: 'Orders (1)' }))
+    const rows = screen.getAllByTestId(/^retest-order-/)
+    expect(rows.map(r => r.dataset.testid)).toEqual([
+      'retest-order-3278',
+      'retest-order-3277',
+    ])
+    const [pendingRow, paidRow] = rows as [HTMLElement, HTMLElement]
+    expect(within(pendingRow).getByText('Add-on')).toBeInTheDocument()
+    expect(within(pendingRow).getByText('not yet')).toBeInTheDocument()
+    expect(within(pendingRow).getByText('$230.00')).toBeInTheDocument()
+    await user.click(within(pendingRow).getByText('Copy link'))
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(PAY_URL))
+    const open = within(pendingRow).getByText('Open')
+    expect(open.getAttribute('href')).toBe(PAY_URL)
+    expect(open.getAttribute('target')).toBe('_blank')
+    expect(open.getAttribute('rel')).toBe('noreferrer')
+
+    expect(within(paidRow).getByText('Retest')).toBeInTheDocument()
     expect(
-      pending.compareDocumentPosition(tablist) &
+      within(paidRow).getByRole('link', { name: 'P-9002' })
+    ).toHaveAttribute('href', '#senaite/sample-details?id=P-9002')
+    expect(within(paidRow).queryByText('Copy link')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /^Create / })
+    ).not.toBeInTheDocument()
+  })
+
+  it('Orders tab shows the empty state and no badge or strip when nothing is unpaid', async () => {
+    const { user } = renderDialog()
+    await user.click(await screen.findByRole('tab', { name: 'Orders' }))
+    expect(
+      screen.getByText('No retest orders for this sample yet.')
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId('retest-unpaid-strip')).not.toBeInTheDocument()
+  })
+
+  it('amber strip names unpaid orders above the tabs and View opens the Orders tab', async () => {
+    vi.mocked(getRetestOptions).mockResolvedValue({
+      ...OPTIONS,
+      context: {
+        ...CONTEXT,
+        orders: [
+          { ...ORDERS[0], order_id: 3278, order_number: '3278' },
+          { ...ORDERS[0], order_id: 3277, order_number: '3277' },
+        ],
+      },
+    })
+    const { user } = renderDialog()
+    const strip = await screen.findByTestId('retest-unpaid-strip')
+    expect(strip).toHaveAttribute('role', 'status')
+    expect(strip).toHaveTextContent('2 unpaid retest orders: 3278, 3277 ·')
+    expect(
+      strip.compareDocumentPosition(screen.getByRole('tablist')) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
-    expect(within(pending).getByText(/· pending/)).toBeInTheDocument()
-    await user.click(within(pending).getByText('Copy link'))
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith(url))
-    const link = within(pending).getByText('Open')
-    expect(link.getAttribute('href')).toBe(url)
-    expect(link.getAttribute('target')).toBe('_blank')
-    expect(link.getAttribute('rel')).toBe('noreferrer')
+    expect(screen.getByRole('tab', { name: 'Orders (2)' })).toBeInTheDocument()
+    await user.click(within(strip).getByRole('button', { name: 'View' }))
+    expect(screen.getByRole('tab', { name: 'Orders (2)' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    expect(screen.getByTestId('retest-order-3277')).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: 'Re-test P-9001' })
+    ).toBeInTheDocument()
   })
 
   it('toasts Copy failed when the clipboard rejects', async () => {
     vi.mocked(getRetestOptions).mockResolvedValue({
       ...OPTIONS,
-      context: {
-        ...CONTEXT,
-        pending_orders: [
-          {
-            order_id: 502,
-            order_number: 'WP-7502',
-            status: 'pending',
-            total: 85,
-            currency: 'USD',
-            created_at: '2026-09-27T10:00:00Z',
-            payment_url: 'https://pay',
-          },
-        ],
-      },
+      context: { ...CONTEXT, orders: ORDERS },
     })
     const { user } = renderDialog()
     vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(
       new Error('denied')
     )
-    const pending = await screen.findByTestId('pending-retest-order-502')
-    await user.click(within(pending).getByText('Copy link'))
+    await user.click(await screen.findByRole('tab', { name: 'Orders (1)' }))
+    await user.click(
+      within(screen.getByTestId('retest-order-3278')).getByText('Copy link')
+    )
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Copy failed'))
   })
 
