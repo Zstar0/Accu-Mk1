@@ -69,18 +69,26 @@ def _live_parent_line_states(db: Session, sample: LimsSample) -> dict[str, str]:
     out: dict[str, str] = {}
     shadow: dict[str, str] = {}
     ordered: dict[str, str] = {}
+    # Two live canonical rows on one line (P-3016: a parent-level retest left
+    # an 'unassigned' parent-hosted row beside the later 'published' one):
+    # the furthest-along row is the line's state, not the last one fetched.
+    # Ties break on newest id.
+    rank = {"published": 3, "verified": 2, "parent_to_verify": 1}
+    for r in sorted((r for r in rows if r.provenance == "canonical"),
+                    key=lambda r: (rank.get(r.review_state, 0), r.id)):
+        if r.retested or r.review_state in _EXCLUDED_LINE_STATES:
+            continue
+        # 'parent_to_verify' (Task 3's native second-sign-off submission
+        # state) reads as 'to_be_verified' for these SENAITE-mirror
+        # sample-scope gates: semantically equivalent (submitted,
+        # awaiting sign-off) to the seeded all_analyses_in_state value
+        # lists; real catalog modeling of the state ships with the
+        # catalog release, not here.
+        out[_key(r)] = ("to_be_verified" if r.review_state == "parent_to_verify"
+                        else r.review_state)
     for r in rows:
         if r.provenance == "canonical":
-            if r.retested or r.review_state in _EXCLUDED_LINE_STATES:
-                continue
-            # 'parent_to_verify' (Task 3's native second-sign-off submission
-            # state) reads as 'to_be_verified' for these SENAITE-mirror
-            # sample-scope gates: semantically equivalent (submitted,
-            # awaiting sign-off) to the seeded all_analyses_in_state value
-            # lists; real catalog modeling of the state ships with the
-            # catalog release, not here.
-            out[_key(r)] = ("to_be_verified" if r.review_state == "parent_to_verify"
-                            else r.review_state)
+            continue
         elif r.provenance == "shadow":
             st = r.mirror_review_state
             if not st or st in _EXCLUDED_LINE_STATES:
