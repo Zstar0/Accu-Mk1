@@ -63,7 +63,7 @@ from sub_samples.lookup_models import (
     SenaiteCOAInfo,
     SenaiteRemark,
 )
-from sub_samples.registry_read import registry_row_to_display
+from sub_samples.registry_read import _iso_utc, registry_row_to_display
 
 log = logging.getLogger(__name__)
 
@@ -131,8 +131,7 @@ def native_sample_remarks(db: Session, sample_id: str) -> list[SenaiteRemark]:
         out.append(SenaiteRemark(
             content=remark.content,
             user_id=label,
-            created=(remark.created_at.isoformat()
-                     if remark.created_at else None),
+            created=_iso_utc(remark.created_at),
         ))
     return out
 

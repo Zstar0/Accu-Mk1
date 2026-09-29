@@ -7,6 +7,9 @@
 ### Changed
 - **Retest overlay: one Billing choice per order.** The Re-test tab's "Retest fee" radio is replaced by a **Billing** radio (Charged / Waived (whole order free)) shown on both the Re-test and Add services tabs. Waived sends `fee: "free"` from either tab and WordPress zeroes every line (retest fee, variance, add-ons, extra vials), so the order completes at once and the new sample is minted immediately. The summary shows each line as "$0.00 (waived $list)" and the Total as "$0.00 (waived)"; missing prices no longer block Create when Waived. The free-order toast now reads "Order completed; the new sample is being created now."
 
+### Fixed
+- Received and sampled times on Mk1-native samples showed the UTC clock as local time; the registry now marks them UTC and the sample page renders every timestamp in the lab's time zone (America/Los_Angeles).
+
 ## v1.30.0 - 2026-09-29
 
 ### Retest overlay v2 (#263)

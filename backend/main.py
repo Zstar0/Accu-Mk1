@@ -18234,13 +18234,14 @@ async def list_senaite_samples(
                             )
                         ).scalar_one_or_none()
                         if _sub is not None:
+                            from sub_samples.registry_read import _iso_utc
                             _parent = db.get(LimsSample, _sub.parent_sample_pk)
                             items.append(SenaiteSampleItem(
                                 uid=_sub.external_lims_uid or f"mk1-sub-{_sub.id}",
                                 id=_sub.sample_id,
                                 title=_sub.sample_id,
-                                date_created=_sub.created_at.isoformat() if _sub.created_at else None,
-                                date_received=_sub.received_at.isoformat() if _sub.received_at else None,
+                                date_created=_iso_utc(_sub.created_at),
+                                date_received=_iso_utc(_sub.received_at),
                                 # A vial with received_at was physically checked
                                 # in (mirrors buildNativeSubSampleLookup).
                                 review_state="sample_received" if _sub.received_at
