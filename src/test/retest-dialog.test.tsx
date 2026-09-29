@@ -349,6 +349,31 @@ describe('RetestDialog overlay v2', () => {
     )
   })
 
+  it('sends only the active tab half: add-ons ticked on Add services are not sent from Re-test', async () => {
+    vi.mocked(createRetest).mockResolvedValue({ order_number: 'WP-7922' })
+    const { user } = renderDialog()
+    await screen.findByTestId(`retest-row-${HPLC}`)
+    await user.click(screen.getByRole('tab', { name: 'Add services' }))
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Rapid Sterility (PCR)' })
+    )
+    await user.click(screen.getByRole('tab', { name: 'Re-test' }))
+    await user.click(retestBox(HPLC))
+    await user.type(screen.getByLabelText('Reason (required)'), 'x')
+    await user.click(
+      screen.getByRole('button', { name: 'Create retest order' })
+    )
+    await waitFor(() =>
+      expect(createRetest).toHaveBeenCalledWith(
+        'P-9001',
+        expect.objectContaining({
+          retest: [HPLC],
+          add: { profiles: [], variance_points: 0, additional_vials: 0 },
+        })
+      )
+    )
+  })
+
   it('renders the order card and pending retest orders above the tabs', async () => {
     const url = 'https://accumarklabs.com/checkout/order-pay/501'
     vi.mocked(getRetestOptions).mockResolvedValue({

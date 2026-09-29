@@ -598,7 +598,9 @@ export function RetestDialog({
             </Table>
             <p className="text-xs text-muted-foreground">{ADDON_SENTENCE}</p>
 
-            <Collapsible>
+            <Collapsible
+              defaultOpen={state.autoCheckin || state.extraVials > 0}
+            >
               <CollapsibleTrigger asChild>
                 <Button
                   variant="ghost"
