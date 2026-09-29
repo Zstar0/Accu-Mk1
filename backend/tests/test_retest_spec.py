@@ -8,6 +8,7 @@ from database import Base
 from lims_analyses.retest_carry import (
     RetestSpec,
     carry_eligible_profile_keys,
+    dropped_profile_keys,
     parse_retest_spec,
     validate_retest_spec,
 )
@@ -82,10 +83,22 @@ def test_parse_add_block_optional():
     assert spec.add_profiles == () and spec.variance_points == 0 and spec.additional_vials == 0
 
 
+def test_parse_drop_defaults_to_empty_tuple():
+    spec = parse_retest_spec(_raw())
+    assert spec.drop == ()
+
+
+def test_as_dict_includes_drop():
+    spec = parse_retest_spec(_raw(drop=["endotoxin-usp85-lal"]))
+    assert spec.as_dict()["drop"] == ["endotoxin-usp85-lal"]
+
+
 @pytest.mark.parametrize("bad", [
     {"fee": "gratis"},
     {"reason": ""},
     {"retest": ["hplcpurity_identity"], "carry": ["hplcpurity_identity"]},
+    {"retest": ["hplcpurity_identity"], "drop": ["hplcpurity_identity"]},
+    {"carry": ["heavy_metals"], "drop": ["heavy_metals"]},
     {"retest": [], "add": {"profiles": [], "variance_points": 0, "additional_vials": 0}},
     {"add": {"profiles": [], "variance_points": 1, "additional_vials": 0}},
     {"add": {"profiles": [], "variance_points": 11, "additional_vials": 0}},
@@ -147,11 +160,33 @@ def test_valid_spec_returns_no_missing(db):
     assert validate_retest_spec(db, original=original, spec=parse_retest_spec(_raw())) == []
 
 
-def test_every_snapshot_profile_must_be_retested_or_carried(db):
+def test_profile_omitted_from_retest_and_carry_is_recorded_as_drop_not_raised(db):
     original = _original(db)          # snapshot = hplcpurity_identity + heavy_metals
     spec = parse_retest_spec(_raw(retest=["hplcpurity_identity"], carry=[]))
-    with pytest.raises(BadRequestError, match="heavy_metals"):
+    assert validate_retest_spec(db, original=original, spec=spec) == []
+    assert dropped_profile_keys(original, spec) == ["heavy_metals"]
+
+
+def test_dropped_profile_keys_ignores_a_stale_client_drop_list(db):
+    # 1.29 client omits `drop` entirely; the server fills in the omission
+    # regardless of what (if anything) the client sent under `drop`.
+    original = _original(db)
+    spec = parse_retest_spec(_raw(retest=["hplcpurity_identity"], carry=[], drop=[]))
+    assert dropped_profile_keys(original, spec) == ["heavy_metals"]
+
+
+def test_drop_of_profile_not_on_original_is_rejected(db):
+    original = _original(db)
+    spec = parse_retest_spec(_raw(retest=["hplcpurity_identity"], carry=[],
+                                  drop=["heavy_metals", "endotoxin-usp85-lal"]))
+    with pytest.raises(BadRequestError, match="endotoxin-usp85-lal"):
         validate_retest_spec(db, original=original, spec=spec)
+
+
+def test_drop_of_original_profile_is_accepted(db):
+    original = _original(db)
+    spec = parse_retest_spec(_raw(retest=["hplcpurity_identity"], carry=[], drop=["heavy_metals"]))
+    assert validate_retest_spec(db, original=original, spec=spec) == []
 
 
 @pytest.mark.parametrize("hplc_key", ["hplcpurity_identity", "hplc-purity-identity"])

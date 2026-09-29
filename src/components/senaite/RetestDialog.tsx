@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { RefreshCw } from 'lucide-react'
+import { ChevronRight, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   Dialog,
@@ -10,19 +10,32 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
-import { Switch } from '@/components/ui/switch'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { Spinner } from '@/components/ui/spinner'
 import { useRetestOptions, useCreateRetest } from '@/hooks/use-retest'
 import {
   HPLC_PROFILE_KEYS,
-  type RetestOptionAddon,
   type RetestOptions,
   type RetestRequestBody,
   type RetestCreated,
+  type RetestOrder,
 } from '@/lib/api'
 
 export interface RetestDialogProps {
@@ -32,100 +45,83 @@ export interface RetestDialogProps {
   onCreated?: (r: RetestCreated) => void
 }
 
+type RetestTab = 'retest' | 'addons' | 'orders'
+
+interface RowChoice {
+  retest: boolean
+  carry: boolean
+}
+
 interface RetestFormState {
-  /** key -> true when set to Retest, false when Carry. */
-  toggles: Record<string, boolean>
-  addons: Record<string, boolean>
+  tab: RetestTab
+  rows: Record<string, RowChoice>
+  addons: Set<string>
   varianceTicked: boolean
   variancePoints: number
-  shipVials: number
-  fee: 'paid' | 'free'
+  extraVials: number
   autoCheckin: boolean
+  fee: 'paid' | 'free'
   reason: string
+}
+
+interface SummaryLine {
+  key: string
+  label: string
+  /** 'shop' = priced by WordPress at checkout, left out of the Total. */
+  price: number | null | 'shop'
 }
 
 const formatMoney = (n: number) => `$${n.toFixed(2)}`
 
-export function retestDelta(sel: {
-  addons: RetestOptionAddon[]
-  variancePoints: number
-  pointPrice: number | null
-  /** Omit to leave the retest fee out of the delta entirely (e.g. order
-   * context unavailable); pass null when the fee applies but its price is
-   * unknown, which makes the whole delta unavailable like a missing
-   * add-on price. */
-  retestFeePrice?: number | null
-}): number | null {
-  let total = 0
-  for (const a of sel.addons) {
-    if (a.price === null) return null
-    total += a.price
-  }
-  if (sel.variancePoints > 0) {
-    if (sel.pointPrice === null) return null
-    total += (sel.variancePoints - 1) * sel.pointPrice
-  }
-  if (sel.retestFeePrice !== undefined) {
-    if (sel.retestFeePrice === null) return null
-    total += sel.retestFeePrice
-  }
-  return total
-}
+const isHplc = (key: string) =>
+  (HPLC_PROFILE_KEYS as readonly string[]).includes(key)
 
-export function buildRetestBody(
-  state: RetestFormState,
-  options: RetestOptions
-): RetestRequestBody {
-  const retest = options.profiles
-    .filter(p => state.toggles[p.key])
-    .map(p => p.key)
-  const carry = options.profiles
-    .filter(p => !state.toggles[p.key])
-    .map(p => p.key)
-  const tickedAddonKeys = options.addons
-    .filter(a => a.wp_type && state.addons[a.key])
-    .map(a => a.key)
-  const hplcSetToRetest = retest.some(k =>
-    (HPLC_PROFILE_KEYS as readonly string[]).includes(k)
-  )
-  const varianceEffective =
-    hplcSetToRetest &&
-    state.varianceTicked &&
-    state.variancePoints >= 2 &&
-    state.variancePoints <= 10
-  const variancePoints = varianceEffective ? state.variancePoints : 0
-  const hasAdd =
-    tickedAddonKeys.length > 0 || variancePoints > 0 || state.shipVials > 0
-  return {
-    retest,
-    carry,
-    add: hasAdd
-      ? {
-          profiles: tickedAddonKeys,
-          variance_points: variancePoints,
-          additional_vials: state.shipVials,
-        }
-      : null,
-    auto_checkin: state.autoCheckin,
-    fee: state.fee,
-    reason: state.reason.trim(),
-  }
-}
+const RULE_SENTENCE =
+  'Rows not re-tested are carried as verified results linked to this sample. Untick Carry to leave a result off the new sample.'
+const ADDON_SENTENCE =
+  'Add-ons are always billed at the listed price. Existing results are carried to the new sample.'
+
+/** Class for a 44 px tap target wrapping a small control. */
+const TARGET = 'inline-flex min-h-11 min-w-11 items-center justify-center'
 
 function initialState(options: RetestOptions): RetestFormState {
-  const toggles: Record<string, boolean> = {}
-  for (const p of options.profiles) toggles[p.key] = !p.carry_eligible
+  const rows: Record<string, RowChoice> = {}
+  for (const p of options.profiles)
+    rows[p.key] = { retest: false, carry: p.carry_eligible }
   return {
-    toggles,
-    addons: {},
+    tab: 'retest',
+    rows,
+    addons: new Set(),
     varianceTicked: false,
     variancePoints: 3,
-    shipVials: 0,
-    fee: 'paid',
+    extraVials: 0,
     autoCheckin: false,
+    fee: 'paid',
     reason: '',
   }
 }
+
+function clampInt(v: string, min: number, max: number): number {
+  const n = Math.floor(Number(v))
+  if (!Number.isFinite(n)) return min
+  return Math.min(max, Math.max(min, n))
+}
+
+const names = (list: { name: string }[]) => list.map(p => p.name).join(', ')
+
+function copyLink(url: string) {
+  if (!navigator.clipboard) {
+    toast.error('Copy failed')
+    return
+  }
+  navigator.clipboard
+    .writeText(url)
+    .then(() => toast.success('Payment link copied'))
+    .catch(() => toast.error('Copy failed'))
+}
+
+/** About 760 px: the four-column profile table fits without wrapping. */
+const WIDTH = 'sm:max-w-[760px]'
 
 export function RetestDialog({
   open,
@@ -152,11 +148,9 @@ export function RetestDialog({
 
   // Reset the form whenever a new options payload for a (possibly
   // different) sample loads, OR the dialog is reopened for the same
-  // sample (it stays mounted like CancelSampleDialog, so closing must
-  // not leave a stale reason / toggles / add-on ticks behind). Render-time
-  // reset per React's "adjusting state when a prop changes" pattern, not
-  // an effect, so this stays in sync without a cascading-render lint
-  // violation.
+  // sample (it stays mounted, so closing must not leave a stale reason,
+  // tab or ticks behind). Render-time reset per React's "adjusting state
+  // when a prop changes" pattern, not an effect.
   const reopened = open && !prevOpen
   if (open !== prevOpen) setPrevOpen(open)
   if (options && (options.sample_id !== stateFor || reopened)) {
@@ -173,9 +167,9 @@ export function RetestDialog({
   if (!state || !options) {
     return (
       <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className={WIDTH}>
           <DialogHeader>
-            <DialogTitle>Retest {sampleId}</DialogTitle>
+            <DialogTitle>Re-test {sampleId}</DialogTitle>
           </DialogHeader>
           {isLoading && (
             <div className="flex items-center gap-2 py-6 justify-center text-sm text-muted-foreground">
@@ -195,106 +189,212 @@ export function RetestDialog({
     )
   }
 
-  const anyRetest = options.profiles.some(p => state.toggles[p.key])
-  const anyAddon = options.addons.some(a => a.wp_type && state.addons[a.key])
-  const sellableAddons = options.addons.filter(a => a.wp_type)
-  const selectedAddons = sellableAddons.filter(a => state.addons[a.key])
-  const hplcSetToRetest = options.profiles.some(
-    p =>
-      (HPLC_PROFILE_KEYS as readonly string[]).includes(p.key) &&
-      state.toggles[p.key]
-  )
-  const varianceEffective =
-    hplcSetToRetest &&
-    state.varianceTicked &&
-    state.variancePoints >= 2 &&
-    state.variancePoints <= 10
-  const hasSomethingToDo = anyRetest || anyAddon || varianceEffective
-  const canCreate =
-    state.reason.trim().length > 0 && hasSomethingToDo && !pending
+  const update = (patch: Partial<RetestFormState>) =>
+    setState(s => (s ? { ...s, ...patch } : s))
 
-  const feeApplies =
-    anyRetest && state.fee === 'paid' && options.context != null
-  const delta = options.prices_available
-    ? retestDelta({
-        addons: selectedAddons,
-        variancePoints: varianceEffective ? state.variancePoints : 0,
-        pointPrice: options.variance.point_price,
-        retestFeePrice: feeApplies
-          ? (options.context?.retest_fee?.price ?? null)
-          : undefined,
-      })
-    : null
+  const rowOf = (p: { key: string; carry_eligible: boolean }): RowChoice =>
+    state.rows[p.key] ?? { retest: false, carry: p.carry_eligible }
 
-  const addingSomething = anyAddon || varianceEffective
-  const title = anyRetest
-    ? addingSomething
-      ? 'Retest + add services'
-      : `Retest ${sampleId}`
-    : addingSomething
-      ? `Add services to ${sampleId}`
-      : `Retest ${sampleId}`
-
-  function setToggle(key: string, toRetest: boolean) {
-    setState(s =>
-      s ? { ...s, toggles: { ...s.toggles, [key]: toRetest } } : s
-    )
+  // Re-test and Carry are mutually exclusive; both unticked means dropped.
+  function setRow(key: string, field: keyof RowChoice, checked: boolean) {
+    setState(s => {
+      if (!s) return s
+      const prev = s.rows[key] ?? { retest: false, carry: false }
+      const next: RowChoice = checked
+        ? { retest: field === 'retest', carry: field === 'carry' }
+        : { ...prev, [field]: false }
+      return { ...s, rows: { ...s.rows, [key]: next } }
+    })
   }
+
   function setAddon(key: string, checked: boolean) {
-    setState(s => (s ? { ...s, addons: { ...s.addons, [key]: checked } } : s))
+    setState(s => {
+      if (!s) return s
+      const addons = new Set(s.addons)
+      if (checked) addons.add(key)
+      else addons.delete(key)
+      return { ...s, addons }
+    })
   }
 
-  function submit() {
-    if (!state || !options) return
-    mutation.mutate(buildRetestBody(state, options))
+  const tab = state.tab
+  const profiles = options.profiles
+  const retested = profiles.filter(p => rowOf(p).retest)
+  const carried = profiles.filter(p => rowOf(p).carry)
+  const dropped = profiles.filter(p => !rowOf(p).retest && !rowOf(p).carry)
+  const anyRetest = retested.length > 0
+  const hasHplc = profiles.some(p => isHplc(p.key))
+  const hplcRetest = retested.some(p => isHplc(p.key))
+  const showVariance = options.variance.allowed && hasHplc
+  const varianceWanted = showVariance && hplcRetest && state.varianceTicked
+  const varianceOutOfRange =
+    varianceWanted && (state.variancePoints < 2 || state.variancePoints > 10)
+  const varianceOn = varianceWanted && !varianceOutOfRange
+  const tickedAddons = options.addons.filter(
+    a => a.sellable && state.addons.has(a.key)
+  )
+  const feePrice = options.context?.retest_fee?.price ?? null
+  const pointPrice = options.variance.point_price
+
+  const summary: SummaryLine[] = []
+  if (tab === 'retest') {
+    if (anyRetest)
+      summary.push({
+        key: 'fee',
+        label:
+          state.fee === 'free'
+            ? `Retest fee (${names(retested)}), waived`
+            : `Retest fee (${names(retested)})`,
+        price: state.fee === 'free' ? 0 : feePrice,
+      })
+    if (varianceOn)
+      summary.push({
+        key: 'variance',
+        label: `Variance, ${state.variancePoints} points`,
+        // Same billing as WordPress: points minus one replicates.
+        price:
+          pointPrice === null ? null : (state.variancePoints - 1) * pointPrice,
+      })
+  } else {
+    for (const a of tickedAddons)
+      summary.push({ key: `addon-${a.key}`, label: a.name, price: a.price })
+    if (state.extraVials > 0)
+      summary.push({
+        key: 'extra-vials',
+        label: `Extra vials, ${state.extraVials}: price set by the shop`,
+        price: 'shop',
+      })
   }
+  const total = summary.some(l => l.price === null)
+    ? null
+    : summary.reduce(
+        (sum, l) => sum + (typeof l.price === 'number' ? l.price : 0),
+        0
+      )
+  const excludesExtraVials = summary.some(l => l.price === 'shop')
+
+  const reasonText = state.reason.trim()
+  let blocked: string | null = null
+  if (tab === 'orders') blocked = null
+  else if (tab === 'retest' && !anyRetest) blocked = 'Tick at least one Re-test'
+  else if (tab === 'addons' && tickedAddons.length === 0)
+    blocked = 'Tick at least one service'
+  else if (tab === 'retest' && varianceOutOfRange)
+    blocked = 'Variance points must be 2 to 10'
+  else if (!reasonText) blocked = 'Enter a reason'
+  else if (total === null) blocked = 'Pricing unavailable'
+
+  const eligible = profiles.filter(p => p.carry_eligible)
+  const ineligible = profiles.filter(p => !p.carry_eligible)
+  const sentenceParts =
+    tab === 'retest'
+      ? [
+          retested.length ? `re-test ${names(retested)}` : '',
+          carried.length ? `carry ${names(carried)}` : '',
+          dropped.length ? `drop ${names(dropped)}` : '',
+        ]
+      : [
+          eligible.length ? `carry ${names(eligible)}` : '',
+          ineligible.length ? `drop ${names(ineligible)}` : '',
+          tickedAddons.length ? `add ${names(tickedAddons)}` : '',
+        ]
+  const newSample = sentenceParts.filter(Boolean).join('; ')
+
+  const buildBody = (): RetestRequestBody => {
+    const base = {
+      auto_checkin: state.autoCheckin,
+      reason: reasonText,
+    }
+    if (tab === 'retest')
+      return {
+        ...base,
+        retest: retested.map(p => p.key),
+        carry: carried.map(p => p.key),
+        drop: dropped.map(p => p.key),
+        add: {
+          profiles: [],
+          variance_points: varianceOn ? state.variancePoints : 0,
+          additional_vials: 0,
+        },
+        fee: state.fee,
+      }
+    return {
+      ...base,
+      retest: [],
+      carry: eligible.map(p => p.key),
+      drop: ineligible.map(p => p.key),
+      add: {
+        profiles: tickedAddons.map(a => a.key),
+        variance_points: 0,
+        additional_vials: state.extraVials,
+      },
+      fee: 'paid',
+    }
+  }
+
+  const checkin = (prefix: boolean) => (
+    <div className="flex items-center gap-2 text-sm">
+      {prefix && <span className="text-muted-foreground">On arrival</span>}
+      <label className="inline-flex min-h-11 items-center gap-2 cursor-pointer">
+        <span className={TARGET}>
+          <Checkbox
+            checked={state.autoCheckin}
+            onCheckedChange={c => update({ autoCheckin: c === true })}
+          />
+        </span>
+        Check in on creation (extra vial already on hand)
+      </label>
+    </div>
+  )
+
+  const ctx = options.context
+  const order = ctx?.order ?? null
+  // Older WordPress sends only pending_retest_orders: show those as unpaid rows.
+  const orders: RetestOrder[] = ctx?.orders?.length
+    ? ctx.orders
+    : (ctx?.pending_orders ?? []).map(o => ({
+        ...o,
+        paid_at: null,
+        kind: 'retest' as const,
+        sample_id: null,
+        sample_status: null,
+      }))
+  const unpaid = orders.filter(o => o.payment_url)
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className={`${WIDTH} max-h-[90vh] overflow-y-auto`}>
         <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
+          <DialogTitle>
+            {tab === 'addons'
+              ? `Add services to ${sampleId}`
+              : `Re-test ${sampleId}`}
+          </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-1 text-sm text-muted-foreground">
-          <p>Creates a WP retest order against order {options.order_number}.</p>
-          <p>When the order completes, Mk1 creates a new sample.</p>
-          <p>
-            Ticked services get new vials, the rest are carried as verified
-            results linked to this sample; nothing changes on this sample or its
-            COA.
-          </p>
-        </div>
-
-        {options.context ? (
+        {ctx ? (
           <div
             data-testid="retest-context-block"
             className="rounded-md border border-border/40 p-3 space-y-1.5 text-sm"
           >
-            {options.context.order ? (
+            {order ? (
               <>
-                <div className="flex items-center justify-between">
-                  <span className="font-medium">
-                    Order {options.context.order.number}
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    {new Date(
-                      options.context.order.placed_at
-                    ).toLocaleDateString()}
+                <div>
+                  <span className="font-medium">Order {order.number}</span>
+                  <span className="text-muted-foreground">
+                    {' · '}
+                    {order.customer_name} · {order.customer_email}
                   </span>
                 </div>
                 <div className="text-muted-foreground">
-                  {options.context.order.customer_name} ·{' '}
-                  {options.context.order.customer_email}
+                  {formatMoney(order.total)} · {order.status} ·{' '}
+                  {new Date(order.placed_at).toLocaleDateString()}
                 </div>
-                <div>
-                  {formatMoney(options.context.order.total)} ·{' '}
-                  {options.context.order.status}
-                </div>
-                <ul className="text-xs text-muted-foreground space-y-0.5">
-                  {options.context.order.lines.map(l => (
-                    <li key={l.key}>
-                      {l.label}: {formatMoney(l.price)}
+                <ul className="space-y-0.5">
+                  {order.lines.map(l => (
+                    <li key={l.key} className="flex justify-between gap-2">
+                      <span>{l.label}</span>
+                      <span>{formatMoney(l.price)}</span>
                     </li>
                   ))}
                 </ul>
@@ -302,48 +402,6 @@ export function RetestDialog({
             ) : (
               <p className="text-muted-foreground">Customer info unavailable</p>
             )}
-            {options.context.pending_orders.length > 0 ? (
-              <div className="pt-1.5 space-y-1">
-                <div className="text-xs font-medium text-muted-foreground">
-                  Pending retest orders
-                </div>
-                {options.context.pending_orders.map(o => (
-                  <div
-                    key={o.order_id}
-                    data-testid={`pending-retest-order-${o.order_id}`}
-                    className="flex items-center justify-between gap-2 text-xs"
-                  >
-                    <span>
-                      Order {o.order_number} · {formatMoney(o.total)} · awaiting
-                      payment
-                    </span>
-                    <div className="flex items-center gap-1">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          if (!navigator.clipboard) return
-                          navigator.clipboard
-                            .writeText(o.payment_url)
-                            .then(() => toast.success('Payment link copied'))
-                            .catch(() => undefined)
-                        }}
-                      >
-                        Copy link
-                      </Button>
-                      <a
-                        href={o.payment_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="underline text-muted-foreground"
-                      >
-                        Open
-                      </a>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : null}
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">
@@ -351,191 +409,417 @@ export function RetestDialog({
           </p>
         )}
 
-        <div>
-          {options.profiles.map(p => {
-            const toRetest = Boolean(state.toggles[p.key])
-            return (
-              <div
-                key={p.key}
-                data-testid={`retest-row-${p.key}`}
-                role="group"
-                aria-label={p.name}
-                className="grid grid-cols-[1fr_auto_auto] items-center gap-2 py-1.5 border-b border-border/40"
-              >
-                <div>
-                  <span>{p.name}</span>
-                  <span className="ml-2 text-xs text-muted-foreground">
-                    {p.state}
-                  </span>
-                  {!p.carry_eligible && (
-                    <span className="ml-2 text-xs text-muted-foreground">
-                      Not verified on this sample; must be retested
-                    </span>
-                  )}
-                </div>
-                <Button
-                  type="button"
-                  variant={toRetest ? 'default' : 'outline'}
-                  size="sm"
-                  aria-pressed={toRetest}
-                  onClick={() => setToggle(p.key, true)}
-                >
-                  Retest
-                </Button>
-                <Button
-                  type="button"
-                  variant={!toRetest ? 'default' : 'outline'}
-                  size="sm"
-                  aria-pressed={!toRetest}
-                  disabled={!p.carry_eligible}
-                  title={
-                    p.carry_eligible
-                      ? undefined
-                      : 'Not verified on this sample; must be retested'
-                  }
-                  onClick={() => setToggle(p.key, false)}
-                >
-                  Carry
-                </Button>
-              </div>
-            )
-          })}
-        </div>
-
-        <div className="space-y-2">
-          {sellableAddons.map(a => (
-            <div key={a.key} className="flex items-center gap-2">
-              <Checkbox
-                id={`addon-${a.key}`}
-                checked={Boolean(state.addons[a.key])}
-                onCheckedChange={c => setAddon(a.key, c === true)}
-              />
-              <Label htmlFor={`addon-${a.key}`}>
-                {a.name}{' '}
-                {a.price === null
-                  ? '(price unavailable)'
-                  : `(${formatMoney(a.price)} · ${a.vials ?? 0} vials)`}
-              </Label>
-            </div>
-          ))}
-
-          {options.variance.allowed && (
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="variance-check"
-                checked={state.varianceTicked}
-                disabled={!hplcSetToRetest}
-                onCheckedChange={c =>
-                  setState(s => (s ? { ...s, varianceTicked: c === true } : s))
-                }
-              />
-              <Label htmlFor="variance-check">Variance</Label>
-              <Input
-                type="number"
-                min={2}
-                max={10}
-                value={state.variancePoints}
-                disabled={!hplcSetToRetest || !state.varianceTicked}
-                aria-label="Variance points"
-                onChange={e =>
-                  setState(s =>
-                    s ? { ...s, variancePoints: Number(e.target.value) } : s
-                  )
-                }
-                className="w-20"
-              />
-              {options.variance.point_price !== null && (
-                <span className="text-xs text-muted-foreground">
-                  @ {formatMoney(options.variance.point_price)}/point
-                </span>
-              )}
-            </div>
-          )}
-
-          <div className="flex items-center gap-2">
-            <Label htmlFor="ship-vials">ship vials</Label>
-            <Input
-              id="ship-vials"
-              type="number"
-              min={0}
-              max={20}
-              value={state.shipVials}
-              onChange={e =>
-                setState(s =>
-                  s ? { ...s, shipVials: Number(e.target.value) } : s
-                )
-              }
-              className="w-20"
-            />
-          </div>
-
-          <p className="text-sm">
-            {delta === null
-              ? 'Delta: price unavailable'
-              : `Delta: ${formatMoney(delta)}`}
-          </p>
-        </div>
-
-        {anyRetest && (
-          <div>
-            <p className="text-sm font-medium">Fee</p>
-            <RadioGroup
-              aria-label="Fee"
-              value={state.fee}
-              onValueChange={v =>
-                setState(s => (s ? { ...s, fee: v as 'paid' | 'free' } : s))
-              }
-              className="flex gap-4"
+        {unpaid.length > 0 && (
+          <div
+            role="status"
+            data-testid="retest-unpaid-strip"
+            className="flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 text-sm text-amber-900 dark:text-amber-200"
+          >
+            <span>
+              {unpaid.length} unpaid retest order
+              {unpaid.length === 1 ? '' : 's'}:{' '}
+              {unpaid.map(o => o.order_number).join(', ')} ·
+            </span>
+            <Button
+              variant="link"
+              size="sm"
+              className="min-h-11 px-1 text-inherit underline"
+              onClick={() => update({ tab: 'orders' })}
             >
-              <div className="flex items-center gap-2">
-                <RadioGroupItem id="fee-paid" value="paid" />
-                <Label htmlFor="fee-paid">
-                  {typeof options.context?.retest_fee?.price === 'number'
-                    ? `Paid (${formatMoney(options.context.retest_fee.price)})`
-                    : 'Paid'}
-                </Label>
-              </div>
-              <div className="flex items-center gap-2">
-                <RadioGroupItem id="fee-free" value="free" />
-                <Label htmlFor="fee-free">Free</Label>
-              </div>
-            </RadioGroup>
+              View
+            </Button>
           </div>
         )}
 
-        <div className="flex items-center gap-2">
-          <Switch
-            id="auto-checkin"
-            checked={state.autoCheckin}
-            onCheckedChange={c =>
-              setState(s => (s ? { ...s, autoCheckin: c } : s))
-            }
-          />
-          <Label htmlFor="auto-checkin">Auto check-in</Label>
-        </div>
-        <p className="text-xs text-muted-foreground -mt-2">
-          On: an extra vial on hand, the sample lands Received. Off: the sample
-          lands Due, vials are seeded at check-in.
-        </p>
+        <Tabs value={tab} onValueChange={v => update({ tab: v as RetestTab })}>
+          <TabsList className="w-full group-data-[orientation=horizontal]/tabs:h-auto">
+            <TabsTrigger value="retest" className="min-h-11">
+              Re-test
+            </TabsTrigger>
+            <TabsTrigger value="addons" className="min-h-11">
+              Add services
+            </TabsTrigger>
+            <TabsTrigger value="orders" className="min-h-11">
+              {unpaid.length > 0 ? `Orders (${unpaid.length})` : 'Orders'}
+            </TabsTrigger>
+          </TabsList>
 
-        <div>
-          <Label htmlFor="retest-reason">Reason</Label>
-          <Textarea
-            id="retest-reason"
-            value={state.reason}
-            onChange={e =>
-              setState(s => (s ? { ...s, reason: e.target.value } : s))
-            }
-          />
-        </div>
+          <TabsContent value="retest" className="space-y-3">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Profile</TableHead>
+                  <TableHead>State</TableHead>
+                  <TableHead className="text-center">Re-test</TableHead>
+                  <TableHead className="text-center">Carry results</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {profiles.map(p => {
+                  const row = rowOf(p)
+                  return (
+                    <TableRow
+                      key={p.key}
+                      data-testid={`retest-row-${p.key}`}
+                      aria-label={p.name}
+                    >
+                      <TableCell className="whitespace-normal">
+                        {p.name}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {p.state_label}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <label className={TARGET}>
+                          <Checkbox
+                            aria-label={`Re-test ${p.name}`}
+                            checked={row.retest}
+                            onCheckedChange={c =>
+                              setRow(p.key, 'retest', c === true)
+                            }
+                          />
+                        </label>
+                      </TableCell>
+                      <TableCell className="text-center whitespace-normal">
+                        <label className={TARGET}>
+                          <Checkbox
+                            aria-label={`Carry results ${p.name}`}
+                            checked={row.carry}
+                            disabled={!p.carry_eligible}
+                            onCheckedChange={c =>
+                              setRow(p.key, 'carry', c === true)
+                            }
+                          />
+                        </label>
+                        {!p.carry_eligible && (
+                          <span className="block text-xs text-muted-foreground">
+                            cannot carry: not verified
+                          </span>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+            <p className="text-xs text-muted-foreground">{RULE_SENTENCE}</p>
 
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose} disabled={pending}>
+            {showVariance && (
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <label className={TARGET}>
+                  <Checkbox
+                    id="variance-check"
+                    aria-label="Variance"
+                    checked={state.varianceTicked}
+                    disabled={!hplcRetest}
+                    onCheckedChange={c =>
+                      update({ varianceTicked: c === true })
+                    }
+                  />
+                </label>
+                <Label htmlFor="variance-check">Variance</Label>
+                <span className="text-muted-foreground">points</span>
+                <Input
+                  type="number"
+                  min={2}
+                  max={10}
+                  value={state.variancePoints}
+                  disabled={!hplcRetest || !state.varianceTicked}
+                  aria-label="Variance points"
+                  onChange={e =>
+                    update({ variancePoints: clampInt(e.target.value, 2, 10) })
+                  }
+                  className="w-20 min-h-11"
+                />
+                {pointPrice !== null && (
+                  <span className="text-xs text-muted-foreground">
+                    @ {formatMoney(pointPrice)}/point
+                  </span>
+                )}
+                {!hplcRetest && (
+                  <span className="text-xs text-muted-foreground">
+                    Requires an HPLC re-test
+                  </span>
+                )}
+              </div>
+            )}
+
+            {anyRetest && (
+              <div className="flex flex-wrap items-center gap-4 text-sm">
+                <span className="font-medium">Retest fee</span>
+                <RadioGroup
+                  aria-label="Retest fee"
+                  value={state.fee}
+                  onValueChange={v => update({ fee: v as 'paid' | 'free' })}
+                  className="flex gap-4"
+                >
+                  <div className="flex items-center gap-2 min-h-11">
+                    <RadioGroupItem id="fee-paid" value="paid" />
+                    <Label htmlFor="fee-paid">
+                      {feePrice === null
+                        ? 'Charged (price unavailable)'
+                        : `Charged ${formatMoney(feePrice)}`}
+                    </Label>
+                  </div>
+                  <div className="flex items-center gap-2 min-h-11">
+                    <RadioGroupItem id="fee-free" value="free" />
+                    <Label htmlFor="fee-free">Waived</Label>
+                  </div>
+                </RadioGroup>
+              </div>
+            )}
+
+            {checkin(true)}
+          </TabsContent>
+
+          <TabsContent value="addons" className="space-y-3">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-11" />
+                  <TableHead>Service</TableHead>
+                  <TableHead>Price</TableHead>
+                  <TableHead>Vials</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {options.addons.map(a => (
+                  <TableRow
+                    key={a.key}
+                    data-testid={`addon-row-${a.key}`}
+                    aria-label={a.name}
+                    aria-disabled={!a.sellable || undefined}
+                    className={a.sellable ? undefined : 'opacity-60'}
+                  >
+                    <TableCell>
+                      <label className={TARGET}>
+                        <Checkbox
+                          aria-label={a.name}
+                          checked={state.addons.has(a.key)}
+                          disabled={!a.sellable}
+                          onCheckedChange={c => setAddon(a.key, c === true)}
+                        />
+                      </label>
+                    </TableCell>
+                    <TableCell className="whitespace-normal">
+                      {a.name}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {!a.sellable
+                        ? 'not sold post-order'
+                        : a.price === null
+                          ? 'price unavailable'
+                          : formatMoney(a.price)}
+                    </TableCell>
+                    <TableCell>{a.vials ?? 0}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            <p className="text-xs text-muted-foreground">{ADDON_SENTENCE}</p>
+
+            <Collapsible
+              defaultOpen={state.autoCheckin || state.extraVials > 0}
+            >
+              <CollapsibleTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="min-h-11 group/more"
+                >
+                  More options
+                  <ChevronRight className="transition-transform group-data-[state=open]/more:rotate-90" />
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="space-y-2 pt-2 pl-3">
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <Label htmlFor="extra-vials">Extra vials to ship</Label>
+                  <Input
+                    id="extra-vials"
+                    type="number"
+                    min={0}
+                    max={20}
+                    value={state.extraVials}
+                    onChange={e =>
+                      update({ extraVials: clampInt(e.target.value, 0, 20) })
+                    }
+                    className="w-20 min-h-11"
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    added to the order at the per-vial price, no test
+                  </span>
+                </div>
+                {checkin(false)}
+              </CollapsibleContent>
+            </Collapsible>
+          </TabsContent>
+
+          <TabsContent value="orders">
+            {orders.length === 0 ? (
+              <p className="py-4 text-sm text-muted-foreground">
+                No retest orders for this sample yet.
+              </p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Order</TableHead>
+                    <TableHead>Kind</TableHead>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Total</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Sample</TableHead>
+                    <TableHead>Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {orders.map(o => (
+                    <TableRow
+                      key={o.order_id}
+                      data-testid={`retest-order-${o.order_id}`}
+                      aria-label={`Order ${o.order_number}`}
+                    >
+                      <TableCell>{o.order_number}</TableCell>
+                      <TableCell>
+                        {o.kind === 'addon' ? 'Add-on' : 'Retest'}
+                      </TableCell>
+                      <TableCell>
+                        {new Date(o.created_at).toLocaleDateString()}
+                      </TableCell>
+                      <TableCell>{formatMoney(o.total)}</TableCell>
+                      <TableCell>{o.status}</TableCell>
+                      <TableCell>
+                        {o.sample_id ? (
+                          <a
+                            href={`#senaite/sample-details?id=${encodeURIComponent(o.sample_id)}`}
+                            className="underline"
+                          >
+                            {o.sample_id}
+                          </a>
+                        ) : (
+                          <span className="text-muted-foreground">not yet</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {o.payment_url && (
+                          <div className="flex items-center gap-1">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="min-h-11"
+                              aria-label={`Copy payment link for order ${o.order_number}`}
+                              onClick={() =>
+                                o.payment_url && copyLink(o.payment_url)
+                              }
+                            >
+                              Copy link
+                            </Button>
+                            <a
+                              href={o.payment_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              aria-label={`Open payment page for order ${o.order_number}`}
+                              className={`${TARGET} px-2 underline text-muted-foreground`}
+                            >
+                              Open
+                            </a>
+                          </div>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </TabsContent>
+        </Tabs>
+
+        {tab !== 'orders' && (
+          <>
+            <div>
+              <Label htmlFor="retest-reason">Reason (required)</Label>
+              <Textarea
+                id="retest-reason"
+                value={state.reason}
+                onChange={e => update({ reason: e.target.value })}
+              />
+            </div>
+
+            <div
+              data-testid="retest-summary"
+              aria-label="Summary"
+              className="rounded-md border border-border/40 p-3 text-sm space-y-0.5"
+            >
+              <div className="font-medium">Summary</div>
+              {summary.map(l => (
+                <div key={l.key} className="flex justify-between gap-2">
+                  <span>{l.label}</span>
+                  <span>
+                    {l.price === 'shop'
+                      ? null
+                      : l.price === null
+                        ? 'price unavailable'
+                        : formatMoney(l.price)}
+                  </span>
+                </div>
+              ))}
+              <div
+                data-testid="retest-summary-total"
+                className="flex justify-between gap-2 font-medium border-t border-border/40 pt-1"
+              >
+                {total === null ? (
+                  <span>Total: price unavailable</span>
+                ) : (
+                  <>
+                    <span>
+                      {excludesExtraVials
+                        ? 'Total (excluding extra vials)'
+                        : 'Total'}
+                    </span>
+                    <span>{formatMoney(total)}</span>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {newSample && (
+              <p data-testid="retest-new-sample" className="text-sm">
+                New sample: {newSample}.
+              </p>
+            )}
+          </>
+        )}
+
+        <DialogFooter className="sm:items-center">
+          {blocked && (
+            <span
+              data-testid="retest-disabled-reason"
+              className="text-sm text-muted-foreground sm:mr-auto"
+            >
+              {blocked}
+            </span>
+          )}
+          <Button
+            variant="ghost"
+            className="min-h-11"
+            onClick={onClose}
+            disabled={pending}
+          >
             Cancel
           </Button>
-          <Button onClick={submit} disabled={!canCreate}>
-            {pending ? 'Creating…' : 'Create'}
-          </Button>
+          {tab !== 'orders' && (
+            <Button
+              className="min-h-11"
+              onClick={() => mutation.mutate(buildBody())}
+              disabled={blocked !== null || pending}
+            >
+              {pending
+                ? 'Creating…'
+                : tab === 'retest'
+                  ? 'Create retest order'
+                  : 'Create add-on order'}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

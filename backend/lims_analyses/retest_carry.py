@@ -34,6 +34,7 @@ class RetestSpec:
     retest_of_sample_id: str
     retest: tuple[str, ...]
     carry: tuple[str, ...]
+    drop: tuple[str, ...]
     add_profiles: tuple[str, ...]
     variance_points: int
     additional_vials: int
@@ -53,6 +54,7 @@ class RetestSpec:
             "retest_of_sample_id": self.retest_of_sample_id,
             "retest": list(self.retest),
             "carry": list(self.carry),
+            "drop": list(self.drop),
             "add": {"profiles": list(self.add_profiles),
                     "variance_points": self.variance_points,
                     "additional_vials": self.additional_vials},
@@ -81,6 +83,7 @@ def parse_retest_spec(raw: dict) -> RetestSpec:
         raise BadRequestError("retest_spec.retest_of_sample_id is required")
     retest = _keys(raw.get("retest"), "retest")
     carry = _keys(raw.get("carry"), "carry")
+    drop = _keys(raw.get("drop"), "drop")
     add = raw.get("add") or {}
     if not isinstance(add, dict):
         raise BadRequestError("retest_spec.add must be an object")
@@ -96,6 +99,12 @@ def parse_retest_spec(raw: dict) -> RetestSpec:
     overlap = set(retest) & set(carry)
     if overlap:
         raise BadRequestError(f"profiles cannot be both retested and carried: {sorted(overlap)}")
+    overlap = set(retest) & set(drop)
+    if overlap:
+        raise BadRequestError(f"profiles cannot be both retested and dropped: {sorted(overlap)}")
+    overlap = set(carry) & set(drop)
+    if overlap:
+        raise BadRequestError(f"profiles cannot be both carried and dropped: {sorted(overlap)}")
     overlap = set(add_profiles) & (set(retest) | set(carry))
     if overlap:
         raise BadRequestError(f"added profiles cannot also be retested or carried: {sorted(overlap)}")
@@ -113,7 +122,7 @@ def parse_retest_spec(raw: dict) -> RetestSpec:
         raise BadRequestError("retest_spec.reason is required")
 
     return RetestSpec(
-        retest_of_sample_id=original_id, retest=retest, carry=carry,
+        retest_of_sample_id=original_id, retest=retest, carry=carry, drop=drop,
         add_profiles=add_profiles, variance_points=variance_points,
         additional_vials=additional_vials,
         auto_checkin=bool(raw.get("auto_checkin")), fee=fee, reason=reason,
@@ -200,11 +209,9 @@ def validate_retest_spec(db: Session, *, original: LimsSample, spec: RetestSpec)
         raise BadRequestError(
             f"retest_spec is for {spec.retest_of_sample_id!r}, not {original.sample_id!r}")
     have = set(snapshot_profile_keys(original))
-    demand = set(spec.retest) | set(spec.carry)
-    omitted = have - demand
-    if omitted:
-        raise BadRequestError(
-            f"every profile on {original.sample_id} must be retested or carried; missing: {sorted(omitted)}")
+    unknown_drop = [k for k in spec.drop if k not in have]
+    if unknown_drop:
+        raise BadRequestError(f"not on {original.sample_id}, cannot be dropped: {unknown_drop}")
     clash = set(spec.add_profiles) & have
     if clash:
         raise BadRequestError(f"already on the original, cannot be added: {sorted(clash)}")
@@ -218,6 +225,14 @@ def validate_retest_spec(db: Session, *, original: LimsSample, spec: RetestSpec)
         raise BadRequestError(
             f"cannot carry unverified profile(s): {not_eligible}; retest them instead")
     return [k for k in (*spec.retest, *spec.carry) if k not in have]
+
+
+def dropped_profile_keys(original: LimsSample, spec: RetestSpec) -> list[str]:
+    """Original snapshot profiles in neither retest nor carry: recorded as
+    drop regardless of what the client's own `drop` list said (a 1.29 client
+    omits it entirely; an incomplete/omitted drop is filled in here)."""
+    demand = set(spec.retest) | set(spec.carry)
+    return [k for k in snapshot_profile_keys(original) if k not in demand]
 
 
 def _ultimate_source(db: Session, row: LimsAnalysis) -> LimsAnalysis:
@@ -459,7 +474,8 @@ def apply_retest_spec(db: Session, *, parent: LimsSample, raw_spec: dict,
         # The registration fallback may have seeded + stamped the FULL
         # services dict before this ran (C2): freeze the demand profiles only.
         snap["profiles"] = _demand_snapshot_profiles(db, demand, package, snap)
-    snap["retest"] = {**spec.as_dict(), "missing": missing}
+    drop_keys = dropped_profile_keys(original, spec)
+    snap["retest"] = {**spec.as_dict(), "missing": missing, "drop": drop_keys}
     parent.catalog_snapshot = snap
 
     carry_keys = [k for k in spec.carry if k not in missing]
@@ -489,6 +505,12 @@ def apply_retest_spec(db: Session, *, parent: LimsSample, raw_spec: dict,
         if missing:
             _event(db, parent, "retest_spec_warning",
                    {"reason": "profiles_missing_on_original", "missing": missing}, user_id)
+        if drop_keys:
+            dropped = _profiles_by_key(db, drop_keys)
+            names = ", ".join(dropped[k].name if k in dropped else k for k in drop_keys)
+            message = f"dropped {names} (not carried to {parent.sample_id})"
+            _event(db, parent, "retest_spec_warning",
+                   {"reason": "profiles_dropped", "message": message, "drop": drop_keys}, user_id)
     db.flush()
     return {"applied": True, "carried": len(carried), "missing": missing,
             "demand_keys": list(spec.demand_keys)}
