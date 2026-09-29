@@ -45,7 +45,7 @@ Re-test tab
   Profile              State            Re-test   Carry results
   HPLC Purity+Identity Verified 9/20     [ ]        [x]
   Heavy Metals         Verified 9/20     [ ]        [x]
-  Endotoxin USP85 LAL  Not verified      [x]        [ ] (cannot carry: not verified)
+  Endotoxin USP85 LAL  Not verified      [ ]        [ ] (cannot carry: not verified)
   "Rows not re-tested are carried as verified results linked to this sample. Untick Carry to leave a
    result off the new sample."
   Variance  [ ] points [3] @ $76.50/point   (only shown when an HPLC row is set to Re-test; helper
@@ -55,8 +55,8 @@ Re-test tab
   Reason (required) [                                    ]
   Summary                                  Create disabled reason: "Tick at least one Re-test" /
     Retest fee (HPLC)         $50.00       "Enter a reason"
-    Variance, 3 points       $229.50
-    Total                    $279.50
+    Variance, 3 points       $153.00  (points minus one, as the shop bills)
+    Total                    $203.00
   New sample: re-test HPLC; carry Heavy Metals; drop Endotoxin.
                                              [Cancel] [Create retest order]
 
@@ -74,6 +74,12 @@ Add services tab
   Summary: lines + Total.   New sample: carry HPLC, Heavy Metals, Endotoxin; add PCR.
                                              [Cancel] [Create add-on order]
 ```
+
+All Re-test boxes start unticked. Unverified rows therefore start as dropped (their Carry box is
+disabled), and the "New sample:" line says so; the operator ticks Re-test to keep them. Variance is
+priced as (points minus one) x point price, the same as the shop bills. Extra vials are priced by the
+shop: the summary lists them as "Extra vials, N: price set by the shop" and the Total then reads
+"Total (excluding extra vials)".
 
 Titles are fixed per tab: "Re-test P-9001" and "Add services to P-9001". The intro paragraphs are gone;
 the per-tab rule sentence and the "New sample:" line carry the explanation.

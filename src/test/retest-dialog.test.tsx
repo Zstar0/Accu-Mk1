@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type * as ApiModule from '@/lib/api'
@@ -11,6 +17,7 @@ vi.mock('@/lib/api', async importOriginal => {
 })
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 
+import { toast } from 'sonner'
 import { createRetest, getRetestOptions } from '@/lib/api'
 import { RetestDialog } from '@/components/senaite/RetestDialog'
 
@@ -325,6 +332,11 @@ describe('RetestDialog overlay v2', () => {
     ).toBeInTheDocument()
     await user.clear(screen.getByLabelText('Extra vials to ship'))
     await user.type(screen.getByLabelText('Extra vials to ship'), '2')
+    const summary = screen.getByTestId('retest-summary')
+    expect(
+      within(summary).getByText('Extra vials, 2: price set by the shop')
+    ).toBeInTheDocument()
+    expect(total()).toHaveTextContent('Total (excluding extra vials)$230.00')
     await user.click(
       screen.getByLabelText('Check in on creation (extra vial already on hand)')
     )
@@ -412,13 +424,66 @@ describe('RetestDialog overlay v2', () => {
       pending.compareDocumentPosition(tablist) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
-    expect(within(pending).getByText(/awaiting payment/)).toBeInTheDocument()
+    expect(within(pending).getByText(/· pending/)).toBeInTheDocument()
     await user.click(within(pending).getByText('Copy link'))
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(url))
     const link = within(pending).getByText('Open')
     expect(link.getAttribute('href')).toBe(url)
     expect(link.getAttribute('target')).toBe('_blank')
     expect(link.getAttribute('rel')).toBe('noreferrer')
+  })
+
+  it('toasts Copy failed when the clipboard rejects', async () => {
+    vi.mocked(getRetestOptions).mockResolvedValue({
+      ...OPTIONS,
+      context: {
+        ...CONTEXT,
+        pending_orders: [
+          {
+            order_id: 502,
+            order_number: 'WP-7502',
+            status: 'pending',
+            total: 85,
+            currency: 'USD',
+            created_at: '2026-09-27T10:00:00Z',
+            payment_url: 'https://pay',
+          },
+        ],
+      },
+    })
+    const { user } = renderDialog()
+    vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(
+      new Error('denied')
+    )
+    const pending = await screen.findByTestId('pending-retest-order-502')
+    await user.click(within(pending).getByText('Copy link'))
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Copy failed'))
+  })
+
+  it('clamps variance points to 2..10', async () => {
+    const { user } = renderDialog()
+    await screen.findByTestId(`retest-row-${HPLC}`)
+    await user.click(retestBox(HPLC))
+    await user.click(screen.getByLabelText('Variance'))
+    const points = screen.getByLabelText('Variance points')
+    expect(points).toHaveAttribute('min', '2')
+    expect(points).toHaveAttribute('max', '10')
+    fireEvent.change(points, { target: { value: '15' } })
+    expect(points).toHaveValue(10)
+    expect(screen.getByText('Variance, 10 points')).toBeInTheDocument()
+    fireEvent.change(points, { target: { value: '1' } })
+    expect(points).toHaveValue(2)
+    expect(disabledReason()).toHaveTextContent('Enter a reason')
+  })
+
+  it('clicking the 44 px target cell toggles the checkbox inside it', async () => {
+    const { user } = renderDialog()
+    await screen.findByTestId(`retest-row-${HPLC}`)
+    const box = retestBox(HPLC)
+    const target = box.closest('label')
+    expect(target).not.toBeNull()
+    await user.click(target as HTMLElement)
+    expect(box).toBeChecked()
   })
 
   it('shows a quiet unavailable line when order context is missing', async () => {

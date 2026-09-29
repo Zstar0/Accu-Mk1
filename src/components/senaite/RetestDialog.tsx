@@ -64,8 +64,10 @@ interface RetestFormState {
 }
 
 interface SummaryLine {
+  key: string
   label: string
-  price: number | null
+  /** 'shop' = priced by WordPress at checkout, left out of the Total. */
+  price: number | null | 'shop'
 }
 
 const formatMoney = (n: number) => `$${n.toFixed(2)}`
@@ -175,8 +177,8 @@ export function RetestDialog({
   const update = (patch: Partial<RetestFormState>) =>
     setState(s => (s ? { ...s, ...patch } : s))
 
-  const rowOf = (key: string): RowChoice =>
-    state.rows[key] ?? { retest: false, carry: false }
+  const rowOf = (p: { key: string; carry_eligible: boolean }): RowChoice =>
+    state.rows[p.key] ?? { retest: false, carry: p.carry_eligible }
 
   // Re-test and Carry are mutually exclusive; both unticked means dropped.
   function setRow(key: string, field: keyof RowChoice, checked: boolean) {
@@ -202,21 +204,17 @@ export function RetestDialog({
 
   const tab = state.tab
   const profiles = options.profiles
-  const retested = profiles.filter(p => rowOf(p.key).retest)
-  const carried = profiles.filter(p => rowOf(p.key).carry)
-  const dropped = profiles.filter(
-    p => !rowOf(p.key).retest && !rowOf(p.key).carry
-  )
+  const retested = profiles.filter(p => rowOf(p).retest)
+  const carried = profiles.filter(p => rowOf(p).carry)
+  const dropped = profiles.filter(p => !rowOf(p).retest && !rowOf(p).carry)
   const anyRetest = retested.length > 0
   const hasHplc = profiles.some(p => isHplc(p.key))
   const hplcRetest = retested.some(p => isHplc(p.key))
   const showVariance = options.variance.allowed && hasHplc
-  const varianceOn =
-    showVariance &&
-    hplcRetest &&
-    state.varianceTicked &&
-    state.variancePoints >= 2 &&
-    state.variancePoints <= 10
+  const varianceWanted = showVariance && hplcRetest && state.varianceTicked
+  const varianceOutOfRange =
+    varianceWanted && (state.variancePoints < 2 || state.variancePoints > 10)
+  const varianceOn = varianceWanted && !varianceOutOfRange
   const tickedAddons = options.addons.filter(
     a => a.sellable && state.addons.has(a.key)
   )
@@ -227,6 +225,7 @@ export function RetestDialog({
   if (tab === 'retest') {
     if (anyRetest)
       summary.push({
+        key: 'fee',
         label:
           state.fee === 'free'
             ? `Retest fee (${names(retested)}), waived`
@@ -235,6 +234,7 @@ export function RetestDialog({
       })
     if (varianceOn)
       summary.push({
+        key: 'variance',
         label: `Variance, ${state.variancePoints} points`,
         // Same billing as WordPress: points minus one replicates.
         price:
@@ -242,17 +242,29 @@ export function RetestDialog({
       })
   } else {
     for (const a of tickedAddons)
-      summary.push({ label: a.name, price: a.price })
+      summary.push({ key: `addon-${a.key}`, label: a.name, price: a.price })
+    if (state.extraVials > 0)
+      summary.push({
+        key: 'extra-vials',
+        label: `Extra vials, ${state.extraVials}: price set by the shop`,
+        price: 'shop',
+      })
   }
   const total = summary.some(l => l.price === null)
     ? null
-    : summary.reduce((sum, l) => sum + (l.price ?? 0), 0)
+    : summary.reduce(
+        (sum, l) => sum + (typeof l.price === 'number' ? l.price : 0),
+        0
+      )
+  const excludesExtraVials = summary.some(l => l.price === 'shop')
 
   const reasonText = state.reason.trim()
   let blocked: string | null = null
   if (tab === 'retest' && !anyRetest) blocked = 'Tick at least one Re-test'
   else if (tab === 'addons' && tickedAddons.length === 0)
     blocked = 'Tick at least one service'
+  else if (tab === 'retest' && varianceOutOfRange)
+    blocked = 'Variance points must be 2 to 10'
   else if (!reasonText) blocked = 'Enter a reason'
   else if (total === null) blocked = 'Pricing unavailable'
 
@@ -304,19 +316,18 @@ export function RetestDialog({
     }
   }
 
-  const checkin = (id: string) => (
+  const checkin = (prefix: boolean) => (
     <div className="flex items-center gap-2 text-sm">
-      <span className="text-muted-foreground">On arrival</span>
-      <span className={TARGET}>
-        <Checkbox
-          id={id}
-          checked={state.autoCheckin}
-          onCheckedChange={c => update({ autoCheckin: c === true })}
-        />
-      </span>
-      <Label htmlFor={id}>
+      {prefix && <span className="text-muted-foreground">On arrival</span>}
+      <label className="inline-flex min-h-11 items-center gap-2 cursor-pointer">
+        <span className={TARGET}>
+          <Checkbox
+            checked={state.autoCheckin}
+            onCheckedChange={c => update({ autoCheckin: c === true })}
+          />
+        </span>
         Check in on creation (extra vial already on hand)
-      </Label>
+      </label>
     </div>
   )
 
@@ -376,8 +387,8 @@ export function RetestDialog({
                     className="flex items-center justify-between gap-2 text-xs"
                   >
                     <span>
-                      Order {o.order_number} · {formatMoney(o.total)} · awaiting
-                      payment
+                      Order {o.order_number} · {formatMoney(o.total)} ·{' '}
+                      {o.status}
                     </span>
                     <div className="flex items-center gap-1">
                       <Button
@@ -385,11 +396,14 @@ export function RetestDialog({
                         size="sm"
                         className="min-h-11"
                         onClick={() => {
-                          if (!navigator.clipboard) return
+                          if (!navigator.clipboard) {
+                            toast.error('Copy failed')
+                            return
+                          }
                           navigator.clipboard
                             .writeText(o.payment_url)
                             .then(() => toast.success('Payment link copied'))
-                            .catch(() => undefined)
+                            .catch(() => toast.error('Copy failed'))
                         }}
                       >
                         Copy link
@@ -436,7 +450,7 @@ export function RetestDialog({
               </TableHeader>
               <TableBody>
                 {profiles.map(p => {
-                  const row = rowOf(p.key)
+                  const row = rowOf(p)
                   return (
                     <TableRow
                       key={p.key}
@@ -450,7 +464,7 @@ export function RetestDialog({
                         {p.state_label}
                       </TableCell>
                       <TableCell className="text-center">
-                        <span className={TARGET}>
+                        <label className={TARGET}>
                           <Checkbox
                             aria-label={`Re-test ${p.name}`}
                             checked={row.retest}
@@ -458,10 +472,10 @@ export function RetestDialog({
                               setRow(p.key, 'retest', c === true)
                             }
                           />
-                        </span>
+                        </label>
                       </TableCell>
                       <TableCell className="text-center whitespace-normal">
-                        <span className={TARGET}>
+                        <label className={TARGET}>
                           <Checkbox
                             aria-label={`Carry results ${p.name}`}
                             checked={row.carry}
@@ -470,7 +484,7 @@ export function RetestDialog({
                               setRow(p.key, 'carry', c === true)
                             }
                           />
-                        </span>
+                        </label>
                         {!p.carry_eligible && (
                           <span className="block text-xs text-muted-foreground">
                             cannot carry: not verified
@@ -486,7 +500,7 @@ export function RetestDialog({
 
             {showVariance && (
               <div className="flex flex-wrap items-center gap-2 text-sm">
-                <span className={TARGET}>
+                <label className={TARGET}>
                   <Checkbox
                     id="variance-check"
                     aria-label="Variance"
@@ -496,7 +510,7 @@ export function RetestDialog({
                       update({ varianceTicked: c === true })
                     }
                   />
-                </span>
+                </label>
                 <Label htmlFor="variance-check">Variance</Label>
                 <span className="text-muted-foreground">points</span>
                 <Input
@@ -507,7 +521,7 @@ export function RetestDialog({
                   disabled={!hplcRetest || !state.varianceTicked}
                   aria-label="Variance points"
                   onChange={e =>
-                    update({ variancePoints: clampInt(e.target.value, 0, 99) })
+                    update({ variancePoints: clampInt(e.target.value, 2, 10) })
                   }
                   className="w-20 min-h-11"
                 />
@@ -549,7 +563,7 @@ export function RetestDialog({
               </div>
             )}
 
-            {checkin('auto-checkin-retest')}
+            {checkin(true)}
           </TabsContent>
 
           <TabsContent value="addons" className="space-y-3">
@@ -572,14 +586,14 @@ export function RetestDialog({
                     className={a.sellable ? undefined : 'opacity-60'}
                   >
                     <TableCell>
-                      <span className={TARGET}>
+                      <label className={TARGET}>
                         <Checkbox
                           aria-label={a.name}
                           checked={state.addons.has(a.key)}
                           disabled={!a.sellable}
                           onCheckedChange={c => setAddon(a.key, c === true)}
                         />
-                      </span>
+                      </label>
                     </TableCell>
                     <TableCell className="whitespace-normal">
                       {a.name}
@@ -629,7 +643,7 @@ export function RetestDialog({
                     added to the order at the per-vial price, no test
                   </span>
                 </div>
-                {checkin('auto-checkin-addons')}
+                {checkin(false)}
               </CollapsibleContent>
             </Collapsible>
           </TabsContent>
@@ -651,10 +665,14 @@ export function RetestDialog({
         >
           <div className="font-medium">Summary</div>
           {summary.map(l => (
-            <div key={l.label} className="flex justify-between gap-2">
+            <div key={l.key} className="flex justify-between gap-2">
               <span>{l.label}</span>
               <span>
-                {l.price === null ? 'price unavailable' : formatMoney(l.price)}
+                {l.price === 'shop'
+                  ? null
+                  : l.price === null
+                    ? 'price unavailable'
+                    : formatMoney(l.price)}
               </span>
             </div>
           ))}
@@ -666,7 +684,11 @@ export function RetestDialog({
               <span>Total: price unavailable</span>
             ) : (
               <>
-                <span>Total</span>
+                <span>
+                  {excludesExtraVials
+                    ? 'Total (excluding extra vials)'
+                    : 'Total'}
+                </span>
                 <span>{formatMoney(total)}</span>
               </>
             )}
