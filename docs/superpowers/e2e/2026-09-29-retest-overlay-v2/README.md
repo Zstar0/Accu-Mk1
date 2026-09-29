@@ -8,3 +8,7 @@ Mounted: Mk1 feat/retest-overlay-v2 (b1e9a89e), accumarklabs feat/retest-overlay
 4. Playwright `e2e/retest.spec.ts` (both tabs): 2 passed against the stack.
 
 Stack notes: the devbox firewalld had wiped Docker's iptables chains; `sudo systemctl restart docker` (live-restore kept all 144 containers) repaired networking. Stack shop seeded with Heavy Metals / Sterility USP-71 / Fentanyl products (pids 3273-3275). Screenshots 01-04.
+
+## Orders tab and width (dfa18fd7 Mk1, f265c298 WP)
+5. Overlay widened to 760 px; the pending list left the order card. When anything is unpaid an amber strip reads "6 unpaid retest orders: 3278, 3276, 3272, 3271, 3270, 3269 · View" and switches to the Orders tab.
+6. Orders (6) tab: every retest and add-on order for the sample newest first with kind, date, total, status, the minted sample (3277 -> P-5002, 3268 -> P-5001) or "not yet", and Copy link / Open for unpaid ones. Data: WP `retest-context.retest_orders` joined in Mk1 to the forward samples by order number. Playwright retest.spec: 2 passed against the stack after the change.
