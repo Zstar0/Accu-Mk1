@@ -198,6 +198,28 @@ def test_reapply_is_idempotent(db):
     assert _placeholder_keywords(db, retest) == ["ENDOTOXIN-USP85LAL", "HPLC-PURITY"]
 
 
+def test_dropped_profile_absent_from_snapshot_and_rows_and_warns(db):
+    cat = _catalog(db)
+    _original(db, cat)
+    retest = _retest(db)
+    out = apply_retest_spec(db, parent=retest,
+                            raw_spec=_spec(carry=[], add={"profiles": [], "variance_points": 0,
+                                                          "additional_vials": 0}),
+                            services={"hplcpurity_identity": True}, package=None, source="test")
+    db.commit()
+    assert out["applied"] is True
+    assert [p["key"] for p in retest.catalog_snapshot["profiles"]] == ["hplcpurity_identity"]
+    assert retest.catalog_snapshot["retest"]["drop"] == ["heavy_metals"]
+    # No carried (or any) canonical row for the dropped profile's service.
+    assert db.execute(select(LimsAnalysis).where(
+        LimsAnalysis.lims_sample_pk == retest.id, LimsAnalysis.provenance == "canonical")).scalars().all() == []
+    [warn] = _events(db, retest, "retest_spec_warning")
+    assert warn.details["reason"] == "profiles_dropped"
+    assert warn.details["drop"] == ["heavy_metals"]
+    assert "Heavy Metals" in warn.details["message"]
+    assert "P-3017" in warn.details["message"]
+
+
 def test_variance_add_seeds_the_variance_service_key(db):
     cat = _catalog(db)
     _original(db, cat)

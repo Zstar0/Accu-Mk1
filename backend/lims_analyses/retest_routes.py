@@ -88,6 +88,29 @@ def _best_state(db: Session, sample: LimsSample, service_ids: set[int]) -> str |
     return best
 
 
+def _latest_verified_at(db: Session, sample: LimsSample, service_ids: set[int]):
+    """Latest verification time of a verified/published parent row for these
+    services, whatever field carries it (verified_at, else published_at)."""
+    if not service_ids:
+        return None
+    rows = db.execute(select(LimsAnalysis).where(
+        LimsAnalysis.lims_sample_pk == sample.id, LimsAnalysis.lims_sub_sample_pk.is_(None),
+        LimsAnalysis.provenance == "canonical", LimsAnalysis.retested.is_(False),
+        LimsAnalysis.analysis_service_id.in_(service_ids),
+        LimsAnalysis.review_state.in_(("verified", "published")),
+    )).scalars().all()
+    times = [r.verified_at or r.published_at for r in rows if (r.verified_at or r.published_at)]
+    return max(times) if times else None
+
+
+def _state_label(state: str | None, verified_at) -> str:
+    if verified_at:
+        return f"Verified {verified_at.month}/{verified_at.day}"
+    if state == "parent_to_verify":
+        return "Pending"
+    return "Not verified"
+
+
 @router.get("/{sample_id}/retest-options")
 def retest_options(sample_id: str, db: Session = Depends(get_db), _user=Depends(get_current_user)):  # noqa: B008
     sample = db.execute(select(LimsSample).where(LimsSample.sample_id == sample_id)).scalar_one_or_none()
@@ -101,16 +124,20 @@ def retest_options(sample_id: str, db: Session = Depends(get_db), _user=Depends(
     for key in have:
         prof = profiles.get(key)
         svc_ids = {s.id for s in prof.analysis_services} if prof else set()
+        state = _best_state(db, sample, svc_ids)
+        verified_at = _latest_verified_at(db, sample, svc_ids)
         out_profiles.append({
             "key": key, "name": prof.name if prof else key,
             "carry_eligible": key in eligible,
-            "state": _best_state(db, sample, svc_ids),
+            "state": state,
+            "verified_at": verified_at.isoformat() if verified_at else None,
+            "state_label": _state_label(state, verified_at),
         })
     context = _fetch_retest_context(sample.sample_id)
     price_map = (context or {}).get("addons") or {}
-    addons = []
+    candidates = []
     for prof in db.execute(select(AnalysisProfile).where(
-            AnalysisProfile.is_addon.is_(True), AnalysisProfile.active.is_(True)
+            AnalysisProfile.active.is_(True)
     ).order_by(AnalysisProfile.sort_order, AnalysisProfile.key)).scalars().all():
         if prof.key in have:
             continue
@@ -118,11 +145,14 @@ def retest_options(sample_id: str, db: Session = Depends(get_db), _user=Depends(
         # WordPress keys add-on prices by its ADDON_TYPES key, which has been the
         # native LIMS key since theme 2.57.1; older themes used the short type.
         priced = price_map.get(prof.key) or (price_map.get(wp_type) if wp_type else None)
-        addons.append({
+        price = (priced or {}).get("price")
+        candidates.append((prof.sort_order, prof.key, {
             "key": prof.key, "name": prof.name, "wp_type": wp_type,
-            "price": (priced or {}).get("price"),
+            "price": price, "sellable": price is not None,
             "vials": (priced or {}).get("vials", prof.vials_required),
-        })
+        }))
+    # Sellable (priced) add-ons first, then catalog sort_order/key.
+    addons = [row for _, _, row in sorted(candidates, key=lambda c: (not c[2]["sellable"], c[0], c[1]))]
     return {
         "sample_id": sample.sample_id, "status": sample.status,
         "order_number": sample.client_order_number,
@@ -139,6 +169,7 @@ def retest_options(sample_id: str, db: Session = Depends(get_db), _user=Depends(
 class RetestRequest(BaseModel):
     retest: list[str] = []
     carry: list[str] = []
+    drop: list[str] = []
     add: dict | None = None
     auto_checkin: bool = False
     fee: str = "paid"
