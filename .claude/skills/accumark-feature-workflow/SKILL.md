@@ -69,7 +69,11 @@ If not, do `references/onboarding.md` first.
    a server you started on your laptop, or any backend that happens to
    answer.
 8. **PR.** Shape in `references/pr-contract.md`: What / Verified / Known
-   limits / Not done. No version bumps, no release commits. Hand back the URL,
+   limits / Not done. The repos' PR template carries that shape and the
+   `pr-evidence` check fails a PR whose Verified block lacks the stack name,
+   pasted test result lines and a committed screenshot (or the ticked "No
+   user-visible change" box). A PR without the Verified block is returned
+   unreviewed. No version bumps, no release commits. Hand back the URL,
    the gate numbers, the stack name, and the "Not done" list verbatim.
 9. **Write back.** Your memory key is read-only; the PR is your write path.
    Durable findings and traps go in the PR body and, when they are rules the
