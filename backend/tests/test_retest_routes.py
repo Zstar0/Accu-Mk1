@@ -44,13 +44,14 @@ def _seed(db, hplc_key="hplcpurity_identity"):
     hm = AnalysisProfile(key="heavy_metals", name="Heavy Metals", is_addon=True, active=True, vials_required=2)
     endo = AnalysisProfile(key="endotoxin-usp85-lal", name="Endotoxin", is_addon=True, active=True, vials_required=1)
     dead = AnalysisProfile(key="old-thing", name="Old", is_addon=True, active=False)
+    legacy = AnalysisProfile(key="sterility_pcr", name="Sterility (legacy alias)", is_addon=True, active=True)
     # A catalog profile that is NOT flagged is_addon: spec v2 sells the whole
     # active catalog, not just is_addon rows.
     fentanyl = AnalysisProfile(key="fentanyl", name="Fentanyl Screening", is_addon=False,
                                active=True, vials_required=0)
     arsenic = AnalysisService(title="Arsenic", keyword="ARSENIC-PPM", origin="mk1")
     pur = AnalysisService(title="Purity", keyword="HPLC-PURITY", origin="mk1")
-    db.add_all([hplc, hm, endo, dead, fentanyl, arsenic, pur])
+    db.add_all([hplc, hm, endo, dead, legacy, fentanyl, arsenic, pur])
     db.flush()
     hm.analysis_services.append(arsenic)
     hplc.analysis_services.append(pur)
@@ -99,7 +100,7 @@ def test_options_lists_profiles_eligibility_addons_and_prices(client, db_session
     assert by_key["hplcpurity_identity"]["carry_eligible"] is False
     assert by_key["hplcpurity_identity"]["verified_at"] is None
     assert by_key["hplcpurity_identity"]["state_label"] == "Pending"
-    # HM is on the original; old-thing inactive. Endo is priced (sellable),
+    # HM is on the original; old-thing inactive; sterility_pcr is a legacy alias (excluded). Endo is priced (sellable),
     # fentanyl is active catalog but WP has no price for it (not sellable);
     # sellable sorts first.
     addon_keys = [a["key"] for a in body["addons"]]

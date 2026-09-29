@@ -32,6 +32,10 @@ from models import AnalysisProfile, LimsAnalysis, LimsSample
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/samples", tags=["retest"])
 
+# Catalog rows that are aliases of a native profile or are sold through another control
+# (variance = points on the Re-test tab). Never offered as add-ons.
+LEGACY_ADDON_EXCLUDE = frozenset({"hplcpurity_identity", "endotoxin", "sterility_pcr", "variance"})
+
 WP_ADDON_TYPE_BY_PROFILE = {
     "endotoxin-usp85-lal": "endotoxin",
     "rapid-sterility-pcr": "sterility_pcr",
@@ -139,7 +143,7 @@ def retest_options(sample_id: str, db: Session = Depends(get_db), _user=Depends(
     for prof in db.execute(select(AnalysisProfile).where(
             AnalysisProfile.active.is_(True)
     ).order_by(AnalysisProfile.sort_order, AnalysisProfile.key)).scalars().all():
-        if prof.key in have:
+        if prof.key in have or prof.key in LEGACY_ADDON_EXCLUDE:
             continue
         wp_type = WP_ADDON_TYPE_BY_PROFILE.get(prof.key)
         # WordPress keys add-on prices by its ADDON_TYPES key, which has been the
