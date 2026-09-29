@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## v1.29.0 - 2026-09-28
+
+### Mk1-native retest
+- **Retest from the sample page.** Actions > Retest on any sample opens the retest overlay: choose which of the original profiles to retest and which to carry, add services (endotoxin, sterility PCR, heavy metals, variance points) priced from WordPress, pick Paid or Free and Auto check-in, give a reason. Create makes the WooCommerce retest order through the Integration Service; a paid order waits for payment, a free one completes at once. (#253, #255)
+- **Customer and pricing block.** The overlay shows the original order (number, customer, total, lines) with the live retest fee, add-on prices and variance point price, and lists pending retest orders for the sample with a copyable payment link. The Create toast keeps the link for 15 seconds. (#255, #259)
+- **Carried results, not clones.** When the retest order is paid, the new sample carries the non-retested results as verified parent rows linked to the original vials (`Carried from P-xxxx-Sxx` chips); retested profiles get `Retesting` chips and added services `Added` chips. The original sample and its COA are untouched; parent retest of a carried row is refused with a pointer to a new retest. Activity events record carries and the spec. (#253)
+- **Retest info both ways.** `Retested as` on the original and the RETEST banner on the new sample now come from Mk1 first (spec, order, source), with the Integration Service as fallback. (#253)
+
+### Fixed
+- **Parent retest of a vial-less placeholder stranded a hidden row (P-3016).** The workflow engine now ranks parent lines deterministically per keyword and refuses a parent retest whose source is a parent-hosted row, pointing at adding a vial instead. (#252)
+
+### Testing
+- Playwright end-to-end suite revived against devbox stacks (`e2e/README.md`), with a spec for the retest overlay. (#257)
+
 ## v1.28.1 - 2026-09-28
 
 ### Fixed
