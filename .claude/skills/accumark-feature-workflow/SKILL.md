@@ -19,10 +19,14 @@ If not, do `references/onboarding.md` first.
 
 ## The loop
 
-1. **Memory first.** `hindsight_search_knowledge_pages(<area>)`, then
-   `hindsight_reflect(<why question>)`, then the repo's `AGENTS.md` and
-   `CLAUDE.md`. Credit what you use (`🧠 From Hindsight memory ...`). If
-   memory has nothing on the area, say so in one line. Only then read code cold.
+1. **Memory first.** Team memory is Cognee, reached through the `memory-work`
+   MCP server: call its `recall` tool twice, `dataset_name` `accumark_code`
+   then `accumark_company`, with the question in plain words. Then the repo's
+   `AGENTS.md` and `CLAUDE.md`. Credit what you use:
+   `> **From memory (cognee: <dataset>)** - <facts used>`. If memory has
+   nothing on the area, say so in one line. Only then read code cold. If the
+   `memory-work` tools are missing, the MCP did not connect: fix that first
+   (`references/onboarding.md`), do not skip the step.
 2. **Design gate.** REQUIRED SUB-SKILL: superpowers:brainstorming. Say what you
    will change, where, how you will prove it, and what you will not do, then
    STOP for a yes. For a one-file change that is one paragraph. No code before
@@ -67,8 +71,12 @@ If not, do `references/onboarding.md` first.
 8. **PR.** Shape in `references/pr-contract.md`: What / Verified / Known
    limits / Not done. No version bumps, no release commits. Hand back the URL,
    the gate numbers, the stack name, and the "Not done" list verbatim.
-9. **Write back.** Durable findings and traps: `hindsight_ingest_document`.
-   Wrong memory: ingest a `Correction: <topic>` document.
+9. **Write back.** Your memory key is read-only; the PR is your write path.
+   Durable findings and traps go in the PR body and, when they are rules the
+   next person needs, in `references/pitfalls.md` in the same PR. Wrong
+   memory: say so in the PR under "Known limits" with what is true now and
+   the evidence. The Handler's nightly ingest carries merged material into
+   the shared datasets.
 
 ## Never
 

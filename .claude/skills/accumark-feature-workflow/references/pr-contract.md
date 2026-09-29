@@ -68,4 +68,5 @@ could not be verified, that is the first line, not a footnote.
 
 Destroy your stack, remove the devbox worktree (see the teardown trap in
 `devbox-stacks.md`), delete the local worktree (unlink a `node_modules`
-junction first on Windows), and ingest any durable finding into Hindsight.
+junction first on Windows), and check that every durable finding landed in
+the PR or in `references/pitfalls.md`; nothing else writes to team memory.

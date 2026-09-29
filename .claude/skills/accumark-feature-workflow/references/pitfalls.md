@@ -1,7 +1,7 @@
 # Pitfalls and house rules memory cannot derive from the code
 
-Read once, then let Hindsight surface the specifics. When you hit a new one,
-ingest it (`hindsight_ingest_document`) so the next person does not.
+Read once, then let memory (`memory-work` `recall`) surface the specifics.
+When you hit a new one, add it here in your PR so the next person does not.
 
 ## Doctrine (all repos)
 
@@ -47,7 +47,7 @@ ingest it (`hindsight_ingest_document`) so the next person does not.
   Wait on call counts per test instead of resetting in a hook.
 - **Vial / analysis model:** parent sample vs sub-sample (vial) worlds have
   different state machines; `verify` is a parent-tier transition. Read
-  `docs/developer/` and ask Hindsight before touching workflow code.
+  `docs/developer/` and ask memory before touching workflow code.
 - **Sub-sample fan-out can exhaust the DB pool** (two outages in 2026-09).
   Anything that loops queries per vial gets a bounded query, not N+1.
 - **SLA tiers hang off analysis profiles, not service groups**, and the
@@ -87,6 +87,7 @@ ingest it (`hindsight_ingest_document`) so the next person does not.
 
 ## When you are unsure
 
-Ask Hindsight (`hindsight_reflect`) with the symptom, then ask the Handler in
-the PR or chat with the smallest concrete question. Do not guess at rulings;
-rulings are recorded in memory as "RULED:" and they win.
+Ask memory (`recall` on `accumark_code`, then `accumark_company`) with the
+symptom, then ask the Handler in the PR or chat with the smallest concrete
+question. Do not guess at rulings; rulings are recorded in memory as "RULED:"
+and they win.
