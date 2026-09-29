@@ -79,7 +79,7 @@ const isHplc = (key: string) =>
 const RULE_SENTENCE =
   'Rows not re-tested are carried as verified results linked to this sample. Untick Carry to leave a result off the new sample.'
 const ADDON_SENTENCE =
-  'Add-ons are always billed at the listed price. Existing results are carried to the new sample.'
+  'Add-ons are billed at the listed price unless Billing is Waived. Existing results are carried to the new sample.'
 
 /** Class for a 44 px tap target wrapping a small control. */
 const TARGET = 'inline-flex min-h-11 min-w-11 items-center justify-center'
@@ -235,17 +235,16 @@ export function RetestDialog({
   )
   const feePrice = options.context?.retest_fee?.price ?? null
   const pointPrice = options.variance.point_price
+  // Waived = the whole order is free; list prices stay visible, struck to $0.
+  const waived = state.fee === 'free'
 
   const summary: SummaryLine[] = []
   if (tab === 'retest') {
     if (anyRetest)
       summary.push({
         key: 'fee',
-        label:
-          state.fee === 'free'
-            ? `Retest fee (${names(retested)}), waived`
-            : `Retest fee (${names(retested)})`,
-        price: state.fee === 'free' ? 0 : feePrice,
+        label: `Retest fee (${names(retested)})`,
+        price: feePrice,
       })
     if (varianceOn)
       summary.push({
@@ -282,7 +281,7 @@ export function RetestDialog({
   else if (tab === 'retest' && varianceOutOfRange)
     blocked = 'Variance points must be 2 to 10'
   else if (!reasonText) blocked = 'Enter a reason'
-  else if (total === null) blocked = 'Pricing unavailable'
+  else if (total === null && !waived) blocked = 'Pricing unavailable'
 
   const eligible = profiles.filter(p => p.carry_eligible)
   const ineligible = profiles.filter(p => !p.carry_eligible)
@@ -328,8 +327,38 @@ export function RetestDialog({
         variance_points: 0,
         additional_vials: state.extraVials,
       },
-      fee: 'paid',
+      fee: state.fee,
     }
+  }
+
+  const billing = (
+    <div className="flex flex-wrap items-center gap-4 text-sm">
+      <span className="font-medium">Billing</span>
+      <RadioGroup
+        aria-label="Billing"
+        value={state.fee}
+        onValueChange={v => update({ fee: v as 'paid' | 'free' })}
+        className="flex gap-4"
+      >
+        <div className="flex items-center gap-2 min-h-11">
+          <RadioGroupItem id={`fee-paid-${tab}`} value="paid" />
+          <Label htmlFor={`fee-paid-${tab}`}>Charged</Label>
+        </div>
+        <div className="flex items-center gap-2 min-h-11">
+          <RadioGroupItem id={`fee-free-${tab}`} value="free" />
+          <Label htmlFor={`fee-free-${tab}`}>Waived (whole order free)</Label>
+        </div>
+      </RadioGroup>
+    </div>
+  )
+
+  const linePrice = (price: SummaryLine['price']) => {
+    if (waived)
+      return typeof price === 'number'
+        ? `$0.00 (waived ${formatMoney(price)})`
+        : '$0.00 (waived)'
+    if (price === 'shop') return null
+    return price === null ? 'price unavailable' : formatMoney(price)
   }
 
   const checkin = (prefix: boolean) => (
@@ -544,30 +573,7 @@ export function RetestDialog({
               </div>
             )}
 
-            {anyRetest && (
-              <div className="flex flex-wrap items-center gap-4 text-sm">
-                <span className="font-medium">Retest fee</span>
-                <RadioGroup
-                  aria-label="Retest fee"
-                  value={state.fee}
-                  onValueChange={v => update({ fee: v as 'paid' | 'free' })}
-                  className="flex gap-4"
-                >
-                  <div className="flex items-center gap-2 min-h-11">
-                    <RadioGroupItem id="fee-paid" value="paid" />
-                    <Label htmlFor="fee-paid">
-                      {feePrice === null
-                        ? 'Charged (price unavailable)'
-                        : `Charged ${formatMoney(feePrice)}`}
-                    </Label>
-                  </div>
-                  <div className="flex items-center gap-2 min-h-11">
-                    <RadioGroupItem id="fee-free" value="free" />
-                    <Label htmlFor="fee-free">Waived</Label>
-                  </div>
-                </RadioGroup>
-              </div>
-            )}
+            {billing}
 
             {checkin(true)}
           </TabsContent>
@@ -652,6 +658,7 @@ export function RetestDialog({
                 {checkin(false)}
               </CollapsibleContent>
             </Collapsible>
+            {billing}
           </TabsContent>
 
           <TabsContent value="orders">
@@ -754,20 +761,19 @@ export function RetestDialog({
               {summary.map(l => (
                 <div key={l.key} className="flex justify-between gap-2">
                   <span>{l.label}</span>
-                  <span>
-                    {l.price === 'shop'
-                      ? null
-                      : l.price === null
-                        ? 'price unavailable'
-                        : formatMoney(l.price)}
-                  </span>
+                  <span>{linePrice(l.price)}</span>
                 </div>
               ))}
               <div
                 data-testid="retest-summary-total"
                 className="flex justify-between gap-2 font-medium border-t border-border/40 pt-1"
               >
-                {total === null ? (
+                {waived ? (
+                  <>
+                    <span>Total</span>
+                    <span>$0.00 (waived)</span>
+                  </>
+                ) : total === null ? (
                   <span>Total: price unavailable</span>
                 ) : (
                   <>

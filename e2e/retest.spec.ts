@@ -47,7 +47,7 @@ test.describe('Mk1-native retest dialog', () => {
     'Set E2E_RETEST_SAMPLE_ID to a published sample IS can map to a WP order'
   )
 
-  test('Re-test tab: customer block, fee on first Re-test, total = fee, creates the WP order', async ({
+  test('Re-test tab: customer block, Billing Charged, total = fee, creates the WP order', async ({
     authedPage: page,
   }) => {
     // Retest options wait on IS -> WP for prices, and Create goes Mk1 -> IS -> WP.
@@ -66,10 +66,8 @@ test.describe('Mk1-native retest dialog', () => {
     await expect(block.getByText(/\S+@\S+\.\S+/)).toBeVisible()
     await expect(dialog.getByText(/Customer .*unavailable/)).toHaveCount(0)
 
-    // Nothing re-tested yet: no fee radio, Create disabled with its reason.
-    await expect(
-      dialog.getByRole('radiogroup', { name: 'Retest fee' })
-    ).toHaveCount(0)
+    // Billing defaults to Charged; nothing re-tested yet, so Create is disabled.
+    await expect(dialog.getByRole('radio', { name: 'Charged' })).toBeChecked()
     await expect(dialog.getByTestId('retest-disabled-reason')).toHaveText(
       'Tick at least one Re-test'
     )
@@ -81,14 +79,16 @@ test.describe('Mk1-native retest dialog', () => {
       .getByRole('checkbox', { name: /^Re-test / })
       .first()
       .click()
-    const charged = dialog.getByRole('radio', { name: /^Charged \$[\d.]+$/ })
-    await expect(charged).toBeChecked()
+    const summary = dialog.getByTestId('retest-summary')
     const fee = price(
-      await dialog.getByText(/^Charged \$[\d.]+$/).textContent()
+      await summary
+        .getByText(/^\$[\d.]+$/)
+        .first()
+        .textContent()
     )
     expect(fee).toBeGreaterThan(0)
     await expect(dialog.getByTestId('retest-summary-total')).toHaveText(
-      `Total$${fee.toFixed(2)}`
+      `Total${fee.toFixed(2)}`
     )
 
     await dialog
@@ -130,7 +130,7 @@ test.describe('Mk1-native retest dialog', () => {
     await expect(row).toContainText(body.order_number)
   })
 
-  test('Add services tab: fixed title, catalog add-ons, no fee radio', async ({
+  test('Add services tab: fixed title, catalog add-ons, Billing radio', async ({
     authedPage: page,
   }) => {
     const dialog = await openRetestDialog(page)
@@ -143,8 +143,11 @@ test.describe('Mk1-native retest dialog', () => {
       dialog.getByRole('heading', { name: `Add services to ${SAMPLE_ID}` })
     ).toBeVisible()
     await expect(
-      dialog.getByRole('radiogroup', { name: 'Retest fee' })
-    ).toHaveCount(0)
+      dialog.getByRole('radiogroup', { name: 'Billing' })
+    ).toBeVisible()
+    await expect(
+      dialog.getByRole('radio', { name: 'Waived (whole order free)' })
+    ).toBeVisible()
     await expect(dialog.getByTestId('retest-disabled-reason')).toHaveText(
       'Tick at least one service'
     )

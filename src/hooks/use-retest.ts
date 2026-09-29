@@ -41,7 +41,8 @@ export function useCreateRetest(
               },
             }
           : {
-              description: 'The sample is created when the order completes.',
+              description:
+                'Order completed; the new sample is being created now.',
             }
       )
       queryClient.invalidateQueries({
